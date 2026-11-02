@@ -301,8 +301,11 @@ impl LegacyPattern {
     ///
     /// # Errors
     /// Never.
-    pub fn parse_local(&self, s: &str) -> Result<Option<i64>, KrishivError> {
-        Ok(self.parse_fields(s).map(|(local, _)| local))
+    pub fn parse_local(&self, s: &str, allow_zone: bool) -> Result<Option<i64>, KrishivError> {
+        Ok(self
+            .parse_fields(s)
+            .filter(|(_, zone)| allow_zone || zone.is_none())
+            .map(|(local, _)| local))
     }
 
     /// `s` as a date (days since the epoch): time and zone are ignored.
@@ -383,7 +386,9 @@ fn pad(out: &mut String, v: i64, n: usize) {
 fn hybrid_week_fields(days: i64, year: i64, month: u32, day: u32) -> (i64, i64) {
     if days >= CUTOVER_DAYS {
         let jan1 = days_from_civil(year, 1, 1).unwrap_or(days);
-        return ((days + 3).rem_euclid(7) + 1, days - jan1 + 1);
+        // 1582 lacks the ten labels 10-05..10-14.
+        let skipped = if year == 1582 { 10 } else { 0 };
+        return ((days + 3).rem_euclid(7) + 1, days - jan1 + 1 - skipped);
     }
     // Julian day number of the label read as a Julian date.
     let a = (14 - i64::from(month)) / 12;
@@ -458,7 +463,7 @@ fn write_offset(out: &mut String, offset: i32, colon: bool, minutes: bool, zulu:
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Zone_ {
     Offset(i32),
     Region(String),
@@ -473,6 +478,8 @@ struct Parsed {
     era_bc: bool,
     /// The year came from `Y`: a week-year, checked against the week's.
     year_is_week: bool,
+    /// The year was two digits (`yy`), read in the 80/20-year window.
+    year_two: bool,
     month0: Option<(i64, u32)>,
     dom: Option<(i64, u32)>,
     doy: Option<(i64, u32)>,
@@ -559,12 +566,10 @@ impl Parsed {
         let digits = end - pos;
         match c {
             'y' | 'Y' => {
-                let v = if n <= 2 && digits == 2 {
-                    window_year(value)
-                } else {
-                    value
-                };
-                self.year = Some((v, st));
+                // A two-digit year waits for the rest of the date: the
+                // window starts on a day, not at a year.
+                self.year_two = n <= 2 && digits == 2;
+                self.year = Some((value, st));
                 self.year_is_week = c == 'Y';
             }
             'M' | 'L' => self.month0 = Some((value - 1, st)),
@@ -705,12 +710,43 @@ impl Parsed {
     }
 
     fn resolve(self) -> Option<(i64, Option<Zone_>)> {
+        if !self.year_two {
+            return self.resolve_in(self.year.map_or(1970, |(y, _)| y));
+        }
+        // `yy`: the century of the window start, one later when the date
+        // falls before the window's first day.
+        let two = self.year.map_or(0, |(y, _)| y);
+        let (ny, nm, nd) = today();
+        let start = ny - 80;
+        let start_days = days_from_civil(start, nm, nd.min(days_in_month(start, nm)))?;
+        let base = start - start.rem_euclid(100) + two;
+        let first = self.resolve_in(base)?;
+        if first.0.div_euclid(MICROS_PER_DAY) < start_days {
+            self.resolve_in(base + 100)
+        } else {
+            Some(first)
+        }
+    }
+
+    fn resolve_in(&self, year: i64) -> Option<(i64, Option<Zone_>)> {
         if self.bad_hour {
             return None;
         }
-        let mut year = self.year.map_or(1970, |(y, _)| y);
+        let mut year = year;
         if self.era_bc {
             year = 1 - year;
+        }
+        // No calendar field reaches this far; a huge one would overflow
+        // the week arithmetic below, and a non-lenient calendar refuses it.
+        let huge = |f: Option<(i64, u32)>| f.is_some_and(|(v, _)| v.unsigned_abs() > 100_000);
+        if huge(self.woy)
+            || huge(self.wom)
+            || huge(self.dowim)
+            || huge(self.dom)
+            || huge(self.doy)
+            || huge(self.month0)
+        {
+            return None;
         }
         let weeky = self.woy.is_some() || self.wom.is_some() || self.dowim.is_some();
         let mode = if weeky {
@@ -783,6 +819,16 @@ impl Parsed {
             }
             _ => self.pm.map_or(0, |(pm, _)| if pm { 12 } else { 0 }),
         };
+        // Every clock field that was set must agree with the result.
+        if self.hour_of_day.is_some_and(|(h, _)| h != hour)
+            || self.hour12.is_some_and(|(h, _)| h != hour % 12)
+            || (self.hour_of_day.is_some() || self.hour12.is_some())
+                && self.pm.is_some_and(|(pm, _)| pm != (hour >= 12))
+            || self.hour_of_day.is_some_and(|(h, _)| !(0..24).contains(&h))
+            || self.hour12.is_some_and(|(h, _)| !(0..12).contains(&h))
+        {
+            return None;
+        }
         let minute = self.minute.unwrap_or(0);
         let second = self.second.unwrap_or(0);
         let millis = self.millis.unwrap_or(0);
@@ -792,7 +838,7 @@ impl Parsed {
         }
         let tod = ((hour * 60 + minute) * 60 + second) * MICROS_PER_SECOND + millis * 1000;
         let local = days.checked_mul(MICROS_PER_DAY)?.checked_add(tod)?;
-        Some((local, self.zone))
+        Some((local, self.zone.clone()))
     }
 }
 
@@ -822,9 +868,9 @@ fn month_day_of(year: i64, mut doy: i64) -> (u32, u32) {
     (12, 31)
 }
 
-/// `SimpleDateFormat`'s two-digit year window: the 80 years before now to
-/// the 20 after.
-fn window_year(two: i64) -> i64 {
+/// Today's date, the anchor of `SimpleDateFormat`'s two-digit year window
+/// (the 80 years before it to the 20 after).
+fn today() -> (i64, u32, u32) {
     // Miri's isolation has no wall clock, so it reads a fixed 2026-07-01.
     #[cfg(miri)]
     let now_secs = 1_782_864_000_i64;
@@ -832,13 +878,7 @@ fn window_year(two: i64) -> i64 {
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
-    let (now_year, _, _) = civil_from_days(now_secs.div_euclid(86_400));
-    let start = now_year - 80;
-    let mut year = start - start.rem_euclid(100) + two;
-    if year < start {
-        year += 100;
-    }
-    year
+    civil_from_days(now_secs.div_euclid(86_400))
 }
 
 /// An unsigned integer at `pos` (`limit` digits at most), as the digits
@@ -1006,7 +1046,10 @@ mod tests {
     }
 
     fn local(p: &str, text: &str) -> Option<i64> {
-        LegacyPattern::new(p).unwrap().parse_local(text).unwrap()
+        LegacyPattern::new(p)
+            .unwrap()
+            .parse_local(text, true)
+            .unwrap()
     }
 
     // Spark 4.2.0 under LEGACY (probe 2026-11-02).
@@ -1025,6 +1068,67 @@ mod tests {
         assert_eq!(local("yyyy-MM E", "2024-03 Tue"), Some(d(2024, 3, 5)));
         assert_eq!(local("yyyy-MM E", "2024-03 Fri"), Some(d(2024, 3, 1)));
         assert_eq!(local("yyyy-DDD", "2024-060"), Some(d(2024, 2, 29)));
+    }
+
+    // Spark 4.2.0 under LEGACY (probe 2026-11-02).
+    #[test]
+    fn oversized_fields_fail_instead_of_overflowing() {
+        assert_eq!(local("yyyy-ww-u", "2024-9223372036854775807-1"), None);
+        assert_eq!(local("yyyy-MM-W-u", "2024-01-9223372036854775807-1"), None);
+        assert_eq!(local("yyyy-MM-F-u", "2024-01-9223372036854775807-1"), None);
+    }
+
+    #[test]
+    fn day_of_year_counts_the_cutover_gap() {
+        let f = |days: i64| fmt("D", days * MICROS_PER_DAY);
+        let d = |m, dd| days_from_civil(1582, m, dd).unwrap();
+        assert_eq!(f(d(10, 4)), "277");
+        assert_eq!(f(d(10, 15)), "278");
+        assert_eq!(f(d(12, 31)), "355");
+        assert_eq!(f(days_from_civil(1583, 1, 1).unwrap()), "1");
+    }
+
+    #[test]
+    fn every_supplied_hour_field_must_agree() {
+        for text in [
+            "2024-01-01 23 01 AM",
+            "2024-01-01 01 23 AM",
+            "2024-01-01 01 13 AM",
+            "2024-01-01 25 01 AM",
+            "2024-01-01 13 01 AM",
+        ] {
+            assert_eq!(local("yyyy-MM-dd HH hh a", text), None, "{text}");
+        }
+        assert!(local("yyyy-MM-dd HH hh a", "2024-01-01 13 01 PM").is_some());
+    }
+
+    #[test]
+    fn a_zone_is_refused_when_the_caller_allows_none() {
+        let p = LegacyPattern::new("yyyy-MM-dd XXX").unwrap();
+        assert!(p.parse_local("2024-01-01 +05:30", false).unwrap().is_none());
+        assert!(p.parse_local("2024-01-01 +05:30", true).unwrap().is_some());
+    }
+
+    #[test]
+    fn the_two_digit_year_window_starts_on_a_day() {
+        let (ny, nm, nd) = today();
+        let start = ny - 80;
+        let yy = start.rem_euclid(100);
+        let text = |m: u32, d: u32| format!("{yy:02}-{m:02}-{d:02}");
+        let day_in = |y: i64, m: u32, d: u32| days_from_civil(y, m, d).unwrap() * MICROS_PER_DAY;
+        let century = start - yy;
+        // The day before the window starts is a century later; the start
+        // day and the day after read in the start's century.
+        if nd > 1 && nd <= 28 {
+            assert_eq!(
+                local("yy-MM-dd", &text(nm, nd - 1)),
+                Some(day_in(century + 100 + yy, nm, nd - 1))
+            );
+            assert_eq!(
+                local("yy-MM-dd", &text(nm, nd)),
+                Some(day_in(century + yy, nm, nd))
+            );
+        }
     }
 
     #[test]
@@ -1227,7 +1331,7 @@ mod tests {
     }
 
     fn parse(p: &str, s: &str) -> Option<i64> {
-        LegacyPattern::new(p).unwrap().parse_local(s).unwrap()
+        LegacyPattern::new(p).unwrap().parse_local(s, true).unwrap()
     }
 
     #[test]

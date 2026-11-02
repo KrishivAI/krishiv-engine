@@ -361,7 +361,7 @@ impl DateTimePattern {
     /// unresolvable zone id does not match either.
     pub fn parse_local(&self, s: &str, allow_zone: bool) -> Result<Option<i64>, KrishivError> {
         if let Some(l) = &self.legacy {
-            return l.parse_local(s);
+            return l.parse_local(s, allow_zone);
         }
         let Some(p) = parse::parse(&self.items, s) else {
             return Ok(None);

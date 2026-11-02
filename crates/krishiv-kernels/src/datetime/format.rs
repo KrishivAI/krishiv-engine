@@ -346,7 +346,7 @@ pub(crate) fn local_of(pattern: &TimePattern, s: &str) -> Result<i64, ParseFail>
     let pattern = match pattern {
         TimePattern::Corrected(p) => p,
         TimePattern::Legacy(p) => {
-            return match p.parse_local(s) {
+            return match p.parse_local(s, true) {
                 Ok(Some(micros)) => Ok(micros),
                 _ => Err(unparseable(s)),
             };
