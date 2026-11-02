@@ -161,7 +161,9 @@ pub fn check_floors(
         }
     }
     if let (Some(now), Some(before)) = (total_line_pct(map), previous.and_then(total_line_pct))
-        && before - now > drop_max
+        // A small tolerance: 80.2 - 80.0 is 0.20000000000000284 in floating point, and a drop of
+        // exactly the allowed points is allowed.
+        && before - now > drop_max + 1e-9
     {
         report.failures.push(format!(
             "total line coverage fell from {before:.2}% to {now:.2}% (at most {drop_max} points allowed)"
@@ -939,6 +941,26 @@ mod tests {
                 .failures
                 .is_empty()
         );
+        // A drop of exactly the allowed points passes, whatever the floating-point rounding:
+        // 802/1000 lines before and 800/1000 now is 80.2 - 80.0 = 0.20000000000000284.
+        let total = |covered: u64| {
+            let mut m = BTreeMap::new();
+            m.insert(
+                "a".to_owned(),
+                CrateCov {
+                    lines: Counts {
+                        covered,
+                        total: 1000,
+                    },
+                    branches: Counts::default(),
+                },
+            );
+            m
+        };
+        let edge = check_floors(&total(800), "{}", Some(&total(802))).unwrap();
+        assert!(edge.failures.is_empty(), "{edge:?}");
+        let over = check_floors(&total(799), "{}", Some(&total(802))).unwrap();
+        assert_eq!(over.failures.len(), 1, "{over:?}");
     }
 
     #[test]
