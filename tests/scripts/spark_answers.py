@@ -49,7 +49,7 @@ def main():
         try:
             out.append({"rows": [[cell(c) for c in row] for row in spark.sql(q).collect()]})
         except Exception as e:
-            cls = getattr(e, "getErrorClass", lambda: None)()
+            cls = getattr(e, "getCondition", lambda: None)()
             out.append({"error": cls or str(e).splitlines()[0]})
     print(json.dumps(out))
 
