@@ -392,7 +392,7 @@ pub(super) struct ExtractedGenerator {
     /// The column holding the argument in the aggregate's output.
     input: BoundColumn,
     /// The item's alias, when it had one.
-    name: Option<String>,
+    names: Vec<String>,
 }
 
 /// Whether `name` (as written) is one of the explode-family generators.
@@ -435,7 +435,7 @@ impl Resolver<'_> {
         &mut self,
         origin: Origin,
         items: Vec<Bound>,
-        alias: Option<String>,
+        alias: Vec<String>,
     ) -> Result<(Vec<Bound>, Option<ExtractedGenerator>), AnalysisError> {
         let zone = self.ctx.conf.session_zone;
         let mut found = None;
@@ -499,7 +499,7 @@ impl Resolver<'_> {
             ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => Arc::clone(expr),
             _ => Arc::clone(&items[index].expr),
         };
-        let name = alias;
+        let names = alias;
         let ExprNode::Resolved(ResolvedExpr::Function(call)) = &inner.node else {
             return Err(super::bind::unsupported("a generator", origin));
         };
@@ -535,7 +535,7 @@ impl Resolver<'_> {
             kind,
             outer,
             input,
-            name,
+            names,
         };
         Ok((items, Some(extracted)))
     }
@@ -559,7 +559,7 @@ impl Resolver<'_> {
             lateral: Vec::new(),
             shown: None,
         };
-        let names: Vec<String> = g.name.iter().cloned().collect();
+        let names = g.names.clone();
         let columns = self.generated_columns(origin, g.kind, g.outer, &arg, &names)?;
         let qual: Arc<[String]> = Arc::from(Vec::<String>::new());
         let carried: Vec<Attr> = agg

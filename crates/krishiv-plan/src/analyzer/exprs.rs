@@ -31,11 +31,11 @@ use krishiv_common::error::{
     InvalidWithinGroupExpressionMismatchWithDistinctInput,
     InvalidWithinGroupExpressionMismatchWithDistinctInputUnsafeCast,
     InvalidWithinGroupExpressionWithinGroupMissing, InvalidWithinGroupExpressionWrongNumOrderings,
-    KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1104, NamedParametersNotSupported,
-    NestedAggregateFunction, NonFoldableArgument, RequiredParameterNotFound, UnexpectedInputType,
-    UnexpectedPositionalArgument, UnrecognizedParameterName, UnresolvedColumnWithSuggestion,
-    UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, WrongNumArgsWithSuggestion,
-    WrongNumArgsWithoutSuggestion,
+    KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1104, MultiAliasWithoutGenerator,
+    NamedParametersNotSupported, NestedAggregateFunction, NonFoldableArgument,
+    RequiredParameterNotFound, UnexpectedInputType, UnexpectedPositionalArgument,
+    UnrecognizedParameterName, UnresolvedColumnWithSuggestion, UnresolvedColumnWithoutSuggestion,
+    UnresolvedRoutine, WrongNumArgsWithSuggestion, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::stack::on_big_stack;
 use krishiv_types::{ArrayType, DataType, DecimalType, StructField, StructType};
@@ -2786,6 +2786,15 @@ impl Resolver<'_> {
                     }),
                     ..keep(arg_type(to.clone(), nullable))
                 }
+            }
+            ExprNode::MultiAlias { names, .. } => {
+                return Err(AnalysisError::new(
+                    MultiAliasWithoutGenerator {
+                        names: names.join(", "),
+                        expr: format!("\"{}\"", pretty(&args[0], self.ctx.conf.session_zone)),
+                    },
+                    e.origin,
+                ));
             }
             ExprNode::Alias { name, .. } => {
                 let output = self.attr(name, &kids[0].ty);
@@ -7075,6 +7084,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> String {
         // to `named_struct` shows its children as written); a resolved
         // one is its expression (its output names the attribute).
         ExprNode::Alias { name, .. } => format!("{} AS {name}", k[0]),
+        ExprNode::MultiAlias { names, .. } => format!("{} AS ({})", k[0], names.join(", ")),
         ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
         ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => k.join(", "),
         ExprNode::Field { name, .. } | ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => {

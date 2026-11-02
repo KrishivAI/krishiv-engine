@@ -71,7 +71,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 9;
+pub const ENCODING_VERSION: u16 = 10;
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
@@ -1205,6 +1205,11 @@ impl<'k, 'a> Encoder<'k, 'a> {
             ExprNode::Alias { expr, name } => {
                 self.u8(6);
                 self.str(name);
+                self.expr(expr);
+            }
+            ExprNode::MultiAlias { expr, names } => {
+                self.u8(40);
+                self.strs(names);
                 self.expr(expr);
             }
             ExprNode::Subquery { kind, plan } => {
