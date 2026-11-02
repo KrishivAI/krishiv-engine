@@ -75,8 +75,10 @@ jobs:
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-mutants@27.1.0,cargo-nextest@0.9.148
-      # `--in-place`: the runner is disposable. A mutant that hangs is killed
-      # at three times the baseline test time (at least two minutes).
+      # `--in-place`: the runner is disposable. cargo-mutants refuses it with
+      # `--jobs` (parallel jobs each need their own copy of the tree), so the
+      # mutants run one at a time. A mutant that hangs is killed at three
+      # times the baseline test time (at least two minutes).
       - name: cargo mutants
         run: |
           # One slice (every 7th mutant) per night: the full set is swept
@@ -85,7 +87,7 @@ jobs:
           echo "SHARD=$SHARD" >> "$GITHUB_ENV"
           args=(--package "$PACKAGE" --test-tool nextest --in-place --no-shuffle
                 --shard "$SHARD/$SHARDS" --timeout-multiplier 3 --minimum-test-timeout 120
-                --output "$RUNNER_TEMP/out" --jobs 2)
+                --output "$RUNNER_TEMP/out")
           set -f  # pass the globs to cargo-mutants literally (it expands them recursively)
           for f in $FILES; do args+=(--file "$f"); done
           for f in $SKIP; do args+=(--exclude "$f"); done
@@ -109,8 +111,14 @@ jobs:
         if: always()
         run: |
           mkdir -p outcomes
-          cp "$RUNNER_TEMP/out/mutants.out/outcomes.json" "outcomes/$AREA.json"
-          cp "$RUNNER_TEMP/out/mutants.out/missed.txt" "outcomes/$AREA.missed.txt" || true
+          # No file when cargo-mutants failed before testing a mutant: the
+          # job is already red, and the scorer reports the area as untested.
+          for f in outcomes.json missed.txt; do
+            src="$RUNNER_TEMP/out/mutants.out/$f"
+            [ -f "$src" ] || continue
+            case "$f" in outcomes.json) dst="outcomes/$AREA.json" ;; *) dst="outcomes/$AREA.missed.txt" ;; esac
+            cp "$src" "$dst"
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -140,6 +148,7 @@ jobs:
         shell: bash # -eo pipefail: the scorer's status survives the tee
         run: |
           args=()
+          shopt -s nullglob # no shard file: every area is reported untested
           for f in shards/*.json; do
             args+=("$(basename "$f" .json)=$f")
           done
