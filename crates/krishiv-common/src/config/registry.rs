@@ -705,8 +705,9 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
           returns its rows in the same order on every run, byte for byte, for the engine's \
           own scans. Costs the parallelism of the query: meant for reproducing a result, \
           comparing two builds, and tests. Memory pressure from other queries in the process \
-          can still change when an operator spills, and so the order of what it returns. Off \
-          by default.",
+          can still change when an operator spills, and so the order of what it returns, and the \
+          branches of a `UNION ALL` under an operator that must see all of them (a hash join \
+          probing a union) still run side by side. Off by default.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

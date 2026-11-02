@@ -90,4 +90,6 @@ Off by default. When on, every pipeline of a query runs on **one driver**, so:
 
 It costs the query's parallelism, so use it to reproduce a result, to compare two builds, and in tests.
 Memory pressure from other queries in the process can still change when an operator spills, and so the
-order of what it returns; sources that reorder their own rows are outside it.
+order of what it returns. A `UNION ALL` under an operator that has to see every branch (a hash join
+probing a union, say) still runs its branches side by side, so their rows can interleave differently;
+unions that only stream rows are ordered by branch. Sources that reorder their own rows are outside it.

@@ -51,26 +51,35 @@ pub(crate) struct TableId {
 pub(crate) struct ResultKey {
     plan: CacheKey,
     tables: Vec<TableId>,
-    /// The settings that change what a read or an execution returns and that the analysis
-    /// configuration of `plan` does not carry.
-    settings: Vec<(&'static str, String)>,
+    /// Every setting the session has set, but the cache's own: a setting can change a read or an
+    /// execution in ways the analysis configuration of `plan` does not carry (a legacy flag, a
+    /// read policy, `krishiv.deterministicOrder`), and listing the ones that do would miss one.
+    /// Another value of any of them is another key.
+    settings: Vec<(String, String)>,
 }
 
-/// The settings of a query that change its rows without changing its plan.
-const RESULT_SETTINGS: &[&str] = &[
-    "krishiv.deterministicOrder",
-    "spark.sql.files.ignoreCorruptFiles",
-    "spark.sql.files.ignoreMissingFiles",
-    "spark.sql.parquet.binaryAsString",
-    "spark.sql.parquet.int96AsTimestamp",
-    "spark.sql.parquet.datetimeRebaseModeInRead",
-    "spark.sql.parquet.int96RebaseModeInRead",
-    "spark.sql.parquet.inferTimestampNTZ.enabled",
-    "spark.sql.legacy.timeParserPolicy",
-    "spark.sql.mapKeyDedupPolicy",
-    "spark.sql.storeAssignmentPolicy",
-    "spark.sql.legacy.sizeOfNull",
-];
+/// The settings that do not segment the cache: its own.
+fn is_cache_setting(key: &str) -> bool {
+    key.starts_with("krishiv.resultCache.")
+}
+
+/// Every explicitly set setting of `config` but the cache's own, sorted.
+fn key_settings(config: &Config) -> Vec<(String, String)> {
+    let mut all: Vec<(String, String)> = config
+        .explicit_registered()
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v))
+        .chain(
+            config
+                .explicit_unregistered()
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v.to_owned())),
+        )
+        .filter(|(k, _)| !is_cache_setting(k))
+        .collect();
+    all.sort();
+    all
+}
 
 /// The least a stored result is charged: the entry, its key and its table list.
 const ENTRY_OVERHEAD: usize = 1024;
@@ -454,10 +463,7 @@ impl Session {
         }
         tables.sort();
         tables.dedup();
-        let settings = RESULT_SETTINGS
-            .iter()
-            .map(|k| (*k, crate::conf::get(&a.env.config, k).unwrap_or_default()))
-            .collect();
+        let settings = key_settings(&a.env.config);
         Ok(ResultKey {
             plan: CacheKey::of(&a.analyzed),
             tables,
@@ -1062,5 +1068,23 @@ mod tests {
         global().invalidate_path(&link);
         assert!(!cached(&key), "the entry behind the link went");
         assert!(global().stats().5 > before, "and was counted");
+    }
+
+    #[test]
+    fn a_requested_relation_cache_is_filled_even_when_the_result_cache_holds_the_query() {
+        let s = session_as("ana");
+        table(&s, "rc_rel", "(1), (2)");
+        let sql = "SELECT a FROM rc_rel";
+        run(&s, sql);
+        assert!(
+            cached(&key_of(&s, sql).unwrap()),
+            "the shared store holds the result"
+        );
+        let df = block_on(s.sql(sql)).unwrap().cache();
+        assert_eq!(rows(&block_on(df.collect()).unwrap()), 2);
+        assert!(
+            block_on(df.is_cached()).unwrap(),
+            "cache() populated the session's snapshot"
+        );
     }
 }

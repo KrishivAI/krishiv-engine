@@ -1219,7 +1219,10 @@ impl DataFrame {
         let a = self.analysis().await?;
         // The reads were authorized by the analysis: a hit serves only what this principal's
         // own run of the query would return.
+        // A frame that asked for a relation cache (`cache()`, `persist()`) runs the query: its
+        // snapshot is filled from the run, whatever the shared store holds.
         let result = crate::result_cache::settings(&a.env)
+            .filter(|_| self.cache_request.is_none())
             .and_then(|settings| self.session.result_key(&a).map(|key| (settings, key)))
             // A cached relation substituted into the plan makes the rows depend on this
             // session's state: neither served from nor stored into the shared cache.
