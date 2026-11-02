@@ -110,6 +110,11 @@ jobs:
             --fixture "$RUNNER_TEMP/diff/expr.json" \
             --known tests/fixtures/spark-4.2.0/expr-differential-known-failures.json \
             --out "$RUNNER_TEMP/diff/expr-mismatches.json"
+      - name: TLP and NoREC hunt (one hour)
+        run: |
+          cargo run -p krishiv-testkit --release --locked --bin metamorphic-hunt -- \
+            --data crates/krishiv-exec/tests/fixtures/tpch-sf0.01-parquet \
+            --seed "$SEED" --seconds 3600 | tee "$RUNNER_TEMP/diff/metamorphic.txt"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:

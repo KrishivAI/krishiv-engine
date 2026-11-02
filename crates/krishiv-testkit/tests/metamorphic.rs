@@ -4,7 +4,8 @@
 #![forbid(unsafe_code)]
 
 use krishiv_testkit::metamorphic::{
-    Cmp, NULLS_SETUP, Oracle, Pred, Rng, SOURCES, check, gen_pred, hunt, reduce, report, tokens,
+    Cmp, NULLS_SETUP, Oracle, Pred, Rng, SOURCES, check, gen_pred, hunt, hunt_cli, reduce, report,
+    tokens,
 };
 use krishiv_testkit::query_oracle::{QueryRunner, SessionRunner};
 
@@ -162,4 +163,25 @@ fn generator_is_seeded() {
     let draw = |seed| gen_pred(SOURCES[0].cols, 3, &mut Rng::new(seed)).to_string();
     assert_eq!(draw(9), draw(9));
     assert!((0..20).any(|s| draw(s) != draw(s + 100)));
+}
+
+#[test]
+fn hunt_command_runs_a_budget_and_reports_usage_errors() -> R {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../krishiv-exec/tests/fixtures/tpch-sf0.01-parquet");
+    let mut out = Vec::new();
+    let args = [
+        "--data",
+        &dir.display().to_string(),
+        "--seed",
+        "4",
+        "--seconds",
+        "0",
+    ];
+    assert!(hunt_cli(args.map(str::to_owned), &mut out)?);
+    assert!(String::from_utf8(out)?.contains("queries_checked_per_s"));
+    assert!(hunt_cli(Vec::new(), &mut Vec::new()).is_err());
+    assert!(hunt_cli(["--nope".to_owned(), "1".to_owned()], &mut Vec::new()).is_err());
+    assert!(hunt_cli(["--seed".to_owned(), "x".to_owned()], &mut Vec::new()).is_err());
+    Ok(())
 }

@@ -15,6 +15,7 @@
 //! reduction, so the report is a handful of tokens.
 
 use std::fmt::{self, Write as _};
+use std::io::Write;
 
 use crate::query_oracle::{QueryRunner, normalise};
 
@@ -533,4 +534,58 @@ pub fn report(r: &mut dyn QueryRunner, f: &Finding) -> Result<String, fmt::Error
         f.pred
     )?;
     Ok(out)
+}
+
+/// The `metamorphic-hunt` command over `args` (without the program name); `Ok(true)` when no
+/// oracle was violated.
+///
+/// # Errors
+/// A usage, I/O or engine error, as text.
+pub fn hunt_cli(
+    args: impl IntoIterator<Item = String>,
+    out: &mut dyn Write,
+) -> Result<bool, String> {
+    let (mut data, mut seed, mut seconds) = (None, 1_u64, 60_u64);
+    let mut args = args.into_iter();
+    while let Some(flag) = args.next() {
+        let v = args
+            .next()
+            .ok_or("usage: metamorphic-hunt --data DIR [--seed N] [--seconds N]")?;
+        match flag.as_str() {
+            "--data" => data = Some(std::path::PathBuf::from(v)),
+            "--seed" => seed = v.parse().map_err(|e| format!("--seed: {e}"))?,
+            "--seconds" => seconds = v.parse().map_err(|e| format!("--seconds: {e}"))?,
+            _ => return Err(format!("unknown flag {flag}")),
+        }
+    }
+    let data = data.ok_or("--data DIR is required")?;
+    let mut runner = crate::query_oracle::SessionRunner::new(&data)?;
+    crate::query_oracle::QueryRunner::run(&mut runner, NULLS_SETUP)?;
+    let (start, budget) = (
+        std::time::Instant::now(),
+        std::time::Duration::from_secs(seconds),
+    );
+    let (mut checked, mut bad) = (0_usize, 0_usize);
+    let mut next = seed;
+    while start.elapsed() < budget {
+        let h = hunt(&mut runner, next, 25);
+        next += 1;
+        checked += h.checked * 4;
+        for e in &h.errors {
+            writeln!(out, "engine error (seed {next}): {e}").map_err(|e| e.to_string())?;
+        }
+        for f in &h.findings {
+            bad += 1;
+            let text = report(&mut runner, f).map_err(|e| e.to_string())?;
+            writeln!(out, "VIOLATION (seed batch {}):\n{text}", next - 1)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    let rate = checked as f64 / start.elapsed().as_secs_f64().max(1e-9);
+    writeln!(
+        out,
+        "queries_checked_per_s {rate:.1} ({checked} checks, {bad} violations)"
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(bad == 0)
 }
