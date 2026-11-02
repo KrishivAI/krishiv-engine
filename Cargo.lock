@@ -2191,6 +2191,7 @@ dependencies = [
  "arrow-buffer",
  "arrow-schema",
  "arrow-select",
+ "bytes",
  "futures",
  "insta",
  "krishiv-common",

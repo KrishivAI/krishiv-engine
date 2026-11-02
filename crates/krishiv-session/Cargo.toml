@@ -38,6 +38,7 @@ object_store = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 arrow-buffer.workspace = true
+bytes.workspace = true
 arrow-select.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
 insta.workspace = true
@@ -55,3 +56,8 @@ unstable-ir = []
 
 [lints]
 workspace = true
+
+# The S3 round trip needs the S3 builder and an emulator (`KRISHIV_TEST_S3_ENDPOINT`).
+[[test]]
+name = "s3_tpch"
+required-features = ["cloud"]

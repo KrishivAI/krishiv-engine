@@ -976,8 +976,9 @@ def test_fetch_adds_the_commit_to_an_old_expected_json_and_recording_counts_keep
 @pytest.mark.skipif(
     not os.environ.get("KRISHIV_BENCH_DOCKER_SMOKE"), reason="set KRISHIV_BENCH_DOCKER_SMOKE=1 (needs docker)"
 )
-def test_a_real_container_serves_a_parquet_file_to_polars_and_duckdb(tmp_path):
+def test_a_real_container_serves_a_parquet_file_to_every_engine(tmp_path):
     from krishiv_bench import remote_filter_child as child
+    from krishiv_bench.adapters.krishiv import runner_binary
     from krishiv_bench.remote_filter_s3 import S3Server
 
     table = tmp_path / "fw"
@@ -994,11 +995,17 @@ def test_a_real_container_serves_a_parquet_file_to_polars_and_duckdb(tmp_path):
         ),
         table / "p.parquet",
     )
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(mode=0o700)
+    runs = [child.run_polars, child.run_duckdb]
+    # Krishiv needs the built runner (cargo build --profile dist -p krishiv-bench-runner).
+    if runner_binary().exists():
+        runs.append(lambda items, out: child.run_krishiv_urls(items, out, scratch))
     with S3Server(table) as srv:
         os.environ.update(srv.env())
         try:
-            for run in (child.run_polars, child.run_duckdb):
-                out = tmp_path / run.__name__
+            for i, run in enumerate(runs):
+                out = tmp_path / f"out{i}"
                 out.mkdir()
                 run(srv.urls(), out)
                 assert child.output_stats(out)[:2] == (1, 5000)
