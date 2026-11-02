@@ -161,8 +161,11 @@ async fn drive(run: Arc<PipelineRun>, partition: u32) -> Result<()> {
 /// (runnable, but not allowed to run): that time is the machine's load, not
 /// the driver's work, and counting it failed queries on loaded machines.
 /// Running and blocking (a sleep or blocking I/O inside a poll) both still
-/// count. Where the kernel does not report these, and when stalls are only
-/// counted, the slice is wall time.
+/// count, except in a slice that took a major page fault: its thread blocked
+/// paging code or data in from disk, which is the machine's disk and the
+/// first use of those pages, not the driver's work, so a bounded time per fault
+/// is left out ([`charged`]). Where the kernel does not report these, and when
+/// stalls are only counted, the slice is wall time.
 struct Timed {
     inner: BoxFuture<'static, ()>,
     stats: DriverStats,
@@ -180,8 +183,8 @@ impl Future for Timed {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        let queued = if self.query.config().fail_on_stall {
-            unrunnable_time()
+        let before = if self.query.config().fail_on_stall {
+            thread_times()
         } else {
             None
         };
@@ -201,12 +204,13 @@ impl Future for Timed {
         let config = this.query.config();
         // Only a slice longer than the threshold can be a stall, so the
         // second sample is taken for those alone.
-        let mut waited = Duration::ZERO;
+        let mut used = ThreadTimes::default();
         let held = if slice > config.stall_threshold {
-            match queued.zip(unrunnable_time()) {
-                Some((before, after)) => {
-                    waited = after.saturating_sub(before);
-                    slice.saturating_sub(waited)
+            // `and_then`: where `before` wasn't sampled, nothing is read here.
+            match before.and_then(|b| Some(thread_times()?.since(b))) {
+                Some(times) => {
+                    used = times;
+                    charged(slice, used)
                 }
                 None => slice,
             }
@@ -218,8 +222,13 @@ impl Future for Timed {
             if config.fail_on_stall {
                 this.query.fail(internal(format!(
                     "a driver ran {held:?} without yielding (stall threshold {:?}, batch size {}; \
-                     slice {slice:?}, of which {waited:?} runnable but not running)",
-                    config.stall_threshold, config.batch_size
+                     slice {slice:?}, of which {:?} runnable but not running, {:?} on a CPU, {} \
+                     major page faults)",
+                    config.stall_threshold,
+                    config.batch_size,
+                    used.unrunnable,
+                    used.on_cpu,
+                    used.major_faults
                 )));
             }
         }
@@ -227,12 +236,53 @@ impl Future for Timed {
     }
 }
 
-/// The time this thread has been ready to run but kept off a CPU so far:
-/// its wait on a run queue, from `/proc/thread-self/schedstat` (second
-/// field, nanoseconds), plus the time the cgroups it belongs to were
-/// throttled by a CPU quota (`throttled_usec` of each cgroup's `cpu.stat`;
-/// a throttled thread is off the run queue, so schedstat does not count it).
-/// `None` where the kernel does not report the run-queue wait.
+/// What a thread has spent so far, or in a slice ([`Self::since`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ThreadTimes {
+    /// On a CPU.
+    on_cpu: Duration,
+    /// Ready to run but kept off a CPU.
+    unrunnable: Duration,
+    /// Major page faults: the thread blocked while a page came from disk.
+    major_faults: u64,
+}
+
+impl ThreadTimes {
+    fn since(self, before: Self) -> Self {
+        Self {
+            on_cpu: self.on_cpu.saturating_sub(before.on_cpu),
+            unrunnable: self.unrunnable.saturating_sub(before.unrunnable),
+            major_faults: self.major_faults.saturating_sub(before.major_faults),
+        }
+    }
+}
+
+/// The most a major page fault excuses: a slow disk's read, not a sleep.
+const FAULT_ALLOWANCE: Duration = Duration::from_millis(10);
+
+/// What a slice of `slice` counts as against the stall threshold, given what
+/// its thread `used` in it: all of it but the wait for a CPU, and but the time
+/// off a CPU its page faults explain, up to [`FAULT_ALLOWANCE`] each (time
+/// blocked on a fault isn't reported on its own). That can still hide a short
+/// blocking call in a poll that faults; a longer one, or one that blocks on
+/// later polls too, is caught. Only this thread's faults count: a thread waiting
+/// on a lock the faulting thread holds is charged in full.
+fn charged(slice: Duration, used: ThreadTimes) -> Duration {
+    let held = slice.saturating_sub(used.unrunnable);
+    let faults = u32::try_from(used.major_faults).unwrap_or(u32::MAX);
+    let excused = held
+        .saturating_sub(used.on_cpu)
+        .min(FAULT_ALLOWANCE.saturating_mul(faults));
+    held.saturating_sub(excused)
+}
+
+/// This thread's [`ThreadTimes`]. On a CPU and the wait on a run queue come
+/// from `/proc/thread-self/schedstat` (first two fields, nanoseconds), major
+/// faults from `/proc/thread-self/stat` (0 if it can't be read). The time the
+/// cgroups it belongs to were throttled by a CPU quota (`throttled_usec` of
+/// each cgroup's `cpu.stat`) adds to the wait: a throttled thread is off the
+/// run queue, so schedstat does not count it. `None` where the kernel does not
+/// report the run-queue wait.
 ///
 /// The files are opened once per thread and read with `pread`: a sample
 /// costs a syscall per file instead of open, statx, two reads and close.
@@ -243,13 +293,14 @@ impl Future for Timed {
     clippy::disallowed_methods,
     reason = "reading pseudo-files served from memory with one pread each per poll never blocks: the only deliberate sync reads on a worker"
 )]
-fn unrunnable_time() -> Option<Duration> {
+fn thread_times() -> Option<ThreadTimes> {
     use std::os::unix::fs::FileExt;
     thread_local! {
         /// Opened by the thread it describes (`thread-self` is resolved at
         /// open), `None` where the file is missing.
         static SCHEDSTAT: Option<std::fs::File> =
             std::fs::File::open("/proc/thread-self/schedstat").ok();
+        static STAT: Option<std::fs::File> = std::fs::File::open("/proc/thread-self/stat").ok();
         /// The `cpu.stat` of the thread's cgroup and each ancestor (cgroup v2).
         static CGROUP_STATS: Vec<std::fs::File> = cgroup_stats();
     }
@@ -276,17 +327,19 @@ fn unrunnable_time() -> Option<Duration> {
         }
         files
     }
-    let waited = SCHEDSTAT.with(|file| {
+    let (on_cpu, waited) = SCHEDSTAT.with(|file| {
         let mut buf = [0u8; 128];
         let n = file.as_ref()?.read_at(&mut buf, 0).ok()?;
-        let nanos: u64 = std::str::from_utf8(&buf[..n])
-            .ok()?
-            .split_whitespace()
-            .nth(1)?
-            .parse()
-            .ok()?;
-        Some(Duration::from_nanos(nanos))
+        let mut fields = std::str::from_utf8(&buf[..n]).ok()?.split_whitespace();
+        let on_cpu: u64 = fields.next()?.parse().ok()?;
+        let waited: u64 = fields.next()?.parse().ok()?;
+        Some((Duration::from_nanos(on_cpu), Duration::from_nanos(waited)))
     })?;
+    let major_faults = STAT.with(|file| {
+        let mut buf = [0u8; 1024];
+        let n = file.as_ref()?.read_at(&mut buf, 0).ok()?;
+        major_faults(std::str::from_utf8(&buf[..n]).ok()?)
+    });
     let throttled = CGROUP_STATS.with(|files| {
         let mut total = Duration::ZERO;
         for file in files {
@@ -303,13 +356,25 @@ fn unrunnable_time() -> Option<Duration> {
         }
         total
     });
-    Some(waited + throttled)
+    Some(ThreadTimes {
+        on_cpu,
+        unrunnable: waited + throttled,
+        major_faults: major_faults.unwrap_or(0),
+    })
+}
+
+/// `majflt` of a `/proc/<pid>/stat` line: the tenth field after the command,
+/// which is in parentheses and may hold spaces or parentheses itself.
+#[cfg(unix)]
+fn major_faults(stat: &str) -> Option<u64> {
+    let (_, fields) = stat.rsplit_once(") ")?;
+    fields.split_whitespace().nth(9)?.parse().ok()
 }
 
 /// Non-Unix targets have no `/proc/thread-self/schedstat`: there is no
 /// wait to subtract, so slices are wall time.
 #[cfg(not(unix))]
-fn unrunnable_time() -> Option<Duration> {
+fn thread_times() -> Option<ThreadTimes> {
     None
 }
 
@@ -920,5 +985,60 @@ impl Drop for Driver {
             }
             m.drivers.merge(&stats);
         });
+    }
+}
+
+#[cfg(all(test, not(loom)))]
+mod stall_tests {
+    use super::*;
+
+    const fn ms(v: u64) -> Duration {
+        Duration::from_millis(v)
+    }
+
+    #[test]
+    fn a_slice_is_charged_its_blocking_unless_it_paged_something_in() {
+        let used = |on_cpu, unrunnable, major_faults| ThreadTimes {
+            on_cpu: ms(on_cpu),
+            unrunnable: ms(unrunnable),
+            major_faults,
+        };
+        // Work and blocking count, the wait for a CPU doesn't.
+        assert_eq!(charged(ms(50), used(2, 8, 0)), ms(42));
+        assert_eq!(charged(ms(50), used(50, 0, 0)), ms(50));
+        // Page faults excuse what they could have blocked it for.
+        assert_eq!(charged(ms(157), used(3, 0, 52)), ms(3));
+        assert_eq!(charged(ms(13), used(3, 0, 1)), ms(3));
+        // Not a long sleep beside one fault, and not the CPU's own time.
+        assert_eq!(charged(ms(10_000), used(3, 0, 1)), ms(9_990));
+        assert_eq!(charged(ms(90), used(80, 0, 1)), ms(80));
+        assert_eq!(charged(ms(200), used(150, 0, 2)), ms(180));
+        // More waiting than the slice measured.
+        assert_eq!(charged(ms(1), used(0, 2, 0)), ms(0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn major_faults_are_read_past_a_command_with_spaces_and_parentheses() {
+        let tail = "S 1 2 3 4 5 6 7 8 77 9 10 11 12";
+        assert_eq!(major_faults(&format!("9 (a) b) c) {tail}")), Some(77));
+        assert_eq!(major_faults(&format!("9 (tokio) {tail}")), Some(77));
+        assert_eq!(major_faults("9 (short) S 1"), None);
+        assert_eq!(major_faults("no command"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn this_thread_reports_its_times() {
+        // `None` is what a kernel without schedstat reports.
+        let Some(before) = thread_times() else {
+            return;
+        };
+        let start = std::time::Instant::now();
+        while start.elapsed() < ms(5) {
+            std::hint::spin_loop();
+        }
+        let after = thread_times().unwrap_or_default();
+        assert!(after.since(before).on_cpu > Duration::ZERO, "{after:?}");
     }
 }

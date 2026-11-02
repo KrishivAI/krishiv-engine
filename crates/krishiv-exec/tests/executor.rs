@@ -592,7 +592,8 @@ async fn the_stall_detector_fails_a_non_yielding_driver() {
 }
 
 /// A driver that blocks inside a poll (a sleep standing in for blocking
-/// I/O) is a stall too: only run-queue waits are left out of a slice.
+/// I/O) is a stall too: only run-queue waits and what page faults explain are
+/// left out of a slice. The first polls may fault, so it blocks on many.
 #[tokio::test]
 async fn the_stall_detector_fails_a_blocking_driver() {
     let runner = QueryRunner::new(executor(1));
@@ -602,7 +603,7 @@ async fn the_stall_detector_fails_a_blocking_driver() {
         ..ExecConfig::default()
     };
     let q = query(&root, 1, config);
-    let (_, scan) = scan(4 * DEFAULT_BATCH_SIZE as u64);
+    let (_, scan) = scan(16 * DEFAULT_BATCH_SIZE as u64);
     let block = hook(|_| {
         std::thread::sleep(Duration::from_millis(30));
         Ok(())
