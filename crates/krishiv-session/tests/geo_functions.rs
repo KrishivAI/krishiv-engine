@@ -310,3 +310,21 @@ fn array_sort_refuses_spatial_elements() {
         "{e}"
     );
 }
+
+#[test]
+fn a_foldable_srid_expression_is_accepted() {
+    assert_eq!(
+        text(&format!("typeof(ST_GeomFromWKB({POINT}, abs(4326)))")),
+        "geometry(4326)"
+    );
+    assert_eq!(
+        text(&format!("ST_SRID(ST_GeomFromWKB({POINT}, abs(4326)))")),
+        "4326"
+    );
+    assert_eq!(
+        text(&format!(
+            "ST_SRID(ST_SetSrid(ST_GeomFromWKB({POINT}), abs(3857)))"
+        )),
+        "3857"
+    );
+}

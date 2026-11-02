@@ -91,6 +91,50 @@ fn srid_literal(args: &[BindArg], i: usize) -> Option<i32> {
     }
 }
 
+/// Whether argument `i` is an SRID `srid_values` can read: an `Int32` literal,
+/// or a column (a foldable expression such as `abs(4326)` that analysis
+/// checked but the planner did not fold).
+fn srid_readable(args: &[BindArg], i: usize) -> bool {
+    match args.get(i) {
+        Some(BindArg::Column { .. }) => true,
+        Some(BindArg::Literal(_)) => srid_literal(args, i).is_some(),
+        None => false,
+    }
+}
+
+/// The SRID of each row at argument `i`; NULL when the expression is.
+fn srid_values(x: &Inputs<'_>, i: usize) -> Result<Vec<Option<i32>>, KrishivError> {
+    let column = x.column(i)?;
+    let n = column.len();
+    let read = |r: usize| -> Result<Option<i32>, KrishivError> {
+        if column.is_null(r) {
+            return Ok(None);
+        }
+        let v = match column.data_type() {
+            DataType::Int8 => i64::from(
+                column
+                    .as_primitive::<arrow_array::types::Int8Type>()
+                    .value(r),
+            ),
+            DataType::Int16 => i64::from(
+                column
+                    .as_primitive::<arrow_array::types::Int16Type>()
+                    .value(r),
+            ),
+            DataType::Int32 => i64::from(column.as_primitive::<Int32Type>().value(r)),
+            DataType::Int64 => column
+                .as_primitive::<arrow_array::types::Int64Type>()
+                .value(r),
+            t => return Err(internal(format!("an SRID of type {t}"))),
+        };
+        // Analysis already refused an SRID outside `int`.
+        i32::try_from(v)
+            .map(Some)
+            .map_err(|_| internal(format!("an SRID {v} outside int")))
+    };
+    (0..n).map(read).collect()
+}
+
 /// The string literal at argument `i`.
 fn string_literal(args: &[BindArg], i: usize) -> Option<String> {
     match args.get(i)? {
@@ -121,14 +165,8 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                     || listed == "st_geomfromwkb" && matches!(types.len(), 1 | 2)) =>
         {
             let geography = listed == "st_geogfromwkb";
-            let srid = if geography {
-                Some(4326)
-            } else if types.len() == 2 {
-                srid_literal(args, 1)
-            } else {
-                Some(0)
-            };
-            srid.map(|srid| {
+            let from_arg = !geography && types.len() == 2;
+            (!from_arg || srid_readable(args, 1)).then(|| {
                 let kind = if geography {
                     SpatialKind::Geography
                 } else {
@@ -136,11 +174,19 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 };
                 Binding::new(spatial_type(), move |x: &Inputs<'_>| {
                     let wkbs = x.binaries(0)?;
+                    let srids = if from_arg {
+                        srid_values(x, 1)?
+                    } else {
+                        vec![Some(if geography { 4326 } else { 0 }); wkbs.len()]
+                    };
                     let rows = wkbs
                         .iter()
-                        .map(|w| {
-                            w.map(|w| rewrite(w, kind, ByteOrder::Ndr).map(|b| (srid, b)))
-                                .transpose()
+                        .zip(srids)
+                        .map(|(w, srid)| match (w, srid) {
+                            (Some(w), Some(srid)) => {
+                                rewrite(w, kind, ByteOrder::Ndr).map(|b| Some((srid, b)))
+                            }
+                            _ => Ok(None),
                         })
                         .collect::<Result<Vec<_>, _>>()?;
                     spatial_column(&rows)
@@ -238,15 +284,19 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 Ok(Arc::new(out.finish()) as ArrayRef)
             }))
         }
-        ("st_setsrid", [g, _]) if spatial_or_null(g) => srid_literal(args, 1).map(|new| {
+        ("st_setsrid", [g, _]) if spatial_or_null(g) => srid_readable(args, 1).then(|| {
             Binding::new(spatial_type(), move |x: &Inputs<'_>| {
+                let news = srid_values(x, 1)?;
                 let column = x.column(0)?;
                 if column.data_type() == &DataType::Null {
                     return spatial_column(&vec![None; column.len()]);
                 }
                 let (_, wkb) = parts(&column)?;
                 let rows = (0..column.len())
-                    .map(|row| (!column.is_null(row)).then(|| (new, wkb.value(row).to_vec())))
+                    .map(|row| match news[row] {
+                        Some(new) if !column.is_null(row) => Some((new, wkb.value(row).to_vec())),
+                        _ => None,
+                    })
                     .collect::<Vec<_>>();
                 spatial_column(&rows)
             })
