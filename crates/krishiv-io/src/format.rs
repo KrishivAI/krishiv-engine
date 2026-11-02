@@ -243,6 +243,21 @@ pub struct Capabilities {
     pub page_checksums: bool,
     /// Whether [`FileFormat::writer`] is implemented.
     pub write: bool,
+    /// Whether a row can be read by its position, and how much is read for
+    /// it. The row index is then positional: its value doesn't depend on
+    /// how much of the file was read before, so a split may be cut finer.
+    pub random_access: Option<Granularity>,
+}
+
+/// What a read of one row by position costs at least.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Granularity {
+    /// The projected columns of the row's whole unit (a Parquet row group).
+    Unit,
+    /// The page holding the row.
+    Page,
+    /// The row alone.
+    Row,
 }
 
 /// Compression suffixes whose Hadoop codec cannot split (observed with
@@ -263,6 +278,7 @@ impl Capabilities {
             page_pruning: false,
             page_checksums: false,
             write: false,
+            random_access: None,
         }
     }
 

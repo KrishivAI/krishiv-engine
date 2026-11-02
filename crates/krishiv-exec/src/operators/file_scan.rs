@@ -684,11 +684,12 @@ impl FileScanSource {
     }
 
     /// The morsels the drivers of `ctx`'s executor claim: whole splits
-    /// when the scan reports `row_index` (a text format would count the
-    /// lines before every piece again), else pieces no smaller than
-    /// `spark.sql.files.openCostInBytes`.
+    /// when the scan reports a `row_index` that isn't positional (a text
+    /// format would count the lines before every piece again), else pieces
+    /// no smaller than `spark.sql.files.openCostInBytes`.
     fn morsels(&self, ctx: &TaskContext) -> Vec<Vec<MorselSplit>> {
-        let target = if self.request.metadata_cols.row_index {
+        let caps = self.format.capabilities(&self.format_options);
+        let target = if self.request.metadata_cols.row_index && caps.random_access.is_none() {
             u64::MAX
         } else {
             krishiv_io::split::morsel_bytes(
@@ -697,7 +698,6 @@ impl FileScanSource {
                 self.min_morsel_bytes,
             )
         };
-        let caps = self.format.capabilities(&self.format_options);
         krishiv_io::split::morsels(&self.partitions, target, |f| {
             self.files
                 .get(f)

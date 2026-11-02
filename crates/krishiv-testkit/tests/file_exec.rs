@@ -5,7 +5,7 @@
 //! (measured on Tokio's paused clock, never the wall clock).
 #![cfg(test)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -684,15 +684,24 @@ fn footers_are_read_ahead_across_a_partition() {
     assert!(m.units > 0 && m.bytes > 0);
 }
 
-/// A scan reporting `row_index` keeps the planned split whole (a text
-/// format would count the lines before every piece again), and the indexes
-/// come back in file order.
-#[test]
-fn a_scan_reporting_row_index_keeps_whole_splits() {
+/// The row indexes a scan reporting `row_index` returns, and how many
+/// pieces it read, with `positional` as the format reports it.
+fn scan_with_row_index(positional: bool) -> (Vec<i64>, u64) {
     let t = Timed::new(StorePolicy::UNPACED);
     let file = t.file("m/f", 4000);
     let fx = MockFixture::default();
-    let o = krishiv_io::FormatOptions::defaults(fx.format().options());
+    let user = BTreeMap::from([(
+        "positionalRowIndex".to_owned(),
+        krishiv_common::secret::OptionValue::from_user(
+            "positionalRowIndex",
+            positional.to_string(),
+        ),
+    )]);
+    let (o, _) = fx
+        .format()
+        .options()
+        .parse(&user, &krishiv_common::config::Config::new())
+        .unwrap();
     let scan = FileScan::new(
         fx.format(),
         t.sched.context(),
@@ -718,7 +727,7 @@ fn a_scan_reporting_row_index_keeps_whole_splits() {
             4,
         ))
         .unwrap();
-    let indexes: Vec<i64> = out
+    let indexes = out
         .iter()
         .flat_map(|b| {
             let m = b.column(b.num_columns() - 1).as_struct();
@@ -726,8 +735,21 @@ fn a_scan_reporting_row_index_keeps_whole_splits() {
             row.as_primitive::<Int64Type>().values().to_vec()
         })
         .collect();
-    assert_eq!(indexes, (0..4000).collect::<Vec<i64>>());
-    assert_eq!(scan.metrics().splits, 1);
+    (indexes, scan.metrics().splits)
+}
+
+/// A row index that isn't positional keeps the planned split whole (a text
+/// format would count the lines before every piece again); a positional one
+/// doesn't need to, and is the same. The indexes come back in file order.
+#[test]
+fn only_a_counted_row_index_keeps_whole_splits() {
+    let want: Vec<i64> = (0..4000).collect();
+    let (indexes, pieces) = scan_with_row_index(false);
+    assert_eq!(indexes, want);
+    assert_eq!(pieces, 1);
+    let (indexes, pieces) = scan_with_row_index(true);
+    assert_eq!(indexes, want);
+    assert!(pieces > 1, "{pieces}");
 }
 
 /// One split of a file whose units are many is cut into about four

@@ -395,6 +395,16 @@ impl ScanFilter {
         self.lowered().keys.clone()
     }
 
+    /// Whether this is a bound that keeps tightening (a top-N's), not a
+    /// value that arrives once.
+    #[must_use]
+    pub fn is_tightening(&self) -> bool {
+        matches!(
+            self.filter.published().snapshot,
+            FilterSnapshot::Tightening(_)
+        )
+    }
+
     /// The generation [`Self::current`] and [`Self::predicate`] are of.
     #[must_use]
     pub fn generation(&self) -> u64 {

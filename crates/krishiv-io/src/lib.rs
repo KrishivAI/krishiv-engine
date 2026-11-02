@@ -55,8 +55,9 @@ pub use commit::{DirectoryWrite, SUCCESS_MARKER, SaveMode};
 pub use csv::CsvFormat;
 pub use error::{FormatError, FormatResult, Result};
 pub use format::{
-    AsyncDecoder, Capabilities, Decoder, Encoder, FileFormat, FileMetadata, MetadataNeeds,
-    PushReadAt, ReadAt, ScanUnit, ScanUnitMetrics, Splittable, Step, UnitPlan, WrittenFile,
+    AsyncDecoder, Capabilities, Decoder, Encoder, FileFormat, FileMetadata, Granularity,
+    MetadataNeeds, PushReadAt, ReadAt, ScanUnit, ScanUnitMetrics, Splittable, Step, UnitPlan,
+    WrittenFile,
 };
 #[cfg(unix)]
 pub use io::beneath::{AnchorError, BeneathStore};
