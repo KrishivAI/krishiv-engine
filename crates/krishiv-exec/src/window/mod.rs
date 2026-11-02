@@ -54,12 +54,15 @@
 //! when its last output slice is emitted.
 //! With a spill scope, the buffered rows spill under memory pressure and a
 //! partition larger than memory is evaluated from disk (`spill.rs`,
-//! `stream.rs`); without one, a partition must fit in memory.
+//! `stream.rs`, `disk.rs`); without one, a partition must fit in memory. An
+//! exact percentile's value map is priced per row and, on disk, charged as
+//! it grows; past the memory left it fails with the memory error.
 //!
 //! # Weights
 //! Window functions are defined for insert-only input: weights other than
 //! 1 are `KRISHIV_UNSUPPORTED_FEATURE` (incremental windows are P4).
 
+mod disk;
 mod eval;
 mod frames;
 mod group_limit;
@@ -902,6 +905,10 @@ impl Operator for Window {
             (
                 "external_partitions",
                 self.counters.external.load(Ordering::Relaxed),
+            ),
+            (
+                "frame_file_folds",
+                self.counters.file_folds.load(Ordering::Relaxed),
             ),
         ])
     }
