@@ -1,12 +1,6 @@
 [
-  "0|date_add(DATE'9999-12-31', i)",
-  "0|date_sub(dt, i)",
-  "1|add_months(coalesce(last_day(dt), coalesce(DATE'1970-01-01', DATE'1970-01-01')), dayofweek(DATE'1970-01-01'))",
   "1|date_add(DATE'2000-02-29', i)",
   "1|date_add(DATE'2024-03-31', i)",
-  "1|date_add(dt, 1)",
-  "1|date_add(dt, 7)",
-  "1|date_add(dt, i)",
   "1|date_sub(DATE'2000-02-29', i)",
   "1|date_sub(DATE'9999-12-31', i)",
   "1|date_sub(dt, 2147483647)",

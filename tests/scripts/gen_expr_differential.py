@@ -338,6 +338,7 @@ def main():
         .config("spark.sql.catalogImplementation", "in-memory")
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.ui.enabled", "false")
+        .config("spark.sql.datetime.java8API.enabled", "true")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("OFF")
