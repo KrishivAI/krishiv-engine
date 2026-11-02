@@ -9,6 +9,27 @@
   "properties": {
     "format": { "const": "krishiv.query-profile" },
     "version": { "const": 1 },
+    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`. A reader ignores members it does not know." },
+    "usage": {
+      "type": "object",
+      "description": "Measured usage (T138): sums of the operators' counters. Derived, so a reader recomputes it. Object-store counts, principal and tags follow with the session context (T136).",
+      "required": ["fidelity", "wall_ns", "cpu_ns", "rows_out", "peak_memory_bytes", "spill_bytes", "scan"],
+      "additionalProperties": false,
+      "properties": {
+        "fidelity": { "type": "string", "description": "`measured`. A reader keeps an unknown string." },
+        "wall_ns": { "$ref": "#/$defs/u64" },
+        "cpu_ns": { "$ref": "#/$defs/u64", "description": "Compute time summed over every operator and driver." },
+        "rows_out": { "$ref": "#/$defs/u64", "description": "Rows the sinks received." },
+        "peak_memory_bytes": { "$ref": "#/$defs/u64", "description": "Summed over workers: an upper bound." },
+        "spill_bytes": { "$ref": "#/$defs/u64" },
+        "scan": {
+          "type": "object",
+          "required": ["bytes", "rows"],
+          "additionalProperties": false,
+          "properties": { "bytes": { "$ref": "#/$defs/u64" }, "rows": { "$ref": "#/$defs/u64" } }
+        }
+      }
+    },
     "detailed": {
       "type": "boolean",
       "description": "Whether the costlier detailed metrics (hash-table probe lengths) were collected."

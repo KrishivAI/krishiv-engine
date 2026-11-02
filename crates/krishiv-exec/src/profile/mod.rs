@@ -29,6 +29,10 @@ pub const PROFILE_FORMAT: &str = "krishiv.query-profile";
 /// The version of the profile document this build writes and reads. A
 /// change that removes or retypes a member bumps it.
 pub const PROFILE_VERSION: u64 = 1;
+/// The minor version this build writes: it counts additive changes within
+/// [`PROFILE_VERSION`] (0 or absent: the first v1; 1: `usage`). A reader
+/// ignores members it does not know, so a later minor still loads.
+pub const PROFILE_MINOR: u64 = 1;
 
 /// A node of the profiled plan: `EXPLAIN`'s node with its id.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,6 +141,62 @@ fn size(p: &PhysNode) -> u32 {
     p.children()
         .into_iter()
         .fold(1_u32, |n, c| n.saturating_add(size(c)))
+}
+
+/// The measured usage of a query (the `usage` member of the document, T138):
+/// sums of the operators' counters, so it always equals them. Object-store
+/// counts, `principal` and `tags` come with the session context (T136) and
+/// are not written before it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueryUsage {
+    /// `"measured"`: the numbers are counters, not estimates.
+    pub fidelity: &'static str,
+    /// Wall time of the query.
+    pub wall: std::time::Duration,
+    /// Compute time summed over every operator and driver.
+    pub cpu: std::time::Duration,
+    /// Rows the sinks received.
+    pub rows_out: u64,
+    /// Peak reserved memory (summed over workers: an upper bound).
+    pub peak_memory_bytes: u64,
+    /// Bytes spilled, summed over operators.
+    pub spill_bytes: u64,
+    /// Bytes the scans read (`scan_bytes`).
+    pub scan_bytes: u64,
+    /// Rows the scans decoded (`scan_rows_decoded`).
+    pub scan_rows: u64,
+}
+
+impl QueryUsage {
+    /// The usage of `m`.
+    #[must_use]
+    pub fn of(m: &QueryMetrics) -> Self {
+        use crate::metrics::{Metric, OperatorRole};
+        let mut u = Self {
+            fidelity: "measured",
+            wall: m.wall_time,
+            cpu: std::time::Duration::ZERO,
+            rows_out: 0,
+            peak_memory_bytes: m.memory.peak_reserved,
+            spill_bytes: 0,
+            scan_bytes: 0,
+            scan_rows: 0,
+        };
+        for e in m.operators.values() {
+            u.cpu = u.cpu.saturating_add(e.metrics.compute_time);
+            u.spill_bytes = u.spill_bytes.saturating_add(e.metrics.spilled_bytes);
+            if e.role == OperatorRole::Sink {
+                u.rows_out = u.rows_out.saturating_add(e.metrics.rows_in);
+            }
+            if let Some(&Metric::Count(n)) = e.extra("scan_bytes") {
+                u.scan_bytes = u.scan_bytes.saturating_add(n);
+            }
+            if let Some(&Metric::Count(n)) = e.extra("scan_rows_decoded") {
+                u.scan_rows = u.scan_rows.saturating_add(n);
+            }
+        }
+        u
+    }
 }
 
 /// A profiled query: its plan and its metrics.

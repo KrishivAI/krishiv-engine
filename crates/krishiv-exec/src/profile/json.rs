@@ -3,16 +3,21 @@
 //!
 //! Times are integer nanoseconds (`*_ns`), sizes integer bytes. Members
 //! appear in a fixed order; operators and pipelines are listed by id. A
-//! reader rejects another format or version, a missing or mistyped member
-//! and an unknown enum value, so a document either round-trips exactly or
-//! does not load.
+//! reader rejects another format or a different major version and a missing
+//! or mistyped member it knows, but ignores members it does not know (a
+//! newer `minor` only adds members) and keeps an unknown metric kind as
+//! text, so a document written by a later minor still loads. `usage` is
+//! derived from the operators, so it is written and not read back.
 
 use std::borrow::Cow;
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
-use super::{PROFILE_FORMAT, PROFILE_VERSION, ProfileError, ProfileNode, QueryProfile};
+use super::{
+    PROFILE_FORMAT, PROFILE_MINOR, PROFILE_VERSION, ProfileError, ProfileNode, QueryProfile,
+    QueryUsage,
+};
 use crate::context::OperatorId;
 use crate::metrics::{
     DriverStats, Metric, OperatorEntry, OperatorMetrics, OperatorRole, PipelineMetrics,
@@ -34,6 +39,7 @@ impl QueryProfile {
         json!({
             "format": PROFILE_FORMAT,
             "version": PROFILE_VERSION,
+            "minor": PROFILE_MINOR,
             "detailed": self.detailed,
             "query": {
                 "wall_time_ns": ns(m.wall_time),
@@ -59,6 +65,7 @@ impl QueryProfile {
             })).collect::<Vec<_>>(),
             "plan": plan_json(&self.plan),
             "operators": m.operators.iter().map(|(id, e)| operator_json(*id, e)).collect::<Vec<_>>(),
+            "usage": usage_json(&QueryUsage::of(m)),
         })
     }
 
@@ -165,6 +172,18 @@ fn plan_json(root: &ProfileNode) -> Value {
             })
             .collect(),
     )
+}
+
+fn usage_json(u: &QueryUsage) -> Value {
+    json!({
+        "fidelity": u.fidelity,
+        "wall_ns": ns(u.wall),
+        "cpu_ns": ns(u.cpu),
+        "rows_out": u.rows_out,
+        "peak_memory_bytes": u.peak_memory_bytes,
+        "spill_bytes": u.spill_bytes,
+        "scan": { "bytes": u.scan_bytes, "rows": u.scan_rows },
+    })
 }
 
 fn operator_json(id: OperatorId, e: &OperatorEntry) -> Value {
@@ -326,7 +345,11 @@ fn operator_of(v: &Value) -> R<(OperatorId, OperatorEntry)> {
             "count" => Metric::Count(u64_of(x, "value")?),
             "max" => Metric::Max(u64_of(x, "value")?),
             "text" => Metric::Text(str_of(x, "value")?.to_owned()),
-            k => return Err(ProfileError::new(format!("unknown metric kind {k:?}"))),
+            // A kind a later minor added: kept as its text, never rejected.
+            _ => Metric::Text(match member(x, "value")? {
+                Value::String(t) => t.clone(),
+                other => other.to_string(),
+            }),
         };
         extra.push((Cow::Owned(name), value));
     }
