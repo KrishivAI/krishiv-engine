@@ -388,7 +388,8 @@ impl Detached {
 
     /// `node` built with the loop tables `loops` (those of the enclosing
     /// loops, and this loop's previous round), as a round of its own: fresh
-    /// values, and the plan's shared plans built again.
+    /// values, and the plan's shared plans built again. `partition_shift`
+    /// is the round's number less one (see `EvalEnv::partition_shift`).
     ///
     /// # Errors
     /// As [`instantiate_task`].
@@ -396,16 +397,19 @@ impl Detached {
         &self,
         node: &PhysNode,
         mut loops: HashMap<u32, Arc<Output>>,
+        partition_shift: u32,
     ) -> Result<(Arc<dyn ExecNode>, SchemaRef)> {
         for (id, table) in &self.loops {
             loops.entry(*id).or_insert_with(|| Arc::clone(table));
         }
+        let mut env = self.env.clone();
+        env.partition_shift = partition_shift;
         let run = || {
             let mut cx = Instantiation {
                 worker: &self.worker,
                 task: self.task.clone(),
                 spill: self.spill.clone(),
-                env: self.env.clone(),
+                env,
                 values: Arc::new(LocalValues::new()),
                 ids: HashMap::new(),
                 shared: HashMap::new(),

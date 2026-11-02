@@ -210,6 +210,11 @@ pub(crate) struct EvalEnv {
     /// Counts the unseeded random binds of one plan instantiation (see
     /// [`BindOptions::seed_salt`](krishiv_functions::scalar::BindOptions::seed_salt)).
     pub(crate) seed_salt: Arc<AtomicU64>,
+    /// Added to the partition index the random functions draw their stream
+    /// for. Spark runs round `k` of a recursive CTE as a fresh plan whose
+    /// seeded random streams start at partition `k - 1` (`rand(7)` gives
+    /// the seed's first value in round 1, `rand(8)`'s in round 2, ...).
+    pub(crate) partition_shift: u32,
 }
 
 impl EvalEnv {
@@ -278,6 +283,7 @@ impl EvalEnv {
             legacy_coding_error_action,
             legacy_time_parser,
             seed_salt: Arc::new(AtomicU64::new(0)),
+            partition_shift: 0,
         }
     }
 
@@ -305,6 +311,7 @@ impl EvalEnv {
             legacy_coding_error_action: env.legacy_coding_error_action,
             legacy_time_parser: env.legacy_time_parser,
             seed_salt: Arc::new(AtomicU64::new(0)),
+            partition_shift: 0,
         }
     }
 
@@ -954,6 +961,7 @@ mod tests {
             legacy_coding_error_action: false,
             legacy_time_parser: false,
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            partition_shift: 0,
         }
     }
 
