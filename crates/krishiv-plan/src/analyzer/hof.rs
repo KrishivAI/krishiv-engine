@@ -31,10 +31,11 @@ use krishiv_common::error::{
     InvalidLambdaFunctionCallDuplicateArgNames, InvalidLambdaFunctionCallNonHigherOrderFunction,
     InvalidLambdaFunctionCallNumArgsMismatch, WrongNumArgsWithoutSuggestion,
 };
-use krishiv_types::DataType;
+use krishiv_types::{DataType, MapType};
 
 use super::AnalysisError;
 use super::bind::{addr, same, unsupported};
+use super::coerce;
 use super::exprs::{Bound, Ctx, Cx, SPARK_DOC_ROOT};
 use super::resolve::Resolver;
 use crate::{BoundColumn, Expr, ExprNode, FunctionCall, Origin};
@@ -286,6 +287,9 @@ impl Resolver<'_> {
                 done.push((key(i), bound));
             }
         }
+        if matches!(h, Hof::MapZipWith) {
+            self.unify_map_keys(f, &mut done);
+        }
         let values: Vec<Option<DataType>> = h
             .values()
             .iter()
@@ -303,6 +307,72 @@ impl Resolver<'_> {
             }
         }
         Ok(done)
+    }
+
+    /// `map_zip_with` over maps whose key types differ: both maps' keys are
+    /// cast to the wider type (Spark's `MapZipWith` coercion,
+    /// `findWiderTypeForTwo`), the values keep their types.
+    fn unify_map_keys(&self, f: &FunctionCall, done: &mut [(usize, Bound)]) {
+        if f.args.len() < 2 {
+            return;
+        }
+        let keys = [addr(&*f.args[0]), addr(&*f.args[1])];
+        let maps: Vec<Option<MapType>> = keys
+            .iter()
+            .map(|k| {
+                done.iter()
+                    .find(|(d, _)| d == k)
+                    .and_then(|(_, b)| match &b.ty.data_type {
+                        Some(DataType::Map(m)) => Some((**m).clone()),
+                        _ => None,
+                    })
+            })
+            .collect();
+        let [Some(first), Some(second)] = &maps[..] else {
+            return;
+        };
+        if first
+            .key_type()
+            .equals_structurally(second.key_type(), true)
+        {
+            return;
+        }
+        let conf = self.ctx.conf;
+        let rules = coerce::Rules {
+            ansi: conf.ansi,
+            case_sensitive: conf.case_sensitive,
+        };
+        let (left, right) = (
+            coerce::Arg {
+                ty: Some(first.key_type()),
+                nullable: false,
+                literal: None,
+            },
+            coerce::Arg {
+                ty: Some(second.key_type()),
+                nullable: false,
+                literal: None,
+            },
+        );
+        let Some(Some(wider)) = coerce::wider_type(&left, &right, rules) else {
+            return;
+        };
+        for (key, map) in keys.iter().zip([first, second]) {
+            if map.key_type() == &wider {
+                continue;
+            }
+            let target = DataType::Map(
+                MapType::new(
+                    wider.clone(),
+                    map.value_type().clone(),
+                    map.value_contains_null(),
+                )
+                .into(),
+            );
+            if let Some((_, b)) = done.iter_mut().find(|(d, _)| d == key) {
+                *b = self.implicit_cast(b, Some(target));
+            }
+        }
     }
 
     /// Binds the lambda `node` at `position` against the value arguments
@@ -361,7 +431,18 @@ impl Resolver<'_> {
         self.lambdas.push(LambdaFrame { vars: vars.clone() });
         let body = self.expr_in(step, &inner, cx);
         self.lambdas.pop();
-        let body = body?;
+        let mut body = body?;
+        // `aggregate`'s merge body has the accumulator's type up to field
+        // names (`(0 AS sum, 0 AS n)` against `(acc.sum + x, acc.n + 1)`):
+        // Spark compares structurally, and the value is the accumulator's.
+        if matches!(h, Hof::Aggregate | Hof::Reduce)
+            && position == 2
+            && let (Some(Some(zero)), Some(merged)) = (values.get(1), &body.ty.data_type)
+            && zero != merged
+            && zero.equals_structurally(merged, true)
+        {
+            body = self.implicit_cast(&body, Some(zero.clone()));
+        }
         // An aggregate or window over the lambda's elements is no outer
         // query aggregate: a constant lambda's own aggregates stay outer
         // aggregates, as the generic path resolves them.

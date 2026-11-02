@@ -4985,6 +4985,18 @@ impl Resolver<'_> {
                 None,
             ));
         }
+        // `acc.sum`: a field of a struct-typed lambda variable.
+        if c.plan_id.is_none()
+            && c.name.len() > 1
+            && let Some(var) = self.lambda_var(&c.name[0])
+        {
+            let a = Attr {
+                col: var,
+                qual: super::ops::no_qual(),
+                source: None,
+            };
+            return self.resolve_attr(&a, 1, &c.name, origin, None, true);
+        }
         if let Some(id) = c.plan_id {
             let a = self.plan_column(id, &c.name, cx, origin)?;
             self.used(&a);
@@ -5011,7 +5023,7 @@ impl Resolver<'_> {
             match self.find(level, &c.name, origin, lenient) {
                 Ok(Some((a, used))) => {
                     self.used(&a);
-                    return self.resolve_attr(&a, used, &c.name, origin, None);
+                    return self.resolve_attr(&a, used, &c.name, origin, None, false);
                 }
                 Ok(None) => {
                     lenient_dup = lenient_dup || lenient;
@@ -5102,7 +5114,7 @@ impl Resolver<'_> {
         for (level, outer) in levels.filter(|_| cx.outer) {
             if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
                 self.used(&a);
-                return self.resolve_attr(&a, used, &c.name, origin, Some(level));
+                return self.resolve_attr(&a, used, &c.name, origin, Some(level), false);
             }
         }
         // The parameters of the SQL function being resolved rank after
@@ -5485,11 +5497,13 @@ impl Resolver<'_> {
         parts: &[String],
         origin: Origin,
         outer: Option<usize>,
+        lambda: bool,
     ) -> Result<Bound, AnalysisError> {
         // A reference keeps the spelling it was written with.
         let mut col = a.col.clone();
         col.name.clone_from(&parts[used - 1]);
         let node = match outer {
+            None if lambda => ExprNode::Resolved(ResolvedExpr::LambdaVar(col.clone())),
             None => ExprNode::Resolved(ResolvedExpr::Column(col.clone())),
             Some(_) => ExprNode::Resolved(ResolvedExpr::OuterColumn(col.clone())),
         };
