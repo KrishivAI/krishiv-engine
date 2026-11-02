@@ -510,8 +510,8 @@ impl RowTable {
     /// Spreads the rows (with their long key bytes) and states over
     /// `1 << widen_to` radix partitions of `h`, in row order, so each
     /// group's states are unchanged. A growing index is rebuilt over the
-    /// new rows; a fixed one is cleared (as when full: later rows of its
-    /// keys become partial duplicates); append mode has none. Partition
+    /// new rows, a fixed one over up to its limit of them
+    /// ([`reindex`](Self::reindex)); append mode has none. Partition
     /// sketches start from the rows.
     ///
     /// The copy is built beside the table, which changes only once it is
@@ -592,7 +592,10 @@ impl RowTable {
                     });
                 }
             }
-            Mode::Fixed { .. } => self.unique &= self.groups == 0,
+            // Rebuilt like a grown one: an empty index would make one more
+            // partial row of every key seen again (q39, q65, q67 and q75
+            // widen early). A unique table keeps all its keys (they fit).
+            Mode::Fixed { limit } => self.reindex(limit),
             Mode::Append => {}
         }
         self.start_sketches(0);
@@ -604,7 +607,9 @@ impl RowTable {
     /// the state arrays of one new partition at a time (at most the
     /// states' bytes, twice for validity and offsets), the row lists and
     /// references (two `u32` per group, plus per-partition list headers),
-    /// and the sketches it starts.
+    /// and the sketches it starts. The rebuilt index is not counted again:
+    /// the old one is dropped first and the new one is no larger (a fixed
+    /// index holds at most the keys its capacity held).
     pub(crate) fn widen_bytes(&self) -> usize {
         let nparts = 1usize << self.widen_to;
         let accs: usize = self
@@ -2745,6 +2750,37 @@ mod tests {
         assert_eq!(counts.iter().flatten().sum::<i64>(), 150);
     }
 
+    /// Widening a fixed index that was cleared rebuilds it over the rows,
+    /// up to its limit and one entry per key: the indexed keys make no new
+    /// rows afterwards, and the index is no larger than before.
+    #[test]
+    fn widening_a_cleared_fixed_index_rebuilds_it() {
+        let seed = HashSeed::new(Some(7));
+        let core = core();
+        let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 64 }, true, 0)
+            .unwrap()
+            .widening(RADIX_BITS, 100);
+        apply(&mut t, &batch(&core, (0..300).map(|i| i % 200)));
+        assert!(!t.unique && t.wants_widen());
+        let (groups, buckets) = (t.groups, t.buckets());
+        t.widen().unwrap();
+        assert_eq!(t.part_count(), PARTS);
+        assert_eq!(t.index.len(), 64);
+        assert!(t.buckets() <= buckets);
+        let indexed: Vec<u32> = t.index.iter().copied().collect();
+        let out = t.output_batch(&indexed).unwrap();
+        let keys: Vec<i64> = out
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .iter()
+            .flatten()
+            .collect();
+        apply(&mut t, &batch(&core, keys.iter().copied()));
+        assert_eq!(t.groups, groups);
+    }
+
     /// Deterministic, one-thread and two-thread defaults.
     #[test]
     fn local_modes() {
@@ -2912,8 +2948,7 @@ mod tests {
 
     /// Widening spreads a narrow table's rows, long key bytes and states
     /// over the radix partitions without changing any group: a growing
-    /// index still finds every key, a fixed one is cleared, and sketches
-    /// start.
+    /// or fixed index still finds every key, and sketches start.
     #[test]
     fn widening_keeps_every_group() {
         let core = core();
@@ -2952,8 +2987,10 @@ mod tests {
             apply(&mut t, &batch(&core, 0..4_500));
             match mode {
                 // Every key is found again: no new rows, still unique.
-                Mode::Grow => assert_eq!((t.len(), t.is_unique()), (groups, true)),
-                _ => assert!(t.len() > groups && !t.is_unique(), "{mode:?}"),
+                Mode::Grow | Mode::Fixed { .. } => {
+                    assert_eq!((t.len(), t.is_unique()), (groups, true), "{mode:?}");
+                }
+                Mode::Append => assert!(t.len() > groups && !t.is_unique()),
             }
             // Widening an already wide table changes nothing.
             let n = t.len();
