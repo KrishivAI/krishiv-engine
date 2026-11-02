@@ -372,3 +372,29 @@ fn spatial_values_do_not_become_strings_or_compare_through_nullif() {
     let e = error(&format!("NULLIF({m}, {m})"));
     assert!(e.contains("INVALID_ORDERING_TYPE"), "{e}");
 }
+
+#[test]
+fn windows_refuse_spatial_keys() {
+    let m = format!("ST_GeomFromWKB({POINT})");
+    for q in [
+        format!("SELECT count(*) OVER (PARTITION BY g) FROM (SELECT {m} g)"),
+        format!("SELECT row_number() OVER (ORDER BY g) FROM (SELECT {m} g)"),
+    ] {
+        let e = run(&q).unwrap_err();
+        assert!(
+            e.contains("GEOMETRY") || e.contains("INVALID_ORDERING_TYPE"),
+            "{q}: {e}"
+        );
+    }
+}
+
+#[test]
+fn a_null_struct_hides_its_invalid_geography() {
+    let bad = "ST_GeomFromWKB(X'010100000000000000000069400000000000005940', 4326)";
+    let sql = format!(
+        "CAST(CAST(s AS STRUCT<g: GEOGRAPHY(4326)>) IS NULL AS STRING) FROM \
+         (SELECT IF(i = 0, CAST(NULL AS STRUCT<g: GEOMETRY(4326)>), named_struct('g', {bad})) s \
+          FROM range(1) t(i))"
+    );
+    assert_eq!(text(&format!("(SELECT {sql})")), "true");
+}

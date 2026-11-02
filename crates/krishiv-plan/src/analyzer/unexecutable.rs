@@ -46,7 +46,8 @@ fn is_spatial(t: Option<&DataType>) -> bool {
 
 /// The use of a spatial value as a key at `node`, with its origin.
 fn spatial_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
-    const KEY: &str = "a GEOMETRY or GEOGRAPHY value as a grouping, distinct or min/max key";
+    const KEY: &str =
+        "a GEOMETRY or GEOGRAPHY value as a grouping, distinct, window or min/max key";
     match node {
         Node::Plan(p) => match &p.node {
             PlanNode::Aggregate { grouping, .. } => {
@@ -61,6 +62,16 @@ fn spatial_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
                     .any(|e| is_spatial(expr_type(e)))
                     .then_some((KEY, p.origin))
             }
+            // A window partitions and orders by its keys.
+            PlanNode::Window {
+                partition_by,
+                order_by,
+                ..
+            } => partition_by
+                .iter()
+                .chain(order_by.iter().map(|o| &o.expr))
+                .any(|e| is_spatial(expr_type(e)))
+                .then_some((KEY, p.origin)),
             PlanNode::Distinct { input } => match &input.node {
                 PlanNode::Project { exprs, .. } => exprs
                     .iter()

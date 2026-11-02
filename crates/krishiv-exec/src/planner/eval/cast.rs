@@ -356,6 +356,16 @@ where
     values.slice(start, end.saturating_sub(start))
 }
 
+/// `col` with the rows of a NULL parent marked NULL too.
+fn under_parent_nulls(col: &ArrayRef, parent: Option<&arrow_buffer::NullBuffer>) -> ArrayRef {
+    let Some(parent) = parent else {
+        return Arc::clone(col);
+    };
+    let nulls = arrow_buffer::NullBuffer::union(col.nulls(), Some(parent));
+    let built = col.to_data().into_builder().nulls(nulls).build();
+    built.map_or_else(|_| Arc::clone(col), arrow_array::make_array)
+}
+
 /// `check_geography` on every geography inside `a`, of the Spark type `t`.
 fn check_geography_in(a: &ArrayRef, t: &DataType) -> Result<()> {
     use arrow_array::cast::AsArray;
@@ -394,7 +404,9 @@ fn check_geography_in(a: &ArrayRef, t: &DataType) -> Result<()> {
                 return Err(internal("a cast to a struct of geography of a non-struct"));
             };
             for (col, f) in st.columns().iter().zip(s.fields()) {
-                check_geography_in(col, f.data_type())?;
+                // A field under a NULL struct is no logical value.
+                let col = under_parent_nulls(col, st.nulls());
+                check_geography_in(&col, f.data_type())?;
             }
             Ok(())
         }
