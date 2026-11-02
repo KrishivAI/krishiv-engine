@@ -1,20 +1,8 @@
 {
   "cases": {
     "depends-on-command": [
-      8,
-      10,
-      12,
-      14,
-      16,
-      17,
-      19,
-      20,
       27,
       28
-    ],
-    "sql-commands": [
-      3,
-      5
     ]
   },
   "file": "subquery/in-subquery/in-null-semantics",

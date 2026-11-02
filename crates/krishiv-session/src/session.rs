@@ -1695,6 +1695,7 @@ impl Session {
         physical: PhysicalPlan,
         env: &QueryEnv,
         target: WriteTarget,
+        types: &[DataType],
     ) -> Result<Vec<String>, KrishivError> {
         let WriteTarget {
             format,
@@ -1725,6 +1726,18 @@ impl Session {
             .into());
         };
         let schema = Arc::clone(physical.schema());
+        // The analyzer's types where the plan's Arrow types don't say them.
+        let column_types: BTreeMap<usize, DataType> = schema
+            .fields()
+            .iter()
+            .zip(types)
+            .enumerate()
+            .filter(|(_, (f, t))| {
+                t.to_arrow_field_with_storage(f.name(), f.data_type().clone(), f.is_nullable())
+                    .is_ok_and(|tagged| !tagged.metadata().is_empty())
+            })
+            .map(|(i, (_, t))| (i, t.clone()))
+            .collect();
         let partitions =
             resolve_partitions(&schema, &partition_by, env.analysis.conf.case_sensitive)?;
         if !partitions.is_empty() && partitions.len() == schema.fields().len() {
@@ -1795,6 +1808,7 @@ impl Session {
                 max_records_per_file: max_records,
                 target_file_bytes: 0,
                 partition_by: partitions.iter().map(|(i, _)| *i).collect(),
+                column_types,
             })?;
             let worker = self.worker(env);
             let mut rows = self.run_on_query(&plan, worker, env, false).await?.0;

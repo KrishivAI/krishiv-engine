@@ -10,7 +10,7 @@ use crate::deadline::Deadline;
 use crate::format::{OutputMode, render_mode};
 use clap::{Args, ValueEnum};
 use krishiv::DataFrame;
-use krishiv::agent::{cell, session_zone};
+use krishiv::agent::{field_cell, session_zone};
 use krishiv::arrow::array::Array;
 use krishiv::arrow::datatypes::DataType;
 
@@ -662,7 +662,8 @@ fn collect_rows(
             rows.push(
                 b.columns()
                     .iter()
-                    .map(|c| cell(c.as_ref(), r, "NULL", &zone))
+                    .zip(schema.fields())
+                    .map(|(c, f)| field_cell(f, c.as_ref(), r, "NULL", &zone))
                     .collect(),
             );
             nulls.push(b.columns().iter().map(|c| c.is_null(r)).collect());
@@ -698,12 +699,35 @@ mod tests {
     use std::sync::Arc;
 
     use futures::StreamExt as _;
+    use krishiv::agent::cell;
     use krishiv::arrow::array::{
         ArrayRef, BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
     };
     use krishiv::arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
+
+    #[test]
+    fn intervals_print_in_their_fields() {
+        let session = krishiv::Session::new().expect("session");
+        let df = futures::executor::block_on(session.sql(
+            "SELECT interval '1 02' day to hour a, interval '3' month b, \
+             cast('1 day' as interval) c, interval '1-2' year to month d, \
+             cast(null as interval day) e",
+        ))
+        .expect("query");
+        let got = collect_rows(&df, &session, 10).expect("rows");
+        assert_eq!(
+            got.rows,
+            [[
+                "INTERVAL '1 02' DAY TO HOUR",
+                "INTERVAL '3' MONTH",
+                "1 days",
+                "INTERVAL '1-2' YEAR TO MONTH",
+                "NULL",
+            ]]
+        );
+    }
 
     fn int_batch(rows: i32) -> RecordBatch {
         let col = Int32Array::from_iter_values(0..rows);

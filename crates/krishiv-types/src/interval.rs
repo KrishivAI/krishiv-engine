@@ -10,63 +10,74 @@ const MICROS_PER_SECOND: i64 = 1_000_000;
 const MICROS_PER_MINUTE: i64 = 60 * MICROS_PER_SECOND;
 const MICROS_PER_HOUR: i64 = 60 * MICROS_PER_MINUTE;
 
-/// `START` or `START TO END`, upper-case.
-fn qualifier(start: &str, end: &str) -> String {
-    if start == end {
-        start.to_ascii_uppercase()
-    } else {
-        format!(
-            "{} TO {}",
-            start.to_ascii_uppercase(),
-            end.to_ascii_uppercase()
-        )
+/// `START` or `START TO END`, upper-case, appended to `out`.
+fn write_qualifier(out: &mut String, start: &str, end: &str) {
+    out.extend(start.chars().map(|c| c.to_ascii_uppercase()));
+    if start != end {
+        out.push_str(" TO ");
+        out.extend(end.chars().map(|c| c.to_ascii_uppercase()));
     }
 }
 
 /// `INTERVAL '-1-2' YEAR TO MONTH`: a year-month value in Spark's ANSI form.
 pub fn year_month_string(months: i32, start: YearMonthField, end: YearMonthField) -> String {
-    let sign = if months < 0 { "-" } else { "" };
+    let mut out = String::new();
+    write_year_month(&mut out, months, start, end);
+    out
+}
+
+/// [`year_month_string`], appended to `out`.
+pub fn write_year_month(out: &mut String, months: i32, start: YearMonthField, end: YearMonthField) {
+    out.push_str("INTERVAL '");
+    if months < 0 {
+        out.push('-');
+    }
     let m = months.unsigned_abs();
-    let value = match (start, end) {
-        (YearMonthField::Year, YearMonthField::Month) => format!("{}-{}", m / 12, m % 12),
-        (YearMonthField::Year, YearMonthField::Year) => (m / 12).to_string(),
-        (YearMonthField::Month, _) => m.to_string(),
-    };
-    format!(
-        "INTERVAL '{sign}{value}' {}",
-        qualifier(start.name(), end.name())
-    )
+    match (start, end) {
+        (YearMonthField::Year, YearMonthField::Month) => write!(out, "{}-{}", m / 12, m % 12),
+        (YearMonthField::Year, YearMonthField::Year) => write!(out, "{}", m / 12),
+        (YearMonthField::Month, _) => write!(out, "{m}"),
+    }
+    .ok();
+    out.push_str("' ");
+    write_qualifier(out, start.name(), end.name());
 }
 
 /// `INTERVAL '-1 02:03:04.5' DAY TO SECOND`: a day-time value in Spark's ANSI
 /// form. The leading field is unbounded and, unless it is DAY, at least two
 /// digits; the others stay in their range.
 pub fn day_time_string(micros: i64, start: DayTimeField, end: DayTimeField) -> String {
+    let mut out = String::new();
+    write_day_time(&mut out, micros, start, end);
+    out
+}
+
+/// [`day_time_string`], appended to `out`.
+pub fn write_day_time(out: &mut String, micros: i64, start: DayTimeField, end: DayTimeField) {
     let units = [86_400, 3_600, 60, 1].map(|s: u64| s * MICROS_PER_SECOND.unsigned_abs());
     let (first, last) = (start as usize, end as usize);
     let mut rest = micros.unsigned_abs();
-    let mut value = String::new();
+    out.push_str("INTERVAL '");
+    if micros < 0 {
+        out.push('-');
+    }
     for (i, unit) in units.iter().enumerate().take(last + 1).skip(first) {
         let whole = rest / unit;
         rest %= unit;
         match i {
-            0 => write!(value, "{whole}"),
-            _ if i == first => write!(value, "{whole:02}"),
-            1 => write!(value, " {whole:02}"),
-            _ => write!(value, ":{whole:02}"),
+            0 => write!(out, "{whole}"),
+            _ if i == first => write!(out, "{whole:02}"),
+            1 => write!(out, " {whole:02}"),
+            _ => write!(out, ":{whole:02}"),
         }
         .ok();
     }
     if end == DayTimeField::Second && rest > 0 {
-        let digits = format!("{rest:06}");
-        value.push('.');
-        value.push_str(digits.trim_end_matches('0'));
+        write!(out, ".{rest:06}").ok();
+        out.truncate(out.trim_end_matches('0').len());
     }
-    let sign = if micros < 0 { "-" } else { "" };
-    format!(
-        "INTERVAL '{sign}{value}' {}",
-        qualifier(start.name(), end.name())
-    )
+    out.push_str("' ");
+    write_qualifier(out, start.name(), end.name());
 }
 
 /// `CalendarInterval.toString`: the non-zero units, `0 seconds` for none,
