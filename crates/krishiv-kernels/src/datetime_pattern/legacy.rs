@@ -158,7 +158,11 @@ impl LegacyPattern {
         // `java.time` date-time labels; the offset fields then print what
         // `java.util.TimeZone` says, which has no transition before 1900.
         let printed = zone.rules.legacy_offset_at_utc(seconds);
-        self.write(local, Some((printed, zone.id)))
+        self.write(
+            local.div_euclid(MICROS_PER_DAY),
+            local.rem_euclid(MICROS_PER_DAY),
+            Some((printed, zone.id)),
+        )
     }
 
     /// `local` (a `TIMESTAMP_NTZ`).
@@ -166,7 +170,11 @@ impl LegacyPattern {
     /// # Errors
     /// A pattern with a zone or offset field.
     pub fn format_local(&self, local: i64) -> Result<String, KrishivError> {
-        self.write(local, None)
+        self.write(
+            local.div_euclid(MICROS_PER_DAY),
+            local.rem_euclid(MICROS_PER_DAY),
+            None,
+        )
     }
 
     /// `days` (a `DATE`): midnight of that day.
@@ -174,12 +182,17 @@ impl LegacyPattern {
     /// # Errors
     /// A pattern with a zone or offset field.
     pub fn format_date(&self, days: i32) -> Result<String, KrishivError> {
-        self.write(i64::from(days) * MICROS_PER_DAY, None)
+        // Day counts, not microseconds: a Date32 may lie beyond the i64 microsecond range.
+        self.write(i64::from(days), 0, None)
     }
 
-    fn write(&self, local: i64, zone: Option<(i32, &str)>) -> Result<String, KrishivError> {
-        let days = local.div_euclid(MICROS_PER_DAY);
-        let tod = local.rem_euclid(MICROS_PER_DAY);
+    fn write(
+        &self,
+        days: i64,
+        tod: i64,
+        zone: Option<(i32, &str)>,
+    ) -> Result<String, KrishivError> {
+        let local = days.saturating_mul(MICROS_PER_DAY).saturating_add(tod);
         let (year, month, day) = civil_from_days(days);
         let (dow, doy) = hybrid_week_fields(days, year, month, day);
         let hour = tod / 3_600_000_000;
@@ -197,7 +210,17 @@ impl LegacyPattern {
             };
             match c {
                 'G' => out.push_str(if year >= 1 { "AD" } else { "BC" }),
-                'y' | 'Y' => {
+                'Y' => {
+                    // The week year: the year of the week's Saturday.
+                    let (wy, _, _) = civil_from_days(week_year_anchor(days, year, doy));
+                    let era_year = if wy >= 1 { wy } else { 1 - wy };
+                    if n == 2 {
+                        let _ = write!(out, "{:02}", era_year % 100);
+                    } else {
+                        pad(&mut out, era_year, n);
+                    }
+                }
+                'y' => {
                     let era_year = if year >= 1 { year } else { 1 - year };
                     if n == 2 {
                         let _ = write!(out, "{:02}", era_year % 100);
@@ -375,6 +398,17 @@ fn week_of_year(days: i64, year: i64, doy: i64) -> i64 {
     }
 }
 
+/// The day that decides the week year of `days`: itself, unless the week
+/// (Sunday first, week 1 holds January 1st) is week 1 of the next year.
+fn week_year_anchor(days: i64, year: i64, doy: i64) -> i64 {
+    if week_of_year(days, year, doy) == 1 && doy > 300 {
+        // Late December in next year's week 1.
+        days + 31
+    } else {
+        days
+    }
+}
+
 fn is_leap(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
@@ -420,6 +454,12 @@ struct Parsed {
     month0: Option<(i64, u32)>,
     dom: Option<(i64, u32)>,
     doy: Option<(i64, u32)>,
+    /// Week of year, week of month, day of week in month, day of week
+    /// (`Calendar`'s numbering: Sunday = 1).
+    woy: Option<(i64, u32)>,
+    wom: Option<(i64, u32)>,
+    dowim: Option<(i64, u32)>,
+    dow: Option<(i64, u32)>,
     hour_of_day: Option<(i64, u32)>,
     hour12: Option<(i64, u32)>,
     pm: Option<(bool, u32)>,
@@ -468,7 +508,9 @@ impl Parsed {
                 return Some(p);
             }
             'E' => {
-                let (p, _) = name(text, pos, &LONG_DAYS, &SHORT_DAYS)?;
+                let (p, i) = name(text, pos, &LONG_DAYS, &SHORT_DAYS)?;
+                // The tables start on Monday.
+                self.dow = Some((if i == 6 { 1 } else { i as i64 + 2 }, st));
                 return Some(p);
             }
             'M' | 'L' if n >= 3 => {
@@ -477,7 +519,12 @@ impl Parsed {
                 self.month0 = Some((i as i64, st));
                 return Some(p);
             }
-            'z' | 'Z' | 'X' => {
+            'X' => {
+                let (p, z) = zone_iso(text, pos, n)?;
+                self.zone = Some(z);
+                return Some(p);
+            }
+            'z' | 'Z' => {
                 let (p, z) = zone(text, pos)?;
                 self.zone = Some(z);
                 return Some(p);
@@ -506,10 +553,119 @@ impl Parsed {
             'm' => self.minute = Some(value),
             's' => self.second = Some(value),
             'S' => self.millis = Some(value),
-            // Week fields are read and ignored.
+            'w' => self.woy = Some((value, st)),
+            'W' => self.wom = Some((value, st)),
+            'F' => self.dowim = Some((value, st)),
+            // `u` counts from Monday = 1; the `Calendar` from Sunday = 1.
+            'u' => {
+                if !(1..=7).contains(&value) {
+                    return None;
+                }
+                self.dow = Some((if value == 7 { 1 } else { value + 1 }, st));
+            }
             _ => {}
         }
         Some(end)
+    }
+
+    /// `GregorianCalendar.selectFields`: which group of fields decides the
+    /// date when a week field was set. Unset stamps compare lowest.
+    fn week_mode(&self) -> Mode {
+        let st = |o: Option<(i64, u32)>| o.map(|x| x.1);
+        let agg = |a: Option<u32>, b: Option<u32>| a.zip(b).map(|(x, y)| x.max(y));
+        let dow = st(self.dow);
+        let month = st(self.month0);
+        let mut dom = st(self.dom);
+        let mut wom = agg(st(self.wom), dow);
+        let mut dowim = agg(st(self.dowim), dow);
+        let doy = st(self.doy);
+        let mut woy = agg(st(self.woy), dow);
+        let mut best = dom.max(wom).max(dowim).max(doy).max(woy);
+        if best.is_none() {
+            wom = st(self.wom);
+            dowim = st(self.dowim).max(dow);
+            woy = st(self.woy);
+            best = wom.max(dowim).max(woy);
+            if best.is_none() {
+                best = month;
+                dom = month;
+            }
+        }
+        let (rw, rd, ry) = (st(self.wom), st(self.dowim), st(self.woy));
+        if best == dom || (best == wom && rw >= ry) || (best == dowim && rd >= ry) {
+            if best == dom {
+                Mode::Dom
+            } else if wom == dowim {
+                if rw >= rd { Mode::Wom } else { Mode::Dowim }
+            } else if best == wom {
+                Mode::Wom
+            } else {
+                Mode::Dowim
+            }
+        } else if best == doy {
+            Mode::Doy
+        } else {
+            Mode::Woy
+        }
+    }
+
+    /// The day a week-field group names (`GregorianCalendar.computeTime`,
+    /// `Locale.US`: weeks start on Sunday, a week 1 may hold one day).
+    fn week_date(&self, year: i64, mode: Mode) -> Option<i64> {
+        let on_or_before = |d: i64, dow: i64| d - (dow_sun1(d) - dow).rem_euclid(7);
+        let first_of = |month: u32| days_from_civil(year, month, 1);
+        let week_start = |first: i64| {
+            let mut start = on_or_before(first + 6, 1);
+            if start - first >= 1 {
+                start -= 7;
+            }
+            match self.dow {
+                Some((dow, _)) => on_or_before(start + 6, dow),
+                None => start,
+            }
+        };
+        match mode {
+            Mode::Wom => {
+                let m = u32::try_from(self.month0.map_or(0, |(v, _)| v) + 1).ok()?;
+                let first = first_of(m)?;
+                Some(week_start(first) + 7 * (self.wom?.0 - 1))
+            }
+            Mode::Woy => {
+                let first = first_of(1)?;
+                Some(week_start(first) + 7 * (self.woy?.0 - 1))
+            }
+            _ => {
+                let m = u32::try_from(self.month0.map_or(0, |(v, _)| v) + 1).ok()?;
+                let first = first_of(m)?;
+                let dow = self.dow.map_or(1, |(d, _)| d);
+                let n = self.dowim.map_or(1, |(v, _)| v);
+                if n >= 0 {
+                    Some(on_or_before(first + 7 * n - 1, dow))
+                } else {
+                    let len = i64::from(days_in_month(year, m));
+                    Some(on_or_before(first + len + 7 * (n + 1) - 1, dow))
+                }
+            }
+        }
+    }
+
+    /// A non-lenient `Calendar` rejects a result that disagrees with a
+    /// field that was set.
+    fn week_fields_agree(&self, days: i64, year: i64) -> bool {
+        let (y, m, d) = civil_from_days(days);
+        let doy = days - days_from_civil(y, 1, 1).unwrap_or(days) + 1;
+        y == year
+            && self.month0.is_none_or(|(v, _)| v == i64::from(m) - 1)
+            && self.dom.is_none_or(|(v, _)| v == i64::from(d))
+            && self.doy.is_none_or(|(v, _)| v == doy)
+            && self
+                .woy
+                .is_none_or(|(v, _)| v == week_of_year(days, y, doy))
+            && self.wom.is_none_or(|(v, _)| v == week_of_month(days, d))
+            && self
+                .dowim
+                .is_none_or(|(v, _)| v == (i64::from(d) - 1) / 7 + 1)
+            && self.dow.is_none_or(|(v, _)| v == dow_sun1(days))
     }
 
     fn resolve(self) -> Option<(i64, Option<Zone_>)> {
@@ -517,11 +673,22 @@ impl Parsed {
         if self.era_bc {
             year = 1 - year;
         }
-        let month_dom = self.month0.map(|(_, s)| s).max(self.dom.map(|(_, s)| s));
-        let use_doy = self
-            .doy
-            .is_some_and(|(_, s)| month_dom.is_none_or(|m| s > m));
-        let days = if use_doy {
+        let weeky = self.woy.is_some() || self.wom.is_some() || self.dowim.is_some();
+        let mode = if weeky {
+            self.week_mode()
+        } else if self.doy.is_some_and(|(_, s)| {
+            self.month0
+                .map(|(_, s)| s)
+                .max(self.dom.map(|(_, s)| s))
+                .is_none_or(|m| s > m)
+        }) {
+            Mode::Doy
+        } else {
+            Mode::Dom
+        };
+        let days = if matches!(mode, Mode::Wom | Mode::Dowim | Mode::Woy) {
+            self.week_date(year, mode)?
+        } else if matches!(mode, Mode::Doy) {
             let (d, _) = self.doy?;
             let len = if is_leap(year) { 366 } else { 365 };
             if !(1..=len).contains(&d) {
@@ -543,6 +710,9 @@ impl Parsed {
             }
             days_from_civil(year, u32::try_from(m + 1).ok()?, u32::try_from(d).ok()?)?
         };
+        if weeky && !self.week_fields_agree(days, year) {
+            return None;
+        }
         let hour = match (self.hour_of_day, self.hour12) {
             (Some((h, hs)), other) if other.is_none_or(|(_, os)| hs > os) => {
                 if !(0..24).contains(&h) {
@@ -573,6 +743,20 @@ impl Parsed {
         let local = days.checked_mul(MICROS_PER_DAY)?.checked_add(tod)?;
         Some((local, self.zone))
     }
+}
+
+#[derive(Clone, Copy)]
+enum Mode {
+    Dom,
+    Doy,
+    Wom,
+    Dowim,
+    Woy,
+}
+
+/// Day of week of `days` since the epoch, Sunday = 1.
+fn dow_sun1(days: i64) -> i64 {
+    (days + 4).rem_euclid(7) + 1
 }
 
 /// `(month, day)` of the 1-based `doy` of `year`.
@@ -654,6 +838,36 @@ fn name<S: AsRef<str>, T: AsRef<str>>(
     None
 }
 
+/// `SimpleDateFormat`'s ISO 8601 zone (`X`, `XX`, `XXX`): `Z`, or a sign and
+/// `hh` (one letter), `hhmm` (two) or `hh:mm` (three); nothing looser.
+fn zone_iso(text: &[char], pos: usize, n: usize) -> Option<(usize, Zone_)> {
+    if text.get(pos) == Some(&'Z') {
+        return Some((pos + 1, Zone_::Offset(0)));
+    }
+    let sign = *text.get(pos).filter(|c| matches!(c, '+' | '-'))?;
+    let (hh, mut e) = number(text, pos + 1, Some(2))?;
+    if e - (pos + 1) != 2 {
+        return None;
+    }
+    let mut mm = 0;
+    if n >= 2 {
+        if n == 3 {
+            if text.get(e) != Some(&':') {
+                return None;
+            }
+            e += 1;
+        }
+        let (m, e2) = number(text, e, Some(2))?;
+        if e2 - e != 2 {
+            return None;
+        }
+        mm = m;
+        e = e2;
+    }
+    let secs = i32::try_from(hh * 3600 + mm * 60).ok()?;
+    Some((e, Zone_::Offset(if sign == '-' { -secs } else { secs })))
+}
+
 /// A zone: `Z`, `GMT`/`UTC` with an optional offset, `+hh`, `+hhmm`,
 /// `+hh:mm`, or a region id.
 fn zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
@@ -710,6 +924,49 @@ mod tests {
     fn micros(y: i64, mo: u32, d: u32, h: i64, mi: i64, s: i64, ms: i64) -> i64 {
         let days = days_from_civil(y, mo, d).unwrap();
         days * MICROS_PER_DAY + ((h * 60 + mi) * 60 + s) * MICROS_PER_SECOND + ms * 1000
+    }
+
+    #[test]
+    fn a_date_beyond_the_microsecond_range_formats_from_day_counts() {
+        let p = LegacyPattern::new("yyyy-MM-dd").unwrap();
+        // 9999-12-31 and a day far past i64 microseconds (2^63 / 86.4e9 days is ~292,000 years).
+        assert_eq!(p.format_date(2_932_896).unwrap(), "9999-12-31");
+        assert!(p.format_date(i32::MAX).is_ok());
+    }
+
+    fn local(p: &str, text: &str) -> Option<i64> {
+        LegacyPattern::new(p).unwrap().parse_local(text).unwrap()
+    }
+
+    // Spark 4.2.0 under LEGACY (probe 2026-11-02).
+    #[test]
+    fn week_fields_resolve_like_gregorian_calendar() {
+        let d = |y, m, dd| days_from_civil(y, m, dd).unwrap() * MICROS_PER_DAY;
+        assert_eq!(local("yyyy-ww-u", "2024-02-1"), Some(d(2024, 1, 8)));
+        assert_eq!(local("yyyy-ww-u", "2024-01-2"), Some(d(2024, 1, 2)));
+        assert_eq!(local("yyyy-MM-F", "2024-05-3"), Some(d(2024, 5, 19)));
+        // Week 1 of February 2024 starts in January: the month disagrees.
+        assert_eq!(local("yyyy-MM-W", "2024-02-1"), None);
+    }
+
+    #[test]
+    fn uppercase_y_is_the_week_year() {
+        let t = micros(2019, 12, 30, 0, 0, 0, 0);
+        assert_eq!(fmt("YYYY-ww", t), "2020-01");
+        assert_eq!(fmt("yyyy-ww", t), "2019-01");
+        assert_eq!(fmt("YYYY-ww", micros(2021, 1, 1, 0, 0, 0, 0)), "2021-01");
+    }
+
+    #[test]
+    fn iso_offsets_have_a_width_each() {
+        let ok = |p: &str, t: &str| local(p, t).is_some();
+        assert!(ok("yyyy-MM-dd X", "2024-03-05 +05"));
+        assert!(ok("yyyy-MM-dd X", "2024-03-05 +05:30")); // trailing text ignored
+        assert!(ok("yyyy-MM-dd X", "2024-03-05 Z"));
+        assert!(ok("yyyy-MM-dd XX", "2024-03-05 +0530"));
+        assert!(!ok("yyyy-MM-dd XX", "2024-03-05 +05"));
+        assert!(ok("yyyy-MM-dd XXX", "2024-03-05 +05:30"));
+        assert!(!ok("yyyy-MM-dd XXX", "2024-03-05 +0530"));
     }
 
     #[test]
