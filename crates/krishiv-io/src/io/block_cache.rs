@@ -136,6 +136,9 @@ type Run = Shared<BoxFuture<'static, RunResult>>;
 pub struct BlockCache {
     cfg: BlockCacheConfig,
     dir: PathBuf,
+    /// The lock this cache holds on `<dir>/.lock` while it lives: a directory whose lock is free
+    /// has no owner (its process is gone), whatever the process table says.
+    _lock: std::fs::File,
     state: Mutex<State>,
     inflight: Mutex<HashMap<u128, (Run, usize)>>,
     counters: Counters,
@@ -188,16 +191,28 @@ impl BlockCache {
             "p{pid}-{}",
             SEQUENCE.fetch_add(1, Ordering::Relaxed)
         ));
-        purge_dead(&cfg.dir, pid);
+        purge_dead(&cfg.dir);
         match std::fs::remove_dir_all(&dir) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
         }
         std::fs::create_dir_all(&dir)?;
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join(LOCK_FILE))?;
+        lock.try_lock().map_err(|e| match e {
+            std::fs::TryLockError::Error(e) => e,
+            std::fs::TryLockError::WouldBlock => {
+                std::io::Error::other("the cache directory is locked by another cache")
+            }
+        })?;
         Ok(Arc::new(Self {
             cfg,
             dir,
+            _lock: lock,
             state: Mutex::new(State::default()),
             inflight: Mutex::new(HashMap::new()),
             counters: Counters::default(),
@@ -394,9 +409,13 @@ impl Drop for BlockCache {
     }
 }
 
-/// Removes the cache directories (`p<pid>-<n>`, or the older `p<pid>`) of processes that no longer
-/// run. Only where the process table can be read (`/proc`); elsewhere they stay.
-fn purge_dead(root: &std::path::Path, own: u32) {
+/// The file a live cache locks in its directory.
+const LOCK_FILE: &str = ".lock";
+
+/// Removes the cache directories (`p<pid>-<n>`) that no cache holds any longer: one whose lock file
+/// can be locked has no owner. A directory without a lock file (an older layout) stays, as does
+/// everything that is not a cache directory.
+fn purge_dead(root: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
@@ -405,13 +424,24 @@ fn purge_dead(root: &std::path::Path, own: u32) {
         let Some(rest) = name.to_str().and_then(|n| n.strip_prefix('p')) else {
             continue;
         };
-        let Ok(pid) = rest.split('-').next().unwrap_or("").parse::<u32>() else {
+        let mut parts = rest.split('-');
+        let (Ok(_pid), Some(Ok(_seq)), None) = (
+            parts.next().unwrap_or("").parse::<u32>(),
+            parts.next().map(str::parse::<u64>),
+            parts.next(),
+        ) else {
             continue;
         };
-        if pid != own
-            && std::path::Path::new("/proc/self").exists()
-            && !std::path::Path::new(&format!("/proc/{pid}")).exists()
-        {
+        let Ok(lock) = std::fs::OpenOptions::new()
+            .write(true)
+            .open(entry.path().join(LOCK_FILE))
+        else {
+            continue;
+        };
+        // A free lock: nobody owns the directory. Held (a live cache of this or another process,
+        // possibly in another PID namespace sharing the directory): leave it.
+        if lock.try_lock().is_ok() {
+            drop(lock);
             drop(std::fs::remove_dir_all(entry.path()));
         }
     }

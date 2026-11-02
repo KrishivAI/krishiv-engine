@@ -270,6 +270,9 @@ async fn a_damaged_payload_is_a_miss() {
         r.io.get_ranges(&f, &[0..100_000]).await.unwrap();
         for entry in std::fs::read_dir(cache_files(&r)).unwrap() {
             let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "blk") {
+                continue;
+            }
             let mut body = std::fs::read(&path).unwrap();
             if truncate {
                 body.truncate(body.len() - 7);
@@ -297,6 +300,9 @@ async fn a_forgotten_block_leaves_no_stale_recency_entry() {
     r.io.get_ranges(&f, &[0..100_000]).await.unwrap();
     for entry in std::fs::read_dir(cache_files(&r)).unwrap() {
         let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "blk") {
+            continue;
+        }
         let mut body = std::fs::read(&path).unwrap();
         let last = body.len() - 1;
         body[last] ^= 0xff;
@@ -356,9 +362,19 @@ async fn keys_and_files_hold_no_credential() {
 fn the_disk_part_is_emptied_at_start() {
     let dir = tempfile::tempdir().unwrap();
     // A directory of a process that is gone (pid 4294967294 is never in use) is removed.
+    // Its lock file is free (nothing holds it), whatever the process table says.
     let dead = dir.path().join("p4294967294-0");
     std::fs::create_dir_all(&dead).unwrap();
     std::fs::write(dead.join("stale.blk"), b"old").unwrap();
+    std::fs::write(dead.join(".lock"), b"").unwrap();
+    // A directory whose lock is held (a live cache, perhaps of another PID namespace sharing the
+    // directory) stays, and so does one without a lock file.
+    let held = dir.path().join("p4294967293-0");
+    std::fs::create_dir_all(&held).unwrap();
+    let held_lock = std::fs::File::create(held.join(".lock")).unwrap();
+    held_lock.try_lock().unwrap();
+    let unlocked_layout = dir.path().join("p4294967292-0");
+    std::fs::create_dir_all(&unlocked_layout).unwrap();
     let config = || BlockCacheConfig {
         dir: FsPath::new(dir.path()).to_path_buf(),
         disk_bytes: 1 << 20,
@@ -369,11 +385,18 @@ fn the_disk_part_is_emptied_at_start() {
     assert!(!dead.exists());
     // A second cache (another session) has a directory of its own and does not empty the first's.
     let second = BlockCache::new(config()).unwrap();
-    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    assert!(held.exists() && unlocked_layout.exists());
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 4);
     // A cache takes its directory away when it is dropped.
     drop(first);
     drop(second);
-    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    // Only the two directories that were not this process's own remain; once its lock is free the
+    // held one is purged by the next cache.
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    drop(held_lock);
+    let third = BlockCache::new(config()).unwrap();
+    assert!(!held.exists() && unlocked_layout.exists());
+    drop(third);
 }
 
 /// The memory tier is charged to the memory manager (I11): it holds only what the pool grants, and
