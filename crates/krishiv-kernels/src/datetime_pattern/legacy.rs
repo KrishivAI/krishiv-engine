@@ -327,20 +327,19 @@ impl LegacyPattern {
             match t {
                 Tok::Literal(lit) => {
                     for c in lit.chars() {
-                        if c.is_whitespace() {
-                            // A blank in the pattern matches any run of blanks.
-                            while text.get(pos).is_some_and(|x| x.is_whitespace()) {
-                                pos += 1;
-                            }
-                        } else {
-                            if text.get(pos) != Some(&c) {
-                                return None;
-                            }
-                            pos += 1;
+                        // A literal matches its own character, a blank too
+                        // (extra blanks are skipped before the next field).
+                        if text.get(pos) != Some(&c) {
+                            return None;
                         }
+                        pos += 1;
                     }
                 }
                 Tok::Field(c, n) => {
+                    // `SimpleDateFormat` skips spaces and tabs before a field.
+                    while text.get(pos).is_some_and(|x| matches!(x, ' ' | '\t')) {
+                        pos += 1;
+                    }
                     // A number directly followed by another number in the
                     // pattern reads exactly its run length.
                     let abut =
@@ -749,6 +748,10 @@ impl Parsed {
 
     fn resolve(self) -> Option<(i64, Option<Zone_>)> {
         if !self.year_two {
+            // The year of the era is positive: no year 0 (nor `0000 BC`).
+            if self.year.is_some_and(|(y, _)| y <= 0) {
+                return None;
+            }
             return self.resolve_in(self.year.map_or(1970, |(y, _)| y));
         }
         // `yy`: the century of the window start, one later when the date
@@ -1131,6 +1134,24 @@ mod tests {
         assert_eq!(local("", "2024-01-01"), None);
         let d = days_from_civil(2000, 2, 29).unwrap() * MICROS_PER_DAY;
         assert_eq!(local("yy-MM-dd", "00-02-29"), Some(d));
+    }
+
+    // Spark 4.2.0 under LEGACY (probe 2026-11-02).
+    #[test]
+    fn year_zero_and_literal_blanks_follow_simple_date_format() {
+        assert_eq!(local("yyyy-MM-dd", "0000-01-01"), None);
+        assert_eq!(local("yyyy-MM-dd G", "0000-01-01 BC"), None);
+        let p = "yyyy-MM-dd 'at' HH:mm";
+        for bad in [
+            "2024-01-01at 12:30",
+            "2024-01-01  at 12:30",
+            "2024-01-01 at12:30",
+        ] {
+            assert_eq!(local(p, bad), None, "{bad}");
+        }
+        assert!(local(p, "2024-01-01 at 12:30").is_some());
+        assert!(local("yyyy-MM-dd HH:mm", "2024-01-01  12:30").is_some());
+        assert_eq!(local("yyyy-MM-dd HH:mm", "2024-01-0112:30"), None);
     }
 
     #[test]
