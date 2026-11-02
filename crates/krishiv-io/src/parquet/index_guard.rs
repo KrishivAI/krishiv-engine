@@ -211,7 +211,7 @@ fn check_locations(pages: &[PageLocation], chunk: &Range<u64>, rows: u64) -> R<(
 /// # Errors
 /// [`Rejected`] for a walk, decode or page-count failure.
 pub(super) fn column_index(bytes: &[u8], ty: PhysicalType, pages: usize) -> R<ColumnIndexMetaData> {
-    thrift_guard::check(bytes)?;
+    thrift_guard::check_column_index(bytes)?;
     let index = super::contain("reading a column index", FormatError::Corrupt, || {
         decode_column_index(bytes, ty).map_err(|e| FormatError::Corrupt(e.to_string()))
     })

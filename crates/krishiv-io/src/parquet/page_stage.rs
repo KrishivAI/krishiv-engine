@@ -269,9 +269,11 @@ impl PageStage {
         })
     }
 
-    /// The ranges to read, once: the decoder's first step.
+    /// The ranges to read, until they arrived: the decoder's first steps.
     pub(super) fn request(&mut self) -> Option<Vec<Range<u64>>> {
-        if self.requested || self.done {
+        // Until the bytes arrive: a step without a push returns the same
+        // ranges (also after a cancelled fetch).
+        if self.done {
             return None;
         }
         self.requested = true;

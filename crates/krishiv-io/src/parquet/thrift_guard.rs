@@ -55,6 +55,10 @@ enum Schema {
     DictPage,
     /// `DataPageHeaderV2`.
     DataPageV2,
+    /// A page index's `ColumnIndex`: walked by wire type like `Any`, except
+    /// that the elements of a boolean list (`null_pages`) each take a byte,
+    /// as the decoder reads them.
+    ColumnIndex,
 }
 
 /// How arrow-rs reads a field of a known struct.
@@ -113,6 +117,17 @@ pub(super) fn check(footer: &[u8]) -> Result<(), &'static str> {
     walk_struct(footer, Schema::Any, &mut 0, limit).map(|_| ())
 }
 
+/// Checks the `ColumnIndex` at `bytes`: as [`check`], but walking its
+/// boolean `null_pages` list the way the decoder reads it (a byte per
+/// element), so the collections after it are reached at the right bytes.
+///
+/// # Errors
+/// What [`check`] reports.
+pub(super) fn check_column_index(bytes: &[u8]) -> Result<(), &'static str> {
+    let limit = bytes.len().saturating_mul(8).saturating_add(1024);
+    walk_struct(bytes, Schema::ColumnIndex, &mut 0, limit).map(|_| ())
+}
+
 /// The `numBytes` of the `BloomFilterHeader` at the start of `buf` and the
 /// header's length. The header is walked first (counts, depth, work), then
 /// read: its first field must be the `i32` `numBytes`, which the format
@@ -141,6 +156,7 @@ pub(super) fn bloom_header(buf: &[u8]) -> Result<(u32, usize), &'static str> {
         work: &mut 0,
         limit,
         page_header: false,
+        bool_bytes: false,
     };
     let raw = walk.varint()?;
     let num_bytes = u32::try_from(unzigzag(raw)).map_err(|_| "a negative Bloom bitset size")?;
@@ -168,6 +184,7 @@ fn walk_struct(
         work,
         limit,
         page_header: schema == Schema::Page,
+        bool_bytes: schema == Schema::ColumnIndex,
     };
     let mut stack = vec![Frame::Struct { schema, last: 0 }];
     let mut field_3 = None;
@@ -359,6 +376,9 @@ struct Walk<'a> {
     /// [`Walk::budget`].
     work: &'a mut usize,
     limit: usize,
+    /// Whether the elements of a boolean list take a byte each (a
+    /// `ColumnIndex`'s `null_pages`).
+    bool_bytes: bool,
     /// Whether this is a page header, read by arrow-rs from a reader that
     /// runs on past the chunk. A footer is read from a slice, whose every
     /// skip is bounded, and still refuses UUIDs here as before.
@@ -421,10 +441,14 @@ impl Walk<'_> {
     /// does the same: walking by the specification would put this check at
     /// other bytes than the decoder's, and let it miss what the decoder
     /// then reads (a map of tens of millions of entries, say).
-    fn value(&mut self, ty: u8, _in_list: bool) -> Result<Option<Frame>, &'static str> {
+    fn value(&mut self, ty: u8, in_list: bool) -> Result<Option<Frame>, &'static str> {
         self.budget()?;
         match ty {
-            BOOL_TRUE | BOOL_FALSE => {}
+            BOOL_TRUE | BOOL_FALSE => {
+                if in_list && self.bool_bytes {
+                    self.skip(1)?;
+                }
+            }
             BYTE => self.skip(1)?,
             I16 | I32 | I64 => {
                 self.varint()?;

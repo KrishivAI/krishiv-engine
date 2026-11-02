@@ -360,3 +360,23 @@ fn a_short_nan_counts_list_is_rejected() {
     let err = column_index(&bytes, PhysicalType::INT64, 2).expect_err("short nan counts");
     assert!(err.0.contains("NaN counts"), "{err:?}");
 }
+
+/// A `ColumnIndex` whose `null_pages` list holds three booleans (a byte
+/// each for the decoder) and whose maximum bounds declare 2^31-1 elements:
+/// the walk must reach that count at the right bytes and refuse it.
+#[test]
+fn a_huge_count_after_null_pages_is_reached_and_refused() {
+    let mut bytes = vec![0x19, (3 << 4) | 2, 2, 2, 2];
+    // 2: min_values, three 8-byte binaries
+    bytes.extend([0x19, (3 << 4) | 8]);
+    for _ in 0..3 {
+        bytes.push(8);
+        bytes.extend([0; 8]);
+    }
+    // 3: max_values declaring 2^31 - 1 elements
+    bytes.extend([0x19, 0xf8]);
+    bytes.extend(varint((1 << 31) - 1));
+    bytes.push(0x00);
+    let err = column_index(&bytes, PhysicalType::INT64, 3).expect_err("a huge count");
+    assert!(err.0.contains("larger than the bytes left"), "{err:?}");
+}
