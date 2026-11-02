@@ -26,12 +26,21 @@ impl Glob {
         let mut alternatives = Vec::new();
         for text in expand_braces(pattern)? {
             check_brackets(&text)?;
-            alternatives.push(
-                text.split('/')
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect(),
-            );
+            let segments: Vec<String> = text
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .map(collapse_stars)
+                .collect();
+            // Matching recurses once per pattern character: a segment is bounded.
+            if segments
+                .iter()
+                .any(|s| s.chars().count() > MAX_SEGMENT_CHARS)
+            {
+                return Err(format!(
+                    "a segment of the pattern is longer than {MAX_SEGMENT_CHARS} characters"
+                ));
+            }
+            alternatives.push(segments);
         }
         Ok(Self { alternatives })
     }
@@ -88,6 +97,36 @@ fn unescape(s: &str) -> String {
 
 /// Most patterns `{a,b}` groups may expand to: repeated groups multiply, and the expansion is eager.
 const MAX_ALTERNATIVES: usize = 4096;
+
+/// Longest pattern segment (after runs of `*` are collapsed): the matcher recurses once per character.
+const MAX_SEGMENT_CHARS: usize = 1024;
+
+/// `a***b` is `a*b` inside a segment: a run of unescaped stars matches what one does.
+fn collapse_stars(segment: &str) -> String {
+    let mut out = String::with_capacity(segment.len());
+    let mut escaped = false;
+    let mut last_star = false;
+    for c in segment.chars() {
+        if escaped {
+            escaped = false;
+            last_star = false;
+            out.push(c);
+        } else if c == '\\' {
+            escaped = true;
+            last_star = false;
+            out.push(c);
+        } else if c == '*' {
+            if !last_star {
+                out.push(c);
+            }
+            last_star = true;
+        } else {
+            last_star = false;
+            out.push(c);
+        }
+    }
+    out
+}
 
 /// Most `{` a pattern may hold: the expansion recurses once per group, so a
 /// pattern of thousands of single-alternative groups (`{}{}{}...`), which
@@ -310,7 +349,21 @@ mod tests {
         assert!(Glob::parse(&format!("/a/{}", "{x}".repeat(64))).is_ok());
         assert!(Glob::parse(&format!("/a/{}", "{x}".repeat(65))).is_err());
         // Escaped braces are literals and do not count.
-        assert!(Glob::parse(&"\\{".repeat(4000)).is_ok());
+        assert!(Glob::parse(&"\\{".repeat(400)).is_ok());
+    }
+
+    #[test]
+    fn long_runs_of_stars_and_long_segments_do_not_recurse_deeply() {
+        let g = Glob::parse(&"*".repeat(100_000)).unwrap();
+        assert!(g.matches(&["x"]));
+        assert!(
+            !Glob::parse(&format!("{}a", "*".repeat(100_000)))
+                .unwrap()
+                .matches(&["x"])
+        );
+        assert!(Glob::parse(&"a?".repeat(2_000)).is_err());
+        assert!(m("/d/a**b", "/d/axyb"));
+        assert!(m("/d/a\\**b", "/d/a*xb"));
     }
 
     #[test]

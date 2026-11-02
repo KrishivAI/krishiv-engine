@@ -636,6 +636,13 @@ impl FileReads {
                 }
             }
         }
+        if logged.is_none() && self.log_appeared(&at, mode).await? {
+            return Err(krishiv_common::error::KrishivConcurrentCommit {
+                root: at.display.clone(),
+                version: "the version this read started at".to_owned(),
+            }
+            .into());
+        }
         if found < expected.len() {
             return Err(krishiv_common::error::KrishivConcurrentCommit {
                 root: at.display.clone(),
@@ -746,6 +753,21 @@ impl FileReads {
         }
     }
 
+    /// Whether a commit log exists now for `at` (or for the `basePath` root above it): checked after an
+    /// unlogged listing, because a first logged write to an existing directory creates its log before
+    /// its tasks write files, so a listing taken in between would accept uncommitted files.
+    async fn log_appeared(&self, at: &LocatedPath, mode: &ListMode) -> Result<bool> {
+        if Box::pin(self.committed_files(at)).await?.is_some() {
+            return Ok(true);
+        }
+        match &mode.base {
+            Some(root) if at.path.prefix_matches(&root.path) => {
+                Ok(Box::pin(self.committed_files(root)).await?.is_some())
+            }
+            _ => Ok(false),
+        }
+    }
+
     async fn list_path(
         &self,
         at: &LocatedPath,
@@ -834,6 +856,13 @@ impl FileReads {
                 .collect();
             let segments = Self::base_segments(at, mode, &names)?;
             out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
+        }
+        if committed.is_none() && inherited.is_none() && self.log_appeared(at, mode).await? {
+            return Err(krishiv_common::error::KrishivConcurrentCommit {
+                root: at.display.clone(),
+                version: "the version this read started at".to_owned(),
+            }
+            .into());
         }
         // The snapshot's files under `at` (the inherited log's, not hidden): each must still be there.
         if let Some((root_base, files)) = &inherited {
