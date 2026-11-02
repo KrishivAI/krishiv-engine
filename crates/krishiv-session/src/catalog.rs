@@ -376,6 +376,8 @@ pub(crate) struct QueryCatalog {
     namespace: Vec<String>,
     /// The SQL path (`SET PATH`) as this query sees it.
     path: Vec<Vec<String>>,
+    /// What the `system` tables read.
+    system: crate::system::Sources,
 }
 
 impl QueryCatalog {
@@ -405,6 +407,7 @@ impl QueryCatalog {
         files: Arc<FileReads>,
         scans: FileScans,
         default_path: &str,
+        system: crate::system::Sources,
     ) -> Self {
         let epoch = session.epoch();
         let namespace = vec![session.current_namespace()];
@@ -420,6 +423,7 @@ impl QueryCatalog {
             epoch,
             namespace,
             path,
+            system,
         }
     }
 
@@ -1119,7 +1123,7 @@ impl TableProviderResolver for QueryCatalog {
         match &scan.source {
             ReadSource::Table { name, .. } if crate::system::is_system_table(name) => {
                 let table = name.last().map_or("", String::as_str);
-                crate::system::provider(table)?
+                crate::system::provider(table, &self.system)?
                     .map(|t| t as Arc<dyn TableProvider>)
                     .ok_or_else(|| {
                         InternalError {

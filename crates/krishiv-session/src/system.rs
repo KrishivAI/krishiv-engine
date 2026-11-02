@@ -8,15 +8,17 @@
 //! reserved catalog name (`KRISHIV_RESERVED_NAME`): nothing can be created in
 //! it, and it is no database.
 //!
-//! This unit holds `system.capabilities`; the query, operator, memory, cache
-//! and metric tables arrive with their recorders (units 2 and 3).
+//! This unit holds `system.capabilities` and `system.memory`; the query,
+//! operator, cache and metric tables arrive with their recorders (units 2
+//! and 3).
 
 use std::sync::{Arc, OnceLock};
 
-use arrow_array::{ArrayRef, RecordBatch, StringArray};
+use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType as ArrowType, Field, Schema};
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_exec::planner::MemoryTable;
+use krishiv_memory::MemoryPool;
 use krishiv_plan::TableVersion;
 use krishiv_plan::analyzer::{
     BoxFuture, Catalog, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
@@ -33,11 +35,8 @@ const SCHEMA_VERSION: &str = "1";
 /// The worker this process is, in the `worker_id` column.
 const LOCAL_WORKER: &str = "local";
 
-/// The columns of `system.capabilities` (design `P2-T126` section 3).
-const CAPABILITY_COLUMNS: [&str; 5] = ["worker_id", "kind", "name", "value", "detail"];
-
 /// Every table of the catalog.
-const TABLES: [&str; 1] = ["capabilities"];
+const TABLES: [&str; 2] = ["capabilities", "memory"];
 
 /// Whether `name` is the reserved catalog name, in any letter case.
 pub(crate) fn is_system(name: &str) -> bool {
@@ -99,52 +98,142 @@ fn capability_rows() -> Vec<[String; 4]> {
     rows
 }
 
+/// What a column holds.
+#[derive(Clone, Copy)]
+enum Kind {
+    Text,
+    Long,
+    Flag,
+}
+
+/// A table's columns: `(name, kind, nullable)`.
+fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
+    use Kind::{Flag, Long, Text};
+    Some(match table.to_ascii_lowercase().as_str() {
+        "capabilities" => vec![
+            ("worker_id", Text, false),
+            ("kind", Text, false),
+            ("name", Text, false),
+            ("value", Text, false),
+            ("detail", Text, true),
+        ],
+        "memory" => vec![
+            ("worker_id", Text, false),
+            ("path", Text, false),
+            ("parent", Text, true),
+            ("kind", Text, false),
+            ("query_id", Text, true),
+            ("reserved_bytes", Long, false),
+            ("peak_bytes", Long, false),
+            ("limit_bytes", Long, true),
+            ("spillable", Flag, false),
+        ],
+        _ => return None,
+    })
+}
+
 /// The columns of `table`, `None` for an unknown table.
 fn columns(table: &str) -> Option<Vec<TableColumn>> {
-    if !table.eq_ignore_ascii_case("capabilities") {
-        return None;
-    }
     Some(
-        CAPABILITY_COLUMNS
-            .iter()
-            .map(|name| TableColumn {
-                name: (*name).to_owned(),
-                data_type: DataType::String,
-                nullable: *name == "detail",
+        layout(table)?
+            .into_iter()
+            .map(|(name, kind, nullable)| TableColumn {
+                name: name.to_owned(),
+                data_type: match kind {
+                    Kind::Text => DataType::String,
+                    Kind::Long => DataType::Long,
+                    Kind::Flag => DataType::Boolean,
+                },
+                nullable,
             })
             .collect(),
     )
 }
 
+/// Rows of text cells, column by column.
+fn text<'a>(cells: impl Iterator<Item = Option<&'a str>>) -> ArrayRef {
+    Arc::new(StringArray::from_iter(cells))
+}
+
+fn long(cells: impl Iterator<Item = Option<i64>>) -> ArrayRef {
+    Arc::new(Int64Array::from_iter(cells))
+}
+
+/// A byte count as `BIGINT`, saturating.
+fn bytes(n: usize) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
+}
+
+/// The columns' values for `table` now.
+fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
+    if table.eq_ignore_ascii_case("memory") {
+        let entries = sources.memory.snapshot().entries;
+        let worker = vec![Some(LOCAL_WORKER); entries.len()];
+        // `process/query-<id>/...`: the query of a pool or consumer below one.
+        let query = |path: &str| {
+            path.split('/')
+                .nth(1)
+                .and_then(|p| p.strip_prefix("query-"))
+                .map(str::to_owned)
+        };
+        let queries: Vec<Option<String>> = entries.iter().map(|e| query(&e.path)).collect();
+        return vec![
+            text(worker.into_iter()),
+            text(entries.iter().map(|e| Some(e.path.as_str()))),
+            text(entries.iter().map(|e| e.parent.as_deref())),
+            text(
+                entries
+                    .iter()
+                    .map(|e| Some(if e.is_consumer { "consumer" } else { "pool" })),
+            ),
+            text(queries.iter().map(Option::as_deref)),
+            long(entries.iter().map(|e| Some(bytes(e.reserved)))),
+            long(entries.iter().map(|e| Some(bytes(e.peak)))),
+            long(entries.iter().map(|e| e.limit.map(bytes))),
+            Arc::new(BooleanArray::from_iter(
+                entries.iter().map(|e| Some(e.spillable)),
+            )),
+        ];
+    }
+    let rows = capability_rows();
+    vec![
+        text(rows.iter().map(|_| Some(LOCAL_WORKER))),
+        text(rows.iter().map(|r| Some(r[0].as_str()))),
+        text(rows.iter().map(|r| Some(r[1].as_str()))),
+        text(rows.iter().map(|r| Some(r[2].as_str()))),
+        text(rows.iter().map(|r| Some(r[3].as_str()))),
+    ]
+}
+
+/// What the tables read: the process's state.
+pub(crate) struct Sources {
+    /// The session's memory pool tree.
+    pub(crate) memory: Arc<dyn MemoryPool>,
+}
+
 /// The table `table` as the planner reads it: its rows now.
-pub(crate) fn provider(table: &str) -> Result<Option<Arc<MemoryTable>>, KrishivError> {
-    let Some(cols) = columns(table) else {
+pub(crate) fn provider(
+    table: &str,
+    sources: &Sources,
+) -> Result<Option<Arc<MemoryTable>>, KrishivError> {
+    let Some(layout) = layout(table) else {
         return Ok(None);
     };
-    let rows = capability_rows();
-    let fields: Vec<Field> = cols
-        .iter()
-        .map(|c| Field::new(&c.name, ArrowType::Utf8, c.nullable))
-        .collect();
-    let schema = crate::carrier::canonical_schema(Arc::new(Schema::new(fields)));
-    let worker: ArrayRef = Arc::new(StringArray::from(vec![LOCAL_WORKER; rows.len()]));
-    let column = |i: usize| -> ArrayRef {
-        Arc::new(StringArray::from_iter_values(
-            rows.iter().map(|r| r[i].as_str()),
-        ))
-    };
     let plain = Arc::new(Schema::new(
-        schema
-            .fields()
+        layout
             .iter()
-            .map(|f| Field::new(f.name(), ArrowType::Utf8, f.is_nullable()))
+            .map(|(name, kind, nullable)| {
+                let ty = match kind {
+                    Kind::Text => ArrowType::Utf8,
+                    Kind::Long => ArrowType::Int64,
+                    Kind::Flag => ArrowType::Boolean,
+                };
+                Field::new(*name, ty, *nullable)
+            })
             .collect::<Vec<_>>(),
     ));
-    let batch = RecordBatch::try_new(
-        plain,
-        vec![worker, column(0), column(1), column(2), column(3)],
-    )
-    .map_err(|e| InternalError {
+    let schema = crate::carrier::canonical_schema(Arc::clone(&plain));
+    let batch = RecordBatch::try_new(plain, values(table, sources)).map_err(|e| InternalError {
         message: format!("system.{table}: {e}"),
     })?;
     let batch = crate::carrier::recarried(&batch, &schema)?;
@@ -201,9 +290,11 @@ mod tests {
         let rows = capability_rows();
         assert!(rows.iter().any(|r| r[0] == "build" && r[1] == "engine"));
         assert!(rows.iter().any(|r| r[0] == "feature" && r[1] == "cloud"));
-        let table = provider("capabilities").unwrap().unwrap();
-        let _ = table;
-        assert!(provider("nope").unwrap().is_none());
+        let sources = Sources {
+            memory: krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default()),
+        };
+        assert!(provider("capabilities", &sources).unwrap().is_some());
+        assert!(provider("nope", &sources).unwrap().is_none());
     }
 
     #[test]

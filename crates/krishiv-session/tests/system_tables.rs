@@ -72,3 +72,16 @@ fn nothing_can_be_created_or_dropped_in_system() {
         assert!(e.contains("KRISHIV_RESERVED_NAME"), "{sql}: {e}");
     }
 }
+
+#[test]
+fn memory_lists_the_pool_tree() {
+    let r = strings("SELECT path FROM system.memory WHERE kind = 'pool' AND parent IS NULL");
+    assert_eq!(r, ["process"]);
+    // Rows are the tree as the scan was planned: before the reading query's own pool exists.
+    let r = strings(
+        "SELECT CAST(sum(reserved_bytes) >= 0 AS STRING) FROM system.memory WHERE kind = 'consumer'",
+    );
+    assert_eq!(r, ["true"]);
+    let r = strings("SELECT worker_id FROM system.memory LIMIT 1");
+    assert_eq!(r, ["local"]);
+}
