@@ -1272,7 +1272,7 @@ fn min_max(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 /// not.
 pub(super) fn spark_orderable(t: &DataType) -> bool {
     match t {
-        DataType::Map(_) => false,
+        DataType::Map(_) | DataType::CalendarInterval => false,
         DataType::Array(a) => spark_orderable(a.element_type()),
         DataType::Struct(s) => s.fields().iter().all(|f| spark_orderable(f.data_type())),
         _ => true,
@@ -1287,11 +1287,17 @@ pub(super) fn spark_orderable(t: &DataType) -> bool {
 /// executor compares with: an array or interval field) is
 /// `KRISHIV_UNSUPPORTED_FEATURE`.
 fn ordered_min_max(c: &CallTypes<'_>, function: &str) -> Result<ArgType, KrishivError> {
-    if let Some(t) = c.data_type(0)
-        && matches!(t, DataType::Struct(_))
-        && !krishiv_kernels::r#struct::comparable(&t.to_arrow())
-    {
-        if spark_orderable(t) {
+    if let Some(t) = c.data_type(0) {
+        if !spark_orderable(t) {
+            return Err(DatatypeMismatchInvalidOrderingType {
+                sql_expr: format!("\"{function}({})\"", c.sql(0).unwrap_or_default()),
+                function_name: format!("`{function}`"),
+                data_type: format!("\"{}\"", t.sql()),
+            }
+            .into());
+        }
+        if matches!(t, DataType::Struct(_)) && !krishiv_kernels::r#struct::comparable(&t.to_arrow())
+        {
             return Err(KrishivUnsupportedFeature {
                 feature: format!(
                     "{function} over {}, a struct with a field the struct comparator does not take",
@@ -1300,12 +1306,6 @@ fn ordered_min_max(c: &CallTypes<'_>, function: &str) -> Result<ArgType, Krishiv
             }
             .into());
         }
-        return Err(DatatypeMismatchInvalidOrderingType {
-            sql_expr: format!("\"{function}({})\"", c.sql(0).unwrap_or_default()),
-            function_name: format!("`{function}`"),
-            data_type: format!("\"{}\"", t.sql()),
-        }
-        .into());
     }
     min_max(c)
 }

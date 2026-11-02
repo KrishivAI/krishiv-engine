@@ -465,6 +465,14 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
     }
 }
 
+/// The `ansiEnabled` a calendar operator takes as its last argument.
+fn exact_flag(f: &ResolvedFunction) -> Result<bool> {
+    match f.args.last().map(|a| &a.node) {
+        Some(ExprNode::Literal(Literal::Boolean(v))) => Ok(*v),
+        _ => Err(unsupported("a calendar operator without its mode")),
+    }
+}
+
 fn builtin(
     b: Builtin,
     f: &ResolvedFunction,
@@ -524,6 +532,25 @@ fn builtin(
             let r = args.pop().ok_or_else(arity)?;
             let l = args.pop().ok_or_else(arity)?;
             interval::binary(b, l, r, out, f.nullable, env)?
+        }
+        (
+            Builtin::DateAddInterval
+            | Builtin::MultiplyInterval
+            | Builtin::DivideInterval
+            | Builtin::CalendarAdd
+            | Builtin::CalendarSubtract,
+            3,
+        ) => {
+            let exact = exact_flag(f)?;
+            args.pop();
+            let r = args.pop().ok_or_else(arity)?;
+            let l = args.pop().ok_or_else(arity)?;
+            interval::calendar_binary(b, l, r, out, f.nullable, exact, env)
+        }
+        (Builtin::CalendarNegate, 2) => {
+            let exact = exact_flag(f)?;
+            args.pop();
+            interval::calendar_negate(args.pop().ok_or_else(arity)?, exact)
         }
         (Builtin::ExtractAnsiIntervalDays, 1) => interval::unary(b, args.pop().ok_or_else(arity)?),
         (Builtin::TryEval, 1) => interval::try_eval(args.pop().ok_or_else(arity)?, f.deterministic),

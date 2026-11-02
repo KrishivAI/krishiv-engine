@@ -817,6 +817,1302 @@
    "value_error_class": "ARITHMETIC_OVERFLOW"
   },
   {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "2 * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "1 days 1.5 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 1.5",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 1.5)",
+   "type": "interval",
+   "value": "1 months 3 days 4.5 seconds"
+  },
+  {
+   "expr": "1.5 * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 1.5)",
+   "type": "interval",
+   "value": "1 months 3 days 4.5 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / 1.5",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 1.5)",
+   "type": "interval",
+   "value": "1 days 8 hours 2 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 2.5D",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2.5)",
+   "type": "interval",
+   "value": "2 months 5 days 7.5 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / 3",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 3)",
+   "type": "interval",
+   "value": "16 hours 1 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 0",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 0)",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / 0",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 0)",
+   "type": "interval",
+   "value_error_class": "INTERVAL_DIVIDED_BY_ZERO"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / 0.0",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 0.0)",
+   "type": "interval",
+   "value_error_class": "INTERVAL_DIVIDED_BY_ZERO"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * '2'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "'2' * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / '2'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "1 days 1.5 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 'a'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), a)",
+   "type": "interval",
+   "value_error_class": "CAST_INVALID_INPUT"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * null",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), NULL)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "null * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), NULL)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / null",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), NULL)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "2 / cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * true",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "true * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / true",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' day * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * cast(2 as tinyint)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(2 AS TINYINT))",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 2L",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 2F",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2.0)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * date'2024-01-01'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * cast('NaN' as double)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(NaN AS DOUBLE))",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / cast('NaN' as double)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(NaN AS DOUBLE))",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / cast('Infinity' as double)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(Infinity AS DOUBLE))",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * cast('Infinity' as double)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(Infinity AS DOUBLE))",
+   "type": "interval",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "cast('2147483647 days' as interval) * 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(2147483647 days AS INTERVAL), 2)",
+   "type": "interval",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "cast('1000000 hours' as interval) * 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1000000 hours AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2000000 hours"
+  },
+  {
+   "expr": "cast('2147483647 months' as interval) * 1e30D",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(2147483647 months AS INTERVAL), 1.0E30)",
+   "type": "interval",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "cast('2147483647 months' as interval) / 0.5",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(2147483647 months AS INTERVAL), 0.5)",
+   "type": "interval",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "cast('3 months' as interval) * 0.5",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(3 months AS INTERVAL), 0.5)",
+   "type": "interval",
+   "value": "1 months"
+  },
+  {
+   "expr": "cast('3 months' as interval) / 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(3 months AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "1 months"
+  },
+  {
+   "expr": "cast('3 days' as interval) * 0.5",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(3 days AS INTERVAL), 0.5)",
+   "type": "interval",
+   "value": "1 days 12 hours"
+  },
+  {
+   "expr": "cast('3 days' as interval) / 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(3 days AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "1 days 12 hours"
+  },
+  {
+   "expr": "cast('1 month' as interval) / 3",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(1 month AS INTERVAL), 3)",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('1 day' as interval) / 3",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(1 day AS INTERVAL), 3)",
+   "type": "interval",
+   "value": "8 hours"
+  },
+  {
+   "expr": "cast('1 second' as interval) / 3",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(1 second AS INTERVAL), 3)",
+   "type": "interval",
+   "value": "0.333333 seconds"
+  },
+  {
+   "expr": "cast('-1 month' as interval) / 3",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(-1 month AS INTERVAL), 3)",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('1 microsecond' as interval) / 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "divide_interval(CAST(1 microsecond AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "0.000001 seconds"
+  },
+  {
+   "expr": "cast('1 microsecond' as interval) * 1.5",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(1 microsecond AS INTERVAL), 1.5)",
+   "type": "interval",
+   "value": "0.000002 seconds"
+  },
+  {
+   "expr": "cast('3 microsecond' as interval) * 0.5",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(3 microsecond AS INTERVAL), 0.5)",
+   "type": "interval",
+   "value": "0.000002 seconds"
+  },
+  {
+   "expr": "cast('-3 microsecond' as interval) * 0.5",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(-3 microsecond AS INTERVAL), 0.5)",
+   "type": "interval",
+   "value": "-0.000001 seconds"
+  },
+  {
+   "expr": "cast('abc' as interval) * 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(CAST(abc AS INTERVAL), 2)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "try_multiply(cast('1 day' as interval), 2)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_multiply(CAST(1 day AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2 days"
+  },
+  {
+   "expr": "try_divide(cast('1 day' as interval), 2)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_divide(CAST(1 day AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "12 hours"
+  },
+  {
+   "expr": "try_divide(cast('1 day' as interval), 0)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_divide(CAST(1 day AS INTERVAL), 0)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "try_multiply(cast('2147483647 months' as interval), 2)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_multiply(CAST(2147483647 months AS INTERVAL), 2)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "try_multiply(2, cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_multiply(2, CAST(1 day AS INTERVAL))",
+   "type": "interval",
+   "value": "2 days"
+  },
+  {
+   "expr": "try_add(cast('2147483647 months' as interval) * 2, cast('1 month' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(multiply_interval(CAST(2147483647 months AS INTERVAL), 2), CAST(1 month AS INTERVAL))",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "try_multiply(cast('2147483647 months' as interval) + cast('1 month' as interval), 1)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_multiply((CAST(2147483647 months AS INTERVAL) + CAST(1 month AS INTERVAL)), 1)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(CAST(1 month 2 days 3 seconds AS INTERVAL) + CAST(1 month 2 days 3 seconds AS INTERVAL))",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(CAST(1 month 2 days 3 seconds AS INTERVAL) - CAST(1 month 2 days 3 seconds AS INTERVAL))",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('2147483647 months' as interval) + cast('1 month' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(CAST(2147483647 months AS INTERVAL) + CAST(1 month AS INTERVAL))",
+   "type": "interval",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "cast('-2147483648 months' as interval) - cast('1 month' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(CAST(-2147483648 months AS INTERVAL) - CAST(1 month AS INTERVAL))",
+   "type": "interval",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "cast('2147483647 days' as interval) + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(CAST(2147483647 days AS INTERVAL) + CAST(1 day AS INTERVAL))",
+   "type": "interval",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "try_add(cast('2147483647 months' as interval), cast('1 month' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(CAST(2147483647 months AS INTERVAL), CAST(1 month AS INTERVAL))",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "try_subtract(cast('1 month' as interval), cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_subtract(CAST(1 month AS INTERVAL), CAST(1 day AS INTERVAL))",
+   "type": "interval",
+   "value": "1 months -1 days"
+  },
+  {
+   "expr": "- cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(- CAST(1 month 2 days 3 seconds AS INTERVAL))",
+   "type": "interval",
+   "value": "-1 months -2 days -3 seconds"
+  },
+  {
+   "expr": "+ cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(+ CAST(1 month 2 days 3 seconds AS INTERVAL))",
+   "type": "interval",
+   "value": "1 months 2 days 3 seconds"
+  },
+  {
+   "expr": "positive(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(+ CAST(1 month 2 days 3 seconds AS INTERVAL))",
+   "type": "interval",
+   "value": "1 months 2 days 3 seconds"
+  },
+  {
+   "expr": "negative(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "negative(CAST(1 month 2 days 3 seconds AS INTERVAL))",
+   "type": "interval",
+   "value": "-1 months -2 days -3 seconds"
+  },
+  {
+   "expr": "- cast('-2147483648 months' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(- CAST(-2147483648 months AS INTERVAL))",
+   "type": "interval",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "- cast('-2147483648 days' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(- CAST(-2147483648 days AS INTERVAL))",
+   "type": "interval",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "abs(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "sign(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' day + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) - interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' day - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' month + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) - interval '1' month",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '1' month - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + 1",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "1 + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) - 1",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "1 - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + '1'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "1 + CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "string",
+   "value_error_class": "CAST_INVALID_INPUT"
+  },
+  {
+   "expr": "'1' + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "1 + CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "string",
+   "value_error_class": "CAST_INVALID_INPUT"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) - '1'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "'1' - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "1 - CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "string",
+   "value_error_class": "CAST_INVALID_INPUT"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + null",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "null + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) - null",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(CAST(1 month 2 days 3 seconds AS INTERVAL) - NULL)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "null - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + true",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 day' as interval) - date'2024-01-31'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 day' as interval) - timestamp'2024-01-31 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 day' as interval) - timestamp_ntz'2024-01-31 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 day' as interval) - '2024-01-31'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "null + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "date_add(date'2024-01-31', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "add_months(date'2024-01-31', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) % 2",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) div 2",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) = cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) > cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "sum(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "avg(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "min(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "nullif(cast('1 month 2 days 3 seconds' as interval), cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "date'2024-01-31' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + CAST(1 day AS INTERVAL)",
+   "type": "date",
+   "value": "2024-02-01"
+  },
+  {
+   "expr": "cast('1 day' as interval) + date'2024-01-31'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + CAST(1 day AS INTERVAL)",
+   "type": "date",
+   "value": "2024-02-01"
+  },
+  {
+   "expr": "date'2024-01-31' - cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' - CAST(1 day AS INTERVAL)",
+   "type": "date",
+   "value": "2024-01-30"
+  },
+  {
+   "expr": "cast('1 hour' as interval) + date'2024-01-31'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + CAST(1 hour AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "INVALID_INTERVAL_WITH_MICROSECONDS_ADDITION"
+  },
+  {
+   "expr": "date'2024-01-31' - cast('1 hour' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' - CAST(1 hour AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "INVALID_INTERVAL_WITH_MICROSECONDS_ADDITION"
+  },
+  {
+   "expr": "date'2024-01-31' + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "INVALID_INTERVAL_WITH_MICROSECONDS_ADDITION"
+  },
+  {
+   "expr": "date'2024-01-31' - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' - CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "INVALID_INTERVAL_WITH_MICROSECONDS_ADDITION"
+  },
+  {
+   "expr": "date'2024-01-31' - cast('1 month 1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' - CAST(1 month 1 day AS INTERVAL)",
+   "type": "date",
+   "value": "2023-12-30"
+  },
+  {
+   "expr": "date'2024-01-31' + cast('1 day 86400 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + CAST(1 day 86400 seconds AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "INVALID_INTERVAL_WITH_MICROSECONDS_ADDITION"
+  },
+  {
+   "expr": "date'9999-12-31' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '9999-12-31' + CAST(1 day AS INTERVAL)",
+   "type": "date",
+   "value": "+10000-01-01"
+  },
+  {
+   "expr": "date'0001-01-01' - cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '0001-01-01' - CAST(1 day AS INTERVAL)",
+   "type": "date",
+   "value": "0000-12-31"
+  },
+  {
+   "expr": "date'9999-12-31' + cast('1 month' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '9999-12-31' + CAST(1 month AS INTERVAL)",
+   "type": "date",
+   "value": "+10000-01-31"
+  },
+  {
+   "expr": "date'2024-01-31' + cast('2147483647 months' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + CAST(2147483647 months AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "date'2024-01-31' + cast('2147483647 days' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + CAST(2147483647 days AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "date'2024-01-31' - cast('-2147483648 months' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' - CAST(-2147483648 months AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "date'2024-01-31' + cast('2147483647 months 1 hour' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + CAST(2147483647 months 1 hour AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "INVALID_INTERVAL_WITH_MICROSECONDS_ADDITION"
+  },
+  {
+   "expr": "null + date'2024-01-31' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "DATE '2024-01-31' + NULL + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": null
+  },
+  {
+   "expr": "cast(null as date) + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(NULL AS DATE) + CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "date",
+   "value": null
+  },
+  {
+   "expr": "try_add(date'2024-01-31', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(DATE '2024-01-31', CAST(1 day AS INTERVAL))",
+   "type": "date",
+   "value": "2024-02-01"
+  },
+  {
+   "expr": "try_add(cast('1 day' as interval), date'2024-01-31')",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(CAST(1 day AS INTERVAL), DATE '2024-01-31')",
+   "type": "date",
+   "value": "2024-02-01"
+  },
+  {
+   "expr": "try_subtract(date'2024-01-31', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_subtract(DATE '2024-01-31', CAST(1 day AS INTERVAL))",
+   "type": "date",
+   "value": "2024-01-30"
+  },
+  {
+   "expr": "try_add(date'2024-01-31', cast('1 hour' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(DATE '2024-01-31', CAST(1 hour AS INTERVAL))",
+   "type": "date",
+   "value": null
+  },
+  {
+   "expr": "try_add(date'9999-12-31', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(DATE '9999-12-31', CAST(1 day AS INTERVAL))",
+   "type": "date",
+   "value": "+10000-01-01"
+  },
+  {
+   "expr": "try_add(date'2024-01-31', cast('2147483647 days' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(DATE '2024-01-31', CAST(2147483647 days AS INTERVAL))",
+   "type": "date",
+   "value": null
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "cast('1 day' as interval) + timestamp'2024-01-31 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' - CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-01-30 00:00:00"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' + cast('1 hour' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + CAST(1 hour AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-01-31 01:00:00"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-02 00:00:03"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' - CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2023-12-28 23:59:57"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - cast('1 month 1 hour' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' - CAST(1 month 1 hour AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2023-12-30 23:00:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-01-31 00:00:00' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP_NTZ '2024-01-31 00:00:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "cast('1 day' as interval) + timestamp_ntz'2024-01-31 00:00:00'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP_NTZ '2024-01-31 00:00:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-01-31 00:00:00' - cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP_NTZ '2024-01-31 00:00:00' - CAST(1 day AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2024-01-30 00:00:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-01-31 00:00:00' + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP_NTZ '2024-01-31 00:00:00' + CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2024-03-02 00:00:03"
+  },
+  {
+   "expr": "timestamp_ntz'2024-01-31 00:00:00' - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP_NTZ '2024-01-31 00:00:00' - CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2023-12-28 23:59:57"
+  },
+  {
+   "expr": "timestamp'9999-12-31 23:59:59' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '9999-12-31 23:59:59' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "+10000-01-01 23:59:59"
+  },
+  {
+   "expr": "timestamp_ntz'9999-12-31 23:59:59' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP_NTZ '9999-12-31 23:59:59' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "+10000-01-01 23:59:59"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' + cast('2147483647 months' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + CAST(2147483647 months AS INTERVAL)",
+   "type": "timestamp",
+   "value_error_class": "UNCLASSIFIED"
+  },
+  {
+   "expr": "try_add(timestamp'2024-01-31 00:00:00', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(TIMESTAMP '2024-01-31 00:00:00', CAST(1 day AS INTERVAL))",
+   "type": "timestamp",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "try_add(timestamp_ntz'2024-01-31 00:00:00', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(TIMESTAMP_NTZ '2024-01-31 00:00:00', CAST(1 day AS INTERVAL))",
+   "type": "timestamp_ntz",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "try_subtract(timestamp'2024-01-31 00:00:00', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_subtract(TIMESTAMP '2024-01-31 00:00:00', CAST(1 day AS INTERVAL))",
+   "type": "timestamp",
+   "value": "2024-01-30 00:00:00"
+  },
+  {
+   "expr": "try_add(timestamp'2024-01-31 00:00:00', cast('2147483647 months' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_add(TIMESTAMP '2024-01-31 00:00:00', CAST(2147483647 months AS INTERVAL))",
+   "type": "timestamp",
+   "value": null
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - cast('-2147483648 days' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' - CAST(-2147483648 days AS INTERVAL)",
+   "type": "timestamp",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "'2024-01-31' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "2024-01-31 + CAST(1 day AS INTERVAL)",
+   "type": "string",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "cast('1 day' as interval) + '2024-01-31'",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "2024-01-31 + CAST(1 day AS INTERVAL)",
+   "type": "string",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "'2024-01-31' - cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "2024-01-31 - CAST(1 day AS INTERVAL)",
+   "type": "string",
+   "value": "2024-01-30 00:00:00"
+  },
+  {
+   "expr": "'abc' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "abc + CAST(1 day AS INTERVAL)",
+   "type": "string",
+   "value_error_class": "CAST_INVALID_INPUT"
+  },
+  {
+   "expr": "'abc' - cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "abc - CAST(1 day AS INTERVAL)",
+   "type": "string",
+   "value_error_class": "CAST_INVALID_INPUT"
+  },
+  {
+   "expr": "typeof(cast('1 month 2 days 3 seconds' as interval) * 2)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "typeof(multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2))",
+   "type": "string",
+   "value": "interval"
+  },
+  {
+   "expr": "typeof(date'2024-01-31' + cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "typeof(DATE '2024-01-31' + CAST(1 day AS INTERVAL))",
+   "type": "string",
+   "value": "date"
+  },
+  {
+   "expr": "typeof(timestamp'2024-01-31 00:00:00' + cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "typeof(TIMESTAMP '2024-01-31 00:00:00' + CAST(1 day AS INTERVAL))",
+   "type": "string",
+   "value": "timestamp"
+  },
+  {
+   "expr": "coalesce(cast('1 month 2 days 3 seconds' as interval), cast('1 month 2 days 3 seconds' as interval)) * 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "multiply_interval(coalesce(CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(1 month 2 days 3 seconds AS INTERVAL)), 2)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "if(true, cast('1 month 2 days 3 seconds' as interval), cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(IF(true, CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(1 month 2 days 3 seconds AS INTERVAL)))",
+   "type": "interval",
+   "value": "1 months 2 days 3 seconds"
+  },
+  {
+   "expr": "cast(cast('1 month 2 days 3 seconds' as interval) * 2 as string)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2) AS STRING)",
+   "type": "string",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast(date'2024-01-31' + cast('1 day' as interval) as string)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(DATE '2024-01-31' + CAST(1 day AS INTERVAL) AS STRING)",
+   "type": "string",
+   "value": "2024-02-01"
+  },
+  {
+   "expr": "(select id * cast('1 day' as interval) from range(1))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "scalarsubquery()",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "(select cast('1 day' as interval) * id from range(1,2))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "scalarsubquery()",
+   "type": "interval",
+   "value": "1 days"
+  },
+  {
+   "expr": "(select cast('1 day' as interval) / id from range(1,2))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "scalarsubquery()",
+   "type": "interval",
+   "value": "1 days"
+  },
+  {
+   "expr": "(select date'2024-01-01' + id * cast('1 day' as interval) from range(1,2))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "scalarsubquery()",
+   "type": "date",
+   "value": "2024-01-02"
+  },
+  {
+   "expr": "(select timestamp'2024-01-01 00:00:00' + id * cast('1 hour' as interval) from range(1,2))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "scalarsubquery()",
+   "type": "timestamp",
+   "value": "2024-01-01 01:00:00"
+  },
+  {
+   "expr": "(select - (id * cast('1 month' as interval)) from range(1,2))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "scalarsubquery()",
+   "type": "interval",
+   "value": "-1 months"
+  },
+  {
+   "expr": "(select id * cast('1 month' as interval) + id * cast('1 day' as interval) from range(1,2))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "scalarsubquery()",
+   "type": "interval",
+   "value": "1 months 1 days"
+  },
+  {
    "expr": "abs(interval '-1' day)",
    "zone": "UTC",
    "ansi": true,
@@ -3487,6 +4783,1302 @@
    "value": "178956970 years 7 months"
   },
   {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 2",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "2 * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / 2",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "1 days 1.5 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 1.5",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 1.5)",
+   "type": "interval",
+   "value": "1 months 3 days 4.5 seconds"
+  },
+  {
+   "expr": "1.5 * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 1.5)",
+   "type": "interval",
+   "value": "1 months 3 days 4.5 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / 1.5",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 1.5)",
+   "type": "interval",
+   "value": "1 days 8 hours 2 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 2.5D",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2.5)",
+   "type": "interval",
+   "value": "2 months 5 days 7.5 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / 3",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 3)",
+   "type": "interval",
+   "value": "16 hours 1 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 0",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 0)",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / 0",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 0)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / 0.0",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 0.0)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * '2'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "'2' * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / '2'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "1 days 1.5 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 'a'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), a)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * null",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), NULL)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "null * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), NULL)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / null",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), NULL)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "2 / cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * true",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "true * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / true",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * interval '1' day",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' day * cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / interval '1' day",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * cast(2 as tinyint)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(2 AS TINYINT))",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 2L",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * 2F",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2.0)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * date'2024-01-01'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * cast('NaN' as double)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(NaN AS DOUBLE))",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / cast('NaN' as double)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(NaN AS DOUBLE))",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) / cast('Infinity' as double)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(Infinity AS DOUBLE))",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) * cast('Infinity' as double)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(Infinity AS DOUBLE))",
+   "type": "interval",
+   "value": "178956970 years 7 months 2147483647 days 2562047788 hours 54.775807 seconds"
+  },
+  {
+   "expr": "cast('2147483647 days' as interval) * 2",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(2147483647 days AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2147483647 days 2562047788 hours 54.775807 seconds"
+  },
+  {
+   "expr": "cast('1000000 hours' as interval) * 2",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1000000 hours AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2000000 hours"
+  },
+  {
+   "expr": "cast('2147483647 months' as interval) * 1e30D",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(2147483647 months AS INTERVAL), 1.0E30)",
+   "type": "interval",
+   "value": "178956970 years 7 months"
+  },
+  {
+   "expr": "cast('2147483647 months' as interval) / 0.5",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(2147483647 months AS INTERVAL), 0.5)",
+   "type": "interval",
+   "value": "178956970 years 7 months"
+  },
+  {
+   "expr": "cast('3 months' as interval) * 0.5",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(3 months AS INTERVAL), 0.5)",
+   "type": "interval",
+   "value": "1 months"
+  },
+  {
+   "expr": "cast('3 months' as interval) / 2",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(3 months AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "1 months"
+  },
+  {
+   "expr": "cast('3 days' as interval) * 0.5",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(3 days AS INTERVAL), 0.5)",
+   "type": "interval",
+   "value": "1 days 12 hours"
+  },
+  {
+   "expr": "cast('3 days' as interval) / 2",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(3 days AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "1 days 12 hours"
+  },
+  {
+   "expr": "cast('1 month' as interval) / 3",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(1 month AS INTERVAL), 3)",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('1 day' as interval) / 3",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(1 day AS INTERVAL), 3)",
+   "type": "interval",
+   "value": "8 hours"
+  },
+  {
+   "expr": "cast('1 second' as interval) / 3",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(1 second AS INTERVAL), 3)",
+   "type": "interval",
+   "value": "0.333333 seconds"
+  },
+  {
+   "expr": "cast('-1 month' as interval) / 3",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(-1 month AS INTERVAL), 3)",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('1 microsecond' as interval) / 2",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "divide_interval(CAST(1 microsecond AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "0.000001 seconds"
+  },
+  {
+   "expr": "cast('1 microsecond' as interval) * 1.5",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(1 microsecond AS INTERVAL), 1.5)",
+   "type": "interval",
+   "value": "0.000002 seconds"
+  },
+  {
+   "expr": "cast('3 microsecond' as interval) * 0.5",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(3 microsecond AS INTERVAL), 0.5)",
+   "type": "interval",
+   "value": "0.000002 seconds"
+  },
+  {
+   "expr": "cast('-3 microsecond' as interval) * 0.5",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(-3 microsecond AS INTERVAL), 0.5)",
+   "type": "interval",
+   "value": "-0.000001 seconds"
+  },
+  {
+   "expr": "cast('abc' as interval) * 2",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(CAST(abc AS INTERVAL), 2)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "try_multiply(cast('1 day' as interval), 2)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_multiply(CAST(1 day AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "2 days"
+  },
+  {
+   "expr": "try_divide(cast('1 day' as interval), 2)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_divide(CAST(1 day AS INTERVAL), 2)",
+   "type": "interval",
+   "value": "12 hours"
+  },
+  {
+   "expr": "try_divide(cast('1 day' as interval), 0)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_divide(CAST(1 day AS INTERVAL), 0)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "try_multiply(cast('2147483647 months' as interval), 2)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_multiply(CAST(2147483647 months AS INTERVAL), 2)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "try_multiply(2, cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_multiply(2, CAST(1 day AS INTERVAL))",
+   "type": "interval",
+   "value": "2 days"
+  },
+  {
+   "expr": "try_add(cast('2147483647 months' as interval) * 2, cast('1 month' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_add(multiply_interval(CAST(2147483647 months AS INTERVAL), 2), CAST(1 month AS INTERVAL))",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "try_multiply(cast('2147483647 months' as interval) + cast('1 month' as interval), 1)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_multiply((CAST(2147483647 months AS INTERVAL) + CAST(1 month AS INTERVAL)), 1)",
+   "type": "interval",
+   "value": "-178956970 years -8 months"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(CAST(1 month 2 days 3 seconds AS INTERVAL) + CAST(1 month 2 days 3 seconds AS INTERVAL))",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(CAST(1 month 2 days 3 seconds AS INTERVAL) - CAST(1 month 2 days 3 seconds AS INTERVAL))",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "cast('2147483647 months' as interval) + cast('1 month' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(CAST(2147483647 months AS INTERVAL) + CAST(1 month AS INTERVAL))",
+   "type": "interval",
+   "value": "-178956970 years -8 months"
+  },
+  {
+   "expr": "cast('-2147483648 months' as interval) - cast('1 month' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(CAST(-2147483648 months AS INTERVAL) - CAST(1 month AS INTERVAL))",
+   "type": "interval",
+   "value": "178956970 years 7 months"
+  },
+  {
+   "expr": "cast('2147483647 days' as interval) + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(CAST(2147483647 days AS INTERVAL) + CAST(1 day AS INTERVAL))",
+   "type": "interval",
+   "value": "-2147483648 days"
+  },
+  {
+   "expr": "try_add(cast('2147483647 months' as interval), cast('1 month' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_add(CAST(2147483647 months AS INTERVAL), CAST(1 month AS INTERVAL))",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "try_subtract(cast('1 month' as interval), cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_subtract(CAST(1 month AS INTERVAL), CAST(1 day AS INTERVAL))",
+   "type": "interval",
+   "value": "1 months -1 days"
+  },
+  {
+   "expr": "- cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(- CAST(1 month 2 days 3 seconds AS INTERVAL))",
+   "type": "interval",
+   "value": "-1 months -2 days -3 seconds"
+  },
+  {
+   "expr": "+ cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(+ CAST(1 month 2 days 3 seconds AS INTERVAL))",
+   "type": "interval",
+   "value": "1 months 2 days 3 seconds"
+  },
+  {
+   "expr": "positive(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(+ CAST(1 month 2 days 3 seconds AS INTERVAL))",
+   "type": "interval",
+   "value": "1 months 2 days 3 seconds"
+  },
+  {
+   "expr": "negative(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "negative(CAST(1 month 2 days 3 seconds AS INTERVAL))",
+   "type": "interval",
+   "value": "-1 months -2 days -3 seconds"
+  },
+  {
+   "expr": "- cast('-2147483648 months' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(- CAST(-2147483648 months AS INTERVAL))",
+   "type": "interval",
+   "value": "-178956970 years -8 months"
+  },
+  {
+   "expr": "- cast('-2147483648 days' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(- CAST(-2147483648 days AS INTERVAL))",
+   "type": "interval",
+   "value": "-2147483648 days"
+  },
+  {
+   "expr": "abs(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "sign(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + interval '1' day",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' day + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) - interval '1' day",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' day - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + interval '1' month",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "interval '1' month + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) - interval '1' month",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '1' month - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + 1",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "1 + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) - 1",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "1 - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + '1'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "1 + CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "string",
+   "value": null
+  },
+  {
+   "expr": "'1' + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "1 + CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "string",
+   "value": null
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) - '1'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "'1' - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "1 - CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "string",
+   "value": null
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + null",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "null + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) - null",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(CAST(1 month 2 days 3 seconds AS INTERVAL) - NULL)",
+   "type": "interval",
+   "value": null
+  },
+  {
+   "expr": "null - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) + true",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 day' as interval) - date'2024-01-31'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 day' as interval) - timestamp'2024-01-31 00:00:00'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 day' as interval) - timestamp_ntz'2024-01-31 00:00:00'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 day' as interval) - '2024-01-31'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "null + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "date_add(date'2024-01-31', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "add_months(date'2024-01-31', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) % 2",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) div 2",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) = cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "cast('1 month 2 days 3 seconds' as interval) > cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "sum(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "avg(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "min(cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "nullif(cast('1 month 2 days 3 seconds' as interval), cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "date'2024-01-31' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' + CAST(1 day AS INTERVAL)",
+   "type": "date",
+   "value": "2024-02-01"
+  },
+  {
+   "expr": "cast('1 day' as interval) + date'2024-01-31'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' + CAST(1 day AS INTERVAL)",
+   "type": "date",
+   "value": "2024-02-01"
+  },
+  {
+   "expr": "date'2024-01-31' - cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' - CAST(1 day AS INTERVAL)",
+   "type": "date",
+   "value": "2024-01-30"
+  },
+  {
+   "expr": "cast('1 hour' as interval) + date'2024-01-31'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' + CAST(1 hour AS INTERVAL)",
+   "type": "date",
+   "value": "2024-01-31"
+  },
+  {
+   "expr": "date'2024-01-31' - cast('1 hour' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' - CAST(1 hour AS INTERVAL)",
+   "type": "date",
+   "value": "2024-01-30"
+  },
+  {
+   "expr": "date'2024-01-31' + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' + CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "date",
+   "value": "2024-03-02"
+  },
+  {
+   "expr": "date'2024-01-31' - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' - CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "date",
+   "value": "2023-12-28"
+  },
+  {
+   "expr": "date'2024-01-31' - cast('1 month 1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' - CAST(1 month 1 day AS INTERVAL)",
+   "type": "date",
+   "value": "2023-12-30"
+  },
+  {
+   "expr": "date'2024-01-31' + cast('1 day 86400 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' + CAST(1 day 86400 seconds AS INTERVAL)",
+   "type": "date",
+   "value": "2024-02-02"
+  },
+  {
+   "expr": "date'9999-12-31' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '9999-12-31' + CAST(1 day AS INTERVAL)",
+   "type": "date",
+   "value": "+10000-01-01"
+  },
+  {
+   "expr": "date'0001-01-01' - cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '0001-01-01' - CAST(1 day AS INTERVAL)",
+   "type": "date",
+   "value": "0000-12-31"
+  },
+  {
+   "expr": "date'9999-12-31' + cast('1 month' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '9999-12-31' + CAST(1 month AS INTERVAL)",
+   "type": "date",
+   "value": "+10000-01-31"
+  },
+  {
+   "expr": "date'2024-01-31' + cast('2147483647 months' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' + CAST(2147483647 months AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "date'2024-01-31' + cast('2147483647 days' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' + CAST(2147483647 days AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "date'2024-01-31' - cast('-2147483648 months' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' - CAST(-2147483648 months AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "ARITHMETIC_OVERFLOW"
+  },
+  {
+   "expr": "date'2024-01-31' + cast('2147483647 months 1 hour' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' + CAST(2147483647 months 1 hour AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "UNCLASSIFIED"
+  },
+  {
+   "expr": "null + date'2024-01-31' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "DATE '2024-01-31' + NULL + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": null
+  },
+  {
+   "expr": "cast(null as date) + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "CAST(NULL AS DATE) + CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "date",
+   "value": null
+  },
+  {
+   "expr": "try_add(date'2024-01-31', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_add(DATE '2024-01-31', CAST(1 day AS INTERVAL))",
+   "type": "date",
+   "value": "2024-02-01"
+  },
+  {
+   "expr": "try_add(cast('1 day' as interval), date'2024-01-31')",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_add(CAST(1 day AS INTERVAL), DATE '2024-01-31')",
+   "type": "date",
+   "value": "2024-02-01"
+  },
+  {
+   "expr": "try_subtract(date'2024-01-31', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_subtract(DATE '2024-01-31', CAST(1 day AS INTERVAL))",
+   "type": "date",
+   "value": "2024-01-30"
+  },
+  {
+   "expr": "try_add(date'2024-01-31', cast('1 hour' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_add(DATE '2024-01-31', CAST(1 hour AS INTERVAL))",
+   "type": "date",
+   "value": null
+  },
+  {
+   "expr": "try_add(date'9999-12-31', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_add(DATE '9999-12-31', CAST(1 day AS INTERVAL))",
+   "type": "date",
+   "value": "+10000-01-01"
+  },
+  {
+   "expr": "try_add(date'2024-01-31', cast('2147483647 days' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_add(DATE '2024-01-31', CAST(2147483647 days AS INTERVAL))",
+   "type": "date",
+   "value": null
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "cast('1 day' as interval) + timestamp'2024-01-31 00:00:00'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' - CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-01-30 00:00:00"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' + cast('1 hour' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + CAST(1 hour AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-01-31 01:00:00"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-02 00:00:03"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' - CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2023-12-28 23:59:57"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - cast('1 month 1 hour' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' - CAST(1 month 1 hour AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2023-12-30 23:00:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-01-31 00:00:00' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP_NTZ '2024-01-31 00:00:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "cast('1 day' as interval) + timestamp_ntz'2024-01-31 00:00:00'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP_NTZ '2024-01-31 00:00:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-01-31 00:00:00' - cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP_NTZ '2024-01-31 00:00:00' - CAST(1 day AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2024-01-30 00:00:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-01-31 00:00:00' + cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP_NTZ '2024-01-31 00:00:00' + CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2024-03-02 00:00:03"
+  },
+  {
+   "expr": "timestamp_ntz'2024-01-31 00:00:00' - cast('1 month 2 days 3 seconds' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP_NTZ '2024-01-31 00:00:00' - CAST(1 month 2 days 3 seconds AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2023-12-28 23:59:57"
+  },
+  {
+   "expr": "timestamp'9999-12-31 23:59:59' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP '9999-12-31 23:59:59' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "+10000-01-01 23:59:59"
+  },
+  {
+   "expr": "timestamp_ntz'9999-12-31 23:59:59' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP_NTZ '9999-12-31 23:59:59' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "+10000-01-01 23:59:59"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' + cast('2147483647 months' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + CAST(2147483647 months AS INTERVAL)",
+   "type": "timestamp",
+   "value_error_class": "UNCLASSIFIED"
+  },
+  {
+   "expr": "try_add(timestamp'2024-01-31 00:00:00', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_add(TIMESTAMP '2024-01-31 00:00:00', CAST(1 day AS INTERVAL))",
+   "type": "timestamp",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "try_add(timestamp_ntz'2024-01-31 00:00:00', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_add(TIMESTAMP_NTZ '2024-01-31 00:00:00', CAST(1 day AS INTERVAL))",
+   "type": "timestamp_ntz",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "try_subtract(timestamp'2024-01-31 00:00:00', cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_subtract(TIMESTAMP '2024-01-31 00:00:00', CAST(1 day AS INTERVAL))",
+   "type": "timestamp",
+   "value": "2024-01-30 00:00:00"
+  },
+  {
+   "expr": "try_add(timestamp'2024-01-31 00:00:00', cast('2147483647 months' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_add(TIMESTAMP '2024-01-31 00:00:00', CAST(2147483647 months AS INTERVAL))",
+   "type": "timestamp",
+   "value": null
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' - cast('-2147483648 days' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' - CAST(-2147483648 days AS INTERVAL)",
+   "type": "timestamp",
+   "value_error_class": "UNCLASSIFIED"
+  },
+  {
+   "expr": "'2024-01-31' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "2024-01-31 + CAST(1 day AS INTERVAL)",
+   "type": "string",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "cast('1 day' as interval) + '2024-01-31'",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "2024-01-31 + CAST(1 day AS INTERVAL)",
+   "type": "string",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "'2024-01-31' - cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "2024-01-31 - CAST(1 day AS INTERVAL)",
+   "type": "string",
+   "value": "2024-01-30 00:00:00"
+  },
+  {
+   "expr": "'abc' + cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "abc + CAST(1 day AS INTERVAL)",
+   "type": "string",
+   "value": null
+  },
+  {
+   "expr": "'abc' - cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "abc - CAST(1 day AS INTERVAL)",
+   "type": "string",
+   "value": null
+  },
+  {
+   "expr": "typeof(cast('1 month 2 days 3 seconds' as interval) * 2)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "typeof(multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2))",
+   "type": "string",
+   "value": "interval"
+  },
+  {
+   "expr": "typeof(date'2024-01-31' + cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "typeof(DATE '2024-01-31' + CAST(1 day AS INTERVAL))",
+   "type": "string",
+   "value": "date"
+  },
+  {
+   "expr": "typeof(timestamp'2024-01-31 00:00:00' + cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "typeof(TIMESTAMP '2024-01-31 00:00:00' + CAST(1 day AS INTERVAL))",
+   "type": "string",
+   "value": "timestamp"
+  },
+  {
+   "expr": "coalesce(cast('1 month 2 days 3 seconds' as interval), cast('1 month 2 days 3 seconds' as interval)) * 2",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "multiply_interval(coalesce(CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(1 month 2 days 3 seconds AS INTERVAL)), 2)",
+   "type": "interval",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "if(true, cast('1 month 2 days 3 seconds' as interval), cast('1 month 2 days 3 seconds' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(IF(true, CAST(1 month 2 days 3 seconds AS INTERVAL), CAST(1 month 2 days 3 seconds AS INTERVAL)))",
+   "type": "interval",
+   "value": "1 months 2 days 3 seconds"
+  },
+  {
+   "expr": "cast(cast('1 month 2 days 3 seconds' as interval) * 2 as string)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "CAST(multiply_interval(CAST(1 month 2 days 3 seconds AS INTERVAL), 2) AS STRING)",
+   "type": "string",
+   "value": "2 months 4 days 6 seconds"
+  },
+  {
+   "expr": "cast(date'2024-01-31' + cast('1 day' as interval) as string)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "CAST(DATE '2024-01-31' + CAST(1 day AS INTERVAL) AS STRING)",
+   "type": "string",
+   "value": "2024-02-01"
+  },
+  {
+   "expr": "(select id * cast('1 day' as interval) from range(1))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "scalarsubquery()",
+   "type": "interval",
+   "value": "0 seconds"
+  },
+  {
+   "expr": "(select cast('1 day' as interval) * id from range(1,2))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "scalarsubquery()",
+   "type": "interval",
+   "value": "1 days"
+  },
+  {
+   "expr": "(select cast('1 day' as interval) / id from range(1,2))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "scalarsubquery()",
+   "type": "interval",
+   "value": "1 days"
+  },
+  {
+   "expr": "(select date'2024-01-01' + id * cast('1 day' as interval) from range(1,2))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "scalarsubquery()",
+   "type": "date",
+   "value": "2024-01-02"
+  },
+  {
+   "expr": "(select timestamp'2024-01-01 00:00:00' + id * cast('1 hour' as interval) from range(1,2))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "scalarsubquery()",
+   "type": "timestamp",
+   "value": "2024-01-01 01:00:00"
+  },
+  {
+   "expr": "(select - (id * cast('1 month' as interval)) from range(1,2))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "scalarsubquery()",
+   "type": "interval",
+   "value": "-1 months"
+  },
+  {
+   "expr": "(select id * cast('1 month' as interval) + id * cast('1 day' as interval) from range(1,2))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "scalarsubquery()",
+   "type": "interval",
+   "value": "1 months 1 days"
+  },
+  {
    "expr": "abs(interval '-1' day)",
    "zone": "UTC",
    "ansi": false,
@@ -5341,6 +7933,278 @@
    "name": "xxhash64(INTERVAL '1' DAY)",
    "type": "bigint",
    "value": "5650310968337874586"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "timestamp'2024-03-09 02:30:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-03-09 02:30:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-10 03:30:00"
+  },
+  {
+   "expr": "timestamp'2024-03-09 12:00:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-03-09 12:00:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-10 12:00:00"
+  },
+  {
+   "expr": "timestamp'2024-03-09 12:00:00' + cast('24 hours' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-03-09 12:00:00' + CAST(24 hours AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-10 13:00:00"
+  },
+  {
+   "expr": "timestamp'2024-03-09 12:00:00' + cast('1 day 1 hour' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-03-09 12:00:00' + CAST(1 day 1 hour AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-10 13:00:00"
+  },
+  {
+   "expr": "timestamp'2024-03-10 01:30:00' + cast('1 hour' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-03-10 01:30:00' + CAST(1 hour AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-10 03:30:00"
+  },
+  {
+   "expr": "timestamp'2024-02-10 02:30:00' + cast('1 month' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-02-10 02:30:00' + CAST(1 month AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-10 03:30:00"
+  },
+  {
+   "expr": "timestamp'2024-02-10 02:30:00' + cast('1 month 1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-02-10 02:30:00' + CAST(1 month 1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-11 03:30:00"
+  },
+  {
+   "expr": "timestamp'2024-11-02 01:30:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-11-02 01:30:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-11-03 01:30:00"
+  },
+  {
+   "expr": "timestamp'2024-11-03 01:30:00' + cast('1 hour' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-11-03 01:30:00' + CAST(1 hour AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-11-03 01:30:00"
+  },
+  {
+   "expr": "timestamp'2024-11-03 01:30:00-08:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-11-03 01:30:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-11-04 01:30:00"
+  },
+  {
+   "expr": "timestamp'2024-11-03 01:30:00-07:00' - cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP '2024-11-03 01:30:00' - CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-11-02 01:30:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-03-09 02:30:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP_NTZ '2024-03-09 02:30:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2024-03-10 02:30:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-03-09 12:00:00' + cast('24 hours' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "TIMESTAMP_NTZ '2024-03-09 12:00:00' + CAST(24 hours AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2024-03-10 12:00:00"
+  },
+  {
+   "expr": "'2024-03-09 02:30:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "2024-03-09 02:30:00 + CAST(1 day AS INTERVAL)",
+   "type": "string",
+   "value": "2024-03-10 03:30:00"
+  },
+  {
+   "expr": "date'2024-03-09' + cast('1 hour' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "DATE '2024-03-09' + CAST(1 hour AS INTERVAL)",
+   "type": "date",
+   "value_error_class": "INVALID_INTERVAL_WITH_MICROSECONDS_ADDITION"
+  },
+  {
+   "expr": "date'2024-03-09' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": true,
+   "name": "DATE '2024-03-09' + CAST(1 day AS INTERVAL)",
+   "type": "date",
+   "value": "2024-03-10"
+  },
+  {
+   "expr": "timestamp'2024-01-31 00:00:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-01-31 00:00:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-02-01 00:00:00"
+  },
+  {
+   "expr": "timestamp'2024-03-09 02:30:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-03-09 02:30:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-10 03:30:00"
+  },
+  {
+   "expr": "timestamp'2024-03-09 12:00:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-03-09 12:00:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-10 12:00:00"
+  },
+  {
+   "expr": "timestamp'2024-03-09 12:00:00' + cast('24 hours' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-03-09 12:00:00' + CAST(24 hours AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-10 13:00:00"
+  },
+  {
+   "expr": "timestamp'2024-03-09 12:00:00' + cast('1 day 1 hour' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-03-09 12:00:00' + CAST(1 day 1 hour AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-10 13:00:00"
+  },
+  {
+   "expr": "timestamp'2024-03-10 01:30:00' + cast('1 hour' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-03-10 01:30:00' + CAST(1 hour AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-10 03:30:00"
+  },
+  {
+   "expr": "timestamp'2024-02-10 02:30:00' + cast('1 month' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-02-10 02:30:00' + CAST(1 month AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-10 03:30:00"
+  },
+  {
+   "expr": "timestamp'2024-02-10 02:30:00' + cast('1 month 1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-02-10 02:30:00' + CAST(1 month 1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-03-11 03:30:00"
+  },
+  {
+   "expr": "timestamp'2024-11-02 01:30:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-11-02 01:30:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-11-03 01:30:00"
+  },
+  {
+   "expr": "timestamp'2024-11-03 01:30:00' + cast('1 hour' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-11-03 01:30:00' + CAST(1 hour AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-11-03 01:30:00"
+  },
+  {
+   "expr": "timestamp'2024-11-03 01:30:00-08:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-11-03 01:30:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-11-04 01:30:00"
+  },
+  {
+   "expr": "timestamp'2024-11-03 01:30:00-07:00' - cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP '2024-11-03 01:30:00' - CAST(1 day AS INTERVAL)",
+   "type": "timestamp",
+   "value": "2024-11-02 01:30:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-03-09 02:30:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP_NTZ '2024-03-09 02:30:00' + CAST(1 day AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2024-03-10 02:30:00"
+  },
+  {
+   "expr": "timestamp_ntz'2024-03-09 12:00:00' + cast('24 hours' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "TIMESTAMP_NTZ '2024-03-09 12:00:00' + CAST(24 hours AS INTERVAL)",
+   "type": "timestamp_ntz",
+   "value": "2024-03-10 12:00:00"
+  },
+  {
+   "expr": "'2024-03-09 02:30:00' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "2024-03-09 02:30:00 + CAST(1 day AS INTERVAL)",
+   "type": "string",
+   "value": "2024-03-10 03:30:00"
+  },
+  {
+   "expr": "date'2024-03-09' + cast('1 hour' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "DATE '2024-03-09' + CAST(1 hour AS INTERVAL)",
+   "type": "date",
+   "value": "2024-03-09"
+  },
+  {
+   "expr": "date'2024-03-09' + cast('1 day' as interval)",
+   "zone": "America/Los_Angeles",
+   "ansi": false,
+   "name": "DATE '2024-03-09' + CAST(1 day AS INTERVAL)",
+   "type": "date",
+   "value": "2024-03-10"
   }
  ]
 }

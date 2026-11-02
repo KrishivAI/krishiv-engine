@@ -2502,7 +2502,7 @@ impl Resolver<'_> {
                         .map_or_else(|| "void".to_owned(), |t| t.catalog_string());
                     (
                         rebuilt(ExprNode::Literal(Literal::String(name))),
-                        Some(expr),
+                        shown.or(Some(expr)),
                     )
                 } else {
                     (expr, shown)
@@ -7115,7 +7115,8 @@ fn call(
             Some(
                 Builtin::DateAddYmInterval
                 | Builtin::TimestampAddYmInterval
-                | Builtin::TimestampAddInterval,
+                | Builtin::TimestampAddInterval
+                | Builtin::DateAddInterval,
             ),
             2,
         ) => format!("{} + {}", k[0], k[1]),
