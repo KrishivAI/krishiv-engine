@@ -676,8 +676,11 @@ fn provider_names_and_defaults() {
     run(&s, "INSERT INTO q VALUES (4)");
     assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM q"), ["4"]);
     run(&s, "CREATE TABLE j (a INT) USING json");
+    run(&s, "INSERT INTO j VALUES (1)");
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM j"), ["1"]);
+    run(&s, "CREATE TABLE o (a INT) USING orc");
     assert_eq!(
-        class(&s, "INSERT INTO j VALUES (1)"),
+        class(&s, "INSERT INTO o VALUES (1)"),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
     assert_eq!(
