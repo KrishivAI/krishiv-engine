@@ -45,13 +45,30 @@ fn matches_duckdb_up_to_known_failures() -> R {
         .filter(|k| replayed.contains(k.as_str()))
         .collect();
     let r = ratchet_keys(&keys, &known);
-    let detail: Vec<String> = found
+    // An unsupported feature is a gap, not a wrong answer: the generated queries of the nightly
+    // run hit the same ones again and again, so they are listed, not failed.
+    let (gaps, wrong): (Vec<_>, Vec<_>) = found
         .iter()
         .filter(|d| r.new.contains(&d.sql))
+        .partition(|d| d.unsupported());
+    if !gaps.is_empty() {
+        use std::io::Write as _;
+        let mut err = std::io::stderr();
+        drop(writeln!(
+            err,
+            "{} queries hit an unsupported feature:",
+            gaps.len()
+        ));
+        for d in &gaps {
+            drop(writeln!(err, "  {}\n    {}", d.sql, d.detail));
+        }
+    }
+    let detail: Vec<String> = wrong
+        .iter()
         .map(|d| format!("{}\n  {}", d.sql, d.detail))
         .collect();
     assert!(
-        r.new.is_empty(),
+        wrong.is_empty(),
         "new disagreements:\n{}",
         detail.join("\n")
     );
@@ -123,4 +140,44 @@ fn numbers_compare_as_numbers() {
     assert_eq!(normalise("NULL"), "NULL");
     assert_ne!(normalise("abc"), normalise("abz"));
     assert_ne!(normalise("1.0"), normalise("1.1"));
+}
+
+#[test]
+fn an_unsupported_feature_is_told_apart_from_a_wrong_answer() {
+    struct Refuses;
+    impl QueryRunner for Refuses {
+        fn run(&mut self, sql: &str) -> Result<Vec<Vec<String>>, String> {
+            if sql.contains("DISTINCT") {
+                Err("KRISHIV_UNSUPPORTED_FEATURE The feature x is not supported".to_owned())
+            } else if sql.contains("BOOM") {
+                Err("INTERNAL_ERROR boom".to_owned())
+            } else {
+                Ok(vec![vec!["1".to_owned()]])
+            }
+        }
+    }
+    let q = |sql: &str, cell: &str| Query {
+        sql: sql.to_owned(),
+        rows: vec![vec![cell.to_owned()]],
+    };
+    let found = run(
+        &[
+            q("SELECT DISTINCT 1", "1"),
+            q("SELECT BOOM", "1"),
+            q("SELECT 2", "2"),
+        ],
+        &mut Refuses,
+    );
+    let flags: Vec<(&str, bool)> = found
+        .iter()
+        .map(|d| (d.sql.as_str(), d.unsupported()))
+        .collect();
+    assert_eq!(
+        flags,
+        [
+            ("SELECT DISTINCT 1", true),
+            ("SELECT BOOM", false),
+            ("SELECT 2", false)
+        ]
+    );
 }
