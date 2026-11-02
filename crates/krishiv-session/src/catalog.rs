@@ -1102,6 +1102,9 @@ impl CatalogResolver for QueryCatalogs {
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
+        if crate::system::is_system(name) {
+            return Some(Arc::new(crate::system::SystemCatalog));
+        }
         name.eq_ignore_ascii_case(CATALOG)
             .then(|| Arc::clone(&self.0) as Arc<dyn Catalog>)
     }
@@ -1114,6 +1117,17 @@ impl CatalogResolver for QueryCatalogs {
 impl TableProviderResolver for QueryCatalog {
     fn provider(&self, scan: &Scan) -> Result<Arc<dyn TableProvider>, KrishivError> {
         match &scan.source {
+            ReadSource::Table { name, .. } if crate::system::is_system_table(name) => {
+                let table = name.last().map_or("", String::as_str);
+                crate::system::provider(table)?
+                    .map(|t| t as Arc<dyn TableProvider>)
+                    .ok_or_else(|| {
+                        InternalError {
+                            message: format!("the system table {table} does not exist"),
+                        }
+                        .into()
+                    })
+            }
             ReadSource::Table { name, .. } => {
                 let last = name.last().map_or("", String::as_str);
                 // Analysis loaded every table a scan names.

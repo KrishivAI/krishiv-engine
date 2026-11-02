@@ -88,6 +88,7 @@ fn main() {
     // `run` holds everything else: the compiler may use the build's CPU level in the
     // prologue of a function with large locals, which must not come before the check.
     krishiv_common::cpu::check_or_exit();
+    krishiv::register_build_features(&bundle::feature_states());
     // Allocator policy is this binary's (it owns the global allocator):
     // under memory pressure, threads return freed memory to the OS. With a
     // configured limit that is not generous, mimalloc also purges promptly

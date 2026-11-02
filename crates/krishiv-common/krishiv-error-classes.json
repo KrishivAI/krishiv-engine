@@ -101,6 +101,12 @@
     ],
     "sqlState" : "54000"
   },
+  "KRISHIV_RESERVED_NAME" : {
+    "message" : [
+      "The name <name> is reserved for the engine's own <kind>: nothing can be created, replaced or dropped in the \"system\" catalog. Choose a different name."
+    ],
+    "sqlState" : "42939"
+  },
   "KRISHIV_RESERVED_TEMP_VIEW_NAME" : {
     "message" : [
       "The temporary view name <relationName> is reserved: names starting with <prefix> (in any letter case) are reserved for internal snapshots. Choose a different name."

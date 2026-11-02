@@ -183,6 +183,10 @@ impl Session {
         class: StatementClass,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
+        if let Err(e) = reject_system_namespace(statement) {
+            log_denial(self, class, &e);
+            return Err(e);
+        }
         let mut targets = statement_targets(statement);
         if class == StatementClass::Admin
             && !targets.iter().any(|t| t.object == TargetObject::Cluster)
@@ -202,6 +206,10 @@ impl Session {
                 }
             };
             for securable in securables {
+                if let Err(e) = reject_system_write(&securable, target.privilege) {
+                    log_denial(self, class, &e);
+                    return Err(e);
+                }
                 if checked
                     .iter()
                     .any(|(s, p)| *s == securable && *p == target.privilege)
@@ -680,5 +688,62 @@ impl AccessPolicy for ReadOnlyPolicy {
             })));
         }
         self.inner.check(principal, securable, privilege)
+    }
+}
+
+/// `KRISHIV_RESERVED_NAME` for a statement that creates, replaces, drops or
+/// writes something in the `system` catalog (P2-T126): its tables belong to
+/// the engine, whoever the principal is.
+fn reject_system_write(securable: &Securable, privilege: Privilege) -> Result<(), KrishivError> {
+    if !matches!(
+        privilege,
+        Privilege::Create | Privilege::Drop | Privilege::Modify
+    ) {
+        return Ok(());
+    }
+    let (name, kind) = match securable {
+        Securable::Table(t) | Securable::View(t) if crate::system::is_system(&t.catalog) => {
+            (t.to_string(), "tables")
+        }
+        Securable::Namespace(parts)
+            if parts.first().is_some_and(|c| crate::system::is_system(c)) =>
+        {
+            (parts.join("."), "namespaces")
+        }
+        _ => return Ok(()),
+    };
+    Err(krishiv_common::error::KrishivReservedName {
+        name,
+        kind: kind.to_owned(),
+    }
+    .into())
+}
+
+/// `CREATE|DROP DATABASE|SCHEMA|NAMESPACE system`: the name itself is
+/// reserved, not only what would be created inside it.
+fn reject_system_namespace(statement: &Statement) -> Result<(), KrishivError> {
+    let name = match statement {
+        Statement::CreateNamespace(n) => &n.name,
+        Statement::DropNamespace(n) => &n.name,
+        _ => return Ok(()),
+    };
+    match name {
+        DdlName::Parts(o)
+            if o.parts
+                .first()
+                .is_some_and(|p| crate::system::is_system(&p.value)) =>
+        {
+            Err(krishiv_common::error::KrishivReservedName {
+                name: o
+                    .parts
+                    .iter()
+                    .map(|p| p.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join("."),
+                kind: "namespaces".to_owned(),
+            }
+            .into())
+        }
+        _ => Ok(()),
     }
 }

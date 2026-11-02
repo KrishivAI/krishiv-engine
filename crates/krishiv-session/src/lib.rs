@@ -64,6 +64,7 @@ mod session;
 mod sql_functions;
 mod sql_path;
 mod store;
+mod system;
 mod table_commands;
 mod udfs;
 mod variable_substitution;
@@ -72,6 +73,7 @@ mod view_schema;
 mod window;
 
 pub use access::{PathPrefixPolicy, ReadOnlyPolicy, StatementInfo};
+pub use system::register_build_features;
 
 pub mod agent;
 
