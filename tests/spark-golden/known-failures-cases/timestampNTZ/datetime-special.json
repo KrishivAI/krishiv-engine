@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "datetime": [
-      3
-    ]
-  },
-  "file": "timestampNTZ/datetime-special",
-  "format_version": 1
-}
