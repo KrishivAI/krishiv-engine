@@ -117,6 +117,15 @@ const UTC_1900: i64 = -2_208_988_800;
 /// database marks winter time as daylight time (`Europe/Dublin`) or that
 /// shift during Ramadan (`Africa/Casablanca`).
 fn raw_offset(zone: &TimeZone) -> i32 {
+    // The database marks the standard offset of these two as daylight time
+    // all year (+01:00 with a negative saving); Java's raw offset is 0
+    // (Spark 4.2: Africa/Casablanca prints `+0000 WET` before 1900).
+    if zone
+        .iana_name()
+        .is_some_and(|n| matches!(n, "Africa/Casablanca" | "Africa/El_Aaiun"))
+    {
+        return 0;
+    }
     // 2400-01-15 and 2400-07-15, 00:00 UTC.
     const SAMPLES: [i64; 2] = [13_570_675_200, 13_586_400_000];
     SAMPLES

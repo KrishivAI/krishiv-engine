@@ -534,3 +534,20 @@ fn legacy_names_a_fixed_offset_zone_and_ntz_keeps_the_corrected_parser() {
         text(&[Some("2024-01-01 00:00:00.000123")])
     );
 }
+
+/// Java's raw offset for Casablanca is 0 although the database marks +01:00
+/// as daylight time (Spark 4.2.0: `+0000 WET` in 1890).
+#[test]
+fn legacy_prints_casablancas_raw_offset_before_1900() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = LEGACY")).unwrap();
+    block_on(s.sql("SET spark.sql.session.timeZone = Africa/Casablanca")).unwrap();
+    assert_eq!(
+        column(
+            &s,
+            "date_format(TIMESTAMP '1890-01-01 00:00:00', 'Z z')",
+            ""
+        ),
+        text(&[Some("+0000 WET")])
+    );
+}

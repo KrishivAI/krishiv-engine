@@ -240,7 +240,7 @@ impl LegacyPattern {
                 },
                 'd' => pad(&mut out, i64::from(day), n),
                 'D' => pad(&mut out, doy, n),
-                'F' => pad(&mut out, (i64::from(day) - 1) / 7 + 1, n),
+                'F' => pad(&mut out, dowim_of(year, month, day), n),
                 'w' => pad(&mut out, week_of_year(real, year, doy), n),
                 'W' => pad(&mut out, week_of_month(real, year, month, day), n),
                 'E' => {
@@ -436,6 +436,17 @@ fn real_day(days: i64, year: i64, month: u32, day: u32) -> i64 {
     let m = i64::from(month) + 12 * a - 3;
     let jdn = i64::from(day) + (153 * m + 2) / 5 + 365 * y + y.div_euclid(4) - 32083;
     jdn - 2_440_588
+}
+
+/// `Calendar.DAY_OF_WEEK_IN_MONTH` (the `F` letter): the occurrence number
+/// of the weekday in its month, October 1582 lacking the 5th..14th.
+fn dowim_of(year: i64, month: u32, day: u32) -> i64 {
+    let gap = if year == 1582 && month == 10 && day >= 15 {
+        10
+    } else {
+        0
+    };
+    (i64::from(day) - 1 - gap) / 7 + 1
 }
 
 /// Days in a month of the hybrid calendar.
@@ -636,7 +647,7 @@ impl Parsed {
                 return Some(p);
             }
             'z' | 'Z' => {
-                let (p, z) = zone(text, pos)?;
+                let (p, z) = zone(text, pos, c == 'Z')?;
                 self.zone = Some(z);
                 return Some(p);
             }
@@ -795,9 +806,7 @@ impl Parsed {
             && self
                 .wom
                 .is_none_or(|(v, _)| v == week_of_month(real, y, m, d))
-            && self
-                .dowim
-                .is_none_or(|(v, _)| v == (i64::from(d) - 1) / 7 + 1)
+            && self.dowim.is_none_or(|(v, _)| v == dowim_of(y, m, d))
             && self.dow.is_none_or(|(v, _)| v == dow_sun1(real))
     }
 
@@ -1066,7 +1075,7 @@ fn zone_iso(text: &[char], pos: usize, n: usize) -> Option<(usize, Zone_)> {
 
 /// A zone: `Z`, `GMT`/`UTC` with an optional offset, `+hh`, `+hhmm`,
 /// `+hh:mm`, or a region id.
-fn zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
+fn zone(text: &[char], pos: usize, rfc822: bool) -> Option<(usize, Zone_)> {
     if let Some(p) = prefix(text, pos, &["Z"])
         && !text.get(p).is_some_and(char::is_ascii_alphabetic)
     {
@@ -1079,13 +1088,26 @@ fn zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
     }
     if let Some(&sign) = text.get(p).filter(|c| matches!(c, '+' | '-')) {
         let (hh, e) = number(text, p + 1, Some(2))?;
-        let (mm, e) = if text.get(e) == Some(&':') {
+        // `SimpleDateFormat`: after `GMT`/`UTC` a sign, one or two hour
+        // digits, a colon and two minute digits; bare, only `Z` reads an
+        // offset, as exactly `+hhmm`.
+        let (mm, e) = if named.is_some() {
+            if text.get(e) != Some(&':') {
+                return None;
+            }
             let (m, e2) = number(text, e + 1, Some(2))?;
+            if e2 - (e + 1) != 2 {
+                return None;
+            }
             (m, e2)
-        } else if let Some((m, e2)) = number(text, e, Some(2)).filter(|_| e - (p + 1) == 2) {
+        } else if rfc822 && e - (p + 1) == 2 {
+            let (m, e2) = number(text, e, Some(2))?;
+            if e2 - e != 2 {
+                return None;
+            }
             (m, e2)
         } else {
-            (0, e)
+            return None;
         };
         if hh > 23 || mm > 59 {
             return None;
@@ -1239,6 +1261,25 @@ mod tests {
             label_of_real(real_day(days_from_civil(1500, 3, 15).unwrap(), 1500, 3, 15)),
             days_from_civil(1500, 3, 15).unwrap()
         );
+    }
+
+    // Spark 4.2.0 under LEGACY (probe 2026-11-02).
+    #[test]
+    fn numeric_zones_and_the_occurrence_number_follow_simple_date_format() {
+        let ok = |p: &str, t: &str| LegacyPattern::new(p).unwrap().parse_local(t, true).unwrap();
+        assert!(ok("yyyy-MM-dd Z", "2024-01-01 +0530").is_some());
+        assert!(ok("yyyy-MM-dd Z", "2024-01-01 GMT+05:30").is_some());
+        for bad in ["2024-01-01 +05:30", "2024-01-01 +05"] {
+            assert!(ok("yyyy-MM-dd Z", bad).is_none(), "{bad}");
+        }
+        for bad in ["2024-01-01 GMT+0530", "2024-01-01 +05:30"] {
+            assert!(ok("yyyy-MM-dd z", bad).is_none(), "{bad}");
+        }
+        let f = |m, dd| fmt("F", days_from_civil(1582, m, dd).unwrap() * MICROS_PER_DAY);
+        assert_eq!(f(10, 15), "1");
+        assert_eq!(f(10, 31), "3");
+        assert!(ok("yyyy-MM-dd F", "1582-10-15 1").is_some());
+        assert!(ok("yyyy-MM-dd F", "1582-10-15 3").is_none());
     }
 
     #[test]
