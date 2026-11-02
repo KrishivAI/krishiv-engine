@@ -275,3 +275,22 @@ fn a_unit_with_every_page_pruned_is_dropped() {
     // The data chunk was never fetched: only the index was read.
     assert_eq!(m.bytes_pushed, 0, "{m:?}");
 }
+
+/// `krishiv.io.parquet.pageIndex.enabled` is the session's default for the
+/// `pageIndex` read option, and the option beats it.
+#[test]
+fn the_session_setting_switches_the_stage() {
+    let env = Env::new();
+    let key = "krishiv.io.parquet.pageIndex.enabled";
+    let pruned = |session: &[(&str, &str)], user: &[(&str, &str)]| {
+        let (f, _) = file(&env, EnabledStatistics::Page);
+        let o = env.options_over(session, user);
+        let req = request(&env, &f, &o, k_between(9_000, 9_700));
+        env.scan_metered(&f, &req, &o).unwrap().1.pages_pruned
+    };
+    assert!(pruned(&[], &[]) > 0);
+    assert!(pruned(&[(key, "true")], &[]) > 0);
+    assert_eq!(pruned(&[(key, "false")], &[]), 0);
+    assert!(pruned(&[(key, "false")], &[("pageIndex", "true")]) > 0);
+    assert_eq!(pruned(&[], &[("pageIndex", "false")]), 0);
+}
