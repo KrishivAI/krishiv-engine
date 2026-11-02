@@ -528,6 +528,28 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
             missing: vec!["shared_subplan".to_owned()]
         }
     );
+    // A reader without `late_fetch` refuses the node and a row id alone.
+    let late_fetch = cases()
+        .into_iter()
+        .find(|(n, _)| n == "late_fetch")
+        .unwrap()
+        .1;
+    let top = late_fetch.root().children()[0];
+    let row_id = plan_of(top.children()[0].clone());
+    for plan in [late_fetch.clone(), row_id] {
+        let err = decode_with(
+            &encode(&plan).unwrap(),
+            &Limits::default(),
+            &ReaderFeatures::only([]),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CodecError::UnsupportedFeatures {
+                missing: vec!["late_fetch".to_owned()]
+            }
+        );
+    }
     // A reader without `lambda_functions` refuses the lambda plan naming
     // the feature, even though it knows `nested_types`.
     let bytes = encode(
@@ -1148,6 +1170,11 @@ fn interval_types_and_literals_need_their_feature() {
     layout.truncate(1);
     assert!(to_message(&plan_of(root)).unwrap().features.is_empty());
     assert_eq!(message("interval_scan").features, ["interval_types"]);
+    assert!(
+        message("interval_array_aggregate")
+            .features
+            .contains(&"interval_types".to_owned())
+    );
     assert_eq!(
         message("interval_nested").features,
         ["interval_types", "nested_types"]
@@ -1202,6 +1229,31 @@ fn interval_types_and_literals_need_their_feature() {
             "{case}"
         );
         assert!(decode(&bytes).is_ok(), "{case}");
+    }
+}
+
+/// The analyzer's internal functions travel by name, and an older reader
+/// refuses them through the interval feature.
+#[test]
+fn internal_interval_functions_travel_by_name_under_their_feature() {
+    use krishiv_plan::{Builtin, FunctionId};
+    for b in [
+        Builtin::DateAddInterval,
+        Builtin::MultiplyInterval,
+        Builtin::DivideInterval,
+        Builtin::CalendarAdd,
+        Builtin::CalendarSubtract,
+        Builtin::CalendarNegate,
+    ] {
+        assert!(Builtin::ALL.contains(&b), "{b:?}");
+        assert!(b.is_analyzer_internal(), "{b:?}");
+        assert_eq!(Builtin::from_name(b.name()), Some(b));
+        let id = FunctionId::Builtin(b);
+        assert_eq!(
+            feature_of(Construct::Function(&id)),
+            Some(Feature::IntervalTypes),
+            "{b:?}"
+        );
     }
 }
 

@@ -15,11 +15,11 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     ArrowPrimitiveType, Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type,
-    Decimal256Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType, Time32MillisecondType,
-    Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type,
-    UInt32Type, UInt64Type,
+    Decimal256Type, DurationMicrosecondType, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
+    Time32MillisecondType, Time32SecondType, Time64MicrosecondType, Time64NanosecondType,
+    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
+    TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow_array::{Array, ArrayRef, PrimitiveArray};
 use arrow_buffer::ArrowNativeType as _;
@@ -169,6 +169,7 @@ pub fn cmp_rows(
         DataType::Timestamp(_, _) => TimestampNanosecondType, |a, b| a.cmp(&b),
         DataType::Interval(IntervalUnit::YearMonth) => IntervalYearMonthType, |a, b| a.cmp(&b),
         DataType::Interval(IntervalUnit::DayTime) => IntervalDayTimeType, |a, b| a.cmp(&b),
+        DataType::Duration(TimeUnit::Microsecond) => DurationMicrosecondType, |a, b| a.cmp(&b),
     ) {
         Some(ord) => ord,
         None => match ordered_bytes!(l, r, li, ri,
