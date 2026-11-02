@@ -458,6 +458,28 @@ impl Decoder {
                 id: SharedId(s.id),
                 layout: layout(&s.layout),
             },
+            Kind::UnionLoop(u) => {
+                let limits = u
+                    .limits
+                    .as_ref()
+                    .ok_or_else(|| corrupt("a recursive loop without limits"))?;
+                PhysNode::UnionLoop {
+                    id: u.id,
+                    anchor: self.boxed(u.anchor)?,
+                    recursive: self.boxed(u.recursive)?,
+                    layout: layout(&u.layout),
+                    nullable: u.nullable.clone(),
+                    limits: krishiv_exec::physical::LoopLimits {
+                        level: limits.level,
+                        rows: limits.rows,
+                        pushed_limit: limits.pushed_limit,
+                    },
+                }
+            }
+            Kind::LoopRef(r) => PhysNode::LoopRef {
+                id: r.id,
+                layout: layout(&r.layout),
+            },
             Kind::Range(r) if r.step == 0 => return Err(corrupt("a range with step 0")),
             Kind::Range(r) if r.num_slices == Some(0) => {
                 return Err(corrupt("a range with 0 slices"));

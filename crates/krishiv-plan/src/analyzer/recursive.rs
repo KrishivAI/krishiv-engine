@@ -25,6 +25,10 @@ use super::coerce::quoted_type;
 use crate::{BoundColumn, ExprNode, JoinKind, LogicalPlan, Origin, PlanNode};
 
 impl Resolver<'_> {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the node's fields, which the caller destructures"
+    )]
     pub(super) fn union_loop(
         &mut self,
         p: &Arc<LogicalPlan>,
@@ -32,6 +36,7 @@ impl Resolver<'_> {
         anchor: &Arc<LogicalPlan>,
         recursive: &Arc<LogicalPlan>,
         max_level: Option<u32>,
+        limit: Option<u64>,
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let o = p.origin;
@@ -97,6 +102,7 @@ impl Resolver<'_> {
             anchor: Arc::clone(&kids[0].plan),
             recursive: Arc::clone(&kids[1].plan),
             max_level,
+            limit,
             output: out.iter().map(|a| a.col.clone()).collect(),
         };
         let kids: Vec<&Rel> = kids.iter().collect();
