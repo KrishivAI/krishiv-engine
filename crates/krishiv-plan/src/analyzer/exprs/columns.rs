@@ -210,18 +210,6 @@ impl Resolver<'_> {
             col
         };
         if c.plan_id.is_none()
-            && let [name, _, ..] = &c.name[..]
-            && let Some(var) = self.lambda_var(name)
-        {
-            // `x.field` of a lambda variable `x`: a field of its struct.
-            let attr = Attr {
-                col: var,
-                qual: Arc::from(Vec::new()),
-                source: None,
-            };
-            return self.resolve_attr_as(&attr, 1, &c.name, origin, None, true);
-        }
-        if c.plan_id.is_none()
             && let [name] = &c.name[..]
             && let Some(var) = self.lambda_var(name)
         {
@@ -233,6 +221,18 @@ impl Resolver<'_> {
                 &col,
                 None,
             ));
+        }
+        // `acc.sum`: a field of a struct-typed lambda variable.
+        if c.plan_id.is_none()
+            && c.name.len() > 1
+            && let Some(var) = self.lambda_var(&c.name[0])
+        {
+            let a = Attr {
+                col: var,
+                qual: super::super::ops::no_qual(),
+                source: None,
+            };
+            return self.resolve_attr(&a, 1, &c.name, origin, None, true);
         }
         if let Some(id) = c.plan_id {
             let a = self.plan_column(id, &c.name, cx, origin)?;
@@ -283,10 +283,10 @@ impl Resolver<'_> {
                         && self.serves_path(&k, &c.name[k_used..])
                     {
                         self.used(&k);
-                        return self.resolve_attr(&k, k_used, &c.name, origin, None);
+                        return self.resolve_attr(&k, k_used, &c.name, origin, None, false);
                     }
                     self.used(&a);
-                    return self.resolve_attr(&a, used, &c.name, origin, None);
+                    return self.resolve_attr(&a, used, &c.name, origin, None, false);
                 }
                 Ok(None) => {
                     lenient_dup = lenient_dup || lenient;
@@ -377,7 +377,7 @@ impl Resolver<'_> {
         for (level, outer) in levels.filter(|_| cx.outer) {
             if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
                 self.used(&a);
-                return self.resolve_attr(&a, used, &c.name, origin, Some(level));
+                return self.resolve_attr(&a, used, &c.name, origin, Some(level), false);
             }
         }
         // `grouping__id` is the grouping id Spark's aggregate rule reads
@@ -810,26 +810,13 @@ impl Resolver<'_> {
         parts: &[String],
         origin: Origin,
         outer: Option<usize>,
-    ) -> Result<Bound, AnalysisError> {
-        self.resolve_attr_as(a, used, parts, origin, outer, false)
-    }
-
-    /// [`Self::resolve_attr`]; `lambda` makes the base a lambda variable
-    /// (`x.field` inside a higher-order function's lambda).
-    fn resolve_attr_as(
-        &mut self,
-        a: &Attr,
-        used: usize,
-        parts: &[String],
-        origin: Origin,
-        outer: Option<usize>,
         lambda: bool,
     ) -> Result<Bound, AnalysisError> {
         // A reference keeps the spelling it was written with.
         let mut col = a.col.clone();
         col.name.clone_from(&parts[used - 1]);
         let node = match outer {
-            _ if lambda => ExprNode::Resolved(ResolvedExpr::LambdaVar(col.clone())),
+            None if lambda => ExprNode::Resolved(ResolvedExpr::LambdaVar(col.clone())),
             None => ExprNode::Resolved(ResolvedExpr::Column(col.clone())),
             Some(_) => ExprNode::Resolved(ResolvedExpr::OuterColumn(col.clone())),
         };
