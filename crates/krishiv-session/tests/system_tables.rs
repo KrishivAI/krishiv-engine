@@ -274,3 +274,14 @@ fn queries_carry_the_trace_of_the_inbound_header() {
         "{r:?}"
     );
 }
+
+#[test]
+fn queries_name_the_statement_class() {
+    let s = Session::new().unwrap();
+    run_all(&s, "SELECT 1 AS one").unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT statement_class FROM system.queries WHERE query_text LIKE 'SELECT 1 AS one%'",
+    );
+    assert_eq!(r, ["READ"], "{r:?}");
+}

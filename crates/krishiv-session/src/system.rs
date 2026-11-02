@@ -165,6 +165,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("session_id", Text, false),
             ("principal", Text, false),
             ("trace_id", Text, true),
+            ("statement_class", Text, true),
             ("state", Text, false),
             ("query_text", Text, true),
             ("query_text_truncated", Flag, false),
@@ -303,6 +304,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             text(rows.iter().map(|r| Some(r.session_id.as_str()))),
             text(rows.iter().map(|r| Some(r.principal.as_str()))),
             text(rows.iter().map(|r| r.trace_id.as_deref())),
+            text(rows.iter().map(|r| r.statement_class)),
             text(rows.iter().map(|r| Some(r.state))),
             text(rows.iter().map(|r| r.text.as_deref())),
             Arc::new(BooleanArray::from_iter(
@@ -361,6 +363,9 @@ pub(crate) struct QueryRow {
     pub(crate) session_id: String,
     pub(crate) principal: String,
     pub(crate) trace_id: Option<String>,
+    /// `READ`, `WRITE`, `DDL`, `SESSION` or `ADMIN` (T137); `None` when the
+    /// statement was refused before it was classified or came from no SQL.
+    pub(crate) statement_class: Option<&'static str>,
     pub(crate) state: &'static str,
     pub(crate) text: Option<String>,
     pub(crate) truncated: bool,
@@ -531,7 +536,7 @@ impl QueryLog {
     }
 
     /// Records a query that started now and returns its id.
-    pub(crate) fn begin(&self, text: Option<&str>) -> String {
+    pub(crate) fn begin(&self, text: Option<&str>, class: Option<&'static str>) -> String {
         let ms = now_ms();
         let id = self.next_id(ms);
         let (text, truncated) = match text {
@@ -560,6 +565,7 @@ impl QueryLog {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone(),
+            statement_class: class,
             state: "running",
             text,
             truncated,
@@ -582,7 +588,7 @@ impl QueryLog {
     /// Records a statement that failed before it ran: parsing, analysis or
     /// an access check. A denial is `denied`; a cancellation `cancelled`.
     pub(crate) fn record_refused(&self, text: &str, error: &KrishivError) {
-        let id = self.begin(Some(text));
+        let id = self.begin(Some(text), None);
         let class = error.error_class().name();
         let state = match class {
             "KRISHIV_INSUFFICIENT_PERMISSIONS" => "denied",
@@ -736,8 +742,8 @@ mod tests {
     #[test]
     fn query_ids_are_uuid_v7_and_unique() {
         let log = QueryLog::default();
-        let a = log.begin(Some("SELECT 1"));
-        let b = log.begin(None);
+        let a = log.begin(Some("SELECT 1"), Some("read"));
+        let b = log.begin(None, None);
         assert_ne!(a, b);
         for id in [&a, &b] {
             let p: Vec<&str> = id.split('-').collect();
@@ -767,7 +773,7 @@ mod tests {
     fn history_is_bounded_and_long_text_is_cut_on_a_char() {
         let log = QueryLog::default();
         for _ in 0..(HISTORY_ROWS + 5) {
-            let id = log.begin(None);
+            let id = log.begin(None, None);
             log.finish(
                 &id,
                 &Finished {
@@ -782,7 +788,7 @@ mod tests {
         }
         assert_eq!(log.snapshot().len(), HISTORY_ROWS);
         let long = "é".repeat(TEXT_BYTES);
-        log.begin(Some(&long));
+        log.begin(Some(&long), None);
         let last = log.snapshot().pop().unwrap();
         assert!(last.truncated && last.text.unwrap().len() <= TEXT_BYTES);
     }

@@ -593,6 +593,8 @@ impl Session {
         // drops (its reads are checked by analysis, first thing).
         let class = krishiv_sql::classify(&statement);
         self.authorize_statement(&statement, class, &env).await?;
+        let mut env = env;
+        env.statement_class = Some(class.name());
         self.run_statement(statement, env, query, &redacted).await
     }
 
@@ -1211,6 +1213,7 @@ impl Session {
             variables_version: variables.version,
             policy_version: self.state.policy.version().0,
             text: None,
+            statement_class: None,
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1548,7 +1551,10 @@ impl Session {
         if metrics_on {
             self.state.metrics.query_begin(query.class());
         }
-        let log_id = self.state.queries.begin(env.text.as_deref());
+        let log_id = self
+            .state
+            .queries
+            .begin(env.text.as_deref(), env.statement_class);
         let mut pending = PendingFold(Some(QueryFold {
             query: Arc::clone(&query),
             state: Arc::clone(&self.state),
@@ -2451,6 +2457,8 @@ pub(crate) struct QueryEnv {
     /// The statement as the session may show it (redacted), for
     /// `system.queries`; `None` for a query no SQL text started.
     pub(crate) text: Option<Arc<str>>,
+    /// The statement's class (`StatementClass::name`), for `system.queries`.
+    pub(crate) statement_class: Option<&'static str>,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a
