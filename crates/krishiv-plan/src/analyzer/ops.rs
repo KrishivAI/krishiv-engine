@@ -3426,6 +3426,10 @@ impl Resolver<'_> {
                 ));
             }
         }
+        // A key naming a column a `USING` join merged away reads it from the join's output.
+        let revealed = self.reveal(&below, &bounds)?;
+        let extended = extended || revealed.out.len() > below.out.len();
+        let below = revealed;
         let node = PlanNode::Sort {
             input: Arc::clone(&below.plan),
             order: sorted(bounds.into_iter().map(|b| b.expr).collect()),
@@ -3434,7 +3438,9 @@ impl Resolver<'_> {
         let mut s = self.make(p.origin, node, below.out.to_vec(), &[&below]);
         s.widen = Some(Arc::new(Widen::Through { child: below }));
         Ok(if extended {
-            self.restore(&s, &c.out)
+            let mut kept = self.restore(&s, &c.out);
+            kept.hidden = Arc::clone(&c.hidden);
+            kept
         } else {
             s
         })

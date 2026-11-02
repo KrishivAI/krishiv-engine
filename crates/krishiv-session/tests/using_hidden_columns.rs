@@ -230,3 +230,27 @@ fn semi_and_anti_joins_read_the_merged_away_key() {
         ["two"]
     );
 }
+
+#[test]
+fn a_sort_or_a_later_join_reads_columns_an_earlier_join_merged_away() {
+    let s = session();
+    block_on(s.sql(
+        "CREATE TEMPORARY VIEW nt3 AS SELECT * FROM VALUES ('one', 7), ('two', 8) AS nt3(k, v3)",
+    ))
+    .unwrap();
+    // Pipe syntax sorts the join directly.
+    assert_eq!(
+        rows(
+            &s,
+            "FROM nt1 JOIN nt2 USING (k) |> ORDER BY nt2.k |> SELECT string(v1), string(v2)"
+        ),
+        ["1|1", "1|5", "2|22"]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT string(nt2.k), string(v3) FROM nt1 JOIN nt2 USING (k) JOIN nt3 USING (k)"
+        ),
+        ["one|7", "one|7", "two|8"]
+    );
+}

@@ -689,6 +689,16 @@ impl Session {
             })
             .unwrap_or_default();
         let provider = self.provider_of(Some(short_provider(&written)))?;
+        // The policy is asked before the path is looked at, so a denial never tells whether it exists.
+        for path in paths.iter().filter_map(OptionValue::as_plain) {
+            let qualified = self.qualify_path(path)?;
+            self.authorize_path(
+                Path::new(&qualified),
+                &[Privilege::Select],
+                StatementClass::Ddl,
+            )
+            .await?;
+        }
         if let Some(path) = paths.first().and_then(OptionValue::as_plain) {
             let local = path.strip_prefix("file:").unwrap_or(path);
             if !path.contains("://") && !std::path::Path::new(local).exists() {

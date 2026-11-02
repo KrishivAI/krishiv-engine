@@ -33,6 +33,17 @@ fn a_path_option_and_a_location_are_the_same_external_table() {
         !place.exists(),
         "an external table's directory is made by a write"
     );
+    // Until a write makes the directory the table holds no rows.
+    for t in ["t1", "t2"] {
+        let df = block_on(s.sql(&format!("SELECT * FROM {t}"))).unwrap();
+        let rows: usize = block_on(df.collect())
+            .unwrap()
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum();
+        assert_eq!(rows, 0);
+    }
+    assert!(!place.exists(), "a read does not make it either");
     let want = format!("LOCATION 'file:{}'\n", place.display());
     for t in ["t1", "t2"] {
         let text = show_create(&s, t);

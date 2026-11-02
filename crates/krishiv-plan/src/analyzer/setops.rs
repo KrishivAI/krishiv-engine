@@ -816,7 +816,11 @@ impl Resolver<'_> {
         let mut c = self.child(input, env)?;
         // An aggregate below is no aggregate to a filter above: its `WHERE
         // sum(..)` is not a `HAVING`.
-        c.widen = None;
+        // Past a `USING` join the merged-away columns stay reachable (its projection is the only
+        // thing below, and it drops nothing else), so the widening stays for them.
+        if c.hidden.is_empty() {
+            c.widen = None;
+        }
         c.agg = None;
         Ok(c)
     }
