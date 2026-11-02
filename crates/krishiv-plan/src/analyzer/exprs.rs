@@ -2144,7 +2144,26 @@ impl Resolver<'_> {
                     // `k` is an INT to Spark (implicit cast): a fractional,
                     // decimal or string constant is validated as the INT it
                     // casts to, and the rewrite uses that cast.
-                    let k_int = self.implicit_cast(&kids[2], Some(DataType::Integer));
+                    // Only numbers and strings cast: an interval or other type stays
+                    // as written and fails the signature check as before.
+                    let castable = matches!(
+                        kids[2].ty.data_type,
+                        Some(
+                            DataType::Byte
+                                | DataType::Short
+                                | DataType::Integer
+                                | DataType::Long
+                                | DataType::Float
+                                | DataType::Double
+                                | DataType::Decimal(_)
+                                | DataType::String
+                        ) | None
+                    );
+                    let k_int = if castable {
+                        self.implicit_cast(&kids[2], Some(DataType::Integer))
+                    } else {
+                        kids[2].clone()
+                    };
                     if let Some(Constant::Integral(k)) = self.fold(&k_int.expr, self.ctx.conf.ansi)
                         && !(1..=100_000).contains(&k)
                     {
