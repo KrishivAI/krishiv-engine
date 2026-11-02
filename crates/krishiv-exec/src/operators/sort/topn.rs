@@ -8,6 +8,7 @@ use arrow_row::Rows;
 use arrow_schema::SchemaRef;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivUnsupportedFeature;
+use krishiv_io::{FilterId, KeyFilter};
 use krishiv_memory::Reservation;
 use krishiv_types::batch::Batch;
 
@@ -19,6 +20,7 @@ use crate::error::{Result, internal};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::operators::{global_ref, local_mut};
 use crate::sync::{Mutex, lock};
+use crate::values::ValueService;
 
 /// The rows kept so far, sorted, with their key rows.
 #[derive(Debug)]
@@ -51,6 +53,12 @@ impl Top {
 /// output is the stable sort's prefix. Drivers merge their tops in
 /// `combine`.
 ///
+/// **Bound** ([`Self::with_bound`]): a driver holding `offset + limit` rows
+/// offers the first key of its last row to the scans below, as a runtime
+/// filter. Any driver's last row bounds the whole top-N, because the global
+/// last row is no worse. Ties pass, since the sink only drops strictly later
+/// rows.
+///
 /// **Weights:** defined for insert-only input; weighted (change stream)
 /// input is rejected with `KRISHIV_UNSUPPORTED_FEATURE` (incremental top-N
 /// over a change stream needs retraction-aware state).
@@ -61,6 +69,8 @@ pub struct TopN {
     offset: usize,
     keep: usize,
     max_retained: AtomicU64,
+    first_key: Option<SortKey>,
+    bound: Option<(Arc<dyn ValueService>, FilterId)>,
 }
 
 impl TopN {
@@ -93,7 +103,54 @@ impl TopN {
             offset,
             keep,
             max_retained: AtomicU64::new(0),
+            first_key: keys.first().copied(),
+            bound: None,
         })
+    }
+
+    /// The same top-N, offering its bound on the first key as filter `id`.
+    #[must_use]
+    pub fn with_bound(mut self, values: Arc<dyn ValueService>, id: FilterId) -> Self {
+        self.bound = Some((values, id));
+        self
+    }
+
+    /// Offers the first key of the last row of `batch`, when that many rows
+    /// are kept and that key isn't the one `before` offered.
+    fn offer_bound(&self, batch: &Batch, before: Option<&Top>) -> Result<()> {
+        let (Some((values, id)), Some(key)) = (&self.bound, self.first_key) else {
+            return Ok(());
+        };
+        let rows = batch.num_rows();
+        if rows < self.keep {
+            return Ok(());
+        }
+        let Some(column) = batch.data().columns().get(key.column) else {
+            return Err(internal(format!("TopN key {} out of range", key.column)));
+        };
+        let last = column.slice(rows - 1, 1);
+        // Only a later key of the same first key leaves the bound where it is.
+        if let Some(top) = before.filter(|t| t.len() >= self.keep)
+            && top
+                .batch
+                .data()
+                .column(key.column)
+                .slice(top.len() - 1, 1)
+                .as_ref()
+                == last.as_ref()
+        {
+            return Ok(());
+        }
+        if let Some(keys) = KeyFilter::top_n_bound(
+            last.as_ref(),
+            0,
+            last.data_type(),
+            key.descending,
+            key.nulls_first,
+        ) {
+            values.tighten(*id, Arc::new(keys))?;
+        }
+        Ok(())
     }
 
     /// The most rows one driver's (or the combined) state held after a
@@ -221,6 +278,7 @@ impl Sink for TopN {
         }
         reservation.shrink(old);
         self.retained(batch.num_rows());
+        self.offer_bound(&batch, l.top.as_ref())?;
         l.top = Some(Top {
             batch,
             rows: new_rows,

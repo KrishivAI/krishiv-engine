@@ -72,6 +72,7 @@ fn scan_plan(table: Arc<dyn TableProvider>, nullable: bool) -> (PhysicalPlan, Ar
         filter: None,
         runtime_filters: Vec::new(),
         row_stage: krishiv_exec::RowStageSettings::default(),
+        row_id: false,
     });
     let schema = Arc::new(Schema::new(vec![Field::new(
         "id",

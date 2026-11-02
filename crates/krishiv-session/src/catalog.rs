@@ -890,6 +890,7 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             | PhysNode::Limit { input, .. }
             | PhysNode::Sort { input, .. }
             | PhysNode::TopN { input, .. }
+            | PhysNode::LateFetch { input, .. }
             | PhysNode::Window { input, .. }
             | PhysNode::WindowGroupLimit { input, .. }
             | PhysNode::Aggregate { input, .. }
@@ -2848,6 +2849,7 @@ mod tests {
                 filter: None,
                 runtime_filters: Vec::new(),
                 row_stage: RowStageSettings::default(),
+                row_id: false,
             }),
             Arc::new(Schema::new(vec![Field::new(
                 "id",

@@ -167,6 +167,16 @@ fn the_exec_seed_is_unset_until_given() {
 }
 
 #[test]
+fn late_fetch_max_rows_parses_and_defaults() {
+    let mut c = Config::new();
+    let get = |c: &Config| c.get(&LATE_FETCH_MAX_ROWS).and_then(ConfigValue::as_int);
+    assert_eq!(get(&c), Some(50));
+    c.set("krishiv.exec.lateFetch.maxRows", "0").unwrap();
+    assert_eq!(get(&c), Some(0));
+    assert!(c.set("krishiv.exec.lateFetch.maxRows", "many").is_err());
+}
+
+#[test]
 fn spill_entries_parse_and_default() {
     let mut c = Config::new();
     let get = |c: &Config| {
