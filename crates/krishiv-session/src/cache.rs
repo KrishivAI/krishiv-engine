@@ -298,6 +298,8 @@ impl RelationCache {
 
     /// Drops every entry.
     pub(crate) fn clear(&self) {
+        // The result cache shares the invalidation: what is cleared here is cleared there.
+        crate::result_cache::global().clear();
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
         for entry in state.entries.values() {
@@ -312,6 +314,7 @@ impl RelationCache {
     /// read may have changed. Matches the entry's tables and its pins, so
     /// versioned and temporary tables both clear.
     pub(crate) fn invalidate_table(&self, name: &str) {
+        crate::result_cache::global().invalidate_table(name);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
         let lowered = name.to_lowercase();

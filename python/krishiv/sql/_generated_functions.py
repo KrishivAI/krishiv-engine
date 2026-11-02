@@ -115,6 +115,7 @@ __all__ = [
     "date_trunc",
     "dateadd",
     "datediff",
+    "datepart",
     "day",
     "dayname",
     "dayofmonth",
@@ -132,6 +133,7 @@ __all__ = [
     "exp",
     "expm1",
     "extract",
+    "factorial",
     "find_in_set",
     "first",
     "first_value",
@@ -821,6 +823,11 @@ def datediff(end: ColumnOrName, start: ColumnOrName) -> Column:
     return _call("datediff", _named(end, "end"), _named(start, "start"))
 
 
+def datepart(field: Column, source: ColumnOrName) -> Column:
+    """Calls the registry function ``datepart``."""
+    return _call("datepart", _named(field, "field"), _named(source, "source"))
+
+
 def day(col: ColumnOrName) -> Column:
     """Calls the registry function ``day``."""
     return _call("day", _named(col, "col"))
@@ -904,6 +911,11 @@ def expm1(col: ColumnOrName) -> Column:
 def extract(field: Column, source: ColumnOrName) -> Column:
     """Calls the registry function ``extract``."""
     return _call("extract", _named(field, "field"), _named(source, "source"))
+
+
+def factorial(col: ColumnOrName) -> Column:
+    """Calls the registry function ``factorial``."""
+    return _call("factorial", _named(col, "col"))
 
 
 def find_in_set(str: ColumnOrName, str_array: ColumnOrName) -> Column:
