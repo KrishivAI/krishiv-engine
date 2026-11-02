@@ -288,10 +288,10 @@ impl LegacyPattern {
             return Ok(None);
         };
         Ok(match zone {
-            None => crate::cast::datetime::local_to_utc(local, session),
+            None => legacy_local_to_utc(local, session),
             Some(Zone_::Offset(o)) => local.checked_sub(i64::from(o) * MICROS_PER_SECOND),
             Some(Zone_::Region(id)) => match crate::datetime::resolve_zone(&id) {
-                Ok(z) => crate::cast::datetime::local_to_utc(local, &z),
+                Ok(z) => legacy_local_to_utc(local, &z),
                 Err(_) => None,
             },
         })
@@ -348,6 +348,22 @@ impl LegacyPattern {
         }
         st.resolve()
     }
+}
+
+/// UTC micros of the local time `local`, resolved as a non-lenient
+/// `GregorianCalendar` does: a time in a gap is invalid (`None`), and in an
+/// overlap the later instant (the smaller offset) wins.
+fn legacy_local_to_utc(local: i64, tz: &dyn TimeZoneRules) -> Option<i64> {
+    let secs = local.div_euclid(MICROS_PER_SECOND);
+    let near = [
+        tz.legacy_offset_at_utc(secs.saturating_sub(86_400)),
+        tz.legacy_offset_at_utc(secs.saturating_add(86_400)),
+    ];
+    let offset = near
+        .into_iter()
+        .filter(|&o| tz.legacy_offset_at_utc(secs.saturating_sub(i64::from(o))) == o)
+        .min()?;
+    local.checked_sub(i64::from(offset).checked_mul(MICROS_PER_SECOND)?)
 }
 
 fn is_numeric(c: char) -> bool {
@@ -462,6 +478,8 @@ struct Parsed {
     dow: Option<(i64, u32)>,
     hour_of_day: Option<(i64, u32)>,
     hour12: Option<(i64, u32)>,
+    /// A one-based hour (`k`, `h`) read as 0 or past its range.
+    bad_hour: bool,
     pm: Option<(bool, u32)>,
     minute: Option<i64>,
     second: Option<i64>,
@@ -669,6 +687,9 @@ impl Parsed {
     }
 
     fn resolve(self) -> Option<(i64, Option<Zone_>)> {
+        if self.bad_hour {
+            return None;
+        }
         let mut year = self.year.map_or(1970, |(y, _)| y);
         if self.era_bc {
             year = 1 - year;
@@ -710,6 +731,11 @@ impl Parsed {
             }
             days_from_civil(year, u32::try_from(m + 1).ok()?, u32::try_from(d).ok()?)?
         };
+        // The labels 1582-10-05..14 do not exist in the hybrid calendar.
+        let cutover = days_from_civil(1582, 10, 4).unwrap_or(i64::MIN);
+        if days > cutover && days < cutover + 11 {
+            return None;
+        }
         if weeky && !self.week_fields_agree(days, year) {
             return None;
         }
@@ -950,6 +976,17 @@ mod tests {
     }
 
     #[test]
+    fn one_based_hours_reject_zero_and_the_cutover_gap_is_not_a_date() {
+        assert_eq!(local("yyyy-MM-dd kk", "2024-01-01 00"), None);
+        assert_eq!(local("yyyy-MM-dd hh a", "2024-01-01 00 AM"), None);
+        assert!(local("yyyy-MM-dd kk", "2024-01-01 24").is_some());
+        assert!(local("yyyy-MM-dd hh a", "2024-01-01 12 AM").is_some());
+        assert_eq!(local("yyyy-MM-dd", "1582-10-10"), None);
+        assert!(local("yyyy-MM-dd", "1582-10-04").is_some());
+        assert!(local("yyyy-MM-dd", "1582-10-15").is_some());
+    }
+
+    #[test]
     fn uppercase_y_is_the_week_year() {
         let t = micros(2019, 12, 30, 0, 0, 0, 0);
         assert_eq!(fmt("YYYY-ww", t), "2020-01");
@@ -967,6 +1004,18 @@ mod tests {
         assert!(!ok("yyyy-MM-dd XX", "2024-03-05 +05"));
         assert!(ok("yyyy-MM-dd XXX", "2024-03-05 +05:30"));
         assert!(!ok("yyyy-MM-dd XXX", "2024-03-05 +0530"));
+    }
+
+    #[test]
+    fn local_times_resolve_like_a_non_lenient_calendar() {
+        let la = crate::datetime::resolve_zone("America/Los_Angeles").unwrap();
+        let p = LegacyPattern::new("yyyy-MM-dd HH:mm:ss").unwrap();
+        assert_eq!(p.parse_timestamp("2024-03-10 02:30:00", &la).unwrap(), None);
+        let t = p
+            .parse_timestamp("2024-11-03 01:30:00", &la)
+            .unwrap()
+            .unwrap();
+        assert_eq!(t, micros(2024, 11, 3, 9, 30, 0, 0));
     }
 
     #[test]
