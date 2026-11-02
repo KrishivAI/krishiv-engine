@@ -60,12 +60,14 @@ class DataFrameReader:
 class DataFrameWriter:
     """Writes a :class:`DataFrame`'s rows to files (a subset of
     ``pyspark.sql.DataFrameWriter``: ``format``/``mode``/``option``/
-    ``options``/``partitionBy``/``save`` and the ``parquet``/``csv``/``json``
-    shortcuts; ``bucketBy``/``sortBy``/``saveAsTable``/``insertInto`` are not
-    implemented). The engine writes no partitioned layout, so a write with
-    ``partitionBy`` columns always fails with ``KRISHIV_UNSUPPORTED_FEATURE``;
-    unknown formats fail the same way and unknown modes with
-    ``INVALID_SAVE_MODE``."""
+    ``options``/``partitionBy``/``bucketBy``/``sortBy``/``save``/
+    ``saveAsTable``/``insertInto`` and the ``parquet``/``csv``/``json``/``text``
+    shortcuts). ``bucketBy`` and ``sortBy`` are accepted but the engine has no
+    bucketed tables: ``save`` and ``insertInto`` fail as in Spark and
+    ``saveAsTable`` with ``KRISHIV_UNSUPPORTED_FEATURE``; ``overwrite`` of an
+    existing table in ``saveAsTable`` and ``insertInto`` and writing ``text``
+    fail with ``KRISHIV_UNSUPPORTED_FEATURE`` as well. Unknown formats fail the
+    same way and unknown modes with ``INVALID_SAVE_MODE``."""
 
     def __init__(self, df: DataFrame) -> None:
         self._df = df
@@ -73,6 +75,8 @@ class DataFrameWriter:
         self._mode = "error"
         self._options: list[tuple[str, str]] = []
         self._partition_by: list[str] = []
+        self._bucket_by: tuple[int, list[str]] | None = None
+        self._sort_by: list[str] | None = None
 
     def format(self, source: str) -> DataFrameWriter:
         self._format = source
@@ -112,6 +116,85 @@ class DataFrameWriter:
         self._partition_by = names
         return self
 
+    def bucketBy(self, numBuckets: int, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter:
+        """Buckets the output by ``col`` (and ``cols``) into ``numBuckets``
+        buckets. Only ``saveAsTable`` accepts it in Spark, and the engine has
+        no bucketed tables (see the class doc)."""
+        if not isinstance(numBuckets, int) or isinstance(numBuckets, bool):
+            raise not_expected_type("numBuckets", "int", numBuckets)
+        if isinstance(col, list | tuple):
+            if cols:
+                raise TypeError("col is a list or tuple, but cols are not empty")
+            names = list(col)
+        else:
+            names = [col, *cols]
+        for n in names:
+            if not isinstance(n, str):
+                raise not_expected_type("col", "str", n)
+        self._bucket_by = (numBuckets, names)
+        return self
+
+    def sortBy(self, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter:
+        """Sorts each bucket by ``col`` (and ``cols``); needs ``bucketBy``."""
+        if isinstance(col, list | tuple):
+            if cols:
+                raise TypeError("col is a list or tuple, but cols are not empty")
+            names = list(col)
+        else:
+            names = [col, *cols]
+        for n in names:
+            if not isinstance(n, str):
+                raise not_expected_type("col", "str", n)
+        self._sort_by = names
+        return self
+
+    def saveAsTable(
+        self,
+        name: str,
+        format: str | None = None,
+        mode: str | None = None,
+        partitionBy: str | list[str] | tuple[str, ...] | None = None,
+        **options: object,
+    ) -> None:
+        """Saves the rows as the table ``name`` (``errorifexists`` fails on an
+        existing table, ``ignore`` leaves it, ``append`` adds by column name)."""
+        self._write_table(False, name, format, mode, partitionBy, options)
+
+    def insertInto(self, tableName: str, overwrite: bool | None = None) -> None:
+        """Inserts the rows into the existing table ``tableName`` by position."""
+        if overwrite is not None:
+            self.mode("overwrite" if overwrite else "append")
+        self._write_table(True, tableName, None, None, None, {})
+
+    def _write_table(
+        self,
+        insert_into: bool,
+        name: str,
+        format: str | None,
+        mode: str | None,
+        partitionBy: str | list[str] | tuple[str, ...] | None,
+        options: dict[str, object],
+    ) -> None:
+        if not isinstance(name, str):
+            raise not_expected_type("name", "str", name)
+        if format is not None:
+            self.format(format)
+        if mode is not None:
+            self.mode(mode)
+        if partitionBy is not None:
+            self.partitionBy(partitionBy)
+        self.options(**{k: v for k, v in options.items() if v is not None})
+        self._df._df.write_table(
+            insert_into,
+            name,
+            self._format,
+            self._mode,
+            self._options,
+            self._partition_by,
+            self._bucket_by,
+            self._sort_by,
+        )
+
     def save(
         self,
         path: str | None = None,
@@ -130,7 +213,15 @@ class DataFrameWriter:
         self.options(**{k: v for k, v in options.items() if v is not None})
         if path is None:
             raise not_expected_type("path", "str", path)
-        self._df._df.write(self._format, self._mode, path, self._options, self._partition_by)
+        self._df._df.write(
+            self._format,
+            self._mode,
+            path,
+            self._options,
+            self._partition_by,
+            self._bucket_by,
+            self._sort_by,
+        )
 
     def parquet(
         self,
@@ -158,6 +249,16 @@ class DataFrameWriter:
         **options: object,
     ) -> None:
         self.save(path, format="json", mode=mode, partitionBy=partitionBy, **options)
+
+    def text(
+        self,
+        path: str,
+        compression: str | None = None,
+        lineSep: str | None = None,
+    ) -> None:
+        """Writes the rows as text files; the engine does not write text yet
+        (``KRISHIV_UNSUPPORTED_FEATURE``)."""
+        self.save(path, format="text", compression=compression, lineSep=lineSep)
 
 
 def _option_text(value: object) -> str:

@@ -387,3 +387,55 @@ def test_writeto_signatures_match_pyspark() -> None:
     assert list(inspect.signature(W2.overwrite).parameters) == ["self", "condition"]
     for name in ("create", "replace", "createOrReplace", "append", "overwritePartitions"):
         assert list(inspect.signature(getattr(W2, name)).parameters) == ["self"], name
+
+
+def error_class(exc: errors.PySparkException) -> str:
+    return exc.getCondition() or ""
+
+
+def test_save_as_table_modes_and_insert_into(spark: SparkSession, df: DataFrame) -> None:
+    df.write.saveAsTable("saved")
+    assert dicts(spark.table("saved")) == dicts(df)
+    with pytest.raises(errors.PySparkException) as exists:
+        df.write.saveAsTable("saved")
+    assert error_class(exists.value) == "TABLE_OR_VIEW_ALREADY_EXISTS"
+    df.write.mode("ignore").saveAsTable("saved")
+    assert spark.table("saved").count() == 3
+    df.select("name", "id").write.mode("append").saveAsTable("saved")  # appended by name
+    assert spark.table("saved").count() == 6
+    df.write.insertInto("saved")
+    assert spark.table("saved").count() == 9
+    with pytest.raises(errors.PySparkException) as overwrite:
+        df.write.mode("overwrite").saveAsTable("saved")
+    assert error_class(overwrite.value) == "KRISHIV_UNSUPPORTED_FEATURE"
+    with pytest.raises(errors.PySparkException) as insert_overwrite:
+        df.write.insertInto("saved", overwrite=True)
+    assert error_class(insert_overwrite.value) == "KRISHIV_UNSUPPORTED_FEATURE"
+    with pytest.raises(errors.PySparkException) as missing:
+        df.write.insertInto("missing")
+    assert error_class(missing.value) == "TABLE_OR_VIEW_NOT_FOUND"
+
+
+def test_bucketing_is_refused_as_spark_refuses_it(df: DataFrame, tmp_path: Any) -> None:
+    path = str(tmp_path / "out")
+    with pytest.raises(errors.PySparkException) as bucketed_save:
+        df.write.bucketBy(2, "id").save(path)
+    assert error_class(bucketed_save.value) == "_LEGACY_ERROR_TEMP_1312"
+    with pytest.raises(errors.PySparkException) as both:
+        df.write.bucketBy(2, "id").sortBy("name").parquet(path)
+    assert error_class(both.value) == "_LEGACY_ERROR_TEMP_1313"
+    with pytest.raises(errors.PySparkException) as sort_only:
+        df.write.sortBy("name").save(path)
+    assert error_class(sort_only.value) == "SORT_BY_WITHOUT_BUCKETING"
+    with pytest.raises(errors.PySparkException) as table:
+        df.write.bucketBy(2, ["id"]).saveAsTable("b")
+    assert error_class(table.value) == "KRISHIV_UNSUPPORTED_FEATURE"
+    with pytest.raises(errors.PySparkException) as partitioned:
+        df.write.partitionBy("id").insertInto("b")
+    assert error_class(partitioned.value) == "PARTITION_BY_NOT_ALLOWED_WITH_INSERT_INTO"
+
+
+def test_text_writing_is_unsupported(df: DataFrame, tmp_path: Any) -> None:
+    with pytest.raises(errors.PySparkException) as text:
+        df.select("name").write.text(str(tmp_path / "t"))
+    assert error_class(text.value) == "KRISHIV_UNSUPPORTED_FEATURE"

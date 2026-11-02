@@ -1669,6 +1669,29 @@ impl DataFrame {
         options: Vec<(String, String)>,
         partition_by: Vec<String>,
     ) -> Result<(), KrishivError> {
+        self.write_to_with(format, mode, path, options, partition_by, None, None)
+            .await
+    }
+
+    /// [`Self::write_to`] with the `bucket_by` (count and columns) and
+    /// `sort_by` state of the writer, which `save` refuses as Spark does.
+    ///
+    /// # Errors
+    /// As [`DataFrameWriter::save`].
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one bridge call carrying the whole writer state"
+    )]
+    pub async fn write_to_with(
+        &self,
+        format: &str,
+        mode: &str,
+        path: &str,
+        options: Vec<(String, String)>,
+        partition_by: Vec<String>,
+        bucket_by: Option<(i32, Vec<String>)>,
+        sort_by: Option<Vec<String>>,
+    ) -> Result<(), KrishivError> {
         let mut writer = self.write().format(format).mode(mode);
         for (key, value) in &options {
             writer = writer.option(key, value);
@@ -1676,7 +1699,55 @@ impl DataFrame {
         if !partition_by.is_empty() {
             writer = writer.partition_by(partition_by.iter().map(String::as_str));
         }
+        if let Some((buckets, cols)) = bucket_by {
+            writer = writer.bucket_by(buckets, cols);
+        }
+        if let Some(cols) = sort_by {
+            writer = writer.sort_by(cols);
+        }
         writer.save(path).await
+    }
+
+    /// Writes this DataFrame's rows to the table `table` (PySpark's
+    /// `DataFrameWriter.saveAsTable`, or `insertInto` when `insert_into` is
+    /// set, collected as one call): `format`, `mode`, `options` pairs and the
+    /// `partition_by`, `bucket_by` (count and columns) and `sort_by` state.
+    ///
+    /// # Errors
+    /// As [`DataFrameWriter::save_as_table`] or [`DataFrameWriter::insert_into`].
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one bridge call carrying the whole writer state"
+    )]
+    pub async fn write_table_with(
+        &self,
+        insert_into: bool,
+        table: &str,
+        format: &str,
+        mode: &str,
+        options: Vec<(String, String)>,
+        partition_by: Vec<String>,
+        bucket_by: Option<(i32, Vec<String>)>,
+        sort_by: Option<Vec<String>>,
+    ) -> Result<(), KrishivError> {
+        let mut writer = self.write().format(format).mode(mode);
+        for (key, value) in &options {
+            writer = writer.option(key, value);
+        }
+        if !partition_by.is_empty() {
+            writer = writer.partition_by(partition_by.iter().map(String::as_str));
+        }
+        if let Some((buckets, cols)) = bucket_by {
+            writer = writer.bucket_by(buckets, cols);
+        }
+        if let Some(cols) = sort_by {
+            writer = writer.sort_by(cols);
+        }
+        if insert_into {
+            writer.insert_into(table).await
+        } else {
+            writer.save_as_table(table).await
+        }
     }
 
     /// Registers this DataFrame as the temporary view `name`, replacing any
