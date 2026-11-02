@@ -210,6 +210,11 @@ fn operator_json(id: OperatorId, e: &OperatorEntry) -> Value {
         "node": e.node,
         "role": e.role.as_str(),
         "pipelines": e.pipelines,
+        "instances": {
+            "count": m.drivers,
+            "min_rows_out": m.min_driver_rows_out,
+            "max_rows_out": m.max_driver_rows_out,
+        },
         "metrics": {
             "drivers": m.drivers,
             "rows_in": m.rows_in,
@@ -328,6 +333,10 @@ fn operator_of(v: &Value) -> R<(OperatorId, OperatorEntry)> {
         })
         .collect::<R<Vec<_>>>()?;
     let m = obj(member(o, "metrics")?, "metrics")?;
+    let instances = match o.get("instances") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(obj(v, "instances")?),
+    };
     let metrics = OperatorMetrics {
         drivers: u64_of(m, "drivers")?,
         rows_in: u64_of(m, "rows_in")?,
@@ -347,6 +356,10 @@ fn operator_of(v: &Value) -> R<(OperatorId, OperatorEntry)> {
         // Added within v1: absent in documents written before them.
         spill_files: opt_u64(m, "spill_files")?.unwrap_or(0),
         spill_write_bytes: opt_u64(m, "spill_write_bytes")?.unwrap_or(0),
+        // Added in minor 1: absent in earlier documents. The count is the
+        // driver count, so only the spread is read.
+        min_driver_rows_out: instances.map_or(Ok(0), |i| u64_of(i, "min_rows_out"))?,
+        max_driver_rows_out: instances.map_or(Ok(0), |i| u64_of(i, "max_rows_out"))?,
     };
     let mut extra = Vec::new();
     for x in arr(o, "extra")? {

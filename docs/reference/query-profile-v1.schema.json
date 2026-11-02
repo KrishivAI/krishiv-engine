@@ -123,6 +123,17 @@
           },
           "role": { "enum": ["source", "operator", "sink"] },
           "pipelines": { "type": "array", "items": { "$ref": "#/$defs/u32" } },
+          "instances": {
+            "type": "object",
+            "description": "Added in minor 1: the spread over the drivers that ran the operator (skew). Mergeable: counts add, minima and maxima combine.",
+            "required": ["count", "min_rows_out", "max_rows_out"],
+            "additionalProperties": false,
+            "properties": {
+              "count": { "$ref": "#/$defs/u64" },
+              "min_rows_out": { "$ref": "#/$defs/u64", "description": "The fewest rows one driver produced (0 when count is 0)." },
+              "max_rows_out": { "$ref": "#/$defs/u64" }
+            }
+          },
           "metrics": {
             "type": "object",
             "required": [

@@ -527,6 +527,32 @@ fn a_later_minor_is_read() {
     assert!(QueryProfile::from_json(&v.to_string()).is_err());
 }
 
+/// The spread of rows over the drivers is written and read back, and a
+/// document without it (written before minor 1) reads as no spread.
+#[test]
+fn instances_round_trip() {
+    let mut m = metrics();
+    if let Some(e) = m.operators.get_mut(&OperatorId(1)) {
+        e.metrics.drivers = 4;
+        e.metrics.min_driver_rows_out = 0;
+        e.metrics.max_driver_rows_out = 91_000;
+    }
+    let p = QueryProfile::new(&plan(matching()), m, false);
+    let v = p.to_json_value();
+    assert_eq!(
+        v["operators"][1]["instances"],
+        serde_json::json!({"count": 4, "min_rows_out": 0, "max_rows_out": 91000})
+    );
+    assert_eq!(QueryProfile::from_json(&v.to_string()).ok(), Some(p));
+    let mut old = v;
+    if let Some(o) = old["operators"][1].as_object_mut() {
+        o.remove("instances");
+    }
+    let back = QueryProfile::from_json(&old.to_string()).unwrap_or_else(|e| panic!("{e}"));
+    let e = &back.metrics.operators[&OperatorId(1)].metrics;
+    assert_eq!((e.min_driver_rows_out, e.max_driver_rows_out), (0, 0));
+}
+
 /// `planning` round-trips and must be an object.
 #[test]
 fn planning_round_trips() {
@@ -630,6 +656,10 @@ fn schema_matches_the_writer() {
     check(&schema["$defs"]["planning"], &doc["planning"]);
     check(&props["environment"], &doc["environment"]);
     check(&props["usage"], &doc["usage"]);
+    check(
+        &props["operators"]["items"]["properties"]["instances"],
+        &doc["operators"][0]["instances"],
+    );
     check(&props["usage"]["properties"]["scan"], &doc["usage"]["scan"]);
     check(&props["pipelines"]["items"], &doc["pipelines"][0]);
     check(&props["plan"]["items"], &doc["plan"][0]);
