@@ -26,6 +26,12 @@
 //! (`krishiv.exec.join.smj.bufferBytes`). Marks for the right rows (a right
 //! or full join with a residual condition) are one bit per row, reserved.
 //!
+//! Without a residual (or a scalar subquery's one-match check) a key's
+//! output follows from its rows alone, so a key whose rows end inside both
+//! current batches, and whose output fits, is joined in place, with no
+//! group ([`Merge::join_run`], counted as `keys_in_place`); the group path
+//! takes the keys that reach a batch's end or overflow the output.
+//!
 //! # Memory
 //! Group memory is reserved in the driver's consumer and released with the
 //! group; output rows reference their input batches as every operator's
@@ -467,6 +473,8 @@ pub(crate) struct MergeSpec {
 #[derive(Debug, Default)]
 pub(crate) struct MergeCounters {
     pub(crate) groups_spilled: AtomicU64,
+    /// Keys joined in place ([`Merge::join_run`]), not through the phases.
+    pub(crate) keys_in_place: AtomicU64,
     pub(crate) spill_bytes: AtomicU64,
 }
 
@@ -546,7 +554,7 @@ impl Merge {
     async fn compare(&mut self) -> Result<bool> {
         self.left.fill(&self.query).await?;
         self.right.fill(&self.query).await?;
-        if self.joins_runs() && self.join_run() {
+        if self.joins_whole_keys() && self.join_run() {
             return Ok(true);
         }
         let (lpos, rpos) = (self.left.pos, self.right.pos);
@@ -587,7 +595,7 @@ impl Merge {
     /// (or a scalar subquery's one-match check) a key's output follows from
     /// its rows alone (every pair, or each row of one side once, or none),
     /// and the other rows are those of keys with no match.
-    fn joins_runs(&self) -> bool {
+    fn joins_whole_keys(&self) -> bool {
         self.shared.filter.is_none() && !self.shared.single_match
     }
 
@@ -602,6 +610,7 @@ impl Merge {
         };
         let (ln, rn) = (l.batch.num_rows(), r.batch.num_rows());
         let from = (self.left.pos, self.right.pos);
+        let mut keys = 0_u64;
         while self.out.len() < self.batch_rows && self.left.pos < ln && self.right.pos < rn {
             let (lpos, rpos) = (self.left.pos, self.right.pos);
             let (lk, rk) = (l.key(lpos), r.key(rpos));
@@ -624,8 +633,14 @@ impl Merge {
                     self.join_key(&l, lpos..lend, &r, rpos..rend);
                     self.left.pos = lend;
                     self.right.pos = rend;
+                    keys += 1;
                 }
             }
+        }
+        if keys > 0 {
+            self.counters
+                .keys_in_place
+                .fetch_add(keys, Ordering::Relaxed);
         }
         (self.left.pos, self.right.pos) != from
     }
@@ -640,7 +655,7 @@ impl Merge {
             JoinType::RightSemi => right,
             JoinType::LeftAnti | JoinType::RightAnti | JoinType::NullAwareAnti => 0,
         };
-        rows <= self.batch_rows - self.out.len()
+        rows <= self.batch_rows.saturating_sub(self.out.len())
     }
 
     /// The output of a key whose rows are `left` of `l` and `right` of `r`,
@@ -1467,6 +1482,10 @@ impl Source for SortMergeJoin {
             (
                 std::borrow::Cow::Borrowed("groups_spilled"),
                 Metric::Count(self.counters.groups_spilled.load(Ordering::Relaxed)),
+            ),
+            (
+                std::borrow::Cow::Borrowed("keys_in_place"),
+                Metric::Count(self.counters.keys_in_place.load(Ordering::Relaxed)),
             ),
             (
                 std::borrow::Cow::Borrowed("spill_file_bytes"),
