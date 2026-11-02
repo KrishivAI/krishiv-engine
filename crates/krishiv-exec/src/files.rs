@@ -753,6 +753,15 @@ impl FileReads {
         // Boxed: the listing future sits on deep recursion paths (nested
         // scripts), so it must stay small.
         let committed = Box::pin(self.committed_files(at)).await?;
+        // A directory below a logged root (a partition subdirectory read with `basePath`, or a glob match)
+        // shows only the files that root committed.
+        let inherited = match (&committed, &mode.logged, &mode.base) {
+            (None, Some(logged), _) => Some(logged.clone()),
+            (None, None, Some(base)) => Box::pin(self.committed_files(base))
+                .await?
+                .map(|files| (base.path.parts().count(), Arc::new(files))),
+            _ => None,
+        };
         let mut seen = 0;
         for meta in self.io.list(&at.store, &at.path).await? {
             let below: Vec<_> = meta.location.parts().skip(base).collect();
@@ -769,7 +778,7 @@ impl FileReads {
                     continue;
                 }
                 seen += 1;
-            } else if let Some((root_base, files)) = &mode.logged {
+            } else if let Some((root_base, files)) = &inherited {
                 // Below a logged directory a glob matched: only its committed files.
                 let rel = meta
                     .location

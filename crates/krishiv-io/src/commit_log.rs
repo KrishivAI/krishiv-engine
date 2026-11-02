@@ -108,14 +108,15 @@ impl<'a> CommitLog<'a> {
         let path = self.dir().join(format!("_probe-{probe_id}"));
         let first = self
             .io
-            .put_if_absent(&self.store, &path, Bytes::from_static(b"probe"))
+            .put_if_absent(&self.store, &path, Bytes::from_static(b"probe-1"))
             .await?;
         if first == PutIfAbsent::Unsupported {
             return Ok(false);
         }
         let second = self
             .io
-            .put_if_absent(&self.store, &path, Bytes::from_static(b"probe"))
+            // Another payload: a retry's read-back must tell the first probe's object from a second create.
+            .put_if_absent(&self.store, &path, Bytes::from_static(b"probe-2"))
             .await?;
         self.io.delete(&self.store, &path).await?;
         // A store that rejects the operation (`Unsupported`) simply has no put-if-absent.
