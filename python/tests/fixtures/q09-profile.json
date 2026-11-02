@@ -1,0 +1,2107 @@
+{
+ "detailed": true,
+ "format": "krishiv.query-profile",
+ "operators": [
+  {
+   "extra": [],
+   "id": 0,
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 0,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 1870,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 1870,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 173,
+    "rows_out": 0,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Result",
+   "node": null,
+   "pipelines": [
+    0
+   ],
+   "role": "sink"
+  },
+  {
+   "extra": [],
+   "id": 1,
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 0,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 43880,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 43880,
+    "morsels": 0,
+    "peak_reserved_bytes": 505741,
+    "rows_in": 173,
+    "rows_out": 0,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Sort",
+   "node": 0,
+   "pipelines": [
+    1
+   ],
+   "role": "sink"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "groups",
+     "value": 173
+    },
+    {
+     "kind": "count",
+     "name": "spill_runs",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_files",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "repartitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "hash_entries",
+     "value": 173
+    },
+    {
+     "kind": "count",
+     "name": "hash_buckets",
+     "value": 4096
+    },
+    {
+     "kind": "count",
+     "name": "hash_resizes",
+     "value": 2
+    },
+    {
+     "kind": "text",
+     "name": "hash_index",
+     "value": "swiss"
+    },
+    {
+     "kind": "count",
+     "name": "row_abandons",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "row_final_tasks",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "row_final_spills",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "row_final_flushes",
+     "value": 0
+    },
+    {
+     "kind": "text",
+     "name": "table_layout",
+     "value": "rows"
+    },
+    {
+     "kind": "count",
+     "name": "probe_lookups",
+     "value": 3223
+    },
+    {
+     "kind": "count",
+     "name": "probe_key_compares",
+     "value": 3050
+    },
+    {
+     "kind": "max",
+     "name": "max_probe_length",
+     "value": 1
+    }
+   ],
+   "id": 2,
+   "metrics": {
+    "batches_in": 2,
+    "batches_out": 0,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 221311,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 221311,
+    "morsels": 0,
+    "peak_reserved_bytes": 309097,
+    "rows_in": 3223,
+    "rows_out": 0,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashAggregate",
+   "node": 3,
+   "pipelines": [
+    2
+   ],
+   "role": "sink"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "build_rows",
+     "value": 3223
+    },
+    {
+     "kind": "count",
+     "name": "hash_entries",
+     "value": 428
+    },
+    {
+     "kind": "count",
+     "name": "hash_buckets",
+     "value": 896
+    },
+    {
+     "kind": "count",
+     "name": "spilled_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_file_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "finalize_ns",
+     "value": 411001
+    },
+    {
+     "kind": "count",
+     "name": "finalize_concat_ns",
+     "value": 599173
+    },
+    {
+     "kind": "count",
+     "name": "finalize_index_ns",
+     "value": 66270
+    },
+    {
+     "kind": "max",
+     "name": "finalize_max_partition_ns",
+     "value": 233711
+    },
+    {
+     "kind": "text",
+     "name": "hash_index",
+     "value": "row-flat+chain"
+    }
+   ],
+   "id": 3,
+   "metrics": {
+    "batches_in": 4,
+    "batches_out": 0,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 940083,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 940083,
+    "morsels": 0,
+    "peak_reserved_bytes": 900668,
+    "rows_in": 3223,
+    "rows_out": 0,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashJoinBuild",
+   "node": 6,
+   "pipelines": [
+    3
+   ],
+   "role": "sink"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "build_rows",
+     "value": 100
+    },
+    {
+     "kind": "count",
+     "name": "hash_entries",
+     "value": 100
+    },
+    {
+     "kind": "count",
+     "name": "hash_buckets",
+     "value": 152
+    },
+    {
+     "kind": "count",
+     "name": "spilled_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_file_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "finalize_ns",
+     "value": 148751
+    },
+    {
+     "kind": "count",
+     "name": "finalize_concat_ns",
+     "value": 25001
+    },
+    {
+     "kind": "count",
+     "name": "finalize_index_ns",
+     "value": 11220
+    },
+    {
+     "kind": "max",
+     "name": "finalize_max_partition_ns",
+     "value": 12630
+    },
+    {
+     "kind": "text",
+     "name": "hash_index",
+     "value": "row-flat+chain"
+    }
+   ],
+   "id": 4,
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 0,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 189721,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 189721,
+    "morsels": 0,
+    "peak_reserved_bytes": 22864,
+    "rows_in": 100,
+    "rows_out": 0,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashJoinBuild",
+   "node": 10,
+   "pipelines": [
+    4
+   ],
+   "role": "sink"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "build_rows",
+     "value": 25
+    },
+    {
+     "kind": "count",
+     "name": "hash_entries",
+     "value": 25
+    },
+    {
+     "kind": "count",
+     "name": "hash_buckets",
+     "value": 52
+    },
+    {
+     "kind": "count",
+     "name": "spilled_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_file_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "finalize_ns",
+     "value": 328621
+    },
+    {
+     "kind": "count",
+     "name": "finalize_concat_ns",
+     "value": 18120
+    },
+    {
+     "kind": "count",
+     "name": "finalize_index_ns",
+     "value": 3780
+    },
+    {
+     "kind": "max",
+     "name": "finalize_max_partition_ns",
+     "value": 17050
+    },
+    {
+     "kind": "text",
+     "name": "hash_index",
+     "value": "row-flat+chain"
+    }
+   ],
+   "id": 5,
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 0,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 368311,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 368311,
+    "morsels": 0,
+    "peak_reserved_bytes": 13820,
+    "rows_in": 25,
+    "rows_out": 0,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashJoinBuild",
+   "node": 24,
+   "pipelines": [
+    5
+   ],
+   "role": "sink"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "scan_splits",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "scan_rows_decoded",
+     "value": 25
+    },
+    {
+     "kind": "count",
+     "name": "scan_bytes",
+     "value": 296
+    }
+   ],
+   "id": 6,
+   "metrics": {
+    "batches_in": 0,
+    "batches_out": 1,
+    "blocked_on_io_ns": 247041,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 121950,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 247041,
+    "max_driver_compute_time_ns": 121950,
+    "morsels": 1,
+    "peak_reserved_bytes": 0,
+    "rows_in": 0,
+    "rows_out": 25,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "FileScan",
+   "node": 27,
+   "pipelines": [
+    5
+   ],
+   "role": "source"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "runtime_filter_rows_tested",
+     "value": 100
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_rows_dropped",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_units_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_bytes_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_splits_skipped",
+     "value": 0
+    },
+    {
+     "kind": "text",
+     "name": "runtime_filters",
+     "value": "#3 [s_nationkey]: range, tested 100, dropped 0"
+    },
+    {
+     "kind": "count",
+     "name": "scan_splits",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "scan_rows_decoded",
+     "value": 100
+    },
+    {
+     "kind": "count",
+     "name": "scan_bytes",
+     "value": 430
+    }
+   ],
+   "id": 7,
+   "metrics": {
+    "batches_in": 0,
+    "batches_out": 1,
+    "blocked_on_io_ns": 103851,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 185311,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 103851,
+    "max_driver_compute_time_ns": 185311,
+    "morsels": 1,
+    "peak_reserved_bytes": 2466,
+    "rows_in": 0,
+    "rows_out": 100,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "FileScan",
+   "node": 25,
+   "pipelines": [
+    4
+   ],
+   "role": "source"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "probe_rows",
+     "value": 100
+    },
+    {
+     "kind": "count",
+     "name": "probe_spilled_rows",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_file_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "repartitions",
+     "value": 0
+    },
+    {
+     "kind": "max",
+     "name": "recursion_depth",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_hash_entries",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_hash_buckets",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "reversed_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "probe_table_ns",
+     "value": 5740
+    },
+    {
+     "kind": "count",
+     "name": "probe_lookups",
+     "value": 100
+    },
+    {
+     "kind": "count",
+     "name": "probe_key_compares",
+     "value": 100
+    },
+    {
+     "kind": "max",
+     "name": "max_probe_length",
+     "value": 1
+    }
+   ],
+   "id": 8,
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 1,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 55780,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 55780,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 100,
+    "rows_out": 100,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashJoinProbe",
+   "node": 24,
+   "pipelines": [
+    4
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [],
+   "id": 9,
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 1,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 740,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 740,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 100,
+    "rows_out": 100,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Project",
+   "node": 23,
+   "pipelines": [
+    4
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "build_rows",
+     "value": 3223
+    },
+    {
+     "kind": "count",
+     "name": "hash_entries",
+     "value": 2918
+    },
+    {
+     "kind": "count",
+     "name": "hash_buckets",
+     "value": 4096
+    },
+    {
+     "kind": "count",
+     "name": "spilled_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_file_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "finalize_ns",
+     "value": 1095004
+    },
+    {
+     "kind": "count",
+     "name": "finalize_concat_ns",
+     "value": 2112430
+    },
+    {
+     "kind": "count",
+     "name": "finalize_index_ns",
+     "value": 112800
+    },
+    {
+     "kind": "max",
+     "name": "finalize_max_partition_ns",
+     "value": 575463
+    },
+    {
+     "kind": "text",
+     "name": "hash_index",
+     "value": "row-flat+chain"
+    }
+   ],
+   "id": 10,
+   "metrics": {
+    "batches_in": 15,
+    "batches_out": 0,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 1744035,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 1744035,
+    "morsels": 0,
+    "peak_reserved_bytes": 676732,
+    "rows_in": 3223,
+    "rows_out": 0,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashJoinBuild",
+   "node": 12,
+   "pipelines": [
+    6
+   ],
+   "role": "sink"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "build_rows",
+     "value": 107
+    },
+    {
+     "kind": "count",
+     "name": "hash_entries",
+     "value": 107
+    },
+    {
+     "kind": "count",
+     "name": "hash_buckets",
+     "value": 168
+    },
+    {
+     "kind": "count",
+     "name": "spilled_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_file_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "finalize_ns",
+     "value": 424532
+    },
+    {
+     "kind": "count",
+     "name": "finalize_concat_ns",
+     "value": 213941
+    },
+    {
+     "kind": "count",
+     "name": "finalize_index_ns",
+     "value": 11960
+    },
+    {
+     "kind": "max",
+     "name": "finalize_max_partition_ns",
+     "value": 180341
+    },
+    {
+     "kind": "text",
+     "name": "hash_index",
+     "value": "row-flat+chain"
+    }
+   ],
+   "id": 11,
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 0,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 460072,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 460072,
+    "morsels": 0,
+    "peak_reserved_bytes": 21528,
+    "rows_in": 107,
+    "rows_out": 0,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashJoinBuild",
+   "node": 16,
+   "pipelines": [
+    7
+   ],
+   "role": "sink"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "scan_splits",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "scan_rows_decoded",
+     "value": 2000
+    },
+    {
+     "kind": "count",
+     "name": "scan_bytes",
+     "value": 24436
+    }
+   ],
+   "id": 12,
+   "metrics": {
+    "batches_in": 0,
+    "batches_out": 1,
+    "blocked_on_io_ns": 473102,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 95460,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 473102,
+    "max_driver_compute_time_ns": 95460,
+    "morsels": 1,
+    "peak_reserved_bytes": 0,
+    "rows_in": 0,
+    "rows_out": 2000,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "FileScan",
+   "node": 21,
+   "pipelines": [
+    7
+   ],
+   "role": "source"
+  },
+  {
+   "extra": [],
+   "id": 13,
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 1,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 76310,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 76310,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 2000,
+    "rows_out": 107,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Filter",
+   "node": 20,
+   "pipelines": [
+    7
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [],
+   "id": 14,
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 1,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 1100,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 1100,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 107,
+    "rows_out": 107,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Project",
+   "node": 19,
+   "pipelines": [
+    7
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "runtime_filter_rows_tested",
+     "value": 120350
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_rows_dropped",
+     "value": 56952
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_units_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_bytes_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_splits_skipped",
+     "value": 0
+    },
+    {
+     "kind": "text",
+     "name": "runtime_filters",
+     "value": "#1 [l_partkey]: hash set of 107, tested 60175, dropped 56952, #4 [l_suppkey]: range, tested 60175, dropped 0"
+    },
+    {
+     "kind": "count",
+     "name": "scan_splits",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units",
+     "value": 4
+    },
+    {
+     "kind": "count",
+     "name": "scan_units_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "scan_rows_decoded",
+     "value": 60175
+    },
+    {
+     "kind": "count",
+     "name": "scan_bytes",
+     "value": 445489
+    }
+   ],
+   "id": 15,
+   "metrics": {
+    "batches_in": 0,
+    "batches_out": 15,
+    "blocked_on_io_ns": 11588016,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 2249800,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 11588016,
+    "max_driver_compute_time_ns": 2249800,
+    "morsels": 1,
+    "peak_reserved_bytes": 333084,
+    "rows_in": 0,
+    "rows_out": 3223,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "FileScan",
+   "node": 17,
+   "pipelines": [
+    6
+   ],
+   "role": "source"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "probe_rows",
+     "value": 3223
+    },
+    {
+     "kind": "count",
+     "name": "probe_spilled_rows",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_file_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "repartitions",
+     "value": 0
+    },
+    {
+     "kind": "max",
+     "name": "recursion_depth",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_hash_entries",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_hash_buckets",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "reversed_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "probe_table_ns",
+     "value": 86230
+    },
+    {
+     "kind": "count",
+     "name": "probe_lookups",
+     "value": 3223
+    },
+    {
+     "kind": "count",
+     "name": "probe_key_compares",
+     "value": 3223
+    },
+    {
+     "kind": "max",
+     "name": "max_probe_length",
+     "value": 1
+    }
+   ],
+   "id": 16,
+   "metrics": {
+    "batches_in": 15,
+    "batches_out": 15,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 369060,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 369060,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 3223,
+    "rows_out": 3223,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashJoinProbe",
+   "node": 16,
+   "pipelines": [
+    6
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [],
+   "id": 17,
+   "metrics": {
+    "batches_in": 15,
+    "batches_out": 15,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 11710,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 11710,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 3223,
+    "rows_out": 3223,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Project",
+   "node": 15,
+   "pipelines": [
+    6
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "runtime_filter_rows_tested",
+     "value": 15000
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_rows_dropped",
+     "value": 12082
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_units_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_bytes_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_splits_skipped",
+     "value": 0
+    },
+    {
+     "kind": "text",
+     "name": "runtime_filters",
+     "value": "#2 [o_orderkey]: hash set of 2918, tested 15000, dropped 12082"
+    },
+    {
+     "kind": "count",
+     "name": "scan_splits",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "scan_rows_decoded",
+     "value": 15000
+    },
+    {
+     "kind": "count",
+     "name": "scan_bytes",
+     "value": 43631
+    }
+   ],
+   "id": 18,
+   "metrics": {
+    "batches_in": 0,
+    "batches_out": 4,
+    "blocked_on_io_ns": 1114304,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 377553,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 1114304,
+    "max_driver_compute_time_ns": 377553,
+    "morsels": 1,
+    "peak_reserved_bytes": 0,
+    "rows_in": 0,
+    "rows_out": 2918,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "FileScan",
+   "node": 13,
+   "pipelines": [
+    3
+   ],
+   "role": "source"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "probe_rows",
+     "value": 2918
+    },
+    {
+     "kind": "count",
+     "name": "probe_spilled_rows",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_file_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "repartitions",
+     "value": 0
+    },
+    {
+     "kind": "max",
+     "name": "recursion_depth",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_hash_entries",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_hash_buckets",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "reversed_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "probe_table_ns",
+     "value": 287131
+    },
+    {
+     "kind": "count",
+     "name": "probe_lookups",
+     "value": 2918
+    },
+    {
+     "kind": "count",
+     "name": "probe_key_compares",
+     "value": 2955
+    },
+    {
+     "kind": "max",
+     "name": "max_probe_length",
+     "value": 3
+    }
+   ],
+   "id": 19,
+   "metrics": {
+    "batches_in": 4,
+    "batches_out": 4,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 526822,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 526822,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 2918,
+    "rows_out": 3223,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashJoinProbe",
+   "node": 12,
+   "pipelines": [
+    3
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [],
+   "id": 20,
+   "metrics": {
+    "batches_in": 4,
+    "batches_out": 4,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 4011,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 4011,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 3223,
+    "rows_out": 3223,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Project",
+   "node": 11,
+   "pipelines": [
+    3
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "probe_rows",
+     "value": 3223
+    },
+    {
+     "kind": "count",
+     "name": "probe_spilled_rows",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_file_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "repartitions",
+     "value": 0
+    },
+    {
+     "kind": "max",
+     "name": "recursion_depth",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_hash_entries",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_hash_buckets",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "reversed_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "probe_table_ns",
+     "value": 84530
+    },
+    {
+     "kind": "count",
+     "name": "probe_lookups",
+     "value": 3223
+    },
+    {
+     "kind": "count",
+     "name": "probe_key_compares",
+     "value": 3223
+    },
+    {
+     "kind": "max",
+     "name": "max_probe_length",
+     "value": 1
+    }
+   ],
+   "id": 21,
+   "metrics": {
+    "batches_in": 4,
+    "batches_out": 4,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 334120,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 334120,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 3223,
+    "rows_out": 3223,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashJoinProbe",
+   "node": 10,
+   "pipelines": [
+    3
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [],
+   "id": 22,
+   "metrics": {
+    "batches_in": 4,
+    "batches_out": 4,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 2820,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 2820,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 3223,
+    "rows_out": 3223,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Project",
+   "node": 9,
+   "pipelines": [
+    3
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "runtime_filter_rows_tested",
+     "value": 16000
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_rows_dropped",
+     "value": 7652
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_units_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_bytes_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "runtime_filter_splits_skipped",
+     "value": 0
+    },
+    {
+     "kind": "text",
+     "name": "runtime_filters",
+     "value": "#5 [ps_suppkey]: hash set of 99, tested 8000, dropped 80, #6 [ps_partkey]: hash set of 107, tested 8000, dropped 7572"
+    },
+    {
+     "kind": "count",
+     "name": "scan_splits",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "scan_rows_decoded",
+     "value": 8000
+    },
+    {
+     "kind": "count",
+     "name": "scan_bytes",
+     "value": 31617
+    },
+    {
+     "kind": "count",
+     "name": "row_filter_units",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "row_filter_units_skipped",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "row_filter_rows",
+     "value": 8000
+    },
+    {
+     "kind": "count",
+     "name": "row_filter_kept",
+     "value": 428
+    }
+   ],
+   "id": 23,
+   "metrics": {
+    "batches_in": 0,
+    "batches_out": 2,
+    "blocked_on_io_ns": 1264385,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 213371,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 1264385,
+    "max_driver_compute_time_ns": 213371,
+    "morsels": 1,
+    "peak_reserved_bytes": 22066,
+    "rows_in": 0,
+    "rows_out": 428,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "FileScan",
+   "node": 7,
+   "pipelines": [
+    2
+   ],
+   "role": "source"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "probe_rows",
+     "value": 428
+    },
+    {
+     "kind": "count",
+     "name": "probe_spilled_rows",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_file_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "repartitions",
+     "value": 0
+    },
+    {
+     "kind": "max",
+     "name": "recursion_depth",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_hash_entries",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_hash_buckets",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "reversed_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "probe_table_ns",
+     "value": 77600
+    },
+    {
+     "kind": "count",
+     "name": "probe_lookups",
+     "value": 428
+    },
+    {
+     "kind": "count",
+     "name": "probe_key_compares",
+     "value": 431
+    },
+    {
+     "kind": "max",
+     "name": "max_probe_length",
+     "value": 2
+    }
+   ],
+   "id": 24,
+   "metrics": {
+    "batches_in": 2,
+    "batches_out": 2,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 432112,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 432112,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 428,
+    "rows_out": 3223,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashJoinProbe",
+   "node": 6,
+   "pipelines": [
+    2
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [],
+   "id": 25,
+   "metrics": {
+    "batches_in": 2,
+    "batches_out": 2,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 148270,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 148270,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 3223,
+    "rows_out": 3223,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Project",
+   "node": 5,
+   "pipelines": [
+    2
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [],
+   "id": 26,
+   "metrics": {
+    "batches_in": 0,
+    "batches_out": 1,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 40050,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 40050,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 0,
+    "rows_out": 173,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashAggregate",
+   "node": 3,
+   "pipelines": [
+    1
+   ],
+   "role": "source"
+  },
+  {
+   "extra": [],
+   "id": 27,
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 1,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 470,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 470,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 173,
+    "rows_out": 173,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Project",
+   "node": 2,
+   "pipelines": [
+    1
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [],
+   "id": 28,
+   "metrics": {
+    "batches_in": 0,
+    "batches_out": 1,
+    "blocked_on_io_ns": 144530,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 15071,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 144530,
+    "max_driver_compute_time_ns": 15071,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 0,
+    "rows_out": 173,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Sort",
+   "node": 0,
+   "pipelines": [
+    0
+   ],
+   "role": "source"
+  }
+ ],
+ "pipelines": [
+  {
+   "drivers": 1,
+   "ended_ns": 25211887,
+   "id": 0,
+   "started_ns": 25033276,
+   "threads": 1
+  },
+  {
+   "drivers": 1,
+   "ended_ns": 25010726,
+   "id": 1,
+   "started_ns": 24910576,
+   "threads": 1
+  },
+  {
+   "drivers": 1,
+   "ended_ns": 24814246,
+   "id": 2,
+   "started_ns": 22468167,
+   "threads": 1
+  },
+  {
+   "drivers": 1,
+   "ended_ns": 22389436,
+   "id": 3,
+   "started_ns": 18980503,
+   "threads": 2
+  },
+  {
+   "drivers": 1,
+   "ended_ns": 2455750,
+   "id": 4,
+   "started_ns": 1871807,
+   "threads": 2
+  },
+  {
+   "drivers": 1,
+   "ended_ns": 818663,
+   "id": 5,
+   "started_ns": 50400,
+   "threads": 2
+  },
+  {
+   "drivers": 1,
+   "ended_ns": 18913163,
+   "id": 6,
+   "started_ns": 2518310,
+   "threads": 2
+  },
+  {
+   "drivers": 1,
+   "ended_ns": 1793727,
+   "id": 7,
+   "started_ns": 656433,
+   "threads": 2
+  }
+ ],
+ "plan": [
+  {
+   "children": [
+    1
+   ],
+   "detail": "[nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST]",
+   "id": 0,
+   "name": "Sort"
+  },
+  {
+   "children": [
+    2
+   ],
+   "detail": "rangepartitioning(nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST)",
+   "id": 1,
+   "name": "Exchange"
+  },
+  {
+   "children": [
+    3
+   ],
+   "detail": "[nation#50, o_year#51, sum(amount#52)#4611686018427387911 AS sum_profit#53]",
+   "id": 2,
+   "name": "Project"
+  },
+  {
+   "children": [
+    4
+   ],
+   "detail": "keys=[nation#50, o_year#51], functions=[sum(amount#52)]",
+   "id": 3,
+   "name": "HashAggregate"
+  },
+  {
+   "children": [
+    5
+   ],
+   "detail": "hashpartitioning(nation#50, o_year#51)",
+   "id": 4,
+   "name": "Exchange"
+  },
+  {
+   "children": [
+    6
+   ],
+   "detail": "[n_name#47 AS nation#50, extract('year', o_orderdate#41) AS o_year#51, ((l_extendedprice#21 * (1 - l_discount#22)) - (ps_supplycost#35 * l_quantity#20)) AS amount#52]",
+   "id": 5,
+   "name": "Project"
+  },
+  {
+   "children": [
+    7,
+    8
+   ],
+   "detail": "Inner, [ps_suppkey#33, ps_partkey#32] = [l_suppkey#18, l_partkey#17], RuntimeFilter #5: ps_suppkey#33 -> spark_catalog.default.partsupp.ps_suppkey, RuntimeFilter #6: ps_partkey#32 -> spark_catalog.default.partsupp.ps_partkey",
+   "id": 6,
+   "name": "HashJoin"
+  },
+  {
+   "children": [],
+   "detail": "spark_catalog.default.partsupp [ps_partkey#32, ps_suppkey#33, ps_supplycost#35]",
+   "id": 7,
+   "name": "Scan"
+  },
+  {
+   "children": [
+    9
+   ],
+   "detail": "",
+   "id": 8,
+   "name": "BroadcastExchange"
+  },
+  {
+   "children": [
+    10
+   ],
+   "detail": "[o_orderdate#41, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22, n_name#47]",
+   "id": 9,
+   "name": "Project"
+  },
+  {
+   "children": [
+    11,
+    22
+   ],
+   "detail": "Inner, [l_suppkey#18] = [s_suppkey#9], RuntimeFilter #4: l_suppkey#18 -> spark_catalog.default.lineitem.l_suppkey",
+   "id": 10,
+   "name": "HashJoin"
+  },
+  {
+   "children": [
+    12
+   ],
+   "detail": "[o_orderdate#41, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22]",
+   "id": 11,
+   "name": "Project"
+  },
+  {
+   "children": [
+    13,
+    14
+   ],
+   "detail": "Inner, [o_orderkey#37] = [l_orderkey#16], RuntimeFilter #2: o_orderkey#37 -> spark_catalog.default.orders.o_orderkey",
+   "id": 12,
+   "name": "HashJoin"
+  },
+  {
+   "children": [],
+   "detail": "spark_catalog.default.orders [o_orderkey#37, o_orderdate#41]",
+   "id": 13,
+   "name": "Scan"
+  },
+  {
+   "children": [
+    15
+   ],
+   "detail": "",
+   "id": 14,
+   "name": "BroadcastExchange"
+  },
+  {
+   "children": [
+    16
+   ],
+   "detail": "[l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22]",
+   "id": 15,
+   "name": "Project"
+  },
+  {
+   "children": [
+    17,
+    18
+   ],
+   "detail": "Inner, [l_partkey#17] = [p_partkey#0], RuntimeFilter #1: l_partkey#17 -> spark_catalog.default.lineitem.l_partkey",
+   "id": 16,
+   "name": "HashJoin"
+  },
+  {
+   "children": [],
+   "detail": "spark_catalog.default.lineitem [l_orderkey#16, l_partkey#17, l_suppkey#18, l_quantity#20, l_extendedprice#21, l_discount#22]",
+   "id": 17,
+   "name": "Scan"
+  },
+  {
+   "children": [
+    19
+   ],
+   "detail": "",
+   "id": 18,
+   "name": "BroadcastExchange"
+  },
+  {
+   "children": [
+    20
+   ],
+   "detail": "[p_partkey#0]",
+   "id": 19,
+   "name": "Project"
+  },
+  {
+   "children": [
+    21
+   ],
+   "detail": "(p_name#1 like '%green%')",
+   "id": 20,
+   "name": "Filter"
+  },
+  {
+   "children": [],
+   "detail": "spark_catalog.default.part [p_partkey#0, p_name#1], PushedFilters: [(p_name#1 like '%green%')]",
+   "id": 21,
+   "name": "Scan"
+  },
+  {
+   "children": [
+    23
+   ],
+   "detail": "",
+   "id": 22,
+   "name": "BroadcastExchange"
+  },
+  {
+   "children": [
+    24
+   ],
+   "detail": "[s_suppkey#9, n_name#47]",
+   "id": 23,
+   "name": "Project"
+  },
+  {
+   "children": [
+    25,
+    26
+   ],
+   "detail": "Inner, [s_nationkey#12] = [n_nationkey#46], RuntimeFilter #3: s_nationkey#12 -> spark_catalog.default.supplier.s_nationkey",
+   "id": 24,
+   "name": "HashJoin"
+  },
+  {
+   "children": [],
+   "detail": "spark_catalog.default.supplier [s_suppkey#9, s_nationkey#12]",
+   "id": 25,
+   "name": "Scan"
+  },
+  {
+   "children": [
+    27
+   ],
+   "detail": "",
+   "id": 26,
+   "name": "BroadcastExchange"
+  },
+  {
+   "children": [],
+   "detail": "spark_catalog.default.nation [n_nationkey#46, n_name#47]",
+   "id": 27,
+   "name": "Scan"
+  }
+ ],
+ "query": {
+  "batches": 26,
+  "busy_ns": 12791671,
+  "drivers": 8,
+  "hash_probe_share": 0.04231120390760519,
+  "max_slice_ns": 1160865,
+  "memory": {
+   "limit_bytes": 53874255440,
+   "peak_reserved_bytes": 5242880
+  },
+  "stalls": 0,
+  "wall_time_ns": 25310658,
+  "workers": 1,
+  "yields": 26
+ },
+ "version": 1
+}

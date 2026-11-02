@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import json
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -197,3 +198,55 @@ def test_dataframe_profile_and_explain_analyze() -> None:
     text = df.explainString(analyze=True)
     assert "Aggregate" in text
     assert json.loads(df.explainString(analyze=True, json=True))["format"] == "krishiv.query-profile"
+
+
+# ---------------------------------------------------------------- TPC-H Q9 (acceptance)
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+class _Tree(HTMLParser):
+    """The plan tree of the page: node names with their nesting depth (a node's operators are not nodes)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.depth = -1
+        self.names: list[tuple[int, str]] = []
+        self._in_name = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "ul":
+            self.depth += 1
+        elif tag == "span" and ("class", "name") in attrs:
+            self._in_name = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "ul":
+            self.depth -= 1
+        elif tag == "span":
+            self._in_name = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_name:
+            self.names.append((self.depth, data))
+
+
+def test_the_q9_profile_renders_the_plan_tree() -> None:
+    """The T140 profile of TPC-H Q9 (SF 0.01, ``bench/queries/tpch/q09.sql``) is shown as its plan tree.
+
+    The expected tree is ``fixtures/q09-plan-tree.txt``: one node per line, two spaces per level. A change to
+    the plan shape or to the viewer's nesting shows up as a diff of that file.
+    """
+    doc = json.loads((FIXTURES / "q09-profile.json").read_text())
+    parser = _Tree()
+    parser.feed(ProfileView(doc).to_html())
+    got = "\n".join("  " * depth + name for depth, name in parser.names) + "\n"
+    assert got == (FIXTURES / "q09-plan-tree.txt").read_text()
+    assert len(parser.names) == len(doc["plan"])
+
+
+def test_the_q9_page_shows_every_operator_and_pipeline() -> None:
+    doc = json.loads((FIXTURES / "q09-profile.json").read_text())
+    html = ProfileView(doc).to_html()
+    assert html.count('class="op"') == len(doc["operators"])
+    for pipeline in doc["pipelines"]:
+        assert f"pipeline {pipeline['id']}" in html
