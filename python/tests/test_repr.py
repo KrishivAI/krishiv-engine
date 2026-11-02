@@ -152,20 +152,20 @@ def test_html_matches_show_cells(spark: SparkSession) -> None:
 
 
 def test_html_preview_reruns_the_query(spark: SparkSession, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Each preview runs the query again: it calls ``toArrow`` every time, not from a cache."""
+    """Each preview runs the query again: it fetches the Arrow result every time, not from a cache."""
     pytest.importorskip("pyarrow")
     from krishiv.sql.dataframe import DataFrame as _DataFrame
 
     df = spark.sql("select 1 as a")
     calls = 0
-    original = _DataFrame.toArrow
+    original = _DataFrame._arrow
 
     def counting(self: _DataFrame) -> Any:
         nonlocal calls
         calls += 1
         return original(self)
 
-    monkeypatch.setattr(_DataFrame, "toArrow", counting)
+    monkeypatch.setattr(_DataFrame, "_arrow", counting)
     first: Any = df._repr_html_()
     assert calls == 1
     assert first == df._repr_html_()

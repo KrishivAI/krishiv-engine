@@ -117,6 +117,42 @@ impl PhysExpr for IntervalLeaves {
     }
 }
 
+/// `from` for `to_json`, whose map keys print an ANSI interval as its number:
+/// those leaves read `NULL` here, so [`interval_leaves`] leaves them unchanged.
+pub(super) fn without_key_intervals(from: &DataType) -> DataType {
+    fn in_key(t: &DataType) -> DataType {
+        match t {
+            DataType::YearMonthInterval { .. } | DataType::DayTimeInterval { .. } => DataType::Null,
+            DataType::Array(a) => {
+                ArrayType::new(in_key(a.element_type()), a.contains_null()).into()
+            }
+            DataType::Struct(s) => StructType::new(
+                s.fields()
+                    .iter()
+                    .map(|f| StructField::new(f.name(), in_key(f.data_type()), f.nullable())),
+            )
+            .into(),
+            other => other.clone(),
+        }
+    }
+    match from {
+        DataType::Array(a) => {
+            ArrayType::new(without_key_intervals(a.element_type()), a.contains_null()).into()
+        }
+        DataType::Map(m) => MapType::new(
+            in_key(m.key_type()),
+            without_key_intervals(m.value_type()),
+            m.value_contains_null(),
+        )
+        .into(),
+        DataType::Struct(s) => StructType::new(s.fields().iter().map(|f| {
+            StructField::new(f.name(), without_key_intervals(f.data_type()), f.nullable())
+        }))
+        .into(),
+        other => other.clone(),
+    }
+}
+
 /// `from` as far as casting it to `to` takes its intervals to strings, for
 /// [`interval_leaves`]: an interval the cast keeps, or a part holding no such
 /// interval, reads `NULL` here, and those leaves pass through unchanged.
