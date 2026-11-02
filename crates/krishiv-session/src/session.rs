@@ -1150,6 +1150,7 @@ impl Session {
                 queries: Arc::clone(&self.state.queries),
                 io: Arc::clone(&self.state.io),
                 relations: Arc::clone(&self.state.cache),
+                metrics: Arc::clone(&self.state.metrics),
             },
         ));
         let resolution = {

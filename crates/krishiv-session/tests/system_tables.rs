@@ -324,3 +324,29 @@ fn caches_counts_the_relation_cache_and_the_file_metadata_cache() {
     let n: u64 = r[1].split('|').nth(1).unwrap().parse().unwrap();
     assert!(n >= 1, "relation entries: {r:?}");
 }
+
+#[test]
+fn metrics_lists_the_engine_series_with_labels() {
+    let s = Session::new().unwrap();
+    run_all(&s, "SELECT count(*) FROM range(10)").unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT concat_ws('|', kind, name, CAST(size(labels) >= 0 AS STRING)) FROM system.metrics \
+         WHERE name = 'krishiv.build.info'",
+    );
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert!(r[0].starts_with("gauge|krishiv.build.info|true"), "{r:?}");
+    // The label map holds the build info; a histogram row carries its buckets.
+    let labels = strings_in(
+        &s,
+        "SELECT CAST(size(labels) AS STRING) FROM system.metrics WHERE name = 'krishiv.build.info'",
+    );
+    assert!(labels[0].parse::<u32>().unwrap() >= 1, "{labels:?}");
+    let h = strings_in(
+        &s,
+        "SELECT CAST(size(buckets) AS STRING) FROM system.metrics WHERE kind = 'histogram' LIMIT 1",
+    );
+    if let Some(n) = h.first() {
+        assert!(n.parse::<u32>().unwrap() >= 1, "{h:?}");
+    }
+}

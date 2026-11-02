@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::{
-    ArrayRef, BooleanArray, Int32Array, Int64Array, RecordBatch, StringArray,
+    ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, StringArray,
     TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType as ArrowType, Field, Schema, TimeUnit};
@@ -42,7 +42,14 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 5] = ["capabilities", "caches", "memory", "operators", "queries"];
+const TABLES: [&str; 6] = [
+    "capabilities",
+    "caches",
+    "memory",
+    "metrics",
+    "operators",
+    "queries",
+];
 
 /// Whether `name` is the reserved catalog name, in any letter case.
 pub(crate) fn is_system(name: &str) -> bool {
@@ -114,11 +121,17 @@ enum Kind {
     Flag,
     /// `TIMESTAMP` (microseconds since the epoch).
     Time,
+    /// `DOUBLE`.
+    Double,
+    /// `MAP<STRING, STRING>`.
+    Labels,
+    /// `ARRAY<STRUCT<le: DOUBLE, count: BIGINT>>`.
+    Buckets,
 }
 
 /// A table's columns: `(name, kind, nullable)`.
 fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
-    use Kind::{Flag, Int, Long, Text, Time};
+    use Kind::{Buckets, Double, Flag, Int, Labels, Long, Text, Time};
     Some(match table.to_ascii_lowercase().as_str() {
         "capabilities" => vec![
             ("worker_id", Text, false),
@@ -149,6 +162,18 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("evictions", Long, false),
             ("invalidations", Long, false),
             ("loads_in_flight", Long, false),
+        ],
+        "metrics" => vec![
+            ("worker_id", Text, false),
+            ("name", Text, false),
+            ("kind", Text, false),
+            ("unit", Text, false),
+            ("labels", Labels, false),
+            ("value", Double, true),
+            ("count", Long, true),
+            ("sum", Double, true),
+            ("buckets", Buckets, true),
+            ("sampled_at", Time, false),
         ],
         "operators" => vec![
             ("query_id", Text, false),
@@ -210,11 +235,80 @@ fn columns(table: &str) -> Option<Vec<TableColumn>> {
                     Kind::Int => DataType::Integer,
                     Kind::Flag => DataType::Boolean,
                     Kind::Time => DataType::Timestamp,
+                    Kind::Double => DataType::Double,
+                    Kind::Labels => labels_type(),
+                    Kind::Buckets => buckets_type(),
                 },
                 nullable,
             })
             .collect(),
     )
+}
+
+/// `MAP<STRING, STRING>`.
+fn labels_type() -> DataType {
+    DataType::Map(krishiv_types::MapType::new(DataType::String, DataType::String, true).into())
+}
+
+/// `ARRAY<STRUCT<le: DOUBLE, count: BIGINT>>`.
+fn buckets_type() -> DataType {
+    use krishiv_types::{ArrayType, StructField, StructType};
+    DataType::Array(
+        ArrayType::new(
+            DataType::Struct(StructType::new([
+                StructField::new("le", DataType::Double, false),
+                StructField::new("count", DataType::Long, false),
+            ])),
+            false,
+        )
+        .into(),
+    )
+}
+
+/// A `MAP<STRING, STRING>` column of `rows` label sets.
+fn labels_column(rows: &[&[(String, String)]]) -> ArrayRef {
+    use arrow_array::{MapArray, StringViewArray, StructArray};
+    use arrow_buffer::OffsetBuffer;
+    let ArrowType::Map(entries, _) = labels_type().to_arrow() else {
+        unreachable!("a map type maps to a map")
+    };
+    let ArrowType::Struct(fields) = entries.data_type().clone() else {
+        unreachable!("map entries are a struct")
+    };
+    let keys = StringViewArray::from_iter_values(
+        rows.iter().flat_map(|r| r.iter().map(|(k, _)| k.as_str())),
+    );
+    let vals = StringViewArray::from_iter_values(
+        rows.iter().flat_map(|r| r.iter().map(|(_, v)| v.as_str())),
+    );
+    let offsets = OffsetBuffer::from_lengths(rows.iter().map(|r| r.len()));
+    let struct_array = StructArray::new(fields, vec![Arc::new(keys), Arc::new(vals)], None);
+    Arc::new(MapArray::new(entries, offsets, struct_array, None, false))
+}
+
+/// An `ARRAY<STRUCT<le, count>>` column; a row with `None` is NULL.
+fn buckets_column(rows: &[Option<&[(f64, i64)]>]) -> ArrayRef {
+    use arrow_array::{Float64Array, ListArray, StructArray};
+    use arrow_buffer::{NullBuffer, OffsetBuffer};
+    let ArrowType::List(element) = buckets_type().to_arrow() else {
+        unreachable!("an array type maps to a list")
+    };
+    let ArrowType::Struct(fields) = element.data_type().clone() else {
+        unreachable!("the element is a struct")
+    };
+    let les =
+        Float64Array::from_iter_values(rows.iter().flatten().flat_map(|r| r.iter().map(|b| b.0)));
+    let counts =
+        Int64Array::from_iter_values(rows.iter().flatten().flat_map(|r| r.iter().map(|b| b.1)));
+    let offsets = OffsetBuffer::from_lengths(rows.iter().map(|r| r.map_or(0, <[_]>::len)));
+    let values = StructArray::new(fields, vec![Arc::new(les), Arc::new(counts)], None);
+    let valid = NullBuffer::from_iter(rows.iter().map(Option::is_some));
+    Arc::new(ListArray::new(
+        element,
+        offsets,
+        Arc::new(values),
+        Some(valid),
+    ))
 }
 
 /// Rows of text cells, column by column.
@@ -278,6 +372,58 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             Arc::new(BooleanArray::from_iter(
                 entries.iter().map(|e| Some(e.spillable)),
             )),
+        ];
+    }
+    if table.eq_ignore_ascii_case("metrics") {
+        let snap = sources.metrics.snapshot();
+        let now = now_ms().saturating_mul(1000);
+        let mut rows: Vec<MetricRow> = Vec::new();
+        for c in &snap.counters {
+            rows.push(MetricRow::new(
+                LOCAL_WORKER,
+                c.name,
+                "counter",
+                c.unit,
+                &c.labels,
+                Some(c.value),
+            ));
+        }
+        for g in &snap.gauges {
+            rows.push(MetricRow::new(
+                &g.worker_id,
+                g.name,
+                "gauge",
+                g.unit,
+                &g.labels,
+                Some(g.value),
+            ));
+        }
+        for h in &snap.histograms {
+            let mut r = MetricRow::new(LOCAL_WORKER, h.name, "histogram", h.unit, &h.labels, None);
+            r.count = Some(i64::try_from(h.count).unwrap_or(i64::MAX));
+            r.sum = Some(h.sum);
+            r.buckets = Some(
+                h.buckets
+                    .iter()
+                    .map(|b| (b.le, i64::try_from(b.count).unwrap_or(i64::MAX)))
+                    .collect(),
+            );
+            rows.push(r);
+        }
+        let labels: Vec<&[(String, String)]> = rows.iter().map(|r| r.labels.as_slice()).collect();
+        let buckets: Vec<Option<&[(f64, i64)]>> =
+            rows.iter().map(|r| r.buckets.as_deref()).collect();
+        return vec![
+            text(rows.iter().map(|r| Some(r.worker.as_str()))),
+            text(rows.iter().map(|r| Some(r.name))),
+            text(rows.iter().map(|r| Some(r.kind))),
+            text(rows.iter().map(|r| Some(r.unit))),
+            labels_column(&labels),
+            Arc::new(Float64Array::from_iter(rows.iter().map(|r| r.value))),
+            long(rows.iter().map(|r| r.count)),
+            Arc::new(Float64Array::from_iter(rows.iter().map(|r| r.sum))),
+            buckets_column(&buckets),
+            Arc::new(TimestampMicrosecondArray::from_value(now, rows.len()).with_timezone("UTC")),
         ];
     }
     if table.eq_ignore_ascii_case("caches") {
@@ -396,6 +542,42 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
     ]
 }
 
+/// One series of `system.metrics`.
+struct MetricRow {
+    worker: String,
+    name: &'static str,
+    kind: &'static str,
+    unit: &'static str,
+    labels: Vec<(String, String)>,
+    value: Option<f64>,
+    count: Option<i64>,
+    sum: Option<f64>,
+    buckets: Option<Vec<(f64, i64)>>,
+}
+
+impl MetricRow {
+    fn new(
+        worker: &str,
+        name: &'static str,
+        kind: &'static str,
+        unit: &'static str,
+        labels: &[(String, String)],
+        value: Option<f64>,
+    ) -> Self {
+        Self {
+            worker: worker.to_owned(),
+            name,
+            kind,
+            unit,
+            labels: labels.to_vec(),
+            value,
+            count: None,
+            sum: None,
+            buckets: None,
+        }
+    }
+}
+
 /// One row of `system.caches`.
 struct CacheRow {
     cache: &'static str,
@@ -419,6 +601,8 @@ pub(crate) struct Sources {
     pub(crate) io: Arc<krishiv_io::IoScheduler>,
     /// The relation cache.
     pub(crate) relations: Arc<crate::cache::RelationCache>,
+    /// The engine's metrics.
+    pub(crate) metrics: Arc<krishiv_exec::MetricsRegistry>,
 }
 
 /// Most queries `system.queries` remembers; the oldest finished go first.
@@ -740,6 +924,9 @@ pub(crate) fn provider(
                     Kind::Int => ArrowType::Int32,
                     Kind::Flag => ArrowType::Boolean,
                     Kind::Time => ArrowType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                    Kind::Double => ArrowType::Float64,
+                    Kind::Labels => labels_type().to_arrow(),
+                    Kind::Buckets => buckets_type().to_arrow(),
                 };
                 Field::new(*name, ty, *nullable)
             })
@@ -809,6 +996,7 @@ mod tests {
             queries: Arc::new(QueryLog::default()),
             io: krishiv_io::IoScheduler::new(krishiv_io::IoConfig::default()),
             relations: Arc::new(crate::cache::RelationCache::new(&memory)),
+            metrics: Arc::new(krishiv_exec::MetricsRegistry::new()),
             memory,
         };
         assert!(provider("capabilities", &sources).unwrap().is_some());
