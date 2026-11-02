@@ -141,6 +141,7 @@ fn a_write_keeps_the_shared_plans() {
             max_records_per_file: 1,
             target_file_bytes: 1,
             partition_by: Vec::new(),
+            column_types: std::collections::BTreeMap::new(),
         })
         .unwrap();
     assert_eq!(p.shared().len(), 1);

@@ -153,6 +153,7 @@ registry! {
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
     (window_offset_functions, WindowOffsetFunctions, POST_MIGRATION_READER_VERSION, Semantic, "The window functions `lag`, `lead` and `nth_value`."),
     (window_range_bounds, WindowRangeBounds, POST_MIGRATION_READER_VERSION, Semantic, "`RANGE` window frame bounds at a value distance from the current row's ordering key (`RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING`)."),
+    (write_column_types, WriteColumnTypes, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` naming the Spark types of input columns whose Arrow type doesn't say them (an interval's fields): without them a file's footer and text forms would use other fields."),
     (write_plan, WritePlan, POST_MIGRATION_READER_VERSION, Semantic, "The `WriteFiles` node's `WritePlan` (format, store, directory, job id and file limits): the file sink is built at instantiation from it with the task's partition and attempt."),
 }
 
@@ -207,6 +208,8 @@ pub enum Construct<'a> {
     /// A lambda expression or variable: the bound body of a higher-order
     /// function's argument.
     Lambda,
+    /// A `WritePlan` naming the Spark types of input columns.
+    WriteColumnTypes,
 }
 
 /// The feature a type needs on its own. The walk reports a type inside an
@@ -390,6 +393,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // A lambda is plan data behind its own feature: a reader without
         // it misreads the higher-order call's argument.
         Construct::Lambda => Some(Feature::LambdaFunctions),
+        Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
         // A type Krishiv does not know cannot be encoded at all. A later
         // feature for a type that can sit inside an array, map or struct
         // (variant, char/varchar, intervals) must look through them: its
@@ -549,8 +553,12 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
         | PhysNode::WindowGroupLimit { .. }
-        | PhysNode::Union { .. }
-        | PhysNode::WriteFiles { .. } => {}
+        | PhysNode::Union { .. } => {}
+        PhysNode::WriteFiles { write, .. } => {
+            if write.as_ref().is_some_and(|w| !w.column_types.is_empty()) {
+                f(Construct::WriteColumnTypes);
+            }
+        }
     }
     for t in types_of(node) {
         visit_type(t, f);
@@ -631,6 +639,9 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
     }
     if let PhysNode::Scan(scan) | PhysNode::LateFetch { scan, .. } = node {
         out.extend(scan.scan.output.iter().map(|c| &c.data_type));
+    }
+    if let PhysNode::WriteFiles { write: Some(w), .. } = node {
+        out.extend(w.column_types.values());
     }
     out
 }

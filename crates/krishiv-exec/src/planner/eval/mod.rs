@@ -171,6 +171,11 @@ pub(crate) trait PhysExpr: Send + Sync + fmt::Debug {
     fn is_constant(&self) -> bool {
         false
     }
+    /// This expression with a row's own arithmetic overflow as NULL instead of
+    /// an error, if it can do that without running again by row (`TryEval`).
+    fn null_on_overflow(&self) -> Option<Arc<dyn PhysExpr>> {
+        None
+    }
 }
 
 /// What every expression of one query is evaluated with.
@@ -444,6 +449,11 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                     f.args.first().and_then(|a| a.nested_interval_type()),
                 )
             {
+                let from = if name == "to_json" {
+                    nested_cast::without_key_intervals(&from)
+                } else {
+                    from
+                };
                 *first = nested_cast::interval_leaves(Arc::clone(first), from);
             }
             match &f.id {

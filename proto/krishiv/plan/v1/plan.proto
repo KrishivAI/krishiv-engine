@@ -726,6 +726,17 @@ message WritePlan {
   // feature: partitioned_writes
   // Input column indices the files are partitioned by (Spark directory layout).
   repeated uint64 partition_by = 8;
+  // feature: write_column_types
+  // Input columns whose Spark type their Arrow type doesn't say.
+  repeated WriteColumnType column_types = 9;
+}
+
+// feature: write_column_types
+message WriteColumnType {
+  // feature: write_column_types
+  uint64 column = 1;
+  // feature: write_column_types
+  DataType data_type = 2;
 }
 
 // v2: moves rows between partitions.

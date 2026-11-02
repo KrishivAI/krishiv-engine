@@ -37,10 +37,7 @@ impl TextEncoder {
             f.data_type(),
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8
         ) {
-            return Err(FormatError::Other(crate::error::unsupported(format!(
-                "the TEXT data source with a column of type {} (only a single string column can be written)",
-                crate::text::spark_type_name(f.data_type())
-            ))));
+            return Err(crate::error::unsupported_column("Text", f));
         }
         Ok(Self {
             o: opts,

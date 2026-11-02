@@ -63,6 +63,20 @@ pub(super) fn literal_string(arg: &BindArg) -> Result<String, KrishivError> {
 
 /// Parses a DDL schema string into struct fields (Spark's `DataType.fromDDL`).
 pub(super) fn struct_fields(ddl: &str) -> Result<Fields, KrishivError> {
+    let s = struct_type(ddl)?;
+    let fields: Vec<Field> = s
+        .fields()
+        .iter()
+        .map(|f| {
+            let arrow = krishiv_types::arrow::client_arrow_type(&f.data_type().to_arrow());
+            Field::new(f.name().to_owned(), arrow, f.nullable())
+        })
+        .collect();
+    Ok(Fields::from(fields))
+}
+
+/// The struct type a schema string names.
+fn struct_type(ddl: &str) -> Result<krishiv_types::StructType, KrishivError> {
     let parsed: krishiv_types::DataType = ddl.parse().or_else(|_: KrishivError| {
         let wrapped = format!("STRUCT<{ddl}>");
         wrapped.parse()
@@ -76,15 +90,7 @@ pub(super) fn struct_fields(ddl: &str) -> Result<Fields, KrishivError> {
         }
         .into());
     };
-    let fields: Vec<Field> = s
-        .fields()
-        .iter()
-        .map(|f| {
-            let arrow = krishiv_types::arrow::client_arrow_type(&f.data_type().to_arrow());
-            Field::new(f.name().to_owned(), arrow, f.nullable())
-        })
-        .collect();
-    Ok(Fields::from(fields))
+    Ok(s)
 }
 
 /// One `sep`/`delimiter` value with Spark's backslash escapes.
@@ -436,11 +442,15 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
     }
     let ddl = literal_string(&args[1])?;
     let fields = struct_fields(&ddl)?;
-    let kinds: Vec<FieldKind> = fields
+    let kinds: Vec<FieldKind> = struct_type(&ddl)?
+        .fields()
         .iter()
-        .map(|f| {
-            FieldKind::of(f.data_type()).map_err(|_| KrishivUnsupportedFeature {
-                feature: "from_csv with a nested field type".to_owned(),
+        .zip(fields.iter())
+        .map(|(spark, f)| {
+            FieldKind::of_read(spark.data_type(), f.data_type()).map_err(|_| {
+                KrishivUnsupportedFeature {
+                    feature: "from_csv with a nested field type".to_owned(),
+                }
             })
         })
         .collect::<Result<_, _>>()?;

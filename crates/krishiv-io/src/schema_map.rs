@@ -24,7 +24,10 @@
 //! microseconds unchanged, as Spark 4.2 does), and integer
 //! narrowing (`int` read as `smallint`, as Spark's Parquet reader allows;
 //! a value that does not fit is a `CAST_OVERFLOW` error, where Spark wraps
-//! silently). Anything else is `FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH`.
+//! silently). An ANSI interval's stored integer reads as that integer (a
+//! year-month interval as an `int`, a day-time one as a `bigint`), and the
+//! other way round, as Spark's Parquet reader goes by the physical type.
+//! Anything else is `FAILED_READ_FILE.PARQUET_COLUMN_DATA_TYPE_MISMATCH`.
 //! Case-insensitive resolution matching several fields is
 //! `FAILED_READ_FILE.NO_HINT` caused by Spark's duplicate-field error
 //! (`_LEGACY_ERROR_TEMP_2093`), as Spark 4.2 reports it. A stored struct none
@@ -35,16 +38,18 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal32Type, Decimal64Type, Decimal128Type, Float32Type, Int8Type, Int16Type,
-    Int32Type, Int64Type, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
+    Date32Type, Decimal32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, LargeBinaryArray, LargeListArray,
     LargeStringArray, ListArray, MapArray, PrimitiveArray, RecordBatch, RecordBatchOptions,
     StringArray, StringViewArray, StructArray, new_null_array,
 };
-use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, Schema, SchemaRef, TimeUnit};
+use arrow_schema::{
+    ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit,
+};
 use krishiv_common::error::{
     CastOverflow, FailedReadFileNoHint, KrishivError, LegacyErrorTemp2093,
 };
@@ -355,7 +360,15 @@ fn leaf_castable(file: &DataType, table: &DataType) -> bool {
         _ => None,
     };
     match (file, table) {
-        (D::Utf8 | D::LargeUtf8 | D::Utf8View, D::Utf8 | D::LargeUtf8 | D::Utf8View)
+        (D::Interval(IntervalUnit::YearMonth), t) => {
+            matches!(t, D::Int32) || leaf_castable(&D::Int32, t)
+        }
+        (D::Duration(TimeUnit::Microsecond), t) => {
+            matches!(t, D::Int64) || leaf_castable(&D::Int64, t)
+        }
+        (D::Int8 | D::Int16 | D::Int32, D::Interval(IntervalUnit::YearMonth))
+        | (D::Int64, D::Duration(TimeUnit::Microsecond))
+        | (D::Utf8 | D::LargeUtf8 | D::Utf8View, D::Utf8 | D::LargeUtf8 | D::Utf8View)
         | (
             D::Binary | D::LargeBinary | D::BinaryView,
             D::Binary | D::LargeBinary | D::BinaryView,
@@ -1022,6 +1035,36 @@ fn cast_leaf(array: &ArrayRef, target: &DataType) -> Result<ArrayRef> {
         return Ok(Arc::clone(array));
     }
     let out: ArrayRef = match (from, target) {
+        (D::Interval(IntervalUnit::YearMonth), _) => {
+            let stored: ArrayRef = Arc::new(
+                array
+                    .as_primitive::<IntervalYearMonthType>()
+                    .reinterpret_cast::<Int32Type>(),
+            );
+            return cast_leaf(&stored, target);
+        }
+        (D::Duration(TimeUnit::Microsecond), _) => {
+            let stored: ArrayRef = Arc::new(
+                array
+                    .as_primitive::<DurationMicrosecondType>()
+                    .reinterpret_cast::<Int64Type>(),
+            );
+            return cast_leaf(&stored, target);
+        }
+        (D::Int8 | D::Int16, D::Interval(IntervalUnit::YearMonth)) => {
+            let wide = cast_leaf(array, &D::Int32)?;
+            return cast_leaf(&wide, target);
+        }
+        (D::Int32, D::Interval(IntervalUnit::YearMonth)) => Arc::new(
+            array
+                .as_primitive::<Int32Type>()
+                .reinterpret_cast::<IntervalYearMonthType>(),
+        ),
+        (D::Int64, D::Duration(TimeUnit::Microsecond)) => Arc::new(
+            array
+                .as_primitive::<Int64Type>()
+                .reinterpret_cast::<DurationMicrosecondType>(),
+        ),
         (D::Utf8 | D::LargeUtf8 | D::Utf8View, _) => {
             let values: Vec<Option<&str>> = match from {
                 D::Utf8 => array.as_string::<i32>().iter().collect(),

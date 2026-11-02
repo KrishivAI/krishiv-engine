@@ -12,12 +12,15 @@ use std::sync::Arc;
 
 use arrow_array::builder::{
     BinaryBuilder, BinaryViewBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
-    Float32Builder, Float64Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder,
+    DurationMicrosecondBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
+    Int32Builder, Int64Builder, IntervalMonthDayNanoBuilder, IntervalYearMonthBuilder,
     LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
     Time64NanosecondBuilder, TimestampMicrosecondBuilder,
 };
+use arrow_array::types::IntervalMonthDayNano;
 use arrow_array::{Array, ArrayRef, StringArray, StructArray, new_null_array};
-use arrow_schema::{DataType, Fields, TimeUnit};
+use arrow_schema::{DataType, Fields, IntervalUnit, TimeUnit};
+use krishiv_types::{DayTimeField, YearMonthField};
 
 use crate::datetime_pattern::DateTimePattern;
 use crate::error::KernelError;
@@ -655,6 +658,12 @@ pub enum FieldKind {
     TimestampNtz,
     /// `VOID`.
     Null,
+    /// An ANSI year-month interval, with the fields its text names.
+    YearMonth(YearMonthField, YearMonthField),
+    /// An ANSI day-time interval, with the fields its text names.
+    DayTime(DayTimeField, DayTimeField),
+    /// A calendar interval.
+    Calendar,
     /// An array, map or struct (written only: `to_csv` shows it the way
     /// Spark prints a nested value; `from_csv` has no such column).
     Nested,
@@ -674,6 +683,22 @@ impl FieldKind {
             | DataType::Struct(_) => Ok(Self::Nested),
             other => Self::of(other),
         }
+    }
+
+    /// The kind for a column `from_csv` reads: as [`Self::of`] of its Arrow
+    /// type `dt`, and the intervals too, whose fields only `spark` holds.
+    ///
+    /// # Errors
+    /// `KernelError` for a type CSV cannot hold.
+    pub fn of_read(spark: &krishiv_types::DataType, dt: &DataType) -> Result<Self, KernelError> {
+        Ok(match spark {
+            krishiv_types::DataType::YearMonthInterval { start, end } => {
+                Self::YearMonth(*start, *end)
+            }
+            krishiv_types::DataType::DayTimeInterval { start, end } => Self::DayTime(*start, *end),
+            krishiv_types::DataType::CalendarInterval => Self::Calendar,
+            _ => return Self::of(dt),
+        })
     }
 
     /// The kind for an Arrow type.
@@ -725,6 +750,8 @@ pub enum Val {
     Text(String),
     /// Binary bytes.
     Bytes(Vec<u8>),
+    /// A calendar interval.
+    Calendar(IntervalMonthDayNano),
 }
 
 /// Why a value did not convert.
@@ -846,11 +873,41 @@ impl Converter<'_> {
                     None => return Err(bad()),
                 }
             }
+            FieldKind::YearMonth(start, end) => Val::I64(i64::from(
+                krishiv_types::interval_parse::cast_to_year_month(s, *start, *end)
+                    .map_err(|_| bad())?,
+            )),
+            FieldKind::DayTime(start, end) => Val::I64(
+                krishiv_types::interval_parse::cast_to_day_time(s, *start, *end)
+                    .map_err(|_| bad())?,
+            ),
+            // Spark's `safeStringToInterval`: text that is no interval is NULL,
+            // not a malformed record, even with `FAILFAST`.
+            FieldKind::Calendar => match krishiv_types::interval_parse::parse_string(s) {
+                Ok((c, _)) => Val::Calendar(calendar_value(c)?),
+                Err(_) => Val::Null,
+            },
             FieldKind::Timestamp | FieldKind::TimestampNtz | FieldKind::Nested => {
                 return Err(bad());
             }
         })
     }
+}
+
+/// `c` on the Arrow carrier, which holds about 292 years of microseconds where
+/// Spark holds a `long`.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a value past that.
+pub(crate) fn calendar_value(
+    c: krishiv_types::interval_parse::Calendar,
+) -> Result<IntervalMonthDayNano, KernelError> {
+    let nanos = c.micros.checked_mul(1_000).ok_or_else(|| {
+        KernelError::unsupported(
+            "a calendar interval whose microseconds overflow the nanosecond field of its Arrow type",
+        )
+    })?;
+    Ok(IntervalMonthDayNano::new(c.months, c.days, nanos))
 }
 
 // ---------------------------------------------------------------------------
@@ -973,6 +1030,12 @@ enum Column {
     Time(Time64NanosecondBuilder),
     /// Timestamp.
     Timestamp(TimestampMicrosecondBuilder),
+    /// Year-month interval.
+    YearMonth(IntervalYearMonthBuilder),
+    /// Day-time interval.
+    DayTime(DurationMicrosecondBuilder),
+    /// Calendar interval.
+    Calendar(IntervalMonthDayNanoBuilder),
     /// Null.
     Null(usize, DataType),
 }
@@ -983,6 +1046,18 @@ impl Column {
     /// # Errors
     /// `KernelError` for a type CSV cannot hold.
     fn new(dt: &DataType) -> Result<Self, KernelError> {
+        match dt {
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                return Ok(Self::YearMonth(IntervalYearMonthBuilder::new()));
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                return Ok(Self::DayTime(DurationMicrosecondBuilder::new()));
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                return Ok(Self::Calendar(IntervalMonthDayNanoBuilder::new()));
+            }
+            _ => {}
+        }
         FieldKind::of(dt)?;
         Ok(match dt {
             DataType::Boolean => Self::Bool(BooleanBuilder::new()),
@@ -1037,6 +1112,9 @@ impl Column {
             (Self::Date(b), Val::I64(x)) => b.append_option(i32::try_from(*x).ok()),
             (Self::Time(b), Val::I64(x)) => b.append_value(*x),
             (Self::Timestamp(b), Val::I64(x)) => b.append_value(*x),
+            (Self::YearMonth(b), Val::I64(x)) => b.append_option(i32::try_from(*x).ok()),
+            (Self::DayTime(b), Val::I64(x)) => b.append_value(*x),
+            (Self::Calendar(b), Val::Calendar(x)) => b.append_value(*x),
             (Self::Null(n, _), _) => *n = n.saturating_add(1),
             (c, _) => c.append_null(),
         }
@@ -1058,6 +1136,9 @@ impl Column {
             Self::Date(b) => b.append_null(),
             Self::Time(b) => b.append_null(),
             Self::Timestamp(b) => b.append_null(),
+            Self::YearMonth(b) => b.append_null(),
+            Self::DayTime(b) => b.append_null(),
+            Self::Calendar(b) => b.append_null(),
             Self::Null(n, _) => *n = n.saturating_add(1),
         }
     }
@@ -1078,6 +1159,9 @@ impl Column {
             Self::Date(b) => Arc::new(b.finish()),
             Self::Time(b) => Arc::new(b.finish()),
             Self::Timestamp(b) => Arc::new(b.finish()),
+            Self::YearMonth(b) => Arc::new(b.finish()),
+            Self::DayTime(b) => Arc::new(b.finish()),
+            Self::Calendar(b) => Arc::new(b.finish()),
             Self::Null(n, dt) => {
                 let rows = std::mem::take(n);
                 new_null_array(dt, rows)
@@ -1138,6 +1222,11 @@ fn row_text(vals: &[Val], kinds: &[FieldKind]) -> String {
             Val::F64(f) => out.push_str(&java_double_string(*f)),
             Val::Text(t) => out.push_str(t),
             Val::Bytes(b) => binary_text(b, &mut out),
+            Val::Calendar(c) => out.push_str(&krishiv_types::interval::calendar_string(
+                c.months,
+                c.days,
+                c.nanoseconds / 1_000,
+            )),
         }
     }
     out.push(']');
@@ -1701,6 +1790,14 @@ pub fn struct_to_csv(
                         true
                     }
                     (FieldKind::Null, _) => false,
+                    // `eval` hands `to_csv` an interval as its text, and only
+                    // `from_csv` makes these kinds.
+                    (
+                        FieldKind::YearMonth(..) | FieldKind::DayTime(..) | FieldKind::Calendar,
+                        _,
+                    ) => {
+                        return Err(KernelError::internal("an interval kind in to_csv"));
+                    }
                 }
             };
             push_quoted(&mut line, present.then_some(cell.as_str()), o);

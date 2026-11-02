@@ -801,6 +801,9 @@ pub struct WritePlan {
     /// A partitioned write sorts its input by these columns directly
     /// below the writer.
     pub partition_by: Vec<usize>,
+    /// The input columns whose Spark type their Arrow type doesn't say (an
+    /// interval's fields), for the writer's footers and text forms.
+    pub column_types: BTreeMap<usize, krishiv_types::DataType>,
 }
 
 impl WritePlan {
@@ -902,7 +905,8 @@ plan_data!(struct WritePlan {
     job_uuid,
     max_records_per_file,
     target_file_bytes,
-    partition_by
+    partition_by,
+    column_types
 });
 plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage, row_id });
 plan_data!(

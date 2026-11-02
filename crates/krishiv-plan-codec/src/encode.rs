@@ -367,7 +367,10 @@ impl Encoder {
             }),
             PhysNode::WriteFiles { input, write } => Kind::WriteFiles(pb::WriteFilesNode {
                 input: self.node_index(input)?,
-                write: write.as_ref().map(write_plan).transpose()?,
+                write: write
+                    .as_ref()
+                    .map(|w| write_plan(w, &self.nested))
+                    .transpose()?,
             }),
             PhysNode::Exchange(exchange) => Kind::Exchange(self.exchange(exchange)?),
             PhysNode::Expand {
@@ -1134,7 +1137,7 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
 }
 
 /// A file write as plan data.
-fn write_plan(write: &WritePlan) -> Result<pb::WritePlan> {
+fn write_plan(write: &WritePlan, nested: &Cell<bool>) -> Result<pb::WritePlan> {
     Ok(pb::WritePlan {
         format: write.format.clone(),
         options: write
@@ -1148,6 +1151,16 @@ fn write_plan(write: &WritePlan) -> Result<pb::WritePlan> {
         max_records_per_file: write.max_records_per_file,
         target_file_bytes: write.target_file_bytes,
         partition_by: indexes(&write.partition_by),
+        column_types: write
+            .column_types
+            .iter()
+            .map(|(column, t)| {
+                Ok(pb::WriteColumnType {
+                    column: *column as u64,
+                    data_type: Some(spark_type(t, nested)?),
+                })
+            })
+            .collect::<Result<_>>()?,
     })
 }
 

@@ -1294,6 +1294,17 @@ fn write_plan(m: &pb::WritePlan) -> Result<WritePlan> {
         max_records_per_file: m.max_records_per_file,
         target_file_bytes: m.target_file_bytes,
         partition_by: usizes(&m.partition_by)?,
+        column_types: m
+            .column_types
+            .iter()
+            .map(|c| {
+                let t = c
+                    .data_type
+                    .as_ref()
+                    .ok_or_else(|| corrupt("a write column without a type"))?;
+                Ok((usize_of(c.column)?, spark_type(t)?))
+            })
+            .collect::<Result<_>>()?,
     })
 }
 

@@ -2,14 +2,14 @@
 //! Values of a flat JSON object as typed columns: Spark's `JacksonParser`
 //! value conversions for the flat types, over the CSV column builders.
 
-use arrow_schema::DataType;
+use arrow_schema::Field;
 use krishiv_common::error::KrishivError;
 use krishiv_kernels::text::{
     java_parse_decimal, java_parse_double, java_parse_float, java_parse_integral,
 };
 
 use super::decode::JVal;
-use crate::csv::convert::{Conv, Kind, Val};
+use crate::csv::convert::{Conv, Kind, Val, interval_of_text};
 use crate::error::unsupported;
 use crate::text::{Datetimes, spark_type_name};
 use krishiv_common::error::CannotParseJsonField;
@@ -19,11 +19,11 @@ use krishiv_common::error::CannotParseJsonField;
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` naming the column's type.
-pub(crate) fn kind_of(dt: &DataType) -> Result<Kind, KrishivError> {
-    Kind::of(dt).map_err(|_| {
+pub(crate) fn kind_of(f: &Field) -> Result<Kind, KrishivError> {
+    Kind::of_field(f).map_err(|_| {
         unsupported(format!(
             "the JSON data source with a column of type {} (only flat types are supported)",
-            spark_type_name(dt)
+            spark_type_name(f.data_type())
         ))
     })
 }
@@ -137,6 +137,8 @@ impl JsonConverter<'_> {
                 Val::I64(self.dt.parse_timestamp(s)?.ok_or_else(bad)?)
             }
             (Kind::TimestampNtz, JVal::Str(s)) => Val::I64(self.dt.parse_ntz(s)?.ok_or_else(bad)?),
+            (Kind::YearMonth(..) | Kind::DayTime(..), JVal::Str(s)) => interval_of_text(kind, s)?,
+            (Kind::YearMonth(..) | Kind::DayTime(..), _) => return Err(Conv::Malformed),
             _ => {
                 let e: KrishivError = CannotParseJsonField {
                     field_name: name.to_owned(),
