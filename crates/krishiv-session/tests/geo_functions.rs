@@ -185,3 +185,33 @@ fn an_srid_outside_int_is_named_as_written() {
     );
     assert!(!e.contains("2147483648"), "{e}");
 }
+
+#[test]
+fn codex_review_fixes() {
+    let m = format!("ST_GeomFromWKB({POINT})");
+    // A NULL endianness gives NULL.
+    assert_eq!(
+        run(&format!(
+            "SELECT CAST(hex(ST_AsBinary({m}, CAST(NULL AS STRING))) AS STRING)"
+        )),
+        Ok(None)
+    );
+    // Collection functions refuse spatial elements.
+    for q in [
+        format!("sort_array(array({m}))"),
+        format!("array_distinct(array({m}))"),
+        format!("array_contains(array({m}), {m})"),
+    ] {
+        let e = error(&q);
+        assert!(!e.is_empty(), "{q}");
+    }
+    // Nested geography casts check coordinates.
+    let bad = "ST_GeomFromWKB(X'010100000000000000000069400000000000005940', 4326)";
+    let e = error(&format!("CAST(array({bad}) AS ARRAY<GEOGRAPHY(4326)>)"));
+    assert!(e.contains("Invalid coordinate value found"), "{e}");
+    // An ordinary struct shaped like the carrier is written.
+    let s = Session::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let df = block_on(s.sql("SELECT named_struct('srid', 1, 'wkb', X'01') v")).unwrap();
+    block_on(df.write().parquet(dir.path().join("out").to_str().unwrap())).unwrap();
+}

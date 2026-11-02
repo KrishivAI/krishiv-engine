@@ -30,8 +30,8 @@
 //! cannot overflow the call stack (Spark fails on such inputs, with no
 //! error class); the output is never larger than the input.
 
+use crate::DataType;
 use crate::error::{self, Result};
-use crate::{DataType, Srid};
 
 /// The byte order of encoded WKB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -402,26 +402,21 @@ pub fn to_ewkt(srid: i32, wkb: &[u8]) -> Result<String> {
     Ok(format!("{prefix}POINT({x} {y})"))
 }
 
-/// Whether `t` is, or holds anywhere inside it, the struct a geometry or
-/// geography is stored as (`Struct<srid: Int32, wkb: BinaryView>`).
+/// Whether `t` is, or holds anywhere inside it, a geometry or geography.
 ///
 /// ```
 /// use krishiv_types::{geo::holds_spatial, DataType, Srid};
 ///
-/// assert!(holds_spatial(&DataType::Geometry { srid: Srid::Any }.to_arrow()));
-/// assert!(!holds_spatial(&DataType::Binary.to_arrow()));
+/// assert!(holds_spatial(&DataType::Geometry { srid: Srid::Any }));
+/// assert!(!holds_spatial(&DataType::Binary));
 /// ```
 #[must_use]
-pub fn holds_spatial(t: &arrow_schema::DataType) -> bool {
-    use arrow_schema::DataType as A;
+pub fn holds_spatial(t: &DataType) -> bool {
     match t {
-        A::Struct(fields) => {
-            let spatial = DataType::Geometry { srid: Srid::Any }.to_arrow();
-            *t == spatial || fields.iter().any(|f| holds_spatial(f.data_type()))
-        }
-        A::List(f) | A::LargeList(f) | A::FixedSizeList(f, _) | A::Map(f, _) => {
-            holds_spatial(f.data_type())
-        }
+        DataType::Geometry { .. } | DataType::Geography { .. } => true,
+        DataType::Array(a) => holds_spatial(a.element_type()),
+        DataType::Map(m) => holds_spatial(m.key_type()) || holds_spatial(m.value_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| holds_spatial(f.data_type())),
         _ => false,
     }
 }

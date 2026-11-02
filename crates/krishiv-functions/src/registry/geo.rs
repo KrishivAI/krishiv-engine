@@ -87,7 +87,8 @@ fn spatial_argument<'a>(
 /// `st_asbinary(g[, endianness])`: a binary.
 fn as_binary(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     spatial_argument("st_asbinary", c)?;
-    Ok(ArgType::new(DataType::Binary, nullable(c)))
+    let order_null = c.args().get(1).is_some_and(|a| a.nullable);
+    Ok(ArgType::new(DataType::Binary, nullable(c) || order_null))
 }
 
 /// `st_srid(g)`: an int.

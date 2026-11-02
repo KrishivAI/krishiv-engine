@@ -160,11 +160,14 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 }
                 None => None,
             };
+            // A NULL endianness literal makes every row NULL.
+            let null_order = order.is_none() && matches!(args.get(1), Some(BindArg::Literal(_)));
+            let order = order.or(null_order.then_some(ByteOrder::Ndr));
             order.map(|order| {
                 Binding::new(DataType::BinaryView, move |x: &Inputs<'_>| {
                     let column = x.column(0)?;
                     let mut out = BinaryViewBuilder::with_capacity(column.len());
-                    if column.data_type() == &DataType::Null {
+                    if null_order || column.data_type() == &DataType::Null {
                         (0..column.len()).for_each(|_| out.append_null());
                     } else {
                         let (_, wkb) = parts(&column)?;

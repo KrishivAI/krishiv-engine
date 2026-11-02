@@ -1183,7 +1183,7 @@ fn min_max(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 /// not.
 pub(super) fn spark_orderable(t: &DataType) -> bool {
     match t {
-        DataType::Map(_) => false,
+        DataType::Map(_) | DataType::Geometry { .. } | DataType::Geography { .. } => false,
         DataType::Array(a) => spark_orderable(a.element_type()),
         DataType::Struct(s) => s.fields().iter().all(|f| spark_orderable(f.data_type())),
         _ => true,
