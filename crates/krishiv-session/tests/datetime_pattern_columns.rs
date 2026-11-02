@@ -533,6 +533,15 @@ fn legacy_names_a_fixed_offset_zone_and_ntz_keeps_the_corrected_parser() {
         ),
         text(&[Some("2024-01-01 00:00:00.000123")])
     );
+    // A format column takes the same parser as a literal format.
+    assert_eq!(
+        column(
+            &s,
+            "to_timestamp_ntz(v, f)",
+            "FROM VALUES ('2024-01-01 00:00:00.000123', 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS t(v, f)"
+        ),
+        text(&[Some("2024-01-01 00:00:00.000123")])
+    );
 }
 
 /// Java's raw offset for Casablanca is 0 although the database marks +01:00

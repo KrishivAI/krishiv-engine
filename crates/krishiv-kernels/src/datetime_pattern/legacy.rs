@@ -767,7 +767,7 @@ impl Parsed {
             }
             Mode::Woy => {
                 let first = first_of(1)?;
-                Some(week_start(first) + 7 * (self.woy?.0 - 1))
+                Some(week_start(first) + 7 * (self.woy.map_or(1, |w| w.0) - 1))
             }
             _ => {
                 let m = u32::try_from(self.month0.map_or(0, |(v, _)| v) + 1).ok()?;
@@ -796,9 +796,12 @@ impl Parsed {
         };
         let (_, hdoy) = hybrid_week_fields(days, y, m, d);
         let real = real_day(days, y, m, d);
+        // A week year with no week field ignores the month and day.
+        let by_week_year =
+            self.year_is_week && self.woy.is_none() && self.wom.is_none() && self.dowim.is_none();
         year_ok
-            && self.month0.is_none_or(|(v, _)| v == i64::from(m) - 1)
-            && self.dom.is_none_or(|(v, _)| v == i64::from(d))
+            && (by_week_year || self.month0.is_none_or(|(v, _)| v == i64::from(m) - 1))
+            && (by_week_year || self.dom.is_none_or(|(v, _)| v == i64::from(d)))
             && self.doy.is_none_or(|(v, _)| v == hdoy)
             && self
                 .woy
@@ -853,7 +856,14 @@ impl Parsed {
             return None;
         }
         let weeky = self.woy.is_some() || self.wom.is_some() || self.dowim.is_some();
-        let mode = if weeky {
+        // A week year (`Y`) with no week field is week 1 of that week year;
+        // a month or day beside it is ignored (Spark 4.2: '2020' with
+        // 'YYYY' is 2019-12-29).
+        let week_year_only = self.year_is_week && !weeky;
+        let mut julian_leap = false;
+        let mode = if week_year_only {
+            Mode::Woy
+        } else if weeky {
             self.week_mode()
         } else if self.dow.is_some() && self.dom.is_none() && self.doy.is_none() {
             // A weekday alone (with at most a month) is the first such
@@ -887,21 +897,35 @@ impl Parsed {
                 return None;
             }
             // A Julian-only leap day (1500-02-29) reads as March 1.
-            days_from_civil(year, m, dd).or_else(|| days_from_civil(year, 3, 1))?
+            days_from_civil(year, m, dd).or_else(|| {
+                julian_leap = true;
+                days_from_civil(year, 3, 1)
+            })?
         } else {
             let m = self.month0.map_or(0, |(v, _)| v);
             let d = self.dom.map_or(1, |(v, _)| v);
             if !(0..12).contains(&m) || d < 1 {
                 return None;
             }
-            days_from_civil(year, u32::try_from(m + 1).ok()?, u32::try_from(d).ok()?)?
+            let (mo, dd) = (u32::try_from(m + 1).ok()?, u32::try_from(d).ok()?);
+            match days_from_civil(year, mo, dd) {
+                Some(days) => days,
+                // February 29 of a Julian-only leap year (1500, ...): the
+                // hybrid calendar has it, the proleptic one reads March 1.
+                None if (mo, dd) == (2, 29) && year <= 1582 && year % 4 == 0 => {
+                    julian_leap = true;
+                    days_from_civil(year, 3, 1)?
+                }
+                None => return None,
+            }
         };
         // The labels 1582-10-05..14 do not exist in the hybrid calendar.
         let cutover = days_from_civil(1582, 10, 4).unwrap_or(i64::MIN);
         if days > cutover && days < cutover + 11 {
             return None;
         }
-        if (weeky || self.dow.is_some() || self.doy.is_some())
+        if (weeky || week_year_only || self.dow.is_some() || self.doy.is_some())
+            && !julian_leap
             && !self.week_fields_agree(days, year)
         {
             return None;
@@ -1280,6 +1304,26 @@ mod tests {
         assert_eq!(f(10, 31), "3");
         assert!(ok("yyyy-MM-dd F", "1582-10-15 1").is_some());
         assert!(ok("yyyy-MM-dd F", "1582-10-15 3").is_none());
+    }
+
+    // Spark 4.2.0 under LEGACY (probe 2026-11-02).
+    #[test]
+    fn a_lone_week_year_and_julian_leap_days_resolve_like_spark() {
+        let d = |y, m, dd| days_from_civil(y, m, dd).unwrap() * MICROS_PER_DAY;
+        assert_eq!(local("YYYY", "2020"), Some(d(2019, 12, 29)));
+        assert_eq!(local("YYYY-MM-dd", "2020-03-05"), Some(d(2019, 12, 29)));
+        assert_eq!(local("YYYY-MM", "2020-03"), Some(d(2019, 12, 29)));
+        assert_eq!(local("YYYY-MM-dd", "2021-01-01"), Some(d(2020, 12, 27)));
+        assert_eq!(local("YYYY E", "2020 Tue"), Some(d(2019, 12, 31)));
+        assert_eq!(local("YYYY-DDD", "2020-053"), None);
+        for (p, t) in [
+            ("yyyy-MM-dd", "1500-02-29"),
+            ("yyyy-DDD", "1500-060"),
+            ("yyyy-DDD", "1500-061"),
+        ] {
+            assert_eq!(local(p, t), Some(d(1500, 3, 1)), "{t}");
+        }
+        assert_eq!(local("yyyy-MM-dd", "1700-02-29"), None);
     }
 
     #[test]

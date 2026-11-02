@@ -1644,7 +1644,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     PatternArg::Column => parse_ntz_column(
                         &strings,
                         &x.strings(1)?,
-                        o.legacy_time_parser,
+                        false,
                         policy,
                         "to_timestamp_ntz",
                     ),
