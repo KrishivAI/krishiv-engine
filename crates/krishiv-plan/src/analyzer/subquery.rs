@@ -77,6 +77,7 @@ pub(super) fn rewrite(
         done: HashMap::new(),
         correlated: HashMap::new(),
         depth: 0,
+        lateral: false,
         row_number: match functions.lookup(&["row_number".to_owned()], profile) {
             FunctionLookup::Found(entry) => Some((entry.id, entry.kind)),
             _ => None,
@@ -97,6 +98,9 @@ struct Rewriter {
     depth: usize,
     /// The registry's `row_number`, for a subquery's per-row `LIMIT`.
     row_number: Option<(FunctionId, FunctionKind)>,
+    /// Decorrelating a lateral join's right side: a global aggregate on the
+    /// way keeps its one row per domain value.
+    lateral: bool,
 }
 
 /// A predicate subquery conjunct, as a join.
@@ -857,8 +861,11 @@ impl Rewriter {
         condition: &JoinCondition,
     ) -> R<Arc<LogicalPlan>> {
         let out = output(p)?;
-        let (inner, corr) = if on_path(right, needs_domain) {
-            let (inner, inner_keys, outer_keys) = self.domain(left, right)?;
+        let (inner, corr) = if on_path_through(right, lateral_hit, true) {
+            self.lateral = true;
+            let domained = self.domain(left, right);
+            self.lateral = false;
+            let (inner, inner_keys, outer_keys) = domained?;
             let corr = inner_keys
                 .into_iter()
                 .zip(outer_keys)
@@ -1845,7 +1852,12 @@ impl Rewriter {
     ) -> R<(Arc<LogicalPlan>, Renumber)> {
         // Below the last set operation or join, the correlation lifts as
         // it does anywhere else and meets the domain in a join's condition.
-        if !on_path(plan, needs_domain) {
+        let hit: fn(&LogicalPlan) -> bool = if self.lateral {
+            lateral_hit
+        } else {
+            needs_domain
+        };
+        if !on_path_through(plan, hit, self.lateral) {
             let (inner, corr) = self.pull(plan, true)?;
             let (right, renumber) = self.shifted(Arc::clone(distinct))?;
             let cond = corr.iter().map(|c| renumber.outer(c)).collect();
@@ -1915,6 +1927,20 @@ impl Rewriter {
                 }
                 // No limit above (it stops the path): the order means nothing.
                 self.domained(input, distinct, domain)
+            }
+            // A global aggregate has a row for an outer row without matches
+            // (a lateral join's right side): aggregated per domain value,
+            // it joins the domain on the left, and a row that found no
+            // match reads the aggregates over no rows.
+            PlanNode::Aggregate {
+                input,
+                grouping: Grouping::GroupBy(keys),
+                aggregates,
+            } if keys.is_empty() && self.lateral => {
+                if aggregates.iter().any(|e| has_outer(Node::Expr(e))) {
+                    return Err(correlated_reference(aggregates, plan.origin));
+                }
+                self.global_aggregate(plan, input, aggregates, distinct, domain)
             }
             PlanNode::Aggregate {
                 input,
@@ -1992,6 +2018,115 @@ impl Rewriter {
                 plan.origin,
             )),
         }
+    }
+
+    /// A global aggregate `plan` (over `input`) on a lateral join's
+    /// correlation path: the aggregates per domain value, outer-joined to
+    /// the domain, with the value over no rows where nothing matched.
+    fn global_aggregate(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+        aggregates: &[Arc<Expr>],
+        distinct: &Arc<LogicalPlan>,
+        domain: &[BoundColumn],
+    ) -> R<(Arc<LogicalPlan>, Renumber)> {
+        let (inner, renumber) = self.domained(input, distinct, domain)?;
+        let keys: Vec<Arc<Expr>> = domain_columns(domain, renumber)
+            .iter()
+            .map(|c| col_expr(c, Origin::UNKNOWN))
+            .collect();
+        let out = output(plan)?;
+        let marker = BoundColumn {
+            id: self.fresh(),
+            name: "matched".to_owned(),
+            data_type: DataType::Boolean,
+            nullable: false,
+        };
+        // The aggregates under fresh attributes, then the keys and a marker.
+        let mut inner_out = Vec::with_capacity(out.len());
+        let mut grouped = Vec::with_capacity(aggregates.len() + keys.len() + 1);
+        let mut defaults = Vec::with_capacity(aggregates.len());
+        for (e, o) in aggregates.iter().zip(&out) {
+            let value = match &e.node {
+                ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => Arc::clone(expr),
+                _ => Arc::clone(e),
+            };
+            let fresh = BoundColumn {
+                id: self.fresh(),
+                ..o.clone()
+            };
+            defaults.push(over_no_rows(&value)?);
+            grouped.push(alias(value, &fresh));
+            inner_out.push(fresh);
+        }
+        grouped.extend(keys.iter().cloned());
+        grouped.push(alias(
+            Arc::new(Expr::literal(Literal::Boolean(true))),
+            &marker,
+        ));
+        let agg = node(
+            PlanNode::Aggregate {
+                input: inner,
+                grouping: Grouping::GroupBy(keys.clone()),
+                aggregates: grouped,
+            },
+            plan.origin,
+        );
+        let (domain_side, dom) = self.shifted(Arc::clone(distinct))?;
+        let cond = domain_columns(domain, dom)
+            .iter()
+            .zip(&keys)
+            .map(|(d, k)| {
+                boolean(
+                    Builtin::EqNullSafe,
+                    vec![col_expr(d, Origin::UNKNOWN), Arc::clone(k)],
+                )
+            })
+            .collect();
+        let join = node(
+            PlanNode::Join {
+                left: domain_side,
+                right: agg,
+                kind: JoinKind::LeftOuter,
+                condition: and_all(cond).map_or(JoinCondition::None, JoinCondition::On),
+            },
+            plan.origin,
+        );
+        let unmatched = boolean(
+            Builtin::IsNull,
+            vec![col_expr(
+                &BoundColumn {
+                    nullable: true,
+                    ..marker
+                },
+                Origin::UNKNOWN,
+            )],
+        );
+        let mut exprs: Vec<Arc<Expr>> = Vec::with_capacity(out.len() + domain.len());
+        for ((o, fresh), default) in out.iter().zip(&inner_out).zip(defaults) {
+            let read = col_expr(
+                &BoundColumn {
+                    nullable: true,
+                    ..fresh.clone()
+                },
+                Origin::UNKNOWN,
+            );
+            let value = call(
+                Builtin::When,
+                vec![Arc::clone(&unmatched), default, read],
+                o.data_type.clone(),
+                o.nullable,
+            );
+            exprs.push(alias(value, o));
+        }
+        exprs.extend(
+            domain_columns(domain, dom)
+                .iter()
+                .map(|c| col_expr(c, Origin::UNKNOWN)),
+        );
+        let project = PlanNode::Project { input: join, exprs };
+        Ok((node(project, plan.origin), dom))
     }
 
     /// A join on the correlation path: the domain goes under the side a
@@ -2196,10 +2331,24 @@ fn needs_domain(p: &LogicalPlan) -> bool {
             if exprs.iter().any(|e| has_outer(Node::Expr(e))))
 }
 
+/// [`needs_domain`], or a global aggregate: one row for every outer row,
+/// matches or not.
+fn lateral_hit(p: &LogicalPlan) -> bool {
+    needs_domain(p)
+        || matches!(&p.node, PlanNode::Aggregate { grouping: Grouping::GroupBy(keys), .. }
+            if keys.is_empty())
+}
+
 /// Whether `hit` holds on the correlation path from `p` down, through what
 /// [`Rewriter::domained`] goes through. A global aggregate ends the path: it
 /// has one row for an outer row without matches, which a domain would lose.
 fn on_path(p: &Arc<LogicalPlan>, hit: fn(&LogicalPlan) -> bool) -> bool {
+    on_path_through(p, hit, false)
+}
+
+/// [`on_path`], also through a global aggregate when `global` (a lateral
+/// join's right side: the domain is kept by an outer join above it).
+fn on_path_through(p: &Arc<LogicalPlan>, hit: fn(&LogicalPlan) -> bool, global: bool) -> bool {
     if !has_outer(Node::Plan(p)) {
         return false;
     }
@@ -2209,13 +2358,15 @@ fn on_path(p: &Arc<LogicalPlan>, hit: fn(&LogicalPlan) -> bool) -> bool {
     match &p.node {
         PlanNode::Project { input, .. }
         | PlanNode::Filter { input, .. }
-        | PlanNode::Sort { input, .. } => on_path(input, hit),
-        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => on_path(input, hit),
+        | PlanNode::Sort { input, .. } => on_path_through(input, hit, global),
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+            on_path_through(input, hit, global)
+        }
         PlanNode::Aggregate {
             input,
             grouping: Grouping::GroupBy(keys),
             ..
-        } if !keys.is_empty() => on_path(input, hit),
+        } if !keys.is_empty() || global => on_path_through(input, hit, global),
         _ => false,
     }
 }
@@ -2282,7 +2433,40 @@ fn with_domain(
     out
 }
 
-/// The outer columns `plan` reads, in the order they are met.
+/// `value` as the attribute `output`.
+fn alias(value: Arc<Expr>, output: &BoundColumn) -> Arc<Expr> {
+    Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+        expr: value,
+        output: output.clone(),
+    })))
+}
+
+/// `e`, an aggregate output, over no rows: each aggregate call read as its
+/// value over no input (`count` 0, the others NULL).
+fn over_no_rows(e: &Arc<Expr>) -> R<Arc<Expr>> {
+    Arc::clone(e).transform_up(&mut |x: Arc<Expr>| match &x.node {
+        ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
+            let zero = match f.id.name() {
+                "count" | "count_if" | "approx_count_distinct" => Literal::Long(0),
+                "sum" | "avg" | "min" | "max" | "any_value" | "first" | "last" | "first_value"
+                | "last_value" | "stddev" | "stddev_samp" | "stddev_pop" | "variance"
+                | "var_samp" | "var_pop" | "bool_and" | "bool_or" | "every" | "some" | "any"
+                | "bit_and" | "bit_or" | "bit_xor" | "median" | "mode" | "corr" => {
+                    Literal::Null(Some(f.data_type.clone()))
+                }
+                _ => {
+                    return Err(unsupported(
+                        "this aggregate in a lateral subquery over no rows",
+                        x.origin,
+                    ));
+                }
+            };
+            Ok(Arc::new(Expr::literal(zero)))
+        }
+        _ => Ok(x),
+    })
+}
+
 /// Whether `right` reads a column of `left`: a lateral join's right side.
 fn reads_left(left: &Arc<LogicalPlan>, right: &Arc<LogicalPlan>) -> bool {
     let Ok(out) = output(left) else {
@@ -2294,6 +2478,7 @@ fn reads_left(left: &Arc<LogicalPlan>, right: &Arc<LogicalPlan>) -> bool {
         .any(|c| ids.contains(&c.id))
 }
 
+/// The outer columns `plan` reads, in the order they are met.
 fn plan_outer_columns(plan: &Arc<LogicalPlan>) -> Vec<BoundColumn> {
     let mut out: Vec<BoundColumn> = Vec::new();
     let _ = visit_distinct(Node::Plan(plan), |n| {
