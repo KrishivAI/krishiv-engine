@@ -39,10 +39,10 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::TimestampMicrosecondType;
+use arrow_array::types::{Time64NanosecondType, TimestampMicrosecondType};
 use arrow_array::{
     Array, ArrayRef, LargeListArray, ListArray, MapArray, RecordBatch, StructArray,
-    TimestampMillisecondArray,
+    Time64MicrosecondArray, TimestampMillisecondArray,
 };
 use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use bytes::Bytes;
@@ -126,6 +126,8 @@ pub(crate) struct Settings {
     extension: &'static str,
     compression: Compression,
     millis: bool,
+    /// Whether batches need `to_parquet` (milliseconds or `TIME`).
+    convert: bool,
     rebase: Rebase,
     /// Whether the data has dates or timestamps (values to check).
     datetimes: bool,
@@ -197,6 +199,7 @@ impl Settings {
             extension,
             compression,
             millis: millis && has(is_timestamp),
+            convert: (millis && has(is_timestamp)) || has(is_time),
             rebase,
             datetimes: has(is_datetime),
             block_size: int(o, "parquet.block.size", 128 << 20),
@@ -275,6 +278,10 @@ fn is_timestamp(t: &DataType) -> bool {
     matches!(t, DataType::Timestamp(TimeUnit::Microsecond, Some(_)))
 }
 
+fn is_time(t: &DataType) -> bool {
+    matches!(t, DataType::Time64(TimeUnit::Nanosecond))
+}
+
 fn is_datetime(t: &DataType) -> bool {
     matches!(t, DataType::Date32 | DataType::Timestamp(_, Some(_)))
 }
@@ -290,13 +297,19 @@ fn any_type(t: &DataType, f: fn(&DataType) -> bool) -> bool {
     }
 }
 
-/// `a` with its timestamps (with a time zone) in milliseconds, rounded down
-/// as Spark does (`floorDiv`), at any depth.
-fn to_millis(a: &ArrayRef) -> FormatResult<ArrayRef> {
+/// `a` as Parquet stores it: timestamps (with a time zone) in milliseconds
+/// when `millis` (rounded down as Spark does, `floorDiv`), and `TIME` in
+/// microseconds (Spark's `TIME(MICROS)`), at any depth.
+fn to_parquet(a: &ArrayRef, millis: bool) -> FormatResult<ArrayRef> {
     let bad = |e: arrow_schema::ArrowError| FormatError::WriteFailed(e.to_string());
     let retyped = |f: &Field, t: &DataType| Arc::new(f.clone().with_data_type(t.clone()));
     Ok(match a.data_type() {
-        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => {
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            let nanos = a.as_primitive::<Time64NanosecondType>();
+            let micros: Time64MicrosecondArray = nanos.unary(|v| v.div_euclid(1000));
+            Arc::new(micros)
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) if millis => {
             let micros = a.as_primitive::<TimestampMicrosecondType>();
             let millis: TimestampMillisecondArray = micros.unary(|v| v.div_euclid(1000));
             Arc::new(millis.with_timezone(Arc::clone(tz)))
@@ -306,7 +319,7 @@ fn to_millis(a: &ArrayRef) -> FormatResult<ArrayRef> {
             let columns = s
                 .columns()
                 .iter()
-                .map(to_millis)
+                .map(|c| to_parquet(c, millis))
                 .collect::<FormatResult<Vec<_>>>()?;
             let fields: Fields = fields
                 .iter()
@@ -317,7 +330,7 @@ fn to_millis(a: &ArrayRef) -> FormatResult<ArrayRef> {
         }
         DataType::List(f) => {
             let l = a.as_list::<i32>();
-            let values = to_millis(l.values())?;
+            let values = to_parquet(l.values(), millis)?;
             let f = retyped(f, values.data_type());
             Arc::new(
                 ListArray::try_new(f, l.offsets().clone(), values, l.nulls().cloned())
@@ -326,7 +339,7 @@ fn to_millis(a: &ArrayRef) -> FormatResult<ArrayRef> {
         }
         DataType::LargeList(f) => {
             let l = a.as_list::<i64>();
-            let values = to_millis(l.values())?;
+            let values = to_parquet(l.values(), millis)?;
             let f = retyped(f, values.data_type());
             Arc::new(
                 LargeListArray::try_new(f, l.offsets().clone(), values, l.nulls().cloned())
@@ -336,7 +349,7 @@ fn to_millis(a: &ArrayRef) -> FormatResult<ArrayRef> {
         DataType::Map(f, sorted) => {
             let m = a.as_map();
             let entries: ArrayRef = Arc::new(m.entries().clone());
-            let entries = to_millis(&entries)?;
+            let entries = to_parquet(&entries, millis)?;
             let f = retyped(f, entries.data_type());
             Arc::new(
                 MapArray::try_new(
@@ -371,7 +384,7 @@ impl ParquetEncoder {
         tweak: impl FnOnce(WriterPropertiesBuilder) -> WriterPropertiesBuilder,
     ) -> FormatResult<Self> {
         let settings = Settings::new(schema, o)?;
-        let schema = if settings.millis {
+        let schema = if settings.convert {
             let empty = RecordBatch::new_empty(Arc::clone(schema));
             let fields: Vec<Field> = schema
                 .fields()
@@ -380,7 +393,7 @@ impl ParquetEncoder {
                 .map(|(f, c)| {
                     Ok(f.as_ref()
                         .clone()
-                        .with_data_type(to_millis(c)?.data_type().clone()))
+                        .with_data_type(to_parquet(c, settings.millis)?.data_type().clone()))
                 })
                 .collect::<FormatResult<_>>()?;
             Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
@@ -431,11 +444,11 @@ impl Encoder for ParquetEncoder {
             }
         }
         let converted;
-        let batch = if self.settings.millis {
+        let batch = if self.settings.convert {
             let columns = batch
                 .columns()
                 .iter()
-                .map(to_millis)
+                .map(|c| to_parquet(c, self.settings.millis))
                 .collect::<FormatResult<_>>()?;
             converted = RecordBatch::try_new(Arc::clone(&self.schema), columns)
                 .map_err(|e| FormatError::WriteFailed(e.to_string()))?;

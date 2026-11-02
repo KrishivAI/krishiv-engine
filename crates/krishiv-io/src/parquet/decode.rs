@@ -25,8 +25,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    TimestampMicrosecondType, TimestampMillisecondType, UInt8Type, UInt16Type, UInt32Type,
-    UInt64Type,
+    Time32MillisecondType, Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
+    TimestampMillisecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow_array::{
     Array, ArrayRef, LargeListArray, ListArray, MapArray, RecordBatch, RecordBatchOptions,
@@ -816,6 +816,18 @@ fn spark_read_array(a: &ArrayRef) -> FormatResult<ArrayRef> {
                     })
                 })?
                 .with_timezone_opt(tz.clone()),
+        ) as ArrayRef,
+        DataType::Time32(TimeUnit::Millisecond) => Arc::new(
+            a.as_primitive::<Time32MillisecondType>()
+                .unary::<_, Time64NanosecondType>(|ms| i64::from(ms) * 1_000_000),
+        ) as ArrayRef,
+        DataType::Time64(TimeUnit::Microsecond) => Arc::new(
+            a.as_primitive::<Time64MicrosecondType>()
+                .try_unary::<_, Time64NanosecondType, FormatError>(|us| {
+                    us.checked_mul(1000).ok_or_else(|| {
+                        FormatError::Corrupt(format!("the TIME value {us} is out of range"))
+                    })
+                })?,
         ) as ArrayRef,
         DataType::UInt8 => Arc::new(
             a.as_primitive::<UInt8Type>()

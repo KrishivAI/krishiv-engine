@@ -1210,3 +1210,53 @@ fn binary_decimals_read_on_the_canonical_carrier() {
         [150, -275]
     );
 }
+
+/// `TIME(MICROS)` and `TIME(MILLIS)` columns reach the query as `TIME` in
+/// nanoseconds, the engine's carrier.
+#[test]
+fn time_columns_read_as_nanoseconds() {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Time64NanosecondType;
+    use parquet::data_type::{Int32Type, Int64Type};
+    use parquet::file::writer::SerializedFileWriter;
+    use parquet::schema::parser::parse_message_type;
+    let message = "message m {
+        required int64 us (TIME(MICROS,false));
+        required int32 ms (TIME(MILLIS,false));
+    }";
+    let schema = Arc::new(parse_message_type(message).unwrap());
+    let mut buf = Vec::new();
+    let mut w = SerializedFileWriter::new(&mut buf, schema, Arc::default()).unwrap();
+    let mut rg = w.next_row_group().unwrap();
+    let mut c = rg.next_column().unwrap().unwrap();
+    c.typed::<Int64Type>()
+        .write_batch(&[36_000_000_000, 7], None, None)
+        .unwrap();
+    c.close().unwrap();
+    let mut c = rg.next_column().unwrap().unwrap();
+    c.typed::<Int32Type>()
+        .write_batch(&[1_500, 86_399_999], None, None)
+        .unwrap();
+    c.close().unwrap();
+    rg.close().unwrap();
+    w.close().unwrap();
+
+    let env = Env::new();
+    let file = env.put("time.parquet", buf);
+    let o = env.options(&[]);
+    let t = DataType::Time64(arrow_schema::TimeUnit::Nanosecond);
+    let table: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("us", t.clone(), false),
+        Field::new("ms", t, false),
+    ]));
+    let got = env.scan(&file, &ScanRequest::all(table), &o).unwrap();
+    let ns = |i: usize| {
+        got[0]
+            .column(i)
+            .as_primitive::<Time64NanosecondType>()
+            .values()
+            .to_vec()
+    };
+    assert_eq!(ns(0), [36_000_000_000_000, 7_000]);
+    assert_eq!(ns(1), [1_500_000_000, 86_399_999_000_000]);
+}

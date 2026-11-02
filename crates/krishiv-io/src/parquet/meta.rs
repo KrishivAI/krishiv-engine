@@ -445,6 +445,9 @@ pub(crate) fn spark_read_type(dt: &DataType) -> DataType {
         DataType::Timestamp(TimeUnit::Millisecond, tz) => {
             DataType::Timestamp(TimeUnit::Microsecond, tz.clone())
         }
+        DataType::Time32(TimeUnit::Millisecond) | DataType::Time64(TimeUnit::Microsecond) => {
+            DataType::Time64(TimeUnit::Nanosecond)
+        }
         DataType::UInt8 => DataType::Int16,
         DataType::UInt16 => DataType::Int32,
         DataType::UInt32 => DataType::Int64,

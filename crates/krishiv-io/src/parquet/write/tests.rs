@@ -638,3 +638,57 @@ fn collated_columns_write_the_spark_row_metadata() {
         .unwrap();
     assert!(json.contains("spark.UTF8_LCASE"), "{json}");
 }
+
+/// `TIME` (nanoseconds in memory) is written as Spark writes it:
+/// `INT64` `TIME(isAdjustedToUTC=false, MICROS)`, at any depth.
+#[test]
+fn time_is_written_as_microseconds() {
+    use arrow_array::types::Time64MicrosecondType;
+    use arrow_array::{ListArray, Time64NanosecondArray};
+    let t = DataType::Time64(TimeUnit::Nanosecond);
+    let item = Arc::new(Field::new("item", t.clone(), true));
+    let values = Time64NanosecondArray::from(vec![Some(36_000_000_000_000), Some(1_500)]);
+    let list = ListArray::new(
+        Arc::clone(&item),
+        OffsetBuffer::from_lengths([2]),
+        Arc::new(values),
+        None,
+    );
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("t", t, true),
+        Field::new("l", DataType::List(item), true),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(Time64NanosecondArray::from(vec![Some(86_399_999_999_000)])),
+            Arc::new(list),
+        ],
+    )
+    .unwrap();
+    let file = write(&[batch], &options(&[])).unwrap();
+    let reader = SerializedFileReader::new(file.clone()).unwrap();
+    for c in reader.metadata().file_metadata().schema_descr().columns() {
+        let Some(LogicalType::Time(tt)) = c.logical_type_ref() else {
+            panic!("not a TIME column: {:?}", c.logical_type_ref());
+        };
+        assert!(!tt.is_adjusted_to_u_t_c);
+        assert!(matches!(tt.unit, parquet::basic::TimeUnit::MICROS));
+    }
+    let got = read(&file);
+    assert_eq!(
+        got[0]
+            .column(0)
+            .as_primitive::<Time64MicrosecondType>()
+            .value(0),
+        86_399_999_999
+    );
+    let l = got[0].column(1).as_list::<i32>();
+    assert_eq!(
+        l.values()
+            .as_primitive::<Time64MicrosecondType>()
+            .values()
+            .to_vec(),
+        [36_000_000_000, 1]
+    );
+}
