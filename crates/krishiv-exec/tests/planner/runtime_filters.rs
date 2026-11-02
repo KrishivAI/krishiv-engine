@@ -670,3 +670,87 @@ fn a_scan_waits_only_for_a_filter_from_another_table() {
         [false]
     );
 }
+
+/// Bytes the scans read with runtime filters on and off, per query of a data
+/// set (the variables of [`runtime_filter_bench`], one run of each mode): the
+/// results must agree, and the queries in `KRISHIV_RF_BENCH_FEWER` must read
+/// fewer bytes with filters on (P2-T058's acceptance). Run with
+/// `cargo test --release -p krishiv-exec --test planner runtime_filter_bytes -- --ignored --nocapture`.
+#[test]
+#[ignore = "needs a benchmark data set"]
+fn runtime_filter_bytes() {
+    let dir = std::env::var("KRISHIV_RF_BENCH_DIR").expect("KRISHIV_RF_BENCH_DIR");
+    let suite = std::env::var("KRISHIV_RF_BENCH_SUITE").unwrap_or_else(|_| "tpcds".to_owned());
+    let fewer = std::env::var("KRISHIV_RF_BENCH_FEWER").unwrap_or_default();
+    let fewer: Vec<&str> = fewer.split(',').filter(|q| !q.is_empty()).collect();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| {
+            let p = e.ok()?.path();
+            (p.extension()? == "parquet").then(|| p.file_stem()?.to_str().map(str::to_owned))?
+        })
+        .collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut t = super::tpch::parquet_dir(Path::new(&dir), &names, true, &rt);
+    let queries = super::tpch::root().join(format!("bench/queries/{suite}"));
+    let mut files: Vec<_> = std::fs::read_dir(&queries)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "sql"))
+        .collect();
+    files.sort();
+    if let Ok(only) = std::env::var("KRISHIV_RF_BENCH_QUERIES") {
+        files.retain(|f| {
+            only.split(',')
+                .any(|q| f.file_stem().is_some_and(|s| s == q))
+        });
+    }
+    let mib: usize = std::env::var("KRISHIV_RF_BENCH_MEMORY_MIB")
+        .ok()
+        .and_then(|m| m.parse().ok())
+        .unwrap_or(8192);
+    let root = TreePool::new(&limited(mib << 20));
+    let (mut mismatched, mut not_fewer) = (Vec::new(), Vec::new());
+    println!("query|off MiB|on MiB|on/off");
+    for f in files {
+        let q = f.file_stem().unwrap().to_string_lossy().into_owned();
+        let text = std::fs::read_to_string(&f).unwrap();
+        let mut run_mode = |on: bool| {
+            configured(&mut t, MODES[usize::from(on)].1);
+            let plan = t.plan_sql(&text).map_err(|e| e.to_string())?;
+            let (out, query) = super::run_in(&plan, &root);
+            let bytes: u64 = query
+                .metrics()
+                .operators
+                .values()
+                .flat_map(|e| &e.extra)
+                .filter(|(name, _)| name.as_ref() == "scan_bytes")
+                .map(|(_, v)| v.value().unwrap_or(0))
+                .sum();
+            Ok::<_, String>((sorted(&out.map_err(|e| e.to_string())?), bytes))
+        };
+        let (off, off_bytes, on, on_bytes) = match (run_mode(false), run_mode(true)) {
+            (Ok((off, a)), Ok((on, b))) => (off, a, on, b),
+            (Err(e), _) | (_, Err(e)) => {
+                println!("{q}|not run: {}", e.lines().next().unwrap_or(""));
+                continue;
+            }
+        };
+        if on != off {
+            mismatched.push(q.clone());
+        }
+        if fewer.contains(&q.as_str()) && on_bytes >= off_bytes {
+            not_fewer.push(q.clone());
+        }
+        #[expect(clippy::cast_precision_loss, reason = "a report")]
+        let (a, b) = (off_bytes as f64, on_bytes as f64);
+        let m = f64::from(1 << 20);
+        println!("{q}|{:.1}|{:.1}|{:.3}", a / m, b / m, b / a.max(1.0));
+    }
+    assert!(mismatched.is_empty(), "results differ: {mismatched:?}");
+    assert!(not_fewer.is_empty(), "no fewer bytes: {not_fewer:?}");
+}

@@ -781,6 +781,49 @@ async fn a_very_large_batch_is_processed_in_chunks() {
     assert_released(&pool);
 }
 
+/// Blocks its thread in every `execute` call.
+struct BlockingSleep;
+
+impl Operator for BlockingSleep {
+    fn schema(&self) -> SchemaRef {
+        int_schema()
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(()))
+    }
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the operator exists to block a worker, which the detector must catch"
+    )]
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        std::thread::sleep(stall_threshold() * 3);
+        Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
+    }
+}
+
+/// Time off a CPU counts when it isn't paging: a poll that blocks trips the
+/// detector with almost no CPU time. The first polls may also page code in,
+/// which can excuse them, so it blocks on several.
+#[tokio::test]
+async fn a_blocking_operator_trips_the_stall_detector() {
+    let runner = QueryRunner::new(executor(1));
+    let pool = root(1 << 30);
+    let q = query(&pool, 1);
+    let (schema, batch) = big_batch(10);
+    let scan = Arc::new(Scan(krishiv_exec::testing::Batches::new(
+        schema,
+        vec![batch; 16],
+    )));
+    let plan = Arc::new(krishiv_exec::testing::Pipe(scan, Arc::new(BlockingSleep)));
+    let e = run(&runner, plan, &q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("without yielding"), "{e}");
+    assert!(q.metrics().drivers.stalls >= 1);
+    assert_released(&pool);
+}
+
 /// Without chunking, one long `execute` call trips the stall detector: the
 /// query fails and the counters record the stall.
 #[tokio::test]
