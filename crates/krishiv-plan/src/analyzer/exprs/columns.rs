@@ -74,6 +74,37 @@ pub(in crate::analyzer) fn unresolved(
     )
 }
 
+/// `UNRESOLVED_COLUMN` for `parts` named in `s.* EXCEPT (...)`, proposing the
+/// fields of the struct `s` (Spark resolves the entry against them).
+pub(in crate::analyzer) fn unresolved_in_fields(
+    parts: &[String],
+    fields: &krishiv_types::StructType,
+    origin: Origin,
+) -> AnalysisError {
+    let candidates = fields
+        .fields()
+        .iter()
+        .map(|f| vec![f.name().to_owned()])
+        .collect();
+    let ranked = closest(&parts.join("."), candidates);
+    let object_name = quoted(parts);
+    if ranked.is_empty() {
+        return AnalysisError::new(UnresolvedColumnWithoutSuggestion { object_name }, origin);
+    }
+    let proposal = ranked
+        .iter()
+        .map(|p| quoted(p))
+        .collect::<Vec<_>>()
+        .join(", ");
+    AnalysisError::new(
+        UnresolvedColumnWithSuggestion {
+            object_name,
+            proposal,
+        },
+        origin,
+    )
+}
+
 /// The quoted names of `attrs`, comma-separated.
 pub(in crate::analyzer) fn names(attrs: &[Attr], _qualified: bool) -> String {
     attrs

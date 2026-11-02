@@ -828,7 +828,43 @@ fn except_field_of_a_flat_column_is_not_found() -> R {
             Err(e) => e,
             Ok(df) => block_on(df.collect()).expect_err("EXCEPT of a missing field must fail"),
         };
-        assert_eq!(e.error_class().name(), "FIELD_NOT_FOUND", "{sql}: {e}");
+        assert_eq!(
+            e.error_class().name(),
+            "INVALID_EXTRACT_BASE_FIELD_TYPE",
+            "{sql}: {e}"
+        );
+    }
+    Ok(())
+}
+
+/// The classes Spark 4.2 raises for an `EXCEPT` path that does not name a
+/// struct field (probed on a real run).
+#[test]
+fn except_paths_below_non_structs_and_missing_fields_use_spark_classes() -> R {
+    let s = Session::new()?;
+    for (sql, class) in [
+        (
+            "SELECT * EXCEPT (id.x) FROM VALUES (1) AS t(id)",
+            "INVALID_EXTRACT_BASE_FIELD_TYPE",
+        ),
+        (
+            "SELECT * EXCEPT (m.k) FROM VALUES (map('a', 1)) AS t(m)",
+            "EXCEPT_NESTED_COLUMN_INVALID_TYPE",
+        ),
+        (
+            "SELECT * EXCEPT (arr.x) FROM VALUES (array(named_struct('x', 1))) AS t(arr)",
+            "EXCEPT_NESTED_COLUMN_INVALID_TYPE",
+        ),
+        (
+            "SELECT data.* EXCEPT (nope) FROM VALUES (named_struct('a', 1)) AS t(data)",
+            "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+        ),
+    ] {
+        let e = match block_on(s.sql(sql)) {
+            Err(e) => e,
+            Ok(df) => block_on(df.collect()).expect_err("must fail"),
+        };
+        assert_eq!(e.error_class().name(), class, "{sql}: {e}");
     }
     Ok(())
 }
@@ -1127,5 +1163,41 @@ fn qualify_errors() -> R {
     ] {
         assert_eq!(error_of(&s, sql)?.error_class().name(), class, "{sql}");
     }
+    Ok(())
+}
+
+/// A table alias wins over a struct column of the same name, and a NULL
+/// struct under a nested `EXCEPT` becomes a struct of NULL fields (Spark
+/// 4.2: `{"b":null}`).
+#[test]
+fn except_alias_beats_struct_column_and_null_struct_is_rebuilt() -> R {
+    let s = Session::new()?;
+    let rows = |sql: &str| -> R<String> {
+        let batches = block_on(block_on(s.sql(sql))?.collect())?;
+        Ok(batches
+            .iter()
+            .map(|b| format!("{}x{}", b.num_rows(), b.num_columns()))
+            .collect::<Vec<_>>()
+            .join(","))
+    };
+    assert_eq!(
+        rows("SELECT t.* EXCEPT (a) FROM (SELECT named_struct('a', 1, 'b', 2) AS t, 5 AS a) t")?,
+        "1x1"
+    );
+    assert_eq!(
+        rows(
+            "SELECT s.b IS NULL AS n, s IS NULL AS sn FROM (SELECT * EXCEPT (s.a) \
+             FROM VALUES (CAST(NULL AS STRUCT<a:INT,b:INT>)) AS t(s))"
+        )?,
+        "1x2"
+    );
+    let b = block_on(
+        block_on(s.sql(
+            "SELECT s IS NULL FROM (SELECT * EXCEPT (s.a) \
+             FROM VALUES (CAST(NULL AS STRUCT<a:INT,b:INT>)) AS t(s))",
+        ))?
+        .collect(),
+    )?;
+    assert!(!arrow_array::cast::AsArray::as_boolean(b[0].column(0)).value(0));
     Ok(())
 }

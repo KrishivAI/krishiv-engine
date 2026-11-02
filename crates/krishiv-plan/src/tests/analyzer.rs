@@ -3048,7 +3048,7 @@ fn star_except_drops_overlaps_and_rejects_nested_fields_of_a_flat_column() {
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["a", "a", "a.b"])]);
     assert_eq!(class(&run(plan, &ctx())), "EXCEPT_OVERLAPPING_COLUMNS");
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["a.b"])]);
-    assert_eq!(class(&run(plan, &ctx())), "FIELD_NOT_FOUND");
+    assert_eq!(class(&run(plan, &ctx())), "INVALID_EXTRACT_BASE_FIELD_TYPE");
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["z"])]);
     assert_eq!(
         class(&run(plan, &ctx())),
