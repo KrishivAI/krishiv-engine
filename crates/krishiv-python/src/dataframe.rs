@@ -338,6 +338,40 @@ impl PyDataFrame {
         })
     }
 
+    /// Writes the rows to the table `name` (PySpark's `saveAsTable`); the
+    /// mode semantics live in `krishiv-session`.
+    #[pyo3(signature = (name, format, mode, options=None, partition_by=None))]
+    fn save_as_table(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        format: &str,
+        mode: &str,
+        options: Option<Vec<(String, String)>>,
+        partition_by: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let df = self.inner.clone();
+        let (name, format, mode) = (name.to_owned(), format.to_owned(), mode.to_owned());
+        let options = options.unwrap_or_default();
+        let partition_by = partition_by.unwrap_or_default();
+        block_on(py, async move {
+            df.save_as_table_with(&name, &format, &mode, options, partition_by)
+                .await
+        })
+    }
+
+    /// Inserts the rows into the table `name` by position (PySpark's
+    /// `insertInto`).
+    #[pyo3(signature = (name, overwrite=false))]
+    fn insert_into(&self, py: Python<'_>, name: &str, overwrite: bool) -> PyResult<()> {
+        let df = self.inner.clone();
+        let name = name.to_owned();
+        block_on(
+            py,
+            async move { df.insert_into_table(&name, overwrite).await },
+        )
+    }
+
     /// Runs a collected `writeTo` request in one call (PySpark's
     /// `DataFrameWriterV2` terminal actions): the table, the builder state
     /// and the terminal `mode` (`create`, `replace`, `createOrReplace`,

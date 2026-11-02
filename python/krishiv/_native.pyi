@@ -79,6 +79,15 @@ class DataFrame:
         options: list[tuple[str, str]] | None = ...,
         partition_by: list[str] | None = ...,
     ) -> None: ...
+    def save_as_table(
+        self,
+        name: str,
+        format: str,
+        mode: str,
+        options: list[tuple[str, str]] | None = ...,
+        partition_by: list[str] | None = ...,
+    ) -> None: ...
+    def insert_into(self, name: str, overwrite: bool = ...) -> None: ...
     def write_to_table(
         self,
         table: str,

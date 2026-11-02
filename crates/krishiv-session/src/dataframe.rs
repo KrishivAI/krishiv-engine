@@ -1677,6 +1677,38 @@ impl DataFrame {
         writer.save(path).await
     }
 
+    /// `DataFrameWriter.saveAsTable` collected as one call (the Python facade):
+    /// the table, `format`, save `mode`, `options` pairs and `partition_by`
+    /// columns; see [`DataFrameWriter::save_as_table`].
+    ///
+    /// # Errors
+    /// As [`DataFrameWriter::save_as_table`].
+    pub async fn save_as_table_with(
+        &self,
+        name: &str,
+        format: &str,
+        mode: &str,
+        options: Vec<(String, String)>,
+        partition_by: Vec<String>,
+    ) -> Result<(), KrishivError> {
+        let mut writer = self.write().format(format).mode(mode);
+        for (key, value) in &options {
+            writer = writer.option(key, value);
+        }
+        if !partition_by.is_empty() {
+            writer = writer.partition_by(partition_by.iter().map(String::as_str));
+        }
+        writer.save_as_table(name).await
+    }
+
+    /// `DataFrameWriter.insertInto` as one call; see [`DataFrameWriter::insert_into`].
+    ///
+    /// # Errors
+    /// As [`DataFrameWriter::insert_into`].
+    pub async fn insert_into_table(&self, name: &str, overwrite: bool) -> Result<(), KrishivError> {
+        self.write().insert_into(name, overwrite).await
+    }
+
     /// Registers this DataFrame as the temporary view `name`, replacing any
     /// table or view of that name (PySpark's `createOrReplaceTempView`).
     /// A view over a read by path lists its files again at every query;
@@ -1996,6 +2028,58 @@ impl DataFrameWriter {
         self.save_reporting(path).await.map(drop)
     }
 
+    /// Writes the rows to the table `name` (PySpark's `saveAsTable`), by name,
+    /// through the same path as `CREATE TABLE ... AS SELECT` and `INSERT INTO`
+    /// (the V2 writer). The mode is Spark's: `errorifexists` (also `error`,
+    /// `default`) creates the table and fails with `TABLE_OR_VIEW_ALREADY_EXISTS`
+    /// when it exists; `ignore` does nothing when it exists; `append` adds the
+    /// rows to an existing table and creates a missing one; `overwrite`
+    /// replaces an existing table (as `REPLACE TABLE AS SELECT` does, which
+    /// file tables refuse) and creates a missing one. Another mode name is
+    /// `INVALID_SAVE_MODE`. The format, options and `partition_by` columns
+    /// become the table's provider, options and partitioning.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let w = s.table("t").write().format("parquet").mode("append");
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As the V2 writer's `create` and `append` report, and `INVALID_SAVE_MODE`.
+    pub async fn save_as_table(self, name: &str) -> Result<(), KrishivError> {
+        let mode = krishiv_io::SaveMode::parse(&self.mode)?;
+        let exists = table_exists(&self.df.session, name).await?;
+        let mut w = self.df.write_to_table(name).using(&self.format);
+        w.options = self.options;
+        w.partitioned_by = self.partition_by;
+        match (mode, exists) {
+            (krishiv_io::SaveMode::Ignore, true) => Ok(()),
+            // A missing table is created whatever the mode; `error` creates and lets the
+            // existence check fail it.
+            (krishiv_io::SaveMode::ErrorIfExists, _) | (_, false) => w.create().await,
+            (krishiv_io::SaveMode::Append, true) => w.append().await,
+            (krishiv_io::SaveMode::Overwrite, true) => w.create_or_replace().await,
+        }
+    }
+
+    /// Inserts the rows into the existing table `name` by position (PySpark's
+    /// `insertInto`, the `INSERT INTO` path). `overwrite` is `INSERT OVERWRITE`,
+    /// which the engine refuses with `KRISHIV_UNSUPPORTED_FEATURE`. The format,
+    /// options and partitioning of this writer are ignored, as in Spark.
+    ///
+    /// # Errors
+    /// `TABLE_OR_VIEW_NOT_FOUND` for a missing table, and the V2 writer's
+    /// `append` errors (arity, types).
+    pub async fn insert_into(self, name: &str, overwrite: bool) -> Result<(), KrishivError> {
+        let w = self.df.write_to_table(name);
+        if overwrite {
+            w.overwrite_partitions().await
+        } else {
+            w.append().await
+        }
+    }
+
     /// [`Self::save`], returning the partition directories (`col=value/...`
     /// below `path`, escaped) that hold the committed files.
     pub(crate) async fn save_reporting(self, path: &str) -> Result<Vec<String>, KrishivError> {
@@ -2311,4 +2395,14 @@ impl DataFrameWriterV2 {
 /// The expressions of `cols`.
 fn exprs(cols: impl IntoIterator<Item = impl Into<Column>>) -> Vec<Arc<Expr>> {
     cols.into_iter().map(|c| Arc::new(c.into().expr)).collect()
+}
+
+/// Whether the session has a table or view `name` (a missing one is
+/// `TABLE_OR_VIEW_NOT_FOUND` when the plan is analyzed).
+async fn table_exists(session: &Session, name: &str) -> Result<bool, KrishivError> {
+    match session.table(name).schema().await {
+        Ok(_) => Ok(true),
+        Err(e) if e.error_class().name() == "TABLE_OR_VIEW_NOT_FOUND" => Ok(false),
+        Err(e) => Err(e),
+    }
 }

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from krishiv.errors import not_expected_type
+from krishiv.errors import not_expected_type, unsupported_feature
 from krishiv.sql.column import Column
 from krishiv.sql.dataframe import DataFrame
 
@@ -58,14 +58,21 @@ class DataFrameReader:
 
 
 class DataFrameWriter:
-    """Writes a :class:`DataFrame`'s rows to files (a subset of
-    ``pyspark.sql.DataFrameWriter``: ``format``/``mode``/``option``/
-    ``options``/``partitionBy``/``save`` and the ``parquet``/``csv``/``json``
-    shortcuts; ``bucketBy``/``sortBy``/``saveAsTable``/``insertInto`` are not
-    implemented). The engine writes no partitioned layout, so a write with
-    ``partitionBy`` columns always fails with ``KRISHIV_UNSUPPORTED_FEATURE``;
-    unknown formats fail the same way and unknown modes with
-    ``INVALID_SAVE_MODE``."""
+    """Writes a :class:`DataFrame`'s rows to files or a table (a subset of
+    ``pyspark.sql.DataFrameWriter``: ``format``/``mode``/``option``/``options``/
+    ``partitionBy``/``save``, the ``parquet``/``csv``/``json``/``text`` shortcuts,
+    ``saveAsTable`` and ``insertInto``). ``bucketBy`` and ``sortBy`` raise
+    ``KRISHIV_UNSUPPORTED_FEATURE`` (no bucketed tables yet). ``partitionBy``
+    writes Spark's ``col=value`` directory layout. Unknown formats fail with
+    ``KRISHIV_UNSUPPORTED_FEATURE`` and unknown modes with ``INVALID_SAVE_MODE``.
+
+    ``saveAsTable`` takes Spark's modes: ``error`` creates the table (and fails
+    with ``TABLE_OR_VIEW_ALREADY_EXISTS`` when it exists), ``ignore`` leaves an
+    existing table alone, ``append`` adds to an existing table or creates a
+    missing one, ``overwrite`` replaces an existing table (file tables cannot be
+    replaced yet, as for ``REPLACE TABLE AS SELECT``) or creates a missing one.
+    ``insertInto`` is positional (``INSERT INTO``); ``overwrite=True`` is
+    ``INSERT OVERWRITE``, which fails with ``KRISHIV_UNSUPPORTED_FEATURE``."""
 
     def __init__(self, df: DataFrame) -> None:
         self._df = df
@@ -94,10 +101,8 @@ class DataFrameWriter:
     def partitionBy(self, *cols: str | list[str] | tuple[str, ...]) -> DataFrameWriter:
         """Names of columns to partition by; each call replaces the columns of
         the one before. Only column names (``str``) are
-        accepted; ``Column`` objects raise a type error. The engine writes no
-        partitioned layout, so any column fails ``save`` with
-        ``KRISHIV_UNSUPPORTED_FEATURE``; an empty ``partitionBy`` is a no-op,
-        as in Spark."""
+        accepted; ``Column`` objects raise a type error. An empty ``partitionBy``
+        is a no-op, as in Spark."""
         names: list[str] = []
         for c in cols:
             if isinstance(c, str):
@@ -131,6 +136,53 @@ class DataFrameWriter:
         if path is None:
             raise not_expected_type("path", "str", path)
         self._df._df.write(self._format, self._mode, path, self._options, self._partition_by)
+
+    def saveAsTable(
+        self,
+        name: str,
+        format: str | None = None,
+        mode: str | None = None,
+        partitionBy: str | list[str] | tuple[str, ...] | None = None,
+        **options: object,
+    ) -> None:
+        """Writes the rows to the table ``name`` by column name (see the class doc for the modes)."""
+        if not isinstance(name, str):
+            raise not_expected_type("name", "str", name)
+        if format is not None:
+            self.format(format)
+        if mode is not None:
+            self.mode(mode)
+        if partitionBy is not None:
+            self.partitionBy(partitionBy)
+        self.options(**{k: v for k, v in options.items() if v is not None})
+        self._df._df.save_as_table(name, self._format, self._mode, self._options, self._partition_by)
+
+    def insertInto(self, tableName: str, overwrite: bool | None = None) -> None:
+        """Inserts the rows into the existing table ``tableName`` by position."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        if overwrite is not None and not isinstance(overwrite, bool):
+            raise not_expected_type("overwrite", "bool", overwrite)
+        # Spark's `overwrite=None` follows the writer's mode: `overwrite` mode overwrites.
+        over = overwrite if overwrite is not None else self._mode.lower() == "overwrite"
+        self._df._df.insert_into(tableName, over)
+
+    def bucketBy(self, numBuckets: int, col: str, *cols: str) -> DataFrameWriter:
+        """Not supported yet: raises ``KRISHIV_UNSUPPORTED_FEATURE`` (no bucketed tables)."""
+        raise unsupported_feature("bucketBy")
+
+    def sortBy(self, col: str, *cols: str) -> DataFrameWriter:
+        """Not supported yet: raises ``KRISHIV_UNSUPPORTED_FEATURE`` (no bucketed tables)."""
+        raise unsupported_feature("sortBy")
+
+    def text(
+        self,
+        path: str,
+        compression: str | None = None,
+        lineSep: str | None = None,
+    ) -> None:
+        """Writes the single string column as text files (one line per row)."""
+        self.save(path, format="text", compression=compression, lineSep=lineSep)
 
     def parquet(
         self,

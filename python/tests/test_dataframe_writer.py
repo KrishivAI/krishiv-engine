@@ -387,3 +387,78 @@ def test_writeto_signatures_match_pyspark() -> None:
     assert list(inspect.signature(W2.overwrite).parameters) == ["self", "condition"]
     for name in ("create", "replace", "createOrReplace", "append", "overwritePartitions"):
         assert list(inspect.signature(getattr(W2, name)).parameters) == ["self"], name
+
+
+def test_save_as_table_modes_follow_spark(df: DataFrame) -> None:
+    spark = df.sparkSession
+    # error (the default) creates; a second one fails as CREATE TABLE does.
+    df.write.saveAsTable("t")
+    assert len(spark.table("t").collect()) == 3
+    with pytest.raises(errors.AnalysisException) as bad:
+        df.write.saveAsTable("t")
+    assert bad.value.getCondition() == "TABLE_OR_VIEW_ALREADY_EXISTS"
+    # ignore leaves an existing table alone and creates a missing one.
+    df.write.mode("ignore").saveAsTable("t")
+    assert len(spark.table("t").collect()) == 3
+    df.write.mode("ignore").saveAsTable("u")
+    assert len(spark.table("u").collect()) == 3
+    # append adds to an existing table and creates a missing one.
+    df.write.mode("append").saveAsTable("t")
+    assert len(spark.table("t").collect()) == 6
+    df.write.mode("append").saveAsTable("v")
+    assert len(spark.table("v").collect()) == 3
+    # overwrite creates a missing table; replacing an existing file table is refused, and the rows stay.
+    df.write.mode("overwrite").saveAsTable("w")
+    assert len(spark.table("w").collect()) == 3
+    with pytest.raises(Exception, match="REPLACE TABLE AS SELECT"):
+        df.write.mode("overwrite").saveAsTable("t")
+    assert len(spark.table("t").collect()) == 6
+    with pytest.raises(errors.AnalysisException) as bad:
+        df.write.mode("bogus").saveAsTable("x")
+    assert bad.value.getCondition() == "INVALID_SAVE_MODE"
+
+
+def test_save_as_table_format_options_and_arguments(df: DataFrame) -> None:
+    df.write.format("csv").option("header", True).saveAsTable("c")
+    assert dicts(df.sparkSession.table("c")) == [
+        {"id": 1, "name": None},
+        {"id": 2, "name": "b"},
+        {"id": 3, "name": "c"},
+    ]
+    with pytest.raises(errors.PySparkTypeError):
+        df.write.saveAsTable(3)  # ty: ignore[invalid-argument-type]
+
+
+def test_insert_into_is_positional(df: DataFrame) -> None:
+    spark = df.sparkSession
+    df.write.saveAsTable("t")
+    # Same arity, other column names: by position, as INSERT INTO.
+    renamed = df.toDF("a", "b")
+    renamed.write.insertInto("t")
+    assert len(spark.table("t").collect()) == 6
+    with pytest.raises(errors.PySparkException) as bad:
+        df.select("id").write.insertInto("t")
+    assert (bad.value.getCondition() or "").startswith("INSERT_COLUMN_ARITY_MISMATCH")
+    with pytest.raises(errors.AnalysisException) as bad:
+        df.write.insertInto("missing")
+    assert bad.value.getCondition() == "TABLE_OR_VIEW_NOT_FOUND"
+    # INSERT OVERWRITE is not supported by the engine.
+    with pytest.raises(errors.UnsupportedOperationException):
+        df.write.insertInto("t", overwrite=True)
+    with pytest.raises(errors.UnsupportedOperationException):
+        df.write.mode("overwrite").insertInto("t")
+    assert len(spark.table("t").collect()) == 6
+
+
+def test_bucket_by_and_sort_by_are_unsupported(df: DataFrame) -> None:
+    for action in (lambda: df.write.bucketBy(4, "id"), lambda: df.write.sortBy("id")):
+        with pytest.raises(errors.UnsupportedOperationException) as bad:
+            action()
+        assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+
+
+def test_text_shortcut_reaches_the_engine_which_does_not_write_text_yet(df: DataFrame, tmp_path: Any) -> None:
+    path = str(tmp_path / "t")
+    with pytest.raises(errors.UnsupportedOperationException, match="text format"):
+        df.select("name").write.text(path)
+    assert not os.path.exists(path)
