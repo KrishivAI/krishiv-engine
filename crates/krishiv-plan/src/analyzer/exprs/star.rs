@@ -282,9 +282,12 @@ impl Resolver<'_> {
         let Some(level) = cx.env.outer.len().checked_sub(1) else {
             return Ok(None);
         };
+        // The merged-away columns of a `USING` join come first, as in
+        // `expand`.
         let attrs: Vec<Attr> = cx.env.outer[level]
-            .scope
+            .hidden
             .iter()
+            .chain(cx.env.outer[level].scope.iter())
             .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
             .cloned()
             .collect();

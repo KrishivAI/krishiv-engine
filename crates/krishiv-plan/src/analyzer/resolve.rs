@@ -111,6 +111,9 @@ pub(super) struct Rel {
 #[derive(Clone)]
 pub(super) struct Level {
     pub(super) scope: Arc<[Attr]>,
+    /// The columns a `USING` join of that query merged away: not
+    /// resolvable by name, but a qualified star still lists them.
+    pub(super) hidden: Arc<[Attr]>,
 }
 
 /// A scope environment: the CTEs visible and the enclosing queries.

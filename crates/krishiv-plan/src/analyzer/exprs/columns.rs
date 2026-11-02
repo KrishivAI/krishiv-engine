@@ -903,8 +903,14 @@ impl Resolver<'_> {
         if cx.agg_scope.is_some() {
             scope.extend(cx.extra.unwrap_or_default().iter().cloned());
         }
+        let hidden: Vec<Attr> = cx
+            .rels
+            .iter()
+            .flat_map(|r| r.hidden.iter().cloned())
+            .collect();
         outer.push(super::super::resolve::Level {
             scope: scope.into(),
+            hidden: hidden.into(),
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }

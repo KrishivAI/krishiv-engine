@@ -50,6 +50,21 @@ fn a_using_join_relation_shadows_the_outer_one() -> R {
     Ok(())
 }
 
+/// An outer relation with a merged-away `USING` column expands all its
+/// columns: two columns in a scalar subquery are refused.
+#[test]
+fn an_outer_star_includes_the_using_columns_of_the_outer_query() {
+    let s = Session::new().unwrap();
+    let r = block_on(s.sql(
+        "select (select b.*) from values (1) as a(k) join values (1, 2) as b(k, v) using (k)",
+    ));
+    let err = r.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(
+        err.contains("SCALAR_SUBQUERY_RETURN_MORE_THAN_ONE_OUTPUT_COLUMN"),
+        "{err}"
+    );
+}
+
 #[test]
 fn a_temporary_function_named_by_identifier_takes_no_database() {
     let s = Session::new().unwrap();
