@@ -1678,8 +1678,19 @@ impl Lowerer {
         let kind = match j.kind {
             JoinKind::Inner | JoinKind::Cross if j.lateral => IrJoin::LateralInner,
             JoinKind::Left if j.lateral => IrJoin::LateralLeft,
-            _ if j.lateral => {
-                return Err(unsupported("LATERAL with this join type", j.span));
+            kind if j.lateral => {
+                let join_type = match kind {
+                    JoinKind::Right => "RIGHT OUTER",
+                    JoinKind::Full => "FULL OUTER",
+                    JoinKind::LeftSemi => "LEFT SEMI",
+                    _ => "LEFT ANTI",
+                };
+                return Err(err(
+                    krishiv_common::error::InvalidLateralJoinType {
+                        join_type: join_type.to_owned(),
+                    },
+                    j.span,
+                ));
             }
             JoinKind::Inner => IrJoin::Inner,
             JoinKind::Cross => IrJoin::Cross,
