@@ -432,6 +432,11 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                     f.args.first().and_then(|a| a.nested_interval_type()),
                 )
             {
+                let from = if name == "to_json" {
+                    nested_cast::without_key_intervals(&from)
+                } else {
+                    from
+                };
                 *first = nested_cast::interval_leaves(Arc::clone(first), from);
             }
             match &f.id {
