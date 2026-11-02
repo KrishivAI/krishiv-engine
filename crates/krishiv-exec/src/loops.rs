@@ -42,6 +42,10 @@ use crate::shared::Output;
 /// Rows that make a run of the working table (one segment, one spill file).
 const RUN_ROWS: usize = 8192;
 
+/// Bytes of pending batches that end a run of the working table early, so
+/// wide rows in small batches never pile up unreserved.
+const RUN_BYTES: usize = 4 << 20;
+
 /// The ids of the queries rounds run as, apart from the outer queries'.
 static NEXT_ROUND: AtomicU64 = AtomicU64::new(1 << 62);
 
@@ -83,11 +87,20 @@ struct Run {
     child: Arc<QueryContext>,
 }
 
+impl Drop for Run {
+    /// A run dropped before its end (downstream stopped reading, or the
+    /// outer query ended) stops its child query at its next batch boundary.
+    fn drop(&mut self) {
+        self.child.cancel();
+    }
+}
+
 /// The working table being written by a run.
 struct Round {
     out: Arc<Output>,
     pending: Vec<Batch>,
     pending_rows: usize,
+    pending_bytes: usize,
     rows: u64,
 }
 
@@ -238,6 +251,7 @@ impl UnionLoopSource {
             ),
             pending: Vec::new(),
             pending_rows: 0,
+            pending_bytes: 0,
             rows: 0,
         });
         Ok(true)
@@ -270,17 +284,18 @@ impl UnionLoopSource {
             st.done = true;
             st.next = None;
             if let Some(run) = st.run.take() {
-                run.child.cancel();
-                drop(run.stream);
-                run.child.finished().await;
+                let child = Arc::clone(&run.child);
+                drop(run);
+                child.finished().await;
             }
             return Ok(Some(batch));
         }
         if let Some(round) = st.next.as_mut() {
             round.rows += n;
             round.pending_rows += batch.data().num_rows();
+            round.pending_bytes += batch.data().get_array_memory_size();
             round.pending.push(batch.clone());
-            if round.pending_rows >= RUN_ROWS {
+            if round.pending_rows >= RUN_ROWS || round.pending_bytes >= RUN_BYTES {
                 round.flush().await?;
             }
         }
@@ -291,6 +306,7 @@ impl UnionLoopSource {
 impl Round {
     async fn flush(&mut self) -> Result<()> {
         self.pending_rows = 0;
+        self.pending_bytes = 0;
         self.out.append(std::mem::take(&mut self.pending)).await
     }
 }
