@@ -432,7 +432,7 @@ fn fault(row: usize, f: &Fault) -> KernelError {
 }
 
 /// `n / d` rounded `HALF_UP`, for `d != 0`.
-fn divide_half_up(n: i256, d: i256) -> Option<i256> {
+pub(crate) fn divide_half_up(n: i256, d: i256) -> Option<i256> {
     let (q, r) = (n.checked_div(d)?, n.checked_rem(d)?);
     let (r2, ad) = (
         r.checked_abs()?.checked_mul(i256::from_i128(2))?,

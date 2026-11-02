@@ -17,6 +17,7 @@ use arrow_array::types::{
 use arrow_array::{
     Array, ArrayRef, DurationMicrosecondArray, IntervalYearMonthArray, PrimitiveArray,
 };
+use arrow_buffer::i256;
 use arrow_schema::DataType;
 
 use crate::error::KernelError;
@@ -240,12 +241,16 @@ fn number_values(a: &dyn Array) -> Result<(PrimitiveArray<Decimal128Type>, i8), 
 
 /// The carrier value of `unscaled`, at `scale`, in `unit`s.
 fn number_as_carrier(unscaled: i128, scale: i8, unit: i64) -> Option<i64> {
-    let v = unscaled.checked_mul(i128::from(unit))?;
-    let v = match u32::try_from(scale) {
-        Ok(down) => divide_half_up(v, down)?,
-        Err(_) => v.checked_mul(ten_pow(u32::from(scale.unsigned_abs()))?)?,
+    // A `decimal(38, s)` times a day's microseconds can pass `i128` however small
+    // the result, so the product is wide.
+    let v = i256::from_i128(unscaled).checked_mul(i256::from_i128(i128::from(unit)))?;
+    let power = i256::from_i128(ten_pow(u32::from(scale.unsigned_abs()))?);
+    let v = if scale >= 0 {
+        crate::interval::divide_half_up(v, power)?
+    } else {
+        v.checked_mul(power)?
     };
-    i64::try_from(v).ok()
+    i64::try_from(v.to_i128()?).ok()
 }
 
 /// SQL text of a number for `CAST_OVERFLOW`.
@@ -337,6 +342,36 @@ mod tests {
     use arrow_array::{Decimal128Array, Int64Array};
 
     use super::*;
+
+    /// Each from a Spark 4.2.0 run.
+    #[test]
+    fn a_high_scale_decimal_scales_without_an_intermediate_overflow() {
+        const SECOND: i64 = 1_000_000;
+        const DAY: i64 = 86_400 * SECOND;
+        let thirty_digits = 1_123_456_789_012_345_678_901_234_567_890_i128;
+        assert_eq!(
+            number_as_carrier(thirty_digits, 30, SECOND),
+            Some(1_123_457)
+        );
+        assert_eq!(
+            number_as_carrier(-thirty_digits, 30, SECOND),
+            Some(-1_123_457)
+        );
+        assert_eq!(
+            number_as_carrier(thirty_digits, 30, DAY),
+            Some(97_066_666_571)
+        );
+        assert_eq!(number_as_carrier(5, 38, DAY), Some(0));
+        assert_eq!(
+            number_as_carrier(9_223_372_036_854_775_807, 6, SECOND),
+            Some(i64::MAX)
+        );
+        assert_eq!(
+            number_as_carrier(92_233_720_368_547_758_075, 7, SECOND),
+            None
+        );
+        assert_eq!(number_as_carrier(1_067_519_915, 1, DAY), None);
+    }
 
     fn names() -> CastNames<'static> {
         CastNames {

@@ -506,6 +506,25 @@ fn a_mixed_timestamp_difference_reads_both_sides_without_a_zone() -> R {
     Ok(())
 }
 
+/// Spark holds a `long` of microseconds and answers these; the Arrow carrier
+/// holds nanoseconds in an `i64`. A named refusal in every mode, never a wrong
+/// value (design note, "Known limit, calendar carrier").
+#[test]
+fn a_string_past_the_nanosecond_field_is_refused_by_name() -> R {
+    let s = Session::new()?;
+    for expr in [
+        "cast('1000000000 hours' as interval)",
+        "try_cast('1000000000 hours' as interval)",
+    ] {
+        assert_eq!(
+            answer(&s, expr).error_class.as_deref(),
+            Some("KRISHIV_UNSUPPORTED_FEATURE"),
+            "{expr}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn an_interval_expression_over_no_rows_is_empty() -> R {
     let session = Session::new()?;
