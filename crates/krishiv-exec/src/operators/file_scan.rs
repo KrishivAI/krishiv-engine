@@ -779,16 +779,20 @@ impl FileScanSource {
 
     /// The morsels the drivers of `ctx`'s executor claim: whole splits
     /// when the scan reports a `row_index` that isn't positional (a text
-    /// format would count the lines before every piece again), else pieces
-    /// no smaller than `spark.sql.files.openCostInBytes`.
+    /// format would count the lines before every piece again), else byte
+    /// pieces, no smaller than `spark.sql.files.openCostInBytes` when it is
+    /// above zero.
     ///
     /// When pruning at scan start (`request`'s predicate and the runtime
     /// filters already published) keeps at most half the bytes, the
     /// morsels share the rows left instead ([`Self::pruned_morsels`]): byte
     /// morsels of clustered data would leave those rows on a driver or two.
-    /// So do the morsels of a scan too small for four byte morsels per
-    /// driver at the floor: a table of a few MiB is otherwise one morsel,
-    /// however many row groups it has.
+    /// So do the morsels of a small scan: one too small for four byte
+    /// morsels per driver at the floor, in no more splits than the morsels
+    /// it is cut into (which bounds the cached footers it plans). A table of a few
+    /// MiB is otherwise one morsel, however many row groups it has. The
+    /// bound grows with the floor and the drivers (512 MiB at 32 drivers
+    /// and the default 4 MiB), and a zero floor makes no scan small.
     fn morsels(
         &self,
         ctx: &TaskContext,
@@ -807,7 +811,13 @@ impl FileScanSource {
         }
         let target =
             krishiv_io::split::morsel_bytes(&self.partitions, drivers, self.min_morsel_bytes);
-        let small = target <= self.min_morsel_bytes;
+        let splits = self
+            .partitions
+            .iter()
+            .map(|p| p.splits.len())
+            .sum::<usize>() as u64;
+        let small = target <= self.min_morsel_bytes
+            && splits <= (drivers.max(1) as u64).saturating_mul(MORSELS_PER_DRIVER);
         if let Some(m) =
             self.pruned_morsels(request, partition_filters, drivers, &splittable, small)
         {

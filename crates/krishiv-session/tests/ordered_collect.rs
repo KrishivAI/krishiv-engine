@@ -248,7 +248,8 @@ fn finer_morsels_keep_the_file_order() {
 /// pruning keeps, so each kept row group is a morsel a driver can take, and
 /// the rows still come back in file order. Unfiltered, or with a filter
 /// that prunes nothing, the small file is still cut by rows: one morsel per
-/// row group rather than one for the file.
+/// row group rather than one for the file. A filter that may raise keeps
+/// the file one morsel, so the first row that raises is the one reported.
 #[test]
 fn pruned_morsels_spread_the_kept_row_groups_in_file_order() {
     let dir = tempfile::tempdir().unwrap();
@@ -260,14 +261,41 @@ fn pruned_morsels_spread_the_kept_row_groups_in_file_order() {
     );
     let all = format!("SELECT id FROM parquet.`{}` WHERE id >= 0", path.display());
     let plain = format!("SELECT id FROM parquet.`{}`", path.display());
+    let raising = format!(
+        "SELECT id FROM parquet.`{}` WHERE id % 3 != 1",
+        path.display()
+    );
     let want: Vec<i64> = (50_000..62_500).collect();
     let s = session(8);
     assert_eq!(scan_splits(&s, &plain), 32);
     assert_eq!(scan_splits(&s, &all), 32);
+    assert_eq!(scan_splits(&s, &raising), 1);
     let pieces = scan_splits(&s, &stretch);
     assert!(pieces >= 5, "{pieces} pieces");
     repeat_under_load(&s, &stretch, &want);
     repeat_under_load(&s, &plain, &(0..80_000).collect::<Vec<i64>>());
+}
+
+/// A small table in more files than the morsels it would be cut into is
+/// not cut by rows, so the scan plans no footer before it starts: 12 files
+/// of 2 row groups on 2 drivers keep their byte morsels, one per file (cut
+/// by rows they would be 8 of 3 row groups), and still come back in file
+/// order.
+#[test]
+fn a_small_scan_of_many_files_keeps_its_byte_morsels() {
+    let dir = tempfile::tempdir().unwrap();
+    for f in 0..12 {
+        write_groups(
+            &dir.path().join(format!("part-{f:02}.parquet")),
+            f * 5_000,
+            2,
+        );
+    }
+    let plain = format!("SELECT id FROM parquet.`{}`", dir.path().display());
+    let s = session(2);
+    let pieces = scan_splits(&s, &plain);
+    assert_eq!(pieces, 12);
+    repeat_under_load(&s, &plain, &(0..60_000).collect::<Vec<i64>>());
 }
 
 /// Writes `groups` row groups of 2,500 rows, ids from `first`, and returns
