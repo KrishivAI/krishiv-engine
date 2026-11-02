@@ -442,3 +442,73 @@ fn a_column_named_star_appends_as_a_plain_column() {
     block_on(starred.write().mode("append").save_as_table("st")).unwrap();
     assert_eq!(count(&s, "st"), 6);
 }
+
+#[test]
+fn the_collected_call_the_python_bridge_makes_runs_the_same_writers() {
+    let s = session();
+    let df = s.table("people");
+    let opts = || vec![("compression".to_owned(), "snappy".to_owned())];
+    // saveAsTable, then insertInto, through the one-call forms.
+    block_on(df.write_table_with(
+        false,
+        "bridge",
+        Some("parquet"),
+        "error",
+        opts(),
+        vec![],
+        None,
+        None,
+    ))
+    .unwrap();
+    block_on(df.write_table_with(true, "bridge", None, "append", vec![], vec![], None, None))
+        .unwrap();
+    assert_eq!(count(&s, "bridge"), 6);
+    // The same refusals as the builder: buckets and sort columns, partition columns on insertInto.
+    let e = block_on(df.write_table_with(
+        false,
+        "b2",
+        None,
+        "error",
+        vec![],
+        vec![],
+        Some((2, vec!["id".to_owned()])),
+        None,
+    ));
+    assert_eq!(class(e), "KRISHIV_UNSUPPORTED_FEATURE");
+    let e = block_on(df.write_table_with(
+        true,
+        "bridge",
+        None,
+        "append",
+        vec![],
+        vec!["id".to_owned()],
+        None,
+        None,
+    ));
+    assert_eq!(class(e), "PARTITION_BY_NOT_ALLOWED_WITH_INSERT_INTO");
+    let e = block_on(df.write_table_with(
+        false,
+        "b3",
+        None,
+        "error",
+        vec![],
+        vec![],
+        None,
+        Some(vec!["name".to_owned()]),
+    ));
+    assert_eq!(class(e), "SORT_BY_WITHOUT_BUCKETING");
+    // The file form: `save` refuses buckets as Spark does, and writes without them.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("o").to_str().unwrap().to_owned();
+    let e = block_on(df.write_to_with(
+        "parquet",
+        "error",
+        &path,
+        vec![],
+        vec![],
+        Some((2, vec!["id".to_owned()])),
+        Some(vec!["name".to_owned()]),
+    ));
+    assert_eq!(class(e), "_LEGACY_ERROR_TEMP_1313");
+    block_on(df.write_to_with("parquet", "error", &path, opts(), vec![], None, None)).unwrap();
+}
