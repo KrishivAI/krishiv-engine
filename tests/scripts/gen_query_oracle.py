@@ -57,7 +57,7 @@ class Schema:
         for t in TABLES:
             self.cols[t] = [(r[0], kind_of(r[1])) for r in con.execute(f"DESCRIBE {t}").fetchall()]
             for c, _ in self.cols[t]:
-                vals = con.execute(f"SELECT DISTINCT {c} FROM {t} USING SAMPLE 40 ROWS").fetchall()
+                vals = con.execute(f"SELECT DISTINCT {c} FROM {t} ORDER BY hash({c}), {c} LIMIT 40").fetchall()
                 self.sample[(t, c)] = [v[0] for v in vals if v[0] is not None and len(str(v[0])) <= 24] or [None]
 
 
@@ -264,7 +264,7 @@ def main():
             continue
         if len(rows) > MAX_ROWS or (not rows and rng.random() < 0.8):
             continue
-        out.append({"sql": sql, "rows": [[cell(v) for v in row] for row in rows]})
+        out.append({"sql": sql, "rows": sorted([cell(v) for v in row] for row in rows)})
     json.dump({"duckdb": duckdb.__version__, "seed": args.seed, "queries": out}, sys.stdout, indent=0)
     sys.stdout.write("\n")
 

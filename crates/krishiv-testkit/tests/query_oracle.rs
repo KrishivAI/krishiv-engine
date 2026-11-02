@@ -37,7 +37,14 @@ fn matches_duckdb_up_to_known_failures() -> R {
         std::fs::write(&known_path, render_known_keys(&keys))?;
         return Ok(());
     }
-    let r = ratchet_keys(&keys, &parse_known(&std::fs::read_to_string(&known_path)?)?);
+    // A fixture selected with KRISHIV_QUERY_ORACLE replays other queries: only the known failures
+    // it holds can be judged "fixed".
+    let replayed: std::collections::HashSet<&str> = qs.iter().map(|q| q.sql.as_str()).collect();
+    let known: Vec<String> = parse_known(&std::fs::read_to_string(&known_path)?)?
+        .into_iter()
+        .filter(|k| replayed.contains(k.as_str()))
+        .collect();
+    let r = ratchet_keys(&keys, &known);
     let detail: Vec<String> = found
         .iter()
         .filter(|d| r.new.contains(&d.sql))

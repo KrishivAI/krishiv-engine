@@ -8,7 +8,7 @@
 #![forbid(unsafe_code)]
 
 use krishiv_testkit::expr_diff::{
-    Evaluator, Expect, Fixture, SessionEvaluator, parse_known, ratchet, render_known, run,
+    Evaluator, Expect, Fixture, SessionEvaluator, cli, parse_known, ratchet, render_known, run,
 };
 
 type R = Result<(), Box<dyn std::error::Error>>;
@@ -132,5 +132,57 @@ fn fixture_parse_and_ratchet() -> R {
     assert_eq!(r.new, ["1|f(a)"]);
     assert_eq!(r.fixed, ["1|gone"]);
     assert_eq!(parse_known(&render_known(&found))?, ["1|f(a)"]);
+    Ok(())
+}
+
+/// The `expr-diff` command: a wrong expectation is a new mismatch (exit false), a listed one is
+/// not, a bad flag or file is an error.
+#[test]
+fn cli_reports_new_and_known_mismatches() -> R {
+    let setup = fixture()?.setup;
+    let dir = std::env::temp_dir().join(format!("expr-diff-cli-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let fx = serde_json::json!({"setup": setup, "cases": [
+        {"sql":"1 + 1","ansi":true,"kids":[],"root":true,"schema":"int","rows":["999"]}]});
+    let (fxp, known, out) = (
+        dir.join("fx.json"),
+        dir.join("known.json"),
+        dir.join("out.json"),
+    );
+    std::fs::write(&fxp, fx.to_string())?;
+    let args = |extra: &[&std::path::Path]| {
+        let mut a = vec!["--fixture".to_owned(), fxp.display().to_string()];
+        for (flag, p) in ["--known", "--out"].iter().zip(extra) {
+            a.extend([(*flag).to_owned(), p.display().to_string()]);
+        }
+        a
+    };
+    let (mut o, mut e) = (Vec::new(), Vec::new());
+    std::fs::write(&known, "[]")?;
+    assert!(!cli(args(&[&known, &out]), &mut o, &mut e)?);
+    let printed = String::from_utf8(o)?;
+    assert!(printed.contains("1|1 + 1"), "{printed}");
+    assert!(std::fs::read_to_string(&out)?.contains("\"new\": true"));
+    std::fs::write(&known, "[\"1|1 + 1\"]")?;
+    assert!(cli(args(&[&known]), &mut Vec::new(), &mut Vec::new())?);
+    assert!(cli(args(&[]), &mut Vec::new(), &mut Vec::new())?.eq(&false));
+    assert!(
+        cli(
+            ["--bogus".to_owned(), "x".to_owned()],
+            &mut Vec::new(),
+            &mut Vec::new()
+        )
+        .is_err()
+    );
+    assert!(cli(Vec::new(), &mut Vec::new(), &mut Vec::new()).is_err());
+    assert!(
+        cli(
+            ["--fixture".to_owned(), "/nonexistent".to_owned()],
+            &mut Vec::new(),
+            &mut Vec::new()
+        )
+        .is_err()
+    );
+    std::fs::remove_dir_all(&dir)?;
     Ok(())
 }
