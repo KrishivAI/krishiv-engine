@@ -328,11 +328,11 @@ fn transform_values_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 /// Whether `t` orders (Spark's `RowOrdering.isOrderable` over the types
-/// that reach here: a map orders nowhere, and neither does an array or
-/// struct holding one).
+/// that reach here: a map, geometry or geography orders nowhere, and neither
+/// does an array or struct holding one).
 pub(super) fn orderable(t: &DataType) -> bool {
     match t {
-        DataType::Map(_) => false,
+        DataType::Map(_) | DataType::Geometry { .. } | DataType::Geography { .. } => false,
         DataType::Array(a) => orderable(a.element_type()),
         DataType::Struct(s) => s.fields().iter().all(|f| orderable(f.data_type())),
         _ => true,

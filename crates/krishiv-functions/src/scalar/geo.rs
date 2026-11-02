@@ -148,15 +148,16 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             })
         }
         ("st_asbinary", [g] | [g, DataType::Utf8 | DataType::Utf8View]) if spatial_or_null(g) => {
+            // An invalid literal fails only when a row evaluates it: the call
+            // may sit in a branch that never runs.
+            let mut bad_literal: Option<String> = None;
             let order = match string_literal(args, 1) {
                 None if types.len() == 1 => Some(ByteOrder::Ndr),
                 Some(e) if e.eq_ignore_ascii_case("NDR") => Some(ByteOrder::Ndr),
                 Some(e) if e.eq_ignore_ascii_case("XDR") => Some(ByteOrder::Xdr),
                 Some(e) => {
-                    return Some((
-                        listed,
-                        Err(StInvalidEndiannessValue { endianness: e }.into()),
-                    ));
+                    bad_literal = Some(e);
+                    Some(ByteOrder::Ndr)
                 }
                 None => None,
             };
@@ -201,6 +202,11 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                             };
                             if column.is_null(row) {
                                 out.append_null();
+                            } else if let Some(e) = &bad_literal {
+                                return Err(StInvalidEndiannessValue {
+                                    endianness: e.clone(),
+                                }
+                                .into());
                             } else if order == ByteOrder::Ndr {
                                 out.append_value(wkb.value(row));
                             } else {

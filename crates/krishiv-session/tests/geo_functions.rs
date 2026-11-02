@@ -269,3 +269,44 @@ fn codex_review_fixes() {
     let df = block_on(s.sql("SELECT named_struct('srid', 1, 'wkb', X'01') v")).unwrap();
     block_on(df.write().parquet(dir.path().join("out").to_str().unwrap())).unwrap();
 }
+
+#[test]
+fn an_invalid_endianness_fails_only_when_a_row_evaluates_it() {
+    let g = format!("ST_GeogFromWKB({POINT})");
+    let sql = format!(
+        "SELECT CASE WHEN i < 0 THEN NULL ELSE ST_AsBinary({g}, 'bad') END FROM range(1) t(i)"
+    );
+    let s = Session::new().unwrap();
+    let e = block_on(async { s.sql(&sql).await?.collect().await }).unwrap_err();
+    assert!(e.to_string().contains("ST_INVALID_ENDIANNESS_VALUE"), "{e}");
+    let skipped = format!(
+        "SELECT CASE WHEN i >= 0 THEN 1 ELSE length(ST_AsBinary({g}, 'bad')) END FROM range(1) t(i)"
+    );
+    let b = block_on(async { s.sql(&skipped).await?.collect().await }).unwrap();
+    assert_eq!(b[0].num_rows(), 1);
+}
+
+#[test]
+fn try_cast_nulls_only_the_invalid_collection() {
+    let sql = "SELECT i, size(TRY_CAST(a AS ARRAY<GEOGRAPHY(4326)>)) FROM (SELECT i, \
+        IF(i = 0, array(ST_GeomFromWKB(X'010100000000000000000069400000000000005940', 4326)), \
+        array(ST_GeomFromWKB(X'0101000000000000000000F03F0000000000000040', 4326))) a \
+        FROM range(2) t(i)) ORDER BY i";
+    let s = Session::new().unwrap();
+    let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    let sizes = b[0]
+        .column(1)
+        .as_primitive::<arrow_array::types::Int32Type>();
+    // Spark's size(NULL) is -1 (legacy) or NULL; the valid row is 1 either way.
+    assert_eq!(sizes.value(1), 1);
+    assert!(sizes.is_null(0) || sizes.value(0) == -1);
+}
+
+#[test]
+fn array_sort_refuses_spatial_elements() {
+    let e = error(&format!("array_sort(array(ST_GeomFromWKB({POINT})))"));
+    assert!(
+        e.contains("INVALID_ORDERING_TYPE") || e.contains("DATATYPE_MISMATCH"),
+        "{e}"
+    );
+}

@@ -386,9 +386,17 @@ fn check_geography_in(a: &ArrayRef, t: &DataType) -> Result<()> {
 /// `TRY_CAST`: `a` with every row that holds an invalid geography (of the
 /// Spark type `t`) replaced by NULL; valid rows are kept.
 fn null_invalid_geography(a: &ArrayRef, t: &DataType) -> Result<ArrayRef> {
+    // `take` of one row copies only that row's list elements; a `slice` of a
+    // list keeps the whole backing values array, so one invalid element would
+    // null every row.
     let keep: arrow_array::BooleanArray = (0..a.len())
-        .map(|i| Some(check_geography_in(&a.slice(i, 1), t).is_ok()))
-        .collect();
+        .map(|i| {
+            let idx = arrow_array::UInt64Array::from(vec![i as u64]);
+            let row = arrow_select::take::take(a.as_ref(), &idx, None)
+                .map_err(|e| internal(&e.to_string()))?;
+            Ok(Some(check_geography_in(&row, t).is_ok()))
+        })
+        .collect::<Result<_>>()?;
     let nulls = arrow_array::new_null_array(a.data_type(), a.len());
     arrow_select::zip::zip(&keep, a, &nulls).map_err(|e| internal(&e.to_string()))
 }
