@@ -259,3 +259,38 @@ fn list_and_dictionary_carriers() {
     let nulls: ArrayRef = Arc::new(arrow_array::NullArray::new(2));
     let _ = render_value(nulls.as_ref(), 0);
 }
+
+/// Lists whose element fields differ only in nullability still compare,
+/// element by element, NULL elements smallest and equal to each other.
+#[test]
+fn lists_differing_only_in_element_nullability_compare() {
+    use arrow_array::ListArray;
+    use arrow_buffer::OffsetBuffer;
+    let build = |nullable: bool, values: Vec<Option<i32>>, lens: &[i32]| -> ArrayRef {
+        let mut offsets = vec![0];
+        for l in lens {
+            offsets.push(offsets.last().copied().unwrap_or(0) + l);
+        }
+        Arc::new(ListArray::new(
+            Arc::new(Field::new("element", DataType::Int32, nullable)),
+            OffsetBuffer::new(offsets.into()),
+            i32s(values),
+            None,
+        ))
+    };
+    let strict = build(false, vec![Some(1), Some(2)], &[2]);
+    let loose = build(true, vec![Some(1), None, Some(1), Some(2)], &[2, 2]);
+    assert_eq!(
+        cmp_rows(strict.as_ref(), 0, loose.as_ref(), 1).unwrap(),
+        Ordering::Equal
+    );
+    assert_eq!(
+        cmp_rows(strict.as_ref(), 0, loose.as_ref(), 0).unwrap(),
+        Ordering::Greater,
+        "a NULL element is smaller than a value"
+    );
+    assert_eq!(
+        cmp_rows(loose.as_ref(), 0, strict.as_ref(), 0).unwrap(),
+        Ordering::Less
+    );
+}

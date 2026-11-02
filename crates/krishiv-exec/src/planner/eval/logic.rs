@@ -229,7 +229,11 @@ pub(super) fn compare(
             (lt, rt),
             (ArrowType::Timestamp(lu, _), ArrowType::Timestamp(ru, _)) if lu == ru
         )
-        || matches!((lt, rt), (ArrowType::Struct(_), ArrowType::Struct(_)));
+        || matches!((lt, rt), (ArrowType::Struct(_), ArrowType::Struct(_)))
+        || matches!(
+            (lt, rt),
+            (ArrowType::List(a), ArrowType::List(b)) if a.data_type() == b.data_type()
+        );
     if !comparable {
         return Err(internal(&format!("comparison of {lt} with {rt}")));
     }
@@ -398,12 +402,41 @@ pub(crate) fn cmp(
             bytes(kind, l, r, rows, bin_value)?
         }
         ArrowType::Struct(fields) => struct_cmp(kind, l, r, rows, fields.len(), ctx)?,
+        ArrowType::List(_) | ArrowType::LargeList(_) => list_cmp(kind, l, r, rows)?,
         other => {
             return Err(crate::planner::build::unsupported(&format!(
                 "comparison of {other} values"
             )));
         }
     })
+}
+
+/// Lists compare element by element in Spark's order (NULL elements are the
+/// smallest and equal one another, a shorter prefix is smaller); a NULL list
+/// makes the answer NULL.
+fn list_cmp(kind: CompareKind, l: &Value, r: &Value, rows: usize) -> Result<BooleanArray> {
+    let (l, r) = (l.clone().into_array(rows)?, r.clone().into_array(rows)?);
+    if l.len() != rows || r.len() != rows {
+        return Err(internal("list comparison operands differ in length"));
+    }
+    let mut values = Vec::with_capacity(rows);
+    for i in 0..rows {
+        if l.is_null(i) || r.is_null(i) {
+            values.push(None);
+            continue;
+        }
+        let ord = krishiv_kernels::order::cmp_rows(l.as_ref(), i, r.as_ref(), i)
+            .map_err(|e| internal(&e.to_string()))?;
+        values.push(Some(match kind {
+            CompareKind::Equal => ord.is_eq(),
+            CompareKind::NotEqual => ord.is_ne(),
+            CompareKind::Less => ord.is_lt(),
+            CompareKind::LessEq => ord.is_le(),
+            CompareKind::Greater => ord.is_gt(),
+            CompareKind::GreaterEq => ord.is_ge(),
+        }));
+    }
+    Ok(BooleanArray::from(values))
 }
 
 /// Whether struct Arrow types compare field-wise: the same fields of

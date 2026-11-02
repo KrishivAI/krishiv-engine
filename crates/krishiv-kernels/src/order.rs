@@ -135,7 +135,13 @@ pub fn cmp_rows(
         (false, true) => return Ok(Ordering::Greater),
         (false, false) => {}
     }
-    if l.data_type() != r.data_type() {
+    // Lists differing only in the element field's nullability compare;
+    // their elements are checked one by one below.
+    let lists = matches!(
+        (l.data_type(), r.data_type()),
+        (DataType::List(_), DataType::List(_)) | (DataType::LargeList(_), DataType::LargeList(_))
+    );
+    if !lists && l.data_type() != r.data_type() {
         return Err(KernelError::internal(format!(
             "a comparison of {} with {}",
             l.data_type(),
