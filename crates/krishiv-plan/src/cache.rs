@@ -827,6 +827,7 @@ impl Encoder {
                 anchor,
                 recursive,
                 max_level,
+                limit,
                 output,
             } => {
                 self.tag("UnionLoop");
@@ -835,6 +836,10 @@ impl Encoder {
                 self.flag(max_level.is_some());
                 if let Some(n) = max_level {
                     self.num(u64::from(*n));
+                }
+                self.flag(limit.is_some());
+                if let Some(n) = limit {
+                    self.num(*n);
                 }
                 self.num(output.len() as u64);
                 for c in output {
