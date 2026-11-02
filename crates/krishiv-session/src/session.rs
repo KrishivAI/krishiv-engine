@@ -577,6 +577,7 @@ impl Session {
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
             Statement::CreateNamespace(n) => self.exec_create_namespace(&n, query).await,
             Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
+            Statement::AlterNamespace(a) => self.exec_alter_namespace(&a, query).await,
             Statement::Use(u) => self.exec_use(&u).await,
             Statement::Show(s) => Box::pin(self.exec_show(&s, query)).await,
             Statement::Describe(d) => Box::pin(self.exec_describe(&d, query)).await,
