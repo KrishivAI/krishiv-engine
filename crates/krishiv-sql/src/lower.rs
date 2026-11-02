@@ -1611,7 +1611,11 @@ impl Lowerer {
                     PlanNode::Join {
                         left: arc(left),
                         right: arc(right),
-                        kind: IrJoin::Inner,
+                        kind: if r.lateral {
+                            IrJoin::LateralInner
+                        } else {
+                            IrJoin::Inner
+                        },
                         condition: JoinCondition::None,
                     },
                     r.span,
@@ -1636,9 +1640,6 @@ impl Lowerer {
     }
 
     fn relation(&mut self, r: &Relation) -> R<LogicalPlan> {
-        if r.lateral {
-            return Err(unsupported("LATERAL subqueries", r.span));
-        }
         // Spark rejects a relation carrying both clauses
         // (`NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT`, also raised for the
         // pipe-operator chain in the goldens): a `PIVOT ... UNPIVOT ...`
@@ -1674,10 +1675,12 @@ impl Lowerer {
 
     /// `[INNER] JOIN right constraint` onto `plan`.
     fn join(&mut self, plan: LogicalPlan, j: &Join) -> R<LogicalPlan> {
-        if j.lateral {
-            return Err(unsupported("LATERAL joins", j.span));
-        }
         let kind = match j.kind {
+            JoinKind::Inner | JoinKind::Cross if j.lateral => IrJoin::LateralInner,
+            JoinKind::Left if j.lateral => IrJoin::LateralLeft,
+            _ if j.lateral => {
+                return Err(unsupported("LATERAL with this join type", j.span));
+            }
             JoinKind::Inner => IrJoin::Inner,
             JoinKind::Cross => IrJoin::Cross,
             JoinKind::Left => IrJoin::LeftOuter,

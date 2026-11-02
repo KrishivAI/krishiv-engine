@@ -372,8 +372,16 @@ impl Resolver<'_> {
             };
             return self.expr(alias, &inner);
         }
-        // Only the immediately enclosing query, as Spark 4.2 resolves.
-        let levels = cx.env.outer.iter().enumerate().rev().take(1);
+        // Only the immediately enclosing query, as Spark 4.2 resolves, and
+        // the left sides of the lateral joins it sits in.
+        let last = cx.env.outer.len().wrapping_sub(1);
+        let levels = cx
+            .env
+            .outer
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(i, l)| *i == last || l.lateral);
         for (level, outer) in levels.filter(|_| cx.outer) {
             if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
                 self.used(&a);
@@ -886,6 +894,7 @@ impl Resolver<'_> {
         }
         outer.push(super::super::resolve::Level {
             scope: scope.into(),
+            lateral: false,
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }

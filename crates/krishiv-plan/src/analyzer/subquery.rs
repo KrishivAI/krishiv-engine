@@ -69,7 +69,7 @@ pub(super) fn rewrite(
     functions: &dyn FunctionRegistry,
     profile: SparkProfile,
 ) -> R<Arc<LogicalPlan>> {
-    if !has_subquery(Node::Plan(root)) {
+    if !has_subquery(Node::Plan(root)) && !has_outer(Node::Plan(root)) {
         return Ok(Arc::clone(root));
     }
     let mut r = Rewriter {
@@ -568,6 +568,12 @@ impl Rewriter {
                 kind,
                 condition: JoinCondition::On(on),
             } if self.existential(on) => self.join(&p, left, right, kind, on),
+            PlanNode::Join {
+                left,
+                right,
+                kind: kind @ (JoinKind::Inner | JoinKind::LeftOuter),
+                condition,
+            } if reads_left(left, right) => self.lateral(&p, left, right, *kind, condition),
             _ => {
                 let mut bad = false;
                 p.for_each_expr(&mut |e| bad |= self.reads_correlated(e));
@@ -832,6 +838,47 @@ impl Rewriter {
                 right: r,
                 kind: *kind,
                 condition,
+            },
+            p.origin,
+        );
+        Ok(columns(joined, &out))
+    }
+
+    /// `left JOIN LATERAL right`, `right` reading `left`'s columns: an
+    /// ordinary join of the two on `right`'s correlated predicates (lifted
+    /// out as for an `IN` subquery) and the join's own condition. The
+    /// output is the join's, as it was.
+    fn lateral(
+        &mut self,
+        p: &Arc<LogicalPlan>,
+        left: &Arc<LogicalPlan>,
+        right: &Arc<LogicalPlan>,
+        kind: JoinKind,
+        condition: &JoinCondition,
+    ) -> R<Arc<LogicalPlan>> {
+        let out = output(p)?;
+        let (inner, corr) = if on_path(right, needs_domain) {
+            let (inner, inner_keys, outer_keys) = self.domain(left, right)?;
+            let corr = inner_keys
+                .into_iter()
+                .zip(outer_keys)
+                .map(|(i, o)| boolean(Builtin::EqNullSafe, vec![i, o]))
+                .collect();
+            (inner, corr)
+        } else {
+            self.pull(right, true)?
+        };
+        let (inner, renumber) = self.disjoint(left, inner)?;
+        let mut cond: Vec<Arc<Expr>> = corr.iter().map(|c| renumber.inner(c)).collect();
+        if let JoinCondition::On(on) = condition {
+            cond.push(Arc::clone(on));
+        }
+        let joined = node(
+            PlanNode::Join {
+                left: Arc::clone(left),
+                right: inner,
+                kind,
+                condition: and_all(cond).map_or(JoinCondition::None, JoinCondition::On),
             },
             p.origin,
         );
@@ -2236,6 +2283,17 @@ fn with_domain(
 }
 
 /// The outer columns `plan` reads, in the order they are met.
+/// Whether `right` reads a column of `left`: a lateral join's right side.
+fn reads_left(left: &Arc<LogicalPlan>, right: &Arc<LogicalPlan>) -> bool {
+    let Ok(out) = output(left) else {
+        return false;
+    };
+    let ids: HashSet<AttrId> = out.iter().map(|c| c.id).collect();
+    plan_outer_columns(right)
+        .iter()
+        .any(|c| ids.contains(&c.id))
+}
+
 fn plan_outer_columns(plan: &Arc<LogicalPlan>) -> Vec<BoundColumn> {
     let mut out: Vec<BoundColumn> = Vec::new();
     let _ = visit_distinct(Node::Plan(plan), |n| {

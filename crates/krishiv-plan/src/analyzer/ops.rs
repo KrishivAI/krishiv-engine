@@ -2752,8 +2752,32 @@ impl Resolver<'_> {
         condition: &JoinCondition,
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
-        let l = self.child(left, env)?;
-        let mut r = self.child(right, env)?;
+        let lateral = matches!(kind, JoinKind::LateralInner | JoinKind::LateralLeft);
+        let l = if lateral {
+            self.rel(left, env)?
+        } else {
+            self.child(left, env)?
+        };
+        // `JOIN LATERAL`: the right side reads the left side's columns as an
+        // enclosing query's. The joined relation reads none of that level.
+        let kind = match kind {
+            JoinKind::LateralInner => JoinKind::Inner,
+            JoinKind::LateralLeft => JoinKind::LeftOuter,
+            k => k,
+        };
+        let mut r = if lateral {
+            let mut outer = env.outer.clone();
+            outer.push(super::resolve::Level {
+                scope: Arc::clone(&l.out),
+                lateral: true,
+            });
+            let inner = self.env(env.ctes.clone(), env.ctes_id, outer);
+            let mut r = self.rel(right, &inner)?;
+            r.outer = r.outer.filter(|k| *k < env.outer.len());
+            r
+        } else {
+            self.child(right, env)?
+        };
         if let (Some(a), Some(b)) = (l.ids, r.ids)
             && a.0 <= b.1
             && b.0 <= a.1

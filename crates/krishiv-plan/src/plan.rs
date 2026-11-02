@@ -708,6 +708,14 @@ pub enum JoinKind {
     /// left row matches more than one right row: how a correlated scalar
     /// subquery without an aggregate is evaluated (Spark's single join).
     Single,
+    /// `[CROSS] JOIN LATERAL (q)`, an inner join whose right side reads the
+    /// left side's columns. Unresolved plans only: Resolve reads the right
+    /// side with the left side in scope and the subquery rewrite plans an
+    /// ordinary [`JoinKind::Inner`] join.
+    LateralInner,
+    /// `LEFT JOIN LATERAL (q)`; unresolved plans only, like
+    /// [`JoinKind::LateralInner`].
+    LateralLeft,
 }
 
 impl JoinKind {
