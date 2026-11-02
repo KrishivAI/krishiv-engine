@@ -95,9 +95,9 @@ READ	SELECT * FROM parent
 PARSE_ERROR	create table foo (with baz)
 PARSE_ERROR	create table foo (with ordinality)
 READ	with ordinality as (select 1 as x) select * from ordinality
-PARSE_ERROR	WITH test AS (SELECT 42) INSERT INTO test VALUES (1)
+WRITE	WITH test AS (SELECT 42) INSERT INTO test VALUES (1)
 DDL	create table test (i int) USING parquet
-PARSE_ERROR	with test as (select 42) insert into test select * from test
+WRITE	with test as (select 42) insert into test select * from test
 READ	select * from test
 DDL	drop table test
 SESSION	DROP VIEW nums
