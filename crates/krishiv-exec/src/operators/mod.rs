@@ -57,6 +57,7 @@ pub(crate) use range::Range;
 pub use replicate::ReplicateRows;
 pub(crate) use runtime_filter::RowStage;
 pub use runtime_filter::{RowStageSettings, RuntimeFilters};
+pub(crate) use scan::scan_metadata;
 pub use scan::{
     FileSelections, FilterPushdown, MemoryScan, PushedFilter, ScanPushdown, ScanPushdowns, TakeRows,
 };

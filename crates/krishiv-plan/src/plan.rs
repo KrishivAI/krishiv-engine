@@ -645,6 +645,20 @@ pub struct Scan {
     pub version: Option<TableVersion>,
 }
 
+impl Scan {
+    /// The hidden `_metadata` column of a file source this scan outputs
+    /// (always last), if it does: a struct led by `file_path`.
+    #[must_use]
+    pub fn metadata_column(&self) -> Option<&BoundColumn> {
+        let c = self.output.last()?;
+        let krishiv_types::DataType::Struct(s) = &c.data_type else {
+            return None;
+        };
+        (c.name == "_metadata" && s.fields().first().is_some_and(|f| f.name() == "file_path"))
+            .then_some(c)
+    }
+}
+
 /// A table version: an Iceberg snapshot id or a Delta table version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TableVersion(pub i64);

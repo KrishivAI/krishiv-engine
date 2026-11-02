@@ -24,7 +24,7 @@ use super::catalog::quoted;
 use super::coerce::quoted_type;
 use super::exprs::{Bound, Cx, WindowUse, names, pretty, semantic_key, unresolved};
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
-use super::{AnalysisError, ArgType, TableKind};
+use super::{AnalysisError, ArgType, FileMetadata, TableKind};
 use crate::{
     AttrId, BoundColumn, CteRef, Expr, ExprNode, FunctionCall, FunctionKind, Grouping,
     JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanNode, ReadSource, ResolvedExpr,
@@ -153,7 +153,41 @@ impl Resolver<'_> {
             output: out.iter().map(|a| a.col.clone()).collect(),
             version: meta.version,
         });
-        Ok(self.make(p.origin, node, out, &[]))
+        let mut rel = self.make(p.origin, node, out, &[]);
+        self.with_metadata_column(&mut rel, meta.file_metadata, &qual);
+        Ok(rel)
+    }
+
+    /// `rel`, a scan of a file source, with the hidden `_metadata` column of
+    /// Spark's file sources: a struct a query can read by name, left out of
+    /// `*`, that the scan outputs only when a query reads it.
+    pub(super) fn with_metadata_column(
+        &mut self,
+        rel: &mut Rel,
+        metadata: FileMetadata,
+        qual: &Arc<[String]>,
+    ) {
+        // A table column of the name hides it.
+        if metadata == FileMetadata::None
+            || rel
+                .out
+                .iter()
+                .any(|a| a.col.name.eq_ignore_ascii_case(METADATA_COLUMN))
+        {
+            return;
+        }
+        let attr = Attr {
+            col: BoundColumn {
+                id: self.fresh(),
+                name: METADATA_COLUMN.to_owned(),
+                data_type: metadata_type(metadata == FileMetadata::WithRowIndex),
+                nullable: false,
+            },
+            qual: Arc::clone(qual),
+            source: None,
+        };
+        rel.hidden = Arc::from(vec![attr]);
+        rel.widen = Some(Arc::new(Widen::Scan));
     }
 
     /// The files of [`super::bind::Bindings::files`] entry `i`, read by
@@ -180,7 +214,13 @@ impl Resolver<'_> {
             output: out.iter().map(|a| a.col.clone()).collect(),
             version: None,
         });
-        self.make(p.origin, node, out, &[])
+        let metadata = match &bound.read {
+            ReadSource::Files { format, .. } => file_metadata(format),
+            _ => FileMetadata::None,
+        };
+        let mut rel = self.make(p.origin, node, out, &[]);
+        self.with_metadata_column(&mut rel, metadata, &no_qual());
+        rel
     }
 
     /// `c` as an instance: every id inside shifted by `offset`; `plan` is
@@ -223,6 +263,17 @@ impl Resolver<'_> {
                 offset,
             }))
         });
+        // A file table's `_metadata` is widened in on demand, in the other instance's ids.
+        let widen = c
+            .hidden
+            .iter()
+            .any(|a| a.col.name == METADATA_COLUMN)
+            .then(|| {
+                Arc::new(Widen::Shift {
+                    inner: c.clone(),
+                    offset,
+                })
+            });
         Ok(Rel {
             plan,
             out: c.out.iter().map(sh).collect::<Vec<_>>().into(),
@@ -230,7 +281,7 @@ impl Resolver<'_> {
             outer: None,
             carriers: Arc::new(carriers),
             agg: None,
-            widen: None,
+            widen,
             hidden: c.hidden.iter().map(sh).collect::<Vec<_>>().into(),
         })
     }
@@ -532,6 +583,31 @@ impl Resolver<'_> {
         for e in exprs {
             if let ExprNode::Star(s) = &e.node {
                 let cx = Self::cx(&c.out, &rels, env, op);
+                // `s.*` over a struct column: its fields.
+                if let Some(fields) = self.star_struct_fields(s, &cx, e.origin)? {
+                    for field in fields {
+                        let mut name = s.qualifier.clone();
+                        name.push(field.clone());
+                        let item = Arc::new(
+                            Expr::new(ExprNode::Alias {
+                                expr: Arc::new(
+                                    Expr::new(ExprNode::Column(crate::ColumnRef {
+                                        name,
+                                        plan_id: None,
+                                    }))
+                                    .with_origin(e.origin),
+                                ),
+                                name: field,
+                            })
+                            .with_origin(e.origin),
+                        );
+                        let mut cx = Self::cx(&c.out, &rels, env, op);
+                        cx.lateral = lca.then_some(&lateral[..]);
+                        cx.windows = WindowUse::Allowed;
+                        items.push(self.bind(&item, &cx)?);
+                    }
+                    continue;
+                }
                 let expanded = self.expand(s, &cx, e.origin)?;
                 let replaced = self.replacements(s, &expanded, e.origin)?;
                 for (a, with) in expanded.iter().zip(replaced) {
@@ -1241,9 +1317,13 @@ impl Resolver<'_> {
                     info.keys.iter().for_each(|k| add(k, &mut out));
                     break;
                 }
+                Widen::Scan | Widen::Join { .. } | Widen::Shift { .. } => break,
                 Widen::Through { child } => child.clone(),
                 Widen::Project { input, .. } => {
                     input.out.iter().for_each(|a| add(a, &mut out));
+                    if with_hidden {
+                        input.hidden.iter().for_each(|a| add(a, &mut out));
+                    }
                     input.clone()
                 }
             };
@@ -1261,7 +1341,9 @@ impl Resolver<'_> {
         while let Some(w) = cur.widen.clone() {
             let here = need.clone();
             let next = match &*w {
-                Widen::Aggregate(_) => None,
+                Widen::Aggregate(_) | Widen::Scan | Widen::Join { .. } | Widen::Shift { .. } => {
+                    None
+                }
                 Widen::Through { child } => Some(child.clone()),
                 Widen::Project { input, .. } => {
                     need.retain(|a| !input.out.iter().any(|o| o.col.id == a.col.id));
@@ -1303,6 +1385,102 @@ impl Resolver<'_> {
                         .unwrap_or_else(|never| match never {});
                     let mut wide = self.wrap(plan, rel.plan.origin.plan_id, out, &[&child]);
                     wide.widen = Some(Arc::new(Widen::Through { child }));
+                    wide
+                }
+                Widen::Join {
+                    left,
+                    right,
+                    kind,
+                    condition,
+                    nullable: (ln, rn),
+                } => {
+                    let side = |rel: &Rel| -> Vec<Attr> {
+                        need.iter()
+                            .filter(|a| {
+                                rel.hidden.iter().any(|h| h.col.id == a.col.id)
+                                    && !rel.out.iter().any(|o| o.col.id == a.col.id)
+                            })
+                            .cloned()
+                            .collect()
+                    };
+                    let (nl, nr) = (side(left), side(right));
+                    let wl = if nl.is_empty() {
+                        left.clone()
+                    } else {
+                        let mut w = self.widened(left, &nl)?;
+                        w.hidden = Arc::clone(&left.hidden);
+                        w
+                    };
+                    let wr = if nr.is_empty() {
+                        right.clone()
+                    } else {
+                        let mut w = self.widened(right, &nr)?;
+                        w.hidden = Arc::clone(&right.hidden);
+                        w
+                    };
+                    // Over the widened inputs, as the join itself was built.
+                    let null = |a: &Attr, yes: bool| Attr {
+                        col: BoundColumn {
+                            nullable: a.col.nullable || yes,
+                            ..a.col.clone()
+                        },
+                        ..a.clone()
+                    };
+                    let mut wide_out: Vec<Attr> = wl.out.iter().map(|a| null(a, *ln)).collect();
+                    if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+                        wide_out.extend(wr.out.iter().map(|a| null(a, *rn)));
+                    }
+                    let node = PlanNode::Join {
+                        left: Arc::clone(&wl.plan),
+                        right: Arc::clone(&wr.plan),
+                        kind: *kind,
+                        condition: condition.clone(),
+                    };
+                    let mut wide = self.make(rel.plan.origin, node, wide_out, &[&wl, &wr]);
+                    wide.widen = Some(Arc::new(Widen::Join {
+                        left: wl,
+                        right: wr,
+                        kind: *kind,
+                        condition: condition.clone(),
+                        nullable: (*ln, *rn),
+                    }));
+                    wide
+                }
+                Widen::Shift { inner, offset } => {
+                    let back: Vec<Attr> = need
+                        .iter()
+                        .map(|a| Attr {
+                            col: BoundColumn {
+                                id: AttrId(a.col.id.0 - *offset),
+                                ..a.col.clone()
+                            },
+                            ..a.clone()
+                        })
+                        .collect();
+                    let mut w = self.widened(inner, &back)?;
+                    w.hidden = Arc::clone(&inner.hidden);
+                    let mut shifted = self.shifted(&w, *offset, None)?;
+                    shifted.widen = Some(Arc::new(Widen::Shift {
+                        inner: w,
+                        offset: *offset,
+                    }));
+                    shifted
+                }
+                Widen::Scan => {
+                    let PlanNode::Scan(scan) = &rel.plan.node else {
+                        return Err(unsupported("a plan shape", rel.plan.origin));
+                    };
+                    let mut scan = scan.clone();
+                    scan.output.extend(need.iter().map(|a| a.col.clone()));
+                    let mut wide = self.wrap(
+                        Arc::new(
+                            LogicalPlan::new(PlanNode::Scan(scan)).with_origin(rel.plan.origin),
+                        ),
+                        rel.plan.origin.plan_id,
+                        out,
+                        &[],
+                    );
+                    wide.widen = Some(Arc::new(Widen::Scan));
                     wide
                 }
             });
@@ -2849,6 +3027,17 @@ impl Resolver<'_> {
             let Some((wl, wr)) = &wide else {
                 let mut j = self.make(p.origin, node, out, &[&l, &r]);
                 j.hidden = Self::carried_hidden(&l, &r, kind, (ln, rn)).into();
+                if let PlanNode::Join { condition, .. } = &j.plan.node
+                    && j.hidden.iter().any(|a| a.col.name == METADATA_COLUMN)
+                {
+                    j.widen = Some(Arc::new(Widen::Join {
+                        left: l.clone(),
+                        right: r.clone(),
+                        kind,
+                        condition: condition.clone(),
+                        nullable: (ln, rn),
+                    }));
+                }
                 return Ok(j);
             };
             let mut wide_out: Vec<Attr> = wl.out.iter().map(|a| nullable(a, ln)).collect();
@@ -2905,9 +3094,11 @@ impl Resolver<'_> {
         if c.hidden.is_empty() {
             return Ok(c.clone());
         }
+        // The `_metadata` of a file table is widened in when a query reads it.
         let exprs: Vec<Arc<Expr>> = c
             .hidden
             .iter()
+            .filter(|a| a.col.name != METADATA_COLUMN)
             .map(|a| col_expr(&a.col, Origin::UNKNOWN))
             .collect();
         self.reveal_exprs(c, exprs.iter())
@@ -2919,7 +3110,9 @@ impl Resolver<'_> {
         let side = |rel: &Rel, null: bool| -> Vec<Attr> {
             rel.hidden
                 .iter()
-                .filter(|a| rel.out.iter().any(|o| o.col.id == a.col.id))
+                .filter(|a| {
+                    a.col.name == METADATA_COLUMN || rel.out.iter().any(|o| o.col.id == a.col.id)
+                })
                 .map(|a| Attr {
                     col: BoundColumn {
                         nullable: a.col.nullable || null,
@@ -3520,7 +3713,52 @@ impl Resolver<'_> {
             alias: alias.to_owned(),
             columns: Vec::new(),
         };
-        Ok(self.make(p.origin, node, out, &[&inner]))
+        let hidden: Vec<Attr> = inner
+            .hidden
+            .iter()
+            .filter(|a| a.col.name == METADATA_COLUMN)
+            .map(|a| Attr {
+                qual: Arc::clone(&qual),
+                ..a.clone()
+            })
+            .collect();
+        let mut rel = self.make(p.origin, node, out, &[&inner]);
+        // A table's `_metadata` column is reachable by the alias.
+        if !hidden.is_empty() {
+            rel.hidden = hidden.into();
+            rel.widen = Some(Arc::new(Widen::Through { child: inner }));
+        }
+        Ok(rel)
+    }
+}
+
+/// The name of the hidden column of file sources.
+pub(super) const METADATA_COLUMN: &str = "_metadata";
+
+/// The `_metadata` struct: Spark's field names, types and order; `row_index`
+/// only for Parquet.
+fn metadata_type(row_index: bool) -> DataType {
+    use krishiv_types::{StructField, StructType};
+    let mut fields = vec![
+        StructField::new("file_path", DataType::String, false),
+        StructField::new("file_name", DataType::String, false),
+        StructField::new("file_size", DataType::Long, false),
+        StructField::new("file_block_start", DataType::Long, false),
+        StructField::new("file_block_length", DataType::Long, false),
+        StructField::new("file_modification_time", DataType::Timestamp, false),
+    ];
+    if row_index {
+        fields.push(StructField::new("row_index", DataType::Long, false));
+    }
+    DataType::Struct(StructType::new(fields))
+}
+
+/// The `_metadata` column of a file source named `format`.
+fn file_metadata(format: &str) -> FileMetadata {
+    match format.to_ascii_lowercase().as_str() {
+        "parquet" => FileMetadata::WithRowIndex,
+        "orc" | "csv" | "json" | "text" | "avro" | "xml" | "binaryfile" => FileMetadata::Basic,
+        _ => FileMetadata::None,
     }
 }
 

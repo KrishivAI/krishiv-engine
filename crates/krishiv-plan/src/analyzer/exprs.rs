@@ -1320,6 +1320,46 @@ impl Resolver<'_> {
             .collect())
     }
 
+    /// The field names of the struct column a qualified star in a select
+    /// list names (`s.*`, `t._metadata.*`): in the input, else among the
+    /// columns the relation hides (a file table's `_metadata`). `None` when
+    /// the qualifier is no struct column.
+    pub(super) fn star_struct_fields(
+        &self,
+        s: &Star,
+        cx: &Cx<'_>,
+        origin: Origin,
+    ) -> Result<Option<Vec<String>>, AnalysisError> {
+        if s.qualifier.is_empty()
+            || s.plan_id.is_some()
+            || s.regex.is_some()
+            || s.position.is_some()
+            || !s.except.is_empty()
+            || !s.replace.is_empty()
+            // A table or alias of the name wins over a struct column of it.
+            || self.qualifier_matches_scope(&s.qualifier, cx)
+        {
+            return Ok(None);
+        }
+        let hidden: &[Attr] = match cx.rels {
+            [r] => &r.hidden[..],
+            _ => &[],
+        };
+        for level in [cx.scope, hidden] {
+            if let Some((a, used)) = self.find(level, &s.qualifier, origin, false)?
+                && used == s.qualifier.len()
+            {
+                return Ok(match &a.col.data_type {
+                    DataType::Struct(st) => {
+                        Some(st.fields().iter().map(|f| f.name().to_owned()).collect())
+                    }
+                    _ => None,
+                });
+            }
+        }
+        Ok(None)
+    }
+
     /// [`Self::expand`] as resolved column expressions with their names.
     fn columns_with_names(
         &mut self,
@@ -1377,15 +1417,20 @@ impl Resolver<'_> {
                 && s.regex.is_none()
                 && !s.qualifier.is_empty()
                 && cx.agg_scope.is_none()
-                && r.hidden
-                    .iter()
-                    .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs)) =>
+                && r.hidden.iter().any(|a| {
+                    a.col.name != super::ops::METADATA_COLUMN
+                        && qualifier_matches(&a.qual, &s.qualifier, cs)
+                }) =>
             {
                 // Spark lists the merged-away columns first, then the output.
+                // (A file table's `_metadata` is not one of them.)
                 let mut all: Vec<_> = r
                     .hidden
                     .iter()
-                    .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+                    .filter(|a| {
+                        a.col.name != super::ops::METADATA_COLUMN
+                            && qualifier_matches(&a.qual, &s.qualifier, cs)
+                    })
                     .cloned()
                     .collect();
                 all.extend(out);
@@ -5215,7 +5260,7 @@ impl Resolver<'_> {
         // The columns a `USING` join merged away answer to a qualified name.
         let joined: Vec<Attr>;
         let hidden = match (cx.rels, cx.agg_scope.is_some() && in_agg) {
-            ([r], false) if c.name.len() > 1 => Some(&r.hidden[..]),
+            ([r], false) if c.name.len() > 1 || is_metadata(&c.name) => Some(&r.hidden[..]),
             ([r], true) if c.name.len() > 1 => r.agg.as_ref().map(|i| &i.input.hidden[..]),
             // A join condition reads the merged-away columns of both inputs.
             (rels, false) if c.name.len() > 1 && rels.len() > 1 => {
@@ -7860,6 +7905,9 @@ pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
                     )),
                 ),
             },
+            // The base is keyed below; where the expression was written is not
+            // part of what it computes.
+            ExprNode::Resolved(ResolvedExpr::Field { ordinal, .. }) => format!("g{ordinal}"),
             other => format!("u{other:?}"),
         }
         .into_bytes();
@@ -7985,6 +8033,11 @@ fn date_with_days(op: &str, left: &ArgType, right: &ArgType) -> Option<(&'static
         }
         _ => None,
     }
+}
+
+/// Whether `name` is the bare hidden `_metadata` column.
+fn is_metadata(name: &[String]) -> bool {
+    matches!(name, [n] if n.eq_ignore_ascii_case(super::ops::METADATA_COLUMN))
 }
 
 #[cfg(test)]
