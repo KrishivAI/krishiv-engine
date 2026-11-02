@@ -328,3 +328,17 @@ fn a_foldable_srid_expression_is_accepted() {
         "3857"
     );
 }
+
+#[test]
+fn spatial_values_are_no_map_keys() {
+    let m = format!("ST_GeomFromWKB({POINT})");
+    for q in [
+        format!("map({m}, 1)"),
+        format!("map_from_arrays(array({m}), array(1))"),
+        format!("map_from_entries(array(struct({m}, 1)))"),
+        format!("transform_keys(map(1, 1), (k, v) -> {m})"),
+    ] {
+        let e = error(&q);
+        assert!(e.contains("INVALID_MAP_KEY_TYPE"), "{q}: {e}");
+    }
+}

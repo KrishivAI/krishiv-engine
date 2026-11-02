@@ -290,10 +290,10 @@ pub(super) fn check_key_type(
     Ok(())
 }
 
-/// Whether `t` is or holds a map type.
+/// Whether `t` is or holds a map, geometry or geography (none can be a map key).
 pub(super) fn holds_map(t: &DataType) -> bool {
     match t {
-        DataType::Map(_) => true,
+        DataType::Map(_) | DataType::Geometry { .. } | DataType::Geography { .. } => true,
         DataType::Array(a) => holds_map(a.element_type()),
         DataType::Struct(s) => s.fields().iter().any(|f| holds_map(f.data_type())),
         _ => false,
