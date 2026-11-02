@@ -96,6 +96,80 @@ pub fn summarize(json: &str) -> Result<BTreeMap<String, CrateCov>, String> {
     Ok(out)
 }
 
+/// Total line coverage over every crate, in percent.
+fn total_line_pct(map: &BTreeMap<String, CrateCov>) -> Option<f64> {
+    let mut total = Counts::default();
+    for c in map.values() {
+        total.add(c.lines);
+    }
+    total.percent()
+}
+
+/// What `coverage-summary --check` found: failures (a crate under an enforced floor, the total
+/// fallen too far) and notes (the same for a floor with `enforce: false`).
+#[derive(Debug, Default, PartialEq)]
+pub struct FloorReport {
+    /// Findings that fail the check.
+    pub failures: Vec<String>,
+    /// Findings reported only.
+    pub notes: Vec<String>,
+}
+
+/// Checks `map` against the floors file `floors` (`tests/coverage-floors.json`):
+/// `{"total_drop_max": 0.2, "crates": {"krishiv-kernels": {"floor": 90.0, "enforce": true}}}`.
+/// A crate under its floor fails when `enforce` is true (the default) and is a note otherwise; so is a
+/// crate with no coverage data. With `previous` (the last nightly's per-crate coverage) the total line
+/// coverage may fall by at most `total_drop_max` points (default 0.2).
+///
+/// # Errors
+/// Returns an error when the floors file is not the shape above.
+pub fn check_floors(
+    map: &BTreeMap<String, CrateCov>,
+    floors: &str,
+    previous: Option<&BTreeMap<String, CrateCov>>,
+) -> Result<FloorReport, String> {
+    let v: serde_json::Value =
+        serde_json::from_str(floors).map_err(|e| format!("bad floors JSON: {e}"))?;
+    let drop_max = v.get("total_drop_max").map_or(Ok(0.2), |d| {
+        d.as_f64().ok_or("total_drop_max is not a number")
+    })?;
+    let crates = match v.get("crates") {
+        None => None,
+        Some(c) => Some(c.as_object().ok_or("`crates` is not an object")?),
+    };
+    let mut report = FloorReport::default();
+    for (name, entry) in crates.into_iter().flatten() {
+        let floor = entry
+            .get("floor")
+            .and_then(serde_json::Value::as_f64)
+            .ok_or_else(|| format!("{name}: `floor` is not a number"))?;
+        let enforce = entry
+            .get("enforce")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let finding = match map.get(name).and_then(|c| c.lines.percent()) {
+            None => Some(format!("{name}: no line coverage data (floor {floor:.1}%)")),
+            Some(p) if p < floor => Some(format!("{name}: {p:.1}% is under its floor {floor:.1}%")),
+            Some(_) => None,
+        };
+        if let Some(f) = finding {
+            if enforce {
+                report.failures.push(f);
+            } else {
+                report.notes.push(f);
+            }
+        }
+    }
+    if let (Some(now), Some(before)) = (total_line_pct(map), previous.and_then(total_line_pct))
+        && before - now > drop_max
+    {
+        report.failures.push(format!(
+            "total line coverage fell from {before:.2}% to {now:.2}% (at most {drop_max} points allowed)"
+        ));
+    }
+    Ok(report)
+}
+
 /// Renders the per-crate table (plain text, or Markdown with `markdown`).
 #[must_use]
 pub fn render_summary(map: &BTreeMap<String, CrateCov>, markdown: bool) -> String {
@@ -611,10 +685,16 @@ pub fn run_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
 pub fn run_summary(root: &Path, flags: &[&str]) -> Result<(), String> {
     let (mut markdown, mut json, mut path) =
         (false, false, coverage_dir(root).join("summary.json"));
-    for f in flags {
+    let (mut check, mut previous) = (None, None);
+    let mut it = flags.iter();
+    while let Some(f) = it.next() {
         match *f {
             "--markdown" => markdown = true,
             "--json" => json = true,
+            "--check" => check = Some(PathBuf::from(it.next().ok_or("--check needs a file")?)),
+            "--previous" => {
+                previous = Some(PathBuf::from(it.next().ok_or("--previous needs a file")?));
+            }
             p if !p.starts_with("--") => path = PathBuf::from(p),
             other => return Err(format!("unknown flag {other}")),
         }
@@ -637,7 +717,36 @@ pub fn run_summary(root: &Path, flags: &[&str]) -> Result<(), String> {
     } else {
         print!("{}", render_summary(&map, markdown));
     }
-    Ok(())
+    let Some(floors) = check else {
+        return Ok(());
+    };
+    let floors_text = std::fs::read_to_string(&floors)
+        .map_err(|e| format!("cannot read {}: {e}", floors.display()))?;
+    // The previous nightly's summary is optional: a first run, or an expired artifact, has none.
+    let before = match previous.map(|p| std::fs::read_to_string(&p).map(|t| (p, t))) {
+        Some(Ok((_, text))) => Some(summarize(&text)?),
+        Some(Err(e)) => {
+            println!("no previous summary to compare the total with ({e})");
+            None
+        }
+        None => None,
+    };
+    let report = check_floors(&map, &floors_text, before.as_ref())?;
+    for note in &report.notes {
+        println!("note: {note}");
+    }
+    for failure in &report.failures {
+        println!("FAIL: {failure}");
+    }
+    if report.failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{} coverage check(s) failed against {}",
+            report.failures.len(),
+            floors.display()
+        ))
+    }
 }
 
 /// `xtask diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT]`:
@@ -762,6 +871,106 @@ mod tests {
         let text = render_summary(&m, false);
         assert!(text.contains("a ") && text.contains("50.0%") && text.contains("TOTAL"));
         assert!(render_summary(&m, true).contains("| xtask | 100.0% | - |"));
+    }
+
+    #[test]
+    fn floors_fail_a_crate_under_an_enforced_floor_and_note_the_rest() {
+        let m = summarize(EXPORT).unwrap_or_default();
+        // `a` is at 50.0% and `xtask` at 100.0%.
+        let ok = check_floors(
+            &m,
+            r#"{"crates": {"a": {"floor": 49.0}, "xtask": {"floor": 100.0}}}"#,
+            None,
+        )
+        .unwrap();
+        assert_eq!(ok, FloorReport::default());
+        let r = check_floors(
+            &m,
+            r#"{"crates": {"a": {"floor": 60.0}, "xtask": {"floor": 101.0, "enforce": false}, "gone": {"floor": 1.0}}}"#,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            r.failures,
+            [
+                "a: 50.0% is under its floor 60.0%",
+                "gone: no line coverage data (floor 1.0%)"
+            ]
+        );
+        assert_eq!(r.notes, ["xtask: 100.0% is under its floor 101.0%"]);
+        // A floors file with no crates enforces nothing.
+        assert_eq!(
+            check_floors(&m, "{}", None).unwrap(),
+            FloorReport::default()
+        );
+        assert!(check_floors(&m, "[]", None).is_ok());
+        assert!(check_floors(&m, "not json", None).is_err());
+        assert!(check_floors(&m, r#"{"crates": {"a": {}}}"#, None).is_err());
+        assert!(check_floors(&m, r#"{"crates": 3}"#, None).is_err());
+        assert!(check_floors(&m, r#"{"total_drop_max": "x"}"#, None).is_err());
+    }
+
+    #[test]
+    fn the_total_may_fall_only_by_the_allowed_points() {
+        let now = summarize(EXPORT).unwrap_or_default();
+        let at = |covered: u64| {
+            let mut m = now.clone();
+            m.get_mut("a").unwrap().lines = Counts { covered, total: 20 };
+            m
+        };
+        // The total is (10 + 4) / (20 + 4) = 58.33%.
+        let same = check_floors(&now, "{}", Some(&now)).unwrap();
+        assert!(same.failures.is_empty());
+        // Before: a at 11/20 -> (11 + 4) / 24 = 62.50%, a drop of 4.17 points.
+        let r = check_floors(&now, "{}", Some(&at(11))).unwrap();
+        assert_eq!(r.failures.len(), 1, "{r:?}");
+        assert!(r.failures[0].starts_with("total line coverage fell from 62.50% to 58.33%"));
+        // The same drop is fine when the file allows 5 points; a rise never fails.
+        let lenient = r#"{"total_drop_max": 5.0}"#;
+        assert!(
+            check_floors(&now, lenient, Some(&at(11)))
+                .unwrap()
+                .failures
+                .is_empty()
+        );
+        assert!(
+            check_floors(&now, "{}", Some(&at(0)))
+                .unwrap()
+                .failures
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_summary_command_fails_on_a_floor_and_reads_the_previous_summary() {
+        let dir = std::env::temp_dir().join(format!("krishiv-cov-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = |name: &str, text: &str| {
+            let p = dir.join(name);
+            std::fs::write(&p, text).unwrap();
+            p.to_string_lossy().into_owned()
+        };
+        let summary = file("summary.json", EXPORT);
+        let higher = file(
+            "previous.json",
+            &EXPORT.replace("\"covered\":1}", "\"covered\":9}"),
+        );
+        let met = file("met.json", r#"{"crates": {"a": {"floor": 50.0}}}"#);
+        let missed = file("missed.json", r#"{"crates": {"a": {"floor": 51.0}}}"#);
+        let root = Path::new(".");
+        let run = |flags: &[&str]| run_summary(root, flags);
+        assert!(run(&[&summary, "--check", &met]).is_ok());
+        let e = run(&[&summary, "--check", &missed]).unwrap_err();
+        assert!(e.contains("1 coverage check(s) failed"), "{e}");
+        // The previous summary has more lines covered: the total fell by more than 0.2 points.
+        assert!(run(&[&summary, "--check", &met, "--previous", &higher]).is_err());
+        // A missing previous summary is no failure; a missing floors file or flag value is.
+        let gone = dir.join("none.json").to_string_lossy().into_owned();
+        assert!(run(&[&summary, "--check", &met, "--previous", &gone]).is_ok());
+        assert!(run(&[&summary, "--check", &gone]).is_err());
+        assert!(run(&[&summary, "--check"]).is_err());
+        assert!(run(&[&summary, "--previous"]).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
