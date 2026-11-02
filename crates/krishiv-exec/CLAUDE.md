@@ -29,6 +29,10 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
 `probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join.
+`join/merge.rs` sort-merge join (P2-T056): `SortMergeJoin` is the source over two `Sort`s in hash buckets of the keys
+(`Sort::bucket_reader`, `PipelineBuilder::set_merge_source`), `Merge` the merge of one bucket pair; a key's right rows
+are the group, spilled past `krishiv.exec.join.smj.bufferBytes`; `join/fallback.rs` runs a grace partition that will not
+split through the same `Merge`.
 `values/` (P2-T177) `ValueService` + `LocalValues`: runtime filters, subquery results and broadcast builds as
 versioned values (`ValueId`, `Version` are plan data), published as one partial per producer partition and visible
 once every producer partition published (count 1 unless the task says otherwise; a retried partition's partial is
@@ -37,7 +41,8 @@ Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFi
 (adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model. A scan's pipeline
 starts after the pipelines publishing the filters worth the wait (`scan_waits`: not when the build reads the scan's
 own table, unless it is far smaller) unless they run with or after it (`runner.rs`, `with_filter_order`); no driver
-ever waits on a filter's value.
+ever waits on a filter's value. A filter on a partition column skips the files of partitions it drops (dynamic partition
+pruning, `file_scan.rs`).
 `window/` (P2-T055) the `Window` operator over input sorted by partition then order keys (the planner puts a
 `Sort` below it; `planner/window.rs`; over a hash exchange that sort splits its rows into hash buckets merged and read
 by several drivers, `operators/sort/sort.rs`): `mod.rs` plan types (`WindowPlan`, plan data) + the operator (buffers one
@@ -47,7 +52,7 @@ evaluated), `frames.rs` (ROWS frames with offsets and frames to the partition's 
 cumulative, in-order fold for float/ANSI sums), `spill.rs` (buffered rows spill under pressure; after a spill rows wait for the flush phase, which reads
 them back in order; a partition that does not fit is copied to its own file; failed/cancelled steps leave the state
 failed, never a short result), `stream.rs` (a partition evaluated from disk: lead and trailing readers, bounded
-memory), `group_limit.rs` (Spark's `WindowGroupLimit`: the exact limit operator below the window, the `Ranker`
+memory), `disk.rs` (frames and `lag`/`lead`/`nth_value` of a partition on disk: forward readers, a frame's batches held or folded from the file), `group_limit.rs` (Spark's `WindowGroupLimit`: the exact limit operator below the window, the `Ranker`
 the sort also uses to prune each sorted batch while that pays; the planner infers it for a filter over the window,
 `planner/window.rs`), `tests.rs` (property test against a naive reference; spilled vs in-memory equality).
 Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.

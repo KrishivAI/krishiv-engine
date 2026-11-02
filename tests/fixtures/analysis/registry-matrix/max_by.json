@@ -17,14 +17,6 @@
       "reason": "SELECT max_by(x, y, NULL) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | resolves to array<string> where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
     },
     {
-      "id": "max_by#3463d4380cb1/ansi_on",
-      "reason": "SELECT max_by(x, y, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "max_by#3463d4380cb1/ansi_off",
-      "reason": "SELECT max_by(x, y, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "max_by#3910f72903d7/ansi_on",
       "reason": "SELECT max_by(x, y, CAST(1 AS SMALLINT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | array<string> not null where Spark has array<string>"
     },
@@ -59,14 +51,6 @@
     {
       "id": "max_by#9df2dec34beb/ansi_off",
       "reason": "SELECT max_by(x, y, CAST(1 AS TINYINT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | array<string> not null where Spark has array<string>"
-    },
-    {
-      "id": "max_by#e2de8c6a8128/ansi_on",
-      "reason": "SELECT max_by(x, y, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "max_by#e2de8c6a8128/ansi_off",
-      "reason": "SELECT max_by(x, y, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "max_by#ea6e2bbfc9e7/ansi_on",

@@ -49,14 +49,6 @@
       "reason": "SELECT make_timestamp_ltz(CAST(1 AS SMALLINT), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "make_timestamp_ltz#14e1f8ec5bea/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', INTERVAL '1-2' YEAR TO MONTH, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#14e1f8ec5bea/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', INTERVAL '1-2' YEAR TO MONTH, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "make_timestamp_ltz#163cce0ac7c2/ansi_on",
       "reason": "SELECT make_timestamp_ltz(1L, TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -66,11 +58,11 @@
     },
     {
       "id": "make_timestamp_ltz#16972ea90352/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, TIME'6:30:45.887') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#16972ea90352/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, TIME'6:30:45.887') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#1d35bbefc837/ansi_on",
@@ -82,11 +74,11 @@
     },
     {
       "id": "make_timestamp_ltz#20203de94e31/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', INTERVAL '1-2' YEAR TO MONTH) | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#20203de94e31/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', INTERVAL '1-2' YEAR TO MONTH) | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#213f09744042/ansi_on",
@@ -95,14 +87,6 @@
     {
       "id": "make_timestamp_ltz#213f09744042/ansi_off",
       "reason": "SELECT make_timestamp_ltz(CAST(1 AS SMALLINT), TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#216ae8da16e3/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "make_timestamp_ltz#216ae8da16e3/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "make_timestamp_ltz#22dcd713f424/ansi_on",
@@ -119,22 +103,6 @@
     {
       "id": "make_timestamp_ltz#240b7ea35eec/ansi_off",
       "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', CAST(1.5 AS DECIMAL(38,18))) | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#25ba4245c154/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, INTERVAL '1 02:03:04' DAY TO SECOND, 6, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#25ba4245c154/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, INTERVAL '1 02:03:04' DAY TO SECOND, 6, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#293670fc6e9b/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, INTERVAL '1 02:03:04' DAY TO SECOND, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#293670fc6e9b/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, INTERVAL '1 02:03:04' DAY TO SECOND, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#333c6df13dda/ansi_on",
@@ -161,22 +129,6 @@
       "reason": "SELECT make_timestamp_ltz(array(1, 2), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "make_timestamp_ltz#400e300b2a9a/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', INTERVAL '1 02:03:04' DAY TO SECOND, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#400e300b2a9a/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', INTERVAL '1 02:03:04' DAY TO SECOND, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#40175fc59862/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#40175fc59862/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "make_timestamp_ltz#46e5303a1d10/ansi_on",
       "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', 'abc') | UNSUPPORTED_TIME_TYPE"
     },
@@ -185,36 +137,12 @@
       "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', 'abc') | UNSUPPORTED_TIME_TYPE"
     },
     {
-      "id": "make_timestamp_ltz#4d77d220f506/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, 12, 28, 6, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#4d77d220f506/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, 12, 28, 6, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "make_timestamp_ltz#4f6ba3516044/ansi_on",
       "reason": "SELECT make_timestamp_ltz('abc', TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#4f6ba3516044/ansi_off",
       "reason": "SELECT make_timestamp_ltz('abc', TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#4f827ffad42f/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, INTERVAL '1 02:03:04' DAY TO SECOND, 28, 6, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#4f827ffad42f/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, INTERVAL '1 02:03:04' DAY TO SECOND, 28, 6, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#51204172afc5/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, INTERVAL '1-2' YEAR TO MONTH, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#51204172afc5/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, INTERVAL '1-2' YEAR TO MONTH, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#563b62635aa4/ansi_on",
@@ -239,14 +167,6 @@
     {
       "id": "make_timestamp_ltz#590d44631ca4/ansi_off",
       "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#5a67881129e5/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, INTERVAL '1-2' YEAR TO MONTH, 6, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#5a67881129e5/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, INTERVAL '1-2' YEAR TO MONTH, 6, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#5b20a3db11cb/ansi_on",
@@ -281,30 +201,6 @@
       "reason": "SELECT make_timestamp_ltz(DATE'2024-02-29', TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE"
     },
     {
-      "id": "make_timestamp_ltz#5ff906899888/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, INTERVAL '1-2' YEAR TO MONTH, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#5ff906899888/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, INTERVAL '1-2' YEAR TO MONTH, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#6293bb5f17b9/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, INTERVAL '1-2' YEAR TO MONTH, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#6293bb5f17b9/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, INTERVAL '1-2' YEAR TO MONTH, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#635160c72c84/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "make_timestamp_ltz#635160c72c84/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "make_timestamp_ltz#644b435deb80/ansi_on",
       "reason": "SELECT make_timestamp_ltz(CAST(NULL AS date), TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE"
     },
@@ -313,20 +209,12 @@
       "reason": "SELECT make_timestamp_ltz(CAST(NULL AS date), TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE"
     },
     {
-      "id": "make_timestamp_ltz#685332b735f9/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, INTERVAL '1 02:03:04' DAY TO SECOND, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#685332b735f9/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, INTERVAL '1 02:03:04' DAY TO SECOND, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "make_timestamp_ltz#6c338d549974/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, TIME'6:30:45.887', 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#6c338d549974/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, TIME'6:30:45.887', 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#704008ec0839/ansi_on",
@@ -369,14 +257,6 @@
       "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', ' \\t a\\u3000\\n ') | UNSUPPORTED_TIME_TYPE"
     },
     {
-      "id": "make_timestamp_ltz#7c65394787a7/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, INTERVAL '1 02:03:04' DAY TO SECOND, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#7c65394787a7/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, INTERVAL '1 02:03:04' DAY TO SECOND, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "make_timestamp_ltz#7f28a98601bc/ansi_on",
       "reason": "SELECT make_timestamp_ltz(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -391,22 +271,6 @@
     {
       "id": "make_timestamp_ltz#7f88d50844eb/ansi_off",
       "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#7ffb38c24f59/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, INTERVAL '1 02:03:04' DAY TO SECOND, 28, 6, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#7ffb38c24f59/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, INTERVAL '1 02:03:04' DAY TO SECOND, 28, 6, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#838088d7e63f/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, 12, 28, 6, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#838088d7e63f/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, 12, 28, 6, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#83f4dea832af/ansi_on",
@@ -433,14 +297,6 @@
       "reason": "SELECT make_timestamp_ltz(1L, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "make_timestamp_ltz#888f318fa802/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, INTERVAL '1-2' YEAR TO MONTH, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#888f318fa802/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, INTERVAL '1-2' YEAR TO MONTH, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "make_timestamp_ltz#8deaa6a3312b/ansi_on",
       "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', NULL) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -450,11 +306,11 @@
     },
     {
       "id": "make_timestamp_ltz#8e0a800aaf32/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, TIME'6:30:45.887') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#8e0a800aaf32/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, TIME'6:30:45.887') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#8ff7e1ea9ea7/ansi_on",
@@ -538,11 +394,11 @@
     },
     {
       "id": "make_timestamp_ltz#a9430aaf7170/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', INTERVAL '1 02:03:04' DAY TO SECOND) | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#a9430aaf7170/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', INTERVAL '1 02:03:04' DAY TO SECOND) | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#a9cbcb6339ac/ansi_on",
@@ -551,22 +407,6 @@
     {
       "id": "make_timestamp_ltz#a9cbcb6339ac/ansi_off",
       "reason": "SELECT make_timestamp_ltz(1.5D, TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#aa2219ab5e1d/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, 12, 28, 6, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#aa2219ab5e1d/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, 12, 28, 6, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#acc8efbd5613/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, 12, 28, 6, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#acc8efbd5613/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, 12, 28, 6, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#ae49d1879545/ansi_on",
@@ -593,14 +433,6 @@
       "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', '') | UNSUPPORTED_TIME_TYPE"
     },
     {
-      "id": "make_timestamp_ltz#b30051da56a5/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, INTERVAL '1 02:03:04' DAY TO SECOND, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#b30051da56a5/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, INTERVAL '1 02:03:04' DAY TO SECOND, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "make_timestamp_ltz#b49a5fb7efa8/ansi_on",
       "reason": "SELECT make_timestamp_ltz(true, TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -610,19 +442,11 @@
     },
     {
       "id": "make_timestamp_ltz#b7bfcd1a2a72/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, TIME'6:30:45.887', 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#b7bfcd1a2a72/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, TIME'6:30:45.887', 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#bcc49d181431/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, INTERVAL '1-2' YEAR TO MONTH, 6, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#bcc49d181431/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, INTERVAL '1-2' YEAR TO MONTH, 6, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT make_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#c1138ef13a50/ansi_on",
@@ -639,14 +463,6 @@
     {
       "id": "make_timestamp_ltz#c187ae53e198/ansi_off",
       "reason": "SELECT make_timestamp_ltz(X'01', TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#c1ba093a0532/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, INTERVAL '1 02:03:04' DAY TO SECOND, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#c1ba093a0532/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, INTERVAL '1 02:03:04' DAY TO SECOND, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#c6048ce6dec5/ansi_on",
@@ -671,14 +487,6 @@
     {
       "id": "make_timestamp_ltz#ccaaaa7e9313/ansi_off",
       "reason": "SELECT make_timestamp_ltz(CAST(1.5 AS DECIMAL(38,18)), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#cf0a58bfd0e3/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, INTERVAL '1-2' YEAR TO MONTH, 28, 6, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#cf0a58bfd0e3/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, INTERVAL '1-2' YEAR TO MONTH, 28, 6, 30, 45.887) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#d35430a29fe4/ansi_on",
@@ -713,28 +521,12 @@
       "reason": "SELECT make_timestamp_ltz(DATE'2024-02-29', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE"
     },
     {
-      "id": "make_timestamp_ltz#d73d8d640219/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, INTERVAL '1 02:03:04' DAY TO SECOND, 6, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#d73d8d640219/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, INTERVAL '1 02:03:04' DAY TO SECOND, 6, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "make_timestamp_ltz#d76812ace52f/ansi_on",
       "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', CAST(X'C328FF' AS STRING)) | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "make_timestamp_ltz#d76812ace52f/ansi_off",
       "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', CAST(X'C328FF' AS STRING)) | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#de842cd069ad/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, INTERVAL '1-2' YEAR TO MONTH, 28, 6, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#de842cd069ad/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, INTERVAL '1-2' YEAR TO MONTH, 28, 6, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#dea3224c083e/ansi_on",
@@ -761,14 +553,6 @@
       "reason": "SELECT make_timestamp_ltz(DATE'1582-10-10', TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE"
     },
     {
-      "id": "make_timestamp_ltz#e24481508305/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#e24481508305/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "make_timestamp_ltz#e26f0bc8373a/ansi_on",
       "reason": "SELECT make_timestamp_ltz('1', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -783,14 +567,6 @@
     {
       "id": "make_timestamp_ltz#e507c9eb2b6d/ansi_off",
       "reason": "SELECT make_timestamp_ltz(true, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#e60b164e02a6/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, INTERVAL '1-2' YEAR TO MONTH, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#e60b164e02a6/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, INTERVAL '1-2' YEAR TO MONTH, 30, 45.887, 'CET') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_timestamp_ltz#e88d84c4947b/ansi_on",
@@ -863,22 +639,6 @@
     {
       "id": "make_timestamp_ltz#fd0f4903da63/ansi_off",
       "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', '1') | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#fd311c172e06/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#fd311c172e06/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(DATE'2014-12-28', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#fe15cfc9d6a2/ansi_on",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_timestamp_ltz#fe15cfc9d6a2/ansi_off",
-      "reason": "SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,
