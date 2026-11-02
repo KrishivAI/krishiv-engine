@@ -170,6 +170,11 @@ pub(crate) trait PhysExpr: Send + Sync + fmt::Debug {
     fn is_constant(&self) -> bool {
         false
     }
+    /// This expression with a row's own arithmetic overflow as NULL instead of
+    /// an error, if it can do that without running again by row (`TryEval`).
+    fn null_on_overflow(&self) -> Option<Arc<dyn PhysExpr>> {
+        None
+    }
 }
 
 /// What every expression of one query is evaluated with.
