@@ -784,6 +784,10 @@ impl Resolver<'_> {
     /// or the struct fields the leftover parts name below it (Spark's
     /// `GetStructField` chain), resolved under `spark.sql.caseSensitive`.
     /// `outer` is `Some` for a column of the enclosing query.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one binding site shared by columns, outer references and lambda variables"
+    )]
     pub(super) fn resolve_attr(
         &mut self,
         a: &Attr,
