@@ -118,6 +118,28 @@ macro_rules! ordered_bytes {
     };
 }
 
+/// Whether `a` and `b` are one type once the nullability of list elements,
+/// struct fields and map entries is ignored.
+#[must_use]
+pub fn same_modulo_nullability(a: &DataType, b: &DataType) -> bool {
+    match (a, b) {
+        (DataType::List(x), DataType::List(y))
+        | (DataType::LargeList(x), DataType::LargeList(y)) => {
+            same_modulo_nullability(x.data_type(), y.data_type())
+        }
+        (DataType::Struct(x), DataType::Struct(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y.iter())
+                    .all(|(p, q)| same_modulo_nullability(p.data_type(), q.data_type()))
+        }
+        (DataType::Map(x, sx), DataType::Map(y, sy)) => {
+            sx == sy && same_modulo_nullability(x.data_type(), y.data_type())
+        }
+        _ => a == b,
+    }
+}
+
 /// The total order Spark sorts and compares by (see the module doc): NULL
 /// is less than every value.
 ///
@@ -135,13 +157,9 @@ pub fn cmp_rows(
         (false, true) => return Ok(Ordering::Greater),
         (false, false) => {}
     }
-    // Lists differing only in the element field's nullability compare;
-    // their elements are checked one by one below.
-    let lists = matches!(
-        (l.data_type(), r.data_type()),
-        (DataType::List(_), DataType::List(_)) | (DataType::LargeList(_), DataType::LargeList(_))
-    );
-    if !lists && l.data_type() != r.data_type() {
+    // Types differing only in nullability, however deep, compare; their
+    // elements and fields are checked one by one below.
+    if !same_modulo_nullability(l.data_type(), r.data_type()) {
         return Err(KernelError::internal(format!(
             "a comparison of {} with {}",
             l.data_type(),

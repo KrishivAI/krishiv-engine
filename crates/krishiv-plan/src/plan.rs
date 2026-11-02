@@ -647,15 +647,31 @@ pub struct Scan {
 
 impl Scan {
     /// The hidden `_metadata` column of a file source this scan outputs
-    /// (always last), if it does: a struct led by `file_path`.
+    /// (always last), if it does: a struct of the source's own fields.
     #[must_use]
     pub fn metadata_column(&self) -> Option<&BoundColumn> {
         let c = self.output.last()?;
         let krishiv_types::DataType::Struct(s) = &c.data_type else {
             return None;
         };
-        (c.name == "_metadata" && s.fields().first().is_some_and(|f| f.name() == "file_path"))
-            .then_some(c)
+        // Every field is one of the source's own (a pruned scan keeps only
+        // the fields read), so a user column of this name that holds anything
+        // else is a table column.
+        const FIELDS: [&str; 7] = [
+            "file_path",
+            "file_name",
+            "file_size",
+            "file_block_start",
+            "file_block_length",
+            "file_modification_time",
+            "row_index",
+        ];
+        (c.name == "_metadata"
+            && !s.fields().is_empty()
+            && s.fields()
+                .iter()
+                .all(|f| FIELDS.iter().any(|n| *n == f.name())))
+        .then_some(c)
     }
 }
 

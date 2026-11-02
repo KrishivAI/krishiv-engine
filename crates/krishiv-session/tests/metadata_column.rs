@@ -193,3 +193,27 @@ fn order_by_a_metadata_field_after_group_by_all() {
     let q = "SELECT _metadata.file_name, count(*) FROM p GROUP BY ALL ORDER BY _metadata.file_name";
     assert_eq!(count(&s, q), 1);
 }
+
+#[test]
+fn a_struct_column_of_the_name_is_a_table_column_not_the_hidden_one() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "CREATE TABLE r(id INT, _metadata STRUCT<file_path: STRING, x: INT>) USING PARQUET",
+        "INSERT INTO r VALUES (1, named_struct('file_path', 'mine', 'x', 7))",
+    ] {
+        block_on(s.sql(sql)).unwrap();
+    }
+    assert_eq!(names(&s, "SELECT * FROM r"), ["id", "_metadata"]);
+    assert_eq!(
+        count(&s, "SELECT _metadata.x FROM r WHERE _metadata.x = 7"),
+        1
+    );
+}
+
+#[test]
+fn a_late_fetched_sort_limit_can_filter_on_the_hidden_column() {
+    let s = session();
+    let sql = "SELECT name FROM p WHERE _metadata.file_size > 0 ORDER BY id LIMIT 1";
+    block_on(s.sql("SET krishiv.exec.lateFetch.maxRows = 100")).unwrap();
+    assert_eq!(count(&s, sql), 1);
+}

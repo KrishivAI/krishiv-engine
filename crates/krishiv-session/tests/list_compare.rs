@@ -44,3 +44,23 @@ fn arrays_order_by_element_then_length() {
 fn a_null_array_gives_null() {
     assert_eq!(one("SELECT CAST(NULL AS ARRAY<INT>) = array(1)"), "null");
 }
+
+#[test]
+fn nullability_differing_below_the_top_level_still_compares() {
+    assert_eq!(
+        one("SELECT array(array(1)) = array(array(1, NULL))"),
+        "false"
+    );
+    assert_eq!(
+        one("SELECT array(array(1, NULL)) = array(array(1, NULL))"),
+        "true"
+    );
+    assert_eq!(
+        one("SELECT array(named_struct('a', 1)) = array(named_struct('a', CAST(NULL AS INT)))"),
+        "false"
+    );
+    assert_eq!(
+        one("SELECT array(named_struct('a', 1)) = array(named_struct('a', 1))"),
+        "true"
+    );
+}
