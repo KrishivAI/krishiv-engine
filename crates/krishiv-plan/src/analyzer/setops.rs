@@ -155,11 +155,12 @@ impl Resolver<'_> {
                 self.check_inline_bound(&b)?;
                 // Spark evaluates each cell while resolving the table: a
                 // cell that raises is `FAILED_SQL_EXPRESSION_EVALUATION`.
-                // A fold that is only unsupported ("cannot fold this") is not a
-                // failure of the expression: the table resolves and the
-                // executor evaluates it.
+                // Only an invalid cast input is taken as a failure of the
+                // cell: the folder cannot yet evaluate every valid literal
+                // (wide decimals, NaN), so any other fold error leaves the
+                // table to the executor.
                 if let Some(Constant::Error(why)) = self.fold(&b.expr, self.ctx.conf.ansi)
-                    && why.error_class().name() != "KRISHIV_UNSUPPORTED_FEATURE"
+                    && why.error_class().name() == "CAST_INVALID_INPUT"
                 {
                     return Err(AnalysisError::new(
                         InvalidInlineTableFailedSqlExpressionEvaluation {
