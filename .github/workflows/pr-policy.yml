@@ -222,7 +222,7 @@ jobs:
           APPROVER: ${{ vars.SIZE_APPROVER }}
           VALUES_FILE: ${{ runner.temp }}/budgets.values
           APPROVAL_SCOPE: unsafe
-          METRIC_FILTER: ^unsafe:
+          METRIC_FILTER: '^unsafe:'
           STRICT: "true"
         run: echo "UNSAFE_APPROVED=$(.github/scripts/approval-label.sh unsafe-reviewed)" >> "$GITHUB_ENV"
       - name: Compare with the budgets
@@ -336,7 +336,7 @@ jobs:
           APPROVER: ${{ vars.SIZE_APPROVER }}
           VALUES_FILE: ${{ runner.temp }}/wheels.values
           APPROVAL_SCOPE: wheels
-          METRIC_FILTER: ^wheel:
+          METRIC_FILTER: '^wheel:'
         run: echo "BUDGET_APPROVED=$(.github/scripts/approval-label.sh budget-approved)" >> "$GITHUB_ENV"
       - name: Compare with the budgets
         if: steps.measure.outputs.result == 'measured'

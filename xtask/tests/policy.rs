@@ -467,7 +467,7 @@ fn approval_labels_survive_pushes_within_the_recorded_margin() {
         ".github/scripts/approval-values.sh wheels",
         "VALUES_FILE: ${{ runner.temp }}/budgets.values",
         "VALUES_FILE: ${{ runner.temp }}/wheels.values",
-        "METRIC_FILTER: ^unsafe:",
+        "METRIC_FILTER: '^unsafe:'",
         "APPROVAL_SCOPE: size",
         "APPROVAL_SCOPE: budgets",
         "APPROVAL_SCOPE: unsafe",
@@ -997,4 +997,33 @@ fn loom_step_check_rejects_name_filters_and_whole_crates() {
             "cargo test -p c --release --locked loom_model::",
         ]
     );
+}
+
+/// A plain scalar ending in a colon makes the whole workflow file invalid (YAML reads a nested
+/// mapping): GitHub then runs nothing, the required checks included.
+#[test]
+fn workflow_lint_rejects_a_plain_value_ending_in_a_colon() {
+    let bad = "name: x\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n        env:\n          FILTER: ^unsafe:\n";
+    let found = xtask::lint::workflow_violations("w.yml", bad);
+    assert!(
+        found.iter().any(|v| v.contains("ends in a colon")),
+        "{found:?}"
+    );
+    let quoted = bad.replace("^unsafe:", "'^unsafe:'");
+    let found = xtask::lint::workflow_violations("w.yml", &quoted);
+    assert!(
+        !found.iter().any(|v| v.contains("ends in a colon")),
+        "{found:?}"
+    );
+    // The checked-in workflows are clean (the lint also runs on them in CI).
+    let dir = root().join(".github/workflows");
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let found = xtask::lint::workflow_violations(&path.display().to_string(), &text);
+        assert!(
+            !found.iter().any(|v| v.contains("ends in a colon")),
+            "{found:?}"
+        );
+    }
 }
