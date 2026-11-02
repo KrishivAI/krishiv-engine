@@ -195,6 +195,7 @@ impl LegacyPattern {
         let local = days.saturating_mul(MICROS_PER_DAY).saturating_add(tod);
         let (year, month, day) = civil_from_days(days);
         let (dow, doy) = hybrid_week_fields(days, year, month, day);
+        let real = real_day(days, year, month, day);
         let hour = tod / 3_600_000_000;
         let minute = tod / 60_000_000 % 60;
         let second = tod / MICROS_PER_SECOND % 60;
@@ -236,8 +237,8 @@ impl LegacyPattern {
                 'd' => pad(&mut out, i64::from(day), n),
                 'D' => pad(&mut out, doy, n),
                 'F' => pad(&mut out, (i64::from(day) - 1) / 7 + 1, n),
-                'w' => pad(&mut out, week_of_year(days, year, doy), n),
-                'W' => pad(&mut out, week_of_month(days, day), n),
+                'w' => pad(&mut out, week_of_year(real, year, doy), n),
+                'W' => pad(&mut out, week_of_month(real, year, month, day), n),
                 'E' => {
                     let d = usize::try_from(dow - 1).unwrap_or(0);
                     out.push_str(if n >= 4 { LONG_DAYS[d] } else { SHORT_DAYS[d] });
@@ -349,6 +350,11 @@ impl LegacyPattern {
                 }
             }
         }
+        // `SimpleDateFormat` rejects a parse that consumed nothing (an empty
+        // pattern), instead of resolving the default epoch fields.
+        if pos == 0 {
+            return None;
+        }
         st.resolve()
     }
 }
@@ -402,21 +408,43 @@ fn hybrid_week_fields(days: i64, year: i64, month: u32, day: u32) -> (i64, i64) 
     (dow, doy)
 }
 
+/// The epoch day a hybrid-calendar label names: the label itself from the
+/// cutover on, before it the day the Julian date is (the labels are
+/// Gregorian epoch counts, ten days off in 1582 and more before).
+fn real_day(days: i64, year: i64, month: u32, day: u32) -> i64 {
+    if days >= CUTOVER_DAYS {
+        return days;
+    }
+    let a = (14 - i64::from(month)) / 12;
+    let y = year + 4800 - a;
+    let m = i64::from(month) + 12 * a - 3;
+    let jdn = i64::from(day) + (153 * m + 2) / 5 + 365 * y + y.div_euclid(4) - 32083;
+    jdn - 2_440_588
+}
+
+/// Days in a year of the hybrid calendar (1582 lacks ten).
+fn hybrid_year_len(year: i64) -> i64 {
+    match year.cmp(&1582) {
+        std::cmp::Ordering::Less => 365 + i64::from(year.rem_euclid(4) == 0),
+        std::cmp::Ordering::Equal => 355,
+        std::cmp::Ordering::Greater => 365 + i64::from(is_leap(year)),
+    }
+}
+
 /// `Calendar.WEEK_OF_YEAR` for `Locale.US` (weeks start on Sunday, week 1
-/// is the one with January 1st).
-fn week_of_year(days: i64, year: i64, doy: i64) -> i64 {
-    let (dow, _) = hybrid_week_fields(days, year, 1, 1);
-    let _ = dow;
+/// is the one with January 1st), for the real day `real` whose hybrid
+/// calendar year and day of year are `year` and `doy`.
+fn week_of_year(real: i64, year: i64, doy: i64) -> i64 {
     // Day of week of January 1st of the year (Sunday = 0).
-    let jan1 = days - (doy - 1);
+    let jan1 = real - (doy - 1);
     let jan1_sun0 = (jan1 + 4).rem_euclid(7);
     let week = (doy - 1 + jan1_sun0) / 7 + 1;
     // The last days of December in the week that holds January 1st of the
     // next year belong to its week 1.
-    let next_jan1 = jan1 + if is_leap(year) { 366 } else { 365 };
+    let next_jan1 = jan1 + hybrid_year_len(year);
     let next_sun0 = (next_jan1 + 4).rem_euclid(7);
     let dec31 = next_jan1 - 1;
-    if days > dec31 - next_sun0 && next_sun0 != 0 {
+    if real > dec31 - next_sun0 && next_sun0 != 0 {
         1
     } else {
         week
@@ -438,11 +466,17 @@ fn is_leap(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
-/// `Calendar.WEEK_OF_MONTH` for `Locale.US`.
-fn week_of_month(days: i64, day: u32) -> i64 {
-    let first = days - i64::from(day) + 1;
+/// `Calendar.WEEK_OF_MONTH` for `Locale.US`, for the real day `real` that is
+/// day `day` of `month` (October 1582 lacks 5..14).
+fn week_of_month(real: i64, year: i64, month: u32, day: u32) -> i64 {
+    let gap = if year == 1582 && month == 10 && day >= 15 {
+        10
+    } else {
+        0
+    };
+    let first = real - i64::from(day) + 1 + gap;
     let first_sun0 = (first + 4).rem_euclid(7);
-    (i64::from(day) - 1 + first_sun0) / 7 + 1
+    (real - first + first_sun0) / 7 + 1
 }
 
 /// `FastDateFormat`'s offsets: `Z` is `+hhmm`; `X` is `Z` for zero, else
@@ -695,14 +729,18 @@ impl Parsed {
         } else {
             y == year
         };
+        let (_, hdoy) = hybrid_week_fields(days, y, m, d);
+        let real = real_day(days, y, m, d);
         year_ok
             && self.month0.is_none_or(|(v, _)| v == i64::from(m) - 1)
             && self.dom.is_none_or(|(v, _)| v == i64::from(d))
             && self.doy.is_none_or(|(v, _)| v == doy)
             && self
                 .woy
-                .is_none_or(|(v, _)| v == week_of_year(days, y, doy))
-            && self.wom.is_none_or(|(v, _)| v == week_of_month(days, d))
+                .is_none_or(|(v, _)| v == week_of_year(real, y, hdoy))
+            && self
+                .wom
+                .is_none_or(|(v, _)| v == week_of_month(real, y, m, d))
             && self
                 .dowim
                 .is_none_or(|(v, _)| v == (i64::from(d) - 1) / 7 + 1)
@@ -720,11 +758,10 @@ impl Parsed {
         let start = ny - 80;
         let start_days = days_from_civil(start, nm, nd.min(days_in_month(start, nm)))?;
         let base = start - start.rem_euclid(100) + two;
-        let first = self.resolve_in(base)?;
-        if first.0.div_euclid(MICROS_PER_DAY) < start_days {
-            self.resolve_in(base + 100)
-        } else {
-            Some(first)
+        // The provisional century may lack the date (`00-02-29` in 1900).
+        match self.resolve_in(base) {
+            Some(first) if first.0.div_euclid(MICROS_PER_DAY) >= start_days => Some(first),
+            _ => self.resolve_in(base + 100),
         }
     }
 
@@ -1071,6 +1108,31 @@ mod tests {
     }
 
     // Spark 4.2.0 under LEGACY (probe 2026-11-02).
+    // Spark 4.2.0 under LEGACY (probe 2026-11-02).
+    #[test]
+    fn week_numbers_follow_the_hybrid_calendar() {
+        let f = |y, m, d| {
+            fmt(
+                "yyyy-MM-dd E w W",
+                days_from_civil(y, m, d).unwrap() * MICROS_PER_DAY,
+            )
+        };
+        assert_eq!(f(1582, 5, 31), "1582-05-31 Thu 22 5");
+        assert_eq!(f(1582, 1, 1), "1582-01-01 Mon 1 1");
+        assert_eq!(f(1582, 10, 4), "1582-10-04 Thu 40 1");
+        assert_eq!(f(1582, 10, 15), "1582-10-15 Fri 40 1");
+        assert_eq!(f(1582, 10, 20), "1582-10-20 Wed 41 2");
+        assert!(f(1500, 3, 15).ends_with(" 12 3"));
+    }
+
+    #[test]
+    fn an_empty_pattern_parses_nothing_and_a_leap_day_finds_its_century() {
+        assert_eq!(local("", ""), None);
+        assert_eq!(local("", "2024-01-01"), None);
+        let d = days_from_civil(2000, 2, 29).unwrap() * MICROS_PER_DAY;
+        assert_eq!(local("yy-MM-dd", "00-02-29"), Some(d));
+    }
+
     #[test]
     fn oversized_fields_fail_instead_of_overflowing() {
         assert_eq!(local("yyyy-ww-u", "2024-9223372036854775807-1"), None);

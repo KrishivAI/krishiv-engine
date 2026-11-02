@@ -317,9 +317,8 @@ impl UnionLoopSource {
             st.done = true;
             st.next = None;
             if let Some(run) = st.run.take() {
-                let child = Arc::clone(&run.child);
-                drop(run);
-                child.finished().await;
+                run.child.finished().await;
+                add_run_metrics(&self.totals, &run);
             }
             return Ok(Some(batch));
         }
@@ -344,19 +343,24 @@ impl Round {
     }
 }
 
+/// A finished run's compute time and spill bytes join the loop's totals.
+fn add_run_metrics(totals: &Totals, run: &Run) {
+    let m = run.child.metrics();
+    for e in m.operators.values() {
+        let ns = u64::try_from(e.metrics.compute_time.as_nanos()).unwrap_or(u64::MAX);
+        totals.compute_ns.fetch_add(ns, Ordering::Relaxed);
+        totals
+            .spill_write_bytes
+            .fetch_add(e.metrics.spill_write_bytes, Ordering::Relaxed);
+    }
+}
+
 /// The run ended: its rows are the next round's input. `false`: it produced
 /// none, the loop is over.
 async fn end_run_impl(totals: &Totals, st: &mut State) -> Result<bool> {
     if let Some(run) = st.run.take() {
         run.child.finished().await;
-        let m = run.child.metrics();
-        for e in m.operators.values() {
-            let ns = u64::try_from(e.metrics.compute_time.as_nanos()).unwrap_or(u64::MAX);
-            totals.compute_ns.fetch_add(ns, Ordering::Relaxed);
-            totals
-                .spill_write_bytes
-                .fetch_add(e.metrics.spill_write_bytes, Ordering::Relaxed);
-        }
+        add_run_metrics(totals, &run);
     }
     let Some(mut round) = st.next.take() else {
         st.done = true;
