@@ -572,3 +572,20 @@ fn table_arguments_register_views_over_urls() {
     assert!(RunnerConfig::from_args(["--table", "x"].map(str::to_owned)).is_err());
     assert!(RunnerConfig::from_args(["--threads", "2"].map(str::to_owned)).is_err());
 }
+
+#[test]
+fn remote_table_urls_get_their_own_errors_not_a_credentials_error() {
+    for url in [
+        "hf://datasets/cornell-movie-review-data/rotten_tomatoes/validation.parquet",
+        "https://huggingface.co/datasets/a/b/resolve/main/c.parquet",
+        "s3://fw/p.parquet",
+    ] {
+        let config =
+            RunnerConfig::from_args(["--table", &format!("fw={url}")].map(str::to_owned)).unwrap();
+        let err = Runner::new(&config)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(!err.contains("credentials"), "{url}: {err}");
+    }
+}

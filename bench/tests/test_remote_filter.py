@@ -998,17 +998,23 @@ def test_a_real_container_serves_a_parquet_file_to_every_engine(tmp_path):
     scratch = tmp_path / "scratch"
     scratch.mkdir(mode=0o700)
     runs = [child.run_polars, child.run_duckdb]
-    # Krishiv needs the built runner (cargo build --profile dist -p krishiv-bench-runner).
-    if runner_binary().exists():
+    # Krishiv needs a runner built with the cloud stores (cargo build --profile dist -p krishiv-bench-runner
+    # --features cloud); set KRISHIV_BENCH_RUNNER_CLOUD=1 to say it is one.
+    if runner_binary().exists() and os.environ.get("KRISHIV_BENCH_RUNNER_CLOUD"):
         runs.append(lambda items, out: child.run_krishiv_urls(items, out, scratch))
     with S3Server(table) as srv:
         os.environ.update(srv.env())
         try:
+            failures = []
             for i, run in enumerate(runs):
                 out = tmp_path / f"out{i}"
                 out.mkdir()
-                run(srv.urls(), out)
-                assert child.output_stats(out)[:2] == (1, 5000)
+                try:
+                    run(srv.urls(), out)
+                    assert child.output_stats(out)[:2] == (1, 5000)
+                except BaseException as e:  # one engine's failure must not hide the others'
+                    failures.append(f"engine {i}: {type(e).__name__}: {str(e)[:300]}")
+            assert not failures, "\n".join(failures)
         finally:
             for k in srv.env():
                 os.environ.pop(k, None)

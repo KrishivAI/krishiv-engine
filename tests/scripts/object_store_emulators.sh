@@ -8,12 +8,13 @@
 #
 # Containers are named krishiv-test-<kind>-<pid> and bind 127.0.0.1 on free ports; only those names are ever
 # removed (never bench-minio or any other container). Images are overridable and should be pinned by digest in CI:
-#   MINIO_IMAGE (default minio/minio), FAKE_GCS_IMAGE (fsouza/fake-gcs-server),
+#   MINIO_IMAGE (default minio/minio), FAKE_GCS_IMAGE (tustvold/fake-gcs-server: object_store uploads through
+#   the XML API, which the upstream fsouza image does not implement; it is object_store's own CI image),
 #   AZURITE_IMAGE (mcr.microsoft.com/azure-storage/azurite), AZ_CLI_IMAGE (mcr.microsoft.com/azure-cli).
 set -euo pipefail
 
 MINIO_IMAGE="${MINIO_IMAGE:-minio/minio}"
-FAKE_GCS_IMAGE="${FAKE_GCS_IMAGE:-fsouza/fake-gcs-server}"
+FAKE_GCS_IMAGE="${FAKE_GCS_IMAGE:-tustvold/fake-gcs-server}"
 AZURITE_IMAGE="${AZURITE_IMAGE:-mcr.microsoft.com/azure-storage/azurite}"
 AZ_CLI_IMAGE="${AZ_CLI_IMAGE:-mcr.microsoft.com/azure-cli}"
 # Azurite's published development account (public, fixed by Microsoft; not a secret).
@@ -60,7 +61,7 @@ s3_port="$(start minio 9000 --user "$(id -u):$(id -g)" -v "$work/minio:/data" \
   "$MINIO_IMAGE" server /data)"
 wait_for "http://127.0.0.1:${s3_port}/minio/health/live"
 
-gcs_port="$(start gcs 4443 "$FAKE_GCS_IMAGE" -scheme http -port 4443)"
+gcs_port="$(start gcs 4443 "$FAKE_GCS_IMAGE" -scheme http -backend memory -port 4443 -public-host localhost:4443)"
 wait_for "http://127.0.0.1:${gcs_port}/storage/v1/b?project=test-project"
 
 az_port="$(start azurite 10000 "$AZURITE_IMAGE" azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck)"
@@ -72,7 +73,10 @@ export KRISHIV_TEST_S3_ENDPOINT="http://127.0.0.1:${s3_port}"
 export KRISHIV_TEST_GCS_ENDPOINT="http://127.0.0.1:${gcs_port}"
 export KRISHIV_TEST_AZURE_ENDPOINT="http://127.0.0.1:${az_port}/devstoreaccount1"
 
-cargo nextest run -p krishiv-io --features cloud --test object_stores --no-tests=pass
+# Every step runs even when an earlier one fails; the exit status is non-zero if any did.
+status=0
+cargo nextest run -p krishiv-io --features cloud --test object_stores --no-tests=pass --no-fail-fast || status=1
 if [ -n "${KRISHIV_TPCH_DIR:-}" ]; then
-  cargo nextest run -p krishiv-session --features cloud --test s3_tpch --no-tests=pass
+  cargo nextest run -p krishiv-session --features cloud --test s3_tpch --no-tests=pass --no-fail-fast || status=1
 fi
+exit "$status"

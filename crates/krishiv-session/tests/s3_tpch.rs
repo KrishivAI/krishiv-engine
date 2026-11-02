@@ -87,6 +87,11 @@ fn tpch_over_s3_equals_tpch_over_local_files() {
     let registry = StoreRegistry::new(config);
     let prefix = format!("tpch-{}", std::process::id());
     let io = sched.context();
+    // The store layer times its requests with Tokio, which `futures::executor` does not provide.
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
     let mut urls: Vec<(String, Vec<String>)> = Vec::new();
     for table in ["lineitem"] {
         let files = table_files(&dir, table);
@@ -100,7 +105,7 @@ fn tpch_over_s3_equals_tpch_over_local_files() {
             let url = format!("s3a://krishiv-test/{prefix}/{table}/part-{i:05}.parquet");
             let (store, path, _) = registry.ensure(&sched, &url).unwrap();
             let bytes = Bytes::from(std::fs::read(f).unwrap());
-            block_on(io.put_object(&store, &path, bytes)).unwrap();
+            rt.block_on(io.put_object(&store, &path, bytes)).unwrap();
             remote.push(url);
         }
         urls.push((table.to_owned(), remote));
