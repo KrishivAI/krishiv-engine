@@ -114,6 +114,9 @@ pub(super) struct Level {
     /// The left side of a `JOIN LATERAL`: unlike a subquery's enclosing
     /// query, it stays in reach from further in.
     pub(super) lateral: bool,
+    /// The columns a `USING` join merged away on the left side of a `JOIN LATERAL`: they
+    /// answer to a qualified name only.
+    pub(super) hidden: Arc<[Attr]>,
 }
 
 /// A scope environment: the CTEs visible and the enclosing queries.

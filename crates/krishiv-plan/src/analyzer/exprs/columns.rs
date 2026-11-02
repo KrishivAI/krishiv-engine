@@ -376,7 +376,11 @@ impl Resolver<'_> {
         // nested lateral join's right side sees its own left side only).
         let levels = cx.env.outer.iter().enumerate().rev().take(1);
         for (level, outer) in levels.filter(|_| cx.outer) {
-            if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
+            let mut hit = self.find(&outer.scope, &c.name, origin, false)?;
+            if hit.is_none() && c.name.len() > 1 {
+                hit = self.find(&outer.hidden, &c.name, origin, false)?;
+            }
+            if let Some((a, used)) = hit {
                 self.used(&a);
                 let b = self.resolve_attr(&a, used, &c.name, origin, Some(level), false)?;
                 return Ok(if outer.lateral && used == c.name.len() {
@@ -893,6 +897,7 @@ impl Resolver<'_> {
         outer.push(super::super::resolve::Level {
             scope: scope.into(),
             lateral: false,
+            hidden: Arc::from(Vec::new()),
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }

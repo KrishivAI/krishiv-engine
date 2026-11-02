@@ -297,3 +297,19 @@ fn a_star_of_the_outer_side_inside_the_lateral() -> R {
     );
     Ok(())
 }
+
+/// A lateral right side after a `NATURAL` / `USING` join reads the merged
+/// key unqualified and each side's original key qualified.
+#[test]
+fn lateral_after_using_join_reads_merged_and_original_keys() -> R {
+    let s = session()?;
+    for sql in [
+        "with a(k, v1) as (values (1, 10)), b(k, v2) as (values (1, 20)) \
+         select * from a natural join b, lateral (select k as q, a.k as qa, b.k as qb)",
+        "with a(k, v1) as (values (1, 10)), b(k, v2) as (values (1, 20)) \
+         select * from a join b using (k), lateral (select k as q, a.k as qa, b.k as qb)",
+    ] {
+        assert_eq!(run(&s, sql)?, ["1|10|20|1|1|1"], "{sql}");
+    }
+    Ok(())
+}
