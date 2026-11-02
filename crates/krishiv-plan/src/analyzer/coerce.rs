@@ -55,6 +55,8 @@ pub(super) struct Rules {
     /// `spark.sql.caseSensitive`: struct field names match by case when
     /// nested types meet.
     pub(super) case_sensitive: bool,
+    /// `spark.sql.function.concatBinaryAsString`.
+    pub(super) concat_binary_as_string: bool,
 }
 
 impl Rules {
@@ -63,6 +65,7 @@ impl Rules {
         Self {
             ansi: call.ansi(),
             case_sensitive: call.case_sensitive(),
+            concat_binary_as_string: call.concat_binary_as_string(),
         }
     }
 }
@@ -199,6 +202,7 @@ fn common(
     let rules = Rules {
         ansi: true,
         case_sensitive,
+        concat_binary_as_string: false,
     };
     common_in(a, b, literal, rules, Nested::Tightest)
 }
@@ -463,6 +467,7 @@ pub(super) fn wider_type_without_string_promotion(
             let rules = Rules {
                 ansi: false,
                 case_sensitive,
+                concat_binary_as_string: false,
             };
             common_in(a, b, false, rules, Nested::Wider)
         }
@@ -749,7 +754,10 @@ fn concat(args: &[Arg<'_>], rules: Rules) -> Result<Typed, Mismatch> {
         common_all(args, rules)
             .ok_or_else(|| Mismatch::DataDiff(args.iter().map(|a| a.ty.cloned()).collect(), false))?
             .unwrap_or(DataType::Null)
-    } else if !args.is_empty() && args.iter().all(|a| a.ty == Some(&DataType::Binary)) {
+    } else if !args.is_empty()
+        && args.iter().all(|a| a.ty == Some(&DataType::Binary))
+        && !rules.concat_binary_as_string
+    {
         DataType::Binary
     } else {
         DataType::String
@@ -1806,6 +1814,7 @@ mod tests {
         Rules {
             ansi,
             case_sensitive: false,
+            concat_binary_as_string: false,
         }
     }
 

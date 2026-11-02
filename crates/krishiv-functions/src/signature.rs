@@ -137,6 +137,7 @@ pub struct CallTypes<'a> {
     ansi: bool,
     decimal_loss: bool,
     case_sensitive: bool,
+    concat_binary_as_string: bool,
 }
 
 impl fmt::Debug for CallTypes<'_> {
@@ -166,6 +167,7 @@ impl<'a> CallTypes<'a> {
             ansi: true,
             decimal_loss: true,
             case_sensitive: false,
+            concat_binary_as_string: false,
         }
     }
 
@@ -212,6 +214,20 @@ impl<'a> CallTypes<'a> {
     pub const fn with_case_sensitive(mut self, case_sensitive: bool) -> Self {
         self.case_sensitive = case_sensitive;
         self
+    }
+
+    /// With `spark.sql.function.concatBinaryAsString` (default off): `concat`
+    /// of binaries returns a string.
+    #[must_use]
+    pub const fn with_concat_binary_as_string(mut self, on: bool) -> Self {
+        self.concat_binary_as_string = on;
+        self
+    }
+
+    /// `spark.sql.function.concatBinaryAsString`.
+    #[must_use]
+    pub const fn concat_binary_as_string(&self) -> bool {
+        self.concat_binary_as_string
     }
 
     /// `spark.sql.caseSensitive`.

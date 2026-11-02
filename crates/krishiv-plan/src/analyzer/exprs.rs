@@ -3360,7 +3360,8 @@ impl Resolver<'_> {
             .with_sql(&sql)
             .with_ansi(ansi)
             .with_decimal_loss(loss)
-            .with_case_sensitive(self.ctx.conf.case_sensitive);
+            .with_case_sensitive(self.ctx.conf.case_sensitive)
+            .with_concat_binary_as_string(self.ctx.conf.concat_binary_as_string);
         let coerced: Vec<Arg<'_>> = kids.iter().map(arg_of).collect();
         let casts = coerce::inputs(&entry.inputs, &coerced, &call)
             .map_err(|m| self.mismatch(m, e, kids, entry.id.name(), e.origin))?;
@@ -3379,7 +3380,8 @@ impl Resolver<'_> {
             .with_bound_sql(&bound_sql)
             .with_ansi(ansi)
             .with_decimal_loss(loss)
-            .with_case_sensitive(self.ctx.conf.case_sensitive);
+            .with_case_sensitive(self.ctx.conf.case_sensitive)
+            .with_concat_binary_as_string(self.ctx.conf.concat_binary_as_string);
         let ty = (entry.result)(&call).map_err(|err| {
             // An error folding an argument is Spark's, cited at the argument.
             let origin = constants
@@ -3855,6 +3857,7 @@ impl Resolver<'_> {
         let rules = coerce::Rules {
             ansi: conf.ansi,
             case_sensitive: conf.case_sensitive,
+            concat_binary_as_string: conf.concat_binary_as_string,
         };
         let typed = coerce::operator(op, &args, rules, conf.decimal_precision_loss);
         let call = |args: Vec<Arc<Expr>>, data_type: DataType, nullable: bool| {
@@ -4754,6 +4757,7 @@ impl Resolver<'_> {
         let rules = coerce::Rules {
             ansi,
             case_sensitive: self.ctx.conf.case_sensitive,
+            concat_binary_as_string: self.ctx.conf.concat_binary_as_string,
         };
         match coerce::operator(
             Builtin::Eq,

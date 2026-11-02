@@ -11,7 +11,7 @@ use arrow_array::{
 };
 use arrow_buffer::{BooleanBuffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::DataType as ArrowType;
-use krishiv_kernels::string::{self, LikePattern, StrOperand};
+use krishiv_kernels::string::{self, BinOperand, LikePattern, StrOperand};
 
 use super::logic::str_value;
 use super::{PhysExpr, Value};
@@ -60,6 +60,10 @@ pub(super) fn to_view(a: &ArrayRef) -> Result<ArrayRef> {
         ArrowType::Utf8View | ArrowType::BinaryView => Arc::clone(a),
         other => return Err(internal(&format!("{other} is not a string or binary"))),
     })
+}
+
+fn is_binary(t: &ArrowType) -> bool {
+    matches!(t, ArrowType::BinaryView | ArrowType::Binary)
 }
 
 fn is_string(t: &ArrowType) -> bool {
@@ -177,18 +181,29 @@ impl PhysExpr for Like {
 struct Concat {
     args: Vec<Arc<dyn PhysExpr>>,
     nullable: bool,
+    /// Every argument is binary: the result is binary.
+    binary: bool,
 }
 
 pub(super) fn concat(args: Vec<Arc<dyn PhysExpr>>, nullable: bool) -> Result<Arc<dyn PhysExpr>> {
-    if args.is_empty() || !args.iter().all(|a| is_string(a.data_type())) {
+    let binary = !args.is_empty() && args.iter().all(|a| is_binary(a.data_type()));
+    if args.is_empty() || !(binary || args.iter().all(|a| is_string(a.data_type()))) {
         return Err(unsupported("concat of non-string values"));
     }
-    Ok(Arc::new(Concat { args, nullable }))
+    Ok(Arc::new(Concat {
+        args,
+        nullable,
+        binary,
+    }))
 }
 
 impl PhysExpr for Concat {
     fn data_type(&self) -> &ArrowType {
-        &ArrowType::Utf8View
+        if self.binary {
+            &ArrowType::BinaryView
+        } else {
+            &ArrowType::Utf8View
+        }
     }
 
     fn nullable(&self) -> bool {
@@ -206,6 +221,28 @@ impl PhysExpr for Concat {
             .iter()
             .map(|v| from_view(v.array()))
             .collect::<Result<Vec<_>>>()?;
+        if self.binary {
+            let parts: Vec<BinOperand<'_, i32>> = values
+                .iter()
+                .zip(&arrays)
+                .enumerate()
+                .map(|(i, (v, a))| {
+                    let b = a.as_binary::<i32>();
+                    if v.is_scalar() && !(scalar && i == 0) {
+                        BinOperand::Scalar(b.is_valid(0).then(|| b.value(0)))
+                    } else {
+                        BinOperand::Array(b)
+                    }
+                })
+                .collect();
+            let out: ArrayRef = Arc::new(string::concat_binary(&parts)?);
+            let out = to_view(&out)?;
+            return Ok(if scalar {
+                Value::Scalar(out)
+            } else {
+                Value::Array(out)
+            });
+        }
         let parts: Vec<StrOperand<'_, i32>> = values
             .iter()
             .zip(&arrays)

@@ -167,6 +167,7 @@ impl Resolver<'_> {
                     let rules = coerce::Rules {
                         ansi: true,
                         case_sensitive,
+                        concat_binary_as_string: false,
                     };
                     coerce::wider_type(&x, &y, rules)
                 } else {
@@ -402,6 +403,7 @@ impl Resolver<'_> {
                 let rules = coerce::Rules {
                     ansi,
                     case_sensitive: self.ctx.conf.case_sensitive,
+                    concat_binary_as_string: false,
                 };
                 let wider = coerce::wider_type(&arg(Some(&acc)), &arg(Some(here)), rules);
                 acc = wider.map(|t| t.unwrap_or(DataType::Null)).ok_or_else(|| {
