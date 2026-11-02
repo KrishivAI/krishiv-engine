@@ -196,6 +196,14 @@ fn cell(a: &ArrayRef, i: usize) -> String {
         DataType::Decimal128(_, s) => plain(a.as_primitive::<Decimal128Type>().value(i), *s),
         DataType::Date32 => a.as_primitive::<Date32Type>().value(i).to_string(),
         DataType::Utf8View => a.as_string_view().value(i).to_owned(),
+        DataType::Interval(_) => a
+            .as_primitive::<arrow_array::types::IntervalYearMonthType>()
+            .value(i)
+            .to_string(),
+        DataType::Duration(_) => a
+            .as_primitive::<arrow_array::types::DurationMicrosecondType>()
+            .value(i)
+            .to_string(),
         _ => format!("{:?}", a.slice(i, 1)).replace('\n', " "),
     }
 }
@@ -2810,6 +2818,7 @@ fn moment_aggs() -> Vec<AggregateExpr> {
             arg_type: DataType::Float64,
             mask: None,
             name: format!("{f:?}"),
+            element: None,
         })
         .collect()
 }

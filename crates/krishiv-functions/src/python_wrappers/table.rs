@@ -220,6 +220,22 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
 
 /// Registry names whose wrapper is written by hand in `functions.py`.
 pub(super) const HANDWRITTEN: &[(&str, &str)] = &[
+    (
+        "make_ym_interval",
+        "an omitted field is `lit(0)`, wherever it falls, so `None` can't just drop it",
+    ),
+    (
+        "make_dt_interval",
+        "an omitted field is `lit(0)`, wherever it falls, so `None` can't just drop it",
+    ),
+    (
+        "make_interval",
+        "an omitted field is `lit(0)`, wherever it falls, so `None` can't just drop it",
+    ),
+    (
+        "try_make_interval",
+        "an omitted field is `lit(0)`, wherever it falls, so `None` can't just drop it",
+    ),
     ("count", "`count(\"*\")` is `count(*)`"),
     ("log", "`log(col)` is `ln(col)`; `log(base, col)` is `log`"),
     (

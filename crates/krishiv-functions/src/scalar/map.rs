@@ -96,9 +96,8 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             projection_bind(listed, entries)
         }
         ("map_from_arrays", [k, v])
-            if matches!(k, DataType::List(_) | DataType::LargeList(_))
-                && matches!(v, DataType::List(_) | DataType::LargeList(_))
-                && kh::supports_key(k)
+            if matches!(v, DataType::List(_) | DataType::LargeList(_))
+                && matches!(k, DataType::List(f) | DataType::LargeList(f) if kh::supports_map_key(f.data_type()))
                 && kh::supports_value(v) =>
         {
             from_arrays_bind(args, k, v, policy)
@@ -121,7 +120,7 @@ fn map_bind(
     let mut value = SparkType::Null;
     let mut first = true;
     for (k, v) in types.iter().step_by(2).zip(types.iter().skip(1).step_by(2)) {
-        if !kh::supports_key(k) || !kh::supports_value(v) {
+        if !kh::supports_map_key(k) || !kh::supports_value(v) {
             return Err(bad_types(listed, args));
         }
         let (ks, vs) = (spark_type(listed, args, k)?, spark_type(listed, args, v)?);

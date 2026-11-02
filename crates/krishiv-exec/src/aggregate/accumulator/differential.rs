@@ -347,6 +347,7 @@ fn moment_acc(f: &AggregateFunction, groups: u32) -> Accumulator {
         arg_type: DataType::Float64,
         mask: None,
         name: "m".to_owned(),
+        element: None,
     };
     // Without ANSI: `corr` of a constant column is NULL, not an error.
     let mut a = Accumulator::new(&e, false).unwrap();
