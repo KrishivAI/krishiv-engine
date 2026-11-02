@@ -374,9 +374,9 @@ impl FileReads {
         options: &BTreeMap<String, OptionValue>,
         schema: SchemaRef,
     ) -> Result<Arc<FileListing>> {
-        let listing = self
-            .list_with(&format.to_ascii_lowercase(), paths, options, Some(schema))
-            .await?;
+        let listing =
+            Box::pin(self.list_with(&format.to_ascii_lowercase(), paths, options, Some(schema)))
+                .await?;
         Ok(Arc::new(listing))
     }
 
@@ -394,7 +394,7 @@ impl FileReads {
         paths: &[OptionValue],
         options: &BTreeMap<String, OptionValue>,
     ) -> Result<FileListing> {
-        self.list_with(format, paths, options, None).await
+        Box::pin(self.list_with(format, paths, options, None)).await
     }
 
     /// [`Self::list`]; with `known` the schema is given, not inferred.
@@ -413,15 +413,16 @@ impl FileReads {
                 return Err(unsupported("paths with credentials".to_owned()));
             };
             if krishiv_io::partition::glob::has_glob(text) {
-                self.list_glob(text, options, &mode, &mut listed).await?;
+                // Boxed, as the listing below: these futures sit on the recursion of nested scripts, where a
+                // larger one overflows the stack (`script_nesting_is_bounded_at_the_limit`).
+                Box::pin(self.list_glob(text, options, &mode, &mut listed)).await?;
                 continue;
             }
             // The store is instantiated from the plan's option values
             // (plans stay pure data): the read's `fs.*` options override
             // the session configuration.
             let at = self.paths.locate_with_options(text, options)?;
-            self.list_path(&at, &mode, known.is_some(), &mut listed)
-                .await?;
+            Box::pin(self.list_path(&at, &mode, known.is_some(), &mut listed)).await?;
         }
         listed.sort_by(|a, b| a.0.path.as_ref().cmp(b.0.path.as_ref()));
         // Overlapping roots (`/d/{a,a/b}`, or a glob and a plain path) reach a file twice: it is read once.
@@ -618,7 +619,7 @@ impl FileReads {
                 path,
                 display,
             };
-            self.list_path(&found, &inner, false, out).await?;
+            Box::pin(self.list_path(&found, &inner, false, out)).await?;
         }
         Ok(())
     }
