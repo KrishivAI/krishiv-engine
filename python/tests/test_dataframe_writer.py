@@ -438,3 +438,11 @@ def test_text_writing_is_unsupported(df: DataFrame, tmp_path: Any) -> None:
     with pytest.raises(errors.PySparkException) as text:
         df.select("name").write.text(str(tmp_path / "t"))
     assert error_class(text.value) == "KRISHIV_UNSUPPORTED_FEATURE"
+
+
+def test_bucket_by_and_sort_by_reject_a_list_with_more_columns(df: DataFrame) -> None:
+    with pytest.raises(errors.PySparkValueError) as both:
+        df.write.bucketBy(2, ["id"], "name")
+    assert error_class(both.value) == "CANNOT_SET_TOGETHER"
+    with pytest.raises(errors.PySparkValueError):
+        df.write.sortBy(["id"], "name")
