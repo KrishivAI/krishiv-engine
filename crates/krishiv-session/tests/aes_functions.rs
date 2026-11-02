@@ -431,3 +431,21 @@ fn a_qualified_call_hides_the_key_too() {
     );
     assert!(!err.to_string().contains("abcdefghijklmnop"), "{err}");
 }
+
+/// A literal call is folded once at planning: the optimized and physical
+/// plans hold the ciphertext (one IV for every task of a distributed run),
+/// not the call and its key.
+#[test]
+fn a_literal_call_is_folded_into_the_plan() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(&format!("SELECT hex(aes_encrypt('Spark', {K}, 'GCM'))"))).unwrap();
+    let text = block_on(df.explain(krishiv_session::ExplainMode::Extended)).unwrap();
+    let optimized = text.split("== Optimized Logical Plan ==").nth(1).unwrap();
+    // The output name keeps the written text; the call itself is gone.
+    assert!(!optimized.contains("aes_encrypt(CAST"), "{optimized}");
+    assert!(
+        optimized.contains("hex(CAST(X'") || optimized.contains("hex(X'"),
+        "{optimized}"
+    );
+    assert!(!text.contains("abcdefghijklmnop"), "{text}");
+}
