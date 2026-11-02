@@ -83,14 +83,15 @@ impl Planner<'_> {
         for (((c, at), function), mask) in calls.iter().zip(&arg_at).zip(lowered).zip(mask_at) {
             let args: Vec<usize> = columns[at.clone()].to_vec();
             let mask = mask.map(|m| columns[m]);
+            let want = c.f.data_type.to_arrow();
             let agg = match state_input(&c.f) {
                 Some((_, raw_type)) if mask.is_none() => {
                     merging_expr(function, args, raw_type, &input.schema, c.key.clone())?
                 }
                 Some(_) => return Err(internal("a filter on a call merging states")),
-                None => aggregate_expr(function, args, mask, &input.schema, c.key.clone())?,
+                None => aggregate_expr(function, args, mask, &input.schema, c.key.clone())?
+                    .with_array_result(&want),
             };
-            let want = c.f.data_type.to_arrow();
             if agg.result_type()? != want {
                 return Err(internal(&format!(
                     "{} computes {} where the analyzer typed {want}",
@@ -655,6 +656,7 @@ fn merging_expr(
         arg_type: view_type(&raw_type.to_arrow()),
         name,
         mask: None,
+        element: None,
     };
     let fields = expr.state_fields()?;
     let read = expr.args.iter().map(|a| schema.field(*a).data_type());
@@ -713,6 +715,7 @@ pub(super) fn aggregate_expr(
         arg_type,
         name,
         mask,
+        element: None,
     })
 }
 

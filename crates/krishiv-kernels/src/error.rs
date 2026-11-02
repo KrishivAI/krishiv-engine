@@ -39,8 +39,8 @@ use krishiv_common::error::{
     DatetimeFieldOutOfBoundsWithoutSuggestion, DatetimeOverflow, DivideByZero, ErrorClass,
     IllegalDayOfWeek, InternalError, IntervalArithmeticOverflowWithSuggestion,
     IntervalArithmeticOverflowWithoutSuggestion, IntervalDividedByZero, InvalidFormatEscAtTheEnd,
-    InvalidFormatEscInTheMiddle, InvalidFractionOfSecond, InvalidUtf8String,
-    KrishivDecimalRemainderImpossible, KrishivError, KrishivUnsupportedFeature,
+    InvalidFormatEscInTheMiddle, InvalidFractionOfSecond, InvalidIntervalWithMicrosecondsAddition,
+    InvalidUtf8String, KrishivDecimalRemainderImpossible, KrishivError, KrishivUnsupportedFeature,
     NumericOutOfSupportedRange, NumericValueOutOfRangeWithSuggestion,
     NumericValueOutOfRangeWithoutSuggestion, RemainderByZero, UnableToAcquireMemory,
 };
@@ -136,6 +136,14 @@ impl KernelError {
         Self {
             row: Some(row),
             error,
+        }
+    }
+
+    /// `INVALID_INTERVAL_WITH_MICROSECONDS_ADDITION`.
+    pub(crate) fn invalid_interval_with_micros_addition(row: usize) -> Self {
+        Self {
+            row: Some(row),
+            error: InvalidIntervalWithMicrosecondsAddition {}.into(),
         }
     }
 

@@ -18,7 +18,7 @@ use krishiv_exec::physical::{
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
-use krishiv_exec::{RowStageSettings, SortKey};
+use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, KeyFilterOptions};
 use krishiv_plan::{
     AttrId, BoundColumn, CastMode, DayTimeField, Expr, ExprNode, FunctionId, FunctionKind, Literal,
@@ -328,10 +328,29 @@ impl Encoder {
                 input: self.node_index(input)?,
                 keys: keys.iter().map(sort_key).collect(),
             }),
-            PhysNode::TopN { input, keys, limit } => Kind::TopN(pb::TopNNode {
+            PhysNode::LateFetch {
+                input,
+                scan,
+                file_col,
+                row_col,
+                output,
+            } => Kind::LateFetch(pb::LateFetchNode {
+                input: self.node_index(input)?,
+                scan: Some(self.scan(scan)?),
+                file_col: *file_col as u64,
+                row_col: *row_col as u64,
+                output: output.iter().map(fetch_slot).collect(),
+            }),
+            PhysNode::TopN {
+                input,
+                keys,
+                limit,
+                bound,
+            } => Kind::TopN(pb::TopNNode {
                 input: self.node_index(input)?,
                 keys: keys.iter().map(sort_key).collect(),
                 limit: *limit,
+                bound: bound.map(|b| b.0),
             }),
             PhysNode::Aggregate { input, aggregate } => {
                 Kind::Aggregate(self.aggregate(input, aggregate)?)
@@ -522,6 +541,7 @@ impl Encoder {
                 .map(|f| scan_filter(f, &self.nested))
                 .collect(),
             row_stage: Some(row_stage(&node.row_stage)),
+            row_id: node.row_id,
         })
     }
 
@@ -674,6 +694,16 @@ fn bound_column(c: &BoundColumn, nested: &Cell<bool>) -> Result<pb::BoundColumn>
 
 fn column_path(p: &ColumnPath) -> pb::ColumnPath {
     pb::ColumnPath { parts: p.0.clone() }
+}
+
+fn fetch_slot(s: &FetchSlot) -> pb::FetchSlot {
+    use pb::fetch_slot::Kind;
+    pb::FetchSlot {
+        kind: Some(match *s {
+            FetchSlot::Input(i) => Kind::Input(i as u64),
+            FetchSlot::Fetched(i) => Kind::Fetched(i as u64),
+        }),
+    }
 }
 
 fn sort_key(k: &SortKey) -> pb::SortKey {
@@ -855,6 +885,14 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
 }
 
 fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
+    let mut expr = aggregate_function(a, nested)?;
+    if let Some(f) = &a.element {
+        expr.result_element = schema_bytes(&arrow_schema::Schema::new(vec![Arc::clone(f)]));
+    }
+    Ok(expr)
+}
+
+fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
     // The decoder refuses what the analyzer and planner never produce, so the
     // encoder refuses it too instead of writing a plan that cannot be read.
     let bad_percentages = |ps: &[f64]| {

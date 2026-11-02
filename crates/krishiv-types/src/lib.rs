@@ -16,6 +16,7 @@ mod ddl;
 pub mod error;
 pub mod geo;
 pub mod interval;
+pub mod interval_parse;
 mod json;
 mod nested;
 pub mod variant;
