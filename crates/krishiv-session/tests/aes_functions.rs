@@ -240,21 +240,54 @@ fn errors_follow_spark() {
 #[test]
 fn the_key_never_reaches_an_error_message() {
     let s = Session::new().unwrap();
-    for sql in [
-        "SELECT aes_encrypt('Spark', 'secretkey-123456', 'XYZ')",
-        "SELECT aes_encrypt(1, 'secretkey-123456')",
-        "SELECT aes_decrypt(unhex('00'), 'secretkey-123456', 'GCM')",
-        "SELECT AES_ENCRYPT(1, 'secretkey-123456')",
-        "SELECT Try_Aes_Decrypt(1, 'secretkey-123456')",
-        "SELECT aes_encrypt('Spark', array('secretkey-123456'))",
-        "SELECT aes_decrypt(unhex('00'), map('secretkey-123456', 1))",
-        "SELECT aes_encrypt(DISTINCT 1, 'secretkey-123456')",
-        "SELECT aes_decrypt(DISTINCT unhex('00'), 'secretkey-123456')",
-        "SELECT aes_encrypt('Spark', CAST(array('secretkey-123456') AS BINARY))",
-        "SELECT try_aes_decrypt(unhex('00'), CAST(map('secretkey-123456', 1) AS BINARY))",
-        "SELECT aes_encrypt('Spark', CAST(CAST(struct('secretkey-123456') AS ARRAY<INT>) AS BINARY))",
+    // Each row is the class this engine raises for the shape (so an unrelated failure cannot
+    // pass for it); the key never shows in the text of any of them.
+    let mismatch = "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE";
+    let cast = "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION";
+    let crypto = "INVALID_PARAMETER_VALUE.AES_CRYPTO_ERROR";
+    for (sql, class) in [
+        (
+            "SELECT aes_encrypt('Spark', 'secretkey-123456', 'XYZ')",
+            "UNSUPPORTED_FEATURE.AES_MODE",
+        ),
+        ("SELECT aes_encrypt(1, 'secretkey-123456')", mismatch),
+        (
+            "SELECT aes_decrypt(unhex('00'), 'secretkey-123456', 'GCM')",
+            crypto,
+        ),
+        ("SELECT AES_ENCRYPT(1, 'secretkey-123456')", mismatch),
+        ("SELECT Try_Aes_Decrypt(1, 'secretkey-123456')", mismatch),
+        (
+            "SELECT aes_encrypt('Spark', array('secretkey-123456'))",
+            mismatch,
+        ),
+        (
+            "SELECT aes_decrypt(unhex('00'), map('secretkey-123456', 1))",
+            mismatch,
+        ),
+        (
+            "SELECT aes_encrypt(DISTINCT 1, 'secretkey-123456')",
+            mismatch,
+        ),
+        (
+            "SELECT aes_decrypt(DISTINCT unhex('00'), 'secretkey-123456')",
+            crypto,
+        ),
+        (
+            "SELECT aes_encrypt('Spark', CAST(array('secretkey-123456') AS BINARY))",
+            cast,
+        ),
+        (
+            "SELECT try_aes_decrypt(unhex('00'), CAST(map('secretkey-123456', 1) AS BINARY))",
+            cast,
+        ),
+        (
+            "SELECT aes_encrypt('Spark', CAST(CAST(struct('secretkey-123456') AS ARRAY<INT>) AS BINARY))",
+            cast,
+        ),
     ] {
         let err = one(&s, sql).expect_err(sql);
+        assert_eq!(err.error_class().name(), class, "{sql}: {err}");
         assert!(
             !err.to_string().contains("secretkey-123456"),
             "{sql}: {err}"
