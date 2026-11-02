@@ -375,7 +375,7 @@ impl Parsed {
                     self.fallback = v.eq_ignore_ascii_case("true");
                 }
                 "timeformat" => {
-                    self.time_pattern = Some(datetime_option(v, func, "timeFormat", self.legacy)?);
+                    self.time_pattern = Some(datetime_option(v, func, "timeFormat", false)?);
                 }
                 "header" => {
                     // Ignored for `from_csv` (Spark ignores it); `to_csv`

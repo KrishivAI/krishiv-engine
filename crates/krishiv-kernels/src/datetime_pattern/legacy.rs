@@ -217,7 +217,7 @@ impl LegacyPattern {
                 'G' => out.push_str(if year >= 1 { "AD" } else { "BC" }),
                 'Y' => {
                     // The week year: the year of the week's Saturday.
-                    let (wy, _, _) = civil_from_days(week_year_anchor(days, year, doy));
+                    let (wy, _, _) = civil_from_days(week_year_anchor(days, real, year, doy));
                     let era_year = if wy >= 1 { wy } else { 1 - wy };
                     if n == 2 {
                         let _ = write!(out, "{:02}", era_year % 100);
@@ -508,8 +508,11 @@ fn week_of_year(real: i64, year: i64, doy: i64) -> i64 {
 
 /// The day that decides the week year of `days`: itself, unless the week
 /// (Sunday first, week 1 holds January 1st) is week 1 of the next year.
-fn week_year_anchor(days: i64, year: i64, doy: i64) -> i64 {
-    if week_of_year(days, year, doy) == 1 && doy > 300 {
+///
+/// `days` is the written date's label and `real` its real epoch day (they
+/// differ before the cutover); `doy` is the hybrid ordinal.
+fn week_year_anchor(days: i64, real: i64, year: i64, doy: i64) -> i64 {
+    if week_of_year(real, year, doy) == 1 && doy > 300 {
         // Late December in next year's week 1.
         days + 31
     } else {
@@ -788,14 +791,13 @@ impl Parsed {
     /// field that was set.
     fn week_fields_agree(&self, days: i64, year: i64) -> bool {
         let (y, m, d) = civil_from_days(days);
-        let doy = days - days_from_civil(y, 1, 1).unwrap_or(days) + 1;
+        let (_, hdoy) = hybrid_week_fields(days, y, m, d);
+        let real = real_day(days, y, m, d);
         let year_ok = if self.year_is_week {
-            civil_from_days(week_year_anchor(days, y, doy)).0 == year
+            civil_from_days(week_year_anchor(days, real, y, hdoy)).0 == year
         } else {
             y == year
         };
-        let (_, hdoy) = hybrid_week_fields(days, y, m, d);
-        let real = real_day(days, y, m, d);
         // A week year with no week field ignores the month and day.
         let by_week_year =
             self.year_is_week && self.woy.is_none() && self.wom.is_none() && self.dowim.is_none();
@@ -819,7 +821,7 @@ impl Parsed {
             if self.year.is_some_and(|(y, _)| y <= 0) {
                 return None;
             }
-            return self.resolve_in(self.year.map_or(1970, |(y, _)| y));
+            return self.resolve_in(self.year.map_or(1970, |(y, _)| y), self.era_bc);
         }
         // `yy`: the century of the window start, one later when the date
         // falls before the window's first day.
@@ -829,18 +831,21 @@ impl Parsed {
         let start_days = days_from_civil(start, nm, nd.min(days_in_month(start, nm)))?;
         let base = start - start.rem_euclid(100) + two;
         // The provisional century may lack the date (`00-02-29` in 1900).
-        match self.resolve_in(base) {
-            Some(first) if first.0.div_euclid(MICROS_PER_DAY) >= start_days => Some(first),
-            _ => self.resolve_in(base + 100),
-        }
+        // The century is chosen on the year of the era, before a BC era
+        // turns the year around (`99 BC` is 1999 BC).
+        let chosen = match self.resolve_in(base, false) {
+            Some(first) if first.0.div_euclid(MICROS_PER_DAY) >= start_days => base,
+            _ => base + 100,
+        };
+        self.resolve_in(chosen, self.era_bc)
     }
 
-    fn resolve_in(&self, year: i64) -> Option<(i64, Option<Zone_>)> {
+    fn resolve_in(&self, year: i64, bc: bool) -> Option<(i64, Option<Zone_>)> {
         if self.bad_hour {
             return None;
         }
         let mut year = year;
-        if self.era_bc {
+        if bc {
             year = 1 - year;
         }
         // No calendar field reaches this far; a huge one would overflow
@@ -1142,6 +1147,19 @@ fn zone(text: &[char], pos: usize, rfc822: bool) -> Option<(usize, Zone_)> {
     if let Some(q) = named {
         return Some((q, Zone_::Offset(0)));
     }
+    // A long display name ("Pacific Daylight Time"): the longest one that
+    // starts here, with the offset of its short name.
+    let long = super::zone_names::NAMES
+        .iter()
+        .flat_map(|row| [(row[1], row[0]), (row[3], row[2])])
+        .filter(|(full, short)| full.contains(' ') && short_name_offset(short).is_some())
+        .filter_map(|(full, short)| {
+            prefix(text, pos, &[full]).map(|q| (q, short_name_offset(short).unwrap_or(0)))
+        })
+        .max_by_key(|(q, _)| *q);
+    if let Some((q, secs)) = long {
+        return Some((q, Zone_::Offset(secs)));
+    }
     let mut e = pos;
     while text
         .get(e)
@@ -1159,7 +1177,20 @@ fn zone(text: &[char], pos: usize, rfc822: bool) -> Option<(usize, Zone_)> {
     // Offsets in seconds, from a Spark 4.2.0 run under LEGACY (the names
     // `java.util.TimeZone` knows; its odd entries, `HDT` -10 and `ACDT`
     // +9:30, are kept as observed).
-    let fixed = match id.as_str() {
+    let fixed = short_name_offset(&id);
+    if let Some(secs) = fixed {
+        return Some((e, Zone_::Offset(secs)));
+    }
+    crate::datetime::resolve_zone(&id).ok()?;
+    Some((e, Zone_::Region(id)))
+}
+
+/// The fixed offset (seconds) `SimpleDateFormat` reads a short display
+/// name as, all year; from a Spark 4.2.0 run under LEGACY (the names
+/// `java.util.TimeZone` knows; its odd entries, `HDT` -10 and `ACDT`
+/// +9:30, are kept as observed).
+fn short_name_offset(id: &str) -> Option<i32> {
+    match id {
         "HST" | "HDT" => Some(-10 * 3600),
         "AKST" => Some(-9 * 3600),
         "PST" | "AKDT" => Some(-8 * 3600),
@@ -1184,12 +1215,7 @@ fn zone(text: &[char], pos: usize, rfc822: bool) -> Option<(usize, Zone_)> {
         "NZST" => Some(12 * 3600),
         "NZDT" => Some(13 * 3600),
         _ => None,
-    };
-    if let Some(secs) = fixed {
-        return Some((e, Zone_::Offset(secs)));
     }
-    crate::datetime::resolve_zone(&id).ok()?;
-    Some((e, Zone_::Region(id)))
 }
 
 #[cfg(test)]
@@ -1345,6 +1371,38 @@ mod tests {
             assert_eq!(local(p, t), Some(d(1500, 3, 1)), "{t}");
         }
         assert_eq!(local("yyyy-MM-dd", "1700-02-29"), None);
+    }
+
+    // Spark 4.2.0 under LEGACY (probe 2026-11-02).
+    #[test]
+    fn zone_display_names_parse_short_and_long_and_the_week_year_uses_the_hybrid_day() {
+        let p = LegacyPattern::new("yyyy-MM-dd HH:mm z").unwrap();
+        let offset = |t: &str| match p.parse_fields(t) {
+            Some((_, Some(Zone_::Offset(o)))) => Some(o),
+            _ => None,
+        };
+        // Spark 4.2.0: 12:00 PDT is 19:00 UTC, whether short or long.
+        assert_eq!(offset("2024-07-01 12:00 PDT"), Some(-7 * 3600));
+        assert_eq!(
+            offset("2024-07-01 12:00 Pacific Daylight Time"),
+            Some(-7 * 3600)
+        );
+        assert_eq!(
+            offset("2024-07-01 12:00 Central European Summer Time"),
+            Some(2 * 3600)
+        );
+        // 1581-12-27 is in week-year 1581 on the Julian calendar.
+        let t = days_from_civil(1581, 12, 27).unwrap() * MICROS_PER_DAY;
+        assert_eq!(fmt("yyyy YYYY w", t), "1581 1581 52");
+    }
+
+    #[test]
+    fn a_two_digit_year_with_bc_picks_its_century_on_the_year_of_the_era() {
+        let mut p = LegacyPattern::new("yy G").unwrap();
+        p.today = (2026, 11, 2);
+        // Spark 4.2.0: '99 BC' is 1999 BC (astronomical year -1998).
+        let want = days_from_civil(-1998, 1, 1).unwrap() * MICROS_PER_DAY;
+        assert_eq!(p.parse_local("99 BC", true).unwrap(), Some(want));
     }
 
     #[test]
