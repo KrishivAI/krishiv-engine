@@ -1888,8 +1888,10 @@ impl Session {
                 // `ignore` found the path: nothing is written.
                 return Ok(Vec::new());
             };
-            let write = if uses_commit_log(&env.config, &io, &store, &at, &job).await? {
-                write.logged(&io).await?
+            // Boxed: the statement futures are on the recursion of nested
+            // scripts, so a larger write future would overflow their stack.
+            let write = if Box::pin(uses_commit_log(&env.config, &io, &store, &at, &job)).await? {
+                Box::pin(write.logged(&io)).await?
             } else {
                 write
             };

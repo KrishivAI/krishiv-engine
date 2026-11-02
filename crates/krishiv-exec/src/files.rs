@@ -629,6 +629,25 @@ impl FileReads {
             .collect()
     }
 
+    /// The files the commit log of the directory `at` shows, `None` when it
+    /// has no log.
+    async fn committed_files(
+        &self,
+        at: &LocatedPath,
+    ) -> Result<Option<BTreeMap<String, krishiv_io::commit_log::AddedFile>>> {
+        let log = krishiv_io::commit_log::CommitLog::new(
+            &self.io,
+            at.store.clone(),
+            at.path.clone(),
+            at.display.clone(),
+        );
+        if log.exists().await? {
+            Ok(Some(log.snapshot().await?.files))
+        } else {
+            Ok(None)
+        }
+    }
+
     async fn list_path(
         &self,
         at: &LocatedPath,
@@ -661,17 +680,9 @@ impl FileReads {
         }
         let base = at.path.parts().count();
         // A directory with a commit log shows only the files committed there.
-        let log = krishiv_io::commit_log::CommitLog::new(
-            &self.io,
-            at.store.clone(),
-            at.path.clone(),
-            at.display.clone(),
-        );
-        let committed = if log.exists().await? {
-            Some(log.snapshot().await?.files)
-        } else {
-            None
-        };
+        // Boxed: the listing future sits on deep recursion paths (nested
+        // scripts), so it must stay small.
+        let committed = Box::pin(self.committed_files(at)).await?;
         let mut seen = 0;
         for meta in self.io.list(&at.store, &at.path).await? {
             let below: Vec<_> = meta.location.parts().skip(base).collect();
