@@ -55,7 +55,7 @@ use crate::store::{
 };
 
 /// The file formats a table can have.
-const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc"];
+const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
 
 /// The short name of a data source written fully qualified, as Spark maps its built-in classes
 /// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
@@ -1355,6 +1355,16 @@ impl Session {
                 if table.columns.is_empty() {
                     return Err(unsupported("CREATE TABLE without columns"));
                 }
+                krishiv_io::check_declared_schema(
+                    &table.provider,
+                    &arrow_schema::Schema::new(
+                        table
+                            .columns
+                            .iter()
+                            .map(|c| c.data_type.to_arrow_field(&c.name, true))
+                            .collect::<Vec<_>>(),
+                    ),
+                )?;
                 table.layout = crate::partitions::table_layout(
                     &name,
                     &mut table.columns,
