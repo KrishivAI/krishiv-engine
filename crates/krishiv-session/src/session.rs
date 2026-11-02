@@ -165,6 +165,9 @@ pub(crate) struct SessionState {
     query_ids: AtomicU64,
     /// The queries `system.queries` lists.
     pub(crate) queries: Arc<crate::system::QueryLog>,
+    /// The session's id on spans and logs (`telemetry.rs`), and the count of its statements.
+    pub(crate) session_id: String,
+    statements: AtomicU64,
     /// SQL source ids handed to view lowerings: every `CREATE TEMPORARY
     /// VIEW` lowers its query with an id of its own, so errors raised
     /// while expanding a view point into the view's text, not the outer
@@ -372,6 +375,8 @@ impl SessionBuilder {
                 plan_ids: AtomicI64::new(0),
                 query_ids: AtomicU64::new(0),
                 queries,
+                session_id: crate::telemetry::new_session_id(),
+                statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(1),
             }),
         })
@@ -552,7 +557,14 @@ impl Session {
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         let marker = Arc::clone(&row);
         let result = self
-            .on_executor(async move { session.sql_here_marked(&text, marker).await })
+            .on_executor(async move {
+                let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
+                let trace = crate::telemetry::QueryTrace::of(&session.state.session_id, seq, &text);
+                session
+                    .sql_here_marked(&text, marker)
+                    .await
+                    .map(|df| df.with_trace(trace))
+            })
             .await;
         // A statement refused before it ran (parse, analysis, access) is a
         // row of `system.queries` too, with the text as the session may show it.

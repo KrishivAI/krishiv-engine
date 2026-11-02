@@ -340,6 +340,10 @@ pub struct DataFrame {
     /// materializes this plan into the relation cache. Derived frames do
     /// not inherit it, but their actions still read matching entries.
     cache_request: Option<StorageLevel>,
+    /// What the frame's actions say on their `krishiv.query` span: set for
+    /// a frame `Session::sql` returned, absent for one a transformation
+    /// built.
+    trace: Option<Arc<crate::telemetry::QueryTrace>>,
 }
 
 impl fmt::Debug for DataFrame {
@@ -367,6 +371,7 @@ impl DataFrame {
             analysis: Arc::default(),
             invalid: None,
             cache_request: None,
+            trace: None,
         }
     }
 
@@ -393,6 +398,7 @@ impl DataFrame {
             analysis: Arc::default(),
             invalid: self.invalid.clone(),
             cache_request: None,
+            trace: None,
         }
     }
 
@@ -1272,51 +1278,60 @@ impl DataFrame {
     }
 
     async fn execute_stream_here(&self) -> Result<RecordBatchStream, KrishivError> {
-        // Before the query is analyzed, so an invalidation that runs while it executes keeps
-        // its rows out of the result cache.
-        let generation = crate::result_cache::global().generation();
-        let a = self.action_analysis().await?;
-        // The reads were authorized by the analysis: a hit serves only what this principal's
-        // own run of the query would return.
-        // A frame that asked for a relation cache (`cache()`, `persist()`) runs the query: its
-        // snapshot is filled from the run, whatever the shared store holds.
-        let result = crate::result_cache::settings(&a.env)
-            .filter(|_| self.cache_request.is_none())
-            .and_then(|settings| self.session.result_key(&a).map(|key| (settings, key)))
-            // A cached relation substituted into the plan makes the rows depend on this
-            // session's state: neither served from nor stored into the shared cache.
-            .filter(|_| {
-                !self.session.state.cache.would_substitute(&a.analyzed)
-                    && self
-                        .session
-                        .state
-                        .cache
-                        .lookup(&CacheKey::of(&a.analyzed))
-                        .is_none()
-            });
-        if let Some((settings, key)) = &result
-            && let Some((batches, _age)) = crate::result_cache::global().lookup(key, settings.ttl)
-        {
-            // A hit is a request answered, so it has its row in `system.queries` too; it is not a
-            // physical execution, so the metrics registry does not count it.
-            let id = self
-                .session
-                .state
-                .queries
-                .record_replayed(a.env.text.as_deref(), a.env.statement_class);
-            *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
-            return Ok(crate::carrier::client_stream(crate::result_cache::replay(
-                batches,
-            )));
+        use tracing::Instrument as _;
+        let span = self.span();
+        async {
+            // Before the query is analyzed, so an invalidation that runs while it executes keeps
+            // its rows out of the result cache.
+            let generation = crate::result_cache::global().generation();
+            let a = self.action_analysis().await?;
+            // The reads were authorized by the analysis: a hit serves only what this principal's
+            // own run of the query would return.
+            // A frame that asked for a relation cache (`cache()`, `persist()`) runs the query: its
+            // snapshot is filled from the run, whatever the shared store holds.
+            let result = crate::result_cache::settings(&a.env)
+                .filter(|_| self.cache_request.is_none())
+                .and_then(|settings| self.session.result_key(&a).map(|key| (settings, key)))
+                // A cached relation substituted into the plan makes the rows depend on this
+                // session's state: neither served from nor stored into the shared cache.
+                .filter(|_| {
+                    !self.session.state.cache.would_substitute(&a.analyzed)
+                        && self
+                            .session
+                            .state
+                            .cache
+                            .lookup(&CacheKey::of(&a.analyzed))
+                            .is_none()
+                });
+            if let Some((settings, key)) = &result
+                && let Some((batches, _age)) =
+                    crate::result_cache::global().lookup(key, settings.ttl)
+            {
+                // A hit is a request answered, so it has its row in `system.queries` too; it is not a
+                // physical execution, so the metrics registry does not count it.
+                let id = self
+                    .session
+                    .state
+                    .queries
+                    .record_replayed(a.env.text.as_deref(), a.env.statement_class);
+                *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
+                return Ok(crate::carrier::client_stream(crate::result_cache::replay(
+                    batches,
+                )));
+            }
+            let (physical, fill) = self.physical_cached(&a).await?;
+            let stream = self.session.run(&physical, &a.env).await?;
+            let stream = fill.fill(stream, &self.session.state.cache);
+            let stream = match result {
+                Some((settings, key)) => {
+                    crate::result_cache::fill(stream, key, generation, settings)
+                }
+                None => stream,
+            };
+            Ok(crate::carrier::client_stream(stream))
         }
-        let (physical, fill) = self.physical_cached(&a).await?;
-        let stream = self.session.run(&physical, &a.env).await?;
-        let stream = fill.fill(stream, &self.session.state.cache);
-        let stream = match result {
-            Some((settings, key)) => crate::result_cache::fill(stream, key, generation, settings),
-            None => stream,
-        };
-        Ok(crate::carrier::client_stream(stream))
+        .instrument(span)
+        .await
     }
 
     /// The analyzed plan with cached subplans replaced by scans of their
@@ -1338,6 +1353,21 @@ impl DataFrame {
             plan: krishiv_plan::Plan::try_new(sub.plan)?,
             ..(*a.analyzed).clone()
         }))
+    }
+
+    /// The span of one action: the statement's, or the engine's alone.
+    fn span(&self) -> tracing::Span {
+        let session_id = &self.session.state.session_id;
+        self.trace.as_ref().map_or_else(
+            || crate::telemetry::plain_span(session_id),
+            |t| t.span(session_id),
+        )
+    }
+
+    /// `self` with the statement's trace.
+    pub(crate) fn with_trace(mut self, trace: crate::telemetry::QueryTrace) -> Self {
+        self.trace = Some(Arc::new(trace));
+        self
     }
 
     /// The physical plan with every cached (sub)plan substituted, and what
