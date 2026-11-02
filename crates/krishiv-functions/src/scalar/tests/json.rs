@@ -853,3 +853,32 @@ fn schema_of_json_deep_nesting_is_null() {
     let out = f.invoke(&[col(&json)], json.len()).unwrap();
     assert_eq!(text(&out), owned(&[None]));
 }
+
+#[test]
+fn from_json_date_format_follows_the_legacy_time_parser() {
+    // `MMMMM` is the full month name to `SimpleDateFormat`.
+    let json = strs(&[Some("{\"d\":\"26/October/2015\"}")]);
+    let schema = strs(&[Some("d Date")]);
+    let fmt = opts(&[("dateFormat", "dd/MMMMM/yyyy")]);
+    let f = bind_scalar(
+        "from_json",
+        &[
+            json.data_type().clone().into(),
+            schema_arg_of(&schema),
+            BindArg::Literal(Arc::clone(&fmt)),
+        ],
+        &BindOptions::new().with_legacy_time_parser(true),
+    )
+    .unwrap();
+    let out = f
+        .invoke(&[col(&json), lit(&schema), lit(&fmt)], json.len())
+        .unwrap();
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    let days: Vec<Option<i32>> = st
+        .column(0)
+        .as_primitive::<arrow_array::types::Date32Type>()
+        .iter()
+        .collect();
+    // 2015-10-26.
+    assert_eq!(days, [Some(16_734)]);
+}

@@ -239,6 +239,8 @@ struct Parsed {
     ntz_pattern: Option<DateTimePattern>,
     /// Fallback to lenient grammar.
     fallback: bool,
+    /// `timeParserPolicy=LEGACY`: the date patterns are the legacy ones.
+    legacy: bool,
     /// Quote every value (`to_csv` write).
     quote_all: bool,
     /// Quote values holding a quote.
@@ -255,13 +257,14 @@ pub(super) fn datetime_option(
     pattern: &str,
     func: &str,
     option: &str,
+    legacy: bool,
 ) -> Result<DateTimePattern, KrishivError> {
     let purpose = if func == "to_csv" {
         Purpose::Format
     } else {
         Purpose::Parse
     };
-    datetime_option_as(pattern, func, option, purpose)
+    datetime_option_as(pattern, func, option, purpose, legacy)
 }
 
 /// [`datetime_option`] for an explicit `purpose` (the XML functions).
@@ -270,8 +273,9 @@ pub(super) fn datetime_option_as(
     func: &str,
     option: &str,
     purpose: Purpose,
+    legacy: bool,
 ) -> Result<DateTimePattern, KrishivError> {
-    DateTimePattern::new(pattern, purpose).map_err(|e| {
+    DateTimePattern::new_with(pattern, purpose, legacy).map_err(|e| {
         if e.error_class() == ErrorClass::KrishivUnsupportedFeature {
             KrishivUnsupportedFeature {
                 feature: format!("{func} with option {option}"),
@@ -299,6 +303,7 @@ impl Parsed {
             timestamp_pattern: None,
             ntz_pattern: None,
             fallback: false,
+            legacy: false,
             quote_all: false,
             escape_quotes: true,
             line_sep: None,
@@ -350,19 +355,21 @@ impl Parsed {
                 }
                 "columnnameofcorruptrecord" => self.corrupt_column = v.clone(),
                 "dateformat" => {
-                    self.date_pattern = Some(datetime_option(v, func, "dateFormat")?);
+                    self.date_pattern = Some(datetime_option(v, func, "dateFormat", self.legacy)?);
                 }
                 "timestampformat" => {
-                    self.timestamp_pattern = Some(datetime_option(v, func, "timestampFormat")?);
+                    self.timestamp_pattern =
+                        Some(datetime_option(v, func, "timestampFormat", self.legacy)?);
                 }
                 "timestampntzformat" => {
-                    self.ntz_pattern = Some(datetime_option(v, func, "timestampNTZFormat")?);
+                    self.ntz_pattern =
+                        Some(datetime_option(v, func, "timestampNTZFormat", self.legacy)?);
                 }
                 "enabledatetimeparsingfallback" => {
                     self.fallback = v.eq_ignore_ascii_case("true");
                 }
                 "timeformat" => {
-                    self.time_pattern = Some(datetime_option(v, func, "timeFormat")?);
+                    self.time_pattern = Some(datetime_option(v, func, "timeFormat", self.legacy)?);
                 }
                 "header" => {
                     // Ignored for `from_csv` (Spark ignores it); `to_csv`
@@ -438,6 +445,7 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
         })
         .collect::<Result<_, _>>()?;
     let mut parsed = Parsed::defaults();
+    parsed.legacy = opts.legacy_time_parser;
     if args.len() == 3 {
         // Options are a `MAP<STRING, STRING>` literal (analysis checked the
         // types); anything else was refused during analysis.
@@ -527,6 +535,7 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         })
         .collect::<Result<_, _>>()?;
     let mut parsed = Parsed::defaults();
+    parsed.legacy = opts.legacy_time_parser;
     // Writing defaults (Spark's CSV writer): an empty string is written as
     // two quotes, and the whitespace around a value is dropped.
     parsed.syntax.empty_value = "\"\"".to_owned();
