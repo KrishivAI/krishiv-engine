@@ -2437,19 +2437,15 @@ mod tests {
             let outcome = cell(f, sql, on, rows(ty, want));
             assert_eq!(outcome, CellOutcome::Pass, "{sql}");
         }
-        // Day arithmetic past the `int` range: Spark wraps; Krishiv wraps with
-        // ANSI off and raises with ANSI on (reported as a documented divergence).
+        // Day arithmetic past the `int` range wraps like Java int, ANSI on or off.
         let sql = "SELECT date_add('2016-07-30', 2147483647)";
         let wrapped = rows("date", day(-2_147_466_637));
-        assert_eq!(
-            cell("date_add", sql, Mode::AnsiOff, wrapped.clone()),
-            CellOutcome::Pass
-        );
-        let ansi = cell("date_add", sql, on, wrapped);
-        assert!(
-            matches!(&ansi, CellOutcome::NotRun(w) if w.contains("ADR 0023")),
-            "{ansi:?}"
-        );
+        for mode in [Mode::AnsiOff, on] {
+            assert_eq!(
+                cell("date_add", sql, mode, wrapped.clone()),
+                CellOutcome::Pass
+            );
+        }
         // The clock functions only check the result type.
         let nd = |ty: &str| Expected::Nondeterministic {
             schema: vec![Field {
