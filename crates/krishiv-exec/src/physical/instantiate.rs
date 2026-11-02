@@ -35,7 +35,7 @@
 //! scans read the cells it hands out, and producers publish their partials
 //! to it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -52,8 +52,8 @@ use object_store::path::Path;
 
 use super::{
     AggregatePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
-    ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SortMergeJoinPlan, SubqueryPlan,
-    ValueId, Version, WritePlan, files_of, partitions_of,
+    ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SharedPlan, SortMergeJoinPlan,
+    SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
 };
 use crate::aggregate::{AggregateNode, AggregateSpec, HashAggregate, distinct_plan};
 use crate::error::{Result, internal};
@@ -61,6 +61,7 @@ use crate::join::{
     HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, NestedLoopJoin, NestedLoopJoinNode,
     NestedLoopSpec, SortMergeJoin, SortMergeJoinNode,
 };
+use crate::loops::UnionLoopSource;
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
     Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, Generate, NullOf, Predicate, Project,
@@ -72,7 +73,7 @@ use crate::planner::TableProviderResolver;
 use crate::planner::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
 use crate::planner::nodes::{BreakerNode, FanInNode, OperatorNode, OrderedNode, SourceNode};
 use crate::planner::subquery::{SubquerySink, SubqueryValue, WithSubqueries};
-use crate::shared::{SharedSink, SharedSource};
+use crate::shared::{Output, SharedSink, SharedSource};
 use crate::values::{
     BroadcastBuild, LocalValues, Partial, Producer, Publication, Value, ValueService,
 };
@@ -305,21 +306,13 @@ pub fn instantiate_task(
                 .unwrap_or_else(|| Arc::new(LocalValues::new())),
             ids: node_ids(plan.roots()),
             shared: HashMap::new(),
+            shared_plans: Arc::from(plan.shared()),
+            loops: HashMap::new(),
         };
         for root in plan.roots() {
             cx.declare_filters(root)?;
         }
-        // Inner first: a shared plan reads only earlier ones.
-        for sp in plan.shared() {
-            let body = cx.node(&sp.plan)?;
-            let producer = Arc::new(SharedProducer {
-                sink: SharedSink::new(Arc::clone(&body.schema), cx.spill.clone()),
-                schema: Arc::clone(&body.schema),
-                node: body.node,
-                ordered: sp.ordered,
-            });
-            cx.shared.insert(sp.id, producer);
-        }
+        cx.build_shared()?;
         let built = cx.node(plan.root())?;
         if built.schema.fields() != plan.schema().fields() {
             return Err(internal(format!(
@@ -367,6 +360,69 @@ struct Instantiation<'a> {
     ids: HashMap<usize, u32>,
     /// The shared plans built so far (a shared plan reads only earlier ones).
     shared: HashMap<super::SharedId, Arc<SharedProducer>>,
+    /// The plan's shared plans, inner first (a recursive round builds them
+    /// again).
+    shared_plans: Arc<[SharedPlan]>,
+    /// The table each enclosing recursive CTE's [`PhysNode::LoopRef`]s read,
+    /// by loop id: the previous round, for a round being instantiated.
+    loops: HashMap<u32, Arc<Output>>,
+}
+
+/// What a recursive CTE needs to instantiate its recursive term once per
+/// round, long after the instantiation that built it ended.
+pub(crate) struct Detached {
+    worker: WorkerContext,
+    task: TaskSpec,
+    spill: Option<SpillScope>,
+    env: EvalEnv,
+    shared_plans: Arc<[SharedPlan]>,
+    /// The tables of the enclosing loops' current rounds.
+    loops: HashMap<u32, Arc<Output>>,
+}
+
+impl Detached {
+    /// The query's spill scope on this worker.
+    pub(crate) fn spill(&self) -> Option<&SpillScope> {
+        self.spill.as_ref()
+    }
+
+    /// `node` built with the loop tables `loops` (those of the enclosing
+    /// loops, and this loop's previous round), as a round of its own: fresh
+    /// values, and the plan's shared plans built again.
+    ///
+    /// # Errors
+    /// As [`instantiate_task`].
+    pub(crate) fn instantiate(
+        &self,
+        node: &PhysNode,
+        mut loops: HashMap<u32, Arc<Output>>,
+    ) -> Result<(Arc<dyn ExecNode>, SchemaRef)> {
+        for (id, table) in &self.loops {
+            loops.entry(*id).or_insert_with(|| Arc::clone(table));
+        }
+        let run = || {
+            let mut cx = Instantiation {
+                worker: &self.worker,
+                task: self.task.clone(),
+                spill: self.spill.clone(),
+                env: self.env.clone(),
+                values: Arc::new(LocalValues::new()),
+                ids: HashMap::new(),
+                shared: HashMap::new(),
+                shared_plans: Arc::clone(&self.shared_plans),
+                loops,
+            };
+            cx.declare_filters(node)?;
+            for sp in cx.shared_plans.iter() {
+                cx.declare_filters(&sp.plan)?;
+            }
+            cx.build_shared()?;
+            let built = cx.node(node)?;
+            Ok((built.node, built.schema))
+        };
+        krishiv_common::stack::on_big_stack(run)
+            .ok_or_else(|| internal("cannot start an instantiation thread".to_owned()))?
+    }
 }
 
 /// A shared plan's body and the sink that keeps its rows; every reader's pipeline depends on this one.
@@ -439,6 +495,57 @@ struct Built {
 }
 
 impl Instantiation<'_> {
+    /// Builds the shared plans, inner first: a shared plan reads only earlier
+    /// ones.
+    fn build_shared(&mut self) -> Result<()> {
+        let plans = Arc::clone(&self.shared_plans);
+        // A shared plan that reads a loop's table (or a shared plan that
+        // does) can only be built where that table is bound: in a round of
+        // the loop. Elsewhere it is left out; nothing reads it there.
+        // Each deferred plan keeps the loops it still waits for, so a plan
+        // that reads it is deferred only for those the plan does not bind
+        // itself (a round-local plan read inside a loop is built in its
+        // rounds, not at the enclosing producer).
+        let mut deferred: HashMap<_, Vec<_>> = HashMap::new();
+        for sp in plans.iter() {
+            let mut stack = vec![&sp.plan];
+            // Loops this plan defines bind their own references.
+            let mut local = HashSet::new();
+            let mut refs = Vec::new();
+            while let Some(n) = stack.pop() {
+                match n {
+                    PhysNode::UnionLoop { id, .. } => {
+                        local.insert(*id);
+                    }
+                    PhysNode::LoopRef { id, .. } => refs.push(*id),
+                    PhysNode::SharedRead { id, .. } => {
+                        if let Some(waits) = deferred.get(id) {
+                            refs.extend(waits.iter().copied());
+                        }
+                    }
+                    _ => {}
+                }
+                stack.extend(n.children());
+            }
+            refs.retain(|id| !self.loops.contains_key(id) && !local.contains(id));
+            if !refs.is_empty() {
+                refs.sort_unstable();
+                refs.dedup();
+                deferred.insert(sp.id, refs);
+                continue;
+            }
+            let body = self.node(&sp.plan)?;
+            let producer = Arc::new(SharedProducer {
+                sink: SharedSink::new(Arc::clone(&body.schema), self.spill.clone()),
+                schema: Arc::clone(&body.schema),
+                node: body.node,
+                ordered: sp.ordered,
+            });
+            self.shared.insert(sp.id, producer);
+        }
+        Ok(())
+    }
+
     /// Declares every runtime filter a scan declares to the value service.
     fn declare_filters(&self, n: &PhysNode) -> Result<()> {
         let mut stack = vec![n];
@@ -501,6 +608,64 @@ impl Instantiation<'_> {
                         source: SharedSource::new(Arc::clone(&producer.schema)),
                         producer,
                     }),
+                })
+            }
+            PhysNode::LoopRef { id, .. } => {
+                let table = self.loops.get(id).cloned().ok_or_else(|| {
+                    internal(format!(
+                        "recursive reference {id} is read outside its round"
+                    ))
+                })?;
+                let source = SharedSource::over(table);
+                Ok(Built {
+                    schema: source.schema(),
+                    node: Arc::new(SourceNode(source)),
+                })
+            }
+            PhysNode::UnionLoop {
+                id,
+                anchor,
+                recursive,
+                nullable,
+                limits,
+                ..
+            } => {
+                let anchor = self.node(anchor)?;
+                // The loop's rows are the anchor's, with the nullability the
+                // plan fixed (the recursive term may produce nulls the
+                // anchor does not).
+                let fields: Vec<arrow_schema::FieldRef> = anchor
+                    .schema
+                    .fields()
+                    .iter()
+                    .zip(nullable)
+                    .map(|(f, n)| Arc::new(f.as_ref().clone().with_nullable(*n)))
+                    .collect();
+                if fields.len() != anchor.schema.fields().len() {
+                    return Err(internal(
+                        "a recursive CTE whose anchor has another width".to_owned(),
+                    ));
+                }
+                let schema: SchemaRef = Arc::new(arrow_schema::Schema::new(fields));
+                let detached = Arc::new(Detached {
+                    worker: self.worker.clone(),
+                    task: self.task.clone(),
+                    spill: self.spill.clone(),
+                    env: self.env.clone(),
+                    shared_plans: Arc::clone(&self.shared_plans),
+                    loops: self.loops.clone(),
+                });
+                let source = UnionLoopSource::new(
+                    *id,
+                    Arc::clone(&schema),
+                    anchor.node,
+                    (**recursive).clone(),
+                    *limits,
+                    detached,
+                );
+                Ok(Built {
+                    schema,
+                    node: Arc::new(SourceNode(source)),
                 })
             }
             PhysNode::OneRow => {

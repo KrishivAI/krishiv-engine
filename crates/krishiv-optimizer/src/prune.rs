@@ -128,6 +128,13 @@ impl Graph {
             }
             // Inputs match by position: each is read whole.
             PlanNode::Union { inputs, .. } => inputs.iter().for_each(|i| child(i, None)),
+            // The terms of a recursive CTE feed back by position.
+            PlanNode::UnionLoop {
+                anchor, recursive, ..
+            } => {
+                child(anchor, None);
+                child(recursive, None);
+            }
             PlanNode::Window { input, .. } => child(input, Some(window_need(p, req))),
             _ => {}
         }

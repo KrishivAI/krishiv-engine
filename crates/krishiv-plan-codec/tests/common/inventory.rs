@@ -764,6 +764,44 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 subqueries: Vec::new(),
             },
         ),
+        (
+            "union_loop",
+            PhysNode::UnionLoop {
+                id: 3,
+                anchor: boxed(scan()),
+                recursive: boxed(PhysNode::Union {
+                    inputs: vec![PhysNode::LoopRef {
+                        id: 3,
+                        layout: vec![AttrId(1)],
+                    }],
+                }),
+                layout: vec![AttrId(1)],
+                nullable: vec![true],
+                limits: krishiv_exec::physical::LoopLimits {
+                    level: 100,
+                    rows: 1_000_000,
+                    pushed_limit: Some(10),
+                },
+            },
+        ),
+        (
+            "union_loop_unbounded",
+            PhysNode::UnionLoop {
+                id: 4,
+                anchor: boxed(scan()),
+                recursive: boxed(PhysNode::LoopRef {
+                    id: 4,
+                    layout: vec![AttrId(1)],
+                }),
+                layout: vec![AttrId(1)],
+                nullable: vec![true],
+                limits: krishiv_exec::physical::LoopLimits {
+                    level: u32::MAX,
+                    rows: u64::MAX,
+                    pushed_limit: None,
+                },
+            },
+        ),
         ("expand_rollup", expand_rollup()),
         (
             "expand_single",

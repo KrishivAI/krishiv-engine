@@ -453,6 +453,10 @@ pub enum PlanNode {
         /// `MAX RECURSION LEVEL n`; else the session's
         /// `spark.sql.cteRecursionLevelLimit` applies.
         max_level: Option<u32>,
+        /// The rows the readers of the loop need at most (every read sits
+        /// under a `LIMIT`, set by the session before physical planning):
+        /// the loop stops once it produced this many.
+        limit: Option<u64>,
         /// The output columns (empty until resolved), named by the anchor.
         output: Vec<BoundColumn>,
     },
