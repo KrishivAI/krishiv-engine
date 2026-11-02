@@ -3,13 +3,7 @@
     "depends-on-command": [
       100
     ],
-    "nested-interval-types": [
-      38,
-      39
-    ],
     "query-features": [
-      40,
-      43,
       44,
       62,
       67,

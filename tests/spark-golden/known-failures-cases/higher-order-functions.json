@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "depends-on-command": [
-      6
-    ]
-  },
-  "file": "higher-order-functions",
-  "format_version": 1
-}
