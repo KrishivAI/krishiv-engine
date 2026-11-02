@@ -13,7 +13,7 @@ use krishiv_common::error::{
     MissingAggregation, MissingGroupBy, NumTableValueAliasesMismatch, OrderByPosOutOfRange,
     QualifyAggregateNotAllowed, QualifyRequiresWindowFunction, StarGroupByPos,
     SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound, UdtfAliasNumberMismatch,
-    UnresolvedAllInGroupBy, UnresolvedUsingColumnForJoin,
+    UnresolvedAllInGroupBy, UnresolvedUsingColumnForJoin, UnsupportedExprForOperator,
     UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy, UnsupportedGeneratorNestedInExpressions,
 };
@@ -1081,6 +1081,27 @@ impl Resolver<'_> {
         Ok((bounds, wide))
     }
 
+    /// Whether a `Generate` node sits between `plan` and the aggregate it
+    /// sorts: the search stops at the first aggregate, so a generator in
+    /// that aggregate's input does not count.
+    fn holds_generator(plan: &Arc<LogicalPlan>) -> bool {
+        let mut seen = HashSet::new();
+        let mut stack = vec![Arc::clone(plan)];
+        while let Some(p) = stack.pop() {
+            if !seen.insert(Arc::as_ptr(&p) as usize) {
+                continue;
+            }
+            if matches!(p.node, PlanNode::Generate { .. }) {
+                return true;
+            }
+            if matches!(p.node, PlanNode::Aggregate { .. }) {
+                continue;
+            }
+            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
+        false
+    }
+
     /// The aggregate under `c`'s filters, sorts and limits (`HAVING`), and
     /// those layers, top first; `None` when `c` is not such a stack. A
     /// `HAVING` that had to grow the aggregate left a projection over its
@@ -1318,6 +1339,20 @@ impl Resolver<'_> {
                     let k = semantic_key(&x, &mut memo);
                     let a = match known.iter().find(|(kk, _)| *kk == k) {
                         Some((_, a)) => a.clone(),
+                        None if info.distinct_rewritten
+                            && !f.distinct
+                            && !matches!(f.id.name(), "min" | "max") =>
+                        {
+                            // Spark rewrites this call with the select list's. Planned over the
+                            // rewrite's own rows (one per distinct set) it would count each group
+                            // once per set (`HAVING count(*) > 1` kept every group), so it is
+                            // refused until the rewrite takes calls from `HAVING` and `ORDER BY`.
+                            // A `DISTINCT` call, `min` and `max` do not read a row twice.
+                            return Err(unsupported(
+                                "an aggregate in HAVING or ORDER BY that the select list does not hold, over DISTINCT aggregates of different arguments",
+                                x.origin,
+                            ));
+                        }
                         None => {
                             let ty = ArgType {
                                 data_type: Some(f.data_type.clone()),
@@ -1534,6 +1569,10 @@ impl Resolver<'_> {
             return self.grouping_sets(p, input, grouping, aggregates, env);
         };
         let c = self.child(input, env)?;
+        // A select item `stack(..)` is `inline` over its array of rows,
+        // as in a plain select list.
+        let stacked = self.stack_items(&c, aggregates, env)?;
+        let aggregates = &stacked[..];
         self.check_star_ordinals(keys, aggregates)?;
         // Spark resolves the select list first, then ordinals, then the
         // other keys.
@@ -1873,6 +1912,7 @@ impl Resolver<'_> {
             top: None,
             analytics,
             having: None,
+            distinct_rewritten: false,
         };
         if base.len() == items.len() {
             return self.aggregate_rel(origin, info, &[]);
@@ -2418,9 +2458,11 @@ impl Resolver<'_> {
                 ..b.clone()
             });
         }
-        Ok(Some(self.build_aggregate(
-            origin, &r1, group2, &items2, global, None, env,
-        )?))
+        let mut r = self.build_aggregate(origin, &r1, group2, &items2, global, None, env)?;
+        if let Some(info) = r.agg.as_mut() {
+            Arc::make_mut(info).distinct_rewritten = true;
+        }
+        Ok(Some(r))
     }
 
     /// A select item that reads lateral aliases, bound over the
@@ -3157,6 +3199,29 @@ impl Resolver<'_> {
                 Err(e) => return Err(reported(e)),
             }
         };
+        // A generator between the sort and the aggregate: the aggregate
+        // cannot grow through it, so Spark leaves the call in the sort and
+        // refuses it there.
+        if bounds.iter().any(|b| b.agg.is_some()) && Self::holds_generator(&c.plan) {
+            let calls: Vec<String> = bounds
+                .iter()
+                .flat_map(|b| {
+                    aggregate_sql(&b.shown(), &below.out)
+                        .split(", ")
+                        .filter(|c| !c.is_empty())
+                        .map(|c| format!("\"{c}\""))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+            if !calls.is_empty() {
+                return Err(AnalysisError::new(
+                    UnsupportedExprForOperator {
+                        invalid_expr_sqls: calls.join(", "),
+                    },
+                    p.origin,
+                ));
+            }
+        }
         // A map does not order (`INVALID_ORDERING_TYPE`, as `SortOrder`).
         for (o, b) in order.iter().zip(&bounds) {
             if let Some(t) =
@@ -3298,15 +3363,13 @@ fn generator_relation_name(plan: &LogicalPlan) -> Option<String> {
                 if *outer { "_outer" } else { "" }
             ))
         }
-        PlanNode::Project { input, exprs }
-            if matches!(input.node, PlanNode::OneRowRelation) && exprs.len() == 1 =>
+        // The table functions that name themselves in the error.
+        PlanNode::TableFunction { name, .. }
+            if ["json_tuple", "range", "sql_keywords"]
+                .iter()
+                .any(|f| name.eq_ignore_ascii_case(f)) =>
         {
-            match &exprs[0].node {
-                ExprNode::Function(f) if f.unqualified() == Some("json_tuple") => {
-                    Some("json_tuple".to_owned())
-                }
-                _ => None,
-            }
+            Some(name.to_ascii_lowercase())
         }
         _ => None,
     }

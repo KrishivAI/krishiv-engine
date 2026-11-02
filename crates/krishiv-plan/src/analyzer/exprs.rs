@@ -208,6 +208,37 @@ fn with_children(e: &Expr, kids: Vec<Arc<Expr>>) -> Arc<Expr> {
     Arc::new(x)
 }
 
+/// The `TIMESTAMP_NTZ` function a timestamp-producing call runs as under
+/// `spark.sql.timestampType = TIMESTAMP_NTZ`, with how many of `kids` it
+/// takes: `to_timestamp` over a string, date or timestamp, and the numeric
+/// forms of `make_timestamp` / `try_make_timestamp` (the optional zone is
+/// ignored). `None` for any other call.
+fn ntz_variant(name: &str, kids: &[Bound]) -> Option<(&'static str, usize)> {
+    let is = |n: &str| name.eq_ignore_ascii_case(n);
+    if is("to_timestamp") && (1..=2).contains(&kids.len()) {
+        let ok = matches!(
+            kids[0].ty.data_type,
+            Some(
+                DataType::String
+                    | DataType::Date
+                    | DataType::Timestamp
+                    | DataType::TimestampNtz
+                    | DataType::Null
+            )
+        );
+        return ok.then_some(("to_timestamp_ntz", kids.len()));
+    }
+    if (6..=7).contains(&kids.len()) {
+        if is("make_timestamp") {
+            return Some(("make_timestamp_ntz", 6));
+        }
+        if is("try_make_timestamp") {
+            return Some(("try_make_timestamp_ntz", 6));
+        }
+    }
+    None
+}
+
 /// The shown form of a call whose bound form is `expr`, the arguments
 /// `cast` of `kids`: the call over what `kids` show, when that differs.
 fn shown_call(expr: &Expr, kids: &[Bound], cast: &[Bound]) -> Option<Arc<Expr>> {
@@ -753,6 +784,62 @@ fn typed_literal(
 
 /// Whether `value` is one of Spark's special date/timestamp spellings
 /// (`now`, `today`, ...), which depend on the session's clock and zone.
+/// The type a typed datetime literal denotes.
+#[derive(Clone, Copy)]
+enum SpecialKind {
+    /// `DATE`.
+    Date,
+    /// `TIMESTAMP` / `TIMESTAMP_LTZ`: an instant.
+    Instant,
+    /// `TIMESTAMP_NTZ` (or `TIMESTAMP` under `spark.sql.timestampType`).
+    Local,
+}
+
+fn special_kind(kind: TypedLiteralKind, timestamp_ntz: bool) -> SpecialKind {
+    match kind {
+        TypedLiteralKind::Date => SpecialKind::Date,
+        TypedLiteralKind::TimestampNtz => SpecialKind::Local,
+        TypedLiteralKind::Timestamp if timestamp_ntz => SpecialKind::Local,
+        _ => SpecialKind::Instant,
+    }
+}
+
+/// The clock expression Spark's special value `now`, `today`, `tomorrow` or
+/// `yesterday` stands for, of the literal's type.
+fn special_clock(special: &str, kind: SpecialKind) -> Expr {
+    let day = |offset: &str| match offset {
+        "tomorrow" => Expr::function(
+            "date_add",
+            vec![
+                Expr::function("current_date", Vec::new()),
+                Expr::literal(Literal::Integer(1)),
+            ],
+        ),
+        "yesterday" => Expr::function(
+            "date_sub",
+            vec![
+                Expr::function("current_date", Vec::new()),
+                Expr::literal(Literal::Integer(1)),
+            ],
+        ),
+        _ => Expr::function("current_date", Vec::new()),
+    };
+    let cast = |expr: Expr, to: DataType| {
+        Expr::new(ExprNode::Cast {
+            expr: Arc::new(expr),
+            to,
+            mode: CastMode::Ansi,
+        })
+    };
+    match (kind, special) {
+        (SpecialKind::Date, d) => day(d),
+        (SpecialKind::Instant, "now") => Expr::function("current_timestamp", Vec::new()),
+        (SpecialKind::Local, "now") => Expr::function("localtimestamp", Vec::new()),
+        (SpecialKind::Instant, d) => cast(day(d), DataType::Timestamp),
+        (SpecialKind::Local, d) => cast(day(d), DataType::TimestampNtz),
+    }
+}
+
 fn is_special(value: &str) -> bool {
     let v = value.trim().to_ascii_lowercase();
     ["epoch", "now", "today", "yesterday", "tomorrow"].contains(&v.as_str())
@@ -1526,6 +1613,34 @@ impl Resolver<'_> {
                     })
                 }
             }
+            // `DATE 'today'` and `TIMESTAMP 'now'`: Spark's special values read
+            // the clock; they bind as the clock calls they stand for (the
+            // query-start instant), `epoch` as a constant.
+            ExprNode::TypedLiteral { kind, value }
+                if *kind != TypedLiteralKind::Time && is_special(value) =>
+            {
+                let special = value.trim().to_ascii_lowercase();
+                if special == "epoch" {
+                    let text = match special_kind(*kind, self.ctx.conf.timestamp_ntz) {
+                        SpecialKind::Date => "1970-01-01",
+                        SpecialKind::Instant => "1970-01-01 00:00:00+00:00",
+                        SpecialKind::Local => "1970-01-01 00:00:00",
+                    };
+                    let literal = typed_literal(*kind, text, &self.ctx.conf, e.origin)?;
+                    let ty = ArgType {
+                        nullable: false,
+                        data_type: literal_type(&literal),
+                    };
+                    return Ok(Bound {
+                        expr: Arc::new(Expr::new(ExprNode::Literal(literal)).with_origin(e.origin)),
+                        ..keep(ty)
+                    });
+                }
+                let call =
+                    special_clock(&special, special_kind(*kind, self.ctx.conf.timestamp_ntz))
+                        .with_origin(e.origin);
+                return self.expr(&Arc::new(call), cx);
+            }
             ExprNode::TypedLiteral { kind, value } => {
                 let literal = typed_literal(*kind, value, &self.ctx.conf, e.origin)?;
                 let ty = ArgType {
@@ -1757,6 +1872,32 @@ impl Resolver<'_> {
                                 .into_iter()
                                 .map(|k| Expr::clone(&k))
                                 .collect(),
+                        )
+                        .with_origin(e.origin),
+                    ));
+                    return Ok(b);
+                }
+                // Under `spark.sql.timestampType = TIMESTAMP_NTZ`, `to_timestamp`
+                // and the numeric forms of `make_timestamp` produce a
+                // `TIMESTAMP_NTZ` (a zone argument is ignored) and Spark
+                // still names them as written.
+                if !session_qualified
+                    && self.ctx.conf.timestamp_ntz
+                    && let Some((ntz, take)) = ntz_variant(lookup_name, &kids[..n])
+                {
+                    let call = Expr::function(
+                        ntz,
+                        kids[..take].iter().map(|k| Expr::clone(&k.expr)).collect(),
+                    )
+                    .with_origin(e.origin);
+                    // The children are bound already, and rebinding a
+                    // resolved child drops its markers: carry them over.
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..take]);
+                    b.shown = Some(Arc::new(
+                        Expr::function(
+                            lookup_name.to_ascii_lowercase(),
+                            kids[..n].iter().map(|k| Expr::clone(&k.shown())).collect(),
                         )
                         .with_origin(e.origin),
                     ));

@@ -20,6 +20,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>", "operator"),
     (">>>", "operator"),
     ("if", "no PySpark function"),
+    (
+        "stack",
+        "generator: rewritten by the analyzer, no PySpark function",
+    ),
     ("make_time", "TIME has no Python mapping yet (P2-T181)"),
     ("time", "TIME has no Python mapping yet (P2-T181)"),
     ("current_time", "TIME has no Python mapping yet (P2-T181)"),

@@ -346,7 +346,7 @@ impl QueryContext {
     }
 
     /// Where `op`'s consumers count their spill files.
-    fn spill_stats(&self, op: OperatorId) -> Arc<SpillStats> {
+    pub(crate) fn spill_stats(&self, op: OperatorId) -> Arc<SpillStats> {
         Arc::clone(lock(&self.spills).entry(op).or_default())
     }
 
@@ -541,21 +541,6 @@ impl TaskContext {
             );
             MemoryHandle { consumer, signal }
         })
-    }
-
-    /// A further consumer of this operator with its own spill hook (not
-    /// this driver's): its spill files count with the operator's.
-    pub(crate) fn register_consumer(
-        &self,
-        name: &str,
-        spill: Arc<dyn krishiv_memory::Spillable>,
-    ) -> Arc<ConsumerHandle> {
-        ConsumerHandle::register_counted(
-            Arc::clone(self.query.pool()),
-            name,
-            Some(spill),
-            self.query.spill_stats(self.op),
-        )
     }
 
     /// A further consumer of this operator that never spills, for memory kept
