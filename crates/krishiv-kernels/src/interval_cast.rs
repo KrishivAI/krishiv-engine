@@ -239,11 +239,43 @@ fn number_values(a: &dyn Array) -> Result<(PrimitiveArray<Decimal128Type>, i8), 
     })
 }
 
+/// `v` to 34 significant digits, half to even (Scala's `DECIMAL128`).
+fn to_34_digits(v: i256) -> Option<i256> {
+    let abs = v.checked_abs()?;
+    let mut limit = i256::from_i128(ten_pow(34)?);
+    let mut unit = i256::ONE;
+    let ten = i256::from_i128(10);
+    while abs >= limit {
+        limit = limit.checked_mul(ten)?;
+        unit = unit.checked_mul(ten)?;
+    }
+    if unit == i256::ONE {
+        return Some(v);
+    }
+    let (q, r) = (abs.checked_div(unit)?, abs.checked_rem(unit)?);
+    let twice = r.checked_mul(i256::from_i128(2))?;
+    let odd = q.checked_rem(i256::from_i128(2))? == i256::ONE;
+    let q = if twice > unit || (twice == unit && odd) {
+        q.checked_add(i256::ONE)?
+    } else {
+        q
+    };
+    let rounded = q.checked_mul(unit)?;
+    if v < i256::ZERO {
+        rounded.checked_neg()
+    } else {
+        Some(rounded)
+    }
+}
+
 /// The carrier value of `unscaled`, at `scale`, in `unit`s.
 fn number_as_carrier(unscaled: i128, scale: i8, unit: i64) -> Option<i64> {
     // A `decimal(38, s)` times a day's microseconds can pass `i128` however small
     // the result, so the product is wide.
     let v = i256::from_i128(unscaled).checked_mul(i256::from_i128(i128::from(unit)))?;
+    // Spark's product has 34 significant digits, so a fraction just under a half
+    // can reach one. With nothing to multiply by, there is no product to round.
+    let v = if unit == 1 { v } else { to_34_digits(v)? };
     let power = i256::from_i128(ten_pow(u32::from(scale.unsigned_abs()))?);
     let v = if scale >= 0 {
         crate::interval::divide_half_up(v, power)?
@@ -371,6 +403,28 @@ mod tests {
             None
         );
         assert_eq!(number_as_carrier(1_067_519_915, 1, DAY), None);
+    }
+
+    /// Each from a Spark 4.2.0 run.
+    #[test]
+    fn a_product_past_34_digits_rounds_there_first() {
+        const SECOND: i64 = 1_000_000;
+        // 1.0000004999999999999999999999999999999
+        let just_under = 10_000_004_999_999_999_999_999_999_999_999_999_999_i128;
+        assert_eq!(number_as_carrier(just_under, 37, SECOND), Some(1_000_001));
+        assert_eq!(number_as_carrier(-just_under, 37, SECOND), Some(-1_000_001));
+        // 5165.2083333333333333333333333333333330
+        let months = 51_652_083_333_333_333_333_333_333_333_333_333_330_i128;
+        assert_eq!(number_as_carrier(months, 34, 12), Some(61_983));
+        // 9223372036854.7758074999999999999999999
+        let top = 92_233_720_368_547_758_074_999_999_999_999_999_999_i128;
+        assert_eq!(number_as_carrier(top, 25, SECOND), None);
+        assert_eq!(number_as_carrier(-top, 25, SECOND), Some(i64::MIN));
+        let below = 92_233_720_368_547_758_084_999_999_999_999_999_999_i128;
+        assert_eq!(number_as_carrier(-below, 25, SECOND), None);
+        // 10.49999999999999999999999999999999999 to INTERVAL MONTH: nothing to round.
+        let one_unit = 1_049_999_999_999_999_999_999_999_999_999_999_999_i128;
+        assert_eq!(number_as_carrier(one_unit, 35, 1), Some(10));
     }
 
     fn names() -> CastNames<'static> {
