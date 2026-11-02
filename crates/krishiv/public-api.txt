@@ -40,6 +40,7 @@ pub use krishiv::agent
 pub use krishiv::dot_of_profile
 pub use krishiv::functions
 pub use krishiv::mermaid_of_profile
+pub use krishiv::register_build_features
 pub mod krishiv::arrow
 pub use krishiv::arrow::array
 pub use krishiv::arrow::datatypes
