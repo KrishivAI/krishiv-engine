@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       checks: read
       actions: read
     steps:
@@ -75,7 +75,18 @@ jobs:
         run: .github/scripts/check-ai-attribution.sh "$BASE_SHA" "$HEAD_SHA"
       # The `size-approved` label only counts when the configured approver
       # (repository variable SIZE_APPROVER, the maintainer) applied it after
-      # the current head arrived (.github/scripts/approval-label.sh).
+      # the current head arrived (.github/scripts/approval-label.sh). The run
+      # that sees it fresh records the measured size in a comment; later pushes
+      # (merges of the base branch included) keep the approval while the size
+      # stays within 5% of that value. A force push, removing the label or
+      # growing past the margin ends it. The same holds for `budget-approved`
+      # (per metric); `unsafe-reviewed` is strict: no new unsafe site.
+      - name: Measure the PR size the approval is recorded against
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: cargo xtask pr-size-value --base "$BASE_SHA" --head "$HEAD_SHA" > "$RUNNER_TEMP/size.values"
       - name: Resolve size-approved label
         if: github.event_name == 'pull_request'
         env:
@@ -85,6 +96,8 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'size-approved') }}
           APPROVER: ${{ vars.SIZE_APPROVER }}
+          VALUES_FILE: ${{ runner.temp }}/size.values
+          APPROVAL_SCOPE: size
         run: echo "SIZE_APPROVED=$(.github/scripts/approval-label.sh size-approved)" >> "$GITHUB_ENV"
       - name: PR size cap (10,000 counted lines; tests at half weight; allowlisted data files excluded)
         if: github.event_name == 'pull_request'
@@ -119,7 +132,7 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       checks: read
       actions: read
     steps:
@@ -181,6 +194,16 @@ jobs:
           toolchain: 1.99.1
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
         if: steps.measure.outputs.result == 'measured'
+      - name: Values the budget approvals are recorded against
+        if: steps.measure.outputs.result == 'measured'
+        # A base that predates the script has no recorded values: the label then counts only
+        # when applied after the head arrived, as before.
+        run: |
+          if [ -x .github/scripts/approval-values.sh ]; then
+            .github/scripts/approval-values.sh budgets "$RUNNER_TEMP/budgets/budgets-current.json" > "$RUNNER_TEMP/budgets.values"
+          else
+            : > "$RUNNER_TEMP/budgets.values"
+          fi
       - name: Resolve budget-approved label
         if: steps.measure.outputs.result == 'measured'
         env:
@@ -190,7 +213,11 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'budget-approved') }}
           APPROVER: ${{ vars.SIZE_APPROVER }}
+          VALUES_FILE: ${{ runner.temp }}/budgets.values
+          APPROVAL_SCOPE: budgets
+          METRIC_FILTER: ^(transitive_crates|binary_bytes)$
         run: echo "BUDGET_APPROVED=$(.github/scripts/approval-label.sh budget-approved)" >> "$GITHUB_ENV"
+      # New unsafe stays strict: any growth in any crate's count ends the approval.
       - name: Resolve unsafe-reviewed label
         if: steps.measure.outputs.result == 'measured'
         env:
@@ -200,6 +227,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'unsafe-reviewed') }}
           APPROVER: ${{ vars.SIZE_APPROVER }}
+          VALUES_FILE: ${{ runner.temp }}/budgets.values
+          APPROVAL_SCOPE: unsafe
+          METRIC_FILTER: '^unsafe:'
+          STRICT: "true"
         run: echo "UNSAFE_APPROVED=$(.github/scripts/approval-label.sh unsafe-reviewed)" >> "$GITHUB_ENV"
       - name: Compare with the budgets
         if: steps.measure.outputs.result == 'measured'
@@ -235,7 +266,7 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       checks: read
       actions: read
     steps:
@@ -298,6 +329,16 @@ jobs:
           toolchain: 1.99.1
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
         if: steps.measure.outputs.result == 'measured'
+      - name: Values the wheel-size approval is recorded against
+        if: steps.measure.outputs.result == 'measured'
+        # A base that predates the script has no recorded values: the label then counts only
+        # when applied after the head arrived, as before.
+        run: |
+          if [ -x .github/scripts/approval-values.sh ]; then
+            .github/scripts/approval-values.sh wheels "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json" > "$RUNNER_TEMP/wheels.values"
+          else
+            : > "$RUNNER_TEMP/wheels.values"
+          fi
       - name: Resolve budget-approved label
         if: steps.measure.outputs.result == 'measured'
         env:
@@ -307,6 +348,9 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'budget-approved') }}
           APPROVER: ${{ vars.SIZE_APPROVER }}
+          VALUES_FILE: ${{ runner.temp }}/wheels.values
+          APPROVAL_SCOPE: wheels
+          METRIC_FILTER: '^wheel:'
         run: echo "BUDGET_APPROVED=$(.github/scripts/approval-label.sh budget-approved)" >> "$GITHUB_ENV"
       - name: Compare with the budgets
         if: steps.measure.outputs.result == 'measured'
