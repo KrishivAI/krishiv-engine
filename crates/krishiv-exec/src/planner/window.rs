@@ -307,9 +307,9 @@ impl Planner<'_> {
         ) {
             return Err(unsupported(&format!("the window aggregate {name}")));
         }
-        // An exact percentile keeps every value of a frame in a map the
-        // frame evaluator does not reserve memory for: it is computed only
-        // over the whole partition or a running frame, which share one map.
+        // An exact percentile keeps every value of a frame in one map, which
+        // the frame evaluator has no way to remove rows from: it is computed
+        // only over the whole partition or a running frame, which share it.
         if matches!(
             lowered.function,
             AggregateFunction::Percentile { .. } | AggregateFunction::PercentileDisc { .. }

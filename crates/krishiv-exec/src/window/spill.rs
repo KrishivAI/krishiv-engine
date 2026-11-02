@@ -43,7 +43,7 @@ use krishiv_memory::{ConsumerHandle, Reservation, SpillFile, SpillReader};
 use krishiv_types::batch::Batch;
 
 use super::stream::{Emit, copy_partition};
-use super::{Local, Window, eval};
+use super::{Local, Window};
 use crate::context::TaskContext;
 use crate::error::{Result, cancelled, internal};
 use crate::join::{SPILL_SCRATCH, write_sliced};
@@ -55,6 +55,8 @@ pub(super) struct Counters {
     pub(super) spills: AtomicU64,
     pub(super) bytes: AtomicU64,
     pub(super) external: AtomicU64,
+    /// Batches whose frames did not fit and folded from the file.
+    pub(super) file_folds: AtomicU64,
 }
 
 /// The spilled rows being read back, in order.
@@ -387,23 +389,17 @@ impl Window {
     /// The buffered partition and `r.carry` do not fit: copies the
     /// partition to a file of its own and starts evaluating it from there.
     async fn external(&self, l: &mut Local, r: &mut Replay, ctx: &TaskContext) -> Result<()> {
-        // Frames other than whole, running and peer frames, and the offset
-        // functions, are evaluated from disk with a later part of P2-T055.
+        let mut readers = 3_usize;
         for f in &self.env.plan.functions {
-            // A running frame over a growing state (`collect_list`, `mode`,
+            readers += super::disk::readers(f)?;
+            // A frame over a growing state (`collect_list`, `mode`,
             // `listagg`) snapshots a copy per row, quadratic in the
             // partition, which no per-partition headroom covers.
-            let framed = match &f.function {
-                super::WindowFunction::Aggregate(a) => {
-                    let shape = f.shape()?;
-                    shape == super::Shape::Frame || super::eval::snapshots_grow(a, shape)
-                }
-                super::WindowFunction::Offset { .. } | super::WindowFunction::NthValue { .. } => {
-                    true
-                }
+            let grows = match &f.function {
+                super::WindowFunction::Aggregate(a) => super::eval::snapshots_grow(a, f.shape()?),
                 _ => false,
             };
-            if framed {
+            if grows {
                 return Err(crate::aggregate::unsupported(format!(
                     "the window function {} ({:?}) over a partition larger than memory",
                     f.name, f.frame
@@ -433,6 +429,7 @@ impl Window {
             .ok_or_else(|| internal("window flush without its input".to_owned()))?;
         let env = Arc::clone(&self.env);
         let query = Arc::clone(ctx.query());
+        let consumer = Arc::clone(ctx.consumer().consumer());
         let scratch = ctx
             .consumer()
             .reservation()
@@ -452,6 +449,7 @@ impl Window {
                     None => cursor.next(),
                 },
                 writer,
+                &consumer,
                 &query,
             )?;
             Ok((cursor, copied))
@@ -467,21 +465,16 @@ impl Window {
         l.prev_order = None;
         l.started = true;
         r.carry = copied.rest;
-        // Frames of three readers' batches (the trailing and lead readers',
-        // and the lead's batch before), and one batch's evaluation.
+        // Frames of the readers' batches (the trailing and lead readers', the
+        // lead's batch before, and each frame's or offset function's), and
+        // one batch's evaluation.
         let rows = copied.disk.batch_rows;
         let need = copied
             .disk
             .file
             .max_read_reservation()
-            .saturating_mul(3)
-            .saturating_add(eval::cost(
-                &self.env.plan,
-                rows,
-                1,
-                rows,
-                rows.saturating_mul(rows.saturating_add(1)) / 2,
-            )?);
+            .saturating_mul(readers)
+            .saturating_add(super::disk::headroom(&self.env.plan, rows)?);
         let spare = r.headroom.size().saturating_sub(need.max(r.base));
         r.headroom.shrink(spare);
         if r.headroom.size() < need {
@@ -494,8 +487,11 @@ impl Window {
         let consumer = Arc::clone(ctx.consumer().consumer());
         let query = Arc::clone(ctx.query());
         let disk = copied.disk;
+        let counters = Arc::clone(&self.counters);
         let emit = with_credit(ctx, &mut r.headroom, move || {
-            Ok(Box::new(Emit::open(&env, disk, &consumer, query)?))
+            Ok(Box::new(Emit::open(
+                &env, disk, &consumer, counters, query,
+            )?))
         })
         .await?;
         r.emit = Some(emit);
