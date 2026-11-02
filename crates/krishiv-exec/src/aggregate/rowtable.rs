@@ -1285,6 +1285,12 @@ impl RowTable {
 
     /// The loop of [`probe_all`](Self::probe_all) for one key shape;
     /// `COUNT` adds each lookup's key comparisons to `count`.
+    ///
+    /// The index's control bytes are mostly cached, the rows it points to
+    /// are not (TPC-DS q22: 29% of the probe in the key compare). So each
+    /// [`PREFETCH_ROWS`] rows' first tag-matching rows are prefetched
+    /// before the rows are resolved in order; a candidate that an insert or
+    /// a clear in between made stale is only a wasted prefetch.
     fn probe_rows<const VIEWS: bool, const COUNT: bool>(
         &mut self,
         keys: &EncodedKeys,
@@ -1293,8 +1299,24 @@ impl RowTable {
         count: &mut ProbeCount,
     ) -> Result<()> {
         let (hashes, heap) = (keys.hashes(), keys.heap());
-        for (k, &h) in hashes.iter().enumerate() {
-            refs.push(self.find_or_insert::<VIEWS, COUNT>(keys.row(k), heap, h, limit, count)?);
+        for (c, chunk) in hashes.chunks(PREFETCH_ROWS).enumerate() {
+            if self.index.len() > PREFETCH_ROWS {
+                for &h in chunk {
+                    if let Some(&r) = self.index.find(fin(h, self.gseed), |_| true) {
+                        prefetch_read(row_at(&self.parts, self.stride, self.refs, r), 0);
+                    }
+                }
+            }
+            for (i, &h) in chunk.iter().enumerate() {
+                let k = c * PREFETCH_ROWS + i;
+                refs.push(self.find_or_insert::<VIEWS, COUNT>(
+                    keys.row(k),
+                    heap,
+                    h,
+                    limit,
+                    count,
+                )?);
+            }
         }
         Ok(())
     }
@@ -2700,6 +2722,28 @@ mod tests {
             .collect();
         v.sort_unstable();
         v
+    }
+
+    /// A fixed index cleared inside a prefetched chunk of rows: the rows of
+    /// the chunk after the clear still find (or make) their own key's row,
+    /// so each key's partial rows add up to its input rows.
+    #[test]
+    fn a_clear_inside_a_prefetched_chunk_keeps_every_count() {
+        let core = core();
+        let seed = HashSeed::new(Some(6));
+        // 100 keys of index, 150 keys cycling: a clear every 100 new keys,
+        // at varying positions within each 64-row chunk.
+        let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 100 }, false, 0).unwrap();
+        apply(&mut t, &batch(&core, (0..5_000).map(|i| i % 150)));
+        assert!(!t.is_unique());
+        let mut sums = [0_i64; 150];
+        for (k, c, s) in sorted(&t.output_batch(&t.ids(0..t.len())).unwrap()) {
+            let k = usize::try_from(k.unwrap()).unwrap();
+            assert_eq!(c, s);
+            sums[k] += c.unwrap();
+        }
+        let want: Vec<i64> = (0..150).map(|k| (5_000 - k + 149) / 150).collect();
+        assert_eq!(sums.to_vec(), want);
     }
 
     /// One partition (one thread) and sixteen fold the same groups; output
