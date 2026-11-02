@@ -113,6 +113,33 @@ pub(super) fn check(footer: &[u8]) -> Result<(), &'static str> {
     walk_struct(footer, Schema::Any, &mut 0, limit).map(|_| ())
 }
 
+/// The `numBytes` of the `BloomFilterHeader` at the start of `buf` and the
+/// header's length. The header is walked first (counts, depth, work), then
+/// read: its first field must be the `i32` `numBytes`, which the format
+/// writes first.
+///
+/// # Errors
+/// What is wrong with the walk, or that the struct does not start with
+/// `numBytes`, or that `numBytes` is negative.
+pub(super) fn bloom_header(buf: &[u8]) -> Result<(u32, usize), &'static str> {
+    let limit = buf.len().saturating_mul(8).saturating_add(1024);
+    let walked = walk_struct(buf, Schema::Any, &mut 0, limit)?;
+    // Field 1, type i32: delta 1 in the high nibble, type 5 in the low.
+    if buf.first() != Some(&0x15) {
+        return Err("a Bloom header that does not start with numBytes");
+    }
+    let mut walk = Walk {
+        buf,
+        pos: 1,
+        work: &mut 0,
+        limit,
+        page_header: false,
+    };
+    let raw = walk.varint()?;
+    let num_bytes = u32::try_from(unzigzag(raw)).map_err(|_| "a negative Bloom bitset size")?;
+    Ok((num_bytes, walked.len))
+}
+
 /// What [`walk_struct`] found: the bytes the struct takes, and the value of
 /// its top-level `i32` field 3 (a page header's `compressed_page_size`).
 struct Walked {

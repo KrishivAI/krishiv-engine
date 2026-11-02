@@ -39,6 +39,14 @@
 
 mod calendar;
 mod decode;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the guard of P2-T080b unit 0; the page-index and Bloom stages of unit 1 call it"
+    )
+)]
+mod index_guard;
 mod meta;
 mod row_filter;
 mod thrift_guard;

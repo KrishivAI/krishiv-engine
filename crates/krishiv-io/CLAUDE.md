@@ -48,7 +48,7 @@ Paths are relative to this crate.
 - `src/runtime_filter/mod.rs` runtime filters and their key normalization
 - `src/parquet/mod.rs` `ParquetFormat`; `src/parquet/decode.rs` and `write.rs` the reader and writer
 - `src/scan_gate.rs` `ScanGate`, admission of the decode working sets of a query's scan streams (ADR 0007)
-- `src/parquet/thrift_guard.rs` structural check of a footer before arrow-rs decodes it
+- `src/parquet/thrift_guard.rs` structural check of a footer before arrow-rs decodes it; `src/parquet/index_guard.rs` (P2-T080b) the same for the page index and stored Bloom filters: declared ranges, decoded structure, Bloom header size, sparse page headers; a failure is `Rejected` (the unit is read without the index), never a scan error
 - `src/csv/mod.rs` CSV format; `src/text/codec.rs` the Hadoop codecs of CSV/JSON/text files (gzip, deflate, bzip2, lz4, snappy; zstd is not a Spark text codec). Compressed files are read whole by the split at byte 0; fixtures `tests/fixtures/spark-4.2.0/compressed-text/` (`tests/scripts/gen_compressed_text.py`, `check_compressed_text_written.py`)
 
 ## Extension points
