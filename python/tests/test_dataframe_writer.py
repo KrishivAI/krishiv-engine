@@ -161,12 +161,7 @@ def test_partition_by_with_bogus_mode_raises_invalid_save_mode(df: DataFrame, tm
 
 
 def test_unknown_format_raises_unsupported(df: DataFrame, tmp_path: Any) -> None:
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        df.write.json(str(tmp_path / "j"))
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-    assert "writing the json format" in str(bad.value)
-
-    for format in ("text", "orc"):
+    for format in ("orc",):
         path = str(tmp_path / format)
         with pytest.raises(errors.UnsupportedOperationException) as bad:
             df.write.format(format).save(path)

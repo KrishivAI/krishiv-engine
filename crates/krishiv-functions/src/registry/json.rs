@@ -15,10 +15,11 @@
 //! non-foldable argument.
 
 use krishiv_common::error::{
-    DatatypeMismatchInvalidJsonSchema, DatatypeMismatchNonFoldableInput,
-    DatatypeMismatchNonStringType, DatatypeMismatchUnexpectedInputType,
-    DatatypeMismatchUnexpectedNull, InvalidOptionsNonMapFunction, InvalidOptionsNonStringType,
-    InvalidSchemaNonStringLiteral, KrishivError,
+    DatatypeMismatchInvalidJsonMapKeyType, DatatypeMismatchInvalidJsonSchema,
+    DatatypeMismatchNonFoldableInput, DatatypeMismatchNonStringType,
+    DatatypeMismatchUnexpectedInputType, DatatypeMismatchUnexpectedNull,
+    InvalidOptionsNonMapFunction, InvalidOptionsNonStringType, InvalidSchemaNonStringLiteral,
+    KrishivError,
 };
 use krishiv_types::{ArrayType, DataType, StructField, StructType, parse_data_type};
 
@@ -147,8 +148,46 @@ fn from_json(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         }
     };
     let parsed = parse_json_schema(&schema)?;
+    let sql_expr = || format!("\"from_json({})\"", c.sql(0).unwrap_or_default());
+    if !matches!(
+        parsed,
+        DataType::Struct(_) | DataType::Array(_) | DataType::Map(_)
+    ) {
+        return Err(DatatypeMismatchInvalidJsonSchema {
+            sql_expr: sql_expr(),
+            schema: format!("\"{}\"", parsed.sql()),
+        }
+        .into());
+    }
+    if has_non_string_map_key(&parsed) {
+        // Spark's check names the entries of a map at the top.
+        return Err(DatatypeMismatchInvalidJsonMapKeyType {
+            sql_expr: if matches!(parsed, DataType::Map(_)) {
+                "\"entries\"".to_owned()
+            } else {
+                sql_expr()
+            },
+            schema: format!("\"{}\"", parsed.sql()),
+        }
+        .into());
+    }
     check_options(c, 2)?;
     Ok(ArgType::new(parsed, true))
+}
+
+/// Whether any map in `t` has a key that is not a string.
+fn has_non_string_map_key(t: &DataType) -> bool {
+    match t {
+        DataType::Array(a) => has_non_string_map_key(a.element_type()),
+        DataType::Struct(s) => s
+            .fields()
+            .iter()
+            .any(|f| has_non_string_map_key(f.data_type())),
+        DataType::Map(m) => {
+            m.key_type() != &DataType::String || has_non_string_map_key(m.value_type())
+        }
+        _ => false,
+    }
 }
 
 /// Parses a `from_json` schema: a data type, or a bare struct field list

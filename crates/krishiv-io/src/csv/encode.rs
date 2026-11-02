@@ -12,7 +12,7 @@ use bytes::Bytes;
 use krishiv_kernels::datetime_pattern::Purpose;
 use krishiv_kernels::text::{java_decimal_string, java_double_string, java_float_string32};
 
-use super::convert::Kind;
+use super::convert::{Kind, interval_text};
 use super::options::{CsvOptions, Syntax};
 use crate::error::{FormatError, FormatResult};
 use crate::format::{Encoder, WrittenFile};
@@ -51,21 +51,7 @@ impl CsvEncoder {
         let kinds = schema
             .fields()
             .iter()
-            .map(|f| {
-                Kind::of(f.data_type()).map_err(|_| {
-                    FormatError::Other(
-                        krishiv_common::error::UnsupportedDataTypeForDatasource {
-                            format: "CSV".to_owned(),
-                            column_name: format!("`{}`", f.name()),
-                            column_type: format!(
-                                "\"{}\"",
-                                crate::text::spark_type_name(f.data_type())
-                            ),
-                        }
-                        .into(),
-                    )
-                })
-            })
+            .map(|f| Kind::of_field(f).map_err(|_| crate::error::unsupported_column("CSV", f)))
             .collect::<FormatResult<Vec<_>>>()?;
         let mut enc = Self {
             out: Vec::new(),
@@ -232,6 +218,9 @@ impl CsvEncoder {
                     .format_ntz(a.as_primitive::<TimestampMicrosecondType>().value(i))
                     .map_err(write_err)?,
             ),
+            (Kind::YearMonth(..) | Kind::DayTime(..), _) => {
+                buf.push_str(&interval_text(kind, a, i).unwrap_or_default());
+            }
         }
         Ok(true)
     }

@@ -111,9 +111,66 @@ struct Cast {
 fn needs_zone(from: &ArrowType, to: &ArrowType) -> bool {
     let zoned = |t: &ArrowType| matches!(t, ArrowType::Timestamp(_, Some(_)));
     let wall_clock = |t: &ArrowType| matches!(t, ArrowType::Timestamp(_, None));
+    let element = |t: &ArrowType| match t {
+        ArrowType::List(f) | ArrowType::LargeList(f) | ArrowType::FixedSizeList(f, _) => {
+            Some(f.data_type().clone())
+        }
+        _ => None,
+    };
+    // A nested cast casts each element, entry or field: any of them may
+    // read the zone (`array<timestamp>` to `array<string>`).
+    if let (Some(f), Some(t)) = (element(from), element(to)) {
+        return needs_zone(&f, &t);
+    }
+    // A nested value cast to text renders every timestamp inside it in
+    // the session zone.
+    if matches!(
+        to,
+        ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View
+    ) && matches!(
+        from,
+        ArrowType::List(_)
+            | ArrowType::LargeList(_)
+            | ArrowType::FixedSizeList(..)
+            | ArrowType::Map(..)
+            | ArrowType::Struct(_)
+    ) {
+        return holds_zoned(from);
+    }
+    match (from, to) {
+        (ArrowType::Map(f, _), ArrowType::Map(t, _)) => {
+            return match (f.data_type(), t.data_type()) {
+                (ArrowType::Struct(f), ArrowType::Struct(t)) => f
+                    .iter()
+                    .zip(t.iter())
+                    .any(|(f, t)| needs_zone(f.data_type(), t.data_type())),
+                _ => false,
+            };
+        }
+        (ArrowType::Struct(f), ArrowType::Struct(t)) => {
+            return f
+                .iter()
+                .zip(t.iter())
+                .any(|(f, t)| needs_zone(f.data_type(), t.data_type()));
+        }
+        _ => {}
+    }
     (zoned(from) && !matches!(to, ArrowType::Int64 | ArrowType::Timestamp(_, Some(_))))
         || (zoned(to) && !matches!(from, ArrowType::Int64 | ArrowType::Timestamp(_, Some(_))))
         || (wall_clock(from) && zoned(to))
+}
+
+/// Whether `t` is, or holds at any depth, a timestamp with a zone.
+fn holds_zoned(t: &ArrowType) -> bool {
+    match t {
+        ArrowType::Timestamp(_, Some(_)) => true,
+        ArrowType::List(f) | ArrowType::LargeList(f) | ArrowType::FixedSizeList(f, _) => {
+            holds_zoned(f.data_type())
+        }
+        ArrowType::Map(f, _) => holds_zoned(f.data_type()),
+        ArrowType::Struct(fields) => fields.iter().any(|f| holds_zoned(f.data_type())),
+        _ => false,
+    }
 }
 
 /// A cast's plan data, without its child: what [`NullIf`](super::cond::NullIf)
@@ -464,27 +521,49 @@ pub(super) fn interval_to_string(e: Arc<dyn PhysExpr>, from: DataType) -> Arc<dy
 
 /// `a`, of the interval type `from`, as `CAST(.. AS STRING)` writes it.
 pub(super) fn render_interval(from: &DataType, a: &dyn Array) -> Result<ArrayRef> {
-    use arrow_array::StringViewArray;
     use arrow_array::types::{
-        DurationMicrosecondType, IntervalMonthDayNanoType, IntervalYearMonthType,
+        ArrowPrimitiveType, DurationMicrosecondType, IntervalMonthDayNanoType,
+        IntervalYearMonthType,
     };
-    use krishiv_types::interval::{calendar_string, day_time_string, year_month_string};
-    let out: StringViewArray = match (from, a.data_type()) {
-        (DataType::YearMonthInterval { start, end }, ArrowType::Interval(_)) => a
-            .as_primitive::<IntervalYearMonthType>()
-            .iter()
-            .map(|v| v.map(|m| year_month_string(m, *start, *end)))
-            .collect(),
-        (DataType::DayTimeInterval { start, end }, ArrowType::Duration(_)) => a
-            .as_primitive::<DurationMicrosecondType>()
-            .iter()
-            .map(|v| v.map(|m| day_time_string(m, *start, *end)))
-            .collect(),
-        (DataType::CalendarInterval, ArrowType::Interval(_)) => a
-            .as_primitive::<IntervalMonthDayNanoType>()
-            .iter()
-            .map(|v| v.map(|i| calendar_string(i.months, i.days, i.nanoseconds / 1000)))
-            .collect(),
+    use arrow_array::{PrimitiveArray, StringViewArray, builder::StringViewBuilder};
+    use krishiv_types::interval::{calendar_string, write_day_time, write_year_month};
+
+    /// The rendered rows, through one reused buffer.
+    fn rendered<T: ArrowPrimitiveType>(
+        a: &PrimitiveArray<T>,
+        write: impl Fn(&mut String, T::Native),
+    ) -> StringViewArray {
+        let mut out = StringViewBuilder::with_capacity(a.len());
+        let mut text = String::new();
+        for v in a {
+            match v {
+                Some(v) => {
+                    text.clear();
+                    write(&mut text, v);
+                    out.append_value(&text);
+                }
+                None => out.append_null(),
+            }
+        }
+        out.finish()
+    }
+
+    let out = match (from, a.data_type()) {
+        (DataType::YearMonthInterval { start, end }, ArrowType::Interval(_)) => {
+            rendered(a.as_primitive::<IntervalYearMonthType>(), |text, m| {
+                write_year_month(text, m, *start, *end);
+            })
+        }
+        (DataType::DayTimeInterval { start, end }, ArrowType::Duration(_)) => {
+            rendered(a.as_primitive::<DurationMicrosecondType>(), |text, m| {
+                write_day_time(text, m, *start, *end);
+            })
+        }
+        (DataType::CalendarInterval, ArrowType::Interval(_)) => {
+            rendered(a.as_primitive::<IntervalMonthDayNanoType>(), |text, i| {
+                text.push_str(&calendar_string(i.months, i.days, i.nanoseconds / 1000));
+            })
+        }
         (from, carrier) => {
             return Err(internal(&format!("a {from} value carried as {carrier}")));
         }
