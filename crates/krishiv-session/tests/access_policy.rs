@@ -1541,3 +1541,39 @@ fn dataframe_table_writers_are_authorized_like_their_statements() {
     block_on(s.table("t").write().insert_into("made")).unwrap();
     assert_eq!(block_on(s.table("made").count()).unwrap(), 6);
 }
+
+fn no_drop(_: &Securable, p: Privilege) -> AccessDecision {
+    if p == Privilege::Drop {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+/// Overwriting a table drops it first, which needs `Drop`; the overwrite of its rows needs `Modify`.
+#[test]
+fn dataframe_overwrites_need_drop_and_modify() {
+    let s = session(Policy::new(no_drop));
+    block_on(s.table("t").write().save_as_table("made")).unwrap();
+    assert_eq!(
+        class(block_on(
+            s.table("t").write().mode("overwrite").save_as_table("made")
+        )),
+        DENIED
+    );
+    assert_eq!(
+        block_on(s.table("made").count()).unwrap(),
+        3,
+        "the table is still there"
+    );
+    // insertInto overwrite needs only Modify, which this policy allows.
+    block_on(s.table("t").write().mode("overwrite").insert_into("made")).unwrap();
+
+    let s = session(Policy::new(all_but_modify));
+    assert_eq!(
+        class(block_on(
+            s.table("t").write().mode("overwrite").insert_into("made")
+        )),
+        DENIED
+    );
+}

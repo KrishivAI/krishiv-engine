@@ -1577,6 +1577,7 @@ impl DataFrame {
             partition_by: Vec::new(),
             bucket_by: None,
             sort_by: None,
+            format_set: false,
         }
     }
 
@@ -1723,14 +1724,17 @@ impl DataFrame {
         &self,
         insert_into: bool,
         table: &str,
-        format: &str,
+        format: Option<&str>,
         mode: &str,
         options: Vec<(String, String)>,
         partition_by: Vec<String>,
         bucket_by: Option<(i32, Vec<String>)>,
         sort_by: Option<Vec<String>>,
     ) -> Result<(), KrishivError> {
-        let mut writer = self.write().format(format).mode(mode);
+        let mut writer = self.write().mode(mode);
+        if let Some(format) = format {
+            writer = writer.format(format);
+        }
         for (key, value) in &options {
             writer = writer.option(key, value);
         }
@@ -1964,6 +1968,9 @@ pub struct DataFrameWriter {
     bucket_by: Option<(i32, Vec<String>)>,
     /// `sortBy`.
     sort_by: Option<Vec<String>>,
+    /// Whether [`Self::format`] was called: a table writer without one uses
+    /// `spark.sql.sources.default`.
+    format_set: bool,
 }
 
 impl DataFrameWriter {
@@ -1984,7 +1991,7 @@ impl DataFrameWriter {
         self
     }
 
-    /// The file format (default `parquet`).
+    /// The file format (default `spark.sql.sources.default`).
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -1993,6 +2000,7 @@ impl DataFrameWriter {
     /// ```
     pub fn format(mut self, format: &str) -> Self {
         format.clone_into(&mut self.format);
+        self.format_set = true;
         self
     }
 
@@ -2152,7 +2160,7 @@ impl DataFrameWriter {
     fn table_spec(&self, table: &str) -> crate::table_commands::V2WriteSpec {
         crate::table_commands::V2WriteSpec {
             table: table.to_owned(),
-            provider: Some(self.format.clone()).filter(|f| !f.is_empty()),
+            provider: self.format_set.then(|| self.format.clone()),
             options: self.options.clone(),
             properties: BTreeMap::new(),
             partitioned_by: self.partition_by.clone(),

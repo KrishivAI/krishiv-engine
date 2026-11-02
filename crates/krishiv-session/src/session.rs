@@ -1668,6 +1668,44 @@ impl Drop for MetricStream {
 }
 
 impl Session {
+    /// The file format named `format`, which must be one the engine writes:
+    /// the Spark file sources it does not write fail with
+    /// `KRISHIV_UNSUPPORTED_FEATURE`.
+    pub(crate) fn writable_format(
+        &self,
+        format: &str,
+    ) -> Result<Arc<dyn krishiv_io::FileFormat>, KrishivError> {
+        match self.state.formats.get(format) {
+            Ok(found) => Ok(found),
+            Err(e) => {
+                if is_spark_file_source(format) {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: format!("writing the {format} format"),
+                    }
+                    .into());
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// What a write of `schema` in `format` with `options` would refuse before it
+    /// touches anything: a format the engine does not write, duplicate output
+    /// columns, options the format rejects. `saveAsTable` in overwrite mode asks
+    /// this before it drops the old table.
+    pub(crate) fn check_write_ready(
+        &self,
+        format: &str,
+        options: &BTreeMap<String, OptionValue>,
+        schema: &SchemaRef,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        unique_columns(schema, env.analysis.conf.case_sensitive)?;
+        let format = self.writable_format(format)?;
+        format.options().parse(options, &env.config)?;
+        Ok(())
+    }
+
     /// Writes the result of `physical` to the directory `path` in
     /// `format` with `mode` (`df.write`): the files under their final
     /// names, then the directory's commit (`_SUCCESS`, the removal of
@@ -1694,18 +1732,7 @@ impl Session {
         } = target;
         let mode = SaveMode::parse(&mode)?;
         unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
-        let format = match self.state.formats.get(&format) {
-            Ok(format) => format,
-            Err(e) => {
-                if is_spark_file_source(&format) {
-                    return Err(KrishivUnsupportedFeature {
-                        feature: format!("writing the {format} format"),
-                    }
-                    .into());
-                }
-                return Err(e);
-            }
-        };
+        let format = self.writable_format(&format)?;
         let (parsed, _) = format.options().parse(&options, &env.config)?;
         let Some(text) = path.as_plain() else {
             return Err(KrishivUnsupportedFeature {

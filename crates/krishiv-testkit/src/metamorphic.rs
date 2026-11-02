@@ -563,12 +563,11 @@ pub fn reduce_finding(r: &mut dyn QueryRunner, f: &Finding) -> Pred {
     })
 }
 
-/// A finding reduced to its smallest failing predicate, ready to paste into a regression test.
+/// A finding with its reduced predicate `small`, ready to paste into a regression test.
 ///
 /// # Errors
 /// When writing the report fails (never, in practice).
-pub fn report(r: &mut dyn QueryRunner, f: &Finding) -> Result<String, fmt::Error> {
-    let small = reduce_finding(r, f);
+pub fn render_report(f: &Finding, small: &Pred) -> Result<String, fmt::Error> {
     let mut out = String::new();
     writeln!(
         out,
@@ -576,11 +575,20 @@ pub fn report(r: &mut dyn QueryRunner, f: &Finding) -> Result<String, fmt::Error
         f.oracle,
         SOURCES[f.source].from,
         f.detail,
-        tokens(&small),
+        tokens(small),
         tokens(&f.pred),
         f.pred
     )?;
     Ok(out)
+}
+
+/// A finding reduced to its smallest failing predicate, ready to paste into a regression test.
+///
+/// # Errors
+/// When writing the report fails (never, in practice).
+pub fn report(r: &mut dyn QueryRunner, f: &Finding) -> Result<String, fmt::Error> {
+    let small = reduce_finding(r, f);
+    render_report(f, &small)
 }
 
 /// A predicate given as SQL text.
@@ -695,11 +703,11 @@ pub fn hunt_cli(
         }
         for f in &h.findings {
             bad += 1;
-            let text = report(&mut runner, f).map_err(|e| e.to_string())?;
+            let small = reduce_finding(&mut runner, f);
+            let text = render_report(f, &small).map_err(|e| e.to_string())?;
             writeln!(out, "VIOLATION (seed batch {}):\n{text}", next - 1)
                 .map_err(|e| e.to_string())?;
             if let Some(dir) = &regressions {
-                let small = reduce_finding(&mut runner, f);
                 let (name, body) = regression_file(f.oracle, f.source, &small, &f.detail);
                 std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
                 let path = dir.join(name);

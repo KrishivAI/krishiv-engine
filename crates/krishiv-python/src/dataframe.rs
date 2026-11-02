@@ -365,7 +365,7 @@ impl PyDataFrame {
         py: Python<'_>,
         insert_into: bool,
         table: &str,
-        format: &str,
+        format: Option<&str>,
         mode: &str,
         options: Option<Vec<(String, String)>>,
         partition_by: Option<Vec<String>>,
@@ -373,14 +373,14 @@ impl PyDataFrame {
         sort_by: Option<Vec<String>>,
     ) -> PyResult<()> {
         let df = self.inner.clone();
-        let (table, format, mode) = (table.to_owned(), format.to_owned(), mode.to_owned());
+        let (table, format, mode) = (table.to_owned(), format.map(str::to_owned), mode.to_owned());
         let options = options.unwrap_or_default();
         let partition_by = partition_by.unwrap_or_default();
         block_on(py, async move {
             df.write_table_with(
                 insert_into,
                 &table,
-                &format,
+                format.as_deref(),
                 &mode,
                 options,
                 partition_by,

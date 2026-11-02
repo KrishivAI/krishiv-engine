@@ -2180,15 +2180,24 @@ impl Session {
                 self.authorize_table_write(&name, true, &env).await?;
                 // `UNSUPPORTED_OVERWRITE.TABLE`: the query reads the table it replaces.
                 let analysis = df.analysis().await?;
-                let mut reads = crate::cache::read_tables(analysis.analyzed.plan.root());
-                reads.extend(crate::cache::unresolved_tables(&df.plan));
-                if reads.contains(&name.name.to_lowercase()) {
+                if crate::catalog::reads_stored_table(
+                    analysis.analyzed.plan.root(),
+                    &name.namespace,
+                    &name.name,
+                    &self.state.catalog.current_namespace(),
+                ) {
                     return Err(krishiv_common::error::UnsupportedOverwriteTable {
                         table: name.quoted(),
                     }
                     .into());
                 }
                 self.validate_new_table(&name, &spec)?;
+                // What the write itself would refuse (a format the engine does not
+                // write, duplicate output columns, options the format rejects) must
+                // not come after the drop.
+                let provider = self.provider_of(spec.provider.clone())?;
+                let schema = df.schema().await?;
+                self.check_write_ready(&provider, &spec.options, &schema, &env)?;
                 self.drop_named_table(&name, &env, true).await?;
                 self.exec_write_v2(df, spec, V2Mode::Create).await
             }

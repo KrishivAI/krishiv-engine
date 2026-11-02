@@ -310,3 +310,56 @@ fn overwrite_checks_before_it_drops() {
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
 }
+
+#[test]
+fn overwrite_never_drops_a_table_the_write_would_refuse_to_replace() {
+    let s = session();
+    block_on(s.table("people").write().save_as_table("t")).unwrap();
+    // Formats the engine cannot write, duplicate output columns and bad options fail before the drop.
+    assert_eq!(
+        class(block_on(
+            s.table("people")
+                .write()
+                .format("text")
+                .mode("overwrite")
+                .save_as_table("t")
+        )),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    let dup = s
+        .table("people")
+        .select_expr(["id AS a", "name AS A"])
+        .unwrap();
+    assert_eq!(
+        class(block_on(dup.write().mode("overwrite").save_as_table("t"))),
+        "COLUMN_ALREADY_EXISTS"
+    );
+    assert_eq!(count(&s, "t"), 3, "the table survived every refusal");
+}
+
+#[test]
+fn a_table_of_another_namespace_with_the_same_name_is_not_the_target() {
+    let s = session();
+    block_on(s.sql("CREATE DATABASE other")).unwrap();
+    block_on(s.table("people").write().save_as_table("t")).unwrap();
+    block_on(s.table("people").write().save_as_table("other.t")).unwrap();
+    // Reading default.t while replacing other.t is fine; reading the target is not.
+    block_on(
+        s.table("t")
+            .filter(col("id").gt(lit(1)))
+            .write()
+            .mode("overwrite")
+            .save_as_table("other.t"),
+    )
+    .unwrap();
+    assert_eq!(count(&s, "other.t"), 2);
+    assert_eq!(
+        class(block_on(
+            s.table("other.t")
+                .write()
+                .mode("overwrite")
+                .save_as_table("other.t")
+        )),
+        "UNSUPPORTED_OVERWRITE.TABLE"
+    );
+}

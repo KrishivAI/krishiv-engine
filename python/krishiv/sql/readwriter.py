@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from krishiv.errors import not_expected_type
+from krishiv.errors import PySparkValueError, not_expected_type
 from krishiv.sql.column import Column
 from krishiv.sql.dataframe import DataFrame
 
@@ -73,6 +73,7 @@ class DataFrameWriter:
     def __init__(self, df: DataFrame) -> None:
         self._df = df
         self._format = "parquet"
+        self._format_set = False
         self._mode = "error"
         self._options: list[tuple[str, str]] = []
         self._partition_by: list[str] = []
@@ -81,6 +82,7 @@ class DataFrameWriter:
 
     def format(self, source: str) -> DataFrameWriter:
         self._format = source
+        self._format_set = True
         return self
 
     def mode(self, saveMode: str) -> DataFrameWriter:
@@ -125,7 +127,9 @@ class DataFrameWriter:
             raise not_expected_type("numBuckets", "int", numBuckets)
         if isinstance(col, list | tuple):
             if cols:
-                raise TypeError("col is a list or tuple, but cols are not empty")
+                raise PySparkValueError(
+                    errorClass="CANNOT_SET_TOGETHER", messageParameters={"arg_list": "col and cols"}
+                )
             names = list(col)
         else:
             names = [col, *cols]
@@ -139,7 +143,9 @@ class DataFrameWriter:
         """Sorts each bucket by ``col`` (and ``cols``); needs ``bucketBy``."""
         if isinstance(col, list | tuple):
             if cols:
-                raise TypeError("col is a list or tuple, but cols are not empty")
+                raise PySparkValueError(
+                    errorClass="CANNOT_SET_TOGETHER", messageParameters={"arg_list": "col and cols"}
+                )
             names = list(col)
         else:
             names = [col, *cols]
@@ -188,7 +194,7 @@ class DataFrameWriter:
         self._df._df.write_table(
             insert_into,
             name,
-            self._format,
+            self._format if self._format_set else None,
             self._mode,
             self._options,
             self._partition_by,

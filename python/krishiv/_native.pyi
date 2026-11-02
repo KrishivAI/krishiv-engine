@@ -85,7 +85,7 @@ class DataFrame:
         self,
         insert_into: bool,
         table: str,
-        format: str,
+        format: str | None,
         mode: str,
         options: list[tuple[str, str]] | None = ...,
         partition_by: list[str] | None = ...,
