@@ -123,6 +123,14 @@ pub(crate) fn literal(iv: &Interval, sql: &str, legacy: bool) -> Result<(), Pars
 /// offending part, as Spark shows it), or the literal's own error, at
 /// `span`.
 pub(crate) fn time_zone_offset(iv: &Interval, span: Span) -> Result<String, ParseError> {
+    // The same visit reads the literal first: a captured second range or
+    // trailing part is its error, whatever the zone would be.
+    if let Some(trailing) = &iv.trailing {
+        return Err(at(
+            LegacyErrorTemp0024 {},
+            Span::new(iv.span.start, iv.span.end.max(trailing.span.end)),
+        ));
+    }
     let (c, _) = evaluate(iv).map_err(|e| at(e, span))?;
     time_zone_of(c, span)
 }
@@ -151,8 +159,12 @@ fn time_zone_of(c: Calendar, span: Span) -> Result<String, ParseError> {
     if c.days != 0 {
         return Err(out_of_range(i64::from(c.days)));
     }
-    if c.micros.abs() > 18 * MICROS_PER_HOUR {
-        return Err(out_of_range(c.micros.abs() / MICROS_PER_HOUR));
+    // `unsigned_abs`: `i64::MIN` has no signed magnitude.
+    let magnitude = c.micros.unsigned_abs();
+    if magnitude > 18 * MICROS_PER_HOUR.unsigned_abs() {
+        return Err(out_of_range(
+            i64::try_from(magnitude / MICROS_PER_HOUR.unsigned_abs()).unwrap_or(i64::MAX),
+        ));
     }
     if c.micros % MICROS_PER_SECOND != 0 {
         return Err(out_of_range(c.micros / MICROS_PER_SECOND));

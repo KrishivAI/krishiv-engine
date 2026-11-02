@@ -13,6 +13,7 @@ commands, in the style of the ``python-quality`` job, are in ``README.md``.
 from __future__ import annotations
 
 import ast
+import importlib
 import inspect
 import os
 import subprocess
@@ -118,7 +119,8 @@ def test_native_stub_matches_runtime() -> None:
 def _need_mypy() -> None:
     """Skip without mypy, unless CI requires it (``KRISHIV_REQUIRE_MYPY=1``): then fail."""
     if os.environ.get("KRISHIV_REQUIRE_MYPY") == "1":
-        import mypy  # noqa: F401  (a missing mypy must fail the job, not skip the check)
+        # A missing mypy must fail the job, not skip the check.
+        importlib.import_module("mypy")
     else:
         pytest.importorskip("mypy")
 
@@ -135,11 +137,13 @@ def test_mypy_strict_examples() -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-def test_stubtest_native() -> None:
+def test_stubtest_native(tmp_path: Path) -> None:
     _need_mypy()
+    # Not from the source tree: its `krishiv` package would shadow the installed wheel (it has the
+    # stub but no compiled extension), and stubtest imports the runtime module.
     proc = subprocess.run(
         [sys.executable, "-m", "mypy.stubtest", "krishiv._native", "--concise", "--ignore-disjoint-bases"],
-        cwd=PYTHON_DIR,
+        cwd=tmp_path,
         capture_output=True,
         text=True,
         check=False,

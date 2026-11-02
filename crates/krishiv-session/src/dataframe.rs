@@ -1221,6 +1221,27 @@ impl DataFrame {
         ))
     }
 
+    /// The analyzed plan with cached subplans replaced by scans of their
+    /// snapshots (the plan that is planned and run), or `None` when no
+    /// subplan is cached.
+    pub(crate) fn cache_substituted(
+        &self,
+        a: &Arc<Analysis>,
+    ) -> Result<Option<AnalyzedPlan>, KrishivError> {
+        let Some(sub) = self.session.state.cache.substitute(&a.analyzed) else {
+            return Ok(None);
+        };
+        // The query keeps its snapshots: clearing the cache before it is
+        // planned must not fail it.
+        for (name, table) in sub.tables {
+            a.env.catalog.pin_cached(name, table);
+        }
+        Ok(Some(AnalyzedPlan {
+            plan: krishiv_plan::Plan::try_new(sub.plan)?,
+            ..(*a.analyzed).clone()
+        }))
+    }
+
     /// The physical plan with every cached (sub)plan substituted, and what
     /// to fill into the cache when the stream completes: the key and the
     /// snapshot shape, or `None` when this frame asked for no cache or the
@@ -1231,23 +1252,8 @@ impl DataFrame {
     ) -> Result<(krishiv_exec::planner::PhysicalPlan, CacheFill), KrishivError> {
         let key = CacheKey::of(&a.analyzed);
         let hit = self.session.state.cache.lookup(&key).is_some();
-        let substituted = self.session.state.cache.substitute(&a.analyzed);
-        let owned;
-        let analyzed = match substituted {
-            Some(sub) => {
-                // The query keeps its snapshots: clearing the cache before
-                // it is planned must not fail it.
-                for (name, table) in sub.tables {
-                    a.env.catalog.pin_cached(name, table);
-                }
-                owned = AnalyzedPlan {
-                    plan: krishiv_plan::Plan::try_new(sub.plan)?,
-                    ..(*a.analyzed).clone()
-                };
-                &owned
-            }
-            None => &a.analyzed,
-        };
+        let owned = self.cache_substituted(a)?;
+        let analyzed = owned.as_ref().unwrap_or(&a.analyzed);
         let (_, physical) = self.session.physical(analyzed, &a.env).await?;
         let fill = if hit || self.cache_request.is_none() {
             CacheFill::No

@@ -4,6 +4,7 @@
 //! optimizer rule that changed it.
 
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use futures::StreamExt as _;
@@ -291,8 +292,13 @@ impl DataFrame {
         let df = self.clone();
         self.session
             .on_executor(async move {
-                let (verbose, _) = df.verbose_full().await?;
-                let (_, mut profile) = df.profiled(false).await?;
+                // One plan for the trace and the run: the one with cached
+                // subplans substituted, which is what executes.
+                let a = df.analysis().await?;
+                let substituted = df.cache_substituted(&a)?;
+                let analyzed = substituted.as_ref().unwrap_or(&a.analyzed);
+                let (verbose, physical) = df.verbose_of(&a, analyzed).await?;
+                let (_, mut profile) = df.run_profiled_plan(&a, &physical, false).await?;
                 profile.planning = Some(verbose.planning_value());
                 Ok(profile)
             })
@@ -319,7 +325,17 @@ impl DataFrame {
     ) -> Result<(Vec<RecordBatch>, QueryProfile), KrishivError> {
         let a = self.analysis().await?;
         let (physical, _) = self.physical_cached(&a).await?;
-        let (mut stream, query) = self.session.run_profiled(&physical, &a.env).await?;
+        self.run_profiled_plan(&a, &physical, keep).await
+    }
+
+    /// Runs `physical` (the plan of `a`) with detailed metrics.
+    async fn run_profiled_plan(
+        &self,
+        a: &Arc<crate::dataframe::Analysis>,
+        physical: &krishiv_exec::planner::PhysicalPlan,
+        keep: bool,
+    ) -> Result<(Vec<RecordBatch>, QueryProfile), KrishivError> {
+        let (mut stream, query) = self.session.run_profiled(physical, &a.env).await?;
         let mut out = Vec::new();
         while let Some(batch) = stream.next().await {
             let batch = batch?;
@@ -330,7 +346,7 @@ impl DataFrame {
         drop(stream);
         // Every driver has merged its counters once the query finished.
         query.finished().await;
-        Ok((out, QueryProfile::new(&physical, query.metrics(), true)))
+        Ok((out, QueryProfile::new(physical, query.metrics(), true)))
     }
 
     /// The plan at every stage (`EXPLAIN VERBOSE`): parsed, analyzed, after
@@ -400,14 +416,24 @@ impl DataFrame {
     /// As [`Self::verbose`], also returning the physical plan tree
     /// ([`GraphFormat::Mermaid`] and [`GraphFormat::Dot`] graph it).
     pub(crate) async fn verbose_full(&self) -> Result<(ExplainVerbose, ExplainNode), KrishivError> {
-        let parsed = self.plan.to_string();
         let a = self.analysis().await?;
-        let analyzed = a.analyzed.plan.root().to_string();
-        let (optimized, physical, rules) = self
-            .session
-            .physical_traced(&a.analyzed, &a.env, true)
-            .await?;
-        let mut before = analyzed.clone();
+        self.verbose_of(&a, &a.analyzed)
+            .await
+            .map(|(verbose, physical)| (verbose, physical.explain_all()))
+    }
+
+    /// The stages of planning `analyzed` (the analyzed plan of `a`, or that
+    /// plan with cached subplans substituted), with the physical plan.
+    async fn verbose_of(
+        &self,
+        a: &Arc<crate::dataframe::Analysis>,
+        analyzed: &krishiv_plan::analyzer::AnalyzedPlan,
+    ) -> Result<(ExplainVerbose, krishiv_exec::planner::PhysicalPlan), KrishivError> {
+        let parsed = self.plan.to_string();
+        let analyzed_text = analyzed.plan.root().to_string();
+        let (optimized, physical, rules) =
+            self.session.physical_traced(analyzed, &a.env, true).await?;
+        let mut before = analyzed_text.clone();
         let mut steps = Vec::new();
         for r in rules {
             let plan = r.plan.to_string();
@@ -427,12 +453,12 @@ impl DataFrame {
         Ok((
             ExplainVerbose {
                 parsed,
-                analyzed,
+                analyzed: analyzed_text,
                 steps,
                 optimized: optimized.root().to_string(),
                 physical: node.to_string(),
             },
-            node,
+            physical,
         ))
     }
 }

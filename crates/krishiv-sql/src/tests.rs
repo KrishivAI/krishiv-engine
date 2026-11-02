@@ -1452,6 +1452,15 @@ fn set_errors_follow_spark() {
         ErrorClass::InvalidIntervalFormatTimezoneIntervalOutOfRange
     );
     assert!(e.error.to_string().contains("'1'"), "{e:?}");
+    // A captured second range is the literal's own error, not a zone.
+    let e = fail("SET TIME ZONE INTERVAL '01:00' HOUR TO MINUTE '1' DAY");
+    assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp0024);
+    // The largest magnitude does not overflow: it is out of range.
+    let e = fail("SET TIME ZONE INTERVAL '-9223372036854775807 microseconds -1 microsecond'");
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::InvalidIntervalFormatTimezoneIntervalOutOfRange
+    );
     // A temporary function takes no database, with or without a class.
     let e = fail("CREATE TEMPORARY FUNCTION a.f AS 'x.Y'");
     assert_eq!(e.error.error_class(), ErrorClass::InvalidTempObjQualifier);
