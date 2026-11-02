@@ -65,7 +65,6 @@ fn ks(out: &[RecordBatch]) -> Vec<i64> {
 fn run(
     env: &Env,
     stats: EnabledStatistics,
-    key: &str,
     predicate: PushdownExpr,
     on: bool,
 ) -> (Vec<i64>, ScanUnitMetrics) {
@@ -73,7 +72,6 @@ fn run(
     let o = env.options(&[("pageIndex", if on { "true" } else { "false" })]);
     let req = request(env, &f, &o, predicate);
     let (out, m) = env.scan_metered(&f, &req, &o).unwrap();
-    let _ = key;
     (ks(&out), m)
 }
 
@@ -87,17 +85,10 @@ fn k_between(lo: i64, hi: i64) -> PushdownExpr {
 #[test]
 fn a_sorted_column_skips_pages() {
     let env = Env::new();
-    let (with, m_on) = run(
-        &env,
-        EnabledStatistics::Page,
-        "k",
-        k_between(9_000, 9_700),
-        true,
-    );
+    let (with, m_on) = run(&env, EnabledStatistics::Page, k_between(9_000, 9_700), true);
     let (without, m_off) = run(
         &env,
         EnabledStatistics::Page,
-        "k",
         k_between(9_000, 9_700),
         false,
     );
@@ -122,8 +113,8 @@ fn a_sorted_column_skips_pages() {
 fn an_unclustered_column_prunes_nothing_and_changes_no_row() {
     let env = Env::new();
     let predicate = PushdownExpr::cmp(ColumnPath::new("u"), CmpOp::Eq, ScalarValue::Int64(12_345));
-    let (with, m_on) = run(&env, EnabledStatistics::Page, "u", predicate.clone(), true);
-    let (without, _) = run(&env, EnabledStatistics::Page, "u", predicate, false);
+    let (with, m_on) = run(&env, EnabledStatistics::Page, predicate.clone(), true);
+    let (without, _) = run(&env, EnabledStatistics::Page, predicate, false);
     assert_eq!(with, without);
     assert_eq!(m_on.pages_pruned, 0, "{m_on:?}");
 }
@@ -134,39 +125,29 @@ fn a_file_without_a_column_index_is_read_whole() {
     let (with, m) = run(
         &env,
         EnabledStatistics::Chunk,
-        "k",
         k_between(9_000, 9_700),
         true,
     );
     let (without, _) = run(
         &env,
         EnabledStatistics::Chunk,
-        "k",
         k_between(9_000, 9_700),
         false,
     );
     assert_eq!(with, without);
     assert_eq!(m.pages_pruned, 0);
-    assert_eq!(rows(&[]), 0);
 }
 
 #[test]
 fn a_predicate_the_statistics_decided_reads_no_index() {
     let env = Env::new();
     // Every row matches: statistics say `True`, the unit is not undecided.
-    let (_, m) = run(
-        &env,
-        EnabledStatistics::Page,
-        "k",
-        k_between(-1, ROWS + 1),
-        true,
-    );
+    let (_, m) = run(&env, EnabledStatistics::Page, k_between(-1, ROWS + 1), true);
     assert_eq!(m.pages_pruned, 0);
     // No row matches: the unit is gone before the stage.
     let (out, _) = run(
         &env,
         EnabledStatistics::Page,
-        "k",
         k_between(ROWS + 5, ROWS + 10),
         true,
     );
@@ -190,8 +171,8 @@ fn the_stage_changes_no_matching_row() {
         (12_000, 12_001),
     ] {
         let predicate = k_between(lo, hi);
-        let (with, _) = run(&env, EnabledStatistics::Page, "k", predicate.clone(), true);
-        let (without, _) = run(&env, EnabledStatistics::Page, "k", predicate, false);
+        let (with, _) = run(&env, EnabledStatistics::Page, predicate.clone(), true);
+        let (without, _) = run(&env, EnabledStatistics::Page, predicate, false);
         let matches = |v: &[i64]| {
             v.iter()
                 .copied()
@@ -212,8 +193,8 @@ fn or_not_and_other_columns() {
         PushdownExpr::cmp(ColumnPath::new("k"), CmpOp::Lt, ScalarValue::Int64(100)),
         PushdownExpr::cmp(ColumnPath::new("k"), CmpOp::Gt, ScalarValue::Int64(19_900)),
     ]);
-    let (with, m) = run(&env, EnabledStatistics::Page, "k", either.clone(), true);
-    let (without, _) = run(&env, EnabledStatistics::Page, "k", either, false);
+    let (with, m) = run(&env, EnabledStatistics::Page, either.clone(), true);
+    let (without, _) = run(&env, EnabledStatistics::Page, either, false);
     assert!(m.pages_pruned > 0);
     let want = |v: &[i64]| {
         v.iter()
@@ -228,7 +209,69 @@ fn or_not_and_other_columns() {
         CmpOp::GtEq,
         ScalarValue::Int64(100),
     )));
-    let (with, m) = run(&env, EnabledStatistics::Page, "k", not, true);
+    let (with, m) = run(&env, EnabledStatistics::Page, not, true);
     assert!(m.pages_pruned > 0);
     assert!(with.iter().filter(|k| **k < 100).count() == 100);
+}
+
+/// A predicate on two indexed columns: each column's pages are checked
+/// against its own chunk, and both prune.
+#[test]
+fn two_indexed_columns_both_prune() {
+    let env = Env::new();
+    let predicate = PushdownExpr::And(vec![
+        k_between(9_000, 9_700),
+        PushdownExpr::cmp(ColumnPath::new("u"), CmpOp::GtEq, ScalarValue::Int64(0)),
+        PushdownExpr::cmp(
+            ColumnPath::new("u"),
+            CmpOp::Lt,
+            ScalarValue::Int64(ROWS - 10_000),
+        ),
+    ]);
+    let (with, m) = run(&env, EnabledStatistics::Page, predicate.clone(), true);
+    let (without, _) = run(&env, EnabledStatistics::Page, predicate, false);
+    assert_eq!(m.page_index_rejected, 0, "{m:?}");
+    assert!(m.pages_pruned > 0);
+    let wanted: Vec<i64> = (9_000..=9_700).collect();
+    assert!(
+        wanted
+            .iter()
+            .filter(|k| (0..ROWS - 10_000).contains(&((*k * 7919) % ROWS)))
+            .all(|k| with.contains(k))
+    );
+    assert!(with.iter().all(|k| without.contains(k)));
+}
+
+/// A row group whose every page is ruled out is dropped from the scan: no
+/// row, no chunk fetched for it, and it counts as a pruned unit.
+#[test]
+fn a_unit_with_every_page_pruned_is_dropped() {
+    let env = Env::new();
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+    // 0..10000 then 20000..30000: a hole statistics cannot see.
+    let k =
+        Int64Array::from_iter_values((0..20_000).map(|i| if i < 10_000 { i } else { i + 10_000 }));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k) as ArrayRef]).unwrap();
+    let props = WriterProperties::builder()
+        .set_data_page_row_count_limit(PAGE_ROWS)
+        .set_write_batch_size(PAGE_ROWS)
+        .build();
+    let f = env.put("hole.parquet", write(&[batch], props));
+    let o = env.options(&[]);
+    let schema = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &f, MetadataNeeds::default(), &o),
+        )
+        .unwrap()
+        .schema();
+    let mut req = ScanRequest::new(schema, vec![ColumnPath::new("k")]);
+    req.predicate = Some(k_between(12_000, 13_000));
+    let (out, m) = env.scan_metered(&f, &req, &o).unwrap();
+    assert_eq!(rows(&out), 0);
+    assert_eq!(m.units_pruned, 1, "{m:?}");
+    assert!(m.pages_pruned >= 40, "{m:?}");
+    // The data chunk was never fetched: only the index was read.
+    assert_eq!(m.bytes_pushed, 0, "{m:?}");
 }

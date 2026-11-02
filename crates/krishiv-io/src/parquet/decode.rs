@@ -616,6 +616,15 @@ impl ParquetDecoder {
                 });
             }
         }
+        // A unit with no row left is dropped: its chunks must not be
+        // prefetched for a reader that never takes them.
+        let before = self.planned.len();
+        self.planned.retain(|u| {
+            u.selection
+                .as_ref()
+                .is_none_or(ParquetSelection::selects_any)
+        });
+        self.metrics.units_pruned += (before - self.planned.len()) as u64;
         let selections = self
             .planned
             .iter()
@@ -701,15 +710,22 @@ impl Decoder for ParquetDecoder {
     }
 
     fn push(&mut self, data: Vec<(Range<u64>, Bytes)>) -> FormatResult<()> {
-        self.metrics.bytes_pushed += data.iter().map(|(_, b)| b.len() as u64).sum::<u64>();
-        // Index bytes go to the page stage, never to arrow-rs's decoder.
-        let data = match self.pages.as_mut() {
+        // Index bytes go to the page stage, never to arrow-rs's decoder, and
+        // are counted apart from the chunk bytes.
+        let data: Vec<(Range<u64>, Bytes)> = match self.pages.as_mut() {
             Some(stage) => data
                 .into_iter()
-                .filter(|(range, bytes)| !stage.accept(range, bytes))
+                .filter(|(range, bytes)| {
+                    let index = stage.accept(range, bytes);
+                    if index {
+                        self.metrics.index_bytes += bytes.len() as u64;
+                    }
+                    !index
+                })
                 .collect(),
             None => data,
         };
+        self.metrics.bytes_pushed += data.iter().map(|(_, b)| b.len() as u64).sum::<u64>();
         if let Err(e) = self.decide_pages() {
             self.poisoned = true;
             return Err(e);

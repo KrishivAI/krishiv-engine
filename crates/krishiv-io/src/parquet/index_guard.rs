@@ -221,6 +221,17 @@ pub(super) fn column_index(bytes: &[u8], ty: PhysicalType, pages: usize) -> R<Co
             "the column index and the offset index count different pages",
         ));
     }
+    // arrow-rs indexes these lists by page without checking their length.
+    for (name, list) in [
+        ("null counts", index.null_counts()),
+        ("NaN counts", index.nan_counts()),
+    ] {
+        if list.is_some_and(|l| l.len() != pages) {
+            return Err(Rejected::new(format!(
+                "the column index's {name} do not match its pages"
+            )));
+        }
+    }
     Ok(index)
 }
 

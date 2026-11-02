@@ -325,3 +325,38 @@ fn a_hostile_page_header_inside_a_sparse_range_is_rejected() {
     };
     assert!(sparse_pages(&page, 1000, &[wild]).is_ok());
 }
+
+/// A `ColumnIndex` of two INT64 pages whose `nan_counts` list has one
+/// element: arrow-rs indexes it by page, so the guard must refuse it.
+#[test]
+fn a_short_nan_counts_list_is_rejected() {
+    let le = |v: i64| v.to_le_bytes().to_vec();
+    let binary = |b: Vec<u8>| {
+        let mut out = varint(b.len() as u64);
+        out.extend(b);
+        out
+    };
+    let list_header = |n: u8, elem: u8| (n << 4) | elem;
+    let mut bytes = Vec::new();
+    // 1: null_pages = [false, false]
+    bytes.extend([0x19, list_header(2, 2), 2, 2]);
+    // 2: min_values, 3: max_values (binary)
+    for field_delta in [1_u8, 1] {
+        bytes.push((field_delta << 4) | 0x09);
+        bytes.push(list_header(2, 8));
+        bytes.extend(binary(le(1)));
+        bytes.extend(binary(le(2)));
+    }
+    // 4: boundary_order = 0 (i32)
+    bytes.extend([0x15, 0x00]);
+    // 5: null_counts = [0, 0]
+    bytes.extend([0x19, list_header(2, 6)]);
+    bytes.extend(zigzag(0));
+    bytes.extend(zigzag(0));
+    // 8: nan_counts = [0] (one element for two pages); field delta 3
+    bytes.extend([0x39, list_header(1, 6)]);
+    bytes.extend(zigzag(0));
+    bytes.push(0x00);
+    let err = column_index(&bytes, PhysicalType::INT64, 2).expect_err("short nan counts");
+    assert!(err.0.contains("NaN counts"), "{err:?}");
+}
