@@ -44,6 +44,10 @@ pub struct JsonOptions {
     pub timestamp_format: Option<DateTimePattern>,
     /// `timestampNTZFormat`, compiled for parsing (a `from_json` reader flag).
     pub timestamp_ntz_format: Option<DateTimePattern>,
+    /// `timeFormat`, compiled for parsing (a `from_json` reader flag).
+    pub time_format: Option<DateTimePattern>,
+    /// `timeFormat`, compiled for formatting (a `to_json` writer flag).
+    pub time_output: Option<DateTimePattern>,
     /// `dateFormat`, compiled for formatting (a `to_json` writer flag).
     pub date_output: Option<DateTimePattern>,
     /// `timestampFormat`, compiled for formatting (a `to_json` writer flag).
@@ -108,6 +112,11 @@ impl JsonOptions {
                     let pattern = DateTimePattern::new(value, Purpose::Parse)?;
                     out.date_format = Some(pattern);
                     out.date_output = Some(DateTimePattern::new(value, Purpose::Format)?);
+                }
+                "timeFormat" => {
+                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
+                    out.time_format = Some(pattern);
+                    out.time_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
                 "timestampFormat" => {
                     let pattern = DateTimePattern::new(value, Purpose::Parse)?;

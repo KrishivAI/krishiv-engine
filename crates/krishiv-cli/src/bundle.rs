@@ -496,6 +496,26 @@ fn platform() -> String {
     format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
 }
 
+/// Every switchable cargo feature of this binary and whether it is on, for
+/// `system.capabilities`.
+pub(crate) fn feature_states() -> Vec<(&'static str, bool)> {
+    vec![
+        ("mimalloc", cfg!(feature = "mimalloc")),
+        ("ui", cfg!(feature = "ui")),
+        ("kafka", cfg!(feature = "kafka")),
+        ("iceberg", cfg!(feature = "iceberg")),
+        ("delta", cfg!(feature = "delta")),
+        ("cdc", cfg!(feature = "cdc")),
+        ("connect", cfg!(feature = "connect")),
+        ("flight-sql", cfg!(feature = "flight-sql")),
+        ("mcp", cfg!(feature = "mcp")),
+        ("python", cfg!(feature = "python")),
+        ("wasm-udf", cfg!(feature = "wasm-udf")),
+        ("celeborn", cfg!(feature = "celeborn")),
+        ("full", cfg!(feature = "full")),
+    ]
+}
+
 fn enabled_features() -> Vec<&'static str> {
     let mut out = Vec::new();
     if cfg!(feature = "mimalloc") {

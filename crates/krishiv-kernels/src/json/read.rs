@@ -31,7 +31,7 @@ use arrow_array::builder::{
     BinaryViewBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     DurationMicrosecondBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
     Int32Builder, Int64Builder, IntervalMonthDayNanoBuilder, IntervalYearMonthBuilder,
-    StringViewBuilder, TimestampMicrosecondBuilder,
+    StringViewBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
 };
 use arrow_array::{Array, ArrayRef, NullArray, StringArray};
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
@@ -606,7 +606,8 @@ fn convert_key(text: &str, keys: &Builder) -> Result<Key, Poison> {
             .ok_or(Poison),
         Scalar::Date(_) => spark_string_to_date(text).map(Key::Date).ok_or(Poison),
         Scalar::Binary(_) => base64::decode(text).map(Key::Binary).ok_or(Poison),
-        Scalar::Timestamp { .. }
+        Scalar::Time(_)
+        | Scalar::Timestamp { .. }
         | Scalar::YearMonth { .. }
         | Scalar::DayTime { .. }
         | Scalar::Calendar(_) => Err(Poison),
@@ -832,6 +833,22 @@ fn read_string(raw: RawStr<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), F
             let parsed = match &ctx.opts.date_format {
                 Some(pattern) => pattern.parse_date(&text).map_err(|_| Poison)?,
                 None => spark_string_to_date(&text),
+            };
+            match parsed {
+                Some(v) => {
+                    b.append_value(v);
+                    Ok(())
+                }
+                None => Err(Poison.into()),
+            }
+        }
+        Scalar::Time(b) => {
+            let parsed = match &ctx.opts.time_format {
+                Some(pattern) => pattern
+                    .parse_local(&text, false)
+                    .map_err(|_| Poison)?
+                    .map(|m| m.rem_euclid(86_400_000_000).wrapping_mul(1_000)),
+                None => crate::cast::time::parse_time(&text),
             };
             match parsed {
                 Some(v) => {
@@ -1190,6 +1207,8 @@ enum Scalar {
     Binary(BinaryViewBuilder),
     /// `date`.
     Date(Date32Builder),
+    /// `time`.
+    Time(Time64NanosecondBuilder),
     /// `timestamp` (`ntz = false`) or `timestamp_ntz`.
     Timestamp {
         /// The values.
@@ -1234,6 +1253,7 @@ impl Scalar {
             Self::Str(b) => b.append_null(),
             Self::Binary(b) => b.append_null(),
             Self::Date(b) => b.append_null(),
+            Self::Time(b) => b.append_null(),
             Self::Timestamp { builder, .. } => builder.append_null(),
             Self::YearMonth { builder, .. } => builder.append_null(),
             Self::DayTime { builder, .. } => builder.append_null(),
@@ -1263,6 +1283,7 @@ impl Scalar {
             Self::Str(mut b) => Arc::new(b.finish()),
             Self::Binary(mut b) => Arc::new(b.finish()),
             Self::Date(mut b) => Arc::new(b.finish()),
+            Self::Time(mut b) => Arc::new(b.finish()),
             Self::Timestamp { mut builder, ntz } => {
                 let mut array = builder.finish();
                 if !ntz {
@@ -1385,6 +1406,9 @@ impl Builder {
                 Self::Scalar(Scalar::Binary(BinaryViewBuilder::new()))
             }
             ArrowType::Date32 => Self::Scalar(Scalar::Date(Date32Builder::new())),
+            ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond) => {
+                Self::Scalar(Scalar::Time(Time64NanosecondBuilder::new()))
+            }
             ArrowType::Timestamp(_, tz) => Self::Scalar(Scalar::Timestamp {
                 builder: TimestampMicrosecondBuilder::new(),
                 ntz: tz.is_none(),
@@ -1471,6 +1495,7 @@ impl Builder {
                 Scalar::Str(b) => len_of(b),
                 Scalar::Binary(b) => len_of(b),
                 Scalar::Date(b) => len_of(b),
+                Scalar::Time(b) => len_of(b),
                 Scalar::Timestamp { builder, .. } => len_of(builder),
                 Scalar::YearMonth { builder, .. } => len_of(builder),
                 Scalar::DayTime { builder, .. } => len_of(builder),
