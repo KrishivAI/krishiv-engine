@@ -336,6 +336,11 @@ struct RangeServer {
 }
 
 fn serve(body: Vec<u8>) -> RangeServer {
+    serve_gated(body, None)
+}
+
+/// As [`serve`], answering `401` unless the request carries `Authorization: Bearer <token>`.
+fn serve_gated(body: Vec<u8>, token: Option<&'static str>) -> RangeServer {
     use std::io::{BufRead, BufReader, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -371,6 +376,15 @@ fn serve(body: Vec<u8>) -> RangeServer {
                     .unwrap()
                     .push((request.clone(), range.clone(), auth.clone()));
                 let head = request.starts_with("HEAD");
+                if let Some(token) = token
+                    && auth.as_deref() != Some(&format!("Bearer {token}"))
+                {
+                    let denied = "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n";
+                    if stream.write_all(denied.as_bytes()).is_err() {
+                        break;
+                    }
+                    continue;
+                }
                 let (status, slice) = match range.as_deref().and_then(|r| r.strip_prefix("bytes="))
                 {
                     Some(r) => {
@@ -512,4 +526,40 @@ async fn hf_paths_read_through_the_resolve_endpoint_with_a_bearer_token() {
     ] {
         assert!(krishiv_io::parse_object_url(bad).is_err(), "{bad}");
     }
+}
+
+/// A gated dataset without a (or with a wrong) token fails with a store
+/// error that names the path but never the token; no panic (P2-T195).
+#[tokio::test]
+async fn hf_without_a_token_on_a_gated_dataset_is_a_store_error() {
+    let server = serve_gated(parquet_bytes(), Some("hf_right"));
+    let endpoint = format!("http://127.0.0.1:{}", server.port);
+    for pairs in [
+        vec![("fs.hf.endpoint", endpoint.as_str())],
+        vec![
+            ("fs.hf.endpoint", endpoint.as_str()),
+            ("fs.hf.token", "hf_Wrong-9"),
+        ],
+    ] {
+        let config = test_config(&pairs);
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let registry = StoreRegistry::new(config);
+        let (store, path, _) = registry
+            .ensure(&sched, "hf://datasets/acme/gated/t.parquet")
+            .unwrap();
+        let e = sched.context().head(&store, &path).await.unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivObjectStoreRequestFailed);
+        assert!(!format!("{e:?}").contains("Wrong-9"));
+    }
+    // The right token reads.
+    let config = test_config(&[
+        ("fs.hf.endpoint", endpoint.as_str()),
+        ("fs.hf.token", "hf_right"),
+    ]);
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(config);
+    let (store, path, _) = registry
+        .ensure(&sched, "hf://datasets/acme/gated/t.parquet")
+        .unwrap();
+    assert!(sched.context().head(&store, &path).await.unwrap().is_some());
 }
