@@ -123,8 +123,8 @@ One selective scan over a FineWeb-Edu sample, written back as Parquet.
 uv run krishiv-datasets remote-filter --yes                    # ~28 GB mirror -> $KRISHIV_DATA/remote-filter/sample-10BT/fw/
 uv run krishiv-bench remote-filter --engines duckdb,polars     # local mirror (the default input); scopes: uncapped and 4g
 uv run krishiv-bench remote-filter --memory-limit 4g --reps 7  # only a MemoryMax=4g scope, 7 timed repetitions
-uv run krishiv-bench remote-filter --sources '["https://..."]' # remote reads (Krishiv needs the local mirror)
-uv run krishiv-bench remote-filter --s3                        # DuckDB and Polars read the mirror over s3:// from a throw-away rclone container
+uv run krishiv-bench remote-filter --sources '["https://..."]' # remote reads (s3://, https://, hf://; Krishiv reads them through `krishiv-bench-runner --table fw=URL`)
+uv run krishiv-bench remote-filter --s3                        # all engines read the mirror over s3:// from a throw-away rclone container
 ```
 * **`--s3`**: serves `fw/` read-only from `docker run --rm` of the pinned `rclone/rclone` image (`rclone serve s3`, which serves a plain directory; MinIO cannot) (container `krishiv-bench-rf-<pid>`, bound to 127.0.0.1 on a free port; never `bench-minio`), removed on exit, error, SIGTERM and SIGHUP (a SIGKILL leaves the container: `docker rm -f krishiv-bench-rf-<pid>`). DuckDB (httpfs, fetched by `INSTALL` on first use) and Polars read `s3://fw/<file>`; Krishiv still reads the local mirror, so `--s3` runs `duckdb,polars`. The mirror's commit (`fw/.revision`) is recorded in the result and checked against `expected.json`.
 * **Data**: FineWeb-Edu `sample/10BT` Parquet (Hugging Face dataset `HuggingFaceFW/fineweb-edu`), stored as the

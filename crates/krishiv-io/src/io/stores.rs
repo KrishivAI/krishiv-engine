@@ -13,7 +13,12 @@
 //! [`parse_object_url`] splits a user path into its scheme, bucket (or
 //! container) and key: `s3://` and `s3a://`, `gs://`, `abfss://` and
 //! `abfs://` (both `container@account.host/key` and `container/key`), and
-//! `az://container/key`. Anything else with a scheme is
+//! `az://container/key`; the read-only web stores `https://host[:port]/key`
+//! (`http://` only for a loopback host) and `hf://datasets/<org>/<name>[@rev]/<path>`
+//! (a Krishiv extension, not Spark behaviour, so no `spark.*` key: reads
+//! through the Hugging Face `resolve` endpoint with `fs.hf.token` or
+//! `HF_TOKEN` as a bearer header, `fs.hf.endpoint` for the host). Both are
+//! byte-range reads and `HEAD` only; no listing or globs. Anything else with a scheme is
 //! `KRISHIV_UNSUPPORTED_FEATURE`, as are paths that smuggle credentials in
 //! the URL itself (user info): like the rest of the engine, this layer only
 //! accepts credentials from configuration, never from paths (plans stay
