@@ -584,23 +584,18 @@ impl Merge {
     }
 
     /// Whether [`Merge::join_run`] may join whole keys: without a residual
-    /// (or a scalar subquery's one-match check) a key's output is every pair
-    /// of its rows, and an outer join's other rows are those of keys with no
-    /// match.
+    /// (or a scalar subquery's one-match check) a key's output follows from
+    /// its rows alone (every pair, or each row of one side once, or none),
+    /// and the other rows are those of keys with no match.
     fn joins_runs(&self) -> bool {
-        self.shared.filter.is_none()
-            && !self.shared.single_match
-            && matches!(
-                self.join_type(),
-                JoinType::Inner | JoinType::LeftOuter | JoinType::RightOuter | JoinType::FullOuter
-            )
+        self.shared.filter.is_none() && !self.shared.single_match
     }
 
     /// Joins the streams' current batches key by key, in place: what the
     /// phases do for a key, without their steps per key. Stops at a full
     /// output, at a batch's end, and at a key whose rows reach the end of
-    /// either batch (they may go on in the next one) or whose pairs don't fit
-    /// the output, which the phases then take. `false` when it joined nothing.
+    /// either batch (they may go on in the next one) or whose output doesn't
+    /// fit, which the phases then take. `false` when it joined nothing.
     fn join_run(&mut self) -> bool {
         let (Some(l), Some(r)) = (self.left.current.clone(), self.right.current.clone()) else {
             return false;
@@ -623,26 +618,65 @@ impl Merge {
                 std::cmp::Ordering::Greater => self.right_unmatched(rpos, r.lower_bound(rpos, lk)),
                 std::cmp::Ordering::Equal => {
                     let (lend, rend) = (l.upper_bound(lpos, lk), r.upper_bound(rpos, rk));
-                    let room = self.batch_rows - self.out.len();
-                    if lend == ln || rend == rn || (lend - lpos).saturating_mul(rend - rpos) > room
-                    {
+                    if lend == ln || rend == rn || !self.key_fits(lend - lpos, rend - rpos) {
                         break;
                     }
-                    let left = self.out.left_source(&l.batch, l.serial);
-                    let right = self.out.right_source(&r.batch, r.serial);
-                    // In `product`'s order.
-                    for j in rpos..rend {
-                        for i in lpos..lend {
-                            self.out.left_rows.push((left, i));
-                            self.out.right_rows.push((right, j));
-                        }
-                    }
+                    self.join_key(&l, lpos..lend, &r, rpos..rend);
                     self.left.pos = lend;
                     self.right.pos = rend;
                 }
             }
         }
         (self.left.pos, self.right.pos) != from
+    }
+
+    /// Whether the output has room for a key of `left` and `right` rows.
+    fn key_fits(&self, left: usize, right: usize) -> bool {
+        let rows = match self.join_type() {
+            JoinType::Inner | JoinType::LeftOuter | JoinType::RightOuter | JoinType::FullOuter => {
+                left.saturating_mul(right)
+            }
+            JoinType::LeftSemi | JoinType::Existence => left,
+            JoinType::RightSemi => right,
+            JoinType::LeftAnti | JoinType::RightAnti | JoinType::NullAwareAnti => 0,
+        };
+        rows <= self.batch_rows - self.out.len()
+    }
+
+    /// The output of a key whose rows are `left` of `l` and `right` of `r`,
+    /// all of them: as the phases give it without a residual.
+    fn join_key(
+        &mut self,
+        l: &Keyed,
+        left: std::ops::Range<usize>,
+        r: &Keyed,
+        right: std::ops::Range<usize>,
+    ) {
+        match self.join_type() {
+            JoinType::Inner | JoinType::LeftOuter | JoinType::RightOuter | JoinType::FullOuter => {
+                let ls = self.out.left_source(&l.batch, l.serial);
+                let rs = self.out.right_source(&r.batch, r.serial);
+                // In `product`'s order.
+                for j in right {
+                    for i in left.clone() {
+                        self.out.left_rows.push((ls, i));
+                        self.out.right_rows.push((rs, j));
+                    }
+                }
+            }
+            t @ (JoinType::LeftSemi | JoinType::Existence) => {
+                let ls = self.out.left_source(&l.batch, l.serial);
+                self.out.left_rows.extend(left.clone().map(|i| (ls, i)));
+                if t == JoinType::Existence {
+                    self.out.exists.extend(left.map(|_| true));
+                }
+            }
+            JoinType::RightSemi => {
+                let rs = self.out.right_source(&r.batch, r.serial);
+                self.out.right_rows.extend(right.map(|j| (rs, j)));
+            }
+            JoinType::LeftAnti | JoinType::RightAnti | JoinType::NullAwareAnti => {}
+        }
     }
 
     /// Left rows `start..end` of the current batch match nothing.
