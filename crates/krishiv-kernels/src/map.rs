@@ -23,15 +23,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::builder::{
-    ArrayBuilder, BooleanBuilder, Date32Builder, Decimal128Builder, Float32Builder, Float64Builder,
-    Int8Builder, Int16Builder, Int32Builder, Int64Builder, ListBuilder, MapBuilder, NullBuilder,
-    StringViewBuilder, StructBuilder, TimestampMicrosecondBuilder, UInt8Builder, UInt16Builder,
-    UInt32Builder, UInt64Builder, make_builder,
+    ArrayBuilder, BooleanBuilder, Date32Builder, Decimal64Builder, Decimal128Builder,
+    Float32Builder, Float64Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder,
+    ListBuilder, MapBuilder, NullBuilder, StringViewBuilder, StructBuilder,
+    TimestampMicrosecondBuilder, UInt8Builder, UInt16Builder, UInt32Builder, UInt64Builder,
+    make_builder,
 };
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, TimestampMicrosecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow_array::{
     Array, ArrayRef, BooleanArray, GenericListArray, ListArray, MapArray, StructArray,
@@ -86,6 +87,7 @@ pub fn supports_key(t: &DataType) -> bool {
         | DataType::UInt64
         | DataType::Float32
         | DataType::Float64
+        | DataType::Decimal64(..)
         | DataType::Decimal128(..)
         | DataType::Utf8
         | DataType::Utf8View
@@ -180,6 +182,8 @@ pub fn keys_equal(a: &dyn Array, i: usize, b: &dyn Array, j: usize) -> Result<bo
             a.as_primitive::<Float64Type>().value(i),
             b.as_primitive::<Float64Type>().value(j),
         )),
+        (T::Decimal64(..), T::Decimal64(..)) => Ok(a.as_primitive::<Decimal64Type>().value(i)
+            == b.as_primitive::<Decimal64Type>().value(j)),
         (T::Decimal128(..), T::Decimal128(..)) => Ok(a.as_primitive::<Decimal128Type>().value(i)
             == b.as_primitive::<Decimal128Type>().value(j)),
         (x, y) if is_string(x) && is_string(y) => Ok(string_value(a, i) == string_value(b, j)),
@@ -344,6 +348,7 @@ fn append_value(
         T::UInt64 => prim!(UInt64Type, UInt64Builder),
         T::Float32 => prim!(Float32Type, Float32Builder),
         T::Float64 => prim!(Float64Type, Float64Builder),
+        T::Decimal64(..) => prim!(Decimal64Type, Decimal64Builder),
         T::Decimal128(..) => prim!(Decimal128Type, Decimal128Builder),
         t if is_string(t) => {
             let b = downcast::<StringViewBuilder>(builder)?;
@@ -574,6 +579,10 @@ fn key_text(keys: &dyn Array, key: usize) -> Result<String, KernelError> {
                 Ok(format!("{v:?}"))
             }
         }
+        T::Decimal64(_, scale) => decimal_text(
+            i128::from(keys.as_primitive::<Decimal64Type>().value(key)),
+            *scale,
+        ),
         T::Decimal128(_, scale) => {
             decimal_text(keys.as_primitive::<Decimal128Type>().value(key), *scale)
         }

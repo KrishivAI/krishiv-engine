@@ -101,6 +101,24 @@ pub enum Builtin {
     When,
     /// `concat`.
     Concat,
+    /// A date plus a year-month interval (Spark's `DateAddYMInterval`).
+    DateAddYmInterval,
+    /// A timestamp plus a year-month interval (`TimestampAddYMInterval`).
+    TimestampAddYmInterval,
+    /// A timestamp plus a day-time interval (`TimestampAddInterval`).
+    TimestampAddInterval,
+    /// How Spark's `DatetimeSub` shows `l - r` in a name; only ever in a
+    /// bound expression's shown form, never evaluated.
+    DatetimeSub,
+    /// `date - date` (`SubtractDates`).
+    SubtractDates,
+    /// `timestamp - timestamp` (`SubtractTimestamps`).
+    SubtractTimestamps,
+    /// The whole days of a day-time interval (`ExtractANSIIntervalDays`).
+    ExtractAnsiIntervalDays,
+    /// Its argument, NULL in a row where evaluating it fails (`TryEval`, the
+    /// `try_*` forms of interval arithmetic).
+    TryEval,
 }
 
 /// The three axes of a [`Builtin`] `[NOT] LIKE|ILIKE ANY|ALL` operator.
@@ -116,7 +134,7 @@ pub struct QuantifiedLike {
 
 impl Builtin {
     /// Every operator, in declaration order.
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 41] = [
         Self::Eq,
         Self::EqNullSafe,
         Self::Lt,
@@ -150,7 +168,32 @@ impl Builtin {
         Self::NotILikeAll,
         Self::When,
         Self::Concat,
+        Self::DateAddYmInterval,
+        Self::TimestampAddYmInterval,
+        Self::TimestampAddInterval,
+        Self::DatetimeSub,
+        Self::SubtractDates,
+        Self::SubtractTimestamps,
+        Self::ExtractAnsiIntervalDays,
+        Self::TryEval,
     ];
+
+    /// Whether this operator only comes from the analyzer's rewrites of
+    /// interval arithmetic: SQL cannot call it by name.
+    #[must_use]
+    pub const fn is_analyzer_internal(self) -> bool {
+        matches!(
+            self,
+            Self::DateAddYmInterval
+                | Self::TimestampAddYmInterval
+                | Self::TimestampAddInterval
+                | Self::DatetimeSub
+                | Self::SubtractDates
+                | Self::SubtractTimestamps
+                | Self::ExtractAnsiIntervalDays
+                | Self::TryEval
+        )
+    }
 
     /// The canonical name.
     #[must_use]
@@ -189,6 +232,14 @@ impl Builtin {
             Self::NotILikeAll => "not_ilike_all",
             Self::When => "when",
             Self::Concat => "concat",
+            Self::DateAddYmInterval => "date_add_ym_interval",
+            Self::TimestampAddYmInterval => "timestamp_add_ym_interval",
+            Self::TimestampAddInterval => "timestamp_add_interval",
+            Self::DatetimeSub => "datetime_sub",
+            Self::SubtractDates => "subtract_dates",
+            Self::SubtractTimestamps => "subtract_timestamps",
+            Self::ExtractAnsiIntervalDays => "extractansiintervaldays",
+            Self::TryEval => "tryeval",
         }
     }
 

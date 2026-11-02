@@ -51,11 +51,14 @@ variants!(
     WindowGroupLimit,
     Aggregate,
     HashJoin,
+    SortMergeJoin,
     NestedLoopJoin,
     Union,
     WriteFiles,
     Exchange,
     SharedRead,
+    UnionLoop,
+    LoopRef,
 );
 
 fn variant_of(node: &PhysNode) -> Variant {
@@ -68,6 +71,8 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Limit { .. } => Variant::Limit,
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
         PhysNode::Generate { .. } => Variant::Generate,
+        PhysNode::UnionLoop { .. } => Variant::UnionLoop,
+        PhysNode::LoopRef { .. } => Variant::LoopRef,
         PhysNode::Expand { .. } => Variant::Expand,
         PhysNode::Sort { .. } => Variant::Sort,
         PhysNode::TopN { .. } => Variant::TopN,
@@ -75,6 +80,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::WindowGroupLimit { .. } => Variant::WindowGroupLimit,
         PhysNode::Aggregate { .. } => Variant::Aggregate,
         PhysNode::HashJoin(_) => Variant::HashJoin,
+        PhysNode::SortMergeJoin(_) => Variant::SortMergeJoin,
         PhysNode::NestedLoopJoin(_) => Variant::NestedLoopJoin,
         PhysNode::Union { .. } => Variant::Union,
         PhysNode::WriteFiles { .. } => Variant::WriteFiles,
@@ -462,6 +468,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
             "window_group_limit"
+            | "sort_merge_join"
             | "partial_aggregate"
             | "shared_subplan"
             | "rust_udf"
@@ -481,7 +488,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "aggregate_percentiles" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.
-            n if n.starts_with("time_") || n.starts_with("geo_") => 6,
+            n if n.starts_with("time_") || n.starts_with("geo_") || n.starts_with("interval_") => 6,
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
             "hash_join_existence"
             | "hash_join_full_outer"
@@ -492,7 +499,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "window_offset_values"
             | "window_range_values"
             | "write_files_with_plan" => POST_MIGRATION_READER_VERSION,
-            n if n.starts_with("generate_") => 6,
+            n if n.starts_with("generate_") || n.starts_with("union_loop") => 6,
             _ => MIN_READER_VERSION,
         };
         assert_eq!(m.min_reader_version, expected, "{name}");
@@ -1228,4 +1235,34 @@ fn aggregates_the_format_does_not_know_are_refused() {
             },
         }));
     }
+}
+
+#[test]
+fn a_reader_without_union_loop_refuses_a_recursive_plan_naming_it() {
+    for name in ["union_loop", "union_loop_unbounded"] {
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        let bytes = encode(&plan).unwrap();
+        let reader = ReaderFeatures::only([Feature::LimitOffset]);
+        let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+        assert_eq!(
+            err,
+            CodecError::UnsupportedFeatures {
+                missing: vec!["union_loop".to_owned()]
+            },
+            "{name}"
+        );
+        assert_eq!(round_trip(&plan), plan, "{name}");
+    }
+}
+
+#[test]
+fn a_loop_without_limits_is_corrupt() {
+    use pb::node::Kind;
+    let mut m = message("union_loop");
+    for node in &mut m.nodes {
+        if let Some(Kind::UnionLoop(u)) = &mut node.kind {
+            u.limits = None;
+        }
+    }
+    corrupt(&m, "a recursive loop without limits");
 }

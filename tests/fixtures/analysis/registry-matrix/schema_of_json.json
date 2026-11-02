@@ -34,11 +34,11 @@
     },
     {
       "id": "schema_of_json#19c6c7daec4e/ansi_on",
-      "reason": "SELECT schema_of_json(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT schema_of_json(INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#19c6c7daec4e/ansi_off",
-      "reason": "SELECT schema_of_json(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT schema_of_json(INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#27ce8e5a35ba/ansi_on",
@@ -73,14 +73,6 @@
       "reason": "SELECT schema_of_json(array(1, 2), map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
-      "id": "schema_of_json#311c2af4e81c/ansi_on",
-      "reason": "SELECT schema_of_json('[{\"col\":01}]', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
-    },
-    {
-      "id": "schema_of_json#311c2af4e81c/ansi_off",
-      "reason": "SELECT schema_of_json('[{\"col\":01}]', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
-    },
-    {
       "id": "schema_of_json#32efff10e0ba/ansi_on",
       "reason": "SELECT schema_of_json(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
@@ -106,11 +98,11 @@
     },
     {
       "id": "schema_of_json#6361bc336a64/ansi_on",
-      "reason": "SELECT schema_of_json(INTERVAL '1 02:03:04' DAY TO SECOND, map('allowNumericLeadingZeros', 'true')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT schema_of_json(INTERVAL '1 02:03:04' DAY TO SECOND, map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#6361bc336a64/ansi_off",
-      "reason": "SELECT schema_of_json(INTERVAL '1 02:03:04' DAY TO SECOND, map('allowNumericLeadingZeros', 'true')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT schema_of_json(INTERVAL '1 02:03:04' DAY TO SECOND, map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#67c0ef7ef1ed/ansi_on",
@@ -130,19 +122,11 @@
     },
     {
       "id": "schema_of_json#79cbcf87b991/ansi_on",
-      "reason": "SELECT schema_of_json(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT schema_of_json(INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#79cbcf87b991/ansi_off",
-      "reason": "SELECT schema_of_json(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "schema_of_json#7ec8703b294f/ansi_on",
-      "reason": "SELECT schema_of_json('[{\"col\":01}]', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
-    },
-    {
-      "id": "schema_of_json#7ec8703b294f/ansi_off",
-      "reason": "SELECT schema_of_json('[{\"col\":01}]', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+      "reason": "SELECT schema_of_json(INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#80511f2962a1/ansi_on",
@@ -194,11 +178,11 @@
     },
     {
       "id": "schema_of_json#bbd5f122b60a/ansi_on",
-      "reason": "SELECT schema_of_json(INTERVAL '1-2' YEAR TO MONTH, map('allowNumericLeadingZeros', 'true')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT schema_of_json(INTERVAL '1-2' YEAR TO MONTH, map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#bbd5f122b60a/ansi_off",
-      "reason": "SELECT schema_of_json(INTERVAL '1-2' YEAR TO MONTH, map('allowNumericLeadingZeros', 'true')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT schema_of_json(INTERVAL '1-2' YEAR TO MONTH, map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#cdbb8be1c4a4/ansi_on",

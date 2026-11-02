@@ -9,44 +9,12 @@
       "reason": "SELECT mask('abcd-EFGH-8765-4321', CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INPUT_SIZE_NOT_ONE"
     },
     {
-      "id": "mask#185d5f6d23ef/ansi_on",
-      "reason": "SELECT mask(INTERVAL '1 02:03:04' DAY TO SECOND, 'Q', 'q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#185d5f6d23ef/ansi_off",
-      "reason": "SELECT mask(INTERVAL '1 02:03:04' DAY TO SECOND, 'Q', 'q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#1c8ecfa526a9/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#1c8ecfa526a9/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#268098ca5d12/ansi_on",
       "reason": "SELECT mask('AbCD123-@$#', CAST(X'C328FF' AS STRING), 'q') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INPUT_SIZE_NOT_ONE"
     },
     {
       "id": "mask#268098ca5d12/ansi_off",
       "reason": "SELECT mask('AbCD123-@$#', CAST(X'C328FF' AS STRING), 'q') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INPUT_SIZE_NOT_ONE"
-    },
-    {
-      "id": "mask#26f2ef12b777/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1-2' YEAR TO MONTH, 'd', 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#26f2ef12b777/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1-2' YEAR TO MONTH, 'd', 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#27cb2dfd4b84/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#27cb2dfd4b84/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#2f388b8a41ca/ansi_on",
@@ -73,28 +41,12 @@
       "reason": "SELECT mask(' \\t a\\u3000\\n ', 'Q', 'q', 'd', 'o') | string not null where Spark has string"
     },
     {
-      "id": "mask#3ae6027968be/ansi_on",
-      "reason": "SELECT mask(INTERVAL '1 02:03:04' DAY TO SECOND, 'Q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#3ae6027968be/ansi_off",
-      "reason": "SELECT mask(INTERVAL '1 02:03:04' DAY TO SECOND, 'Q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#411877cfc39c/ansi_on",
       "reason": "SELECT mask('abc', 'Q', 'q', 'd', 'o') | string not null where Spark has string"
     },
     {
       "id": "mask#411877cfc39c/ansi_off",
       "reason": "SELECT mask('abc', 'Q', 'q', 'd', 'o') | string not null where Spark has string"
-    },
-    {
-      "id": "mask#466aaca1585c/ansi_on",
-      "reason": "SELECT mask(INTERVAL '1-2' YEAR TO MONTH, 'Q', 'q', 'd', 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#466aaca1585c/ansi_off",
-      "reason": "SELECT mask(INTERVAL '1-2' YEAR TO MONTH, 'Q', 'q', 'd', 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#49375ca3e112/ansi_on",
@@ -113,36 +65,12 @@
       "reason": "SELECT mask('AbCD123-@$#', CAST(X'C328FF' AS STRING), 'q', 'd') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INPUT_SIZE_NOT_ONE"
     },
     {
-      "id": "mask#4c3bbabdc2d6/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#4c3bbabdc2d6/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#6691f60de573/ansi_on",
-      "reason": "SELECT mask('abcd-EFGH-8765-4321', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#6691f60de573/ansi_off",
-      "reason": "SELECT mask('abcd-EFGH-8765-4321', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#68f9b5afb88a/ansi_on",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INPUT_SIZE_NOT_ONE"
     },
     {
       "id": "mask#68f9b5afb88a/ansi_off",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INPUT_SIZE_NOT_ONE"
-    },
-    {
-      "id": "mask#6a1012a06a00/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', INTERVAL '1 02:03:04' DAY TO SECOND, 'q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#6a1012a06a00/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', INTERVAL '1 02:03:04' DAY TO SECOND, 'q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#6d70d9a6b16e/ansi_on",
@@ -161,76 +89,12 @@
       "reason": "SELECT mask('AbCD123-@$#', 'Q', CAST(X'C328FF' AS STRING), 'd', 'o') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INPUT_SIZE_NOT_ONE"
     },
     {
-      "id": "mask#7af2934fee03/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#7af2934fee03/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#7e8b4b5e561c/ansi_on",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', '1', 'o') | string not null where Spark has string"
     },
     {
       "id": "mask#7e8b4b5e561c/ansi_off",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', '1', 'o') | string not null where Spark has string"
-    },
-    {
-      "id": "mask#8e073509fa76/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#8e073509fa76/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#92e79a232d1f/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#92e79a232d1f/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#94cbcce5e38e/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1-2' YEAR TO MONTH, 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#94cbcce5e38e/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1-2' YEAR TO MONTH, 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#9dc44bff3e50/ansi_on",
-      "reason": "SELECT mask('abcd-EFGH-8765-4321', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#9dc44bff3e50/ansi_off",
-      "reason": "SELECT mask('abcd-EFGH-8765-4321', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#9f81e5379f99/ansi_on",
-      "reason": "SELECT mask(INTERVAL '1 02:03:04' DAY TO SECOND, 'Q', 'q', 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#9f81e5379f99/ansi_off",
-      "reason": "SELECT mask(INTERVAL '1 02:03:04' DAY TO SECOND, 'Q', 'q', 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#a045760f7cbb/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', INTERVAL '1 02:03:04' DAY TO SECOND, 'q', 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#a045760f7cbb/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', INTERVAL '1 02:03:04' DAY TO SECOND, 'q', 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#a28f7fc11d02/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', INTERVAL '1 02:03:04' DAY TO SECOND, 'q', 'd', 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#a28f7fc11d02/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', INTERVAL '1 02:03:04' DAY TO SECOND, 'q', 'd', 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#a523765f14c7/ansi_on",
@@ -257,38 +121,6 @@
       "reason": "SELECT mask('AbCD123-@$#', 'Q', CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INPUT_SIZE_NOT_ONE"
     },
     {
-      "id": "mask#ab9ccc920439/ansi_on",
-      "reason": "SELECT mask(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#ab9ccc920439/ansi_off",
-      "reason": "SELECT mask(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#ad92cd7d7b6f/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1 02:03:04' DAY TO SECOND, 'd', 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#ad92cd7d7b6f/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1 02:03:04' DAY TO SECOND, 'd', 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#ae6b6ce57bab/ansi_on",
-      "reason": "SELECT mask(INTERVAL '1-2' YEAR TO MONTH, 'Q', 'q', 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#ae6b6ce57bab/ansi_off",
-      "reason": "SELECT mask(INTERVAL '1-2' YEAR TO MONTH, 'Q', 'q', 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#b107aafe4bec/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', INTERVAL '1-2' YEAR TO MONTH, 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#b107aafe4bec/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', INTERVAL '1-2' YEAR TO MONTH, 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#b6b4fd6fc340/ansi_on",
       "reason": "SELECT mask(CAST(X'C328FF' AS STRING), 'Q', 'q', 'd', 'o') | string not null where Spark has string"
     },
@@ -297,52 +129,12 @@
       "reason": "SELECT mask(CAST(X'C328FF' AS STRING), 'Q', 'q', 'd', 'o') | string not null where Spark has string"
     },
     {
-      "id": "mask#b7a79998bbde/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1 02:03:04' DAY TO SECOND, 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#b7a79998bbde/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1 02:03:04' DAY TO SECOND, 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#bc50a5058006/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', INTERVAL '1 02:03:04' DAY TO SECOND, 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#bc50a5058006/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', INTERVAL '1 02:03:04' DAY TO SECOND, 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#c4303c92398e/ansi_on",
-      "reason": "SELECT mask(INTERVAL '1 02:03:04' DAY TO SECOND, 'Q', 'q', 'd', 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#c4303c92398e/ansi_off",
-      "reason": "SELECT mask(INTERVAL '1 02:03:04' DAY TO SECOND, 'Q', 'q', 'd', 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#cd1546aa3c75/ansi_on",
-      "reason": "SELECT mask(INTERVAL '1-2' YEAR TO MONTH, 'Q', 'q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#cd1546aa3c75/ansi_off",
-      "reason": "SELECT mask(INTERVAL '1-2' YEAR TO MONTH, 'Q', 'q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#ce1dda0289a3/ansi_on",
       "reason": "SELECT mask('AbCD123-@$#', '1', 'q', 'd', 'o') | string not null where Spark has string"
     },
     {
       "id": "mask#ce1dda0289a3/ansi_off",
       "reason": "SELECT mask('AbCD123-@$#', '1', 'q', 'd', 'o') | string not null where Spark has string"
-    },
-    {
-      "id": "mask#d253e08279a7/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', INTERVAL '1-2' YEAR TO MONTH, 'q', 'd', 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#d253e08279a7/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', INTERVAL '1-2' YEAR TO MONTH, 'q', 'd', 'o') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#dd889043c6c6/ansi_on",
@@ -369,44 +161,12 @@
       "reason": "SELECT mask('1', 'Q', 'q', 'd', 'o') | string not null where Spark has string"
     },
     {
-      "id": "mask#ec24fafa1f92/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', INTERVAL '1-2' YEAR TO MONTH, 'q', 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#ec24fafa1f92/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', INTERVAL '1-2' YEAR TO MONTH, 'q', 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#ef30e035841e/ansi_on",
-      "reason": "SELECT mask(INTERVAL '1-2' YEAR TO MONTH, 'Q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#ef30e035841e/ansi_off",
-      "reason": "SELECT mask(INTERVAL '1-2' YEAR TO MONTH, 'Q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#f2eae03490ae/ansi_on",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INPUT_SIZE_NOT_ONE"
     },
     {
       "id": "mask#f2eae03490ae/ansi_off",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INPUT_SIZE_NOT_ONE"
-    },
-    {
-      "id": "mask#f77fd44df469/ansi_on",
-      "reason": "SELECT mask(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#f77fd44df469/ansi_off",
-      "reason": "SELECT mask(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#f8c5db4839ce/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', INTERVAL '1-2' YEAR TO MONTH, 'q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#f8c5db4839ce/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', INTERVAL '1-2' YEAR TO MONTH, 'q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

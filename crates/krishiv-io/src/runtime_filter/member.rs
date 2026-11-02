@@ -59,7 +59,7 @@ impl Class {
             D::Int64 | D::Timestamp(..) => Self::Int { width: 8 },
             D::Float32 => Self::Float { single: true },
             D::Float64 => Self::Float { single: false },
-            D::Decimal128(..) => Self::Decimal,
+            D::Decimal64(..) | D::Decimal128(..) => Self::Decimal,
             D::Utf8 | D::LargeUtf8 | D::Utf8View | D::Binary | D::LargeBinary | D::BinaryView => {
                 Self::Bytes
             }

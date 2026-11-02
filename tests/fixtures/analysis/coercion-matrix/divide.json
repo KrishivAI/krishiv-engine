@@ -98,11 +98,11 @@
     },
     {
       "id": "divide/STRING/TIMESTAMP/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) / CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) / CAST(NULL AS TIMESTAMP))\\\"\"}"
+      "reason": "SELECT typeof(CAST(NULL AS STRING) / CAST(NULL AS TIMESTAMP)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) / CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"TIMESTAMP\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) / CAST(NULL AS TIMESTAMP))\\\"\"}"
     },
     {
       "id": "divide/STRING/TIMESTAMP_NTZ/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) / CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) / CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+      "reason": "SELECT typeof(CAST(NULL AS STRING) / CAST(NULL AS TIMESTAMP_NTZ)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) / CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"TIMESTAMP_NTZ\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) / CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
     },
     {
       "id": "divide/STRING/TINYINT/ansi_off",
@@ -122,11 +122,11 @@
     },
     {
       "id": "divide/TIMESTAMP/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) / CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) / CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) / CAST(NULL AS STRING)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) / CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) / CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "divide/TIMESTAMP_NTZ/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) / CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) / CAST(NULL AS STRING))\\\"\"}"
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) / CAST(NULL AS STRING)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) / CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TIMESTAMP_NTZ\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) / CAST(NULL AS STRING))\\\"\"}"
     },
     {
       "id": "divide/TINYINT/STRING/ansi_off",

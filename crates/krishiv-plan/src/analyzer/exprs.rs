@@ -132,7 +132,7 @@ impl Bound {
     /// Adds the analysis markers of `kids` to this expression: rebinding an
     /// already resolved child drops its markers, so a rewrite that rebinds
     /// its children carries them over.
-    fn carry_markers(&mut self, kids: &[Self]) {
+    pub(super) fn carry_markers(&mut self, kids: &[Self]) {
         for k in kids {
             self.agg = self.agg.or(k.agg);
             self.win = self.win.or(k.win);
@@ -205,6 +205,37 @@ fn with_children(e: &Expr, kids: Vec<Arc<Expr>>) -> Arc<Expr> {
         }
     });
     Arc::new(x)
+}
+
+/// The `TIMESTAMP_NTZ` function a timestamp-producing call runs as under
+/// `spark.sql.timestampType = TIMESTAMP_NTZ`, with how many of `kids` it
+/// takes: `to_timestamp` over a string, date or timestamp, and the numeric
+/// forms of `make_timestamp` / `try_make_timestamp` (the optional zone is
+/// ignored). `None` for any other call.
+fn ntz_variant(name: &str, kids: &[Bound]) -> Option<(&'static str, usize)> {
+    let is = |n: &str| name.eq_ignore_ascii_case(n);
+    if is("to_timestamp") && (1..=2).contains(&kids.len()) {
+        let ok = matches!(
+            kids[0].ty.data_type,
+            Some(
+                DataType::String
+                    | DataType::Date
+                    | DataType::Timestamp
+                    | DataType::TimestampNtz
+                    | DataType::Null
+            )
+        );
+        return ok.then_some(("to_timestamp_ntz", kids.len()));
+    }
+    if (6..=7).contains(&kids.len()) {
+        if is("make_timestamp") {
+            return Some(("make_timestamp_ntz", 6));
+        }
+        if is("try_make_timestamp") {
+            return Some(("try_make_timestamp_ntz", 6));
+        }
+    }
+    None
 }
 
 /// The shown form of a call whose bound form is `expr`, the arguments
@@ -559,7 +590,15 @@ pub(super) fn literal_type(v: &Literal) -> Option<DataType> {
         Literal::Date(_) => DataType::Date,
         Literal::Timestamp(_) => DataType::Timestamp,
         Literal::TimestampNtz(_) => DataType::TimestampNtz,
-        Literal::YearMonthInterval { .. } | Literal::DayTimeInterval { .. } => return None,
+        Literal::YearMonthInterval { start, end, .. } => DataType::YearMonthInterval {
+            start: *start,
+            end: *end,
+        },
+        Literal::DayTimeInterval { start, end, .. } => DataType::DayTimeInterval {
+            start: *start,
+            end: *end,
+        },
+        Literal::CalendarInterval { .. } => DataType::CalendarInterval,
     })
 }
 
@@ -744,6 +783,62 @@ fn typed_literal(
 
 /// Whether `value` is one of Spark's special date/timestamp spellings
 /// (`now`, `today`, ...), which depend on the session's clock and zone.
+/// The type a typed datetime literal denotes.
+#[derive(Clone, Copy)]
+enum SpecialKind {
+    /// `DATE`.
+    Date,
+    /// `TIMESTAMP` / `TIMESTAMP_LTZ`: an instant.
+    Instant,
+    /// `TIMESTAMP_NTZ` (or `TIMESTAMP` under `spark.sql.timestampType`).
+    Local,
+}
+
+fn special_kind(kind: TypedLiteralKind, timestamp_ntz: bool) -> SpecialKind {
+    match kind {
+        TypedLiteralKind::Date => SpecialKind::Date,
+        TypedLiteralKind::TimestampNtz => SpecialKind::Local,
+        TypedLiteralKind::Timestamp if timestamp_ntz => SpecialKind::Local,
+        _ => SpecialKind::Instant,
+    }
+}
+
+/// The clock expression Spark's special value `now`, `today`, `tomorrow` or
+/// `yesterday` stands for, of the literal's type.
+fn special_clock(special: &str, kind: SpecialKind) -> Expr {
+    let day = |offset: &str| match offset {
+        "tomorrow" => Expr::function(
+            "date_add",
+            vec![
+                Expr::function("current_date", Vec::new()),
+                Expr::literal(Literal::Integer(1)),
+            ],
+        ),
+        "yesterday" => Expr::function(
+            "date_sub",
+            vec![
+                Expr::function("current_date", Vec::new()),
+                Expr::literal(Literal::Integer(1)),
+            ],
+        ),
+        _ => Expr::function("current_date", Vec::new()),
+    };
+    let cast = |expr: Expr, to: DataType| {
+        Expr::new(ExprNode::Cast {
+            expr: Arc::new(expr),
+            to,
+            mode: CastMode::Ansi,
+        })
+    };
+    match (kind, special) {
+        (SpecialKind::Date, d) => day(d),
+        (SpecialKind::Instant, "now") => Expr::function("current_timestamp", Vec::new()),
+        (SpecialKind::Local, "now") => Expr::function("localtimestamp", Vec::new()),
+        (SpecialKind::Instant, d) => cast(day(d), DataType::Timestamp),
+        (SpecialKind::Local, d) => cast(day(d), DataType::TimestampNtz),
+    }
+}
+
 fn is_special(value: &str) -> bool {
     let v = value.trim().to_ascii_lowercase();
     ["epoch", "now", "today", "yesterday", "tomorrow"].contains(&v.as_str())
@@ -1468,7 +1563,12 @@ impl Resolver<'_> {
             ExprNode::Column(c) => self.column(c, e.origin, in_agg, cx)?,
             ExprNode::Literal(
                 Literal::YearMonthInterval { .. } | Literal::DayTimeInterval { .. },
-            ) => return Err(unsupported("interval values", e.origin)),
+            ) if self.ctx.conf.legacy_interval => {
+                return Err(unsupported(
+                    "interval literals under spark.sql.legacy.interval.enabled",
+                    e.origin,
+                ));
+            }
             ExprNode::Literal(v) => keep(ArgType {
                 nullable: matches!(v, Literal::Null(_)),
                 data_type: literal_type(v),
@@ -1511,6 +1611,34 @@ impl Resolver<'_> {
                         data_type: Some(DataType::Time { precision: 6 }),
                     })
                 }
+            }
+            // `DATE 'today'` and `TIMESTAMP 'now'`: Spark's special values read
+            // the clock; they bind as the clock calls they stand for (the
+            // query-start instant), `epoch` as a constant.
+            ExprNode::TypedLiteral { kind, value }
+                if *kind != TypedLiteralKind::Time && is_special(value) =>
+            {
+                let special = value.trim().to_ascii_lowercase();
+                if special == "epoch" {
+                    let text = match special_kind(*kind, self.ctx.conf.timestamp_ntz) {
+                        SpecialKind::Date => "1970-01-01",
+                        SpecialKind::Instant => "1970-01-01 00:00:00+00:00",
+                        SpecialKind::Local => "1970-01-01 00:00:00",
+                    };
+                    let literal = typed_literal(*kind, text, &self.ctx.conf, e.origin)?;
+                    let ty = ArgType {
+                        nullable: false,
+                        data_type: literal_type(&literal),
+                    };
+                    return Ok(Bound {
+                        expr: Arc::new(Expr::new(ExprNode::Literal(literal)).with_origin(e.origin)),
+                        ..keep(ty)
+                    });
+                }
+                let call =
+                    special_clock(&special, special_kind(*kind, self.ctx.conf.timestamp_ntz))
+                        .with_origin(e.origin);
+                return self.expr(&Arc::new(call), cx);
             }
             ExprNode::TypedLiteral { kind, value } => {
                 let literal = typed_literal(*kind, value, &self.ctx.conf, e.origin)?;
@@ -1746,6 +1874,38 @@ impl Resolver<'_> {
                         )
                         .with_origin(e.origin),
                     ));
+                    return Ok(b);
+                }
+                // Under `spark.sql.timestampType = TIMESTAMP_NTZ`, `to_timestamp`
+                // and the numeric forms of `make_timestamp` produce a
+                // `TIMESTAMP_NTZ` (a zone argument is ignored) and Spark
+                // still names them as written.
+                if !session_qualified
+                    && self.ctx.conf.timestamp_ntz
+                    && let Some((ntz, take)) = ntz_variant(lookup_name, &kids[..n])
+                {
+                    let call = Expr::function(
+                        ntz,
+                        kids[..take].iter().map(|k| Expr::clone(&k.expr)).collect(),
+                    )
+                    .with_origin(e.origin);
+                    // The children are bound already, and rebinding a
+                    // resolved child drops its markers: carry them over.
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.carry_markers(&kids[..take]);
+                    b.shown = Some(Arc::new(
+                        Expr::function(
+                            lookup_name.to_ascii_lowercase(),
+                            kids[..n].iter().map(|k| Expr::clone(&k.shown())).collect(),
+                        )
+                        .with_origin(e.origin),
+                    ));
+                    return Ok(b);
+                }
+                if !session_qualified
+                    && let Some(b) =
+                        self.interval_operator(lookup_name, e.origin, &kids[..n], cx)?
+                {
                     return Ok(b);
                 }
                 // `date + int`, `int + date` and `date - int` are `date_add`
@@ -4689,7 +4849,7 @@ impl Resolver<'_> {
     }
 
     /// The analysis error of a call that does not type.
-    fn mismatch(
+    pub(super) fn mismatch(
         &self,
         m: Mismatch,
         call: &Arc<Expr>,
@@ -6537,7 +6697,7 @@ fn builtin_op(name: &str, arity: usize) -> Option<crate::Builtin> {
     if name.eq_ignore_ascii_case("negative") {
         return None;
     }
-    crate::Builtin::from_name(name)
+    crate::Builtin::from_name(name).filter(|b| !b.is_analyzer_internal())
 }
 
 /// Spark's generated name for an unaliased expression (`toPrettySQL`):
@@ -7029,6 +7189,16 @@ fn call(
         (Some(Builtin::And), 2) => infix("AND"),
         (Some(Builtin::Or), 2) => infix("OR"),
         (Some(Builtin::Add), 2) => infix("+"),
+        // Spark's interval rewrites print without parentheses.
+        (
+            Some(
+                Builtin::DateAddYmInterval
+                | Builtin::TimestampAddYmInterval
+                | Builtin::TimestampAddInterval,
+            ),
+            2,
+        ) => format!("{} + {}", k[0], k[1]),
+        (Some(Builtin::DatetimeSub), 2) => format!("{} - {}", k[0], k[1]),
         (Some(Builtin::Subtract), 2) => infix("-"),
         (Some(Builtin::Multiply), 2) => infix("*"),
         (Some(Builtin::Divide), 2) => infix("/"),
@@ -7538,22 +7708,21 @@ fn is_pattern_function(name: &str, args: &[Bound]) -> bool {
     }
 }
 
-/// The function Spark rewrites `+`/`-` to when one operand is a date and
-/// the other a byte, short or int (`date_add`, `date_sub`), and whether the
-/// operands swap (`int + date`). Other mixes of dates and numbers stay
-/// refused by the coercion.
+/// The function Spark rewrites `+`/`-` to when an operand is a date and the
+/// other no interval (`date_add`, `date_sub`, whose input check then refuses
+/// a type it does not take), and whether the operands swap. A string never
+/// swaps: `'1' + DATE'...'` is `date_add('1', DATE'...')`.
 fn date_with_days(op: &str, left: &ArgType, right: &ArgType) -> Option<(&'static str, bool)> {
-    let days = |t: &ArgType| {
-        matches!(
-            t.data_type,
-            Some(DataType::Byte | DataType::Short | DataType::Integer)
-        )
-    };
     let date = |t: &ArgType| matches!(t.data_type, Some(DataType::Date));
+    let typed = |t: &ArgType| !matches!(t.data_type, None | Some(DataType::Null));
+    let string = |t: &ArgType| matches!(t.data_type, Some(DataType::String));
     match op {
-        "+" if date(left) && days(right) => Some(("date_add", false)),
-        "+" if days(left) && date(right) => Some(("date_add", true)),
-        "-" if date(left) && days(right) => Some(("date_sub", false)),
+        "+" if date(left) && typed(right) => Some(("date_add", false)),
+        "+" if date(right) && string(left) => Some(("date_add", false)),
+        "+" if date(right) && typed(left) => Some(("date_add", true)),
+        "-" if date(left) && typed(right) && !string(right) && !date(right) => {
+            Some(("date_sub", false))
+        }
         _ => None,
     }
 }

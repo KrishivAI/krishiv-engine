@@ -72,6 +72,7 @@
 
 pub mod aggregate;
 mod cancel;
+pub mod carrier;
 mod channel;
 pub mod console;
 mod context;
@@ -81,6 +82,7 @@ mod executor;
 pub mod files;
 pub mod hash;
 mod join;
+mod loops;
 mod metrics;
 mod morsel;
 mod operator;
@@ -113,7 +115,8 @@ pub use executor::{
 };
 pub use join::{
     HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, JoinType, NestedLoopJoin,
-    NestedLoopJoinNode, NestedLoopSpec,
+    NestedLoopJoinNode, NestedLoopSpec, SkewSplit, SortMergeJoin, SortMergeJoinNode,
+    merge_join_supported, skew_split_sides,
 };
 pub use metrics::prometheus;
 pub use metrics::registry::{

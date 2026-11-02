@@ -1184,7 +1184,7 @@ impl DataFrame {
             .iter()
             .map(|c| c.data_type.to_arrow_field(c.name.clone(), c.nullable))
             .collect();
-        Ok(Arc::new(Schema::new(fields)))
+        Ok(crate::carrier::client_schema(&Schema::new(fields)))
     }
 
     /// Runs the query; its result rows, in batches. Dropping the stream
@@ -1216,7 +1216,9 @@ impl DataFrame {
         let a = self.analysis().await?;
         let (physical, fill) = self.physical_cached(&a).await?;
         let stream = self.session.run(&physical, &a.env).await?;
-        Ok(fill.fill(stream, &self.session.state.cache))
+        Ok(crate::carrier::client_stream(
+            fill.fill(stream, &self.session.state.cache),
+        ))
     }
 
     /// The physical plan with every cached (sub)plan substituted, and what
@@ -1329,7 +1331,7 @@ impl DataFrame {
                 let mut stream = fill.fill(stream, &df.session.state.cache);
                 let mut out = Vec::new();
                 while let Some(batch) = stream.next().await {
-                    out.push(batch?);
+                    out.push(crate::carrier::client_batch(&batch?)?);
                 }
                 drop(stream);
                 Ok((out, query.metrics()))

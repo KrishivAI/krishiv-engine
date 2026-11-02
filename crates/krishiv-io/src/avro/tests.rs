@@ -595,6 +595,36 @@ fn option_value(key: &str, value: &str) -> krishiv_common::secret::OptionValue {
 }
 
 /// Each codec round-trips; the header names it the way Spark does.
+/// Decimals of either carrier are written and read back on that carrier.
+#[test]
+fn decimals_round_trip_on_both_carriers() {
+    let env = Env::new();
+    let narrow: arrow_array::ArrayRef = Arc::new(
+        arrow_array::Decimal64Array::from(vec![Some(150), None, Some(-275)])
+            .with_precision_and_scale(10, 2)
+            .unwrap(),
+    );
+    let wide: arrow_array::ArrayRef = Arc::new(
+        arrow_array::Decimal128Array::from(vec![Some(150), None, Some(-275)])
+            .with_precision_and_scale(20, 2)
+            .unwrap(),
+    );
+    for (name, column) in [("narrow", narrow), ("wide", wide)] {
+        let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            column.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![column]).unwrap();
+        let o = env.options(&[]);
+        let bytes = env.encode(&schema, std::slice::from_ref(&batch), &o);
+        let file = env.put(&format!("decimal-{name}.avro"), bytes);
+        let req = ScanRequest::all(Arc::clone(&schema));
+        let got = env.scan(&file, &req, &o).unwrap();
+        assert_eq!(concat(&schema, &got), batch, "{name}");
+    }
+}
+
 #[test]
 fn compression_codecs_round_trip() {
     let env = Env::new();

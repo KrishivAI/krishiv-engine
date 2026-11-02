@@ -93,9 +93,11 @@
 //! rows and the headroom to read its probe rows back. Once one does not
 //! fit, that driver becomes the only one that claims partitions: it waits
 //! until no other holds one, then repartitions build and probe rows 8 ways
-//! on the next hash bits, at most six levels deep, then fails with
-//! `KRISHIV_JOIN_PARTITION_TOO_LARGE` (a partition that does not split is
-//! skewed on very few keys). Built tables are not spilled while probing.
+//! on the next hash bits. A partition at the sixth level, or one that kept
+//! nearly all its parent's rows (skewed on very few keys), joins by sort-merge
+//! instead ([`fallback`]); only a join that cannot (`NOT IN`, row-layout keys
+//! with out-of-line strings) fails with `KRISHIV_JOIN_PARTITION_TOO_LARGE`.
+//! Built tables are not spilled while probing.
 //!
 //! Spill I/O needs scratch: a spill writer's 64 KiB buffer plus twice the
 //! slice it encodes (writes are sliced to 64 KiB). A spill the arbitrator
@@ -146,12 +148,17 @@
 //! # Metrics (`EXPLAIN ANALYZE`, [`OperatorEntry::extra`](crate::OperatorEntry::extra))
 //! Build sink: `build_rows`, `spilled_partitions`, `spill_file_bytes`. Probe:
 //! `probe_rows`, `probe_spilled_rows`, `spill_file_bytes`,
-//! `grace_partitions` (spilled partitions joined), `repartitions` and
-//! `recursion_depth` (deepest level joined).
+//! `grace_partitions` (spilled partitions joined), `repartitions`,
+//! `recursion_depth` (deepest level joined), `merge_fallbacks` (partitions
+//! joined by sort-merge) and `probe_table_ns` (time in
+//! the tables: two clock reads per batch, for
+//! [`QueryMetrics::hash_probe_share`](crate::QueryMetrics::hash_probe_share)).
 
 mod build;
+mod fallback;
 mod grace;
 mod keys;
+mod merge;
 mod nested;
 mod probe;
 mod table;
@@ -168,6 +175,8 @@ use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_memory::SpillScope;
 use krishiv_types::batch::{Batch, Weights};
 
+pub(crate) use merge::MergeEnv;
+pub use merge::{SortMergeJoin, SortMergeJoinNode, merge_join_supported};
 pub use nested::{NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec};
 
 use crate::error::{Result, internal};
@@ -263,6 +272,36 @@ impl JoinType {
     }
 }
 
+/// Which sides of a join may be split when one is skewed, the other side
+/// replicated to every split ([`skew_split_sides`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SkewSplit {
+    /// The probe side may be split.
+    pub probe: bool,
+    /// The build side may be split.
+    pub build: bool,
+}
+
+/// The sides a skewed partition of a join of this oriented physical type may
+/// be split on (design P2-T052b §2.3, for adaptive execution, P5-T020). A
+/// side may be split when its rows each appear at most once per match group
+/// and its output never depends on seeing the other side's whole partition.
+///
+/// `null_aware` marks an existence join on Spark's `(k = c) OR isnull(k = c)`
+/// (`NOT IN` outside a filter conjunct), which reads build-wide NULL facts as
+/// [`JoinType::NullAwareAnti`] does; other types ignore it.
+#[must_use]
+pub fn skew_split_sides(join_type: JoinType, null_aware: bool) -> SkewSplit {
+    let (probe, build) = match join_type {
+        JoinType::Inner => (true, true),
+        JoinType::LeftOuter | JoinType::LeftSemi | JoinType::LeftAnti => (true, false),
+        JoinType::Existence => (!null_aware, false),
+        JoinType::RightOuter | JoinType::RightSemi | JoinType::RightAnti => (false, true),
+        JoinType::FullOuter | JoinType::NullAwareAnti => (false, false),
+    };
+    SkewSplit { probe, build }
+}
+
 /// What a hash join joins.
 #[derive(Debug)]
 pub struct JoinSpec {
@@ -332,6 +371,11 @@ pub(crate) enum Counter {
     MaxPartitionNs,
     /// Spilled partitions joined with roles reversed (`grace::reverse`).
     ReversedPartitions,
+    /// Time probe drivers spent in the tables (ns, summed): the batch's
+    /// lookups and the walk of its match chains.
+    ProbeTableNs,
+    /// Spilled partitions that would not split, joined by sort-merge.
+    MergeFallbacks,
 }
 
 /// The build sink's counters, by name.
@@ -347,7 +391,7 @@ const BUILD_COUNTERS: [(Counter, &str); 9] = [
     (Counter::MaxPartitionNs, "finalize_max_partition_ns"),
 ];
 /// The probe operator's counters, by name.
-const PROBE_COUNTERS: [(Counter, &str); 9] = [
+const PROBE_COUNTERS: [(Counter, &str); 10] = [
     (Counter::ProbeRows, "probe_rows"),
     (Counter::ProbeSpilledRows, "probe_spilled_rows"),
     (Counter::ProbeSpillBytes, "spill_file_bytes"),
@@ -357,6 +401,7 @@ const PROBE_COUNTERS: [(Counter, &str); 9] = [
     (Counter::GraceHashEntries, "grace_hash_entries"),
     (Counter::GraceHashBuckets, "grace_hash_buckets"),
     (Counter::ReversedPartitions, "reversed_partitions"),
+    (Counter::ProbeTableNs, "probe_table_ns"),
 ];
 /// The probe operator's per-lookup counters (detailed metrics only).
 const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
@@ -367,7 +412,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug, Default)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 22]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 24]);
 
 impl Counters {
     pub(crate) fn add(&self, c: Counter, v: u64) {
@@ -416,6 +461,10 @@ impl Counters {
 
     pub(crate) fn probe(&self) -> crate::metrics::ExtraMetrics {
         let mut out = self.report(&PROBE_COUNTERS);
+        // Only a join that fell back to sort-merge reports it.
+        if self.get(Counter::MergeFallbacks) > 0 {
+            out.extend(self.report(&[(Counter::MergeFallbacks, "merge_fallbacks")]));
+        }
         // Probe-length counters exist only when a detailed profile asked
         // for them (`ExecConfig::detailed_metrics`).
         if self.get(Counter::Lookups) > 0 {

@@ -35,9 +35,9 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    TimestampMicrosecondType, TimestampMillisecondType, TimestampNanosecondType,
-    TimestampSecondType,
+    Date32Type, Decimal32Type, Decimal64Type, Decimal128Type, Float32Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType,
 };
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, LargeBinaryArray, LargeListArray,
@@ -368,10 +368,11 @@ fn leaf_castable(file: &DataType, table: &DataType) -> bool {
         // Zone labels only (Spark 4.2 reads NTZ as LTZ and LTZ as NTZ with
         // the stored microseconds unchanged).
         (D::Timestamp(u1, _), D::Timestamp(u2, _)) => u1 == u2,
-        (D::Decimal128(p1, s1), D::Decimal128(p2, s2)) => {
-            s2 >= s1 && i16::from(*p2) - i16::from(*s2) >= i16::from(*p1) - i16::from(*s1)
-        }
-        (f, D::Decimal128(p, s)) => {
+        (
+            D::Decimal32(p1, s1) | D::Decimal64(p1, s1) | D::Decimal128(p1, s1),
+            D::Decimal64(p2, s2) | D::Decimal128(p2, s2),
+        ) => s2 >= s1 && i16::from(*p2) - i16::from(*s2) >= i16::from(*p1) - i16::from(*s1),
+        (f, D::Decimal64(p, s) | D::Decimal128(p, s)) => {
             int_digits(f).is_some_and(|d| i16::from(*p) - i16::from(*s) >= d)
         }
         _ => false,
@@ -806,7 +807,7 @@ pub(crate) fn retype(
             _,
         ) => {
             let (fp, fs) = match f {
-                DataType::Decimal128(p, s) => (*p, *s),
+                DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => (*p, *s),
                 _ if int_range(f).is_some() => (0, 0),
                 _ => return None,
             };
@@ -1092,32 +1093,77 @@ fn cast_leaf(array: &ArrayRef, target: &DataType) -> Result<ArrayRef> {
                 .as_primitive::<Float32Type>()
                 .unary::<_, arrow_array::types::Float64Type>(f64::from),
         ),
-        (D::Decimal128(_, s1), D::Decimal128(p2, s2)) => {
+        (
+            D::Decimal32(_, s1) | D::Decimal64(_, s1) | D::Decimal128(_, s1),
+            D::Decimal64(_, s2) | D::Decimal128(_, s2),
+        ) => {
             let m = pow10(*s2 - *s1);
             // In range for every value of the file's precision; a corrupt
             // file can hold larger ones, which must not overflow.
-            Arc::new(
-                array
-                    .as_primitive::<Decimal128Type>()
-                    .try_unary::<_, Decimal128Type, KrishivError>(|v| {
-                        v.checked_mul(m).ok_or_else(|| {
-                            CastOverflow {
-                                value: v.to_string(),
-                                source_type: format!(
-                                    "\"{}\"",
-                                    spark_name(from).to_ascii_uppercase()
-                                ),
-                                target_type: format!(
-                                    "\"{}\"",
-                                    spark_name(target).to_ascii_uppercase()
-                                ),
-                            }
-                            .into()
+            let overflow = |v: i128| -> KrishivError {
+                CastOverflow {
+                    value: v.to_string(),
+                    source_type: format!("\"{}\"", spark_name(from).to_ascii_uppercase()),
+                    target_type: format!("\"{}\"", spark_name(target).to_ascii_uppercase()),
+                }
+                .into()
+            };
+            let wide: Vec<i128> = match from {
+                D::Decimal32(..) => array
+                    .as_primitive::<Decimal32Type>()
+                    .values()
+                    .iter()
+                    .map(|&v| i128::from(v))
+                    .collect(),
+                D::Decimal64(..) => array
+                    .as_primitive::<Decimal64Type>()
+                    .values()
+                    .iter()
+                    .map(|&v| i128::from(v))
+                    .collect(),
+                _ => array.as_primitive::<Decimal128Type>().values().to_vec(),
+            };
+            let valid = |i: usize| array.is_valid(i);
+            let scaled = |i: usize, v: i128| {
+                if valid(i) {
+                    v.checked_mul(m).ok_or_else(|| overflow(v))
+                } else {
+                    Ok(0)
+                }
+            };
+            match target {
+                D::Decimal64(p2, s2) => {
+                    let values = wide
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &v)| {
+                            let u = scaled(i, v)?;
+                            i64::try_from(u).map_err(|_| overflow(v))
                         })
-                    })?
-                    .with_precision_and_scale(*p2, *s2)
-                    .map_err(arrow_internal)?,
-            )
+                        .collect::<Result<Vec<i64>>>()?;
+                    Arc::new(
+                        PrimitiveArray::<Decimal64Type>::new(values.into(), array.nulls().cloned())
+                            .with_precision_and_scale(*p2, *s2)
+                            .map_err(arrow_internal)?,
+                    )
+                }
+                D::Decimal128(p2, s2) => {
+                    let values = wide
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &v)| scaled(i, v))
+                        .collect::<Result<Vec<i128>>>()?;
+                    Arc::new(
+                        PrimitiveArray::<Decimal128Type>::new(
+                            values.into(),
+                            array.nulls().cloned(),
+                        )
+                        .with_precision_and_scale(*p2, *s2)
+                        .map_err(arrow_internal)?,
+                    )
+                }
+                other => return Err(internal(format!("cannot widen a decimal to {other}"))),
+            }
         }
         _ => cast_int(array, target)?,
     };
@@ -1179,6 +1225,18 @@ fn cast_int(array: &ArrayRef, target: &DataType) -> Result<ArrayRef> {
             )]
             let out: Vec<Option<f64>> = values.iter().map(|v| v.map(|v| v as f64)).collect();
             Arc::new(PrimitiveArray::<arrow_array::types::Float64Type>::from(out))
+        }
+        DataType::Decimal64(p, s) => {
+            let m = pow10(*s);
+            let out: Vec<Option<i64>> = values
+                .iter()
+                .map(|v| v.and_then(|v| i64::try_from(i128::from(v) * m).ok()))
+                .collect();
+            Arc::new(
+                PrimitiveArray::<Decimal64Type>::from(out)
+                    .with_precision_and_scale(*p, *s)
+                    .map_err(arrow_internal)?,
+            )
         }
         DataType::Decimal128(p, s) => {
             let m = pow10(*s);

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use arrow_array::{
-    Array, Date32Array, Decimal128Array, Int32Array, Int64Array, RecordBatch, StringViewArray,
+    Array, Date32Array, Decimal64Array, Int32Array, Int64Array, RecordBatch, StringViewArray,
 };
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
@@ -367,7 +367,7 @@ struct TpchTable {
 }
 
 fn tpch_tables() -> Vec<TpchTable> {
-    let decimal = || DataType::Decimal128(15, 2);
+    let decimal = || DataType::Decimal64(15, 2);
     let string = || DataType::Utf8View;
     vec![
         TpchTable {
@@ -513,9 +513,9 @@ fn tpch_column(field: &Field, rows: usize) -> Result<Arc<dyn Array>> {
         DataType::Date32 => Arc::new(Date32Array::from_iter_values(
             (0..rows).map(|i| 8_766 + i32::try_from(i % 2_500).unwrap()),
         )),
-        DataType::Decimal128(_, _) => Arc::new(
-            Decimal128Array::from_iter_values(
-                (0..rows).map(|i| i128::try_from(i % 7 + 1).unwrap() * 100),
+        DataType::Decimal64(_, _) => Arc::new(
+            Decimal64Array::from_iter_values(
+                (0..rows).map(|i| i64::try_from(i % 7 + 1).unwrap() * 100),
             )
             .with_precision_and_scale(15, 2)
             .map_err(|e| internal(&e.to_string()))?,
@@ -778,6 +778,49 @@ async fn a_very_large_batch_is_processed_in_chunks() {
         yields >= 20,
         "the driver yielded between slices: {yields} yields"
     );
+    assert_released(&pool);
+}
+
+/// Blocks its thread in every `execute` call.
+struct BlockingSleep;
+
+impl Operator for BlockingSleep {
+    fn schema(&self) -> SchemaRef {
+        int_schema()
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(()))
+    }
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the operator exists to block a worker, which the detector must catch"
+    )]
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        std::thread::sleep(stall_threshold() * 3);
+        Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
+    }
+}
+
+/// Time off a CPU counts when it isn't paging: a poll that blocks trips the
+/// detector with almost no CPU time. The first polls may also page code in,
+/// which can excuse them, so it blocks on several.
+#[tokio::test]
+async fn a_blocking_operator_trips_the_stall_detector() {
+    let runner = QueryRunner::new(executor(1));
+    let pool = root(1 << 30);
+    let q = query(&pool, 1);
+    let (schema, batch) = big_batch(10);
+    let scan = Arc::new(Scan(krishiv_exec::testing::Batches::new(
+        schema,
+        vec![batch; 16],
+    )));
+    let plan = Arc::new(krishiv_exec::testing::Pipe(scan, Arc::new(BlockingSleep)));
+    let e = run(&runner, plan, &q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("without yielding"), "{e}");
+    assert!(q.metrics().drivers.stalls >= 1);
     assert_released(&pool);
 }
 

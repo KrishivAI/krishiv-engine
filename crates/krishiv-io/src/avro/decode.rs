@@ -526,6 +526,8 @@ enum Node {
     Decimal {
         builder: Decimal128Builder,
         precision: u8,
+        /// The type of the finished column.
+        data_type: DataType,
     },
     Date(Date32Builder),
     Timestamp(TimestampMicrosecondBuilder),
@@ -572,13 +574,14 @@ fn node_of(field: &Field, schema: &AvroSchema) -> FormatResult<Node> {
         DataType::BinaryView | DataType::Binary | DataType::LargeBinary => {
             Node::Binary(BinaryViewBuilder::new())
         }
-        DataType::Decimal128(p, s) => {
+        t @ (DataType::Decimal64(p, s) | DataType::Decimal128(p, s)) => {
             let builder = Decimal128Builder::new()
                 .with_precision_and_scale(*p, *s)
                 .map_err(|e| corrupt(format!("an invalid decimal type: {e}")))?;
             Node::Decimal {
                 builder,
                 precision: *p,
+                data_type: t.clone(),
             }
         }
         DataType::Date32 => Node::Date(Date32Builder::new()),
@@ -851,7 +854,12 @@ fn append(node: &mut Node, reader: &AvroSchema, value: &AvroValue, dry: bool) ->
                 b.append_value(v.as_bytes().as_slice());
             }
         }
-        (Node::Decimal { builder, precision }, AvroValue::Decimal(v)) => {
+        (
+            Node::Decimal {
+                builder, precision, ..
+            },
+            AvroValue::Decimal(v),
+        ) => {
             let bytes = Vec::<u8>::try_from(v)
                 .map_err(|e| corrupt(format!("an undecodable decimal: {e}")))?;
             let unscaled = decimal_i128(&bytes)?;
@@ -1036,7 +1044,11 @@ fn finish_node(node: Node, field: &Field) -> FormatResult<ArrayRef> {
         Node::Float64(mut b) => Arc::new(b.finish()),
         Node::String(mut b) => Arc::new(b.finish()),
         Node::Binary(mut b) => Arc::new(b.finish()),
-        Node::Decimal { mut builder, .. } => Arc::new(builder.finish()),
+        Node::Decimal {
+            mut builder,
+            data_type,
+            ..
+        } => crate::csv::convert::finish_decimal(&mut builder, &data_type),
         Node::Date(mut b) => Arc::new(b.finish()),
         Node::Timestamp(mut b) => Arc::new(b.finish()),
         Node::Struct {
@@ -1758,6 +1770,7 @@ mod tests {
         assert_eq!(
             node_len(&Node::Decimal {
                 builder: Decimal128Builder::new(),
+                data_type: DataType::Decimal128(38, 0),
                 precision: 10,
             }),
             0

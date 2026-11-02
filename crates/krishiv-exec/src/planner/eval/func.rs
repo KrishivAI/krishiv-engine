@@ -10,11 +10,13 @@ use arrow_schema::DataType as ArrowType;
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, ScalarFunction, bind_scalar};
 use krishiv_kernels::map::DedupPolicy;
 use krishiv_kernels::string::CharsetOptions;
-use krishiv_plan::{Expr, ExprNode, ResolvedFunction};
+use krishiv_plan::{Expr, ExprNode, Literal, ResolvedFunction};
+use krishiv_types::arrow::client_arrow_type;
 use krishiv_udf_sdk::ScalarUdf;
 
 use super::strings::to_view;
 use super::{Input, PhysExpr, Value, literal_array, rendered_zone, unsupported_expr};
+use crate::carrier::recarried_array;
 use crate::error::Result;
 use crate::planner::build::internal;
 
@@ -28,14 +30,15 @@ pub(super) fn compile_udf(
     input: Input<'_>,
     _e: &Expr,
 ) -> Result<Arc<dyn PhysExpr>> {
+    let args = wide_args(args);
     let bind_args = f
         .args
         .iter()
         .zip(&args)
         .map(|(ir, compiled)| match &ir.node {
-            ExprNode::Literal(l) => literal_array(l).map(BindArg::Literal),
+            ExprNode::Literal(l) => wide_literal(l).map(BindArg::Literal),
             _ => Ok(BindArg::Column {
-                ty: compiled.data_type().clone(),
+                ty: client_arrow_type(compiled.data_type()),
                 nullable: compiled.nullable(),
             }),
         })
@@ -52,7 +55,8 @@ pub(super) fn compile_udf(
         input.env.ansi,
         input.env.zone,
     )?;
-    let out = f.data_type.to_arrow();
+    let canonical = f.data_type.to_arrow();
+    let out = client_arrow_type(&canonical);
     // The binding returns plain carriers; Spark's `STRING` and `BINARY`
     // are views here. Both derive from the analyzer's type, so they only
     // ever match or convert to a view (by construction, no mismatch).
@@ -60,18 +64,72 @@ pub(super) fn compile_udf(
         (function.return_type(), &out),
         (ArrowType::Utf8, ArrowType::Utf8View) | (ArrowType::Binary, ArrowType::BinaryView)
     );
-    Ok(Arc::new(Call {
-        function,
-        args,
-        out,
-        view,
-        relabel: false,
-        nullable: f.nullable,
-    }))
+    Ok(on_carrier(
+        Arc::new(Call {
+            function,
+            args,
+            out,
+            view,
+            relabel: false,
+            nullable: f.nullable,
+        }),
+        canonical,
+    ))
+}
+
+/// `e`'s values as `to`, which differs at most in decimal carriers. Functions
+/// read and return `Decimal128`, as they do at every other edge (design P2-T160).
+#[derive(Debug)]
+struct Recarried {
+    inner: Arc<dyn PhysExpr>,
+    to: ArrowType,
+}
+
+impl PhysExpr for Recarried {
+    fn data_type(&self) -> &ArrowType {
+        &self.to
+    }
+
+    fn nullable(&self) -> bool {
+        self.inner.nullable()
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        Ok(match self.inner.eval(batch, partition)? {
+            Value::Array(a) => Value::Array(recarried_array(&a, &self.to)?),
+            Value::Scalar(a) => Value::Scalar(recarried_array(&a, &self.to)?),
+        })
+    }
+
+    fn is_constant(&self) -> bool {
+        self.inner.is_constant()
+    }
+}
+
+fn on_carrier(e: Arc<dyn PhysExpr>, to: ArrowType) -> Arc<dyn PhysExpr> {
+    if e.data_type() == &to {
+        e
+    } else {
+        Arc::new(Recarried { inner: e, to })
+    }
+}
+
+fn wide_args(args: Vec<Arc<dyn PhysExpr>>) -> Vec<Arc<dyn PhysExpr>> {
+    args.into_iter()
+        .map(|a| {
+            let to = client_arrow_type(a.data_type());
+            on_carrier(a, to)
+        })
+        .collect()
+}
+
+fn wide_literal(l: &Literal) -> Result<ArrayRef> {
+    let a = literal_array(l)?;
+    recarried_array(&a, &client_arrow_type(a.data_type()))
 }
 
 /// Whether `a` and `b` differ at most in the nullability of nested fields.
-fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
+pub(super) fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
     match (a, b) {
         (ArrowType::List(x), ArrowType::List(y)) => same_shape(x.data_type(), y.data_type()),
         (ArrowType::Struct(x), ArrowType::Struct(y)) => {
@@ -85,7 +143,7 @@ fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
 }
 
 /// `array` with the nested field flags of `to` (see [`same_shape`]).
-fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
+pub(super) fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
     match to {
         ArrowType::List(f) if array.data_type() != to => {
             let list = array
@@ -127,19 +185,21 @@ pub(super) fn compile(
     input: Input<'_>,
     e: &Expr,
 ) -> Result<Arc<dyn PhysExpr>> {
+    let args = wide_args(args);
     let bind_args = f
         .args
         .iter()
         .zip(&args)
         .map(|(ir, compiled)| match &ir.node {
-            ExprNode::Literal(l) => literal_array(l).map(BindArg::Literal),
+            ExprNode::Literal(l) => wide_literal(l).map(BindArg::Literal),
             _ => Ok(BindArg::Column {
-                ty: compiled.data_type().clone(),
+                ty: client_arrow_type(compiled.data_type()),
                 nullable: compiled.nullable(),
             }),
         })
         .collect::<Result<Vec<_>>>()?;
-    let out = f.data_type.to_arrow();
+    let canonical = f.data_type.to_arrow();
+    let out = client_arrow_type(&canonical);
     // The session zone's rules; a function that never reads the zone sees
     // the same rules, so no per-function list of zone readers is needed.
     let zone = input.env.zone_rules()?;
@@ -193,14 +253,17 @@ pub(super) fn compile(
             )));
         }
     };
-    Ok(Arc::new(Call {
-        function,
-        args,
-        out,
-        view,
-        relabel,
-        nullable: f.nullable,
-    }))
+    Ok(on_carrier(
+        Arc::new(Call {
+            function,
+            args,
+            out,
+            view,
+            relabel,
+            nullable: f.nullable,
+        }),
+        canonical,
+    ))
 }
 
 /// A bound registry function over its arguments.

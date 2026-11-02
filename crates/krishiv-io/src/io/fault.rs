@@ -74,6 +74,7 @@ struct FaultState {
     fail_deletes: u32,
     retry_after: Option<Duration>,
     latency: Duration,
+    list_latency: Duration,
     stats: FaultStats,
 }
 
@@ -142,6 +143,11 @@ impl FaultStore {
     /// Every GET and upload part waits `latency` first (Tokio time).
     pub fn set_latency(&self, latency: Duration) {
         lock(&self.state).latency = latency;
+    }
+
+    /// Every listing waits `latency` before its first object (Tokio time).
+    pub fn set_list_latency(&self, latency: Duration) {
+        lock(&self.state).list_latency = latency;
     }
 
     /// Counters so far.
@@ -260,14 +266,14 @@ impl ObjectStore for FaultStore {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, StoreResult<ObjectMeta>> {
-        let fail = {
+        let (fail, latency) = {
             let mut st = lock(&self.state);
             let fail = st.fail_lists > 0;
             st.fail_lists = st.fail_lists.saturating_sub(1);
-            fail
+            (fail, st.list_latency)
         };
         let inner = self.inner.list(prefix);
-        if fail {
+        let listing: BoxStream<'static, StoreResult<ObjectMeta>> = if fail {
             // One object, then a transient failure mid-listing.
             Box::pin(futures::StreamExt::chain(
                 futures::StreamExt::take(inner, 1),
@@ -275,7 +281,13 @@ impl ObjectStore for FaultStore {
             ))
         } else {
             inner
+        };
+        if latency.is_zero() {
+            return listing;
         }
+        let wait = futures::stream::once(tokio::time::sleep(latency));
+        let wait = futures::StreamExt::filter_map(wait, |()| std::future::ready(None));
+        Box::pin(futures::StreamExt::chain(wait, listing))
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> StoreResult<ListResult> {

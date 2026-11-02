@@ -69,6 +69,15 @@ pub enum Literal {
         /// The trailing field; equal to `start` for a single-field type.
         end: DayTimeField,
     },
+    /// A calendar `INTERVAL`, which only casts and calendar arithmetic make.
+    CalendarInterval {
+        /// Months.
+        months: i32,
+        /// Days.
+        days: i32,
+        /// Microseconds.
+        micros: i64,
+    },
 }
 
 impl std::fmt::Debug for Literal {
@@ -111,6 +120,16 @@ impl std::fmt::Debug for Literal {
                 .field("start", start)
                 .field("end", end)
                 .finish(),
+            Self::CalendarInterval {
+                months,
+                days,
+                micros,
+            } => f
+                .debug_struct("CalendarInterval")
+                .field("months", months)
+                .field("days", days)
+                .field("micros", micros)
+                .finish(),
         }
     }
 }
@@ -135,6 +154,7 @@ enum Key<'a> {
     TimestampNtz(i64),
     YearMonth(i32, YearMonthField, YearMonthField),
     DayTime(i64, DayTimeField, DayTimeField),
+    Calendar(i32, i32, i64),
 }
 
 impl Literal {
@@ -160,6 +180,11 @@ impl Literal {
             Self::TimestampNtz(v) => Key::TimestampNtz(*v),
             Self::YearMonthInterval { months, start, end } => Key::YearMonth(*months, *start, *end),
             Self::DayTimeInterval { micros, start, end } => Key::DayTime(*micros, *start, *end),
+            Self::CalendarInterval {
+                months,
+                days,
+                micros,
+            } => Key::Calendar(*months, *days, *micros),
         }
     }
 }

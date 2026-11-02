@@ -22,7 +22,7 @@ and a loom model of publication · `write.rs` FileWriter · `commit.rs` `SaveMod
 directory, `_SUCCESS`, the empty-output file; files written under final names, never renamed) · `io/` IoScheduler,
 IoContext (reads, uploads, listing), coalescing, metadata cache, cloud store registry (`stores.rs`: S3, GCS and
 Azure stores built per session from Spark `fs.*` keys, behind the `cloud` feature),
-multipart `Upload`, `FaultStore` (fault injection + unscheduled-request detection), `pace.rs` prefix pacing
+multipart `Upload`, `FaultStore` (fault injection + unscheduled-request detection), `local_listing.rs` the local store reads use (`LocalFileSystem` whose listing re-reads when an entry vanished; writes use `beneath.rs`), `pace.rs` prefix pacing
 (`StorePolicy`, per-store; single-flight footer reads live in `cache.rs`).
 `parquet/` (P2-T080a) `ParquetFormat` over arrow-rs's `ParquetPushDecoder`, no custom decoders: `meta.rs` footer
 (one tail read, checked against the file size, engine types, exact-only row-group statistics, calendar markers) ·

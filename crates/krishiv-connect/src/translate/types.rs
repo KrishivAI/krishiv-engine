@@ -5,6 +5,7 @@ use krishiv_common::error::{KrishivError, UnsupportedTimePrecision};
 use krishiv_types::{ArrayType, DataType, DecimalType, MapType, Srid, StructField, StructType};
 
 use super::errors::{assertion, not_set, unsupported_field, unsupported_variant};
+use super::literal;
 use crate::proto::v4_2::{DataType as Proto, data_type::Kind};
 
 /// The collation Spark 4 reports for the default `STRING`.
@@ -66,6 +67,23 @@ fn data_type_at(proto: &Proto, depth: usize) -> Result<DataType, KrishivError> {
                 }
             },
         },
+        Kind::YearMonthInterval(t) => {
+            let (start, end) =
+                literal::fields(t.start_field, t.end_field, literal::YEAR_MONTH_DEFAULT);
+            DataType::year_month_interval(
+                literal::year_month_field(start)?,
+                literal::year_month_field(end)?,
+            )?
+        }
+        Kind::DayTimeInterval(t) => {
+            let (start, end) =
+                literal::fields(t.start_field, t.end_field, literal::DAY_TIME_DEFAULT);
+            DataType::day_time_interval(
+                literal::day_time_field(start)?,
+                literal::day_time_field(end)?,
+            )?
+        }
+        Kind::CalendarInterval(_) => DataType::CalendarInterval,
         Kind::Geometry(g) => DataType::geometry(Srid::from_i32(g.srid))?,
         Kind::Geography(g) => DataType::geography(Srid::from_i32(g.srid))?,
         Kind::String(s) => {

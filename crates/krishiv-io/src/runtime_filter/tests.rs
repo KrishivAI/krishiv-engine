@@ -708,4 +708,16 @@ mod loom_model {
             assert!(consumer.predicate().is_some());
         });
     }
+
+    /// A decimal key of either carrier builds a filter, and its type survives
+    /// the codec on the canonical carrier of its precision.
+    #[test]
+    fn decimal_keys_of_both_carriers_build_and_encode() {
+        for t in [DataType::Decimal64(10, 2), DataType::Decimal128(20, 2)] {
+            assert!(
+                KeyFilterBuilder::new(t.clone(), options(4)).is_some(),
+                "{t}"
+            );
+        }
+    }
 }

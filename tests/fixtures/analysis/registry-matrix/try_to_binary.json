@@ -2,11 +2,11 @@
   "entries": [
     {
       "id": "try_to_binary#06419cc6034d/ansi_on",
-      "reason": "SELECT try_to_binary('abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT try_to_binary('abc', INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "try_to_binary#06419cc6034d/ansi_off",
-      "reason": "SELECT try_to_binary('abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT try_to_binary('abc', INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "try_to_binary#078a344c97f9/ansi_on",
@@ -15,14 +15,6 @@
     {
       "id": "try_to_binary#078a344c97f9/ansi_off",
       "reason": "SELECT try_to_binary('abc', CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
-    },
-    {
-      "id": "try_to_binary#149fb5d0cf52/ansi_on",
-      "reason": "SELECT try_to_binary(INTERVAL '1-2' YEAR TO MONTH, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_to_binary#149fb5d0cf52/ansi_off",
-      "reason": "SELECT try_to_binary(INTERVAL '1-2' YEAR TO MONTH, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "try_to_binary#17d5b6a7bd20/ansi_on",
@@ -97,14 +89,6 @@
       "reason": "SELECT try_to_binary('abc', true) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
-      "id": "try_to_binary#a503f7c901a7/ansi_on",
-      "reason": "SELECT try_to_binary(INTERVAL '1 02:03:04' DAY TO SECOND, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_to_binary#a503f7c901a7/ansi_off",
-      "reason": "SELECT try_to_binary(INTERVAL '1 02:03:04' DAY TO SECOND, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "try_to_binary#b469ec1badfc/ansi_on",
       "reason": "SELECT try_to_binary('abc', TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
@@ -122,11 +106,11 @@
     },
     {
       "id": "try_to_binary#e1d6e9aec2fc/ansi_on",
-      "reason": "SELECT try_to_binary('abc', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT try_to_binary('abc', INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "try_to_binary#e1d6e9aec2fc/ansi_off",
-      "reason": "SELECT try_to_binary('abc', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT try_to_binary('abc', INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "try_to_binary#e7ecfacf32b9/ansi_on",

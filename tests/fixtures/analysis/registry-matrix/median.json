@@ -2,19 +2,19 @@
   "entries": [
     {
       "id": "median#098c416de7ba/ansi_on",
-      "reason": "SELECT median(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT median(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     },
     {
       "id": "median#098c416de7ba/ansi_off",
-      "reason": "SELECT median(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT median(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     },
     {
       "id": "median#925f1a7af8c9/ansi_on",
-      "reason": "SELECT median(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT median(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     },
     {
       "id": "median#925f1a7af8c9/ansi_off",
-      "reason": "SELECT median(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT median(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     }
   ],
   "format_version": 1,

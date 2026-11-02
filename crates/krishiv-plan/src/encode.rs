@@ -923,11 +923,19 @@ impl<'k, 'a> Encoder<'k, 'a> {
             PlanNode::UnionLoop {
                 id,
                 max_level,
+                limit,
                 output,
                 ..
             } => {
                 self.u8(31);
                 self.put(&id.to_le_bytes());
+                match limit {
+                    None => self.u8(0),
+                    Some(n) => {
+                        self.u8(1);
+                        self.put(&n.to_le_bytes());
+                    }
+                }
                 match max_level {
                     None => self.u8(0),
                     Some(n) => {
@@ -1428,6 +1436,16 @@ impl<'k, 'a> Encoder<'k, 'a> {
                         DayTimeField::Second => 4,
                     });
                 }
+            }
+            Literal::CalendarInterval {
+                months,
+                days,
+                micros,
+            } => {
+                self.u8(19);
+                self.put(&months.to_le_bytes());
+                self.put(&days.to_le_bytes());
+                self.i64(*micros);
             }
         }
     }

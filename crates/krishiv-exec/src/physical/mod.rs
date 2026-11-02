@@ -65,12 +65,12 @@ mod shared_tests;
 
 #[cfg(test)]
 pub(crate) use instantiate::node_ids;
-pub use instantiate::{SpillScopes, TaskSpec, WorkerContext, instantiate, instantiate_task};
 pub(crate) use instantiate::{
-    Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, generate_op,
-    group_limit_op, hash_join, nested_loop_join, project_op, replicate_op, scan_filter, sort_op,
-    top_n_op,
+    Detached, Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, generate_op,
+    group_limit_op, hash_join, nested_loop_join, project_op, replicate_op, scan_filter,
+    sort_merge_join, sort_op, top_n_op,
 };
+pub use instantiate::{SpillScopes, TaskSpec, WorkerContext, instantiate, instantiate_task};
 pub use krishiv_memory::{RelationLease, RelationRef, RelationStore};
 pub use splits::{
     ScanSplits, SplitFileRef, assign_batch_splits, assign_file_splits, deal_ranges, files_of,
@@ -442,6 +442,8 @@ pub enum PhysNode {
     },
     /// A hash join building its right input.
     HashJoin(HashJoinPlan),
+    /// A sort-merge join (P2-T056); its two sorts are its own.
+    SortMergeJoin(SortMergeJoinPlan),
     /// A nested-loop join building its right input.
     NestedLoopJoin(NestedLoopPlan),
     /// `UNION ALL` of inputs of one schema.
@@ -474,6 +476,50 @@ pub enum PhysNode {
         /// The attribute id of each of its output columns here.
         layout: Vec<AttrId>,
     },
+    /// A recursive common table expression: `anchor` runs once, then
+    /// `recursive` runs round after round, reading in its
+    /// [`PhysNode::LoopRef`] (the same `id`) the rows the previous round
+    /// produced, until a round is empty or a limit is reached. The node's
+    /// rows are the anchor's and then every round's, in order.
+    UnionLoop {
+        /// Ties the node to its [`PhysNode::LoopRef`]s.
+        id: u32,
+        /// The non-recursive term.
+        anchor: Box<PhysNode>,
+        /// The recursive term.
+        recursive: Box<PhysNode>,
+        /// The attribute of each output column.
+        layout: Vec<AttrId>,
+        /// Whether each output column may be null (the anchor's or the
+        /// recursive term's may be).
+        nullable: Vec<bool>,
+        /// The bounds on the loop.
+        limits: LoopLimits,
+    },
+    /// The previous round of the enclosing [`PhysNode::UnionLoop`] with the
+    /// same `id`, under the reader's attribute ids.
+    LoopRef {
+        /// The loop read.
+        id: u32,
+        /// The attribute id of each of its output columns here.
+        layout: Vec<AttrId>,
+    },
+}
+
+/// The bounds on a [`PhysNode::UnionLoop`], decided at planning from the
+/// configuration, `MAX RECURSION LEVEL` and a pushed `LIMIT`: the operator
+/// never reads session state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoopLimits {
+    /// The most rounds after the anchor (`spark.sql.cteRecursionLevelLimit`
+    /// or `MAX RECURSION LEVEL`).
+    pub level: u32,
+    /// The most rows the loop may produce
+    /// (`spark.sql.cteRecursionRowLimit`).
+    pub rows: u64,
+    /// A `LIMIT` above the loop: the loop stops once it has produced this
+    /// many rows, and neither bound above applies to the rows past it.
+    pub pushed_limit: Option<u64>,
 }
 
 /// A table scan.
@@ -666,6 +712,29 @@ impl HashJoinPlan {
     }
 }
 
+/// A sort-merge join: each input is sorted on its keys in hash buckets of
+/// them, and the same bucket of the two is merged. Output is ordered within
+/// a bucket only. Inputs arrive co-partitioned on the keys.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SortMergeJoinPlan {
+    /// The streamed (left) input.
+    pub probe: Box<PhysNode>,
+    /// The buffered (right) input.
+    pub build: Box<PhysNode>,
+    /// The join type; never `NullAwareAnti`.
+    pub join_type: JoinType,
+    /// Key columns of the streamed input.
+    pub probe_keys: Vec<usize>,
+    /// Key columns of the buffered input.
+    pub build_keys: Vec<usize>,
+    /// Per key, whether NULLs match (`<=>`).
+    pub null_safe: Vec<bool>,
+    /// The non-equality conditions.
+    pub residual: Option<Residual>,
+    /// A left outer join that fails when a left row matches more than once.
+    pub single_match: bool,
+}
+
 /// A nested-loop join over every pair of rows.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NestedLoopPlan {
@@ -788,12 +857,16 @@ plan_data!(enum PhysNode {
     WindowGroupLimit { input, limit },
     Aggregate { input, aggregate },
     HashJoin(join),
+    SortMergeJoin(join),
     NestedLoopJoin(join),
     Union { inputs },
     WriteFiles { input, write },
     Exchange(exchange),
     SharedRead { id, layout },
+    UnionLoop { id, anchor, recursive, layout, nullable, limits },
+    LoopRef { id, layout },
 });
+plan_data!(struct LoopLimits { level, rows, pushed_limit });
 plan_data!(struct WritePlan {
     format,
     options,
@@ -823,6 +896,9 @@ plan_data!(struct HashJoinPlan {
     probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match,
     distinct_build, runtime_filters, distribution
 });
+plan_data!(struct SortMergeJoinPlan {
+    probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match
+});
 plan_data!(struct NestedLoopPlan { probe, build, join_type, residual });
 plan_data!(struct PhysicalPlan { root, shared, schema, explain, warnings, env });
 
@@ -831,7 +907,11 @@ impl PhysNode {
     /// first.
     pub fn children(&self) -> Vec<&PhysNode> {
         match self {
-            Self::Scan(_) | Self::OneRow | Self::Range(_) | Self::SharedRead { .. } => Vec::new(),
+            Self::Scan(_)
+            | Self::OneRow
+            | Self::Range(_)
+            | Self::SharedRead { .. }
+            | Self::LoopRef { .. } => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
             }
@@ -858,15 +938,23 @@ impl PhysNode {
             | Self::WriteFiles { input, .. } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
             Self::HashJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
+            Self::SortMergeJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
             Self::Union { inputs } => inputs.iter().collect(),
+            Self::UnionLoop {
+                anchor, recursive, ..
+            } => vec![anchor.as_ref(), recursive.as_ref()],
         }
     }
 
     /// [`Self::children`], mutable.
     pub(crate) fn children_mut(&mut self) -> Vec<&mut PhysNode> {
         match self {
-            Self::Scan(_) | Self::OneRow | Self::Range(_) | Self::SharedRead { .. } => Vec::new(),
+            Self::Scan(_)
+            | Self::OneRow
+            | Self::Range(_)
+            | Self::SharedRead { .. }
+            | Self::LoopRef { .. } => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
             }
@@ -893,8 +981,12 @@ impl PhysNode {
             | Self::WriteFiles { input, .. } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],
             Self::HashJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
+            Self::SortMergeJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
             Self::Union { inputs } => inputs.iter_mut().collect(),
+            Self::UnionLoop {
+                anchor, recursive, ..
+            } => vec![anchor.as_mut(), recursive.as_mut()],
         }
     }
 }

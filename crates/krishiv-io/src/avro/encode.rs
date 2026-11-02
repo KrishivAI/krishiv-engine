@@ -294,9 +294,12 @@ fn put_scalar(
             }
             out.extend_from_slice(v);
         }
-        (AvroSchema::Decimal(d), DataType::Decimal128(_, scale)) => {
+        (
+            AvroSchema::Decimal(d),
+            DataType::Decimal64(_, scale) | DataType::Decimal128(_, scale),
+        ) => {
             let v = rescale(
-                prim::<t::Decimal128Type>(array, row),
+                crate::csv::convert::decimal_at(array, row),
                 *scale,
                 d.scale,
                 d.precision,

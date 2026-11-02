@@ -35,6 +35,30 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let o = p.origin;
+        if name.eq_ignore_ascii_case("json_tuple") {
+            // `FROM json_tuple(..)` is the select list `SELECT json_tuple(..)`
+            // over one row.
+            if args
+                .iter()
+                .any(|a| matches!(a.node, ExprNode::Alias { .. }))
+            {
+                return Err(super::bind::unsupported(
+                    "named table-function arguments",
+                    o,
+                ));
+            }
+            let call = Expr::function("json_tuple", args.iter().map(|a| (**a).clone()).collect())
+                .with_origin(o);
+            let one_row = Arc::new(LogicalPlan::new(PlanNode::OneRowRelation).with_origin(o));
+            let select = Arc::new(
+                LogicalPlan::new(PlanNode::Project {
+                    input: one_row,
+                    exprs: vec![Arc::new(call)],
+                })
+                .with_origin(o),
+            );
+            return self.rel(&select, env);
+        }
         match self.ctx.table_functions.lookup(name, self.ctx.profile) {
             TableFunctionLookup::NotFound => {
                 // A SQL-bodied table function of the session or its catalog.
@@ -750,10 +774,17 @@ mod tests {
 
     #[test]
     fn generator_names_stay_unsupported() {
-        for name in ["explode", "inline", "stack", "posexplode", "json_tuple"] {
+        for name in ["explode", "inline", "stack", "posexplode"] {
             let r = run(table_function(name, vec![lit_int(1)]));
             assert_eq!(class_of(&r), "KRISHIV_UNSUPPORTED_FEATURE", "{name}");
         }
+    }
+
+    #[test]
+    fn json_tuple_as_a_table_function_checks_its_arity_like_the_call() {
+        // Spark: `json_tuple` requires more than one argument.
+        let r = run(table_function("json_tuple", vec![lit_string("{}")]));
+        assert_eq!(class_of(&r), "WRONG_NUM_ARGS.WITHOUT_SUGGESTION");
     }
 
     struct Keywords;

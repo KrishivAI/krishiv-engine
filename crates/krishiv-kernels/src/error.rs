@@ -8,6 +8,7 @@
 //! | ANSI division by zero (`/`, `div`) | `DIVIDE_BY_ZERO` |
 //! | ANSI remainder by zero (`%`) | `REMAINDER_BY_ZERO` (Spark 4.0: `DIVIDE_BY_ZERO`) |
 //! | ANSI decimal result out of range | `NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION` |
+//! | interval arithmetic (see [`crate::interval`]) | `INTERVAL_ARITHMETIC_OVERFLOW.*`, `INTERVAL_DIVIDED_BY_ZERO` |
 //! | ANSI cast of a malformed string | `CAST_INVALID_INPUT` |
 //! | ANSI cast to a narrower integral type | `CAST_OVERFLOW` |
 //! | ANSI string to decimal with over 38 integral digits | `NUMERIC_OUT_OF_SUPPORTED_RANGE` |
@@ -36,9 +37,11 @@ use krishiv_common::error::{
     ArithmeticOverflow, BinaryArithmeticOverflow, CannotParseTime, CannotParseTimestamp,
     CastInvalidInput, CastOverflow, DatetimeFieldOutOfBoundsWithSuggestion,
     DatetimeFieldOutOfBoundsWithoutSuggestion, DatetimeOverflow, DivideByZero, ErrorClass,
-    IllegalDayOfWeek, InternalError, InvalidFormatEscAtTheEnd, InvalidFormatEscInTheMiddle,
-    InvalidFractionOfSecond, InvalidUtf8String, KrishivDecimalRemainderImpossible, KrishivError,
-    KrishivUnsupportedFeature, NumericOutOfSupportedRange, NumericValueOutOfRangeWithSuggestion,
+    IllegalDayOfWeek, InternalError, IntervalArithmeticOverflowWithSuggestion,
+    IntervalArithmeticOverflowWithoutSuggestion, IntervalDividedByZero, InvalidFormatEscAtTheEnd,
+    InvalidFormatEscInTheMiddle, InvalidFractionOfSecond, InvalidUtf8String,
+    KrishivDecimalRemainderImpossible, KrishivError, KrishivUnsupportedFeature,
+    NumericOutOfSupportedRange, NumericValueOutOfRangeWithSuggestion,
     NumericValueOutOfRangeWithoutSuggestion, RemainderByZero, UnableToAcquireMemory,
 };
 
@@ -118,6 +121,29 @@ impl KernelError {
                 fail_fast_mode: "FAILFAST".to_owned(),
             }
             .into(),
+        }
+    }
+
+    /// `INTERVAL_ARITHMETIC_OVERFLOW`, suggesting `function` if there is one.
+    pub(crate) fn interval_overflow(row: usize, function: Option<&str>) -> Self {
+        let error: KrishivError = match function {
+            Some(f) => IntervalArithmeticOverflowWithSuggestion {
+                function_name: format!("`{f}`"),
+            }
+            .into(),
+            None => IntervalArithmeticOverflowWithoutSuggestion {}.into(),
+        };
+        Self {
+            row: Some(row),
+            error,
+        }
+    }
+
+    /// `INTERVAL_DIVIDED_BY_ZERO`.
+    pub(crate) fn interval_divided_by_zero(row: usize) -> Self {
+        Self {
+            row: Some(row),
+            error: IntervalDividedByZero {}.into(),
         }
     }
 

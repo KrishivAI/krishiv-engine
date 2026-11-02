@@ -2,11 +2,11 @@
   "entries": [
     {
       "id": "time_from_millis#15c5c099349a/ansi_on",
-      "reason": "SELECT time_from_millis(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT time_from_millis(INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time_from_millis#15c5c099349a/ansi_off",
-      "reason": "SELECT time_from_millis(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT time_from_millis(INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time_from_millis#1f3b9da3f271/ansi_on",
@@ -42,11 +42,11 @@
     },
     {
       "id": "time_from_millis#51f7d04dd2f7/ansi_on",
-      "reason": "SELECT time_from_millis(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT time_from_millis(INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time_from_millis#51f7d04dd2f7/ansi_off",
-      "reason": "SELECT time_from_millis(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT time_from_millis(INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time_from_millis#846c25999d6d/ansi_on",

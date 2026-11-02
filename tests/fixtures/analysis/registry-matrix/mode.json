@@ -9,14 +9,6 @@
       "reason": "SELECT mode(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (-10), (0), (10) AS tab(col) | NON_FOLDABLE_ARGUMENT where Spark has UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "mode#3e39647af9ca/ansi_on",
-      "reason": "SELECT mode(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (-10), (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mode#3e39647af9ca/ansi_off",
-      "reason": "SELECT mode(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (-10), (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mode#65051a7cfe5e/ansi_on",
       "reason": "SELECT mode(col, array(1, 2)) FROM VALUES (-10), (0), (10) AS tab(col) | NON_FOLDABLE_ARGUMENT where Spark has UNEXPECTED_INPUT_TYPE"
     },
@@ -25,28 +17,12 @@
       "reason": "SELECT mode(col, array(1, 2)) FROM VALUES (-10), (0), (10) AS tab(col) | NON_FOLDABLE_ARGUMENT where Spark has UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "mode#a21f5d9d0104/ansi_on",
-      "reason": "SELECT mode(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH), (INTERVAL '10' MONTH) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "mode#a21f5d9d0104/ansi_off",
-      "reason": "SELECT mode(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH), (INTERVAL '10' MONTH) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "mode#cd541b220646/ansi_on",
       "reason": "SELECT mode(col, map('a', 1)) FROM VALUES (-10), (0), (10) AS tab(col) | NON_FOLDABLE_ARGUMENT where Spark has UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mode#cd541b220646/ansi_off",
       "reason": "SELECT mode(col, map('a', 1)) FROM VALUES (-10), (0), (10) AS tab(col) | NON_FOLDABLE_ARGUMENT where Spark has UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mode#f70996153b70/ansi_on",
-      "reason": "SELECT mode(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (-10), (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mode#f70996153b70/ansi_off",
-      "reason": "SELECT mode(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (-10), (0), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

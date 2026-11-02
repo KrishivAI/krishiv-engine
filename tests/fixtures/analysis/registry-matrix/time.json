@@ -26,11 +26,11 @@
     },
     {
       "id": "time#2a654d6f0e0d/ansi_on",
-      "reason": "SELECT time(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT time(INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time#2a654d6f0e0d/ansi_off",
-      "reason": "SELECT time(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT time(INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time#2e0d2010cb8f/ansi_on",
@@ -106,11 +106,11 @@
     },
     {
       "id": "time#8dc7069906ac/ansi_on",
-      "reason": "SELECT time(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT time(INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time#8dc7069906ac/ansi_off",
-      "reason": "SELECT time(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT time(INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time#98f7e3acb227/ansi_on",

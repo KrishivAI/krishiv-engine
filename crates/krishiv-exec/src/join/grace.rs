@@ -319,9 +319,16 @@ pub(crate) fn reserve_chunks(parts: &mut [Part], chunks: &[(usize, Batch)]) -> R
 #[derive(Debug)]
 struct Task {
     depth: u32,
+    /// Repartitioning hardly shrank it: see [`NO_SHRINK_PERCENT`].
+    no_shrink: bool,
     build: Part,
     probe: Part,
 }
+
+/// A partition keeping at least this share of its parent's build rows did not
+/// shrink, so it holds a key too large to split: it joins by sort-merge if it
+/// does not fit (design P2-T056 #9; provisional until E11 in P5).
+const NO_SHRINK_PERCENT: u64 = 90;
 
 /// The spilled partitions of a join, shared by its probe drivers, and who
 /// works on what. A driver that finds nothing to claim waits on
@@ -407,6 +414,7 @@ impl Grace {
                 .filter(|(b, p)| p.rows > 0 || (keep && b.rows > 0))
                 .map(|(build, probe)| Task {
                     depth: 0,
+                    no_shrink: false,
                     build,
                     probe,
                 });
@@ -805,6 +813,24 @@ pub(crate) struct Flush {
     task: Option<(Loading, Claim)>,
     /// Held while this driver works alone.
     alone: Option<Claim>,
+    /// A partition joining by sort-merge, with the claim on its task: the
+    /// driver works alone until it is done.
+    merge: Option<(Box<super::fallback::Fallback>, Claim)>,
+}
+
+impl Flush {
+    /// Serves a spill request from a partition joining by sort-merge, whose
+    /// sorts buffer on this driver's consumer; `None` without one.
+    pub(crate) async fn spill_merge(
+        &mut self,
+        target: usize,
+        ctx: &TaskContext,
+    ) -> Result<Option<usize>> {
+        match &mut self.merge {
+            Some((merge, _)) => merge.spill(target, ctx).await.map(Some),
+            None => Ok(None),
+        }
+    }
 }
 
 /// One flush step: emit a batch of the partition being joined, read its
@@ -822,6 +848,15 @@ pub(crate) async fn step(
         .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
     let limit = ctx.query().config().batch_size.max(1);
     let partition = ctx.partition();
+    if let Some((merge, _held)) = &mut st.merge {
+        if let Some(out) = merge.step(shared, hashing, ctx).await? {
+            return Ok(out);
+        }
+        st.merge = None;
+        st.alone = None;
+        ctx.consumer().consumer().release_credit();
+        return Ok(FlushOutput::Continue);
+    }
     if shared.join_type.builds_preserved() && st.active.is_none() && st.task.is_none() {
         // The in-memory partitions' build rows first: every probe driver's
         // input ended, so their marks are final.
@@ -974,8 +1009,20 @@ pub(crate) async fn step(
                 st.task = Some((Loading::new(task, true, ctx), held));
                 return Ok(FlushOutput::Continue);
             }
-            // It does not fit even alone: repartition it, then let every
-            // driver claim again.
+            // It does not fit even alone. A partition that will not split
+            // joins by sort-merge, still alone.
+            if (task.depth >= MAX_DEPTH || task.no_shrink)
+                && super::fallback::possible(shared, hashing)
+            {
+                let fallback =
+                    super::fallback::Fallback::start(shared, hashing, task.build, task.probe, ctx)
+                        .await?;
+                shared.counters.add(Counter::MergeFallbacks, 1);
+                shared.counters.add(Counter::GracePartitions, 1);
+                st.merge = Some((Box::new(fallback), held));
+                return Ok(FlushOutput::Continue);
+            }
+            // Otherwise repartition it, then let every driver claim again.
             let split = split(shared, hashing, task, ctx).await;
             ctx.consumer().consumer().release_credit();
             let (tasks, written) = split?;
@@ -1342,6 +1389,7 @@ async fn split(
     let depth = task.depth + 1;
     let hashing = hashing.clone();
     let keep = shared.join_type.keeps_null_build_keys();
+    let parent_rows = task.build.rows;
     ctx.run_blocking(move || {
         let memory = || handle.reservation().releasing_to_credit();
         let query = &query;
@@ -1385,6 +1433,8 @@ async fn split(
             .filter(|(b, p)| p.rows > 0 || (keep && b.rows > 0))
             .map(|(build, probe)| Task {
                 depth,
+                no_shrink: build.rows.saturating_mul(100)
+                    >= parent_rows.saturating_mul(NO_SHRINK_PERCENT),
                 build,
                 probe,
             })
@@ -1461,6 +1511,7 @@ mod loom_model {
     fn task() -> Task {
         Task {
             depth: 1,
+            no_shrink: false,
             build: Part::default(),
             probe: Part::default(),
         }
@@ -1770,6 +1821,7 @@ mod tests {
         assert!(files > 0 && parts[0].chunks.is_empty());
         let task = Task {
             depth: 0,
+            no_shrink: false,
             build: Part::default(),
             probe: parts.remove(0),
         };
@@ -1912,6 +1964,7 @@ mod tests {
             probe_part[0].chunks.push(probe);
             let task = Task {
                 depth: 0,
+                no_shrink: false,
                 build: build_part.remove(0),
                 probe: probe_part.remove(0),
             };
@@ -2100,6 +2153,7 @@ mod tests {
             .unwrap();
         let task = Task {
             depth: 0,
+            no_shrink: false,
             build: parts.pop().unwrap(),
             probe: Part::default(),
         };

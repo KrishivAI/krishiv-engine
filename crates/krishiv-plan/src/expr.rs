@@ -507,6 +507,55 @@ pub enum ResolvedExpr {
 }
 
 impl Expr {
+    /// The Spark interval type of a resolved expression, when its node says
+    /// it. Arrow carries no fields, so a kernel that prints or converts an
+    /// interval asks here.
+    #[must_use]
+    pub fn interval_type(&self) -> Option<DataType> {
+        let t = match &self.node {
+            ExprNode::Literal(Literal::YearMonthInterval { start, end, .. }) => {
+                DataType::YearMonthInterval {
+                    start: *start,
+                    end: *end,
+                }
+            }
+            ExprNode::Literal(Literal::DayTimeInterval { start, end, .. }) => {
+                DataType::DayTimeInterval {
+                    start: *start,
+                    end: *end,
+                }
+            }
+            ExprNode::Literal(Literal::CalendarInterval { .. }) => DataType::CalendarInterval,
+            _ => crate::raises::type_of(self)?,
+        };
+        matches!(
+            t,
+            DataType::YearMonthInterval { .. }
+                | DataType::DayTimeInterval { .. }
+                | DataType::CalendarInterval
+        )
+        .then_some(t)
+    }
+
+    /// This array, map or struct's type, if an interval sits anywhere inside:
+    /// the Arrow carrier has no fields, so rendering one needs this type.
+    #[must_use]
+    pub fn nested_interval_type(&self) -> Option<DataType> {
+        fn holds_interval(t: &DataType) -> bool {
+            match t {
+                DataType::YearMonthInterval { .. }
+                | DataType::DayTimeInterval { .. }
+                | DataType::CalendarInterval => true,
+                DataType::Array(a) => holds_interval(a.element_type()),
+                DataType::Map(m) => holds_interval(m.key_type()) || holds_interval(m.value_type()),
+                DataType::Struct(s) => s.fields().iter().any(|f| holds_interval(f.data_type())),
+                _ => false,
+            }
+        }
+        let t = crate::raises::type_of(self)?;
+        (t.is_nested() && holds_interval(&t)).then_some(t)
+    }
+
     /// An expression of unknown origin.
     #[must_use]
     pub const fn new(node: ExprNode) -> Self {

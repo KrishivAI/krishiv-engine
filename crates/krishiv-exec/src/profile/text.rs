@@ -76,6 +76,14 @@ impl QueryProfile {
                 mem.limit.map_or_else(|| "none".to_owned(), |l| p.bytes(l))
             );
         }
+        if let Some(share) = m.hash_probe_share() {
+            let _ = writeln!(
+                out,
+                "hash probe: {} of {} driver busy time",
+                p.percent(share),
+                p.time(m.drivers.busy)
+            );
+        }
         if !self.detailed {
             out.push_str("(probe lengths not collected)\n");
         }
@@ -325,6 +333,13 @@ impl Printer<'_> {
         } else {
             n.to_string()
         }
+    }
+
+    fn percent(&self, share: f64) -> String {
+        if self.opts.mask_volatile {
+            return "<n>%".to_owned();
+        }
+        format!("{:.1}%", share * 100.0)
     }
 
     fn bytes(&self, n: u64) -> String {

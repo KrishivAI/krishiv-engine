@@ -592,7 +592,8 @@ async fn the_stall_detector_fails_a_non_yielding_driver() {
 }
 
 /// A driver that blocks inside a poll (a sleep standing in for blocking
-/// I/O) is a stall too: only run-queue waits are left out of a slice.
+/// I/O) is a stall too: only run-queue waits and what page faults explain are
+/// left out of a slice. The first polls may fault, so it blocks on many.
 #[tokio::test]
 async fn the_stall_detector_fails_a_blocking_driver() {
     let runner = QueryRunner::new(executor(1));
@@ -602,7 +603,7 @@ async fn the_stall_detector_fails_a_blocking_driver() {
         ..ExecConfig::default()
     };
     let q = query(&root, 1, config);
-    let (_, scan) = scan(4 * DEFAULT_BATCH_SIZE as u64);
+    let (_, scan) = scan(16 * DEFAULT_BATCH_SIZE as u64);
     let block = hook(|_| {
         std::thread::sleep(Duration::from_millis(30));
         Ok(())
@@ -752,6 +753,17 @@ fn config_join_row_layout_keys() {
     assert_eq!(off.join_radix_bits, 5);
     assert_eq!(read("1").join_radix_bits, 3);
     assert_eq!(read("9").join_radix_bits, 6);
+}
+
+#[test]
+fn config_merge_join_buffer_bytes() {
+    let default = ExecConfig::from_config(&Config::new());
+    assert_eq!(default.join_merge_buffer_bytes, 0);
+    let (config, _) = Config::from_pairs([("krishiv.exec.join.smj.bufferBytes", "4m")]).unwrap();
+    assert_eq!(
+        ExecConfig::from_config(&config).join_merge_buffer_bytes,
+        4 << 20
+    );
 }
 
 /// Sort hash buckets are on by default; `krishiv.exec.sort.hashBuckets`

@@ -123,6 +123,21 @@ impl PhysExpr for Like {
         let scalar = s.is_scalar() && p.is_scalar();
         let rows = if scalar { 1 } else { batch.num_rows() };
         let (sa, pa) = (s.array(), p.array());
+        // A column against one pattern: compiled once, matched in one loop.
+        if !s.is_scalar()
+            && p.is_scalar()
+            && pa.is_valid(0)
+            && let Some(column) = sa.as_string_view_opt()
+        {
+            let Some(first) = (0..column.len()).find(|&i| column.is_valid(i)) else {
+                return Ok(Value::Array(Arc::new(BooleanArray::new_null(rows))));
+            };
+            let pattern = LikePattern::compile(str_value(pa.as_ref(), 0), self.escape, first)?;
+            return Ok(Value::Array(Arc::new(BooleanArray::new(
+                pattern.matches_views(column),
+                column.nulls().cloned(),
+            ))));
+        }
         let at = |v: &Value, i: usize| if v.is_scalar() { 0 } else { i };
         let mut values = Vec::with_capacity(rows);
         let mut valid = Vec::with_capacity(rows);

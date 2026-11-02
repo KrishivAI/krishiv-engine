@@ -2,19 +2,19 @@
   "entries": [
     {
       "id": "try_avg#23bbc5b5d375/ansi_on",
-      "reason": "SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     },
     {
       "id": "try_avg#23bbc5b5d375/ansi_off",
-      "reason": "SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     },
     {
       "id": "try_avg#ec98c24806fe/ansi_on",
-      "reason": "SELECT try_avg(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT try_avg(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     },
     {
       "id": "try_avg#ec98c24806fe/ansi_off",
-      "reason": "SELECT try_avg(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT try_avg(col) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     }
   ],
   "format_version": 1,

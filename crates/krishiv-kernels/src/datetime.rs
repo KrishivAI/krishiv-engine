@@ -528,7 +528,7 @@ fn at<T: ArrowPrimitiveType>(o: &Operand<'_, T>, i: usize) -> Option<T::Native> 
 /// `None` (overflow) the row is NULL if `null_on_overflow` (`try_add`), else
 /// `overflow(row)` is raised for the first such row. A NULL row is never
 /// evaluated.
-fn map2<A, B, C>(
+pub(crate) fn map2<A, B, C>(
     a: Operand<'_, A>,
     b: Operand<'_, B>,
     f: impl Fn(A::Native, B::Native) -> Option<C::Native>,

@@ -25,6 +25,8 @@ pub mod beneath;
 pub mod cache;
 mod coalesce;
 pub mod fault;
+#[cfg(unix)]
+pub mod local_listing;
 mod pace;
 pub mod stores;
 pub mod upload;
@@ -389,6 +391,9 @@ pub(crate) struct Lane {
     /// The store's in-flight request cap, shared by reads and writes.
     permits: Semaphore,
     pacer: Pacer,
+    /// The store answers a listing only when all of it is known, so the
+    /// wait for an object is the wait for the whole listing.
+    whole_listing: bool,
 }
 
 impl Lane {
@@ -461,9 +466,26 @@ impl IoScheduler {
         store: Arc<dyn ObjectStore>,
         policy: StorePolicy,
     ) {
+        self.register(id, store, policy, false);
+    }
+
+    /// Registers (or replaces) the unpaced store `id`, whose listing answers
+    /// all at once: no request timeout applies to it, however long it takes.
+    pub fn register_whole_listing_store(&self, id: StoreId, store: Arc<dyn ObjectStore>) {
+        self.register(id, store, StorePolicy::UNPACED, true);
+    }
+
+    fn register(
+        &self,
+        id: StoreId,
+        store: Arc<dyn ObjectStore>,
+        policy: StorePolicy,
+        whole_listing: bool,
+    ) {
         let lane = Arc::new(Lane {
             permits: Semaphore::new(self.config.max_concurrent_requests),
             pacer: Pacer::new(policy),
+            whole_listing,
         });
         self.stores
             .write()
@@ -1169,6 +1191,11 @@ impl IoContext {
         let (s, lane) = self.sched.store(store)?;
         let cfg = &self.sched.config;
         let display = format!("{store}/{prefix}");
+        let object_wait = if lane.whole_listing {
+            Duration::MAX
+        } else {
+            cfg.request_timeout
+        };
         let mut attempt = 0;
         loop {
             // The timeout bounds the wait for each object (and so each
@@ -1181,11 +1208,8 @@ impl IoContext {
                 let mut listed = s.list(Some(prefix));
                 let mut out = Vec::new();
                 loop {
-                    match tokio::time::timeout(
-                        cfg.request_timeout,
-                        futures::StreamExt::next(&mut listed),
-                    )
-                    .await
+                    match tokio::time::timeout(object_wait, futures::StreamExt::next(&mut listed))
+                        .await
                     {
                         Ok(None) => return Ok(out),
                         Ok(Some(Ok(m))) => out.push(m),
