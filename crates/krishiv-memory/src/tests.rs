@@ -1371,3 +1371,46 @@ async fn the_cut_never_fails_or_aborts_a_query() {
     let e = q2.reserve_without_abort(w, 2 * Q).await.unwrap_err();
     assert!(matches!(e, MemoryError::Exhausted { .. }), "{e:?}");
 }
+
+#[test]
+fn a_snapshot_lists_pools_then_consumers() {
+    let root = root(Some(64 * Q), Q);
+    let query = root.child("query-1", Some(32 * Q));
+    let id = query.register("hash_join", None);
+    query.try_reserve(id, Q).unwrap();
+    let other = root.child("query-2", None);
+    let _ = other.register("sort", None);
+
+    let all = root.snapshot();
+    let paths: Vec<&str> = all.entries.iter().map(|e| e.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            "process",
+            "process/query-1",
+            "process/query-2",
+            "process/query-1/hash_join",
+            "process/query-2/sort"
+        ]
+    );
+    let q1 = &all.entries[1];
+    assert_eq!(q1.parent.as_deref(), Some("process"));
+    assert_eq!((q1.limit, q1.is_consumer), (Some(32 * Q), false));
+    assert_eq!(q1.reserved, Q);
+    let join = &all.entries[3];
+    assert!(join.is_consumer && join.reserved >= Q && !join.spillable);
+
+    // A query's own pool sees only its subtree, rooted at itself.
+    let mine = query.snapshot();
+    assert_eq!(mine.entries[0].path, "process/query-1");
+    assert_eq!(mine.entries[0].parent, None);
+    assert_eq!(mine.entries.len(), 2);
+    query.release(id, Q);
+    query.unregister(id);
+    assert!(
+        root.snapshot()
+            .entries
+            .iter()
+            .all(|e| e.path != "process/query-1/hash_join")
+    );
+}
