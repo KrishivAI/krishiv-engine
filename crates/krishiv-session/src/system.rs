@@ -12,10 +12,15 @@
 //! operator, cache and metric tables arrive with their recorders (units 2
 //! and 3).
 
-use std::sync::{Arc, OnceLock};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use arrow_array::{ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray};
-use arrow_schema::{DataType as ArrowType, Field, Schema};
+use arrow_array::{
+    ArrayRef, BooleanArray, Int64Array, RecordBatch, StringArray, TimestampMicrosecondArray,
+};
+use arrow_schema::{DataType as ArrowType, Field, Schema, TimeUnit};
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_exec::planner::MemoryTable;
 use krishiv_memory::MemoryPool;
@@ -36,7 +41,7 @@ const SCHEMA_VERSION: &str = "1";
 const LOCAL_WORKER: &str = "local";
 
 /// Every table of the catalog.
-const TABLES: [&str; 2] = ["capabilities", "memory"];
+const TABLES: [&str; 3] = ["capabilities", "memory", "queries"];
 
 /// Whether `name` is the reserved catalog name, in any letter case.
 pub(crate) fn is_system(name: &str) -> bool {
@@ -104,11 +109,13 @@ enum Kind {
     Text,
     Long,
     Flag,
+    /// `TIMESTAMP` (microseconds since the epoch).
+    Time,
 }
 
 /// A table's columns: `(name, kind, nullable)`.
 fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
-    use Kind::{Flag, Long, Text};
+    use Kind::{Flag, Long, Text, Time};
     Some(match table.to_ascii_lowercase().as_str() {
         "capabilities" => vec![
             ("worker_id", Text, false),
@@ -128,6 +135,17 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("limit_bytes", Long, true),
             ("spillable", Flag, false),
         ],
+        "queries" => vec![
+            ("query_id", Text, false),
+            ("state", Text, false),
+            ("query_text", Text, true),
+            ("query_text_truncated", Flag, false),
+            ("submitted_at", Time, false),
+            ("ended_at", Time, true),
+            ("wall_ns", Long, true),
+            ("peak_memory_bytes", Long, true),
+            ("error_class", Text, true),
+        ],
         _ => return None,
     })
 }
@@ -143,6 +161,7 @@ fn columns(table: &str) -> Option<Vec<TableColumn>> {
                     Kind::Text => DataType::String,
                     Kind::Long => DataType::Long,
                     Kind::Flag => DataType::Boolean,
+                    Kind::Time => DataType::Timestamp,
                 },
                 nullable,
             })
@@ -195,6 +214,31 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             )),
         ];
     }
+    if table.eq_ignore_ascii_case("queries") {
+        let rows = sources.queries.snapshot();
+        let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
+        return vec![
+            text(rows.iter().map(|r| Some(r.id.as_str()))),
+            text(rows.iter().map(|r| Some(r.state))),
+            text(rows.iter().map(|r| r.text.as_deref())),
+            Arc::new(BooleanArray::from_iter(
+                rows.iter().map(|r| Some(r.truncated)),
+            )),
+            Arc::new(
+                TimestampMicrosecondArray::from_iter(
+                    rows.iter().map(|r| micros(Some(r.submitted_ms))),
+                )
+                .with_timezone("UTC"),
+            ),
+            Arc::new(
+                TimestampMicrosecondArray::from_iter(rows.iter().map(|r| micros(r.ended_ms)))
+                    .with_timezone("UTC"),
+            ),
+            long(rows.iter().map(|r| r.wall_ns)),
+            long(rows.iter().map(|r| r.peak_memory_bytes)),
+            text(rows.iter().map(|r| r.error_class.as_deref())),
+        ];
+    }
     let rows = capability_rows();
     vec![
         text(rows.iter().map(|_| Some(LOCAL_WORKER))),
@@ -209,6 +253,135 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
 pub(crate) struct Sources {
     /// The session's memory pool tree.
     pub(crate) memory: Arc<dyn MemoryPool>,
+    /// The queries the session ran.
+    pub(crate) queries: Arc<QueryLog>,
+}
+
+/// Most queries `system.queries` remembers; the oldest finished go first.
+const HISTORY_ROWS: usize = 1000;
+
+/// Most bytes of a statement `system.queries` keeps
+/// (`query_text_truncated` says when it cut).
+const TEXT_BYTES: usize = 4096;
+
+/// One query of `system.queries`.
+#[derive(Debug, Clone)]
+pub(crate) struct QueryRow {
+    pub(crate) id: String,
+    pub(crate) state: &'static str,
+    pub(crate) text: Option<String>,
+    pub(crate) truncated: bool,
+    pub(crate) submitted_ms: i64,
+    pub(crate) ended_ms: Option<i64>,
+    pub(crate) wall_ns: Option<i64>,
+    pub(crate) peak_memory_bytes: Option<i64>,
+    pub(crate) error_class: Option<String>,
+}
+
+/// What a finished query adds to its row.
+#[derive(Debug)]
+pub(crate) struct Finished<'a> {
+    pub(crate) state: &'static str,
+    pub(crate) wall_ns: i64,
+    pub(crate) peak_memory_bytes: i64,
+    pub(crate) error_class: Option<&'a str>,
+}
+
+/// The queries of one session, bounded: live ones and the recent finished
+/// ones (P2-T126 unit 2). The lock is held only to push, update or copy.
+#[derive(Debug, Default)]
+pub(crate) struct QueryLog {
+    rows: Mutex<VecDeque<QueryRow>>,
+    counter: AtomicU64,
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
+}
+
+impl QueryLog {
+    /// A UUIDv7 (RFC 9562): 48 bits of milliseconds, then version, then bits
+    /// that are unique per call. The tail comes from a per-process random
+    /// hasher key and a counter, not from a CSPRNG: it names queries, it
+    /// guards nothing.
+    fn next_id(&self, ms: i64) -> String {
+        use std::hash::{BuildHasher, Hasher, RandomState};
+        let n = self.counter.fetch_add(1, Ordering::Relaxed);
+        let mut h = RandomState::new().build_hasher();
+        h.write_u64(n);
+        let rand = h.finish();
+        let ms = u64::try_from(ms).unwrap_or(0) & 0xFFFF_FFFF_FFFF;
+        // 12 bits after the version, then the variant and 62 more bits.
+        let rand_a = (rand >> 52) & 0xFFF;
+        let rand_b = (rand ^ n.rotate_left(32)) & 0x3FFF_FFFF_FFFF_FFFF;
+        format!(
+            "{:08x}-{:04x}-7{:03x}-{:04x}-{:012x}",
+            ms >> 16,
+            ms & 0xFFFF,
+            rand_a,
+            0x8000 | ((rand_b >> 48) & 0x3FFF),
+            rand_b & 0xFFFF_FFFF_FFFF
+        )
+    }
+
+    /// Records a query that started now and returns its id.
+    pub(crate) fn begin(&self, text: Option<&str>) -> String {
+        let ms = now_ms();
+        let id = self.next_id(ms);
+        let (text, truncated) = match text {
+            None => (None, false),
+            Some(t) if t.len() <= TEXT_BYTES => (Some(t.to_owned()), false),
+            Some(t) => {
+                let mut end = TEXT_BYTES;
+                while !t.is_char_boundary(end) {
+                    end -= 1;
+                }
+                (Some(t[..end].to_owned()), true)
+            }
+        };
+        let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
+        if rows.len() >= HISTORY_ROWS {
+            // The oldest finished query; if every row is live, the oldest.
+            let at = rows.iter().position(|r| r.ended_ms.is_some()).unwrap_or(0);
+            rows.remove(at);
+        }
+        rows.push_back(QueryRow {
+            id: id.clone(),
+            state: "running",
+            text,
+            truncated,
+            submitted_ms: ms,
+            ended_ms: None,
+            wall_ns: None,
+            peak_memory_bytes: None,
+            error_class: None,
+        });
+        id
+    }
+
+    /// Marks the query `id` finished (a row evicted meanwhile is gone).
+    pub(crate) fn finish(&self, id: &str, done: &Finished<'_>) {
+        let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(row) = rows.iter_mut().find(|r| r.id == id) {
+            row.state = done.state;
+            row.ended_ms = Some(now_ms());
+            row.wall_ns = Some(done.wall_ns);
+            row.peak_memory_bytes = Some(done.peak_memory_bytes);
+            row.error_class = done.error_class.map(str::to_owned);
+        }
+    }
+
+    /// The rows now, oldest first.
+    pub(crate) fn snapshot(&self) -> Vec<QueryRow> {
+        self.rows
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
 }
 
 /// The table `table` as the planner reads it: its rows now.
@@ -227,6 +400,7 @@ pub(crate) fn provider(
                     Kind::Text => ArrowType::Utf8,
                     Kind::Long => ArrowType::Int64,
                     Kind::Flag => ArrowType::Boolean,
+                    Kind::Time => ArrowType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
                 };
                 Field::new(*name, ty, *nullable)
             })
@@ -292,9 +466,60 @@ mod tests {
         assert!(rows.iter().any(|r| r[0] == "feature" && r[1] == "cloud"));
         let sources = Sources {
             memory: krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default()),
+            queries: Arc::new(QueryLog::default()),
         };
         assert!(provider("capabilities", &sources).unwrap().is_some());
         assert!(provider("nope", &sources).unwrap().is_none());
+    }
+
+    #[test]
+    fn query_ids_are_uuid_v7_and_unique() {
+        let log = QueryLog::default();
+        let a = log.begin(Some("SELECT 1"));
+        let b = log.begin(None);
+        assert_ne!(a, b);
+        for id in [&a, &b] {
+            let p: Vec<&str> = id.split('-').collect();
+            assert_eq!(
+                p.iter().map(|x| x.len()).collect::<Vec<_>>(),
+                [8, 4, 4, 4, 12],
+                "{id}"
+            );
+            assert!(p[2].starts_with('7') && "89ab".contains(&p[3][..1]), "{id}");
+        }
+        log.finish(
+            &a,
+            &Finished {
+                state: "finished",
+                wall_ns: 5,
+                peak_memory_bytes: 7,
+                error_class: None,
+            },
+        );
+        let rows = log.snapshot();
+        assert_eq!((rows[0].state, rows[1].state), ("finished", "running"));
+    }
+
+    #[test]
+    fn history_is_bounded_and_long_text_is_cut_on_a_char() {
+        let log = QueryLog::default();
+        for _ in 0..(HISTORY_ROWS + 5) {
+            let id = log.begin(None);
+            log.finish(
+                &id,
+                &Finished {
+                    state: "finished",
+                    wall_ns: 1,
+                    peak_memory_bytes: 0,
+                    error_class: None,
+                },
+            );
+        }
+        assert_eq!(log.snapshot().len(), HISTORY_ROWS);
+        let long = "é".repeat(TEXT_BYTES);
+        log.begin(Some(&long));
+        let last = log.snapshot().pop().unwrap();
+        assert!(last.truncated && last.text.unwrap().len() <= TEXT_BYTES);
     }
 
     #[test]

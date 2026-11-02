@@ -158,6 +158,8 @@ pub(crate) struct SessionState {
     planner: Arc<dyn PhysicalPlanner>,
     plan_ids: AtomicI64,
     query_ids: AtomicU64,
+    /// The queries `system.queries` lists.
+    pub(crate) queries: Arc<crate::system::QueryLog>,
     /// SQL source ids handed to view lowerings: every `CREATE TEMPORARY
     /// VIEW` lowers its query with an id of its own, so errors raised
     /// while expanding a view point into the view's text, not the outer
@@ -361,6 +363,7 @@ impl SessionBuilder {
                 planner: Arc::new(DefaultPlanner),
                 plan_ids: AtomicI64::new(0),
                 query_ids: AtomicU64::new(0),
+                queries: Arc::default(),
                 sql_sources: AtomicU32::new(1),
             }),
         })
@@ -1089,6 +1092,7 @@ impl Session {
                 .unwrap_or_default(),
             crate::system::Sources {
                 memory: Arc::clone(&self.state.memory),
+                queries: Arc::clone(&self.state.queries),
             },
         ));
         let resolution = {
@@ -1153,6 +1157,7 @@ impl Session {
             catalog_epoch,
             variables_version: variables.version,
             policy_version: self.state.policy.version().0,
+            text: None,
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1483,26 +1488,20 @@ impl Session {
             },
             pool,
         );
-        if !metrics_enabled(&env.config) {
-            let stream = self
-                .state
-                .runner
-                .submit(physical.clone(), worker, Arc::clone(&query))
-                .await?;
-            return Ok((
-                Box::pin(stream.map(|b| b.and_then(into_record_batch))),
-                query,
-            ));
+        // The query's row in `system.queries`, and (when metrics are on) its
+        // one metrics fold, both closed by the guard when the stream ends,
+        // fails or is dropped.
+        let metrics_on = metrics_enabled(&env.config);
+        if metrics_on {
+            self.state.metrics.query_begin(query.class());
         }
-        // The fold below runs exactly once per started query; without it a
-        // query is invisible to the registry. The guard folds it when this
-        // future is dropped before the stream exists (a cancel during
-        // `submit`).
-        self.state.metrics.query_begin(query.class());
+        let log_id = self.state.queries.begin(env.text.as_deref());
         let mut pending = PendingFold(Some(QueryFold {
             query: Arc::clone(&query),
             state: Arc::clone(&self.state),
             start: QueryStart::capture(&self.state),
+            metrics_on,
+            log_id,
         }));
         match self
             .state
@@ -1572,7 +1571,14 @@ impl QueryStart {
     /// if any; otherwise the query's own error decides the outcome (none is
     /// success). A zero wall time means the query never finished (a
     /// cancelled stream dropped early): the duration then runs to now.
-    fn fold(self, state: &SessionState, query: &QueryContext, error: Option<&KrishivError>) {
+    fn fold(
+        self,
+        state: &SessionState,
+        query: &QueryContext,
+        error: Option<&KrishivError>,
+        metrics_on: bool,
+        log_id: &str,
+    ) {
         let stored = query.error();
         let (status, error_class) = Status::from_error(error.or(stored.as_ref()));
         let metrics = query.metrics();
@@ -1585,6 +1591,23 @@ impl QueryStart {
         } else {
             wall
         };
+        state.queries.finish(
+            log_id,
+            &crate::system::Finished {
+                state: match status {
+                    Status::Succeeded => "finished",
+                    Status::Failed => "failed",
+                    Status::Cancelled => "cancelled",
+                    Status::Denied => "denied",
+                },
+                wall_ns: i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX),
+                peak_memory_bytes: i64::try_from(metrics.memory.peak_reserved).unwrap_or(i64::MAX),
+                error_class: error_class.as_deref(),
+            },
+        );
+        if !metrics_on {
+            return;
+        }
         let totals = state.io.totals();
         let arbitration = state.memory_tree.stats();
         state.metrics.fold(&QueryOutcome {
@@ -1608,11 +1631,21 @@ struct QueryFold {
     query: Arc<QueryContext>,
     state: Arc<SessionState>,
     start: QueryStart,
+    /// `krishiv.metrics.enabled` as the query started.
+    metrics_on: bool,
+    /// The query's id in `system.queries`.
+    log_id: String,
 }
 
 impl QueryFold {
     fn finish(self, error: Option<&KrishivError>) {
-        self.start.fold(&self.state, &self.query, error);
+        self.start.fold(
+            &self.state,
+            &self.query,
+            error,
+            self.metrics_on,
+            &self.log_id,
+        );
     }
 }
 
@@ -2339,6 +2372,9 @@ pub(crate) struct QueryEnv {
     /// The access policy's version when the query started: an analysis made under another one
     /// is not reused, since its reads were authorized under the old rules.
     pub(crate) policy_version: u64,
+    /// The statement as the session may show it (redacted), for
+    /// `system.queries`; `None` for a query no SQL text started.
+    pub(crate) text: Option<Arc<str>>,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a

@@ -1143,6 +1143,8 @@ impl DataFrame {
             return Err(e.clone());
         }
         let analyzed = self.session.analyze_in(&self.plan, &env, text).await?;
+        let mut env = env;
+        env.text = text.map(|t| Arc::from(t.as_str()));
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),

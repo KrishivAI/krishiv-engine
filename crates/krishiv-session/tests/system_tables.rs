@@ -108,3 +108,62 @@ fn a_view_over_a_system_table_ignores_a_session_table_of_the_same_name() {
     .unwrap();
     assert!(rows[0].num_rows() == 1);
 }
+
+fn run_all(s: &Session, sql: &str) -> Result<(), String> {
+    block_on(async { s.sql(sql).await?.collect().await })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+fn strings_in(s: &Session, sql: &str) -> Vec<String> {
+    let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    let mut out = Vec::new();
+    for batch in &b {
+        let c = batch.column(0);
+        if let Some(v) = c.as_string_view_opt() {
+            out.extend((0..v.len()).map(|i| v.value(i).to_owned()));
+        } else {
+            let v = c.as_string::<i32>();
+            out.extend((0..v.len()).map(|i| v.value(i).to_owned()));
+        }
+    }
+    out
+}
+
+#[test]
+fn queries_lists_finished_and_failed_statements_with_their_text() {
+    let s = Session::new().unwrap();
+    run_all(&s, "SELECT 1 AS one, 'secret-literal' AS s").unwrap();
+    run_all(&s, "SELECT * FROM range(3)").unwrap();
+    let ids = strings_in(
+        &s,
+        "SELECT query_id FROM system.queries ORDER BY submitted_at",
+    );
+    assert!(ids.len() >= 2, "{ids:?}");
+    // Every id is a UUIDv7 and they differ.
+    let mut seen = std::collections::BTreeSet::new();
+    for id in &ids {
+        assert_eq!(id.len(), 36, "{id}");
+        assert_eq!(&id[14..15], "7", "{id}");
+        assert!(seen.insert(id.clone()), "{id}");
+    }
+    let states = strings_in(&s, "SELECT DISTINCT state FROM system.queries");
+    assert!(
+        states
+            .iter()
+            .all(|x| ["finished", "failed", "running", "cancelled"].contains(&x.as_str())),
+        "{states:?}"
+    );
+    let texts = strings_in(
+        &s,
+        "SELECT query_text FROM system.queries WHERE query_text LIKE 'SELECT 1 AS one%'",
+    );
+    assert_eq!(texts.len(), 1, "{texts:?}");
+    // Literals are kept (`queryText.literals = keep`, the design default).
+    assert!(texts[0].contains("secret-literal"), "{}", texts[0]);
+    let walls = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.queries WHERE state = 'finished' AND wall_ns > 0 AND ended_at >= submitted_at",
+    );
+    assert!(walls[0].parse::<u32>().unwrap() >= 1, "{walls:?}");
+}
