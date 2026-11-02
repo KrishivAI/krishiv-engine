@@ -605,6 +605,221 @@ impl Resolver<'_> {
                     b.shown = Some(with_children(e, shown_kids));
                     return Ok(b);
                 }
+                // `max_by(x, y, k)` / `min_by(x, y, k)`: the `k` values of `x`
+                // with the largest (smallest) non-NULL `y`, best first, as
+                // `slice(sort_array(collect_list(named_struct('k', y, 'v', x))
+                // FILTER (WHERE y IS NOT NULL), asc), 1, k).v`. The group's
+                // pairs are held (Spark keeps a heap of `k`); ties order by `x`.
+                if is_builtin_entry(&entry)
+                    && matches!(entry.id.name(), "max_by" | "min_by")
+                    && n == 3
+                    && !window_fn
+                    && !f.distinct
+                {
+                    // `k` is an INT to Spark (implicit cast): a fractional,
+                    // decimal or string constant is validated as the INT it
+                    // casts to, and the rewrite uses that cast.
+                    // Only numbers and strings cast: an interval or other type stays
+                    // as written and fails the signature check as before.
+                    let castable = matches!(
+                        kids[2].ty.data_type,
+                        Some(
+                            DataType::Byte
+                                | DataType::Short
+                                | DataType::Integer
+                                | DataType::Long
+                                | DataType::Float
+                                | DataType::Double
+                                | DataType::Decimal(_)
+                                | DataType::String
+                        ) | None
+                    );
+                    if !castable {
+                        // Spark's `k` is an INT with implicit casts only from
+                        // numbers and strings: anything else is a type mismatch.
+                        let shown = with_children(e, kids[..n].iter().map(Bound::shown).collect());
+                        return Err(AnalysisError::new(
+                            DatatypeMismatchUnexpectedInputType {
+                                sql_expr: format!(
+                                    "\"{}\"",
+                                    pretty(&shown, self.ctx.conf.session_zone)
+                                ),
+                                param_index: "third".to_owned(),
+                                required_type: "\"INT\"".to_owned(),
+                                input_sql: format!(
+                                    "\"{}\"",
+                                    pretty(&kids[2].shown(), self.ctx.conf.session_zone)
+                                ),
+                                input_type: quoted_type(kids[2].ty.data_type.as_ref()),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    let k_int = if castable {
+                        self.implicit_cast(&kids[2], Some(DataType::Integer))
+                    } else {
+                        kids[2].clone()
+                    };
+                    // A NULL count (written, or a string that fails to cast) is
+                    // as out of range as 0 is.
+                    let bad_k = match self.fold(&k_int.expr, self.ctx.conf.ansi) {
+                        Some(Constant::Integral(k)) if !(1..=100_000).contains(&k) => {
+                            Some(k.to_string())
+                        }
+                        Some(Constant::Null) => Some("NULL".to_owned()),
+                        // A count that is not a constant (a column, `rand()`) is refused as
+                        // Spark does: `k` must be foldable.
+                        None => {
+                            let shown =
+                                with_children(e, kids[..n].iter().map(Bound::shown).collect());
+                            return Err(AnalysisError::new(
+                                DatatypeMismatchNonFoldableInput {
+                                    sql_expr: format!(
+                                        "\"{}\"",
+                                        pretty(&shown, self.ctx.conf.session_zone)
+                                    ),
+                                    input_name: "k".to_owned(),
+                                    input_type: "int".to_owned(),
+                                    // Spark shows the implicit cast to INT it added.
+                                    input_expr: {
+                                        let text =
+                                            pretty(&kids[2].shown(), self.ctx.conf.session_zone);
+                                        if matches!(kids[2].ty.data_type, Some(DataType::Integer)) {
+                                            text
+                                        } else {
+                                            format!("CAST({text} AS INT)")
+                                        }
+                                    },
+                                },
+                                e.origin,
+                            ));
+                        }
+                        _ => None,
+                    };
+                    if let Some(current) = bad_k {
+                        let shown = with_children(e, kids[..n].iter().map(Bound::shown).collect());
+                        return Err(AnalysisError::new(
+                            DatatypeMismatchValueOutOfRange {
+                                expr_name: "`k`".to_owned(),
+                                value_range: "[1, 100000]".to_owned(),
+                                current_value: current,
+                                sql_expr: format!(
+                                    "\"{}\"",
+                                    pretty(&shown, self.ctx.conf.session_zone)
+                                ),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    let origin = e.origin;
+                    let lit =
+                        |l: Literal| Arc::new(Expr::new(ExprNode::Literal(l)).with_origin(origin));
+                    let mk = |name: &str, args: Vec<Arc<Expr>>, filter: Option<Arc<Expr>>| {
+                        Arc::new(
+                            Expr::new(ExprNode::Function(FunctionCall {
+                                name: name.to_owned(),
+                                qualifier: Vec::new(),
+                                args,
+                                arg_names: Vec::new(),
+                                distinct: false,
+                                filter,
+                                within_group: Vec::new(),
+                            }))
+                            .with_origin(origin),
+                        )
+                    };
+                    let (x, y, k) = (&kids[0].expr, &kids[1].expr, &k_int.expr);
+                    let pair = mk(
+                        "named_struct",
+                        vec![
+                            lit(Literal::String("k".to_owned())),
+                            Arc::clone(y),
+                            lit(Literal::String("v".to_owned())),
+                            Arc::clone(x),
+                        ],
+                        None,
+                    );
+                    let keep = f
+                        .filter
+                        .is_some()
+                        .then(|| kids.get(n).map(|b| Arc::clone(&b.expr)))
+                        .flatten();
+                    let present = mk("isnotnull", vec![Arc::clone(y)], None);
+                    let filter = match keep {
+                        Some(k) => mk("and", vec![present, k], None),
+                        None => present,
+                    };
+                    let collected = mk("collect_list", vec![pair], Some(filter));
+                    let ascending = entry.id.name() == "min_by";
+                    // The entries order by `y` only: `x` is an opaque payload.
+                    // `sort_array` orders the whole `(y, x)` struct (ties by
+                    // `x`), which needs `x` orderable; a value holding a map
+                    // sorts through a comparator on `y` instead.
+                    let sorted = if kids[0].ty.data_type.as_ref().is_some_and(holds_map) {
+                        let var = |name: &str| {
+                            Arc::new(
+                                Expr::new(ExprNode::Column(crate::ColumnRef {
+                                    name: vec![name.to_owned()],
+                                    plan_id: None,
+                                }))
+                                .with_origin(origin),
+                            )
+                        };
+                        let key = |name: &str| {
+                            mk(
+                                "__subscript",
+                                vec![var(name), lit(Literal::String("k".to_owned()))],
+                                None,
+                            )
+                        };
+                        let (before, after) = if ascending { (-1, 1) } else { (1, -1) };
+                        let compare = mk(
+                            "if",
+                            vec![
+                                mk("<", vec![key("l"), key("r")], None),
+                                lit(Literal::Integer(before)),
+                                mk(
+                                    "if",
+                                    vec![
+                                        mk(">", vec![key("l"), key("r")], None),
+                                        lit(Literal::Integer(after)),
+                                        lit(Literal::Integer(0)),
+                                    ],
+                                    None,
+                                ),
+                            ],
+                            None,
+                        );
+                        let comparator = Arc::new(
+                            Expr::lambda(vec!["l".to_owned(), "r".to_owned()], (*compare).clone())
+                                .with_origin(origin),
+                        );
+                        mk("array_sort", vec![collected, comparator], None)
+                    } else {
+                        mk(
+                            "sort_array",
+                            vec![collected, lit(Literal::Boolean(ascending))],
+                            None,
+                        )
+                    };
+                    let top = mk(
+                        "slice",
+                        vec![sorted, lit(Literal::Integer(1)), Arc::clone(k)],
+                        None,
+                    );
+                    let rewritten = mk(
+                        "__subscript",
+                        vec![top, lit(Literal::String("v".to_owned()))],
+                        None,
+                    );
+                    let mut b = self.expr(&rewritten, cx)?;
+                    b.carry_markers(&kids[..n]);
+                    b.shown = Some(with_children(
+                        e,
+                        kids[..n].iter().map(Bound::shown).collect(),
+                    ));
+                    return Ok(b);
+                }
                 if entry.id.name() == "count" && n == 0 {
                     return self.parameterless_count(e, &entry, &kids, agg, window_fn);
                 }
@@ -1302,5 +1517,15 @@ impl Resolver<'_> {
             ));
         }
         Ok(b)
+    }
+}
+
+/// Whether `t` is or holds a map at any depth (Spark does not order it).
+fn holds_map(t: &DataType) -> bool {
+    match t {
+        DataType::Map(_) => true,
+        DataType::Array(a) => holds_map(a.element_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| holds_map(f.data_type())),
+        _ => false,
     }
 }
