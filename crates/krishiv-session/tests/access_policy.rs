@@ -1607,3 +1607,33 @@ fn ignore_mode_on_an_existing_table_is_authorized_like_a_create() {
         DENIED
     );
 }
+
+static PATHS_LOCKED: AtomicBool = AtomicBool::new(false);
+
+fn lock_paths_later(securable: &Securable, p: Privilege) -> AccessDecision {
+    if PATHS_LOCKED.load(Ordering::SeqCst) && matches!(securable, Securable::Path(_)) {
+        deny()
+    } else {
+        let _ = (securable, p);
+        AccessDecision::Allow
+    }
+}
+
+/// The write of an overwrite asks the policy about the table's directory; that must be asked
+/// before the old table is dropped, or a denial there loses the table.
+#[test]
+fn a_denied_path_does_not_lose_the_table_an_overwrite_would_replace() {
+    let s = session(Policy::new(lock_paths_later));
+    block_on(s.table("t").write().save_as_table("made")).unwrap();
+    PATHS_LOCKED.store(true, Ordering::SeqCst);
+    let denied = class(block_on(
+        s.table("t").write().mode("overwrite").save_as_table("made"),
+    ));
+    PATHS_LOCKED.store(false, Ordering::SeqCst);
+    assert_eq!(denied, DENIED);
+    assert_eq!(
+        block_on(s.table("made").count()).unwrap(),
+        3,
+        "the table survived the denial"
+    );
+}

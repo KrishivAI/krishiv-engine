@@ -2376,6 +2376,31 @@ impl Session {
                 let provider = self.provider_of(spec.provider.clone())?;
                 let schema = df.schema().await?;
                 self.check_write_ready(&provider, &spec.options, &schema, &env)?;
+                // The write asks the policy about the table's directory and the create
+                // refuses a directory that is already there; both before the drop.
+                let location =
+                    managed_location(&self.warehouse_dir()?, &name.namespace, &name.name);
+                self.authorize_path(
+                    &location,
+                    &[Privilege::Modify, Privilege::Create],
+                    StatementClass::Write,
+                )
+                .await?;
+                let external = self
+                    .state
+                    .catalog
+                    .store
+                    .table(&name.namespace, &name.name)
+                    .is_some_and(|t| !t.managed);
+                if external && location.exists() {
+                    return Err(LocationAlreadyExists {
+                        identifier: name.quoted(),
+                        location: location.display().to_string(),
+                    }
+                    .into());
+                }
+                // What is left after this point is the write itself (query errors, I/O): as in
+                // Spark's V1 overwrite, a failure there leaves no table.
                 self.drop_named_table(&name, &env, true).await?;
                 self.exec_write_v2(df, spec, V2Mode::Create).await
             }
