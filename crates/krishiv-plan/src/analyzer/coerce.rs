@@ -1335,13 +1335,6 @@ fn declared(
     let mut casts = Vec::new();
     for (i, a) in args.iter().enumerate() {
         let want = types.get(i).or(types.last()).unwrap_or(&InputType::Any);
-        // Spark takes these and answers in the interval; they run from unit 4
-        // of P2-T001b.
-        if matches!(want, InputType::Numeric { intervals: true })
-            && a.ty.is_some_and(is_ansi_interval)
-        {
-            return Err(Mismatch::Unsupported("an interval as this argument"));
-        }
         let to = implicit(a.ty, want, ansi).ok_or_else(|| Mismatch::Unexpected {
             arg: i,
             param: i,
@@ -1361,6 +1354,9 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
         | (Some(DataType::Map(_)), InputType::Map)
         | (Some(DataType::Array(_)), InputType::Array) => Some(from.cloned()),
         (Some(t), InputType::Numeric { .. } | InputType::StrictNumeric) if is_numeric(t) => {
+            Some(Some(t.clone()))
+        }
+        (Some(t), InputType::Numeric { intervals: true }) if is_ansi_interval(t) => {
             Some(Some(t.clone()))
         }
         (None, InputType::Numeric { .. } | InputType::StrictNumeric)

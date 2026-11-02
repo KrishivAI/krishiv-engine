@@ -832,6 +832,14 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
 }
 
 fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
+    let mut expr = aggregate_function(a, nested)?;
+    if let Some(f) = &a.element {
+        expr.result_element = schema_bytes(&arrow_schema::Schema::new(vec![Arc::clone(f)]));
+    }
+    Ok(expr)
+}
+
+fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
     // The decoder refuses what the analyzer and planner never produce, so the
     // encoder refuses it too instead of writing a plan that cannot be read.
     let bad_percentages = |ps: &[f64]| {

@@ -2031,6 +2031,560 @@
    "value": "INTERVAL '1' DAY"
   },
   {
+   "expr": "SELECT sum(i) FROM VALUES (interval '1' day) AS t(i) WHERE false",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "sum(i)",
+   "type": "interval day",
+   "value": null
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '1' month) AS t(i) WHERE false",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "avg(i)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "SELECT sum(i) FROM VALUES (1, interval '1' day), (1, interval '2' day), (2, null) AS t(k, i) GROUP BY k HAVING k = 1",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "sum(i)",
+   "type": "interval day",
+   "value": "INTERVAL '3' DAY"
+  },
+  {
+   "expr": "SELECT sum(i) FROM VALUES (1, interval '1' day), (2, null) AS t(k, i) GROUP BY k HAVING k = 2",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "sum(i)",
+   "type": "interval day",
+   "value": null
+  },
+  {
+   "expr": "SELECT sum(DISTINCT i) FROM VALUES (interval '1' day), (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "sum(DISTINCT i)",
+   "type": "interval day",
+   "value": "INTERVAL '3' DAY"
+  },
+  {
+   "expr": "SELECT sum(i) FROM VALUES (interval '106751991 04:00:54.775807' day to second), (interval '0.000001' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "sum(i)",
+   "type": "interval day to second",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION"
+  },
+  {
+   "expr": "SELECT try_sum(i) FROM VALUES (interval '106751991 04:00:54.775807' day to second), (interval '0.000001' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_sum(i)",
+   "type": "interval day to second",
+   "value": null
+  },
+  {
+   "expr": "SELECT try_sum(i) FROM VALUES (interval '178956970-7' year to month), (interval '1' month), (interval '-1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_sum(i)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "SELECT sum(i) FROM VALUES (interval '178956970-7' year to month), (interval '-1' month), (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "sum(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '178956970-7' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT sum(i) FILTER (WHERE i > interval '1' day) FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "sum(i) FILTER (WHERE (i > INTERVAL '1' DAY))",
+   "type": "interval day",
+   "value": "INTERVAL '2' DAY"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '1' month), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "avg(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '-1' month), (interval '-2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "avg(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '-0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '1' month), (interval '1' month), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "avg(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-1' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '0.000001' second), (interval '0.000002' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "avg(i)",
+   "type": "interval day to second",
+   "value": "INTERVAL '0 00:00:00.000002' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '-0.000001' second), (interval '-0.000002' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "avg(i)",
+   "type": "interval day to second",
+   "value": "INTERVAL '-0 00:00:00.000002' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '1' year), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "avg(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-7' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '178956970-7' year to month), (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "avg(i)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION"
+  },
+  {
+   "expr": "SELECT try_avg(i) FROM VALUES (interval '178956970-7' year to month), (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_avg(i)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "SELECT try_avg(i) FROM VALUES (interval '178956970-7' year to month), (interval '1' month), (interval '-1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_avg(i)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '106751991 04:00:54.775807' day to second), (interval '0.000001' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "avg(i)",
+   "type": "interval day to second",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION"
+  },
+  {
+   "expr": "SELECT try_avg(i) FROM VALUES (interval '106751991 04:00:54.775807' day to second), (interval '0.000001' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_avg(i)",
+   "type": "interval day to second",
+   "value": null
+  },
+  {
+   "expr": "SELECT try_avg(i) FROM VALUES (interval '1' month) AS t(i) WHERE false",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_avg(i)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '1' month), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "median(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-1' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '-1' month), (interval '-2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "median(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '-0-1' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '0.000001' second), (interval '0.000002' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "median(i)",
+   "type": "interval day to second",
+   "value": "INTERVAL '0 00:00:00.000001' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '-0.000001' second), (interval '-0.000002' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "median(i)",
+   "type": "interval day to second",
+   "value": "INTERVAL '-0 00:00:00.000001' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '106751991 04:00:54.775807' day to second) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "median(i)",
+   "type": "interval day to second",
+   "value": "INTERVAL '106751991 04:00:54.775807' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '178956970-7' year to month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "median(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '178956970-7' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '1' month) AS t(i) WHERE false",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "median(i)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "SELECT percentile(i, array(0.25, 0.75)) FROM VALUES (interval '1' month), (interval '3' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "percentile(i, array(0.25, 0.75), 1)",
+   "type": "array<interval year to month>",
+   "value": "[INTERVAL '0-1' YEAR TO MONTH, INTERVAL '0-2' YEAR TO MONTH]"
+  },
+  {
+   "expr": "SELECT percentile(i, array(0.25, 0.75)) FROM VALUES (interval '1' day), (interval '3' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "percentile(i, array(0.25, 0.75), 1)",
+   "type": "array<interval day to second>",
+   "value": "[INTERVAL '1 12:00:00' DAY TO SECOND, INTERVAL '2 12:00:00' DAY TO SECOND]"
+  },
+  {
+   "expr": "SELECT percentile(i, 0.5, 2) FROM VALUES (interval '1' month), (interval '4' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "percentile(i, 0.5, 2)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT percentile_cont(array(0.25, 0.75)) WITHIN GROUP (ORDER BY i) FROM VALUES (interval '1' month), (interval '3' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "percentile_cont(array(0.25, 0.75)) WITHIN GROUP (ORDER BY i)",
+   "type": "array<interval year to month>",
+   "value": "[INTERVAL '0-1' YEAR TO MONTH, INTERVAL '0-2' YEAR TO MONTH]"
+  },
+  {
+   "expr": "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY i DESC) FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "percentile_cont(0.5) WITHIN GROUP (ORDER BY i DESC)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 12:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY i DESC) FROM VALUES (interval '1' month), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "percentile_disc(0.5) WITHIN GROUP (ORDER BY i DESC)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY i) FROM VALUES (interval '106751991 04:00:54.775807' day to second) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "percentile_disc(0.5) WITHIN GROUP (ORDER BY i)",
+   "type": "interval day to second",
+   "value": "INTERVAL '106751991 04:00:54.775807' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT percentile_approx(i, 0.5) FROM VALUES (interval '1' month), (interval '3' month), (interval '5' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "percentile_approx(i, 0.5, 10000)",
+   "type": "interval month",
+   "value": "INTERVAL '3' MONTH"
+  },
+  {
+   "expr": "SELECT percentile_approx(i, 0.5) FROM VALUES (interval '1' day), (interval '3' day), (interval '5' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "percentile_approx(i, 0.5, 10000)",
+   "type": "interval day",
+   "value": "INTERVAL '3' DAY"
+  },
+  {
+   "expr": "SELECT percentile_approx(i, array(0.25, 0.75)) FROM VALUES (interval '1' hour), (interval '3' hour) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "percentile_approx(i, array(0.25, 0.75), 10000)",
+   "type": "array<interval hour>",
+   "value": "[INTERVAL '01' HOUR, INTERVAL '03' HOUR]"
+  },
+  {
+   "expr": "SELECT approx_percentile(i, 0.5) FROM VALUES (interval '1' month) AS t(i) WHERE false",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "approx_percentile(i, 0.5, 10000)",
+   "type": "interval month",
+   "value": null
+  },
+  {
+   "expr": "SELECT sum(i) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM VALUES (interval '1' month), (interval '2' month) AS t(i) ORDER BY 1 DESC LIMIT 1",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "sum(i) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)",
+   "type": "interval month",
+   "value": "INTERVAL '3' MONTH"
+  },
+  {
+   "expr": "SELECT try_sum(i) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM VALUES (interval '1' month), (interval '2' month) AS t(i) ORDER BY 1 DESC LIMIT 1",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_sum(i) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)",
+   "type": "interval month",
+   "value": "INTERVAL '3' MONTH"
+  },
+  {
+   "expr": "SELECT sum(i) OVER () FROM VALUES (interval '178956970-7' year to month), (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "sum(i) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION"
+  },
+  {
+   "expr": "SELECT avg(i) OVER () FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "avg(i) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 12:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT avg(i) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM VALUES (interval '1' month), (interval '2' month) AS t(i) ORDER BY 1 DESC LIMIT 1",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "avg(i) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT try_avg(i) OVER (ORDER BY i) FROM VALUES (interval '1' day), (interval '2' day) AS t(i) ORDER BY 1 DESC LIMIT 1",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_avg(i) OVER (ORDER BY i ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 12:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT min(i) OVER () FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "min(i) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "SELECT max(i) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM VALUES (interval '1' month), (interval '2' month) AS t(i) LIMIT 1",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "max(i) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+   "type": "interval month",
+   "value": "INTERVAL '2' MONTH"
+  },
+  {
+   "expr": "SELECT median(i) OVER () FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "median(i) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 12:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY i) OVER () FROM VALUES (interval '1' month), (interval '3' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "percentile_cont(0.5) WITHIN GROUP (ORDER BY i) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT collect_list(i) OVER () FROM VALUES (interval '1' hour), (interval '2' hour) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "collect_list(i) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+   "type": "array<interval hour>",
+   "value": "[INTERVAL '01' HOUR, INTERVAL '02' HOUR]"
+  },
+  {
+   "expr": "SELECT collect_list(i) FROM VALUES (interval '1' hour), (interval '2' hour) AS t(i) GROUP BY i HAVING i = interval '1' hour",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "collect_list(i)",
+   "type": "array<interval hour>",
+   "value": "[INTERVAL '01' HOUR]"
+  },
+  {
+   "expr": "SELECT min(i) FROM VALUES (interval '1' month), (interval '1' year) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "min(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-1' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT max(i) FROM VALUES (interval '1' month), (interval '1' year) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "max(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '1-0' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT first(i) FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "first(i)",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "SELECT last(i) FROM VALUES (interval '1' month), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "last(i)",
+   "type": "interval month",
+   "value": "INTERVAL '2' MONTH"
+  },
+  {
+   "expr": "SELECT any_value(i) FROM VALUES (interval '1' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "any_value(i)",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "SELECT max_by(i, k) FROM VALUES (1, interval '1' day), (2, interval '2' day) AS t(k, i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "max_by(i, k)",
+   "type": "interval day",
+   "value": "INTERVAL '2' DAY"
+  },
+  {
+   "expr": "SELECT min_by(k, i) FROM VALUES (1, interval '1' day), (2, interval '2' day) AS t(k, i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "min_by(k, i)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "SELECT mode(i) FROM VALUES (interval '1' month), (interval '1' month), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "mode(i)",
+   "type": "interval month",
+   "value": "INTERVAL '1' MONTH"
+  },
+  {
+   "expr": "SELECT collect_list(i) FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "collect_list(i)",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY, INTERVAL '2' DAY]"
+  },
+  {
+   "expr": "SELECT collect_set(i) FROM VALUES (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "collect_set(i)",
+   "type": "array<interval month>",
+   "value": "[INTERVAL '1' MONTH]"
+  },
+  {
+   "expr": "SELECT count(i) FROM VALUES (interval '1' day), (null) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "count(i)",
+   "type": "bigint",
+   "value": "1"
+  },
+  {
+   "expr": "SELECT approx_count_distinct(i) FROM VALUES (interval '1' day), (interval '1' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "approx_count_distinct(i)",
+   "type": "bigint",
+   "value": "1"
+  },
+  {
+   "expr": "SELECT i FROM VALUES (interval '1' day), (interval '1' day) AS t(i) GROUP BY i",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "i",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "SELECT count(*) FROM VALUES (interval '1' month), (interval '1' month) AS t(i) GROUP BY i",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "count(1)",
+   "type": "bigint",
+   "value": "2"
+  },
+  {
+   "expr": "SELECT sum(i) FROM VALUES (1) AS t(i) GROUP BY interval '1' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "sum(i)",
+   "type": "bigint",
+   "value": "1"
+  },
+  {
+   "expr": "SELECT variance(i) FROM VALUES (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "SELECT bit_and(i) FROM VALUES (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "SELECT sum(i, i) FROM VALUES (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+  },
+  {
    "expr": "width_bucket(interval '0' year, interval '0' year, interval '10' year, 10)",
    "zone": "UTC",
    "ansi": true,
@@ -4145,6 +4699,560 @@
    "name": "sum(i) OVER (ORDER BY i ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
    "type": "interval day",
    "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "SELECT sum(i) FROM VALUES (interval '1' day) AS t(i) WHERE false",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "sum(i)",
+   "type": "interval day",
+   "value": null
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '1' month) AS t(i) WHERE false",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "avg(i)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "SELECT sum(i) FROM VALUES (1, interval '1' day), (1, interval '2' day), (2, null) AS t(k, i) GROUP BY k HAVING k = 1",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "sum(i)",
+   "type": "interval day",
+   "value": "INTERVAL '3' DAY"
+  },
+  {
+   "expr": "SELECT sum(i) FROM VALUES (1, interval '1' day), (2, null) AS t(k, i) GROUP BY k HAVING k = 2",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "sum(i)",
+   "type": "interval day",
+   "value": null
+  },
+  {
+   "expr": "SELECT sum(DISTINCT i) FROM VALUES (interval '1' day), (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "sum(DISTINCT i)",
+   "type": "interval day",
+   "value": "INTERVAL '3' DAY"
+  },
+  {
+   "expr": "SELECT sum(i) FROM VALUES (interval '106751991 04:00:54.775807' day to second), (interval '0.000001' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "sum(i)",
+   "type": "interval day to second",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION"
+  },
+  {
+   "expr": "SELECT try_sum(i) FROM VALUES (interval '106751991 04:00:54.775807' day to second), (interval '0.000001' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_sum(i)",
+   "type": "interval day to second",
+   "value": null
+  },
+  {
+   "expr": "SELECT try_sum(i) FROM VALUES (interval '178956970-7' year to month), (interval '1' month), (interval '-1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_sum(i)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "SELECT sum(i) FROM VALUES (interval '178956970-7' year to month), (interval '-1' month), (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "sum(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '178956970-7' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT sum(i) FILTER (WHERE i > interval '1' day) FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "sum(i) FILTER (WHERE (i > INTERVAL '1' DAY))",
+   "type": "interval day",
+   "value": "INTERVAL '2' DAY"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '1' month), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "avg(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '-1' month), (interval '-2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "avg(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '-0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '1' month), (interval '1' month), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "avg(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-1' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '0.000001' second), (interval '0.000002' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "avg(i)",
+   "type": "interval day to second",
+   "value": "INTERVAL '0 00:00:00.000002' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '-0.000001' second), (interval '-0.000002' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "avg(i)",
+   "type": "interval day to second",
+   "value": "INTERVAL '-0 00:00:00.000002' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '1' year), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "avg(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-7' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '178956970-7' year to month), (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "avg(i)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION"
+  },
+  {
+   "expr": "SELECT try_avg(i) FROM VALUES (interval '178956970-7' year to month), (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_avg(i)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "SELECT try_avg(i) FROM VALUES (interval '178956970-7' year to month), (interval '1' month), (interval '-1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_avg(i)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "SELECT avg(i) FROM VALUES (interval '106751991 04:00:54.775807' day to second), (interval '0.000001' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "avg(i)",
+   "type": "interval day to second",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION"
+  },
+  {
+   "expr": "SELECT try_avg(i) FROM VALUES (interval '106751991 04:00:54.775807' day to second), (interval '0.000001' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_avg(i)",
+   "type": "interval day to second",
+   "value": null
+  },
+  {
+   "expr": "SELECT try_avg(i) FROM VALUES (interval '1' month) AS t(i) WHERE false",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_avg(i)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '1' month), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "median(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-1' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '-1' month), (interval '-2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "median(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '-0-1' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '0.000001' second), (interval '0.000002' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "median(i)",
+   "type": "interval day to second",
+   "value": "INTERVAL '0 00:00:00.000001' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '-0.000001' second), (interval '-0.000002' second) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "median(i)",
+   "type": "interval day to second",
+   "value": "INTERVAL '-0 00:00:00.000001' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '106751991 04:00:54.775807' day to second) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "median(i)",
+   "type": "interval day to second",
+   "value": "INTERVAL '106751991 04:00:54.775807' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '178956970-7' year to month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "median(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '178956970-7' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT median(i) FROM VALUES (interval '1' month) AS t(i) WHERE false",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "median(i)",
+   "type": "interval year to month",
+   "value": null
+  },
+  {
+   "expr": "SELECT percentile(i, array(0.25, 0.75)) FROM VALUES (interval '1' month), (interval '3' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "percentile(i, array(0.25, 0.75), 1)",
+   "type": "array<interval year to month>",
+   "value": "[INTERVAL '0-1' YEAR TO MONTH, INTERVAL '0-2' YEAR TO MONTH]"
+  },
+  {
+   "expr": "SELECT percentile(i, array(0.25, 0.75)) FROM VALUES (interval '1' day), (interval '3' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "percentile(i, array(0.25, 0.75), 1)",
+   "type": "array<interval day to second>",
+   "value": "[INTERVAL '1 12:00:00' DAY TO SECOND, INTERVAL '2 12:00:00' DAY TO SECOND]"
+  },
+  {
+   "expr": "SELECT percentile(i, 0.5, 2) FROM VALUES (interval '1' month), (interval '4' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "percentile(i, 0.5, 2)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT percentile_cont(array(0.25, 0.75)) WITHIN GROUP (ORDER BY i) FROM VALUES (interval '1' month), (interval '3' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "percentile_cont(array(0.25, 0.75)) WITHIN GROUP (ORDER BY i)",
+   "type": "array<interval year to month>",
+   "value": "[INTERVAL '0-1' YEAR TO MONTH, INTERVAL '0-2' YEAR TO MONTH]"
+  },
+  {
+   "expr": "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY i DESC) FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "percentile_cont(0.5) WITHIN GROUP (ORDER BY i DESC)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 12:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY i DESC) FROM VALUES (interval '1' month), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "percentile_disc(0.5) WITHIN GROUP (ORDER BY i DESC)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY i) FROM VALUES (interval '106751991 04:00:54.775807' day to second) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "percentile_disc(0.5) WITHIN GROUP (ORDER BY i)",
+   "type": "interval day to second",
+   "value": "INTERVAL '106751991 04:00:54.775807' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT percentile_approx(i, 0.5) FROM VALUES (interval '1' month), (interval '3' month), (interval '5' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "percentile_approx(i, 0.5, 10000)",
+   "type": "interval month",
+   "value": "INTERVAL '3' MONTH"
+  },
+  {
+   "expr": "SELECT percentile_approx(i, 0.5) FROM VALUES (interval '1' day), (interval '3' day), (interval '5' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "percentile_approx(i, 0.5, 10000)",
+   "type": "interval day",
+   "value": "INTERVAL '3' DAY"
+  },
+  {
+   "expr": "SELECT percentile_approx(i, array(0.25, 0.75)) FROM VALUES (interval '1' hour), (interval '3' hour) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "percentile_approx(i, array(0.25, 0.75), 10000)",
+   "type": "array<interval hour>",
+   "value": "[INTERVAL '01' HOUR, INTERVAL '03' HOUR]"
+  },
+  {
+   "expr": "SELECT approx_percentile(i, 0.5) FROM VALUES (interval '1' month) AS t(i) WHERE false",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "approx_percentile(i, 0.5, 10000)",
+   "type": "interval month",
+   "value": null
+  },
+  {
+   "expr": "SELECT sum(i) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM VALUES (interval '1' month), (interval '2' month) AS t(i) ORDER BY 1 DESC LIMIT 1",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "sum(i) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)",
+   "type": "interval month",
+   "value": "INTERVAL '3' MONTH"
+  },
+  {
+   "expr": "SELECT try_sum(i) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM VALUES (interval '1' month), (interval '2' month) AS t(i) ORDER BY 1 DESC LIMIT 1",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_sum(i) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)",
+   "type": "interval month",
+   "value": "INTERVAL '3' MONTH"
+  },
+  {
+   "expr": "SELECT sum(i) OVER () FROM VALUES (interval '178956970-7' year to month), (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "sum(i) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+   "type": "interval year to month",
+   "value_error_class": "INTERVAL_ARITHMETIC_OVERFLOW.WITH_SUGGESTION"
+  },
+  {
+   "expr": "SELECT avg(i) OVER () FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "avg(i) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 12:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT avg(i) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM VALUES (interval '1' month), (interval '2' month) AS t(i) ORDER BY 1 DESC LIMIT 1",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "avg(i) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND CURRENT ROW)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT try_avg(i) OVER (ORDER BY i) FROM VALUES (interval '1' day), (interval '2' day) AS t(i) ORDER BY 1 DESC LIMIT 1",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_avg(i) OVER (ORDER BY i ASC NULLS FIRST RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 12:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT min(i) OVER () FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "min(i) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "SELECT max(i) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM VALUES (interval '1' month), (interval '2' month) AS t(i) LIMIT 1",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "max(i) OVER (ORDER BY i ASC NULLS FIRST ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING)",
+   "type": "interval month",
+   "value": "INTERVAL '2' MONTH"
+  },
+  {
+   "expr": "SELECT median(i) OVER () FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "median(i) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+   "type": "interval day to second",
+   "value": "INTERVAL '1 12:00:00' DAY TO SECOND"
+  },
+  {
+   "expr": "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY i) OVER () FROM VALUES (interval '1' month), (interval '3' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "percentile_cont(0.5) WITHIN GROUP (ORDER BY i) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-2' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT collect_list(i) OVER () FROM VALUES (interval '1' hour), (interval '2' hour) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "collect_list(i) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)",
+   "type": "array<interval hour>",
+   "value": "[INTERVAL '01' HOUR, INTERVAL '02' HOUR]"
+  },
+  {
+   "expr": "SELECT collect_list(i) FROM VALUES (interval '1' hour), (interval '2' hour) AS t(i) GROUP BY i HAVING i = interval '1' hour",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "collect_list(i)",
+   "type": "array<interval hour>",
+   "value": "[INTERVAL '01' HOUR]"
+  },
+  {
+   "expr": "SELECT min(i) FROM VALUES (interval '1' month), (interval '1' year) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "min(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '0-1' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT max(i) FROM VALUES (interval '1' month), (interval '1' year) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "max(i)",
+   "type": "interval year to month",
+   "value": "INTERVAL '1-0' YEAR TO MONTH"
+  },
+  {
+   "expr": "SELECT first(i) FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "first(i)",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "SELECT last(i) FROM VALUES (interval '1' month), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "last(i)",
+   "type": "interval month",
+   "value": "INTERVAL '2' MONTH"
+  },
+  {
+   "expr": "SELECT any_value(i) FROM VALUES (interval '1' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "any_value(i)",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "SELECT max_by(i, k) FROM VALUES (1, interval '1' day), (2, interval '2' day) AS t(k, i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "max_by(i, k)",
+   "type": "interval day",
+   "value": "INTERVAL '2' DAY"
+  },
+  {
+   "expr": "SELECT min_by(k, i) FROM VALUES (1, interval '1' day), (2, interval '2' day) AS t(k, i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "min_by(k, i)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "SELECT mode(i) FROM VALUES (interval '1' month), (interval '1' month), (interval '2' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "mode(i)",
+   "type": "interval month",
+   "value": "INTERVAL '1' MONTH"
+  },
+  {
+   "expr": "SELECT collect_list(i) FROM VALUES (interval '1' day), (interval '2' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "collect_list(i)",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY, INTERVAL '2' DAY]"
+  },
+  {
+   "expr": "SELECT collect_set(i) FROM VALUES (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "collect_set(i)",
+   "type": "array<interval month>",
+   "value": "[INTERVAL '1' MONTH]"
+  },
+  {
+   "expr": "SELECT count(i) FROM VALUES (interval '1' day), (null) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "count(i)",
+   "type": "bigint",
+   "value": "1"
+  },
+  {
+   "expr": "SELECT approx_count_distinct(i) FROM VALUES (interval '1' day), (interval '1' day) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "approx_count_distinct(i)",
+   "type": "bigint",
+   "value": "1"
+  },
+  {
+   "expr": "SELECT i FROM VALUES (interval '1' day), (interval '1' day) AS t(i) GROUP BY i",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "i",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "SELECT count(*) FROM VALUES (interval '1' month), (interval '1' month) AS t(i) GROUP BY i",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "count(1)",
+   "type": "bigint",
+   "value": "2"
+  },
+  {
+   "expr": "SELECT sum(i) FROM VALUES (1) AS t(i) GROUP BY interval '1' day",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "sum(i)",
+   "type": "bigint",
+   "value": "1"
+  },
+  {
+   "expr": "SELECT variance(i) FROM VALUES (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "SELECT bit_and(i) FROM VALUES (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "SELECT sum(i, i) FROM VALUES (interval '1' month) AS t(i)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
   },
   {
    "expr": "width_bucket(interval '0' year, interval '0' year, interval '10' year, 10)",

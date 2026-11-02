@@ -141,23 +141,6 @@ fn matches_spark(file: &str) -> R {
     Ok(())
 }
 
-/// Spark answers these in an interval type. Until they run (P2-T001b unit 4)
-/// they say so, rather than that an interval is not an interval.
-#[test]
-fn interval_arguments_not_built_yet_are_named_as_unsupported() -> R {
-    let session = Session::new()?;
-    for q in [
-        "SELECT sum(i) FROM VALUES (interval '1' day) AS t(i)",
-        "SELECT avg(i) FROM VALUES (interval '1' month) AS t(i)",
-        "SELECT try_sum(i) FROM VALUES (interval '1' day) AS t(i)",
-        "SELECT try_avg(i) FROM VALUES (interval '1' day) AS t(i)",
-    ] {
-        let e = block_on(session.sql(q)).err().ok_or(q)?;
-        assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{q}");
-    }
-    Ok(())
-}
-
 /// `sql`'s rows, each column cast to string, one line per row.
 fn rows(session: &Session, sql: &str) -> R<Vec<String>> {
     block_on(async {

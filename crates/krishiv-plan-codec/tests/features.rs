@@ -1148,6 +1148,11 @@ fn interval_types_and_literals_need_their_feature() {
     layout.truncate(1);
     assert!(to_message(&plan_of(root)).unwrap().features.is_empty());
     assert_eq!(message("interval_scan").features, ["interval_types"]);
+    assert!(
+        message("interval_array_aggregate")
+            .features
+            .contains(&"interval_types".to_owned())
+    );
     assert_eq!(
         message("interval_nested").features,
         ["interval_types", "nested_types"]

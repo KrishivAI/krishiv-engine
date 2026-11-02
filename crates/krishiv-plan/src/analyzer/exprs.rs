@@ -5642,7 +5642,7 @@ impl Resolver<'_> {
                     .join(", ")
             )
         };
-        // The value (or ordering key): Spark's numeric input, which the
+        // The value (or ordering key): a number or an ANSI interval, which the
         // approximate path extends to dates and timestamps.
         let value = if ordered {
             kids[wstart].clone()
@@ -5976,9 +5976,9 @@ impl Resolver<'_> {
                 )))
                 .with_origin(origin),
             ));
-            data_type = exact_percentile_result(array);
+            data_type = exact_percentile_result(value.ty.data_type.as_ref(), array);
         } else if median {
-            data_type = exact_percentile_result(false);
+            data_type = exact_percentile_result(value.ty.data_type.as_ref(), false);
         } else if appr {
             // `relativeSD`: a double (or decimal) literal, as Spark's
             // `validateDoubleLiteral` requires; the default is 0.05. It is
@@ -6152,7 +6152,7 @@ impl Resolver<'_> {
                 resolved.push(Arc::clone(&frequency.expr));
                 // Spark names the call with the defaulted frequency.
                 shown.push(frequency.shown());
-                data_type = exact_percentile_result(array);
+                data_type = exact_percentile_result(value.ty.data_type.as_ref(), array);
             }
         }
         let shown_within: Vec<SortOrder> = f

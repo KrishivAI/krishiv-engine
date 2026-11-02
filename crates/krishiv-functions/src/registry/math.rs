@@ -264,7 +264,7 @@ arithmetic!(try_multiply, Operator::Multiply);
 arithmetic!(try_divide, Operator::Divide);
 arithmetic!(remainder, Operator::Remainder);
 
-const fn is_ansi_interval(t: &DataType) -> bool {
+pub(super) const fn is_ansi_interval(t: &DataType) -> bool {
     matches!(
         t,
         DataType::YearMonthInterval { .. } | DataType::DayTimeInterval { .. }

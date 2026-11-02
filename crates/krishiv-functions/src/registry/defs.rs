@@ -13,6 +13,7 @@ use krishiv_common::error::{
 use krishiv_kernels::datetime::DatePart;
 use krishiv_types::{ArrayType, DataType, DayTimeField, DecimalType, YearMonthField};
 
+use super::math::is_ansi_interval;
 use super::{Aggregate, Execution};
 use crate::signature::{
     ArgType, CallTypes, Constant, FunctionKind, InputBuilder, InputType, Inputs,
@@ -1225,21 +1226,34 @@ fn sum(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
             d.scale().into(),
         )?,
         Some(DataType::Double | DataType::Float) | None => DataType::Double,
+        // An ANSI interval keeps its fields.
+        Some(t) if is_ansi_interval(t) => t.clone(),
         Some(_) => DataType::Long,
     };
     Ok(ArgType::new(t, true))
 }
 
-/// `avg`: `decimal(min(38, p + 4), min(38, s + 4))`, else `double`.
+/// `avg`: `decimal(min(38, p + 4), min(38, s + 4))`, an ANSI interval's
+/// default fields, else `double`.
 fn avg(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let t = match c.data_type(0) {
         Some(DataType::Decimal(d)) => bounded_decimal(
             u32::from(d.precision()).saturating_add(4),
             u32::from(d.scale()).saturating_add(4),
         )?,
+        Some(t) if is_ansi_interval(t) => default_interval(t),
         _ => DataType::Double,
     };
     Ok(ArgType::new(t, true))
+}
+
+/// The default fields of the ANSI interval family of `t`.
+fn default_interval(t: &DataType) -> DataType {
+    if matches!(t, DataType::YearMonthInterval { .. }) {
+        DataType::DEFAULT_YEAR_MONTH_INTERVAL
+    } else {
+        DataType::DEFAULT_DAY_TIME_INTERVAL
+    }
 }
 
 fn count(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
@@ -1571,15 +1585,17 @@ fn try_avg(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     avg(c)
 }
 
-/// Spark's `PercentileBase.dataType` over the types this engine
-/// represents: `double`, or `array<double>` for an array percentage.
-/// (Spark keeps an ANSI interval child as an interval; this engine has
-/// no interval type, so an interval never reaches typing.)
-pub fn exact_percentile_result(array: bool) -> DataType {
+/// Spark's `PercentileBase.dataType`: `double`, or an ANSI interval child's
+/// default fields; an array of it for an array percentage.
+pub fn exact_percentile_result(child: Option<&DataType>, array: bool) -> DataType {
+    let value = match child {
+        Some(t) if is_ansi_interval(t) => default_interval(t),
+        _ => DataType::Double,
+    };
     if array {
-        DataType::Array(ArrayType::new(DataType::Double, false).into())
+        DataType::Array(ArrayType::new(value, false).into())
     } else {
-        DataType::Double
+        value
     }
 }
 
@@ -1603,14 +1619,17 @@ fn array_percentage(c: &CallTypes<'_>, i: usize) -> bool {
 /// is `percentile(child, 0.5)`): [`exact_percentile_result`].
 fn percentile(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(
-        exact_percentile_result(array_percentage(c, 1)),
+        exact_percentile_result(c.data_type(0), array_percentage(c, 1)),
         true,
     ))
 }
 
 /// Spark's `Median`: `percentile(child, 0.5)`.
-fn median(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    Ok(ArgType::new(DataType::Double, true))
+fn median(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
+        exact_percentile_result(c.data_type(0), false),
+        true,
+    ))
 }
 
 /// Spark's `ApproximatePercentile.dataType`: the child's type, or an
@@ -1625,10 +1644,11 @@ fn percentile_approx(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 
 /// Spark's `PercentileCont` / `PercentileDisc` result over the user
 /// form (the percentage is the only argument): `double`, or
-/// `array<double>` for an array percentage.
+/// `array<double>` for an array percentage. The analyzer retypes it from the
+/// ordering key.
 fn percentile_ordered(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(
-        exact_percentile_result(array_percentage(c, 0)),
+        exact_percentile_result(None, array_percentage(c, 0)),
         true,
     ))
 }
