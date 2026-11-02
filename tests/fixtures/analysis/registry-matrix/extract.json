@@ -2,35 +2,35 @@
   "entries": [
     {
       "id": "extract#0a952bc77298/ansi_on",
-      "reason": "SELECT extract(days FROM interval 5 days 3 hours 7 minutes) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT extract(days FROM interval 5 days 3 hours 7 minutes) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "extract#0a952bc77298/ansi_off",
-      "reason": "SELECT extract(days FROM interval 5 days 3 hours 7 minutes) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT extract(days FROM interval 5 days 3 hours 7 minutes) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "extract#201fe7b02d16/ansi_on",
-      "reason": "SELECT extract(seconds FROM interval 5 hours 30 seconds 1 milliseconds 1 microseconds) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT extract(seconds FROM interval 5 hours 30 seconds 1 milliseconds 1 microseconds) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "extract#201fe7b02d16/ansi_off",
-      "reason": "SELECT extract(seconds FROM interval 5 hours 30 seconds 1 milliseconds 1 microseconds) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT extract(seconds FROM interval 5 hours 30 seconds 1 milliseconds 1 microseconds) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "extract#3119033962f4/ansi_on",
-      "reason": "SELECT extract(MINUTE FROM INTERVAL '123 23:55:59.002001' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT extract(MINUTE FROM INTERVAL '123 23:55:59.002001' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "extract#3119033962f4/ansi_off",
-      "reason": "SELECT extract(MINUTE FROM INTERVAL '123 23:55:59.002001' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT extract(MINUTE FROM INTERVAL '123 23:55:59.002001' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "extract#dd28af7ed0f0/ansi_on",
-      "reason": "SELECT extract(MONTH FROM INTERVAL '2021-11' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT extract(MONTH FROM INTERVAL '2021-11' YEAR TO MONTH) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "extract#dd28af7ed0f0/ansi_off",
-      "reason": "SELECT extract(MONTH FROM INTERVAL '2021-11' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT extract(MONTH FROM INTERVAL '2021-11' YEAR TO MONTH) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

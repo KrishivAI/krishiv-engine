@@ -918,10 +918,13 @@ impl JsonDecoder {
                         }
                         Err(Conv::Fatal(e)) => {
                             // A conversion that cannot be done at all (a
-                            // region time zone) fails the scan even in
+                            // unknown time zone) fails the scan even in
                             // PERMISSIVE. Nested values never reach here:
                             // they are `Malformed` above.
-                            if e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE" {
+                            if matches!(
+                                e.error_class().name(),
+                                "KRISHIV_UNSUPPORTED_FEATURE" | "INVALID_TIMEZONE"
+                            ) {
                                 return Err(FormatError::Other(e));
                             }
                             if bad.is_none() {

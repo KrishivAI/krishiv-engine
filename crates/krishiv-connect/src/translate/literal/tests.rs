@@ -471,12 +471,25 @@ fn a_literal_with_no_value_is_unsupported_literal_type() {
 }
 
 #[test]
+fn a_calendar_interval_literal_keeps_its_parts() {
+    let value = LiteralType::CalendarInterval(pl::CalendarInterval {
+        months: 14,
+        days: 3,
+        microseconds: 4,
+    });
+    assert_eq!(
+        literal(&literal_of(value)).unwrap(),
+        Literal::CalendarInterval {
+            months: 14,
+            days: 3,
+            micros: 4
+        }
+    );
+}
+
+#[test]
 fn literals_the_ir_has_no_value_for_are_unsupported() {
     for (value, name) in [
-        (
-            LiteralType::CalendarInterval(pl::CalendarInterval::default()),
-            "calendar_interval",
-        ),
         (LiteralType::Array(pl::Array::default()), "array"),
         (LiteralType::Map(pl::Map::default()), "map"),
         (LiteralType::Struct(pl::Struct::default()), "struct"),

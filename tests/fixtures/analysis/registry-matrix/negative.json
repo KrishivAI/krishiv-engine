@@ -2,19 +2,19 @@
   "entries": [
     {
       "id": "negative#987900a6d6ac/ansi_on",
-      "reason": "SELECT negative(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT negative(INTERVAL '1-2' YEAR TO MONTH) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     },
     {
       "id": "negative#987900a6d6ac/ansi_off",
-      "reason": "SELECT negative(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT negative(INTERVAL '1-2' YEAR TO MONTH) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     },
     {
       "id": "negative#e4f95c990089/ansi_on",
-      "reason": "SELECT negative(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT negative(INTERVAL '1 02:03:04' DAY TO SECOND) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     },
     {
       "id": "negative#e4f95c990089/ansi_off",
-      "reason": "SELECT negative(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+      "reason": "SELECT negative(INTERVAL '1 02:03:04' DAY TO SECOND) | KRISHIV_UNSUPPORTED_FEATURE: an interval as this argument"
     }
   ],
   "format_version": 1,

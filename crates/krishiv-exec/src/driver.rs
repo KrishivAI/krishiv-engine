@@ -197,6 +197,7 @@ impl Future for Timed {
         let out = this.inner.as_mut().poll(cx);
         let slice = since(&*this.executor, start);
         this.stats.max_slice = this.stats.max_slice.max(slice);
+        this.stats.busy = this.stats.busy.saturating_add(slice);
         let config = this.query.config();
         // Only a slice longer than the threshold can be a stall, so the
         // second sample is taken for those alone.

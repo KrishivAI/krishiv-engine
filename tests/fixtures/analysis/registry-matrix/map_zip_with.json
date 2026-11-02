@@ -5,38 +5,6 @@
       "reason": "SELECT map_zip_with(map(1, 'a', 2, 'b'), map('a', 1), (k, v1, v2) -> concat(v1, v2)) | DATATYPE_MISMATCH.MAP_ZIP_WITH_DIFF_TYPES"
     },
     {
-      "id": "map_zip_with#1c3f5a8b32c6/ansi_on",
-      "reason": "SELECT map_zip_with(INTERVAL '1 02:03:04' DAY TO SECOND, map(1, 'x', 2, 'y'), (k, v1, v2) -> concat(v1, v2)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "map_zip_with#1c3f5a8b32c6/ansi_off",
-      "reason": "SELECT map_zip_with(INTERVAL '1 02:03:04' DAY TO SECOND, map(1, 'x', 2, 'y'), (k, v1, v2) -> concat(v1, v2)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "map_zip_with#214098eec82a/ansi_on",
-      "reason": "SELECT map_zip_with(map(1, 'a', 2, 'b'), INTERVAL '1 02:03:04' DAY TO SECOND, (k, v1, v2) -> concat(v1, v2)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "map_zip_with#214098eec82a/ansi_off",
-      "reason": "SELECT map_zip_with(map(1, 'a', 2, 'b'), INTERVAL '1 02:03:04' DAY TO SECOND, (k, v1, v2) -> concat(v1, v2)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "map_zip_with#6509b85e8ec1/ansi_on",
-      "reason": "SELECT map_zip_with(map(1, 'a', 2, 'b'), INTERVAL '1-2' YEAR TO MONTH, (k, v1, v2) -> concat(v1, v2)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "map_zip_with#6509b85e8ec1/ansi_off",
-      "reason": "SELECT map_zip_with(map(1, 'a', 2, 'b'), INTERVAL '1-2' YEAR TO MONTH, (k, v1, v2) -> concat(v1, v2)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "map_zip_with#a14e4af3c1ca/ansi_on",
-      "reason": "SELECT map_zip_with(INTERVAL '1-2' YEAR TO MONTH, map(1, 'x', 2, 'y'), (k, v1, v2) -> concat(v1, v2)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "map_zip_with#a14e4af3c1ca/ansi_off",
-      "reason": "SELECT map_zip_with(INTERVAL '1-2' YEAR TO MONTH, map(1, 'x', 2, 'y'), (k, v1, v2) -> concat(v1, v2)) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "map_zip_with#fb7e0d22030c/ansi_off",
       "reason": "SELECT map_zip_with(map('a', 1), map(1, 'x', 2, 'y'), (k, v1, v2) -> concat(v1, v2)) | DATATYPE_MISMATCH.MAP_ZIP_WITH_DIFF_TYPES"
     }

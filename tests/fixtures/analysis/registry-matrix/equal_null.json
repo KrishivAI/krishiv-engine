@@ -5,14 +5,6 @@
       "reason": "SELECT equal_null(3, true) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
-      "id": "equal_null#2992d8a79db7/ansi_on",
-      "reason": "SELECT equal_null(3, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "equal_null#2992d8a79db7/ansi_off",
-      "reason": "SELECT equal_null(3, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "equal_null#49d8fd6084a6/ansi_off",
       "reason": "SELECT equal_null('abc', 3) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
@@ -23,14 +15,6 @@
     {
       "id": "equal_null#5e7675ee6078/ansi_off",
       "reason": "SELECT equal_null(1, ' \\t a\\u3000\\n ') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "equal_null#6cae7fe0679b/ansi_on",
-      "reason": "SELECT equal_null(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "equal_null#6cae7fe0679b/ansi_off",
-      "reason": "SELECT equal_null(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "equal_null#77395af26a6c/ansi_off",
@@ -49,24 +33,8 @@
       "reason": "SELECT equal_null(1, '11') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "equal_null#a0d42b62f690/ansi_on",
-      "reason": "SELECT equal_null(INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "equal_null#a0d42b62f690/ansi_off",
-      "reason": "SELECT equal_null(INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "equal_null#b1fc9a5c815a/ansi_off",
       "reason": "SELECT equal_null(1, CAST(NULL AS string)) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "equal_null#cff9dbd80a51/ansi_on",
-      "reason": "SELECT equal_null(3, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "equal_null#cff9dbd80a51/ansi_off",
-      "reason": "SELECT equal_null(3, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "equal_null#d4af90d93c88/ansi_off",

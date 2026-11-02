@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "decode#0156304d4316/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, INTERVAL '1 02:03:04' DAY TO SECOND, 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#0156304d4316/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, INTERVAL '1 02:03:04' DAY TO SECOND, 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "decode#02158dbb4363/ansi_off",
       "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, true) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -17,32 +9,8 @@
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#02dcecbca7c9/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', INTERVAL '1 02:03:04' DAY TO SECOND, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#02dcecbca7c9/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', INTERVAL '1 02:03:04' DAY TO SECOND, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#04697e50e21b/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, INTERVAL '1 02:03:04' DAY TO SECOND, 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#04697e50e21b/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, INTERVAL '1 02:03:04' DAY TO SECOND, 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "decode#0511112b5bdc/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, CAST(1.5 AS DECIMAL(10,2)), 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#0631db8ab4ff/ansi_on",
-      "reason": "SELECT decode(INTERVAL '1 02:03:04' DAY TO SECOND, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#0631db8ab4ff/ansi_off",
-      "reason": "SELECT decode(INTERVAL '1 02:03:04' DAY TO SECOND, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#07bbaaea4a70/ansi_off",
@@ -109,14 +77,6 @@
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, array(1, 2), 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "decode#10500b903420/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, INTERVAL '1-2' YEAR TO MONTH, 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#10500b903420/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, INTERVAL '1-2' YEAR TO MONTH, 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "decode#10595e1f9356/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 1, 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
@@ -127,14 +87,6 @@
     {
       "id": "decode#139497514bb4/ansi_off",
       "reason": "SELECT decode(6, 1, 'Southlake', 2, X'01', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#154b3b59f051/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', INTERVAL '1-2' YEAR TO MONTH, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#154b3b59f051/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', INTERVAL '1-2' YEAR TO MONTH, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#15af533aa2de/ansi_off",
@@ -229,22 +181,6 @@
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, CAST(1 AS TINYINT), 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#2ba79b6c8a55/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#2ba79b6c8a55/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#2c517961acc8/ansi_on",
-      "reason": "SELECT decode(6, INTERVAL '1-2' YEAR TO MONTH, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#2c517961acc8/ansi_off",
-      "reason": "SELECT decode(6, INTERVAL '1-2' YEAR TO MONTH, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "decode#2d100f98f978/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
@@ -285,24 +221,8 @@
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, DATE'2024-02-29', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#393ff8530457/ansi_on",
-      "reason": "SELECT decode(INTERVAL '1 02:03:04' DAY TO SECOND, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "decode#393ff8530457/ansi_off",
-      "reason": "SELECT decode(INTERVAL '1 02:03:04' DAY TO SECOND, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "decode#39556a2e0ca6/ansi_off",
       "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, CAST(1.5 AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#3a9738e39914/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', INTERVAL '1-2' YEAR TO MONTH, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#3a9738e39914/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', INTERVAL '1-2' YEAR TO MONTH, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#3b1eb199756f/ansi_off",
@@ -321,28 +241,12 @@
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 1.5D) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#3e0d4ad100ec/ansi_on",
-      "reason": "SELECT decode(INTERVAL '1 02:03:04' DAY TO SECOND, 6, 'Spark', NULL, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#3e0d4ad100ec/ansi_off",
-      "reason": "SELECT decode(INTERVAL '1 02:03:04' DAY TO SECOND, 6, 'Spark', NULL, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "decode#3ea0db93fefc/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 1L, 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
       "id": "decode#3f64d95b2904/ansi_off",
       "reason": "SELECT decode(null, 6, 'Spark', NULL, named_struct('a', 1, 'b', 'x'), 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#43527eb3d806/ansi_on",
-      "reason": "SELECT decode(null, 6, INTERVAL '1-2' YEAR TO MONTH, NULL, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#43527eb3d806/ansi_off",
-      "reason": "SELECT decode(null, 6, INTERVAL '1-2' YEAR TO MONTH, NULL, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#455ae8c9ef66/ansi_off",
@@ -357,48 +261,16 @@
       "reason": "SELECT decode(2, true, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
-      "id": "decode#47b1bbbdf546/ansi_on",
-      "reason": "SELECT decode(2, INTERVAL '1-2' YEAR TO MONTH, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#47b1bbbdf546/ansi_off",
-      "reason": "SELECT decode(2, INTERVAL '1-2' YEAR TO MONTH, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "decode#480730e0fa74/ansi_off",
       "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, CAST(1 AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#495078d9d15c/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', INTERVAL '1-2' YEAR TO MONTH, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#495078d9d15c/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', INTERVAL '1-2' YEAR TO MONTH, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#4a0c370427ac/ansi_off",
       "reason": "SELECT decode(6, 1, 'Southlake', 2, CAST(1 AS SMALLINT), 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#4a56401e9392/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', INTERVAL '1-2' YEAR TO MONTH, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#4a56401e9392/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', INTERVAL '1-2' YEAR TO MONTH, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "decode#4b08d7583108/ansi_off",
       "reason": "SELECT decode(null, 6, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#4be2c9e0da9a/ansi_on",
-      "reason": "SELECT decode(INTERVAL '1 02:03:04' DAY TO SECOND, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#4be2c9e0da9a/ansi_off",
-      "reason": "SELECT decode(INTERVAL '1 02:03:04' DAY TO SECOND, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#4ca8ce90de73/ansi_off",
@@ -411,14 +283,6 @@
     {
       "id": "decode#500716355965/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#505c1741a700/ansi_on",
-      "reason": "SELECT decode(INTERVAL '1-2' YEAR TO MONTH, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "decode#505c1741a700/ansi_off",
-      "reason": "SELECT decode(INTERVAL '1-2' YEAR TO MONTH, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "decode#50efe84b2341/ansi_off",
@@ -465,36 +329,12 @@
       "reason": "SELECT decode(null, 6, 'Spark', NULL, CAST(1.5 AS DECIMAL(38,18)), 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#5a38139fc893/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, INTERVAL '1 02:03:04' DAY TO SECOND, 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#5a38139fc893/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, INTERVAL '1 02:03:04' DAY TO SECOND, 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "decode#5aa23992c7cb/ansi_off",
       "reason": "SELECT decode(2, 1, array(1, 2), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#5beb6796c5a0/ansi_off",
       "reason": "SELECT decode(6, 1, TIMESTAMP'2024-02-29 12:34:56.123456', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#5d0011006701/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#5d0011006701/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#5fb8a071c90a/ansi_on",
-      "reason": "SELECT decode(null, INTERVAL '1 02:03:04' DAY TO SECOND, 'Spark', NULL, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#5fb8a071c90a/ansi_off",
-      "reason": "SELECT decode(null, INTERVAL '1 02:03:04' DAY TO SECOND, 'Spark', NULL, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#61b926ca444e/ansi_off",
@@ -509,14 +349,6 @@
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', X'01') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "decode#632b1e830f5a/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#632b1e830f5a/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "decode#667e1333a2d1/ansi_off",
       "reason": "SELECT decode(null, 6, CAST(1.5 AS DECIMAL(10,2)), NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
@@ -527,14 +359,6 @@
     {
       "id": "decode#66bdf55c25bd/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', CAST(1.5 AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#66c3235d9bff/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', INTERVAL '1 02:03:04' DAY TO SECOND, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#66c3235d9bff/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', INTERVAL '1 02:03:04' DAY TO SECOND, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#690020fa5f12/ansi_off",
@@ -563,14 +387,6 @@
     {
       "id": "decode#6fc3dd21bce4/ansi_off",
       "reason": "SELECT decode(6, 1, CAST(1 AS TINYINT), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#71352767b910/ansi_on",
-      "reason": "SELECT decode(INTERVAL '1-2' YEAR TO MONTH, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#71352767b910/ansi_off",
-      "reason": "SELECT decode(INTERVAL '1-2' YEAR TO MONTH, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#7169a30d7b10/ansi_off",
@@ -625,14 +441,6 @@
       "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', '1', 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#7c212761c67b/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, INTERVAL '1-2' YEAR TO MONTH, 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#7c212761c67b/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, INTERVAL '1-2' YEAR TO MONTH, 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "decode#7c831db36088/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 1L, 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
@@ -661,36 +469,12 @@
       "reason": "SELECT decode(2, 1, 1L, 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#82319dfff91f/ansi_on",
-      "reason": "SELECT decode(INTERVAL '1-2' YEAR TO MONTH, 6, 'Spark', NULL, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#82319dfff91f/ansi_off",
-      "reason": "SELECT decode(INTERVAL '1-2' YEAR TO MONTH, 6, 'Spark', NULL, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "decode#8375d8507502/ansi_off",
       "reason": "SELECT decode(null, 6, CAST(1.5 AS FLOAT), NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
       "id": "decode#83c6f13b22a4/ansi_off",
       "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, map('a', 1), 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#8462c37f4e90/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, INTERVAL '1 02:03:04' DAY TO SECOND, 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#8462c37f4e90/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, INTERVAL '1 02:03:04' DAY TO SECOND, 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#84a40525296c/ansi_on",
-      "reason": "SELECT decode(encode('abc', 'utf-8'), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#84a40525296c/ansi_off",
-      "reason": "SELECT decode(encode('abc', 'utf-8'), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#856a0b33c310/ansi_off",
@@ -723,14 +507,6 @@
     {
       "id": "decode#88318de02956/ansi_off",
       "reason": "SELECT decode(2, '1', 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#88cc701a5c42/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#88cc701a5c42/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#88ce27f82dc7/ansi_off",
@@ -797,14 +573,6 @@
       "reason": "SELECT decode(null, 6, CAST(1 AS TINYINT), NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#966e1dab29ea/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', INTERVAL '1-2' YEAR TO MONTH, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#966e1dab29ea/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', INTERVAL '1-2' YEAR TO MONTH, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "decode#974dcef36ae5/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 1) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
@@ -817,14 +585,6 @@
       "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "decode#9afc3a12fcad/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', INTERVAL '1-2' YEAR TO MONTH, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#9afc3a12fcad/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', INTERVAL '1-2' YEAR TO MONTH, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "decode#9bb3267bf981/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, named_struct('a', 1, 'b', 'x'), 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -835,14 +595,6 @@
     {
       "id": "decode#9c6fbabadfd7/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#9cf49853705f/ansi_on",
-      "reason": "SELECT decode(6, 1, INTERVAL '1 02:03:04' DAY TO SECOND, 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#9cf49853705f/ansi_off",
-      "reason": "SELECT decode(6, 1, INTERVAL '1 02:03:04' DAY TO SECOND, 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#9e17c828ca49/ansi_off",
@@ -873,40 +625,8 @@
       "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#a48d485599b2/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, INTERVAL '1-2' YEAR TO MONTH, 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#a48d485599b2/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, INTERVAL '1-2' YEAR TO MONTH, 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "decode#a4f442bca9b0/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, CAST(1.5 AS DECIMAL(38,18)), 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#a5c3ac70263e/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', INTERVAL '1-2' YEAR TO MONTH, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#a5c3ac70263e/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', INTERVAL '1-2' YEAR TO MONTH, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#a71f7909b42d/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', INTERVAL '1 02:03:04' DAY TO SECOND, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#a71f7909b42d/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', INTERVAL '1 02:03:04' DAY TO SECOND, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#a75e4f0d80d8/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', INTERVAL '1 02:03:04' DAY TO SECOND, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#a75e4f0d80d8/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', INTERVAL '1 02:03:04' DAY TO SECOND, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#af23fef8e9f1/ansi_off",
@@ -923,22 +643,6 @@
     {
       "id": "decode#b0eec5657c47/ansi_off",
       "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#b11be349e618/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, INTERVAL '1-2' YEAR TO MONTH, 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#b11be349e618/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, INTERVAL '1-2' YEAR TO MONTH, 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#b14bcccb588d/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, INTERVAL '1-2' YEAR TO MONTH, 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#b14bcccb588d/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, INTERVAL '1-2' YEAR TO MONTH, 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#b15fc8919a7a/ansi_off",
@@ -969,14 +673,6 @@
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, CAST(1.5 AS DECIMAL(10,2)), 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#b74b50c01921/ansi_on",
-      "reason": "SELECT decode(INTERVAL '1-2' YEAR TO MONTH, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#b74b50c01921/ansi_off",
-      "reason": "SELECT decode(INTERVAL '1-2' YEAR TO MONTH, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "decode#b7694b4f4146/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', '1', 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
@@ -991,14 +687,6 @@
     {
       "id": "decode#bb3823f28316/ansi_off",
       "reason": "SELECT decode(null, 6, DATE'2024-02-29', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#be1c3ce2c149/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#be1c3ce2c149/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#be2298b9f565/ansi_off",
@@ -1019,38 +707,6 @@
     {
       "id": "decode#c253d61039cd/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', CAST(1.5 AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#c2ba40c407bc/ansi_on",
-      "reason": "SELECT decode(encode('abc', 'utf-8'), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#c2ba40c407bc/ansi_off",
-      "reason": "SELECT decode(encode('abc', 'utf-8'), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#c398b429847b/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', INTERVAL '1 02:03:04' DAY TO SECOND, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#c398b429847b/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', INTERVAL '1 02:03:04' DAY TO SECOND, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#c3b4720a542f/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', INTERVAL '1 02:03:04' DAY TO SECOND, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#c3b4720a542f/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', INTERVAL '1 02:03:04' DAY TO SECOND, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#c4dc1c930312/ansi_on",
-      "reason": "SELECT decode(null, 6, INTERVAL '1 02:03:04' DAY TO SECOND, NULL, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#c4dc1c930312/ansi_off",
-      "reason": "SELECT decode(null, 6, INTERVAL '1 02:03:04' DAY TO SECOND, NULL, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#c4e216530076/ansi_off",
@@ -1093,14 +749,6 @@
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "decode#ce0287be402e/ansi_on",
-      "reason": "SELECT decode(null, INTERVAL '1-2' YEAR TO MONTH, 'Spark', NULL, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#ce0287be402e/ansi_off",
-      "reason": "SELECT decode(null, INTERVAL '1-2' YEAR TO MONTH, 'Spark', NULL, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "decode#cfb15a486d75/ansi_off",
       "reason": "SELECT decode(6, 1, named_struct('a', 1, 'b', 'x'), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -1123,14 +771,6 @@
     {
       "id": "decode#d37b5333c9b6/ansi_off",
       "reason": "SELECT decode(6, true, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#d39cf14c6df7/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#d39cf14c6df7/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#d3d1078472ef/ansi_off",
@@ -1157,14 +797,6 @@
       "reason": "SELECT decode(null, 6, 1, NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#da73ef85de35/ansi_on",
-      "reason": "SELECT decode(2, INTERVAL '1 02:03:04' DAY TO SECOND, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#da73ef85de35/ansi_off",
-      "reason": "SELECT decode(2, INTERVAL '1 02:03:04' DAY TO SECOND, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "decode#da78c532361e/ansi_off",
       "reason": "SELECT decode(true, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
@@ -1189,14 +821,6 @@
       "reason": "SELECT decode(null, 6, array(1, 2), NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "decode#de493ccd4bc8/ansi_on",
-      "reason": "SELECT decode(2, 1, INTERVAL '1-2' YEAR TO MONTH, 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#de493ccd4bc8/ansi_off",
-      "reason": "SELECT decode(2, 1, INTERVAL '1-2' YEAR TO MONTH, 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "decode#dee9c6d605fd/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, CAST(1.5 AS FLOAT), 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
@@ -1207,14 +831,6 @@
     {
       "id": "decode#dff276f34587/ansi_off",
       "reason": "SELECT decode(6, 1, 1.5D, 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#e2181a83bfb4/ansi_on",
-      "reason": "SELECT decode(6, 1, INTERVAL '1-2' YEAR TO MONTH, 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#e2181a83bfb4/ansi_off",
-      "reason": "SELECT decode(6, 1, INTERVAL '1-2' YEAR TO MONTH, 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#e259e4a793fb/ansi_off",
@@ -1241,22 +857,6 @@
       "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, 1.5D) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#ea37cbc45b1a/ansi_on",
-      "reason": "SELECT decode(2, 1, INTERVAL '1 02:03:04' DAY TO SECOND, 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#ea37cbc45b1a/ansi_off",
-      "reason": "SELECT decode(2, 1, INTERVAL '1 02:03:04' DAY TO SECOND, 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#ea920bfb5dbf/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', INTERVAL '1-2' YEAR TO MONTH, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "decode#ea920bfb5dbf/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', INTERVAL '1-2' YEAR TO MONTH, 'SQL', 4, 'rocks') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "decode#eb08e0976c63/ansi_off",
       "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, named_struct('a', 1, 'b', 'x'), 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -1265,36 +865,12 @@
       "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 1L, 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#edc76f8b828b/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', INTERVAL '1 02:03:04' DAY TO SECOND, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#edc76f8b828b/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', INTERVAL '1 02:03:04' DAY TO SECOND, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "decode#edf817c1f6ba/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', CAST(1 AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#ee127cf52b3c/ansi_on",
-      "reason": "SELECT decode(6, INTERVAL '1 02:03:04' DAY TO SECOND, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#ee127cf52b3c/ansi_off",
-      "reason": "SELECT decode(6, INTERVAL '1 02:03:04' DAY TO SECOND, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "decode#ee1305371937/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, map('a', 1), 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#ee426f7ea74e/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, INTERVAL '1-2' YEAR TO MONTH, 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#ee426f7ea74e/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, INTERVAL '1-2' YEAR TO MONTH, 4, 'Seattle', 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#ee60f58ab810/ansi_off",
@@ -1309,28 +885,12 @@
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "decode#f02fff1f5920/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#f02fff1f5920/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "decode#f1cea5ee1047/ansi_off",
       "reason": "SELECT decode(6, 'abc', 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
       "id": "decode#f1dd37e71a00/ansi_off",
       "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 'abc', 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#f2b1c86b59bf/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, INTERVAL '1 02:03:04' DAY TO SECOND, 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#f2b1c86b59bf/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, INTERVAL '1 02:03:04' DAY TO SECOND, 'Non domestic') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#f47a5e9535d9/ansi_off",
@@ -1399,14 +959,6 @@
     {
       "id": "decode#fdc872c3b891/ansi_off",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, CAST(1.5 AS FLOAT), 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "decode#fe0badd0791e/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, INTERVAL '1 02:03:04' DAY TO SECOND, 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "decode#fe0badd0791e/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, INTERVAL '1 02:03:04' DAY TO SECOND, 4, 'Seattle') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "decode#fe4138f056b3/ansi_off",
