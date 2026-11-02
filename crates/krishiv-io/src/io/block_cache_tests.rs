@@ -261,6 +261,31 @@ async fn a_corrupt_block_is_a_miss() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_damaged_payload_is_a_miss() {
+    // A disk-only cache: a flipped byte, then a truncated file, must both be re-fetched.
+    for truncate in [false, true] {
+        let r = rig(1 << 30, 0, true);
+        let data = pattern(300_000, 8);
+        let f = put(&r, "d", data.clone()).await;
+        r.io.get_ranges(&f, &[0..100_000]).await.unwrap();
+        for entry in std::fs::read_dir(cache_files(&r)).unwrap() {
+            let path = entry.unwrap().path();
+            let mut body = std::fs::read(&path).unwrap();
+            if truncate {
+                body.truncate(body.len() - 7);
+            } else {
+                let last = body.len() - 1;
+                body[last] ^= 0xff;
+            }
+            std::fs::write(&path, body).unwrap();
+        }
+        let got = r.io.get_ranges(&f, &[0..100_000]).await.unwrap();
+        assert_eq!(got[0], Bytes::from(data[..100_000].to_vec()));
+        assert!(r.sched.block_cache_stats().unwrap().errors > 0);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn keys_and_files_hold_no_credential() {
     let cache_dir = tempfile::tempdir().unwrap();
     let local = Arc::new(InMemory::new());

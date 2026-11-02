@@ -160,7 +160,9 @@ fn name_of(text: &str) -> u128 {
     (u128::from(hi) << 64) | u128::from(lo)
 }
 
-const MAGIC: &[u8; 4] = b"KBC1";
+const MAGIC: &[u8; 4] = b"KBC2";
+/// Magic, key length (u32), payload length (u64), payload XXH64 (u64).
+const HEADER: usize = 4 + 4 + 8 + 8;
 
 /// The longest one fetch of blocks may take before its readers are told it failed (they fall back
 /// to the store); it also ends the in-flight entry of a request that never answers.
@@ -415,16 +417,27 @@ fn purge_dead(root: &std::path::Path, own: u32) {
 fn read_block(path: &std::path::Path, key: &str) -> std::io::Result<Bytes> {
     let raw = std::fs::read(path)?;
     let bad = || std::io::Error::new(std::io::ErrorKind::InvalidData, "a corrupt cache block");
-    let head = raw.get(..8).ok_or_else(bad)?;
+    let head = raw.get(..HEADER).ok_or_else(bad)?;
     if &head[..4] != MAGIC {
         return Err(bad());
     }
     let key_len = u32::from_le_bytes([head[4], head[5], head[6], head[7]]) as usize;
-    let stored = raw.get(8..8 + key_len).ok_or_else(bad)?;
+    let word = |at: usize| {
+        let mut w = [0u8; 8];
+        w.copy_from_slice(&head[at..at + 8]);
+        u64::from_le_bytes(w)
+    };
+    let (len, sum) = (word(8), word(16));
+    let stored = raw.get(HEADER..HEADER + key_len).ok_or_else(bad)?;
     if stored != key.as_bytes() {
         return Err(bad());
     }
-    Ok(Bytes::from(raw).slice(8 + key_len..))
+    let payload = Bytes::from(raw).slice(HEADER + key_len..);
+    // A truncated or damaged payload is a miss, never a short or wrong block.
+    if payload.len() as u64 != len || twox_hash::XxHash64::oneshot(0, &payload) != sum {
+        return Err(bad());
+    }
+    Ok(payload)
 }
 
 fn write_block(
@@ -439,15 +452,21 @@ fn write_block(
         path.file_stem().and_then(|s| s.to_str()).unwrap_or("block"),
         TMP.fetch_add(1, Ordering::Relaxed)
     ));
-    let mut file = std::fs::File::create(&tmp)?;
     let key_len = u32::try_from(key.len())
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "a long cache key"))?;
-    file.write_all(MAGIC)?;
-    file.write_all(&key_len.to_le_bytes())?;
-    file.write_all(key.as_bytes())?;
-    file.write_all(bytes)?;
-    drop(file);
-    std::fs::rename(&tmp, path).inspect_err(|_| {
+    let write = || -> std::io::Result<()> {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(MAGIC)?;
+        file.write_all(&key_len.to_le_bytes())?;
+        file.write_all(&(bytes.len() as u64).to_le_bytes())?;
+        file.write_all(&twox_hash::XxHash64::oneshot(0, bytes).to_le_bytes())?;
+        file.write_all(key.as_bytes())?;
+        file.write_all(bytes)?;
+        drop(file);
+        std::fs::rename(&tmp, path)
+    };
+    // Any failure (a full disk included) leaves no temporary file behind.
+    write().inspect_err(|_| {
         let _ = std::fs::remove_file(&tmp);
     })
 }
