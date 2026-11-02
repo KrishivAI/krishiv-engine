@@ -655,6 +655,7 @@ fn is_foldable_datetime(name: &str) -> bool {
             | "dayofmonth"
             | "extract"
             | "date_part"
+            | "datepart"
     )
 }
 
