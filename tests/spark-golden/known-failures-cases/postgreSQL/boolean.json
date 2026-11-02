@@ -3,9 +3,6 @@
     "depends-on-command": [
       47,
       58
-    ],
-    "sql-commands": [
-      55
     ]
   },
   "file": "postgreSQL/boolean",

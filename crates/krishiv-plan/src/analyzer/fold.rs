@@ -413,11 +413,13 @@ fn fold_cast(
     if inner.data_type() == &fold_type(to) {
         return Some(Ok(inner));
     }
-    // The kernels' targets: numbers, strings and dates (no timestamp: it
-    // reads the session time zone, so a cast to one stays unfolded).
+    // The kernels' targets: booleans, numbers, strings and dates (no
+    // timestamp: it reads the session time zone, so a cast to one stays
+    // unfolded).
     if !matches!(
         to,
-        DataType::Byte
+        DataType::Boolean
+            | DataType::Byte
             | DataType::Short
             | DataType::Integer
             | DataType::Long

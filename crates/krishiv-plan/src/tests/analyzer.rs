@@ -3357,6 +3357,13 @@ fn inline_table_cell_that_fails_to_evaluate() {
         class(&r),
         "INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION"
     );
+    // The cast-named function form fails the same way.
+    let named = f("boolean", vec![s("XXX")]);
+    let r = run(inline_table(vec![vec![named]], &["a"]), &on);
+    assert_eq!(
+        class(&r),
+        "INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION"
+    );
     let try_cast = Expr::new(ExprNode::Cast {
         expr: Arc::new(s("nan")),
         to: DataType::Integer,
