@@ -1,8 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      100
-    ],
     "query-features": [
       44,
       62,
@@ -10,10 +7,6 @@
       68,
       71,
       72
-    ],
-    "sql-commands": [
-      97,
-      99
     ]
   },
   "file": "postgreSQL/with",

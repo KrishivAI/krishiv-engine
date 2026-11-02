@@ -47,3 +47,19 @@ fn from_json_reads_nested_times_and_misses() {
         Some("{01:02:03}")
     );
 }
+
+#[test]
+fn from_json_cuts_times_to_the_declared_precision() {
+    assert_eq!(
+        text("from_json('{\"t\":\"09:08:01.987654\"}', 't TIME(0)')").as_deref(),
+        Some("{09:08:01}")
+    );
+    assert_eq!(
+        text("from_json('{\"t\":[\"09:08:01.987654\"]}', 't array<time(2)>')").as_deref(),
+        Some("{[09:08:01.98]}")
+    );
+    assert_eq!(
+        text("from_json('{\"t\":\"09:08:01.987654\"}', 't TIME')").as_deref(),
+        Some("{09:08:01.987654}")
+    );
+}
