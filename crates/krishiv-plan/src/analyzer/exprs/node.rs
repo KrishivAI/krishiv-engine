@@ -617,6 +617,27 @@ impl Resolver<'_> {
                                 | DataType::String
                         ) | None
                     );
+                    if !castable {
+                        // Spark's `k` is an INT with implicit casts only from
+                        // numbers and strings: anything else is a type mismatch.
+                        let shown = with_children(e, kids[..n].iter().map(Bound::shown).collect());
+                        return Err(AnalysisError::new(
+                            DatatypeMismatchUnexpectedInputType {
+                                sql_expr: format!(
+                                    "\"{}\"",
+                                    pretty(&shown, self.ctx.conf.session_zone)
+                                ),
+                                param_index: "third".to_owned(),
+                                required_type: "\"INT\"".to_owned(),
+                                input_sql: format!(
+                                    "\"{}\"",
+                                    pretty(&kids[2].shown(), self.ctx.conf.session_zone)
+                                ),
+                                input_type: quoted_type(kids[2].ty.data_type.as_ref()),
+                            },
+                            e.origin,
+                        ));
+                    }
                     let k_int = if castable {
                         self.implicit_cast(&kids[2], Some(DataType::Integer))
                     } else {
