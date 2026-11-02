@@ -56,8 +56,8 @@ enum Schema {
     /// `DataPageHeaderV2`.
     DataPageV2,
     /// A page index's `ColumnIndex`: walked by wire type like `Any`, except
-    /// that the elements of a boolean list (`null_pages`) each take a byte,
-    /// as the decoder reads them.
+    /// for field 1, `null_pages`, a boolean list the decoder reads a byte
+    /// per element of (an unknown field's boolean list it skips unread).
     ColumnIndex,
 }
 
@@ -69,6 +69,9 @@ enum Known {
     Bool,
     /// A nested known struct, whatever the wire type.
     Struct(Schema),
+    /// A list the decoder reads: booleans take a byte each (the other
+    /// element types are walked as any list).
+    List,
     /// Not read: skipped by wire type.
     Skipped,
 }
@@ -85,6 +88,7 @@ fn known(schema: Schema, id: i16) -> Known {
         (Schema::Page, 7) => Known::Struct(Schema::DictPage),
         (Schema::Page, 8) => Known::Struct(Schema::DataPageV2),
         (Schema::DictPage, 3) | (Schema::DataPageV2, 7) => Known::Bool,
+        (Schema::ColumnIndex, 1) => Known::List,
         _ => Known::Skipped,
     }
 }
@@ -156,7 +160,6 @@ pub(super) fn bloom_header(buf: &[u8]) -> Result<(u32, usize), &'static str> {
         work: &mut 0,
         limit,
         page_header: false,
-        bool_bytes: false,
     };
     let raw = walk.varint()?;
     let num_bytes = u32::try_from(unzigzag(raw)).map_err(|_| "a negative Bloom bitset size")?;
@@ -184,7 +187,6 @@ fn walk_struct(
         work,
         limit,
         page_header: schema == Schema::Page,
-        bool_bytes: schema == Schema::ColumnIndex,
     };
     let mut stack = vec![Frame::Struct { schema, last: 0 }];
     let mut field_3 = None;
@@ -239,6 +241,23 @@ fn walk_struct(
                         stack.push(Frame::Struct {
                             schema: child,
                             last: 0,
+                        });
+                        continue;
+                    }
+                    Known::List => {
+                        // The decoder reads this field as a list whatever
+                        // the wire type says.
+                        let (count, elem) = walk.list_header()?;
+                        if elem == BOOL_TRUE || elem == BOOL_FALSE {
+                            walk.skip(count)?;
+                            continue;
+                        }
+                        if stack.len() >= MAX_DEPTH {
+                            return Err(TOO_DEEP);
+                        }
+                        stack.push(Frame::Items {
+                            left: count,
+                            ty: elem,
                         });
                         continue;
                     }
@@ -376,9 +395,6 @@ struct Walk<'a> {
     /// [`Walk::budget`].
     work: &'a mut usize,
     limit: usize,
-    /// Whether the elements of a boolean list take a byte each (a
-    /// `ColumnIndex`'s `null_pages`).
-    bool_bytes: bool,
     /// Whether this is a page header, read by arrow-rs from a reader that
     /// runs on past the chunk. A footer is read from a slice, whose every
     /// skip is bounded, and still refuses UUIDs here as before.
@@ -441,14 +457,24 @@ impl Walk<'_> {
     /// does the same: walking by the specification would put this check at
     /// other bytes than the decoder's, and let it miss what the decoder
     /// then reads (a map of tens of millions of entries, say).
-    fn value(&mut self, ty: u8, in_list: bool) -> Result<Option<Frame>, &'static str> {
+    /// A list or set header: the element count (checked against the bytes
+    /// left) and the element type.
+    fn list_header(&mut self) -> Result<(u64, u8), &'static str> {
+        let header = self.byte()?;
+        let mut count = u64::from(header >> 4);
+        if count == 15 {
+            count = self.varint()?;
+        }
+        if count > self.left() as u64 {
+            return Err(COUNT_TOO_LARGE);
+        }
+        Ok((count, header & 0x0f))
+    }
+
+    fn value(&mut self, ty: u8, _in_list: bool) -> Result<Option<Frame>, &'static str> {
         self.budget()?;
         match ty {
-            BOOL_TRUE | BOOL_FALSE => {
-                if in_list && self.bool_bytes {
-                    self.skip(1)?;
-                }
-            }
+            BOOL_TRUE | BOOL_FALSE => {}
             BYTE => self.skip(1)?,
             I16 | I32 | I64 => {
                 self.varint()?;
@@ -473,15 +499,7 @@ impl Walk<'_> {
                 self.skip(16)?;
             }
             LIST | SET => {
-                let header = self.byte()?;
-                let mut count = u64::from(header >> 4);
-                if count == 15 {
-                    count = self.varint()?;
-                }
-                let ty = header & 0x0f;
-                if count > self.left() as u64 {
-                    return Err(COUNT_TOO_LARGE);
-                }
+                let (count, ty) = self.list_header()?;
                 return Ok(Some(Frame::Items { left: count, ty }));
             }
             MAP => {

@@ -380,3 +380,16 @@ fn a_huge_count_after_null_pages_is_reached_and_refused() {
     let err = column_index(&bytes, PhysicalType::INT64, 3).expect_err("a huge count");
     assert!(err.0.contains("larger than the bytes left"), "{err:?}");
 }
+
+/// An unknown boolean-list field is skipped unread, as arrow-rs skips it:
+/// consuming its bytes would lose alignment with the decoder (a reviewer's
+/// 11-byte payload whose later bytes the decoder reads as a 2^31-element
+/// list). The guard must still refuse it.
+#[test]
+fn an_unknown_boolean_list_is_walked_like_the_decoder_does() {
+    let bytes = [
+        0x09, 0x28, 0x72, 0x19, 0xf2, 0xff, 0xff, 0xff, 0xff, 0x07, 0x00,
+    ];
+    let err = column_index(&bytes, PhysicalType::INT64, 1).expect_err("a huge count");
+    assert!(err.0.contains("larger than the bytes left"), "{err:?}");
+}
