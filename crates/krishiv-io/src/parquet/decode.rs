@@ -392,7 +392,12 @@ impl ParquetDecoder {
             .map_err(|e| FormatError::Corrupt(e.to_string()))?;
         }
         let projected = project_batch(&batch, &self.projection).map_err(FormatError::Other)?;
-        let mut columns = projected.columns().to_vec();
+        let mut columns = projected
+            .columns()
+            .iter()
+            .zip(self.output.fields())
+            .map(|(c, f)| super::intervals::as_intervals(c, f.data_type()))
+            .collect::<FormatResult<Vec<_>>>()?;
         if let Some(rn) = row_number {
             columns.push(rn);
         }

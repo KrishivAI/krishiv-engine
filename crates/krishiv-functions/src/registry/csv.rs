@@ -25,7 +25,7 @@ use krishiv_common::error::{
     DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
     DatatypeMismatchUnexpectedNull, DatatypeMismatchUnsupportedInputType,
     InvalidOptionsNonMapFunction, InvalidOptionsNonStringType, InvalidSchemaNonStringLiteral,
-    InvalidSchemaNonStructType, KrishivError,
+    InvalidSchemaNonStructType, KrishivError, UnsupportedDatatype,
 };
 use krishiv_types::DataType;
 
@@ -180,6 +180,19 @@ fn from_csv(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         Some(Constant::Error(e)) => Err(e.clone()),
         Some(Constant::String(s)) => {
             let struct_type = struct_of_ddl(s)?;
+            if let DataType::Struct(fields) = &struct_type
+                && let Some(nested) = fields.fields().iter().find(|f| {
+                    matches!(
+                        f.data_type(),
+                        DataType::Array(_) | DataType::Map(_) | DataType::Struct(_)
+                    )
+                })
+            {
+                return Err(UnsupportedDatatype {
+                    type_name: format!("\"{}\"", nested.data_type().sql()),
+                }
+                .into());
+            }
             let nullable = c.args().first().is_some_and(|a| a.nullable);
             Ok(ArgType::new(struct_type, nullable))
         }

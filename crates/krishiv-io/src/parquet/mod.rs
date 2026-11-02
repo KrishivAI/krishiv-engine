@@ -47,6 +47,7 @@ mod decode;
     )
 )]
 mod index_guard;
+mod intervals;
 mod meta;
 mod row_filter;
 mod thrift_guard;
