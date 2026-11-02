@@ -31,6 +31,7 @@ pub(crate) mod eval;
 mod explain;
 mod file_table;
 mod join;
+mod late_fetch;
 pub(crate) mod nodes;
 mod orient;
 mod properties;

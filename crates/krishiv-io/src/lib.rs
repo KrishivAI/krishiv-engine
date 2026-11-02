@@ -47,6 +47,7 @@ mod scan_gate;
 mod schema_map;
 pub mod split;
 mod stats;
+mod take;
 pub mod text;
 pub mod text_format;
 mod write;
@@ -56,8 +57,9 @@ pub use commit::{DirectoryWrite, SUCCESS_MARKER, SaveMode};
 pub use csv::CsvFormat;
 pub use error::{FormatError, FormatResult, Result};
 pub use format::{
-    AsyncDecoder, Capabilities, Decoder, Encoder, FileFormat, FileMetadata, MetadataNeeds,
-    PushReadAt, ReadAt, ScanUnit, ScanUnitMetrics, Splittable, Step, UnitPlan, WrittenFile,
+    AsyncDecoder, Capabilities, Decoder, Encoder, FileFormat, FileMetadata, Granularity,
+    MetadataNeeds, PushReadAt, ReadAt, ScanUnit, ScanUnitMetrics, Splittable, Step, UnitPlan,
+    WrittenFile,
 };
 #[cfg(unix)]
 pub use io::beneath::{AnchorError, BeneathStore};
@@ -74,6 +76,7 @@ pub use options::{
     OptionWarning,
 };
 pub use registry::{FormatRegistry, SPARK_FILE_SOURCES, is_spark_file_source};
+pub use take::{RowFile, TakeRequest, TakeStream, take};
 
 pub use partition::{
     DEFAULT_PARTITION, check_partition_column,

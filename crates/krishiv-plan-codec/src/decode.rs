@@ -22,7 +22,7 @@ use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
     WindowFunctionPlan, WindowPlan,
 };
-use krishiv_exec::{RowStageSettings, SortKey};
+use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, CastMode, DayTimeField, Expr, ExprNode, FunctionId, FunctionKind,
@@ -549,10 +549,18 @@ impl Decoder {
                 input: self.boxed(s.input)?,
                 keys: sort_keys(&s.keys)?,
             },
+            Kind::LateFetch(f) => PhysNode::LateFetch {
+                input: self.boxed(f.input)?,
+                scan: self.scan(required(&f.scan, "a late fetch scan")?)?,
+                file_col: usize_of(f.file_col)?,
+                row_col: usize_of(f.row_col)?,
+                output: f.output.iter().map(fetch_slot).collect::<Result<_>>()?,
+            },
             Kind::TopN(t) => PhysNode::TopN {
                 input: self.boxed(t.input)?,
                 keys: sort_keys(&t.keys)?,
                 limit: t.limit,
+                bound: t.bound.map(FilterId),
             },
             Kind::Window(w) => PhysNode::Window {
                 input: self.boxed(w.input)?,
@@ -745,6 +753,7 @@ impl Decoder {
                 min_rows: row_stage.min_rows,
                 max_pass_rate: row_stage.max_pass_rate,
             },
+            row_id: s.row_id,
         })
     }
 
@@ -828,6 +837,14 @@ impl Decoder {
             deterministic: f.deterministic,
         })
     }
+}
+
+fn fetch_slot(s: &pb::FetchSlot) -> Result<FetchSlot> {
+    use pb::fetch_slot::Kind;
+    Ok(match required(&s.kind, "a late fetch slot")? {
+        Kind::Input(i) => FetchSlot::Input(usize_of(*i)?),
+        Kind::Fetched(i) => FetchSlot::Fetched(usize_of(*i)?),
+    })
 }
 
 fn sort_keys(v: &[pb::SortKey]) -> Result<Vec<SortKey>> {

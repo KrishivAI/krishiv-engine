@@ -175,6 +175,7 @@ fn pushdowns(req: &ScanRequest) -> ScanPushdowns {
             .map(|s| Arc::new(Only(Some(s))) as Arc<dyn FileSelections>),
         mapping: req.mapping.clone(),
         metadata: req.metadata_cols,
+        row_id: false,
     }
 }
 

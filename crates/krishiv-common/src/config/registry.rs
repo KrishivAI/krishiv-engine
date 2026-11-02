@@ -75,6 +75,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
+    &LATE_FETCH_MAX_ROWS,
     &CTE_RECURSION_LEVEL_LIMIT,
     &CTE_RECURSION_ROW_LIMIT,
     &LEGACY_CODING_ERROR_ACTION,
@@ -140,6 +141,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.spill.dropBehindBytes", &SPILL_DROP_BEHIND_BYTES),
     ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
+    ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
     ("spark.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     (
@@ -1149,6 +1151,19 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
+};
+
+/// `krishiv.exec.lateFetch.maxRows`.
+pub static LATE_FETCH_MAX_ROWS: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.lateFetch.maxRows",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(50)),
+    doc: "Most rows (limit plus offset) an ORDER BY ... LIMIT over a file scan may rank while \
+          reading only the sort keys and filter columns, fetching the other columns for the rows \
+          kept; 0 turns it off. Results are the same either way.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
 };
 
 /// `spark.sql.cteRecursionLevelLimit`.

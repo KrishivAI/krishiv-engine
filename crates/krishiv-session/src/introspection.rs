@@ -401,9 +401,6 @@ impl Session {
                 self.ordered_frame(&["key", "value"], &[], rows).await
             }
             ShowKind::CreateTable { name, serde, .. } => {
-                if *serde {
-                    return Err(unsupported("SHOW CREATE TABLE ... AS SERDE"));
-                }
                 let env = self.query_env();
                 let name = self.table_name(name, &env)?;
                 self.require_current_profile("SHOW CREATE TABLE")?;
@@ -415,6 +412,11 @@ impl Session {
                     .into());
                 }
                 let table = self.stored_relation(&name)?;
+                // A view prints the same either way; a data source table has no serde to show,
+                // and Spark's error for it is not modelled yet.
+                if *serde && table.view.is_none() {
+                    return Err(unsupported("SHOW CREATE TABLE ... AS SERDE on a table"));
+                }
                 if table.view.is_some() {
                     self.authorize_view_select(&name.namespace, &name.name, &env)
                         .await?;
@@ -1124,6 +1126,15 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
         let mut out = format!("CREATE VIEW {}.{} (\n{cols})\n", t.namespace, t.name);
         if let Some(c) = &t.comment {
             out.push_str(&format!("COMMENT {}\n", sql_literal(c)));
+        }
+        if !t.properties.is_empty() {
+            let props = t
+                .properties
+                .iter()
+                .map(|(k, v)| format!("  {} = {}", sql_literal(k), sql_literal(redact(k, v))))
+                .collect::<Vec<_>>()
+                .join(",\n");
+            out.push_str(&format!("TBLPROPERTIES (\n{props})\n"));
         }
         if let Some(mode) = crate::view_schema::effective_mode(view.schema_mode, binding_enabled) {
             out.push_str(&format!("WITH SCHEMA {}\n", mode.as_str()));
