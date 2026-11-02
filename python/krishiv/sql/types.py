@@ -564,7 +564,11 @@ class StructType(DataType):
 
 def _struct_from_columns(columns: list[tuple[str, str, bool]]) -> StructType:
     """The ``StructType`` of the engine's ``(name, simple type, nullable)`` columns."""
-    return StructType([StructField(n, _from_simple_string(t), nullable) for n, t, nullable in columns])
+
+    def of(text: str) -> DataType:
+        return _parse_datatype_string(text) if "<" in text else _from_simple_string(text)
+
+    return StructType([StructField(n, of(t), nullable) for n, t, nullable in columns])
 
 
 def _simple_string_of(data_type: DataType | str) -> str:

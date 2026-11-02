@@ -814,7 +814,7 @@ fn nested_data_is_malformed_and_nested_schemas_are_unsupported() {
             krishiv_common::error::UnsupportedDataTypeForDatasource {
                 format: "JSON".to_owned(),
                 column_name: "`n`".to_owned(),
-                column_type: "\"array<int>\"".to_owned(),
+                column_type: "\"ARRAY<INT>\"".to_owned(),
             }
             .into()
         )
