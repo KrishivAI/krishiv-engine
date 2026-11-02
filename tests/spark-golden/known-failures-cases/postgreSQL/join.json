@@ -2,9 +2,7 @@
   "cases": {
     "query-features": [
       141,
-      142,
-      152,
-      153
+      142
     ]
   },
   "file": "postgreSQL/join",
