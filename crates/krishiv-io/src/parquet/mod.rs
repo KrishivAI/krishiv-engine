@@ -55,8 +55,8 @@ use self::meta::SchemaOptions;
 pub use self::write::SPARK_FILE_VERSION;
 use crate::error::{FormatError, FormatResult};
 use crate::format::{
-    Capabilities, Decoder, Encoder, FileFormat, FileMetadata, MetadataNeeds, ScanUnit, Splittable,
-    UnitPlan,
+    Capabilities, Decoder, Encoder, FileFormat, FileMetadata, Granularity, MetadataNeeds, ScanUnit,
+    Splittable, UnitPlan,
 };
 use crate::io::{ByteRange, FileRef, IoContext};
 use crate::options::{FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec};
@@ -267,6 +267,7 @@ impl FileFormat for ParquetFormat {
         c.row_index = true;
         c.selection = true;
         c.write = true;
+        c.random_access = Some(Granularity::Unit);
         c
     }
 

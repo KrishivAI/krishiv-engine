@@ -144,7 +144,7 @@ impl Planner<'_> {
         let input = match top {
             Some(n) if !input.placement.satisfies(Distribution::Single) => {
                 let detail = format!("{n}, {}", orders(&sorted_by));
-                Self::local_top_n(input, &keys, n, detail)?
+                Self::local_top_n(input, &keys, n, detail, None)?
             }
             _ => input,
         };
@@ -174,6 +174,7 @@ impl Planner<'_> {
                     input,
                     keys,
                     limit: n,
+                    bound: None,
                 },
                 schema,
                 layout,

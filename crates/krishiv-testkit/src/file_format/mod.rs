@@ -36,6 +36,8 @@
 //! 13. [`dynamic_filter_pruning`]: a `Final` membership filter and a range
 //!     filter prune only units they prove empty, and the result equals the
 //!     unfiltered result filtered.
+//! 14. [`take`]: rows by position equal a scan filtered by row index; a
+//!     changed file fails, and an empty take reads no bytes.
 //!
 //! Split-planning parity with Spark is format-independent and checked in
 //! `krishiv-io` against Spark 4.2 goldens.
@@ -1771,6 +1773,111 @@ pub fn writer(fx: &dyn FormatFixture) -> SuiteResult {
     Ok(())
 }
 
+/// Check 14.
+///
+/// # Errors
+/// Rows differing from the scan, a changed file read, or bytes read for
+/// nothing.
+pub fn take(fx: &dyn FormatFixture) -> SuiteResult {
+    let env = Env::new(None)?;
+    let schema = pruning_schema();
+    let input = data::batch(&schema, 1000, 21)?;
+    let path = "take/f";
+    let file = env.write(
+        fx,
+        path,
+        &schema,
+        std::slice::from_ref(&input),
+        &fx.unit_rows(128),
+    )?;
+    let o = env.options(fx, &[])?;
+    let format = fx.format();
+    if format.capabilities(&o).random_access.is_none() {
+        return Ok(());
+    }
+    let projection: Vec<ColumnPath> = schema
+        .fields()
+        .iter()
+        .map(|f| ColumnPath::new(f.name()))
+        .collect();
+    let read = |file: &FileRef, rows: Vec<u64>| -> Result<(Vec<RecordBatch>, u64), KrishivError> {
+        let req = krishiv_io::TakeRequest::new(
+            file.clone(),
+            Arc::clone(&schema),
+            projection.clone(),
+            krishiv_io::FieldMapping::default(),
+            rows,
+        );
+        env.block_on(async {
+            let mut s = krishiv_io::take(
+                format.as_ref(),
+                &env.io,
+                req,
+                &o,
+                env.reservation("take"),
+                ScanOptions::default(),
+            )
+            .await?;
+            let mut out = Vec::new();
+            while let Some(b) = s.next_batch().await? {
+                out.push(b);
+            }
+            Ok((out, s.stream().map_or(0, |s| s.metrics().units)))
+        })
+    };
+    // Out of order, with repeats, in a few units of many.
+    let rows = vec![999, 3, 500, 3, 0, 501, 127, 128];
+    let (got, units) = read(&file, rows).map_err(|e| e.to_string())?;
+    let mut seen = Vec::new();
+    for b in &got {
+        let idx = b.column_by_name(ROW_INDEX_COLUMN).ok_or("no row index")?;
+        let idx =
+            arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Int64Type>(idx.as_ref());
+        for (k, &ri) in idx.values().iter().enumerate() {
+            let want = input.slice(usize::try_from(ri).map_err(|e| e.to_string())?, 1);
+            let have = b.slice(k, 1);
+            for c in 0..schema.fields().len() {
+                ensure!(
+                    have.column(c).to_data() == want.column(c).to_data(),
+                    "row {ri} holds other values"
+                );
+            }
+            seen.push(ri);
+        }
+    }
+    ensure!(
+        seen == [0, 3, 127, 128, 500, 501, 999],
+        "rows read: {seen:?}"
+    );
+    ensure!(units < 8, "{units} units read for rows in at most 6");
+    // A position past the end is an error, never a short result.
+    ensure!(
+        read(&file, vec![1000]).is_err(),
+        "a missing row read as nothing"
+    );
+    // Nothing to read: no request at all, even for a file that is gone.
+    let gone = FileRef {
+        path: Path::from("take/gone"),
+        ..file.clone()
+    };
+    let (empty, _) = read(&gone, Vec::new()).map_err(|e| e.to_string())?;
+    ensure!(empty.is_empty(), "an empty take returned rows");
+    // A file replaced after the row ids were made.
+    let replaced = Path::from("take/changing");
+    let bytes = env.get_raw(&file.path)?.to_vec();
+    let listed = env.put_raw(&replaced, bytes.clone())?;
+    let mut changed = bytes;
+    changed[4] ^= 0xFF;
+    env.put_raw(&replaced, changed)?;
+    let e = read(&listed, vec![1]).err().ok_or("changed file read")?;
+    ensure!(
+        e.error_class() == ErrorClass::KrishivFileChangedDuringRead,
+        "changed class {}",
+        class(&e)
+    );
+    Ok(())
+}
+
 /// Check 13: dynamic-filter pruning.
 ///
 /// A `Final` membership filter on `i` plus a range filter on `i` prune only
@@ -1998,6 +2105,10 @@ macro_rules! file_format_conformance {
             #[test]
             fn dynamic_filter_pruning() {
                 run(suite::dynamic_filter_pruning)
+            }
+            #[test]
+            fn take() {
+                run(suite::take)
             }
         }
     };
