@@ -1706,10 +1706,15 @@ impl Resolver<'_> {
             .transform_down(&mut |x: Arc<Expr>| -> Result<Arc<Expr>, Infallible> {
                 // Leaves resolve by name; aggregate calls and the rest of
                 // the output are bound by the caller.
-                if matches!(
-                    x.node,
-                    ExprNode::Column(_) | ExprNode::Literal(_) | ExprNode::Star(_)
-                ) {
+                // A dotted name (`s.a`) may be a field of a grouped struct,
+                // which is a grouping expression, so it is probed.
+                let dotted = matches!(&x.node, ExprNode::Column(c) if c.name.len() > 1);
+                if !dotted
+                    && matches!(
+                        x.node,
+                        ExprNode::Column(_) | ExprNode::Literal(_) | ExprNode::Star(_)
+                    )
+                {
                     return Ok(x);
                 }
                 let Ok(b) = self.expr(&x, &probe) else {

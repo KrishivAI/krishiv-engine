@@ -166,3 +166,30 @@ fn a_struct_field_groups_and_expands() {
         ["a", "b"]
     );
 }
+
+#[test]
+fn order_by_and_having_match_a_grouped_struct_field() {
+    let s = Session::new().unwrap();
+    let from = "FROM (SELECT named_struct('a', 1) s) t";
+    assert_eq!(
+        count(
+            &s,
+            &format!("SELECT s.a, count(*) {from} GROUP BY s.a ORDER BY s.a")
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &s,
+            &format!("SELECT count(*) {from} GROUP BY s.a HAVING s.a > 0")
+        ),
+        1
+    );
+}
+
+#[test]
+fn order_by_a_metadata_field_after_group_by_all() {
+    let s = session();
+    let q = "SELECT _metadata.file_name, count(*) FROM p GROUP BY ALL ORDER BY _metadata.file_name";
+    assert_eq!(count(&s, q), 1);
+}
