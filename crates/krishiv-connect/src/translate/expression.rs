@@ -86,20 +86,17 @@ impl Translator<'_> {
                         "column aliases with metadata",
                     ));
                 }
-                let [name] = a.name.as_slice() else {
-                    return if a.name.is_empty() {
-                        Err(field_empty("name", "spark.connect.Expression.Alias"))
-                    } else {
-                        Err(unsupported_field(
-                            "Expression.Alias",
-                            "name",
-                            "aliases with several names",
-                        ))
-                    };
-                };
-                ExprNode::Alias {
-                    expr: self.required_expression(a.expr.as_deref())?,
-                    name: name.clone(),
+                let expr = self.required_expression(a.expr.as_deref())?;
+                match a.name.as_slice() {
+                    [] => return Err(field_empty("name", "spark.connect.Expression.Alias")),
+                    [name] => ExprNode::Alias {
+                        expr,
+                        name: name.clone(),
+                    },
+                    names => ExprNode::MultiAlias {
+                        expr,
+                        names: names.to_vec(),
+                    },
                 }
             }
             ExprType::Cast(c) => {

@@ -215,9 +215,7 @@ fn aliases() {
     );
     let e = err(&alias(&["x"], Some("{\"k\":1}")));
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    let e = err(&alias(&["x", "y"], None));
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.message().contains("several names"), "{}", e.message());
+    assert_eq!(text(&alias(&["x", "y"], None)), "a AS (x, y)");
     let e = err(&alias(&[], None));
     assert_eq!(
         e.error_class(),
