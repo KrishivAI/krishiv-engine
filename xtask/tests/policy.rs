@@ -468,6 +468,10 @@ fn approval_labels_survive_pushes_within_the_recorded_margin() {
         "VALUES_FILE: ${{ runner.temp }}/budgets.values",
         "VALUES_FILE: ${{ runner.temp }}/wheels.values",
         "METRIC_FILTER: ^unsafe:",
+        "APPROVAL_SCOPE: size",
+        "APPROVAL_SCOPE: budgets",
+        "APPROVAL_SCOPE: unsafe",
+        "APPROVAL_SCOPE: wheels",
         "pull-requests: write",
     ] {
         assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");

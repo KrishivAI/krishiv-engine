@@ -39,8 +39,14 @@ fi
 case "$path" in
   */events*) file=$FAKE_EVENTS ;;
   */comments*) file=$FAKE_COMMENTS ;;
-  */actions/runs*) file=$FAKE_RUNS ;;
+  */actions/runs*)
+    sha=${path#*head_sha=}
+    sha=${sha%%&*}
+    file="$FAKE_RUNS.$sha"
+    [ -f "$file" ] || file="$FAKE_RUNS.none"
+    ;;
   */check-suites*) file=$FAKE_SUITES ;;
+  */pulls/*) echo "${FAKE_CURRENT_HEAD:-abc}"; exit 0 ;;
   *) exit 2 ;;
 esac
 jq -r "$filter" "$file"
@@ -62,19 +68,31 @@ events() {
 [{"event":"labeled","label":{"name":"L"},"actor":{"login":"$1"},"created_at":"$2"}$extra]
 JSON
 }
-# runs HEAD_ARRIVED_AT
+# runs HEAD_ARRIVED_AT: when the PR's head (abc) arrived; the earlier head "old" always arrived
+# before the label
 runs() {
-  echo "{\"workflow_runs\":[{\"created_at\":\"$1\"}]}" > "$FAKE_RUNS"
+  echo "{\"workflow_runs\":[{\"created_at\":\"$1\"}]}" > "$FAKE_RUNS.abc"
+  echo "{\"workflow_runs\":[{\"created_at\":\"2026-11-02T08:00:00Z\"}]}" > "$FAKE_RUNS.old"
+  echo "{\"workflow_runs\":[{\"created_at\":\"2026-11-02T10:30:00Z\"}]}" > "$FAKE_RUNS.late"
+  echo '{"workflow_runs":[]}' > "$FAKE_RUNS.none"
   echo '{"check_suites":[]}' > "$FAKE_SUITES"
 }
-# comment AUTHOR LABELED_AT NAME VALUE...  (a record as the workflow writes it)
-comment() {
+# comment AUTHOR LABELED_AT NAME VALUE...  (a record as the workflow writes it: scope "default",
+# measured on the earlier head "old"); RECORD_SCOPE and RECORD_HEAD override those. Sets the only
+# comment; add_comment appends one.
+record_json() {
   local author=$1 at=$2
   shift 2
   local lines=""
   while [ $# -ge 2 ]; do lines="$lines$1 $2\n"; shift 2; done
-  local body="<!-- krishiv-approval:v1\nlabel=L\nlabeled_at=$at\n${lines}-->\nRecorded."
-  printf '[{"user":{"login":"%s"},"body":"%s"}]\n' "$author" "$body" > "$FAKE_COMMENTS"
+  local body="<!-- krishiv-approval:v1\nlabel=L\nscope=${RECORD_SCOPE:-default}\nhead=${RECORD_HEAD-old}\nlabeled_at=$at\n${lines}-->\nRecorded."
+  printf '{"user":{"login":"%s"},"body":"%s"}' "$author" "$body"
+}
+comment() { printf '[%s]\n' "$(record_json "$@")" > "$FAKE_COMMENTS"; }
+add_comment() {
+  local old
+  old=$(sed 's/^\[//; s/\]$//' "$FAKE_COMMENTS")
+  printf '[%s,%s]\n' "$old" "$(record_json "$@")" > "$FAKE_COMMENTS"
 }
 no_comments() { echo '[]' > "$FAKE_COMMENTS"; }
 values() { printf '%s\n' "$@" > "$tmp/values"; }
@@ -165,6 +183,40 @@ values "unsafe:a 2" "unsafe:b 5" "unsafe:c 0"
 check "strict: a crate with none is fine" 1 VALUES_FILE="$tmp/values" STRICT=true METRIC_FILTER='^unsafe:'
 values "unsafe:a 2" "unsafe:b 5"
 check "the ratio rule would allow +5% where strict does not" 1 VALUES_FILE="$tmp/values" METRIC_FILTER='^unsafe:'
+
+# --- scopes, forgery and races ---------------------------------------------------------------
+events maintainer $LABELED; runs $HEAD_AFTER
+comment github-actions[bot] $LABELED counted_lines 1000
+values "counted_lines 1000"
+check "a record of another scope does not cover this gate" 0 VALUES_FILE="$tmp/values" APPROVAL_SCOPE=wheels
+RECORD_SCOPE=wheels comment github-actions[bot] $LABELED counted_lines 1000
+check "a record of this scope covers it" 1 VALUES_FILE="$tmp/values" APPROVAL_SCOPE=wheels
+comment github-actions[bot] $LABELED counted_lines 1000
+add_comment github-actions[bot] $LABELED counted_lines 999999
+values "counted_lines 500000"
+check "a later record cannot replace the first" 0 VALUES_FILE="$tmp/values"
+RECORD_HEAD=late comment github-actions[bot] $LABELED counted_lines 999999
+check "a record naming a head that arrived after the label is ignored" 0 VALUES_FILE="$tmp/values"
+RECORD_HEAD= comment github-actions[bot] $LABELED counted_lines 999999
+check "a record without a head is ignored" 0 VALUES_FILE="$tmp/values"
+RECORD_HEAD=unknown comment github-actions[bot] $LABELED counted_lines 999999
+check "a record naming an unknown head is ignored" 0 VALUES_FILE="$tmp/values"
+# a fake forged record first, the real one after: the first valid one counts, the forged is invalid
+RECORD_HEAD=late comment github-actions[bot] $LABELED counted_lines 999999
+add_comment github-actions[bot] $LABELED counted_lines 1000
+values "counted_lines 500000"
+check "a forged first record (late head) does not hide the real one, which is too small" 0 VALUES_FILE="$tmp/values"
+values "counted_lines 1000"
+check "and the real one still covers" 1 VALUES_FILE="$tmp/values"
+# recording only for the PR's current head
+rm -f "$FAKE_POSTS"
+events maintainer $LABELED; runs $HEAD_BEFORE; no_comments; values "counted_lines 1000"
+check "an older head's run still counts the fresh label" 1 VALUES_FILE="$tmp/values" FAKE_CURRENT_HEAD=newer
+[ "$(posts)" = 0 ] && echo "ok   but records nothing for a head that is no longer current" || { echo "FAIL stale-head record"; fails=$((fails + 1)); }
+rm -f "$FAKE_POSTS"
+check "the current head records" 1 VALUES_FILE="$tmp/values"
+grep -q '^head=abc$' "$FAKE_POSTS" && grep -q '^scope=default$' "$FAKE_POSTS" \
+  && echo "ok   the record names its head and scope" || { echo "FAIL record head/scope"; fails=$((fails + 1)); }
 
 # --- approval-values.sh ----------------------------------------------------------------------
 cat > "$tmp/b.json" <<JSON

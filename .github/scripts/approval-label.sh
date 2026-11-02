@@ -11,7 +11,12 @@
 # Staying valid across pushes. With VALUES_FILE set, the run that sees the label
 # fresh (case a) records the measured values in a comment on the pull request
 # (written by the workflow's own token, marked `krishiv-approval:v1`, bound to
-# that application of the label). A later run, on a head that arrived after the
+# that application of the label, to the gate that measured them (APPROVAL_SCOPE:
+# the size cap, the budgets and the wheel sizes share the `budget-approved` label
+# but not their values) and to the head it measured). Only a head that is still the
+# PR's head records, the oldest record of an application wins, and a record counts
+# only when the head it names had arrived before the label was applied, so a later
+# push cannot replace what the approver saw. A later run, on a head that arrived after the
 # label, still counts the approval while every measured value that matches
 # METRIC_FILTER stays within TOLERANCE_PERCENT (default 5) of the recorded one,
 # or with STRICT=true does not grow at all. A value that was not recorded counts
@@ -23,7 +28,7 @@
 # VALUES_FILE holds one `name value` pair per line (integers).
 # Read-only apart from that comment, so it also works for fork pull requests.
 # Env: GH_TOKEN, REPO, PR, HEAD_SHA, APPROVER, HAS_LABEL (true|false), and
-# optionally VALUES_FILE, METRIC_FILTER (extended regex over names, default
+# optionally VALUES_FILE, APPROVAL_SCOPE, METRIC_FILTER (extended regex over names, default
 # everything), TOLERANCE_PERCENT, STRICT (true|false), RECORD (false: never write).
 set -euo pipefail
 label="$1"
@@ -37,35 +42,45 @@ last=$(printf '%s\n' "$events" | awk -F'\t' -v l="$label" '$1 == "labeled" && $2
 actor=$(printf '%s' "$last" | cut -f3)
 labeled_at=$(printf '%s' "$last" | cut -f4)
 forced_at=$(printf '%s\n' "$events" | awk -F'\t' '$1 == "head_ref_force_pushed" {print $4}' | sort | tail -n1)
+# The first time a workflow run or check suite saw commit $1: when it reached GitHub.
+arrival_of() {
+  local run suite
+  run=$(gh api "repos/$REPO/actions/runs?head_sha=$1&per_page=100" \
+    --jq '[.workflow_runs[].created_at] | min // empty')
+  suite=$(gh api "repos/$REPO/commits/$1/check-suites" \
+    --jq '[.check_suites[].created_at] | min // empty' 2>/dev/null || true)
+  printf '%s\n%s\n' "$run" "$suite" | grep -v '^$' | sort | head -n1 || true
+}
 # Workflow runs record every pull-request update, fork pushes included; check
 # suites are a fallback for a head with no run yet.
-run_at=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&per_page=100" \
-  --jq '[.workflow_runs[].created_at] | min // empty')
-suite_at=$(gh api "repos/$REPO/commits/$HEAD_SHA/check-suites" \
-  --jq '[.check_suites[].created_at] | min // empty' 2>/dev/null || true)
-pushed_at=$(printf '%s\n%s\n' "$run_at" "$suite_at" | grep -v '^$' | sort | head -n1 || true)
+pushed_at=$(arrival_of "$HEAD_SHA")
 arrived_at=$(printf '%s\n%s\n' "$pushed_at" "$forced_at" | sort | tail -n1)
 
 values_file="${VALUES_FILE:-}"
 filter="${METRIC_FILTER:-.}"
+scope="${APPROVAL_SCOPE:-default}"
 strict="${STRICT:-false}"
 tolerance="${TOLERANCE_PERCENT:-5}"
 if [ "$strict" = "true" ]; then tolerance=0; fi
 
-# The record for this application of the label: the newest comment by the
-# workflow's bot that carries the marker, this label and this labeled_at.
-# Prints its `name value` lines.
+# The record for this application of the label and this gate: the OLDEST comment by the
+# workflow's bot that carries the marker, the label, the scope and the labeled_at, and
+# whose head had arrived before the label was applied. Prints its `name value` lines.
 recorded_values() {
-  local last="" b64 body
+  local b64 body head arrived
   while read -r b64; do
     body=$(printf '%s' "$b64" | base64 -d)
-    if printf '%s\n' "$body" | grep -qx "label=$label" \
-      && printf '%s\n' "$body" | grep -qx "labeled_at=$labeled_at"; then
-      last=$(printf '%s\n' "$body" | awk '/^<!--/ || /^-->/ || /^label=/ || /^labeled_at=/ {next} NF == 2 && $2 ~ /^[0-9]+$/ {print}')
-    fi
+    printf '%s\n' "$body" | grep -qx "label=$label" || continue
+    printf '%s\n' "$body" | grep -qx "scope=$scope" || continue
+    printf '%s\n' "$body" | grep -qx "labeled_at=$labeled_at" || continue
+    head=$(printf '%s\n' "$body" | sed -n 's/^head=//p' | head -n1)
+    [ -n "$head" ] || continue
+    arrived=$(arrival_of "$head")
+    [ -n "$arrived" ] && [[ "$labeled_at" > "$arrived" ]] || continue
+    printf '%s\n' "$body" | awk '/^<!--/ || /^-->/ || /^label=/ || /^scope=/ || /^head=/ || /^labeled_at=/ {next} NF == 2 && $2 ~ /^[0-9]+$/ {print}'
+    return 0
   done < <(gh api "repos/$REPO/issues/$PR/comments" --paginate \
     --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | startswith("<!-- krishiv-approval:v1")) | .body | @base64')
-  printf '%s\n' "$last"
 }
 
 # Whether the current values stay inside the recorded ones: reads the recorded
@@ -90,9 +105,16 @@ within_record() {
 
 record_values() {
   [ "${RECORD:-true}" = "false" ] && return 0
+  # A run for a head that is no longer the PR's head (a delayed or re-run job) must not
+  # record that head's values.
+  if [ "$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha' 2>/dev/null || true)" != "$HEAD_SHA" ]; then
+    return 0
+  fi
   local body
   body="<!-- krishiv-approval:v1
 label=$label
+scope=$scope
+head=$HEAD_SHA
 labeled_at=$labeled_at
 $(awk -v filter="$filter" '$1 ~ filter' "$values_file")
 -->
