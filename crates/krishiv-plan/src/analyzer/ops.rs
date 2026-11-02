@@ -583,6 +583,16 @@ impl Resolver<'_> {
         for e in exprs {
             if let ExprNode::Star(s) = &e.node {
                 let cx = Self::cx(&c.out, &rels, env, op);
+                // `* EXCEPT (s.f)` and `s.* EXCEPT (...)` rebuild the structs.
+                if let Some(nested) = self.nested_except_items(s, &cx, e.origin)? {
+                    for item in nested {
+                        let mut cx = Self::cx(&c.out, &rels, env, op);
+                        cx.lateral = lca.then_some(&lateral[..]);
+                        cx.windows = WindowUse::Allowed;
+                        items.push(self.bind(&item, &cx)?);
+                    }
+                    continue;
+                }
                 // `s.*` over a struct column: its fields.
                 if let Some(fields) = self.star_struct_fields(s, &cx, e.origin)? {
                     for field in fields {

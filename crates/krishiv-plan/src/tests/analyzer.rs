@@ -3020,9 +3020,9 @@ fn order_by_all_sorts_by_every_output_column() {
 }
 
 /// `* EXCEPT` drops the named columns; overlapping entries and nested
-/// fields fail with Spark's classes, unknown names resolve as usual.
+/// fields of a non-struct column fail, unknown names resolve as usual.
 #[test]
-fn star_except_drops_overlaps_and_rejects_nested() {
+fn star_except_drops_overlaps_and_rejects_nested_fields_of_a_flat_column() {
     use crate::Star;
 
     let except = |cols: &[&str]| {
@@ -3048,7 +3048,7 @@ fn star_except_drops_overlaps_and_rejects_nested() {
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["a", "a", "a.b"])]);
     assert_eq!(class(&run(plan, &ctx())), "EXCEPT_OVERLAPPING_COLUMNS");
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["a.b"])]);
-    assert_eq!(class(&run(plan, &ctx())), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(class(&run(plan, &ctx())), "FIELD_NOT_FOUND");
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["z"])]);
     assert_eq!(
         class(&run(plan, &ctx())),
