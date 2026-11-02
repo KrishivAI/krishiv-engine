@@ -2411,6 +2411,9 @@ pub struct Select {
     pub group_by: Option<GroupBy>,
     /// `HAVING`.
     pub having: Option<Expr>,
+    /// `spark.sql.legacy.parser.havingWithoutGroupByAsWhere`: a `HAVING` with no `GROUP BY` over
+    /// a select list with no aggregate call filters the rows, as `WHERE` does.
+    pub having_as_where: bool,
     /// `WINDOW`.
     pub windows: Vec<NamedWindow>,
     /// `QUALIFY`.

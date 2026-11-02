@@ -718,6 +718,24 @@ impl Lowerer {
         Ok(plan)
     }
 
+    /// A `HAVING` condition as Spark's `AstBuilder` reads it: a predicate, or else cast to boolean.
+    fn having_predicate(&mut self, h: &Expr) -> R<Arc<IrExpr>> {
+        let predicate = self.expr(h)?;
+        Ok(arc(if is_predicate(&predicate) {
+            predicate
+        } else {
+            let span = h.span;
+            self.ex(
+                ExprNode::Cast {
+                    expr: arc(predicate),
+                    to: krishiv_types::DataType::Boolean,
+                    mode: CastMode::Default,
+                },
+                span,
+            )
+        }))
+    }
+
     fn pipe_op(&mut self, plan: LogicalPlan, op: &PipeOp) -> R<LogicalPlan> {
         let star = |l: &Self, except: Vec<Vec<String>>| {
             arc(l.ex(
@@ -1320,7 +1338,18 @@ impl Lowerer {
             }
             items.push(self.select_item(item)?);
         }
-        if s.group_by.is_none() && s.having.is_none() && !(aggregates && has_generator) {
+        // `spark.sql.legacy.parser.havingWithoutGroupByAsWhere`: a `HAVING` with no `GROUP BY` over
+        // a select list with no aggregate call filters the rows (as `WHERE` does; aggregates in
+        // it are `INVALID_WHERE_CONDITION`) instead of making the query one global group.
+        let having_filter = s.having_as_where
+            && s.group_by.is_none()
+            && s.having.is_some()
+            && !aggregates
+            && !has_generator;
+        if s.group_by.is_none()
+            && (s.having.is_none() || having_filter)
+            && !(aggregates && has_generator)
+        {
             plan = self.node(
                 PlanNode::Project {
                     input: arc(plan),
@@ -1328,6 +1357,16 @@ impl Lowerer {
                 },
                 s.span,
             );
+            if let Some(h) = s.having.as_ref().filter(|_| having_filter) {
+                let predicate = self.having_predicate(h)?;
+                plan = self.node(
+                    PlanNode::Filter {
+                        input: arc(plan),
+                        predicate,
+                    },
+                    s.span,
+                );
+            }
         } else {
             let grouping = match &s.group_by {
                 Some(g) => self.grouping(g)?,
@@ -1342,22 +1381,7 @@ impl Lowerer {
                 s.span,
             );
             if let Some(h) = &s.having {
-                let predicate = self.expr(h)?;
-                // As Spark's AstBuilder: a `HAVING` that is not a predicate is
-                // cast to boolean.
-                let predicate = arc(if is_predicate(&predicate) {
-                    predicate
-                } else {
-                    let span = h.span;
-                    self.ex(
-                        ExprNode::Cast {
-                            expr: arc(predicate),
-                            to: krishiv_types::DataType::Boolean,
-                            mode: CastMode::Default,
-                        },
-                        span,
-                    )
-                });
+                let predicate = self.having_predicate(h)?;
                 plan = self.node(
                     PlanNode::Filter {
                         input: arc(plan),

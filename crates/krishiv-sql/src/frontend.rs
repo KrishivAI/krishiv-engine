@@ -46,6 +46,7 @@ impl SqlFrontend for Frontend {
             o.single_character_pipe_operator,
             o.consecutive_string_literals,
             o.quoted_regex_column_names,
+            o.having_without_group_by_as_where,
         ]
         .iter()
         .fold(0, |acc, b| acc << 1 | u64::from(*b));

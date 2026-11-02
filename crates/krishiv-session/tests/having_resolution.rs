@@ -64,3 +64,31 @@ fn an_alias_nothing_else_holds_is_the_alias() {
         [2]
     );
 }
+
+/// `spark.sql.legacy.parser.havingWithoutGroupByAsWhere`: a `HAVING` with no `GROUP BY` over a select list without an aggregate call filters
+/// rows like `WHERE` (an aggregate in it is `INVALID_WHERE_CONDITION`); with an aggregate in the
+/// select list the query is still one global group.
+#[test]
+fn having_without_group_by_filters_rows_when_nothing_aggregates() {
+    let s = Session::new().unwrap();
+    // The default is one global group.
+    assert_eq!(
+        firsts(
+            &s,
+            "SELECT CAST(1 AS BIGINT) FROM range(10) HAVING MAX(id) > 0"
+        ),
+        [1]
+    );
+    block_on(s.sql("SET spark.sql.legacy.parser.havingWithoutGroupByAsWhere=true")).unwrap();
+    assert_eq!(firsts(&s, "SELECT id FROM range(10) HAVING id > 7"), [8, 9]);
+    assert_eq!(firsts(&s, "SELECT id FROM range(5) HAVING true").len(), 5);
+    let e = block_on(s.sql("SELECT 1 FROM range(10) HAVING MAX(id) > 0")).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::InvalidWhereCondition
+    );
+    assert_eq!(
+        firsts(&s, "SELECT MIN(id) FROM range(10) HAVING COUNT(1) > 0"),
+        [0]
+    );
+}

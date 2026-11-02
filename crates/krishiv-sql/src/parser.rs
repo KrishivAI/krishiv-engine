@@ -4217,6 +4217,7 @@ impl<'s> Parser<'s> {
             selection,
             group_by,
             having,
+            having_as_where: self.opts.having_without_group_by_as_where,
             windows,
             qualify,
             span: self.span_from(start),
