@@ -1,9 +1,7 @@
 {
   "cases": {
     "depends-on-command": [
-      6,
-      13,
-      17
+      6
     ]
   },
   "file": "nonansi/higher-order-functions",

@@ -354,7 +354,13 @@ impl Resolver<'_> {
                 literal: None,
             },
         );
-        let Some(Some(wider)) = coerce::wider_type(&left, &right, rules) else {
+        // ANSI mode never promotes a string against another type.
+        let found = if conf.ansi {
+            coerce::wider_type_without_string_promotion(&left, &right, conf.case_sensitive)
+        } else {
+            coerce::wider_type(&left, &right, rules)
+        };
+        let Some(Some(wider)) = found else {
             return;
         };
         for (key, map) in keys.iter().zip([first, second]) {
