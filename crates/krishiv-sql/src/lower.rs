@@ -1257,7 +1257,7 @@ impl Lowerer {
         let wrong = |expected: &str, actual: usize| {
             err(
                 WrongNumArgsWithoutSuggestion {
-                    function_name: format!("`{}`", name.value),
+                    function_name: format!("`{}`", name.value.to_ascii_lowercase()),
                     expected_num: expected.to_owned(),
                     actual_num: actual.to_string(),
                     docroot: "https://spark.apache.org/docs/latest".to_owned(),
