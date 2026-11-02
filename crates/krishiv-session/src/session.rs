@@ -1668,6 +1668,50 @@ impl Drop for MetricStream {
 }
 
 impl Session {
+    /// The directory a write of `text` goes to, as it physically is (links in
+    /// its existing part resolved): the policy is asked about the directory
+    /// that is written, never about a name that a link sends elsewhere.
+    /// Cloud stores are built from the query snapshot with the write's
+    /// per-relation `fs.*` options overriding it (Spark's per-relation Hadoop
+    /// configuration).
+    pub(crate) fn locate_write_path(
+        &self,
+        text: &str,
+        options: &BTreeMap<String, OptionValue>,
+        env: &QueryEnv,
+    ) -> Result<krishiv_exec::files::LocatedPath, KrishivError> {
+        let stores = Arc::new(StoreRegistry::new(Arc::clone(&env.config)));
+        let at = ObjectPaths::new(
+            StoreId::new(LOCAL_STORE),
+            self.state.cwd.clone(),
+            Arc::clone(&self.state.io),
+            stores,
+        )
+        .locate_with_options(text, options)?;
+        crate::access::physical(at)
+    }
+
+    /// Before anything is written or replaced (an overwrite deletes first):
+    /// `Modify` and `Create` on the path, both whether or not it exists, so a
+    /// denial never tells whether it does.
+    pub(crate) async fn authorize_write_path(
+        &self,
+        at: &krishiv_exec::files::LocatedPath,
+    ) -> Result<(), KrishivError> {
+        let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
+        for privilege in [Privilege::Modify, Privilege::Create] {
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &securable,
+                privilege,
+            )
+            .await;
+            crate::access::audit(self, StatementClass::Write, r)?;
+        }
+        Ok(())
+    }
+
     /// The file format named `format`, which must be one the engine writes:
     /// the Spark file sources it does not write fail with
     /// `KRISHIV_UNSUPPORTED_FEATURE`.
@@ -1751,36 +1795,9 @@ impl Session {
         let dynamic =
             !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
         let max_records = max_records_per_file(&options, format.name())?;
-        // Cloud stores are built from the query snapshot with the write's
-        // per-relation `fs.*` options overriding it (Spark's per-relation
-        // Hadoop configuration).
-        let stores = Arc::new(StoreRegistry::new(Arc::clone(&env.config)));
-        let at = ObjectPaths::new(
-            StoreId::new(LOCAL_STORE),
-            self.state.cwd.clone(),
-            Arc::clone(&self.state.io),
-            stores,
-        )
-        .locate_with_options(text, &options)?;
-        // The directory as it physically is (links in its existing part
-        // resolved): the policy is asked about the directory that is
-        // written, never about a name that a link sends elsewhere.
-        let at = crate::access::physical(at)?;
+        let at = self.locate_write_path(text, &options, env)?;
         let io = self.state.io.context();
-        // Before anything is written or replaced (an overwrite deletes
-        // first): `Modify` and `Create`, both whether or not the path
-        // exists, so a denial never tells whether it does.
-        let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
-        for privilege in [Privilege::Modify, Privilege::Create] {
-            let r = authorize(
-                &*self.state.policy,
-                &self.state.principal,
-                &securable,
-                privilege,
-            )
-            .await;
-            crate::access::audit(self, StatementClass::Write, r)?;
-        }
+        self.authorize_write_path(&at).await?;
         // A link swapped into the checked path since fails the write
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.

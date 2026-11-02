@@ -2376,23 +2376,23 @@ impl Session {
                 let provider = self.provider_of(spec.provider.clone())?;
                 let schema = df.schema().await?;
                 self.check_write_ready(&provider, &spec.options, &schema, &env)?;
-                // The write asks the policy about the table's directory and the create
-                // refuses a directory that is already there; both before the drop.
+                // The write asks the policy about the table's directory, in the form
+                // `write_files` asks it (`locate_write_path`), and the create refuses
+                // a directory that is already there other than the old table's own;
+                // both before the drop.
                 let location =
                     managed_location(&self.warehouse_dir()?, &name.namespace, &name.name);
-                self.authorize_path(
-                    &location,
-                    &[Privilege::Modify, Privilege::Create],
-                    StatementClass::Write,
-                )
-                .await?;
-                let external = self
+                let at =
+                    self.locate_write_path(&location.display().to_string(), &spec.options, &env)?;
+                self.authorize_write_path(&at).await?;
+                // A managed table's own directory goes with it; any other one in the way stays.
+                let own = self
                     .state
                     .catalog
                     .store
                     .table(&name.namespace, &name.name)
-                    .is_some_and(|t| !t.managed);
-                if external && location.exists() {
+                    .is_some_and(|t| t.managed && t.location == location);
+                if location.exists() && !own {
                     return Err(LocationAlreadyExists {
                         identifier: name.quoted(),
                         location: location.display().to_string(),
