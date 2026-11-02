@@ -3945,6 +3945,922 @@
    "value": "{1 -> INTERVAL '1' MONTH}"
   },
   {
+   "expr": "interval '5' month div interval '-2' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '5' MONTH div INTERVAL '-2' MONTH)",
+   "type": "bigint",
+   "value": "-2"
+  },
+  {
+   "expr": "interval '1' year div interval '5' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '1' YEAR div INTERVAL '5' MONTH)",
+   "type": "bigint",
+   "value": "2"
+  },
+  {
+   "expr": "interval '5' day div interval '2' hour",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '5' DAY div INTERVAL '02' HOUR)",
+   "type": "bigint",
+   "value": "60"
+  },
+  {
+   "expr": "interval '5' hour div interval '2' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '05' HOUR div INTERVAL '2' DAY)",
+   "type": "bigint",
+   "value": "0"
+  },
+  {
+   "expr": "interval '-7' day div interval '2' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '-7' DAY div INTERVAL '2' DAY)",
+   "type": "bigint",
+   "value": "-3"
+  },
+  {
+   "expr": "interval '5' month div interval '0' month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '5' MONTH div INTERVAL '0' MONTH)",
+   "type": "bigint",
+   "value_error_class": "DIVIDE_BY_ZERO"
+  },
+  {
+   "expr": "interval '5' month div interval '2' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '5' day div 2",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "5 div interval '2' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '5' day div null",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '5' DAY div NULL)",
+   "type": "bigint",
+   "value": null
+  },
+  {
+   "expr": "null div interval '5' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(NULL div INTERVAL '5' DAY)",
+   "type": "bigint",
+   "value": null
+  },
+  {
+   "expr": "cast(null as interval day) div interval '2' day",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(CAST(NULL AS INTERVAL DAY) div INTERVAL '2' DAY)",
+   "type": "bigint",
+   "value": null
+  },
+  {
+   "expr": "'5' div interval '2' day",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '5' day div '2'",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '-178956970-8' year to month div interval '-0-1' year to month",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '-178956970-8' YEAR TO MONTH div INTERVAL '-0-1' YEAR TO MONTH)",
+   "type": "bigint",
+   "value": "-2147483648"
+  },
+  {
+   "expr": "interval '-106751991 04:00:54.775808' day to second div interval '-0.000001' second",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "(INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND div INTERVAL '-00.000001' SECOND)",
+   "type": "bigint",
+   "value": "-9223372036854775808"
+  },
+  {
+   "expr": "interval '1' day div cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "cast('1 day' as interval) div cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '0' hour, interval '10' day, 10)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '00' HOUR, INTERVAL '10' DAY, 10)",
+   "type": "bigint",
+   "value": "6"
+  },
+  {
+   "expr": "width_bucket(interval '5' month, interval '0' year, interval '10' month, 10)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "width_bucket(INTERVAL '5' MONTH, INTERVAL '0' YEAR, INTERVAL '10' MONTH, 10)",
+   "type": "bigint",
+   "value": "6"
+  },
+  {
+   "expr": "width_bucket(interval '5' month, interval '0' day, interval '10' month, 10)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, 0, 10, 10)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+  },
+  {
+   "expr": "width_bucket(5, interval '0' day, interval '10' day, 10)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+  },
+  {
+   "expr": "width_bucket(cast('5 days' as interval), cast('0 days' as interval), cast('10 days' as interval), 10)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '10' day, interval '0' day, 10)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '10' DAY, INTERVAL '0' DAY, 10)",
+   "type": "bigint",
+   "value": "6"
+  },
+  {
+   "expr": "width_bucket(interval '50' day, interval '0' day, interval '10' day, 10)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "width_bucket(INTERVAL '50' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10)",
+   "type": "bigint",
+   "value": "11"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '5' day, interval '5' day, 10)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '5' DAY, INTERVAL '5' DAY, 10)",
+   "type": "bigint",
+   "value": null
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '0' day, interval '10' day, 0)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 0)",
+   "type": "bigint",
+   "value": null
+  },
+  {
+   "expr": "width_bucket(null, interval '0' day, interval '10' day, 10)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, null, interval '10' day, 10)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '0' day, interval '10' day, null)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, NULL)",
+   "type": "bigint",
+   "value": null
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '0' day, interval '10' day, '10')",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10)",
+   "type": "bigint",
+   "value": "6"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '0' day, interval '10' day, 10.0)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10.0)",
+   "type": "bigint",
+   "value": "6"
+  },
+  {
+   "expr": "width_bucket('5', interval '0' day, interval '10' day, 10)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+  },
+  {
+   "expr": "map(interval '1' day, 'a', interval '24' hour, 'b')",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(INTERVAL '1' DAY, a, INTERVAL '24' HOUR, b)",
+   "type": "map<interval day to hour,string>",
+   "value_error_class": "DUPLICATED_MAP_KEY"
+  },
+  {
+   "expr": "map(interval '12' month, 'a', interval '1' year, 'b')",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(INTERVAL '12' MONTH, a, INTERVAL '1' YEAR, b)",
+   "type": "map<interval year to month,string>",
+   "value_error_class": "DUPLICATED_MAP_KEY"
+  },
+  {
+   "expr": "map(interval '1' day, interval '1' month)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(INTERVAL '1' DAY, INTERVAL '1' MONTH)",
+   "type": "map<interval day,interval month>",
+   "value": "{INTERVAL '1' DAY -> INTERVAL '1' MONTH}"
+  },
+  {
+   "expr": "map(interval '1' day, 1, interval '1' hour, 2)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(INTERVAL '1' DAY, 1, INTERVAL '01' HOUR, 2)",
+   "type": "map<interval day to hour,int>",
+   "value": "{INTERVAL '1 00' DAY TO HOUR -> 1, INTERVAL '0 01' DAY TO HOUR -> 2}"
+  },
+  {
+   "expr": "map(interval '1' day, 1, null, 2)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(INTERVAL '1' DAY, 1, NULL, 2)",
+   "type": "map<interval day,int>",
+   "value_error_class": "NULL_MAP_KEY"
+  },
+  {
+   "expr": "map(1, cast(null as interval day))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, CAST(NULL AS INTERVAL DAY))",
+   "type": "map<int,interval day>",
+   "value": "{1 -> null}"
+  },
+  {
+   "expr": "map(1, interval '1' day, 2, interval '1' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, INTERVAL '1' DAY, 2, INTERVAL '01' HOUR)",
+   "type": "map<int,interval day to hour>",
+   "value": "{1 -> INTERVAL '1 00' DAY TO HOUR, 2 -> INTERVAL '0 01' DAY TO HOUR}"
+  },
+  {
+   "expr": "map(1, interval '1' day, 2, interval '1' month)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+  },
+  {
+   "expr": "map(cast('1 day' as interval), 1)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(CAST(1 day AS INTERVAL), 1)",
+   "type": "map<interval,int>",
+   "value": "{1 days -> 1}"
+  },
+  {
+   "expr": "map(1, cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, CAST(1 day AS INTERVAL))",
+   "type": "map<int,interval>",
+   "value": "{1 -> 1 days}"
+  },
+  {
+   "expr": "map(1, cast(null as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, CAST(NULL AS INTERVAL))",
+   "type": "map<int,interval>",
+   "value": "{1 -> null}"
+  },
+  {
+   "expr": "cast(map(1, cast('1 day' as interval)) as string)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "CAST(map(1, CAST(1 day AS INTERVAL)) AS STRING)",
+   "type": "string",
+   "value": "{1 -> 1 days}"
+  },
+  {
+   "expr": "map(cast('1 day' as interval), 1, cast('1 day' as interval), 2)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(CAST(1 day AS INTERVAL), 1, CAST(1 day AS INTERVAL), 2)",
+   "type": "map<interval,int>",
+   "value_error_class": "DUPLICATED_MAP_KEY"
+  },
+  {
+   "expr": "map(cast('1 day' as interval), 1, cast('24 hours' as interval), 2)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(CAST(1 day AS INTERVAL), 1, CAST(24 hours AS INTERVAL), 2)",
+   "type": "map<interval,int>",
+   "value": "{1 days -> 1, 24 hours -> 2}"
+  },
+  {
+   "expr": "map(1, map(interval '1' day, interval '1' month))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, map(INTERVAL '1' DAY, INTERVAL '1' MONTH))",
+   "type": "map<int,map<interval day,interval month>>",
+   "value": "{1 -> {INTERVAL '1' DAY -> INTERVAL '1' MONTH}}"
+  },
+  {
+   "expr": "map(array(interval '1' day), 1)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(array(INTERVAL '1' DAY), 1)",
+   "type": "map<array<interval day>,int>",
+   "value": "{[INTERVAL '1' DAY] -> 1}"
+  },
+  {
+   "expr": "map(array(interval '1' day), 1, array(interval '24' hour), 2)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(array(INTERVAL '1' DAY), 1, array(INTERVAL '24' HOUR), 2)",
+   "type": "map<array<interval day to hour>,int>",
+   "value_error_class": "DUPLICATED_MAP_KEY"
+  },
+  {
+   "expr": "map(named_struct('a', interval '1' day), 1)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(named_struct(a, INTERVAL '1' DAY), 1)",
+   "type": "map<struct<a:interval day>,int>",
+   "value": "{{INTERVAL '1' DAY} -> 1}"
+  },
+  {
+   "expr": "map(1, array(interval '1' month))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, array(INTERVAL '1' MONTH))",
+   "type": "map<int,array<interval month>>",
+   "value": "{1 -> [INTERVAL '1' MONTH]}"
+  },
+  {
+   "expr": "map(1, named_struct('a', interval '1' month))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, named_struct(a, INTERVAL '1' MONTH))",
+   "type": "map<int,struct<a:interval month>>",
+   "value": "{1 -> {INTERVAL '1' MONTH}}"
+  },
+  {
+   "expr": "map_keys(map(interval '1' day, 1))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_keys(map(INTERVAL '1' DAY, 1))",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY]"
+  },
+  {
+   "expr": "map_values(map(1, interval '1' month))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_values(map(1, INTERVAL '1' MONTH))",
+   "type": "array<interval month>",
+   "value": "[INTERVAL '1' MONTH]"
+  },
+  {
+   "expr": "map_entries(map(interval '1' day, interval '1' month))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_entries(map(INTERVAL '1' DAY, INTERVAL '1' MONTH))",
+   "type": "array<struct<key:interval day,value:interval month>>",
+   "value": "[{INTERVAL '1' DAY, INTERVAL '1' MONTH}]"
+  },
+  {
+   "expr": "map_keys(map(cast('1 day' as interval), 1))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_keys(map(CAST(1 day AS INTERVAL), 1))",
+   "type": "array<interval>",
+   "value": "[1 days]"
+  },
+  {
+   "expr": "map_contains_key(map(interval '1' day, 1), interval '1' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_contains_key(map(INTERVAL '1' DAY, 1), INTERVAL '1' DAY)",
+   "type": "boolean",
+   "value": "true"
+  },
+  {
+   "expr": "map_contains_key(map(interval '1' day, 1), interval '24' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.MAP_FUNCTION_DIFF_TYPES"
+  },
+  {
+   "expr": "map_contains_key(map(cast('1 day' as interval), 1), cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "map(interval '1' day, 1)[interval '1' day]",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(INTERVAL '1' DAY, 1)[INTERVAL '1' DAY]",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "map(interval '1' day, 1)[interval '24' hour]",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "map(cast('1 day' as interval), 1)[cast('1 day' as interval)]",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "element_at(map(interval '1' day, 1), interval '1' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "element_at(map(INTERVAL '1' DAY, 1), INTERVAL '1' DAY)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "element_at(map(interval '1' day, 1), interval '24' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.MAP_FUNCTION_DIFF_TYPES"
+  },
+  {
+   "expr": "try_element_at(map(interval '1' month, 1), interval '2' month)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "try_element_at(map(INTERVAL '1' MONTH, 1), INTERVAL '2' MONTH)",
+   "type": "int",
+   "value": null
+  },
+  {
+   "expr": "map_from_arrays(array(interval '1' day), array(1))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_from_arrays(array(INTERVAL '1' DAY), array(1))",
+   "type": "map<interval day,int>",
+   "value": "{INTERVAL '1' DAY -> 1}"
+  },
+  {
+   "expr": "map_from_arrays(array(1), array(interval '1' month))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_from_arrays(array(1), array(INTERVAL '1' MONTH))",
+   "type": "map<int,interval month>",
+   "value": "{1 -> INTERVAL '1' MONTH}"
+  },
+  {
+   "expr": "map_from_arrays(array(interval '1' day, interval '1' day), array(1, 2))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_from_arrays(array(INTERVAL '1' DAY, INTERVAL '1' DAY), array(1, 2))",
+   "type": "map<interval day,int>",
+   "value_error_class": "DUPLICATED_MAP_KEY"
+  },
+  {
+   "expr": "map_from_arrays(array(cast('1 day' as interval)), array(1))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_from_arrays(array(CAST(1 day AS INTERVAL)), array(1))",
+   "type": "map<interval,int>",
+   "value": "{1 days -> 1}"
+  },
+  {
+   "expr": "map_from_entries(array(named_struct('k', interval '1' day, 'v', 1)))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_from_entries(array(named_struct(k, INTERVAL '1' DAY, v, 1)))",
+   "type": "map<interval day,int>",
+   "value": "{INTERVAL '1' DAY -> 1}"
+  },
+  {
+   "expr": "map_from_entries(array(named_struct('k', 1, 'v', interval '1' month)))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_from_entries(array(named_struct(k, 1, v, INTERVAL '1' MONTH)))",
+   "type": "map<int,interval month>",
+   "value": "{1 -> INTERVAL '1' MONTH}"
+  },
+  {
+   "expr": "map_from_entries(array(named_struct('k', cast('1 day' as interval), 'v', 1)))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_from_entries(array(named_struct(k, CAST(1 day AS INTERVAL), v, 1)))",
+   "type": "map<interval,int>",
+   "value": "{1 days -> 1}"
+  },
+  {
+   "expr": "map_concat(map(interval '1' day, 1), map(interval '2' day, 2))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_concat(map(INTERVAL '1' DAY, 1), map(INTERVAL '2' DAY, 2))",
+   "type": "map<interval day,int>",
+   "value": "{INTERVAL '1' DAY -> 1, INTERVAL '2' DAY -> 2}"
+  },
+  {
+   "expr": "map_concat(map(1, interval '1' day), map(2, interval '2' hour))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_concat(map(1, INTERVAL '1' DAY), map(2, INTERVAL '02' HOUR))",
+   "type": "map<int,interval day to hour>",
+   "value": "{1 -> INTERVAL '1 00' DAY TO HOUR, 2 -> INTERVAL '0 02' DAY TO HOUR}"
+  },
+  {
+   "expr": "map_concat(map(cast('1 day' as interval), 1), map(cast('1 day' as interval), 2))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_concat(map(CAST(1 day AS INTERVAL), 1), map(CAST(1 day AS INTERVAL), 2))",
+   "type": "map<interval,int>",
+   "value_error_class": "DUPLICATED_MAP_KEY"
+  },
+  {
+   "expr": "size(map(1, interval '1' day))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "size(map(1, INTERVAL '1' DAY))",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "named_struct('a', map(1, interval '1' day))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "named_struct(a, map(1, INTERVAL '1' DAY))",
+   "type": "struct<a:map<int,interval day>>",
+   "value": "{{1 -> INTERVAL '1' DAY}}"
+  },
+  {
+   "expr": "array(map(1, interval '1' month))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "array(map(1, INTERVAL '1' MONTH))",
+   "type": "array<map<int,interval month>>",
+   "value": "[{1 -> INTERVAL '1' MONTH}]"
+  },
+  {
+   "expr": "explode(map(interval '1' day, interval '1' month))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "key",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "cast(map('a', interval '1' month) as map<string,string>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(a, INTERVAL '1' MONTH)",
+   "type": "map<string,string>",
+   "value": "{a -> INTERVAL '1' MONTH}"
+  },
+  {
+   "expr": "cast(map(interval '1' month, 'a') as map<string,string>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(INTERVAL '1' MONTH, a)",
+   "type": "map<string,string>",
+   "value": "{INTERVAL '1' MONTH -> a}"
+  },
+  {
+   "expr": "cast(map(1, interval '1' day) as map<int, interval hour>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, INTERVAL '1' DAY)",
+   "type": "map<int,interval hour>",
+   "value": "{1 -> INTERVAL '24' HOUR}"
+  },
+  {
+   "expr": "cast(map(1, interval '25' hour) as map<int, interval day>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, INTERVAL '25' HOUR)",
+   "type": "map<int,interval day>",
+   "value": "{1 -> INTERVAL '1' DAY}"
+  },
+  {
+   "expr": "cast(map(1, interval '1' month) as map<bigint, interval year>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, INTERVAL '1' MONTH)",
+   "type": "map<bigint,interval year>",
+   "value": "{1 -> INTERVAL '0' YEAR}"
+  },
+  {
+   "expr": "cast(map(1, interval '1' month) as map<int, int>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, INTERVAL '1' MONTH)",
+   "type": "map<int,int>",
+   "value": "{1 -> 1}"
+  },
+  {
+   "expr": "cast(map(interval '1' day, 1) as map<interval hour, bigint>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(INTERVAL '1' DAY, 1)",
+   "type": "map<interval hour,bigint>",
+   "value": "{INTERVAL '24' HOUR -> 1}"
+  },
+  {
+   "expr": "cast(map(1, interval '1' month) as map<int,interval>)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast(map(1, cast('1 day' as interval)) as map<int,string>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, CAST(1 day AS INTERVAL))",
+   "type": "map<int,string>",
+   "value": "{1 -> 1 days}"
+  },
+  {
+   "expr": "cast(map(cast('1 day' as interval), 1) as map<string,int>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(CAST(1 day AS INTERVAL), 1)",
+   "type": "map<string,int>",
+   "value": "{1 days -> 1}"
+  },
+  {
+   "expr": "cast(map(1, cast('1 day' as interval)) as map<int,interval>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, CAST(1 day AS INTERVAL))",
+   "type": "map<int,interval>",
+   "value": "{1 -> 1 days}"
+  },
+  {
+   "expr": "map(1, interval '1' day) = map(1, interval '1' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "to_json(map('a', interval '1' month))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "to_json(map(a, INTERVAL '1' MONTH))",
+   "type": "string",
+   "value": "{\"a\":\"INTERVAL '1' MONTH\"}"
+  },
+  {
+   "expr": "to_json(map(1, cast('1 day' as interval)))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "to_json(map(1, CAST(1 day AS INTERVAL)))",
+   "type": "string",
+   "value": "{\"1\":\"1 days\"}"
+  },
+  {
+   "expr": "array_distinct(array(interval '1' day, interval '1' day))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "array_distinct(array(INTERVAL '1' DAY, INTERVAL '1' DAY))",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY]"
+  },
+  {
+   "expr": "array_distinct(array(cast('1 day' as interval), cast('1 day' as interval)))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "array_union(array(interval '1' day), array(interval '2' day))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "array_union(array(INTERVAL '1' DAY), array(INTERVAL '2' DAY))",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY, INTERVAL '2' DAY]"
+  },
+  {
+   "expr": "array_intersect(array(interval '1' day), array(interval '1' day))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "array_intersect(array(INTERVAL '1' DAY), array(INTERVAL '1' DAY))",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY]"
+  },
+  {
+   "expr": "array_except(array(interval '1' day), array(interval '1' day))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "array_except(array(INTERVAL '1' DAY), array(INTERVAL '1' DAY))",
+   "type": "array<interval day>",
+   "value": "[]"
+  },
+  {
+   "expr": "array_contains(array(interval '1' day), interval '1' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "array_contains(array(INTERVAL '1' DAY), INTERVAL '1' DAY)",
+   "type": "boolean",
+   "value": "true"
+  },
+  {
+   "expr": "array_position(array(interval '1' day), interval '1' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "array_position(array(INTERVAL '1' DAY), INTERVAL '1' DAY)",
+   "type": "bigint",
+   "value": "1"
+  },
+  {
+   "expr": "array_remove(array(interval '1' day), interval '1' day)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "array_remove(array(INTERVAL '1' DAY), INTERVAL '1' DAY)",
+   "type": "array<interval day>",
+   "value": "[]"
+  },
+  {
+   "expr": "arrays_overlap(array(interval '1' day), array(interval '1' day))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "arrays_overlap(array(INTERVAL '1' DAY), array(INTERVAL '1' DAY))",
+   "type": "boolean",
+   "value": "true"
+  },
+  {
+   "expr": "sort_array(map_keys(map(interval '2' day, 1, interval '1' day, 2)))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "sort_array(map_keys(map(INTERVAL '2' DAY, 1, INTERVAL '1' DAY, 2)), true)",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY, INTERVAL '2' DAY]"
+  },
+  {
+   "expr": "array_contains(array(interval '1' day), interval '24' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
+  },
+  {
+   "expr": "array_position(array(interval '1' day), interval '24' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
+  },
+  {
+   "expr": "array_remove(array(interval '1' day), interval '24' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
+  },
+  {
+   "expr": "array_union(array(interval '1' day), array(interval '1' hour))",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES"
+  },
+  {
+   "expr": "array_append(array(interval '1' day), interval '1' hour)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
+  },
+  {
+   "expr": "map_concat(map(1, interval '1' month), map(2, interval '1' year))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_concat(map(1, INTERVAL '1' MONTH), map(2, INTERVAL '1' YEAR))",
+   "type": "map<int,interval year to month>",
+   "value": "{1 -> INTERVAL '0-1' YEAR TO MONTH, 2 -> INTERVAL '1-0' YEAR TO MONTH}"
+  },
+  {
+   "expr": "map_concat(map(interval '1' day, 1), map(interval '1' hour, 2))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_concat(map(INTERVAL '1' DAY, 1), map(INTERVAL '01' HOUR, 2))",
+   "type": "map<interval day to hour,int>",
+   "value": "{INTERVAL '1 00' DAY TO HOUR -> 1, INTERVAL '0 01' DAY TO HOUR -> 2}"
+  },
+  {
+   "expr": "map_concat(map(1, 1), map(2, 2L))",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map_concat(map(1, 1), map(2, 2))",
+   "type": "map<int,bigint>",
+   "value": "{1 -> 1, 2 -> 2}"
+  },
+  {
+   "expr": "cast(map(1, 3) as map<int, interval month>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "map(1, 3)",
+   "type": "map<int,interval month>",
+   "value": "{1 -> INTERVAL '3' MONTH}"
+  },
+  {
+   "expr": "cast(map(1, 3) as map<int, interval>)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast(array(interval '1' month) as array<int>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "array(INTERVAL '1' MONTH)",
+   "type": "array<int>",
+   "value": "[1]"
+  },
+  {
+   "expr": "cast(array(1) as array<interval month>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "array(1)",
+   "type": "array<interval month>",
+   "value": "[INTERVAL '1' MONTH]"
+  },
+  {
+   "expr": "cast(named_struct('a', interval '1' day) as struct<a:bigint>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "named_struct(a, INTERVAL '1' DAY)",
+   "type": "struct<a:bigint>",
+   "value": "{1}"
+  },
+  {
+   "expr": "cast(named_struct('a', 1) as struct<a:interval day>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "named_struct(a, 1)",
+   "type": "struct<a:interval day>",
+   "value": "{INTERVAL '1' DAY}"
+  },
+  {
+   "expr": "cast(array('1') as array<interval day>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "array(1)",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY]"
+  },
+  {
+   "expr": "cast(array('1 day') as array<interval>)",
+   "zone": "UTC",
+   "ansi": true,
+   "name": "array(1 day)",
+   "type": "array<interval>",
+   "value": "[1 days]"
+  },
+  {
+   "expr": "cast(array(interval '1' month) as array<interval>)",
+   "zone": "UTC",
+   "ansi": true,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
    "expr": "hash(interval '1' day)",
    "zone": "UTC",
    "ansi": true,
@@ -7909,6 +8825,922 @@
    "name": "CAST(map(1, INTERVAL '1' MONTH) AS STRING)",
    "type": "string",
    "value": "{1 -> INTERVAL '1' MONTH}"
+  },
+  {
+   "expr": "interval '5' month div interval '-2' month",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '5' MONTH div INTERVAL '-2' MONTH)",
+   "type": "bigint",
+   "value": "-2"
+  },
+  {
+   "expr": "interval '1' year div interval '5' month",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '1' YEAR div INTERVAL '5' MONTH)",
+   "type": "bigint",
+   "value": "2"
+  },
+  {
+   "expr": "interval '5' day div interval '2' hour",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '5' DAY div INTERVAL '02' HOUR)",
+   "type": "bigint",
+   "value": "60"
+  },
+  {
+   "expr": "interval '5' hour div interval '2' day",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '05' HOUR div INTERVAL '2' DAY)",
+   "type": "bigint",
+   "value": "0"
+  },
+  {
+   "expr": "interval '-7' day div interval '2' day",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '-7' DAY div INTERVAL '2' DAY)",
+   "type": "bigint",
+   "value": "-3"
+  },
+  {
+   "expr": "interval '5' month div interval '0' month",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '5' MONTH div INTERVAL '0' MONTH)",
+   "type": "bigint",
+   "value": null
+  },
+  {
+   "expr": "interval '5' month div interval '2' day",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '5' day div 2",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "5 div interval '2' day",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '5' day div null",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '5' DAY div NULL)",
+   "type": "bigint",
+   "value": null
+  },
+  {
+   "expr": "null div interval '5' day",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(NULL div INTERVAL '5' DAY)",
+   "type": "bigint",
+   "value": null
+  },
+  {
+   "expr": "cast(null as interval day) div interval '2' day",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(CAST(NULL AS INTERVAL DAY) div INTERVAL '2' DAY)",
+   "type": "bigint",
+   "value": null
+  },
+  {
+   "expr": "'5' div interval '2' day",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '5' day div '2'",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "interval '-178956970-8' year to month div interval '-0-1' year to month",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '-178956970-8' YEAR TO MONTH div INTERVAL '-0-1' YEAR TO MONTH)",
+   "type": "bigint",
+   "value": "-2147483648"
+  },
+  {
+   "expr": "interval '-106751991 04:00:54.775808' day to second div interval '-0.000001' second",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "(INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND div INTERVAL '-00.000001' SECOND)",
+   "type": "bigint",
+   "value": "-9223372036854775808"
+  },
+  {
+   "expr": "interval '1' day div cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+  },
+  {
+   "expr": "cast('1 day' as interval) div cast('1 day' as interval)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '0' hour, interval '10' day, 10)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '00' HOUR, INTERVAL '10' DAY, 10)",
+   "type": "bigint",
+   "value": "6"
+  },
+  {
+   "expr": "width_bucket(interval '5' month, interval '0' year, interval '10' month, 10)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "width_bucket(INTERVAL '5' MONTH, INTERVAL '0' YEAR, INTERVAL '10' MONTH, 10)",
+   "type": "bigint",
+   "value": "6"
+  },
+  {
+   "expr": "width_bucket(interval '5' month, interval '0' day, interval '10' month, 10)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, 0, 10, 10)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+  },
+  {
+   "expr": "width_bucket(5, interval '0' day, interval '10' day, 10)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+  },
+  {
+   "expr": "width_bucket(cast('5 days' as interval), cast('0 days' as interval), cast('10 days' as interval), 10)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '10' day, interval '0' day, 10)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '10' DAY, INTERVAL '0' DAY, 10)",
+   "type": "bigint",
+   "value": "6"
+  },
+  {
+   "expr": "width_bucket(interval '50' day, interval '0' day, interval '10' day, 10)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "width_bucket(INTERVAL '50' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10)",
+   "type": "bigint",
+   "value": "11"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '5' day, interval '5' day, 10)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '5' DAY, INTERVAL '5' DAY, 10)",
+   "type": "bigint",
+   "value": null
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '0' day, interval '10' day, 0)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 0)",
+   "type": "bigint",
+   "value": null
+  },
+  {
+   "expr": "width_bucket(null, interval '0' day, interval '10' day, 10)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, null, interval '10' day, 10)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '0' day, interval '10' day, null)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, NULL)",
+   "type": "bigint",
+   "value": null
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '0' day, interval '10' day, '10')",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10)",
+   "type": "bigint",
+   "value": "6"
+  },
+  {
+   "expr": "width_bucket(interval '5' day, interval '0' day, interval '10' day, 10.0)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "width_bucket(INTERVAL '5' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10.0)",
+   "type": "bigint",
+   "value": "6"
+  },
+  {
+   "expr": "width_bucket('5', interval '0' day, interval '10' day, 10)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+  },
+  {
+   "expr": "map(interval '1' day, 'a', interval '24' hour, 'b')",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(INTERVAL '1' DAY, a, INTERVAL '24' HOUR, b)",
+   "type": "map<interval day to hour,string>",
+   "value_error_class": "DUPLICATED_MAP_KEY"
+  },
+  {
+   "expr": "map(interval '12' month, 'a', interval '1' year, 'b')",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(INTERVAL '12' MONTH, a, INTERVAL '1' YEAR, b)",
+   "type": "map<interval year to month,string>",
+   "value_error_class": "DUPLICATED_MAP_KEY"
+  },
+  {
+   "expr": "map(interval '1' day, interval '1' month)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(INTERVAL '1' DAY, INTERVAL '1' MONTH)",
+   "type": "map<interval day,interval month>",
+   "value": "{INTERVAL '1' DAY -> INTERVAL '1' MONTH}"
+  },
+  {
+   "expr": "map(interval '1' day, 1, interval '1' hour, 2)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(INTERVAL '1' DAY, 1, INTERVAL '01' HOUR, 2)",
+   "type": "map<interval day to hour,int>",
+   "value": "{INTERVAL '1 00' DAY TO HOUR -> 1, INTERVAL '0 01' DAY TO HOUR -> 2}"
+  },
+  {
+   "expr": "map(interval '1' day, 1, null, 2)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(INTERVAL '1' DAY, 1, NULL, 2)",
+   "type": "map<interval day,int>",
+   "value_error_class": "NULL_MAP_KEY"
+  },
+  {
+   "expr": "map(1, cast(null as interval day))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, CAST(NULL AS INTERVAL DAY))",
+   "type": "map<int,interval day>",
+   "value": "{1 -> null}"
+  },
+  {
+   "expr": "map(1, interval '1' day, 2, interval '1' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, INTERVAL '1' DAY, 2, INTERVAL '01' HOUR)",
+   "type": "map<int,interval day to hour>",
+   "value": "{1 -> INTERVAL '1 00' DAY TO HOUR, 2 -> INTERVAL '0 01' DAY TO HOUR}"
+  },
+  {
+   "expr": "map(1, interval '1' day, 2, interval '1' month)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+  },
+  {
+   "expr": "map(cast('1 day' as interval), 1)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(CAST(1 day AS INTERVAL), 1)",
+   "type": "map<interval,int>",
+   "value": "{1 days -> 1}"
+  },
+  {
+   "expr": "map(1, cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, CAST(1 day AS INTERVAL))",
+   "type": "map<int,interval>",
+   "value": "{1 -> 1 days}"
+  },
+  {
+   "expr": "map(1, cast(null as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, CAST(NULL AS INTERVAL))",
+   "type": "map<int,interval>",
+   "value": "{1 -> null}"
+  },
+  {
+   "expr": "cast(map(1, cast('1 day' as interval)) as string)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "CAST(map(1, CAST(1 day AS INTERVAL)) AS STRING)",
+   "type": "string",
+   "value": "{1 -> 1 days}"
+  },
+  {
+   "expr": "map(cast('1 day' as interval), 1, cast('1 day' as interval), 2)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(CAST(1 day AS INTERVAL), 1, CAST(1 day AS INTERVAL), 2)",
+   "type": "map<interval,int>",
+   "value_error_class": "DUPLICATED_MAP_KEY"
+  },
+  {
+   "expr": "map(cast('1 day' as interval), 1, cast('24 hours' as interval), 2)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(CAST(1 day AS INTERVAL), 1, CAST(24 hours AS INTERVAL), 2)",
+   "type": "map<interval,int>",
+   "value": "{1 days -> 1, 24 hours -> 2}"
+  },
+  {
+   "expr": "map(1, map(interval '1' day, interval '1' month))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, map(INTERVAL '1' DAY, INTERVAL '1' MONTH))",
+   "type": "map<int,map<interval day,interval month>>",
+   "value": "{1 -> {INTERVAL '1' DAY -> INTERVAL '1' MONTH}}"
+  },
+  {
+   "expr": "map(array(interval '1' day), 1)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(array(INTERVAL '1' DAY), 1)",
+   "type": "map<array<interval day>,int>",
+   "value": "{[INTERVAL '1' DAY] -> 1}"
+  },
+  {
+   "expr": "map(array(interval '1' day), 1, array(interval '24' hour), 2)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(array(INTERVAL '1' DAY), 1, array(INTERVAL '24' HOUR), 2)",
+   "type": "map<array<interval day to hour>,int>",
+   "value_error_class": "DUPLICATED_MAP_KEY"
+  },
+  {
+   "expr": "map(named_struct('a', interval '1' day), 1)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(named_struct(a, INTERVAL '1' DAY), 1)",
+   "type": "map<struct<a:interval day>,int>",
+   "value": "{{INTERVAL '1' DAY} -> 1}"
+  },
+  {
+   "expr": "map(1, array(interval '1' month))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, array(INTERVAL '1' MONTH))",
+   "type": "map<int,array<interval month>>",
+   "value": "{1 -> [INTERVAL '1' MONTH]}"
+  },
+  {
+   "expr": "map(1, named_struct('a', interval '1' month))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, named_struct(a, INTERVAL '1' MONTH))",
+   "type": "map<int,struct<a:interval month>>",
+   "value": "{1 -> {INTERVAL '1' MONTH}}"
+  },
+  {
+   "expr": "map_keys(map(interval '1' day, 1))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_keys(map(INTERVAL '1' DAY, 1))",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY]"
+  },
+  {
+   "expr": "map_values(map(1, interval '1' month))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_values(map(1, INTERVAL '1' MONTH))",
+   "type": "array<interval month>",
+   "value": "[INTERVAL '1' MONTH]"
+  },
+  {
+   "expr": "map_entries(map(interval '1' day, interval '1' month))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_entries(map(INTERVAL '1' DAY, INTERVAL '1' MONTH))",
+   "type": "array<struct<key:interval day,value:interval month>>",
+   "value": "[{INTERVAL '1' DAY, INTERVAL '1' MONTH}]"
+  },
+  {
+   "expr": "map_keys(map(cast('1 day' as interval), 1))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_keys(map(CAST(1 day AS INTERVAL), 1))",
+   "type": "array<interval>",
+   "value": "[1 days]"
+  },
+  {
+   "expr": "map_contains_key(map(interval '1' day, 1), interval '1' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_contains_key(map(INTERVAL '1' DAY, 1), INTERVAL '1' DAY)",
+   "type": "boolean",
+   "value": "true"
+  },
+  {
+   "expr": "map_contains_key(map(interval '1' day, 1), interval '24' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.MAP_FUNCTION_DIFF_TYPES"
+  },
+  {
+   "expr": "map_contains_key(map(cast('1 day' as interval), 1), cast('1 day' as interval))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "map(interval '1' day, 1)[interval '1' day]",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(INTERVAL '1' DAY, 1)[INTERVAL '1' DAY]",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "map(interval '1' day, 1)[interval '24' hour]",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+  },
+  {
+   "expr": "map(cast('1 day' as interval), 1)[cast('1 day' as interval)]",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "element_at(map(interval '1' day, 1), interval '1' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "element_at(map(INTERVAL '1' DAY, 1), INTERVAL '1' DAY)",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "element_at(map(interval '1' day, 1), interval '24' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.MAP_FUNCTION_DIFF_TYPES"
+  },
+  {
+   "expr": "try_element_at(map(interval '1' month, 1), interval '2' month)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "try_element_at(map(INTERVAL '1' MONTH, 1), INTERVAL '2' MONTH)",
+   "type": "int",
+   "value": null
+  },
+  {
+   "expr": "map_from_arrays(array(interval '1' day), array(1))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_from_arrays(array(INTERVAL '1' DAY), array(1))",
+   "type": "map<interval day,int>",
+   "value": "{INTERVAL '1' DAY -> 1}"
+  },
+  {
+   "expr": "map_from_arrays(array(1), array(interval '1' month))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_from_arrays(array(1), array(INTERVAL '1' MONTH))",
+   "type": "map<int,interval month>",
+   "value": "{1 -> INTERVAL '1' MONTH}"
+  },
+  {
+   "expr": "map_from_arrays(array(interval '1' day, interval '1' day), array(1, 2))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_from_arrays(array(INTERVAL '1' DAY, INTERVAL '1' DAY), array(1, 2))",
+   "type": "map<interval day,int>",
+   "value_error_class": "DUPLICATED_MAP_KEY"
+  },
+  {
+   "expr": "map_from_arrays(array(cast('1 day' as interval)), array(1))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_from_arrays(array(CAST(1 day AS INTERVAL)), array(1))",
+   "type": "map<interval,int>",
+   "value": "{1 days -> 1}"
+  },
+  {
+   "expr": "map_from_entries(array(named_struct('k', interval '1' day, 'v', 1)))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_from_entries(array(named_struct(k, INTERVAL '1' DAY, v, 1)))",
+   "type": "map<interval day,int>",
+   "value": "{INTERVAL '1' DAY -> 1}"
+  },
+  {
+   "expr": "map_from_entries(array(named_struct('k', 1, 'v', interval '1' month)))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_from_entries(array(named_struct(k, 1, v, INTERVAL '1' MONTH)))",
+   "type": "map<int,interval month>",
+   "value": "{1 -> INTERVAL '1' MONTH}"
+  },
+  {
+   "expr": "map_from_entries(array(named_struct('k', cast('1 day' as interval), 'v', 1)))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_from_entries(array(named_struct(k, CAST(1 day AS INTERVAL), v, 1)))",
+   "type": "map<interval,int>",
+   "value": "{1 days -> 1}"
+  },
+  {
+   "expr": "map_concat(map(interval '1' day, 1), map(interval '2' day, 2))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_concat(map(INTERVAL '1' DAY, 1), map(INTERVAL '2' DAY, 2))",
+   "type": "map<interval day,int>",
+   "value": "{INTERVAL '1' DAY -> 1, INTERVAL '2' DAY -> 2}"
+  },
+  {
+   "expr": "map_concat(map(1, interval '1' day), map(2, interval '2' hour))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_concat(map(1, INTERVAL '1' DAY), map(2, INTERVAL '02' HOUR))",
+   "type": "map<int,interval day to hour>",
+   "value": "{1 -> INTERVAL '1 00' DAY TO HOUR, 2 -> INTERVAL '0 02' DAY TO HOUR}"
+  },
+  {
+   "expr": "map_concat(map(cast('1 day' as interval), 1), map(cast('1 day' as interval), 2))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_concat(map(CAST(1 day AS INTERVAL), 1), map(CAST(1 day AS INTERVAL), 2))",
+   "type": "map<interval,int>",
+   "value_error_class": "DUPLICATED_MAP_KEY"
+  },
+  {
+   "expr": "size(map(1, interval '1' day))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "size(map(1, INTERVAL '1' DAY))",
+   "type": "int",
+   "value": "1"
+  },
+  {
+   "expr": "named_struct('a', map(1, interval '1' day))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "named_struct(a, map(1, INTERVAL '1' DAY))",
+   "type": "struct<a:map<int,interval day>>",
+   "value": "{{1 -> INTERVAL '1' DAY}}"
+  },
+  {
+   "expr": "array(map(1, interval '1' month))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "array(map(1, INTERVAL '1' MONTH))",
+   "type": "array<map<int,interval month>>",
+   "value": "[{1 -> INTERVAL '1' MONTH}]"
+  },
+  {
+   "expr": "explode(map(interval '1' day, interval '1' month))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "key",
+   "type": "interval day",
+   "value": "INTERVAL '1' DAY"
+  },
+  {
+   "expr": "cast(map('a', interval '1' month) as map<string,string>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(a, INTERVAL '1' MONTH)",
+   "type": "map<string,string>",
+   "value": "{a -> INTERVAL '1' MONTH}"
+  },
+  {
+   "expr": "cast(map(interval '1' month, 'a') as map<string,string>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(INTERVAL '1' MONTH, a)",
+   "type": "map<string,string>",
+   "value": "{INTERVAL '1' MONTH -> a}"
+  },
+  {
+   "expr": "cast(map(1, interval '1' day) as map<int, interval hour>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, INTERVAL '1' DAY)",
+   "type": "map<int,interval hour>",
+   "value": "{1 -> INTERVAL '24' HOUR}"
+  },
+  {
+   "expr": "cast(map(1, interval '25' hour) as map<int, interval day>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, INTERVAL '25' HOUR)",
+   "type": "map<int,interval day>",
+   "value": "{1 -> INTERVAL '1' DAY}"
+  },
+  {
+   "expr": "cast(map(1, interval '1' month) as map<bigint, interval year>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, INTERVAL '1' MONTH)",
+   "type": "map<bigint,interval year>",
+   "value": "{1 -> INTERVAL '0' YEAR}"
+  },
+  {
+   "expr": "cast(map(1, interval '1' month) as map<int, int>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, INTERVAL '1' MONTH)",
+   "type": "map<int,int>",
+   "value": "{1 -> 1}"
+  },
+  {
+   "expr": "cast(map(interval '1' day, 1) as map<interval hour, bigint>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(INTERVAL '1' DAY, 1)",
+   "type": "map<interval hour,bigint>",
+   "value": "{INTERVAL '24' HOUR -> 1}"
+  },
+  {
+   "expr": "cast(map(1, interval '1' month) as map<int,interval>)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast(map(1, cast('1 day' as interval)) as map<int,string>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, CAST(1 day AS INTERVAL))",
+   "type": "map<int,string>",
+   "value": "{1 -> 1 days}"
+  },
+  {
+   "expr": "cast(map(cast('1 day' as interval), 1) as map<string,int>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(CAST(1 day AS INTERVAL), 1)",
+   "type": "map<string,int>",
+   "value": "{1 days -> 1}"
+  },
+  {
+   "expr": "cast(map(1, cast('1 day' as interval)) as map<int,interval>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, CAST(1 day AS INTERVAL))",
+   "type": "map<int,interval>",
+   "value": "{1 -> 1 days}"
+  },
+  {
+   "expr": "map(1, interval '1' day) = map(1, interval '1' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "to_json(map('a', interval '1' month))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "to_json(map(a, INTERVAL '1' MONTH))",
+   "type": "string",
+   "value": "{\"a\":\"INTERVAL '1' MONTH\"}"
+  },
+  {
+   "expr": "to_json(map(1, cast('1 day' as interval)))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "to_json(map(1, CAST(1 day AS INTERVAL)))",
+   "type": "string",
+   "value": "{\"1\":\"1 days\"}"
+  },
+  {
+   "expr": "array_distinct(array(interval '1' day, interval '1' day))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "array_distinct(array(INTERVAL '1' DAY, INTERVAL '1' DAY))",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY]"
+  },
+  {
+   "expr": "array_distinct(array(cast('1 day' as interval), cast('1 day' as interval)))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+  },
+  {
+   "expr": "array_union(array(interval '1' day), array(interval '2' day))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "array_union(array(INTERVAL '1' DAY), array(INTERVAL '2' DAY))",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY, INTERVAL '2' DAY]"
+  },
+  {
+   "expr": "array_intersect(array(interval '1' day), array(interval '1' day))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "array_intersect(array(INTERVAL '1' DAY), array(INTERVAL '1' DAY))",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY]"
+  },
+  {
+   "expr": "array_except(array(interval '1' day), array(interval '1' day))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "array_except(array(INTERVAL '1' DAY), array(INTERVAL '1' DAY))",
+   "type": "array<interval day>",
+   "value": "[]"
+  },
+  {
+   "expr": "array_contains(array(interval '1' day), interval '1' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "array_contains(array(INTERVAL '1' DAY), INTERVAL '1' DAY)",
+   "type": "boolean",
+   "value": "true"
+  },
+  {
+   "expr": "array_position(array(interval '1' day), interval '1' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "array_position(array(INTERVAL '1' DAY), INTERVAL '1' DAY)",
+   "type": "bigint",
+   "value": "1"
+  },
+  {
+   "expr": "array_remove(array(interval '1' day), interval '1' day)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "array_remove(array(INTERVAL '1' DAY), INTERVAL '1' DAY)",
+   "type": "array<interval day>",
+   "value": "[]"
+  },
+  {
+   "expr": "arrays_overlap(array(interval '1' day), array(interval '1' day))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "arrays_overlap(array(INTERVAL '1' DAY), array(INTERVAL '1' DAY))",
+   "type": "boolean",
+   "value": "true"
+  },
+  {
+   "expr": "sort_array(map_keys(map(interval '2' day, 1, interval '1' day, 2)))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "sort_array(map_keys(map(INTERVAL '2' DAY, 1, INTERVAL '1' DAY, 2)), true)",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY, INTERVAL '2' DAY]"
+  },
+  {
+   "expr": "array_contains(array(interval '1' day), interval '24' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
+  },
+  {
+   "expr": "array_position(array(interval '1' day), interval '24' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
+  },
+  {
+   "expr": "array_remove(array(interval '1' day), interval '24' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
+  },
+  {
+   "expr": "array_union(array(interval '1' day), array(interval '1' hour))",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.BINARY_ARRAY_DIFF_TYPES"
+  },
+  {
+   "expr": "array_append(array(interval '1' day), interval '1' hour)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.ARRAY_FUNCTION_DIFF_TYPES"
+  },
+  {
+   "expr": "map_concat(map(1, interval '1' month), map(2, interval '1' year))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_concat(map(1, INTERVAL '1' MONTH), map(2, INTERVAL '1' YEAR))",
+   "type": "map<int,interval year to month>",
+   "value": "{1 -> INTERVAL '0-1' YEAR TO MONTH, 2 -> INTERVAL '1-0' YEAR TO MONTH}"
+  },
+  {
+   "expr": "map_concat(map(interval '1' day, 1), map(interval '1' hour, 2))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_concat(map(INTERVAL '1' DAY, 1), map(INTERVAL '01' HOUR, 2))",
+   "type": "map<interval day to hour,int>",
+   "value": "{INTERVAL '1 00' DAY TO HOUR -> 1, INTERVAL '0 01' DAY TO HOUR -> 2}"
+  },
+  {
+   "expr": "map_concat(map(1, 1), map(2, 2L))",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map_concat(map(1, 1), map(2, 2))",
+   "type": "map<int,bigint>",
+   "value": "{1 -> 1, 2 -> 2}"
+  },
+  {
+   "expr": "cast(map(1, 3) as map<int, interval month>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "map(1, 3)",
+   "type": "map<int,interval month>",
+   "value": "{1 -> INTERVAL '3' MONTH}"
+  },
+  {
+   "expr": "cast(map(1, 3) as map<int, interval>)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+  },
+  {
+   "expr": "cast(array(interval '1' month) as array<int>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "array(INTERVAL '1' MONTH)",
+   "type": "array<int>",
+   "value": "[1]"
+  },
+  {
+   "expr": "cast(array(1) as array<interval month>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "array(1)",
+   "type": "array<interval month>",
+   "value": "[INTERVAL '1' MONTH]"
+  },
+  {
+   "expr": "cast(named_struct('a', interval '1' day) as struct<a:bigint>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "named_struct(a, INTERVAL '1' DAY)",
+   "type": "struct<a:bigint>",
+   "value": "{1}"
+  },
+  {
+   "expr": "cast(named_struct('a', 1) as struct<a:interval day>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "named_struct(a, 1)",
+   "type": "struct<a:interval day>",
+   "value": "{INTERVAL '1' DAY}"
+  },
+  {
+   "expr": "cast(array('1') as array<interval day>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "array(1)",
+   "type": "array<interval day>",
+   "value": "[INTERVAL '1' DAY]"
+  },
+  {
+   "expr": "cast(array('1 day') as array<interval>)",
+   "zone": "UTC",
+   "ansi": false,
+   "name": "array(1 day)",
+   "type": "array<interval>",
+   "value": "[1 days]"
+  },
+  {
+   "expr": "cast(array(interval '1' month) as array<interval>)",
+   "zone": "UTC",
+   "ansi": false,
+   "error_class": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
   },
   {
    "expr": "hash(interval '1' day)",

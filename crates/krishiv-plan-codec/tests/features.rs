@@ -1210,6 +1210,31 @@ fn interval_types_and_literals_need_their_feature() {
     }
 }
 
+/// The analyzer's internal functions travel by name, and an older reader
+/// refuses them through the interval feature.
+#[test]
+fn internal_interval_functions_travel_by_name_under_their_feature() {
+    use krishiv_plan::{Builtin, FunctionId};
+    for b in [
+        Builtin::DateAddInterval,
+        Builtin::MultiplyInterval,
+        Builtin::DivideInterval,
+        Builtin::CalendarAdd,
+        Builtin::CalendarSubtract,
+        Builtin::CalendarNegate,
+    ] {
+        assert!(Builtin::ALL.contains(&b), "{b:?}");
+        assert!(b.is_analyzer_internal(), "{b:?}");
+        assert_eq!(Builtin::from_name(b.name()), Some(b));
+        let id = FunctionId::Builtin(b);
+        assert_eq!(
+            feature_of(Construct::Function(&id)),
+            Some(Feature::IntervalTypes),
+            "{b:?}"
+        );
+    }
+}
+
 /// An interval type's fields are external input: a missing field, fields
 /// that do not increase and fields on another type are corrupt.
 #[test]

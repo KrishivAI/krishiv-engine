@@ -63,6 +63,47 @@ pub enum ScaleOp {
     Divide,
 }
 
+/// Year-month `l div r` (`IntegralDivide`): a `bigint` truncated towards zero.
+/// A zero divisor is NULL unless `ansi`; `MIN div -1` wraps at the `int`, ANSI on
+/// or off.
+///
+/// # Errors
+/// `DIVIDE_BY_ZERO` under `ansi`.
+pub fn integral_divide_year_month(
+    l: Operand<'_, IntervalYearMonthType>,
+    r: Operand<'_, IntervalYearMonthType>,
+    ansi: bool,
+) -> Result<PrimitiveArray<Int64Type>, KernelError> {
+    map2::<_, _, Int64Type>(
+        l,
+        r,
+        // Past the zero check, only `MIN div -1` has no quotient: it wraps to `MIN`.
+        |a, b| (b != 0).then(|| i64::from(a.checked_div(b).unwrap_or(a))),
+        !ansi,
+        KernelError::divide_by_zero,
+    )
+}
+
+/// Day-time `l div r` (`IntegralDivide`): a `bigint` truncated towards zero. A
+/// zero divisor is NULL unless `ansi`; `MIN div -1` wraps, ANSI on or off.
+///
+/// # Errors
+/// `DIVIDE_BY_ZERO` under `ansi`.
+pub fn integral_divide_day_time(
+    l: Operand<'_, DurationMicrosecondType>,
+    r: Operand<'_, DurationMicrosecondType>,
+    ansi: bool,
+) -> Result<PrimitiveArray<Int64Type>, KernelError> {
+    map2::<_, _, Int64Type>(
+        l,
+        r,
+        // Past the zero check, only `MIN div -1` has no quotient: it wraps to `MIN`.
+        |a, b| (b != 0).then(|| a.checked_div(b).unwrap_or(a)),
+        !ansi,
+        KernelError::divide_by_zero,
+    )
+}
+
 /// Year-month `l op r`; an overflow is NULL if `null_on_overflow`.
 ///
 /// # Errors

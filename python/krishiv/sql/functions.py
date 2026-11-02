@@ -126,8 +126,8 @@ def convert_timezone(sourceTz: Column | None, targetTz: Column, sourceTs: Column
     )
 
 
-def _field_or_zero(col: ColumnOrName | None, name: str) -> Column:
-    return lit(0) if col is None else _named(col, name)
+def _field_or_zero(col: ColumnOrName | None, name: str) -> _native.Column:
+    return _literal(0) if col is None else _named(col, name)
 
 
 def make_ym_interval(years: ColumnOrName | None = None, months: ColumnOrName | None = None) -> Column:
