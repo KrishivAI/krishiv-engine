@@ -102,6 +102,10 @@ jobs:
         run: |
           # One slice (every 7th mutant) per night: the full set is swept
           # once a week, and a slice is a representative sample of it.
+          if [ -n "$SHARD_INPUT" ] && ! [[ "$SHARD_INPUT" =~ ^[0-6]$ ]]; then
+            echo "::error::the shard input must be a single digit 0-6, got '$SHARD_INPUT'" >&2
+            exit 1
+          fi
           NIGHT="${SHARD_INPUT:-$(( 10#$(date -u +%j) % SHARDS ))}"
           # A night's slice is cut into PARTS pieces, one per job: piece `PART` is shard
           # NIGHT*PARTS+PART-1 of SHARDS*PARTS, so the pieces together are the slice.
@@ -172,10 +176,22 @@ jobs:
         run: |
           args=()
           shopt -s nullglob # no shard file: every area is reported untested
+          # Parts per area (the `parts` of the matrix). An area with a part missing (its job
+          # failed or timed out before writing outcomes) is reported untested, never scored
+          # from the parts that did arrive.
+          declare -A EXPECT=([kernels]=2 [hash]=1 [parser]=1 [serialization]=1)
+          declare -A HAVE=()
           for f in shards/*.json; do
-            # `kernels.2.json` is part 2 of the kernels area.
-            area="$(basename "$f" .json)"
-            args+=("${area%%.*}=$f")
+            area="$(basename "$f" .json)"; area="${area%%.*}" # `kernels.2.json` is part 2
+            HAVE[$area]=$(( ${HAVE[$area]:-0} + 1 ))
+          done
+          for f in shards/*.json; do
+            area="$(basename "$f" .json)"; area="${area%%.*}"
+            if [ "${HAVE[$area]}" -ne "${EXPECT[$area]:-1}" ]; then
+              echo "::warning::$area has ${HAVE[$area]} of ${EXPECT[$area]:-1} parts; reported untested" >&2
+              continue
+            fi
+            args+=("$area=$f")
           done
           python3 tests/scripts/mutation_score.py --floors tests/mutation-floors.json \
             --out mutation-score.json "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
