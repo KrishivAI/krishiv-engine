@@ -1088,6 +1088,9 @@ impl Session {
                 .get(&krishiv_common::config::SQL_DEFAULT_PATH)
                 .map(ToString::to_string)
                 .unwrap_or_default(),
+            crate::system::Sources {
+                memory: Arc::clone(&self.state.memory),
+            },
         ));
         let resolution = {
             let values = conf_values(&config, &ResolutionConf::KEYS);

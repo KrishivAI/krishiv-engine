@@ -377,6 +377,8 @@ pub(crate) struct QueryCatalog {
     namespace: Vec<String>,
     /// The SQL path (`SET PATH`) as this query sees it.
     path: Vec<Vec<String>>,
+    /// What the `system` tables read.
+    system: crate::system::Sources,
 }
 
 impl QueryCatalog {
@@ -406,6 +408,7 @@ impl QueryCatalog {
         files: Arc<FileReads>,
         scans: FileScans,
         default_path: &str,
+        system: crate::system::Sources,
     ) -> Self {
         let epoch = session.epoch();
         let namespace = vec![session.current_namespace()];
@@ -421,6 +424,7 @@ impl QueryCatalog {
             epoch,
             namespace,
             path,
+            system,
         }
     }
 
@@ -1124,6 +1128,9 @@ impl CatalogResolver for QueryCatalogs {
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
+        if crate::system::is_system(name) {
+            return Some(Arc::new(crate::system::SystemCatalog));
+        }
         name.eq_ignore_ascii_case(CATALOG)
             .then(|| Arc::clone(&self.0) as Arc<dyn Catalog>)
     }
@@ -1136,6 +1143,17 @@ impl CatalogResolver for QueryCatalogs {
 impl TableProviderResolver for QueryCatalog {
     fn provider(&self, scan: &Scan) -> Result<Arc<dyn TableProvider>, KrishivError> {
         match &scan.source {
+            ReadSource::Table { name, .. } if crate::system::is_system_table(name) => {
+                let table = name.last().map_or("", String::as_str);
+                crate::system::provider(table, &self.system)?
+                    .map(|t| t as Arc<dyn TableProvider>)
+                    .ok_or_else(|| {
+                        InternalError {
+                            message: format!("the system table {table} does not exist"),
+                        }
+                        .into()
+                    })
+            }
             ReadSource::Table { name, .. } => {
                 let last = name.last().map_or("", String::as_str);
                 // Analysis loaded every table a scan names.
@@ -1981,6 +1999,11 @@ impl Pinner<'_> {
         {
             if is_hidden_name(last) || is_cache_name(last) {
                 self.owned.insert(last.to_lowercase());
+                return Ok(Arc::clone(plan));
+            }
+            // A `system` table is the engine's, whatever the session names
+            // its own tables: it is read as it is when the view is queried.
+            if crate::system::is_system_table(name) {
                 return Ok(Arc::clone(plan));
             }
             let key = last.to_lowercase();

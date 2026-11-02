@@ -103,6 +103,17 @@ pub struct Disagreement {
     pub detail: String,
 }
 
+impl Disagreement {
+    /// Whether the engine refused the query as an unsupported feature
+    /// (`KRISHIV_UNSUPPORTED_FEATURE`): not a wrong answer, so a generated
+    /// query that hits one is counted and listed but is not a new failure.
+    #[must_use]
+    pub fn unsupported(&self) -> bool {
+        self.detail
+            .starts_with("engine failed: KRISHIV_UNSUPPORTED_FEATURE")
+    }
+}
+
 /// Runs every query; returns the ones that disagree.
 pub fn run(queries: &[Query], runner: &mut dyn QueryRunner) -> Vec<Disagreement> {
     queries
