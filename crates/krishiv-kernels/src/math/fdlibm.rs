@@ -336,6 +336,26 @@ mod tests {
             (f64::NEG_INFINITY, f64::INFINITY)
         );
         assert!(log(-1.0).is_nan());
+        // Spark 4.2.0 (`StrictMath.log`) on every branch of `e_log.c`: a
+        // subnormal, near one, either side of sqrt(2)/2 and 2, the largest
+        // finite value, -0.0, NaN and -inf.
+        for (x, want) in [
+            (0.5, -std::f64::consts::LN_2),
+            (4.9e-324, -744.440_071_921_381_2),
+            (1.0e-310, -713.801_378_828_154_2),
+            (2.5e-300, -689.859_237_166_339_5),
+            (1.000_000_1, 9.999_999_505_838_704e-8),
+            (0.999_999_9, -1.000_000_049_473_647_4e-7),
+            (1.797_693_134_862_315_7e308, 709.782_712_893_384),
+            (10.0, std::f64::consts::LN_10),
+            (3.0, 1.098_612_288_668_109_6),
+            (0.75, -0.287_682_072_451_780_9),
+            (1.5, 0.405_465_108_108_164_4),
+        ] {
+            assert_eq!(log(x), want, "log({x})");
+        }
+        assert_eq!(log(-0.0), f64::NEG_INFINITY);
+        assert!(log(f64::NAN).is_nan() && log(f64::NEG_INFINITY).is_nan());
         assert!(log10(-1.0).is_nan() && log10(f64::NAN).is_nan());
         assert!((log10(5e-324) + 323.306_215_343_115_9).abs() < 1e-9);
         assert_eq!(

@@ -505,3 +505,32 @@ fn a_region_session_zone_serves_the_calls_that_read_it() {
         text(&[Some("2024-01-05")])
     );
 }
+
+/// Under LEGACY a fixed-offset session zone prints as `GMT+hh:mm` (Spark
+/// 4.2.0), `ZZ` has no colon, and `to_timestamp_ntz` keeps the corrected
+/// parser.
+#[test]
+fn legacy_names_a_fixed_offset_zone_and_ntz_keeps_the_corrected_parser() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = LEGACY")).unwrap();
+    for zone in ["+05:30", "UTC+05:30"] {
+        block_on(s.sql(&format!("SET spark.sql.session.timeZone = {zone}"))).unwrap();
+        assert_eq!(
+            column(
+                &s,
+                "date_format(TIMESTAMP '2024-01-01 00:00:00', 'z zzzz ZZ')",
+                ""
+            ),
+            text(&[Some("GMT+05:30 GMT+05:30 +0530")]),
+            "{zone}"
+        );
+    }
+    assert_eq!(
+        column(
+            &s,
+            "CAST(to_timestamp_ntz('2024-01-01 00:00:00.000123', 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS STRING)",
+            ""
+        ),
+        text(&[Some("2024-01-01 00:00:00.000123")])
+    );
+}

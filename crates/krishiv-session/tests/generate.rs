@@ -778,14 +778,14 @@ fn order_by_a_grouping_column_the_generator_select_does_not_list() {
     assert_eq!(
         rows(
             &s,
-            &format!("select explode(arr) e from {v} group by k, arr order by k")
+            &format!("select explode(arr) e from {v} group by k, arr order by k, e")
         ),
         table(&[&["1"], &["2"], &["3"]])
     );
     assert_eq!(
         rows(
             &s,
-            &format!("select explode(arr) e, k from {v} group by k, arr order by k")
+            &format!("select explode(arr) e, k from {v} group by k, arr order by k, e")
         ),
         table(&[&["1", "1"], &["2", "1"], &["3", "2"]])
     );
@@ -855,16 +855,16 @@ fn generators_beside_aliases_aggregates_and_windows() {
     assert_eq!(
         rows(
             &s,
-            "select explode(collect_list(x)) from values (1),(2) t(x)"
+            "select explode(array_sort(collect_list(x))) from values (1),(2) t(x)"
         ),
         table(&[&["1"], &["2"]])
     );
     assert_eq!(
         rows(
             &s,
-            "select explode(arr) e, row_number() over (order by k) rn from values (1, array(1,2)) t(k, arr)"
+            "select count(*), sum(rn), max(rn) from (select explode(arr) e, row_number() over (order by k) rn from values (1, array(1,2)) t(k, arr))"
         ),
-        table(&[&["1", "1"], &["2", "2"]])
+        table(&[&["2", "3", "2"]])
     );
     assert_eq!(
         rows(

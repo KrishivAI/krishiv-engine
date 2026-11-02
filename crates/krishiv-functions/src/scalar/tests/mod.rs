@@ -309,7 +309,14 @@ fn literal_arguments_are_broadcast() {
     let add = bind("date_add", &[&max, &one]);
     let out = add.invoke(&[lit(&max), lit(&one)], 0).unwrap();
     assert_eq!((out.len(), out.data_type()), (0, &DataType::Date32));
-    assert!(add.invoke(&[lit(&max), lit(&one)], 1).is_ok());
+    let wrapped = add.invoke(&[lit(&max), lit(&one)], 1).unwrap();
+    assert_eq!(
+        wrapped
+            .as_primitive::<Date32Type>()
+            .iter()
+            .collect::<Vec<_>>(),
+        vec![Some(i32::MIN)]
+    );
     let null = strs(&[None]);
     let p = ints(&[Some(1)]);
     let f = bind("substring", &[&null, &p]);

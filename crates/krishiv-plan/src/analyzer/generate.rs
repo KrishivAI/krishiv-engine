@@ -192,7 +192,7 @@ impl Resolver<'_> {
                 _ => (item, None, None),
             };
             let is_stack = matches!(&inner.node, ExprNode::Function(f)
-                if f.unqualified() == Some("stack") && f.args.len() >= 2);
+                if f.unqualified().is_some_and(|n| n.eq_ignore_ascii_case("stack")) && f.args.len() >= 2);
             if !is_stack {
                 out.push(Arc::clone(item));
                 continue;
@@ -231,7 +231,11 @@ impl Resolver<'_> {
         let ExprNode::Function(f) = &arg.node else {
             return Ok(Arc::clone(arg));
         };
-        if f.unqualified() != Some("stack") || f.args.len() < 2 {
+        if !f
+            .unqualified()
+            .is_some_and(|n| n.eq_ignore_ascii_case("stack"))
+            || f.args.len() < 2
+        {
             return Ok(Arc::clone(arg));
         }
         let origin = arg.origin;

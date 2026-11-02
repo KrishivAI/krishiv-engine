@@ -403,7 +403,9 @@ impl Detached {
             loops.entry(*id).or_insert_with(|| Arc::clone(table));
         }
         let mut env = self.env.clone();
-        env.partition_shift = partition_shift;
+        // A loop inside a round of an outer loop keeps the outer round's
+        // shift: the two compose instead of the inner one replacing it.
+        env.partition_shift = env.partition_shift.saturating_add(partition_shift);
         let run = || {
             let mut cx = Instantiation {
                 worker: &self.worker,

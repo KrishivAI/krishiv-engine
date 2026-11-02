@@ -1624,7 +1624,9 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     })),
                 ));
             }
-            let pat = match pattern_arg(args, 1, Purpose::Parse, opts.legacy_time_parser) {
+            // Spark's formatter factory keeps TIMESTAMP_NTZ on the corrected
+            // parser under LEGACY.
+            let pat = match pattern_arg(args, 1, Purpose::Parse, false) {
                 Ok(p) => p,
                 Err(e) => return Some((listed, Err(e))),
             };

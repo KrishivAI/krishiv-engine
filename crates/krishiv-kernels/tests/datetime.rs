@@ -177,6 +177,7 @@ fn day_arithmetic_wraps_like_java_int_with_or_without_ansi() {
     for (sub, days) in [(false, i32::MAX), (true, i32::MIN)] {
         let ansi = run(sub, days, OverflowMode::AnsiError).unwrap();
         let wrapped = run(sub, days, wrap).unwrap();
+        assert!(ansi.is_valid(0));
         assert_eq!(ansi.value(0), wrapped.value(0));
         // try_add / try_subtract: NULL.
         assert!(

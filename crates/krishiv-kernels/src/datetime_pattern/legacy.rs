@@ -56,6 +56,9 @@ enum Tok {
 pub struct LegacyPattern {
     pattern: String,
     toks: Vec<Tok>,
+    /// The date the two-digit year window is anchored to, read once when
+    /// the pattern is compiled so every parse of it maps years alike.
+    today: (i64, u32, u32),
 }
 
 impl LegacyPattern {
@@ -126,6 +129,7 @@ impl LegacyPattern {
         Ok(Self {
             pattern: pattern.to_owned(),
             toks,
+            today: today(),
         })
     }
 
@@ -259,12 +263,25 @@ impl LegacyPattern {
                         ));
                     };
                     match c {
-                        'z' => out.push_str(&zone_name(
-                            id,
-                            offset,
-                            local.div_euclid(MICROS_PER_SECOND),
-                            n >= 4,
-                        )?),
+                        'z' => {
+                            let fixed = id.starts_with(['+', '-'])
+                                || ["UTC+", "UTC-", "GMT+", "GMT-"]
+                                    .iter()
+                                    .any(|p| id.starts_with(p));
+                            if fixed && offset != 0 {
+                                // `java.util.TimeZone` names a fixed offset `GMT+hh:mm`.
+                                let a = offset.unsigned_abs();
+                                let sign = if offset < 0 { '-' } else { '+' };
+                                let _ = write!(out, "GMT{sign}{:02}:{:02}", a / 3600, a / 60 % 60);
+                            } else {
+                                out.push_str(&zone_name(
+                                    id,
+                                    offset,
+                                    local.div_euclid(MICROS_PER_SECOND),
+                                    n >= 4,
+                                )?);
+                            }
+                        }
                         'Z' => write_offset(&mut out, offset, false, true, false),
                         _ => write_offset(&mut out, offset, n == 3, n >= 2, true),
                     }
@@ -354,7 +371,7 @@ impl LegacyPattern {
         if pos == 0 {
             return None;
         }
-        st.resolve()
+        st.resolve(self.today)
     }
 }
 
@@ -419,6 +436,34 @@ fn real_day(days: i64, year: i64, month: u32, day: u32) -> i64 {
     let m = i64::from(month) + 12 * a - 3;
     let jdn = i64::from(day) + (153 * m + 2) / 5 + 365 * y + y.div_euclid(4) - 32083;
     jdn - 2_440_588
+}
+
+/// Days in a month of the hybrid calendar.
+fn hybrid_month_len(year: i64, month: u32) -> i64 {
+    match (year, month) {
+        (y, 2) if y < 1582 => 28 + i64::from(y.rem_euclid(4) == 0),
+        (1582, 10) => 21,
+        _ => i64::from(days_in_month(year, month)),
+    }
+}
+
+/// The label (Gregorian epoch count of the written date) of a real epoch
+/// day: itself from the cutover on, before it the day's Julian date.
+fn label_of_real(real: i64) -> i64 {
+    if real >= CUTOVER_DAYS {
+        return real;
+    }
+    let c = real + 2_440_588 + 32_082;
+    let d = (4 * c + 3).div_euclid(1461);
+    let e = c - (1461 * d).div_euclid(4);
+    let m = (5 * e + 2).div_euclid(153);
+    let day = u32::try_from(e - (153 * m + 2).div_euclid(5) + 1).unwrap_or(1);
+    let month = u32::try_from(m + 3 - 12 * m.div_euclid(10)).unwrap_or(1);
+    let year = d - 4800 + m.div_euclid(10);
+    // A Julian-only leap day has no label: it reads as March 1.
+    days_from_civil(year, month, day)
+        .or_else(|| days_from_civil(year, 3, 1))
+        .unwrap_or(real)
 }
 
 /// Days in a year of the hybrid calendar (1582 lacks ten).
@@ -556,6 +601,8 @@ impl Parsed {
         match c {
             'G' => {
                 if let Some(p) = prefix(text, pos, &["AD"]) {
+                    // The last era field wins.
+                    self.era_bc = false;
                     return Some(p);
                 }
                 let p = prefix(text, pos, &["BC"])?;
@@ -681,8 +728,16 @@ impl Parsed {
     /// The day a week-field group names (`GregorianCalendar.computeTime`,
     /// `Locale.US`: weeks start on Sunday, a week 1 may hold one day).
     fn week_date(&self, year: i64, mode: Mode) -> Option<i64> {
+        self.week_real(year, mode).map(label_of_real)
+    }
+
+    /// [`Self::week_date`] as a real epoch day.
+    fn week_real(&self, year: i64, mode: Mode) -> Option<i64> {
         let on_or_before = |d: i64, dow: i64| d - (dow_sun1(d) - dow).rem_euclid(7);
-        let first_of = |month: u32| days_from_civil(year, month, 1);
+        // Real epoch days: the Julian calendar's before the cutover.
+        let first_of = |month: u32| {
+            days_from_civil(year, month, 1).map(|label| real_day(label, year, month, 1))
+        };
         let week_start = |first: i64| {
             let mut start = on_or_before(first + 6, 1);
             if start - first >= 1 {
@@ -711,7 +766,7 @@ impl Parsed {
                 if n >= 0 {
                     Some(on_or_before(first + 7 * n - 1, dow))
                 } else {
-                    let len = i64::from(days_in_month(year, m));
+                    let len = hybrid_month_len(year, m);
                     Some(on_or_before(first + len + 7 * (n + 1) - 1, dow))
                 }
             }
@@ -746,7 +801,7 @@ impl Parsed {
             && self.dow.is_none_or(|(v, _)| v == dow_sun1(real))
     }
 
-    fn resolve(self) -> Option<(i64, Option<Zone_>)> {
+    fn resolve(self, today: (i64, u32, u32)) -> Option<(i64, Option<Zone_>)> {
         if !self.year_two {
             // The year of the era is positive: no year 0 (nor `0000 BC`).
             if self.year.is_some_and(|(y, _)| y <= 0) {
@@ -757,7 +812,7 @@ impl Parsed {
         // `yy`: the century of the window start, one later when the date
         // falls before the window's first day.
         let two = self.year.map_or(0, |(y, _)| y);
-        let (ny, nm, nd) = today();
+        let (ny, nm, nd) = today;
         let start = ny - 80;
         let start_days = days_from_civil(start, nm, nd.min(days_in_month(start, nm)))?;
         let base = start - start.rem_euclid(100) + two;
@@ -1176,6 +1231,24 @@ mod tests {
     }
 
     #[test]
+    fn week_fields_resolve_on_the_hybrid_calendar() {
+        // Spark 4.2.0 under LEGACY: '1582-22-4' (yyyy-ww-u) is May 31.
+        let d = days_from_civil(1582, 5, 31).unwrap() * MICROS_PER_DAY;
+        assert_eq!(local("yyyy-ww-u", "1582-22-4"), Some(d));
+        assert_eq!(
+            label_of_real(real_day(days_from_civil(1500, 3, 15).unwrap(), 1500, 3, 15)),
+            days_from_civil(1500, 3, 15).unwrap()
+        );
+    }
+
+    #[test]
+    fn the_last_era_field_wins() {
+        let d = days_from_civil(1, 1, 1).unwrap() * MICROS_PER_DAY;
+        // Spark 4.2.0 under LEGACY: '0001-01-01 BC AD' is year 1 AD.
+        assert_eq!(local("yyyy-MM-dd G G", "0001-01-01 BC AD"), Some(d));
+    }
+
+    #[test]
     fn oversized_fields_fail_instead_of_overflowing() {
         assert_eq!(local("yyyy-ww-u", "2024-9223372036854775807-1"), None);
         assert_eq!(local("yyyy-MM-W-u", "2024-01-9223372036854775807-1"), None);
@@ -1215,24 +1288,19 @@ mod tests {
 
     #[test]
     fn the_two_digit_year_window_starts_on_a_day() {
-        let (ny, nm, nd) = today();
-        let start = ny - 80;
-        let yy = start.rem_euclid(100);
-        let text = |m: u32, d: u32| format!("{yy:02}-{m:02}-{d:02}");
-        let day_in = |y: i64, m: u32, d: u32| days_from_civil(y, m, d).unwrap() * MICROS_PER_DAY;
-        let century = start - yy;
-        // The day before the window starts is a century later; the start
-        // day and the day after read in the start's century.
-        if nd > 1 && nd <= 28 {
-            assert_eq!(
-                local("yy-MM-dd", &text(nm, nd - 1)),
-                Some(day_in(century + 100 + yy, nm, nd - 1))
-            );
-            assert_eq!(
-                local("yy-MM-dd", &text(nm, nd)),
-                Some(day_in(century + yy, nm, nd))
-            );
-        }
+        // Spark 4.2.0 under LEGACY with the clock at 2026-11-02 (probe): the
+        // window starts on 1946-11-02.
+        let mut p = LegacyPattern::new("yy-MM-dd").unwrap();
+        p.today = (2026, 11, 2);
+        let at = |text: &str| p.parse_local(text, true).unwrap();
+        let day = |y: i64, m: u32, d: u32| days_from_civil(y, m, d).unwrap() * MICROS_PER_DAY;
+        assert_eq!(at("46-01-01"), Some(day(2046, 1, 1)));
+        assert_eq!(at("46-11-01"), Some(day(2046, 11, 1)));
+        assert_eq!(at("46-11-02"), Some(day(1946, 11, 2)));
+        assert_eq!(at("46-11-03"), Some(day(1946, 11, 3)));
+        assert_eq!(at("46-12-31"), Some(day(1946, 12, 31)));
+        // A leap day whose provisional century lacks it.
+        assert_eq!(at("00-02-29"), Some(day(2000, 2, 29)));
     }
 
     #[test]

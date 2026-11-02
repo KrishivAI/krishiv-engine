@@ -63,7 +63,7 @@ outer query); every batch goes downstream at once and into the round's working t
 spilled to the query's scope under pressure), which the next round's `LoopRef` reads (`SharedSource::over`). `Detached`
 (`instantiate.rs`) re-instantiates the recursive term per round with the loop tables bound; shared plans are built again each
 round. Limits (`LoopLimits`) are plan data. Seeded random functions draw round `k`'s stream at partition `k - 1` (`EvalEnv::partition_shift`, as Spark does). Not done: a
-nondeterministic enclosing CTE is evaluated once per round, rounds' metrics are not folded into EXPLAIN ANALYZE.
+nondeterministic enclosing CTE is evaluated once per round. `EXPLAIN ANALYZE` reports the rounds, their rows and the folded compute time and spill bytes of every round, a LIMIT-stopped one included (`add_run_metrics`).
 `physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
 `PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the
 worker that runs it; the planner validates nodes with the same builders). `PhysicalPlan::shared` (P2-T198): subplans
