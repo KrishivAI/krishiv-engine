@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 
 use crate::error::Result;
 use crate::options::{FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec};
-use crate::text::{Charset, LineSep, check_write_codec};
+use crate::text::{Charset, LineSep, write_codec};
 
 fn string(name: &'static str, doc: &'static str) -> OptionSpec {
     OptionSpec {
@@ -42,7 +42,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("lineSep", "The line separator (read: \\r, \\r\\n, \\n; write: \\n).");
         string("encoding", "The charset: UTF-8, ISO-8859-1 or US-ASCII.");
         string("charset", "Alias of `encoding`.");
-        string("compression", "Write codec: only none and uncompressed so far.");
+        string("compression", "Write codec: none, uncompressed, bzip2, deflate, gzip, lz4 or snappy.");
         string("codec", "Alias of `compression`.");
     }
 });
@@ -68,7 +68,7 @@ impl TextOptions {
     /// for a value that cannot be honoured.
     pub(crate) fn new(o: &FormatOptions, writing: bool) -> Result<Self> {
         if writing {
-            check_write_codec(o)?;
+            write_codec(o)?;
         }
         let charset = Charset::parse(o.str("encoding").or_else(|| o.str("charset")))?;
         let line_sep = LineSep::parse(o.str("lineSep"), charset, "text")?;
