@@ -1097,3 +1097,10 @@ def test_the_runner_is_started_with_table_arguments_instead_of_data(monkeypatch,
     assert "--data" not in cmd
     pairs = [cmd[i + 1] for i, a in enumerate(cmd) if a == "--table"]
     assert pairs == ["fw=s3://b/a.parquet", "fw=s3://b/b.parquet"]
+
+
+def test_hf_sources_are_urls_for_every_engine():
+    from krishiv_bench import remote_filter_child as child
+
+    url = "hf://datasets/HuggingFaceFW/fineweb-edu/sample/10BT/000_00000.parquet"
+    assert child.parse_input(f'["{url}"]') == ("urls", [url])

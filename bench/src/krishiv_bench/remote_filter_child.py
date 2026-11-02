@@ -34,12 +34,12 @@ THREADS = 8  # every engine gets the same worker count
 
 
 def parse_input(arg: str) -> tuple[str, list[str]]:
-    """``(kind, items)``: ``files`` (local Parquet paths) or ``urls`` (remote HTTPS sources)."""
+    """``(kind, items)``: ``files`` (local Parquet paths) or ``urls`` (``https://``, ``s3://``, ``hf://`` sources)."""
     if arg.strip().startswith("["):
         items = json.loads(arg)
         if not isinstance(items, list) or not items or not all(isinstance(x, str) for x in items):
             raise SystemExit(f"input JSON list must be a non-empty list of strings (got {arg[:80]!r})")
-        if all(x.startswith(("https://", "s3://")) for x in items):
+        if all(x.startswith(("https://", "s3://", "hf://")) for x in items):
             return "urls", list(items)
         return "files", expand_files(items)
     p = Path(arg)
