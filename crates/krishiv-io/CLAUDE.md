@@ -49,7 +49,7 @@ Paths are relative to this crate.
 - `src/parquet/mod.rs` `ParquetFormat`; `src/parquet/decode.rs` and `write.rs` the reader and writer
 - `src/scan_gate.rs` `ScanGate`, admission of the decode working sets of a query's scan streams (ADR 0007)
 - `src/parquet/thrift_guard.rs` structural check of a footer before arrow-rs decodes it
-- `src/csv/mod.rs` CSV format
+- `src/csv/mod.rs` CSV format; `src/text/codec.rs` the Hadoop codecs of CSV/JSON/text files (gzip, deflate, bzip2, lz4, snappy; zstd is not a Spark text codec). Compressed files are read whole by the split at byte 0; fixtures `tests/fixtures/spark-4.2.0/compressed-text/` (`tests/scripts/gen_compressed_text.py`, `check_compressed_text_written.py`)
 
 ## Extension points
 - New format: implement `FileFormat` in a module like `src/parquet/`, route all bytes through `IoContext`, and instantiate `krishiv_testkit::file_format_conformance!`.

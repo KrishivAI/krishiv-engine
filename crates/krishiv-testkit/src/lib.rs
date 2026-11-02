@@ -19,6 +19,7 @@ pub mod golden;
 pub mod hash_fixture;
 pub mod kernel_eval;
 pub mod manifest_dir;
+pub mod metamorphic;
 pub mod query_oracle;
 pub mod slt;
 

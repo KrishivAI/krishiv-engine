@@ -4,20 +4,23 @@
 //! included, so an error reads as Spark's does (`1 + INTERVAL '1' DAY` is a
 //! bad `TimestampAddInterval`, and so is `INTERVAL '1' MONTH + INTERVAL '1' DAY`).
 //!
-//! Each rewrite has its Spark name in [`Bound::shown`]. Calendar intervals are
-//! not handled yet.
+//! Each rewrite has its Spark name in [`Bound::shown`]. An operator on a
+//! calendar interval carries Spark's `ansiEnabled` as a boolean literal, since
+//! `try_*` forces it on for that operator alone, not for the operands below.
 
 use std::sync::Arc;
 
+use krishiv_common::error::DatatypeMismatchCastWithoutSuggestion;
 use krishiv_types::{DataType, DayTimeField};
 
 use super::AnalysisError;
 use super::bind::unsupported;
 use super::coerce::{self, Mismatch};
-use super::exprs::{Bound, Cx, arg_type};
+use super::exprs::{Bound, Cx, arg_type, pretty};
 use super::resolve::Resolver;
 use crate::{
-    Builtin, Expr, ExprNode, FunctionId, FunctionKind, Origin, ResolvedExpr, ResolvedFunction,
+    Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, Origin, ResolvedExpr,
+    ResolvedFunction,
 };
 
 /// How the resolver sees an operand.
@@ -147,10 +150,22 @@ impl Resolver<'_> {
         kids: &[Bound],
         cx: &Cx<'_>,
     ) -> Result<Option<Bound>, AnalysisError> {
+        self.operator(name, origin, kids, cx, self.ctx.conf.ansi)
+    }
+
+    /// [`Self::interval_operator`]; `exact` is what a calendar operator takes
+    /// for `ansiEnabled`.
+    fn operator(
+        &mut self,
+        name: &str,
+        origin: Origin,
+        kids: &[Bound],
+        cx: &Cx<'_>,
+        exact: bool,
+    ) -> Result<Option<Bound>, AnalysisError> {
         if let ("-", [e]) = (name, kids) {
             return Ok(match kind(e) {
-                Kind::Calendar => return Err(calendar(origin)),
-                k if ansi(k) => {
+                k if ansi(k) || k == Kind::Calendar => {
                     let t = e.ty.data_type.clone().unwrap_or(DataType::Null);
                     let shown = call(
                         Builtin::Negative,
@@ -160,7 +175,7 @@ impl Resolver<'_> {
                         origin,
                     );
                     Some(bound(
-                        negative(e, origin),
+                        negative(e, exact, origin),
                         t,
                         shown,
                         std::slice::from_ref(e),
@@ -170,8 +185,35 @@ impl Resolver<'_> {
             });
         }
         if let [e] = kids
+            && name.eq_ignore_ascii_case("negative")
+            && kind(e) == Kind::Calendar
+        {
+            // The function's own name: a builtin's would print as `(- x)`.
+            let shown = ResolvedFunction {
+                id: FunctionId::Registry {
+                    name: "negative".to_owned(),
+                    id: 0,
+                },
+                kind: FunctionKind::Scalar,
+                args: vec![e.shown()],
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+                data_type: DataType::CalendarInterval,
+                nullable: e.ty.nullable,
+                deterministic: true,
+            };
+            let shown = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(shown)));
+            return Ok(Some(bound(
+                negative(e, exact, origin),
+                DataType::CalendarInterval,
+                Arc::new(shown.with_origin(origin)),
+                std::slice::from_ref(e),
+            )));
+        }
+        if let [e] = kids
             && name.eq_ignore_ascii_case("positive")
-            && ansi(kind(e))
+            && (ansi(kind(e)) || kind(e) == Kind::Calendar)
         {
             let mut b = e.clone();
             b.shown = Some(Arc::new(
@@ -187,10 +229,11 @@ impl Resolver<'_> {
             let datetimes = op == "-"
                 && matches!(lk, Kind::Date | Kind::Timestamp)
                 && matches!(rk, Kind::Date | Kind::Timestamp);
-            if !ansi(lk) && !ansi(rk) && !datetimes {
+            let calendar = lk == Kind::Calendar || rk == Kind::Calendar;
+            if !ansi(lk) && !ansi(rk) && !datetimes && !calendar {
                 return Ok(None);
             }
-            let Some(inner) = self.interval_operator(op, origin, kids, cx)? else {
+            let Some(inner) = self.operator(op, origin, kids, cx, true)? else {
                 return Ok(None);
             };
             let t = inner.ty.data_type.clone().unwrap_or(DataType::Null);
@@ -216,10 +259,15 @@ impl Resolver<'_> {
             return Ok(Some(b));
         }
         match name {
-            "+" => self.interval_add(origin, l, r, lk, rk, cx),
-            "-" => self.interval_subtract(origin, l, r, lk, rk, cx),
+            "+" => self.interval_add(origin, l, r, cx, exact),
+            "-" => self.interval_subtract(origin, l, r, cx, exact),
             "*" => match (lk, rk) {
-                (Kind::Calendar, _) | (_, Kind::Calendar) => Err(calendar(origin)),
+                (Kind::Calendar, _) => self
+                    .calendar_scale(Builtin::MultiplyInterval, origin, l, r, exact)
+                    .map(Some),
+                (_, Kind::Calendar) => self
+                    .calendar_scale(Builtin::MultiplyInterval, origin, r, l, exact)
+                    .map(Some),
                 (a, _) if ansi(a) => self
                     .interval_scale(Builtin::Multiply, origin, l, r)
                     .map(Some),
@@ -229,7 +277,9 @@ impl Resolver<'_> {
                 _ => Ok(None),
             },
             "/" => match lk {
-                Kind::Calendar => Err(calendar(origin)),
+                Kind::Calendar => self
+                    .calendar_scale(Builtin::DivideInterval, origin, l, r, exact)
+                    .map(Some),
                 a if ansi(a) => self.interval_scale(Builtin::Divide, origin, l, r).map(Some),
                 _ => Ok(None),
             },
@@ -242,12 +292,26 @@ impl Resolver<'_> {
         origin: Origin,
         l: &Bound,
         r: &Bound,
-        lk: Kind,
-        rk: Kind,
         cx: &Cx<'_>,
+        exact: bool,
     ) -> Result<Option<Bound>, AnalysisError> {
-        Ok(Some(match (lk, rk) {
-            (Kind::Calendar, _) | (_, Kind::Calendar) => return Err(calendar(origin)),
+        Ok(Some(match (kind(l), kind(r)) {
+            (Kind::Calendar, Kind::Calendar) => {
+                self.calendar_pair(Builtin::CalendarAdd, Builtin::Add, origin, l, r, exact)
+            }
+            (Kind::Date, Kind::Calendar) => date_add_calendar(origin, l, r, false, exact),
+            (Kind::Calendar, Kind::Date) => date_add_calendar(origin, r, l, false, exact),
+            // `Cast(TimestampAddInterval(NULL, i), NULL's type)`.
+            (Kind::Null, Kind::Calendar) => {
+                return Err(self.no_null_timestamp(Builtin::TimestampAddInterval, origin, l, r));
+            }
+            (Kind::Calendar, Kind::Null) => {
+                return Err(self.no_null_timestamp(Builtin::TimestampAddInterval, origin, r, l));
+            }
+            (_, Kind::Calendar) => self.timestamp_add(origin, l, r, false, exact)?,
+            (Kind::Calendar, b) if !day_time(b) => {
+                self.timestamp_add(origin, r, l, false, exact)?
+            }
             (Kind::Date, Kind::Days) => self.date_add_days(origin, l, r, false, cx)?,
             (Kind::Days, Kind::Date) => self.date_add_days(origin, r, l, false, cx)?,
             (Kind::Date, Kind::DayTime) => {
@@ -277,8 +341,8 @@ impl Resolver<'_> {
             (Kind::Date, Kind::String) => return Err(self.string_days("date_add", origin, l, r)),
             (Kind::Timestamp, Kind::Null) => self.timestamp_add_null(origin, l, r),
             (Kind::Null, Kind::Timestamp) => self.timestamp_add_null(origin, r, l),
-            (_, b) if day_time(b) => self.timestamp_add(origin, l, r, false)?,
-            (a, _) if day_time(a) => self.timestamp_add(origin, r, l, false)?,
+            (_, b) if day_time(b) => self.timestamp_add(origin, l, r, false, exact)?,
+            (a, _) if day_time(a) => self.timestamp_add(origin, r, l, false, exact)?,
             _ => return Ok(None),
         }))
     }
@@ -288,16 +352,33 @@ impl Resolver<'_> {
         origin: Origin,
         l: &Bound,
         r: &Bound,
-        lk: Kind,
-        rk: Kind,
         cx: &Cx<'_>,
+        exact: bool,
     ) -> Result<Option<Bound>, AnalysisError> {
+        let (lk, rk) = (kind(l), kind(r));
         Ok(Some(match (lk, rk) {
-            (Kind::Calendar, _) | (_, Kind::Calendar) => return Err(calendar(origin)),
+            (Kind::Calendar, Kind::Calendar | Kind::Null) => self.calendar_pair(
+                Builtin::CalendarSubtract,
+                Builtin::Subtract,
+                origin,
+                l,
+                r,
+                exact,
+            ),
+            (Kind::Calendar, Kind::String) => {
+                let m = Mismatch::DiffTypes(l.ty.data_type.clone(), r.ty.data_type.clone());
+                let name = shown(Builtin::Subtract, [l, r], origin);
+                return Err(self.mismatch(m, &name, &[l.clone(), r.clone()], "-", origin));
+            }
+            (Kind::Date, Kind::Calendar) => date_add_calendar(origin, l, r, true, exact),
+            (Kind::Null, Kind::Calendar) => {
+                return Err(self.no_null_timestamp(Builtin::DatetimeSub, origin, l, r));
+            }
+            (_, Kind::Calendar) => self.timestamp_add(origin, l, r, true, exact)?,
             (Kind::Date, Kind::Days) => self.date_add_days(origin, l, r, true, cx)?,
             (Kind::Date, Kind::DayTime) => {
                 let ts = self.implicit_cast(l, Some(DataType::Timestamp));
-                let negated = negative(r, origin);
+                let negated = negative(r, exact, origin);
                 let expr = call(
                     Builtin::TimestampAddInterval,
                     vec![Arc::clone(&ts.expr), negated],
@@ -323,7 +404,7 @@ impl Resolver<'_> {
                 };
                 let expr = call(
                     id,
-                    vec![Arc::clone(&l.expr), negative(r, origin)],
+                    vec![Arc::clone(&l.expr), negative(r, exact, origin)],
                     t.clone(),
                     l.ty.nullable || r.ty.nullable,
                     origin,
@@ -340,7 +421,7 @@ impl Resolver<'_> {
             }
             (Kind::Null, b) if ansi(b) => self.null_operand(Builtin::Subtract, origin, l, r),
             (a, Kind::Null) if ansi(a) => self.null_operand(Builtin::Subtract, origin, l, r),
-            (_, b) if day_time(b) => self.timestamp_add(origin, l, r, true)?,
+            (_, b) if day_time(b) => self.timestamp_add(origin, l, r, true, exact)?,
             (Kind::Timestamp, _) | (_, Kind::Timestamp) => {
                 self.timestamp_difference(origin, l, r)?
             }
@@ -498,6 +579,7 @@ impl Resolver<'_> {
         l: &Bound,
         i: &Bound,
         negate: bool,
+        exact: bool,
     ) -> Result<Bound, AnalysisError> {
         let id = if negate {
             Builtin::DatetimeSub
@@ -539,7 +621,7 @@ impl Resolver<'_> {
         let start = self.implicit_cast(l, Some(ts_type.clone()));
         let nullable = start.ty.nullable || i.ty.nullable;
         let interval = if negate {
-            negative(i, origin)
+            negative(i, exact, origin)
         } else {
             Arc::clone(&i.expr)
         };
@@ -664,6 +746,92 @@ impl Resolver<'_> {
         Ok(difference)
     }
 
+    /// `l op r` of calendar intervals, shown as `shown_id`; a NULL takes the type.
+    fn calendar_pair(
+        &mut self,
+        id: Builtin,
+        shown_id: Builtin,
+        origin: Origin,
+        l: &Bound,
+        r: &Bound,
+        exact: bool,
+    ) -> Bound {
+        let t = DataType::CalendarInterval;
+        let (a, b) = (
+            self.implicit_cast(l, Some(t.clone())),
+            self.implicit_cast(r, Some(t.clone())),
+        );
+        let expr = call(
+            id,
+            vec![Arc::clone(&a.expr), Arc::clone(&b.expr), flag(exact)],
+            t.clone(),
+            l.ty.nullable || r.ty.nullable,
+            origin,
+        );
+        bound(
+            expr,
+            t,
+            shown(shown_id, [l, r], origin),
+            &[l.clone(), r.clone()],
+        )
+    }
+
+    /// `calendar * number` or `calendar / number`: anything that reads as a
+    /// double is a number here.
+    fn calendar_scale(
+        &mut self,
+        id: Builtin,
+        origin: Origin,
+        interval: &Bound,
+        by: &Bound,
+        exact: bool,
+    ) -> Result<Bound, AnalysisError> {
+        let name = shown(id, [interval, by], origin);
+        let kids = [interval.clone(), by.clone()];
+        if !numeric(by) && !matches!(kind(by), Kind::String | Kind::Null) {
+            let m = Mismatch::Unexpected {
+                arg: 1,
+                param: 1,
+                ty: by.ty.data_type.clone(),
+                required: "\"DOUBLE\"".to_owned(),
+            };
+            return Err(self.mismatch(m, &name, &kids, id.name(), origin));
+        }
+        let number = self.implicit_cast(by, Some(DataType::Double));
+        let t = DataType::CalendarInterval;
+        let expr = call(
+            id,
+            vec![
+                Arc::clone(&interval.expr),
+                Arc::clone(&number.expr),
+                flag(exact),
+            ],
+            t.clone(),
+            true,
+            origin,
+        );
+        let mut scaled = bound(expr, t, name, &kids);
+        scaled.ty.nullable = true;
+        Ok(scaled)
+    }
+
+    /// `NULL + calendar`: Spark's rewrite casts a timestamp back to NULL's type.
+    fn no_null_timestamp(
+        &self,
+        id: Builtin,
+        origin: Origin,
+        null: &Bound,
+        i: &Bound,
+    ) -> AnalysisError {
+        let name = shown(id, [null, i], origin);
+        let error = DatatypeMismatchCastWithoutSuggestion {
+            sql_expr: format!("\"{}\"", pretty(&name, self.ctx.conf.session_zone)),
+            src_type: "\"TIMESTAMP\"".to_owned(),
+            target_type: "\"VOID\"".to_owned(),
+        };
+        AnalysisError::new(krishiv_common::error::KrishivError::from(error), origin)
+    }
+
     /// `NULL op interval`: the NULL takes the interval's type.
     fn null_operand(&mut self, id: Builtin, origin: Origin, l: &Bound, r: &Bound) -> Bound {
         let t = if kind(l) == Kind::Null {
@@ -750,11 +918,43 @@ fn legacy_difference(origin: Origin) -> AnalysisError {
     )
 }
 
-fn calendar(origin: Origin) -> AnalysisError {
-    unsupported("calendar interval arithmetic", origin)
+/// A calendar operator's `ansiEnabled`.
+fn flag(exact: bool) -> Arc<Expr> {
+    Arc::new(Expr::new(ExprNode::Literal(Literal::Boolean(exact))))
 }
 
-fn negative(i: &Bound, origin: Origin) -> Arc<Expr> {
+/// `date + i`, or `date - i`.
+fn date_add_calendar(origin: Origin, date: &Bound, i: &Bound, negate: bool, exact: bool) -> Bound {
+    let (interval, shown_id) = if negate {
+        (negative(i, exact, origin), Builtin::DatetimeSub)
+    } else {
+        (Arc::clone(&i.expr), Builtin::DateAddInterval)
+    };
+    let expr = call(
+        Builtin::DateAddInterval,
+        vec![Arc::clone(&date.expr), interval, flag(exact)],
+        DataType::Date,
+        date.ty.nullable || i.ty.nullable,
+        origin,
+    );
+    bound(
+        expr,
+        DataType::Date,
+        shown(shown_id, [date, i], origin),
+        &[date.clone(), i.clone()],
+    )
+}
+
+fn negative(i: &Bound, exact: bool, origin: Origin) -> Arc<Expr> {
+    if kind(i) == Kind::Calendar {
+        return call(
+            Builtin::CalendarNegate,
+            vec![Arc::clone(&i.expr), flag(exact)],
+            DataType::CalendarInterval,
+            i.ty.nullable,
+            origin,
+        );
+    }
     call(
         Builtin::Negative,
         vec![Arc::clone(&i.expr)],
