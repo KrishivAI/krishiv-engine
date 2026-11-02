@@ -136,6 +136,13 @@ impl ResultCache {
         state.entries.get(key).map(|e| (e.batches.clone(), age))
     }
 
+    /// The age of the entry for `key` if it would be served (no batches copied).
+    pub(crate) fn age(&self, key: &ResultKey, ttl: Duration) -> Option<Duration> {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        let age = state.entries.get(key)?.stored.elapsed();
+        (ttl.is_zero() || age < ttl).then_some(age)
+    }
+
     /// Stores `batches` under `key` unless an invalidation ran after `generation`, they exceed
     /// `max_bytes`, or they would not fit once the oldest entries are dropped. Returns whether
     /// they were stored.
@@ -272,28 +279,31 @@ fn survey(plan: &Arc<LogicalPlan>) -> Found {
 }
 
 impl Session {
-    /// The result-cache key of an analyzed query, or `None` when it must not be cached: it reads
-    /// anything but permanent catalog tables, calls a non-deterministic function, or reads
-    /// nothing at all through a temporary name.
-    pub(crate) fn result_key(&self, a: &Analysis) -> Option<ResultKey> {
+    /// The result-cache key of an analyzed query, or why it must not be cached: it reads
+    /// anything but permanent catalog tables, or calls a non-deterministic function.
+    pub(crate) fn result_verdict(&self, a: &Analysis) -> Result<ResultKey, &'static str> {
         let found = survey(a.analyzed.plan.root());
-        if found.files || found.nondeterministic {
-            return None;
+        if found.files {
+            return Err("it reads files by path");
+        }
+        if found.nondeterministic {
+            return Err("it calls a non-deterministic function");
         }
         let mut tables = Vec::new();
         for parts in &found.tables {
-            let name =
-                TableName::resolve(parts, &self.state.catalog.current_namespace(), &a.env).ok()?;
+            let name = TableName::resolve(parts, &self.state.catalog.current_namespace(), &a.env)
+                .map_err(|_| "it reads a table that does not resolve")?;
             if self.temp_entry_of(&name, &a.env) {
-                return None;
+                return Err("it reads a temporary or in-memory table");
             }
             let table = self
                 .state
                 .catalog
                 .store
-                .table(&name.namespace, &name.name)?;
+                .table(&name.namespace, &name.name)
+                .ok_or("it reads a table that is not in the catalog")?;
             if table.view.is_some() {
-                return None;
+                return Err("it reads a view that is not inlined");
             }
             tables.push(TableId {
                 namespace: table.namespace.clone(),
@@ -304,9 +314,26 @@ impl Session {
         }
         tables.sort();
         tables.dedup();
-        Some(ResultKey {
+        Ok(ResultKey {
             plan: CacheKey::of(&a.analyzed),
             tables,
+        })
+    }
+
+    /// [`Self::result_verdict`] as an option, for the action boundary.
+    pub(crate) fn result_key(&self, a: &Analysis) -> Option<ResultKey> {
+        self.result_verdict(a).ok()
+    }
+
+    /// The line `EXPLAIN` prints about the result cache, when it is enabled for the query.
+    pub(crate) fn result_cache_note(&self, a: &Analysis) -> Option<String> {
+        let settings = settings(&a.env)?;
+        Some(match self.result_verdict(a) {
+            Err(why) => format!("not cached: {why}"),
+            Ok(key) => match global().age(&key, settings.ttl) {
+                Some(age) => format!("hit (metadata_age_ms={})", age.as_millis()),
+                None => "miss (the result is stored when the query has run)".to_owned(),
+            },
         })
     }
 }
@@ -392,6 +419,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use arrow_array::cast::AsArray;
     use arrow_array::{Int32Array, RecordBatch};
     use arrow_schema::{DataType, Field, Schema};
     use futures::executor::block_on;
@@ -596,5 +624,45 @@ mod tests {
             !cached(&key),
             "a plan that used the session's cached relation was not stored"
         );
+    }
+
+    fn explain(s: &Session, sql: &str) -> String {
+        let batches = run(s, &format!("EXPLAIN {sql}"));
+        let col = batches[0].column(0);
+        match col.data_type() {
+            DataType::Utf8View => col.as_string_view().value(0).to_owned(),
+            DataType::LargeUtf8 => col.as_string::<i64>().value(0).to_owned(),
+            _ => col.as_string::<i32>().value(0).to_owned(),
+        }
+    }
+
+    #[test]
+    fn explain_reports_the_cache_only_when_it_is_on() {
+        let off = Session::new().unwrap();
+        table(&off, "rc_ex_off", "(1)");
+        assert!(!explain(&off, "SELECT a FROM rc_ex_off").contains("Result Cache"));
+
+        let s = session_as("ana");
+        table(&s, "rc_ex", "(1), (2)");
+        let sql = "SELECT a FROM rc_ex";
+        assert!(
+            explain(&s, sql).contains("== Result Cache ==\nmiss"),
+            "{}",
+            explain(&s, sql)
+        );
+        run(&s, sql);
+        let text = explain(&s, sql);
+        assert!(
+            text.contains("== Result Cache ==\nhit (metadata_age_ms="),
+            "{text}"
+        );
+        let text = explain(&s, "SELECT a, rand() FROM rc_ex");
+        assert!(
+            text.contains("not cached: it calls a non-deterministic function"),
+            "{text}"
+        );
+        run(&s, "CREATE TEMPORARY VIEW rc_ex_v AS SELECT 1 AS a");
+        let text = explain(&s, "SELECT a FROM rc_ex_v");
+        assert!(!text.contains("hit"), "{text}");
     }
 }
