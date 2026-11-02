@@ -25,6 +25,7 @@ use bytes::Bytes;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::basic::{ConvertedType, LogicalType, Type as PhysicalType};
 use parquet::file::page_index::column_index::ColumnIndexMetaData;
+use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 use parquet::file::statistics::Statistics;
 use parquet::schema::types::ColumnDescriptor;
 
@@ -48,6 +49,15 @@ struct IndexedColumn {
     conjuncts: Vec<usize>,
 }
 
+/// A column the scan reads (and does not filter on) whose offset index
+/// the stage fetches, so that arrow-rs can fetch only the selected pages.
+#[derive(Debug, Clone)]
+struct ReadColumn {
+    leaf: usize,
+    chunk: Range<u64>,
+    offset_index: Range<u64>,
+}
+
 /// A row group the stage looks at.
 #[derive(Debug, Clone)]
 struct IndexedUnit {
@@ -55,6 +65,9 @@ struct IndexedUnit {
     index: usize,
     rows: u64,
     columns: Vec<IndexedColumn>,
+    /// The other projected columns' offset indexes; `None` when some
+    /// projected column declares none (nothing of this unit is attached).
+    reads: Option<Vec<ReadColumn>>,
 }
 
 /// The stage's state for one decoder.
@@ -79,6 +92,22 @@ pub(super) struct Decision {
     pub(super) index: usize,
     /// The rows that may match (all rows when nothing was pruned).
     pub(super) keep: RowSelection,
+}
+
+/// The offset indexes of every projected leaf of a row group, guarded and
+/// decoded: what lets arrow-rs fetch only the pages a selection needs.
+pub(super) struct Offsets {
+    /// The row group's index in the file.
+    pub(super) index: usize,
+    /// `(leaf, offset index)` for every projected leaf.
+    pub(super) leaves: Vec<(usize, OffsetIndexMetaData)>,
+}
+
+/// What [`PageStage::finish`] found.
+pub(super) struct Outcome {
+    pub(super) decisions: Vec<Decision>,
+    /// Row groups with complete offset indexes.
+    pub(super) offsets: Vec<Offsets>,
 }
 
 /// The top-level conjuncts of `predicate` (negation pushed to the
@@ -163,6 +192,7 @@ impl PageStage {
         meta: &ParquetMetadata,
         units: &[usize],
         predicate: &PushdownExpr,
+        read_leaves: &[usize],
     ) -> Option<Self> {
         let conjuncts: Vec<PushdownExpr> = conjuncts_of(predicate)
             .into_iter()
@@ -226,18 +256,42 @@ impl PageStage {
             if columns.is_empty() {
                 continue;
             }
+            // The other projected columns' offset indexes (all or none: a
+            // row group with one missing is not attached, see decode.rs).
+            let mut reads = Some(Vec::new());
+            for &leaf in read_leaves {
+                if columns.iter().any(|c| c.leaf == leaf) {
+                    continue;
+                }
+                let col = rg.column(leaf);
+                let (start, len) = col.byte_range();
+                let found = start.checked_add(len).and_then(|end| {
+                    index_guard::declared(col, meta.size, &(start..end))
+                        .ok()
+                        .and_then(|d| d.offset_index)
+                        .map(|offset_index| ReadColumn {
+                            leaf,
+                            chunk: start..end,
+                            offset_index,
+                        })
+                });
+                match (found, reads.as_mut()) {
+                    (Some(r), Some(list)) => list.push(r),
+                    _ => reads = None,
+                }
+            }
             // The read must be small next to what it can save: an eighth of
-            // the filter columns' own chunks.
+            // the projected columns' chunks.
+            let len = |r: &Range<u64>| r.end - r.start;
             let index_bytes: u64 = columns
                 .iter()
-                .map(|c| {
-                    (c.column_index.end - c.column_index.start)
-                        + (c.offset_index.end - c.offset_index.start)
-                })
+                .map(|c| len(&c.column_index) + len(&c.offset_index))
+                .chain(reads.iter().flatten().map(|r| len(&r.offset_index)))
                 .sum();
             let chunk_bytes: u64 = columns
                 .iter()
-                .map(|c| rg.column(c.leaf).byte_range().1)
+                .map(|c| len(&c.chunk))
+                .chain(reads.iter().flatten().map(|r| len(&r.chunk)))
                 .sum();
             if index_bytes.saturating_mul(8) > chunk_bytes {
                 continue;
@@ -246,10 +300,14 @@ impl PageStage {
                 ranges.push(c.column_index.clone());
                 ranges.push(c.offset_index.clone());
             }
+            for r in reads.iter().flatten() {
+                ranges.push(r.offset_index.clone());
+            }
             planned.push(IndexedUnit {
                 index,
                 rows: row_group.rows,
                 columns,
+                reads,
             });
         }
         if planned.is_empty() {
@@ -308,10 +366,11 @@ impl PageStage {
     /// Decodes what arrived and decides each unit; releases the bytes. A
     /// unit whose index fails a check, or makes arrow-rs panic, is left as
     /// it was; one warning per file says so.
-    pub(super) fn finish(&mut self, meta: &ParquetMetadata) -> Vec<Decision> {
+    pub(super) fn finish(&mut self, meta: &ParquetMetadata) -> Outcome {
         self.done = true;
         let held = std::mem::take(&mut self.held);
         let mut out = Vec::new();
+        let mut all_offsets = Vec::new();
         let (mut pruned, mut rejected) = (0, 0);
         let mut first_reason: Option<String> = None;
         for unit in &self.units {
@@ -320,9 +379,10 @@ impl PageStage {
                     .map_err(|why| FormatError::Corrupt(why.0))
             });
             match decided {
-                Ok((decision, pages)) => {
+                Ok((decision, pages, offsets)) => {
                     pruned += pages;
                     out.extend(decision);
+                    all_offsets.extend(offsets);
                 }
                 Err(why) => {
                     rejected += 1;
@@ -335,7 +395,10 @@ impl PageStage {
         }
         self.pages_pruned += pruned;
         self.rejected += rejected;
-        out
+        Outcome {
+            decisions: out,
+            offsets: all_offsets,
+        }
     }
 
     fn slice<'a>(
@@ -357,18 +420,20 @@ impl PageStage {
         unit: &IndexedUnit,
         meta: &ParquetMetadata,
         held: &BTreeMap<(u64, u64), Bytes>,
-    ) -> Result<(Option<Decision>, u64), Rejected> {
+    ) -> Result<(Option<Decision>, u64, Option<Offsets>), Rejected> {
         let rows = usize::try_from(unit.rows).map_err(|_| Rejected::from("rows"))?;
         // The row ranges to skip, from the pages alone: time and memory
         // follow the number of pages, never the row count a footer declares.
         let mut skipped: Vec<Range<usize>> = Vec::new();
         let mut pruned_pages = 0_u64;
+        let mut kept: Vec<(usize, OffsetIndexMetaData)> = Vec::new();
         for col in &unit.columns {
             let offsets = index_guard::offset_index(
                 Self::slice(held, &col.offset_index)?,
                 &col.chunk,
                 unit.rows,
             )?;
+            kept.push((col.leaf, offsets.clone()));
             let locations = offsets.page_locations();
             let columns = index_guard::column_index(
                 Self::slice(held, &col.column_index)?,
@@ -412,8 +477,26 @@ impl PageStage {
                 }
             }
         }
+        // The other projected columns' offset indexes: a bad or missing one
+        // only means this row group is not attached.
+        let mut complete = unit.reads.is_some();
+        for r in unit.reads.iter().flatten() {
+            let one = Self::slice(held, &r.offset_index)
+                .and_then(|bytes| index_guard::offset_index(bytes, &r.chunk, unit.rows));
+            match one {
+                Ok(o) => kept.push((r.leaf, o)),
+                Err(_) => {
+                    complete = false;
+                    break;
+                }
+            }
+        }
+        let offsets = complete.then_some(Offsets {
+            index: unit.index,
+            leaves: kept,
+        });
         if skipped.is_empty() {
-            return Ok((None, 0));
+            return Ok((None, 0, offsets));
         }
         skipped.sort_by_key(|r| (r.start, r.end));
         let mut selectors = Vec::new();
@@ -438,6 +521,7 @@ impl PageStage {
                 keep: selectors.into_iter().collect(),
             }),
             pruned_pages,
+            offsets,
         ))
     }
 }
