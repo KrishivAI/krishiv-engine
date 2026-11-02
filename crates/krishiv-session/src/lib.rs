@@ -65,6 +65,7 @@ mod sql_functions;
 mod sql_path;
 mod store;
 mod table_commands;
+mod telemetry;
 mod udfs;
 mod variable_substitution;
 mod variables;

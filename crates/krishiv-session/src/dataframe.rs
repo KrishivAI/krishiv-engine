@@ -340,6 +340,10 @@ pub struct DataFrame {
     /// materializes this plan into the relation cache. Derived frames do
     /// not inherit it, but their actions still read matching entries.
     cache_request: Option<StorageLevel>,
+    /// What the frame's actions say on their `krishiv.query` span: set for
+    /// a frame `Session::sql` returned, absent for one a transformation
+    /// built.
+    trace: Option<Arc<crate::telemetry::QueryTrace>>,
 }
 
 impl fmt::Debug for DataFrame {
@@ -367,6 +371,7 @@ impl DataFrame {
             analysis: Arc::default(),
             invalid: None,
             cache_request: None,
+            trace: None,
         }
     }
 
@@ -393,6 +398,7 @@ impl DataFrame {
             analysis: Arc::default(),
             invalid: self.invalid.clone(),
             cache_request: None,
+            trace: None,
         }
     }
 
@@ -1213,12 +1219,33 @@ impl DataFrame {
     }
 
     async fn execute_stream_here(&self) -> Result<RecordBatchStream, KrishivError> {
-        let a = self.analysis().await?;
-        let (physical, fill) = self.physical_cached(&a).await?;
-        let stream = self.session.run(&physical, &a.env).await?;
-        Ok(crate::carrier::client_stream(
-            fill.fill(stream, &self.session.state.cache),
-        ))
+        use tracing::Instrument as _;
+        let span = self.span();
+        async {
+            let a = self.analysis().await?;
+            let (physical, fill) = self.physical_cached(&a).await?;
+            let stream = self.session.run(&physical, &a.env).await?;
+            Ok(crate::carrier::client_stream(
+                fill.fill(stream, &self.session.state.cache),
+            ))
+        }
+        .instrument(span)
+        .await
+    }
+
+    /// The span of one action: the statement's, or the engine's alone.
+    fn span(&self) -> tracing::Span {
+        let session_id = &self.session.state.session_id;
+        self.trace.as_ref().map_or_else(
+            || crate::telemetry::plain_span(session_id),
+            |t| t.span(session_id),
+        )
+    }
+
+    /// `self` with the statement's trace.
+    pub(crate) fn with_trace(mut self, trace: crate::telemetry::QueryTrace) -> Self {
+        self.trace = Some(Arc::new(trace));
+        self
     }
 
     /// The physical plan with every cached (sub)plan substituted, and what

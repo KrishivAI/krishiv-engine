@@ -158,6 +158,9 @@ pub(crate) struct SessionState {
     planner: Arc<dyn PhysicalPlanner>,
     plan_ids: AtomicI64,
     query_ids: AtomicU64,
+    /// The session's id on spans and logs (`telemetry.rs`), and the count of its statements.
+    pub(crate) session_id: String,
+    statements: AtomicU64,
     /// SQL source ids handed to view lowerings: every `CREATE TEMPORARY
     /// VIEW` lowers its query with an id of its own, so errors raised
     /// while expanding a view point into the view's text, not the outer
@@ -361,6 +364,8 @@ impl SessionBuilder {
                 planner: Arc::new(DefaultPlanner),
                 plan_ids: AtomicI64::new(0),
                 query_ids: AtomicU64::new(0),
+                session_id: crate::telemetry::new_session_id(),
+                statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(1),
             }),
         })
@@ -506,8 +511,15 @@ impl Session {
     /// for statements other than queries and commands.
     pub async fn sql(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let (session, query) = (self.clone(), query.to_owned());
-        self.on_executor(async move { session.sql_here(&query).await })
-            .await
+        self.on_executor(async move {
+            let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
+            let trace = crate::telemetry::QueryTrace::of(&session.state.session_id, seq, &query);
+            session
+                .sql_here(&query)
+                .await
+                .map(|df| df.with_trace(trace))
+        })
+        .await
     }
 
     /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.

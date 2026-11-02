@@ -42,6 +42,7 @@ mod lower;
 mod params;
 mod parser;
 mod redact;
+mod summary;
 mod types;
 mod validate;
 
@@ -57,6 +58,7 @@ pub use lower::{
 };
 pub use params::{ParameterMarker, parameter_markers};
 pub use redact::redact_sql;
+pub use summary::{query_summary, sanitize_query_text};
 
 /// The deepest tree the parser builds, counted in nested expressions,
 /// queries and relations; deeper statements fail with
