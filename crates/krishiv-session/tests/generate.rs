@@ -907,21 +907,6 @@ fn a_multi_name_alias_needs_a_generator() {
 }
 
 #[test]
-fn an_ambiguous_generator_column_prints_without_the_internal_qualifier() {
-    let s = Session::new().unwrap();
-    for sql in [
-        "select explode(arr), col from values (array(1), 2) t(arr, col)",
-        "select col, explode(arr) from values (array(1), 2) t(arr, col)",
-    ] {
-        let e = error_of(&s, sql);
-        assert_eq!(e.error_class(), ErrorClass::AmbiguousReference, "{sql}");
-        let text = e.to_string();
-        assert!(text.contains("[`col`, `t`.`col`]"), "{text}");
-        assert!(!text.contains("__krishiv"), "{text}");
-    }
-}
-
-#[test]
 fn a_stack_with_an_alias_list_runs_beside_group_by() {
     let s = Session::new().unwrap();
     assert_eq!(
@@ -1001,5 +986,33 @@ fn generators_read_the_columns_a_using_join_merged_away() {
             &["NULL", "1"],
             &["NULL", "NULL"]
         ])
+    );
+}
+
+// Spark 4.2 (golden generators-resolution-edge-cases): the other items of a
+// select list read the input's columns, not the generator's.
+#[test]
+fn a_bare_name_beside_a_generator_reads_the_input_column() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "select explode(array(10, 20)) as col, col from (values (42)) as t(col) order by 1"
+        ),
+        table(&[&["10", "42"], &["20", "42"]])
+    );
+    // Spark 4.2: the generator's default column name `col` does not clash either.
+    for sql in [
+        "select explode(arr), col from values (array(1), 2) t(arr, col)",
+        "select col, explode(arr) from values (array(1), 2) t(arr, col)",
+    ] {
+        assert_eq!(rows(&s, sql).len(), 1, "{sql}");
+    }
+    assert_eq!(
+        rows(
+            &s,
+            "select posexplode(array('x', 'y')) as (pos, val), pos, val from (values (42)) as t(pos) order by 1"
+        ),
+        table(&[&["0", "x", "42", "x"], &["1", "y", "42", "y"]])
     );
 }

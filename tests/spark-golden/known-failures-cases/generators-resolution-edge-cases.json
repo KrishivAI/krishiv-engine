@@ -13,9 +13,7 @@
     "query-features": [
       16,
       18,
-      19,
-      50,
-      52
+      19
     ]
   },
   "file": "generators-resolution-edge-cases",

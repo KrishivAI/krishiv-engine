@@ -513,6 +513,13 @@ impl Resolver<'_> {
                     hits.push(a);
                 }
             }
+            // A bare name beside a select-list generator is the input's
+            // column: the generator's own columns are not in scope for the
+            // other items (Spark 4.2: `select explode(a) as col, col from
+            // t(col)` reads t.col).
+            if q == 0 && hits.len() > 1 && hits.iter().any(|a| !is_generated(a)) {
+                hits.retain(|a| !is_generated(a));
+            }
             match hits[..] {
                 [] => continue,
                 [a] if parts.len() > q + 1 => {
@@ -952,4 +959,12 @@ impl Resolver<'_> {
         );
         Ok((expr, ty))
     }
+}
+
+/// Whether `a` is a column of a select-list generator (its reserved
+/// qualifier).
+fn is_generated(a: &Attr) -> bool {
+    a.qual
+        .iter()
+        .any(|q| q.starts_with(crate::GENERATE_QUALIFIER_PREFIX))
 }
