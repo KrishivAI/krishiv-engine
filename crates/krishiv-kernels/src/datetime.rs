@@ -372,7 +372,7 @@ fn month_length(year: i64, month: u32) -> u32 {
 /// Day number `months` calendar months after `days`, the day of the month
 /// clamped to the target month (`2020-01-31 + 1 month` is `2020-02-29`), as
 /// Java's `LocalDate.plusMonths`.
-fn add_months(days: i64, months: i64) -> Option<i64> {
+pub(crate) fn add_months(days: i64, months: i64) -> Option<i64> {
     let (year, month, day) = civil_from_days(days);
     let total = year
         .checked_mul(12)?
@@ -390,7 +390,11 @@ fn add_months(days: i64, months: i64) -> Option<i64> {
 /// `java.time.ZonedDateTime.plusDays`/`plusMonths` do: in a DST overlap the
 /// result stays on the side of the transition the start was on. Otherwise
 /// (not in an overlap, or in a gap) the usual resolution applies.
-fn local_to_utc_keeping(local: i64, tz: &dyn TimeZoneRules, preferred: i32) -> Option<i64> {
+pub(crate) fn local_to_utc_keeping(
+    local: i64,
+    tz: &dyn TimeZoneRules,
+    preferred: i32,
+) -> Option<i64> {
     let candidate = local.checked_sub(i64::from(preferred).checked_mul(1_000_000)?)?;
     if tz.offset_at_utc(candidate.div_euclid(1_000_000)) == preferred {
         Some(candidate)
@@ -517,7 +521,7 @@ pub fn timestamp_add_day_time(
 }
 
 /// The value of an operand at row `i`; `None` is NULL.
-fn at<T: ArrowPrimitiveType>(o: &Operand<'_, T>, i: usize) -> Option<T::Native> {
+pub(crate) fn at<T: ArrowPrimitiveType>(o: &Operand<'_, T>, i: usize) -> Option<T::Native> {
     match o {
         Operand::Array(a) => a.is_valid(i).then(|| a.value(i)),
         Operand::Scalar(v) => *v,

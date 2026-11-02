@@ -1152,6 +1152,11 @@ fn interval_types_and_literals_need_their_feature() {
     layout.truncate(1);
     assert!(to_message(&plan_of(root)).unwrap().features.is_empty());
     assert_eq!(message("interval_scan").features, ["interval_types"]);
+    assert!(
+        message("interval_array_aggregate")
+            .features
+            .contains(&"interval_types".to_owned())
+    );
     assert_eq!(
         message("interval_nested").features,
         ["interval_types", "nested_types"]
@@ -1206,6 +1211,31 @@ fn interval_types_and_literals_need_their_feature() {
             "{case}"
         );
         assert!(decode(&bytes).is_ok(), "{case}");
+    }
+}
+
+/// The analyzer's internal functions travel by name, and an older reader
+/// refuses them through the interval feature.
+#[test]
+fn internal_interval_functions_travel_by_name_under_their_feature() {
+    use krishiv_plan::{Builtin, FunctionId};
+    for b in [
+        Builtin::DateAddInterval,
+        Builtin::MultiplyInterval,
+        Builtin::DivideInterval,
+        Builtin::CalendarAdd,
+        Builtin::CalendarSubtract,
+        Builtin::CalendarNegate,
+    ] {
+        assert!(Builtin::ALL.contains(&b), "{b:?}");
+        assert!(b.is_analyzer_internal(), "{b:?}");
+        assert_eq!(Builtin::from_name(b.name()), Some(b));
+        let id = FunctionId::Builtin(b);
+        assert_eq!(
+            feature_of(Construct::Function(&id)),
+            Some(Feature::IntervalTypes),
+            "{b:?}"
+        );
     }
 }
 

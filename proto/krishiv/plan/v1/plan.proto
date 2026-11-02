@@ -575,6 +575,10 @@ message AggregateExpr {
   // feature: percentile_aggregates (`approx_count_distinct` only: the
   // folded HyperLogLog++ addressing bits).
   uint32 hll_precision = 16;
+  // feature: interval_types (an array result of ANSI intervals only: the Arrow
+  // IPC `Schema` flatbuffer of its element field, whose metadata holds the
+  // interval's fields; empty otherwise).
+  bytes result_element = 17;
 }
 
 enum JoinType {

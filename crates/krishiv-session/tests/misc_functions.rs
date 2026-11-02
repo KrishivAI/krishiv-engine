@@ -202,12 +202,12 @@ fn typeof_names_the_analyzers_type() {
 #[test]
 fn typeof_needs_no_execution() {
     // The rewrite is a literal: the argument is never evaluated, so a
-    // failing argument still names its type (with the analyzer's casts, as
-    // Spark's `toPrettySQL` shows them).
+    // failing argument still names its type. Spark 4.2.0's name leaves out
+    // the analyzer's casts, as any other name does.
     let s = session();
     assert_eq!(
         rows(&s, "select typeof(1 / 0)").0,
-        vec!["typeof((CAST(1 AS DOUBLE) / CAST(0 AS DOUBLE)))".to_owned()]
+        vec!["typeof((1 / 0))".to_owned()]
     );
     assert_eq!(
         rows(&s, "select typeof(1 / 0)").1,
