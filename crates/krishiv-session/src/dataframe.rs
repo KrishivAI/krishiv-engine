@@ -2064,8 +2064,6 @@ impl DataFrameWriter {
     }
 
     /// Writes the rows as JSON files under `path` (PySpark's `write.json`).
-    /// The engine has no JSON writer yet: the write fails with
-    /// `KRISHIV_UNSUPPORTED_FEATURE`.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -2073,8 +2071,8 @@ impl DataFrameWriter {
     /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
     /// # s.register_batches("t", schema, vec![])?;
     /// let out = dir.path().join("t");
-    /// let e = futures::executor::block_on(s.table("t").write().json(out.to_str().unwrap())).unwrap_err();
-    /// assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    /// futures::executor::block_on(s.table("t").write().json(out.to_str().unwrap()))?;
+    /// assert!(out.is_dir());
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     ///
