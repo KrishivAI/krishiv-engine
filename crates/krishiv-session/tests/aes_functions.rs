@@ -365,6 +365,48 @@ fn a_constant_expression_argument_is_folded_too() {
     assert_eq!(n, 1);
 }
 
+/// An input with constant arithmetic (division is not folded by the
+/// optimizer) is still one value for every batch.
+#[test]
+fn a_constant_arithmetic_argument_is_folded_too() {
+    assert_eq!(
+        distinct_ciphertexts("range(0, 10000, 1, 4)", "CAST(1 / 1 AS STRING)"),
+        1
+    );
+}
+
+/// Aggregates that differ only in the AES key are different aggregates.
+#[test]
+fn aggregates_over_different_keys_stay_different() {
+    let s = Session::new().unwrap();
+    let a = one(
+        &s,
+        "SELECT concat(max(hex(aes_encrypt(x, 'abcdefghijklmnop', 'ECB'))), '|', max(hex(aes_encrypt(x, 'ponmlkjihgfedcba', 'ECB')))) FROM VALUES ('Spark') t(x)",
+    )
+    .unwrap();
+    let (first, second) = a.split_once('|').unwrap();
+    assert_ne!(first, second, "{a}");
+}
+
+/// A key written by name, or holding an aggregate, never shows its value.
+#[test]
+fn a_named_key_and_an_aggregate_key_stay_hidden() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.ansi.enabled = true")).unwrap();
+    for sql in [
+        "SELECT aes_encrypt(key => CAST(array('secretkey-123456') AS BINARY), input => 'Spark')",
+        "SELECT aes_encrypt(input => 'Spark', key => CAST(array('secretkey-123456') AS BINARY))",
+        "SELECT aes_encrypt('Spark', CAST(max(CAST(k AS INT)) AS STRING)) FROM VALUES ('secretkey-123456') t(k)",
+        "SELECT aes_encrypt('Spark', CAST(max(CAST(k AS INT)) OVER () AS STRING)) FROM VALUES ('secretkey-123456') t(k)",
+    ] {
+        let err = one(&s, sql).expect_err(sql);
+        assert!(
+            !format!("{err:?} {err}").contains("secretkey-123456"),
+            "{sql}: {err}"
+        );
+    }
+}
+
 /// Spark 4.2.0: a column input draws an IV for every row (4 distinct
 /// ciphertexts of 4 identical values). Must never be weakened.
 #[test]

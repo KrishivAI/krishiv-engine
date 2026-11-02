@@ -428,9 +428,20 @@ impl Resolver<'_> {
                     }
                     if let ExprNode::Function(f) = &x.node
                         && super::is_aes_function(&f.name)
-                        && let Some(key) = f.args.get(1)
                     {
-                        self.secret.insert(addr(&**key));
+                        // The second argument, and the one written `key => ...`
+                        // (a named call is refused later, after its children
+                        // are bound).
+                        for (i, arg) in f.args.iter().enumerate() {
+                            let named = f
+                                .arg_names
+                                .get(i)
+                                .and_then(Option::as_deref)
+                                .is_some_and(|n| n.eq_ignore_ascii_case("key"));
+                            if i == 1 || named {
+                                self.secret.insert(addr(&**arg));
+                            }
+                        }
                     }
                     let is_secret = self.secret.contains(&addr(&*x));
                     if is_secret {
@@ -516,6 +527,20 @@ impl Resolver<'_> {
                     let b = self.expr_node(&x, &kids, ctx.agg, ctx.window_fn, cx);
                     self.secret_scope = prev;
                     let b = b.map_err(|err| mask_if(is_secret, err))?;
+                    // An aggregate or window function in a key would run in an
+                    // input projection of its own, outside the evaluator that
+                    // masks the key's errors.
+                    if let ExprNode::Function(f) = &x.node
+                        && super::is_aes_function(&f.name)
+                        && kids
+                            .get(1)
+                            .is_some_and(|k| k.agg.is_some() || k.win.is_some())
+                    {
+                        return Err(unsupported(
+                            "an aggregate or window function in an AES key",
+                            x.origin,
+                        ));
+                    }
                     done.insert((addr(&*x), ctx), b);
                 }
             }

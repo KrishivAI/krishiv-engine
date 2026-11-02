@@ -185,3 +185,23 @@ fn a_wide_aes_call_redacts_in_linear_time() {
     assert!(!leaks(r.as_str()));
     assert!(start.elapsed() < std::time::Duration::from_secs(2));
 }
+
+/// Deeply nested and unterminated AES calls are masked in one linear pass.
+#[test]
+fn nested_aes_calls_redact_in_linear_time() {
+    let nested = format!(
+        "{}1, 'Canary7f3a9c'{}",
+        "aes_encrypt(".repeat(5_000),
+        ")".repeat(5_000)
+    );
+    let open = "aes_encrypt(".repeat(20_000);
+    for sql in [
+        format!("SELECT {nested}"),
+        format!("SELECT {open}'Canary7f3a9c'"),
+    ] {
+        let start = std::time::Instant::now();
+        let r = redact_sql(&sql);
+        assert!(!leaks(r.as_str()));
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    }
+}

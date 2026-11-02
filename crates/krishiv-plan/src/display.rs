@@ -82,6 +82,27 @@ impl LogicalPlan {
     }
 }
 
+thread_local! {
+    /// Set while [`identity_string`] prints: secrets stay in the text.
+    static IDENTITY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `e` as text for comparing expressions inside the engine (an aggregate's
+/// identity, a grouping key's): the display without redaction, so two calls
+/// that differ only in an AES key stay different. Never show or log it.
+#[doc(hidden)]
+#[must_use]
+pub fn identity_string(e: &Expr) -> String {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            IDENTITY.with(|c| c.set(self.0));
+        }
+    }
+    let _reset = Reset(IDENTITY.with(|c| c.replace(true)));
+    e.to_string()
+}
+
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if walk::too_deep(Node::Expr(self)) {
@@ -996,7 +1017,10 @@ fn call<'a>(
     match (op, args.len()) {
         // The key of `aes_encrypt`/`aes_decrypt` never reaches a plan, an
         // error message or a log (ADR 0042).
-        _ if crate::analyzer::is_aes_function(name) && args.len() >= 2 => {
+        _ if crate::analyzer::is_aes_function(name)
+            && args.len() >= 2
+            && !IDENTITY.with(std::cell::Cell::get) =>
+        {
             out.push(Piece::Owned(format!("{name}(")));
             if distinct {
                 out.push(Piece::Str("DISTINCT "));

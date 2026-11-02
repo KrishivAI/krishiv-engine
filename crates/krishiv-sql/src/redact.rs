@@ -179,11 +179,17 @@ fn marks(sql: &str) -> Vec<Mark> {
 /// arguments (`key => ...`) can expose the key; one pass is linear in the
 /// call. An unterminated call is marked to the end (fail-safe).
 fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
+    // Tokens before this index sit inside an AES call already masked as a
+    // whole: an enclosing call covers its nested ones, so each token is
+    // scanned once however deep the calls nest.
+    let mut covered = 0_usize;
     for (i, t) in code.iter().enumerate() {
-        if !matches!(
-            t.kind,
-            TokenKind::Word | TokenKind::QuotedIdent | TokenKind::DoubleQuoted
-        ) {
+        if i < covered
+            || !matches!(
+                t.kind,
+                TokenKind::Word | TokenKind::QuotedIdent | TokenKind::DoubleQuoted
+            )
+        {
             continue;
         }
         let name = if t.kind == TokenKind::QuotedIdent {
@@ -209,9 +215,13 @@ fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
         }
         let mut depth = 0_usize;
         let mut range: Option<(usize, usize)> = None;
-        for u in &code[i + 2..] {
+        covered = code.len();
+        for (j, u) in code.iter().enumerate().skip(i + 2) {
             match u.kind {
-                TokenKind::Sym(Sym::RParen) if depth == 0 => break,
+                TokenKind::Sym(Sym::RParen) if depth == 0 => {
+                    covered = j + 1;
+                    break;
+                }
                 TokenKind::Sym(Sym::RParen) => depth -= 1,
                 TokenKind::Sym(Sym::LParen) => depth += 1,
                 _ => {}
