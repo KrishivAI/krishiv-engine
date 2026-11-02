@@ -33,14 +33,6 @@
       "reason": "SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'), CAST(1.5 AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "st_asbinary#3bf8bb6971c3/ansi_on",
-      "reason": "SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'), CAST(NULL AS string))) | string not null where Spark has string"
-    },
-    {
-      "id": "st_asbinary#3bf8bb6971c3/ansi_off",
-      "reason": "SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'), CAST(NULL AS string))) | string not null where Spark has string"
-    },
-    {
       "id": "st_asbinary#5d62c22f29a6/ansi_on",
       "reason": "SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'), INTERVAL '1-2' YEAR TO MONTH)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -71,14 +63,6 @@
     {
       "id": "st_asbinary#68486aa72a7c/ansi_off",
       "reason": "SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'), CAST(1.5 AS FLOAT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "st_asbinary#72a1a226514b/ansi_on",
-      "reason": "SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'), NULL)) | string not null where Spark has string"
-    },
-    {
-      "id": "st_asbinary#72a1a226514b/ansi_off",
-      "reason": "SELECT hex(st_asbinary(st_geomfromwkb(X'0101000000000000000000F03F0000000000000040'), NULL)) | string not null where Spark has string"
     },
     {
       "id": "st_asbinary#7d922ff9340c/ansi_on",

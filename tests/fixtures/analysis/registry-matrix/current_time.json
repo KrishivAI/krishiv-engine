@@ -58,11 +58,11 @@
     },
     {
       "id": "current_time#476fbdcd9642/ansi_on",
-      "reason": "SELECT current_time | UNRESOLVED_COLUMN.WITH_SUGGESTION"
+      "reason": "SELECT current_time | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "current_time#476fbdcd9642/ansi_off",
-      "reason": "SELECT current_time | UNRESOLVED_COLUMN.WITH_SUGGESTION"
+      "reason": "SELECT current_time | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "current_time#51ddcb41b3fd/ansi_on",

@@ -175,6 +175,10 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                         let (_, wkb) = parts(&column)?;
                         let ends = if per_row { Some(x.strings(1)?) } else { None };
                         for row in 0..column.len() {
+                            if column.is_null(row) {
+                                out.append_null();
+                                continue;
+                            }
                             let order = match &ends {
                                 Some(ends) if ends.is_valid(row) => {
                                     let e = ends.value(row);

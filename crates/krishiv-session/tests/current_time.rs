@@ -57,3 +57,8 @@ fn time_hashes_as_spark() {
     assert_eq!(text("hash(time'10:00')"), "-1113572777");
     assert_eq!(text("xxhash64(time'10:00')"), "-8977161405312030080");
 }
+
+#[test]
+fn bare_current_time_is_the_function() {
+    assert_eq!(text("typeof(current_time)"), "time(6)");
+}

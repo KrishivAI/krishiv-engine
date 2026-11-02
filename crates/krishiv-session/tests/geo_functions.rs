@@ -99,6 +99,12 @@ fn endianness_may_be_a_column() {
     assert_eq!(run(&q("CAST(NULL AS STRING)")).unwrap(), None);
     let e = run(&q("'big'")).unwrap_err();
     assert!(e.contains("ST_INVALID_ENDIANNESS_VALUE"), "{e}");
+    // A NULL spatial row is NULL even when its endianness is invalid.
+    let null_row = format!(
+        "SELECT hex(ST_AsBinary(IF(i = 0, CAST(NULL AS GEOMETRY(4326)), {g}), \
+         IF(i = 0, 'bad', 'NDR'))) FROM range(2) t(i) ORDER BY i"
+    );
+    assert_eq!(run(&null_row).unwrap(), None);
 }
 
 #[test]
@@ -179,6 +185,15 @@ fn spatial_values_are_no_keys() {
     ] {
         let e = error(&q);
         assert!(e.contains("GEOMETRY or GEOGRAPHY"), "{q}: {e}");
+    }
+    // A spatial field read out of a struct is no key either.
+    let field = format!("(SELECT named_struct('g', {m}) s) t");
+    for q in [
+        format!("SELECT count(*) FROM {field} GROUP BY s.g"),
+        format!("SELECT count(DISTINCT s.g) FROM {field}"),
+    ] {
+        let e = run(&q).unwrap_err();
+        assert!(e.contains("GEOMETRY"), "{q}: {e}");
     }
     for q in [
         format!("SELECT DISTINCT {m}"),

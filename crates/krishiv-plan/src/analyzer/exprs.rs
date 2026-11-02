@@ -183,6 +183,7 @@ fn extract_function(function: &str, call: &Expr) -> Option<&'static str> {
 const LITERAL_FUNCTIONS: &[(&str, &str)] = &[
     ("current_date", "current_date"),
     ("current_timestamp", "current_timestamp"),
+    ("current_time", "current_time"),
     ("current_user", "current_user"),
     ("user", "current_user"),
     ("session_user", "current_user"),

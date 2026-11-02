@@ -33,6 +33,7 @@ fn expr_type(e: &crate::Expr) -> Option<&DataType> {
             | ResolvedExpr::Alias { output: c, .. },
         ) => Some(&c.data_type),
         ExprNode::Resolved(ResolvedExpr::Function(f)) => Some(&f.data_type),
+        ExprNode::Resolved(ResolvedExpr::Field { data_type, .. }) => Some(data_type),
         _ => None,
     }
 }
