@@ -254,3 +254,23 @@ fn queries_name_the_session_and_its_principal() {
     assert_ne!(ra[0], rb[0]);
     assert_eq!(ra[0].len(), "etl|".len() + 36);
 }
+
+#[test]
+fn queries_carry_the_trace_of_the_inbound_header() {
+    let s = Session::new().unwrap();
+    run_all(&s, "SELECT 1").unwrap();
+    s.set_trace_context("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+        .unwrap();
+    run_all(&s, "SELECT 2").unwrap();
+    s.clear_trace_context();
+    run_all(&s, "SELECT 3").unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT coalesce(trace_id, '-') FROM system.queries ORDER BY submitted_at",
+    );
+    assert_eq!(
+        &r[..3],
+        ["-", "4bf92f3577b34da6a3ce929d0e0e4736", "-"],
+        "{r:?}"
+    );
+}

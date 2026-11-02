@@ -164,6 +164,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("query_id", Text, false),
             ("session_id", Text, false),
             ("principal", Text, false),
+            ("trace_id", Text, true),
             ("state", Text, false),
             ("query_text", Text, true),
             ("query_text_truncated", Flag, false),
@@ -215,6 +216,24 @@ fn long(cells: impl Iterator<Item = Option<i64>>) -> ArrayRef {
 /// A byte count as `BIGINT`, saturating.
 fn bytes(n: usize) -> i64 {
     i64::try_from(n).unwrap_or(i64::MAX)
+}
+
+/// The trace id of a W3C `traceparent` (`version-trace_id-parent_id-flags`,
+/// lower-case hex), `None` if the header is malformed: version `ff`, an
+/// all-zero id, or the wrong lengths.
+pub(crate) fn parse_traceparent(header: &str) -> Option<String> {
+    let hex = |s: &str, n: usize| {
+        s.len() == n && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    };
+    let parts: Vec<&str> = header.trim().split('-').collect();
+    let [version, trace, parent, flags, ..] = parts.as_slice() else {
+        return None;
+    };
+    let zero = |s: &str| s.bytes().all(|b| b == b'0');
+    // Version 00 has exactly four fields; later versions may add more.
+    let shape = hex(version, 2) && *version != "ff" && (*version != "00" || parts.len() == 4);
+    (shape && hex(trace, 32) && !zero(trace) && hex(parent, 16) && !zero(parent) && hex(flags, 2))
+        .then(|| (*trace).to_owned())
 }
 
 /// The columns' values for `table` now.
@@ -283,6 +302,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             text(rows.iter().map(|r| Some(r.id.as_str()))),
             text(rows.iter().map(|r| Some(r.session_id.as_str()))),
             text(rows.iter().map(|r| Some(r.principal.as_str()))),
+            text(rows.iter().map(|r| r.trace_id.as_deref())),
             text(rows.iter().map(|r| Some(r.state))),
             text(rows.iter().map(|r| r.text.as_deref())),
             Arc::new(BooleanArray::from_iter(
@@ -340,6 +360,7 @@ pub(crate) struct QueryRow {
     pub(crate) id: String,
     pub(crate) session_id: String,
     pub(crate) principal: String,
+    pub(crate) trace_id: Option<String>,
     pub(crate) state: &'static str,
     pub(crate) text: Option<String>,
     pub(crate) truncated: bool,
@@ -451,6 +472,8 @@ pub(crate) struct QueryLog {
     /// The session this log belongs to, and its principal (fixed for life).
     session_id: String,
     principal: String,
+    /// The W3C trace the session's next queries belong to.
+    trace_id: Mutex<Option<String>>,
 }
 
 fn now_ms() -> i64 {
@@ -468,6 +491,19 @@ impl QueryLog {
         };
         let session_id = log.next_id(now_ms());
         Self { session_id, ..log }
+    }
+
+    /// Sets (or clears) the trace id the session's next queries record.
+    pub(crate) fn set_trace_id(&self, trace_id: Option<String>) {
+        *self.trace_id.lock().unwrap_or_else(PoisonError::into_inner) = trace_id;
+    }
+
+    /// The trace id now in effect.
+    pub(crate) fn trace_id(&self) -> Option<String> {
+        self.trace_id
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// A UUIDv7 (RFC 9562): 48 bits of milliseconds, then version, then bits
@@ -519,6 +555,11 @@ impl QueryLog {
             id: id.clone(),
             session_id: self.session_id.clone(),
             principal: self.principal.clone(),
+            trace_id: self
+                .trace_id
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
             state: "running",
             text,
             truncated,
@@ -744,6 +785,29 @@ mod tests {
         log.begin(Some(&long));
         let last = log.snapshot().pop().unwrap();
         assert!(last.truncated && last.text.unwrap().len() <= TEXT_BYTES);
+    }
+
+    #[test]
+    fn traceparent_is_checked_as_w3c_says() {
+        let ok = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        assert_eq!(
+            parse_traceparent(ok).as_deref(),
+            Some("4bf92f3577b34da6a3ce929d0e0e4736")
+        );
+        for bad in [
+            "",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",
+            "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
+            "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra",
+        ] {
+            assert!(parse_traceparent(bad).is_none(), "{bad}");
+        }
+        assert!(
+            parse_traceparent(&format!("01-{}-00f067aa0ba902b7-01-more", &ok[3..35])).is_some()
+        );
     }
 
     #[test]
