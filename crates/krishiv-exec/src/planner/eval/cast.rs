@@ -341,6 +341,20 @@ fn holds_geography(t: &DataType) -> bool {
     }
 }
 
+/// The part of `values` the offsets of a (possibly sliced) list or map point
+/// at.
+fn visible<O>(values: &ArrayRef, offsets: &arrow_buffer::OffsetBuffer<O>) -> ArrayRef
+where
+    O: arrow_array::OffsetSizeTrait,
+{
+    let o = offsets.as_ref();
+    let (Some(first), Some(last)) = (o.first(), o.last()) else {
+        return Arc::clone(values);
+    };
+    let (start, end) = (first.as_usize(), last.as_usize());
+    values.slice(start, end.saturating_sub(start))
+}
+
 /// `check_geography` on every geography inside `a`, of the Spark type `t`.
 fn check_geography_in(a: &ArrayRef, t: &DataType) -> Result<()> {
     use arrow_array::cast::AsArray;
@@ -350,10 +364,14 @@ fn check_geography_in(a: &ArrayRef, t: &DataType) -> Result<()> {
     match t {
         DataType::Geography { .. } => check_geography(a),
         DataType::Array(e) => {
+            // Only the elements the visible rows point at: a sliced list keeps
+            // the whole backing values array.
             let values = if let Some(l) = a.as_list_opt::<i32>() {
-                Arc::clone(l.values())
+                let o = l.offsets();
+                visible(l.values(), o)
             } else if let Some(l) = a.as_list_opt::<i64>() {
-                Arc::clone(l.values())
+                let o = l.offsets();
+                visible(l.values(), o)
             } else if let Some(l) = a.as_list_view_opt::<i32>() {
                 Arc::clone(l.values())
             } else if let Some(l) = a.as_list_view_opt::<i64>() {
@@ -367,8 +385,8 @@ fn check_geography_in(a: &ArrayRef, t: &DataType) -> Result<()> {
             let Some(map) = a.as_map_opt() else {
                 return Err(internal("a cast to a map of geography of a non-map"));
             };
-            check_geography_in(map.keys(), m.key_type())?;
-            check_geography_in(map.values(), m.value_type())
+            check_geography_in(&visible(map.keys(), map.offsets()), m.key_type())?;
+            check_geography_in(&visible(map.values(), map.offsets()), m.value_type())
         }
         DataType::Struct(s) => {
             let Some(st) = a.as_struct_opt() else {

@@ -342,3 +342,16 @@ fn spatial_values_are_no_map_keys() {
         assert!(e.contains("INVALID_MAP_KEY_TYPE"), "{q}: {e}");
     }
 }
+
+#[test]
+fn a_cast_checks_only_the_rows_it_keeps() {
+    // The second array holds an invalid coordinate; LIMIT 1 drops it, so the
+    // ordinary cast of the first (valid) array must succeed.
+    let sql = "SELECT size(CAST(a AS ARRAY<GEOGRAPHY(4326)>)) FROM (SELECT a FROM (SELECT i, \
+        IF(i = 0, array(ST_GeomFromWKB(X'0101000000000000000000F03F0000000000000040', 4326)), \
+        array(ST_GeomFromWKB(X'010100000000000000000069400000000000005940', 4326))) a \
+        FROM range(2) t(i)) ORDER BY i LIMIT 1)";
+    let s = Session::new().unwrap();
+    let b = block_on(async { s.sql(sql).await?.collect().await });
+    assert!(b.is_ok(), "{b:?}");
+}
