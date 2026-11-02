@@ -40,10 +40,11 @@
 //!   the rows stay in their partitions, so a group seen again later becomes
 //!   a second row (a partial duplicate merged by the final phase). An
 //!   [`Hll`] of a 1/8 sample of the input hashes estimates the keys. After
-//!   an index filled, it grows to the estimate's capacity (at least 2x)
+//!   an index filled, it grows to the estimate's capacity (at least 2x):
+//!   at once while that stays within [`CACHED_SINK_SLOTS`], otherwise
 //!   once the partial duplicates outweigh [`GROW_DUPLICATE_FACTOR`] times
 //!   the larger index (DuckDB 2.0's `RadixHTAdaptivity::TryGrow`), if the
-//!   keys fit in [`MAX_SINK_SLOTS`], and is rebuilt over the rows. Every
+//!   keys fit in [`MAX_SINK_SLOTS`]; it is rebuilt over the rows. Every
 //!   [`ADAPT_ROWS`] input rows, it switches to **append** (no lookups)
 //!   when over 95% of the keys are unique. This is DuckDB's thread-local
 //!   abandon (fixed-size thread-local tables,
@@ -175,6 +176,15 @@ const SINK_SLOTS_FEW_THREADS: usize = 1 << 18;
 /// 3-5 LLC misses a row in a growing table): TPC-DS q67, about 5.8M groups,
 /// ran 8% slower growing to 2^22 slots.
 const MAX_SINK_SLOTS: usize = 1 << 19;
+/// Largest capacity a full fixed index grows to without the duplicate test
+/// of [`RowTable::grown_limit`]: 320 KiB of index, inside a core's 512 KiB
+/// L2, so its lookups cost about what the smaller index's did. TPC-DS q21:
+/// each driver's ~33K keys come as a repeating sweep (`inventory` lists
+/// every pair per date), so a 2^15-slot index cleared before any key came
+/// back and made every row a partial duplicate until the test passed, at
+/// about 77K rows (q21 0.87x). Growing past the L2 without the test made
+/// q65, whose keys are nearly all new, 4% slower.
+const CACHED_SINK_SLOTS: usize = 1 << 16;
 /// Input rows between append decisions of a fixed index.
 pub(crate) const ADAPT_ROWS: usize = 1 << 20;
 /// Bytes of partial duplicates per byte of the grown index from which a
@@ -791,9 +801,10 @@ impl RowTable {
     /// `TryGrow`, research C11): room for the distinct keys at load 2/3,
     /// and at least twice the slots; `None` when that passes
     /// [`MAX_SINK_SLOTS`] (the keys would not fit, so a larger index only
-    /// adds cache misses: DuckDB grows to its memory limit instead), and
-    /// while the partial duplicates (rows beyond the distinct keys) take
-    /// fewer than [`GROW_DUPLICATE_FACTOR`] times the grown index's bytes.
+    /// adds cache misses: DuckDB grows to its memory limit instead), and,
+    /// past [`CACHED_SINK_SLOTS`], while the partial duplicates (rows
+    /// beyond the distinct keys) take fewer than [`GROW_DUPLICATE_FACTOR`]
+    /// times the grown index's bytes.
     /// The growth stops a table's index from clearing over and over when
     /// its keys repeat but do not fit: every row it makes then is a partial
     /// duplicate that the final phase copies and merges again.
@@ -809,7 +820,11 @@ impl RowTable {
         if grown > MAX_SINK_SLOTS {
             return None;
         }
+        let cached = grown <= CACHED_SINK_SLOTS;
         let grown = grown * 2 / 3;
+        if cached {
+            return Some(grown);
+        }
         let index = buckets_for(grown) * BUCKET_BYTES;
         ((self.groups - distinct) * self.stride >= GROW_DUPLICATE_FACTOR * index).then_some(grown)
     }
@@ -2449,8 +2464,10 @@ mod tests {
         let core = core();
         let seed = HashSeed::new(Some(1));
         let mut grow = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+        // Not thread-local: no adaptation, so the full index stays at its
+        // limit instead of growing.
         let mut fixed =
-            RowTable::new(&core, &seed, Mode::Fixed { limit: 8 }, true, RADIX_BITS).unwrap();
+            RowTable::new(&core, &seed, Mode::Fixed { limit: 8 }, false, RADIX_BITS).unwrap();
         let mut append = RowTable::new(&core, &seed, Mode::Append, true, RADIX_BITS).unwrap();
         for t in [&mut grow, &mut fixed, &mut append] {
             apply(t, &batch(&core, 0..20));
@@ -2541,10 +2558,10 @@ mod tests {
         assert_eq!(repeat.groups, groups);
     }
 
-    /// A full fixed index grows (DuckDB 2.0's rule) only once its partial
-    /// duplicates take `GROW_DUPLICATE_FACTOR` times the grown index's
-    /// bytes, at least 2x and at most to `MAX_SINK_SLOTS`; and it decides
-    /// only after it filled.
+    /// A full fixed index grows at least 2x and at most to `MAX_SINK_SLOTS`,
+    /// only after it filled: at once up to `CACHED_SINK_SLOTS`, past it
+    /// (DuckDB 2.0's rule) only once its partial duplicates take
+    /// `GROW_DUPLICATE_FACTOR` times the grown index's bytes.
     #[test]
     fn fixed_index_grows_by_its_duplicates() {
         let core = core();
@@ -2576,26 +2593,44 @@ mod tests {
             t.groups = distinct + dups;
             t
         };
-        // From 2^11 slots: the distinct keys fit, so 2x, 2^12 slots.
-        let index = buckets_for((1 << 12) * 2 / 3) * BUCKET_BYTES;
-        let stride = table(1 << 11, 0).stride;
+        // Up to CACHED_SINK_SLOTS: 2x with no partial duplicates, but not
+        // before it filled.
+        let cached = |from: usize| {
+            assert_eq!(
+                table(from, 0).next_mode(),
+                Mode::Fixed {
+                    limit: from * 2 * 2 / 3
+                },
+                "from {from}"
+            );
+            let mut t = table(from, 0);
+            t.adapt.as_mut().unwrap().filled = false;
+            assert_eq!(t.mode, t.next_mode());
+        };
+        cached(1 << 11);
+        cached(SINK_SLOTS);
+        // From CACHED_SINK_SLOTS: the distinct keys fit, so 2x, once the
+        // duplicates outweigh the grown index.
+        let from = CACHED_SINK_SLOTS;
+        let index = buckets_for(from * 2 * 2 / 3) * BUCKET_BYTES;
+        let stride = table(from, 0).stride;
         let enough = (GROW_DUPLICATE_FACTOR * index).div_ceil(stride);
         assert_eq!(
-            table(1 << 11, enough - 1).next_mode(),
+            table(from, enough - 1).next_mode(),
             Mode::Fixed {
-                limit: (1 << 11) * 2 / 3
+                limit: from * 2 / 3
             }
         );
         let grown = Mode::Fixed {
-            limit: (1 << 12) * 2 / 3,
+            limit: from * 2 * 2 / 3,
         };
-        assert_eq!(table(1 << 11, enough).next_mode(), grown);
+        assert_eq!(table(from, enough).next_mode(), grown);
         // Not before it filled.
-        let mut t = table(1 << 11, enough);
+        let mut t = table(from, enough);
         t.adapt.as_mut().unwrap().filled = false;
         assert_eq!(t.mode, t.next_mode());
         // The switch to it restarts the early-widening window.
-        let mut t = table(1 << 11, enough);
+        let mut t = table(from, enough);
         let a = t.adapt.as_mut().unwrap();
         (a.rows, a.pushed, a.early) = (5_000, 4_000, true);
         t.switch(t.next_mode());
@@ -2631,6 +2666,29 @@ mod tests {
                 limit: (1 << 11) * 2 / 3
             }
         );
+    }
+
+    /// Keys that come as a repeating sweep a little larger than a fixed
+    /// index (TPC-DS q21) grow it at its first clear, before any key comes
+    /// back: the table ends with about one row per key, not one per input
+    /// row until the duplicate rule passes.
+    #[test]
+    fn a_sweep_past_a_small_index_grows_it_at_once() {
+        let core = core();
+        let seed = HashSeed::new(Some(3));
+        let mut t =
+            RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
+        for _ in 0..20 {
+            for start in (0..1500).step_by(250) {
+                apply(&mut t, &batch(&core, start..start + 250));
+            }
+        }
+        assert!(
+            matches!(t.mode, Mode::Fixed { limit } if limit >= 1500),
+            "{:?}",
+            t.mode
+        );
+        assert!(t.len() < 1500 + 250, "{} rows for 1500 keys", t.len());
     }
 
     /// A grown index is rebuilt over the rows, newest first in a
