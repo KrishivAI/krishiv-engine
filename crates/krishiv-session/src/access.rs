@@ -629,3 +629,56 @@ impl AccessPolicy for PathPrefixPolicy {
         self.inner.check(principal, securable, privilege)
     }
 }
+
+/// A policy that allows `Select` as `inner` decides and denies every other
+/// privilege: the read-only surfaces (the MCP server) enforce read-only
+/// through the same [`authorize`] path as every other check, even if a
+/// statement classifier missed a write.
+///
+/// ```
+/// use std::sync::Arc;
+/// use krishiv_session::{AllowAll, ReadOnlyPolicy, Session};
+///
+/// let s = Session::builder().access_policy(Arc::new(ReadOnlyPolicy::new(Arc::new(AllowAll)))).build()?;
+/// let e = futures::executor::block_on(s.sql("CREATE TABLE t (a INT)")).unwrap_err();
+/// assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+/// # Ok::<(), krishiv_common::error::KrishivError>(())
+/// ```
+#[derive(Clone)]
+pub struct ReadOnlyPolicy {
+    inner: Arc<dyn AccessPolicy>,
+}
+
+impl std::fmt::Debug for ReadOnlyPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReadOnlyPolicy").finish_non_exhaustive()
+    }
+}
+
+impl ReadOnlyPolicy {
+    /// Read-only over `inner`, which decides every `Select`.
+    #[must_use]
+    pub fn new(inner: Arc<dyn AccessPolicy>) -> Self {
+        Self { inner }
+    }
+}
+
+impl AccessPolicy for ReadOnlyPolicy {
+    fn version(&self) -> PolicyVersion {
+        self.inner.version()
+    }
+
+    fn check<'a>(
+        &'a self,
+        principal: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        if privilege != Privilege::Select {
+            return Box::pin(std::future::ready(Ok(AccessDecision::Deny {
+                reason: "the session is read-only".to_owned(),
+            })));
+        }
+        self.inner.check(principal, securable, privilege)
+    }
+}

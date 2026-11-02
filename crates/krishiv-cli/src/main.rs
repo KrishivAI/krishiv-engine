@@ -11,6 +11,10 @@
         reason = "CLI binary: stdout/stderr are its interface"
     )
 )]
+#![cfg_attr(
+    all(feature = "mcp", not(feature = "ui")),
+    expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")
+)]
 
 mod archive;
 mod bundle;
@@ -57,6 +61,16 @@ enum Command {
     /// `krishiv sql`, which exits 1 on a query error).
     #[command(name = "debug-bundle")]
     DebugBundle(bundle::BundleArgs),
+    /// Serve read-only MCP tools over stdio (design P2-T095).
+    #[cfg(feature = "mcp")]
+    Mcp {
+        /// Directory whose parquet files are the tables; files outside it cannot be read.
+        #[arg(long)]
+        data: std::path::PathBuf,
+        /// Run even as uid 0.
+        #[arg(long)]
+        allow_root: bool,
+    },
     /// Serve the web UI and admin API.
     #[cfg(feature = "ui")]
     Server {
@@ -98,6 +112,8 @@ fn run() {
     match cli.command {
         Command::Sql(args) => std::process::exit(sql::run(&args)),
         Command::DebugBundle(args) => std::process::exit(bundle::run(&args)),
+        #[cfg(feature = "mcp")]
+        Command::Mcp { data, allow_root } => std::process::exit(run_mcp(data, allow_root)),
         #[cfg(feature = "ui")]
         Command::Server { port, host } => {
             let addr = std::net::SocketAddr::new(host, port);
@@ -108,6 +124,42 @@ fn run() {
                 eprintln!("krishiv server: {e}");
                 std::process::exit(1);
             }
+        }
+    }
+}
+
+/// `krishiv mcp`: stdio until the client closes it. Exit 0 ok, 1 failure.
+#[cfg(feature = "mcp")]
+fn run_mcp(data: std::path::PathBuf, allow_root: bool) -> i32 {
+    if krishiv_mcp::gate::is_root() && !allow_root {
+        eprintln!("krishiv mcp: refusing to run as root; pass --allow-root to override");
+        return 1;
+    }
+    if !data.is_dir() {
+        eprintln!("krishiv mcp: --data {} is not a directory", data.display());
+        return 1;
+    }
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("krishiv mcp: {e}");
+            return 1;
+        }
+    };
+    let server = krishiv_mcp::KrishivMcpServer::with_tools(krishiv_mcp::McpConfig::new(data));
+    let result = runtime.block_on(async {
+        let running = server.serve_stdio().await.map_err(|e| e.to_string())?;
+        running
+            .waiting()
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    });
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("krishiv mcp: {e}");
+            1
         }
     }
 }

@@ -71,7 +71,7 @@ mod variables;
 mod view_schema;
 mod window;
 
-pub use access::{PathPrefixPolicy, StatementInfo};
+pub use access::{PathPrefixPolicy, ReadOnlyPolicy, StatementInfo};
 
 pub mod agent;
 
@@ -90,8 +90,8 @@ pub use krishiv_exec::{
     CounterSample, GaugeSample, HistogramBucket, HistogramSample, MetricDict, MetricsSnapshot,
 };
 pub use krishiv_plan::analyzer::{
-    AccessDecision, AccessPolicy, AllowAll, DenyAll, Principal, PrincipalKind, Privilege,
-    Securable, SecurableUse,
+    AccessDecision, AccessPolicy, AllowAll, BoxFuture, DenyAll, PolicyVersion, Principal,
+    PrincipalKind, Privilege, Securable, SecurableUse,
 };
 pub use krishiv_sql::{ExplainKind, StatementClass};
 pub use krishiv_udf_sdk::{

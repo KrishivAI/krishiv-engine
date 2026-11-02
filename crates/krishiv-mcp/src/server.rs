@@ -26,6 +26,7 @@ use rmcp::service::{RequestContext, RoleServer, RunningService, ServerInitialize
 use rmcp::{ErrorData as McpError, ServerHandler, ServiceExt};
 
 use crate::protocol::{PINNED_PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS};
+use crate::tools::{McpConfig, Tools, definitions};
 
 /// Name this server reports in `initialize` results.
 pub const SERVER_NAME: &str = "krishiv-mcp";
@@ -43,9 +44,19 @@ pub const TOOL_SERVER_STATUS: &str = "server_status";
 /// Read-only MCP server. Holds no per-client state: safe to share across
 /// connections and to serve revisions with and without sessions.
 #[derive(Debug, Clone, Default)]
-pub struct KrishivMcpServer;
+pub struct KrishivMcpServer {
+    tools: Option<Arc<Tools>>,
+}
 
 impl KrishivMcpServer {
+    /// A server that also serves the read-only query tools over `config`.
+    #[must_use]
+    pub fn with_tools(config: McpConfig) -> Self {
+        Self {
+            tools: Some(Arc::new(Tools::new(config))),
+        }
+    }
+
     /// Serve this server on stdio (`initialize` then framed JSON-RPC).
     ///
     /// # Errors
@@ -137,7 +148,14 @@ impl ServerHandler for KrishivMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult::with_all_items(vec![status_tool()]))
+        let mut tools = vec![status_tool()];
+        if self.tools.is_some() {
+            tools.extend(definitions().into_iter().map(|(name, doc, schema)| {
+                Tool::new(name, doc, Arc::new(schema))
+                    .annotate(ToolAnnotations::new().read_only(true))
+            }));
+        }
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     async fn call_tool(
@@ -145,7 +163,19 @@ impl ServerHandler for KrishivMcpServer {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        dispatch_tool(request.name.as_ref())
+        let name = request.name.as_ref();
+        let Some(tools) = self.tools.as_ref().filter(|_| name != TOOL_SERVER_STATUS) else {
+            return dispatch_tool(name);
+        };
+        let args = request.arguments.unwrap_or_default();
+        let answer = tools.call(name, &args).await;
+        let content = vec![ContentBlock::text(answer.text)];
+        Ok(if answer.is_error {
+            CallToolResult::error(content)
+        } else {
+            CallToolResult::success(content)
+        }
+        .into())
     }
 }
 
@@ -166,7 +196,7 @@ mod tests {
     }
 
     fn negotiated(requested: ProtocolVersion) -> ProtocolVersion {
-        KrishivMcpServer
+        KrishivMcpServer::default()
             .negotiate_initialize(&init_params(requested))
             .expect("negotiation over a handshake revision must succeed")
             .protocol_version
@@ -209,7 +239,7 @@ mod tests {
 
     #[test]
     fn info_advertises_pin_tools_and_identity() {
-        let info = KrishivMcpServer.get_info();
+        let info = KrishivMcpServer::default().get_info();
         assert_eq!(info.protocol_version, PINNED_PROTOCOL_VERSION);
         assert_eq!(info.server_info.name, SERVER_NAME);
         assert!(
@@ -261,7 +291,7 @@ mod tests {
     #[test]
     fn tools_hold_no_session_state() {
         // Two instances (as two connections would see) agree exactly.
-        let (first, second) = (KrishivMcpServer, KrishivMcpServer);
+        let (first, second) = (KrishivMcpServer::default(), KrishivMcpServer::default());
         assert_eq!(
             first.get_info().protocol_version,
             second.get_info().protocol_version

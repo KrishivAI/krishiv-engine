@@ -1891,6 +1891,7 @@ dependencies = [
  "krishiv-alloc",
  "krishiv-common",
  "krishiv-functions",
+ "krishiv-mcp",
  "krishiv-memory",
  "krishiv-server",
  "krishiv-sql",
@@ -1898,6 +1899,7 @@ dependencies = [
  "mimalloc",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -2066,8 +2068,14 @@ dependencies = [
 name = "krishiv-mcp"
 version = "0.1.0-alpha"
 dependencies = [
+ "futures",
+ "krishiv-common",
+ "krishiv-functions",
+ "krishiv-session",
+ "krishiv-sql",
  "rmcp",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

@@ -9,6 +9,10 @@ use krishiv_mcp::KrishivMcpServer;
 /// Serve stdio until the client closes it.
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    KrishivMcpServer.serve_stdio().await?.waiting().await?;
+    KrishivMcpServer::default()
+        .serve_stdio()
+        .await?
+        .waiting()
+        .await?;
     Ok(())
 }

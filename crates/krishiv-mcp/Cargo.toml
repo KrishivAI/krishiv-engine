@@ -13,11 +13,17 @@ workspace = true
 
 [dependencies]
 rmcp = { workspace = true, features = ["server", "transport-io"] }
+futures.workspace = true
+krishiv-functions = { path = "../krishiv-functions" }
+krishiv-common = { path = "../krishiv-common" }
+krishiv-session = { path = "../krishiv-session" }
+krishiv-sql = { path = "../krishiv-sql" }
 serde_json = { workspace = true, features = ["std"] }
 # The `mcp_stdio` conformance shim serves stdio from a plain binary (not a
 # test harness), so its stdout carries only JSON-RPC.
-tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
+tempfile.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "io-util", "process", "time"] }

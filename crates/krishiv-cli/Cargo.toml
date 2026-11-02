@@ -25,6 +25,8 @@ krishiv-common = { path = "../krishiv-common" }
 krishiv-functions = { path = "../krishiv-functions" }
 krishiv-sql = { path = "../krishiv-sql" }
 krishiv-server = { path = "../krishiv-server", optional = true }
+krishiv-mcp = { path = "../krishiv-mcp", optional = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread"], optional = true }
 serde_json = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 
@@ -45,7 +47,7 @@ delta = ["krishiv/delta"]
 cdc = ["krishiv/cdc"]
 connect = ["krishiv/connect"]
 flight-sql = ["krishiv/flight-sql"]
-mcp = ["krishiv/mcp"]
+mcp = ["krishiv/mcp", "dep:krishiv-mcp", "dep:tokio"]
 python = ["krishiv/python"]
 wasm-udf = ["krishiv/wasm-udf"]
 ui = ["krishiv/ui", "dep:krishiv-server"]
