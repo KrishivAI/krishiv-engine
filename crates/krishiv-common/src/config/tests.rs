@@ -717,3 +717,60 @@ fn time_parser_policy_parses_and_defaults() {
         Some("LEGACY")
     );
 }
+
+#[test]
+fn result_cache_entries_parse_and_default() {
+    use super::registry::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        (
+            c.get(&RESULT_CACHE_ENABLED).and_then(ConfigValue::as_bool),
+            c.get(&RESULT_CACHE_TTL).and_then(ConfigValue::as_duration),
+            c.get(&RESULT_CACHE_MAX_BYTES)
+                .and_then(ConfigValue::as_size),
+        )
+    };
+    // Off by default, a day, 64 MiB.
+    assert_eq!(
+        get(&c),
+        (
+            Some(false),
+            Some(std::time::Duration::from_secs(24 * 60 * 60)),
+            Some(64 << 20)
+        )
+    );
+    c.set("krishiv.resultCache.enabled", "true").unwrap();
+    c.set("krishiv.resultCache.ttl", "30m").unwrap();
+    c.set("krishiv.resultCache.maxBytes", "1g").unwrap();
+    assert_eq!(
+        get(&c),
+        (
+            Some(true),
+            Some(std::time::Duration::from_secs(1800)),
+            Some(1 << 30)
+        )
+    );
+    c.set("krishiv.resultCache.ttl", "0s").unwrap();
+    assert_eq!(
+        c.get(&RESULT_CACHE_TTL).and_then(ConfigValue::as_duration),
+        Some(std::time::Duration::ZERO)
+    );
+    assert!(c.set("krishiv.resultCache.enabled", "maybe").is_err());
+    assert!(c.set("krishiv.resultCache.maxBytes", "lots").is_err());
+}
+
+#[test]
+fn deterministic_order_is_off_by_default_and_parses() {
+    use super::registry::DETERMINISTIC_ORDER;
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&DETERMINISTIC_ORDER).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    c.set("krishiv.deterministicOrder", "true").unwrap();
+    assert_eq!(
+        c.get(&DETERMINISTIC_ORDER).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert!(c.set("krishiv.deterministicOrder", "sometimes").is_err());
+}

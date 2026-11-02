@@ -1876,6 +1876,10 @@ impl Session {
             // reading files are dropped, so the next action lists them again.
             // (An external change drops nothing and stays invisible.)
             self.refresh_files();
+            // A write by path into a table's directory changes what the table reads.
+            if let Some(local) = at.display.strip_prefix("file:") {
+                crate::result_cache::global().invalidate_path(std::path::Path::new(local));
+            }
             let mut dirs = std::collections::BTreeSet::new();
             for f in &committed {
                 let below: Vec<String> = f
