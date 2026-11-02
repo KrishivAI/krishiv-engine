@@ -209,12 +209,15 @@ fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
         // ahead (a later argument may hold a `>`), so the call is scanned
         // both ways and the union of the two key ranges is masked: it can
         // over-mask, never expose the key.
-        let range = match (
-            aes_key_range(sql, code, i, true),
-            aes_key_range(sql, code, i, false),
-        ) {
-            (Some(x), Some(y)) => Some((x.0.min(y.0), x.1.max(y.1))),
-            (x, y) => x.or(y),
+        let (with, call_end) = aes_key_range(sql, code, i, true);
+        let (without, _) = aes_key_range(sql, code, i, false);
+        // When the readings disagree about where the key ends (or one finds
+        // no key), the boundary is unsettled: mask to the end of the call.
+        let range = match (with, without) {
+            (Some(x), Some(y)) if x.1 == y.1 => Some((x.0.min(y.0), x.1)),
+            (Some(x), Some(y)) => Some((x.0.min(y.0), x.1.max(y.1).max(call_end))),
+            (Some(x), None) | (None, Some(x)) => Some((x.0, x.1.max(call_end))),
+            (None, None) => None,
         };
         if let Some((a, b)) = range {
             marks.push(Mark::Secret(a..b));
@@ -224,13 +227,19 @@ fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
 
 /// The key range (the second argument) of the AES call whose name is
 /// `code[i]`; `angles` reads `<` after `map`/`array`/`struct` as a type.
-fn aes_key_range(sql: &str, code: &[&Token], i: usize, angles: bool) -> Option<(usize, usize)> {
+fn aes_key_range(
+    sql: &str,
+    code: &[&Token],
+    i: usize,
+    angles: bool,
+) -> (Option<(usize, usize)>, usize) {
     let (mut depth, mut arg) = (0_usize, 0_usize);
     // Angle brackets of a complex type (`MAP<STRING,STRING>`) open only
     // after a type word, so a comparison `a < b` never hides a comma.
     let mut angle = 0_usize;
     let mut prev_word = String::new();
     let mut range: Option<(usize, usize)> = None;
+    let mut call_end = code[i + 1].span.end;
     for (j, u) in code[i + 2..].iter().enumerate() {
         let word = std::mem::take(&mut prev_word);
         if u.kind == TokenKind::Word {
@@ -251,6 +260,9 @@ fn aes_key_range(sql: &str, code: &[&Token], i: usize, angles: bool) -> Option<(
                 )
             })
             && closes_ahead(&code[i + 2 + j + 1..]);
+        if depth > 0 || u.kind != TokenKind::Sym(Sym::RParen) {
+            call_end = u.span.end;
+        }
         match u.kind {
             TokenKind::Sym(Sym::Lt) if angle > 0 || (angles && opens_type) => {
                 angle += 1;
@@ -262,9 +274,6 @@ fn aes_key_range(sql: &str, code: &[&Token], i: usize, angles: bool) -> Option<(
             TokenKind::Sym(Sym::RParen) => depth = depth.saturating_sub(1),
             TokenKind::Sym(Sym::Comma) if depth == 0 => {
                 arg += 1;
-                if arg > 1 {
-                    break;
-                }
                 continue;
             }
             _ => {}
@@ -274,7 +283,7 @@ fn aes_key_range(sql: &str, code: &[&Token], i: usize, angles: bool) -> Option<(
             r.1 = u.span.end;
         }
     }
-    range
+    (range, call_end)
 }
 
 /// Whether a `>` follows before the enclosing call's `)`: the `<` before
