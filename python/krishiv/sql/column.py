@@ -390,13 +390,13 @@ class Column:
         >>> df = spark.sql("SELECT named_struct('b', 1, 'c', 2) AS a")
         >>> df.withColumn('a', df['a'].withField('b', lit(3))).select('a.b').show()
         +---+
-        |a.b|
+        |  b|
         +---+
         |  3|
         +---+
         >>> df.withColumn('a', df['a'].withField('d', lit(4))).select('a.d').show()
         +---+
-        |a.d|
+        |  d|
         +---+
         |  4|
         +---+
