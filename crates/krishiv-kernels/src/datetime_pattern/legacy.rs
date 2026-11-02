@@ -747,7 +747,16 @@ impl Parsed {
             if !(0..12).contains(&m) || d < 1 {
                 return None;
             }
-            days_from_civil(year, u32::try_from(m + 1).ok()?, u32::try_from(d).ok()?)?
+            let (mo, dd) = (u32::try_from(m + 1).ok()?, u32::try_from(d).ok()?);
+            match days_from_civil(year, mo, dd) {
+                Some(days) => days,
+                // February 29 of a Julian-only leap year (1500, ...): the
+                // hybrid calendar has it, the proleptic one reads it as March 1.
+                None if (mo, dd) == (2, 29) && year <= 1582 && year % 4 == 0 => {
+                    days_from_civil(year, 3, 1)?
+                }
+                None => return None,
+            }
         };
         // The labels 1582-10-05..14 do not exist in the hybrid calendar.
         let cutover = days_from_civil(1582, 10, 4).unwrap_or(i64::MIN);
@@ -1042,6 +1051,13 @@ mod tests {
         assert!(local("yyyy-MM-dd hh a", "2024-01-01 12 AM").is_some());
         assert_eq!(local("yyyy-MM-dd", "1582-10-10"), None);
         assert!(local("yyyy-MM-dd", "1582-10-04").is_some());
+        // Spark 4.2.0 under LEGACY: a Julian-only leap day reads as March 1.
+        assert_eq!(
+            local("yyyy-MM-dd", "1500-02-29"),
+            local("yyyy-MM-dd", "1500-03-01")
+        );
+        assert_eq!(local("yyyy-MM-dd", "1700-02-29"), None);
+        assert_eq!(local("yyyy-MM-dd", "1500-02-30"), None);
         assert!(local("yyyy-MM-dd", "1582-10-15").is_some());
     }
 
