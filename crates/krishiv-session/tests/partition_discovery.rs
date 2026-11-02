@@ -258,3 +258,50 @@ fn nested_and_repeated_projections_keep_the_column_layout() {
         [["1", "1", "2020", "2020"], ["2", "2", "2021", "2021"]]
     );
 }
+
+/// A late fetch (design P2-T063) reads a data column back by row id and takes
+/// the partition column from the narrow scan: a partition column isn't in the
+/// files.
+#[test]
+fn a_late_fetch_over_partition_directories_returns_the_plain_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    let years: Vec<i32> = (2000..2012).collect();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("year", DataType::Int32, false),
+        Field::new("payload", DataType::Utf8, true),
+    ]));
+    let payloads: Vec<String> = years.iter().map(|y| format!("payload-{y}")).collect();
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from_iter_values(years.iter().map(|y| 3000 - y))),
+            Arc::new(Int32Array::from(years.clone())),
+            Arc::new(StringArray::from(payloads)),
+        ],
+    )
+    .unwrap();
+    s.register_batches("t", schema, vec![batch]).unwrap();
+    let root = dir.path().join("t");
+    let root = root.to_str().unwrap().to_owned();
+    block_on(s.table("t").write().partition_by(["year"]).parquet(&root)).unwrap();
+    let query = format!(
+        "SELECT payload, CAST(year AS STRING), CAST(id AS STRING) \
+         FROM (SELECT * FROM parquet.`{root}` ORDER BY id LIMIT 2)"
+    );
+    let on = rows(&s, &query);
+    assert_eq!(
+        on,
+        [
+            ["payload-2010", "2010", "990"],
+            ["payload-2011", "2011", "989"],
+        ]
+    );
+    let explain = block_on(s.sql(&format!("EXPLAIN {query}"))).unwrap();
+    let explain = block_on(explain.collect()).unwrap();
+    let text = format!("{explain:?}");
+    assert!(text.contains("LateFetch"), "{text}");
+    block_on(s.sql("SET krishiv.exec.lateFetch.maxRows = 0")).unwrap();
+    assert_eq!(rows(&s, &query), on);
+}
