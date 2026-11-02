@@ -324,3 +324,117 @@ async fn azure_round_trip() {
     )
     .await;
 }
+
+/// A one-file web server on loopback that honours `Range`, logging each
+/// request line and its `Range` header.
+struct RangeServer {
+    port: u16,
+    log: Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>,
+}
+
+fn serve(body: Vec<u8>) -> RangeServer {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = Arc::clone(&log);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let request = line.trim().to_owned();
+                let mut range = None;
+                loop {
+                    let mut h = String::new();
+                    reader.read_line(&mut h).unwrap();
+                    let h = h.trim();
+                    if h.is_empty() {
+                        break;
+                    }
+                    if let Some(v) = h.to_ascii_lowercase().strip_prefix("range:") {
+                        range = Some(v.trim().to_owned());
+                    }
+                }
+                seen.lock().unwrap().push((request.clone(), range.clone()));
+                let head = request.starts_with("HEAD");
+                let (status, slice) = match range.as_deref().and_then(|r| r.strip_prefix("bytes="))
+                {
+                    Some(r) => {
+                        let (a, b) = r.split_once('-').unwrap();
+                        let a: usize = a.parse().unwrap();
+                        let b: usize = b.parse::<usize>().unwrap().min(body.len() - 1);
+                        (
+                            format!(
+                                "206 Partial Content\r\nContent-Range: bytes {a}-{b}/{}",
+                                body.len()
+                            ),
+                            &body[a..=b],
+                        )
+                    }
+                    None => ("200 OK".to_owned(), &body[..]),
+                };
+                let length = if head { body.len() } else { slice.len() };
+                let mut out = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {length}\r\nAccept-Ranges: bytes\r\nLast-Modified: Tue, 03 Nov 2026 00:00:00 GMT\r\nConnection: keep-alive\r\n\r\n"
+                )
+                .into_bytes();
+                if !head {
+                    out.extend_from_slice(slice);
+                }
+                if stream.write_all(&out).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    RangeServer { port, log }
+}
+
+/// An `http://` URL to a loopback server reads like a file: `HEAD` for the
+/// size, then only `Range` requests (P2-T195 unit 1).
+#[tokio::test]
+async fn https_store_reads_ranges_only() {
+    let body = parquet_bytes();
+    let server = serve(body.clone());
+    let config = test_config(&[]);
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(config);
+    let url = format!("http://127.0.0.1:{}/data/t.parquet", server.port);
+    let (store, path, display) = registry.ensure(&sched, &url).unwrap();
+    assert_eq!(display, url);
+    let io = sched.context();
+    let meta = io.head(&store, &path).await.unwrap().unwrap();
+    assert_eq!(meta.size, body.len() as u64);
+    let file = FileRef::from_meta(store.clone(), &meta);
+    let got = io.get_ranges(&file, &[0..file.size]).await.unwrap();
+    assert_eq!(&got[0][..], &body[..]);
+    let (ids, _) = read_parquet(&got[0]);
+    assert_eq!(ids, vec![1, 2, 3]);
+    for (request, range) in server.log.lock().unwrap().iter() {
+        assert!(
+            request.starts_with("HEAD") || range.is_some(),
+            "a whole-file GET: {request}"
+        );
+    }
+}
+
+#[test]
+fn http_urls_name_a_store_by_authority_and_refuse_credentials_and_remote_plain_http() {
+    let ok = krishiv_io::parse_object_url("https://example.com:8443/a/b.parquet").unwrap();
+    assert_eq!(ok.store_id.key(), "https://example.com:8443");
+    assert_eq!(ok.key.as_ref(), "a/b.parquet");
+    assert!(krishiv_io::parse_object_url("https://user:pw@example.com/x").is_err());
+    assert!(krishiv_io::parse_object_url("https://example.com/x?token=1").is_err());
+    let config = test_config(&[]);
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(config);
+    let e = registry
+        .ensure(&sched, "http://example.com/x.parquet")
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}

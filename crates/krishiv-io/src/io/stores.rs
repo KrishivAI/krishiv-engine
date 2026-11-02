@@ -137,6 +137,9 @@ pub enum ObjectScheme {
     Gcs,
     /// `abfs://`, `abfss://` and `az://`.
     Azure,
+    /// `https://` (and loopback `http://`): a read-only server of byte
+    /// ranges. The "bucket" is the authority (`host[:port]`).
+    Http,
 }
 
 impl fmt::Display for ObjectScheme {
@@ -145,6 +148,7 @@ impl fmt::Display for ObjectScheme {
             Self::S3 => f.write_str("s3"),
             Self::Gcs => f.write_str("gs"),
             Self::Azure => f.write_str("abfss"),
+            Self::Http => f.write_str("https"),
         }
     }
 }
@@ -185,6 +189,7 @@ pub fn parse_object_url(text: &str) -> Result<ParsedUrl> {
         "s3" | "s3a" => ObjectScheme::S3,
         "gs" => ObjectScheme::Gcs,
         "abfs" | "abfss" | "az" => ObjectScheme::Azure,
+        "https" | "http" => ObjectScheme::Http,
         _ => {
             return Err(unsupported(format!("paths with the scheme {scheme}")));
         }
@@ -192,6 +197,11 @@ pub fn parse_object_url(text: &str) -> Result<ParsedUrl> {
     let Some(rest) = after.strip_prefix("//") else {
         return Err(unsupported(format!("{scheme} paths without `//`")));
     };
+    if kind == ObjectScheme::Http && rest.contains(['?', '#']) {
+        return Err(unsupported(format!(
+            "{scheme} paths with a query or fragment"
+        )));
+    }
     let (authority, key) = match rest.find('/') {
         Some(i) => rest.split_at(i),
         None => (rest, ""),
@@ -200,7 +210,7 @@ pub fn parse_object_url(text: &str) -> Result<ParsedUrl> {
         return Err(unsupported(format!("{scheme} paths without a bucket")));
     }
     let (bucket, account) = match kind {
-        ObjectScheme::S3 | ObjectScheme::Gcs => {
+        ObjectScheme::S3 | ObjectScheme::Gcs | ObjectScheme::Http => {
             if authority.contains('@') {
                 return Err(unsupported("paths with credentials".to_owned()));
             }
@@ -243,6 +253,7 @@ pub fn parse_object_url(text: &str) -> Result<ParsedUrl> {
         (ObjectScheme::Gcs, _) => StoreId::new(format!("gs://{bucket}")),
         (ObjectScheme::Azure, Some(account)) => StoreId::new(format!("abfss://{bucket}@{account}")),
         (ObjectScheme::Azure, None) => StoreId::new(format!("abfss://{bucket}")),
+        (ObjectScheme::Http, _) => StoreId::new(format!("{lower}://{bucket}")),
     };
     let mut display = format!("{scheme}://{authority}");
     if !key.as_ref().is_empty() {
@@ -359,6 +370,8 @@ fn policy_for(scheme: ObjectScheme) -> StorePolicy {
         ObjectScheme::S3 => StorePolicy::S3,
         ObjectScheme::Gcs => StorePolicy::GCS,
         ObjectScheme::Azure => StorePolicy::AZURE,
+        // A plain web server publishes no per-prefix budget.
+        ObjectScheme::Http => StorePolicy::UNPACED,
     }
 }
 
@@ -392,7 +405,34 @@ fn build(
         ObjectScheme::S3 => s3_store(config, options, url, path_style),
         ObjectScheme::Gcs => gcs_store(config, options, url),
         ObjectScheme::Azure => azure_store(config, options, url),
+        ObjectScheme::Http => http_store(url),
     }
+}
+
+/// A read-only store over `https://host[:port]` (`http://` only for a
+/// loopback host, for tests): byte-range reads and `HEAD` for sizes. Nothing
+/// is sent but the request itself: no credentials, and redirects are not
+/// followed to another host with a header (the client sends none).
+#[cfg(feature = "cloud")]
+fn http_store(url: &ParsedUrl) -> Result<Arc<dyn ObjectStore>> {
+    use object_store::http::HttpBuilder;
+    let plain = url.store_id.key().starts_with("http://");
+    let host = url
+        .bucket
+        .rsplit_once(':')
+        .map_or(url.bucket.as_str(), |(h, _)| h);
+    if plain && !matches!(host, "localhost" | "127.0.0.1" | "[::1]") {
+        return Err(unsupported(format!(
+            "http:// paths to a host other than the loopback ({})",
+            url.display
+        )));
+    }
+    HttpBuilder::new()
+        .with_url(url.store_id.key())
+        .with_client_options(object_store::ClientOptions::new().with_allow_http(plain))
+        .build()
+        .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
+        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
 }
 
 /// Without the `cloud` feature there are no builders: cloud URLs parse (so
