@@ -822,6 +822,20 @@ pub struct WritePlan {
     /// Input column indices the files are partitioned by (Spark directory layout).
     #[prost(uint64, repeated, tag = "8")]
     pub partition_by: ::prost::alloc::vec::Vec<u64>,
+    /// feature: write_column_types
+    /// Input columns whose Spark type their Arrow type doesn't say.
+    #[prost(message, repeated, tag = "9")]
+    pub column_types: ::prost::alloc::vec::Vec<WriteColumnType>,
+}
+/// feature: write_column_types
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WriteColumnType {
+    /// feature: write_column_types
+    #[prost(uint64, tag = "1")]
+    pub column: u64,
+    /// feature: write_column_types
+    #[prost(message, optional, tag = "2")]
+    pub data_type: ::core::option::Option<DataType>,
 }
 /// v2: moves rows between partitions.
 #[derive(Clone, PartialEq, ::prost::Message)]

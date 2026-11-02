@@ -715,7 +715,7 @@ impl JsonDecoder {
                     .iter()
                     .position(|n| *n == f.name())
                     .ok_or_else(|| internal(format!("no column {}", f.name())))?;
-                let kind = kind_of(f.data_type())?;
+                let kind = kind_of(f)?;
                 columns.push(Column::new(f.data_type())?);
                 outs.push(Out::Data { slot, kind });
                 continue;

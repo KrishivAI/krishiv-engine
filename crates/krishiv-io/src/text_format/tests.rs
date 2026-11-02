@@ -331,7 +331,11 @@ fn write_checks_and_nulls() {
         true,
     )]));
     let e = TextFormat.check_write(&int, &o).expect_err("int column");
-    assert!(matches!(&e, crate::error::FormatError::Other(e) if e.error_class() == Unsupported));
+    assert!(matches!(
+        &e,
+        crate::error::FormatError::Other(e)
+            if e.error_class() == krishiv_common::error::ErrorClass::UnsupportedDataTypeForDatasource
+    ));
     // A NULL writes an empty line, as Spark's text writer does.
     let batch = RecordBatch::try_new(
         value_schema(),

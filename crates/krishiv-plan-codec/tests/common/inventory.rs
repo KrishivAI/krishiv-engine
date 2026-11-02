@@ -129,6 +129,7 @@ pub(crate) fn write_plan() -> krishiv_exec::physical::WritePlan {
         max_records_per_file: 600,
         target_file_bytes: 1 << 20,
         partition_by: Vec::new(),
+        column_types: std::collections::BTreeMap::new(),
     }
 }
 
@@ -1178,6 +1179,22 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 input: boxed(scan()),
                 write: Some(WritePlan {
                     partition_by: vec![1, 0],
+                    ..write_plan()
+                }),
+            },
+        ),
+        (
+            "write_files_column_types",
+            PhysNode::WriteFiles {
+                input: boxed(scan()),
+                write: Some(WritePlan {
+                    column_types: BTreeMap::from([(
+                        0,
+                        krishiv_types::DataType::DayTimeInterval {
+                            start: krishiv_types::DayTimeField::Day,
+                            end: krishiv_types::DayTimeField::Hour,
+                        },
+                    )]),
                     ..write_plan()
                 }),
             },
