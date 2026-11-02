@@ -900,6 +900,16 @@ fn zone_iso(text: &[char], pos: usize, n: usize) -> Option<(usize, Zone_)> {
     Some((e, Zone_::Offset(if sign == '-' { -secs } else { secs })))
 }
 
+/// North American daylight-time names and their fixed offsets in seconds.
+const DAYLIGHT_NAMES: &[(&str, i32)] = &[
+    ("ADT", -3 * 3600),
+    ("EDT", -4 * 3600),
+    ("CDT", -5 * 3600),
+    ("MDT", -6 * 3600),
+    ("PDT", -7 * 3600),
+    ("AKDT", -8 * 3600),
+];
+
 /// A zone: `Z`, `GMT`/`UTC` with an optional offset, `+hh`, `+hhmm`,
 /// `+hh:mm`, or a region id.
 fn zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
@@ -940,6 +950,10 @@ fn zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
         return None;
     }
     let id: String = text[pos..e].iter().collect();
+    // `SimpleDateFormat` reads a daylight name as the zone's raw offset plus its DST saving.
+    if let Some(&(_, secs)) = DAYLIGHT_NAMES.iter().find(|(n, _)| *n == id) {
+        return Some((e, Zone_::Offset(secs)));
+    }
     crate::datetime::resolve_zone(&id).ok()?;
     Some((e, Zone_::Region(id)))
 }
@@ -1225,6 +1239,20 @@ mod tests {
             p.parse_timestamp("2020-01-02T03:04:05+0530", &FixedOffset(0))
                 .unwrap(),
             Some(micros(2020, 1, 1, 21, 34, 5, 0))
+        );
+    }
+
+    #[test]
+    fn a_daylight_zone_name_is_a_fixed_offset() {
+        let p = LegacyPattern::new("yyyy-MM-dd HH:mm z").unwrap();
+        let utc = FixedOffset(0);
+        assert_eq!(
+            p.parse_timestamp("2020-01-02 03:04 PDT", &utc).unwrap(),
+            Some(micros(2020, 1, 2, 10, 4, 0, 0))
+        );
+        assert_eq!(
+            p.parse_timestamp("2020-07-02 03:04 EDT", &utc).unwrap(),
+            Some(micros(2020, 7, 2, 7, 4, 0, 0))
         );
     }
 }
