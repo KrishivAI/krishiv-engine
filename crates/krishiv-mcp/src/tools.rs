@@ -4,7 +4,7 @@
 //! and `sql_reference`. Every call builds a fresh session (nothing survives
 //! a call), gates the one statement it runs with [`check_read`], and answers
 //! in the `krishiv.agent-result` v1 text or the JSON error of the same
-//! format. Not in this change: `explain_analyze`, `get_query_profile`,
+//! format. Not in this change: `get_query_profile`,
 //! `query_history`, `count_total`.
 
 use std::path::{Path, PathBuf};
@@ -26,13 +26,14 @@ use tokio::sync::Semaphore;
 use crate::gate::{SetupLock, check_read};
 
 /// Tools of this server, in `tools/list` order.
-pub const TOOL_NAMES: [&str; 7] = [
+pub const TOOL_NAMES: [&str; 8] = [
     "list_catalogs",
     "list_tables",
     "search_tables",
     "describe_table",
     "run_query",
     "explain",
+    "explain_analyze",
     "sql_reference",
 ];
 
@@ -185,6 +186,23 @@ pub fn definitions() -> Vec<(&'static str, String, Map<String, Value>)> {
             "explain",
             d("Show the plan of a read-only SQL statement without running it."),
             schema(&[("sql", "string", "One read statement.")], &["sql"]),
+        ),
+        (
+            "explain_analyze",
+            d(
+                "Run a read-only SQL statement and show its plan with row counts and timings per operator. Subject to the same caps and scan gate as run_query.",
+            ),
+            schema(
+                &[
+                    ("sql", "string", "One read statement."),
+                    (
+                        "allow_heavy",
+                        "boolean",
+                        "Run even when the scan estimate is above the gate.",
+                    ),
+                ],
+                &["sql"],
+            ),
         ),
         (
             "sql_reference",
@@ -352,6 +370,20 @@ impl Tools {
                 }
                 limits.explain = true;
                 format!("EXPLAIN {sql}")
+            }
+            "explain_analyze" => {
+                check_args(args, &["sql", "allow_heavy"])?;
+                let sql =
+                    str_arg(args, "sql")?.ok_or_else(|| arg_err("`sql` is required".to_owned()))?;
+                if let Err(e) = check_read(sql) {
+                    return Err(self.error_answer(&e, sql));
+                }
+                limits.allow_heavy = match args.get("allow_heavy") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(b)) => *b,
+                    Some(_) => return Err(arg_err("`allow_heavy` must be a boolean".to_owned())),
+                };
+                format!("EXPLAIN ANALYZE {sql}")
             }
             "sql_reference" => {
                 check_args(args, &["function"])?;

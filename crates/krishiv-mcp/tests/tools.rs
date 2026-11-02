@@ -180,3 +180,21 @@ async fn root_check_reads_proc() {
     // Runs as a normal user in CI; the function must at least not panic.
     let _ = krishiv_mcp::gate::is_root();
 }
+
+#[tokio::test]
+async fn explain_analyze_runs_the_query_and_stays_read_only() {
+    let (_d, t) = fixture();
+    let (text, err) = call(
+        &t,
+        "explain_analyze",
+        json!({"sql": "SELECT count(*) FROM nums"}),
+    )
+    .await;
+    assert!(!err, "{text}");
+    assert!(text.to_lowercase().contains("rows"), "{text}");
+    let (text, err) = call(&t, "explain_analyze", json!({"sql": "DROP TABLE nums"})).await;
+    assert!(
+        err && text.contains("KRISHIV_MCP_STATEMENT_NOT_ALLOWED"),
+        "{text}"
+    );
+}
