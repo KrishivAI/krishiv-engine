@@ -303,13 +303,13 @@ fn literal_arguments_are_broadcast() {
         owned(&[Some("AB")])
     );
     assert_eq!(f.invoke(&[lit(&s)], 0).unwrap().len(), 0);
-    // An empty batch computes nothing, so a literal that would overflow
-    // does not raise.
+    // Day arithmetic wraps like Java `int` under ANSI too (as Spark does),
+    // so it never raises; the empty batch still has the right type.
     let (max, one) = (dates(&[Some(i32::MAX)]), ints(&[Some(1)]));
     let add = bind("date_add", &[&max, &one]);
     let out = add.invoke(&[lit(&max), lit(&one)], 0).unwrap();
     assert_eq!((out.len(), out.data_type()), (0, &DataType::Date32));
-    assert!(add.invoke(&[lit(&max), lit(&one)], 1).is_err());
+    assert!(add.invoke(&[lit(&max), lit(&one)], 1).is_ok());
     let null = strs(&[None]);
     let p = ints(&[Some(1)]);
     let f = bind("substring", &[&null, &p]);
@@ -373,14 +373,17 @@ fn bind_arg_types() {
 }
 
 #[test]
-fn day_arithmetic_follows_ansi() {
+fn day_arithmetic_wraps_in_both_modes() {
     let d = dates(&[Some(0), Some(i32::MAX), None]);
     let n = ints(&[Some(1)]);
     let f = bind("date_add", &[&d, &n]);
     assert_eq!(f.return_type(), &DataType::Date32);
-    let err = f.invoke(&[col(&d), lit(&n)], 3).unwrap_err();
-    assert_eq!(class(&err), ErrorClass::ArithmeticOverflow);
-    // ANSI off: Java `int` wrap.
+    // Wraps like Java `int` under ANSI too (Spark does not raise).
+    let out = f.invoke(&[col(&d), lit(&n)], 3).unwrap();
+    assert_eq!(
+        out.as_primitive::<Date32Type>().iter().collect::<Vec<_>>(),
+        [Some(1), Some(i32::MIN), None]
+    );
     let legacy = BindOptions::new().with_ansi(false);
     let f = bind_with("dateadd", &[&d, &n], &legacy);
     assert_eq!(f.name(), "dateadd");
