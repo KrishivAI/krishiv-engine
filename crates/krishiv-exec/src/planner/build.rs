@@ -23,7 +23,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_schema::{Schema, SchemaRef};
-use krishiv_common::config::{ConfigValue, LATE_FETCH_MAX_ROWS};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::{ColumnPath, FilterId};
 use krishiv_optimizer::PlanStats;
@@ -40,9 +39,7 @@ use super::subquery::SubqueryValue;
 use super::{PhysicalPlanner, PlanningContext};
 use crate::error::Result;
 use crate::operator::{Operator, Source};
-use crate::operators::{
-    FetchSlot, FilterPushdown, LateFetch, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN,
-};
+use crate::operators::{FilterPushdown, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN};
 use crate::physical::{
     PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter,
     SharedId, SharedPlan, SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId, Values, expand_op,
@@ -155,6 +152,7 @@ fn ends_in_sort(n: &PhysNode) -> bool {
             PhysNode::Sort { .. } | PhysNode::TopN { .. } => return true,
             PhysNode::Project { input, .. }
             | PhysNode::Filter { input, .. }
+            | PhysNode::LateFetch { input, .. }
             | PhysNode::Limit { input, .. } => n = input,
             _ => return false,
         }
@@ -659,148 +657,8 @@ impl<'a> Planner<'a> {
         Ok(Self::skip_rows(input, skip, n))
     }
 
-    /// `ORDER BY order LIMIT n OFFSET skip` over a scan that reads only the
-    /// sort keys and the filter's columns, and fetches the other columns for
-    /// the rows kept, when that's cheaper (design P2-T063 §4).
-    fn late_fetch(
-        &mut self,
-        sorted: &Arc<LogicalPlan>,
-        order: &[SortOrder],
-        skip: u64,
-        n: u64,
-        deterministic: bool,
-    ) -> Result<Option<Planned>> {
-        // A projection of plain columns only picks columns of the fetch's output.
-        let (below, picked) = match &sorted.node {
-            PlanNode::Project { input, exprs }
-                if exprs
-                    .iter()
-                    .all(|e| matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Column(_)))) =>
-            {
-                (input, sorted.resolved_output())
-            }
-            _ => (sorted, None),
-        };
-        let (scan, filter) = match &below.node {
-            PlanNode::Scan(scan) => (scan, None),
-            PlanNode::Filter { input, predicate } => match &input.node {
-                PlanNode::Scan(scan) if !has_subquery(predicate) => (scan, Some(predicate)),
-                _ => return Ok(None),
-            },
-            _ => return Ok(None),
-        };
-        let max_rows = self
-            .cx
-            .config
-            .get(&LATE_FETCH_MAX_ROWS)
-            .and_then(ConfigValue::as_int)
-            .and_then(|m| u64::try_from(m).ok())
-            .unwrap_or(0);
-        let total = n.saturating_add(skip);
-        if n == 0 || total > max_rows || order.iter().any(|o| has_subquery(&o.expr)) {
-            return Ok(None);
-        }
-        let provider = self.cx.tables.provider(scan)?;
-        let factory = provider.scan()?;
-        if !factory.supports_take() {
-            return Ok(None);
-        }
-        // A fetch costs every deferred chunk of each unit it touches, a plain
-        // scan at most those of all units.
-        let Some(units) = provider.scan_units() else {
-            return Ok(None);
-        };
-        if n.min(units) > units / 4 {
-            return Ok(None);
-        }
-        let mut read = HashSet::new();
-        for e in order.iter().map(|o| &o.expr).chain(filter) {
-            columns_read(e, &mut read);
-        }
-        let (kept, deferred): (Vec<_>, Vec<_>) = scan
-            .output
-            .iter()
-            .cloned()
-            .partition(|c| read.contains(&c.id) || !factory.in_files(&c.name));
-        if deferred.is_empty() {
-            return Ok(None);
-        }
-        let narrow = krishiv_plan::Scan {
-            output: kept,
-            ..scan.clone()
-        };
-        let input = self.scan_reading(below, &narrow, filter, true)?;
-        let width = narrow.output.len();
-        let (Some(&file_attr), Some(&row_attr)) =
-            (input.layout.get(width), input.layout.get(width + 1))
-        else {
-            return Err(internal("a scan without its row id"));
-        };
-        let mut top = self.top_n(input, order, total, deterministic)?;
-        if skip != 0 {
-            top = Self::skip_rows(top, skip, n);
-        }
-        let file_col = top.column(file_attr)?;
-        let row_col = top.column(row_attr)?;
-        let mut fetched = 0;
-        let output = scan
-            .output
-            .iter()
-            .map(|c| {
-                if narrow.output.iter().any(|k| k.id == c.id) {
-                    return Ok(FetchSlot::Input(top.column(c.id)?));
-                }
-                fetched += 1;
-                Ok(FetchSlot::Fetched(fetched - 1))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let projection: Vec<ColumnPath> = deferred
-            .iter()
-            .map(|c| ColumnPath::new(c.name.clone()))
-            .collect();
-        let schema = LateFetch::new(
-            &top.schema,
-            factory,
-            projection.clone(),
-            file_col,
-            row_col,
-            output.clone(),
-        )?
-        .schema();
-        let detail = format!("{} [{}]", source_name(scan), columns(&deferred));
-        let layout = scan.output.iter().map(|c| c.id).collect();
-        let fetch = ScanNode {
-            id: self.next_scan_id()?,
-            scan: krishiv_plan::Scan {
-                output: deferred,
-                ..scan.clone()
-            },
-            projection,
-            filter: None,
-            runtime_filters: Vec::new(),
-            row_stage: self.rf.row_stage(),
-            row_id: false,
-        };
-        let fetched = top.wrap(
-            |input| PhysNode::LateFetch {
-                input,
-                scan: fetch,
-                file_col,
-                row_col,
-                output,
-            },
-            schema,
-            layout,
-            ("LateFetch", detail),
-        );
-        Ok(Some(match picked {
-            Some(columns) => select(fetched, &columns, "Project")?,
-            None => fetched,
-        }))
-    }
-
     /// The `Limit` operator over `input`.
-    fn skip_rows(input: Planned, offset: u64, limit: u64) -> Planned {
+    pub(super) fn skip_rows(input: Planned, offset: u64, limit: u64) -> Planned {
         let schema = Limit::with_offset(Arc::clone(&input.schema), offset, limit).schema();
         let layout = input.layout.clone();
         let detail = match (offset, limit) {
@@ -1064,7 +922,7 @@ impl<'a> Planner<'a> {
         self.stats.has_statistics(plan)
     }
 
-    fn next_scan_id(&mut self) -> Result<ScanId> {
+    pub(super) fn next_scan_id(&mut self) -> Result<ScanId> {
         let id = ScanId(self.next_scan);
         self.next_scan = self
             .next_scan
@@ -1084,7 +942,7 @@ impl<'a> Planner<'a> {
 
     /// A scan; with `row_id`, its output ends in the row id, in two columns
     /// the plan above doesn't name.
-    fn scan_reading(
+    pub(super) fn scan_reading(
         &mut self,
         plan: &Arc<LogicalPlan>,
         scan: &krishiv_plan::Scan,
@@ -1694,7 +1552,7 @@ impl<'a> Planner<'a> {
         Some(id)
     }
 
-    fn top_n(
+    pub(super) fn top_n(
         &mut self,
         input: Planned,
         order: &[SortOrder],
@@ -1849,13 +1707,6 @@ fn carrier_cast_target(
 }
 
 /// The id of a plain (or aliased plain) column expression.
-fn columns_read(e: &Expr, out: &mut HashSet<AttrId>) {
-    if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &e.node {
-        out.insert(c.id);
-    }
-    e.for_each_child(&mut |c| columns_read(c, out));
-}
-
 pub(crate) fn column_of(e: &Expr) -> Option<AttrId> {
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
@@ -1999,7 +1850,7 @@ fn limit_value(e: &Expr) -> Result<u64> {
     }
 }
 
-fn source_name(scan: &krishiv_plan::Scan) -> String {
+pub(crate) fn source_name(scan: &krishiv_plan::Scan) -> String {
     match &scan.source {
         krishiv_plan::ReadSource::Table { name, .. } => name.join("."),
         krishiv_plan::ReadSource::Files { format, .. } => format!("{format} files"),

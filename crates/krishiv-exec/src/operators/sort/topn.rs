@@ -116,8 +116,8 @@ impl TopN {
     }
 
     /// Offers the first key of the last row of `batch`, when that many rows
-    /// are kept.
-    fn offer_bound(&self, batch: &Batch) -> Result<()> {
+    /// are kept and that key isn't the one `before` offered.
+    fn offer_bound(&self, batch: &Batch, before: Option<&Top>) -> Result<()> {
         let (Some((values, id)), Some(key)) = (&self.bound, self.first_key) else {
             return Ok(());
         };
@@ -129,6 +129,18 @@ impl TopN {
             return Err(internal(format!("TopN key {} out of range", key.column)));
         };
         let last = column.slice(rows - 1, 1);
+        // Only a later key of the same first key leaves the bound where it is.
+        if let Some(top) = before.filter(|t| t.len() >= self.keep)
+            && top
+                .batch
+                .data()
+                .column(key.column)
+                .slice(top.len() - 1, 1)
+                .as_ref()
+                == last.as_ref()
+        {
+            return Ok(());
+        }
         if let Some(keys) = KeyFilter::top_n_bound(
             last.as_ref(),
             0,
@@ -266,7 +278,7 @@ impl Sink for TopN {
         }
         reservation.shrink(old);
         self.retained(batch.num_rows());
-        self.offer_bound(&batch)?;
+        self.offer_bound(&batch, l.top.as_ref())?;
         l.top = Some(Top {
             batch,
             rows: new_rows,

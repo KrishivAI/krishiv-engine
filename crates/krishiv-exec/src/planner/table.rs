@@ -34,7 +34,7 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
     }
 
     /// How many units (row groups) a whole read of the table touches, when
-    /// known. The cost of a late fetch ([design P2-T063]) needs it.
+    /// known. The cost of a late fetch (design P2-T063) needs it.
     fn scan_units(&self) -> Option<u64> {
         None
     }

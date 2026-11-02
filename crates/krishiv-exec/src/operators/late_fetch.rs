@@ -6,9 +6,8 @@
 //! reservation). The source groups them by file, reads each file's rows by
 //! position through [`ScanPushdown::take`] and emits the rows in the order
 //! they came, with the fetched columns between theirs. A read gives back every
-//! row asked for or fails, so the result is never short. Each batch read
-//! returns to the driver as an empty batch, so cancellation and yields apply
-//! between reads.
+//! row asked for or fails, so the result is never short. It yields between
+//! reads, as a scan's reads do between files.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -18,7 +17,7 @@ use arrow_array::types::Int64Type;
 use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Schema, SchemaRef};
 use futures::future::BoxFuture;
-use krishiv_io::{ColumnPath, FileRef, RowFile, ScanGate, TakeStream};
+use krishiv_io::{ColumnPath, FileRef, ROW_INDEX_COLUMN, RowFile, ScanGate, TakeStream};
 use krishiv_memory::{ConsumerHandle, Reservation};
 use krishiv_types::batch::Batch;
 
@@ -226,9 +225,8 @@ impl LateFetch {
         memory.grow(batch.get_array_memory_size()).await?;
         let index = l.fetched.len();
         let positions = batch
-            .columns()
-            .last()
-            .ok_or_else(|| internal("take returned no columns".to_owned()))?
+            .column_by_name(ROW_INDEX_COLUMN)
+            .ok_or_else(|| internal("take returned no row index".to_owned()))?
             .as_primitive::<Int64Type>();
         for (row, &position) in positions.values().iter().enumerate() {
             let position =
@@ -398,13 +396,10 @@ impl Source for LateFetch {
                     l.input = Some(all);
                 }
             }
-            if self.read(l).await? {
-                return self.emit(l);
+            while !self.read(l).await? {
+                tokio::task::yield_now().await;
             }
-            // Back to the driver between reads.
-            Ok(Some(Batch::new(RecordBatch::new_empty(Arc::clone(
-                &self.schema,
-            )))))
+            self.emit(l)
         })
     }
 
