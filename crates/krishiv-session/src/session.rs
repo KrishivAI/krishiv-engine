@@ -555,6 +555,56 @@ impl Session {
         Ok(())
     }
 
+    /// Tags the queries this session starts next (`system.queries.tags`):
+    /// a key of 1 to 128 characters, a value of up to 256, at most 32 tags.
+    /// Setting a key again replaces its value.
+    ///
+    /// ```
+    /// let s = krishiv_session::Session::new()?;
+    /// s.set_tag("team", "etl")?;
+    /// assert_eq!(s.tags(), [("team".to_owned(), "etl".to_owned())]);
+    /// s.remove_tag("team");
+    /// assert!(s.tags().is_empty());
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// `INVALID_PARAMETER_VALUE.STRING` for an empty or over-long key, an
+    /// over-long value or a 33rd tag; the tags stay as they were.
+    pub fn set_tag(&self, key: &str, value: &str) -> Result<(), KrishivError> {
+        use crate::system::{MAX_TAG_KEY, MAX_TAG_VALUE};
+        let refuse = |why: &str| {
+            Err(krishiv_common::error::InvalidParameterValueString {
+                parameter: "tag".to_owned(),
+                function_name: "Session::set_tag".to_owned(),
+                invalid_value: format!("{key} ({why})"),
+            }
+            .into())
+        };
+        if key.is_empty() || key.chars().count() > MAX_TAG_KEY {
+            return refuse("a key has 1 to 128 characters");
+        }
+        if value.chars().count() > MAX_TAG_VALUE {
+            return refuse("a value has at most 256 characters");
+        }
+        if !self.state.queries.has_room_for(key) {
+            return refuse("a session carries at most 32 tags");
+        }
+        self.state.queries.set_tag(key, Some(value));
+        Ok(())
+    }
+
+    /// Removes the tag `key`, if the session has it.
+    pub fn remove_tag(&self, key: &str) {
+        self.state.queries.set_tag(key, None);
+    }
+
+    /// The session's tags, by key.
+    #[must_use]
+    pub fn tags(&self) -> Vec<(String, String)> {
+        self.state.queries.tags()
+    }
+
     /// Ends the trace [`Session::set_trace_context`] set.
     pub fn clear_trace_context(&self) {
         self.state.queries.set_trace_id(None);

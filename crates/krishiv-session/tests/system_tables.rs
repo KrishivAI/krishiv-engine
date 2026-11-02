@@ -372,3 +372,26 @@ fn operators_carry_pipelines_extras_and_workers() {
     );
     assert!(n[0].parse::<u32>().unwrap() >= 1, "{n:?}");
 }
+
+#[test]
+fn queries_carry_the_session_tags() {
+    let s = Session::new().unwrap();
+    s.set_tag("team", "etl").unwrap();
+    s.set_tag("job", "nightly").unwrap();
+    run_all(&s, "SELECT 1").unwrap();
+    s.remove_tag("job");
+    run_all(&s, "SELECT 2").unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT concat_ws(',', CAST(size(tags) AS STRING), tags['team'], coalesce(tags['job'], '-')) \
+         FROM system.queries ORDER BY submitted_at",
+    );
+    assert_eq!(&r[..2], ["2,etl,nightly", "1,etl,-"], "{r:?}");
+    assert!(s.set_tag("", "x").is_err());
+    assert!(s.set_tag("k", &"v".repeat(257)).is_err());
+    for i in 0..31 {
+        s.set_tag(&format!("t{i}"), "v").unwrap();
+    }
+    assert!(s.set_tag("one-too-many", "v").is_err());
+    s.set_tag("team", "other").unwrap();
+}

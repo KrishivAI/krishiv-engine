@@ -206,6 +206,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("query_id", Text, false),
             ("session_id", Text, false),
             ("principal", Text, false),
+            ("tags", Labels, false),
             ("trace_id", Text, true),
             ("statement_class", Text, true),
             ("state", Text, false),
@@ -534,6 +535,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             text(rows.iter().map(|r| Some(r.id.as_str()))),
             text(rows.iter().map(|r| Some(r.session_id.as_str()))),
             text(rows.iter().map(|r| Some(r.principal.as_str()))),
+            labels_column(&rows.iter().map(|r| r.tags.as_slice()).collect::<Vec<_>>()),
             text(rows.iter().map(|r| r.trace_id.as_deref())),
             text(rows.iter().map(|r| r.statement_class)),
             text(rows.iter().map(|r| Some(r.state))),
@@ -638,6 +640,11 @@ pub(crate) struct Sources {
 /// Most queries `system.queries` remembers; the oldest finished go first.
 const HISTORY_ROWS: usize = 1000;
 
+/// Most tags a session carries, and the longest key and value.
+pub(crate) const MAX_TAGS: usize = 32;
+pub(crate) const MAX_TAG_KEY: usize = 128;
+pub(crate) const MAX_TAG_VALUE: usize = 256;
+
 /// Most bytes of a statement `system.queries` keeps
 /// (`query_text_truncated` says when it cut).
 const TEXT_BYTES: usize = 4096;
@@ -648,6 +655,7 @@ pub(crate) struct QueryRow {
     pub(crate) id: String,
     pub(crate) session_id: String,
     pub(crate) principal: String,
+    pub(crate) tags: Vec<(String, String)>,
     pub(crate) trace_id: Option<String>,
     /// `READ`, `WRITE`, `DDL`, `SESSION` or `ADMIN` (T137); `None` when the
     /// statement was refused before it was classified or came from no SQL.
@@ -788,6 +796,8 @@ pub(crate) struct QueryLog {
     principal: String,
     /// The W3C trace the session's next queries belong to.
     trace_id: Mutex<Option<String>>,
+    /// The session's tags, by key.
+    tags: Mutex<std::collections::BTreeMap<String, String>>,
 }
 
 fn now_ms() -> i64 {
@@ -805,6 +815,35 @@ impl QueryLog {
         };
         let session_id = log.next_id(now_ms());
         Self { session_id, ..log }
+    }
+
+    /// Sets the tag `key`, or removes it with `None`.
+    pub(crate) fn set_tag(&self, key: &str, value: Option<&str>) {
+        let mut tags = self.tags.lock().unwrap_or_else(PoisonError::into_inner);
+        match value {
+            Some(v) => {
+                tags.insert(key.to_owned(), v.to_owned());
+            }
+            None => {
+                tags.remove(key);
+            }
+        }
+    }
+
+    /// The tags now, by key.
+    pub(crate) fn tags(&self) -> Vec<(String, String)> {
+        self.tags
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
+    /// Whether a new tag `key` still fits.
+    pub(crate) fn has_room_for(&self, key: &str) -> bool {
+        let tags = self.tags.lock().unwrap_or_else(PoisonError::into_inner);
+        tags.contains_key(key) || tags.len() < MAX_TAGS
     }
 
     /// Sets (or clears) the trace id the session's next queries record.
@@ -869,6 +908,13 @@ impl QueryLog {
             id: id.clone(),
             session_id: self.session_id.clone(),
             principal: self.principal.clone(),
+            tags: self
+                .tags
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
             trace_id: self
                 .trace_id
                 .lock()
