@@ -305,3 +305,153 @@ fn the_session_setting_switches_the_stage() {
     assert!(pruned(&[(key, "false")], &[("pageIndex", "true")]) > 0);
     assert_eq!(pruned(&[], &[("pageIndex", "false")]), 0);
 }
+
+// ---- stored Bloom filters (stage 2a) ----
+
+/// The string key of the number `x`: 20 zero-padded digits.
+fn key(x: i64) -> String {
+    format!("{x:020}")
+}
+
+/// Two row groups of one string column: the keys of the even numbers below
+/// 20,000, then of the odd ones. Their min/max overlap, so only the Bloom
+/// filter can tell a row group does not hold a key. (Strings: a filter
+/// costs about a byte per value, which must be small next to the column
+/// chunk, a rule that 8-byte integers rarely meet.)
+fn parity_file(env: &Env, bloom: bool) -> FileRef {
+    let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Utf8, false)]));
+    let evens = (0..10_000_i64).map(|i| key(2 * i));
+    let odds = (0..10_000_i64).map(|i| key(2 * i + 1));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(arrow_array::StringArray::from_iter_values(
+            evens.chain(odds),
+        )) as ArrayRef],
+    )
+    .unwrap();
+    let mut props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(10_000))
+        .set_dictionary_enabled(false)
+        // Uncompressed: the filter is judged against the chunk's size.
+        .set_compression(parquet::basic::Compression::UNCOMPRESSED);
+    if bloom {
+        props = props
+            .set_bloom_filter_enabled(true)
+            .set_bloom_filter_max_ndv(10_000);
+    }
+    env.put("parity.parquet", write(&[batch], props.build()))
+}
+
+fn parity_scan(
+    env: &Env,
+    f: &FileRef,
+    o: &FormatOptions,
+    predicate: PushdownExpr,
+) -> (Vec<String>, ScanUnitMetrics) {
+    let schema = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, f, MetadataNeeds::default(), o),
+        )
+        .unwrap()
+        .schema();
+    let mut req = ScanRequest::new(schema, vec![ColumnPath::new("v")]);
+    req.predicate = Some(predicate);
+    let (out, m) = env.scan_metered(f, &req, o).unwrap();
+    let values = out
+        .iter()
+        .flat_map(|b| {
+            let a = b.column(0).as_string_view();
+            (0..b.num_rows())
+                .map(|i| a.value(i).to_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    (values, m)
+}
+
+fn v_eq(x: i64) -> PushdownExpr {
+    PushdownExpr::cmp(ColumnPath::new("v"), CmpOp::Eq, ScalarValue::Utf8(key(x)))
+}
+
+fn parity(values: &[String]) -> Vec<i64> {
+    values
+        .iter()
+        .filter_map(|v| v.parse::<i64>().ok())
+        .collect()
+}
+
+#[test]
+fn a_point_lookup_skips_the_row_group_whose_bloom_filter_lacks_it() {
+    let env = Env::new();
+    let f = parity_file(&env, true);
+    let o = env.options(&[]);
+    let (odd, m) = parity_scan(&env, &f, &o, v_eq(4_001));
+    // The even row group is ruled out by its filter; the odd one is read
+    // whole (no row filter applies in this request) and holds the key.
+    assert_eq!(m.units_pruned_bloom, 1, "{m:?}");
+    assert_eq!(m.bloom_rejected, 0);
+    let odd = parity(&odd);
+    assert!(odd.contains(&4_001));
+    assert!(
+        odd.iter().all(|v| v % 2 == 1),
+        "the even row group was not read"
+    );
+    // An even key prunes the other row group.
+    let (even, m) = parity_scan(&env, &f, &o, v_eq(4_000));
+    assert_eq!(m.units_pruned_bloom, 1);
+    let even = parity(&even);
+    assert!(even.contains(&4_000) && even.iter().all(|v| v % 2 == 0));
+    // IN: a row group is read if it may hold any literal.
+    let both = PushdownExpr::In {
+        column: ColumnPath::new("v"),
+        values: vec![ScalarValue::Utf8(key(4_000)), ScalarValue::Utf8(key(4_001))],
+        collation: crate::request::Collation::Utf8Binary,
+    };
+    let (_, m) = parity_scan(&env, &f, &o, both);
+    assert_eq!(m.units_pruned_bloom, 0);
+}
+
+#[test]
+fn bloom_pruning_changes_no_matching_row() {
+    let env = Env::new();
+    let f = parity_file(&env, true);
+    let on = env.options(&[]);
+    let off = env.options(&[("bloomFilter", "false")]);
+    for x in [0, 1, 4_000, 4_001, 19_998, 19_999, 7_777] {
+        let (with, _) = parity_scan(&env, &f, &on, v_eq(x));
+        let (without, m) = parity_scan(&env, &f, &off, v_eq(x));
+        assert_eq!(m.units_pruned_bloom, 0);
+        let hits = |v: &[String]| v.iter().filter(|k| **k == key(x)).count();
+        assert_eq!(hits(&with), 1, "{x}");
+        assert_eq!(hits(&without), 1, "{x}");
+    }
+}
+
+#[test]
+fn a_file_without_a_bloom_filter_reads_nothing_extra() {
+    let env = Env::new();
+    let f = parity_file(&env, false);
+    let o = env.options(&[]);
+    let (rows_read, m) = parity_scan(&env, &f, &o, v_eq(4_001));
+    assert_eq!((m.units_pruned_bloom, m.bloom_rejected), (0, 0), "{m:?}");
+    assert_eq!(rows_read.len(), 20_000);
+}
+
+/// `krishiv.io.parquet.bloomFilter.enabled` is the session's default for
+/// the `bloomFilter` read option, and the option beats it.
+#[test]
+fn the_session_setting_switches_the_bloom_stage() {
+    let env = Env::new();
+    let key = "krishiv.io.parquet.bloomFilter.enabled";
+    let f = parity_file(&env, true);
+    let pruned = |session: &[(&str, &str)], user: &[(&str, &str)]| {
+        let o = env.options_over(session, user);
+        parity_scan(&env, &f, &o, v_eq(4_001)).1.units_pruned_bloom
+    };
+    assert_eq!(pruned(&[], &[]), 1);
+    assert_eq!(pruned(&[(key, "false")], &[]), 0);
+    assert_eq!(pruned(&[(key, "false")], &[("bloomFilter", "true")]), 1);
+    assert_eq!(pruned(&[], &[("bloomFilter", "false")]), 0);
+}

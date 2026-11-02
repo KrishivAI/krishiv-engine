@@ -351,7 +351,13 @@ impl ParquetDecoder {
         let pages = if o.bool("pageIndex").unwrap_or(true) && !row_index {
             req.predicate.as_ref().and_then(|p| {
                 let units: Vec<usize> = planned.iter().map(|u| u.index).collect();
-                PageStage::plan(meta, &units, p, &leaves)
+                PageStage::plan(
+                    meta,
+                    &units,
+                    p,
+                    &leaves,
+                    o.bool("bloomFilter").unwrap_or(true),
+                )
             })
         } else {
             None
@@ -644,6 +650,8 @@ impl ParquetDecoder {
         let outcome = stage.finish(&self.meta);
         self.metrics.pages_pruned += stage.pages_pruned;
         self.metrics.page_index_rejected += stage.rejected;
+        self.metrics.units_pruned_bloom += stage.bloom_pruned;
+        self.metrics.bloom_rejected += stage.bloom_rejected;
         self.pages = None;
         if outcome.decisions.is_empty() {
             return Ok(());

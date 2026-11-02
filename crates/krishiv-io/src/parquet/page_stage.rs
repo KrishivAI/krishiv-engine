@@ -29,10 +29,12 @@ use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 use parquet::file::statistics::Statistics;
 use parquet::schema::types::ColumnDescriptor;
 
+use super::bloom_probe;
 use super::index_guard::{self, Rejected};
 use super::meta::{ParquetMetadata, column_statistics, leaf_type, micros_per_unit};
 use crate::error::FormatError;
 use crate::request::{ColumnPath, PushdownExpr};
+use crate::runtime_filter::RuntimeBloom;
 use crate::stats::{FileStatistics, Precision, TriState, prune};
 
 /// A column of a unit whose indexes the stage reads.
@@ -58,6 +60,15 @@ struct ReadColumn {
     offset_index: Range<u64>,
 }
 
+/// A stored Bloom filter to probe for a unit: the filter's declared range
+/// and, per equality conjunct on the column, the hashes of its literals.
+#[derive(Debug, Clone)]
+struct BloomCheck {
+    leaf: usize,
+    range: Range<u64>,
+    probes: Vec<Vec<u64>>,
+}
+
 /// A row group the stage looks at.
 #[derive(Debug, Clone)]
 struct IndexedUnit {
@@ -68,6 +79,8 @@ struct IndexedUnit {
     /// The other projected columns' offset indexes; `None` when some
     /// projected column declares none (nothing of this unit is attached).
     reads: Option<Vec<ReadColumn>>,
+    /// The stored Bloom filters to probe (stage 2a).
+    blooms: Vec<BloomCheck>,
 }
 
 /// The stage's state for one decoder.
@@ -84,6 +97,10 @@ pub(super) struct PageStage {
     pub(super) rejected: u64,
     /// Pages the stage removed.
     pub(super) pages_pruned: u64,
+    /// Units a stored Bloom filter ruled out.
+    pub(super) bloom_pruned: u64,
+    /// Units whose Bloom filter failed a check and was not used.
+    pub(super) bloom_rejected: u64,
 }
 
 /// What the stage decided for a unit: the rows to keep.
@@ -193,6 +210,7 @@ impl PageStage {
         units: &[usize],
         predicate: &PushdownExpr,
         read_leaves: &[usize],
+        bloom: bool,
     ) -> Option<Self> {
         let conjuncts: Vec<PushdownExpr> = conjuncts_of(predicate)
             .into_iter()
@@ -253,12 +271,66 @@ impl PageStage {
                     conjuncts: vec![n],
                 });
             }
-            if columns.is_empty() {
+            // Stored Bloom filters (stage 2a): equality conjuncts that
+            // statistics left undecided, on columns with an exact plain
+            // encoding, whose filter is small next to the column chunk.
+            let mut blooms: Vec<BloomCheck> = Vec::new();
+            if bloom {
+                for c in &conjuncts {
+                    if prune(c, &row_group.statistics) != TriState::Unknown {
+                        continue;
+                    }
+                    let Some((path, values)) = bloom_probe::probe_values(c) else {
+                        continue;
+                    };
+                    let Some(leaf) = (0..descr.num_columns()).find(|&l| {
+                        let d = descr.column(l);
+                        d.max_rep_level() == 0 && d.path().parts() == path.0.as_slice()
+                    }) else {
+                        continue;
+                    };
+                    let d = descr.column(leaf);
+                    let Some(dt) = leaf_type(&meta.schema, &path.0) else {
+                        continue;
+                    };
+                    if !bloom_probe::eligible(&d) {
+                        continue;
+                    }
+                    let Some(hashes) =
+                        bloom_probe::hashes(&values, d.physical_type(), dt, micros_per_unit(&d))
+                    else {
+                        continue;
+                    };
+                    let col = rg.column(leaf);
+                    let (start, len) = col.byte_range();
+                    let Some(chunk_end) = start.checked_add(len) else {
+                        continue;
+                    };
+                    let Some(range) = index_guard::declared(col, meta.size, &(start..chunk_end))
+                        .ok()
+                        .and_then(|d| d.bloom)
+                    else {
+                        continue;
+                    };
+                    if (range.end - range.start).saturating_mul(8) > len {
+                        continue;
+                    }
+                    match blooms.iter_mut().find(|b| b.leaf == leaf) {
+                        Some(b) => b.probes.push(hashes),
+                        None => blooms.push(BloomCheck {
+                            leaf,
+                            range,
+                            probes: vec![hashes],
+                        }),
+                    }
+                }
+            }
+            if columns.is_empty() && blooms.is_empty() {
                 continue;
             }
             // The other projected columns' offset indexes (all or none: a
             // row group with one missing is not attached, see decode.rs).
-            let mut reads = Some(Vec::new());
+            let mut reads = (!columns.is_empty()).then(Vec::new);
             for &leaf in read_leaves {
                 if columns.iter().any(|c| c.leaf == leaf) {
                     continue;
@@ -294,6 +366,10 @@ impl PageStage {
                 .chain(reads.iter().flatten().map(|r| len(&r.chunk)))
                 .sum();
             if index_bytes.saturating_mul(8) > chunk_bytes {
+                columns.clear();
+                reads = None;
+            }
+            if columns.is_empty() && blooms.is_empty() {
                 continue;
             }
             for c in &columns {
@@ -303,11 +379,15 @@ impl PageStage {
             for r in reads.iter().flatten() {
                 ranges.push(r.offset_index.clone());
             }
+            for b in &blooms {
+                ranges.push(b.range.clone());
+            }
             planned.push(IndexedUnit {
                 index,
                 rows: row_group.rows,
                 columns,
                 reads,
+                blooms,
             });
         }
         if planned.is_empty() {
@@ -324,6 +404,8 @@ impl PageStage {
             done: false,
             rejected: 0,
             pages_pruned: 0,
+            bloom_pruned: 0,
+            bloom_rejected: 0,
         })
     }
 
@@ -373,7 +455,32 @@ impl PageStage {
         let mut all_offsets = Vec::new();
         let (mut pruned, mut rejected) = (0, 0);
         let mut first_reason: Option<String> = None;
+        let (mut bloom_pruned, mut bloom_rejected) = (0_u64, 0_u64);
+        let mut first_bloom: Option<String> = None;
         for unit in &self.units {
+            // A stored Bloom filter that rules the row group out ends it.
+            if !unit.blooms.is_empty() {
+                match Self::may_match(&held, &unit.blooms) {
+                    Ok(false) => {
+                        if let Ok(rows) = usize::try_from(unit.rows) {
+                            bloom_pruned += 1;
+                            out.push(Decision {
+                                index: unit.index,
+                                keep: std::iter::once(RowSelector::skip(rows)).collect(),
+                            });
+                            continue;
+                        }
+                    }
+                    Ok(true) => {}
+                    Err(why) => {
+                        bloom_rejected += 1;
+                        first_bloom.get_or_insert(why.0);
+                    }
+                }
+            }
+            if unit.columns.is_empty() {
+                continue;
+            }
             let decided = super::contain("applying a page index", FormatError::Corrupt, || {
                 self.decide(unit, meta, &held)
                     .map_err(|why| FormatError::Corrupt(why.0))
@@ -393,12 +500,43 @@ impl PageStage {
         if let Some(reason) = first_reason {
             tracing::warn!(units = rejected, %reason, "a Parquet page index is ignored");
         }
+        if let Some(reason) = first_bloom {
+            tracing::warn!(units = bloom_rejected, %reason, "a Parquet Bloom filter is ignored");
+        }
+        self.bloom_pruned += bloom_pruned;
+        self.bloom_rejected += bloom_rejected;
         self.pages_pruned += pruned;
         self.rejected += rejected;
         Outcome {
             decisions: out,
             offsets: all_offsets,
         }
+    }
+
+    /// Whether the unit may hold a row matching every Bloom-probed
+    /// conjunct: `false` when some conjunct has no literal the filter can
+    /// contain. The filter's header and bitset are guarded first.
+    fn may_match(
+        held: &BTreeMap<(u64, u64), Bytes>,
+        blooms: &[BloomCheck],
+    ) -> Result<bool, Rejected> {
+        for b in blooms {
+            let bytes = Self::slice(held, &b.range)?;
+            let (num_bytes, header) = index_guard::bloom_header(bytes, &b.range)?;
+            let bitset = usize::try_from(num_bytes)
+                .ok()
+                .and_then(|n| header.checked_add(n))
+                .and_then(|end| bytes.get(header..end))
+                .ok_or_else(|| Rejected::from("the Bloom bitset is short"))?;
+            let bloom = RuntimeBloom::from_bytes(bitset)
+                .ok_or_else(|| Rejected::from("the Bloom bitset is not a filter"))?;
+            for probe in &b.probes {
+                if !probe.iter().any(|h| bloom.check_hash(*h)) {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
     }
 
     fn slice<'a>(
