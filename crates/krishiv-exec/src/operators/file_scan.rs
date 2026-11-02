@@ -786,6 +786,9 @@ impl FileScanSource {
     /// filters already published) keeps at most half the bytes, the
     /// morsels share the rows left instead ([`Self::pruned_morsels`]): byte
     /// morsels of clustered data would leave those rows on a driver or two.
+    /// So do the morsels of a scan too small for four byte morsels per
+    /// driver at the floor: a table of a few MiB is otherwise one morsel,
+    /// however many row groups it has.
     fn morsels(
         &self,
         ctx: &TaskContext,
@@ -802,11 +805,14 @@ impl FileScanSource {
         if self.request.metadata_cols.row_index && caps.random_access.is_none() {
             return krishiv_io::split::morsels(&self.partitions, u64::MAX, splittable);
         }
-        if let Some(m) = self.pruned_morsels(request, partition_filters, drivers, &splittable) {
-            return m;
-        }
         let target =
             krishiv_io::split::morsel_bytes(&self.partitions, drivers, self.min_morsel_bytes);
+        let small = target <= self.min_morsel_bytes;
+        if let Some(m) =
+            self.pruned_morsels(request, partition_filters, drivers, &splittable, small)
+        {
+            return m;
+        }
         krishiv_io::split::morsels(&self.partitions, target, splittable)
     }
 
@@ -825,12 +831,17 @@ impl FileScanSource {
     /// than in its reader (pruning answers Unknown), so its weight is a
     /// superset of what it reads. A file a partition filter drops keeps
     /// nothing. When nothing is kept, each partition is one morsel.
+    ///
+    /// A `small` scan (its byte morsels are at the floor) needs neither a
+    /// predicate nor half the bytes pruned: its morsels are cut by rows
+    /// anyway, one unit at least each.
     fn pruned_morsels(
         &self,
         request: &ScanRequest,
         partition_filters: &[(usize, ScanFilter)],
         drivers: usize,
         splittable: &impl Fn(usize) -> bool,
+        small: bool,
     ) -> Option<Vec<Vec<MorselSplit>>> {
         if !request.row_level.runtime_filters() {
             return None;
@@ -838,16 +849,17 @@ impl FileScanSource {
         let mut conjuncts: Vec<PushdownExpr> = request.predicate.iter().cloned().collect();
         conjuncts.extend(request.dynamic.iter().filter_map(ScanFilter::predicate));
         let predicate = match conjuncts.len() {
+            0 if small => None,
             0 => return None,
-            1 => conjuncts.pop()?,
-            _ => PushdownExpr::And(conjuncts),
+            1 => conjuncts.pop(),
+            _ => Some(PushdownExpr::And(conjuncts)),
         };
         // Without runtime filters, so no filter counts a unit skipped here.
         let mut req = request.clone();
         req.dynamic = Vec::new();
-        req.predicate = Some(predicate);
-        // Walked in order, the scan gives up as soon as more than half its
-        // bytes are kept, without pruning the rest.
+        req.predicate = predicate;
+        // Walked in order, a scan that is not small gives up as soon as more
+        // than half its bytes are kept, without pruning the rest.
         let bytes = self
             .partitions
             .iter()
@@ -892,7 +904,7 @@ impl FileScanSource {
                         }
                     })
                     .collect();
-                if kept_bytes.saturating_mul(2) > bytes {
+                if !small && kept_bytes.saturating_mul(2) > bytes {
                     return None;
                 }
                 splits.push(units);
