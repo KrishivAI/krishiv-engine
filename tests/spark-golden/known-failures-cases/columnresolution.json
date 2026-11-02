@@ -1,11 +1,7 @@
 {
   "cases": {
     "depends-on-command": [
-      43,
-      44,
-      47,
-      48,
-      49
+      47
     ]
   },
   "file": "columnresolution",

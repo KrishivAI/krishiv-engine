@@ -1,9 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      1,
-      2
-    ],
     "nested-interval-types": [
       5,
       6,

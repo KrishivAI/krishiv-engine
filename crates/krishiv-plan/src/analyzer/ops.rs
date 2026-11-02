@@ -614,10 +614,10 @@ impl Resolver<'_> {
         let shown = b.shown();
         let zone = self.ctx.conf.session_zone;
         let name = match &shown.node {
-            // A bare variable keeps its own name (see the variable branch of `column`).
-            ExprNode::Column(c) if matches!(c.name.as_slice(), [_, r] if r.starts_with(super::exprs::VARIABLE_REFERENCE)) => {
-                c.name[0].clone()
-            }
+            // A bare variable or a field of a dotted column path keeps its own name.
+            _ if super::exprs::bare_name(&shown).is_some() => super::exprs::bare_name(&shown)
+                .unwrap_or_default()
+                .to_owned(),
             ExprNode::Cast { expr, .. }
                 if matches!(expr.node, ExprNode::Resolved(ResolvedExpr::Column(_))) =>
             {

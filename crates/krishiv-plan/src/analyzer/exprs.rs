@@ -5128,22 +5128,16 @@ impl Resolver<'_> {
                 outer: None,
                 lateral: Vec::new(),
                 // Inside another expression's name Spark spells a variable
-                // `variablereference(system.session.v=<value>)`; a bare select item keeps
-                // `v`. The shown column carries both: `named` takes the first part for the
-                // bare item and the printer the last for the rest.
-                shown: Some(Arc::new(
-                    Expr::new(ExprNode::Column(crate::ColumnRef {
-                        name: vec![
-                            name.clone(),
-                            format!(
-                                "{VARIABLE_REFERENCE}system.session.{}={})",
-                                name.to_lowercase(),
-                                var.value
-                            ),
-                        ],
-                        ..c.clone()
-                    }))
-                    .with_origin(origin),
+                // `variablereference(system.session.v=<value>)`; a bare select item keeps `v`.
+                shown: Some(named_as(
+                    name,
+                    format!(
+                        "variablereference(system.session.{}={})",
+                        name.to_lowercase(),
+                        var.value
+                    ),
+                    c,
+                    origin,
                 )),
             });
         }
@@ -5570,6 +5564,17 @@ impl Resolver<'_> {
             );
             ty = field_ty;
         }
+        // A dotted column path that reads fields is named by the last field (Spark wraps the
+        // resolved path in an alias), but spelled in full inside other names.
+        let shown = Some(named_as(
+            &parent,
+            pretty(&base, None),
+            &crate::ColumnRef {
+                name: Vec::new(),
+                plan_id: None,
+            },
+            origin,
+        ));
         Ok(Bound {
             expr: base,
             ty,
@@ -5577,7 +5582,7 @@ impl Resolver<'_> {
             win: None,
             outer,
             lateral: Vec::new(),
-            shown: None,
+            shown,
         })
     }
 
@@ -6659,29 +6664,51 @@ fn builtin_op(name: &str, arity: usize) -> Option<crate::Builtin> {
     crate::Builtin::from_name(name).filter(|b| !b.is_analyzer_internal())
 }
 
+/// The marker part of the shown column [`named_as`] builds.
+const NAMED_AS: &str = "\u{1}named";
+
+/// The shown form of an expression that a bare select item names `top` but that the names of
+/// other expressions spell `text` (a session variable, a field read through a dotted column
+/// path): a column whose parts are the marker, `top` and `text`, printed as the last of them.
+fn named_as(top: &str, text: String, like: &crate::ColumnRef, origin: Origin) -> Arc<Expr> {
+    Arc::new(
+        Expr::new(ExprNode::Column(crate::ColumnRef {
+            name: vec![NAMED_AS.to_owned(), top.to_owned(), text],
+            ..like.clone()
+        }))
+        .with_origin(origin),
+    )
+}
+
+/// The name a bare select item takes from a [`named_as`] shown form.
+pub(super) fn bare_name(e: &Expr) -> Option<&str> {
+    match &e.node {
+        ExprNode::Column(c) => match c.name.as_slice() {
+            [m, top, _] if m == NAMED_AS => Some(top),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `e` with a session variable shown by its own name (Spark names `date + v` over the variable
+/// as written, unlike every other call).
+fn bare_variable(e: &Arc<Expr>) -> Expr {
+    match (bare_name(e), &e.node) {
+        (Some(top), ExprNode::Column(c)) => Expr::new(ExprNode::Column(crate::ColumnRef {
+            name: vec![top.to_owned()],
+            ..c.clone()
+        }))
+        .with_origin(e.origin),
+        _ => Expr::clone(e),
+    }
+}
+
 /// Spark's generated name for an unaliased expression (`toPrettySQL`):
 /// `(a + 1)`, `count(1)`, `CASE WHEN ... END`. Built bottom-up with an
 /// explicit stack, once per distinct node. Timestamp literals render in
 /// `zone`, the session's resolved zone, through the same cast-to-string
 /// kernels `CAST(ts AS STRING)` uses.
-/// The opening of the name Spark gives a session variable inside another expression's name.
-pub(super) const VARIABLE_REFERENCE: &str = "variablereference(";
-
-/// `e` with a session variable shown by its own name (Spark names `date + v` over the variable
-/// as written, unlike every other call).
-fn bare_variable(e: &Arc<Expr>) -> Expr {
-    match &e.node {
-        ExprNode::Column(c) if matches!(c.name.as_slice(), [_, r] if r.starts_with(VARIABLE_REFERENCE)) => {
-            Expr::new(ExprNode::Column(crate::ColumnRef {
-                name: vec![c.name[0].clone()],
-                ..c.clone()
-            }))
-            .with_origin(e.origin)
-        }
-        _ => Expr::clone(e),
-    }
-}
-
 pub(super) fn pretty(e: &Expr, zone: Option<SessionZone>) -> String {
     let mut done: HashMap<usize, String> = HashMap::new();
     let mut stack = vec![(e, false)];

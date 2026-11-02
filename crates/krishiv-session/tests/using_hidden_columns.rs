@@ -181,3 +181,28 @@ fn a_later_join_condition_reads_the_merged_away_key() {
         ["two|5|two"]
     );
 }
+
+/// A field read through a dotted column path is named by the last field (Spark wraps the resolved
+/// path in an alias); inside another expression's name the whole path is spelled.
+#[test]
+fn a_dotted_field_path_is_named_by_its_last_field() {
+    let s = Session::new().unwrap();
+    let names = |sql: &str| -> Vec<String> {
+        let df = block_on(s.sql(sql)).unwrap();
+        block_on(df.schema())
+            .unwrap()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect()
+    };
+    let from = "FROM VALUES (NAMED_STRUCT('name', 'x', 'id', 1)) AS t(col1)";
+    assert_eq!(
+        names(&format!("SELECT col1.name, t.col1.id {from}")),
+        ["name", "id"]
+    );
+    assert_eq!(
+        names(&format!("SELECT upper(col1.name) {from}")),
+        ["upper(col1.name)"]
+    );
+}
