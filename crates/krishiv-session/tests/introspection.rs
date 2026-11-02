@@ -149,6 +149,33 @@ fn show_create_table() {
         rows(&s, "SHOW CREATE TABLE u")[0][0],
         "CREATE TABLE spark_catalog.default.u (\n  id INT)\nUSING csv\nOPTIONS (\n  'sep' = ';')\n"
     );
+    // A header option is shown like any other, whichever way it was set.
+    run(
+        &s,
+        "CREATE TABLE h (a INT) USING csv OPTIONS (header 'true')",
+    );
+    assert_eq!(
+        rows(&s, "SHOW CREATE TABLE h")[0][0],
+        "CREATE TABLE spark_catalog.default.h (\n  a INT)\nUSING csv\nOPTIONS (\n  'header' = 'true')\n"
+    );
+    assert!(
+        rows(&s, "DESCRIBE EXTENDED h")
+            .iter()
+            .any(|r| r[0] == "Storage Properties" && r[1] == "[header=true]")
+    );
+    run(
+        &s,
+        "CREATE TABLE f (a INT) USING csv OPTIONS (header 'false')",
+    );
+    assert_eq!(
+        rows(&s, "SHOW CREATE TABLE f")[0][0],
+        "CREATE TABLE spark_catalog.default.f (\n  a INT)\nUSING csv\nOPTIONS (\n  'header' = 'false')\n"
+    );
+    run(&s, "CREATE TABLE p (a INT) USING csv");
+    assert_eq!(
+        rows(&s, "SHOW CREATE TABLE p")[0][0],
+        "CREATE TABLE spark_catalog.default.p (\n  a INT)\nUSING csv\n"
+    );
     assert_eq!(
         rows(&s, "SHOW CREATE TABLE v")[0][0],
         "CREATE VIEW default.v (\n  a)\nWITH SCHEMA COMPENSATION\nAS SELECT a FROM t\n"

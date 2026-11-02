@@ -415,7 +415,7 @@ fn meta_of(location: Path, st: &Stat) -> ObjectMeta {
 }
 
 /// A staging file name (`<name>#<digits>`) of an upload in flight.
-fn is_staging(name: &str) -> bool {
+pub(super) fn is_staging(name: &str) -> bool {
     // As `LocalFileSystem` reads a name: the text after the first `#`.
     name.split_once('#')
         .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
@@ -435,7 +435,7 @@ fn child_path(base: &[String], rel: &[String], name: &str) -> StoreResult<Path> 
 
 /// How many times a listing re-reads a directory in which an entry vanished
 /// between the read and its `lstat`.
-const SETTLE_PASSES: usize = 8;
+pub(super) const SETTLE_PASSES: usize = 8;
 
 /// Entries of the open directory `dir`: `(name, lstat)`.
 ///

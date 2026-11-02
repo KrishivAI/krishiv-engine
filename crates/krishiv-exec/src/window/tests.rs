@@ -1416,6 +1416,20 @@ async fn compare_spilling(
     window: &WindowPlan,
     spills: Spills,
 ) -> (u64, u64) {
+    let counters = compared_spilling(rows, split, window, spills).await;
+    (
+        counters.spills.load(std::sync::atomic::Ordering::Relaxed),
+        counters.external.load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// [`compare_spilling`], returning the operator's counters.
+async fn compared_spilling(
+    rows: &[Row],
+    split: usize,
+    window: &WindowPlan,
+    spills: Spills,
+) -> Arc<super::spill::Counters> {
     let batches: Vec<Batch> = rows.chunks(split.max(1)).map(batch).collect();
     let mut sorted = batches.clone();
     // Sorted by partition, order and id, as the sort below a window gives.
@@ -1428,10 +1442,16 @@ async fn compare_spilling(
                 r.0
             }
         };
+        let key = window.order_by.first().copied().unwrap_or(SortKey::asc(1));
         v.sort_by_key(|r| {
             (
                 p(r).map(|x| x + 1).unwrap_or(0),
-                r.1.map(|x| x + 1).unwrap_or(0),
+                match r.1 {
+                    None if key.nulls_first => i64::MIN,
+                    None => i64::MAX,
+                    Some(x) if key.descending => -x,
+                    Some(x) => x,
+                },
                 r.2,
             )
         });
@@ -1461,14 +1481,7 @@ async fn compare_spilling(
     assert_eq!(outputs(&got, window.functions.len()), want, "{spills:?}");
     drop((got, ctx));
     assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
-    (
-        op.counters
-            .spills
-            .load(std::sync::atomic::Ordering::Relaxed),
-        op.counters
-            .external
-            .load(std::sync::atomic::Ordering::Relaxed),
-    )
+    Arc::clone(&op.counters)
 }
 
 fn big_rows_strategy() -> impl Strategy<Value = Vec<Row>> {
@@ -1767,8 +1780,8 @@ impl<F: Fn(i64) -> Batch + Send + Sync> crate::Source for Generated<F> {
 /// and the query's memory limit (`KRISHIV_WINDOW_SPILL_LIMIT`).
 fn large_case() -> (i64, usize) {
     let var = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u64>().ok());
-    let rows = var("KRISHIV_WINDOW_SPILL_ROWS").map_or(60_000, |v| i64::try_from(v).unwrap());
-    let limit = var("KRISHIV_WINDOW_SPILL_LIMIT").map_or(3 << 20, |v| usize::try_from(v).unwrap());
+    let rows = var("KRISHIV_WINDOW_SPILL_ROWS").map_or(200_000, |v| i64::try_from(v).unwrap());
+    let limit = var("KRISHIV_WINDOW_SPILL_LIMIT").map_or(8 << 20, |v| usize::try_from(v).unwrap());
     (rows, limit)
 }
 
@@ -1800,6 +1813,34 @@ async fn one_large_partition_spills_through_the_runner() {
                 ),
                 WindowFrame::whole(FrameUnits::Rows),
             ),
+            // Read through `disk.rs`: an offset function, a sliding frame, a
+            // frame from the start, a frame over key values, `nth_value`.
+            (lag_lead(-1, None, false), rows),
+            (
+                agg(Sum, Some(3)),
+                between(
+                    FrameUnits::Rows,
+                    FrameBound::Offset(-1),
+                    FrameBound::Offset(1),
+                ),
+            ),
+            (
+                agg(Count, None),
+                between(
+                    FrameUnits::Rows,
+                    FrameBound::UnboundedPreceding,
+                    FrameBound::Offset(-1),
+                ),
+            ),
+            (
+                agg(Count, None),
+                between(
+                    FrameUnits::Range,
+                    FrameBound::RangeInt(-3),
+                    FrameBound::RangeInt(3),
+                ),
+            ),
+            (nth(2, false), range),
         ],
         true,
     );
@@ -1869,6 +1910,18 @@ async fn one_large_partition_spills_through_the_runner() {
             assert_eq!(count.value(r), (i / 3 * 3 + 3).min(n));
             assert_eq!(whole.value(r), total);
             assert!((med.value(r) - median).abs() < 1e-9);
+            let (lag, slide, before, near, second) = (col(11), col(12), col(13), col(14), col(15));
+            if i == 0 {
+                assert!(lag.is_null(r));
+            } else {
+                assert_eq!(lag.value(r), (i - 1) % 11);
+            }
+            let around: i64 = ((i - 1).max(0)..=(i + 1).min(n - 1)).map(|x| x % 11).sum();
+            assert_eq!(slide.value(r), around);
+            assert_eq!(before.value(r), i);
+            let k = i / 3;
+            assert_eq!(near.value(r), ((k + 3) * 3 + 3).min(n) - (k - 3).max(0) * 3);
+            assert_eq!(second.value(r), 1);
             next += 1;
         }
     }
@@ -2077,22 +2130,6 @@ fn trees_larger_than_a_chunk_match_the_reference() {
         })
         .collect();
     assert_eq!(got, want);
-}
-
-/// A frame with offsets over a partition larger than memory is refused
-/// (evaluating it from disk is a later part of P2-T055), never answered
-/// short.
-#[tokio::test]
-async fn a_frame_over_a_partition_on_disk_is_refused() {
-    refused_on_disk(
-        agg(AggregateFunction::Sum, Some(3)),
-        WindowFrame {
-            units: FrameUnits::Rows,
-            lower: FrameBound::Offset(-1),
-            upper: FrameBound::Offset(1),
-        },
-    )
-    .await;
 }
 
 /// A running `collect_list` snapshots a growing copy per row: over a
@@ -2469,4 +2506,433 @@ async fn a_running_collect_list_over_a_big_partition_fails_under_a_tight_limit()
     assert!(e.to_string().contains("NeedMemory"), "{e}");
     drop(ctx);
     assert_eq!(root.reserved(), 0);
+}
+
+/// A frame from `lower` to `upper`.
+fn between(units: FrameUnits, lower: FrameBound, upper: FrameBound) -> WindowFrame {
+    WindowFrame {
+        units,
+        lower,
+        upper,
+    }
+}
+
+/// Every frame a partition on disk evaluates through `disk.rs`.
+fn disk_frames() -> Vec<WindowFrame> {
+    use FrameBound::{CurrentRow, Offset, RangeInt, UnboundedFollowing, UnboundedPreceding};
+    use FrameUnits::{Range, Rows};
+    vec![
+        between(Rows, Offset(-2), Offset(3)),
+        between(Rows, Offset(-1), CurrentRow),
+        between(Rows, Offset(2), Offset(1)),
+        between(Rows, Offset(40), Offset(60)),
+        // Whole batches of empty frames come before the first row a frame reads.
+        between(Rows, Offset(-1000), Offset(-900)),
+        between(Rows, CurrentRow, UnboundedFollowing),
+        between(Rows, Offset(-3), UnboundedFollowing),
+        between(Rows, UnboundedPreceding, Offset(-1)),
+        between(Rows, UnboundedPreceding, Offset(2)),
+        between(Range, CurrentRow, UnboundedFollowing),
+        between(Range, RangeInt(-3), RangeInt(2)),
+        between(Range, RangeInt(-4), CurrentRow),
+        between(Range, CurrentRow, RangeInt(4)),
+        between(Range, RangeInt(1), RangeInt(3)),
+        between(Range, UnboundedPreceding, RangeInt(1)),
+        between(Range, UnboundedPreceding, RangeInt(-1)),
+        between(Range, RangeInt(-2), UnboundedFollowing),
+    ]
+}
+
+/// The aggregates, of integers and strings, over `frame`, and `nth_value`.
+fn over(frame: WindowFrame) -> Vec<(WindowFunction, WindowFrame)> {
+    use AggregateFunction::{Avg, Count, First, Last, Max, Min, Sum};
+    let first = First {
+        ignore_nulls: false,
+    };
+    let last = Last { ignore_nulls: true };
+    vec![
+        (agg(Sum, Some(3)), frame),
+        (agg(Avg, Some(3)), frame),
+        (agg(Count, None), frame),
+        (agg(Min, Some(3)), frame),
+        (agg(first.clone(), Some(3)), frame),
+        (agg(last.clone(), Some(3)), frame),
+        (agg(Max, Some(4)), frame),
+        (agg(first, Some(4)), frame),
+        (agg(last, Some(4)), frame),
+        (nth(2, false), frame),
+        (nth(3, true), frame),
+    ]
+}
+
+fn skewed_rows(n: i64) -> Vec<Row> {
+    (0..n)
+        .map(|i| {
+            // One large partition between two small ones.
+            let p = if i < 50 {
+                0
+            } else if i < n - 50 {
+                1
+            } else {
+                2
+            };
+            (
+                Some(p),
+                (i % 7 != 0).then_some(i / 5),
+                i,
+                (i % 13 != 0).then_some(i % 17),
+            )
+        })
+        .collect()
+}
+
+/// A partition larger than memory gives what it gives in memory, for every
+/// frame of aggregates and `nth_value`.
+#[tokio::test]
+async fn frames_of_a_partition_on_disk_match_memory() {
+    let rows = skewed_rows(3_000);
+    let spills = Spills {
+        every: 1,
+        slack: Some(4 << 20),
+    };
+    for frame in disk_frames() {
+        let window = plan(over(frame), true);
+        let (spilled, external) = compare_spilling(&rows, 250, &window, spills).await;
+        assert!(spilled > 0, "{frame:?}");
+        assert!(external >= 1, "{frame:?}");
+    }
+}
+
+/// `lag`/`lead` of integers and strings from disk: any offset (past the
+/// partition too), defaults, `IGNORE NULLS`.
+#[tokio::test]
+async fn offsets_of_a_partition_on_disk_match_memory() {
+    let frame = WindowFrame::whole(FrameUnits::Rows);
+    let rows = skewed_rows(6_000);
+    let spills = Spills {
+        every: 1,
+        slack: Some(1 << 20),
+    };
+    for offset in [-100_000, -300, -2, -1, 0, 1, 7, 300, 100_000] {
+        let mut functions = Vec::new();
+        for default in [None, Some(2)] {
+            for ignore_nulls in [false, true] {
+                functions.push((lag_lead(offset, default, ignore_nulls), frame));
+            }
+        }
+        for ignore_nulls in [false, true] {
+            functions.push((
+                WindowFunction::Offset {
+                    input: 4,
+                    offset,
+                    default: Some(4),
+                    ignore_nulls,
+                    data_type: DataType::Utf8View,
+                },
+                frame,
+            ));
+        }
+        let window = plan(functions, true);
+        let (_, external) = compare_spilling(&rows, 250, &window, spills).await;
+        assert!(external >= 1, "lead by {offset}");
+    }
+}
+
+/// Frames that do not fit fold their rows from the file, with the same
+/// values: a frame to the partition's end and one wider than memory.
+#[tokio::test]
+async fn frames_wider_than_memory_fold_from_the_file() {
+    use AggregateFunction::{Count, First, Max, Min, Sum};
+    use FrameBound::{CurrentRow, Offset, UnboundedFollowing};
+    use FrameUnits::Rows;
+    // Few enough for the quadratic fold.
+    let rows = skewed_rows(1_500);
+    for frame in [
+        between(Rows, CurrentRow, UnboundedFollowing),
+        between(Rows, Offset(-1_000), Offset(1_000)),
+    ] {
+        let functions = vec![
+            (agg(Sum, Some(3)), frame),
+            (agg(Count, None), frame),
+            (agg(Min, Some(3)), frame),
+            (agg(Max, Some(4)), frame),
+            (agg(First { ignore_nulls: true }, Some(4)), frame),
+        ];
+        let window = plan(functions, true);
+        let spills = Spills {
+            every: 1,
+            slack: Some(96 << 10),
+        };
+        let counters = compared_spilling(&rows, 50, &window, spills).await;
+        assert!(counters.external.load(std::sync::atomic::Ordering::Relaxed) >= 1);
+        assert!(
+            counters
+                .file_folds
+                .load(std::sync::atomic::Ordering::Relaxed)
+                >= 1,
+            "{frame:?}"
+        );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(24))]
+
+    /// Frames and offset functions from disk equal the in-memory ones over
+    /// random rows, split anywhere.
+    #[test]
+    fn disk_frames_match_memory_on_random_rows(
+        rows in big_rows_strategy(),
+        split in 1_usize..12,
+        which in 0_usize..16,
+        offset in -9_i64..9,
+        ignore_nulls in any::<bool>(),
+        partitioned in any::<bool>(),
+    ) {
+        let frame = disk_frames()[which];
+        let mut functions = over(frame);
+        functions.push((lag_lead(offset, Some(2), ignore_nulls), frame));
+        let window = plan(functions, partitioned);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let spills = Spills { every: 1, slack: Some(256 << 10) };
+        rt.block_on(compare_spilling(&rows, split, &window, spills));
+    }
+}
+
+/// An exact percentile's value map is charged as it grows: distinct values
+/// far beyond the memory left are refused with the memory error (the pool
+/// empty after), and few distinct values over the same rows complete.
+#[tokio::test]
+async fn an_exact_percentile_on_disk_is_charged() {
+    let percentile = agg(
+        AggregateFunction::Percentile {
+            percentages: vec![0.5],
+            array: false,
+            reverse: false,
+        },
+        Some(3),
+    );
+    for frame in [
+        WindowFrame::whole(FrameUnits::Rows),
+        WindowFrame::running(FrameUnits::Rows),
+        WindowFrame::running(FrameUnits::Range),
+    ] {
+        let window = plan(vec![(percentile.clone(), frame)], true);
+        let spills = Spills {
+            every: 1,
+            slack: Some(256 << 10),
+        };
+        let few: Vec<Row> = (0..20_000)
+            .map(|i| (Some(0), Some(i), i, Some(i % 11)))
+            .collect();
+        compare_spilling(&few, 500, &window, spills).await;
+
+        let distinct: Vec<Row> = (0..200_000)
+            .map(|i| (Some(0), Some(i), i, Some(i)))
+            .collect();
+        let (_dir, scope) = spill_scope();
+        let op = Window::new(schema(), window, true, Some(scope)).unwrap();
+        let limit = 1 << 30;
+        let (root, ctx) = task(limit);
+        let batches: Vec<Batch> = distinct.chunks(500).map(batch).collect();
+        let e = drive_spilling(&op, &ctx, limit, &root, &batches, spills)
+            .await
+            .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory, "{e}");
+        drop(ctx);
+        assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
+    }
+}
+
+/// `RANGE` frames from disk over a descending key with NULLs last, as in
+/// memory: both edges move the other way through the keys.
+#[tokio::test]
+async fn range_frames_on_disk_over_a_descending_key_match_memory() {
+    use FrameBound::{CurrentRow, RangeInt, UnboundedFollowing, UnboundedPreceding};
+    let rows = skewed_rows(3_000);
+    let spills = Spills {
+        every: 1,
+        slack: Some(4 << 20),
+    };
+    for frame in [
+        between(FrameUnits::Range, RangeInt(-3), RangeInt(2)),
+        between(FrameUnits::Range, CurrentRow, RangeInt(4)),
+        between(FrameUnits::Range, UnboundedPreceding, RangeInt(1)),
+        between(FrameUnits::Range, RangeInt(-2), UnboundedFollowing),
+    ] {
+        for (descending, nulls_first) in [(true, false), (true, true), (false, false)] {
+            let mut window = plan(over(frame), true);
+            window.order_by = vec![SortKey {
+                column: 1,
+                descending,
+                nulls_first,
+            }];
+            let (_, external) = compare_spilling(&rows, 250, &window, spills).await;
+            assert!(external >= 1, "{frame:?} {descending} {nulls_first}");
+        }
+    }
+}
+
+/// Float and decimal `RANGE` keys and `FILTER` from disk, as in memory.
+#[tokio::test]
+async fn float_and_decimal_keys_and_filters_on_disk_match_memory() {
+    use FrameBound::{Offset, RangeFloat, RangeInt, UnboundedFollowing};
+    use arrow_array::{BooleanArray, Decimal128Array, Float64Array};
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("f", DataType::Float64, true),
+        Field::new("d", DataType::Decimal128(12, 2), true),
+        Field::new("v", DataType::Int64, true),
+        Field::new("b", DataType::Boolean, true),
+    ]));
+    let n = 3_000_i64;
+    let sorted_batches = || -> Vec<Batch> {
+        // Ascending in both keys, NULLs first, NaN largest for the float.
+        let ids: Vec<i64> = (0..n).collect();
+        ids.chunks(250)
+            .map(|c| {
+                let f = Float64Array::from_iter(c.iter().map(|&i| match i {
+                    i if i < 20 => None,
+                    i if i >= n - 20 => Some(f64::NAN),
+                    #[expect(clippy::cast_precision_loss, reason = "small test keys")]
+                    i => Some((i / 4) as f64 / 2.0),
+                }));
+                let d = Decimal128Array::from_iter(
+                    c.iter()
+                        .map(|&i| (i >= 20).then_some(i128::from(i / 4) * 25)),
+                )
+                .with_data_type(DataType::Decimal128(12, 2));
+                let v = Int64Array::from_iter(c.iter().map(|&i| (i % 13 != 0).then_some(i % 17)));
+                let b =
+                    BooleanArray::from_iter(c.iter().map(|&i| (i % 11 != 0).then_some(i % 3 != 0)));
+                let columns: Vec<ArrayRef> =
+                    vec![Arc::new(f), Arc::new(d), Arc::new(v), Arc::new(b)];
+                Batch::new(RecordBatch::try_new(Arc::clone(&schema), columns).unwrap())
+            })
+            .collect()
+    };
+    let sum = || agg(AggregateFunction::Sum, Some(2));
+    let filtered = |frame| WindowFunctionPlan {
+        function: sum(),
+        frame,
+        filter: Some(3),
+        name: "w".to_owned(),
+    };
+    let float = between(
+        FrameUnits::Range,
+        RangeFloat((-1.5_f64).to_bits()),
+        RangeFloat(1.0_f64.to_bits()),
+    );
+    let cases = [
+        (0, float),
+        (1, between(FrameUnits::Range, RangeInt(-50), RangeInt(75))),
+        (1, between(FrameUnits::Rows, Offset(-2), Offset(3))),
+        (1, between(FrameUnits::Rows, Offset(-1), UnboundedFollowing)),
+        (
+            1,
+            between(FrameUnits::Rows, FrameBound::UnboundedPreceding, Offset(-1)),
+        ),
+    ];
+    for (column, frame) in cases {
+        let window = WindowPlan {
+            partition_by: Vec::new(),
+            order_by: vec![SortKey::asc(column)],
+            functions: vec![filtered(frame)],
+        };
+        let concat = |batches: &[Batch]| {
+            let data: Vec<RecordBatch> = batches.iter().map(|b| b.data().clone()).collect();
+            arrow_select::concat::concat_batches(&data[0].schema(), &data).unwrap()
+        };
+        let input = sorted_batches();
+        let plain = Window::new(Arc::clone(&schema), window.clone(), true, None).unwrap();
+        let (_r, ctx) = task(1 << 30);
+        let want = concat(&drive(&plain, &ctx, &input).unwrap());
+        let (_manager, scope) = spill_scope();
+        let op = Window::new(Arc::clone(&schema), window, true, Some(scope)).unwrap();
+        let limit = 1 << 30;
+        let (root, ctx) = task(limit);
+        let spills = Spills {
+            every: 1,
+            slack: Some(256 << 10),
+        };
+        let got = drive_spilling(&op, &ctx, limit, &root, &input, spills)
+            .await
+            .unwrap();
+        assert_eq!(concat(&got), want, "{frame:?}");
+        assert!(
+            op.counters
+                .external
+                .load(std::sync::atomic::Ordering::Relaxed)
+                >= 1,
+            "{frame:?}"
+        );
+        drop((got, ctx));
+        assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
+    }
+}
+
+/// A row `FILTER` drops adds nothing, so it can't overflow an ANSI `sum`,
+/// from disk as in memory. Frames from the partition's start fold (`Prefix`)
+/// and frames that don't fit fold from the file.
+#[tokio::test]
+async fn rows_a_filter_drops_do_not_overflow_on_disk() {
+    use FrameBound::{Offset, UnboundedPreceding};
+    use arrow_array::BooleanArray;
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("v", DataType::Int64, true),
+        Field::new("b", DataType::Boolean, true),
+    ]));
+    let n = 3_000_i64;
+    let ids: Vec<i64> = (0..n).collect();
+    let input: Vec<Batch> = ids
+        .chunks(250)
+        .map(|c| {
+            let k = Int64Array::from_iter_values(c.iter().copied());
+            let v = Int64Array::from_iter_values(c.iter().map(|_| i64::MAX));
+            let b = BooleanArray::from_iter(c.iter().map(|_| Some(false)));
+            let columns: Vec<ArrayRef> = vec![Arc::new(k), Arc::new(v), Arc::new(b)];
+            Batch::new(RecordBatch::try_new(Arc::clone(&schema), columns).unwrap())
+        })
+        .collect();
+    for frame in [
+        between(FrameUnits::Rows, UnboundedPreceding, Offset(-1)),
+        between(FrameUnits::Rows, Offset(-2), Offset(3)),
+    ] {
+        let window = WindowPlan {
+            partition_by: Vec::new(),
+            order_by: vec![SortKey::asc(0)],
+            functions: vec![WindowFunctionPlan {
+                function: agg(AggregateFunction::Sum, Some(1)),
+                frame,
+                filter: Some(2),
+                name: "w".to_owned(),
+            }],
+        };
+        let (_manager, scope) = spill_scope();
+        let op = Window::new(Arc::clone(&schema), window, true, Some(scope)).unwrap();
+        let limit = 1 << 30;
+        let (root, ctx) = task(limit);
+        let spills = Spills {
+            every: 1,
+            slack: Some(256 << 10),
+        };
+        let got = drive_spilling(&op, &ctx, limit, &root, &input, spills)
+            .await
+            .unwrap();
+        let rows: usize = got.iter().map(Batch::num_rows).sum();
+        assert_eq!(rows, 3_000, "{frame:?}");
+        for b in &got {
+            let w = b.data().columns().last().unwrap();
+            assert_eq!(w.null_count(), b.num_rows(), "{frame:?}");
+        }
+        assert!(
+            op.counters
+                .external
+                .load(std::sync::atomic::Ordering::Relaxed)
+                >= 1,
+            "{frame:?}"
+        );
+        drop((got, ctx));
+        assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
+    }
 }
