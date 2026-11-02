@@ -1156,18 +1156,37 @@ fn zone(text: &[char], pos: usize, rfc822: bool) -> Option<(usize, Zone_)> {
     // A standard-time display name is that fixed offset all year, as
     // `SimpleDateFormat` reads it (not the region's seasonal rules).
     // Daylight names (`PDT`, ...) are the saving-time offset, also all year.
+    // Offsets in seconds, from a Spark 4.2.0 run under LEGACY (the names
+    // `java.util.TimeZone` knows; its odd entries, `HDT` -10 and `ACDT`
+    // +9:30, are kept as observed).
     let fixed = match id.as_str() {
-        "HST" => Some(-10),
-        "AKST" => Some(-9),
-        "PST" | "AKDT" => Some(-8),
-        "MST" | "PDT" => Some(-7),
-        "CST" | "MDT" => Some(-6),
-        "EST" | "CDT" => Some(-5),
-        "EDT" => Some(-4),
+        "HST" | "HDT" => Some(-10 * 3600),
+        "AKST" => Some(-9 * 3600),
+        "PST" | "AKDT" => Some(-8 * 3600),
+        "MST" | "PDT" => Some(-7 * 3600),
+        "CST" | "MDT" => Some(-6 * 3600),
+        "EST" | "CDT" => Some(-5 * 3600),
+        "AST" | "EDT" => Some(-4 * 3600),
+        "ART" | "BRT" | "ADT" => Some(-3 * 3600),
+        "NST" => Some(-(3 * 3600 + 1800)),
+        "NDT" => Some(-(2 * 3600 + 1800)),
+        "WET" => Some(0),
+        "CET" | "BST" | "WEST" | "WAT" => Some(3600),
+        "CEST" | "EET" | "IST" | "SAST" | "CAT" => Some(2 * 3600),
+        "EEST" | "MSK" | "EAT" => Some(3 * 3600),
+        "GST" => Some(4 * 3600),
+        "PKT" => Some(5 * 3600),
+        "AWST" | "HKT" | "SGT" => Some(8 * 3600),
+        "JST" | "KST" => Some(9 * 3600),
+        "ACST" | "ACDT" => Some(9 * 3600 + 1800),
+        "AEST" => Some(10 * 3600),
+        "AEDT" => Some(11 * 3600),
+        "NZST" => Some(12 * 3600),
+        "NZDT" => Some(13 * 3600),
         _ => None,
     };
-    if let Some(h) = fixed {
-        return Some((e, Zone_::Offset(h * 3600)));
+    if let Some(secs) = fixed {
+        return Some((e, Zone_::Offset(secs)));
     }
     crate::datetime::resolve_zone(&id).ok()?;
     Some((e, Zone_::Region(id)))
@@ -1449,6 +1468,27 @@ mod tests {
         let p = LegacyPattern::new("yyyy-MM-dd HH:mm z").unwrap();
         let at = |s: &str| p.parse_timestamp(s, &utc).unwrap().unwrap();
         assert_eq!(at("2024-07-01 12:00 PDT"), micros(2024, 7, 1, 19, 0, 0, 0));
+        // Spark 4.2.0 under LEGACY: other names are fixed offsets all year.
+        for (name, hours) in [
+            ("CEST", 2),
+            ("CET", 1),
+            ("BST", 1),
+            ("EEST", 3),
+            ("AEST", 10),
+            ("JST", 9),
+        ] {
+            assert_eq!(
+                at(&format!("2024-07-01 12:00 {name}")),
+                micros(2024, 7, 1, 12 - hours, 0, 0, 0),
+                "{name}"
+            );
+            assert_eq!(
+                at(&format!("2024-01-01 12:00 {name}")),
+                micros(2024, 1, 1, 12 - hours, 0, 0, 0),
+                "{name} in winter"
+            );
+        }
+        assert_eq!(at("2024-07-01 12:00 ACST"), micros(2024, 7, 1, 2, 30, 0, 0));
         assert_eq!(at("2024-01-01 12:00 EDT"), micros(2024, 1, 1, 16, 0, 0, 0));
         assert_eq!(at("2024-07-01 12:00 AKDT"), micros(2024, 7, 1, 20, 0, 0, 0));
     }
