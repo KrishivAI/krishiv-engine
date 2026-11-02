@@ -61,7 +61,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   `map_from_entries` and `str_to_map`. Keys compare with Spark's equality and hash with the observable Murmur3
   (NaN equals NaN, `-0.0` equals `0.0`); a null key is `NULL_MAP_KEY`, a repeat `DUPLICATED_MAP_KEY` under
   `EXCEPTION` and last-wins under `LAST_WIN`.
-- `datetime` (P2-T025a): `date_add`/`date_sub`/`date_diff` (ANSI: `ARITHMETIC_OVERFLOW` past the `int` range, a documented divergence from Spark; legacy: Java `int` wrap; `try_*`: NULL),
+- `datetime` (P2-T025a): `date_add`/`date_sub` (Java `int` wrap, ANSI or not, as Spark; `try_*`: NULL) and `date_diff` (ANSI: `ARITHMETIC_OVERFLOW` past the `int` range; legacy: wrap; `try_*`: NULL),
   field extraction (`DatePart`: `year`, `month`, `day`, `extract`/`date_part` incl. ISO week and `SECOND` as
   `decimal(8,6)`), `date`/`timestamp` ± interval (`date_add_months` clamps the day; `timestamp_add_day_time` adds whole
   days as calendar days in the zone and keeps the start's offset in a DST overlap, like `ZonedDateTime.plusDays`), and
