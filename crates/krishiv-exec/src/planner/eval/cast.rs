@@ -102,9 +102,66 @@ struct Cast {
 fn needs_zone(from: &ArrowType, to: &ArrowType) -> bool {
     let zoned = |t: &ArrowType| matches!(t, ArrowType::Timestamp(_, Some(_)));
     let wall_clock = |t: &ArrowType| matches!(t, ArrowType::Timestamp(_, None));
+    let element = |t: &ArrowType| match t {
+        ArrowType::List(f) | ArrowType::LargeList(f) | ArrowType::FixedSizeList(f, _) => {
+            Some(f.data_type().clone())
+        }
+        _ => None,
+    };
+    // A nested cast casts each element, entry or field: any of them may
+    // read the zone (`array<timestamp>` to `array<string>`).
+    if let (Some(f), Some(t)) = (element(from), element(to)) {
+        return needs_zone(&f, &t);
+    }
+    // A nested value cast to text renders every timestamp inside it in
+    // the session zone.
+    if matches!(
+        to,
+        ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View
+    ) && matches!(
+        from,
+        ArrowType::List(_)
+            | ArrowType::LargeList(_)
+            | ArrowType::FixedSizeList(..)
+            | ArrowType::Map(..)
+            | ArrowType::Struct(_)
+    ) {
+        return holds_zoned(from);
+    }
+    match (from, to) {
+        (ArrowType::Map(f, _), ArrowType::Map(t, _)) => {
+            return match (f.data_type(), t.data_type()) {
+                (ArrowType::Struct(f), ArrowType::Struct(t)) => f
+                    .iter()
+                    .zip(t.iter())
+                    .any(|(f, t)| needs_zone(f.data_type(), t.data_type())),
+                _ => false,
+            };
+        }
+        (ArrowType::Struct(f), ArrowType::Struct(t)) => {
+            return f
+                .iter()
+                .zip(t.iter())
+                .any(|(f, t)| needs_zone(f.data_type(), t.data_type()));
+        }
+        _ => {}
+    }
     (zoned(from) && !matches!(to, ArrowType::Int64 | ArrowType::Timestamp(_, Some(_))))
         || (zoned(to) && !matches!(from, ArrowType::Int64 | ArrowType::Timestamp(_, Some(_))))
         || (wall_clock(from) && zoned(to))
+}
+
+/// Whether `t` is, or holds at any depth, a timestamp with a zone.
+fn holds_zoned(t: &ArrowType) -> bool {
+    match t {
+        ArrowType::Timestamp(_, Some(_)) => true,
+        ArrowType::List(f) | ArrowType::LargeList(f) | ArrowType::FixedSizeList(f, _) => {
+            holds_zoned(f.data_type())
+        }
+        ArrowType::Map(f, _) => holds_zoned(f.data_type()),
+        ArrowType::Struct(fields) => fields.iter().any(|f| holds_zoned(f.data_type())),
+        _ => false,
+    }
 }
 
 /// A cast's plan data, without its child: what [`NullIf`](super::cond::NullIf)
