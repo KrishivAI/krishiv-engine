@@ -181,11 +181,32 @@ struct Concat {
 
 pub(super) fn concat(args: Vec<Arc<dyn PhysExpr>>, nullable: bool) -> Result<Arc<dyn PhysExpr>> {
     // `concat(array, array, ...)`: the arrays joined, NULL if any is NULL.
+    // Arrays that differ only in the child field's name or nullability
+    // (`item` from a registered batch, `element` from a literal) are one
+    // Spark type: their element types are what must agree.
+    let element = |t: &ArrowType| match t {
+        ArrowType::List(f) => Some(f.data_type().clone()),
+        _ => None,
+    };
     if let Some(first) = args.first()
-        && matches!(first.data_type(), ArrowType::List(_))
-        && args.iter().all(|a| a.data_type() == first.data_type())
+        && let Some(want) = element(first.data_type())
+        && args
+            .iter()
+            .all(|a| element(a.data_type()).as_ref() == Some(&want))
     {
-        let out = first.data_type().clone();
+        // The child is nullable if any input's is: the result holds both.
+        let child_nullable = args.iter().any(|a| match a.data_type() {
+            ArrowType::List(f) => f.is_nullable(),
+            _ => false,
+        });
+        let out = match first.data_type() {
+            ArrowType::List(f) => ArrowType::List(Arc::new(arrow_schema::Field::new(
+                f.name().clone(),
+                want,
+                child_nullable,
+            ))),
+            other => other.clone(),
+        };
         return Ok(Arc::new(ConcatArrays {
             args,
             out,

@@ -46,3 +46,38 @@ fn concat_works_per_row_and_in_lambdas() {
         "[[0, 1], [0, 2]]"
     );
 }
+
+#[test]
+fn concat_joins_registered_arrays_whose_child_is_named_item() {
+    use std::sync::Arc;
+
+    use arrow_array::{ArrayRef, Int32Array, ListArray, RecordBatch};
+    use arrow_buffer::OffsetBuffer;
+    use arrow_schema::{DataType, Field, Schema};
+
+    let child: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let field = Arc::new(Field::new("item", DataType::Int32, false));
+    let list = ListArray::new(
+        Arc::clone(&field),
+        OffsetBuffer::new(vec![0, 2, 3].into()),
+        child,
+        None,
+    );
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "a",
+        DataType::List(field),
+        false,
+    )]));
+    let batch =
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(list) as ArrayRef]).unwrap();
+    let s = Session::new().unwrap();
+    s.register_batches("t", schema, vec![batch]).unwrap();
+    let df = block_on(s.sql("SELECT CAST(concat(a, array(9, NULL)) AS STRING) FROM t ORDER BY 1"))
+        .unwrap();
+    let b = block_on(df.collect()).unwrap();
+    let got: Vec<_> = arrow_array::cast::AsArray::as_string_view(b[0].column(0))
+        .iter()
+        .map(|v| v.unwrap_or("NULL").to_owned())
+        .collect();
+    assert_eq!(got, ["[1, 2, 9, null]", "[3, 9, null]"]);
+}

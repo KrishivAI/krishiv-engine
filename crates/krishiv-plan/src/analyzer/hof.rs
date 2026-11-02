@@ -31,7 +31,7 @@ use krishiv_common::error::{
     InvalidLambdaFunctionCallDuplicateArgNames, InvalidLambdaFunctionCallNonHigherOrderFunction,
     InvalidLambdaFunctionCallNumArgsMismatch, WrongNumArgsWithoutSuggestion,
 };
-use krishiv_types::{DataType, MapType};
+use krishiv_types::{ArrayType, DataType, MapType, StructField, StructType};
 
 use super::AnalysisError;
 use super::bind::{addr, same, unsupported};
@@ -289,6 +289,18 @@ impl Resolver<'_> {
         }
         if matches!(h, Hof::MapZipWith) {
             self.unify_map_keys(f, &mut done);
+        }
+        // `aggregate`'s accumulator takes whatever the merge produces, so
+        // the seed's struct fields are nullable (a merge may yield NULL for
+        // a field the seed wrote non-null).
+        if matches!(h, Hof::Aggregate | Hof::Reduce)
+            && f.args.len() > 1
+            && let Some(slot) = done.iter().position(|(k, _)| *k == key(1))
+            && let Some(zero) = done[slot].1.ty.data_type.clone()
+            && nullable_fields(&zero) != zero
+        {
+            let widened = self.implicit_cast(&done[slot].1, Some(nullable_fields(&zero)));
+            done[slot].1 = widened;
         }
         let values: Vec<Option<DataType>> = h
             .values()
@@ -583,4 +595,28 @@ fn duplicate_param(params: &[String], cs: bool) -> Option<Vec<String>> {
         }
     }
     None
+}
+
+/// `t` with every struct field nullable: the accumulator of `aggregate`
+/// takes whatever the merge produces, NULL included.
+fn nullable_fields(t: &DataType) -> DataType {
+    match t {
+        DataType::Struct(st) => {
+            DataType::Struct(StructType::new(st.fields().iter().map(|f| {
+                StructField::new(f.name().to_owned(), nullable_fields(f.data_type()), true)
+            })))
+        }
+        DataType::Array(a) => DataType::Array(
+            ArrayType::new(nullable_fields(a.element_type()), a.contains_null()).into(),
+        ),
+        DataType::Map(m) => DataType::Map(
+            MapType::new(
+                nullable_fields(m.key_type()),
+                nullable_fields(m.value_type()),
+                m.value_contains_null(),
+            )
+            .into(),
+        ),
+        other => other.clone(),
+    }
 }

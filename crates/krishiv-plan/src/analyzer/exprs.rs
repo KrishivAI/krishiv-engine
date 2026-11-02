@@ -2197,14 +2197,58 @@ impl Resolver<'_> {
                         None => present,
                     };
                     let collected = mk("collect_list", vec![pair], Some(filter));
-                    let sorted = mk(
-                        "sort_array",
-                        vec![
-                            collected,
-                            lit(Literal::Boolean(entry.id.name() == "min_by")),
-                        ],
-                        None,
-                    );
+                    let ascending = entry.id.name() == "min_by";
+                    // The entries order by `y` only: `x` is an opaque payload.
+                    // `sort_array` orders the whole `(y, x)` struct (ties by
+                    // `x`), which needs `x` orderable; a value holding a map
+                    // sorts through a comparator on `y` instead.
+                    let sorted = if kids[0].ty.data_type.as_ref().is_some_and(holds_map) {
+                        let var = |name: &str| {
+                            Arc::new(
+                                Expr::new(ExprNode::Column(crate::ColumnRef {
+                                    name: vec![name.to_owned()],
+                                    plan_id: None,
+                                }))
+                                .with_origin(origin),
+                            )
+                        };
+                        let key = |name: &str| {
+                            mk(
+                                "__subscript",
+                                vec![var(name), lit(Literal::String("k".to_owned()))],
+                                None,
+                            )
+                        };
+                        let (before, after) = if ascending { (-1, 1) } else { (1, -1) };
+                        let compare = mk(
+                            "if",
+                            vec![
+                                mk("<", vec![key("l"), key("r")], None),
+                                lit(Literal::Integer(before)),
+                                mk(
+                                    "if",
+                                    vec![
+                                        mk(">", vec![key("l"), key("r")], None),
+                                        lit(Literal::Integer(after)),
+                                        lit(Literal::Integer(0)),
+                                    ],
+                                    None,
+                                ),
+                            ],
+                            None,
+                        );
+                        let comparator = Arc::new(
+                            Expr::lambda(vec!["l".to_owned(), "r".to_owned()], (*compare).clone())
+                                .with_origin(origin),
+                        );
+                        mk("array_sort", vec![collected, comparator], None)
+                    } else {
+                        mk(
+                            "sort_array",
+                            vec![collected, lit(Literal::Boolean(ascending))],
+                            None,
+                        )
+                    };
                     let top = mk(
                         "slice",
                         vec![sorted, lit(Literal::Integer(1)), Arc::clone(k)],
@@ -7897,6 +7941,16 @@ fn date_with_days(op: &str, left: &ArgType, right: &ArgType) -> Option<(&'static
             Some(("date_sub", false))
         }
         _ => None,
+    }
+}
+
+/// Whether `t` is or holds a map at any depth (Spark does not order it).
+fn holds_map(t: &DataType) -> bool {
+    match t {
+        DataType::Map(_) => true,
+        DataType::Array(a) => holds_map(a.element_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| holds_map(f.data_type())),
+        _ => false,
     }
 }
 
