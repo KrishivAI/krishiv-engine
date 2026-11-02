@@ -3,6 +3,7 @@ pub use krishiv_session::AccessDecision
 pub use krishiv_session::AccessPolicy
 pub use krishiv_session::AllowAll
 pub use krishiv_session::ArgField
+pub use krishiv_session::BoxFuture
 pub use krishiv_session::CounterSample
 pub use krishiv_session::DenyAll
 pub use krishiv_session::ExplainKind
@@ -13,10 +14,12 @@ pub use krishiv_session::InvokeContext
 pub use krishiv_session::MetricDict
 pub use krishiv_session::MetricsSnapshot
 pub use krishiv_session::NullHandling
+pub use krishiv_session::PolicyVersion
 pub use krishiv_session::Principal
 pub use krishiv_session::PrincipalKind
 pub use krishiv_session::Privilege
 pub use krishiv_session::QueryProfile
+pub use krishiv_session::ReadOnlyPolicy
 pub use krishiv_session::ReturnField
 pub use krishiv_session::ScalarUdf
 pub use krishiv_session::Securable
@@ -444,6 +447,16 @@ pub fn krishiv_session::PathPrefixPolicy::fmt(&self, &mut core::fmt::Formatter<'
 impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::PathPrefixPolicy
 pub fn krishiv_session::PathPrefixPolicy::check<'a>(&'a self, &'a krishiv_plan::analyzer::catalog::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::PathPrefixPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
+pub struct krishiv_session::ReadOnlyPolicy
+impl krishiv_session::ReadOnlyPolicy
+pub fn krishiv_session::ReadOnlyPolicy::new(alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>) -> Self
+impl core::clone::Clone for krishiv_session::ReadOnlyPolicy
+pub fn krishiv_session::ReadOnlyPolicy::clone(&self) -> krishiv_session::ReadOnlyPolicy
+impl core::fmt::Debug for krishiv_session::ReadOnlyPolicy
+pub fn krishiv_session::ReadOnlyPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::ReadOnlyPolicy
+pub fn krishiv_session::ReadOnlyPolicy::check<'a>(&'a self, &'a krishiv_plan::analyzer::catalog::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::ReadOnlyPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
 pub struct krishiv_session::RuntimeConf
 impl krishiv_session::RuntimeConf
 pub fn krishiv_session::RuntimeConf::get(&self, &str) -> core::option::Option<alloc::string::String>
