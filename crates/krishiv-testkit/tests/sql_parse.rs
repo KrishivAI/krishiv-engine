@@ -135,3 +135,23 @@ fn dql_corpus_parses_with_spans_and_differential_equality() -> R {
     assert_eq!(rejected.get("UNCLOSED_BRACKETED_COMMENT").copied(), Some(2));
     Ok(())
 }
+
+/// Fuzz finding (weekly `sql_parse`, input `fuzz/regressions/sql_parse/crash-41592bf8…`): in operand
+/// position `NOT` is a column name when no operand follows as a boolean (`1 = NOT + 1`: Spark 4.2
+/// answers `UNRESOLVED_COLUMN` for `NOT`, checked on a real run), so the expression's text on its
+/// own (`NOT + 1`, a logical NOT of `+ 1`) reads differently. The span check accepts a text that
+/// parses to the node in any of its read-back contexts, the operand one included.
+#[test]
+fn a_keyword_read_as_a_name_in_operand_position_passes_the_span_check() -> R {
+    let options = krishiv_sql::ParserOptions::default();
+    for sql in [
+        "SELECT 1 + 11++ 1= NOT+ +   + 1 AS ten",
+        "SELECT 1 = NOT + 1",
+        "SELECT 1 = NOT+ + 1",
+        "SELECT NOT+ +  + 1",
+    ] {
+        let q = parse_query(sql, &options).map_err(|e| format!("{sql}: {e:?}"))?;
+        check_spans(sql, &q, &options).map_err(|e| format!("{sql}: {e}"))?;
+    }
+    Ok(())
+}

@@ -526,6 +526,16 @@ fn package_args(packages: &[String]) -> Vec<String> {
     }
 }
 
+/// The nightly toolchain of branch coverage: pinned like the fuzz and ASan jobs, because a floating
+/// `nightly` broke the run (the 2026-10-31 nightly fails to compile `apache-avro` 0.22 with "cycle
+/// detected when computing when `ArraySchema` needs async drop"). `KRISHIV_COVERAGE_TOOLCHAIN` overrides it;
+/// move the pin together with `nightly.yml` once a newer nightly builds the workspace.
+const COVERAGE_NIGHTLY: &str = "nightly-2026-08-12";
+
+fn coverage_toolchain() -> String {
+    std::env::var("KRISHIV_COVERAGE_TOOLCHAIN").unwrap_or_else(|_| COVERAGE_NIGHTLY.to_owned())
+}
+
 /// `xtask coverage [--no-branch] [--all-features] [--html] [-p PACKAGE]...`: runs the suite
 /// under `cargo-llvm-cov`, writing `lcov.info` and `summary.json` (and an HTML
 /// report) under `<target>/coverage`. Branch coverage needs the nightly
@@ -547,7 +557,7 @@ pub fn run_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
         // RUSTUP_TOOLCHAIN, so branch mode goes through the rustup proxy.
         let mut c = if branch {
             let mut c = Command::new("cargo");
-            c.env("RUSTUP_TOOLCHAIN", "nightly");
+            c.env("RUSTUP_TOOLCHAIN", coverage_toolchain());
             c
         } else {
             cargo()
