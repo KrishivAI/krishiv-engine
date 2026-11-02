@@ -1249,7 +1249,7 @@ impl Session {
             }
             .into());
         }
-        let options = options_of(&t.options, original);
+        let mut options = options_of(&t.options, original);
         let properties = options_of(&t.tblproperties, original);
         // A `path` option is the table's location, as in Spark.
         let path_key = options
