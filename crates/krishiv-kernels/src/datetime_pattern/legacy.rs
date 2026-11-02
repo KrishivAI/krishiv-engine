@@ -565,8 +565,14 @@ impl Parsed {
             'D' => self.doy = Some((value, st)),
             'H' => self.hour_of_day = Some((value, st)),
             // 24 reads as 0 (no carry), as `SimpleDateFormat` does.
-            'k' => self.hour_of_day = Some((if value == 24 { 0 } else { value }, st)),
-            'h' => self.hour12 = Some((if value == 12 { 0 } else { value }, st)),
+            'k' => {
+                self.bad_hour |= value == 0;
+                self.hour_of_day = Some((if value == 24 { 0 } else { value }, st));
+            }
+            'h' => {
+                self.bad_hour |= value == 0;
+                self.hour12 = Some((if value == 12 { 0 } else { value }, st));
+            }
             'K' => self.hour12 = Some((value, st)),
             'm' => self.minute = Some(value),
             's' => self.second = Some(value),
