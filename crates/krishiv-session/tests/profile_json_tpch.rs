@@ -1219,7 +1219,8 @@ fn corrupt_documents_fail_validation() {
             "unknown metric kind",
             Box::new(move |v| v["operators"][with_extra]["extra"][0]["kind"] = "avg".into()),
             "/extra[0]: matches 0 of 2 oneOf branches",
-            Some("unknown metric kind \"avg\""),
+            // A kind a later minor adds is kept as text by the reader.
+            None,
         ),
         (
             "a pipeline id exceeds u32",
