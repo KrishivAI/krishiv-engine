@@ -162,6 +162,8 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
         ],
         "queries" => vec![
             ("query_id", Text, false),
+            ("session_id", Text, false),
+            ("principal", Text, false),
             ("state", Text, false),
             ("query_text", Text, true),
             ("query_text_truncated", Flag, false),
@@ -279,6 +281,8 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
         let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
         return vec![
             text(rows.iter().map(|r| Some(r.id.as_str()))),
+            text(rows.iter().map(|r| Some(r.session_id.as_str()))),
+            text(rows.iter().map(|r| Some(r.principal.as_str()))),
             text(rows.iter().map(|r| Some(r.state))),
             text(rows.iter().map(|r| r.text.as_deref())),
             Arc::new(BooleanArray::from_iter(
@@ -334,6 +338,8 @@ const TEXT_BYTES: usize = 4096;
 #[derive(Debug, Clone)]
 pub(crate) struct QueryRow {
     pub(crate) id: String,
+    pub(crate) session_id: String,
+    pub(crate) principal: String,
     pub(crate) state: &'static str,
     pub(crate) text: Option<String>,
     pub(crate) truncated: bool,
@@ -442,6 +448,9 @@ pub(crate) struct Totals {
 pub(crate) struct QueryLog {
     rows: Mutex<VecDeque<QueryRow>>,
     counter: AtomicU64,
+    /// The session this log belongs to, and its principal (fixed for life).
+    session_id: String,
+    principal: String,
 }
 
 fn now_ms() -> i64 {
@@ -451,6 +460,16 @@ fn now_ms() -> i64 {
 }
 
 impl QueryLog {
+    /// The log of a new session run by `principal`.
+    pub(crate) fn new(principal: &str) -> Self {
+        let log = Self {
+            principal: principal.to_owned(),
+            ..Self::default()
+        };
+        let session_id = log.next_id(now_ms());
+        Self { session_id, ..log }
+    }
+
     /// A UUIDv7 (RFC 9562): 48 bits of milliseconds, then version, then bits
     /// that are unique per call. The tail comes from a per-process random
     /// hasher key and a counter, not from a CSPRNG: it names queries, it
@@ -498,6 +517,8 @@ impl QueryLog {
         }
         rows.push_back(QueryRow {
             id: id.clone(),
+            session_id: self.session_id.clone(),
+            principal: self.principal.clone(),
             state: "running",
             text,
             truncated,

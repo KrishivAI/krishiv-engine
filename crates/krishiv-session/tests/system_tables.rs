@@ -226,3 +226,31 @@ fn queries_carries_the_query_wide_counters() {
     );
     assert_eq!(r, ["interactive|true|true|true|true"], "{r:?}");
 }
+
+#[test]
+fn queries_name_the_session_and_its_principal() {
+    use krishiv_session::{Principal, PrincipalKind};
+    let a = Session::builder()
+        .principal(Principal::new("etl", PrincipalKind::Service))
+        .build()
+        .unwrap();
+    let b = Session::new().unwrap();
+    for s in [&a, &b] {
+        run_all(s, "SELECT 1").unwrap();
+        run_all(s, "SELECT 2").unwrap();
+    }
+    let rows = |s: &Session| {
+        strings_in(
+            s,
+            "SELECT concat_ws('|', principal, session_id) FROM system.queries ORDER BY submitted_at",
+        )
+    };
+    let (ra, rb) = (rows(&a), rows(&b));
+    assert!(ra.len() >= 2 && ra.iter().all(|r| r == &ra[0]), "{ra:?}");
+    assert!(
+        ra[0].starts_with("etl|") && !rb[0].starts_with("etl|"),
+        "{ra:?} {rb:?}"
+    );
+    assert_ne!(ra[0], rb[0]);
+    assert_eq!(ra[0].len(), "etl|".len() + 36);
+}

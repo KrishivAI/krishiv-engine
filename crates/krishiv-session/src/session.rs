@@ -337,6 +337,8 @@ impl SessionBuilder {
                 as Arc<dyn FunctionRegistry>,
             None => Arc::new(SessionFunctions::new(Arc::clone(&udfs))) as Arc<dyn FunctionRegistry>,
         };
+        let principal = Arc::new(self.principal.unwrap_or_else(Principal::local_user));
+        let queries = Arc::new(crate::system::QueryLog::new(&principal.name));
         Ok(Session {
             locals: Arc::from([]),
             state: Arc::new(SessionState {
@@ -345,7 +347,7 @@ impl SessionBuilder {
                 cache,
                 variables: Arc::new(SessionVariables::default()),
                 profile: self.profile,
-                principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
+                principal,
                 policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
                 functions,
                 udfs,
@@ -363,7 +365,7 @@ impl SessionBuilder {
                 planner: Arc::new(DefaultPlanner),
                 plan_ids: AtomicI64::new(0),
                 query_ids: AtomicU64::new(0),
-                queries: Arc::default(),
+                queries,
                 sql_sources: AtomicU32::new(1),
             }),
         })
