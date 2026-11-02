@@ -94,6 +94,10 @@ impl FileMetadata for ParquetMetadata {
     fn heap_size(&self) -> usize {
         self.heap
     }
+
+    fn unit_count(&self) -> Option<u64> {
+        Some(self.row_groups.len() as u64)
+    }
 }
 
 fn footer_error(e: impl std::fmt::Display) -> FormatError {

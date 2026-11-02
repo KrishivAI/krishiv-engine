@@ -31,6 +31,7 @@ fn text_source() -> Capabilities {
         page_pruning: false,
         page_checksums: false,
         write: false,
+        random_access: None,
     }
 }
 

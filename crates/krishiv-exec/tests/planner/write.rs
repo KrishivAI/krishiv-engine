@@ -325,6 +325,7 @@ fn two_tasks_write_disjoint_files_named_by_partition() {
             filter: None,
             runtime_filters: Vec::new(),
             row_stage: krishiv_exec::RowStageSettings::default(),
+            row_id: false,
         });
         let write = WritePlan {
             format: "parquet".to_owned(),
@@ -508,6 +509,7 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
             filter: None,
             runtime_filters: Vec::new(),
             row_stage: krishiv_exec::RowStageSettings::default(),
+            row_id: false,
         });
         let write = WritePlan {
             format: "parquet".to_owned(),
@@ -708,6 +710,7 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
             filter: None,
             runtime_filters: Vec::new(),
             row_stage: krishiv_exec::RowStageSettings::default(),
+            row_id: false,
         });
         let write = WritePlan {
             format: "parquet".to_owned(),

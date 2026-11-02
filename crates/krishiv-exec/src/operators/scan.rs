@@ -19,8 +19,9 @@ use futures::future::BoxFuture;
 use krishiv_io::split::FilePartition;
 use krishiv_io::{
     ColumnPath, FieldMapping, FileRef, MetadataCols, PushdownExpr, RowLevel, RowSelection,
-    ScanFilter,
+    ScanFilter, ScanGate, TakeStream,
 };
+use krishiv_memory::Reservation;
 use krishiv_types::batch::Batch;
 
 use super::expr::Predicate;
@@ -118,6 +119,26 @@ pub struct ScanPushdowns {
     pub mapping: FieldMapping,
     /// `_metadata` columns to append (file scans).
     pub metadata: MetadataCols,
+    /// Append the row id: [`ROW_FILE_COLUMN`](super::ROW_FILE_COLUMN) and
+    /// [`ROW_POSITION_COLUMN`](super::ROW_POSITION_COLUMN), which
+    /// [`ScanPushdown::take`] reads the row back by. Only for a scan that
+    /// [`supports_take`](ScanPushdown::supports_take).
+    pub row_id: bool,
+}
+
+/// The rows of one file [`ScanPushdown::take`] reads.
+#[derive(Debug)]
+pub struct TakeRows {
+    /// The file, with the version the row ids were made from.
+    pub file: FileRef,
+    /// File-relative positions.
+    pub rows: Vec<u64>,
+    /// Columns to read.
+    pub projection: Vec<ColumnPath>,
+    /// Pays for the read's buffers.
+    pub mem: Reservation,
+    /// The query's decode budget.
+    pub gate: Arc<ScanGate>,
 }
 
 /// What a planner can push into a scan. Implemented by scan factories: the
@@ -164,6 +185,27 @@ pub trait ScanPushdown: Send + Sync {
         Err(internal(
             "this scan does not read in-memory batches".to_owned(),
         ))
+    }
+    /// Whether rows of this scan can be read again by position
+    /// ([`Self::take`]): the same read a second time gives the same rows.
+    fn supports_take(&self) -> bool {
+        false
+    }
+    /// Whether `column` is read from the files, so [`Self::take`] can read
+    /// it (a partition column comes from the path).
+    fn in_files(&self, column: &str) -> bool {
+        let _ = column;
+        false
+    }
+    /// Opens a read of `projection` at `rows` of `file`, in position order.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a scan that can't; any error opening the file.
+    fn take(&self, take: TakeRows) -> BoxFuture<'_, Result<TakeStream>> {
+        let _ = take;
+        Box::pin(std::future::ready(Err(internal(
+            "this scan can't read rows by position".to_owned(),
+        ))))
     }
     /// The schema of the batches a source built with `pushdowns` returns,
     /// without building it (planning reads it; the source is built when the

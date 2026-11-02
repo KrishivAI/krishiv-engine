@@ -133,7 +133,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -196,6 +196,42 @@ pub mod node {
         /// feature: sort_merge_join
         #[prost(message, tag = "21")]
         SortMergeJoin(super::SortMergeJoinNode),
+        /// feature: late_fetch
+        #[prost(message, tag = "24")]
+        LateFetch(super::LateFetchNode),
+    }
+}
+/// feature: late_fetch
+/// The rows of `input` with columns read from their files by row id.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LateFetchNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    /// The table and the columns to read.
+    #[prost(message, optional, tag = "2")]
+    pub scan: ::core::option::Option<ScanNode>,
+    #[prost(uint64, tag = "3")]
+    pub file_col: u64,
+    #[prost(uint64, tag = "4")]
+    pub row_col: u64,
+    #[prost(message, repeated, tag = "5")]
+    pub output: ::prost::alloc::vec::Vec<FetchSlot>,
+}
+/// feature: late_fetch
+/// Where a column of a `LateFetchNode`'s output comes from.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FetchSlot {
+    #[prost(oneof = "fetch_slot::Kind", tags = "1, 2")]
+    pub kind: ::core::option::Option<fetch_slot::Kind>,
+}
+/// Nested message and enum types in `FetchSlot`.
+pub mod fetch_slot {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Kind {
+        #[prost(uint64, tag = "1")]
+        Input(u64),
+        #[prost(uint64, tag = "2")]
+        Fetched(u64),
     }
 }
 /// feature: shared_subplan
@@ -434,6 +470,9 @@ pub struct TopNNode {
     pub keys: ::prost::alloc::vec::Vec<SortKey>,
     #[prost(uint64, tag = "3")]
     pub limit: u64,
+    /// ignorable: a reader that skips it offers no bound, and scans only prune less.
+    #[prost(uint64, optional, tag = "4")]
+    pub bound: ::core::option::Option<u64>,
 }
 /// feature: window
 /// Window functions over an input sorted by the partitioning columns, then
@@ -861,6 +900,9 @@ pub struct ScanNode {
     pub runtime_filters: ::prost::alloc::vec::Vec<ScanRuntimeFilter>,
     #[prost(message, optional, tag = "8")]
     pub row_stage: ::core::option::Option<RowStageSettings>,
+    /// feature: late_fetch
+    #[prost(bool, tag = "9")]
+    pub row_id: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ColumnPath {
