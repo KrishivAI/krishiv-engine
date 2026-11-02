@@ -2011,6 +2011,20 @@ impl DataFrameWriter {
         session
             .on_executor(async move {
                 let a = df.analysis().await?;
+                // Files hold a geometry or geography as a WKB column with a
+                // Parquet logical type (P2-T181 unit U3); until it lands, a
+                // spatial value is not written as the `{srid, wkb}` struct
+                // Spark cannot read.
+                if a.analyzed
+                    .output
+                    .iter()
+                    .any(|c| krishiv_types::geo::holds_spatial(&c.data_type))
+                {
+                    return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: "writing GEOMETRY or GEOGRAPHY columns to files".to_owned(),
+                    }
+                    .into());
+                }
                 // A write reads the cache like any other action.
                 let (physical, _) = df.physical_cached(&a).await?;
                 df.session.write_files(physical, &a.env, target).await

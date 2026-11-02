@@ -33,7 +33,8 @@ mod xxh64;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
-    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, Time64NanosecondType,
+    TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrowPrimitiveType, Int32Array, Int64Array};
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
@@ -189,6 +190,10 @@ impl<'a> Col<'a> {
             }
             DataType::Duration(TimeUnit::Microsecond) => {
                 Self::Int64(Prim::of::<DurationMicrosecondType>(a))
+            }
+            // TIME: Spark hashes the nanoseconds since midnight as a long.
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                Self::Int64(Prim::of::<Time64NanosecondType>(a))
             }
             DataType::Float32 => Self::Float32(Prim::of::<Float32Type>(a)),
             DataType::Float64 => Self::Float64(Prim::of::<Float64Type>(a)),

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Types the engine parses, maps and serializes but cannot evaluate yet
-//! (`TIME`, `GEOMETRY`, `GEOGRAPHY`): a resolved plan that holds one
+//! (`TIME` while its gate is off): a resolved plan that holds one
 //! anywhere (a scanned column, a cast, a typed `NULL`, a function result)
 //! fails with `KRISHIV_UNSUPPORTED_FEATURE` before it reaches a planner.
 
@@ -20,14 +20,70 @@ const TIME: &str = "the TIME data type";
 fn feature(t: &DataType, time_type: bool) -> Option<&'static str> {
     // The first unevaluable type in the type or inside it (an array
     // element, a map key or value, a struct field).
-    if !time_type && t.any_type(&|x| matches!(x, DataType::Time { .. })) {
-        Some(TIME)
-    } else if t.any_type(&|x| matches!(x, DataType::Geometry { .. })) {
-        Some("the GEOMETRY data type")
-    } else if t.any_type(&|x| matches!(x, DataType::Geography { .. })) {
-        Some("the GEOGRAPHY data type")
-    } else {
-        None
+    (!time_type && t.any_type(&|x| matches!(x, DataType::Time { .. }))).then_some(TIME)
+}
+
+/// The type of a resolved expression, when it is a column or a call.
+fn expr_type(e: &crate::Expr) -> Option<&DataType> {
+    match &e.node {
+        ExprNode::Literal(Literal::Null(Some(t))) | ExprNode::Cast { to: t, .. } => Some(t),
+        ExprNode::Resolved(
+            ResolvedExpr::Column(c)
+            | ResolvedExpr::OuterColumn(c)
+            | ResolvedExpr::Alias { output: c, .. },
+        ) => Some(&c.data_type),
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => Some(&f.data_type),
+        ExprNode::Resolved(ResolvedExpr::Field { data_type, .. }) => Some(data_type),
+        _ => None,
+    }
+}
+
+fn is_spatial(t: Option<&DataType>) -> bool {
+    t.is_some_and(|t| {
+        t.any_type(&|x| matches!(x, DataType::Geometry { .. } | DataType::Geography { .. }))
+    })
+}
+
+/// The use of a spatial value as a key at `node`, with its origin.
+fn spatial_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
+    const KEY: &str = "a GEOMETRY or GEOGRAPHY value as a grouping, distinct or min/max key";
+    match node {
+        Node::Plan(p) => match &p.node {
+            PlanNode::Aggregate { grouping, .. } => {
+                let exprs: Vec<&std::sync::Arc<crate::Expr>> = match grouping {
+                    crate::Grouping::GroupBy(e)
+                    | crate::Grouping::Rollup(e)
+                    | crate::Grouping::Cube(e) => e.iter().collect(),
+                    crate::Grouping::GroupingSets { exprs, .. } => exprs.iter().collect(),
+                };
+                exprs
+                    .iter()
+                    .any(|e| is_spatial(expr_type(e)))
+                    .then_some((KEY, p.origin))
+            }
+            PlanNode::Distinct { input } => match &input.node {
+                PlanNode::Project { exprs, .. } => exprs
+                    .iter()
+                    .any(|e| is_spatial(expr_type(e)))
+                    .then_some((KEY, p.origin)),
+                _ => None,
+            },
+            _ => None,
+        },
+        Node::Expr(e) => match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f))
+                if f.kind == crate::FunctionKind::Aggregate
+                    && (f.distinct
+                        || matches!(
+                            f.id.name(),
+                            "min" | "max" | "min_by" | "max_by" | "mode" | "collect_set"
+                        ))
+                    && f.args.iter().any(|a| is_spatial(expr_type(a))) =>
+            {
+                Some((KEY, e.origin))
+            }
+            _ => None,
+        },
     }
 }
 
@@ -49,6 +105,14 @@ pub(super) fn check(root: &LogicalPlan, time_type: bool) -> Result<(), AnalysisE
                 },
                 e.origin,
             ));
+            return ControlFlow::Break(());
+        }
+        // A geometry or geography neither compares nor orders (Spark's
+        // `INVALID_ORDERING_TYPE`), so it is no grouping key, distinct row or
+        // `min`/`max` argument; the operators below would compare its
+        // internal struct.
+        if let Some((what, origin)) = spatial_key(&node) {
+            error = Some(unsupported(what, origin));
             return ControlFlow::Break(());
         }
         let (types, origin) = match node {

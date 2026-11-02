@@ -68,7 +68,12 @@ pub(crate) fn coerce_to(
     };
     let parts = parts(e.data_type(), to.clone(), mode, env)?;
     let nullable = e.nullable() || parts.mode != KernelMode::Ansi;
-    Ok(Arc::new(Cast { e, parts, nullable }))
+    Ok(Arc::new(Cast {
+        e,
+        parts,
+        nullable,
+        geography: None,
+    }))
 }
 
 /// `(l, r)` with operands of one Spark `STRING` or `BINARY` in different
@@ -96,6 +101,9 @@ struct Cast {
     e: Arc<dyn PhysExpr>,
     parts: CastParts,
     nullable: bool,
+    /// The target is a geography: every value's coordinates must be
+    /// geographic (a geometry of the same SRID casts to it).
+    geography: Option<DataType>,
 }
 
 /// Whether a cast between `from` and `to` reads the session time zone.
@@ -313,7 +321,94 @@ pub(super) fn compile(
     // Every cast to a narrower or textual type can produce NULL in legacy
     // and `TRY_CAST` modes; ANSI keeps the input's nullability.
     let nullable = e.nullable() || parts.mode != KernelMode::Ansi;
-    Ok(Arc::new(Cast { e, parts, nullable }))
+    let geography = holds_geography(to).then(|| to.clone());
+    Ok(Arc::new(Cast {
+        e,
+        parts,
+        nullable,
+        geography,
+    }))
+}
+
+/// Whether `t` is, or holds, a geography.
+fn holds_geography(t: &DataType) -> bool {
+    match t {
+        DataType::Geography { .. } => true,
+        DataType::Array(a) => holds_geography(a.element_type()),
+        DataType::Map(m) => holds_geography(m.key_type()) || holds_geography(m.value_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| holds_geography(f.data_type())),
+        _ => false,
+    }
+}
+
+/// `check_geography` on every geography inside `a`, of the Spark type `t`.
+fn check_geography_in(a: &ArrayRef, t: &DataType) -> Result<()> {
+    use arrow_array::cast::AsArray;
+    if !holds_geography(t) {
+        return Ok(());
+    }
+    match t {
+        DataType::Geography { .. } => check_geography(a),
+        DataType::Array(e) => {
+            let values = if let Some(l) = a.as_list_opt::<i32>() {
+                Arc::clone(l.values())
+            } else if let Some(l) = a.as_list_opt::<i64>() {
+                Arc::clone(l.values())
+            } else if let Some(l) = a.as_list_view_opt::<i32>() {
+                Arc::clone(l.values())
+            } else if let Some(l) = a.as_list_view_opt::<i64>() {
+                Arc::clone(l.values())
+            } else {
+                return Err(internal("a cast to an array of geography of a non-list"));
+            };
+            check_geography_in(&values, e.element_type())
+        }
+        DataType::Map(m) => {
+            let Some(map) = a.as_map_opt() else {
+                return Err(internal("a cast to a map of geography of a non-map"));
+            };
+            check_geography_in(map.keys(), m.key_type())?;
+            check_geography_in(map.values(), m.value_type())
+        }
+        DataType::Struct(s) => {
+            let Some(st) = a.as_struct_opt() else {
+                return Err(internal("a cast to a struct of geography of a non-struct"));
+            };
+            for (col, f) in st.columns().iter().zip(s.fields()) {
+                check_geography_in(col, f.data_type())?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// `TRY_CAST`: `a` with every row that holds an invalid geography (of the
+/// Spark type `t`) replaced by NULL; valid rows are kept.
+fn null_invalid_geography(a: &ArrayRef, t: &DataType) -> Result<ArrayRef> {
+    let keep: arrow_array::BooleanArray = (0..a.len())
+        .map(|i| Some(check_geography_in(&a.slice(i, 1), t).is_ok()))
+        .collect();
+    let nulls = arrow_array::new_null_array(a.data_type(), a.len());
+    arrow_select::zip::zip(&keep, a, &nulls).map_err(|e| internal(&e.to_string()))
+}
+
+/// Fails with `WKB_PARSE_ERROR` on a value of `spatial` (the struct of a
+/// geometry or geography) with a coordinate outside longitude and latitude.
+fn check_geography(spatial: &ArrayRef) -> Result<()> {
+    use krishiv_types::geo::{ByteOrder, SpatialKind, rewrite};
+    let wkb = spatial
+        .as_struct_opt()
+        .and_then(|s| s.column(1).as_binary_view_opt().map(|w| (s, w)));
+    let Some((s, wkb)) = wkb else {
+        return Err(internal(
+            "a cast to geography of a value that is no spatial struct",
+        ));
+    };
+    for row in (0..s.len()).filter(|r| s.is_valid(*r)) {
+        rewrite(wkb.value(row), SpatialKind::Geography, ByteOrder::Ndr)?;
+    }
+    Ok(())
 }
 
 /// `CAST(interval AS STRING)`. The Arrow carrier has no fields, so the
@@ -431,7 +526,15 @@ impl PhysExpr for Cast {
 
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
         let v = self.e.eval(batch, partition)?;
-        let out = apply(&self.parts, v.array())?;
+        let mut out = apply(&self.parts, v.array())?;
+        if let Some(to) = &self.geography
+            && check_geography_in(&out, to).is_err()
+        {
+            if self.parts.mode != KernelMode::Try {
+                check_geography_in(&out, to)?;
+            }
+            out = null_invalid_geography(&out, to)?;
+        }
         Ok(match v {
             Value::Scalar(_) => Value::Scalar(out),
             Value::Array(_) => Value::Array(out),

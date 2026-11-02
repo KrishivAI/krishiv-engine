@@ -46,7 +46,7 @@ pub use format::{
     ParsePolicy, format_timestamps, parse_date_one, parse_dates, parse_ntz, parse_ntz_one,
     parse_timestamp_one, parse_timestamps, seconds_to_timestamps,
 };
-pub use make::{TimestampFields, make_timestamp};
+pub use make::{TimestampFields, make_timestamp, make_timestamp_from_date};
 pub use unit::{TimestampUnit, timestamp_add, timestamp_diff};
 pub use zone::{ZoneRef, resolve_zone, zone_id};
 

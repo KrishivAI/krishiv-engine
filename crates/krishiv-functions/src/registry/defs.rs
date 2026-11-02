@@ -275,6 +275,35 @@ fn clock_timestamp_ntz(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::TimestampNtz, false))
 }
 
+/// `current_time([p])`: `TIME(p)`, `p` a foldable integer in `[0, 6]`
+/// (`TIME(6)` without it); never NULL.
+fn clock_time(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let precision = match c.constant(0) {
+        None if c.args().is_empty() => 6,
+        Some(Constant::Integral(n)) if (0..=6).contains(n) => u8::try_from(*n).unwrap_or(6),
+        Some(Constant::Integral(n)) => {
+            return Err(DatatypeMismatchValueOutOfRange {
+                sql_expr: format!("\"current_time({n})\""),
+                expr_name: "precision".to_owned(),
+                value_range: "[0, 6]".to_owned(),
+                current_value: n.to_string(),
+            }
+            .into());
+        }
+        Some(Constant::Error(e)) => return Err(e.clone()),
+        _ => {
+            return Err(DatatypeMismatchNonFoldableInput {
+                sql_expr: format!("\"current_time({})\"", c.sql(0).unwrap_or_default()),
+                input_name: "`precision`".to_owned(),
+                input_type: "\"INT\"".to_owned(),
+                input_expr: format!("\"{}\"", c.sql(0).unwrap_or_default()),
+            }
+            .into());
+        }
+    };
+    Ok(ArgType::new(DataType::Time { precision }, false))
+}
+
 fn user(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::String, false))
 }
@@ -514,7 +543,27 @@ fn seconds_input() -> InputType {
     ))
 }
 
+/// The `(date[, time[, zone]])` forms of `make_timestamp`.
+fn make_timestamp_date_inputs(n: usize) -> Vec<InputType> {
+    let time = InputType::OneOf(
+        (0..=6)
+            .map(|precision| DataType::Time { precision })
+            .collect(),
+    );
+    [
+        InputType::Strict(DataType::Date),
+        time,
+        exact(DataType::String),
+    ]
+    .into_iter()
+    .take(n)
+    .collect()
+}
+
 fn make_timestamp_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    if c.args().len() <= 3 {
+        return make_timestamp_date_inputs(c.args().len());
+    }
     let mut inputs = vec![exact(DataType::Integer); 5];
     inputs.push(seconds_input());
     if c.args().len() == 7 {
@@ -523,7 +572,10 @@ fn make_timestamp_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     inputs
 }
 
-fn make_timestamp_ntz_inputs(_: &CallTypes<'_>) -> Vec<InputType> {
+fn make_timestamp_ntz_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    if c.args().len() <= 2 {
+        return make_timestamp_date_inputs(c.args().len());
+    }
     let mut inputs = vec![exact(DataType::Integer); 5];
     inputs.push(seconds_input());
     inputs
@@ -532,7 +584,9 @@ fn make_timestamp_ntz_inputs(_: &CallTypes<'_>) -> Vec<InputType> {
 /// A malformed field is NULL with ANSI off and always for the `try_`
 /// forms, so the result may be null then whatever the arguments.
 fn make_timestamp_result(c: &CallTypes<'_>, ty: DataType, try_form: bool) -> ArgType {
-    ArgType::new(ty, try_form || !c.ansi() || c.any_nullable())
+    // The date forms have no field that can be malformed.
+    let can_fail = c.args().len() > 3 && (try_form || !c.ansi());
+    ArgType::new(ty, can_fail || c.any_nullable())
 }
 
 fn make_timestamp_ltz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
@@ -1061,6 +1115,11 @@ fn datetime() -> Vec<Spec> {
         clock_timestamp,
     ));
     out.extend(scalar(
+        &["current_time"],
+        &Inputs::Expects(vec![exact(DataType::Integer)]),
+        clock_time,
+    ));
+    out.extend(scalar(
         &["current_user", "user", "session_user"],
         &Inputs::Any,
         user,
@@ -1124,7 +1183,7 @@ fn min_max(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 /// not.
 pub(super) fn spark_orderable(t: &DataType) -> bool {
     match t {
-        DataType::Map(_) => false,
+        DataType::Map(_) | DataType::Geometry { .. } | DataType::Geography { .. } => false,
         DataType::Array(a) => spark_orderable(a.element_type()),
         DataType::Struct(s) => s.fields().iter().all(|f| spark_orderable(f.data_type())),
         _ => true,
@@ -1815,6 +1874,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::predicate::specs());
     out.extend(super::number::specs());
     out.extend(super::misc::specs());
+    out.extend(super::geo::specs());
     out.extend(super::url::specs());
     out.extend(super::csv::specs());
     out.extend(super::xml::specs());

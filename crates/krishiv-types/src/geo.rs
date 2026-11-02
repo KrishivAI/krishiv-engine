@@ -30,6 +30,7 @@
 //! cannot overflow the call stack (Spark fails on such inputs, with no
 //! error class); the output is never larger than the input.
 
+use crate::DataType;
 use crate::error::{self, Result};
 
 /// The byte order of encoded WKB.
@@ -350,3 +351,72 @@ impl Writer {
 
 #[cfg(test)]
 mod tests;
+
+/// The text Spark prints a spatial value as (extended well-known text):
+/// `POINT(1 2)`, with `SRID=<n>;` in front unless the SRID is 0.
+///
+/// Only a two-dimensional point is printed so far; any other geometry is
+/// `KRISHIV_UNSUPPORTED_FEATURE`.
+///
+/// ```
+/// use krishiv_types::geo::{rewrite, to_ewkt, ByteOrder, SpatialKind};
+///
+/// let xdr = [0, 0, 0, 0, 1, 0x3F, 0xF0, 0, 0, 0, 0, 0, 0, 0x40, 0, 0, 0, 0, 0, 0, 0];
+/// let ndr = rewrite(&xdr, SpatialKind::Geometry, ByteOrder::Ndr).unwrap();
+/// assert_eq!(to_ewkt(4326, &ndr).unwrap(), "SRID=4326;POINT(1 2)");
+/// assert_eq!(to_ewkt(0, &ndr).unwrap(), "POINT(1 2)");
+/// ```
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for anything but a two-dimensional point.
+pub fn to_ewkt(srid: i32, wkb: &[u8]) -> Result<String> {
+    let coord = |at: usize| -> Option<f64> {
+        let bytes: [u8; 8] = wkb.get(at..at + 8)?.try_into().ok()?;
+        Some(match wkb.first()? {
+            0 => f64::from_be_bytes(bytes),
+            _ => f64::from_le_bytes(bytes),
+        })
+    };
+    let code = wkb
+        .get(1..HEADER)
+        .and_then(|b| <[u8; 4]>::try_from(b).ok())
+        .map(|b| match wkb.first() {
+            Some(0) => u32::from_be_bytes(b),
+            _ => u32::from_le_bytes(b),
+        });
+    let (Some(POINT), Some(x), Some(y), true) = (
+        code,
+        coord(HEADER),
+        coord(HEADER + 8),
+        wkb.len() == HEADER + 16,
+    ) else {
+        return Err(error::unsupported(
+            "printing a geometry that is not a two-dimensional point".to_owned(),
+        ));
+    };
+    let prefix = if srid == 0 {
+        String::new()
+    } else {
+        format!("SRID={srid};")
+    };
+    Ok(format!("{prefix}POINT({x} {y})"))
+}
+
+/// Whether `t` is, or holds anywhere inside it, a geometry or geography.
+///
+/// ```
+/// use krishiv_types::{geo::holds_spatial, DataType, Srid};
+///
+/// assert!(holds_spatial(&DataType::Geometry { srid: Srid::Any }));
+/// assert!(!holds_spatial(&DataType::Binary));
+/// ```
+#[must_use]
+pub fn holds_spatial(t: &DataType) -> bool {
+    match t {
+        DataType::Geometry { .. } | DataType::Geography { .. } => true,
+        DataType::Array(a) => holds_spatial(a.element_type()),
+        DataType::Map(m) => holds_spatial(m.key_type()) || holds_spatial(m.value_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| holds_spatial(f.data_type())),
+        _ => false,
+    }
+}

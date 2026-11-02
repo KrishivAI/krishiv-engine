@@ -25,6 +25,7 @@ mod csv;
 mod defs;
 mod element;
 mod generator;
+mod geo;
 mod hashing;
 mod hof;
 mod json;

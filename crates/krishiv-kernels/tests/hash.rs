@@ -337,3 +337,15 @@ fn intervals_hash_as_spark() {
     let null = DurationMicrosecondArray::from(vec![None::<i64>]);
     assert_eq!(h(&[&null]), [42]);
 }
+
+/// TIME hashes as its nanoseconds-since-midnight long (design P2-T181 section 6;
+/// `hash(TIME'10:00') = hash(36000000000000L) = -1113572777` on Spark 4.2.0).
+#[test]
+fn time_hashes_as_its_nanosecond_long() {
+    use arrow_array::Time64NanosecondArray;
+    let long = Int64Array::from(vec![36_000_000_000_000]);
+    let time = Time64NanosecondArray::from(vec![36_000_000_000_000]);
+    assert_eq!(h(&[&time]), [-1_113_572_777]);
+    assert_eq!(h(&[&time]), h(&[&long]));
+    assert_eq!(x(&[&time]), x(&[&long]));
+}

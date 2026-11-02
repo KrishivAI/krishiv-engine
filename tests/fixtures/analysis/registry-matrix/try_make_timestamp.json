@@ -49,14 +49,6 @@
       "reason": "SELECT try_make_timestamp(DATE'0001-01-01', TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE"
     },
     {
-      "id": "try_make_timestamp#113f9d16df86/ansi_on",
-      "reason": "SELECT try_make_timestamp(CAST(1 AS SMALLINT)) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#113f9d16df86/ansi_off",
-      "reason": "SELECT try_make_timestamp(CAST(1 AS SMALLINT)) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "try_make_timestamp#17ba5895db63/ansi_on",
       "reason": "SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', ' \\t a\\u3000\\n ') | UNSUPPORTED_TIME_TYPE"
     },
@@ -121,22 +113,6 @@
       "reason": "SELECT try_make_timestamp(CAST(1.5 AS FLOAT), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "try_make_timestamp#276c82861d13/ansi_on",
-      "reason": "SELECT try_make_timestamp(1.5D) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#276c82861d13/ansi_off",
-      "reason": "SELECT try_make_timestamp(1.5D) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#309184e97c28/ansi_on",
-      "reason": "SELECT try_make_timestamp(CAST(1.5 AS FLOAT)) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#309184e97c28/ansi_off",
-      "reason": "SELECT try_make_timestamp(CAST(1.5 AS FLOAT)) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "try_make_timestamp#30be6f2af48d/ansi_on",
       "reason": "SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', CAST(X'C328FF' AS STRING)) | UNSUPPORTED_TIME_TYPE"
     },
@@ -185,14 +161,6 @@
       "reason": "SELECT try_make_timestamp(CAST(1.5 AS DECIMAL(10,2)), TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "try_make_timestamp#430cfd54f589/ansi_on",
-      "reason": "SELECT try_make_timestamp('abc') | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#430cfd54f589/ansi_off",
-      "reason": "SELECT try_make_timestamp('abc') | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "try_make_timestamp#455f34cf885f/ansi_on",
       "reason": "SELECT try_make_timestamp(map('a', 1), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -215,14 +183,6 @@
     {
       "id": "try_make_timestamp#5895c2a2ec20/ansi_off",
       "reason": "SELECT try_make_timestamp(named_struct('a', 1, 'b', 'x'), TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#5a67b480c41b/ansi_on",
-      "reason": "SELECT try_make_timestamp(DATE'0001-01-01') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#5a67b480c41b/ansi_off",
-      "reason": "SELECT try_make_timestamp(DATE'0001-01-01') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_make_timestamp#5d8e7f086cf6/ansi_on",
@@ -255,14 +215,6 @@
     {
       "id": "try_make_timestamp#6b7f186eee1b/ansi_off",
       "reason": "SELECT try_make_timestamp(true, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#6f20b9e514aa/ansi_on",
-      "reason": "SELECT try_make_timestamp(DATE'9999-12-31') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#6f20b9e514aa/ansi_off",
-      "reason": "SELECT try_make_timestamp(DATE'9999-12-31') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_make_timestamp#71da7d61c608/ansi_on",
@@ -329,28 +281,12 @@
       "reason": "SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', INTERVAL '1-2' YEAR TO MONTH) | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "try_make_timestamp#89252797b6a9/ansi_on",
-      "reason": "SELECT try_make_timestamp('1') | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#89252797b6a9/ansi_off",
-      "reason": "SELECT try_make_timestamp('1') | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "try_make_timestamp#8b7998eb5136/ansi_on",
       "reason": "SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', '1') | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "try_make_timestamp#8b7998eb5136/ansi_off",
       "reason": "SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', '1') | UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#8c7de5a89e7a/ansi_on",
-      "reason": "SELECT try_make_timestamp(1L) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#8c7de5a89e7a/ansi_off",
-      "reason": "SELECT try_make_timestamp(1L) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_make_timestamp#8e1c83b78ec0/ansi_on",
@@ -378,11 +314,11 @@
     },
     {
       "id": "try_make_timestamp#9c6c06103f86/ansi_on",
-      "reason": "SELECT try_make_timestamp(DATE'2014-12-28', NULL) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT try_make_timestamp(DATE'2014-12-28', NULL) | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "try_make_timestamp#9c6c06103f86/ansi_off",
-      "reason": "SELECT try_make_timestamp(DATE'2014-12-28', NULL) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT try_make_timestamp(DATE'2014-12-28', NULL) | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "try_make_timestamp#9d3cae3ad6ef/ansi_on",
@@ -407,30 +343,6 @@
     {
       "id": "try_make_timestamp#a1d10e1653ae/ansi_off",
       "reason": "SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', X'01') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#a6227ea55156/ansi_on",
-      "reason": "SELECT try_make_timestamp(CAST(1.5 AS DECIMAL(10,2))) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#a6227ea55156/ansi_off",
-      "reason": "SELECT try_make_timestamp(CAST(1.5 AS DECIMAL(10,2))) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#a7659ae06520/ansi_on",
-      "reason": "SELECT try_make_timestamp(DATE'2014-12-28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#a7659ae06520/ansi_off",
-      "reason": "SELECT try_make_timestamp(DATE'2014-12-28') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#a91bef322792/ansi_on",
-      "reason": "SELECT try_make_timestamp(CAST(NULL AS date)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#a91bef322792/ansi_off",
-      "reason": "SELECT try_make_timestamp(CAST(NULL AS date)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_make_timestamp#acee0a74e327/ansi_on",
@@ -506,11 +418,11 @@
     },
     {
       "id": "try_make_timestamp#bff93219ac3d/ansi_on",
-      "reason": "SELECT try_make_timestamp(DATE'2014-12-28', NULL, 'CET') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT try_make_timestamp(DATE'2014-12-28', NULL, 'CET') | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "try_make_timestamp#bff93219ac3d/ansi_off",
-      "reason": "SELECT try_make_timestamp(DATE'2014-12-28', NULL, 'CET') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT try_make_timestamp(DATE'2014-12-28', NULL, 'CET') | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "try_make_timestamp#c0cac5cfbb26/ansi_on",
@@ -543,14 +455,6 @@
     {
       "id": "try_make_timestamp#c9945e99a948/ansi_off",
       "reason": "SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', 1) | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#c9c5ded48c07/ansi_on",
-      "reason": "SELECT try_make_timestamp(DATE'1582-10-10') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#c9c5ded48c07/ansi_off",
-      "reason": "SELECT try_make_timestamp(DATE'1582-10-10') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_make_timestamp#ce15d004697d/ansi_on",
@@ -641,14 +545,6 @@
       "reason": "SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "try_make_timestamp#e243eac00104/ansi_on",
-      "reason": "SELECT try_make_timestamp(CAST(1 AS TINYINT)) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#e243eac00104/ansi_off",
-      "reason": "SELECT try_make_timestamp(CAST(1 AS TINYINT)) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "try_make_timestamp#e324dea08869/ansi_on",
       "reason": "SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', 1L) | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -681,14 +577,6 @@
       "reason": "SELECT try_make_timestamp(X'01', TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "try_make_timestamp#e83ece824dec/ansi_on",
-      "reason": "SELECT try_make_timestamp(1) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#e83ece824dec/ansi_off",
-      "reason": "SELECT try_make_timestamp(1) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "try_make_timestamp#ed0bae8b7156/ansi_on",
       "reason": "SELECT try_make_timestamp(map('a', 1), TIME'6:30:45.887', 'CET') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -711,22 +599,6 @@
     {
       "id": "try_make_timestamp#efe53448dcf5/ansi_off",
       "reason": "SELECT try_make_timestamp(INTERVAL '1-2' YEAR TO MONTH, TIME'6:30:45.887') | UNSUPPORTED_TIME_TYPE where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#f1bb4dd6ac62/ansi_on",
-      "reason": "SELECT try_make_timestamp(CAST(1.5 AS DECIMAL(38,18))) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#f1bb4dd6ac62/ansi_off",
-      "reason": "SELECT try_make_timestamp(CAST(1.5 AS DECIMAL(38,18))) | resolves to timestamp where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#f307fd3b4999/ansi_on",
-      "reason": "SELECT try_make_timestamp(DATE'2024-02-29') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_make_timestamp#f307fd3b4999/ansi_off",
-      "reason": "SELECT try_make_timestamp(DATE'2024-02-29') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_make_timestamp#f586a9eeae52/ansi_on",

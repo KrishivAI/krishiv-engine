@@ -360,6 +360,13 @@ fn common_in(
         (T::Time { precision: p }, T::Time { precision: q }) => T::Time {
             precision: *p.max(q),
         },
+        // Two spatial types of one kind meet at `ANY` (their SRIDs differ).
+        (T::Geometry { .. }, T::Geometry { .. }) => T::Geometry {
+            srid: krishiv_types::Srid::Any,
+        },
+        (T::Geography { .. }, T::Geography { .. }) => T::Geography {
+            srid: krishiv_types::Srid::Any,
+        },
         (T::YearMonthInterval { .. } | T::DayTimeInterval { .. }, _) => {
             return widen_intervals(x, y).map(Some);
         }
@@ -709,10 +716,14 @@ fn same_shape(args: &[Arg<'_>]) -> bool {
 }
 
 /// Spark's `TypeUtils.isOrderable`: a map orders nowhere, and neither does
-/// an array or struct holding one.
+/// an array or struct holding one; a geometry or geography does not either.
 pub(super) fn orderable(t: &DataType) -> bool {
     match t {
-        DataType::Map(_) | DataType::CalendarInterval => false,
+        // A geometry or geography neither orders nor compares.
+        DataType::Map(_)
+        | DataType::CalendarInterval
+        | DataType::Geometry { .. }
+        | DataType::Geography { .. } => false,
         DataType::Array(a) => orderable(a.element_type()),
         DataType::Struct(s) => s.fields().iter().all(|f| orderable(f.data_type())),
         _ => true,
@@ -1468,6 +1479,16 @@ pub(super) fn can_cast(
             Err(BadCast::Without)
         };
     }
+    // A geometry or geography casts only to a spatial type: to its own kind
+    // with `ANY` (or the same SRID), and between kinds when both SRIDs are
+    // the same fixed one. Nothing else (a string, binary) casts to or from it.
+    if is_spatial(from) || is_spatial(to) {
+        return if spatial_cast(from, to) {
+            Ok(())
+        } else {
+            Err(BadCast::Without)
+        };
+    }
     if *from == T::String || *to == T::String {
         return Ok(());
     }
@@ -1516,6 +1537,39 @@ pub(super) fn can_cast(
         (T::Date, t) if is_numeric(t) && !legacy => Err(BadCast::Func("`UNIX_DATE`")),
         (T::Date, _) | (T::Boolean, T::Timestamp) | (T::Timestamp, T::Boolean) => conf(),
         _ => Ok(()),
+    }
+}
+
+fn is_spatial(t: &DataType) -> bool {
+    matches!(t, DataType::Geometry { .. } | DataType::Geography { .. })
+}
+
+/// Spark's `Cast.canCast` between `geometry` and `geography` types.
+fn spatial_cast(from: &DataType, to: &DataType) -> bool {
+    use DataType as T;
+    use krishiv_types::Srid;
+    match (from, to) {
+        // Into the same kind: to `ANY` always, otherwise only the same SRID.
+        (T::Geometry { srid: f }, T::Geometry { srid: t })
+        | (T::Geography { srid: f }, T::Geography { srid: t }) => *t == Srid::Any || f == t,
+        // Between kinds: only equal fixed SRIDs.
+        (
+            T::Geometry {
+                srid: Srid::Fixed(f),
+            },
+            T::Geography {
+                srid: Srid::Fixed(t),
+            },
+        )
+        | (
+            T::Geography {
+                srid: Srid::Fixed(f),
+            },
+            T::Geometry {
+                srid: Srid::Fixed(t),
+            },
+        ) => f == t,
+        _ => false,
     }
 }
 

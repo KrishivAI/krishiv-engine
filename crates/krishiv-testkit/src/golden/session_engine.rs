@@ -348,12 +348,20 @@ impl Engine for SessionEngine {
         );
         let mut rows = Vec::new();
         for batch in &batches {
-            // Each column's Spark type, from the batch's own field.
+            // Each column's Spark type, from the batch's own field. A
+            // geometry or geography column keeps its type in the analysed
+            // output only (the batch holds a plain struct).
             let types = batch
                 .schema()
                 .fields()
                 .iter()
-                .map(|f| DataType::from_arrow_field(f).map_err(|e| engine_error(&e)))
+                .enumerate()
+                .map(|(i, f)| match output.get(i).map(|c| &c.data_type) {
+                    Some(t @ (DataType::Geometry { .. } | DataType::Geography { .. })) => {
+                        Ok(t.clone())
+                    }
+                    _ => DataType::from_arrow_field(f).map_err(|e| engine_error(&e)),
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             for row in 0..batch.num_rows() {
                 let cells = batch
@@ -468,6 +476,9 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
                 micros: v.nanoseconds / 1000,
             }
         }
+        (DataType::Geometry { .. } | DataType::Geography { .. }, ArrowType::Struct(_)) => {
+            spatial_cell(col, row).ok_or_else(unexpected)?
+        }
         (DataType::Time { .. }, ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond)) => {
             Cell::Time(
                 col.as_primitive::<arrow_array::types::Time64NanosecondType>()
@@ -481,6 +492,14 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
         (DataType::Struct(struct_), ArrowType::Struct(_)) => struct_cell(col, row, struct_)?,
         _ => return Err(unexpected()),
     })
+}
+
+/// The text Spark prints the spatial value at `row` of `col` as.
+fn spatial_cell(col: &ArrayRef, row: usize) -> Option<Cell> {
+    let s = col.as_struct_opt()?;
+    let srid = s.column(0).as_primitive_opt::<Int32Type>()?.value(row);
+    let wkb = binary_value(s.column(1), row)?;
+    krishiv_types::geo::to_ewkt(srid, &wkb).ok().map(Cell::Str)
 }
 
 /// The elements of the list at `row` of `col` (a `List` or `LargeList`) as
@@ -644,6 +663,9 @@ fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, Engine
         }
         (DataType::TimestampNtz, ArrowType::Timestamp(..)) => {
             Cell::TimestampNtz(col.as_primitive::<TimestampMicrosecondType>().value(row))
+        }
+        (DataType::Geometry { .. } | DataType::Geography { .. }, ArrowType::Struct(_)) => {
+            spatial_cell(col, row).ok_or_else(unexpected)?
         }
         (DataType::Time { .. }, ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond)) => {
             Cell::Time(

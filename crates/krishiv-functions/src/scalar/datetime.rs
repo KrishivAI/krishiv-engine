@@ -18,7 +18,8 @@ use arrow_array::types::{
     Time64NanosecondType, TimestampMicrosecondType,
 };
 use arrow_array::{
-    Array, ArrayRef, BooleanArray, Date32Array, Int64Array, StringArray, TimestampMicrosecondArray,
+    Array, ArrayRef, BooleanArray, Date32Array, Int64Array, StringArray, Time64NanosecondArray,
+    TimestampMicrosecondArray,
 };
 use arrow_schema::{DataType, TimeUnit};
 use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
@@ -35,7 +36,9 @@ use krishiv_kernels::datetime::{
     parse_timestamps, seconds_to_timestamps, timestamp_add, timestamp_diff, to_utc_timestamp,
     trunc_date, trunc_timestamp, unix_date,
 };
-use krishiv_kernels::datetime::{TimeZoneRules, TimestampFields, TimestampUnit, make_timestamp};
+use krishiv_kernels::datetime::{
+    TimeZoneRules, TimestampFields, TimestampUnit, make_timestamp, make_timestamp_from_date,
+};
 use krishiv_kernels::datetime::{
     date_from_unix_date, timestamp_from_integral, timestamp_from_seconds,
     timestamp_from_seconds_decimal, timestamp_from_seconds_double, unix_time,
@@ -109,6 +112,7 @@ pub(super) const NAMES: &[&str] = &[
     "curdate",
     "current_timestamp",
     "now",
+    "current_time",
     "localtimestamp",
     "date_format",
     "to_date",
@@ -958,6 +962,57 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             | "try_make_timestamp"
             | "try_make_timestamp_ltz"
             | "try_make_timestamp_ntz",
+            [DataType::Date32, ..],
+        ) if types.len() <= 3
+            && types
+                .get(1)
+                .is_none_or(|t| *t == DataType::Time64(TimeUnit::Nanosecond))
+            && types.get(2).is_none_or(is_string) =>
+        {
+            let ntz = listed.ends_with("_ntz");
+            let zone = if ntz || types.len() < 3 {
+                None
+            } else {
+                Some(match zone_arg(args, 2) {
+                    Ok(z) => z,
+                    Err(e) => return Some((listed, Err(e))),
+                })
+            };
+            let session_zone = !ntz && types.len() < 3;
+            Binding::new(
+                if ntz { ntz_type() } else { timestamp() },
+                move |x: &Inputs<'_>| {
+                    let times = if types.len() > 1 {
+                        Some(x.array::<Time64NanosecondType>(1)?)
+                    } else {
+                        None
+                    };
+                    let names;
+                    let zones = match &zone {
+                        None if session_zone => Some(Zones::One(o.time_zone.as_ref())),
+                        None => None,
+                        Some(ZoneArg::Literal(Some(one))) => Some(Zones::One(one)),
+                        Some(ZoneArg::Literal(None)) => {
+                            return Ok(Arc::new(null_instants(x.rows())) as ArrayRef);
+                        }
+                        Some(ZoneArg::Column) => {
+                            names = column_zones(&x.strings(2)?)?;
+                            Some(Zones::PerRow(&names))
+                        }
+                    };
+                    let out =
+                        make_timestamp_from_date(&x.dates(0)?, times.as_ref(), zones.as_ref())?;
+                    Ok(Arc::new(if ntz { out } else { out.with_timezone("UTC") }) as ArrayRef)
+                },
+            )
+        }
+        (
+            "make_timestamp"
+            | "make_timestamp_ltz"
+            | "make_timestamp_ntz"
+            | "try_make_timestamp"
+            | "try_make_timestamp_ltz"
+            | "try_make_timestamp_ntz",
             [
                 DataType::Int32,
                 DataType::Int32,
@@ -1272,6 +1327,29 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 let a = TimestampMicrosecondArray::from(vec![now; x.rows()]).with_timezone("UTC");
                 Ok(Arc::new(a) as ArrayRef)
             })
+        }
+        ("current_time", [] | [DataType::Int32]) => {
+            // The query's start instant as a wall clock of the session zone,
+            // cut to the precision (a constant the registry already checked).
+            let now = opts.query_start_micros;
+            let offset = i64::from(opts.time_zone.offset_at_utc(now.div_euclid(1_000_000)));
+            let local = now.saturating_add(offset.saturating_mul(1_000_000));
+            let nanos = local.rem_euclid(86_400_000_000) * 1_000;
+            let bare = args.is_empty();
+            Binding::new(
+                DataType::Time64(TimeUnit::Nanosecond),
+                move |x: &Inputs<'_>| {
+                    let step = if bare {
+                        1_000
+                    } else {
+                        let p = x.array::<Int32Type>(0)?;
+                        let digits = p.iter().flatten().next().unwrap_or(6).clamp(0, 6);
+                        10_i64.pow(9_u32.saturating_sub(digits.unsigned_abs()))
+                    };
+                    let v = nanos - nanos % step;
+                    Ok(Arc::new(Time64NanosecondArray::from(vec![v; x.rows()])) as ArrayRef)
+                },
+            )
         }
         ("localtimestamp", []) => {
             // The wall clock of the session zone, as a `timestamp_ntz`.
