@@ -1684,6 +1684,21 @@ impl Rewriter {
             ));
         };
         let value = value.clone();
+        // `(SELECT outer_col = 1)`: a select list over no relation is one
+        // row whatever the outer row, so its value is the expression read
+        // over the outer query's own columns.
+        if let PlanNode::Project { input, exprs } = &plan.node
+            && matches!(input.node, PlanNode::OneRowRelation)
+            && let [e] = &exprs[..]
+            && !has_subquery(Node::Expr(e))
+        {
+            let read = Renumber::NONE.inner(e);
+            let read = match &read.node {
+                ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => Arc::clone(expr),
+                _ => read,
+            };
+            return Ok((base, read));
+        }
         let through_domain = on_path(plan, set_op_or_join);
         if !through_domain && aggregates_below(plan) {
             return Err(unsupported(

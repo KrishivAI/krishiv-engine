@@ -1249,3 +1249,39 @@ fn distinct_aggregates_over_the_same_columns_in_any_order() -> R {
     );
     Ok(())
 }
+
+/// A scalar subquery with no relation reads the outer query's columns in
+/// its select list (`HAVING (SELECT col1 = 1)`, having.sql 33-36).
+#[test]
+fn a_scalar_subquery_without_a_relation_reads_outer_columns() -> R {
+    let s = Session::new()?;
+    let count = |sql: &str| -> R<usize> {
+        Ok(block_on(block_on(s.sql(sql))?.collect())?
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum())
+    };
+    assert_eq!(
+        count("SELECT col1 AS alias FROM values(1) GROUP BY col1 HAVING (SELECT col1 = 1)")?,
+        1
+    );
+    assert_eq!(
+        count(
+            "SELECT col1 FROM values(named_struct('a', 1)) GROUP BY col1 HAVING (SELECT col1.a = 1)"
+        )?,
+        1
+    );
+    assert_eq!(
+        count("SELECT col1 FROM values(array(1)) GROUP BY col1 HAVING (SELECT col1[0] = 1)")?,
+        1
+    );
+    assert_eq!(
+        count("SELECT col1 FROM values(map('a', 1)) GROUP BY col1 HAVING (SELECT col1[0] = 1)")?,
+        0
+    );
+    assert_eq!(
+        count("SELECT a, (SELECT a + 1) FROM values(1), (2) t(a)")?,
+        2
+    );
+    Ok(())
+}
