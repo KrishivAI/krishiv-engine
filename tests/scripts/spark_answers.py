@@ -48,7 +48,7 @@ def main():
     for q in req["queries"]:
         try:
             out.append({"rows": [[cell(c) for c in row] for row in spark.sql(q).collect()]})
-        except Exception as e:  # noqa: BLE001 - the error text is the answer
+        except Exception as e:
             cls = getattr(e, "getErrorClass", lambda: None)()
             out.append({"error": cls or str(e).splitlines()[0]})
     print(json.dumps(out))
