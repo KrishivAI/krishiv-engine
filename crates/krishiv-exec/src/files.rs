@@ -763,6 +763,7 @@ impl FileReads {
             _ => None,
         };
         let mut seen = 0;
+        let mut seen_inherited = 0;
         for meta in self.io.list(&at.store, &at.path).await? {
             let below: Vec<_> = meta.location.parts().skip(base).collect();
             if below.iter().any(|p| hidden(p.as_ref())) {
@@ -790,6 +791,7 @@ impl FileReads {
                 if !files.contains_key(&rel) {
                     continue;
                 }
+                seen_inherited += 1;
             }
             let dirs = below.len().saturating_sub(1);
             let names: Vec<String> = below[..dirs]
@@ -799,9 +801,26 @@ impl FileReads {
             let segments = Self::base_segments(at, mode, &names)?;
             out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
         }
-        if let Some(files) = &committed
-            && seen < files.len()
-        {
+        let missing = match (&committed, &inherited) {
+            (Some(files), _) => seen < files.len(),
+            // The root's snapshot lists the files of this directory too: one that is gone (a
+            // concurrent overwrite deleted it) must not shrink the read silently.
+            (None, Some((root_base, files))) => {
+                let mut prefix = at
+                    .path
+                    .parts()
+                    .skip(*root_base)
+                    .map(|p| p.as_ref().to_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                if !prefix.is_empty() {
+                    prefix.push('/');
+                }
+                seen_inherited < files.keys().filter(|k| k.starts_with(&prefix)).count()
+            }
+            (None, None) => false,
+        };
+        if missing {
             // A committed file is gone (a concurrent overwrite deleted it).
             return Err(krishiv_common::error::KrishivConcurrentCommit {
                 root: at.display.clone(),

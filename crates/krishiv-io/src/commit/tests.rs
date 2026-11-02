@@ -1565,3 +1565,35 @@ fn adoption_skips_copy_in_progress_files() {
         "{visible:?}"
     );
 }
+
+/// Once a logged write's entry is published its rows are visible: a failed deletion of the files
+/// it replaced is maintenance, so the write still succeeds and the next write sees the new state.
+#[test]
+fn a_logged_overwrite_succeeds_when_the_deletion_of_replaced_files_fails() {
+    let inner = Arc::new(InMemory::new());
+    let fault = crate::io::FaultStore::new(Arc::clone(&inner) as Arc<dyn ObjectStore>);
+    let env = Env::new(Arc::clone(&fault) as Arc<dyn ObjectStore>, STORE);
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    let old = env.visible("t");
+    fault.fail_next_deletes(1000);
+    env.write_logged("t", SaveMode::Overwrite, "job-2", 2, true);
+    fault.fail_next_deletes(0);
+    let now = env.visible("t");
+    assert_eq!(now.len(), 1);
+    assert_ne!(now, old);
+    // The replaced file is still on the store, outside the log.
+    assert!(env.names("t").iter().any(|n| n.contains("job-1")));
+}
+
+#[test]
+fn a_step_after_the_commit_point_fails_the_write_only_without_a_log() {
+    let failure = || -> crate::error::Result<()> {
+        Err(krishiv_common::error::PathNotFound {
+            path: "x".to_owned(),
+        }
+        .into())
+    };
+    super::after_publish(true, "step", failure()).unwrap();
+    super::after_publish(false, "step", failure()).unwrap_err();
+    super::after_publish(false, "step", Ok(())).unwrap();
+}
