@@ -42,3 +42,36 @@ fn a_nullable_merge_field_over_a_non_null_seed_field_keeps_its_nulls() {
         "42"
     );
 }
+
+#[test]
+fn k_is_validated_as_the_int_it_casts_to() {
+    let s = Session::new().unwrap();
+    for k in [
+        "CAST(100001 AS DOUBLE)",
+        "0.5",
+        "'0'",
+        "CAST(100001 AS DECIMAL(10, 2))",
+    ] {
+        let df = block_on(s.sql(&format!("SELECT max_by('a', 1, {k})")));
+        let err = match df {
+            Ok(df) => block_on(df.collect()).expect_err(k),
+            Err(e) => e,
+        };
+        assert!(err.to_string().contains("VALUE_OUT_OF_RANGE"), "{k}: {err}");
+    }
+    assert_eq!(text("SELECT max_by('a', 1, CAST(1.9 AS DOUBLE))"), "[a]");
+}
+
+#[test]
+fn a_merge_may_put_nulls_in_a_non_null_seed_collection() {
+    assert_eq!(
+        text("aggregate(array(1), array(0), (acc, x) -> array(CAST(NULL AS INT)), acc -> 42)"),
+        "42"
+    );
+    assert_eq!(
+        text(
+            "aggregate(array(1), map('a', 1), (acc, x) -> map('a', CAST(NULL AS INT)), acc -> 42)"
+        ),
+        "42"
+    );
+}

@@ -2141,8 +2141,11 @@ impl Resolver<'_> {
                     && !window_fn
                     && !f.distinct
                 {
-                    if let Some(Constant::Integral(k)) =
-                        self.fold(&kids[2].expr, self.ctx.conf.ansi)
+                    // `k` is an INT to Spark (implicit cast): a fractional,
+                    // decimal or string constant is validated as the INT it
+                    // casts to, and the rewrite uses that cast.
+                    let k_int = self.implicit_cast(&kids[2], Some(DataType::Integer));
+                    if let Some(Constant::Integral(k)) = self.fold(&k_int.expr, self.ctx.conf.ansi)
                         && !(1..=100_000).contains(&k)
                     {
                         let shown = with_children(e, kids[..n].iter().map(Bound::shown).collect());
@@ -2176,7 +2179,7 @@ impl Resolver<'_> {
                             .with_origin(origin),
                         )
                     };
-                    let (x, y, k) = (&kids[0].expr, &kids[1].expr, &kids[2].expr);
+                    let (x, y, k) = (&kids[0].expr, &kids[1].expr, &k_int.expr);
                     let pair = mk(
                         "named_struct",
                         vec![

@@ -597,7 +597,7 @@ fn duplicate_param(params: &[String], cs: bool) -> Option<Vec<String>> {
     None
 }
 
-/// `t` with every struct field nullable: the accumulator of `aggregate`
+/// `t` with every struct field, array element and map value nullable: the accumulator of `aggregate`
 /// takes whatever the merge produces, NULL included.
 fn nullable_fields(t: &DataType) -> DataType {
     match t {
@@ -606,14 +606,14 @@ fn nullable_fields(t: &DataType) -> DataType {
                 StructField::new(f.name().to_owned(), nullable_fields(f.data_type()), true)
             })))
         }
-        DataType::Array(a) => DataType::Array(
-            ArrayType::new(nullable_fields(a.element_type()), a.contains_null()).into(),
-        ),
+        DataType::Array(a) => {
+            DataType::Array(ArrayType::new(nullable_fields(a.element_type()), true).into())
+        }
         DataType::Map(m) => DataType::Map(
             MapType::new(
                 nullable_fields(m.key_type()),
                 nullable_fields(m.value_type()),
-                m.value_contains_null(),
+                true,
             )
             .into(),
         ),
