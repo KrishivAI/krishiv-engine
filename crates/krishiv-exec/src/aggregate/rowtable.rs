@@ -1000,8 +1000,10 @@ impl RowTable {
         }
     }
 
-    /// Rebuilds a grown fixed index over the table's rows, newest first, up
-    /// to `limit` keys, one entry per key. Without it, every key whose
+    /// Rebuilds a grown fixed index over the table's rows, up to `limit`
+    /// keys, one entry per key: the last partition's rows first, each
+    /// partition's newest first (so in a one-partition table, the newest
+    /// keys are the ones kept). Without it, every key whose
     /// entry an earlier clear dropped would make one more partial duplicate
     /// when it next came (on TPC-DS q22 about as many rows again as the
     /// table's keys). DuckDB clears a table it grows: its rows are already
@@ -1299,20 +1301,25 @@ impl RowTable {
         count: &mut ProbeCount,
     ) -> Result<()> {
         let (hashes, heap) = (keys.hashes(), keys.heap());
+        let mut gs = [0_u64; PREFETCH_ROWS];
         for (c, chunk) in hashes.chunks(PREFETCH_ROWS).enumerate() {
+            for (g, &h) in gs.iter_mut().zip(chunk) {
+                *g = fin(h, self.gseed);
+            }
+            let gs = &gs[..chunk.len()];
             if self.index.len() > PREFETCH_ROWS {
-                for &h in chunk {
-                    if let Some(&r) = self.index.find(fin(h, self.gseed), |_| true) {
+                for &g in gs {
+                    if let Some(&r) = self.index.find(g, |_| true) {
                         prefetch_read(row_at(&self.parts, self.stride, self.refs, r), 0);
                     }
                 }
             }
-            for (i, &h) in chunk.iter().enumerate() {
+            for (i, (&h, &g)) in chunk.iter().zip(gs).enumerate() {
                 let k = c * PREFETCH_ROWS + i;
                 refs.push(self.find_or_insert::<VIEWS, COUNT>(
                     keys.row(k),
                     heap,
-                    h,
+                    (h, g),
                     limit,
                     count,
                 )?);
@@ -1321,7 +1328,8 @@ impl RowTable {
         Ok(())
     }
 
-    /// The row of key row `key` (with hash `h`; its long values in
+    /// The row of key row `key` (with hash `h` and index hash
+    /// `g = fin(h, gseed)`; its long values in
     /// `key_heap`), inserting it if new; an index holding `limit` keys is
     /// cleared before it takes another (the rows stay: a key seen again
     /// gets a new row). `VIEWS`: the layout has string or binary views;
@@ -1331,7 +1339,7 @@ impl RowTable {
         &mut self,
         key: &[u8],
         key_heap: &[u8],
-        h: u64,
+        (h, g): (u64, u64),
         limit: usize,
         count: &mut ProbeCount,
     ) -> Result<u32> {
@@ -1351,7 +1359,6 @@ impl RowTable {
             ..
         } = self;
         let (stride, gseed) = (*stride, *gseed);
-        let g = fin(h, gseed);
         // A lookup first (hashbrown inlines `find`; most rows are hits),
         // then an insert on a miss.
         let mut compares = 0_u64;
@@ -1662,6 +1669,7 @@ impl RowTable {
             for &r in &c.refs {
                 let (row, heap) = row_heap_at(&src.parts, src.stride, src.refs, r);
                 let h = word(row, 0);
+                let h = (h, fin(h, self.gseed));
                 let found = match (self.views.is_some(), counted) {
                     (true, false) => {
                         self.find_or_insert::<true, false>(row, heap, h, usize::MAX, &mut count)
@@ -2663,6 +2671,78 @@ mod tests {
             let counts = out.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
             assert_eq!(counts.iter().flatten().sum::<i64>(), 200);
         }
+    }
+
+    /// A full fixed index grows through `apply` itself (sketch, clears and
+    /// all), within the bytes `projected` reserved, for fixed-width and long
+    /// string keys; the growth counts as a resize, and afterwards a repeated
+    /// key makes no new row.
+    #[test]
+    fn a_full_index_grows_inside_its_projection() {
+        let seed = HashSeed::new(Some(6));
+        let int = core();
+        let string = core_str();
+        type Keys = fn(&AggCore, std::ops::Range<i64>) -> Batch;
+        let cases: [(&Arc<AggCore>, Keys); 2] = [
+            (&int, |c, r| batch(c, r)),
+            (&string, |c, r| long_keys(c, r)),
+        ];
+        for (core, keys) in cases {
+            let resizes = Arc::new(AtomicU64::new(0));
+            let mut t = RowTable::new(core, &seed, Mode::Fixed { limit: 8 }, true, RADIX_BITS)
+                .unwrap()
+                .with_resizes(Arc::clone(&resizes));
+            // 100 keys, over and over: every pass past the first is all
+            // partial duplicates until the index grows.
+            for _ in 0..20 {
+                apply(&mut t, &keys(core, 0..100));
+            }
+            let Mode::Fixed { limit } = t.mode else {
+                panic!("{:?}", t.mode);
+            };
+            assert!(limit >= 100, "{limit}");
+            assert!(resizes.load(Ordering::Relaxed) > 0);
+            let groups = t.groups;
+            apply(&mut t, &keys(core, 0..100));
+            assert_eq!(t.groups, groups);
+            let out = t.output_batch(&t.ids(0..t.groups)).unwrap();
+            let counts = out.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
+            assert_eq!(counts.iter().flatten().sum::<i64>(), 2_100);
+        }
+    }
+
+    /// A rebuild over several partitions stops at its limit and keeps one
+    /// entry per key; rows it leaves out only make partial duplicates.
+    #[test]
+    fn a_rebuild_over_partitions_stops_at_its_limit() {
+        let seed = HashSeed::new(Some(7));
+        let core = core();
+        let mut t =
+            RowTable::new(&core, &seed, Mode::Fixed { limit: 8 }, true, RADIX_BITS).unwrap();
+        apply(&mut t, &batch(&core, 0..100));
+        assert!(!t.unique);
+        assert!(t.part_count() > 1);
+        t.switch(Mode::Fixed { limit: 50 });
+        assert_eq!(t.index.len(), 50);
+        // The indexed keys are 50 distinct keys, and each finds its row.
+        let indexed: Vec<u32> = t.index.iter().copied().collect();
+        let out = t.output_batch(&indexed).unwrap();
+        let mut keys: Vec<i64> = out
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .iter()
+            .flatten()
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), 50);
+        apply(&mut t, &batch(&core, keys.iter().copied()));
+        assert_eq!(t.groups, 100);
+        let out = t.output_batch(&t.ids(0..t.groups)).unwrap();
+        let counts = out.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(counts.iter().flatten().sum::<i64>(), 150);
     }
 
     /// Deterministic, one-thread and two-thread defaults.
