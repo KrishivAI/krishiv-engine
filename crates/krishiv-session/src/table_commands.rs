@@ -2039,9 +2039,10 @@ impl Session {
     /// table is created from the DataFrame's schema (an existing one in
     /// `errorifexists` mode fails with `TABLE_OR_VIEW_ALREADY_EXISTS`),
     /// `ignore` leaves an existing table alone, `append` adds the rows by
-    /// column name (case-insensitively; names that do not match the table's
-    /// fail with `KRISHIV_UNSUPPORTED_FEATURE`), and `overwrite` drops the
-    /// table and creates it again.
+    /// column name (names that do not match the table's, a format other than
+    /// its, or a `partition_by` fail with `KRISHIV_UNSUPPORTED_FEATURE`), and
+    /// `overwrite` of an existing table fails with `KRISHIV_UNSUPPORTED_FEATURE`
+    /// (Spark drops and recreates it).
     pub(crate) async fn exec_save_as_table(
         &self,
         df: &DataFrame,
@@ -2061,26 +2062,57 @@ impl Session {
             (SaveMode::Ignore, true) => Ok(()),
             (SaveMode::Append, true) => {
                 let table = self.table_for_write(&name, "INSERT", &env)?;
+                // Spark refuses an append whose format or partitioning differs
+                // from the table's.
+                if !spec.partitioned_by.is_empty() {
+                    return Err(unsupported("partitioned tables"));
+                }
+                if spec
+                    .provider
+                    .as_deref()
+                    .is_some_and(|p| !p.eq_ignore_ascii_case(&table.provider))
+                {
+                    return Err(unsupported(
+                        "saveAsTable append with a format other than the table's",
+                    ));
+                }
                 let schema = df.schema().await?;
-                let have: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+                let case_sensitive = env.analysis.conf.case_sensitive;
+                let same = |a: &str, b: &str| {
+                    if case_sensitive {
+                        a == b
+                    } else {
+                        a.eq_ignore_ascii_case(b)
+                    }
+                };
                 let mut order = Vec::with_capacity(table.columns.len());
                 for c in &table.columns {
-                    match have.iter().find(|h| h.eq_ignore_ascii_case(&c.name)) {
-                        Some(h) => order.push(*h),
-                        None => break,
+                    let mut hits = schema
+                        .fields()
+                        .iter()
+                        .map(|f| f.name().as_str())
+                        .filter(|h| same(h, &c.name));
+                    match (hits.next(), hits.next()) {
+                        (Some(h), None) => order.push(h.to_owned()),
+                        _ => break,
                     }
                 }
-                if order.len() != table.columns.len() || order.len() != have.len() {
+                if order.len() != table.columns.len() || order.len() != schema.fields().len() {
                     return Err(unsupported(
                         "saveAsTable append with column names that differ from the table's",
                     ));
                 }
-                let by_name = df.select(order);
+                // Quoted, so a name with dots or a star is one plain column.
+                let by_name = df.select(order.iter().map(|h| {
+                    crate::column::Column::named(&format!("`{}`", h.replace('`', "``")), None)
+                }));
                 self.exec_write_v2(&by_name, spec, V2Mode::Append).await
             }
             (SaveMode::Overwrite, true) => {
-                self.drop_named_table(&name, &env, true).await?;
-                self.exec_write_v2(df, spec, V2Mode::Create).await
+                // Dropping the table first would lose it when the create then
+                // fails, and Spark refuses to overwrite a table the query reads
+                // (`UNSUPPORTED_OVERWRITE.TABLE`), which this does not check yet.
+                Err(unsupported("saveAsTable overwrite of an existing table"))
             }
             // `ErrorIfExists` on an existing table fails in the create.
             _ => self.exec_write_v2(df, spec, V2Mode::Create).await,

@@ -72,16 +72,27 @@ fn save_as_table_modes() {
     let df = block_on(s.sql("SELECT sum(id) FROM t")).unwrap();
     let sums = block_on(df.collect()).unwrap();
     assert_eq!(sums[0].column(0).as_primitive::<Int64Type>().value(0), 12);
-    // overwrite drops and creates again.
+    // overwrite of an existing table is not supported yet, and leaves it alone.
+    assert_eq!(
+        class(block_on(
+            s.table("people")
+                .filter(col("id").gt(lit(1)))
+                .write()
+                .mode("overwrite")
+                .save_as_table("t")
+        )),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(count(&s, "t"), 6);
+    // overwrite of a table that does not exist creates it.
     block_on(
         s.table("people")
-            .filter(col("id").gt(lit(1)))
             .write()
             .mode("overwrite")
-            .save_as_table("t"),
+            .save_as_table("made"),
     )
     .unwrap();
-    assert_eq!(count(&s, "t"), 2);
+    assert_eq!(count(&s, "made"), 3);
     // append to a table that does not exist creates it.
     block_on(
         s.table("people")
@@ -203,4 +214,51 @@ fn text_is_unsupported_until_the_engine_writes_it() {
         class(block_on(one.write().text(&path))),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
+}
+
+#[test]
+fn append_by_name_is_exact_about_names_and_format() {
+    let s = session();
+    block_on(s.table("people").write().save_as_table("t")).unwrap();
+    // a column name with a dot is one column, not a nested reference.
+    let dotted = s
+        .table("people")
+        .select_expr(["id AS `a.b`", "name"])
+        .unwrap();
+    block_on(dotted.write().save_as_table("d")).unwrap();
+    block_on(dotted.write().mode("append").save_as_table("d")).unwrap();
+    assert_eq!(count(&s, "d"), 6);
+    // a different format than the table's, and a partitioning, are refused.
+    assert_eq!(
+        class(block_on(
+            s.table("people")
+                .write()
+                .format("csv")
+                .mode("append")
+                .save_as_table("t")
+        )),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(
+        class(block_on(
+            s.table("people")
+                .write()
+                .partition_by(["id"])
+                .mode("append")
+                .save_as_table("t")
+        )),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    // overwrite with a partitioning on a new table fails and creates nothing.
+    assert_eq!(
+        class(block_on(
+            s.table("people")
+                .write()
+                .partition_by(["id"])
+                .mode("overwrite")
+                .save_as_table("p")
+        )),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert!(block_on(s.table("p").count()).is_err());
 }

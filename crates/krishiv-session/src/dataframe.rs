@@ -2092,9 +2092,10 @@ impl DataFrameWriter {
     /// Saves the rows as the table `table` (PySpark's `saveAsTable`). The
     /// mode is Spark's: `errorifexists` (the default) fails with
     /// `TABLE_OR_VIEW_ALREADY_EXISTS` when the table exists, `ignore` leaves
-    /// it, `append` adds the rows by column name and `overwrite` drops and
-    /// creates it again. The format is [`Self::format`], else
-    /// `spark.sql.sources.default`.
+    /// it, `append` adds the rows by column name, and `overwrite` of an
+    /// existing table is not supported yet (`KRISHIV_UNSUPPORTED_FEATURE`;
+    /// Spark drops and creates it again). The format is [`Self::format`]
+    /// (default `parquet`).
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -2107,7 +2108,9 @@ impl DataFrameWriter {
     ///
     /// # Errors
     /// `INVALID_SAVE_MODE`; `SORT_BY_WITHOUT_BUCKETING`;
-    /// `KRISHIV_UNSUPPORTED_FEATURE` for `bucket_by` or `partition_by`;
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for `bucket_by`, `partition_by`, an
+    /// append that does not match the table, or an overwrite of an existing
+    /// table;
     /// `TABLE_OR_VIEW_ALREADY_EXISTS`; analysis and write errors.
     pub async fn save_as_table(self, table: &str) -> Result<(), KrishivError> {
         let mode = krishiv_io::SaveMode::parse(&self.mode)?;
