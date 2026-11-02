@@ -210,3 +210,19 @@ fn queries_records_statements_refused_before_they_ran() {
     assert!(rows[0].starts_with("failed|UNRESOLVED_COLUMN"), "{rows:?}");
     assert!(rows[1].starts_with("failed|PARSE_SYNTAX_ERROR"), "{rows:?}");
 }
+
+#[test]
+fn queries_carries_the_query_wide_counters() {
+    let s = Session::new().unwrap();
+    run_all(
+        &s,
+        "SELECT id % 7 AS k, count(*) FROM range(100000) GROUP BY id % 7",
+    )
+    .unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT concat_ws('|', workload_class, CAST(pipelines >= 1 AS STRING), CAST(workers >= 1 AS STRING), \
+         CAST(cpu_ns >= 0 AS STRING), CAST(spill_bytes >= 0 AS STRING)) FROM system.queries WHERE state = 'finished'",
+    );
+    assert_eq!(r, ["interactive|true|true|true|true"], "{r:?}");
+}

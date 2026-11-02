@@ -1619,6 +1619,22 @@ impl QueryStart {
                     .take(500)
                     .map(|(id, e)| crate::system::OperatorRow::of(log_id, *id, e))
                     .collect(),
+                totals: Some(crate::system::Totals {
+                    workload_class: query.class().as_str(),
+                    cpu_ns: i64::try_from(metrics.drivers.busy.as_nanos()).unwrap_or(i64::MAX),
+                    spill_bytes: metrics
+                        .operators
+                        .values()
+                        .map(|e| i64::try_from(e.metrics.spill_write_bytes).unwrap_or(i64::MAX))
+                        .fold(0, i64::saturating_add),
+                    spill_files: metrics
+                        .operators
+                        .values()
+                        .map(|e| i64::try_from(e.metrics.spill_files).unwrap_or(i64::MAX))
+                        .fold(0, i64::saturating_add),
+                    pipelines: i64::try_from(metrics.pipelines.len()).unwrap_or(i64::MAX),
+                    workers: i64::try_from(metrics.workers).unwrap_or(i64::MAX),
+                }),
             },
         );
         if !metrics_on {

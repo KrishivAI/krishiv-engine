@@ -170,6 +170,12 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("wall_ns", Long, true),
             ("peak_memory_bytes", Long, true),
             ("error_class", Text, true),
+            ("workload_class", Text, true),
+            ("cpu_ns", Long, true),
+            ("spill_bytes", Long, true),
+            ("spill_files", Long, true),
+            ("pipelines", Long, true),
+            ("workers", Long, true),
         ],
         _ => return None,
     })
@@ -291,6 +297,12 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             long(rows.iter().map(|r| r.wall_ns)),
             long(rows.iter().map(|r| r.peak_memory_bytes)),
             text(rows.iter().map(|r| r.error_class.as_deref())),
+            text(rows.iter().map(|r| r.workload_class)),
+            long(rows.iter().map(|r| r.cpu_ns)),
+            long(rows.iter().map(|r| r.spill_bytes)),
+            long(rows.iter().map(|r| r.spill_files)),
+            long(rows.iter().map(|r| r.pipelines)),
+            long(rows.iter().map(|r| r.workers)),
         ];
     }
     let rows = capability_rows();
@@ -332,6 +344,13 @@ pub(crate) struct QueryRow {
     pub(crate) error_class: Option<String>,
     /// The operators it ran (a finished query only).
     pub(crate) operators: Vec<OperatorRow>,
+    pub(crate) workload_class: Option<&'static str>,
+    /// Busy time of its drivers.
+    pub(crate) cpu_ns: Option<i64>,
+    pub(crate) spill_bytes: Option<i64>,
+    pub(crate) spill_files: Option<i64>,
+    pub(crate) pipelines: Option<i64>,
+    pub(crate) workers: Option<i64>,
 }
 
 /// One operator of a finished query, as `system.operators` lists it.
@@ -402,6 +421,19 @@ pub(crate) struct Finished<'a> {
     pub(crate) peak_memory_bytes: i64,
     pub(crate) error_class: Option<&'a str>,
     pub(crate) operators: Vec<OperatorRow>,
+    /// Counters that need the query's metrics; `None` when it never ran.
+    pub(crate) totals: Option<Totals>,
+}
+
+/// The query-wide counters of a finished query.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Totals {
+    pub(crate) workload_class: &'static str,
+    pub(crate) cpu_ns: i64,
+    pub(crate) spill_bytes: i64,
+    pub(crate) spill_files: i64,
+    pub(crate) pipelines: i64,
+    pub(crate) workers: i64,
 }
 
 /// The queries of one session, bounded: live ones and the recent finished
@@ -475,6 +507,12 @@ impl QueryLog {
             peak_memory_bytes: None,
             error_class: None,
             operators: Vec::new(),
+            workload_class: None,
+            cpu_ns: None,
+            spill_bytes: None,
+            spill_files: None,
+            pipelines: None,
+            workers: None,
         });
         id
     }
@@ -497,6 +535,7 @@ impl QueryLog {
                 peak_memory_bytes: 0,
                 error_class: (state != "cancelled").then_some(class),
                 operators: Vec::new(),
+                totals: None,
             },
         );
     }
@@ -511,6 +550,14 @@ impl QueryLog {
             row.peak_memory_bytes = Some(done.peak_memory_bytes);
             row.error_class = done.error_class.map(str::to_owned);
             row.operators.clone_from(&done.operators);
+            if let Some(t) = done.totals {
+                row.workload_class = Some(t.workload_class);
+                row.cpu_ns = Some(t.cpu_ns);
+                row.spill_bytes = Some(t.spill_bytes);
+                row.spill_files = Some(t.spill_files);
+                row.pipelines = Some(t.pipelines);
+                row.workers = Some(t.workers);
+            }
         }
     }
 
@@ -647,6 +694,7 @@ mod tests {
                 peak_memory_bytes: 7,
                 error_class: None,
                 operators: Vec::new(),
+                totals: None,
             },
         );
         let rows = log.snapshot();
@@ -666,6 +714,7 @@ mod tests {
                     peak_memory_bytes: 0,
                     error_class: None,
                     operators: Vec::new(),
+                    totals: None,
                 },
             );
         }
