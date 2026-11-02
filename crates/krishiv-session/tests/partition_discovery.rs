@@ -58,6 +58,10 @@ fn written(s: &Session, dir: &std::path::Path, years: &[i32], regions: &[Option<
     )
     .unwrap();
     s.register_batches("t", schema, vec![batch]).unwrap();
+    // The tests add files the way another engine would; a log would hide them.
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "NONE")
+        .unwrap();
     let root = dir.join("t");
     let root = root.to_str().unwrap().to_owned();
     block_on(

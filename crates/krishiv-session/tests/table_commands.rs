@@ -560,9 +560,12 @@ fn insert_overwrite_never_loses_the_old_rows_before_the_new_ones_are_complete() 
     // manifest commit of P2-T082b) both: never fewer rows than the smaller side, and never none. The directory
     // listing re-reads a directory in which an entry vanished, so a file replaced mid-listing is replaced in
     // it. Until that commit a reader that listed the old files can also lose one to the overwrite's cleanup:
-    // that is the only error allowed.
+    // that is the only error allowed (with the commit log, which is the default, the read says
+    // `KRISHIV_CONCURRENT_COMMIT` instead: retry it).
     assert!(
-        errors.iter().all(|e| e.contains("FILE_NOT_EXIST")),
+        errors
+            .iter()
+            .all(|e| e.contains("FILE_NOT_EXIST") || e.contains("KRISHIV_CONCURRENT_COMMIT")),
         "{errors:?}"
     );
     let allowed: std::collections::BTreeSet<&str> = ["3", "5", "8"].into();

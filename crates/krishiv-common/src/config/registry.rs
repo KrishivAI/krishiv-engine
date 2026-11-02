@@ -1388,12 +1388,11 @@ pub static PARTITION_OVERWRITE_MODE: ConfigEntry = ConfigEntry {
 pub static FILES_COMMIT_PROTOCOL: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.files.commitProtocol",
     value_type: ValueType::Enum(&["AUTO", "LOG", "NONE"]),
-    default: Some(ConfigValue::String(Cow::Borrowed("NONE"))),
+    default: Some(ConfigValue::String(Cow::Borrowed("AUTO"))),
     doc: "How a write to a plain directory is committed: `LOG` records every commit in \
           `_krishiv_log/` (put-if-absent, so concurrent writers cannot both take a version), and \
           Krishiv readers of the directory then see only committed files; `NONE` is Spark's plain \
-          commit (files under their final names, `_SUCCESS`; the default until the log is the \
-          default); `AUTO` uses the log \
+          commit (files under their final names, `_SUCCESS`); `AUTO` (the default) uses the log \
           where the store supports put-if-absent and the plain commit, with a warning, where it \
           does not.",
     scope: Scope::Session,
