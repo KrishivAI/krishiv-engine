@@ -395,3 +395,31 @@ fn queries_carry_the_session_tags() {
     assert!(s.set_tag("one-too-many", "v").is_err());
     s.set_tag("team", "other").unwrap();
 }
+
+#[test]
+fn queries_count_result_rows_and_io() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    let out = dir.path().join("o");
+    block_on(async {
+        s.sql("SELECT id FROM range(5000)")
+            .await?
+            .write()
+            .mode("overwrite")
+            .format("parquet")
+            .save(out.to_str().unwrap())
+            .await
+    })
+    .unwrap();
+    run_all(
+        &s,
+        &format!("SELECT id FROM parquet.`{}` WHERE id < 7", out.display()),
+    )
+    .unwrap();
+    let r = strings_in(
+        &s,
+        "SELECT concat_ws('|', CAST(rows_produced AS STRING), CAST(bytes_read > 0 AS STRING)) \
+         FROM system.queries WHERE state = 'finished' AND query_text LIKE '%WHERE id < 7%'",
+    );
+    assert_eq!(r, ["7|true"], "{r:?}");
+}

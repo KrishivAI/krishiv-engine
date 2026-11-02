@@ -1111,7 +1111,13 @@ impl DataFrame {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let env = self.session.query_env();
+        let mut env = self.session.query_env();
+        // A fresh analysis is still the same statement: keep what
+        // `system.queries` shows of it.
+        if let Some(a) = &cached {
+            env.text.clone_from(&a.env.text);
+            env.statement_class = a.env.statement_class;
+        }
         if let Some(a) = cached
             && !a.analyzed.reads_files
             && !a.env.catalog.loaded_file_views()
@@ -1144,7 +1150,9 @@ impl DataFrame {
         }
         let analyzed = self.session.analyze_in(&self.plan, &env, text).await?;
         let mut env = env;
-        env.text = text.map(|t| Arc::from(t.as_str()));
+        if let Some(t) = text {
+            env.text = Some(Arc::from(t.as_str()));
+        }
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),

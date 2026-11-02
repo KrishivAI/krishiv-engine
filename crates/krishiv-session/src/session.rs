@@ -1665,6 +1665,8 @@ struct QueryStart {
     arbitration: ArbitrationStats,
     cache_hits: u64,
     cache_misses: u64,
+    bytes_read: u64,
+    bytes_written: u64,
 }
 
 impl QueryStart {
@@ -1675,6 +1677,8 @@ impl QueryStart {
             arbitration: state.memory_tree.stats(),
             cache_hits: IoCounters::get(&totals.cache_hits),
             cache_misses: IoCounters::get(&totals.cache_misses),
+            bytes_read: IoCounters::get(&totals.bytes_read),
+            bytes_written: IoCounters::get(&totals.bytes_written),
         }
     }
 
@@ -1723,6 +1727,23 @@ impl QueryStart {
                     .map(|(id, e)| crate::system::OperatorRow::of(log_id, *id, e, metrics.workers))
                     .collect(),
                 totals: Some(crate::system::Totals {
+                    rows_produced: metrics
+                        .operators
+                        .values()
+                        .filter(|e| e.node.is_none() && e.role == krishiv_exec::OperatorRole::Sink)
+                        .map(|e| i64::try_from(e.metrics.rows_in).unwrap_or(i64::MAX))
+                        .max(),
+                    // Process-wide deltas: concurrent queries see each other's I/O.
+                    bytes_read: i64::try_from(
+                        IoCounters::get(&state.io.totals().bytes_read)
+                            .saturating_sub(self.bytes_read),
+                    )
+                    .unwrap_or(i64::MAX),
+                    bytes_written: i64::try_from(
+                        IoCounters::get(&state.io.totals().bytes_written)
+                            .saturating_sub(self.bytes_written),
+                    )
+                    .unwrap_or(i64::MAX),
                     workload_class: query.class().as_str(),
                     cpu_ns: i64::try_from(metrics.drivers.busy.as_nanos()).unwrap_or(i64::MAX),
                     spill_bytes: metrics

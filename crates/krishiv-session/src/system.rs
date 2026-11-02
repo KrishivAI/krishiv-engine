@@ -219,6 +219,9 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("error_class", Text, true),
             ("workload_class", Text, true),
             ("cpu_ns", Long, true),
+            ("rows_produced", Long, true),
+            ("bytes_read", Long, true),
+            ("bytes_written", Long, true),
             ("spill_bytes", Long, true),
             ("spill_files", Long, true),
             ("pipelines", Long, true),
@@ -558,6 +561,9 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             text(rows.iter().map(|r| r.error_class.as_deref())),
             text(rows.iter().map(|r| r.workload_class)),
             long(rows.iter().map(|r| r.cpu_ns)),
+            long(rows.iter().map(|r| r.rows_produced)),
+            long(rows.iter().map(|r| r.bytes_read)),
+            long(rows.iter().map(|r| r.bytes_written)),
             long(rows.iter().map(|r| r.spill_bytes)),
             long(rows.iter().map(|r| r.spill_files)),
             long(rows.iter().map(|r| r.pipelines)),
@@ -673,6 +679,9 @@ pub(crate) struct QueryRow {
     pub(crate) workload_class: Option<&'static str>,
     /// Busy time of its drivers.
     pub(crate) cpu_ns: Option<i64>,
+    pub(crate) rows_produced: Option<i64>,
+    pub(crate) bytes_read: Option<i64>,
+    pub(crate) bytes_written: Option<i64>,
     pub(crate) spill_bytes: Option<i64>,
     pub(crate) spill_files: Option<i64>,
     pub(crate) pipelines: Option<i64>,
@@ -779,6 +788,10 @@ pub(crate) struct Finished<'a> {
 pub(crate) struct Totals {
     pub(crate) workload_class: &'static str,
     pub(crate) cpu_ns: i64,
+    pub(crate) rows_produced: Option<i64>,
+    /// Process-wide I/O since the query started (concurrent queries share it).
+    pub(crate) bytes_read: i64,
+    pub(crate) bytes_written: i64,
     pub(crate) spill_bytes: i64,
     pub(crate) spill_files: i64,
     pub(crate) pipelines: i64,
@@ -932,6 +945,9 @@ impl QueryLog {
             operators: Vec::new(),
             workload_class: None,
             cpu_ns: None,
+            rows_produced: None,
+            bytes_read: None,
+            bytes_written: None,
             spill_bytes: None,
             spill_files: None,
             pipelines: None,
@@ -976,6 +992,9 @@ impl QueryLog {
             if let Some(t) = done.totals {
                 row.workload_class = Some(t.workload_class);
                 row.cpu_ns = Some(t.cpu_ns);
+                row.rows_produced = t.rows_produced;
+                row.bytes_read = Some(t.bytes_read);
+                row.bytes_written = Some(t.bytes_written);
                 row.spill_bytes = Some(t.spill_bytes);
                 row.spill_files = Some(t.spill_files);
                 row.pipelines = Some(t.pipelines);
