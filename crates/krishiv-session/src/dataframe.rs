@@ -1134,6 +1134,33 @@ impl DataFrame {
         self.analyzed_in(env).await
     }
 
+    /// [`Self::analysis`] for an action that runs the query: a re-analysis
+    /// that fails (the catalog or the configuration changed since the frame
+    /// analyzed) is a row of `system.queries`, with the statement's text and
+    /// class. A first analysis that fails is left to the caller, as before:
+    /// inside `sql` its refusal handler records it.
+    pub(crate) async fn action_analysis(&self) -> Result<Arc<Analysis>, KrishivError> {
+        let error = match self.analysis().await {
+            Ok(a) => return Ok(a),
+            Err(error) => error,
+        };
+        let cached = self
+            .analysis
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(a) = cached {
+            let id = self.session.state.queries.record_refused(
+                a.env.text.as_deref(),
+                a.env.statement_class,
+                &error,
+            );
+            // Shared with the statement's marker, so `sql` adds no second row.
+            *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
+        }
+        Err(error)
+    }
+
     /// Analyzes the plan in `env` and keeps the result.
     pub(crate) async fn analyzed_in(&self, env: QueryEnv) -> Result<Arc<Analysis>, KrishivError> {
         self.analyzed_in_with_text(env, None).await
@@ -1248,7 +1275,7 @@ impl DataFrame {
         // Before the query is analyzed, so an invalidation that runs while it executes keeps
         // its rows out of the result cache.
         let generation = crate::result_cache::global().generation();
-        let a = self.analysis().await?;
+        let a = self.action_analysis().await?;
         // The reads were authorized by the analysis: a hit serves only what this principal's
         // own run of the query would return.
         // A frame that asked for a relation cache (`cache()`, `persist()`) runs the query: its
@@ -1420,7 +1447,7 @@ impl DataFrame {
         let df = self.clone();
         self.session
             .on_executor(async move {
-                let a = df.analysis().await?;
+                let a = df.action_analysis().await?;
                 let (physical, fill) = df.physical_cached(&a).await?;
                 let (stream, query) = df.session.run_with_query(&physical, &a.env).await?;
                 let mut stream = fill.fill(stream, &df.session.state.cache);
@@ -2191,7 +2218,7 @@ impl DataFrameWriter {
         let session = df.session.clone();
         session
             .on_executor(async move {
-                let a = df.analysis().await?;
+                let a = df.action_analysis().await?;
                 // Files hold a geometry or geography as a WKB column with a
                 // Parquet logical type (P2-T181 unit U3); until it lands, a
                 // spatial value is not written as the `{srid, wkb}` struct

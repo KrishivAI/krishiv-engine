@@ -227,6 +227,25 @@ fn queries_records_an_action_that_fails_in_physical_planning() {
 }
 
 #[test]
+fn queries_records_an_action_whose_reanalysis_fails() {
+    let s = Session::new().unwrap();
+    run_all(&s, "CREATE TEMPORARY VIEW v AS SELECT id FROM range(3)").unwrap();
+    let df = block_on(s.sql("SELECT id FROM v")).unwrap();
+    run_all(&s, "DROP VIEW v").unwrap();
+    // The catalog changed, so the action analyzes again, and fails.
+    assert!(block_on(df.collect()).is_err());
+    let rows = strings_in(
+        &s,
+        "SELECT concat_ws('|', state, error_class, query_text) FROM system.queries WHERE state NOT IN ('finished', 'running')",
+    );
+    assert_eq!(rows.len(), 1, "one row, no duplicate: {rows:?}");
+    assert!(
+        rows[0].starts_with("failed|TABLE_OR_VIEW_NOT_FOUND|SELECT id FROM v"),
+        "{rows:?}"
+    );
+}
+
+#[test]
 fn queries_carries_the_query_wide_counters() {
     let s = Session::new().unwrap();
     run_all(
