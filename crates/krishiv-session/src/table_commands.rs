@@ -1681,25 +1681,34 @@ impl Session {
         } else {
             df.clone()
         };
-        // `errorifexists`: a CTAS never replaces files that are already there (an external LOCATION with data).
-        let managed_dir = table.managed.then(|| table.location.clone());
-        let dirs = match self.write_table_rows(&table, &df, "errorifexists").await {
-            Ok(dirs) => dirs,
-            Err(e) => {
-                // As Spark's `CreateDataSourceTableAsSelectCommand`: a failed CTAS removes the directory of
-                // the managed table it was creating (checked above not to exist before), including a commit
-                // log that the failed write started, so the statement can be retried.
-                // Only a directory this statement created: `PATH_ALREADY_EXISTS` is the write refusing a
-                // directory that a concurrent CTAS of the same table created first, which is not ours to
-                // remove (it holds that statement's data and commit log).
-                if e.error_class().name() != "PATH_ALREADY_EXISTS"
-                    && let Some(dir) = managed_dir
-                {
-                    drop(std::fs::remove_dir_all(dir));
-                }
-                return Err(e);
-            }
+        // A managed table's directory is made here, exclusively: that creation is the proof that this
+        // statement owns it (a concurrent CTAS of the same table loses it and fails with
+        // `LOCATION_ALREADY_EXISTS`), and the guard removes it again if the statement fails or is
+        // cancelled, so a failed first write (and the commit log it started) leaves nothing and the
+        // statement can be retried. The write goes into that empty directory (`append`).
+        // An external location keeps `errorifexists`: a CTAS never replaces files already there.
+        let owned = if table.managed {
+            Some(
+                OwnedDirectory::create(table.location.clone()).map_err(|e| match e {
+                    OwnedDirectoryError::Exists => KrishivError::from(LocationAlreadyExists {
+                        identifier: quoted(&table.namespace, &table.name),
+                        location: table.location.display().to_string(),
+                    }),
+                    OwnedDirectoryError::Io(message) => internal(message),
+                })?,
+            )
+        } else {
+            None
         };
+        let write_mode = if owned.is_some() {
+            "append"
+        } else {
+            "errorifexists"
+        };
+        let dirs = self.write_table_rows(&table, &df, write_mode).await?;
+        if let Some(owned) = owned {
+            owned.keep();
+        }
         self.add_table(table, mode, true).await?;
         // `RepairTableCommand`: the partitions written, with their file statistics.
         self.register_partitions(&name, &dirs, true);
@@ -3109,5 +3118,112 @@ mod tests {
         assert_eq!(literal_text("\"x\""), "x");
         assert_eq!(literal_text(" true "), "true");
         assert_eq!(literal_text("'"), "'");
+    }
+}
+
+/// Why an [`OwnedDirectory`] could not be made.
+#[derive(Debug)]
+enum OwnedDirectoryError {
+    /// Something is already at the path (not ours to touch).
+    Exists,
+    Io(String),
+}
+
+/// A directory this statement created exclusively. Dropped without [`Self::keep`] (the statement
+/// failed, or its future was dropped), it removes what is in it, provided the path still names the
+/// directory that was created (same device and inode): a path swapped for another directory in the
+/// meantime is left alone.
+struct OwnedDirectory {
+    path: PathBuf,
+    identity: Option<(u64, u64)>,
+    kept: bool,
+}
+
+impl OwnedDirectory {
+    fn create(path: PathBuf) -> Result<Self, OwnedDirectoryError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                OwnedDirectoryError::Io(format!("cannot create {}: {e}", parent.display()))
+            })?;
+        }
+        match std::fs::create_dir(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(OwnedDirectoryError::Exists);
+            }
+            Err(e) => {
+                return Err(OwnedDirectoryError::Io(format!(
+                    "cannot create {}: {e}",
+                    path.display()
+                )));
+            }
+        }
+        let identity = Self::identity_of(&path);
+        Ok(Self {
+            path,
+            identity,
+            kept: false,
+        })
+    }
+
+    fn identity_of(path: &Path) -> Option<(u64, u64)> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let meta = std::fs::symlink_metadata(path).ok()?;
+            meta.is_dir().then(|| (meta.dev(), meta.ino()))
+        }
+        #[cfg(not(unix))]
+        {
+            let meta = std::fs::symlink_metadata(path).ok()?;
+            meta.is_dir().then_some((0, 0))
+        }
+    }
+
+    /// The statement succeeded: the directory stays.
+    fn keep(mut self) {
+        self.kept = true;
+    }
+}
+
+impl Drop for OwnedDirectory {
+    fn drop(&mut self) {
+        if !self.kept && self.identity.is_some() && Self::identity_of(&self.path) == self.identity {
+            drop(std::fs::remove_dir_all(&self.path));
+        }
+    }
+}
+
+#[cfg(test)]
+mod owned_directory_tests {
+    use super::{OwnedDirectory, OwnedDirectoryError};
+
+    #[test]
+    fn a_dropped_guard_removes_only_the_directory_it_made() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Dropped without `keep` (a failed or cancelled statement): gone, with what was written.
+        let a = tmp.path().join("a");
+        let guard = OwnedDirectory::create(a.clone()).unwrap();
+        std::fs::write(a.join("f"), b"x").unwrap();
+        drop(guard);
+        assert!(!a.exists());
+        // Kept: stays.
+        let b = tmp.path().join("b");
+        OwnedDirectory::create(b.clone()).unwrap().keep();
+        assert!(b.exists());
+        // A path that already exists is not ours.
+        assert!(matches!(
+            OwnedDirectory::create(b.clone()),
+            Err(OwnedDirectoryError::Exists)
+        ));
+        assert!(b.exists());
+        // The path now names another directory (swapped meanwhile): left alone.
+        let c = tmp.path().join("c");
+        let guard = OwnedDirectory::create(c.clone()).unwrap();
+        std::fs::remove_dir(&c).unwrap();
+        std::fs::create_dir(&c).unwrap();
+        std::fs::write(c.join("theirs"), b"y").unwrap();
+        drop(guard);
+        assert!(c.join("theirs").exists());
     }
 }

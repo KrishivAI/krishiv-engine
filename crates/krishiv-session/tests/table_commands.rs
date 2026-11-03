@@ -976,3 +976,22 @@ fn insert_values_refuse_scalar_subqueries() {
     // Without a subquery nothing changes.
     run(&s, "INSERT INTO t VALUES (1), (2)");
 }
+
+/// A CTAS owns the directory it makes: a concurrent or earlier one at the same location is never
+/// touched by a failure, and a dropped (cancelled) statement removes only what it made.
+#[test]
+fn a_failed_ctas_never_removes_a_directory_it_did_not_create() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "SET spark.sql.ansi.enabled = true");
+    // Another statement's table directory with data in it.
+    let other = dir.path().join("w");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("keep.txt"), b"data").unwrap();
+    let e = err(
+        &s,
+        "CREATE TABLE w USING parquet AS SELECT CAST('x' AS INT) AS a",
+    );
+    assert_eq!(e.error_class().name(), "LOCATION_ALREADY_EXISTS", "{e}");
+    assert_eq!(std::fs::read(other.join("keep.txt")).unwrap(), b"data");
+}
