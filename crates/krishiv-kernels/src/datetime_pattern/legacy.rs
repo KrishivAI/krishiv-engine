@@ -218,12 +218,21 @@ impl LegacyPattern {
                 'G' => out.push_str(if year >= 1 { "AD" } else { "BC" }),
                 'Y' => {
                     // The week year: the year of the week's Saturday.
+                    // `Calendar.getWeekYear` is not a year of the era: a BC week
+                    // year prints as the signed astronomical year (Spark 4.2:
+                    // `-0005-06-01` with 'Y YY YYY' is `-5 -05 -005`).
                     let (wy, _, _) = civil_from_days(week_year_anchor(days, real, year, doy));
-                    let era_year = if wy >= 1 { wy } else { 1 - wy };
+                    if wy < 0 {
+                        out.push('-');
+                    }
                     if n == 2 {
-                        let _ = write!(out, "{:02}", era_year % 100);
+                        let _ = write!(out, "{:02}", wy.unsigned_abs() % 100);
                     } else {
-                        pad(&mut out, era_year, n);
+                        pad(
+                            &mut out,
+                            i64::try_from(wy.unsigned_abs()).unwrap_or(i64::MAX),
+                            n,
+                        );
                     }
                 }
                 'y' => {
@@ -857,7 +866,10 @@ impl Parsed {
     /// A non-lenient `Calendar` rejects a result that disagrees with a
     /// field that was set. `days` is the result's label and `(y, m, d)` the
     /// hybrid-calendar date it names (`1500-02-29` for a Julian-only leap
-    /// day, whose label is March 1).
+    /// day, whose label is March 1). `year` is the astronomical year, or for
+    /// a winning week year the week year as parsed: `setWeekDate` compares
+    /// `getWeekYear` (astronomical) with it, so a BC era beside a positive
+    /// week year (`2020 BC` with `YYYY G`) is refused.
     fn week_fields_agree(&self, days: i64, year: i64, (y, m, d): (i64, u32, u32)) -> bool {
         let (_, hdoy) = hybrid_week_fields(days, y, m, d);
         let real = real_day(days, y, m, d);
@@ -886,8 +898,10 @@ impl Parsed {
 
     fn resolve(self, today: (i64, u32, u32)) -> Option<Resolved> {
         if !self.year_two {
-            // The year of the era is positive: no year 0 (nor `0000 BC`).
-            if self.year.is_some_and(|(y, _)| y <= 0) {
+            // The year of the era is positive: no year 0 (nor `0000 BC`). A
+            // week year is no year of the era: `setWeekDate` takes `0` or
+            // `-5` as it is (Spark 4.2: '0' with 'YYYY' is -0001-12-28).
+            if self.year.is_some_and(|(y, _)| y <= 0) && !(self.year_is_week && !self.era_bc) {
                 return None;
             }
             return self.resolve_in(self.year.map_or(1970, |(y, _)| y), self.era_bc);
@@ -913,6 +927,9 @@ impl Parsed {
         if self.bad_hour {
             return None;
         }
+        // `setWeekDate` checks the result's week year against the week year
+        // as parsed, before the era turns it around.
+        let parsed = year;
         let mut year = year;
         if bc {
             year = 1 - year;
@@ -1013,7 +1030,7 @@ impl Parsed {
             civil_from_days(days)
         };
         if (weeky || self.year_is_week || self.dow.is_some() || self.doy.is_some())
-            && !self.week_fields_agree(days, year, label)
+            && !self.week_fields_agree(days, if self.year_is_week { parsed } else { year }, label)
         {
             return None;
         }
@@ -1407,6 +1424,49 @@ mod tests {
         assert_eq!(f(1582, 10, 15), "1582-10-15 Fri 40 1");
         assert_eq!(f(1582, 10, 20), "1582-10-20 Wed 41 2");
         assert!(f(1500, 3, 15).ends_with(" 12 3"));
+    }
+
+    // Spark 4.2.0 under LEGACY, UTC (probe 2026-11-03, Codex on #417).
+    #[test]
+    fn a_bc_week_year_prints_signed_and_a_year_field_keeps_its_run_length() {
+        let f = |p, y, m, d| fmt(p, days_from_civil(y, m, d).unwrap() * MICROS_PER_DAY);
+        assert_eq!(f("y yyy Y YYY", 1, 1, 1), "1 001 1 001");
+        assert_eq!(f("y yyy Y YYY G", -5, 6, 1), "6 006 -5 -005 BC");
+        assert_eq!(f("Y YY YYYY yyyy G", -3, 1, 1), "-3 -03 -0003 0004 BC");
+        assert_eq!(f("Y YY YYYY yyyy G", -3, 12, 31), "-2 -02 -0002 0004 BC");
+        assert_eq!(f("Y YY YYYY yyyy G", -1, 12, 28), "0 00 0000 0002 BC");
+        assert_eq!(f("Y YY YYYY yyyy G", 0, 12, 28), "1 01 0001 0001 BC");
+        assert_eq!(f("Y YY yyyy", 1000, 12, 31), "1001 01 1000");
+    }
+
+    // Spark 4.2.0 under LEGACY, UTC (probe 2026-11-03, Codex on #417).
+    #[test]
+    fn a_week_year_is_checked_as_parsed_against_the_era() {
+        let d = |y, m, dd| days_from_civil(y, m, dd).unwrap() * MICROS_PER_DAY;
+        for (p, t) in [
+            ("YYYY G", "2020 BC"),
+            ("YYYY G", "-5 BC"),
+            ("YYYY G", "2 BC"),
+            ("YYYY G", "1000 BC"),
+            ("G YYYY", "BC 5"),
+            ("YYYY G ww", "5 BC 20"),
+            ("YYYY G u", "2020 BC 2"),
+            ("YY G", "20 BC"),
+            ("yyyy YYYY G", "2020 2019 BC"),
+        ] {
+            assert_eq!(local(p, t), None, "{p} {t}");
+        }
+        assert_eq!(local("YYYY G", "2020 AD"), Some(d(2019, 12, 29)));
+        assert_eq!(local("YYYY G", "2021 AD"), Some(d(2020, 12, 27)));
+        assert_eq!(local("YYYY", "0"), Some(d(-1, 12, 28)));
+        assert_eq!(local("YYYY G", "0 AD"), Some(d(-1, 12, 28)));
+        // Not matched yet: Spark reads a signed week year ('-5' with 'YYYY'
+        // is -0006-12-27), the numeric fields here take digits only; and
+        // `getWeekYear`'s BC year-end arithmetic accepts '0 BC' and refuses
+        // '1' with 'YYYY G'/'YYYY', where this check does the opposite.
+        // A winning `y` takes the era (`YYYY yyyy G`).
+        assert_eq!(local("YYYY yyyy G", "2020 2019 BC"), Some(d(-2018, 1, 1)));
+        assert_eq!(local("yyyy G", "2020 BC"), Some(d(-2019, 1, 1)));
     }
 
     #[test]
