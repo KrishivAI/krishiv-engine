@@ -106,6 +106,44 @@ impl TimeZoneRules for ZoneRef {
     }
 }
 
+impl ZoneRef {
+    /// `java.util.TimeZone`'s raw (standard) offset at `utc_seconds`, which
+    /// the legacy parser adds a zone name's saving to: the smallest of the
+    /// offset then and the offsets of the periods just before and after it
+    /// that are of the other kind (daylight or not). So daylight time reads
+    /// the standard time around it, a zone whose standard offset changed
+    /// reads the one in force (`America/Scoresbysund` is -02:00 in July
+    /// 2024, its summer after the change), and a zone whose database marks
+    /// winter as daylight time (`Europe/Dublin`) reads its winter offset.
+    /// Before 1900, as [`TimeZoneRules::legacy_offset_at_utc`], the raw
+    /// offset.
+    #[must_use]
+    pub fn standard_offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        let zone = match self {
+            Self::Fixed(fixed) => return fixed.0,
+            Self::Named(zone) => zone,
+        };
+        if utc_seconds < UTC_1900 {
+            return raw_offset(zone);
+        }
+        let Ok(t) = Timestamp::from_second(fold_seconds(utc_seconds)) else {
+            return raw_offset(zone);
+        };
+        let info = zone.to_offset_info(t);
+        let now = info.offset().seconds();
+        let dst = info.dst().is_dst();
+        // `preceding` starts with the transition into the current period.
+        let before = zone.preceding(t).nth(1);
+        let after = zone.following(t).next();
+        [before, after]
+            .into_iter()
+            .flatten()
+            .filter(|tr| tr.dst().is_dst() != dst)
+            .map(|tr| tr.offset().seconds())
+            .fold(now, i32::min)
+    }
+}
+
 /// 1900-01-01T00:00:00Z: `java.util.TimeZone` (`ZoneInfoFile`) keeps no
 /// transition before it.
 const UTC_1900: i64 = -2_208_988_800;

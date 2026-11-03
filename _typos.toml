@@ -10,6 +10,7 @@ extend-exclude = [
     "crates/krishiv-types/vendored/collations.tsv",
     # generated Java zone-name table (PONT, TAHT)
     "crates/krishiv-kernels/src/datetime_pattern/zone_names.rs",
+    "crates/krishiv-kernels/src/datetime_pattern/legacy_zones.rs",
     "proto/spark-connect/**",
     "crates/krishiv-connect/src/proto/**",
     "tests/sqllogictest/**",

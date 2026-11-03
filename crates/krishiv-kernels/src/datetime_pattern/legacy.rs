@@ -25,6 +25,7 @@ use std::fmt::Write as _;
 use krishiv_common::error::{InvalidDatetimePatternWithSuggestion, KrishivError};
 
 use super::format::{MICROS_PER_DAY, MONTHS, zone_name};
+use super::legacy_zones::{DIGIT_ZEROS, ZONE_STRINGS};
 use super::{DOC_ROOT, Zone, unsupported};
 use crate::cast::TimeZoneRules;
 use crate::cast::datetime::{civil_from_days, days_from_civil, days_in_month};
@@ -312,6 +313,18 @@ impl LegacyPattern {
                 Ok(z) => legacy_local_to_utc(local, &z),
                 Err(_) => None,
             },
+            Some(Zone_::Standard { id, raw, dst }) => {
+                // The calendar reads the standard offset at the wall time.
+                let offset = match crate::datetime::resolve_zone(id) {
+                    Ok(z) => {
+                        let secs = local.div_euclid(MICROS_PER_SECOND);
+                        let first = z.standard_offset_at_utc(secs - i64::from(raw));
+                        z.standard_offset_at_utc(secs - i64::from(first + dst))
+                    }
+                    Err(_) => raw,
+                };
+                local.checked_sub(i64::from(offset + dst) * MICROS_PER_SECOND)
+            }
         })
     }
 
@@ -559,6 +572,12 @@ fn write_offset(out: &mut String, offset: i32, colon: bool, minutes: bool, zulu:
 enum Zone_ {
     Offset(i32),
     Region(String),
+    /// A zone name: the region's standard offset at that time plus `dst`.
+    Standard {
+        id: &'static str,
+        raw: i32,
+        dst: i32,
+    },
 }
 
 /// The calendar fields a parse sets, each with the order it was set in (the
@@ -650,7 +669,7 @@ impl Parsed {
                 return Some(p);
             }
             'z' | 'Z' => {
-                let (p, z) = zone(text, pos, c == 'Z')?;
+                let (p, z) = zone(text, pos)?;
                 self.zone = Some(z);
                 return Some(p);
             }
@@ -788,9 +807,10 @@ impl Parsed {
     }
 
     /// A non-lenient `Calendar` rejects a result that disagrees with a
-    /// field that was set.
-    fn week_fields_agree(&self, days: i64, year: i64) -> bool {
-        let (y, m, d) = civil_from_days(days);
+    /// field that was set. `days` is the result's label and `(y, m, d)` the
+    /// hybrid-calendar date it names (`1500-02-29` for a Julian-only leap
+    /// day, whose label is March 1).
+    fn week_fields_agree(&self, days: i64, year: i64, (y, m, d): (i64, u32, u32)) -> bool {
         let (_, hdoy) = hybrid_week_fields(days, y, m, d);
         let real = real_day(days, y, m, d);
         let year_ok = if self.year_is_week {
@@ -798,9 +818,10 @@ impl Parsed {
         } else {
             y == year
         };
-        // A week year with no week field ignores the month and day.
-        let by_week_year =
-            self.year_is_week && self.woy.is_none() && self.wom.is_none() && self.dowim.is_none();
+        // A winning week year (`Y`) is `Calendar.setWeekDate`, which sets
+        // the month and day itself: the parsed ones are ignored, the other
+        // fields must still agree.
+        let by_week_year = self.year_is_week;
         year_ok
             && (by_week_year || self.month0.is_none_or(|(v, _)| v == i64::from(m) - 1))
             && (by_week_year || self.dom.is_none_or(|(v, _)| v == i64::from(d)))
@@ -861,12 +882,13 @@ impl Parsed {
             return None;
         }
         let weeky = self.woy.is_some() || self.wom.is_some() || self.dowim.is_some();
-        // A week year (`Y`) with no week field is week 1 of that week year;
-        // a month or day beside it is ignored (Spark 4.2: '2020' with
-        // 'YYYY' is 2019-12-29).
-        let week_year_only = self.year_is_week && !weeky;
+        // A winning week year (`Y`) is the week date of that week year, its
+        // week of year (1 by default) and day of week (Sunday by default),
+        // as `CalendarBuilder.establish` calls `setWeekDate`; a month or day
+        // beside it is ignored (Spark 4.2: '2020' with 'YYYY' is 2019-12-29,
+        // '2020-01-03-05' with 'YYYY-ww-MM-dd' too).
         let mut julian_leap = false;
-        let mode = if week_year_only {
+        let mode = if self.year_is_week {
             Mode::Woy
         } else if weeky {
             self.week_mode()
@@ -929,9 +951,15 @@ impl Parsed {
         if days > cutover && days < cutover + 11 {
             return None;
         }
-        if (weeky || week_year_only || self.dow.is_some() || self.doy.is_some())
-            && !julian_leap
-            && !self.week_fields_agree(days, year)
+        // A Julian-only leap day is checked as the day it is (February 29),
+        // before it reads as March 1.
+        let label = if julian_leap {
+            (year, 2, 29)
+        } else {
+            civil_from_days(days)
+        };
+        if (weeky || self.year_is_week || self.dow.is_some() || self.doy.is_some())
+            && !self.week_fields_agree(days, year, label)
         {
             return None;
         }
@@ -1022,11 +1050,26 @@ fn today() -> (i64, u32, u32) {
 }
 
 /// An unsigned integer at `pos` (`limit` digits at most), as the digits
-/// and where they end.
+/// and where they end. Any decimal digit counts, as `DecimalFormat` reads
+/// a numeric field (`٢٠٢٤` is 2024).
 fn number(text: &[char], pos: usize, limit: Option<usize>) -> Option<(i64, usize)> {
+    number_of(text, pos, limit, java_digit)
+}
+
+/// [`number`] with ASCII digits only, as the zone fields read them.
+fn ascii_number(text: &[char], pos: usize, limit: Option<usize>) -> Option<(i64, usize)> {
+    number_of(text, pos, limit, |c| c.to_digit(10))
+}
+
+fn number_of(
+    text: &[char],
+    pos: usize,
+    limit: Option<usize>,
+    digit: fn(char) -> Option<u32>,
+) -> Option<(i64, usize)> {
     let mut end = pos;
     let mut value: i64 = 0;
-    while let Some(d) = text.get(end).and_then(|c| c.to_digit(10)) {
+    while let Some(d) = text.get(end).and_then(|&c| digit(c)) {
         if limit.is_some_and(|l| end - pos >= l) {
             break;
         }
@@ -1034,6 +1077,18 @@ fn number(text: &[char], pos: usize, limit: Option<usize>) -> Option<(i64, usize
         end += 1;
     }
     (end > pos).then_some((value, end))
+}
+
+/// `Character.digit(c, 10)` in the Basic Multilingual Plane (a field is
+/// read one UTF-16 unit at a time, so no supplementary digit counts).
+fn java_digit(c: char) -> Option<u32> {
+    if let Some(d) = c.to_digit(10) {
+        return Some(d);
+    }
+    let cp = u32::from(c);
+    let i = DIGIT_ZEROS.partition_point(|&z| z <= cp).checked_sub(1)?;
+    let d = cp.checked_sub(*DIGIT_ZEROS.get(i)?)?;
+    (d < 10).then_some(d)
 }
 
 /// Case-insensitive prefix match of any of `options`.
@@ -1076,7 +1131,7 @@ fn zone_iso(text: &[char], pos: usize, n: usize) -> Option<(usize, Zone_)> {
         return Some((pos + 1, Zone_::Offset(0)));
     }
     let sign = *text.get(pos).filter(|c| matches!(c, '+' | '-'))?;
-    let (hh, mut e) = number(text, pos + 1, Some(2))?;
+    let (hh, mut e) = ascii_number(text, pos + 1, Some(2))?;
     if e - (pos + 1) != 2 {
         return None;
     }
@@ -1088,7 +1143,7 @@ fn zone_iso(text: &[char], pos: usize, n: usize) -> Option<(usize, Zone_)> {
             }
             e += 1;
         }
-        let (m, e2) = number(text, e, Some(2))?;
+        let (m, e2) = ascii_number(text, e, Some(2))?;
         if e2 - e != 2 {
             return None;
         }
@@ -1102,120 +1157,127 @@ fn zone_iso(text: &[char], pos: usize, n: usize) -> Option<(usize, Zone_)> {
     Some((e, Zone_::Offset(if sign == '-' { -secs } else { secs })))
 }
 
-/// A zone: `Z`, `GMT`/`UTC` with an optional offset, `+hh`, `+hhmm`,
-/// `+hh:mm`, or a region id.
-fn zone(text: &[char], pos: usize, rfc822: bool) -> Option<(usize, Zone_)> {
-    if let Some(p) = prefix(text, pos, &["Z"])
-        && !text.get(p).is_some_and(char::is_ascii_alphabetic)
-    {
-        return Some((p, Zone_::Offset(0)));
+/// A `z` or `Z` field, which `SimpleDateFormat.subParse` reads alike: a
+/// sign and `hhmm` (RFC 822); `GMT` (any case), alone or with a sign, one or
+/// two hour digits, a colon and two minute digits; else a zone name (see
+/// [`parse_zone_name`]). Nothing else: no `Z`, `+hh:mm` or region id.
+fn zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
+    let c = *text.get(pos)?;
+    if matches!(c, '+' | '-') {
+        return numeric_zone(text, pos + 1, c == '-', false);
     }
-    let mut p = pos;
-    let named = prefix(text, p, &["GMT", "UTC"]);
-    if let Some(q) = named {
-        p = q;
-    }
-    if let Some(&sign) = text.get(p).filter(|c| matches!(c, '+' | '-')) {
-        let (hh, e) = number(text, p + 1, Some(2))?;
-        // `SimpleDateFormat`: after `GMT`/`UTC` a sign, one or two hour
-        // digits, a colon and two minute digits; bare, only `Z` reads an
-        // offset, as exactly `+hhmm`.
-        let (mm, e) = if named.is_some() {
-            if text.get(e) != Some(&':') {
-                return None;
-            }
-            let (m, e2) = number(text, e + 1, Some(2))?;
-            if e2 - (e + 1) != 2 {
-                return None;
-            }
-            (m, e2)
-        } else if rfc822 && e - (p + 1) == 2 {
-            let (m, e2) = number(text, e, Some(2))?;
-            if e2 - e != 2 {
-                return None;
-            }
-            (m, e2)
-        } else {
-            return None;
+    if let Some(p) = prefix(text, pos, &["GMT"]) {
+        return match text.get(p) {
+            Some(&s @ ('+' | '-')) => numeric_zone(text, p + 1, s == '-', true),
+            _ => Some((p, Zone_::Offset(0))),
         };
-        if hh > 23 || mm > 59 {
-            return None;
-        }
-        let secs = i32::try_from(hh * 3600 + mm * 60).ok()?;
-        return Some((e, Zone_::Offset(if sign == '-' { -secs } else { secs })));
     }
-    if let Some(q) = named {
-        return Some((q, Zone_::Offset(0)));
-    }
-    // A long display name ("Pacific Daylight Time"): the longest one that
-    // starts here, with the offset of its short name.
-    let long = super::zone_names::NAMES
-        .iter()
-        .flat_map(|row| [(row[1], row[0]), (row[3], row[2])])
-        .filter(|(full, short)| full.contains(' ') && short_name_offset(short).is_some())
-        .filter_map(|(full, short)| {
-            prefix(text, pos, &[full]).map(|q| (q, short_name_offset(short).unwrap_or(0)))
-        })
-        .max_by_key(|(q, _)| *q);
-    if let Some((q, secs)) = long {
-        return Some((q, Zone_::Offset(secs)));
-    }
-    let mut e = pos;
-    while text
-        .get(e)
-        .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+'))
-    {
-        e += 1;
-    }
-    if e == pos {
-        return None;
-    }
-    let id: String = text[pos..e].iter().collect();
-    // A standard-time display name is that fixed offset all year, as
-    // `SimpleDateFormat` reads it (not the region's seasonal rules).
-    // Daylight names (`PDT`, ...) are the saving-time offset, also all year.
-    // Offsets in seconds, from a Spark 4.2.0 run under LEGACY (the names
-    // `java.util.TimeZone` knows; its odd entries, `HDT` -10 and `ACDT`
-    // +9:30, are kept as observed).
-    let fixed = short_name_offset(&id);
-    if let Some(secs) = fixed {
-        return Some((e, Zone_::Offset(secs)));
-    }
-    crate::datetime::resolve_zone(&id).ok()?;
-    Some((e, Zone_::Region(id)))
+    parse_zone_name(text, pos)
 }
 
-/// The fixed offset (seconds) `SimpleDateFormat` reads a short display
-/// name as, all year; from a Spark 4.2.0 run under LEGACY (the names
-/// `java.util.TimeZone` knows; its odd entries, `HDT` -10 and `ACDT`
-/// +9:30, are kept as observed).
-fn short_name_offset(id: &str) -> Option<i32> {
-    match id {
-        "HST" | "HDT" => Some(-10 * 3600),
-        "AKST" => Some(-9 * 3600),
-        "PST" | "AKDT" => Some(-8 * 3600),
-        "MST" | "PDT" => Some(-7 * 3600),
-        "CST" | "MDT" => Some(-6 * 3600),
-        "EST" | "CDT" => Some(-5 * 3600),
-        "AST" | "EDT" => Some(-4 * 3600),
-        "ART" | "BRT" | "ADT" => Some(-3 * 3600),
-        "NST" => Some(-(3 * 3600 + 1800)),
-        "NDT" => Some(-(2 * 3600 + 1800)),
-        "WET" => Some(0),
-        "CET" | "BST" | "WEST" | "WAT" => Some(3600),
-        "CEST" | "EET" | "IST" | "SAST" | "CAT" => Some(2 * 3600),
-        "EEST" | "MSK" | "EAT" => Some(3 * 3600),
-        "GST" => Some(4 * 3600),
-        "PKT" => Some(5 * 3600),
-        "AWST" | "HKT" | "SGT" => Some(8 * 3600),
-        "JST" | "KST" => Some(9 * 3600),
-        "ACST" | "ACDT" => Some(9 * 3600 + 1800),
-        "AEST" => Some(10 * 3600),
-        "AEDT" => Some(11 * 3600),
-        "NZST" => Some(12 * 3600),
-        "NZDT" => Some(13 * 3600),
-        _ => None,
+/// `SimpleDateFormat.subParseNumericZone` from the first hour digit: two
+/// hour digits, or one before the colon (`colon`), then two minute digits.
+fn numeric_zone(
+    text: &[char],
+    start: usize,
+    negative: bool,
+    colon: bool,
+) -> Option<(usize, Zone_)> {
+    let (hh, mut e) = ascii_number(text, start, Some(2))?;
+    if e - start != 2 && !colon {
+        return None;
     }
+    if colon {
+        if text.get(e) != Some(&':') {
+            return None;
+        }
+        e += 1;
+    }
+    let (mm, end) = ascii_number(text, e, Some(2))?;
+    if end - e != 2 || hh > 23 || mm > 59 {
+        return None;
+    }
+    let secs = i32::try_from(hh * 3600 + mm * 60).ok()?;
+    Some((end, Zone_::Offset(if negative { -secs } else { secs })))
+}
+
+/// `SimpleDateFormat.subParseZoneString`: the first row of the JVM's zone
+/// strings with a name (long standard, short standard, long daylight, short
+/// daylight) that starts the text, ignoring case; only that name is read
+/// (`PSTfoo` is `PST`). A standard name is the zone's standard offset at
+/// that time (`ALMT` is +06:00 in January 2024, +05:00 since March), a
+/// daylight one adds its saving; a name its row uses for both kinds of time, or a
+/// daylight name of a zone without saving, leaves the zone's own rules to
+/// decide. Spark's parser first tries the session zone's own row; that is
+/// not done here (it differs only where the session zone's names are found
+/// in an earlier row too, such as `"IST"` in `Asia/Kolkata`).
+fn parse_zone_name(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
+    for row in ZONE_STRINGS {
+        for (i, name) in row.names.iter().enumerate() {
+            let Some(end) = name_at(text, pos, name) else {
+                continue;
+            };
+            let same = row
+                .names
+                .get(i + 2)
+                .is_some_and(|other| java_equals_ignore_case(name, other));
+            let daylight = i >= 2;
+            let zone = if same || (daylight && row.dst == 0) {
+                if crate::datetime::resolve_zone(row.id).is_ok() {
+                    Zone_::Region(row.id.to_owned())
+                } else {
+                    Zone_::Offset(row.raw)
+                }
+            } else {
+                Zone_::Standard {
+                    id: row.id,
+                    raw: row.raw,
+                    dst: if daylight { row.dst } else { 0 },
+                }
+            };
+            return Some((end, zone));
+        }
+    }
+    None
+}
+
+/// Where `name` (non-empty) ends if it starts `text` at `pos`, ignoring
+/// case as `String.regionMatches(true, ..)` does.
+fn name_at(text: &[char], pos: usize, name: &str) -> Option<usize> {
+    let mut end = pos;
+    for c in name.chars() {
+        if !java_same_ignoring_case(*text.get(end)?, c) {
+            return None;
+        }
+        end += 1;
+    }
+    (end > pos).then_some(end)
+}
+
+fn java_equals_ignore_case(a: &str, b: &str) -> bool {
+    a.chars().count() == b.chars().count()
+        && a.chars()
+            .zip(b.chars())
+            .all(|(x, y)| java_same_ignoring_case(x, y))
+}
+
+/// Java's per-character case-blind equality (single-character mappings).
+fn java_same_ignoring_case(a: char, b: char) -> bool {
+    let upper = |c: char| {
+        let mut u = c.to_uppercase();
+        match (u.next(), u.next()) {
+            (Some(x), None) => x,
+            _ => c,
+        }
+    };
+    let lower = |c: char| {
+        let mut l = c.to_lowercase();
+        match (l.next(), l.next()) {
+            (Some(x), None) => x,
+            _ => c,
+        }
+    };
+    a == b || upper(a) == upper(b) || lower(upper(a)) == lower(upper(b))
 }
 
 #[cfg(test)]
@@ -1377,9 +1439,10 @@ mod tests {
     #[test]
     fn zone_display_names_parse_short_and_long_and_the_week_year_uses_the_hybrid_day() {
         let p = LegacyPattern::new("yyyy-MM-dd HH:mm z").unwrap();
-        let offset = |t: &str| match p.parse_fields(t) {
-            Some((_, Some(Zone_::Offset(o)))) => Some(o),
-            _ => None,
+        let offset = |t: &str| {
+            let (local, _) = p.parse_fields(t)?;
+            let utc = p.parse_timestamp(t, &FixedOffset(0)).ok()??;
+            i32::try_from((local - utc) / MICROS_PER_SECOND).ok()
         };
         // Spark 4.2.0: 12:00 PDT is 19:00 UTC, whether short or long.
         assert_eq!(offset("2024-07-01 12:00 PDT"), Some(-7 * 3600));

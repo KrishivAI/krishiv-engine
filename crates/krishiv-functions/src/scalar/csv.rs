@@ -367,9 +367,10 @@ impl Parsed {
                     self.timestamp_pattern =
                         Some(datetime_option(v, func, "timestampFormat", self.legacy)?);
                 }
+                // Spark's NTZ formatter (`forTimestampNTZ`) is never the
+                // legacy one.
                 "timestampntzformat" => {
-                    self.ntz_pattern =
-                        Some(datetime_option(v, func, "timestampNTZFormat", self.legacy)?);
+                    self.ntz_pattern = Some(datetime_option(v, func, "timestampNTZFormat", false)?);
                 }
                 "enabledatetimeparsingfallback" => {
                     self.fallback = v.eq_ignore_ascii_case("true");
