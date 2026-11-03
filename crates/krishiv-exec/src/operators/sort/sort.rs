@@ -1778,10 +1778,11 @@ impl Sort {
                 let need = merge_need(&runs, runs.len(), l.batch_rows, false);
                 // Only memory to spare: half the pool stays for the
                 // operators above, whose memory is not reclaimed from a
-                // merge in progress.
+                // merge in progress. The limit may be a pool's above the
+                // query's (a session's query pool has none of its own).
                 let pool = handle.pool();
                 let spare = pool
-                    .limit()
+                    .effective_limit()
                     .is_none_or(|limit| pool.reserved().saturating_add(need) <= limit / 2);
                 if !spare || budget.try_grow(need).is_err() {
                     return Ok(Err((runs, slot)));
