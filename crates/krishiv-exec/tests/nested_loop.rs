@@ -426,3 +426,33 @@ fn a_spilled_build_with_no_probe_rows() {
         );
     }
 }
+
+/// Build batches of about a third of the limit: what the build still held
+/// in memory when it finished goes to disk too, so a driver's chunk and
+/// its spill readers fit beside nothing else of the build.
+#[test]
+fn a_spilled_build_of_large_batches() {
+    let probe: Vec<Option<i64>> = (0..32).map(|i| Some(i * 3_001)).collect();
+    let build: Vec<Option<i64>> = (0..100_000)
+        .map(|i| (i % 13 != 6).then_some((i * 7) % 100_000))
+        .collect();
+    for join_type in [JoinType::Inner, JoinType::FullOuter, JoinType::LeftAnti] {
+        let (got, counters) = run_with(
+            join_type,
+            Some(near()),
+            batches("p", &probe, 8),
+            batches("b", &build, 20_000),
+            Some(LIMIT),
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            expected_by(join_type, &is_near, &probe, &build),
+            "{join_type:?}"
+        );
+        assert!(
+            counter(&counters, "build_spills") > 0,
+            "{join_type:?}: {counters:?}"
+        );
+    }
+}

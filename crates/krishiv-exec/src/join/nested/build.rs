@@ -210,7 +210,27 @@ impl Sink for BuildSink {
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let g = global_ref::<BuildGlobal>(global, "NestedLoopJoinBuild")?;
-            let segments = std::mem::take(&mut *lock(&g.collect));
+            let mut segments = std::mem::take(&mut *lock(&g.collect));
+            // Once part of the build is on disk, so is the rest: batches kept
+            // in memory would stay reserved through the whole flush phase,
+            // beside every driver's chunk and spill readers.
+            if let Some(scope) = &self.0.spec.spill
+                && segments.iter().any(|s| matches!(s, Segment::File(_)))
+            {
+                for s in &mut segments {
+                    if let Segment::Memory {
+                        batches,
+                        reservation,
+                    } = s
+                    {
+                        let schema = Arc::clone(&self.0.spec.build_schema);
+                        let batches = std::mem::take(batches);
+                        let file = write(ctx, scope, schema, batches, reservation).await?;
+                        self.0.counters.build_spills.fetch_add(1, Ordering::Relaxed);
+                        *s = Segment::File(Arc::new(file));
+                    }
+                }
+            }
             let mut memory = Vec::new();
             let mut reservations = Vec::new();
             let mut files = Vec::new();

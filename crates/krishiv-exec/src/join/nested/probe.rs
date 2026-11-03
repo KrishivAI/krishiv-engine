@@ -20,6 +20,10 @@ use crate::error::{Result, internal};
 use crate::operator::{FlushOutput, LocalState, Operator, OperatorOutput};
 use crate::operators::local_mut;
 
+/// The most pairing steps (each at most `TARGET_PAIRS` pairs) one
+/// `execute` call runs before it returns.
+const STEPS_PER_CALL: usize = 4;
+
 pub(super) struct ProbeOp(pub(super) Arc<Shared>);
 
 struct ProbeLocal {
@@ -131,24 +135,24 @@ impl Disk {
     }
 }
 
-/// The next batch of the reader in `slot` (opened on `file` when empty), read
-/// on the blocking pool. A frame the pool refuses is waited for and read
-/// again. `None` at the end of the file, which closes the reader.
+/// The next batch of the reader in `slot` (opened on `file` when empty),
+/// opened and read on the blocking pool. A frame the pool refuses is waited
+/// for and read again. `None` at the end of the file, which closes the
+/// reader.
 async fn next_batch(
     ctx: &TaskContext,
     slot: &mut Option<SpillReader>,
-    file: &SpillFile,
+    file: &Arc<SpillFile>,
 ) -> Result<Option<RecordBatch>> {
     loop {
-        let reader = match slot.take() {
-            Some(r) => r,
-            None => file
-                .reader(ctx.consumer().reservation())
-                .map_err(KrishivError::from)?,
-        };
+        let open = slot.take();
+        let (f, reservation) = (Arc::clone(file), ctx.consumer().reservation());
         let (reader, item) = ctx
             .run_blocking(move || {
-                let mut reader = reader;
+                let mut reader = match open {
+                    Some(r) => r,
+                    None => f.reader(reservation).map_err(KrishivError::from)?,
+                };
                 let item = reader.next();
                 Ok((reader, item))
             })
@@ -217,7 +221,7 @@ impl Operator for ProbeOp {
             batches: &l.ready.memory,
             bases: &l.ready.memory_bases,
         };
-        loop {
+        for _ in 0..STEPS_PER_CALL {
             let (out, done) = self.0.step(
                 input.data(),
                 build,
@@ -233,6 +237,12 @@ impl Operator for ProbeOp {
                 return Ok(OperatorOutput::HaveMoreOutput(Batch::new(b)));
             }
         }
+        // Nothing matched yet (a selective condition, or a join that
+        // outputs no pairs): an empty batch ends the call, so it stays
+        // bounded and the driver can yield.
+        Ok(OperatorOutput::HaveMoreOutput(Batch::new(
+            RecordBatch::new_empty(Arc::clone(&self.0.schema)),
+        )))
     }
 
     fn spill<'a>(
