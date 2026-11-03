@@ -323,7 +323,7 @@ impl Resolver<'_> {
                 && !s.qualifier.is_empty()
                 && cx.agg_scope.is_none()
                 && r.hidden.iter().any(|a| {
-                    a.col.name != crate::analyzer::ops::METADATA_COLUMN
+                    !crate::analyzer::ops::is_generated_metadata(a)
                         && qualifier_matches(&a.qual, &s.qualifier, cs)
                 }) =>
             {
@@ -333,7 +333,7 @@ impl Resolver<'_> {
                     .hidden
                     .iter()
                     .filter(|a| {
-                        a.col.name != crate::analyzer::ops::METADATA_COLUMN
+                        !crate::analyzer::ops::is_generated_metadata(a)
                             && qualifier_matches(&a.qual, &s.qualifier, cs)
                     })
                     .cloned()

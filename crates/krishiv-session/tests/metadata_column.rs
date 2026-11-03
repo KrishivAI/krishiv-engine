@@ -293,3 +293,36 @@ fn struct_expansion_of_the_hidden_column_takes_except() {
         ]
     );
 }
+
+#[test]
+fn a_table_column_named_metadata_merged_by_using_stays_in_a_qualified_star() {
+    let s = session();
+    assert_eq!(
+        names(
+            &s,
+            "SELECT r.* FROM (SELECT 1 AS _metadata) l JOIN (SELECT 1 AS _metadata, 2 AS x) r USING (_metadata)"
+        ),
+        ["_metadata", "x"]
+    );
+}
+
+#[test]
+fn chained_using_joins_keep_the_metadata_of_every_input() {
+    let s = session();
+    block_on(s.sql("CREATE TABLE d(id INT, w STRING) USING PARQUET")).unwrap();
+    block_on(s.sql("INSERT INTO d VALUES (1, 'z')")).unwrap();
+    assert_eq!(
+        count(
+            &s,
+            "SELECT p._metadata.file_name FROM p JOIN c USING (id) JOIN d USING (id)"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT d._metadata.file_name FROM p JOIN c USING (id) JOIN d USING (id)"
+        ),
+        1
+    );
+}

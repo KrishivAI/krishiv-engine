@@ -264,16 +264,12 @@ impl Resolver<'_> {
             }))
         });
         // A file table's `_metadata` is widened in on demand, in the other instance's ids.
-        let widen = c
-            .hidden
-            .iter()
-            .any(|a| a.col.name == METADATA_COLUMN)
-            .then(|| {
-                Arc::new(Widen::Shift {
-                    inner: c.clone(),
-                    offset,
-                })
-            });
+        let widen = c.hidden.iter().any(is_generated_metadata).then(|| {
+            Arc::new(Widen::Shift {
+                inner: c.clone(),
+                offset,
+            })
+        });
         Ok(Rel {
             plan,
             out: c.out.iter().map(sh).collect::<Vec<_>>().into(),
@@ -3110,10 +3106,14 @@ impl Resolver<'_> {
         let mut res = self.using_project(p.origin, &j, kind, &keys, env, visible.as_ref())?;
         let shown: HashSet<AttrId> = res.out.iter().map(|a| a.col.id).collect();
         let hidden: Vec<Attr> = if hidden_in {
-            j.out
+            // A file table's `_metadata` nobody asked for yet is in no
+            // output, so it travels from the inputs' hidden lists.
+            l.hidden
                 .iter()
-                .filter(|a| !shown.contains(&a.col.id))
-                .cloned()
+                .map(|a| nullable(a, ln))
+                .chain(r.hidden.iter().map(|a| nullable(a, rn)))
+                .filter(is_generated_metadata)
+                .chain(j.out.iter().filter(|a| !shown.contains(&a.col.id)).cloned())
                 .collect()
         } else {
             l.hidden
@@ -3139,7 +3139,7 @@ impl Resolver<'_> {
         let PlanNode::Join { condition, .. } = &j.plan.node else {
             return None;
         };
-        let meta = |c: &Rel| c.hidden.iter().any(|a| a.col.name == METADATA_COLUMN);
+        let meta = |c: &Rel| c.hidden.iter().any(is_generated_metadata);
         (meta(l) || meta(r)).then(|| {
             Arc::new(Widen::Join {
                 left: l.clone(),
@@ -3160,7 +3160,7 @@ impl Resolver<'_> {
         let exprs: Vec<Arc<Expr>> = c
             .hidden
             .iter()
-            .filter(|a| a.col.name != METADATA_COLUMN)
+            .filter(|a| !is_generated_metadata(a))
             .map(|a| col_expr(&a.col, Origin::UNKNOWN))
             .collect();
         self.reveal_exprs(c, exprs.iter())
@@ -3173,7 +3173,7 @@ impl Resolver<'_> {
             rel.hidden
                 .iter()
                 .filter(|a| {
-                    a.col.name == METADATA_COLUMN || rel.out.iter().any(|o| o.col.id == a.col.id)
+                    is_generated_metadata(a) || rel.out.iter().any(|o| o.col.id == a.col.id)
                 })
                 .map(|a| Attr {
                     col: BoundColumn {
@@ -3778,7 +3778,7 @@ impl Resolver<'_> {
         let hidden: Vec<Attr> = inner
             .hidden
             .iter()
-            .filter(|a| a.col.name == METADATA_COLUMN)
+            .filter(|a| is_generated_metadata(a))
             .map(|a| Attr {
                 qual: Arc::clone(&qual),
                 ..a.clone()
@@ -3796,6 +3796,18 @@ impl Resolver<'_> {
 
 /// The name of the hidden column of file sources.
 pub(super) const METADATA_COLUMN: &str = "_metadata";
+
+/// Whether `a` is the `_metadata` struct the analyzer generates for a file
+/// table, not a table column of that name (told by the provenance marker on
+/// its fields).
+pub(super) fn is_generated_metadata(a: &Attr) -> bool {
+    a.col.name == METADATA_COLUMN
+        && matches!(&a.col.data_type, DataType::Struct(s)
+        if !s.fields().is_empty()
+            && s.fields().iter().all(|f| {
+                f.metadata().as_map().contains_key(crate::plan::GENERATED_METADATA_KEY)
+            }))
+}
 
 /// The `_metadata` struct: Spark's field names, types and order; `row_index`
 /// only for Parquet.
