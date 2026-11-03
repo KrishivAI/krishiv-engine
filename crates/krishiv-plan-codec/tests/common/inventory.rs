@@ -603,6 +603,7 @@ pub(crate) fn join_plan(join_type: JoinType) -> HashJoinPlan {
                 bloom_max_bytes: 8 << 20,
                 bloom_fpp: 0.01,
                 bloom_max_fpp: 0.05,
+                bloom_bytes: None,
             },
         }],
         distribution: JoinDistribution::Broadcast,

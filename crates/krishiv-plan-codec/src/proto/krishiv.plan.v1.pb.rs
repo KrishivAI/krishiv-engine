@@ -804,6 +804,10 @@ pub struct KeyFilterOptions {
     /// ignorable
     #[prost(bool, tag = "8")]
     pub scan_waits: bool,
+    /// ignorable: a reader that skips it sizes each Bloom for its keys; filters
+    /// of several build partitions then merge to their range, and pass more rows.
+    #[prost(uint32, optional, tag = "9")]
+    pub bloom_bytes: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnionNode {

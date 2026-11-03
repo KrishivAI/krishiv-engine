@@ -712,6 +712,9 @@ message KeyFilterOptions {
   double bloom_max_fpp = 7;
   // ignorable
   bool scan_waits = 8;
+  // ignorable: a reader that skips it sizes each Bloom for its keys; filters
+  // of several build partitions then merge to their range, and pass more rows.
+  optional uint32 bloom_bytes = 9;
 }
 
 message UnionNode {

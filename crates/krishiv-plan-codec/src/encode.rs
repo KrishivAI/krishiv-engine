@@ -781,6 +781,7 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
         bloom_max_bytes,
         bloom_fpp,
         bloom_max_fpp,
+        bloom_bytes,
     } = f.options;
     pb::JoinFilter {
         id: f.id.0,
@@ -794,6 +795,7 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
             bloom_max_bytes: bloom_max_bytes as u64,
             bloom_fpp,
             bloom_max_fpp,
+            bloom_bytes,
         }),
     }
 }
