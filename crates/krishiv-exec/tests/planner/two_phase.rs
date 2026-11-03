@@ -76,15 +76,29 @@ fn an_aggregate_over_rows_that_move_has_a_partial_phase() {
     ");
 }
 
-/// A `DISTINCT` aggregate keeps its single node over moved rows (its partial
-/// phase needs a merge level after the exchange); so does an aggregate whose
-/// input is already placed on its keys.
+/// A `DISTINCT` aggregate over moved rows has Spark's four phases: partial
+/// over the keys and the distinct argument, the exchange on the keys, a
+/// partial merge removing the pairs several tasks sent, and the final phase.
+/// An aggregate whose input is already placed on its keys keeps one node.
 #[test]
-fn distinct_and_placed_inputs_keep_one_aggregate() {
+fn distinct_has_a_partial_merge_and_placed_inputs_keep_one_aggregate() {
     let env = env();
-    let plan = explain(&env, "SELECT a, count(DISTINCT b) FROM t GROUP BY a");
-    assert!(!plan.contains("PartialHashAggregate"), "{plan}");
-    assert!(plan.contains("Exchange hashpartitioning(a#0)"), "{plan}");
+    insta::assert_snapshot!(explain(&env, "SELECT a, count(DISTINCT b), sum(b) FROM t GROUP BY a"), @"
+    Project [a#0, count(DISTINCT b#1)#4611686018427387904 AS count(DISTINCT b)#3, sum(b#1)#4611686018427387905 AS sum(b)#4]
+    +- HashAggregate keys=[a#0], functions=[count(DISTINCT b#1), sum(b#1)]
+       +- PartialMergeHashAggregate keys=[a#0], distinct=[b], functions=[sum(b#1)]
+          +- Exchange hashpartitioning(a#0)
+             +- PartialHashAggregate keys=[a#0], distinct=[b], functions=[sum(b#1)]
+                +- Scan spark_catalog.default.t [a#0, b#1]
+    ");
+    let (rows, fused, written) = both(
+        &env,
+        "SELECT a, count(DISTINCT b), sum(b) FROM t GROUP BY a",
+    );
+    assert_eq!(rows.len(), 9, "{rows:?}");
+    assert_eq!((fused, written), (2, 3));
+    let (rows, ..) = both(&env, "SELECT count(DISTINCT a), max(s) FROM t");
+    assert_eq!(rows, ["8|s9"]);
     let plan = explain(
         &env,
         "SELECT a, count(*) FROM (SELECT a, sum(b) AS b FROM t GROUP BY a) GROUP BY a",

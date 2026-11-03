@@ -124,28 +124,53 @@ impl Planner<'_> {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        // Two phases where rows must move (design P2-T174 §2.1): each task's
-        // partial states cross the exchange instead of its rows. Instantiation
-        // fuses the three nodes back into one breaker on one worker.
-        let (input, plan) = if input.placement.satisfies(required) || distinct.iter().any(|d| *d) {
-            let input = self.require(input, required)?;
-            let plan = AggregatePlan {
-                group_by: columns[..k].to_vec(),
-                aggregates,
-                distinct,
-                output: AggregateOutput::Final,
-            };
-            (input, plan)
-        } else {
+        let single = AggregatePlan {
+            group_by: columns[..k].to_vec(),
+            aggregates,
+            distinct,
+            output: AggregateOutput::Final,
+        };
+        // Phases where rows must move (design P2-T174 §2.1): each task's
+        // partial states cross the exchange instead of its rows.
+        // Instantiation fuses the phases back into one aggregation on one
+        // worker.
+        let (input, plan) = if input.placement.satisfies(required) {
+            (input, single)
+        } else if !single.distinct.iter().any(|d| *d) {
             let partial = AggregatePlan {
-                group_by: columns[..k].to_vec(),
-                distinct: vec![false; aggregates.len()],
-                aggregates,
                 output: AggregateOutput::Partial,
+                ..single
             };
             let plan = crate::physical::final_of(&partial)?;
-            let partial = self.partial_node(input, partial, &detail)?;
+            let partial = self.partial_node(input, partial, "PartialHashAggregate", &detail)?;
             (self.require(partial, required)?, plan)
+        } else if let Some([first, merge, last]) = crate::physical::distinct_phases(&single) {
+            // Spark's plan for a distinct aggregate: the partial phase groups
+            // by the keys and the distinct arguments, the exchange hashes the
+            // keys, and after it a partial merge removes the pairs several
+            // tasks sent before the final phase aggregates each distinct value
+            // once.
+            let darg_names: Vec<String> = first.group_by[k..]
+                .iter()
+                .map(|c| input.schema.field(*c).name().clone())
+                .collect();
+            let detail = format!(
+                "keys={}, distinct=[{}], functions=[{}]",
+                list(keys),
+                darg_names.join(", "),
+                calls
+                    .iter()
+                    .filter(|c| !c.f.distinct)
+                    .map(|c| c.key.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let first = self.partial_node(input, first, "PartialHashAggregate", &detail)?;
+            let moved = self.require(first, required)?;
+            let merged = self.partial_node(moved, merge, "PartialMergeHashAggregate", &detail)?;
+            (merged, last)
+        } else {
+            (self.require(input, required)?, single)
         };
         // Validates the aggregate (over an input that is never run) and
         // gives its schema.
@@ -213,6 +238,7 @@ impl Planner<'_> {
         &mut self,
         input: Planned,
         plan: AggregatePlan,
+        name: &str,
         detail: &str,
     ) -> Result<Planned> {
         let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
@@ -232,11 +258,7 @@ impl Planner<'_> {
             },
             schema,
             layout,
-            explain: super::explain::ExplainNode::new(
-                "PartialHashAggregate",
-                detail,
-                vec![input.explain],
-            ),
+            explain: super::explain::ExplainNode::new(name, detail, vec![input.explain]),
             sites,
             placement,
         })

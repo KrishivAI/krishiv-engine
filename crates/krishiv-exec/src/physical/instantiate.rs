@@ -56,7 +56,8 @@ use super::{
     SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
 };
 use crate::aggregate::{
-    AggregateNode, AggregateOutput, AggregateSpec, HashAggregate, distinct_plan,
+    AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, HashAggregate,
+    distinct_plan,
 };
 use crate::error::{Result, internal};
 use crate::join::{
@@ -555,6 +556,140 @@ pub(crate) fn fused_aggregate<'p>(
     ))
 }
 
+/// The phases of `single`, an aggregation with `DISTINCT` aggregates over raw
+/// input, around an exchange (Spark's single-distinct plan, as
+/// [`distinct_plan`] runs it in one place): a partial phase grouped by the
+/// keys and the distinct arguments computing the other aggregates' states; a
+/// partial merge after the exchange on the same columns, which removes the
+/// pairs several tasks sent; and the final phase grouped by the keys, which
+/// aggregates each distinct value once (as plain aggregates over the now
+/// distinct argument columns) and merges the other states. `None` where
+/// [`distinct_plan`] has no such plan: no distinct aggregate, distinct
+/// aggregates over different arguments or with a filter, or input that is not
+/// raw.
+pub(crate) fn distinct_phases(single: &AggregatePlan) -> Option<[AggregatePlan; 3]> {
+    if single.output != AggregateOutput::Final
+        || single.distinct.len() != single.aggregates.len()
+        || single.aggregates.iter().any(|a| a.input != AggInput::Raw)
+    {
+        return None;
+    }
+    let mut dargs: Option<&[usize]> = None;
+    for (a, &d) in single.aggregates.iter().zip(&single.distinct) {
+        if d && (a.mask.is_some() || *dargs.get_or_insert(&a.args) != a.args.as_slice()) {
+            return None;
+        }
+    }
+    let dargs = dargs?;
+    let k = single.group_by.len();
+    let width = k + dargs.len();
+    let others: Vec<AggregateExpr> = single
+        .aggregates
+        .iter()
+        .zip(&single.distinct)
+        .filter(|(_, d)| !**d)
+        .map(|(a, _)| a.clone())
+        .collect();
+    let first = AggregatePlan {
+        group_by: single.group_by.iter().chain(dargs).copied().collect(),
+        distinct: vec![false; others.len()],
+        aggregates: others,
+        output: AggregateOutput::Partial,
+    };
+    let mut at = width;
+    let mut merged = Vec::with_capacity(first.aggregates.len());
+    for a in &first.aggregates {
+        let m = a.merging(at);
+        at += m.args.len();
+        merged.push(m);
+    }
+    let merge = AggregatePlan {
+        group_by: (0..width).collect(),
+        distinct: vec![false; merged.len()],
+        aggregates: merged.clone(),
+        output: AggregateOutput::Partial,
+    };
+    let mut merged = merged.into_iter();
+    let mut aggregates = Vec::with_capacity(single.aggregates.len());
+    for (a, &d) in single.aggregates.iter().zip(&single.distinct) {
+        aggregates.push(if d {
+            AggregateExpr {
+                args: (k..width).collect(),
+                ..a.clone()
+            }
+        } else {
+            merged.next()?
+        });
+    }
+    let last = AggregatePlan {
+        group_by: (0..k).collect(),
+        distinct: vec![false; aggregates.len()],
+        aggregates,
+        output: AggregateOutput::Final,
+    };
+    Some([first, merge, last])
+}
+
+/// `Final ← PartialMerge ← Exchange(Hash | Single) ← Partial`, the phases
+/// [`distinct_phases`] plans, as the one aggregation they came from: the node
+/// below the partial and that aggregation. `None` for any other shape.
+pub(crate) fn fused_distinct<'p>(
+    last: &AggregatePlan,
+    input: &'p PhysNode,
+) -> Option<(&'p PhysNode, AggregatePlan)> {
+    let PhysNode::Aggregate {
+        input: exchange,
+        aggregate: merge,
+    } = input
+    else {
+        return None;
+    };
+    let PhysNode::Exchange(e) = exchange.as_ref() else {
+        return None;
+    };
+    if !matches!(
+        e.partitioning,
+        Partitioning::Hash { .. } | Partitioning::Single
+    ) {
+        return None;
+    }
+    let PhysNode::Aggregate {
+        input: below,
+        aggregate: first,
+    } = e.input.as_ref()
+    else {
+        return None;
+    };
+    let k = last.group_by.len();
+    let dargs = first.group_by.get(k..)?;
+    // The final phase's raw aggregates are the distinct ones; the others
+    // merge the partial phase's states, in order.
+    let mut others = first.aggregates.iter();
+    let mut aggregates = Vec::with_capacity(last.aggregates.len());
+    let mut distinct = Vec::with_capacity(last.aggregates.len());
+    for a in &last.aggregates {
+        if a.input == AggInput::Raw {
+            aggregates.push(AggregateExpr {
+                args: dargs.to_vec(),
+                ..a.clone()
+            });
+            distinct.push(true);
+        } else {
+            aggregates.push(others.next()?.clone());
+            distinct.push(false);
+        }
+    }
+    let single = AggregatePlan {
+        group_by: first.group_by.get(..k)?.to_vec(),
+        aggregates,
+        distinct,
+        output: AggregateOutput::Final,
+    };
+    let phases = distinct_phases(&single)?;
+    (phases[0] == *first && phases[1] == *merge && phases[2] == *last)
+        .then_some((below.as_ref(), single))
+}
+
 /// A fused aggregation (see [`fused_aggregate`]): one [`HashAggregate`]
 /// whose sink side is tagged with the partial node's id.
 struct FusedAggregateNode {
@@ -941,6 +1076,16 @@ impl Instantiation<'_> {
                     && let Some((partial, below, fused)) = fused_aggregate(aggregate, input)
                 {
                     return self.fused(partial, below, &fused);
+                }
+                if self.worker.fuse_aggregates
+                    && let Some((below, single)) = fused_distinct(aggregate, input)
+                {
+                    let input = self.node(below)?;
+                    let spec =
+                        aggregate_spec(&input.schema, &single, &self.env, self.spill.clone());
+                    let schema = spec.output_schema()?;
+                    let node = aggregate_node(input.node, spec, &single.distinct)?;
+                    return Ok(Built { node, schema });
                 }
                 let input = self.node(input)?;
                 let spec = aggregate_spec(&input.schema, aggregate, &self.env, self.spill.clone());
