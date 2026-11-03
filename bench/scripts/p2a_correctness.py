@@ -14,7 +14,7 @@ Numbers are compared as decimals. Against the official answers they must agree a
 two scales (the answers hold doubles where Spark's decimal semantics give a decimal of scale 6). Against
 DuckDB they must agree within a relative tolerance of 1e-6 (Spark's ``avg`` over decimals keeps fewer
 digits than DuckDB's double); the largest relative difference seen is reported. Rows are compared in
-order when the query has a top-level ORDER BY, as sets otherwise.
+order when the query has a top-level ORDER BY (rows that tie on its keys may swap), as sets otherwise.
 
     uv run python scripts/p2a_correctness.py run-python --data D --queries Q --out py.json
     uv run python scripts/p2a_correctness.py check --sf 1 --data D --queries Q --results py.json
@@ -32,7 +32,7 @@ import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from krishiv_bench.compare import has_top_level_order_by, load_tpch_answers
+from krishiv_bench.compare import derive_sort_keys, has_top_level_order_by, load_tpch_answers
 
 TABLES = ["customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"]
 REL_TOL = 1e-6
@@ -133,8 +133,32 @@ def cells_equal(a: str | None, b: str | None, answer: bool, worst: list[float]) 
     return rel <= REL_TOL
 
 
-def rows_equal(got, ref, ordered: bool, answer: bool, worst: list[float]) -> str | None:
-    """None when equal, else a one-line difference."""
+def rows_equal(
+    got, ref, ordered: bool, answer: bool, worst: list[float], sort_keys: list[int] | None = None
+) -> str | None:
+    """None when equal, else a one-line difference.
+
+    An ordered result may differ from the reference in the order of rows that tie on the ORDER BY keys: it
+    passes when the sets of rows are equal and the key columns agree position by position.
+    """
+    first = [0.0]
+    diff = _rows_diff(got, ref, ordered, answer, first)
+    if diff is None:
+        worst[0] = max(worst[0], first[0])
+        return None
+    if not ordered or not sort_keys:
+        return diff
+    tie_worst = [0.0]
+    if _rows_diff(got, ref, False, answer, tie_worst) is not None:
+        return diff
+    for g, r in zip(got, ref, strict=True):
+        if any(not cells_equal(g[k], r[k], answer, tie_worst) for k in sort_keys):
+            return diff
+    worst[0] = max(worst[0], tie_worst[0])
+    return None
+
+
+def _rows_diff(got, ref, ordered: bool, answer: bool, worst: list[float]) -> str | None:
     if len(got) != len(ref):
         return f"{len(got)} rows, reference has {len(ref)}"
     if not ordered:
@@ -174,13 +198,14 @@ def check(args: argparse.Namespace) -> int:
             lines.append(f"| {q} | - | ERROR | ERROR | {(res or {}).get('error', 'missing')[:160]} |")
             continue
         got, ordered = res["rows"], has_top_level_order_by(sql)
+        keys = derive_sort_keys(sql)
         official = "n/a"
         detail = ""
         if q in answers:
-            d = rows_equal(got, answers[q], ordered, True, worst)
+            d = rows_equal(got, answers[q], ordered, True, worst, keys)
             official = "ok" if d is None else "MISMATCH"
             detail += "" if d is None else f"official: {d}; "
-        d2 = rows_equal(got, duckdb_rows(Path(args.data), sql), ordered, False, worst)
+        d2 = rows_equal(got, duckdb_rows(Path(args.data), sql), ordered, False, worst, keys)
         duck = "ok" if d2 is None else "MISMATCH"
         detail += "" if d2 is None else f"DuckDB: {d2}"
         if official in ("ok", "n/a") and duck == "ok":
