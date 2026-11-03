@@ -70,3 +70,18 @@ def test_unknown_or_empty_query_selections_are_refused():
         m.query_ids(["q01", "q99"])
     with pytest.raises(SystemExit):
         m.query_ids([])
+
+
+def test_a_numeric_looking_text_column_compares_as_text():
+    # q22's cntrycode is substring(c_phone, 1, 2): "013" is not "13" in a string column.
+    for answer in (True, False):
+        assert m.rows_equal([["013", "5"]], [["13", "5"]], True, answer, [0.0], None, frozenset({0})) is not None
+        assert m.rows_equal([["13", "5"]], [["13", "5"]], True, answer, [0.0], None, frozenset({0})) is None
+
+
+def test_an_empty_string_is_not_null_against_duckdb():
+    assert diff([[""]], [[None]]) is not None
+    assert diff([[None]], [[""]]) is not None
+    assert diff([[None]], [[None]]) is None
+    # The official answer text cannot tell them apart.
+    assert diff([[None]], [[""]], answer=True) is None

@@ -118,11 +118,16 @@ def decimal_places(d: Decimal) -> int:
     return max(-exponent, 0) if isinstance(exponent, int) else 0
 
 
-def cells_equal(a: str | None, b: str | None, answer: bool, worst: list[float]) -> bool:
-    """`a` is the engine's cell, `b` the reference's (official answer text, or DuckDB's value)."""
+def cells_equal(a: str | None, b: str | None, answer: bool, worst: list[float], text: bool = False) -> bool:
+    """`a` is the engine's cell, `b` the reference's (official answer text, or DuckDB's value).
+
+    `text` marks a string column (DuckDB's result type): its cells compare as text even when they look
+    numeric, so `"013"` is not `"13"`.
+    """
     if a is None or b is None:
-        return (a in (None, "")) and (b in (None, ""))
-    da, db = as_decimal(a), as_decimal(b)
+        # The official answer files cannot tell an empty field from NULL; DuckDB can.
+        return (a in (None, "")) and (b in (None, "")) if answer else a is None and b is None
+    da, db = (None, None) if text else (as_decimal(a), as_decimal(b))
     if da is None or db is None:
         # Text is exact; only CHAR padding at the end may differ, never leading characters.
         return a.rstrip() == b.rstrip()
@@ -145,31 +150,38 @@ def cells_equal(a: str | None, b: str | None, answer: bool, worst: list[float]) 
 
 
 def rows_equal(
-    got, ref, ordered: bool, answer: bool, worst: list[float], sort_keys: list[int] | None = None
+    got,
+    ref,
+    ordered: bool,
+    answer: bool,
+    worst: list[float],
+    sort_keys: list[int] | None = None,
+    text_cols: frozenset[int] = frozenset(),
 ) -> str | None:
     """None when equal, else a one-line difference.
 
     An ordered result may differ from the reference in the order of rows that tie on the ORDER BY keys: it
-    passes when the sets of rows are equal and the key columns agree position by position.
+    passes when the sets of rows are equal and the key columns agree position by position. Columns in
+    `text_cols` compare as text.
     """
     first = [0.0]
-    diff = _rows_diff(got, ref, ordered, answer, first)
+    diff = _rows_diff(got, ref, ordered, answer, first, text_cols)
     if diff is None:
         worst[0] = max(worst[0], first[0])
         return None
     if not ordered or not sort_keys:
         return diff
     tie_worst = [0.0]
-    if _rows_diff(got, ref, False, answer, tie_worst) is not None:
+    if _rows_diff(got, ref, False, answer, tie_worst, text_cols) is not None:
         return diff
     for g, r in zip(got, ref, strict=True):
-        if any(not cells_equal(g[k], r[k], answer, tie_worst) for k in sort_keys):
+        if any(not cells_equal(g[k], r[k], answer, tie_worst, k in text_cols) for k in sort_keys):
             return diff
     worst[0] = max(worst[0], tie_worst[0])
     return None
 
 
-def _rows_diff(got, ref, ordered: bool, answer: bool, worst: list[float]) -> str | None:
+def _rows_diff(got, ref, ordered: bool, answer: bool, worst: list[float], text_cols: frozenset[int]) -> str | None:
     if len(got) != len(ref):
         return f"{len(got)} rows, reference has {len(ref)}"
     if not ordered:
@@ -182,7 +194,7 @@ def _rows_diff(got, ref, ordered: bool, answer: bool, worst: list[float]) -> str
         if len(g) != len(r):
             return f"row {i}: {len(g)} columns, reference has {len(r)}"
         for j, (a, b) in enumerate(zip(g, r, strict=True)):
-            if not cells_equal(a, b, answer, worst):
+            if not cells_equal(a, b, answer, worst, j in text_cols):
                 return f"row {i} column {j}: {a!r}, reference {b!r}"
     return None
 
@@ -193,7 +205,9 @@ def duckdb_rows(data: Path, sql: str):
     con = duckdb.connect()
     for t in TABLES:
         con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{data / (t + '.parquet')}')")
-    return [[cell_text(v) for v in r] for r in con.execute(sql).fetchall()]
+    cur = con.execute(sql)
+    text_cols = frozenset(i for i, d in enumerate(cur.description or []) if str(d[1]).upper() == "VARCHAR")
+    return [[cell_text(v) for v in r] for r in cur.fetchall()], text_cols
 
 
 def check(args: argparse.Namespace) -> int:
@@ -212,11 +226,12 @@ def check(args: argparse.Namespace) -> int:
         keys = derive_sort_keys(sql)
         official = "n/a"
         detail = ""
+        duck_rows, text_cols = duckdb_rows(Path(args.data), sql)
         if q in answers:
-            d = rows_equal(got, answers[q], ordered, True, worst, keys)
+            d = rows_equal(got, answers[q], ordered, True, worst, keys, text_cols)
             official = "ok" if d is None else "MISMATCH"
             detail += "" if d is None else f"official: {d}; "
-        d2 = rows_equal(got, duckdb_rows(Path(args.data), sql), ordered, False, worst, keys)
+        d2 = rows_equal(got, duck_rows, ordered, False, worst, keys, text_cols)
         duck = "ok" if d2 is None else "MISMATCH"
         detail += "" if d2 is None else f"DuckDB: {d2}"
         if official in ("ok", "n/a") and duck == "ok":
