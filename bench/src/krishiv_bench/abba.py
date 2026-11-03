@@ -65,7 +65,8 @@ def load_bound(record: dict) -> float:
 def load_line(record: dict) -> str:
     """The report line on the machine load: what was measured, the bound and why it is indicative."""
     s = record["summary"]
-    bound = s["load_bound"]
+    # A record saved before the summary held the bound is rendered as saved, not re-summarized.
+    bound = s.get("load_bound", load_bound(record))
     own = bound - LOAD_INDICATIVE
     makeup = (
         f"{LOAD_INDICATIVE:g} of other load plus the run's {own:g} threads"

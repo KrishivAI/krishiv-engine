@@ -158,6 +158,14 @@ def test_the_report_line_says_why_a_run_is_indicative():
     assert "no thread count" in abba.load_line(old)
 
 
+def test_a_saved_summary_without_a_bound_still_renders():
+    # Results saved before the summary held `load_bound` are rendered as saved (`report_from_file`).
+    old = _wide_record(start=1.0, peak=1.0, threads=None)
+    old["summary"] = abba.summarize(old)
+    del old["summary"]["load_bound"]
+    assert "bound 4" in abba.markdown(old)
+
+
 def test_threads_count_only_up_to_the_machines_cpus(monkeypatch):
     monkeypatch.setattr(abba.os, "cpu_count", lambda: 4)
     rec = _wide_record(start=1.0, peak=9.0, threads=12)
