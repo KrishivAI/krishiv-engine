@@ -459,8 +459,12 @@ impl CatalogStore for InMemoryCatalogStore {
             (true, CreateMode::IfNotExists) => return Ok(false),
             (true, CreateMode::Replace) | (false, _) => {}
         }
+        let changed = format!("{}.{}", key.0, key.1);
         state.tables.insert(key, Arc::new(table));
         self.epoch.fetch_add(1, Ordering::AcqRel);
+        // What the result cache holds for this table is stale (it also covers the results
+        // computed between a table's data being written and its partitions being registered).
+        crate::result_cache::global().invalidate_table(&changed);
         Ok(true)
     }
 
@@ -471,8 +475,10 @@ impl CatalogStore for InMemoryCatalogStore {
             Some(current) if Arc::ptr_eq(current, expected) => {}
             _ => return false,
         }
+        let changed = format!("{}.{}", key.0, key.1);
         state.tables.insert(key, Arc::new(table));
         self.epoch.fetch_add(1, Ordering::AcqRel);
+        crate::result_cache::global().invalidate_table(&changed);
         true
     }
 
@@ -483,6 +489,7 @@ impl CatalogStore for InMemoryCatalogStore {
             .remove(&(namespace.to_owned(), name.to_owned()));
         if removed.is_some() {
             self.epoch.fetch_add(1, Ordering::AcqRel);
+            crate::result_cache::global().invalidate_table(&format!("{namespace}.{name}"));
         }
         removed
     }

@@ -41,3 +41,6 @@ Paths are relative to this crate.
 `krishiv-python` sets `test = false` for its lib (the extension module cannot link a test binary); Python tests are under
 `python/` (`maturin develop` then `pytest`). `cargo nextest run -p krishiv-python` runs `src/stream/tests.rs` ·
 `cargo +nightly-2026-08-12 miri test -p krishiv-python --test stream_ffi` · `cargo clippy -p krishiv-python --all-targets -- -D warnings`
+
+## Fuzzing
+`fuzz/fuzz_targets/capsule_import.rs` (nightly and weekly `fuzz.yml`) includes `src/stream/ffi.rs` by path, exports valid Arrow C schema and array trees and corrupts the header fields a consumer can check (negative or shrinking lengths, offsets and counts, null buffer or dictionary pointers, narrower formats); a larger length, offset or type is not generated because the C data interface carries no buffer sizes, so no consumer can detect it. Run: `cd fuzz && cargo +nightly-2026-08-12 fuzz run --target x86_64-unknown-linux-gnu capsule_import`.

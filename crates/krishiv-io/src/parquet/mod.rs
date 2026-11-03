@@ -39,8 +39,10 @@
 
 mod calendar;
 mod decode;
+mod index_guard;
 mod intervals;
 mod meta;
+mod page_stage;
 mod row_filter;
 mod thrift_guard;
 mod write;
@@ -107,6 +109,15 @@ static OPTIONS: OptionSchema = OptionSchema {
             metadata_key: false,
             doc: "Read: evaluate the pushed filter before decoding the other columns \
                   (`auto` decides per row group).",
+        },
+        OptionSpec {
+            name: "pageIndex",
+            kind: OptionKind::Bool,
+            default: OptionDefault::Bool(true),
+            conf_fallback: Some("krishiv.io.parquet.pageIndex.enabled"),
+            metadata_key: false,
+            doc: "Read: skip the pages of a column chunk that the pushed filter and the file's \
+                  page index rule out.",
         },
         OptionSpec {
             name: "compression",

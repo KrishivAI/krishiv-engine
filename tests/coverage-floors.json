@@ -1,0 +1,77 @@
+{
+  "total_drop_max": 0.2,
+  "crates": {
+    "krishiv-alloc": {
+      "floor": 98.0
+    },
+    "krishiv-bench-runner": {
+      "floor": 97.0
+    },
+    "krishiv-cli": {
+      "floor": 90.0
+    },
+    "krishiv-common": {
+      "floor": 97.0
+    },
+    "krishiv-connect": {
+      "floor": 28.0
+    },
+    "krishiv-exec": {
+      "floor": 93.0
+    },
+    "krishiv-functions": {
+      "floor": 93.0
+    },
+    "krishiv-io": {
+      "floor": 94.0
+    },
+    "krishiv-kernels": {
+      "floor": 94.0
+    },
+    "krishiv-mcp": {
+      "floor": 94.0
+    },
+    "krishiv-memory": {
+      "floor": 94.0
+    },
+    "krishiv-optimizer": {
+      "floor": 94.0
+    },
+    "krishiv-plan": {
+      "floor": 95.0
+    },
+    "krishiv-plan-codec": {
+      "floor": 83.0
+    },
+    "krishiv-python": {
+      "floor": 94.0
+    },
+    "krishiv-server": {
+      "floor": 84.0
+    },
+    "krishiv-session": {
+      "floor": 93.0
+    },
+    "krishiv-sim": {
+      "floor": 99.0
+    },
+    "krishiv-sql": {
+      "floor": 96.0
+    },
+    "krishiv-testkit": {
+      "floor": 93.0
+    },
+    "krishiv-types": {
+      "floor": 93.0
+    },
+    "krishiv-udf-sdk": {
+      "floor": 94.0
+    },
+    "krishiv-ui-assets": {
+      "floor": 70.0
+    },
+    "xtask": {
+      "floor": 88.0
+    }
+  }
+}

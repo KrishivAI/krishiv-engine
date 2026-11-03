@@ -4,7 +4,9 @@ name: Mutation testing (nightly)
 # and the spill-file serialization, with the score per area tracked in the run
 # summary and in the `mutation-score` artifact (90 days). Nightly only, never
 # per PR; each night one seventh of the mutants per area (the full set once a
-# week, so a job stays inside the six-hour limit); GitHub-hosted runners only (`cargo xtask workflow-lint`). The
+# week, so a job stays inside the six-hour limit; the kernels area runs as two half
+# slices side by side, the first full run having taken 5.5 hours for its seventh);
+# GitHub-hosted runners only (`cargo xtask workflow-lint`). The
 # acceptance numbers are in `tests/mutation-floors.json`.
 on:
   schedule:
@@ -39,24 +41,41 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `parts` halves (thirds, ...) a night's slice across that many jobs of the area.
           - area: kernels
+            part: 1
+            parts: 2
+            package: krishiv-kernels
+            files: crates/krishiv-kernels/src/**/*.rs
+            skip: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**
+          - area: kernels
+            part: 2
+            parts: 2
             package: krishiv-kernels
             files: crates/krishiv-kernels/src/**/*.rs
             skip: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**
           - area: hash
+            part: 1
+            parts: 1
             package: krishiv-kernels
             files: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**/*.rs
             skip: ""
           - area: parser
+            part: 1
+            parts: 1
             package: krishiv-sql
             files: crates/krishiv-sql/src/**/*.rs
             skip: ""
           - area: serialization
+            part: 1
+            parts: 1
             package: krishiv-memory
             files: crates/krishiv-memory/src/spillfile/**/*.rs
             skip: ""
     env:
       AREA: ${{ matrix.area }}
+      PART: ${{ matrix.part }}
+      PARTS: ${{ matrix.parts }}
       SHARDS: 7
       SHARD_INPUT: ${{ inputs.shard }}
       PACKAGE: ${{ matrix.package }}
@@ -83,10 +102,18 @@ jobs:
         run: |
           # One slice (every 7th mutant) per night: the full set is swept
           # once a week, and a slice is a representative sample of it.
-          SHARD="${SHARD_INPUT:-$(( 10#$(date -u +%j) % SHARDS ))}"
+          if [ -n "$SHARD_INPUT" ] && ! [[ "$SHARD_INPUT" =~ ^[0-6]$ ]]; then
+            echo "::error::the shard input must be a single digit 0-6, got '$SHARD_INPUT'" >&2
+            exit 1
+          fi
+          NIGHT="${SHARD_INPUT:-$(( 10#$(date -u +%j) % SHARDS ))}"
+          # A night's slice is cut into PARTS pieces, one per job: piece `PART` is shard
+          # NIGHT*PARTS+PART-1 of SHARDS*PARTS, so the pieces together are the slice.
+          SHARD=$(( NIGHT * PARTS + PART - 1 ))
+          TOTAL=$(( SHARDS * PARTS ))
           echo "SHARD=$SHARD" >> "$GITHUB_ENV"
           args=(--package "$PACKAGE" --test-tool nextest --in-place --no-shuffle
-                --shard "$SHARD/$SHARDS" --timeout-multiplier 3 --minimum-test-timeout 120
+                --shard "$SHARD/$TOTAL" --timeout-multiplier 3 --minimum-test-timeout 120
                 --output "$RUNNER_TEMP/out")
           set -f  # pass the globs to cargo-mutants literally (it expands them recursively)
           for f in $FILES; do args+=(--file "$f"); done
@@ -101,7 +128,7 @@ jobs:
         run: |
           missed="$RUNNER_TEMP/out/mutants.out/missed.txt"
           {
-            echo "### Missed mutants: $AREA, slice $SHARD of $SHARDS"
+            echo "### Missed mutants: $AREA part $PART of $PARTS, shard $SHARD of $(( SHARDS * PARTS ))"
             echo
             echo '```text'
             head -n 200 "$missed" 2>/dev/null || echo "(none recorded)"
@@ -116,13 +143,13 @@ jobs:
           for f in outcomes.json missed.txt; do
             src="$RUNNER_TEMP/out/mutants.out/$f"
             [ -f "$src" ] || continue
-            case "$f" in outcomes.json) dst="outcomes/$AREA.json" ;; *) dst="outcomes/$AREA.missed.txt" ;; esac
+            case "$f" in outcomes.json) dst="outcomes/$AREA.$PART.json" ;; *) dst="outcomes/$AREA.$PART.missed.txt" ;; esac
             cp "$src" "$dst"
           done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: mutants-${{ matrix.area }}
+          name: mutants-${{ matrix.area }}-${{ matrix.part }}
           path: outcomes
           retention-days: 30
 
@@ -149,8 +176,22 @@ jobs:
         run: |
           args=()
           shopt -s nullglob # no shard file: every area is reported untested
+          # Parts per area (the `parts` of the matrix). An area with a part missing (its job
+          # failed or timed out before writing outcomes) is reported untested, never scored
+          # from the parts that did arrive.
+          declare -A EXPECT=([kernels]=2 [hash]=1 [parser]=1 [serialization]=1)
+          declare -A HAVE=()
           for f in shards/*.json; do
-            args+=("$(basename "$f" .json)=$f")
+            area="$(basename "$f" .json)"; area="${area%%.*}" # `kernels.2.json` is part 2
+            HAVE[$area]=$(( ${HAVE[$area]:-0} + 1 ))
+          done
+          for f in shards/*.json; do
+            area="$(basename "$f" .json)"; area="${area%%.*}"
+            if [ "${HAVE[$area]}" -ne "${EXPECT[$area]:-1}" ]; then
+              echo "::warning::$area has ${HAVE[$area]} of ${EXPECT[$area]:-1} parts; reported untested" >&2
+              continue
+            fi
+            args+=("$area=$f")
           done
           python3 tests/scripts/mutation_score.py --floors tests/mutation-floors.json \
             --out mutation-score.json "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"

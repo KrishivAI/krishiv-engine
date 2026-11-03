@@ -1208,7 +1208,7 @@ impl Resolver<'_> {
                 // of them, and Arrow's `Time64` does not carry `p`): the
                 // precision follows as a trailing literal.
                 if is_builtin_entry(&entry)
-                    && matches!(entry.id.name(), "extract" | "date_part")
+                    && matches!(entry.id.name(), "extract" | "date_part" | "datepart")
                     && n == 2
                     && let Some(DataType::Time { precision }) = &call_kids[1].ty.data_type
                     && *precision < 6
