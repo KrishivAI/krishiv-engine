@@ -270,6 +270,20 @@ fn to_34_digits(v: i256) -> Option<i256> {
 
 /// The carrier value of `unscaled`, at `scale`, in `unit`s.
 fn number_as_carrier(unscaled: i128, scale: i8, unit: i64) -> Option<i64> {
+    number_as_carrier_within(unscaled, scale, unit, i64::MIN, i64::MAX)
+}
+
+/// [`number_as_carrier`] for a carrier whose values lie in `min..=max`: the
+/// product is checked against them before an end field above the carrier's
+/// unit drops its remainder (`178956970.7` years is 2147483648 months, past
+/// an `INTERVAL YEAR`'s `i32`, though the truncated 2147483640 would fit).
+fn number_as_carrier_within(
+    unscaled: i128,
+    scale: i8,
+    unit: i64,
+    min: i64,
+    max: i64,
+) -> Option<i64> {
     // A `decimal(38, s)` times a day's microseconds can pass `i128` however small
     // the result, so the product is wide.
     let v = i256::from_i128(unscaled).checked_mul(i256::from_i128(i128::from(unit)))?;
@@ -282,7 +296,9 @@ fn number_as_carrier(unscaled: i128, scale: i8, unit: i64) -> Option<i64> {
     } else {
         v.checked_mul(power)?
     };
-    let carrier = i64::try_from(v.to_i128()?).ok()?;
+    let carrier = i64::try_from(v.to_i128()?)
+        .ok()
+        .filter(|c| (min..=max).contains(c))?;
     // The product is checked for overflow with its fraction, then an end
     // field above the carrier's unit (year, day, hour, minute) drops what is
     // below it toward zero: Spark 4.2 gives 80 minutes for `80.5BD` as
@@ -359,7 +375,14 @@ pub fn number_to_year_month(
     names: CastNames<'_>,
 ) -> Result<IntervalYearMonthArray, KernelError> {
     from_number::<IntervalYearMonthType>(a, null_on_overflow, names, |v, scale| {
-        i32::try_from(number_as_carrier(v, scale, unit)?).ok()
+        i32::try_from(number_as_carrier_within(
+            v,
+            scale,
+            unit,
+            i64::from(i32::MIN),
+            i64::from(i32::MAX),
+        )?)
+        .ok()
     })
 }
 
@@ -459,6 +482,19 @@ mod tests {
         let out =
             interval_to_integral(&big, MICROS_PER_SECOND, &DataType::Int8, true, names()).unwrap();
         assert!(out.is_null(0));
+    }
+
+    #[test]
+    fn a_year_checks_the_month_carrier_before_truncating() {
+        // 178956970.7 years is 2147483648.4 months: past i32 (Spark: CAST_OVERFLOW).
+        let a = Decimal128Array::from(vec![1_789_569_707_i128, 1_789_569_705])
+            .with_precision_and_scale(10, 1)
+            .unwrap();
+        let years = number_to_year_month(&a, 12, true, names()).unwrap();
+        assert!(years.is_null(0));
+        // 178956970.5 years is 2147483646 months, kept to 178956970 years.
+        assert_eq!(years.value(1), 178_956_970 * 12);
+        assert!(number_to_year_month(&a, 12, false, names()).is_err());
     }
 
     #[test]
