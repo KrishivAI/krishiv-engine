@@ -54,7 +54,7 @@ use object_store::{
 };
 use tokio::sync::Semaphore;
 
-pub use self::cache::{CacheKey, MetadataCache};
+pub use self::cache::{CacheKey, CacheStats, MetadataCache};
 pub use self::coalesce::{Coalesced, Waste, coalesce, coalesce_with};
 pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
 pub use self::pace::StorePolicy;

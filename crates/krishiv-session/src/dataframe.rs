@@ -1111,7 +1111,14 @@ impl DataFrame {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
-        let env = self.session.query_env();
+        let mut env = self.session.query_env();
+        // A fresh analysis is still the same statement: keep what
+        // `system.queries` shows of it.
+        if let Some(a) = &cached {
+            env.text.clone_from(&a.env.text);
+            env.statement_class = a.env.statement_class;
+            env.row = Arc::clone(&a.env.row);
+        }
         if let Some(a) = cached
             && !a.analyzed.reads_files
             && !a.env.catalog.loaded_file_views()
@@ -1125,6 +1132,33 @@ impl DataFrame {
             return Ok(a);
         }
         self.analyzed_in(env).await
+    }
+
+    /// [`Self::analysis`] for an action that runs the query: a re-analysis
+    /// that fails (the catalog or the configuration changed since the frame
+    /// analyzed) is a row of `system.queries`, with the statement's text and
+    /// class. A first analysis that fails is left to the caller, as before:
+    /// inside `sql` its refusal handler records it.
+    pub(crate) async fn action_analysis(&self) -> Result<Arc<Analysis>, KrishivError> {
+        let error = match self.analysis().await {
+            Ok(a) => return Ok(a),
+            Err(error) => error,
+        };
+        let cached = self
+            .analysis
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(a) = cached {
+            let id = self.session.state.queries.record_refused(
+                a.env.text.as_deref(),
+                a.env.statement_class,
+                &error,
+            );
+            // Shared with the statement's marker, so `sql` adds no second row.
+            *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
+        }
+        Err(error)
     }
 
     /// Analyzes the plan in `env` and keeps the result.
@@ -1143,12 +1177,37 @@ impl DataFrame {
             return Err(e.clone());
         }
         let analyzed = self.session.analyze_in(&self.plan, &env, text).await?;
+        let mut env = env;
+        if let Some(t) = text {
+            env.text = Some(Arc::from(t.as_str()));
+        }
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),
         });
         *self.analysis.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&analysis));
         Ok(analysis)
+    }
+
+    /// Makes the statement `text` of class `class` the one this frame's executions show in
+    /// `system.queries`, when its analysis has none yet (a frame a command made).
+    pub(crate) fn with_statement(
+        &self,
+        text: &krishiv_common::redact::RedactedSql,
+        class: &'static str,
+    ) {
+        let mut cached = self.analysis.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(a) = cached.as_ref()
+            && a.env.text.is_none()
+        {
+            let mut env = QueryEnv::clone(&a.env);
+            env.text = Some(Arc::from(text.as_str()));
+            env.statement_class = Some(class);
+            *cached = Some(Arc::new(Analysis {
+                env: Arc::new(env),
+                analyzed: Arc::clone(&a.analyzed),
+            }));
+        }
     }
 
     /// The result's schema: names, Arrow types and nullability.
@@ -1216,7 +1275,7 @@ impl DataFrame {
         // Before the query is analyzed, so an invalidation that runs while it executes keeps
         // its rows out of the result cache.
         let generation = crate::result_cache::global().generation();
-        let a = self.analysis().await?;
+        let a = self.action_analysis().await?;
         // The reads were authorized by the analysis: a hit serves only what this principal's
         // own run of the query would return.
         // A frame that asked for a relation cache (`cache()`, `persist()`) runs the query: its
@@ -1227,7 +1286,7 @@ impl DataFrame {
             // A cached relation substituted into the plan makes the rows depend on this
             // session's state: neither served from nor stored into the shared cache.
             .filter(|_| {
-                self.session.state.cache.substitute(&a.analyzed).is_none()
+                !self.session.state.cache.would_substitute(&a.analyzed)
                     && self
                         .session
                         .state
@@ -1238,6 +1297,14 @@ impl DataFrame {
         if let Some((settings, key)) = &result
             && let Some((batches, _age)) = crate::result_cache::global().lookup(key, settings.ttl)
         {
+            // A hit is a request answered, so it has its row in `system.queries` too; it is not a
+            // physical execution, so the metrics registry does not count it.
+            let id = self
+                .session
+                .state
+                .queries
+                .record_replayed(a.env.text.as_deref(), a.env.statement_class);
+            *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
             return Ok(crate::carrier::client_stream(crate::result_cache::replay(
                 batches,
             )));
@@ -1283,9 +1350,27 @@ impl DataFrame {
     ) -> Result<(krishiv_exec::planner::PhysicalPlan, CacheFill), KrishivError> {
         let key = CacheKey::of(&a.analyzed);
         let hit = self.session.state.cache.lookup(&key).is_some();
-        let owned = self.cache_substituted(a)?;
-        let analyzed = owned.as_ref().unwrap_or(&a.analyzed);
-        let (_, physical) = self.session.physical(analyzed, &a.env).await?;
+        let planned = match self.cache_substituted(a) {
+            Ok(owned) => {
+                let analyzed = owned.as_ref().unwrap_or(&a.analyzed);
+                self.session.physical(analyzed, &a.env).await
+            }
+            Err(error) => Err(error),
+        };
+        let physical = match planned {
+            Ok((_, physical)) => physical,
+            Err(error) => {
+                // The query analyzed but never ran: an action's planning failure is a row of
+                // `system.queries` too (no execution began, so it has no other row).
+                let id = self.session.state.queries.record_refused(
+                    a.env.text.as_deref(),
+                    a.env.statement_class,
+                    &error,
+                );
+                *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
+                return Err(error);
+            }
+        };
         let fill = if hit || self.cache_request.is_none() {
             CacheFill::No
         } else {
@@ -1362,7 +1447,7 @@ impl DataFrame {
         let df = self.clone();
         self.session
             .on_executor(async move {
-                let a = df.analysis().await?;
+                let a = df.action_analysis().await?;
                 let (physical, fill) = df.physical_cached(&a).await?;
                 let (stream, query) = df.session.run_with_query(&physical, &a.env).await?;
                 let mut stream = fill.fill(stream, &df.session.state.cache);
@@ -2133,7 +2218,7 @@ impl DataFrameWriter {
         let session = df.session.clone();
         session
             .on_executor(async move {
-                let a = df.analysis().await?;
+                let a = df.action_analysis().await?;
                 // Files hold a geometry or geography as a WKB column with a
                 // Parquet logical type (P2-T181 unit U3); until it lands, a
                 // spatial value is not written as the `{srid, wkb}` struct
