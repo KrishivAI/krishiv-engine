@@ -213,3 +213,46 @@ fn a_regression_file_replays_on_its_reduced_rows() -> R {
     assert_eq!(r.run("SELECT COUNT(*) FROM nulls")?[0][0], "10");
     Ok(())
 }
+
+fn shell(script: &str) -> PythonSpark {
+    PythonSpark {
+        command: vec!["sh".to_owned(), "-c".to_owned(), script.to_owned()],
+        data: std::path::PathBuf::from("/tpch"),
+    }
+}
+
+#[test]
+fn a_spark_script_is_fed_json_and_its_answers_are_read() {
+    use krishiv_testkit::metamorphic_reduce::SparkAnswers;
+    let queries = vec!["SELECT 1".to_owned()];
+    // The script reads the request from stdin and answers one statement.
+    let mut ok = shell(r#"grep -q '"setup"' && printf '[{"rows":[["1"]]}]'"#);
+    assert_eq!(
+        ok.answer(&["CREATE VIEW v AS SELECT 1".to_owned()], &queries),
+        Ok(vec![Ok(vec![vec!["1".to_owned()]])])
+    );
+    let failed = shell("cat >/dev/null; exit 3").answer(&[], &queries);
+    assert!(failed.is_err_and(|e| e.contains("exited with")));
+    let wrong_count = shell("cat >/dev/null; printf '[]'").answer(&[], &queries);
+    assert!(wrong_count.is_err());
+    let empty = PythonSpark {
+        command: Vec::new(),
+        data: std::path::PathBuf::new(),
+    };
+    let mut empty = empty;
+    assert!(empty.answer(&[], &queries).is_err());
+}
+
+#[test]
+fn verdicts_say_what_they_found() {
+    assert!(
+        Verdict::OracleArtefact
+            .to_string()
+            .contains("oracle artefact")
+    );
+    assert!(
+        Verdict::Unavailable("no spark".to_owned())
+            .to_string()
+            .contains("Spark not consulted: no spark")
+    );
+}
