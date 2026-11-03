@@ -46,6 +46,7 @@ use parquet::errors::ParquetError;
 
 use super::calendar::Guard;
 use super::meta::{ParquetMetadata, spark_read_type};
+use super::page_stage::PageStage;
 use super::row_filter::{CACHE_BYTES, LateMaterialization, Worth};
 use crate::error::{FormatError, FormatResult};
 use crate::format::{Decoder, ScanUnitMetrics, Step, UnitPlan};
@@ -148,6 +149,8 @@ pub(crate) struct ParquetDecoder {
     leaves: Vec<usize>,
     /// The row filter's leaves while it is on (the only ones prefetched).
     late_leaves: Vec<usize>,
+    /// The page-index stage (`page_stage.rs`) until it has decided.
+    pages: Option<PageStage>,
 }
 
 impl std::fmt::Debug for ParquetDecoder {
@@ -326,6 +329,18 @@ impl ParquetDecoder {
             .flat_map(|u| u.chunks.iter().cloned())
             .collect();
         chunk_ranges.sort_by_key(|r| (r.start, r.end));
+        // The page index answers only what statistics left undecided, and
+        // only a scan that pushes a filter and allows it.
+        // Not with `_metadata.row_index`: row numbers under a page-skipping
+        // selection are not verified yet (design section 5, stage 3).
+        let pages = if o.bool("pageIndex").unwrap_or(true) && !row_index {
+            req.predicate.as_ref().and_then(|p| {
+                let units: Vec<usize> = planned.iter().map(|u| u.index).collect();
+                PageStage::plan(meta, &units, p)
+            })
+        } else {
+            None
+        };
         Ok(Self {
             decoder: Some(decoder),
             reader: None,
@@ -351,6 +366,7 @@ impl ParquetDecoder {
             late,
             leaves,
             late_leaves,
+            pages,
         })
     }
 
@@ -576,7 +592,54 @@ impl ParquetDecoder {
         Ok(())
     }
 
+    /// Once every index range arrived: the stage's row selections replace
+    /// the units', and the decoder is rebuilt with them.
+    fn decide_pages(&mut self) -> FormatResult<()> {
+        let Some(stage) = self.pages.as_mut() else {
+            return Ok(());
+        };
+        if !stage.complete() {
+            return Ok(());
+        }
+        let decisions = stage.finish(&self.meta);
+        self.metrics.pages_pruned += stage.pages_pruned;
+        self.metrics.page_index_rejected += stage.rejected;
+        self.pages = None;
+        if decisions.is_empty() {
+            return Ok(());
+        }
+        for d in decisions {
+            if let Some(u) = self.planned.iter_mut().find(|u| u.index == d.index) {
+                u.selection = Some(match u.selection.take() {
+                    Some(existing) => existing.intersection(&d.keep),
+                    None => d.keep,
+                });
+            }
+        }
+        // A unit with no row left is dropped: its chunks must not be
+        // prefetched for a reader that never takes them.
+        let before = self.planned.len();
+        self.planned.retain(|u| {
+            u.selection
+                .as_ref()
+                .is_none_or(ParquetSelection::selects_any)
+        });
+        self.metrics.units_pruned += (before - self.planned.len()) as u64;
+        let selections = self
+            .planned
+            .iter()
+            .map(|u| RowGroupSelection::new(u.index, u.selection.clone()))
+            .collect();
+        let late = self.late.want();
+        self.rebuild(Some(selections), late, false)
+    }
+
     fn step_inner(&mut self) -> FormatResult<Step> {
+        // The page index first: one read, then the row groups' selections.
+        if let Some(ranges) = self.pages.as_mut().and_then(PageStage::request) {
+            self.fetching = None;
+            return Ok(Step::NeedData(ranges));
+        }
         loop {
             if let Some(reader) = self.reader.as_mut() {
                 let next = super::contain("decoding", FormatError::Corrupt, || {
@@ -647,8 +710,27 @@ impl Decoder for ParquetDecoder {
     }
 
     fn push(&mut self, data: Vec<(Range<u64>, Bytes)>) -> FormatResult<()> {
+        // Index bytes go to the page stage, never to arrow-rs's decoder, and
+        // are counted apart from the chunk bytes.
+        let data: Vec<(Range<u64>, Bytes)> = match self.pages.as_mut() {
+            Some(stage) => data
+                .into_iter()
+                .filter(|(range, bytes)| {
+                    let index = stage.accept(range, bytes);
+                    if index {
+                        self.metrics.index_bytes += bytes.len() as u64;
+                    }
+                    !index
+                })
+                .collect(),
+            None => data,
+        };
+        self.metrics.bytes_pushed += data.iter().map(|(_, b)| b.len() as u64).sum::<u64>();
+        if let Err(e) = self.decide_pages() {
+            self.poisoned = true;
+            return Err(e);
+        }
         let (ranges, bytes): (Vec<_>, Vec<_>) = data.into_iter().unzip();
-        self.metrics.bytes_pushed += bytes.iter().map(|b| b.len() as u64).sum::<u64>();
         if let Err(e) = self.check_page_headers(&ranges, &bytes) {
             self.poisoned = true;
             return Err(e);
@@ -725,9 +807,12 @@ impl Decoder for ParquetDecoder {
     }
 
     fn buffered_bytes(&self) -> usize {
-        self.decoder.as_ref().map_or(0, |d| {
-            usize::try_from(d.buffered_bytes()).unwrap_or(usize::MAX)
-        })
+        self.decoder
+            .as_ref()
+            .map_or(0, |d| {
+                usize::try_from(d.buffered_bytes()).unwrap_or(usize::MAX)
+            })
+            .saturating_add(self.pages.as_ref().map_or(0, PageStage::held_bytes))
     }
 
     fn working_bytes(&self) -> usize {

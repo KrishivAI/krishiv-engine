@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "datetime": [
-      9
-    ]
-  },
-  "file": "typeCoercion/native/arrayJoin",
-  "format_version": 1
-}

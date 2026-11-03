@@ -78,6 +78,10 @@ pub struct ParquetMetadata {
     /// footer's ANSI interval types: see [`super::intervals`]).
     pub(crate) schema: SchemaRef,
     pub(crate) row_groups: Vec<RowGroup>,
+    /// The file's size in bytes (index and Bloom ranges are checked against it).
+    pub(crate) size: u64,
+    /// Whether the writer ordered binary statistics by signed bytes.
+    pub(crate) legacy_writer: bool,
     statistics: FileStatistics,
     heap: usize,
 }
@@ -307,6 +311,8 @@ fn describe_checked(
         reader_options,
         schema,
         row_groups: planned,
+        size,
+        legacy_writer,
         statistics,
         heap,
     })
@@ -470,7 +476,7 @@ fn spark_read_field(f: &FieldRef) -> Field {
 }
 
 /// The type of the leaf at `path` (structs only).
-fn leaf_type<'a>(schema: &'a Schema, path: &[String]) -> Option<&'a DataType> {
+pub(super) fn leaf_type<'a>(schema: &'a Schema, path: &[String]) -> Option<&'a DataType> {
     let (first, rest) = path.split_first()?;
     let mut dt = schema.field_with_name(first).ok()?.data_type();
     for name in rest {
@@ -497,7 +503,7 @@ fn legacy_binary_stats(created_by: Option<&str>) -> bool {
 }
 
 /// Statistics of one leaf column chunk in its engine type `dt`.
-fn column_statistics(
+pub(super) fn column_statistics(
     path: ColumnPath,
     d: &ColumnDescriptor,
     dt: &DataType,

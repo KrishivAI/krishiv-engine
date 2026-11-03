@@ -1339,7 +1339,11 @@ fn constant_string(value: &str, rows: usize) -> Result<ArrayRef> {
 fn spark_file_path(file: &FileRef) -> String {
     let store = file.store.to_string();
     let path = uri_path(&decode_store_path(file.path.as_ref()));
-    match store.strip_prefix("file://") {
+    // A local store names itself `file://` or, for a session's tables, `file`.
+    match store
+        .strip_prefix("file://")
+        .or_else(|| (store == "file").then_some(""))
+    {
         Some(rest) => format!("file:{}/{path}", rest.trim_end_matches('/')),
         None => format!("{}/{path}", store.trim_end_matches('/')),
     }

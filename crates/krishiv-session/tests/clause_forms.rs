@@ -809,10 +809,10 @@ fn except_drops_columns() -> R {
     Ok(())
 }
 
-/// `* EXCEPT` over a nested field needs struct support: the analyzer must
-/// fail naming it, never drop a wrong column.
+/// `* EXCEPT` over a field of a column that is no struct fails naming the
+/// missing field, never dropping a wrong column.
 #[test]
-fn except_nested_field_is_unsupported() -> R {
+fn except_field_of_a_flat_column_is_not_found() -> R {
     let s = Session::new()?;
     let t = Table {
         name: "t".to_owned(),
@@ -820,27 +820,15 @@ fn except_nested_field_is_unsupported() -> R {
         rows: vec![vec![Some("1".to_owned()), Some("a".to_owned())]],
     };
     register(&s, &t, "t")?;
-    for (sql, feature) in [
-        (
-            "SELECT * EXCEPT (id.sub) FROM t",
-            "SELECT * EXCEPT with nested column `id.sub`",
-        ),
-        (
-            "SELECT t.* EXCEPT (t.id.sub) FROM t",
-            "SELECT * EXCEPT with nested column `t.id.sub`",
-        ),
+    for sql in [
+        "SELECT * EXCEPT (id.sub) FROM t",
+        "SELECT t.* EXCEPT (t.id.sub) FROM t",
     ] {
         let e = match block_on(s.sql(sql)) {
             Err(e) => e,
-            Ok(df) => block_on(df.collect()).expect_err("nested EXCEPT must fail"),
+            Ok(df) => block_on(df.collect()).expect_err("EXCEPT of a missing field must fail"),
         };
-        assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
-        assert!(
-            e.message_parameters()
-                .iter()
-                .any(|(k, v)| *k == "feature" && v == feature),
-            "{sql}: {e}"
-        );
+        assert_eq!(e.error_class().name(), "FIELD_NOT_FOUND", "{sql}: {e}");
     }
     Ok(())
 }
@@ -1138,6 +1126,25 @@ fn qualify_errors() -> R {
         ),
     ] {
         assert_eq!(error_of(&s, sql)?.error_class().name(), class, "{sql}");
+    }
+    Ok(())
+}
+
+/// The fields a struct star expands to are lateral column aliases for the
+/// select items after them, as explicit `s.a AS a` is.
+#[test]
+fn struct_star_fields_are_lateral_aliases() -> R {
+    let s = Session::new()?;
+    for sql in [
+        "SELECT s.*, a + 1 AS n FROM (SELECT named_struct('a', 1) AS s) t",
+        "SELECT s.* EXCEPT (b), a + 1 AS n FROM (SELECT named_struct('a', 1, 'b', 2) AS s) t",
+    ] {
+        let b = block_on(block_on(s.sql(sql))?.collect())?;
+        let n = arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Int32Type>(
+            b[0].column(b[0].num_columns() - 1),
+        )
+        .value(0);
+        assert_eq!(n, 2, "{sql}");
     }
     Ok(())
 }

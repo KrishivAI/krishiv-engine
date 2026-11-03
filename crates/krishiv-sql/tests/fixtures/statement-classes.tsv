@@ -81,6 +81,7 @@ AlterView::UnsetTblProperties	DDL	ALTER VIEW v UNSET TBLPROPERTIES ('k')
 AlterView::RenameTo	DDL	ALTER VIEW v RENAME TO w
 AlterNamespace::SetProperties	DDL	ALTER DATABASE d SET PROPERTIES (k = 'v')
 AlterNamespace::SetLocation	DDL	ALTER DATABASE d SET LOCATION '/data/d'
+AlterNamespace::SetComment	DDL	COMMENT ON SCHEMA d IS 'c'
 Insert	WRITE	INSERT INTO t SELECT * FROM s
 Insert	WRITE	INSERT OVERWRITE TABLE t VALUES (1)
 Insert	WRITE	FROM s INSERT INTO t SELECT a INSERT INTO u SELECT b

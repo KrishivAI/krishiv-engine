@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Decimal128Type, Int32Type, Int64Type};
-use arrow_array::{Array, ArrayRef, BinaryArray, StringArray};
+use arrow_array::{Array, ArrayRef, BinaryArray, Int64Array, StringArray};
 use arrow_schema::DataType;
 use krishiv_common::error::KrishivError;
 use krishiv_kernels::number_format::convert;
@@ -28,6 +28,7 @@ pub(super) const NAMES: &[&str] = &[
     "hex",
     "unhex",
     "bin",
+    "factorial",
     "conv",
     "format_number",
     "to_number",
@@ -125,6 +126,25 @@ fn bin() -> Binding {
             })
             .collect();
         Ok(string_array(&owned))
+    })
+}
+
+/// `factorial(n)`: `n!` for `0..=20`, NULL otherwise (a long holds 20!).
+fn factorial() -> Binding {
+    Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
+        let a = x.column(0)?.as_primitive::<Int32Type>().clone();
+        let out: Int64Array = (0..a.len())
+            .map(|i| {
+                if a.is_null(i) {
+                    return None;
+                }
+                let n = a.value(i);
+                (0..=20)
+                    .contains(&n)
+                    .then(|| (2..=i64::from(n)).product::<i64>())
+            })
+            .collect();
+        Ok(Arc::new(out) as ArrayRef)
     })
 }
 
@@ -431,6 +451,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         },
         ("unhex", [t]) if is_string(t) => Ok(unhex()),
         ("bin", [DataType::Int64]) => Ok(bin()),
+        ("factorial", [DataType::Int32]) => Ok(factorial()),
         ("conv", [n, DataType::Int32, DataType::Int32]) if is_string(n) => Ok(conv(opts.ansi)),
         ("format_number", [_, DataType::Int32]) => Ok(format_number()),
         ("format_number", [_, t]) if is_string(t) => Ok(format_number()),
