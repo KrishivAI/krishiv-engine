@@ -68,7 +68,7 @@ mod topn;
 
 pub(crate) use keys::KeyEncoder;
 pub use keys::SortKey;
-pub(crate) use merge::data_bytes;
+pub(crate) use merge::{data_bytes, owned_rows};
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortMetrics};
 pub use topn::TopN;
 
