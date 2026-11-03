@@ -186,3 +186,44 @@ fn cli_reports_new_and_known_mismatches() -> R {
     std::fs::remove_dir_all(&dir)?;
     Ok(())
 }
+
+/// An evaluator that answers every expression with one fixed error class.
+struct Always(&'static str);
+
+impl Evaluator for Always {
+    fn eval(&mut self, _sql: &str, _ansi: bool) -> Expect {
+        Expect::Error(self.0.to_owned())
+    }
+}
+
+fn one_case(sql: &str, ansi: bool, spark: &str) -> Result<Fixture, String> {
+    Fixture::parse(&format!(
+        r#"{{"setup": "x", "cases": [{{"sql": {sql:?}, "ansi": {ansi}, "kids": [], "schema": "date", "rows": ["{spark}"]}}]}}"#
+    ))
+}
+
+/// ADR 0023: past the `int` day range `date_add`/`date_sub`/`datediff` wrap silently in Spark and
+/// raise `ARITHMETIC_OVERFLOW` under ANSI here, by decision. That divergence is not reported, but
+/// nothing near it is: ANSI off, another error class and another expression all are.
+#[test]
+fn the_date_arithmetic_overflow_divergence_is_not_reported_and_nothing_else_is() -> R {
+    let overflow = |sql: &str, ansi: bool, class: &'static str| -> Result<usize, String> {
+        let fx = one_case(sql, ansi, "2000-01-01")?;
+        Ok(run(&fx, &mut Always(class)).len())
+    };
+    for f in [
+        "date_add(dt, i)",
+        "date_sub(dt, i)",
+        "datediff(dt, date_add(dt, i))",
+    ] {
+        assert_eq!(overflow(f, true, "ARITHMETIC_OVERFLOW")?, 0, "{f}");
+    }
+    // Reported: ANSI off, another class, another expression.
+    assert_eq!(
+        overflow("date_add(dt, i)", false, "ARITHMETIC_OVERFLOW")?,
+        1
+    );
+    assert_eq!(overflow("date_add(dt, i)", true, "DIVIDE_BY_ZERO")?, 1);
+    assert_eq!(overflow("(i + l)", true, "ARITHMETIC_OVERFLOW")?, 1);
+    Ok(())
+}

@@ -150,7 +150,28 @@ impl Mismatch {
     }
 }
 
-/// Replays every case and returns the minimal mismatches, sorted by key.
+/// Whether `m` is the divergence ADR 0023 records (owner decision, 2026-10-18): `date_add`,
+/// `date_sub` and `datediff` past the `int` day range wrap silently in Spark, in both ANSI modes,
+/// and raise `ARITHMETIC_OVERFLOW` under ANSI here (`try_*` gives NULL; with ANSI off the wrap is
+/// kept). With all-literal arguments Spark raises a bare `ArithmeticException` instead of wrapping.
+/// Such a mismatch is not reported, so a seeded nightly run does not find a new variant of it
+/// every day; a parent of such a case is already left out, as for any mismatching child.
+fn documented_divergence(m: &Mismatch) -> bool {
+    let date_arith = ["date_add(", "date_sub(", "datediff("]
+        .iter()
+        .any(|f| m.sql.contains(f));
+    let spark_wraps_or_throws = match &m.spark {
+        Expect::Rows { .. } => true,
+        Expect::Error(class) => class == "ArithmeticException",
+    };
+    m.ansi
+        && date_arith
+        && spark_wraps_or_throws
+        && matches!(&m.got, Expect::Error(class) if class == "ARITHMETIC_OVERFLOW")
+}
+
+/// Replays every case and returns the minimal mismatches, sorted by key, without the
+/// documented divergences ([`documented_divergence`]).
 pub fn run(fixture: &Fixture, ev: &mut dyn Evaluator) -> Vec<Mismatch> {
     let mut bad: BTreeMap<(&str, bool), Option<Expect>> = BTreeMap::new();
     for c in &fixture.cases {
@@ -173,6 +194,7 @@ pub fn run(fixture: &Fixture, ev: &mut dyn Evaluator) -> Vec<Mismatch> {
                 got,
             })
         })
+        .filter(|m| !documented_divergence(m))
         .collect();
     out.sort_by_key(Mismatch::key);
     out.dedup_by_key(|m| m.key());
