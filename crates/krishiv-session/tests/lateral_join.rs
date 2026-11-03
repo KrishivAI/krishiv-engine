@@ -318,33 +318,31 @@ fn lateral_after_using_join_reads_merged_and_original_keys() -> R {
     Ok(())
 }
 
-/// An `IN` subquery in the `ON` of a lateral join composes with the lateral
-/// decorrelation.
+/// Spark refuses an `IN` or `EXISTS` in the condition of a lateral join.
 #[test]
-fn an_in_subquery_in_the_on_of_a_lateral_join() -> R {
+fn an_in_subquery_in_the_on_of_a_lateral_join_is_refused() -> R {
     let s = session()?;
-    assert_eq!(
-        run(
-            &s,
-            "SELECT t1.c1, s.y FROM t1 JOIN LATERAL (SELECT t1.c2 AS y) s ON t1.c1 IN (SELECT c1 FROM t2)"
-        )?,
-        ["0|1"]
+    let err = error_of(
+        &s,
+        "SELECT t1.c1, s.y FROM t1 JOIN LATERAL (SELECT t1.c2 AS y) s ON t1.c1 IN (SELECT c1 FROM t2)",
+    );
+    assert!(
+        err.contains("UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.UNSUPPORTED_IN_EXISTS_SUBQUERY"),
+        "{err}"
     );
     Ok(())
 }
 
-/// A `HAVING` subquery reads the aggregate's output before its input: `x`
-/// is `sum(x)`, not the column `x`.
+/// Spark binds `x` in a `HAVING` subquery to the aggregate's input column, not
+/// to the output alias `sum(x) AS x`, and refuses it as not grouped.
 #[test]
-fn a_having_subquery_prefers_the_aggregate_output() -> R {
+fn a_having_subquery_binds_an_unqualified_name_to_the_aggregate_input() -> R {
     let s = session()?;
-    assert_eq!(
-        run(
-            &s,
-            "SELECT sum(x) AS x FROM VALUES (1), (2) t(x) \
-             HAVING EXISTS (SELECT 1 FROM VALUES (3) u(y) WHERE u.y = x)"
-        )?,
-        ["3"]
+    let err = error_of(
+        &s,
+        "SELECT sum(x) AS x FROM VALUES (1), (2) t(x) \
+         HAVING EXISTS (SELECT 1 FROM VALUES (3) u(y) WHERE u.y = x)",
     );
+    assert!(!err.is_empty(), "must not answer");
     Ok(())
 }

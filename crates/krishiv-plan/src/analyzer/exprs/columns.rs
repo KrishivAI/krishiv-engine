@@ -409,12 +409,19 @@ impl Resolver<'_> {
         // nested lateral join's right side sees its own left side only).
         let levels = cx.env.outer.iter().enumerate().rev().take(1);
         for (level, outer) in levels.filter(|_| cx.outer) {
-            let mut hit = self.find(&outer.scope, &c.name, origin, false)?;
+            // Spark binds an unqualified outer name to the aggregate's input
+            // first (an output alias of the same name is then not reached),
+            // so the input columns the output does not carry come first.
+            let mut hit = if outer.fallback.is_empty() {
+                None
+            } else {
+                self.find(&outer.fallback, &c.name, origin, false)?
+            };
+            if hit.is_none() {
+                hit = self.find(&outer.scope, &c.name, origin, false)?;
+            }
             if hit.is_none() && c.name.len() > 1 {
                 hit = self.find(&outer.hidden, &c.name, origin, false)?;
-            }
-            if hit.is_none() && !outer.fallback.is_empty() {
-                hit = self.find(&outer.fallback, &c.name, origin, false)?;
             }
             if let Some((a, used)) = hit {
                 self.used(&a);
@@ -952,7 +959,13 @@ impl Resolver<'_> {
         // aggregate's own output.
         let fallback: Arc<[Attr]> = cx.agg_scope.map_or_else(
             || Arc::from(Vec::new()),
-            |input| input.iter().cloned().collect(),
+            |input| {
+                input
+                    .iter()
+                    .filter(|a| !scope.iter().any(|s| s.col.id == a.col.id))
+                    .cloned()
+                    .collect()
+            },
         );
         outer.push(super::super::resolve::Level {
             scope: scope.into(),

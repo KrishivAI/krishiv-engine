@@ -132,9 +132,9 @@ pub(super) struct Level {
     /// The columns a `USING` join merged away on the left side of a `JOIN LATERAL`: they
     /// answer to a qualified name only.
     pub(super) hidden: Arc<[Attr]>,
-    /// Attributes searched only when `scope` has no answer: the input of the
-    /// aggregate a `HAVING` subquery sits in. An aggregate output of the same
-    /// name wins over an input column.
+    /// The input columns of the aggregate a `HAVING` subquery sits in that its
+    /// output does not carry, searched first: Spark binds an outer name to the
+    /// aggregate input before an output alias of the same name.
     pub(super) fallback: Arc<[Attr]>,
 }
 
