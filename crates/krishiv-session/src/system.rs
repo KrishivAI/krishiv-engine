@@ -681,8 +681,9 @@ pub(crate) struct QueryRow {
     pub(crate) wall_ns: Option<i64>,
     pub(crate) peak_memory_bytes: Option<i64>,
     pub(crate) error_class: Option<String>,
-    /// The operators it ran (a finished query only).
-    pub(crate) operators: Vec<OperatorRow>,
+    /// The operators it ran (a finished query only); shared, so a copy of
+    /// the history doesn't copy them.
+    pub(crate) operators: Arc<[OperatorRow]>,
     pub(crate) workload_class: Option<&'static str>,
     /// Busy time of its drivers.
     pub(crate) cpu_ns: Option<i64>,
@@ -950,7 +951,7 @@ impl QueryLog {
             wall_ns: None,
             peak_memory_bytes: None,
             error_class: None,
-            operators: Vec::new(),
+            operators: Arc::default(),
             workload_class: None,
             cpu_ns: None,
             rows_produced: None,
@@ -1034,7 +1035,7 @@ impl QueryLog {
             row.wall_ns = Some(done.wall_ns);
             row.peak_memory_bytes = Some(done.peak_memory_bytes);
             row.error_class = done.error_class.map(str::to_owned);
-            row.operators.clone_from(&done.operators);
+            row.operators = Arc::from(done.operators.as_slice());
             if let Some(t) = done.totals {
                 row.workload_class = Some(t.workload_class);
                 row.cpu_ns = Some(t.cpu_ns);
@@ -1049,14 +1050,17 @@ impl QueryLog {
         }
     }
 
-    /// The operators of every remembered query, oldest query first.
+    /// The operators of every remembered query, oldest query first (copied
+    /// after the lock is released).
     pub(crate) fn operators(&self) -> Vec<OperatorRow> {
-        self.rows
+        let shared: Vec<Arc<[OperatorRow]>> = self
+            .rows
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
-            .flat_map(|r| r.operators.iter().cloned())
-            .collect()
+            .map(|r| Arc::clone(&r.operators))
+            .collect();
+        shared.iter().flat_map(|o| o.iter().cloned()).collect()
     }
 
     /// The rows now, oldest first.
@@ -1295,6 +1299,52 @@ mod tests {
         );
         let rows = log.snapshot();
         assert_eq!((rows[0].state, rows[1].state), ("finished", "running"));
+    }
+
+    #[test]
+    fn a_history_copy_shares_the_operator_rows() {
+        let log = QueryLog::default();
+        let id = log.begin(None, None);
+        let op = OperatorRow {
+            query_id: id.clone(),
+            operator_id: 0,
+            node_id: None,
+            name: "Scan".to_owned(),
+            role: "source",
+            drivers: 1,
+            rows_in: 0,
+            rows_out: 3,
+            batches_in: 0,
+            batches_out: 1,
+            compute_ns: 0,
+            max_driver_compute_ns: 0,
+            blocked_io_ns: 0,
+            blocked_memory_ns: 0,
+            blocked_sink_ns: 0,
+            peak_reserved_bytes: 0,
+            spills: 0,
+            spilled_bytes: 0,
+            spill_files: 0,
+            spill_write_bytes: 0,
+            pipelines: vec![0],
+            extra: Vec::new(),
+            workers: 1,
+        };
+        log.finish(
+            &id,
+            &Finished {
+                state: "finished",
+                wall_ns: 1,
+                peak_memory_bytes: 0,
+                error_class: None,
+                operators: vec![op],
+                totals: None,
+            },
+        );
+        let (a, b) = (log.snapshot(), log.snapshot());
+        assert!(Arc::ptr_eq(&a[0].operators, &b[0].operators));
+        let ops = log.operators();
+        assert_eq!((ops.len(), ops[0].rows_out), (1, 3));
     }
 
     #[test]
