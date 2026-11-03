@@ -382,6 +382,17 @@ impl Resolver<'_> {
                 return self.resolve_attr(&a, used, &c.name, origin, Some(level), cx, false);
             }
         }
+        // `grouping__id` is the grouping id Spark's aggregate rule reads
+        // before a function parameter of that name can: outside a grouping
+        // context it is `UNSUPPORTED_GROUPING_EXPRESSION`.
+        if let [name] = &c.name[..]
+            && name.eq_ignore_ascii_case("grouping__id")
+            && !cx.grouping
+            && !self.ctx.conf.udf_parameter_shadows_function
+            && self.has_parameter(name)
+        {
+            return Err(AnalysisError::new(UnsupportedGroupingExpression {}, origin));
+        }
         // The parameters of the SQL function being resolved rank after
         // everything else, but before a session variable.
         if let Some(b) = self.parameter(&c.name, origin, cx.env.outer.len())? {
@@ -430,10 +441,18 @@ impl Resolver<'_> {
         if self.parameter_attrs().is_empty() {
             return Err(unresolved(&c.name, cx.scope, origin));
         }
+        // A parameter the name matches is out of reach here (the body
+        // nests deeper than a parameter is visible), and Spark proposes
+        // nothing for it.
+        let cs = self.ctx.conf.case_sensitive;
         let candidates: Vec<Attr> = cx
             .scope
             .iter()
-            .chain(self.parameter_attrs())
+            .chain(
+                self.parameter_attrs()
+                    .iter()
+                    .filter(|a| !matches!(&c.name[..], [n] if same(&a.col.name, n, cs))),
+            )
             .cloned()
             .collect();
         Err(unresolved(&c.name, &candidates, origin))
@@ -797,7 +816,7 @@ impl Resolver<'_> {
         clippy::too_many_arguments,
         reason = "one binding site shared by columns, outer references and lambda variables"
     )]
-    pub(super) fn resolve_attr(
+    pub(in crate::analyzer) fn resolve_attr(
         &mut self,
         a: &Attr,
         used: usize,
@@ -910,8 +929,14 @@ impl Resolver<'_> {
         if cx.agg_scope.is_some() {
             scope.extend(cx.extra.unwrap_or_default().iter().cloned());
         }
+        let hidden: Vec<Attr> = cx
+            .rels
+            .iter()
+            .flat_map(|r| r.hidden.iter().cloned())
+            .collect();
         outer.push(super::super::resolve::Level {
             scope: scope.into(),
+            hidden: hidden.into(),
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }

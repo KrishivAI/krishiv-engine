@@ -350,6 +350,9 @@ pub struct ResolutionConf {
     /// `spark.sql.legacy.interval.enabled`: Spark's literals become calendar
     /// intervals; refused here (`KRISHIV_UNSUPPORTED_FEATURE`).
     pub legacy_interval: bool,
+    /// `spark.sql.legacy.nullInEmptyListBehavior`: `NULL IN (empty
+    /// subquery)` is NULL instead of false.
+    pub legacy_null_in_empty_list: bool,
 }
 
 impl Default for ResolutionConf {
@@ -378,13 +381,14 @@ impl Default for ResolutionConf {
             legacy_time_parser: false,
             time_type: false,
             legacy_interval: false,
+            legacy_null_in_empty_list: false,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 22] = [
+    pub const KEYS: [&'static str; 23] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -407,6 +411,7 @@ impl ResolutionConf {
         "spark.sql.legacy.negativeIndexInArrayInsert",
         "spark.sql.timeType.enabled",
         "spark.sql.legacy.interval.enabled",
+        "spark.sql.legacy.nullInEmptyListBehavior",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -463,6 +468,7 @@ impl ResolutionConf {
             legacy_negative_index_in_array_insert: on(Self::KEYS[19]),
             time_type: on(Self::KEYS[20]),
             legacy_interval: on(Self::KEYS[21]),
+            legacy_null_in_empty_list: on(Self::KEYS[22]),
         }
     }
 }
@@ -561,6 +567,7 @@ impl ContextFingerprint {
             c.legacy_negative_index_in_array_insert,
             c.time_type,
             c.legacy_interval,
+            c.legacy_null_in_empty_list,
         ];
         num(
             &mut b,

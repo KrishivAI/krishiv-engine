@@ -634,6 +634,14 @@ impl Resolver<'_> {
                     }
                     continue;
                 }
+                // `t.*` in a subquery where `t` is the enclosing query's: after
+                // the local forms above (a local struct column of that name wins).
+                if let Some(outer) = self.outer_star(s, &cx, e.origin)? {
+                    for b in outer {
+                        items.push(self.named(b)?);
+                    }
+                    continue;
+                }
                 let expanded = self.expand(s, &cx, e.origin)?;
                 let replaced = self.replacements(s, &expanded, e.origin)?;
                 for (a, with) in expanded.iter().zip(replaced) {
@@ -2450,6 +2458,33 @@ impl Resolver<'_> {
                 },
             ));
         }
+        // A distinct call's filter that reads a subquery is computed below
+        // the expansion too (the subquery rewrite joins it to the input
+        // there); the projections read its column.
+        let mut filter_cols: Vec<(u128, Attr)> = Vec::new();
+        for (_, f) in &calls {
+            let Some(filter) = &f.filter else {
+                continue;
+            };
+            if !f.distinct || !has_subquery(filter) {
+                continue;
+            }
+            let k = semantic_key(filter, &mut memo);
+            if filter_cols.iter().any(|(j, _)| *j == k) {
+                continue;
+            }
+            let col = self.attr(
+                &pretty(filter, zone),
+                &ArgType::new(krishiv_types::DataType::Boolean, true),
+            );
+            let attr = Attr {
+                col,
+                qual: no_qual(),
+                source: None,
+            };
+            computed.push((k, Arc::clone(filter), attr.clone()));
+            filter_cols.push((k, attr));
+        }
         // One nullable boolean column per filtered distinct call: whether
         // some row of the group passes its filter.
         let mut cond_cols: Vec<(usize, Attr)> = Vec::new();
@@ -2598,7 +2633,11 @@ impl Resolver<'_> {
                 if let Some(p) = cond_cols.iter().position(|(j, _)| *j == i)
                     && let Some(f) = &calls[i].1.filter
                 {
-                    filters[p] = Arc::clone(f);
+                    let k = semantic_key(f, &mut memo);
+                    filters[p] = filter_cols
+                        .iter()
+                        .find(|(j, _)| *j == k)
+                        .map_or_else(|| Arc::clone(f), |(_, a)| col_expr(&a.col, origin));
                 }
             }
             row.extend(filters);
@@ -3976,6 +4015,19 @@ fn synth_call(
 /// The expansion column evaluating `a`: the input column it already is,
 /// or the fresh column computed for its semantic key (`None` when neither
 /// holds, for the caller to leave the rewrite).
+/// Whether `e` reads a subquery.
+fn has_subquery(e: &Arc<Expr>) -> bool {
+    crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+        if let crate::walk::Node::Expr(x) = n
+            && matches!(x.node, ExprNode::Subquery { .. })
+        {
+            return std::ops::ControlFlow::Break(());
+        }
+        std::ops::ControlFlow::Continue(())
+    })
+    .is_break()
+}
+
 fn expand_col(
     a: &Arc<Expr>,
     scope: &Rel,

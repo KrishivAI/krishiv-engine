@@ -126,6 +126,9 @@ pub(super) struct Rel {
 #[derive(Clone)]
 pub(super) struct Level {
     pub(super) scope: Arc<[Attr]>,
+    /// The columns a `USING` join of that query merged away: not
+    /// resolvable by name, but a qualified star still lists them.
+    pub(super) hidden: Arc<[Attr]>,
 }
 
 /// A scope environment: the CTEs visible and the enclosing queries.
@@ -142,6 +145,10 @@ pub(super) struct Env {
 
 pub(super) struct Resolver<'a> {
     pub(super) ctx: &'a AnalysisContext,
+    /// The context with `spark.sql.ansi.enabled` inverted, swapped in with
+    /// `ctx` while the body of a function captured under the other mode
+    /// resolves.
+    pub(super) flipped: &'a AnalysisContext,
     pub(super) b: &'a Bindings,
     pub(super) next_id: u64,
     next_env: usize,
@@ -201,8 +208,11 @@ pub(super) fn resolve(
     ctx: &AnalysisContext,
     b: &Bindings,
 ) -> Result<Resolved, AnalysisError> {
+    let mut other = ctx.clone();
+    other.conf.ansi = !ctx.conf.ansi;
     let mut r = Resolver {
         ctx,
+        flipped: &other,
         b,
         next_id: 0,
         next_env: 0,

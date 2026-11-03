@@ -722,10 +722,17 @@ fn set_time_zone_sets_the_session_zone() {
     // An invalid zone fails as Spark's time zone check does.
     let e = block_on(s.sql("SET TIME ZONE 'not a zone!'")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InvalidConfValueTimeZone);
-    // `INTERVAL` zones name their unsupported form.
+    // An `INTERVAL` zone is an offset in whole seconds within 18 hours.
     let e = block_on(s.sql("SET TIME ZONE INTERVAL '1' DAY")).unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.to_string().contains("INTERVAL"), "{e}");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::InvalidIntervalFormatTimezoneIntervalOutOfRange
+    );
+    block_on(s.sql("SET TIME ZONE INTERVAL '-08:30' HOUR TO MINUTE")).unwrap();
+    assert_eq!(
+        s.conf().get("spark.sql.session.timeZone").as_deref(),
+        Some("-08:30")
+    );
 }
 
 #[test]
