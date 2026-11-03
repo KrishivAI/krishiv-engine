@@ -137,7 +137,11 @@ def markdown(record: dict) -> str:
     else:
         lines.append(f"No query passed the A-vs-B correctness check (0/{s['queries_total']}).")
     tag = "INDICATIVE ONLY" if s["indicative"] else "load within bound"
-    lines.append(f"Max 1-min load average {s['max_load']:.1f} (bound {LOAD_INDICATIVE:g}): {tag}.")
+    lines.append(
+        f"Max 1-min load average {s['max_load']:.1f} (bound {s.get('load_bound', LOAD_INDICATIVE):g}: "
+        f"{LOAD_INDICATIVE:g} of other load, plus the run's own threads; load at start must be below "
+        f"{LOAD_INDICATIVE:g}): {tag}."
+    )
     return "\n".join(lines)
 
 
@@ -196,6 +200,7 @@ def run_ab(
             "shared, never dropped; both sides read the same Parquet files",
             "bench_lock_wait_s": waited,
             "load_at_start": loadavg(),
+            "threads": threads,
             "queries": {},
         }
         try:
