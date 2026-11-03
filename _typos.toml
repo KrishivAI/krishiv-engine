@@ -24,10 +24,10 @@ extend-exclude = [
 [default]
 extend-ignore-re = [
     '"(ECT|IST)"',         # Java's short time-zone IDs (Europe/Paris, Asia/Kolkata)
-    # the zone name in LEGACY parser docs and tests
-    '(`IST`|\d\d:\d\d (IST|ist)")',
     'spark\.implicits\._', # Spark's implicit-conversions import
     '"Bash\([^"]*\)"',     # command patterns in agent permission rules (bundled git options like -nam)
+    # the zone name in LEGACY parser docs and tests
+    '(`IST`|\d\d:\d\d (IST|ist)")',
 ]
 
 [default.extend-identifiers]

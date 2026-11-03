@@ -794,13 +794,9 @@ impl Parsed {
         }
     }
 
-    /// The day a week-field group names (`GregorianCalendar.computeTime`,
-    /// `Locale.US`: weeks start on Sunday, a week 1 may hold one day).
-    fn week_date(&self, year: i64, mode: Mode) -> Option<i64> {
-        self.week_real(year, mode).map(label_of_real)
-    }
-
-    /// [`Self::week_date`] as a real epoch day.
+    /// The real epoch day a week-field group names
+    /// (`GregorianCalendar.computeTime`, `Locale.US`: weeks start on Sunday,
+    /// a week 1 may hold one day).
     fn week_real(&self, year: i64, mode: Mode) -> Option<i64> {
         let on_or_before = |d: i64, dow: i64| d - (dow_sun1(d) - dow).rem_euclid(7);
         // Real epoch days: the Julian calendar's before the cutover.
@@ -944,7 +940,13 @@ impl Parsed {
             Mode::Dom
         };
         let days = if matches!(mode, Mode::Wom | Mode::Dowim | Mode::Woy) {
-            self.week_date(year, mode)?
+            let real = self.week_real(year, mode)?;
+            let days = label_of_real(real);
+            // A Julian-only leap day (1500-02-29) has March 1's label, whose
+            // real day is the next one.
+            let (y, m, d) = civil_from_days(days);
+            julian_leap = real_day(days, y, m, d) != real;
+            days
         } else if matches!(mode, Mode::Doy) {
             let (d, _) = self.doy?;
             if !(1..=hybrid_year_len(year)).contains(&d) {
@@ -990,7 +992,7 @@ impl Parsed {
         // A Julian-only leap day is checked as the day it is (February 29),
         // before it reads as March 1.
         let label = if julian_leap {
-            (year, 2, 29)
+            (civil_from_days(days).0, 2, 29)
         } else {
             civil_from_days(days)
         };
@@ -1479,6 +1481,18 @@ mod tests {
             assert_eq!(local(p, t), Some(d(1500, 3, 1)), "{t}");
         }
         assert_eq!(local("yyyy-MM-dd", "1700-02-29"), None);
+        // Java 21 non-lenient `SimpleDateFormat`: week fields reach the
+        // Julian-only leap day too, and its neighbours keep their own labels.
+        for (p, t) in [
+            ("yyyy-ww-u", "1500-09-6"),
+            ("yyyy-MM-W-u", "1500-02-5-6"),
+            ("yyyy-MM-F-u", "1500-02-5-6"),
+        ] {
+            assert_eq!(local(p, t), Some(d(1500, 3, 1)), "{p} {t}");
+        }
+        assert_eq!(local("yyyy-ww-u", "1500-09-5"), Some(d(1500, 2, 28)));
+        assert_eq!(local("yyyy-MM-W-u", "1500-03-1-7"), Some(d(1500, 3, 1)));
+        assert_eq!(local("yyyy-MM-F-u", "1500-02-5-5"), None);
     }
 
     // Spark 4.2.0 under LEGACY (probe 2026-11-02).
