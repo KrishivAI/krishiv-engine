@@ -150,6 +150,19 @@ impl Mismatch {
     }
 }
 
+/// Whether a cell of Spark's answer is a day number that wrapped past the `int` range: a date
+/// outside years 1 to 9999 (`-5877611-08-19`, `+10000-01-01`), or a day difference larger than
+/// any two valid dates can have (the span of 0001-01-01 to 9999-12-31 is 3,652,058 days).
+fn is_wrapped_day_value(cell: &str) -> bool {
+    let signed_date = cell.starts_with(['+', '-'])
+        && cell.chars().nth(1).is_some_and(|c| c.is_ascii_digit())
+        && cell[1..].contains('-');
+    signed_date
+        || cell
+            .parse::<i64>()
+            .is_ok_and(|v| v.unsigned_abs() > 3_700_000)
+}
+
 /// Whether `m` is the divergence ADR 0023 records (owner decision, 2026-10-18): `date_add`,
 /// `date_sub` and `datediff` past the `int` day range wrap silently in Spark, in both ANSI modes,
 /// and raise `ARITHMETIC_OVERFLOW` under ANSI here (`try_*` gives NULL; with ANSI off the wrap is
@@ -157,9 +170,10 @@ impl Mismatch {
 /// Such a mismatch is not reported, so a seeded nightly run does not find a new variant of it
 /// every day; a parent of such a case is already left out, as for any mismatching child.
 ///
-/// When Spark returned rows the engine must prove it wraps: its own ANSI-off answer to the same
-/// expression equals Spark's rows, so an `ARITHMETIC_OVERFLOW` that is not about the `int` range
-/// (a real bug in the function) is still reported.
+/// When Spark returned rows the mismatch must be a wrap: Spark's rows hold a wrapped day value
+/// ([`is_wrapped_day_value`]; an in-range day cannot overflow), and the engine's own ANSI-off
+/// answer to the same expression equals them. An `ARITHMETIC_OVERFLOW` that is not about the
+/// `int` range (a real bug in the function) is therefore still reported.
 fn documented_divergence(m: &Mismatch, ev: &mut dyn Evaluator) -> bool {
     let date_arith = ["date_add(", "date_sub(", "datediff("]
         .iter()
@@ -170,7 +184,9 @@ fn documented_divergence(m: &Mismatch, ev: &mut dyn Evaluator) -> bool {
         return false;
     }
     match &m.spark {
-        Expect::Rows { .. } => ev.eval(&m.sql, false) == m.spark,
+        Expect::Rows { rows, .. } => {
+            rows.iter().any(|cell| is_wrapped_day_value(cell)) && ev.eval(&m.sql, false) == m.spark
+        }
         Expect::Error(class) => class == "ArithmeticException",
     }
 }
