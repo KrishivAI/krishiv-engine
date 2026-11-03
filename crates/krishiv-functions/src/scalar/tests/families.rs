@@ -494,6 +494,27 @@ fn rounding_every_type() {
     assert_eq!(i64s(&r), [Some(3), Some(3)]);
 }
 
+/// Spark's one-argument `floor`/`ceil` keep the type of a decimal whose scale is 0
+/// (`case dt @ DecimalType.Fixed(_, 0) => dt`) and add one integral digit to any other
+/// (found by the nightly expression differential: `floor(decimal(9,0))` was `decimal(10,0)`).
+#[test]
+fn one_argument_floor_and_ceil_keep_a_scale_zero_decimal_type() {
+    for f in ["floor", "ceil"] {
+        let b = bind(f, &[&decimals(&[Some(5)], 9, 0)]);
+        assert_eq!(
+            b.return_type(),
+            &DataType::Decimal128(9, 0),
+            "{f}(decimal(9,0))"
+        );
+        let b = bind(f, &[&decimals(&[Some(5)], 10, 2)]);
+        assert_eq!(
+            b.return_type(),
+            &DataType::Decimal128(9, 0),
+            "{f}(decimal(10,2))"
+        );
+    }
+}
+
 #[test]
 fn greatest_and_least_of_every_type() {
     let both = |name: &str, a: &ArrayRef, b: &ArrayRef| run(name, &[a, b]);
