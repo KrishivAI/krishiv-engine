@@ -108,9 +108,11 @@ impl JsonOptions {
         Self::from_map_with(options, false)
     }
 
-    /// [`Self::from_map`], with the datetime patterns compiled as the legacy
-    /// `SimpleDateFormat`/`FastDateFormat` ones when `legacy`
-    /// (`spark.sql.legacy.timeParserPolicy=LEGACY`).
+    /// [`Self::from_map`], with the date and zoned timestamp patterns
+    /// compiled as the legacy (`SimpleDateFormat`) ones when `legacy`.
+    /// Spark's JSON functions use a lenient `FastDateFormat` there instead,
+    /// which this does not model, so the SQL functions pass `false` and
+    /// refuse `LEGACY` for a `DATE` or `TIMESTAMP` field.
     ///
     /// # Errors
     /// As [`Self::from_map`].
@@ -202,16 +204,10 @@ mod tests {
 
     #[test]
     fn an_ntz_pattern_stays_on_the_corrected_formatter_under_legacy() {
-        let options = BTreeMap::from([
-            (
-                "timestampNTZFormat".to_owned(),
-                "yyyy-MM-dd HH:mm:ss.SSSSSS".to_owned(),
-            ),
-            (
-                "timestampFormat".to_owned(),
-                "yyyy-MM-dd HH:mm:ss.SSSSSS".to_owned(),
-            ),
-        ]);
+        let options = BTreeMap::from([(
+            "timestampNTZFormat".to_owned(),
+            "yyyy-MM-dd HH:mm:ss.SSSSSS".to_owned(),
+        )]);
         let o = JsonOptions::from_map_with(&options, true).unwrap();
         let text = "2024-01-02 03:04:05.000123";
         let ntz = o.timestamp_ntz_format.as_ref().unwrap();
@@ -220,14 +216,5 @@ mod tests {
         assert_eq!(micros.rem_euclid(1_000_000), 123);
         let output = o.timestamp_ntz_output.as_ref().unwrap();
         assert_eq!(output.format_local(micros).unwrap(), text);
-        // The zoned pattern still follows the policy.
-        let ts = o.timestamp_format.as_ref().unwrap();
-        assert_eq!(
-            ts.parse_local(text, false)
-                .unwrap()
-                .unwrap()
-                .rem_euclid(1_000_000),
-            123_000
-        );
     }
 }

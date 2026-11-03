@@ -456,7 +456,11 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
         })
         .collect::<Result<_, _>>()?;
     let mut parsed = Parsed::defaults();
-    parsed.legacy = opts.legacy_time_parser;
+    super::json::refuse_legacy_dates(
+        "from_csv",
+        &DataType::Struct(fields.clone()),
+        opts.legacy_time_parser,
+    )?;
     if args.len() == 3 {
         // Options are a `MAP<STRING, STRING>` literal (analysis checked the
         // types); anything else was refused during analysis.
@@ -546,7 +550,7 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         })
         .collect::<Result<_, _>>()?;
     let mut parsed = Parsed::defaults();
-    parsed.legacy = opts.legacy_time_parser;
+    super::json::refuse_legacy_dates("to_csv", &DataType::Struct(fields), opts.legacy_time_parser)?;
     // Writing defaults (Spark's CSV writer): an empty string is written as
     // two quotes, and the whitespace around a value is dropped.
     parsed.syntax.empty_value = "\"\"".to_owned();

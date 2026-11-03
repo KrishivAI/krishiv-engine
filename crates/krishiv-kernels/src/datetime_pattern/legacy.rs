@@ -626,8 +626,9 @@ impl Parsed {
         n: usize,
         abut: Option<usize>,
     ) -> Option<usize> {
-        // Every field skips leading blanks.
-        while text.get(pos).is_some_and(|x| x.is_whitespace()) {
+        // `SimpleDateFormat` skips spaces and tabs before a field, nothing
+        // else (a newline or an ideographic space is not a blank).
+        while text.get(pos).is_some_and(|x| matches!(x, ' ' | '\t')) {
             pos += 1;
         }
         let st = self.stamp();
@@ -1800,6 +1801,14 @@ mod tests {
             Some(micros(2020, 1, 2, 3, 4, 5, 0))
         );
         assert_eq!(parse("dd-DDD", "01-365"), None);
+        // Only spaces and tabs are skipped before a field (Spark 4.2.0).
+        assert_eq!(parse("yyyy-MM-dd HH", "2024-01-01 \n12"), None);
+        assert_eq!(parse("yyyy-MM-dd HH", "2024-01-01 \u{3000}12"), None);
+        assert_eq!(parse("yyyy-MM-ddHH", "2024-01-01\n12"), None);
+        assert_eq!(
+            parse("yyyy-MM-dd HH", "2024-01-01 \t12"),
+            Some(micros(2024, 1, 1, 12, 0, 0, 0))
+        );
     }
 
     #[test]

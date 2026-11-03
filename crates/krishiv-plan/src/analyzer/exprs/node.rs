@@ -1429,7 +1429,7 @@ impl Resolver<'_> {
             ExprNode::MultiAlias { expr, names } => {
                 return Err(AnalysisError::new(
                     krishiv_common::error::MultiAliasWithoutGenerator {
-                        names: format!("({})", names.join(", ")),
+                        names: names.join(", "),
                         expr: format!("\"{}\"", pretty(expr, self.ctx.conf.session_zone)),
                     },
                     e.origin,

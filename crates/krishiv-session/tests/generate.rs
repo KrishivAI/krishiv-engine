@@ -878,10 +878,10 @@ fn generators_beside_aliases_aggregates_and_windows() {
 #[test]
 fn a_multi_name_alias_needs_a_generator() {
     let s = Session::new().unwrap();
-    assert_eq!(
-        error_of(&s, "select 1 as (a, b)").error_class(),
-        ErrorClass::MultiAliasWithoutGenerator
-    );
+    let err = error_of(&s, "select 1 as (a, b)");
+    assert_eq!(err.error_class(), ErrorClass::MultiAliasWithoutGenerator);
+    // Spark 4.2.0: `Multi part aliasing (a, b) is not supported with "1" ...`.
+    assert!(err.to_string().contains("aliasing (a, b) is"), "{err}");
     assert_eq!(
         error_of(
             &s,
