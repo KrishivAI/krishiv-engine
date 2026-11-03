@@ -124,13 +124,16 @@ jobs:
           path: ${{ runner.temp }}/diff
           retention-days: 30
 
-  # P2-T105: full line + branch coverage (branch needs nightly rustc), report only.
+  # P2-T105: full line + branch coverage (branch needs nightly rustc). P2-T105b: the per-crate
+  # floors of `tests/coverage-floors.json` and the fall of the total against the previous
+  # nightly's `summary.json` fail the job; the report itself stays an artifact.
   coverage:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
       contents: read
+      actions: read # the previous nightly's coverage-report artifact
       id-token: write # Codecov OIDC upload (no secret)
     env:
       RUSTC_WRAPPER: "" # no sccache here: instrumented builds are not cacheable
@@ -152,7 +155,24 @@ jobs:
       - run: cargo xtask coverage --all-features --html
       - name: Per-crate summary
         run: cargo xtask coverage-summary --markdown | tee -a "$GITHUB_STEP_SUMMARY"
+      # The newest coverage-report artifact is the previous nightly's (this run uploads its own
+      # below). None, or an expired one, is no failure: the total is then not compared.
+      - name: Previous nightly's coverage summary
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=coverage-report&per_page=1" --jq '.artifacts[0].id // empty')
+          [ -n "$id" ] || exit 0
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > "${RUNNER_TEMP}/previous-coverage.zip"
+          # Into a temporary file, published only when the archive has the summary: an archive
+          # without it (an earlier run that failed before writing it) leaves no empty file behind.
+          unzip -p "${RUNNER_TEMP}/previous-coverage.zip" summary.json > "${RUNNER_TEMP}/previous-summary.tmp"
+          mv "${RUNNER_TEMP}/previous-summary.tmp" "${RUNNER_TEMP}/previous-summary.json"
+      - name: Coverage floors and total
+        run: cargo xtask coverage-summary --check tests/coverage-floors.json --previous "${RUNNER_TEMP}/previous-summary.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
         with:
           name: coverage-report
           path: |
