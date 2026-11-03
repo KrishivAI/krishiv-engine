@@ -1401,14 +1401,23 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
         (_, InputType::Any)
         | (Some(DataType::Map(_)), InputType::Map)
         | (Some(DataType::Array(_)), InputType::Array) => Some(from.cloned()),
-        (Some(t), InputType::Numeric { .. } | InputType::StrictNumeric) if is_numeric(t) => {
+        (
+            Some(t),
+            InputType::Numeric { .. } | InputType::StrictNumeric | InputType::NumericOrTimestamp,
+        ) if is_numeric(t) => Some(Some(t.clone())),
+        (Some(t), InputType::Numeric { intervals: true } | InputType::NumericOrTimestamp)
+            if is_ansi_interval(t) =>
+        {
             Some(Some(t.clone()))
         }
-        (Some(t), InputType::Numeric { intervals: true }) if is_ansi_interval(t) => {
-            Some(Some(t.clone()))
+        (Some(T::Timestamp), InputType::NumericOrTimestamp) => Some(Some(T::Double)),
+        (
+            None,
+            InputType::Numeric { .. } | InputType::StrictNumeric | InputType::NumericOrTimestamp,
+        )
+        | (Some(T::String), InputType::Numeric { .. } | InputType::NumericOrTimestamp) => {
+            Some(Some(T::Double))
         }
-        (None, InputType::Numeric { .. } | InputType::StrictNumeric)
-        | (Some(T::String), InputType::Numeric { .. }) => Some(Some(T::Double)),
         // A type of the collection stays; another takes the first member
         // it may be cast to (Spark's `TypeCollection`), except that a number
         // is not narrowed or widened into one (`date_add(d, 1L)` and

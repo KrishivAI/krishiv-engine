@@ -1284,7 +1284,7 @@ fn sum(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
             u32::from(d.precision()).saturating_add(10),
             d.scale().into(),
         )?,
-        Some(DataType::Double | DataType::Float) | None => DataType::Double,
+        Some(DataType::Timestamp | DataType::Double | DataType::Float) | None => DataType::Double,
         // An ANSI interval keeps its fields.
         Some(t) if is_ansi_interval(t) => t.clone(),
         Some(_) => DataType::Long,
@@ -1721,7 +1721,7 @@ fn approx_count_distinct(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 fn aggregates() -> Vec<Spec> {
-    let numeric = || Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
+    let numeric = || Inputs::Expects(vec![InputType::NumericOrTimestamp]);
     let boolean_arg = || Inputs::Expects(vec![exact(DataType::Boolean)]);
     let doubles = || Inputs::Expects(vec![exact(DataType::Double)]);
     let integrals = || {

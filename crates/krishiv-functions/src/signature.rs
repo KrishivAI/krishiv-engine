@@ -348,6 +348,10 @@ pub enum InputType {
     /// with `NumericType`, as `timestamp_seconds` has it); an untyped `NULL`
     /// becomes `DOUBLE`.
     StrictNumeric,
+    /// What `sum` and `avg` take: [`Self::Numeric`] with ANSI intervals, and a
+    /// `TIMESTAMP` too, read as seconds (`DOUBLE`; Spark 4.2 casts it, a
+    /// `DATE` or `TIMESTAMP_NTZ` it refuses). Its message names no timestamp.
+    NumericOrTimestamp,
     /// Any map type; an untyped `NULL` becomes `map<null, null>` (Spark's
     /// implicit cast of `NULL` to the abstract map type).
     Map,
@@ -369,7 +373,9 @@ impl InputType {
             Self::Map => "\"MAP\"".to_owned(),
             Self::Array => "\"ARRAY\"".to_owned(),
             Self::Numeric { intervals: false } | Self::StrictNumeric => "\"NUMERIC\"".to_owned(),
-            Self::Numeric { intervals: true } => "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned(),
+            Self::Numeric { intervals: true } | Self::NumericOrTimestamp => {
+                "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned()
+            }
             // Spark's `AnyTimestampType` names itself in words. The time
             // fields also take a `TIME` (Spark types that overload
             // separately, so its message keeps the timestamp wording).

@@ -1148,3 +1148,36 @@ fn struct_star_fields_are_lateral_aliases() -> R {
     }
     Ok(())
 }
+
+/// `sum`, `avg` and `mean` of a `TIMESTAMP` read it as seconds (`DOUBLE`), as
+/// Spark 4.2 does; a `DATE` or `TIMESTAMP_NTZ` is refused.
+#[test]
+fn sum_and_avg_of_a_timestamp_are_doubles() -> R {
+    let s = Session::new()?;
+    block_on(s.sql("SET spark.sql.session.timeZone=UTC"))?;
+    let b = block_on(
+        block_on(s.sql(
+            "SELECT avg(c), mean(c), sum(c) FROM VALUES (timestamp'2020-01-01 00:00:00') AS t(c)",
+        ))?
+        .collect(),
+    )?;
+    for i in 0..3 {
+        let v = arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Float64Type>(
+            b[0].column(i),
+        )
+        .value(0);
+        assert!((v - 1_577_836_800.0).abs() < 1e-6, "column {i}: {v}");
+    }
+    for sql in [
+        "SELECT avg(c) FROM VALUES (date'2020-01-01') AS t(c)",
+        "SELECT mean(c) FROM VALUES (timestamp_ntz'2020-01-01') AS t(c)",
+    ] {
+        let e = block_on(s.sql(sql)).map(|_| ()).expect_err("must fail");
+        assert_eq!(
+            e.error_class().name(),
+            "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+            "{sql}"
+        );
+    }
+    Ok(())
+}
