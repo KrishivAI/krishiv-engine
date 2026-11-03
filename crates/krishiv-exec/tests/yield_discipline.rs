@@ -525,19 +525,61 @@ fn tpch_column(field: &Field, rows: usize) -> Result<Arc<dyn Array>> {
     Ok(array)
 }
 
-/// Rows per table of the in-process TPC-H data set; `KRISHIV_YIELD_TPCH_ROWS`
-/// scales it up for nightly runs.
-fn tpch_rows() -> usize {
-    std::env::var("KRISHIV_YIELD_TPCH_ROWS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(100)
+/// Rows of `table` in the in-process TPC-H data set. `KRISHIV_YIELD_TPCH_SF`
+/// sizes every table as TPC-H does at that scale factor (lineitem 6M rows at
+/// SF1, the nightly run); otherwise each table holds `KRISHIV_YIELD_TPCH_ROWS`
+/// rows (default 100).
+fn tpch_rows(table: &str) -> usize {
+    tpch_rows_for(
+        table,
+        std::env::var("KRISHIV_YIELD_TPCH_SF").ok().as_deref(),
+        std::env::var("KRISHIV_YIELD_TPCH_ROWS").ok().as_deref(),
+    )
 }
 
-fn tpch_session(rows: usize) -> Result<(MemoryCatalog, Arc<MemoryTables>)> {
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a row count of a few million, rounded from a positive product"
+)]
+fn tpch_rows_for(table: &str, sf: Option<&str>, rows: Option<&str>) -> usize {
+    let Some(sf) = sf.and_then(|v| v.parse::<f64>().ok()) else {
+        return rows.and_then(|v| v.parse().ok()).unwrap_or(100);
+    };
+    let per_sf: u32 = match table {
+        "region" => return 5,
+        "nation" => return 25,
+        "supplier" => 10_000,
+        "part" => 200_000,
+        "partsupp" => 800_000,
+        "customer" => 150_000,
+        "orders" => 1_500_000,
+        _ => 6_000_000,
+    };
+    // Rounded to whole rows; at least one, so every table has data.
+    ((f64::from(per_sf) * sf).round() as usize).max(1)
+}
+
+#[test]
+fn tpch_tables_scale_by_the_tpch_cardinalities() {
+    assert_eq!(tpch_rows_for("lineitem", None, None), 100);
+    assert_eq!(tpch_rows_for("region", None, Some("7")), 7);
+    assert_eq!(tpch_rows_for("lineitem", Some("1"), Some("7")), 6_000_000);
+    assert_eq!(tpch_rows_for("orders", Some("0.1"), None), 150_000);
+    assert_eq!(tpch_rows_for("nation", Some("10"), None), 25);
+    assert_eq!(tpch_rows_for("supplier", Some("0.00001"), None), 1);
+}
+
+/// Rows per batch of the in-process tables: about a scan's output batch, so
+/// a large table reaches the operators as many batches, as a file scan's
+/// would.
+const TPCH_BATCH_ROWS: usize = 8_192;
+
+fn tpch_session() -> Result<(MemoryCatalog, Arc<MemoryTables>)> {
     let mut catalog = MemoryCatalog::new("spark_catalog");
     let mut tables = MemoryTables::new();
     for table in tpch_tables() {
+        let rows = tpch_rows(table.name);
         let schema: SchemaRef = Arc::new(Schema::new(
             table
                 .fields
@@ -567,7 +609,13 @@ fn tpch_session(rows: usize) -> Result<(MemoryCatalog, Arc<MemoryTables>)> {
         catalog = catalog.with_table(&["default"], table.name, table_columns, None);
         tables = tables.with_table(
             &["spark_catalog", "default", table.name],
-            Arc::new(MemoryTable::new(schema, vec![Batch::new(data)])),
+            Arc::new(MemoryTable::new(
+                schema,
+                (0..rows)
+                    .step_by(TPCH_BATCH_ROWS)
+                    .map(|at| Batch::new(data.slice(at, TPCH_BATCH_ROWS.min(rows - at))))
+                    .collect(),
+            )),
         );
     }
     Ok((catalog, Arc::new(tables)))
@@ -603,8 +651,7 @@ const TPCH_QUERIES: [&str; 22] = [
 /// threshold is already a query error, and the counters must stay at zero.
 #[test]
 fn tpch_suite_counts_no_stalls() {
-    let rows = tpch_rows();
-    let (catalog, tables) = tpch_session(rows).unwrap();
+    let (catalog, tables) = tpch_session().unwrap();
     let ctx = context(
         catalog,
         ResolutionConf {

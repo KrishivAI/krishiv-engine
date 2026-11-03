@@ -137,6 +137,7 @@ pub struct CallTypes<'a> {
     ansi: bool,
     decimal_loss: bool,
     case_sensitive: bool,
+    concat_binary_as_string: bool,
 }
 
 impl fmt::Debug for CallTypes<'_> {
@@ -166,6 +167,7 @@ impl<'a> CallTypes<'a> {
             ansi: true,
             decimal_loss: true,
             case_sensitive: false,
+            concat_binary_as_string: false,
         }
     }
 
@@ -212,6 +214,20 @@ impl<'a> CallTypes<'a> {
     pub const fn with_case_sensitive(mut self, case_sensitive: bool) -> Self {
         self.case_sensitive = case_sensitive;
         self
+    }
+
+    /// With `spark.sql.function.concatBinaryAsString` (default off): `concat`
+    /// of binaries returns a string.
+    #[must_use]
+    pub const fn with_concat_binary_as_string(mut self, on: bool) -> Self {
+        self.concat_binary_as_string = on;
+        self
+    }
+
+    /// `spark.sql.function.concatBinaryAsString`.
+    #[must_use]
+    pub const fn concat_binary_as_string(&self) -> bool {
+        self.concat_binary_as_string
     }
 
     /// `spark.sql.caseSensitive`.
@@ -332,6 +348,10 @@ pub enum InputType {
     /// with `NumericType`, as `timestamp_seconds` has it); an untyped `NULL`
     /// becomes `DOUBLE`.
     StrictNumeric,
+    /// What `sum` and `avg` take: [`Self::Numeric`] with ANSI intervals, and a
+    /// `TIMESTAMP` too, read as seconds (`DOUBLE`; Spark 4.2 casts it, a
+    /// `DATE` or `TIMESTAMP_NTZ` it refuses). Its message names no timestamp.
+    NumericOrTimestamp,
     /// Any map type; an untyped `NULL` becomes `map<null, null>` (Spark's
     /// implicit cast of `NULL` to the abstract map type).
     Map,
@@ -353,7 +373,9 @@ impl InputType {
             Self::Map => "\"MAP\"".to_owned(),
             Self::Array => "\"ARRAY\"".to_owned(),
             Self::Numeric { intervals: false } | Self::StrictNumeric => "\"NUMERIC\"".to_owned(),
-            Self::Numeric { intervals: true } => "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned(),
+            Self::Numeric { intervals: true } | Self::NumericOrTimestamp => {
+                "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned()
+            }
             // Spark's `AnyTimestampType` names itself in words. The time
             // fields also take a `TIME` (Spark types that overload
             // separately, so its message keeps the timestamp wording).

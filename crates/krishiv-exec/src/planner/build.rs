@@ -167,6 +167,48 @@ struct Copy {
     filters: std::ops::Range<u64>,
 }
 
+/// One key of the order of a relation's rows within each partition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OrderKey {
+    pub(crate) attr: AttrId,
+    pub(crate) descending: bool,
+    pub(crate) nulls_first: bool,
+}
+
+impl OrderKey {
+    /// `keys` (columns of `layout`) as attributes; `None` when a key is not
+    /// in `layout`, so neither a provided nor a required order is cut short.
+    pub(crate) fn of(keys: &[SortKey], layout: &[AttrId]) -> Option<Vec<Self>> {
+        keys.iter()
+            .map(|k| {
+                Some(Self {
+                    attr: *layout.get(k.column)?,
+                    descending: k.descending,
+                    nulls_first: k.nulls_first,
+                })
+            })
+            .collect()
+    }
+}
+
+/// What `node` keeps of its input's row order `order` (design P2-T174
+/// unit 4): a node passing rows on in order within each stream keeps the
+/// keys up to the first one `layout` drops; any other node, none.
+fn kept_order(node: &PhysNode, order: &[OrderKey], layout: &[AttrId]) -> Vec<OrderKey> {
+    match node {
+        PhysNode::Project { .. }
+        | PhysNode::Filter { .. }
+        | PhysNode::Limit { .. }
+        | PhysNode::Window { .. }
+        | PhysNode::WindowGroupLimit { .. } => order
+            .iter()
+            .take_while(|k| layout.contains(&k.attr))
+            .copied()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// A planned relation.
 pub(crate) struct Planned {
     pub(crate) node: PhysNode,
@@ -178,6 +220,9 @@ pub(crate) struct Planned {
     pub(crate) sites: Vec<Site>,
     /// How its rows are placed in partitions.
     pub(crate) placement: Placement,
+    /// The order of its rows within each partition; empty when none is
+    /// known.
+    pub(crate) ordering: Vec<OrderKey>,
 }
 
 impl Planned {
@@ -215,9 +260,11 @@ impl Planned {
         layout: Vec<AttrId>,
         explain: (&str, String),
     ) -> Self {
+        let node = make(Box::new(self.node));
         Self {
             schema,
-            node: make(Box::new(self.node)),
+            ordering: kept_order(&node, &self.ordering, &layout),
+            node,
             sites: kept(&self.sites, &layout),
             placement: self.placement.restrict(&layout),
             layout,
@@ -617,6 +664,7 @@ impl<'a> Planner<'a> {
             vec![anchor.explain, recursive.explain],
         );
         Ok(Planned {
+            ordering: Vec::new(),
             node: PhysNode::UnionLoop {
                 id,
                 anchor: Box::new(anchor.node),
@@ -643,6 +691,7 @@ impl<'a> Planner<'a> {
         let layout: Vec<AttrId> = output.iter().map(|c| c.id).collect();
         let explain = ExplainNode::leaf("LoopRef", format!("#{id} [{}]", columns(output)));
         Ok(Planned {
+            ordering: Vec::new(),
             node: PhysNode::LoopRef {
                 id,
                 layout: layout.clone(),
@@ -665,6 +714,7 @@ impl<'a> Planner<'a> {
         );
         // No runtime filter reaches a shared plan: it is computed once for every reader.
         Ok(Planned {
+            ordering: Vec::new(),
             node: PhysNode::SharedRead {
                 id,
                 layout: layout.clone(),
@@ -879,6 +929,7 @@ impl<'a> Planner<'a> {
         }
         let schema = schema.ok_or_else(|| internal("a union without inputs"))?;
         Ok(Planned {
+            ordering: Vec::new(),
             node: PhysNode::Union { inputs: nodes },
             schema,
             layout,
@@ -997,11 +1048,13 @@ impl<'a> Planner<'a> {
     ) -> Planned {
         let mut children = vec![input.explain];
         children.extend(prepared.explain);
+        let node = make(Box::new(input.node), input.layout, prepared.subqueries);
         Planned {
             sites: kept(&input.sites, &layout),
             placement: input.placement.restrict(&layout),
+            ordering: kept_order(&node, &input.ordering, &layout),
             schema,
-            node: make(Box::new(input.node), input.layout, prepared.subqueries),
+            node,
             layout,
             explain: ExplainNode::new(explain.0, explain.1, children),
         }
@@ -1119,6 +1172,7 @@ impl<'a> Planner<'a> {
             layout.extend([self.fresh_id(), self.fresh_id()]);
         }
         let mut planned = Planned {
+            ordering: Vec::new(),
             schema,
             node: PhysNode::Scan(ScanNode {
                 id,
@@ -1543,6 +1597,7 @@ impl<'a> Planner<'a> {
         let schema = sort_op(&input.schema, &keys, None)?.schema();
         let layout = input.layout.clone();
         let sites = input.sites.clone();
+        let ordering = OrderKey::of(&keys, &layout).unwrap_or_default();
         let mut planned = input.wrap(
             |input| PhysNode::Sort { input, keys },
             schema,
@@ -1550,6 +1605,7 @@ impl<'a> Planner<'a> {
             ("Sort", orders(order)),
         );
         planned.sites = sites;
+        planned.ordering = ordering;
         Ok(planned)
     }
 
@@ -1903,6 +1959,7 @@ fn range_node(
     use arrow_schema::{DataType, Field, Schema};
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
     Planned {
+        ordering: Vec::new(),
         schema,
         node: PhysNode::Range(crate::physical::RangeNode {
             start,
@@ -1927,6 +1984,7 @@ fn range_node(
 /// One row without columns (`SELECT` without `FROM`).
 fn one_row() -> Planned {
     Planned {
+        ordering: Vec::new(),
         schema: Arc::new(Schema::empty()),
         node: PhysNode::OneRow,
         layout: Vec::new(),

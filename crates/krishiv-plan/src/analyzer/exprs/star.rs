@@ -573,7 +573,7 @@ impl Resolver<'_> {
                     .iter()
                     .position(|f| same(f.name(), &path[0], cs))
                 else {
-                    return Err(unresolved_field(path, &st, origin));
+                    return Err(unresolved_in_fields(path, &st, origin));
                 };
                 drops[i].push(path[1..].to_vec());
             }
@@ -622,7 +622,7 @@ impl Resolver<'_> {
             let value = if rests.is_empty() {
                 value
             } else {
-                self.drop_nested(&value, &ty, &rests, origin)?
+                self.drop_nested(&value, &ty, &rests, &name, origin)?
             };
             items.push(Arc::new(
                 Expr::new(ExprNode::Alias { expr: value, name }).with_origin(origin),
@@ -632,17 +632,58 @@ impl Resolver<'_> {
     }
 
     /// `base` (a struct of type `ty`) without the fields `rests` name, each
-    /// a path below it: an unknown name is `FIELD_NOT_FOUND`.
+    /// a path below it: an unknown name is `FIELD_NOT_FOUND`. `shown` is
+    /// how `base` prints in an error. Below a non-struct, Spark raises by
+    /// what the path would extract: a map's value or an array of
+    /// structs' field is `EXCEPT_NESTED_COLUMN_INVALID_TYPE`, anything
+    /// else `INVALID_EXTRACT_BASE_FIELD_TYPE`.
     fn drop_nested(
         &self,
         base: &Arc<Expr>,
         ty: &DataType,
         rests: &[Vec<String>],
+        shown: &str,
         origin: Origin,
     ) -> Result<Arc<Expr>, AnalysisError> {
         let cs = self.ctx.conf.case_sensitive;
         let DataType::Struct(st) = ty else {
-            return Err(unresolved_field(&rests[0], &StructType::new([]), origin));
+            let first = &rests[0][0];
+            let invalid = |column_name: String, found: String| {
+                AnalysisError::new(
+                    ExceptNestedColumnInvalidType {
+                        column_name,
+                        data_type: found,
+                    },
+                    origin,
+                )
+            };
+            let not_extractable = || {
+                AnalysisError::new(
+                    InvalidExtractBaseFieldType {
+                        base: format!("\"{shown}\""),
+                        other: format!("\"{}\"", ty.sql()),
+                    },
+                    origin,
+                )
+            };
+            return Err(match ty {
+                DataType::Map(m) => {
+                    invalid(format!("{shown}['{first}']"), catalyst_type(m.value_type()))
+                }
+                DataType::Array(a) => match a.element_type() {
+                    DataType::Struct(es) => {
+                        match es.fields().iter().find(|f| same(f.name(), first, cs)) {
+                            Some(f) => invalid(
+                                format!("{shown}.`{first}`"),
+                                format!("ArrayType({},false)", catalyst_type(f.data_type())),
+                            ),
+                            None => unresolved_field(&rests[0], es, origin),
+                        }
+                    }
+                    _ => not_extractable(),
+                },
+                _ => not_extractable(),
+            });
         };
         let mut ops: Vec<FieldOp> = Vec::new();
         let mut seen: Vec<usize> = Vec::new();
@@ -675,7 +716,13 @@ impl Resolver<'_> {
                     })
                     .with_origin(origin),
                 );
-                let value = self.drop_nested(&inner, field.data_type(), &subs, origin)?;
+                let value = self.drop_nested(
+                    &inner,
+                    field.data_type(),
+                    &subs,
+                    &format!("{shown}.{name}"),
+                    origin,
+                )?;
                 ops.push(FieldOp::With { name, value });
             }
         }
@@ -719,11 +766,39 @@ impl Resolver<'_> {
                 ],
             ));
         }
+        // Spark rebuilds the struct from the kept fields (`CreateStruct`), so
+        // a NULL struct becomes a struct of NULL fields, not NULL.
+        let mut args: Vec<Arc<Expr>> = Vec::new();
+        for field in st.fields() {
+            let name = field.name().to_owned();
+            let value = match ops.iter().find(|o| match o {
+                FieldOp::Drop { name: n } | FieldOp::With { name: n, .. } => *n == name,
+            }) {
+                Some(FieldOp::Drop { .. }) => continue,
+                Some(FieldOp::With { value, .. }) => Arc::clone(value),
+                None => Arc::new(
+                    Expr::new(ExprNode::Field {
+                        base: Arc::clone(base),
+                        name: name.clone(),
+                    })
+                    .with_origin(origin),
+                ),
+            };
+            args.push(Arc::new(
+                Expr::new(ExprNode::Literal(Literal::String(name))).with_origin(origin),
+            ));
+            args.push(value);
+        }
         Ok(Arc::new(
-            Expr::new(ExprNode::UpdateFields {
-                base: Arc::clone(base),
-                ops,
-            })
+            Expr::new(ExprNode::Function(FunctionCall {
+                within_group: Vec::new(),
+                name: "named_struct".to_owned(),
+                qualifier: Vec::new(),
+                args,
+                arg_names: Vec::new(),
+                distinct: false,
+                filter: None,
+            }))
             .with_origin(origin),
         ))
     }
@@ -851,5 +926,21 @@ impl Resolver<'_> {
             })
             .cloned()
             .collect()
+    }
+}
+
+/// A type as Spark's `toString` prints a Catalyst type in an `EXCEPT` error
+/// (`IntegerType`, `StringType`); the SQL name where no short form is known.
+fn catalyst_type(t: &DataType) -> String {
+    match t {
+        DataType::Byte => "ByteType".to_owned(),
+        DataType::Short => "ShortType".to_owned(),
+        DataType::Integer => "IntegerType".to_owned(),
+        DataType::Long => "LongType".to_owned(),
+        DataType::Float => "FloatType".to_owned(),
+        DataType::Double => "DoubleType".to_owned(),
+        DataType::Boolean => "BooleanType".to_owned(),
+        DataType::String => "StringType".to_owned(),
+        other => other.sql(),
     }
 }

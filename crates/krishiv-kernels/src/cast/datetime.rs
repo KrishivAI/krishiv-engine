@@ -24,6 +24,13 @@ pub trait TimeZoneRules: Send + Sync + std::fmt::Debug {
     /// overlap, the offset before the transition in a gap (which moves the
     /// time forward by the gap's length).
     fn offset_for_local(&self, local_seconds: i64) -> i32;
+    /// The query start instant, in microseconds since the epoch, when the
+    /// caller has one: a time of day without a date (`CAST('10:11:12' AS
+    /// TIMESTAMP)`) is on that instant's date in this zone. Without it such a
+    /// string is `KRISHIV_UNSUPPORTED_FEATURE`.
+    fn query_start_micros(&self) -> Option<i64> {
+        None
+    }
 }
 
 /// A zone with one fixed offset (`UTC` is `FixedOffset(0)`).

@@ -64,7 +64,7 @@ pub use scan::{
 #[cfg(all(test, not(loom)))]
 use scan::{ScanGlobal, ScanLocal};
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortKey, SortMetrics, TopN};
-pub(crate) use sort::{KeyEncoder, blocking, data_bytes};
+pub(crate) use sort::{KeyEncoder, blocking, data_bytes, owned_rows};
 pub use union::UnionAlign;
 
 use crate::error::{Result, internal};

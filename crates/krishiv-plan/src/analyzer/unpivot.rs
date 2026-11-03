@@ -118,6 +118,7 @@ impl Resolver<'_> {
         let rules = Rules {
             ansi: self.ctx.conf.ansi,
             case_sensitive: self.ctx.conf.case_sensitive,
+            concat_binary_as_string: false,
         };
         let used: HashSet<AttrId> = member_ids.iter().flatten().copied().collect();
         let kept: Vec<Attr> = c

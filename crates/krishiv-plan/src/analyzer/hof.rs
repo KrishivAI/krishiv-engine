@@ -350,10 +350,7 @@ impl Resolver<'_> {
             return;
         }
         let conf = self.ctx.conf;
-        let rules = coerce::Rules {
-            ansi: conf.ansi,
-            case_sensitive: conf.case_sensitive,
-        };
+        let rules = coerce::Rules::new(conf.ansi, conf.case_sensitive);
         let (left, right) = (
             coerce::Arg {
                 ty: Some(first.key_type()),

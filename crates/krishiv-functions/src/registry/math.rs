@@ -210,6 +210,11 @@ fn ceil_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
 
 fn ceil_type(function: &str, c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let t = match c.data_type(0) {
+        // One argument and a scale of 0: Spark keeps the type
+        // (`case dt @ DecimalType.Fixed(_, 0) => dt`), no extra integral digit.
+        Some(DataType::Decimal(d)) if c.args().len() == 1 && d.scale() == 0 => {
+            DataType::Decimal(*d)
+        }
         Some(DataType::Decimal(d)) => {
             let scale = if c.args().len() > 1 {
                 int_scale(c, function)?
