@@ -157,6 +157,10 @@ where
 }
 
 impl PhysExpr for Binary {
+    fn is_constant(&self) -> bool {
+        self.l.is_constant() && self.r.is_constant()
+    }
+
     fn data_type(&self) -> &ArrowType {
         &self.out
     }
@@ -226,6 +230,10 @@ pub(super) fn negative(e: Arc<dyn PhysExpr>, env: &EvalEnv) -> Result<Arc<dyn Ph
 }
 
 impl PhysExpr for Negative {
+    fn is_constant(&self) -> bool {
+        self.e.is_constant()
+    }
+
     fn data_type(&self) -> &ArrowType {
         self.e.data_type()
     }
@@ -329,6 +337,10 @@ pub(super) fn integral_divide(
 }
 
 impl PhysExpr for IntegralDivide {
+    fn is_constant(&self) -> bool {
+        self.l.is_constant() && self.r.is_constant()
+    }
+
     fn data_type(&self) -> &ArrowType {
         &ArrowType::Int64
     }
