@@ -129,3 +129,20 @@ fn the_legacy_identifier_clause_still_names_a_function() {
         .unwrap_or_default();
     assert!(e.contains("INVALID_TEMP_OBJ_QUALIFIER"), "{e}");
 }
+
+/// Rewriting `NULL IN (subquery)` (to `EXISTS(..) AND NULL`) must not
+/// rename the output column: it keeps the name of the `IN` as written.
+#[test]
+fn a_null_in_subquery_keeps_its_written_column_name() -> R {
+    let s = Session::new()?;
+    let schema = block_on(async {
+        s.sql("select cast(null as int) in (select 1)")
+            .await?
+            .schema()
+            .await
+    })?;
+    let name = schema.field(0).name().to_lowercase();
+    assert!(name.contains(" in "), "{name}");
+    assert!(!name.contains("exists"), "{name}");
+    Ok(())
+}

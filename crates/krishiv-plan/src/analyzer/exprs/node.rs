@@ -1481,9 +1481,13 @@ impl Resolver<'_> {
                 };
                 let level = cx.env.outer.len();
                 let expr = rebuilt(ExprNode::Subquery { kind, plan });
+                let original = Arc::clone(&expr);
                 let shown = shown_call(&expr, kids, &values);
                 let expr = self.null_in_subquery(expr);
                 let expr = self.in_global_aggregate(expr);
+                // A rewrite must not rename the output column: the written `IN`
+                // stays the shown form when no coercion gave one.
+                let shown = shown.or_else(|| (!Arc::ptr_eq(&original, &expr)).then_some(original));
                 Bound {
                     shown,
                     expr,
