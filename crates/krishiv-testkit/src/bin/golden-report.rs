@@ -4,7 +4,8 @@
 //!
 //! `cargo run -p krishiv-testkit --bin golden-report -- [--tag TAG] [--jdk 17|21] [--manifest FILE]
 //! [--out FILE] [--engine reject-all|sql-parse|session] [--cases FILE] [--ratchet check|update]
-//! [--known-failures FILE]` (or `cargo xtask golden`).
+//! [--known-failures FILE] [--only NAME]` (or `cargo xtask golden`). `--only` runs the golden files
+//! whose name contains NAME (a quick look at one file; not with `--ratchet`).
 //!
 //! * The default engine is the reject-all stub (0/0/0 with the real denominators);
 //!   `--engine sql-parse` measures the `krishiv-sql` parser on the DQL statements
@@ -30,7 +31,7 @@ use krishiv_testkit::golden::sql_parse::{ParseOnlyEngine, in_dql_scope};
 use krishiv_testkit::golden::{DEFAULT_TAG, GoldenSet, Jdk, report};
 
 const USAGE: &str = "usage: golden-report [--tag TAG] [--jdk 17|21] [--manifest FILE] [--out FILE] \
-[--engine reject-all|sql-parse|session] [--cases FILE] [--ratchet check|update] [--reclassify CATEGORY] [--known-failures FILE]";
+[--engine reject-all|sql-parse|session] [--cases FILE] [--only NAME] [--ratchet check|update] [--reclassify CATEGORY] [--known-failures FILE]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ratchet {
@@ -61,6 +62,7 @@ fn run_cli() -> Result<(), String> {
     let mut jdk = Jdk::default();
     let mut engine_name = "reject-all".to_owned();
     let mut cases_out = None;
+    let mut only: Option<String> = None;
     let mut mode = Ratchet::Off;
     let mut reclassify: Option<String> = None;
     let mut args = std::env::args().skip(1);
@@ -84,6 +86,7 @@ fn run_cli() -> Result<(), String> {
                 _ => return Err(USAGE.to_owned()),
             },
             "--cases" => cases_out = Some(PathBuf::from(value)),
+            "--only" => only = Some(value),
             "--ratchet" => {
                 mode = match value.as_str() {
                     "check" => Ratchet::Check,
@@ -100,9 +103,16 @@ fn run_cli() -> Result<(), String> {
     if reclassify.is_some() && mode != Ratchet::Update {
         return Err("--reclassify needs --ratchet update".to_owned());
     }
-    let manifest = ExclusionManifest::load(&manifest_path).map_err(|e| e.to_string())?;
+    if only.is_some() && mode != Ratchet::Off {
+        return Err("--only needs no --ratchet".to_owned());
+    }
+    let mut manifest = ExclusionManifest::load(&manifest_path).map_err(|e| e.to_string())?;
     let dir = GoldenSet::tag_dir(&tag);
-    let set = GoldenSet::scan_for(&dir, jdk).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut set = GoldenSet::scan_for(&dir, jdk).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if let Some(name) = &only {
+        set.pairs.retain(|p| p.name.contains(name.as_str()));
+        manifest = ExclusionManifest::default();
+    }
     let result = match engine_name.as_str() {
         "sql-parse" => run_with(
             &mut ParseOnlyEngine::default(),

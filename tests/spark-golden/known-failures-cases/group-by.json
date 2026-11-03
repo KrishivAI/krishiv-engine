@@ -1,13 +1,9 @@
 {
   "cases": {
     "depends-on-command": [
-      15,
-      97,
-      99,
-      101
+      15
     ],
     "query-features": [
-      24,
       62,
       63,
       64,

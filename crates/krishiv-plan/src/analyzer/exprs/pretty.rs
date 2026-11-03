@@ -39,6 +39,16 @@ pub(in crate::analyzer) fn pretty(e: &Expr, zone: Option<SessionZone>) -> String
         }
         done.insert(addr(x), s);
     }
+    // A bare lateral reference is named by its column, as Spark's
+    // `OuterReference` is.
+    if let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+        && let Some(inner) = c
+            .name
+            .strip_prefix("outer(")
+            .and_then(|n| n.strip_suffix(')'))
+    {
+        return outer_column_name(inner);
+    }
     done.remove(&addr(e)).unwrap_or_default()
 }
 
@@ -819,4 +829,26 @@ pub(super) fn special_float(v: f64) -> &'static str {
     } else {
         "-Infinity"
     }
+}
+
+/// The column named by the inside of an `outer(..)` reference: the text after
+/// the qualifier's last dot, or the backquoted name (dots and doubled
+/// backquotes inside it kept) that ends it.
+pub(super) fn outer_column_name(inner: &str) -> String {
+    if let Some(quoted) = inner.strip_suffix('`') {
+        // Scan back to the opening backquote: a doubled one is part of the name.
+        let chars: Vec<char> = quoted.chars().collect();
+        let mut i = chars.len();
+        while i > 0 {
+            i -= 1;
+            if chars[i] == '`' {
+                if i > 0 && chars[i - 1] == '`' {
+                    i -= 1;
+                } else {
+                    return chars[i + 1..].iter().collect::<String>().replace("``", "`");
+                }
+            }
+        }
+    }
+    inner.rsplit('.').next().unwrap_or(inner).to_owned()
 }
