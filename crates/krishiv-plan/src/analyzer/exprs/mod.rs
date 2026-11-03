@@ -34,8 +34,8 @@ use krishiv_common::error::{
     KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1104, NamedParametersNotSupported,
     NestedAggregateFunction, NonFoldableArgument, RequiredParameterNotFound, UnexpectedInputType,
     UnexpectedPositionalArgument, UnrecognizedParameterName, UnresolvedColumnWithSuggestion,
-    UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, WrongNumArgsWithSuggestion,
-    WrongNumArgsWithoutSuggestion,
+    UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, UnsupportedGroupingExpression,
+    WrongNumArgsWithSuggestion, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::stack::on_big_stack;
 use krishiv_types::{ArrayType, DataType, DecimalType, StructField, StructType};

@@ -867,9 +867,10 @@ impl Session {
             (Some(namespace), part)
         };
         let name = part.value.to_lowercase();
-        let case_sensitive = self.query_env().analysis.conf.case_sensitive;
+        let conf = self.query_env().analysis.conf;
+        let case_sensitive = conf.case_sensitive;
         let source = self.next_source_id();
-        let mut entry = self.declare(f, &name, source, case_sensitive, redacted)?;
+        let mut entry = self.declare(f, &name, source, case_sensitive, conf.ansi, redacted)?;
         let reads = self.reads_data(&entry.def);
         if reads && f.characteristics.data_access == Some(SqlDataAccess::ContainsSql) {
             return Err(InvalidSqlFunctionDataAccess {}.into());
@@ -960,6 +961,7 @@ impl Session {
         name: &str,
         source: krishiv_plan::SourceId,
         case_sensitive: bool,
+        ansi: bool,
         redacted: &RedactedSql,
     ) -> Result<Entry, KrishivError> {
         let fold = |n: &str| {
@@ -1102,6 +1104,7 @@ impl Session {
             source,
             deterministic: f.characteristics.deterministic.unwrap_or(true),
             reads_data: f.characteristics.data_access == Some(SqlDataAccess::ReadsSqlData),
+            ansi: Some(ansi),
         };
         Ok(Entry {
             def: Arc::new(def),

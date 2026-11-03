@@ -2,9 +2,6 @@
   "cases": {
     "query-features": [
       3
-    ],
-    "subqueries": [
-      4
     ]
   },
   "file": "cte-nonlegacy",

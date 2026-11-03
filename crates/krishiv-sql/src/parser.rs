@@ -18,6 +18,7 @@
 mod ddl;
 mod expr;
 mod function;
+pub(crate) use function::check_temporary_function_name;
 mod script;
 mod types;
 
@@ -1903,7 +1904,7 @@ impl<'s> Parser<'s> {
                 (TimeZone::Named(zone), t.span)
             }
             _ if self.kw_at(0, "INTERVAL") => {
-                let from = self.start();
+                let from = self.pos;
                 let mut end = self.src.len();
                 for t in self.toks.iter().skip(self.pos) {
                     if t.kind == TokenKind::Sym(Sym::Semi) {
@@ -1911,14 +1912,44 @@ impl<'s> Parser<'s> {
                         break;
                     }
                 }
-                let rest = self.src.get(from..end).unwrap_or_default();
-                let form = format!("SET TIME ZONE {}", rest.trim_matches(|c: char| c <= ' '));
-                return Self::fatal(error::unsupported_set_time_zone(
-                    &form,
-                    self.span_from(start),
-                ));
+                let whole = Span::new(start, end);
+                // An interval that does not reach the end of the statement
+                // is the grammar's catch-all alternative.
+                let parsed = self
+                    .interval()
+                    .ok()
+                    .filter(|_| self.pos >= self.toks.len() || self.sym_at(0, Sym::Semi));
+                let offset = match parsed {
+                    Some(Literal::Interval(iv)) => validate::interval::time_zone_offset(&iv, whole),
+                    Some(Literal::Typed { value, .. }) => {
+                        validate::interval::time_zone_offset_typed(&value, whole)
+                    }
+                    _ => {
+                        self.pos = from;
+                        return Self::fatal(error::invalid_time_zone_displacement(whole));
+                    }
+                };
+                match offset {
+                    Ok(zone) => {
+                        // `from` is a token index; the span starts at the byte.
+                        let begin = self.toks.get(from).map_or(start, |t| t.span.start);
+                        (TimeZone::Named(zone), self.span_from(begin))
+                    }
+                    Err(e) => return Self::fatal(e),
+                }
             }
-            _ => return self.fail(),
+            // The grammar's catch-all alternative (`SET TIME ZONE .*?`).
+            _ => {
+                let mut end = self.src.len();
+                for t in self.toks.iter().skip(self.pos) {
+                    if t.kind == TokenKind::Sym(Sym::Semi) {
+                        end = t.span.start;
+                        break;
+                    }
+                }
+                let end = end.max(self.span_from(start).end);
+                return Self::fatal(error::invalid_time_zone_displacement(Span::new(start, end)));
+            }
         };
         let span = self.span_from(start);
         self.command_end()?;
