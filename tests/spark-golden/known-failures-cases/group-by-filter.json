@@ -3,12 +3,6 @@
     "query-features": [
       77,
       79
-    ],
-    "subqueries": [
-      72,
-      73,
-      74,
-      75
     ]
   },
   "file": "group-by-filter",

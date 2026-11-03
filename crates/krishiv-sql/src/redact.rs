@@ -73,6 +73,7 @@ fn marks(sql: &str) -> Vec<Mark> {
         url_marks(sql, t, &mut marks);
     }
     set_value(sql, &code, &mut marks);
+    aes_key_marks(sql, &code, &mut marks);
     let mut depth = 0_usize;
     // The depth of the option list being read, and what it is reading.
     let mut list: Option<usize> = None;
@@ -169,6 +170,69 @@ fn marks(sql: &str) -> Vec<Mark> {
     // An unterminated list: its last value runs to the end.
     finish(&state, &mut marks);
     marks
+}
+
+/// The argument list of `aes_encrypt`, `aes_decrypt` and `try_aes_decrypt`
+/// calls, wherever they stand: a key is a secret in the error context as
+/// much as in the error message. The whole list is masked, found by
+/// matching parentheses alone, so no reading of commas, `<`/`>` or named
+/// arguments (`key => ...`) can expose the key; one pass is linear in the
+/// call. An unterminated call is marked to the end (fail-safe).
+fn aes_key_marks(sql: &str, code: &[&Token], marks: &mut Vec<Mark>) {
+    // Tokens before this index sit inside an AES call already masked as a
+    // whole: an enclosing call covers its nested ones, so each token is
+    // scanned once however deep the calls nest.
+    let mut covered = 0_usize;
+    for (i, t) in code.iter().enumerate() {
+        if i < covered
+            || !matches!(
+                t.kind,
+                TokenKind::Word | TokenKind::QuotedIdent | TokenKind::DoubleQuoted
+            )
+        {
+            continue;
+        }
+        let name = if t.kind == TokenKind::QuotedIdent {
+            unquote_ident(t.span.text(sql))
+        } else if t.kind == TokenKind::DoubleQuoted {
+            // `"aes_encrypt"(...)` under doubleQuotedIdentifiers.
+            let raw = t.span.text(sql);
+            raw.get(1..raw.len().saturating_sub(1))
+                .unwrap_or_default()
+                .replace("\"\"", "\"")
+        } else {
+            t.span.text(sql).to_owned()
+        };
+        let aes = ["aes_encrypt", "aes_decrypt", "try_aes_decrypt"]
+            .iter()
+            .any(|f| name.eq_ignore_ascii_case(f));
+        if !aes
+            || code
+                .get(i + 1)
+                .is_none_or(|n| n.kind != TokenKind::Sym(Sym::LParen))
+        {
+            continue;
+        }
+        let mut depth = 0_usize;
+        let mut range: Option<(usize, usize)> = None;
+        covered = code.len();
+        for (j, u) in code.iter().enumerate().skip(i + 2) {
+            match u.kind {
+                TokenKind::Sym(Sym::RParen) if depth == 0 => {
+                    covered = j + 1;
+                    break;
+                }
+                TokenKind::Sym(Sym::RParen) => depth -= 1,
+                TokenKind::Sym(Sym::LParen) => depth += 1,
+                _ => {}
+            }
+            let r = range.get_or_insert((u.span.start, u.span.end));
+            r.1 = u.span.end;
+        }
+        if let Some((a, b)) = range {
+            marks.push(Mark::Secret(a..b));
+        }
+    }
 }
 
 /// `SET key = value` with a sensitive key: the value (raw text to the end
