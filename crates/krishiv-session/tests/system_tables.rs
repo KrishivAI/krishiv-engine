@@ -494,3 +494,19 @@ fn explain_analyze_and_commands_show_their_statement_in_the_history() {
     );
     assert_eq!(shown, ["1"], "{shown:?}");
 }
+
+#[test]
+fn a_result_cache_hit_has_its_own_row_in_the_history() {
+    let s = Session::new().unwrap();
+    s.conf().set("krishiv.resultCache.enabled", "true").unwrap();
+    s.set_tag("team", "etl").unwrap();
+    for _ in 0..2 {
+        run_all(&s, "SELECT 1 AS cached_probe").unwrap();
+    }
+    let rows = strings_in(
+        &s,
+        "SELECT concat_ws('|', state, tags['team']) FROM system.queries \
+         WHERE query_text LIKE 'SELECT 1 AS cached_probe%'",
+    );
+    assert_eq!(rows, ["finished|etl", "finished|etl"], "{rows:?}");
+}

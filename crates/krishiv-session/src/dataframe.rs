@@ -1270,6 +1270,14 @@ impl DataFrame {
         if let Some((settings, key)) = &result
             && let Some((batches, _age)) = crate::result_cache::global().lookup(key, settings.ttl)
         {
+            // A hit is a request answered, so it has its row in `system.queries` too; it is not a
+            // physical execution, so the metrics registry does not count it.
+            let id = self
+                .session
+                .state
+                .queries
+                .record_replayed(a.env.text.as_deref(), a.env.statement_class);
+            *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
             return Ok(crate::carrier::client_stream(crate::result_cache::replay(
                 batches,
             )));

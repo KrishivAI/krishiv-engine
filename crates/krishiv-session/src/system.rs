@@ -830,17 +830,24 @@ impl QueryLog {
         Self { session_id, ..log }
     }
 
-    /// Sets the tag `key`, or removes it with `None`.
-    pub(crate) fn set_tag(&self, key: &str, value: Option<&str>) {
+    /// Removes the tag `key`, if there is one.
+    pub(crate) fn remove_tag(&self, key: &str) {
+        self.tags
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(key);
+    }
+
+    /// Sets the tag `key`; `false` (and nothing changed) when it is new and the session already has
+    /// [`MAX_TAGS`]. The check and the insertion happen under one lock, so concurrent callers
+    /// cannot both take the last place.
+    pub(crate) fn try_set_tag(&self, key: &str, value: &str) -> bool {
         let mut tags = self.tags.lock().unwrap_or_else(PoisonError::into_inner);
-        match value {
-            Some(v) => {
-                tags.insert(key.to_owned(), v.to_owned());
-            }
-            None => {
-                tags.remove(key);
-            }
+        if !tags.contains_key(key) && tags.len() >= MAX_TAGS {
+            return false;
         }
+        tags.insert(key.to_owned(), value.to_owned());
+        true
     }
 
     /// The tags now, by key.
@@ -851,12 +858,6 @@ impl QueryLog {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
-    }
-
-    /// Whether a new tag `key` still fits.
-    pub(crate) fn has_room_for(&self, key: &str) -> bool {
-        let tags = self.tags.lock().unwrap_or_else(PoisonError::into_inner);
-        tags.contains_key(key) || tags.len() < MAX_TAGS
     }
 
     /// Sets (or clears) the trace id the session's next queries record.
@@ -953,6 +954,28 @@ impl QueryLog {
             pipelines: None,
             workers: None,
         });
+        id
+    }
+
+    /// Records a query answered from the result cache: a finished row of its own (with the
+    /// session's current tags and trace id) that took no execution.
+    pub(crate) fn record_replayed(
+        &self,
+        text: Option<&str>,
+        class: Option<&'static str>,
+    ) -> String {
+        let id = self.begin(text, class);
+        self.finish(
+            &id,
+            &Finished {
+                state: "finished",
+                wall_ns: 0,
+                peak_memory_bytes: 0,
+                error_class: None,
+                operators: Vec::new(),
+                totals: None,
+            },
+        );
         id
     }
 
@@ -1174,6 +1197,45 @@ mod tests {
         log.fail(&id, &cancelled);
         let row = &log.snapshot()[0];
         assert_eq!(row.state, "cancelled");
+        assert_eq!(row.error_class, None);
+    }
+
+    #[test]
+    fn concurrent_tags_never_exceed_the_limit() {
+        let log = QueryLog::default();
+        let taken: usize = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..MAX_TAGS * 2)
+                .map(|i| {
+                    let log = &log;
+                    scope.spawn(move || log.try_set_tag(&format!("k{i}"), "v"))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| usize::from(h.join().unwrap_or(false)))
+                .sum()
+        });
+        assert_eq!(taken, MAX_TAGS);
+        assert_eq!(log.tags().len(), MAX_TAGS);
+        // A known key can still change; an unknown one is refused until a tag is removed.
+        assert!(log.try_set_tag("k0", "other") || log.tags().iter().all(|(k, _)| k != "k0"));
+        assert!(!log.try_set_tag("new", "v"));
+        let (key, _) = log.tags()[0].clone();
+        log.remove_tag(&key);
+        assert!(log.try_set_tag("new", "v"));
+    }
+
+    #[test]
+    fn a_replayed_query_is_a_finished_row() {
+        let log = QueryLog::default();
+        log.set_trace_id(Some("trace".to_owned()));
+        assert!(log.try_set_tag("team", "etl"));
+        let id = log.record_replayed(Some("SELECT 1"), Some("READ"));
+        let row = &log.snapshot()[0];
+        assert_eq!(row.id, id);
+        assert_eq!(row.state, "finished");
+        assert_eq!(row.statement_class, Some("READ"));
+        assert_eq!(row.tags, [("team".to_owned(), "etl".to_owned())]);
         assert_eq!(row.error_class, None);
     }
 

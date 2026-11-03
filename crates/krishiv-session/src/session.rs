@@ -597,16 +597,15 @@ impl Session {
         if value.chars().count() > MAX_TAG_VALUE {
             return refuse("a value has at most 256 characters");
         }
-        if !self.state.queries.has_room_for(key) {
+        if !self.state.queries.try_set_tag(key, value) {
             return refuse("a session carries at most 32 tags");
         }
-        self.state.queries.set_tag(key, Some(value));
         Ok(())
     }
 
     /// Removes the tag `key`, if the session has it.
     pub fn remove_tag(&self, key: &str) {
-        self.state.queries.set_tag(key, None);
+        self.state.queries.remove_tag(key);
     }
 
     /// The session's tags, by key.
@@ -1612,6 +1611,22 @@ impl Session {
         env: &QueryEnv,
         detailed: bool,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
+        let (stream, query, _) = self
+            .run_on_query_logged(physical, worker, env, detailed)
+            .await?;
+        Ok((stream, query))
+    }
+
+    /// As [`Self::run_on_query`], also returning the id of the `system.queries` row this execution
+    /// began, so the caller keeps it for itself: the statement's slot in `env` is shared by every
+    /// execution of the same analyzed frame.
+    async fn run_on_query_logged(
+        &self,
+        physical: &PhysicalPlan,
+        worker: WorkerContext,
+        env: &QueryEnv,
+        detailed: bool,
+    ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
         let id = QueryId(self.state.query_ids.fetch_add(1, Ordering::Relaxed));
         let pool = self.state.memory.child(&format!("query-{}", id.0), None);
         let query = QueryContext::new(
@@ -1635,6 +1650,7 @@ impl Session {
             .queries
             .begin(env.text.as_deref(), env.statement_class);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        let row_id = log_id.clone();
         let mut pending = PendingFold(Some(QueryFold {
             query: Arc::clone(&query),
             state: Arc::clone(&self.state),
@@ -1662,6 +1678,7 @@ impl Session {
                 Ok((
                     Box::pin(stream.map(|b| b.and_then(into_record_batch))),
                     query,
+                    row_id,
                 ))
             }
         }
@@ -2086,7 +2103,7 @@ impl Session {
                 column_types,
             })?;
             let worker = self.worker(env);
-            let mut rows = self.run_on_query(&plan, worker, env, false).await?.0;
+            let (mut rows, _, row_id) = self.run_on_query_logged(&plan, worker, env, false).await?;
             let mut batches = Vec::new();
             while let Some(batch) = rows.next().await {
                 batches.push(batch?);
@@ -2112,14 +2129,7 @@ impl Session {
             let committed = match after_run {
                 Ok(committed) => committed,
                 Err(error) => {
-                    let id = env
-                        .row
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .clone();
-                    if let Some(id) = id {
-                        self.state.queries.fail(&id, &error);
-                    }
+                    self.state.queries.fail(&row_id, &error);
                     return Err(error);
                 }
             };
