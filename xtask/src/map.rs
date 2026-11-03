@@ -4,8 +4,9 @@
 //!
 //! `map` prints, for every `src/` file of a crate, its first `//!` line, its line count and its public
 //! items (`pub fn`, `struct`, `enum`, `trait`, `const`, `static`, `type`, `mod`) with the first line of
-//! their doc. The scanner is line-based (no parser): it reads items outside the first `#[cfg(test)]`
-//! and ignores `pub(crate)` and `pub(super)`.
+//! their doc. The scanner is line-based (no parser): it skips each `#[cfg(test)]` item (a declaration, or
+//! a block up to its closing brace, counted by braces) and reads on, and ignores `pub(crate)` and
+//! `pub(super)`.
 //!
 //! `maps-check` fails (or with `--report`, only reports) on three things, in every crate under `crates/`:
 //! (a) a `src/` file without a `//!` line; (b) a file or directory named in backticks in the crate's
@@ -84,16 +85,39 @@ const ITEM_KEYWORDS: &[&str] = &[
     "mod",
 ];
 
-/// The public items of `text` outside its first `#[cfg(test)]`: the declaration up to its name, and
-/// the first line of the doc above it.
+/// The public items of `text` outside its `#[cfg(test)]` items: the declaration up to its name, and the
+/// first line of the doc above it.
 #[must_use]
 pub fn public_items(text: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut doc: Option<String> = None;
+    // `Some(depth)` while inside a test-only block; `pending` right after a `#[cfg(test)]`.
+    let (mut test_depth, mut pending) = (None::<i64>, false);
     for line in text.lines() {
         let t = line.trim_start();
+        let braces = |l: &str| {
+            let count = |c: char| i64::try_from(l.matches(c).count()).unwrap_or(0);
+            count('{') - count('}')
+        };
+        if let Some(depth) = test_depth {
+            let depth = depth + braces(t);
+            test_depth = (depth > 0).then_some(depth);
+            continue;
+        }
         if t.starts_with("#[cfg(test)]") {
-            break;
+            pending = true;
+            doc = None;
+            continue;
+        }
+        if pending {
+            if t.starts_with("#[") || t.starts_with("//") || t.is_empty() {
+                continue;
+            }
+            // The test-only item: a declaration ending in `;`, or a block to its closing brace.
+            pending = false;
+            let depth = braces(t);
+            test_depth = (depth > 0).then_some(depth);
+            continue;
         }
         if let Some(d) = t.strip_prefix("///") {
             if doc.is_none() && !d.trim().is_empty() {
@@ -359,6 +383,19 @@ mod tests {
                 ("struct S".to_owned(), String::new()),
                 ("enum Kind".to_owned(), "A kind.".to_owned()),
                 ("async fn go".to_owned(), String::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn public_items_resume_after_a_test_only_item() {
+        let text = "#[cfg(test)]\nmod wrappers;\n/// Real.\npub mod real {}\n#[cfg(test)]\n#[allow(dead_code)]\nfn helper() {\n    if true { pub fn inner() {} }\n}\npub fn after() {}\n#[cfg(test)]\nmod tests {\n    pub fn t() {}\n}\npub struct Last;\n";
+        assert_eq!(
+            public_items(text),
+            [
+                ("mod real".to_owned(), "Real.".to_owned()),
+                ("fn after".to_owned(), String::new()),
+                ("struct Last".to_owned(), String::new()),
             ]
         );
     }
