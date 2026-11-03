@@ -1304,3 +1304,101 @@ fn struct_star_fields_are_lateral_aliases() -> R {
     }
     Ok(())
 }
+
+/// A scalar aggregate subquery whose correlation is not an equality joins
+/// the distinct outer values (Spark's `DecorrelateInnerQuery`): `min` and
+/// `count` per outer row, NULL and 0 where nothing matched.
+#[test]
+fn a_scalar_subquery_correlated_by_an_inequality() -> R {
+    let s = Session::new()?;
+    block_on(s.sql("CREATE OR REPLACE TEMPORARY VIEW t1 AS VALUES (0, 1), (1, 2) t1(c1, c2)"))?;
+    block_on(s.sql("CREATE OR REPLACE TEMPORARY VIEW t2 AS VALUES (0, 2), (0, 3) t2(c1, c2)"))?;
+    let rows = |sql: &str| -> R<Vec<String>> {
+        let mut out = Vec::new();
+        for b in block_on(block_on(s.sql(sql))?.collect())? {
+            let a = b.column(0);
+            for i in 0..b.num_rows() {
+                out.push(if a.is_null(i) {
+                    "NULL".to_owned()
+                } else {
+                    arrow_cast_to_string(a, i)
+                });
+            }
+        }
+        out.sort();
+        Ok(out)
+    };
+    assert_eq!(
+        rows("SELECT (SELECT min(c2) FROM t2 WHERE t1.c1 > t2.c1) FROM t1")?,
+        ["2", "NULL"]
+    );
+    assert_eq!(
+        rows("SELECT (SELECT min(c2) FROM t2 WHERE t1.c1 >= t2.c1 AND t1.c2 < t2.c2) FROM t1")?,
+        ["2", "3"]
+    );
+    assert_eq!(
+        rows("SELECT (SELECT count(*) FROM t2 WHERE t1.c1 > t2.c1) FROM t1")?,
+        ["0", "2"]
+    );
+    Ok(())
+}
+
+fn arrow_cast_to_string(a: &dyn arrow_array::Array, i: usize) -> String {
+    use arrow_array::cast::AsArray;
+    match a.data_type() {
+        arrow_schema::DataType::Int32 => a
+            .as_primitive::<arrow_array::types::Int32Type>()
+            .value(i)
+            .to_string(),
+        arrow_schema::DataType::Int64 => a
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .value(i)
+            .to_string(),
+        other => format!("<{other}>"),
+    }
+}
+
+/// A `HAVING` over a correlated global aggregate: NULL where it rejects the
+/// value, and a count over no matches is 0 for the `HAVING` (Spark's count
+/// bug cases).
+#[test]
+fn a_correlated_scalar_aggregate_with_having() -> R {
+    let s = Session::new()?;
+    block_on(s.sql("CREATE OR REPLACE TEMPORARY VIEW t1 AS VALUES (0, 1), (1, 2) t1(c1, c2)"))?;
+    block_on(s.sql("CREATE OR REPLACE TEMPORARY VIEW t2 AS VALUES (0, 2), (0, 3) t2(c1, c2)"))?;
+    let rows = |sql: &str| -> R<Vec<String>> {
+        let mut out = Vec::new();
+        for b in block_on(block_on(s.sql(sql))?.collect())? {
+            let a = b.column(b.num_columns() - 1);
+            for i in 0..b.num_rows() {
+                out.push(if a.is_null(i) {
+                    "NULL".to_owned()
+                } else {
+                    arrow_cast_to_string(a, i)
+                });
+            }
+        }
+        out.sort();
+        Ok(out)
+    };
+    // t1.c1 = 0 has two matches, t1.c1 = 1 none.
+    assert_eq!(
+        rows(
+            "SELECT c1, c2, (SELECT count(*) cnt FROM t2 WHERE t1.c1 = t2.c1 HAVING cnt = 0) FROM t1"
+        )?,
+        ["0", "NULL"]
+    );
+    assert_eq!(
+        rows(
+            "SELECT c1, (SELECT count(*) FROM t2 WHERE t1.c1 = t2.c1 HAVING count(*) >= 2) FROM t1"
+        )?,
+        ["2", "NULL"]
+    );
+    assert_eq!(
+        rows(
+            "SELECT c1, (SELECT count(*) FROM t2 WHERE t1.c1 = t2.c1 HAVING count(*) <= 1) FROM t1"
+        )?,
+        ["0", "NULL"]
+    );
+    Ok(())
+}

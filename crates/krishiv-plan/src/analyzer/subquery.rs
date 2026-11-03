@@ -1516,6 +1516,9 @@ impl Rewriter {
         base: Arc<LogicalPlan>,
         plan: &Arc<LogicalPlan>,
     ) -> R<(Arc<LogicalPlan>, Arc<Expr>)> {
+        if let Some((agg, predicate, value)) = having_over_global(plan) {
+            return self.scalar_having(base, &agg, &predicate, &value);
+        }
         let PlanNode::Aggregate {
             input,
             grouping: Grouping::GroupBy(keys),
@@ -1564,7 +1567,9 @@ impl Rewriter {
         } else {
             None
         };
-        if on_path(input, set_op_or_join) {
+        if on_path(input, set_op_or_join)
+            || (non_equality_correlation(input) && deterministic_filters(input))
+        {
             if !keys.is_empty() {
                 return Err(unsupported(
                     "correlated scalar subqueries with GROUP BY",
@@ -1612,6 +1617,47 @@ impl Rewriter {
             &outer_keys,
             false,
         )
+    }
+
+    /// `(SELECT agg FROM .. WHERE <correlation> HAVING pred(agg))`: the
+    /// aggregate's value per outer row, NULL where the `HAVING` rejects it
+    /// (a global aggregate has one row, so a rejected row is no row). A
+    /// count over no matches is 0 and meets the `HAVING` as such.
+    fn scalar_having(
+        &mut self,
+        base: Arc<LogicalPlan>,
+        agg: &Arc<LogicalPlan>,
+        predicate: &Arc<Expr>,
+        value: &BoundColumn,
+    ) -> R<(Arc<LogicalPlan>, Arc<Expr>)> {
+        let (base, v) = self.scalar(base, agg)?;
+        let id = value.id;
+        let mut other = false;
+        let pred = Arc::clone(predicate).transform_up(&mut |x: Arc<Expr>| {
+            Ok::<_, std::convert::Infallible>(match &x.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == id => Arc::clone(&v),
+                ExprNode::Resolved(ResolvedExpr::Column(_)) => {
+                    other = true;
+                    x
+                }
+                _ => x,
+            })
+        });
+        let pred = pred.unwrap_or_else(|never| match never {});
+        if other || has_outer(Node::Expr(&pred)) || has_subquery(Node::Expr(&pred)) {
+            return Err(unsupported(
+                "a correlated scalar subquery of this shape",
+                predicate.origin,
+            ));
+        }
+        let null = Arc::new(Expr::literal(Literal::Null(Some(value.data_type.clone()))));
+        let guarded = call(
+            Builtin::When,
+            vec![pred, v, null],
+            value.data_type.clone(),
+            true,
+        );
+        Ok((base, guarded))
     }
 
     /// The left outer join of `base` with the aggregate of `inner` (the
@@ -2404,6 +2450,25 @@ fn non_equality_correlation(p: &LogicalPlan) -> bool {
     }
 }
 
+/// Whether every filter on the correlation path from `p` down is
+/// deterministic: a nondeterministic predicate lifted into a domain join's
+/// condition would be evaluated per domain row and inner row, not per row of
+/// the subquery's input.
+fn deterministic_filters(p: &LogicalPlan) -> bool {
+    match &p.node {
+        PlanNode::Filter { input, predicate } => {
+            super::sqlfn::is_deterministic(predicate) && deterministic_filters(input)
+        }
+        PlanNode::Project { input, .. }
+        | PlanNode::Generate { input, .. }
+        | PlanNode::Sort { input, .. } => deterministic_filters(input),
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+            deterministic_filters(input)
+        }
+        _ => true,
+    }
+}
+
 /// Whether `hit` holds on the correlation path from `p` down, through what
 /// [`Rewriter::domained`] goes through. A global aggregate ends the path: it
 /// has one row for an outer row without matches, which a domain would lose.
@@ -2773,6 +2838,38 @@ fn equality_keys(corr: &[Arc<Expr>], origin: Origin) -> R<Keys> {
         outer_keys.push(Arc::clone(o));
     }
     Ok((inner_keys, outer_keys))
+}
+
+/// `plan` as a global aggregate of one value under a `HAVING` (a filter on
+/// its value, possibly under a projection of that value): the aggregate, the
+/// predicate and the value's column.
+fn having_over_global(
+    plan: &Arc<LogicalPlan>,
+) -> Option<(Arc<LogicalPlan>, Arc<Expr>, BoundColumn)> {
+    let filter = match &plan.node {
+        PlanNode::Project { input, exprs } if exprs.len() == 1 => input,
+        PlanNode::Filter { .. } => plan,
+        _ => return None,
+    };
+    let PlanNode::Filter { input, predicate } = &filter.node else {
+        return None;
+    };
+    let PlanNode::Aggregate {
+        grouping: Grouping::GroupBy(keys),
+        aggregates,
+        ..
+    } = &input.node
+    else {
+        return None;
+    };
+    let [item] = &aggregates[..] else {
+        return None;
+    };
+    let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &item.node else {
+        return None;
+    };
+    keys.is_empty()
+        .then(|| (Arc::clone(input), Arc::clone(predicate), output.clone()))
 }
 
 /// Spark's refusal of a correlated reference where it cannot be lifted, naming
