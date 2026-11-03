@@ -37,7 +37,7 @@ use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::executor::{Executor, run_blocking};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
-use crate::operators::{global_ref, local_mut};
+use crate::operators::{global_ref, local_mut, owned_rows};
 use crate::output_spill::{OutputSpill, SpillUnread, refused};
 use crate::sync::{Mutex, lock};
 
@@ -302,7 +302,11 @@ impl Output {
     ) -> Result<Option<Vec<(usize, Arc<SpillFile>)>>> {
         let mut written = Vec::with_capacity(work.len());
         for (i, batches) in work {
-            let scratch = consumer.reservation().for_spill_scratch();
+            // Back to credit when dropped, so a refused write can return what was lent.
+            let scratch = consumer
+                .reservation()
+                .for_spill_scratch()
+                .releasing_to_credit();
             let writer = match scope.writer(Arc::clone(&self.schema), scratch) {
                 Ok(w) => w,
                 Err(e) => return refused(KrishivError::from(e)).map(|_| None),
@@ -365,6 +369,9 @@ impl Sink for SharedSink {
         _global: &GlobalState,
     ) -> Result<SinkStatus> {
         let l = local_mut::<SinkLocal>(local, "SharedSink")?;
+        // A scan's morsel can be a slice of a much larger batch: kept as is,
+        // every segment would hold and be charged the whole buffers.
+        let input = owned_rows(input)?;
         let bytes = input.data().get_array_memory_size();
         if l.reservation.try_grow(bytes).is_err() {
             return Ok(SinkStatus::NeedMemory { bytes });
@@ -460,7 +467,12 @@ impl Sink for SharedSink {
             // other consumer takes it meanwhile): a full pool cannot grant it afresh.
             let lent = l.reservation.size().min(SCRATCH_BYTES);
             l.reservation.shrink_to_credit(lent);
-            let scratch = ctx.consumer().reservation().for_spill_scratch();
+            // Back to credit when dropped, so a refused write can return what was lent.
+            let scratch = ctx
+                .consumer()
+                .reservation()
+                .for_spill_scratch()
+                .releasing_to_credit();
             let restore = |l: &mut SinkLocal| {
                 // Nothing was written: the lent bytes go back to the batches' reservation.
                 let _ = l.reservation.try_grow(lent);
@@ -742,6 +754,56 @@ mod tests {
         sink.combine(local, &global).unwrap();
         sink.finalize(&global, &ctx).await.unwrap();
         (sink, global, query, ctx, dir)
+    }
+
+    /// A driver's spill whose writer is refused (here a cancelled scope)
+    /// gives back the scratch it lent: the batches stay in memory, charged
+    /// as much as before, and the pool holds what it held. (That nobody else
+    /// takes the lent bytes meanwhile, which the scratch's return to credit
+    /// ensures, needs a concurrent claimant; this test has none.)
+    #[tokio::test]
+    async fn a_refused_spill_write_restores_the_batches_reservation() {
+        let pool = TreePool::new(&MemoryConfig::default());
+        let query = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Batch,
+            ExecConfig::default(),
+            pool.child("q", None),
+        );
+        let ctx = TaskContext::new(
+            Arc::clone(&query),
+            TokioExecutor::deterministic(1).unwrap(),
+            SpillOwner::new(),
+            OperatorId(1),
+            "shared",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let scope = SpillManager::open(&SpillConfig {
+            dir: dir.path().join("spill"),
+            ..SpillConfig::default()
+        })
+        .unwrap()
+        .scope()
+        .unwrap();
+        let sink = SharedSink::new(schema(), Some(scope.clone()));
+        let global = sink.global_state(&ctx).unwrap();
+        let mut local = sink.local_state(&ctx, &global).unwrap();
+        for start in [0, 3, 6] {
+            sink.sink(batch(start, 3), &mut local, &global).unwrap();
+        }
+        let held = local_mut::<SinkLocal>(&mut local, "test")
+            .unwrap()
+            .reservation
+            .size();
+        assert!(held > 0);
+        let reserved = pool.reserved();
+        scope.cancel().unwrap();
+        assert!(sink.spill(&mut local, 1, &ctx).await.is_err());
+        let l = local_mut::<SinkLocal>(&mut local, "test").unwrap();
+        assert_eq!(l.reservation.size(), held);
+        assert_eq!(l.batches.len(), 3);
+        assert!(l.segments.is_empty());
+        assert_eq!(pool.reserved(), reserved);
     }
 
     /// A reader's context: the finalized sink state as its dependency.

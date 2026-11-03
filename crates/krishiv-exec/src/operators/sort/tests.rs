@@ -26,7 +26,7 @@ use super::Sort;
 use super::keys::{KeyEncoder, SortKey};
 use super::merge::{
     Bucketing, Merger, Slice, SortedBatch, interleave_batches, merge_part, merge_splitters,
-    parallel_merge, sort_parts, sort_slices,
+    owned_rows, parallel_merge, sort_parts, sort_slices,
 };
 use crate::context::{ExecConfig, OperatorId, QueryContext, QueryId, TaskContext};
 use crate::executor::{Executor, TokioExecutor, WorkloadClass};
@@ -367,6 +367,31 @@ async fn a_spilled_run_of_views_is_sized_as_written() {
 /// slices of one page charged (and held) the page ten times, and a sort
 /// under a limit spilled a run per batch (51K spill files on a partitioned
 /// window over 60M `lineitem` rows at 1 GB).
+/// A small slice of a large batch is copied down to its rows, values and
+/// weights kept; a batch that is all its buffers hold is returned as is.
+#[test]
+fn owned_rows_copies_only_sparse_slices() {
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, true)]));
+    let n = 150_000i64;
+    let k = Int64Array::from_iter((0..n).map(|i| (i % 7 != 3).then_some(i)));
+    let whole = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k)])
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let shared = whole.get_array_memory_size();
+    let weights = Weights::Column(Int64Array::from_iter_values(1..=8_192));
+    let slice = Batch::with_weights(whole.slice(1_000, 8_192), weights.clone())
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let owned = owned_rows(slice.clone()).unwrap_or_else(|e| unreachable!("{e}"));
+    assert!(owned.data().get_array_memory_size() * 10 < shared);
+    assert_eq!(owned.data(), slice.data());
+    assert_eq!(owned.weights(), &weights);
+    let full = Batch::new(whole.clone());
+    let kept = owned_rows(full).unwrap_or_else(|e| unreachable!("{e}"));
+    assert_eq!(
+        kept.data().column(0).to_data().buffers()[0].as_ptr(),
+        whole.column(0).to_data().buffers()[0].as_ptr()
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn sunk_views_into_shared_buffers_are_charged_by_their_rows() {
     let schema = Arc::new(Schema::new(vec![

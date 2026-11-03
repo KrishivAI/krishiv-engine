@@ -79,6 +79,12 @@ plan, and a deterministic one (the optimizer's `ShareCte`) only in a second pass
 `planner/properties.rs` (P2-T174) the ADR 0012 property pass: required distributions and provided placements (by
 attribute id); `Exchange` nodes (`Hash` on the routing hash, `Single`, `Broadcast`, `RoundRobin`, `Range`) are inserted
 only where a requirement is unmet; on one worker instantiation lowers each exchange into the operators around it.
+An aggregate over rows that must move is planned in two phases, `Aggregate{Partial}` -> exchange -> `Aggregate{Final}`
+over states (`planner/aggregate.rs`, design P2-T174 unit 2; `DISTINCT`: partial over keys and argument, exchange,
+partial merge, final, `physical::distinct_phases`, fused back by `fused_distinct`); `physical::fused_aggregate`
+runs the three as one `HashAggregate::fused` breaker on one worker (`WorkerContext::with_fused_aggregates(false)` runs
+them as written, for tests), whose drivers record the `ExchangeStats` (`exchange_stats.rs`: rows and bytes per
+partition, `Hll(10)` of the keys) that `EXPLAIN ANALYZE` prints as `exchange_*`.
 
 ## Key files
 Paths are relative to this crate.

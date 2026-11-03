@@ -113,6 +113,25 @@ fn run_with(
     build: Vec<Batch>,
     limit: Option<usize>,
 ) -> Result<(Vec<String>, Counters), krishiv_common::error::KrishivError> {
+    run_on(
+        join_type,
+        filter,
+        probe,
+        build,
+        limit,
+        ExecutorConfig::default(),
+    )
+}
+
+/// As [`run_with`], on an executor with `executor`'s threads.
+fn run_on(
+    join_type: JoinType,
+    filter: Option<Arc<dyn Predicate>>,
+    probe: Vec<Batch>,
+    build: Vec<Batch>,
+    limit: Option<usize>,
+    executor: ExecutorConfig,
+) -> Result<(Vec<String>, Counters), krishiv_common::error::KrishivError> {
     let (_dir, scope) = spill_scope();
     let source = |name: &str, b: Vec<Batch>| {
         MemoryScan::try_new(schema(name), b)
@@ -132,7 +151,7 @@ fn run_with(
         build: Arc::new(Scan(source("b", build))),
         probe: Arc::new(Scan(source("p", probe))),
     });
-    let executor = TokioExecutor::new(&ExecutorConfig::default())?;
+    let executor = TokioExecutor::new(&executor)?;
     let runner = QueryRunner::new(executor);
     let root = TreePool::new(&MemoryConfig {
         limit,
@@ -455,4 +474,39 @@ fn a_spilled_build_of_large_batches() {
             "{join_type:?}: {counters:?}"
         );
     }
+}
+
+/// Twelve drivers sinking a 24 MB build under a 16 MiB limit from batches
+/// of 1.2 MB, which the scan hands out as slices: each slice is held (and
+/// charged) for its own rows, not for the whole batch it shares, so the
+/// build spills instead of filling the pool with shared buffers.
+#[test]
+fn many_drivers_spill_wide_build_batches() {
+    let probe: Vec<Option<i64>> = (0..16).map(|i| Some(i * 70_001)).collect();
+    let build: Vec<Option<i64>> = (0..3_000_000).map(Some).collect();
+    let executor = ExecutorConfig {
+        compute_threads: 12,
+        blocking_threads: 12,
+        ..ExecutorConfig::default()
+    };
+    // One join type: the build is the same for every type.
+    let join_type = JoinType::FullOuter;
+    let (got, counters) = run_on(
+        join_type,
+        Some(near()),
+        batches("p", &probe, 16),
+        batches("b", &build, 150_000),
+        Some(16 << 20),
+        executor,
+    )
+    .unwrap();
+    assert_eq!(
+        got,
+        expected_by(join_type, &is_near, &probe, &build),
+        "{join_type:?}"
+    );
+    assert!(
+        counter(&counters, "build_spills") > 0,
+        "{join_type:?}: {counters:?}"
+    );
 }
