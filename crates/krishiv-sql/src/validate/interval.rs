@@ -8,7 +8,7 @@
 
 use krishiv_common::error::{
     IntervalArithmeticOverflowWithoutSuggestion, InvalidIntervalFormatIntervalParsing,
-    InvalidIntervalFormatUnmatchedFormatString,
+    InvalidIntervalFormatTimezoneIntervalOutOfRange, InvalidIntervalFormatUnmatchedFormatString,
     InvalidIntervalFormatUnmatchedFormatStringWithNotice,
     InvalidIntervalFormatUnsupportedFromToExpression, KrishivError, KrishivUnsupportedFeature,
     LegacyErrorTemp0024, LegacyErrorTemp0026, LegacyErrorTemp0027, LegacyErrorTemp0029,
@@ -112,6 +112,75 @@ pub(crate) fn literal(iv: &Interval, sql: &str, legacy: bool) -> Result<(), Pars
     );
     let (calendar, named) = evaluate(iv).map_err(|e| at(e, body))?;
     typed_check(calendar, named, iv.span, sql, legacy)
+}
+
+/// The zone `SET TIME ZONE INTERVAL ...` names (`ZoneOffset.toString` of
+/// the interval's whole seconds), as `SparkSqlParser.visitSetTimeZone`
+/// reads it: no months or days, at most 18 hours, whole seconds.
+///
+/// # Errors
+/// `INVALID_INTERVAL_FORMAT.TIMEZONE_INTERVAL_OUT_OF_RANGE` (the first
+/// offending part, as Spark shows it), or the literal's own error, at
+/// `span`.
+pub(crate) fn time_zone_offset(iv: &Interval, span: Span) -> Result<String, ParseError> {
+    // The same visit reads the literal first: a captured second range or
+    // trailing part is its error, whatever the zone would be.
+    if let Some(trailing) = &iv.trailing {
+        return Err(at(
+            LegacyErrorTemp0024 {},
+            Span::new(iv.span.start, iv.span.end.max(trailing.span.end)),
+        ));
+    }
+    let (c, _) = evaluate(iv).map_err(|e| at(e, span))?;
+    time_zone_of(c, span)
+}
+
+/// [`time_zone_offset`] of the typed literal `INTERVAL 'text'`.
+///
+/// # Errors
+/// As [`time_zone_offset`].
+pub(crate) fn time_zone_offset_typed(value: &str, span: Span) -> Result<String, ParseError> {
+    let (c, _) = parse_string(value).map_err(|_| at(TypedKind::Interval.invalid(value), span))?;
+    time_zone_of(c, span)
+}
+
+fn time_zone_of(c: Calendar, span: Span) -> Result<String, ParseError> {
+    let out_of_range = |n: i64| {
+        at(
+            InvalidIntervalFormatTimezoneIntervalOutOfRange {
+                input: n.to_string(),
+            },
+            span,
+        )
+    };
+    if c.months != 0 {
+        return Err(out_of_range(i64::from(c.months)));
+    }
+    if c.days != 0 {
+        return Err(out_of_range(i64::from(c.days)));
+    }
+    // `unsigned_abs`: `i64::MIN` has no signed magnitude.
+    let magnitude = c.micros.unsigned_abs();
+    if magnitude > 18 * MICROS_PER_HOUR.unsigned_abs() {
+        return Err(out_of_range(
+            i64::try_from(magnitude / MICROS_PER_HOUR.unsigned_abs()).unwrap_or(i64::MAX),
+        ));
+    }
+    if c.micros % MICROS_PER_SECOND != 0 {
+        return Err(out_of_range(c.micros / MICROS_PER_SECOND));
+    }
+    let total = c.micros / MICROS_PER_SECOND;
+    if total == 0 {
+        return Ok("Z".to_owned());
+    }
+    let abs = total.abs();
+    let sign = if total < 0 { '-' } else { '+' };
+    let (h, m, sec) = (abs / 3600, abs / 60 % 60, abs % 60);
+    Ok(if sec == 0 {
+        format!("{sign}{h:02}:{m:02}")
+    } else {
+        format!("{sign}{h:02}:{m:02}:{sec:02}")
+    })
 }
 
 /// Checks the typed literal `INTERVAL 'text'` at `span`.

@@ -22,8 +22,8 @@ use krishiv_common::error::{
     InvalidSqlSyntaxCreateRoutineWithIfNotExistsAndReplace,
     InvalidSqlSyntaxCreateTempFuncWithDatabase, InvalidSqlSyntaxCreateTempFuncWithIfNotExists,
     InvalidStatementOrClause, InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature,
-    LegacyErrorTemp0035, LegacyErrorTemp0053, ParseEmptyStatement, ParseSyntaxError,
-    SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
+    LegacyErrorTemp0035, LegacyErrorTemp0045, LegacyErrorTemp0053, ParseEmptyStatement,
+    ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
 };
 
 use crate::ast::Span;
@@ -240,15 +240,21 @@ pub(crate) fn invalid_temp_obj_qualifier(
     )
 }
 
-/// `KRISHIV_UNSUPPORTED_FEATURE` for the `SET TIME ZONE` form `form`
-/// (e.g. an `INTERVAL` zone).
-pub(crate) fn unsupported_set_time_zone(form: &str, span: Span) -> ParseError {
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a function implemented by a JVM class.
+pub(crate) fn unsupported_function_class(span: Span) -> ParseError {
     at(
         KrishivUnsupportedFeature {
-            feature: form.to_owned(),
+            feature: "CREATE FUNCTION ... AS 'class' (a function implemented by a JVM class)"
+                .to_owned(),
         },
         span,
     )
+}
+
+/// `_LEGACY_ERROR_TEMP_0045`: `SET TIME ZONE` followed by neither a zone
+/// nor an interval.
+pub(crate) fn invalid_time_zone_displacement(span: Span) -> ParseError {
+    at(LegacyErrorTemp0045 {}, span)
 }
 
 /// `_LEGACY_ERROR_TEMP_0035`: a bare `ALTER TABLE ... CHANGE column`
