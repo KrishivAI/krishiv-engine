@@ -344,3 +344,19 @@ fn a_base_path_read_notices_a_committed_file_that_is_gone() {
     let err = block_on(df.count()).unwrap_err();
     assert_eq!(err.error_class().name(), "KRISHIV_CONCURRENT_COMMIT");
 }
+
+#[test]
+fn a_partition_directory_read_by_its_own_path_shows_only_the_roots_committed_files() {
+    let (_dir, root, s) = logged_partition_with_a_stray_file();
+    let path = root.to_str().unwrap();
+    // No basePath: the log of the root above the `p=a` directory still applies.
+    let df = s.read().parquet([format!("{path}/p=a").as_str()]);
+    assert_eq!(
+        block_on(df.count()).unwrap(),
+        1,
+        "the abandoned file is not read"
+    );
+    // And a glob below the root.
+    let df = s.read().parquet([format!("{path}/p=a/*.parquet").as_str()]);
+    assert_eq!(block_on(df.count()).unwrap(), 1);
+}

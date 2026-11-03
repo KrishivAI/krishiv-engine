@@ -1483,7 +1483,8 @@ pub static FILES_COMMIT_PROTOCOL: ConfigEntry = ConfigEntry {
           Krishiv readers of the directory then see only committed files; `NONE` is Spark's plain \
           commit (files under their final names, `_SUCCESS`); `AUTO` (the default) uses the log \
           where the store supports put-if-absent and the plain commit, with a warning, where it \
-          does not.",
+          does not. A directory that already has a `_krishiv_log/` keeps being written through \
+          it, whatever this is set to (`NONE` does not switch an existing log off).",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

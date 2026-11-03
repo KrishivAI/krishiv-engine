@@ -199,6 +199,14 @@ impl<'a> CommitLog<'a> {
     fn parse_checkpoint(&self, bytes: &[u8], version: u64) -> Result<Snapshot> {
         let v: Value = serde_json::from_slice(bytes)
             .map_err(|e| self.corrupt(&format!("checkpoint {version}: {e}")))?;
+        // N reads N-1 (ADR 0026): a checkpoint from a newer writer is refused, as an entry is.
+        if let Some(format) = v["format"].as_u64()
+            && format > FORMAT
+        {
+            return Err(self.corrupt(&format!(
+                "checkpoint {version}: format {format} is newer than this reader's {FORMAT}"
+            )));
+        }
         let files = v["files"]
             .as_array()
             .ok_or_else(|| self.corrupt("a checkpoint without files"))?;

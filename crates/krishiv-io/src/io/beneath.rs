@@ -609,7 +609,16 @@ impl ObjectStore for BeneathStore {
                         name.as_str(),
                         AtFlags::empty(),
                     )
-                    .map_err(|e| errno(&location, e))
+                    .map_err(|e| match e {
+                        // The file system cannot make hard links: put-if-absent is unsupported
+                        // here (the commit protocol then falls back or refuses by its setting).
+                        Errno::PERM | Errno::OPNOTSUPP | Errno::NOSYS => {
+                            object_store::Error::NotSupported {
+                                source: Box::new(std::io::Error::from(e)),
+                            }
+                        }
+                        e => errno(&location, e),
+                    })
                 } else {
                     renameat(&parent, staging.as_str(), &parent, name.as_str())
                         .map_err(|e| errno(&location, e))
@@ -655,13 +664,35 @@ impl ObjectStore for BeneathStore {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> StoreResult<GetResult> {
         let head = options.head;
-        let range = options.range;
+        let range = options.range.clone();
         let store = self.clone();
         let location = location.clone();
         blocking(move || {
             let (parent, name) = store.parent_and_name(&location, false)?;
-            let st = statat(&parent, name.as_str(), AtFlags::SYMLINK_NOFOLLOW)
-                .map_err(|e| errno(&location, e))?;
+            // One descriptor for the metadata, the preconditions and the bytes, without following
+            // a link: a concurrent publish cannot pair the old file's metadata with the new bytes.
+            let opened = openat(
+                &parent,
+                name.as_str(),
+                OFlags::RDONLY
+                    .union(OFlags::NOFOLLOW)
+                    .union(OFlags::CLOEXEC),
+                Mode::empty(),
+            );
+            let (fd, st) = match opened {
+                Ok(fd) => {
+                    let st = rustix::fs::fstat(&fd).map_err(|e| errno(&location, e))?;
+                    (Some(fd), st)
+                }
+                // A link is an object of its own for a head (its size is its target path's
+                // length); its bytes are never read through it.
+                Err(Errno::LOOP) if head => {
+                    let st = statat(&parent, name.as_str(), AtFlags::SYMLINK_NOFOLLOW)
+                        .map_err(|e| errno(&location, e))?;
+                    (None, st)
+                }
+                Err(e) => return Err(errno(&location, e)),
+            };
             // A directory is not an object.
             if FileType::from_raw_mode(st.st_mode) == FileType::Directory {
                 return Err(object_store::Error::NotFound {
@@ -670,6 +701,7 @@ impl ObjectStore for BeneathStore {
                 });
             }
             let meta = meta_of(location.clone(), &st);
+            options.check_preconditions(&meta)?;
             if head {
                 return Ok(GetResult {
                     payload: GetResultPayload::Stream(futures::stream::empty().boxed()),
@@ -679,18 +711,11 @@ impl ObjectStore for BeneathStore {
                     extensions: Default::default(),
                 });
             }
-            // A body is read whole (the objects read through this store are
-            // small log entries), without following a link.
-            let fd = openat(
-                &parent,
-                name.as_str(),
-                OFlags::RDONLY
-                    .union(OFlags::NOFOLLOW)
-                    .union(OFlags::CLOEXEC),
-                Mode::empty(),
-            )
-            .map_err(|e| errno(&location, e))?;
+            // A body is read whole (the objects read through this store are small log entries).
             let mut body = Vec::new();
+            let Some(fd) = fd else {
+                return Err(violation(&location, "a link is not read through"));
+            };
             std::io::Read::read_to_end(&mut File::from(fd), &mut body).map_err(io_err)?;
             let size = body.len() as u64;
             let span = match range {

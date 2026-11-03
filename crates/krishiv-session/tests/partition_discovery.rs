@@ -268,7 +268,8 @@ fn base_path_keeps_partition_columns_of_a_subdirectory() {
         .read()
         .option("basePath", other.path().to_str().unwrap())
         .parquet([sub.as_str()]);
-    assert!(block_on(df.schema()).is_err());
+    let e = block_on(df.schema()).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
 }
 
 #[test]

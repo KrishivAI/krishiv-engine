@@ -568,7 +568,8 @@ impl FileReads {
                         .await?
                         .map(|files| (root.path.parts().count(), Arc::new(files)))
                 }
-                _ => None,
+                Some(_) => None,
+                None => self.logged_ancestor(&at).await?,
             },
         };
         // The names between the log's root and `at`.
@@ -753,6 +754,43 @@ impl FileReads {
         }
     }
 
+    /// The log of the nearest ancestor of `at`, reached through `name=value` directories only (a
+    /// partition directory read by its own path): the ancestor's depth and its committed files,
+    /// `None` when no such ancestor has a log.
+    async fn logged_ancestor(
+        &self,
+        at: &LocatedPath,
+    ) -> Result<
+        Option<(
+            usize,
+            Arc<BTreeMap<String, krishiv_io::commit_log::AddedFile>>,
+        )>,
+    > {
+        let mut parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
+        let mut display = at.display.clone();
+        while parts
+            .last()
+            .is_some_and(|name| parse_segment(name).is_some())
+        {
+            parts.pop();
+            if parts.is_empty() {
+                break;
+            }
+            display = display
+                .rsplit_once('/')
+                .map_or_else(String::new, |(head, _)| head.to_owned());
+            let parent = LocatedPath {
+                store: at.store.clone(),
+                path: Path::from_iter(parts.iter().map(String::as_str)),
+                display: display.clone(),
+            };
+            if let Some(files) = Box::pin(self.committed_files(&parent)).await? {
+                return Ok(Some((parts.len(), Arc::new(files))));
+            }
+        }
+        Ok(None)
+    }
+
     /// Whether a commit log exists now for `at` (or for the `basePath` root above it): checked after an
     /// unlogged listing, because a first logged write to an existing directory creates its log before
     /// its tasks write files, so a listing taken in between would accept uncommitted files.
@@ -764,7 +802,8 @@ impl FileReads {
             Some(root) if at.path.prefix_matches(&root.path) => {
                 Ok(Box::pin(self.committed_files(root)).await?.is_some())
             }
-            _ => Ok(false),
+            Some(_) => Ok(false),
+            None => Ok(self.logged_ancestor(at).await?.is_some()),
         }
     }
 
@@ -816,6 +855,8 @@ impl FileReads {
             (None, None, Some(base)) => Box::pin(self.committed_files(base))
                 .await?
                 .map(|files| (base.path.parts().count(), Arc::new(files))),
+            // A partition directory read by its own path: the log of the root above it.
+            (None, None, None) => self.logged_ancestor(at).await?,
             _ => None,
         };
         let mut seen = 0;

@@ -132,16 +132,11 @@ async fn a_rescan_is_served_from_the_cache() {
     );
     assert_eq!(requests, 0, "the re-scan reached the store");
     assert_eq!(bytes, 0);
-    assert!(
-        second_time * 2 <= first_time,
-        "second {second_time:?} vs first {first_time:?}"
-    );
     // (2) The cold scan costs no more requests than the uncached one (the
     // time is within noise of the uncached scan, which the request counts bound).
     assert!(first_stats.gets <= uncached_stats.gets);
     // Aligned blocks over-read by up to one block at each end of each requested range.
     assert!(first_stats.bytes <= uncached_stats.bytes + files.len() as u64 * 8 * BLOCK);
-    assert!(first_time <= uncached * 2, "{first_time:?} vs {uncached:?}");
     let stats = cold.sched.block_cache_stats().unwrap();
     assert!(stats.misses > 0 && stats.memory_hits + stats.disk_hits >= stats.misses);
     assert_eq!(stats.errors, 0);

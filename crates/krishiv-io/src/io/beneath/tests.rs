@@ -147,6 +147,141 @@ async fn create_mode_publishes_once_and_never_overwrites() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exactly_one_of_many_concurrent_creates_wins() {
+    for components in [false, true] {
+        let f = fixture();
+        let s = store(&f, components);
+        let at = obj(&f, "t/log/0");
+        let mut tasks = Vec::new();
+        for i in 0..8_u8 {
+            let (s, at) = (s.clone(), at.clone());
+            tasks.push(tokio::spawn(async move {
+                s.put_opts(
+                    &at,
+                    PutPayload::from(Bytes::from(vec![i; 16])),
+                    PutOptions {
+                        mode: object_store::PutMode::Create,
+                        ..PutOptions::default()
+                    },
+                )
+                .await
+            }));
+        }
+        let mut wins = 0;
+        for t in tasks {
+            match t.await.unwrap() {
+                Ok(_) => wins += 1,
+                Err(object_store::Error::AlreadyExists { .. }) => {}
+                Err(e) => panic!("{e}"),
+            }
+        }
+        assert_eq!(wins, 1, "components = {components}");
+        // The file holds one writer's whole body and no staging file is left.
+        let body = std::fs::read(f.root.join("a/t/log/0")).unwrap();
+        assert_eq!(body.len(), 16);
+        assert!(body.iter().all(|b| *b == body[0]));
+        assert_eq!(tree(&f.root.join("a/t/log")).len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn ranges_heads_links_and_conditions_read_as_asked() {
+    use object_store::GetRange;
+    for components in [false, true] {
+        let f = fixture();
+        let s = store(&f, components);
+        put(&s, &obj(&f, "t/x"), b"0123456789").await.unwrap();
+        let read = |range: Option<GetRange>| {
+            let s = s.clone();
+            let at = obj(&f, "t/x");
+            async move {
+                s.get_opts(
+                    &at,
+                    GetOptions {
+                        range,
+                        ..GetOptions::default()
+                    },
+                )
+                .await
+            }
+        };
+        for (range, want) in [
+            (GetRange::Bounded(2..5), &b"234"[..]),
+            (GetRange::Offset(7), b"789"),
+            (GetRange::Suffix(4), b"6789"),
+        ] {
+            let got = read(Some(range)).await.unwrap().bytes().await.unwrap();
+            assert_eq!(&got[..], want);
+        }
+        // A range past the end is cut to it; one that starts beyond it is an error.
+        let cut = read(Some(GetRange::Bounded(8..20)))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(&cut[..], b"89");
+        assert!(read(Some(GetRange::Bounded(11..12))).await.is_err());
+        assert!(read(Some(GetRange::Offset(11))).await.is_err());
+        // A head request returns the metadata and no bytes.
+        let head = s
+            .get_opts(
+                &obj(&f, "t/x"),
+                GetOptions {
+                    head: true,
+                    ..GetOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(head.meta.size, 10);
+        assert!(head.bytes().await.unwrap().is_empty());
+        // A condition that fails is refused before any byte is read.
+        let e = s
+            .get_opts(
+                &obj(&f, "t/x"),
+                GetOptions {
+                    if_match: Some("\"nope\"".to_owned()),
+                    ..GetOptions::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                e,
+                object_store::Error::Precondition { .. }
+                    | object_store::Error::NotModified { .. }
+                    | object_store::Error::Generic { .. }
+            ),
+            "{e}"
+        );
+        // A link is not followed: its head is the link itself, its body is refused.
+        symlink(f.outside.join("keep"), f.root.join("a/t/link")).unwrap();
+        let link_head = s
+            .get_opts(
+                &obj(&f, "t/link"),
+                GetOptions {
+                    head: true,
+                    ..GetOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            link_head.meta.size,
+            f.outside.join("keep").as_os_str().len() as u64
+        );
+        let e = s
+            .get_opts(&obj(&f, "t/link"), GetOptions::default())
+            .await
+            .unwrap_err();
+        // Refused as a violation of the anchor, not read through to the file outside.
+        assert!(!format!("{e}").contains("outside"), "{e}");
+    }
+}
+
 #[tokio::test]
 async fn put_modes_other_than_overwrite_and_create_are_refused() {
     let f = fixture();

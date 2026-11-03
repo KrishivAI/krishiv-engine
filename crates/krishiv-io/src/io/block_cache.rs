@@ -197,7 +197,13 @@ impl BlockCache {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
         }
-        std::fs::create_dir_all(&dir)?;
+        // Owner-only: another local user must not be able to put blocks of their own into a
+        // cache (the default root is under the shared temp directory).
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder.create(&dir)?;
         let lock = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -375,9 +381,9 @@ impl BlockCache {
             let mut st = lock(&self.state);
             let tick = Self::next_tick(&mut st);
             let mut victims = Vec::new();
-            for (k, _, old) in st.disk.insert(name, tick, size, size) {
+            // A replaced entry has the name of the file just written: it is not a victim.
+            for (_, _, old) in st.disk.insert(name, tick, size, size) {
                 st.disk.used = st.disk.used.saturating_sub(old);
-                victims.push(k);
             }
             while st.disk.used > self.cfg.disk_bytes {
                 let Some((k, old)) = st.disk.pop_oldest() else {
