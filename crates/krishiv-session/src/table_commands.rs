@@ -38,11 +38,11 @@ use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{Privilege, Securable, TableColumn, authorize};
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
-    AlterColumnAction, AlterTable, AlterTableAction, AlterView, AlterViewAction, Analyze,
-    AnalyzeColumns, ChangeColumnAction, ColumnName, CreateNamespace, CreatePermanentView,
-    CreateTable, CreateTableLike, CreateView, DdlName, DropBehavior, DropNamespace,
-    DropPermanentView, DropTable, Ident, Insert, InsertClause, Query, TableElement, TableOption,
-    Truncate, Use, ViewColumn,
+    AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable, AlterTableAction,
+    AlterView, AlterViewAction, Analyze, AnalyzeColumns, ChangeColumnAction, ColumnName,
+    CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, CreateView, DdlName,
+    DropBehavior, DropNamespace, DropPermanentView, DropTable, Ident, Insert, InsertClause, Query,
+    TableElement, TableOption, Truncate, Use, ViewColumn,
 };
 use krishiv_types::DataType;
 
@@ -160,7 +160,11 @@ pub(crate) struct TableName {
 }
 
 impl TableName {
-    fn resolve(parts: &[String], current: &str, env: &QueryEnv) -> Result<Self, KrishivError> {
+    pub(crate) fn resolve(
+        parts: &[String],
+        current: &str,
+        env: &QueryEnv,
+    ) -> Result<Self, KrishivError> {
         let fold = |s: &str| {
             if env.analysis.conf.case_sensitive {
                 s.to_owned()
@@ -292,6 +296,40 @@ impl Session {
         };
         if !self.state.catalog.store.create_namespace(&name, meta) && !n.if_not_exists {
             return Err(SchemaAlreadyExists {
+                schema_name: format!("`{name}`"),
+            }
+            .into());
+        }
+        self.empty_frame().await
+    }
+
+    /// `ALTER DATABASE|SCHEMA|NAMESPACE name SET PROPERTIES | SET LOCATION`, and `COMMENT ON SCHEMA`.
+    pub(crate) async fn exec_alter_namespace(
+        &self,
+        a: &AlterNamespace,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        let name = self.namespace_name(&a.name, &env)?;
+        let change: Box<dyn Fn(&mut NamespaceMeta)> = match &a.action {
+            AlterNamespaceAction::SetProperties(properties) => {
+                let properties = options_of(properties, original);
+                Box::new(move |m| m.properties.extend(properties.clone()))
+            }
+            AlterNamespaceAction::SetLocation(l) => {
+                let l = l.clone();
+                Box::new(move |m| m.location = Some(l.clone()))
+            }
+            AlterNamespaceAction::SetComment(c) => {
+                let c = c.clone();
+                Box::new(move |m| m.comment.clone_from(&c))
+            }
+            _ => return Err(unsupported("this ALTER SCHEMA action")),
+        };
+        let found = self.state.catalog.store.alter_namespace(&name, &*change);
+        drop(change);
+        if !found {
+            return Err(SchemaNotFound {
                 schema_name: format!("`{name}`"),
             }
             .into());
@@ -470,7 +508,7 @@ impl Session {
             .iter()
             .map(|c| StoreColumn {
                 name: c.name.clone(),
-                data_type: c.data_type.clone(),
+                data_type: krishiv_plan::without_generated_marker(&c.data_type),
                 nullable: c.nullable,
                 default: None,
                 comment: None,
@@ -870,7 +908,7 @@ impl Session {
                     .iter()
                     .map(|c| StoreColumn {
                         name: c.name.clone(),
-                        data_type: c.data_type.clone(),
+                        data_type: krishiv_plan::without_generated_marker(&c.data_type),
                         nullable: c.nullable,
                         default: None,
                         comment: None,
@@ -1606,7 +1644,7 @@ impl Session {
             .iter()
             .map(|c| StoreColumn {
                 name: c.name.clone(),
-                data_type: c.data_type.clone(),
+                data_type: krishiv_plan::without_generated_marker(&c.data_type),
                 nullable: true,
                 default: None,
                 comment: None,
@@ -1702,7 +1740,7 @@ impl Session {
                     .iter()
                     .map(|c| StoreColumn {
                         name: c.name.clone(),
-                        data_type: c.data_type.clone(),
+                        data_type: krishiv_plan::without_generated_marker(&c.data_type),
                         nullable: c.nullable,
                         default: None,
                         comment: None,
@@ -2137,7 +2175,7 @@ impl Session {
             .iter()
             .map(|c| TableColumn {
                 name: c.name.clone(),
-                data_type: c.data_type.clone(),
+                data_type: krishiv_plan::without_generated_marker(&c.data_type),
                 nullable: c.nullable,
             })
             .collect();

@@ -588,6 +588,7 @@ impl Session {
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
             Statement::CreateNamespace(n) => self.exec_create_namespace(&n, query).await,
             Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
+            Statement::AlterNamespace(a) => self.exec_alter_namespace(&a, query).await,
             Statement::Use(u) => self.exec_use(&u).await,
             Statement::Show(s) => Box::pin(self.exec_show(&s, query)).await,
             Statement::Describe(d) => Box::pin(self.exec_describe(&d, query)).await,
@@ -1887,6 +1888,10 @@ impl Session {
             // reading files are dropped, so the next action lists them again.
             // (An external change drops nothing and stays invisible.)
             self.refresh_files();
+            // A write by path into a table's directory changes what the table reads.
+            if let Some(local) = at.display.strip_prefix("file:") {
+                crate::result_cache::global().invalidate_path(std::path::Path::new(local));
+            }
             let mut dirs = std::collections::BTreeSet::new();
             for f in &committed {
                 let below: Vec<String> = f

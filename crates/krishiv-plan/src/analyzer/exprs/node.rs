@@ -160,6 +160,23 @@ impl Resolver<'_> {
                     ));
                 }
             }
+            // `m.k` on a map is the lookup `m['k']` (Spark's `ExtractValue`).
+            ExprNode::Field { base: _, name }
+                if matches!(kids[0].ty.data_type, Some(DataType::Map(_))) =>
+            {
+                let call = Expr::function(
+                    "__subscript",
+                    vec![
+                        Expr::clone(&kids[0].expr),
+                        Expr::new(ExprNode::Literal(Literal::String(name.clone())))
+                            .with_origin(e.origin),
+                    ],
+                )
+                .with_origin(e.origin);
+                let mut b = self.expr(&Arc::new(call), cx)?;
+                b.carry_markers(kids);
+                return Ok(b);
+            }
             ExprNode::Field { base: _, name } => {
                 let (expr, ty) = self.struct_field(e, &kids[0], name)?;
                 Bound {
@@ -1191,7 +1208,7 @@ impl Resolver<'_> {
                 // of them, and Arrow's `Time64` does not carry `p`): the
                 // precision follows as a trailing literal.
                 if is_builtin_entry(&entry)
-                    && matches!(entry.id.name(), "extract" | "date_part")
+                    && matches!(entry.id.name(), "extract" | "date_part" | "datepart")
                     && n == 2
                     && let Some(DataType::Time { precision }) = &call_kids[1].ty.data_type
                     && *precision < 6

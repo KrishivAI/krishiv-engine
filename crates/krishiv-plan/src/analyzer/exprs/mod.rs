@@ -175,7 +175,7 @@ impl Bound {
 /// to, when `field` is a literal naming one.
 fn extract_function(function: &str, call: &Expr) -> Option<&'static str> {
     use krishiv_kernels::datetime::DatePart as P;
-    if !matches!(function, "extract" | "date_part") {
+    if !matches!(function, "extract" | "date_part" | "datepart") {
         return None;
     }
     let ExprNode::Function(f) = &call.node else {
@@ -788,6 +788,11 @@ fn builtin_op(name: &str, arity: usize) -> Option<crate::Builtin> {
         return None;
     }
     crate::Builtin::from_name(name).filter(|b| !b.is_analyzer_internal())
+}
+
+/// Whether `name` is the bare hidden `_metadata` column.
+fn is_metadata(name: &[String]) -> bool {
+    matches!(name, [n] if n.eq_ignore_ascii_case(super::ops::METADATA_COLUMN))
 }
 
 #[cfg(test)]
