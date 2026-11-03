@@ -33,8 +33,11 @@ use crate::physical::{AggregatePlan, PhysNode, aggregate_node, aggregate_spec};
 
 /// One aggregate call of the output expressions.
 struct Call {
-    /// Its text, which identifies equal calls.
+    /// Its text (redacted where it holds a secret): the name of its result.
     key: String,
+    /// Its text with nothing redacted, which identifies equal calls (two calls
+    /// differing only in an AES key are different calls). Never shown.
+    ident: String,
     f: ResolvedFunction,
     /// The column of its result.
     id: AttrId,
@@ -156,7 +159,7 @@ impl Planner<'_> {
                 let field = agg.schema.field(i);
                 let data_type = krishiv_types::DataType::from_arrow(field.data_type())?;
                 key_ids.insert(
-                    e.to_string(),
+                    krishiv_plan::identity_string(e),
                     BoundColumn {
                         id: agg.layout[i],
                         name: e.to_string(),
@@ -170,7 +173,7 @@ impl Planner<'_> {
             .iter()
             .map(|c| {
                 (
-                    c.key.as_str(),
+                    c.ident.as_str(),
                     BoundColumn {
                         id: c.id,
                         name: c.key.clone(),
@@ -277,13 +280,15 @@ impl Planner<'_> {
             && f.kind == FunctionKind::Aggregate
         {
             let key = e.to_string();
-            if !out.iter().any(|c| c.key == key) {
+            let ident = krishiv_plan::identity_string(e);
+            if !out.iter().any(|c| c.ident == ident) {
                 if !matches!(f.id, FunctionId::Registry { .. }) {
                     return Err(unsupported(&format!("the aggregate {key}")));
                 }
                 let id = self.fresh_id();
                 out.push(Call {
                     key,
+                    ident,
                     f: f.clone(),
                     id,
                 });
@@ -311,7 +316,7 @@ fn replace(
         if matches!(x.node, ExprNode::Resolved(ResolvedExpr::Alias { .. })) {
             return Ok::<_, krishiv_common::error::KrishivError>(x);
         }
-        let text = x.to_string();
+        let text = krishiv_plan::identity_string(&x);
         let found = calls.get(text.as_str()).or_else(|| keys.get(&text));
         Ok(match found {
             Some(c) => Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(

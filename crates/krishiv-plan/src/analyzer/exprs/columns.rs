@@ -232,7 +232,7 @@ impl Resolver<'_> {
                 qual: super::super::ops::no_qual(),
                 source: None,
             };
-            return self.resolve_attr(&a, 1, &c.name, origin, None, true);
+            return self.resolve_attr(&a, 1, &c.name, origin, None, cx, true);
         }
         if let Some(id) = c.plan_id {
             let a = self.plan_column(id, &c.name, cx, origin)?;
@@ -257,8 +257,10 @@ impl Resolver<'_> {
         // The columns a `USING` join merged away answer to a qualified name.
         let joined: Vec<Attr>;
         let hidden = match (cx.rels, cx.agg_scope.is_some() && in_agg) {
-            ([r], false) if c.name.len() > 1 => Some(&r.hidden[..]),
-            ([r], true) if c.name.len() > 1 => r.agg.as_ref().map(|i| &i.input.hidden[..]),
+            ([r], false) if c.name.len() > 1 || is_metadata(&c.name) => Some(&r.hidden[..]),
+            ([r], true) if c.name.len() > 1 || is_metadata(&c.name) => {
+                r.agg.as_ref().map(|i| &i.input.hidden[..])
+            }
             // A join condition reads the merged-away columns of both inputs.
             (rels, false) if c.name.len() > 1 && rels.len() > 1 => {
                 joined = rels.iter().flat_map(|r| r.hidden.iter().cloned()).collect();
@@ -283,10 +285,10 @@ impl Resolver<'_> {
                         && self.serves_path(&k, &c.name[k_used..])
                     {
                         self.used(&k);
-                        return self.resolve_attr(&k, k_used, &c.name, origin, None, false);
+                        return self.resolve_attr(&k, k_used, &c.name, origin, None, cx, false);
                     }
                     self.used(&a);
-                    return self.resolve_attr(&a, used, &c.name, origin, None, false);
+                    return self.resolve_attr(&a, used, &c.name, origin, None, cx, false);
                 }
                 Ok(None) => {
                     lenient_dup = lenient_dup || lenient;
@@ -377,8 +379,19 @@ impl Resolver<'_> {
         for (level, outer) in levels.filter(|_| cx.outer) {
             if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
                 self.used(&a);
-                return self.resolve_attr(&a, used, &c.name, origin, Some(level), false);
+                return self.resolve_attr(&a, used, &c.name, origin, Some(level), cx, false);
             }
+        }
+        // `grouping__id` is the grouping id Spark's aggregate rule reads
+        // before a function parameter of that name can: outside a grouping
+        // context it is `UNSUPPORTED_GROUPING_EXPRESSION`.
+        if let [name] = &c.name[..]
+            && name.eq_ignore_ascii_case("grouping__id")
+            && !cx.grouping
+            && !self.ctx.conf.udf_parameter_shadows_function
+            && self.has_parameter(name)
+        {
+            return Err(AnalysisError::new(UnsupportedGroupingExpression {}, origin));
         }
         // The parameters of the SQL function being resolved rank after
         // everything else, but before a session variable.
@@ -428,10 +441,18 @@ impl Resolver<'_> {
         if self.parameter_attrs().is_empty() {
             return Err(unresolved(&c.name, cx.scope, origin));
         }
+        // A parameter the name matches is out of reach here (the body
+        // nests deeper than a parameter is visible), and Spark proposes
+        // nothing for it.
+        let cs = self.ctx.conf.case_sensitive;
         let candidates: Vec<Attr> = cx
             .scope
             .iter()
-            .chain(self.parameter_attrs())
+            .chain(
+                self.parameter_attrs()
+                    .iter()
+                    .filter(|a| !matches!(&c.name[..], [n] if same(&a.col.name, n, cs))),
+            )
             .cloned()
             .collect();
         Err(unresolved(&c.name, &candidates, origin))
@@ -784,13 +805,18 @@ impl Resolver<'_> {
     /// or the struct fields the leftover parts name below it (Spark's
     /// `GetStructField` chain), resolved under `spark.sql.caseSensitive`.
     /// `outer` is `Some` for a column of the enclosing query.
-    pub(super) fn resolve_attr(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one binding site shared by columns, outer references and lambda variables"
+    )]
+    pub(in crate::analyzer) fn resolve_attr(
         &mut self,
         a: &Attr,
         used: usize,
         parts: &[String],
         origin: Origin,
         outer: Option<usize>,
+        cx: &Cx<'_>,
         lambda: bool,
     ) -> Result<Bound, AnalysisError> {
         // A reference keeps the spelling it was written with.
@@ -816,7 +842,19 @@ impl Resolver<'_> {
         let mut ty = column(&col);
         let mut base = Arc::new(Expr::new(node).with_origin(origin));
         let mut parent = parts[used - 1].clone();
-        for part in &parts[used..] {
+        for (i, part) in parts.iter().enumerate().skip(used) {
+            // A map below the path: the rest are lookups (`m.a.b` is `m['a']['b']`).
+            if matches!(ty.data_type, Some(DataType::Map(_))) {
+                let mut chain = Expr::clone(&base);
+                for rest in &parts[i..] {
+                    chain = Expr::new(ExprNode::Field {
+                        base: Arc::new(chain),
+                        name: rest.clone(),
+                    })
+                    .with_origin(origin);
+                }
+                return self.expr(&Arc::new(chain), cx);
+            }
             let st = match &ty.data_type {
                 Some(DataType::Struct(st)) => st.clone(),
                 _ => {
@@ -884,8 +922,14 @@ impl Resolver<'_> {
         if cx.agg_scope.is_some() {
             scope.extend(cx.extra.unwrap_or_default().iter().cloned());
         }
+        let hidden: Vec<Attr> = cx
+            .rels
+            .iter()
+            .flat_map(|r| r.hidden.iter().cloned())
+            .collect();
         outer.push(super::super::resolve::Level {
             scope: scope.into(),
+            hidden: hidden.into(),
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }

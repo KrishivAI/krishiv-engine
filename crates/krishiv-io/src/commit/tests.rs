@@ -1449,3 +1449,151 @@ impl PartitionedOptions for crate::WriteOptions {
         self
     }
 }
+
+impl Env {
+    /// A logged write of `rows` rows; with `commit` false the writer "dies"
+    /// after its files are complete and before the commit.
+    fn write_logged(&self, dir: &str, mode: SaveMode, uuid: &str, rows: i32, commit: bool) {
+        let w = self.begin(dir, mode, uuid).unwrap().unwrap();
+        let w = self.rt.block_on(w.logged(&self.io)).unwrap();
+        let o = FormatOptions::defaults(ParquetFormat.options());
+        let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+        self.rt.block_on(async {
+            let pool: Arc<dyn krishiv_memory::MemoryPool> =
+                krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+            let id = pool.register("write", None);
+            let mut writer = FileWriter::new(
+                &self.io,
+                Arc::clone(&format),
+                &schema(),
+                o.clone(),
+                w.write_options(0),
+                krishiv_memory::Reservation::new(pool, id),
+            )
+            .unwrap();
+            writer.write(&batch(rows)).await.unwrap();
+            let files = writer.finish().await.unwrap();
+            if commit {
+                w.commit(&self.io, format.as_ref(), schema(), &o, files)
+                    .await
+                    .unwrap();
+            }
+        });
+    }
+
+    fn visible(&self, dir: &str) -> Vec<String> {
+        let log = crate::commit_log::CommitLog::new(
+            &self.io,
+            self.store.clone(),
+            Path::from(dir),
+            dir.to_owned(),
+        );
+        self.rt
+            .block_on(log.snapshot())
+            .unwrap()
+            .files
+            .into_keys()
+            .collect()
+    }
+}
+
+/// A writer killed between its data files and its commit (append or
+/// overwrite) leaves the committed state exactly as it was: the log has no
+/// entry, so readers never see its files, and the old files of an overwrite
+/// are still there.
+#[test]
+fn a_logged_write_killed_before_its_commit_leaves_the_old_state_visible() {
+    let env = Env::memory();
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    let committed = env.visible("t");
+    assert_eq!(committed.len(), 1);
+    env.write_logged("t", SaveMode::Append, "job-2", 3, false);
+    env.write_logged("t", SaveMode::Overwrite, "job-3", 2, false);
+    assert_eq!(env.visible("t"), committed);
+    // The killed writers' files are on the store, but outside the log.
+    let on_store = env.names("t");
+    assert!(on_store.iter().any(|n| n.contains("job-2")), "{on_store:?}");
+    assert!(on_store.iter().any(|n| n.contains("job-1")), "{on_store:?}");
+    // The next write commits normally on top of the committed version.
+    env.write_logged("t", SaveMode::Append, "job-4", 1, true);
+    assert_eq!(env.visible("t").len(), 2);
+}
+
+/// A concurrent overwrite replaces only the files its base snapshot shows: the task files of an append that
+/// has not committed yet are never in it, so they survive (and the append can still commit).
+#[test]
+fn a_logged_overwrite_leaves_the_uncommitted_files_of_a_concurrent_append() {
+    let env = Env::memory();
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    // The append has written its files and not committed.
+    let w = env.begin("t", SaveMode::Append, "job-2").unwrap().unwrap();
+    let w = env.rt.block_on(w.logged(&env.io)).unwrap();
+    let pending = env.names("t");
+    drop(w);
+    env.write_logged("t", SaveMode::Append, "job-2", 3, false);
+    // The overwrite lists everything, the pending files included, and commits first.
+    env.write_logged("t", SaveMode::Overwrite, "job-3", 2, true);
+    let on_store = env.names("t");
+    assert!(
+        on_store.iter().any(|n| n.contains("job-2")),
+        "{on_store:?} (before: {pending:?})"
+    );
+    assert!(
+        !on_store.iter().any(|n| n.contains("job-1")),
+        "{on_store:?}"
+    );
+    assert_eq!(env.visible("t").len(), 1);
+}
+
+/// Adoption uses the reads' hidden-name rule: a copy in progress is not data.
+#[test]
+fn adoption_skips_copy_in_progress_files() {
+    let env = Env::memory();
+    env.put("t/part-00000.parquet._COPYING_");
+    env.put("t/_hidden");
+    env.put("t/part-00001.parquet");
+    env.write_logged("t", SaveMode::Append, "job-1", 1, true);
+    let visible = env.visible("t");
+    assert!(
+        visible.contains(&"part-00001.parquet".to_owned()),
+        "{visible:?}"
+    );
+    assert!(
+        !visible
+            .iter()
+            .any(|n| n.contains("_COPYING_") || n.contains("_hidden")),
+        "{visible:?}"
+    );
+}
+
+/// Once a logged write's entry is published its rows are visible: a failed deletion of the files
+/// it replaced is maintenance, so the write still succeeds and the next write sees the new state.
+#[test]
+fn a_logged_overwrite_succeeds_when_the_deletion_of_replaced_files_fails() {
+    let inner = Arc::new(InMemory::new());
+    let fault = crate::io::FaultStore::new(Arc::clone(&inner) as Arc<dyn ObjectStore>);
+    let env = Env::new(Arc::clone(&fault) as Arc<dyn ObjectStore>, STORE);
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    let old = env.visible("t");
+    fault.fail_next_deletes(1000);
+    env.write_logged("t", SaveMode::Overwrite, "job-2", 2, true);
+    fault.fail_next_deletes(0);
+    let now = env.visible("t");
+    assert_eq!(now.len(), 1);
+    assert_ne!(now, old);
+    // The replaced file is still on the store, outside the log.
+    assert!(env.names("t").iter().any(|n| n.contains("job-1")));
+}
+
+#[test]
+fn a_step_after_the_commit_point_fails_the_write_only_without_a_log() {
+    let failure = || -> crate::error::Result<()> {
+        Err(krishiv_common::error::PathNotFound {
+            path: "x".to_owned(),
+        }
+        .into())
+    };
+    super::after_publish(true, "step", failure()).unwrap();
+    super::after_publish(false, "step", failure()).unwrap_err();
+    super::after_publish(false, "step", Ok(())).unwrap();
+}

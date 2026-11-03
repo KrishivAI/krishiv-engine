@@ -345,6 +345,17 @@ fn conf_value(session: &Config, key: &str) -> Option<String> {
     }
 }
 
+/// Joins option `name` to fingerprint material: only the value's keyed
+/// fingerprint, so no plaintext copy is left in an unzeroed buffer.
+fn push_material(material: &mut String, name: &str, text: &SecretString) {
+    material.push_str(&format!(
+        "{}:{}:{:?};",
+        name.len(),
+        name,
+        text.fingerprint()
+    ));
+}
+
 fn default_value(d: OptionDefault) -> Option<Value> {
     match d {
         OptionDefault::None => None,
@@ -494,16 +505,29 @@ impl FormatOptions {
                 Some(other) => SecretString::new(format!("{other:?}")),
             };
             any = true;
-            // Only the value's keyed fingerprint joins the material, so no
-            // plaintext copy is left in an unzeroed buffer.
-            material.push_str(&format!(
-                "{}:{}:{:?};",
-                spec.name.len(),
-                spec.name,
-                text.fingerprint()
-            ));
+            push_material(&mut material, spec.name, &text);
         }
         Ok(any.then(|| SecretString::new(material).fingerprint()))
+    }
+
+    /// [`Self::metadata_fingerprint`] without a resolver, or `None` when a
+    /// metadata key holds a `secret('scope', 'key')` reference, which only
+    /// a resolver can read.
+    #[must_use]
+    pub fn metadata_fingerprint_now(&self) -> Option<Option<[u8; 16]>> {
+        let mut material = String::new();
+        let mut any = false;
+        for spec in self.schema.options.iter().filter(|o| o.metadata_key) {
+            let text = match self.values.get(spec.name) {
+                None => continue,
+                Some(Value::Secret(SecretValue::Inline(s))) => s.clone(),
+                Some(Value::Secret(_)) => return None,
+                Some(other) => SecretString::new(format!("{other:?}")),
+            };
+            any = true;
+            push_material(&mut material, spec.name, &text);
+        }
+        Some(any.then(|| SecretString::new(material).fingerprint()))
     }
 
     /// Options given but not known to the format (shown by `EXPLAIN`),

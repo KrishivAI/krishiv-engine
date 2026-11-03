@@ -39,9 +39,13 @@ use proptest::prelude::*;
 const KIB: usize = 1 << 10;
 
 fn root() -> Arc<TreePool> {
+    root_with(1 << 30)
+}
+
+fn root_with(limit: usize) -> Arc<TreePool> {
     TreePool::with_clock(
         &MemoryConfig {
-            limit: Some(1 << 30),
+            limit: Some(limit),
             quantum: 4 << 10,
             spill_wait_timeout: Duration::from_secs(2),
             abort_release_timeout: Duration::from_secs(30),
@@ -911,6 +915,37 @@ async fn bucket_readers_fit_the_memory_of_one() {
         assert_released(&root);
         assert_eq!(manager.used_bytes(), 0);
     }
+}
+
+/// The same when the limit is the session's, not the query's: a query
+/// pool without a limit of its own still leaves half the limit above it to
+/// the reader downstream, which cannot spill.
+#[tokio::test(start_paused = true)]
+async fn bucket_readers_fit_a_limit_above_the_query() {
+    let rows = 30_000;
+    let root = root_with(2 << 20);
+    let config = ExecConfig {
+        batch_size: 512,
+        morsel_rows: 2048,
+        ..ExecConfig::default()
+    };
+    let q = query(&root, config, None);
+    let (manager, scope) = spill();
+    let sort = bucketed_sort_with(30, Some(scope), Some(2));
+    let p = plan_unordered(table(rows, 30), &sort);
+    let p: Arc<dyn ExecNode> = Arc::new(Break(
+        p,
+        krishiv_exec::testing::Buffer::new(false, None),
+        false,
+    ));
+    let out = run(&deterministic(4), p, &q).await.unwrap();
+    check_grouped(rows, &out);
+    let m = sort.metrics();
+    assert!(m.runs_spilled > 0, "{m:?}");
+    assert!(m.merge_readers >= 1, "{m:?}");
+    drop(out);
+    assert_released(&root);
+    assert_eq!(manager.used_bytes(), 0);
 }
 
 /// The same on threads: readers claiming, giving back and waiting race for

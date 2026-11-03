@@ -33,6 +33,7 @@ mod shared;
 mod splits;
 mod string_encoding;
 mod sum_rewrite;
+mod tpcds_merge;
 mod tpch;
 mod union;
 mod union_order;

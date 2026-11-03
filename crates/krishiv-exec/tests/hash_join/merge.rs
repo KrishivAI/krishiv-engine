@@ -134,6 +134,66 @@ proptest! {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig { cases: 96, ..ProptestConfig::default() })]
+    /// Many keys of a few rows each in large batches, every join type: most
+    /// keys end inside both sides' batches, so the merge joins them in
+    /// place. Few reach a batch's end here; `keys_across_batch_ends_...`
+    /// covers those.
+    #[test]
+    fn many_short_keys_in_large_batches_match_the_oracle(
+        t in 0usize..TYPES.len(),
+        keys in 1usize..3,
+        safe in any::<bool>(),
+        probe in prop::collection::vec(row(400, 30), 1_000..1_400),
+        build in prop::collection::vec(row(400, 30), 300..700),
+        batch_rows in 100usize..600,
+        threads in 1usize..4,
+    ) {
+        let jt = match TYPES[t] {
+            JoinType::NullAwareAnti => JoinType::LeftAnti,
+            jt => jt,
+        };
+        let c = case(jt, keys, safe, false);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let (got, q) = rt.block_on(run_merge(&c, &probe, &build, batch_rows, threads, 64 * MIB, 0));
+        prop_assert_eq!(got, c.oracle(&probe, &build));
+        prop_assert!(metric(&q, "SortMergeJoin", "keys_in_place") > 0);
+    }
+}
+
+/// Keys of two left rows and one right row in the sort's 5-row output
+/// batches: every few keys one straddles a left batch's end and goes
+/// through the phases, and the keys between are joined in place. A join with a
+/// residual joins nothing in place.
+#[tokio::test]
+async fn keys_across_batch_ends_take_the_phases() {
+    let probe: Vec<Row> = (0..200)
+        .flat_map(|k| [r(Some(k), Some("a"), k % 7), r(Some(k), Some("a"), 9)])
+        .collect();
+    let build: Vec<Row> = (0..200)
+        .filter(|k| k % 5 != 3)
+        .map(|k| r(Some(k), Some("a"), k % 11))
+        .collect();
+    for jt in TYPES {
+        if jt == JoinType::NullAwareAnti {
+            continue;
+        }
+        for filter in [false, true] {
+            let c = case(jt, 1, false, filter);
+            let (got, q) = run_merge(&c, &probe, &build, 7, 2, 64 * MIB, 0).await;
+            assert_eq!(got, c.oracle(&probe, &build), "{c:?}");
+            let in_place = metric(&q, "SortMergeJoin", "keys_in_place");
+            if filter {
+                assert_eq!(in_place, 0, "{c:?}");
+            } else {
+                // Not every key: some straddle a batch's end.
+                assert!(in_place > 0 && in_place < 160, "{c:?}: {in_place}");
+            }
+        }
+    }
+}
+
+proptest! {
     #![proptest_config(ProptestConfig { cases: 12, max_shrink_iters: 0, ..ProptestConfig::default() })]
     /// Larger inputs under a budget that makes both sorts and the groups
     /// spill: the hash join's answer in memory.
