@@ -408,7 +408,12 @@ impl DataFrame {
         let stats = ProviderStatistics(
             Arc::clone(&planned.analysis.env.catalog) as Arc<dyn TableProviderResolver>
         );
-        Ok(render(mode, &parsed, &planned, &stats))
+        let mut text = render(mode, &parsed, &planned, &stats);
+        // Only when the cache is on for the query, so the plan text stays Spark's by default.
+        if let Some(note) = self.session.result_cache_note(&planned.analysis) {
+            let _ = write!(text, "\n== Result Cache ==\n{note}\n");
+        }
+        Ok(text)
     }
 }
 

@@ -18,6 +18,7 @@ use xtask::dev;
 use xtask::docs::{self, Doc};
 use xtask::format_neutral;
 use xtask::layering;
+use xtask::map;
 use xtask::metrics_gate;
 use xtask::policy::{self, DiffArgs};
 use xtask::precheck;
@@ -25,7 +26,7 @@ use xtask::profile;
 use xtask::qerror;
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | qerror [--data DIR] [--scale N] [--suite tpch|tpcds]... | metrics-gate | docs-config [PATH] | docs-errors [PATH] | docs-metrics [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | budgets --precheck [--base REF] [--repo DIR] | budgets --cache-main [--repo DIR] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] [-p PKG]... | coverage-summary [--markdown] [--json] [PATH] | coverage-scope --base REF [--head REF] [--repo DIR] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | tokio-console-check | check-format-neutral [ROOT] | profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph] | precheck [--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE] | codeql-proxy [--base REF] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--reclassify CATEGORY] [--known-failures F]>";
+const USAGE: &str = "usage: cargo xtask <layering | qerror [--data DIR] [--scale N] [--suite tpch|tpcds]... | metrics-gate | docs-config [PATH] | docs-errors [PATH] | docs-metrics [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | budgets --precheck [--base REF] [--repo DIR] | budgets --cache-main [--repo DIR] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] [-p PKG]... | coverage-summary [--markdown] [--json] [--check FLOORS [--previous SUMMARY]] [PATH] | coverage-scope --base REF [--head REF] [--repo DIR] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|pr-size-value|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | map CRATE | maps-check [--report] | tokio-console-check | check-format-neutral [ROOT] | profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph] | precheck [--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE] | codeql-proxy [--base REF] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--reclassify CATEGORY] [--known-failures F]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -42,6 +43,8 @@ fn main() -> ExitCode {
         ["precheck", flags @ ..] => precheck::run_precheck(&workspace_root(), flags),
         ["codeql-proxy", flags @ ..] => codeql_proxy::run(&workspace_root(), flags),
         ["registry-coverage"] => registry_coverage::run(&workspace_root()),
+        ["map", flags @ ..] => map::run_map(&workspace_root(), flags),
+        ["maps-check", flags @ ..] => map::run_maps_check(&workspace_root(), flags),
         ["budgets", flags @ ..] => run_budgets(flags),
         ["wheel-sizes", "--compare", file, flags @ ..] => {
             run_wheel_sizes_compare(Path::new(file), flags)
@@ -58,6 +61,9 @@ fn main() -> ExitCode {
         ["coverage-summary", flags @ ..] => coverage::run_summary(&workspace_root(), flags),
         ["coverage-scope", flags @ ..] => coverage::run_coverage_scope(&workspace_root(), flags),
         ["diff-coverage", flags @ ..] => coverage::run_diff_coverage(&workspace_root(), flags),
+        ["pr-size-value", flags @ ..] => {
+            DiffArgs::parse(flags, &workspace_root()).and_then(|a| policy::run_pr_size_value(&a))
+        }
         ["pr-size", flags @ ..] => {
             DiffArgs::parse(flags, &workspace_root()).and_then(|a| policy::run_pr_size(&a))
         }

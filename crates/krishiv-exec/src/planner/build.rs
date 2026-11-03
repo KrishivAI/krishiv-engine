@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow_schema::{Schema, SchemaRef};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
-use krishiv_io::{ColumnPath, FilterId};
+use krishiv_io::{ColumnPath, FilterId, MetadataCols};
 use krishiv_optimizer::PlanStats;
 use krishiv_plan::{
     AttrId, BoundColumn, CastMode, Expr, ExprNode, Literal, LogicalPlan, NullOrdering, Plan,
@@ -346,6 +346,8 @@ impl<'a> Planner<'a> {
             PlanNode::Filter { input, predicate } => {
                 if let PlanNode::Scan(scan) = &input.node
                     && !has_subquery(predicate)
+                    // The scan evaluates pushed filters over the table's columns.
+                    && scan.metadata_column().is_none()
                 {
                     return self.scan(p, scan, Some(predicate));
                 }
@@ -1050,8 +1052,10 @@ impl<'a> Planner<'a> {
         let provider = self.cx.tables.provider(scan)?;
         let factory = provider.scan()?;
         let table = factory.table_schema();
+        let metadata = crate::operators::scan_metadata(scan);
+        let hidden = usize::from(metadata != MetadataCols::default());
         let mut projection = Vec::with_capacity(scan.output.len());
-        for c in &scan.output {
+        for c in &scan.output[..scan.output.len() - hidden] {
             let field = table
                 .fields()
                 .iter()
@@ -1086,6 +1090,7 @@ impl<'a> Planner<'a> {
             projection: Some(projection.clone()),
             filters: pushed,
             row_id,
+            metadata,
             ..ScanPushdowns::default()
         })?;
         let id = self.next_scan_id()?;

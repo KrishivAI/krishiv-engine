@@ -75,6 +75,16 @@ mod builtins;
 mod catalog;
 mod coerce;
 mod exprs;
+
+/// Whether `name` is an AES function, in any letter case: the key is the
+/// second argument and must not reach a name, a plan or an error (ADR 0042).
+pub(crate) fn is_aes_function(name: &str) -> bool {
+    // A qualified call (`builtin.aes_encrypt`) is judged by its last segment.
+    let name = name.rsplit('.').next().unwrap_or(name);
+    ["aes_encrypt", "aes_decrypt", "try_aes_decrypt"]
+        .iter()
+        .any(|f| name.eq_ignore_ascii_case(f))
+}
 mod fold;
 mod fold_ops;
 mod generate;
@@ -112,11 +122,12 @@ pub use access::{authorize, insufficient_permissions, namespace_parts, table_ide
 pub use builtins::BuiltinFunctions;
 pub use catalog::{
     AccessDecision, AccessPolicy, AllowAll, ArgType, Arity, BoxFuture, BuiltinTableFunctions,
-    CallTypes, Catalog, CatalogResolver, Constant, DenyAll, FileSchemaResolver, FunctionEntry,
-    FunctionLookup, FunctionRegistry, InputBuilder, InputType, Inputs, MemoryCatalog, NameForm,
-    Operator, PolicyVersion, Principal, PrincipalKind, Privilege, ResultType, RowColumnPolicy,
-    Securable, SourceKind, SqlFrontend, TableColumn, TableFunctionKind, TableFunctionLookup,
-    TableFunctionRegistry, TableIdent, TableKind, TableMeta,
+    CallTypes, Catalog, CatalogResolver, Constant, DenyAll, FileMetadata, FileSchemaResolver,
+    FunctionEntry, FunctionLookup, FunctionRegistry, InputBuilder, InputType, Inputs,
+    MemoryCatalog, NameForm, Operator, PolicyVersion, Principal, PrincipalKind, Privilege,
+    ResultType, RowColumnPolicy, Securable, SourceKind, SqlFrontend, TableColumn,
+    TableFunctionKind, TableFunctionLookup, TableFunctionRegistry, TableIdent, TableKind,
+    TableMeta,
 };
 pub use sqlfn::{SqlFunction, SqlParam};
 pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, variable_name};

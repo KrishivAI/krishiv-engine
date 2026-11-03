@@ -176,20 +176,30 @@ impl<'s> Parser<'s> {
 
     // ---- COMMENT ON ---------------------------------------------------
 
-    /// `COMMENT ON TABLE name IS 'comment' | NULL`, an `ALTER TABLE` that sets the comment.
+    /// `COMMENT ON TABLE|SCHEMA name IS 'comment' | NULL`, an `ALTER` that sets the comment.
     fn comment_on_command(&mut self) -> PR<Statement> {
         self.nested(|p| {
             let start = p.start();
             p.expect_kw("COMMENT")?;
             p.expect_kw("ON")?;
+            if p.any_kw_at(0, &["DATABASE", "SCHEMA", "NAMESPACE"]) {
+                let kind = p.namespace_kind()?;
+                let name = p.ddl_name()?;
+                p.expect_kw("IS")?;
+                let comment = p.comment_value()?;
+                let span = p.span_from(start);
+                p.command_end()?;
+                return Ok(Statement::AlterNamespace(AlterNamespace {
+                    kind,
+                    name,
+                    action: AlterNamespaceAction::SetComment(comment),
+                    span,
+                }));
+            }
             p.expect_kw("TABLE")?;
             let table = p.ddl_name()?;
             p.expect_kw("IS")?;
-            let comment = if p.eat_kw("NULL") {
-                None
-            } else {
-                Some(p.string_after()?)
-            };
+            let comment = p.comment_value()?;
             let span = p.span_from(start);
             p.command_end()?;
             Ok(Statement::AlterTable(Box::new(AlterTable {
@@ -198,6 +208,15 @@ impl<'s> Parser<'s> {
                 span,
             })))
         })
+    }
+
+    /// The value of `COMMENT ON ... IS`: a string, or `NULL` for none.
+    fn comment_value(&mut self) -> PR<Option<String>> {
+        if self.eat_kw("NULL") {
+            Ok(None)
+        } else {
+            Ok(Some(self.string_after()?))
+        }
     }
 
     // ---- ALTER --------------------------------------------------------

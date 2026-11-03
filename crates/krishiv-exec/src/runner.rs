@@ -489,7 +489,10 @@ fn start_group(
             .map(|i| i.as_ref().map(read).transpose())
             .collect::<Result<Vec<_>>>()?;
         let source_global = source.global_state(&source_ctx)?;
-        let drivers = if pipeline.preserve_order {
+        // One driver when the pipeline must keep order, and for every pipeline under
+        // `krishiv.deterministicOrder`: no interleaving of drivers, no run-to-run
+        // difference in the order of merges or output rows.
+        let drivers = if pipeline.preserve_order || query.config().deterministic_order {
             1
         } else {
             executor

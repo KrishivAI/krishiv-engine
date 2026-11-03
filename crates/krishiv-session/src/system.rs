@@ -1116,6 +1116,7 @@ impl Catalog for SystemCatalog {
                 columns,
                 version: None,
                 kind: TableKind::Table,
+                file_metadata: Default::default(),
             }))
         })
     }

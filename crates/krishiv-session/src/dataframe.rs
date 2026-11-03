@@ -1245,12 +1245,43 @@ impl DataFrame {
     }
 
     async fn execute_stream_here(&self) -> Result<RecordBatchStream, KrishivError> {
+        // Before the query is analyzed, so an invalidation that runs while it executes keeps
+        // its rows out of the result cache.
+        let generation = crate::result_cache::global().generation();
         let a = self.analysis().await?;
+        // The reads were authorized by the analysis: a hit serves only what this principal's
+        // own run of the query would return.
+        // A frame that asked for a relation cache (`cache()`, `persist()`) runs the query: its
+        // snapshot is filled from the run, whatever the shared store holds.
+        let result = crate::result_cache::settings(&a.env)
+            .filter(|_| self.cache_request.is_none())
+            .and_then(|settings| self.session.result_key(&a).map(|key| (settings, key)))
+            // A cached relation substituted into the plan makes the rows depend on this
+            // session's state: neither served from nor stored into the shared cache.
+            .filter(|_| {
+                self.session.state.cache.substitute(&a.analyzed).is_none()
+                    && self
+                        .session
+                        .state
+                        .cache
+                        .lookup(&CacheKey::of(&a.analyzed))
+                        .is_none()
+            });
+        if let Some((settings, key)) = &result
+            && let Some((batches, _age)) = crate::result_cache::global().lookup(key, settings.ttl)
+        {
+            return Ok(crate::carrier::client_stream(crate::result_cache::replay(
+                batches,
+            )));
+        }
         let (physical, fill) = self.physical_cached(&a).await?;
         let stream = self.session.run(&physical, &a.env).await?;
-        Ok(crate::carrier::client_stream(
-            fill.fill(stream, &self.session.state.cache),
-        ))
+        let stream = fill.fill(stream, &self.session.state.cache);
+        let stream = match result {
+            Some((settings, key)) => crate::result_cache::fill(stream, key, generation, settings),
+            None => stream,
+        };
+        Ok(crate::carrier::client_stream(stream))
     }
 
     /// The physical plan with every cached (sub)plan substituted, and what

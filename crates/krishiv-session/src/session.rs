@@ -2,7 +2,7 @@
 //! [`Session`] and [`SessionBuilder`], and the query pipeline every
 //! action runs: analyze → optimize → physical plan → run.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -148,6 +148,9 @@ pub(crate) struct SessionState {
     /// The spill directory, opened by the first query that plans for
     /// execution (`krishiv.spill.*` are build-time keys).
     spill: Arc<Mutex<Option<SpillManager>>>,
+    /// Whether a store creates objects only if absent (the commit log's
+    /// probe), by store id; per session, never process-wide.
+    commit_log_probes: Mutex<HashMap<String, bool>>,
     io: Arc<IoScheduler>,
     formats: Arc<FormatRegistry>,
     /// The session's content-addressed relations: every memory table's
@@ -352,6 +355,7 @@ impl SessionBuilder {
                 functions,
                 udfs,
                 sql_functions: SqlFunctions::default(),
+                commit_log_probes: Mutex::new(HashMap::new()),
                 runner: QueryRunner::new(Arc::clone(&executor)),
                 executor,
                 memory,
@@ -705,6 +709,7 @@ impl Session {
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
             Statement::CreateNamespace(n) => self.exec_create_namespace(&n, query).await,
             Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
+            Statement::AlterNamespace(a) => self.exec_alter_namespace(&a, query).await,
             Statement::Use(u) => self.exec_use(&u).await,
             Statement::Show(s) => Box::pin(self.exec_show(&s, query)).await,
             Statement::Describe(d) => Box::pin(self.exec_describe(&d, query)).await,
@@ -2053,6 +2058,22 @@ impl Session {
                 // `ignore` found the path: nothing is written.
                 return Ok(Vec::new());
             };
+            // Boxed: the statement futures are on the recursion of nested
+            // scripts, so a larger write future would overflow their stack.
+            let write = if Box::pin(uses_commit_log(
+                &env.config,
+                &self.state.commit_log_probes,
+                &io,
+                &store,
+                &at,
+                &job,
+            ))
+            .await?
+            {
+                Box::pin(write.logged(&io)).await?
+            } else {
+                write
+            };
             let plan = physical.into_write(WritePlan {
                 format: format.name().to_owned(),
                 options: options.clone(),
@@ -2106,12 +2127,16 @@ impl Session {
             // reading files are dropped, so the next action lists them again.
             // (An external change drops nothing and stays invisible.)
             self.refresh_files();
+            // A write by path into a table's directory changes what the table reads.
+            if let Some(local) = at.display.strip_prefix("file:") {
+                crate::result_cache::global().invalidate_path(std::path::Path::new(local));
+            }
             let mut dirs = std::collections::BTreeSet::new();
             for f in &committed {
                 let below: Vec<String> = f
                     .path
                     .prefix_match(&at.path)
-                    .map(|parts| parts.map(|p| percent_decoded(p.as_ref())).collect())
+                    .map(|parts| parts.map(|p| p.as_ref().to_owned()).collect())
                     .unwrap_or_default();
                 if let Some((_, leaf)) = below.split_last()
                     && !leaf.is_empty()
@@ -2219,6 +2244,70 @@ fn partition_overwrite_is_dynamic(
         == Some("DYNAMIC"))
 }
 
+/// Whether this write goes through the commit log:
+/// `krishiv.sql.files.commitProtocol` `LOG`, or `AUTO` where the store
+/// creates objects only if absent (probed once per write; a store that
+/// fails the probe falls back to the plain commit with a warning).
+async fn uses_commit_log(
+    config: &Config,
+    probes: &Mutex<HashMap<String, bool>>,
+    io: &krishiv_io::IoContext,
+    store: &StoreId,
+    at: &krishiv_exec::files::LocatedPath,
+    job: &str,
+) -> Result<bool, KrishivError> {
+    let protocol = config
+        .get(&krishiv_common::config::FILES_COMMIT_PROTOCOL)
+        .and_then(ConfigValue::as_str)
+        .map(str::to_ascii_uppercase);
+    let log = krishiv_io::commit_log::CommitLog::new(
+        io,
+        store.clone(),
+        at.path.clone(),
+        at.display.clone(),
+    );
+    // A directory that already has a log stays logged whatever the setting says: readers apply the
+    // log, so a write that skipped it would succeed and stay invisible.
+    if log.exists().await? {
+        return Ok(true);
+    }
+    if protocol.as_deref() == Some("NONE") {
+        return Ok(false);
+    }
+    let known = probes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(at.store.key())
+        .copied();
+    let supported = match known {
+        Some(supported) => supported,
+        None => {
+            let supported = log.supports_put_if_absent(job).await?;
+            probes
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(at.store.key().to_owned(), supported);
+            supported
+        }
+    };
+    if !supported {
+        if protocol.as_deref() == Some("LOG") {
+            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: format!(
+                    "the commit log on a store without put-if-absent ({})",
+                    at.display
+                ),
+            }
+            .into());
+        }
+        tracing::warn!(
+            path = %at.display,
+            "the store does not create objects only if absent: writing without the commit log"
+        );
+    }
+    Ok(supported)
+}
+
 /// The `maxRecordsPerFile` write option (`FILE_SOURCE_OPTIONS`), case
 /// insensitive; 0 (unlimited) when unset.
 fn max_records_per_file(
@@ -2310,7 +2399,10 @@ fn committed_files(
             let rows = u64::try_from(rows.value(i))
                 .map_err(|_| internal(format!("a written file of {} rows", rows.value(i))))?;
             out.push(krishiv_io::WrittenFileInfo {
-                path: object_store::path::Path::from(path.value(i)),
+                // As the writer made it (`Path::parse`: the escaped directory names stay as text), so it names
+                // the key a listing returns; `Path::from` would encode the `%` of `%2F` a second time.
+                path: object_store::path::Path::parse(path.value(i))
+                    .map_err(|e| internal(format!("a written file with an invalid path ({e})")))?,
                 size,
                 rows,
                 statistics: FileStatistics::with_rows(Precision::Exact(rows)),
@@ -2689,30 +2781,6 @@ impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
     }
-}
-
-/// An object-store path part as the file system names it: object_store percent-encodes characters it does
-/// not keep in a part (`%` among them), so `13%253A33` is the directory `13%3A33`.
-fn percent_decoded(part: &str) -> String {
-    let bytes = part.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let hex = |b: u8| char::from(b).to_digit(16);
-        if bytes[i] == b'%'
-            && let (Some(Some(h)), Some(Some(l))) = (
-                bytes.get(i + 1).map(|b| hex(*b)),
-                bytes.get(i + 2).map(|b| hex(*b)),
-            )
-        {
-            out.push(u8::try_from(h * 16 + l).unwrap_or(b'?'));
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]
