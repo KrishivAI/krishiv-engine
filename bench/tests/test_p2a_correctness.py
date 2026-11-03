@@ -1,0 +1,115 @@
+# SPDX-License-Identifier: Apache-2.0
+"""The TPC-H correctness check (`scripts/p2a_correctness.py`) must fail on what it exists to catch."""
+
+import importlib.util
+from pathlib import Path
+
+import pytest
+
+_SPEC = importlib.util.spec_from_file_location(
+    "p2a_correctness", Path(__file__).resolve().parents[1] / "scripts" / "p2a_correctness.py"
+)
+assert _SPEC is not None
+assert _SPEC.loader is not None
+m = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(m)
+
+
+def diff(got, ref, *, ordered=True, answer=False):
+    return m.rows_equal(got, ref, ordered, answer, [0.0])
+
+
+def test_equal_rows_pass():
+    assert diff([["1", "a", "1.50"]], [["1", "a", "1.50"]]) is None
+
+
+def test_an_integer_count_off_by_one_fails_against_duckdb():
+    assert diff([["1478494"]], [["1478493"]]) is not None
+    assert diff([["1478494"]], [["1478493"]], answer=True) is not None
+
+
+def test_decimals_of_the_same_scale_must_be_equal():
+    assert diff([["123141078.2284"]], [["123141078.2283"]]) is not None
+
+
+def test_a_spark_decimal_average_may_differ_from_a_double_within_the_tolerance():
+    assert diff([["25.522006"]], [["25.522005853257337"]]) is None
+    assert diff([["25.53"]], [["25.522005853257337"]]) is not None
+    # The official answer holds the double: the same value at the coarser scale.
+    assert diff([["25.522006"]], [["25.522005853257337"]], answer=True) is None
+
+
+def test_leading_whitespace_in_text_is_part_of_the_value():
+    assert diff([["Address"]], [[" Address"]]) is not None
+    assert diff([["Address"]], [[" Address"]], answer=True) is not None
+    # CHAR padding at the end is not.
+    assert diff([["AIR"]], [["AIR  "]]) is None
+
+
+def test_rows_in_the_wrong_order_fail_unless_they_tie_on_the_keys():
+    got, ref = [["1", "a"], ["2", "b"]], [["2", "b"], ["1", "a"]]
+    assert diff(got, ref) is not None
+    assert diff(got, ref, ordered=False) is None
+    # Equal on the ORDER BY key column 1, other column swapped: ties may come in any order.
+    tie_got, tie_ref = [["x", "5"], ["y", "5"]], [["y", "5"], ["x", "5"]]
+    assert m.rows_equal(tie_got, tie_ref, True, False, [0.0], [1]) is None
+    assert m.rows_equal(tie_got, tie_ref, True, False, [0.0], [0]) is not None
+
+
+def test_a_missing_row_fails():
+    assert diff([["1"]], [["1"], ["2"]], ordered=False) is not None
+
+
+def test_unknown_or_empty_query_selections_are_refused():
+    assert m.query_ids(None)[0] == "q01"
+    assert len(m.query_ids(None)) == 22
+    assert m.query_ids(["q03", "q01"]) == ["q01", "q03"]
+    with pytest.raises(SystemExit):
+        m.query_ids(["q1"])
+    with pytest.raises(SystemExit):
+        m.query_ids(["q01", "q99"])
+    with pytest.raises(SystemExit):
+        m.query_ids([])
+
+
+def test_a_numeric_looking_text_column_compares_as_text():
+    # q22's cntrycode is substring(c_phone, 1, 2): "013" is not "13" in a string column.
+    for answer in (True, False):
+        assert m.rows_equal([["013", "5"]], [["13", "5"]], True, answer, [0.0], None, frozenset({0})) is not None
+        assert m.rows_equal([["13", "5"]], [["13", "5"]], True, answer, [0.0], None, frozenset({0})) is None
+
+
+def test_an_empty_string_is_not_null_against_duckdb():
+    assert diff([[""]], [[None]]) is not None
+    assert diff([[None]], [[""]]) is not None
+    assert diff([[None]], [[None]]) is None
+    # The official answer text cannot tell them apart.
+    assert diff([[None]], [[""]], answer=True) is None
+
+
+def test_cli_csv_keeps_a_quoted_empty_string_apart_from_null():
+    # krishiv-cli's csv_field quotes the empty string; NULL is an unquoted empty field.
+    assert m.csv_cells('revenue\n""\n') == [["revenue"], [""]]
+    assert m.csv_cells("revenue\n\n") == [["revenue"], [None]]
+    assert m.csv_cells('a,b\n,""\r\n"x,""y""\nz",1\n') == [["a", "b"], [None, ""], ['x,"y"\nz', "1"]]
+    assert diff(m.csv_cells('revenue\n""\n')[1:], [[None]]) is not None
+
+
+def test_a_tie_group_cut_by_limit_may_hold_other_rows():
+    # q03 orders by revenue and date only: with 11 orders tied at the tenth place, either may be kept.
+    ref = [["1", "9"], ["2", "5"], ["3", "5"]]
+    got = [["1", "9"], ["4", "5"], ["2", "5"]]
+    assert m.rows_equal(got, ref, True, False, [0.0], [1], frozenset(), 3) is None
+    # Without a cut, or outside the last group, the rows must be the same.
+    assert m.rows_equal(got, ref, True, False, [0.0], [1], frozenset(), 4) is not None
+    assert m.rows_equal(got, ref, True, False, [0.0], [1], frozenset(), None) is not None
+    assert m.rows_equal([["7", "9"], *ref[1:]], ref, True, False, [0.0], [1], frozenset(), 3) is not None
+    # The keys themselves still must agree.
+    assert m.rows_equal([["1", "9"], ["2", "5"], ["3", "6"]], ref, True, False, [0.0], [1], frozenset(), 3) is not None
+
+
+def test_a_single_last_row_at_the_limit_compares_whole():
+    # q02 orders by keys that name one row: a corrupted last row is not a tie.
+    ref = [["1", "a"], ["2", "b"], ["3", "c"]]
+    got = [["1", "a"], ["2", "b"], ["3", "CORRUPTED"]]
+    assert m.rows_equal(got, ref, True, False, [0.0], [0], frozenset(), 3) is not None
