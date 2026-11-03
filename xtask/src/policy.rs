@@ -109,6 +109,23 @@ fn step_summary(text: &str) {
 /// # Errors
 /// Returns the failure message when the cap is exceeded or git fails.
 pub fn run_pr_size(args: &DiffArgs) -> Result<(), String> {
+    let report = measure_pr_size(args)?;
+    print_pr_size(&report)
+}
+
+/// `xtask pr-size-value`: prints the measured value an approval is recorded against
+/// (`counted_lines N`), one line, and never fails on the cap.
+///
+/// # Errors
+/// Returns the failure message when git fails.
+pub fn run_pr_size_value(args: &DiffArgs) -> Result<(), String> {
+    let report = measure_pr_size(args)?;
+    println!("counted_lines {}", report.counted);
+    Ok(())
+}
+
+/// Measures the diff of `args`: counted lines, test lines, excluded data files and binaries.
+fn measure_pr_size(args: &DiffArgs) -> Result<ci::SizeReport, String> {
     let numstat = args.git(&["diff", "--numstat", "-z", &args.range()])?;
     let mut report = ci::measure_numstat(&numstat)?;
     let deleted = args.git(&[
@@ -132,6 +149,11 @@ pub fn run_pr_size(args: &DiffArgs) -> Result<(), String> {
             .map_err(|e| format!("cannot size binary {path}: {e} ({size:?})"))?;
         report.add_binary(bytes);
     }
+    Ok(report)
+}
+
+/// Prints the size summary and applies the cap and `SIZE_APPROVED`.
+fn print_pr_size(report: &ci::SizeReport) -> Result<(), String> {
     let binaries = if report.binaries.is_empty() {
         String::new()
     } else {

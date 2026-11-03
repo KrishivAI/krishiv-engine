@@ -31,6 +31,10 @@ krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-types = { path = "../krishiv-types" }
 krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
 quick-xml.workspace = true
+aes.workspace = true
+cbc = { workspace = true, features = ["alloc", "block-padding"] }
+aes-gcm.workspace = true
+getrandom.workspace = true
 
 [dev-dependencies]
 arrow-buffer.workspace = true

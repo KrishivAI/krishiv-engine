@@ -925,6 +925,7 @@ impl Instantiation<'_> {
             filters,
             dynamic,
             row_id: s.row_id,
+            metadata: crate::operators::scan_metadata(&s.scan),
             ..ScanPushdowns::default()
         })?;
         Ok(Built {

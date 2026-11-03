@@ -83,6 +83,7 @@ pub mod files;
 pub mod hash;
 mod join;
 mod loops;
+mod map_keys;
 mod metrics;
 mod morsel;
 mod operator;
