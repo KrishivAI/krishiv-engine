@@ -37,7 +37,7 @@ use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::executor::{Executor, run_blocking};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
-use crate::operators::{global_ref, local_mut};
+use crate::operators::{global_ref, local_mut, owned_rows};
 use crate::output_spill::{OutputSpill, SpillUnread, refused};
 use crate::sync::{Mutex, lock};
 
@@ -302,7 +302,11 @@ impl Output {
     ) -> Result<Option<Vec<(usize, Arc<SpillFile>)>>> {
         let mut written = Vec::with_capacity(work.len());
         for (i, batches) in work {
-            let scratch = consumer.reservation().for_spill_scratch();
+            // Back to credit when dropped, so a refused write can return what was lent.
+            let scratch = consumer
+                .reservation()
+                .for_spill_scratch()
+                .releasing_to_credit();
             let writer = match scope.writer(Arc::clone(&self.schema), scratch) {
                 Ok(w) => w,
                 Err(e) => return refused(KrishivError::from(e)).map(|_| None),
@@ -365,6 +369,9 @@ impl Sink for SharedSink {
         _global: &GlobalState,
     ) -> Result<SinkStatus> {
         let l = local_mut::<SinkLocal>(local, "SharedSink")?;
+        // A scan's morsel can be a slice of a much larger batch: kept as is,
+        // every segment would hold and be charged the whole buffers.
+        let input = owned_rows(input)?;
         let bytes = input.data().get_array_memory_size();
         if l.reservation.try_grow(bytes).is_err() {
             return Ok(SinkStatus::NeedMemory { bytes });
@@ -460,7 +467,12 @@ impl Sink for SharedSink {
             // other consumer takes it meanwhile): a full pool cannot grant it afresh.
             let lent = l.reservation.size().min(SCRATCH_BYTES);
             l.reservation.shrink_to_credit(lent);
-            let scratch = ctx.consumer().reservation().for_spill_scratch();
+            // Back to credit when dropped, so a refused write can return what was lent.
+            let scratch = ctx
+                .consumer()
+                .reservation()
+                .for_spill_scratch()
+                .releasing_to_credit();
             let restore = |l: &mut SinkLocal| {
                 // Nothing was written: the lent bytes go back to the batches' reservation.
                 let _ = l.reservation.try_grow(lent);
