@@ -58,7 +58,7 @@
 //! Every value whose key is sensitive (see
 //! [`is_sensitive_key`](krishiv_common::secret::is_sensitive_key): every key
 //! above but the endpoints, the region and the account name) is wrapped in a
-//! [`SecretString`](krishiv_common::secret::SecretString) the moment it is read and is only exposed at the builder
+//! [`SecretString`] the moment it is read and is only exposed at the builder
 //! call. [`StoreRegistry`]'s `Debug`, every error here and every store id
 //! and path are free of secret values: builder errors name the bucket, the
 //! endpoint or a credential file path at most.
