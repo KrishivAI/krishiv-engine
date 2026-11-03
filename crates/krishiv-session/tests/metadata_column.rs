@@ -326,3 +326,36 @@ fn chained_using_joins_keep_the_metadata_of_every_input() {
         1
     );
 }
+
+#[test]
+fn a_materialized_metadata_column_keeps_the_captured_values() {
+    let s = session();
+    block_on(s.sql("CREATE TABLE q USING PARQUET AS SELECT id, _metadata FROM p")).unwrap();
+    // Read back as a table column, not regenerated for q's own files.
+    assert_eq!(
+        names(&s, "SELECT * FROM q"),
+        ["id", "_metadata"],
+        "the stored column is an ordinary one"
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT id FROM q WHERE _metadata.file_name IN (SELECT _metadata.file_name FROM p)"
+        ),
+        2,
+        "q keeps p's file names, not its own"
+    );
+}
+
+#[test]
+fn column_aliases_on_a_file_table_keep_its_metadata() {
+    let s = session();
+    assert_eq!(
+        count(&s, "SELECT x._metadata.file_name FROM p AS x(a, b)"),
+        2
+    );
+    assert_eq!(
+        count(&s, "SELECT _metadata.file_size, a FROM p AS x(a, b)"),
+        2
+    );
+}

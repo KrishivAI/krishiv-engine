@@ -3754,9 +3754,21 @@ impl Resolver<'_> {
             }
             let node = PlanNode::Project {
                 input: Arc::clone(&c.plan),
-                exprs,
+                exprs: exprs.clone(),
             };
-            self.make(Origin::UNKNOWN, node, out, &[&c])
+            let mut renamed = self.make(Origin::UNKNOWN, node, out, &[&c]);
+            // A file table's `_metadata` stays reachable through the renaming.
+            let meta: Vec<Attr> = c
+                .hidden
+                .iter()
+                .filter(|a| is_generated_metadata(a))
+                .cloned()
+                .collect();
+            if !meta.is_empty() {
+                renamed.hidden = meta.into();
+                renamed.widen = Some(Arc::new(Widen::Project { input: c, exprs }));
+            }
+            renamed
         };
         let qual: Arc<[String]> = alias
             .split(crate::plan::ALIAS_PART_SEP)
