@@ -3007,6 +3007,7 @@ impl Resolver<'_> {
                 scope: Arc::clone(&l.out),
                 lateral: true,
                 hidden: Arc::clone(&l.hidden),
+                fallback: Arc::from(Vec::new()),
             });
             let inner = self.env(env.ctes.clone(), env.ctes_id, outer);
             let mut r = self.rel(right, &inner)?;

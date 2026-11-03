@@ -218,7 +218,9 @@ fn a_nondeterministic_lateral_needs_a_single_outer_row() -> R {
     ] {
         let err = error_of(&s, q);
         assert!(
-            err.contains("NON_DETERMINISTIC_LATERAL_SUBQUERIES"),
+            err.contains(
+                "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.NON_DETERMINISTIC_LATERAL_SUBQUERIES"
+            ),
             "{q}: {err}"
         );
     }
@@ -234,7 +236,9 @@ fn a_nondeterministic_lateral_needs_a_single_outer_row() -> R {
         "select * from t1 join lateral (select * from t2) s on t1.c1 + rand(0) = s.c1",
     );
     assert!(
-        err.contains("LATERAL_JOIN_CONDITION_NON_DETERMINISTIC"),
+        err.contains(
+            "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.LATERAL_JOIN_CONDITION_NON_DETERMINISTIC"
+        ),
         "{err}"
     );
     Ok(())
@@ -311,5 +315,36 @@ fn lateral_after_using_join_reads_merged_and_original_keys() -> R {
     ] {
         assert_eq!(run(&s, sql)?, ["1|10|20|1|1|1"], "{sql}");
     }
+    Ok(())
+}
+
+/// An `IN` subquery in the `ON` of a lateral join composes with the lateral
+/// decorrelation.
+#[test]
+fn an_in_subquery_in_the_on_of_a_lateral_join() -> R {
+    let s = session()?;
+    assert_eq!(
+        run(
+            &s,
+            "SELECT t1.c1, s.y FROM t1 JOIN LATERAL (SELECT t1.c2 AS y) s ON t1.c1 IN (SELECT c1 FROM t2)"
+        )?,
+        ["0|1"]
+    );
+    Ok(())
+}
+
+/// A `HAVING` subquery reads the aggregate's output before its input: `x`
+/// is `sum(x)`, not the column `x`.
+#[test]
+fn a_having_subquery_prefers_the_aggregate_output() -> R {
+    let s = session()?;
+    assert_eq!(
+        run(
+            &s,
+            "SELECT sum(x) AS x FROM VALUES (1), (2) t(x) \
+             HAVING EXISTS (SELECT 1 FROM VALUES (3) u(y) WHERE u.y = x)"
+        )?,
+        ["3"]
+    );
     Ok(())
 }

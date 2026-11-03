@@ -571,7 +571,9 @@ impl Rewriter {
                 right,
                 kind,
                 condition: JoinCondition::On(on),
-            } if self.existential(on) => self.join(&p, left, right, kind, on),
+            } if self.existential(on) && !reads_left(left, right) => {
+                self.join(&p, left, right, kind, on)
+            }
             PlanNode::Join {
                 left,
                 right,
@@ -880,7 +882,7 @@ impl Rewriter {
         if let JoinCondition::On(on) = condition {
             cond.push(Arc::clone(on));
         }
-        let joined = node(
+        let mut joined = node(
             PlanNode::Join {
                 left: Arc::clone(left),
                 right: inner,
@@ -889,6 +891,16 @@ impl Rewriter {
             },
             p.origin,
         );
+        // An `IN` or `EXISTS` in the `ON` is now a subquery of a join whose
+        // right side reads nothing outside it: rewrite it as any other.
+        if let PlanNode::Join {
+            condition: JoinCondition::On(on),
+            ..
+        } = &joined.node
+            && self.existential(on)
+        {
+            joined = self.relation(Arc::clone(&joined))?;
+        }
         // The right side's columns come back under the attributes the plan
         // above reads them as, where the join renumbered them.
         let exprs = out

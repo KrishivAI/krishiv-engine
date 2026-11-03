@@ -413,6 +413,9 @@ impl Resolver<'_> {
             if hit.is_none() && c.name.len() > 1 {
                 hit = self.find(&outer.hidden, &c.name, origin, false)?;
             }
+            if hit.is_none() && !outer.fallback.is_empty() {
+                hit = self.find(&outer.fallback, &c.name, origin, false)?;
+            }
             if let Some((a, used)) = hit {
                 self.used(&a);
                 let b = self.resolve_attr(&a, used, &c.name, origin, Some(level), cx, false)?;
@@ -943,14 +946,19 @@ impl Resolver<'_> {
         let mut scope = cx.scope.to_vec();
         if cx.agg_scope.is_some() {
             scope.extend(cx.extra.unwrap_or_default().iter().cloned());
-            // Spark resolves a reference to an input column that is no
-            // grouping column too; the check after analysis refuses it.
-            scope.extend(cx.agg_scope.unwrap_or_default().iter().cloned());
         }
+        // Spark resolves a reference to an input column that is no grouping
+        // column too (the check after analysis refuses it), after the
+        // aggregate's own output.
+        let fallback: Arc<[Attr]> = cx.agg_scope.map_or_else(
+            || Arc::from(Vec::new()),
+            |input| input.iter().cloned().collect(),
+        );
         outer.push(super::super::resolve::Level {
             scope: scope.into(),
             lateral: false,
             hidden: Arc::from(Vec::new()),
+            fallback,
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }

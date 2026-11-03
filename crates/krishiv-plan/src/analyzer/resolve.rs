@@ -132,6 +132,10 @@ pub(super) struct Level {
     /// The columns a `USING` join merged away on the left side of a `JOIN LATERAL`: they
     /// answer to a qualified name only.
     pub(super) hidden: Arc<[Attr]>,
+    /// Attributes searched only when `scope` has no answer: the input of the
+    /// aggregate a `HAVING` subquery sits in. An aggregate output of the same
+    /// name wins over an input column.
+    pub(super) fallback: Arc<[Attr]>,
 }
 
 /// A scope environment: the CTEs visible and the enclosing queries.
