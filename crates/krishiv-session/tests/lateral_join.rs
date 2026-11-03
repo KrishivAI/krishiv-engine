@@ -367,3 +367,82 @@ fn a_having_subquery_binds_an_unqualified_name_to_the_aggregate_input() -> R {
     assert!(!err.is_empty(), "must not answer");
     Ok(())
 }
+
+/// Chained lateral joins renumber the second right side: its `ON` follows.
+#[test]
+fn chained_laterals_remap_the_on_condition() -> R {
+    let s = session()?;
+    assert_eq!(
+        run(
+            &s,
+            "SELECT t.x, a.y, b.z FROM VALUES (1), (2) t(x) \
+             JOIN LATERAL (SELECT t.x + 1 AS y) a ON true \
+             JOIN LATERAL (SELECT a.y + 1 AS z) b ON b.z = t.x + 2"
+        )?,
+        ["1|2|3", "2|3|4"]
+    );
+    Ok(())
+}
+
+/// A qualified star of a USING join's non-preserved side, read by a lateral
+/// right side, lists the merged key too.
+#[test]
+fn a_lateral_qualified_star_lists_the_using_key() -> R {
+    let s = session()?;
+    assert_eq!(
+        run(
+            &s,
+            "WITH a(k, v1) AS (VALUES (1, 10)), b(k, v2) AS (VALUES (1, 20)) \
+             SELECT s.* FROM a JOIN b USING (k), LATERAL (SELECT b.*) s"
+        )?,
+        ["1|20"]
+    );
+    Ok(())
+}
+
+/// A nondeterministic left side is evaluated once: the lateral value is the
+/// left row's.
+#[test]
+fn a_lateral_over_an_unseeded_random_left_side_sees_one_value() -> R {
+    let s = session()?;
+    assert_eq!(
+        run(
+            &s,
+            "SELECT t.x = s.y FROM (SELECT rand() AS x) t JOIN LATERAL (SELECT t.x AS y) s ON true"
+        )?,
+        ["true"]
+    );
+    Ok(())
+}
+
+/// A column name holding a dot survives the lateral reference.
+#[test]
+fn a_lateral_reference_keeps_a_dotted_column_name() -> R {
+    let s = session()?;
+    assert_eq!(
+        run(
+            &s,
+            "SELECT s.`a.b` FROM VALUES (1) t(`a.b`) JOIN LATERAL (SELECT t.`a.b`) s ON true"
+        )?,
+        ["1"]
+    );
+    Ok(())
+}
+
+/// Chained laterals that both decorrelate through a domain renumber the
+/// second right side; its `ON` condition is renumbered with it (Spark 4.2:
+/// `0|3|4`).
+#[test]
+fn chained_domain_laterals_remap_the_on_condition() -> R {
+    let s = session()?;
+    assert_eq!(
+        run(
+            &s,
+            "select t1.c1, a.m, b.z from t1 \
+             join lateral (select max(c2) m from t2 where t2.c1 <= t1.c1) a on true \
+             join lateral (select a.m + 1 as z from t2 where t2.c1 = t1.c1 limit 1) b on b.z > t1.c1"
+        )?,
+        ["0|3|4"]
+    );
+    Ok(())
+}

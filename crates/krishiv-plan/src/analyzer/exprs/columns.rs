@@ -1062,11 +1062,18 @@ fn qualify_lateral(mut b: Bound, a: &Attr) -> Bound {
     };
     let mut col = c.clone();
     let qual: Vec<&str> = a.qual.iter().map(String::as_str).collect();
+    // A column name holding a dot is quoted, so the name taken back out of
+    // this text (`pretty::outer_column_name`) is the column's, not its tail.
+    let name = if c.name.contains('.') {
+        format!("`{}`", c.name.replace('`', "``"))
+    } else {
+        c.name.clone()
+    };
     col.name = format!(
         "outer({}{}{})",
         qual.join("."),
         if qual.is_empty() { "" } else { "." },
-        c.name
+        name
     );
     b.expr = Arc::new(
         Expr::new(ExprNode::Resolved(ResolvedExpr::OuterColumn(col))).with_origin(b.expr.origin),

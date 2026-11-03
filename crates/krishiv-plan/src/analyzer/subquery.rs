@@ -887,6 +887,42 @@ impl Rewriter {
         condition: &JoinCondition,
     ) -> R<Arc<LogicalPlan>> {
         let out = output(p)?;
+        // A right side that is a select list over no relation is one row per
+        // left row: the expressions read over the left side's own columns. No
+        // domain, so a nondeterministic left side is evaluated once.
+        if (matches!(kind, JoinKind::Inner) || matches!(condition, JoinCondition::None))
+            && let Some(row) = one_row_select(right)
+            && !row.iter().any(|e| has_subquery(Node::Expr(e)))
+        {
+            let mut exprs: Vec<Arc<Expr>> = output(left)?
+                .iter()
+                .map(|c| col_expr(c, Origin::UNKNOWN))
+                .collect();
+            exprs.extend(row.iter().map(|e| Renumber::NONE.inner(e)));
+            let mut plan = node(
+                PlanNode::Project {
+                    input: Arc::clone(left),
+                    exprs,
+                },
+                p.origin,
+            );
+            if let JoinCondition::On(on) = condition {
+                plan = node(
+                    PlanNode::Filter {
+                        input: plan,
+                        predicate: Arc::clone(on),
+                    },
+                    p.origin,
+                );
+            }
+            return Ok(plan);
+        }
+        if !plan_is_deterministic(left) && on_path_through(right, lateral_hit, true) {
+            return Err(unsupported(
+                "a lateral join over a nondeterministic input that its right side correlates with",
+                p.origin,
+            ));
+        }
         let (inner, corr) = if on_path_through(right, lateral_hit, true) {
             self.lateral = true;
             let domained = self.domain(left, right);
@@ -904,7 +940,8 @@ impl Rewriter {
         let (inner, renumber) = self.disjoint(left, inner)?;
         let mut cond: Vec<Arc<Expr>> = corr.iter().map(|c| renumber.inner(c)).collect();
         if let JoinCondition::On(on) = condition {
-            cond.push(Arc::clone(on));
+            // The condition reads the right side's columns as renumbered.
+            cond.push(renumber.inner(on));
         }
         let joined = node(
             PlanNode::Join {
@@ -2523,6 +2560,36 @@ fn non_equality_correlation(p: &LogicalPlan) -> bool {
         }
         _ => false,
     }
+}
+
+/// The select list of `p` when it is a projection over no relation (under
+/// plain aliases): one row whatever the outer row.
+fn one_row_select(p: &Arc<LogicalPlan>) -> Option<Vec<Arc<Expr>>> {
+    match &p.node {
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+            one_row_select(input)
+        }
+        PlanNode::Project { input, exprs } if matches!(input.node, PlanNode::OneRowRelation) => {
+            Some(exprs.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Whether no expression of the plan `p` is nondeterministic.
+fn plan_is_deterministic(p: &Arc<LogicalPlan>) -> bool {
+    visit_distinct(Node::Plan(p), |n| match n {
+        Node::Expr(e)
+            if matches!(
+                &e.node,
+                ExprNode::Resolved(ResolvedExpr::Function(f)) if !f.deterministic
+            ) =>
+        {
+            ControlFlow::Break(())
+        }
+        _ => ControlFlow::Continue(()),
+    })
+    .is_continue()
 }
 
 /// Whether every filter on the correlation path from `p` down is
