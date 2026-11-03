@@ -13,7 +13,10 @@ mod fixtures {
 #[test]
 fn legacy_parses_match_spark() {
     let mut wrong = Vec::new();
-    for &(text, pattern, want) in fixtures::PROBES {
+    // Under Miri a sample: each probe scans the zone tables, and the parser
+    // has no unsafe code.
+    let step = if cfg!(miri) { 64 } else { 1 };
+    for &(text, pattern, want) in fixtures::PROBES.iter().step_by(step) {
         let got = LegacyPattern::new(pattern)
             .unwrap()
             .parse_timestamp(text, &FixedOffset(0))
