@@ -446,3 +446,30 @@ fn chained_domain_laterals_remap_the_on_condition() -> R {
     );
     Ok(())
 }
+
+/// `struct(t.x)` over a lateral reference names its field `x`.
+#[test]
+fn a_struct_of_a_lateral_reference_keeps_the_field_name() -> R {
+    let s = session()?;
+    assert_eq!(
+        run(
+            &s,
+            "SELECT s.rec.x FROM VALUES (1) t(x), LATERAL (SELECT struct(t.x) AS rec) s"
+        )?,
+        ["1"]
+    );
+    Ok(())
+}
+
+/// A correlated scalar subquery over an unseeded random outer input is
+/// refused rather than evaluated twice.
+#[test]
+fn a_scalar_subquery_over_a_random_outer_input_is_refused() -> R {
+    let s = session()?;
+    let err = error_of(
+        &s,
+        "SELECT t.x, (SELECT count(*) FROM VALUES (1) u(y) WHERE u.y > t.x) FROM (SELECT rand() AS x) t",
+    );
+    assert!(err.contains("nondeterministic"), "{err}");
+    Ok(())
+}

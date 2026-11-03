@@ -647,11 +647,12 @@ impl Resolver<'_> {
         let mut names = Vec::with_capacity(kids.len());
         for (i, k) in kids.iter().enumerate() {
             let name = match &k.expr.node {
-                ExprNode::Resolved(
-                    ResolvedExpr::Column(c)
-                    | ResolvedExpr::OuterColumn(c)
-                    | ResolvedExpr::LambdaVar(c),
-                ) => c.name.clone(),
+                ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::LambdaVar(c)) => {
+                    c.name.clone()
+                }
+                // A lateral reference is named `outer(t.x)` for display; the
+                // struct field is the column's own name.
+                ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => outer_column_name_of(&c.name),
                 ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
                 ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
                 _ => format!("col{}", i + 1),
@@ -1079,4 +1080,15 @@ fn qualify_lateral(mut b: Bound, a: &Attr) -> Bound {
         Expr::new(ExprNode::Resolved(ResolvedExpr::OuterColumn(col))).with_origin(b.expr.origin),
     );
     b
+}
+
+/// The column an `outer(..)` display name stands for; any other name as it is.
+fn outer_column_name_of(name: &str) -> String {
+    match name
+        .strip_prefix("outer(")
+        .and_then(|n| n.strip_suffix(')'))
+    {
+        Some(inner) => super::pretty::outer_column_name(inner),
+        None => name.to_owned(),
+    }
 }

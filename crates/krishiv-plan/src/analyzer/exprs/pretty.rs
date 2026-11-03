@@ -834,7 +834,7 @@ pub(super) fn special_float(v: f64) -> &'static str {
 /// The column named by the inside of an `outer(..)` reference: the text after
 /// the qualifier's last dot, or the backquoted name (dots and doubled
 /// backquotes inside it kept) that ends it.
-fn outer_column_name(inner: &str) -> String {
+pub(super) fn outer_column_name(inner: &str) -> String {
     if let Some(quoted) = inner.strip_suffix('`') {
         // Scan back to the opening backquote: a doubled one is part of the name.
         let chars: Vec<char> = quoted.chars().collect();

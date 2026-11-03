@@ -1979,6 +1979,14 @@ impl Rewriter {
     /// outer columns they match, null-safely (a NULL outer value owns its
     /// own rows).
     fn domain(&mut self, base: &Arc<LogicalPlan>, input: &Arc<LogicalPlan>) -> R<Lifted> {
+        // The outer rows serve as the left input and under the domain: a
+        // nondeterministic outer input would be evaluated twice.
+        if !plan_is_deterministic(base) {
+            return Err(unsupported(
+                "a correlated subquery over a nondeterministic outer input",
+                input.origin,
+            ));
+        }
         let domain = plan_outer_columns(input);
         let visible: HashSet<AttrId> = output(base)?.iter().map(|c| c.id).collect();
         if !domain.iter().all(|c| visible.contains(&c.id)) {
@@ -2547,6 +2555,8 @@ fn lateral_hit(p: &LogicalPlan) -> bool {
 fn non_equality_correlation(p: &LogicalPlan) -> bool {
     match &p.node {
         PlanNode::Filter { input, predicate } => {
+            // As `pull` reads it: the common conjuncts of a disjunction first.
+            let predicate = &factor_or(predicate);
             conjuncts(predicate)
                 .iter()
                 .any(|c| has_outer(Node::Expr(c)) && !is_outer_equality(c))
