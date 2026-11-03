@@ -118,6 +118,12 @@ def _record(load: float, ratio_ok: bool = True) -> dict:
     }
 
 
+@pytest.fixture(autouse=True)
+def _twelve_cpus(monkeypatch):
+    """The load bound counts the run's threads up to the machine's CPUs; pin them for these tests."""
+    monkeypatch.setattr(abba.os, "cpu_count", lambda: 12)
+
+
 def _wide_record(start: float, peak: float, threads: int | None) -> dict:
     rec = _record(peak)
     rec["load_at_start"] = start
@@ -150,6 +156,14 @@ def test_the_report_line_says_why_a_run_is_indicative():
     old = _wide_record(start=1.0, peak=1.0, threads=None)
     old["summary"] = abba.summarize(old)
     assert "no thread count" in abba.load_line(old)
+
+
+def test_threads_count_only_up_to_the_machines_cpus(monkeypatch):
+    monkeypatch.setattr(abba.os, "cpu_count", lambda: 4)
+    rec = _wide_record(start=1.0, peak=9.0, threads=12)
+    s = abba.summarize(rec)
+    assert s["load_bound"] == pytest.approx(8.0)
+    assert s["indicative"]
 
 
 def test_other_load_is_still_flagged():
