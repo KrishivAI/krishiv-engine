@@ -21,8 +21,10 @@ use crate::operators::{global_ref, local_mut};
 use crate::output_spill::refused;
 use crate::sync::{Mutex, lock};
 
-/// A spill writer's working memory, lent from the rows it writes.
+/// A spill writer's working memory, lent from the rows it writes: more than
+/// one bounded slice needs ([`SPILL_SCRATCH`](crate::join::grace::SPILL_SCRATCH)).
 const SCRATCH_BYTES: usize = 1 << 20;
+const _: () = assert!(SCRATCH_BYTES >= crate::join::grace::SPILL_SCRATCH);
 
 /// A run of build batches: in memory, or in one spill file.
 enum Segment {
@@ -78,8 +80,12 @@ pub(super) fn ready(global: &GlobalState) -> Result<Arc<Ready>> {
 
 /// Writes `batches` to a new spill file in `scope`, lending the writer's
 /// working memory from `reservation`, which holds them: a full pool cannot
-/// grant it afresh. On success the batches' bytes are released and the
-/// file returned; on failure nothing was freed.
+/// grant it afresh. Another driver's reservation (a segment combined at
+/// finalize) is first re-charged to this driver's consumer, whose credit the
+/// writer draws. Batches are written in slices of a bounded size, so the
+/// writer's scratch stays within the loan whatever their width. On success
+/// the batches' bytes are released and the file returned; on failure nothing
+/// was freed.
 pub(super) async fn write(
     ctx: &TaskContext,
     scope: &SpillScope,
@@ -87,6 +93,11 @@ pub(super) async fn write(
     batches: Vec<RecordBatch>,
     reservation: &mut Reservation,
 ) -> Result<SpillFile> {
+    if reservation.consumer() != ctx.consumer().id() {
+        reservation
+            .transfer_to(ctx.consumer().consumer())
+            .map_err(KrishivError::from)?;
+    }
     let lent = reservation.size().min(SCRATCH_BYTES);
     reservation.shrink_to_credit(lent);
     let scratch = ctx.consumer().reservation().for_spill_scratch();
@@ -108,7 +119,7 @@ pub(super) async fn write(
             let mut writer = writer;
             for b in batches {
                 query.check_cancelled()?;
-                writer.write(&Batch::new(b)).map_err(KrishivError::from)?;
+                crate::join::grace::write_sliced(&mut writer, &Batch::new(b))?;
             }
             writer.finish().map_err(KrishivError::from)
         })
