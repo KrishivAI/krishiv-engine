@@ -2041,6 +2041,34 @@ async fn uses_commit_log(
     if log.exists().await? {
         return Ok(true);
     }
+    // A partition directory (`name=value`) below a logged root cannot be committed on its own: the
+    // root's readers would never see its files, and a log of its own would shadow the root's. The
+    // write goes through the root.
+    let mut parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
+    while parts
+        .last()
+        .is_some_and(|name| name.split_once('=').is_some_and(|(k, _)| !k.is_empty()))
+    {
+        parts.pop();
+        if parts.is_empty() {
+            break;
+        }
+        let parent = krishiv_io::commit_log::CommitLog::new(
+            io,
+            store.clone(),
+            object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
+            at.display.clone(),
+        );
+        if parent.exists().await? {
+            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: format!(
+                    "a write into a partition directory below a directory with a commit log ({}): write through the directory that has the log",
+                    at.display
+                ),
+            }
+            .into());
+        }
+    }
     if protocol.as_deref() == Some("NONE") {
         return Ok(false);
     }

@@ -381,3 +381,32 @@ fn a_partition_directory_read_by_its_own_path_shows_only_the_roots_committed_fil
     let df = s.read().parquet([format!("{path}/p=a/*.parquet").as_str()]);
     assert_eq!(block_on(df.count()).unwrap(), 1);
 }
+
+#[test]
+fn a_write_into_a_partition_directory_of_a_logged_root_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'a' AS p")).unwrap();
+    block_on(df.write().partition_by(["p"]).mode("append").parquet(&path)).unwrap();
+    let df = block_on(s.sql("SELECT 2 AS id")).unwrap();
+    let err = block_on(
+        df.write()
+            .mode("append")
+            .parquet(format!("{path}/p=a").as_str()),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class().name(),
+        "KRISHIV_UNSUPPORTED_FEATURE",
+        "{err}"
+    );
+    // Nothing was added, and the root still reads its one committed row.
+    assert!(!root.join("p=a/_krishiv_log").exists());
+    let n = block_on(s.read().parquet([path.as_str()]).count()).unwrap();
+    assert_eq!(n, 1);
+}

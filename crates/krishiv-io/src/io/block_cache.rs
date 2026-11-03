@@ -142,6 +142,26 @@ pub struct BlockCache {
     state: Mutex<State>,
     inflight: Mutex<HashMap<u128, (Run, usize)>>,
     counters: Counters,
+    /// At most [`MAX_CONCURRENT_FETCHES`] runs are fetched from the store at a time, whatever the
+    /// number of readers and of missing runs in their ranges.
+    fetches: Arc<tokio::sync::Semaphore>,
+    /// The memory the runs in flight hold, reserved from the pool when one is attached.
+    fetch_memory: Mutex<Option<Reservation>>,
+}
+
+/// Most runs fetched from the store at the same time by one cache.
+const MAX_CONCURRENT_FETCHES: usize = 8;
+
+/// A random part for a directory name (the hasher is seeded randomly per process).
+fn random_suffix() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos()),
+    );
+    h.finish()
 }
 
 impl fmt::Debug for BlockCache {
@@ -184,26 +204,37 @@ impl BlockCache {
     pub fn new(mut cfg: BlockCacheConfig) -> std::io::Result<Arc<Self>> {
         cfg.block_bytes = cfg.block_bytes.max(4096);
         // One directory per cache (a process runs many sessions, each with its own cache): the
-        // process id plus a sequence number. Directories of processes that are gone are removed.
+        // process id, a sequence number and a random part, created exclusively. Processes in
+        // different PID namespaces may share the directory and have the same pid and sequence, so
+        // a name is never assumed free: an existing one is skipped, never emptied.
         static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         let pid = std::process::id();
-        let dir = cfg.dir.join(format!(
-            "p{pid}-{}",
-            SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
         purge_dead(&cfg.dir);
-        match std::fs::remove_dir_all(&dir) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
-        }
         // Owner-only: another local user must not be able to put blocks of their own into a
         // cache (the default root is under the shared temp directory).
         let mut builder = std::fs::DirBuilder::new();
         builder.recursive(true);
         #[cfg(unix)]
         std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-        builder.create(&dir)?;
+        builder.create(&cfg.dir)?;
+        let mut attempt = 0_u32;
+        let dir = loop {
+            let dir = cfg.dir.join(format!(
+                "p{pid}-{}-{:016x}",
+                SEQUENCE.fetch_add(1, Ordering::Relaxed),
+                random_suffix()
+            ));
+            let mut leaf = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            std::os::unix::fs::DirBuilderExt::mode(&mut leaf, 0o700);
+            match leaf.create(&dir) {
+                Ok(()) => break dir,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 16 => {
+                    attempt += 1;
+                }
+                Err(e) => return Err(e),
+            }
+        };
         let lock = std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -222,6 +253,8 @@ impl BlockCache {
             state: Mutex::new(State::default()),
             inflight: Mutex::new(HashMap::new()),
             counters: Counters::default(),
+            fetches: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_FETCHES)),
+            fetch_memory: Mutex::new(None),
         }))
     }
 
@@ -254,6 +287,25 @@ impl BlockCache {
         let mut st = lock(&self.state);
         st.memory = Lru::default();
         st.reservation = Some(Reservation::new(child, id));
+        drop(st);
+        let fetch_child = pool.child("block-cache-fetch", None);
+        let fetch_id = fetch_child.register("block-cache-fetch", None);
+        *lock(&self.fetch_memory) = Some(Reservation::new(fetch_child, fetch_id));
+    }
+
+    /// Reserves `bytes` for a fetch in flight; `false` when an attached pool refuses.
+    fn reserve_fetch(&self, bytes: usize) -> bool {
+        match lock(&self.fetch_memory).as_mut() {
+            Some(r) => r.try_grow(bytes).is_ok(),
+            None => true,
+        }
+    }
+
+    /// Returns the bytes reserved by [`Self::reserve_fetch`].
+    fn release_fetch(&self, bytes: usize) {
+        if let Some(r) = lock(&self.fetch_memory).as_mut() {
+            r.shrink(bytes.min(r.size()));
+        }
     }
 
     /// Bytes held in memory now.
@@ -431,13 +483,20 @@ fn purge_dead(root: &std::path::Path) {
             continue;
         };
         let mut parts = rest.split('-');
-        let (Ok(_pid), Some(Ok(_seq)), None) = (
+        let (Ok(_pid), Some(Ok(_seq))) = (
             parts.next().unwrap_or("").parse::<u32>(),
             parts.next().map(str::parse::<u64>),
-            parts.next(),
         ) else {
             continue;
         };
+        // An optional random part follows; nothing else.
+        if parts
+            .next()
+            .is_some_and(|r| u64::from_str_radix(r, 16).is_err())
+            || parts.next().is_some()
+        {
+            continue;
+        }
         let Ok(lock) = std::fs::OpenOptions::new()
             .write(true)
             .open(entry.path().join(LOCK_FILE))
@@ -610,7 +669,18 @@ impl CachingStore {
         };
         let location = location.clone();
         let task = tokio::spawn(async move {
+            // At most a few runs in flight; the buffer of a run is reserved from the pool (a
+            // refusal ends the fetch, and the reader falls back to the plain read).
+            let _permit = Arc::clone(&cache.fetches).acquire_owned().await;
+            let held = usize::try_from(end - start).unwrap_or(usize::MAX);
+            let reserved = cache.reserve_fetch(held);
             let result = tokio::time::timeout(FETCH_TIMEOUT, async {
+                if !reserved {
+                    return Err(object_store::Error::Generic {
+                        store: "block cache",
+                        source: "no memory for a block fetch".into(),
+                    });
+                }
                 let got = inner.get_opts(&location, opts).await?;
                 if got.meta.size != size {
                     return Err(object_store::Error::Generic {
@@ -651,6 +721,9 @@ impl CachingStore {
                 })),
                 Err(e) => Err(Arc::new(e)),
             };
+            if reserved {
+                cache.release_fetch(held);
+            }
             // Done: later readers find the blocks cached, so the entries go.
             let mut flight = lock(&cache.inflight);
             for (name, _) in &keys {

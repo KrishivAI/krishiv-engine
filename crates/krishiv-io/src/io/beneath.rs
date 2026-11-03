@@ -674,8 +674,11 @@ impl ObjectStore for BeneathStore {
             let opened = openat(
                 &parent,
                 name.as_str(),
+                // Non-blocking: opening a FIFO for reading must not wait for a writer (a head, or a
+                // write that checks what is at its target, only wants the metadata).
                 OFlags::RDONLY
                     .union(OFlags::NOFOLLOW)
+                    .union(OFlags::NONBLOCK)
                     .union(OFlags::CLOEXEC),
                 Mode::empty(),
             );
@@ -716,6 +719,13 @@ impl ObjectStore for BeneathStore {
             let Some(fd) = fd else {
                 return Err(violation(&location, "a link is not read through"));
             };
+            // Only a regular file has a body to read: a FIFO or a device would block or never end.
+            if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile {
+                return Err(object_store::Error::NotFound {
+                    path: location.to_string(),
+                    source: Box::new(std::io::Error::other("not a regular file")),
+                });
+            }
             std::io::Read::read_to_end(&mut File::from(fd), &mut body).map_err(io_err)?;
             let size = body.len() as u64;
             let span = match range {

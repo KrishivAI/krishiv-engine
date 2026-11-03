@@ -282,6 +282,42 @@ async fn ranges_heads_links_and_conditions_read_as_asked() {
     }
 }
 
+/// A FIFO at the target is an object whose metadata can be read; opening it must not wait for a
+/// writer, and it has no body to read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fifo_is_headed_without_blocking_and_has_no_body() {
+    let f = fixture();
+    let s = store(&f, false);
+    let path = f.root.join("a/t");
+    std::fs::create_dir_all(&path).unwrap();
+    let fifo = path.join("pipe");
+    // mkfifo through the command (the crate forbids unsafe code).
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if !matches!(made, Ok(st) if st.success()) {
+        return;
+    }
+    let head = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        s.get_opts(
+            &obj(&f, "t/pipe"),
+            GetOptions {
+                head: true,
+                ..GetOptions::default()
+            },
+        ),
+    )
+    .await
+    .expect("a head of a FIFO must not block");
+    assert!(head.is_ok(), "{head:?}");
+    let body = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        s.get_opts(&obj(&f, "t/pipe"), GetOptions::default()),
+    )
+    .await
+    .expect("a body read of a FIFO must not block");
+    assert!(matches!(body, Err(object_store::Error::NotFound { .. })));
+}
+
 #[tokio::test]
 async fn put_modes_other_than_overwrite_and_create_are_refused() {
     let f = fixture();

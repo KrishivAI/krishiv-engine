@@ -506,3 +506,224 @@ async fn tpch_lineitem_scans_identically_with_the_cache() {
         "the warm scan reached the store"
     );
 }
+
+fn direct(
+    cache_dir: &FsPath,
+    disk: u64,
+    mem: u64,
+) -> (Arc<InMemory>, Arc<BlockCache>, CachingStore) {
+    let inner = Arc::new(InMemory::new());
+    let cache = BlockCache::new(BlockCacheConfig {
+        dir: cache_dir.to_path_buf(),
+        disk_bytes: disk,
+        memory_bytes: mem,
+        block_bytes: BLOCK,
+    })
+    .unwrap();
+    let store = CachingStore::new(
+        Arc::clone(&inner) as Arc<dyn ObjectStore>,
+        "s3://direct",
+        Arc::clone(&cache),
+    );
+    (inner, cache, store)
+}
+
+fn sized(size: u64) -> GetOptions {
+    let mut extensions = object_store::Extensions::new();
+    extensions.insert(ObjectSize(size));
+    GetOptions {
+        extensions,
+        ..GetOptions::default()
+    }
+}
+
+/// Everything but a bounded range read passes straight through to the store.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn other_calls_pass_through_to_the_store() {
+    use futures::TryStreamExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, cache, store) = direct(tmp.path(), 1 << 20, 1 << 20);
+    assert!(format!("{cache:?}").contains("BlockCache"));
+    let a = Path::from("d/a");
+    store
+        .put(&a, Bytes::from_static(b"0123456789").into())
+        .await
+        .unwrap();
+    store
+        .put_opts(
+            &Path::from("d/b"),
+            Bytes::from_static(b"xy").into(),
+            PutOptions::default(),
+        )
+        .await
+        .unwrap();
+    let mut up = store.put_multipart(&Path::from("d/m")).await.unwrap();
+    up.put_part(Bytes::from_static(b"mm").into()).await.unwrap();
+    up.complete().await.unwrap();
+    assert_eq!(inner.head(&Path::from("d/m")).await.unwrap().size, 2);
+    assert_eq!(
+        store.get_ranges(&a, &[2..4, 6..9]).await.unwrap(),
+        vec![Bytes::from_static(b"23"), Bytes::from_static(b"678")]
+    );
+    let listed: Vec<_> = store
+        .list(Some(&Path::from("d")))
+        .try_collect()
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 3);
+    let delim = store
+        .list_with_delimiter(Some(&Path::from("d")))
+        .await
+        .unwrap();
+    assert_eq!(delim.objects.len(), 3);
+    store.copy(&a, &Path::from("d/c")).await.unwrap();
+    assert_eq!(inner.head(&Path::from("d/c")).await.unwrap().size, 10);
+    store.delete(&Path::from("d/c")).await.unwrap();
+    assert!(inner.head(&Path::from("d/c")).await.is_err());
+    // A head, a whole-object read and a read without a size are not cached.
+    assert_eq!(store.head(&a).await.unwrap().size, 10);
+    assert_eq!(
+        store.get(&a).await.unwrap().bytes().await.unwrap().len(),
+        10
+    );
+    let r = store
+        .get_opts(
+            &a,
+            GetOptions {
+                range: Some(object_store::GetRange::Bounded(1..3)),
+                ..GetOptions::default()
+            },
+        )
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(&r[..], b"12");
+    assert_eq!(cache.stats().misses, 0);
+}
+
+/// An object that changed size under a read, or a range past its end, is the store's to answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_changed_object_falls_back_to_the_store() {
+    use object_store::GetRange;
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, cache, store) = direct(tmp.path(), 1 << 20, 0);
+    let a = Path::from("o");
+    inner.put(&a, pattern(300_000, 1).into()).await.unwrap();
+    // The scheduler believed 400,000 bytes: the fetched run has another size, so the cache path
+    // fails and the plain read answers.
+    let mut options = sized(400_000);
+    options.range = Some(GetRange::Bounded(10..20));
+    let got = store
+        .get_opts(&a, options)
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(got.len(), 10);
+    assert!(cache.stats().errors > 0);
+    // An empty or past-the-end range is not cached either.
+    let mut options = sized(300_000);
+    options.range = Some(GetRange::Bounded(299_990..300_005));
+    let _ = store.get_opts(&a, options).await;
+}
+
+/// A pool that cannot hold a block's fetch refuses it, and the read is answered by the store; the
+/// reservation of a fetch that did run is returned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fetch_buffers_are_reserved_from_the_pool() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, cache, store) = direct(tmp.path(), 1 << 22, 1 << 20);
+    let a = Path::from("o");
+    let data = pattern(1 << 20, 4);
+    inner.put(&a, data.clone().into()).await.unwrap();
+    let root = TreePool::new(&MemoryConfig {
+        limit: Some(2 * usize::try_from(BLOCK).unwrap()),
+        quantum: 1,
+        spill_scratch_reserve: 0,
+        resident_guard: true,
+        ..MemoryConfig::default()
+    });
+    let pool: Arc<dyn MemoryPool> = Arc::clone(&root) as Arc<dyn MemoryPool>;
+    cache.attach_pool(&pool);
+    let read = |range: std::ops::Range<u64>| {
+        let mut options = sized(1 << 20);
+        options.range = Some(object_store::GetRange::Bounded(range));
+        let (store, a) = (&store, a.clone());
+        async move {
+            store
+                .get_opts(&a, options)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap()
+        }
+    };
+    // Four blocks do not fit two blocks of pool: refused, answered by the plain read.
+    let big = read(0..4 * BLOCK).await;
+    assert_eq!(&big[..], &data[..usize::try_from(4 * BLOCK).unwrap()]);
+    assert!(cache.stats().errors > 0);
+    assert_eq!(root.reserved(), 0, "no reservation is left behind");
+    // One block fits, is cached, and its fetch reservation is returned.
+    let one = read(5 * BLOCK..5 * BLOCK + 100).await;
+    assert_eq!(
+        &one[..],
+        &data[usize::try_from(5 * BLOCK).unwrap()..][..100]
+    );
+    assert!(cache.stats().misses > 0);
+    assert!(root.reserved() as u64 <= cache.memory_used());
+}
+
+/// A read with many separate runs of missing blocks fetches them all, a few at a time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn many_runs_are_fetched_within_the_concurrency_bound() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, cache, store) = direct(tmp.path(), 1 << 26, 0);
+    let a = Path::from("o");
+    let data = pattern(40 * usize::try_from(BLOCK).unwrap(), 6);
+    inner.put(&a, data.clone().into()).await.unwrap();
+    // Warm every other block so the missing ones form 20 separate runs.
+    for b in (0..40).step_by(2) {
+        let mut o = sized(40 * BLOCK);
+        o.range = Some(object_store::GetRange::Bounded(b * BLOCK..b * BLOCK + 10));
+        store.get_opts(&a, o).await.unwrap();
+    }
+    let mut o = sized(40 * BLOCK);
+    o.range = Some(object_store::GetRange::Bounded(0..40 * BLOCK));
+    let got = store.get_opts(&a, o).await.unwrap().bytes().await.unwrap();
+    assert_eq!(&got[..], &data[..]);
+    assert_eq!(cache.stats().errors, 0);
+}
+
+/// Two caches of one directory (the same names a second PID namespace would pick) never empty
+/// each other: each takes a directory of its own.
+#[test]
+fn caches_never_share_or_empty_a_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = || BlockCacheConfig {
+        dir: tmp.path().to_path_buf(),
+        disk_bytes: 1 << 20,
+        memory_bytes: 0,
+        block_bytes: BLOCK,
+    };
+    let first = BlockCache::new(config()).unwrap();
+    // A live foreign cache's directory under any name this process could pick.
+    let pid = std::process::id();
+    for n in 0..64 {
+        let foreign = tmp.path().join(format!("p{pid}-{n}"));
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(foreign.join("keep.blk"), b"live").unwrap();
+    }
+    let second = BlockCache::new(config()).unwrap();
+    for n in 0..64 {
+        assert!(
+            tmp.path().join(format!("p{pid}-{n}/keep.blk")).exists(),
+            "{n}"
+        );
+    }
+    drop((first, second));
+}
