@@ -15,7 +15,11 @@ use crate::operator::{LocalState, Operator, OperatorOutput};
 /// Keeps the rows for which the predicate is true (a null does not select
 /// its row). Each surviving row keeps its weight; a batch with no
 /// surviving row produces no output. A mask that keeps every row shares the
-/// input's buffers.
+/// input's buffers. A string or binary view column whose kept views use
+/// less than half of the data buffers they share with the input is
+/// compacted: otherwise a few rows kept from each batch of a selective
+/// filter would hold the scan's whole decoded pages (a collected result,
+/// a write queue), unseen by the memory pool.
 #[derive(Debug)]
 pub struct Filter {
     schema: SchemaRef,
@@ -51,8 +55,58 @@ impl Operator for Filter {
         let partition = local_mut::<PartitionState>(local, "Filter")?.partition;
         let mask = self.predicate.evaluate_in(input.data(), partition)?;
         let out = input.filter(&mask)?;
-        Ok(OperatorOutput::NeedMoreInput(
-            (out.num_rows() > 0).then_some(out),
-        ))
+        if out.num_rows() == 0 {
+            return Ok(OperatorOutput::NeedMoreInput(None));
+        }
+        let out = if out.num_rows() < input.num_rows() {
+            compact_sparse_views(out)?
+        } else {
+            out
+        };
+        Ok(OperatorOutput::NeedMoreInput(Some(out)))
     }
+}
+
+/// `batch` with each top-level view column compacted (`gc`) whose data
+/// buffers hold more than twice the bytes its views use.
+fn compact_sparse_views(batch: Batch) -> Result<Batch> {
+    use arrow_array::cast::AsArray;
+    use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
+    use arrow_schema::DataType;
+    fn sparse(held: usize, used: usize) -> bool {
+        held > used.saturating_mul(2)
+    }
+    let data = batch.data();
+    let compacted = |c: &ArrayRef| -> Option<ArrayRef> {
+        match c.data_type() {
+            DataType::Utf8View => {
+                let a = c.as_string_view();
+                let held = a.data_buffers().iter().map(arrow_buffer::Buffer::len).sum();
+                sparse(held, a.total_buffer_bytes_used()).then(|| Arc::new(a.gc()) as ArrayRef)
+            }
+            DataType::BinaryView => {
+                let a = c.as_binary_view();
+                let held = a.data_buffers().iter().map(arrow_buffer::Buffer::len).sum();
+                sparse(held, a.total_buffer_bytes_used()).then(|| Arc::new(a.gc()) as ArrayRef)
+            }
+            _ => None,
+        }
+    };
+    let columns: Vec<Option<ArrayRef>> = data.columns().iter().map(compacted).collect();
+    if columns.iter().all(Option::is_none) {
+        return Ok(batch);
+    }
+    let columns = columns
+        .into_iter()
+        .zip(data.columns())
+        .map(|(new, old)| new.unwrap_or_else(|| Arc::clone(old)))
+        .collect();
+    let compacted = RecordBatch::try_new_with_options(
+        data.schema(),
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(data.num_rows())),
+    )
+    .map_err(|e| crate::error::internal(e.to_string()))?;
+    Batch::with_weights(compacted, batch.weights().clone())
+        .map_err(|e| crate::error::internal(e.to_string()))
 }

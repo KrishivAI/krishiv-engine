@@ -207,6 +207,81 @@ fn filter_errors_propagate() {
     );
 }
 
+/// A selective filter's view columns hold only the kept rows' bytes, not
+/// the input's buffers; a filter keeping most bytes (or every row) shares
+/// them, and the values are the same either way.
+#[test]
+fn filter_compacts_view_columns_it_keeps_little_of() {
+    use arrow_array::{BinaryViewArray, StringViewArray};
+    let long = |i: usize| format!("{i:04}-{}", "x".repeat(200));
+    let rows = 100;
+    let s = StringViewArray::from_iter_values((0..rows).map(long));
+    let b = BinaryViewArray::from_iter_values((0..rows).map(|i| long(i).into_bytes()));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("s", DataType::Utf8View, false),
+        Field::new("b", DataType::BinaryView, false),
+        Field::new("n", DataType::Int64, false),
+    ]));
+    let n = Int64Array::from_iter_values(0..100);
+    let input = Batch::new(
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(s), Arc::new(b), Arc::new(n)],
+        )
+        .unwrap_or_else(|e| unreachable!("{e}")),
+    );
+    let held = |out: &Batch| {
+        let s = out.data().column(0).as_string_view();
+        let b = out.data().column(1).as_binary_view();
+        let sum = |bufs: &[arrow_buffer::Buffer]| {
+            bufs.iter().map(arrow_buffer::Buffer::len).sum::<usize>()
+        };
+        (sum(s.data_buffers()), sum(b.data_buffers()))
+    };
+    let (in_s, in_b) = held(&input);
+    let (_root, ctx) = ctx();
+    for (keep, compacted) in [(2, true), (70, false), (100, false)] {
+        let f = Filter::new(
+            Arc::clone(&schema),
+            Arc::new(FnPredicate(move |b: &RecordBatch| {
+                Ok(BooleanArray::from_iter(
+                    (0..b.num_rows()).map(|i| Some(i % 100 < keep)),
+                ))
+            })),
+        );
+        let mut local = f.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+        let out = out_batch(
+            f.execute(&input, &mut local)
+                .unwrap_or_else(|e| unreachable!("{e}")),
+        )
+        .unwrap_or_else(|| unreachable!("rows survive"));
+        let (s, b) = held(&out);
+        if compacted {
+            assert!(s < in_s / 10 && b < in_b / 10, "{s} {b} of {in_s} {in_b}");
+        } else {
+            assert_eq!((s, b), (in_s, in_b), "keep {keep}");
+        }
+        let got: Vec<&str> = out
+            .data()
+            .column(0)
+            .as_string_view()
+            .iter()
+            .flatten()
+            .collect();
+        let want: Vec<String> = (0..keep).map(long).collect();
+        assert_eq!(got, want, "keep {keep}");
+        let got: Vec<&[u8]> = out
+            .data()
+            .column(1)
+            .as_binary_view()
+            .iter()
+            .flatten()
+            .collect();
+        assert_eq!(got, want.iter().map(String::as_bytes).collect::<Vec<_>>());
+        assert_eq!(out.data().column(2).len(), keep);
+    }
+}
+
 /// `a + 1`, or an expression that misbehaves.
 #[derive(Debug)]
 struct PlusOne {
