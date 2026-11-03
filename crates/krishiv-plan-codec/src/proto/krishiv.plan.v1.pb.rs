@@ -1217,6 +1217,12 @@ pub struct DataType {
     /// `KIND_DAY_TIME_INTERVAL` only: the trailing field.
     #[prost(enumeration = "DayTimeField", tag = "9")]
     pub dt_end: i32,
+    /// feature: collated_strings
+    /// `KIND_COLLATED_STRING` only: the collation's canonical name (never
+    /// `UTF8_BINARY`, which is `KIND_STRING`). Ids index an ICU build's
+    /// table, so they never travel.
+    #[prost(string, tag = "10")]
+    pub collation: ::prost::alloc::string::String,
 }
 /// Nested message and enum types in `DataType`.
 pub mod data_type {
@@ -1262,6 +1268,8 @@ pub mod data_type {
         DayTimeInterval = 20,
         /// feature: interval_types
         CalendarInterval = 21,
+        /// feature: collated_strings
+        CollatedString = 22,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -1292,6 +1300,7 @@ pub mod data_type {
                 Self::YearMonthInterval => "KIND_YEAR_MONTH_INTERVAL",
                 Self::DayTimeInterval => "KIND_DAY_TIME_INTERVAL",
                 Self::CalendarInterval => "KIND_CALENDAR_INTERVAL",
+                Self::CollatedString => "KIND_COLLATED_STRING",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1319,6 +1328,7 @@ pub mod data_type {
                 "KIND_YEAR_MONTH_INTERVAL" => Some(Self::YearMonthInterval),
                 "KIND_DAY_TIME_INTERVAL" => Some(Self::DayTimeInterval),
                 "KIND_CALENDAR_INTERVAL" => Some(Self::CalendarInterval),
+                "KIND_COLLATED_STRING" => Some(Self::CollatedString),
                 _ => None,
             }
         }

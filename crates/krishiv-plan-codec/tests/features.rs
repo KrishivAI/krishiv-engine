@@ -1521,3 +1521,121 @@ fn a_shared_plans_constructs_are_in_the_header() {
     assert!(features.contains(&Feature::SharedSubplan), "{features:?}");
     assert_eq!(decode(&encode(&plan).unwrap()).unwrap(), plan);
 }
+
+/// A collated string needs `collated_strings` wherever the plan names it:
+/// a Spark type, a nested type's JSON, or the tag of an Arrow field at any
+/// depth (the carrier, `Utf8View`, alone says `string`).
+#[test]
+fn collated_strings_need_their_feature_wherever_they_appear() {
+    use krishiv_types::arrow::SPARK_TYPE_METADATA_KEY;
+    use krishiv_types::{Collation, DataType};
+    assert_eq!(message("collated_scan").features, ["collated_strings"]);
+    assert_eq!(
+        message("collated_nested").features,
+        ["collated_strings", "nested_types"]
+    );
+    assert_eq!(
+        message("collated_output").features,
+        ["collated_strings", "nested_types"]
+    );
+    let lcase = inventory::collated("UTF8_LCASE");
+    assert_eq!(
+        feature_of(Construct::Type(&lcase)),
+        Some(Feature::CollatedStrings)
+    );
+    assert_eq!(feature_of(Construct::Type(&DataType::String)), None);
+    let tagged = |tag: &str| {
+        arrow_schema::Field::new("s", arrow_schema::DataType::Utf8View, true).with_metadata(
+            std::collections::HashMap::from([(SPARK_TYPE_METADATA_KEY.to_owned(), tag.to_owned())]),
+        )
+    };
+    let field = lcase.to_arrow_field("s", true);
+    assert_eq!(field, tagged("string collate UTF8_LCASE"));
+    assert_eq!(
+        feature_of(Construct::ArrowField(&field)),
+        Some(Feature::CollatedStrings)
+    );
+    for plain in [
+        DataType::String.to_arrow_field("s", true),
+        tagged("string"),
+        tagged("not a type"),
+    ] {
+        assert_eq!(feature_of(Construct::ArrowField(&plain)), None, "{plain:?}");
+    }
+    assert_eq!(Feature::CollatedStrings.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::CollatedStrings.legacy_level(), 6);
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::CollatedStrings),
+    );
+    for case in ["collated_scan", "collated_nested", "collated_output"] {
+        let bytes = message(case).encode_to_vec();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["collated_strings".to_owned()]
+            },
+            "{case}"
+        );
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == case).unwrap();
+        assert_eq!(decode(&bytes).unwrap(), plan, "{case}");
+    }
+    // A header that hides the type is corrupt.
+    let mut m = message("collated_scan");
+    m.features.clear();
+    m.min_reader_version = 2;
+    corrupt(
+        &m,
+        "the feature header does not match the plan's constructs",
+    );
+    // The indeterminate collation of a mixed expression is the analyzer's,
+    // never a plan's.
+    let indeterminate = DataType::CollatedString(Collation::INDETERMINATE);
+    let mut plan = inventory::file_scan();
+    plan.scan.output[0].data_type = indeterminate;
+    assert!(matches!(
+        encode(&plan_of(PhysNode::Scan(plan))),
+        Err(CodecError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn a_decoded_collation_is_checked() {
+    use pb::data_type::Kind;
+    // `collated_scan`'s first output column is `string collate UTF8_LCASE`.
+    let edit = |change: &dyn Fn(&mut pb::DataType)| {
+        let mut m = message("collated_scan");
+        let Some(pb::node::Kind::Scan(scan)) = m.nodes[0].kind.as_mut() else {
+            panic!("not a scan");
+        };
+        change(scan.output[0].data_type.as_mut().unwrap());
+        m
+    };
+    let named =
+        |name: &'static str| edit(&move |t: &mut pb::DataType| t.collation = name.to_owned());
+    assert_eq!(
+        message("collated_scan").nodes[0].kind,
+        named("UTF8_LCASE").nodes[0].kind
+    );
+    assert!(decode(&named("UNICODE_CI").encode_to_vec()).is_ok());
+    // Only the canonical name the encoder writes: the bytes re-encode the
+    // same.
+    for name in [
+        "utf8_lcase",
+        "SYSTEM.BUILTIN.UTF8_LCASE",
+        "UNICODE_CS",
+        "UTF8_BINARY",
+        "null",
+        "",
+        "NOPE",
+    ] {
+        corrupt(&named(name), "an invalid collation");
+    }
+    let on_string = edit(&|t: &mut pb::DataType| t.kind = Kind::String as i32);
+    corrupt(
+        &on_string,
+        "a collation on a type that is not a collated string",
+    );
+}

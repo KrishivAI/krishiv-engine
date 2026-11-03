@@ -1266,6 +1266,19 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
             });
         }
         DataType::CalendarInterval => (Kind::CalendarInterval, 0, 0, 0),
+        DataType::CollatedString(c) => {
+            // By canonical name: ids index an ICU build's table.
+            if c.is_indeterminate() || c.is_utf8_binary() {
+                return Err(CodecError::Unsupported(format!(
+                    "a string type of collation {c}"
+                )));
+            }
+            return Ok(pb::DataType {
+                kind: Kind::CollatedString as i32,
+                collation: c.name(),
+                ..pb::DataType::default()
+            });
+        }
         _ => {
             return Err(CodecError::Unsupported(
                 "a Spark type this version does not know".to_owned(),

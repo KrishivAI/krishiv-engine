@@ -1007,6 +1007,8 @@ message DataType {
     KIND_DAY_TIME_INTERVAL = 20;
     // feature: interval_types
     KIND_CALENDAR_INTERVAL = 21;
+    // feature: collated_strings
+    KIND_COLLATED_STRING = 22;
   }
   Kind kind = 1;
   // `KIND_DECIMAL` and `KIND_TIME` only.
@@ -1032,6 +1034,11 @@ message DataType {
   // feature: interval_types
   // `KIND_DAY_TIME_INTERVAL` only: the trailing field.
   DayTimeField dt_end = 9;
+  // feature: collated_strings
+  // `KIND_COLLATED_STRING` only: the collation's canonical name (never
+  // `UTF8_BINARY`, which is `KIND_STRING`). Ids index an ICU build's
+  // table, so they never travel.
+  string collation = 10;
 }
 
 enum YearMonthField {
