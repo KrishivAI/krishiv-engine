@@ -5,10 +5,6 @@
       "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS STRING))\\\"\"}"
     },
     {
-      "id": "subtract/BIGINT/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
-    },
-    {
       "id": "subtract/BINARY/STRING/ansi_off",
       "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS STRING))\\\"\"}"
     },
@@ -17,36 +13,12 @@
       "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS STRING))\\\"\"}"
     },
     {
-      "id": "subtract/DECIMAL(10,2)/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
-    },
-    {
-      "id": "subtract/DOUBLE/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
-    },
-    {
-      "id": "subtract/FLOAT/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
-    },
-    {
-      "id": "subtract/INT/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
-    },
-    {
       "id": "subtract/MAP<STRING,INT>/STRING/ansi_off",
       "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS STRING))\\\"\"}"
     },
     {
-      "id": "subtract/SMALLINT/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
-    },
-    {
       "id": "subtract/STRING/ARRAY<INT>/ansi_off",
       "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS ARRAY<INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - NULL)\\\"\"}"
-    },
-    {
-      "id": "subtract/STRING/BIGINT/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS BIGINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
     },
     {
       "id": "subtract/STRING/BINARY/ansi_off",
@@ -57,44 +29,12 @@
       "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS BOOLEAN)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - CAST(NULL AS BOOLEAN))\\\"\"}"
     },
     {
-      "id": "subtract/STRING/DECIMAL(10,2)/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
-    },
-    {
-      "id": "subtract/STRING/DOUBLE/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS DOUBLE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
-    },
-    {
-      "id": "subtract/STRING/FLOAT/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
-    },
-    {
-      "id": "subtract/STRING/INT/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS INT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
-    },
-    {
       "id": "subtract/STRING/MAP<STRING,INT>/ansi_off",
       "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS MAP<STRING,INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - NULL)\\\"\"}"
     },
     {
-      "id": "subtract/STRING/SMALLINT/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
-    },
-    {
-      "id": "subtract/STRING/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS STRING)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRING\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - CAST(NULL AS STRING))\\\"\"} where Spark resolves to double"
-    },
-    {
       "id": "subtract/STRING/STRUCT<a INT>/ansi_off",
       "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS STRUCT<a INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - NULL)\\\"\"}"
-    },
-    {
-      "id": "subtract/STRING/TINYINT/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
-    },
-    {
-      "id": "subtract/STRING/VOID/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS VOID)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRING\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - CAST(NULL AS VOID))\\\"\"} where Spark resolves to double"
     },
     {
       "id": "subtract/STRING/VOID/ansi_on",
@@ -103,14 +43,6 @@
     {
       "id": "subtract/STRUCT<a INT>/STRING/ansi_off",
       "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS STRING))\\\"\"}"
-    },
-    {
-      "id": "subtract/TINYINT/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
-    },
-    {
-      "id": "subtract/VOID/STRING/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS STRING)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRING\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - CAST(NULL AS STRING))\\\"\"} where Spark resolves to double"
     },
     {
       "id": "subtract/VOID/STRING/ansi_on",

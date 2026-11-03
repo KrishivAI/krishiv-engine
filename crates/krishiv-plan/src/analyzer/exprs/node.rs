@@ -407,6 +407,10 @@ impl Resolver<'_> {
                     // resolved child drops its markers: carry them over.
                     let mut b = self.expr(&Arc::new(call), cx)?;
                     b.carry_markers(&kids[..n]);
+                    // The `try_` forms are nullable, as Spark types them.
+                    if lookup_name.starts_with("try_") {
+                        b = make_nullable(b);
+                    }
                     // Shown as Spark names it, over the operands as written
                     // (a session variable keeps its name).
                     b.shown = Some(Arc::new(
@@ -1631,4 +1635,17 @@ fn holds_map(t: &DataType) -> bool {
         DataType::Struct(s) => s.fields().iter().any(|f| holds_map(f.data_type())),
         _ => false,
     }
+}
+
+/// `b` typed nullable (the expression's own flag too).
+fn make_nullable(mut b: Bound) -> Bound {
+    b.ty.nullable = true;
+    if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &b.expr.node {
+        let mut f = f.clone();
+        f.nullable = true;
+        b.expr = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f))).with_origin(b.expr.origin),
+        );
+    }
+    b
 }

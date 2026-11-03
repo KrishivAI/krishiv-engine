@@ -1305,6 +1305,122 @@ fn struct_star_fields_are_lateral_aliases() -> R {
     Ok(())
 }
 
+/// `sum`, `avg` and `mean` of a `TIMESTAMP` read it as seconds (`DOUBLE`), as
+/// Spark 4.2 does; a `DATE` or `TIMESTAMP_NTZ` is refused.
+#[test]
+fn sum_and_avg_of_a_timestamp_are_doubles() -> R {
+    let s = Session::new()?;
+    block_on(s.sql("SET spark.sql.session.timeZone=UTC"))?;
+    let b = block_on(
+        block_on(s.sql(
+            "SELECT avg(c), mean(c), sum(c) FROM VALUES (timestamp'2020-01-01 00:00:00') AS t(c)",
+        ))?
+        .collect(),
+    )?;
+    for i in 0..3 {
+        let v = arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Float64Type>(
+            b[0].column(i),
+        )
+        .value(0);
+        assert!((v - 1_577_836_800.0).abs() < 1e-6, "column {i}: {v}");
+    }
+    for sql in [
+        "SELECT avg(c) FROM VALUES (date'2020-01-01') AS t(c)",
+        "SELECT mean(c) FROM VALUES (timestamp_ntz'2020-01-01') AS t(c)",
+    ] {
+        let e = block_on(s.sql(sql)).map(|_| ()).expect_err("must fail");
+        assert_eq!(
+            e.error_class().name(),
+            "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+            "{sql}"
+        );
+    }
+    Ok(())
+}
+
+/// A time of day without a date is on the query's date: `hour('10:11:12')`
+/// and the cast to `TIMESTAMP` (Spark reads today's date in the session zone).
+#[test]
+fn a_time_of_day_string_is_on_the_query_date() -> R {
+    let s = Session::new()?;
+    let b = block_on(
+        block_on(s.sql(
+            "SELECT hour('10:11:12'), minute('10:11:12'), second('10:11:12.5'), \
+             CAST('T23:59' AS TIMESTAMP) = CAST(CAST(current_date() AS STRING) || ' 23:59:00' AS TIMESTAMP), \
+             CAST('T10:00:00-12:00' AS TIMESTAMP) = CAST(CONCAT(CAST(CAST(current_timestamp() - INTERVAL 12 HOURS AS DATE) AS STRING), ' 10:00:00-12:00') AS TIMESTAMP)",
+        ))?
+        .collect(),
+    )?;
+    let int = |i: usize| {
+        arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Int32Type>(b[0].column(i))
+            .value(0)
+    };
+    assert_eq!((int(0), int(1)), (10, 11));
+    assert!(arrow_array::cast::AsArray::as_boolean(b[0].column(3)).value(0));
+    // A zone in the text sets the date: the day it is at -12:00, not in the session zone.
+    assert!(arrow_array::cast::AsArray::as_boolean(b[0].column(4)).value(0));
+    Ok(())
+}
+
+/// With ANSI off a string beside a number in arithmetic is read as a `double`
+/// (Spark 4.2: `2147483647 + '1'` is `2.147483648E9`, text that is no number
+/// gives NULL).
+#[test]
+fn arithmetic_with_a_string_and_ansi_off_is_a_double() -> R {
+    let s = Session::new()?;
+    block_on(s.sql("SET spark.sql.ansi.enabled=false"))?;
+    let b = block_on(
+        block_on(s.sql(
+            "SELECT 2147483647 + '1', try_divide(1, '0'), '3' * 2, 'x' + 1, try_multiply(2147483647, '-2'), \
+             '1' + '2', '1' + NULL",
+        ))?
+        .collect(),
+    )?;
+    let col = |i: usize| {
+        let a = arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Float64Type>(
+            b[0].column(i),
+        );
+        (!a.is_null(0)).then(|| a.value(0))
+    };
+    assert_eq!(col(0), Some(2_147_483_648.0));
+    assert_eq!(col(1), None);
+    assert_eq!(col(2), Some(6.0));
+    assert_eq!(col(3), None);
+    assert_eq!(col(4), Some(-4_294_967_294.0));
+    assert_eq!(col(5), Some(3.0));
+    assert_eq!(col(6), None);
+    Ok(())
+}
+
+/// `try_add` and `try_subtract` of a date and a day count are `date_add` and
+/// `date_sub`, with ANSI on or off.
+#[test]
+fn try_add_and_try_subtract_of_a_date_and_days() -> R {
+    for ansi in ["true", "false"] {
+        let s = Session::new()?;
+        block_on(s.sql(&format!("SET spark.sql.ansi.enabled={ansi}")))?;
+        let b = block_on(
+            block_on(s.sql(
+                "SELECT try_add(date'2021-01-01', 1), try_add(1, date'2021-01-01'), try_subtract(date'2021-01-02', 1)",
+            ))?
+            .collect(),
+        )?;
+        let days = |i: usize| {
+            arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Date32Type>(
+                b[0].column(i),
+            )
+            .value(0)
+        };
+        // 2021-01-01 is day 18628.
+        assert_eq!(
+            (days(0), days(1), days(2)),
+            (18629, 18629, 18628),
+            "ansi {ansi}"
+        );
+    }
+    Ok(())
+}
+
 /// A scalar aggregate subquery whose correlation is not an equality joins
 /// the distinct outer values (Spark's `DecorrelateInnerQuery`): `min` and
 /// `count` per outer row, NULL and 0 where nothing matched.
