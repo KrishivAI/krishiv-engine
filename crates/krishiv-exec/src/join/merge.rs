@@ -26,6 +26,12 @@
 //! (`krishiv.exec.join.smj.bufferBytes`). Marks for the right rows (a right
 //! or full join with a residual condition) are one bit per row, reserved.
 //!
+//! Without a residual (or a scalar subquery's one-match check) a key's
+//! output follows from its rows alone, so a key whose rows end inside both
+//! current batches, and whose output fits, is joined in place, with no
+//! group ([`Merge::join_run`], counted as `keys_in_place`); the group path
+//! takes the keys that reach a batch's end or overflow the output.
+//!
 //! # Memory
 //! Group memory is reserved in the driver's consumer and released with the
 //! group; output rows reference their input batches as every operator's
@@ -467,6 +473,8 @@ pub(crate) struct MergeSpec {
 #[derive(Debug, Default)]
 pub(crate) struct MergeCounters {
     pub(crate) groups_spilled: AtomicU64,
+    /// Keys joined in place ([`Merge::join_run`]), not through the phases.
+    pub(crate) keys_in_place: AtomicU64,
     pub(crate) spill_bytes: AtomicU64,
 }
 
@@ -546,6 +554,9 @@ impl Merge {
     async fn compare(&mut self) -> Result<bool> {
         self.left.fill(&self.query).await?;
         self.right.fill(&self.query).await?;
+        if self.joins_whole_keys() && self.join_run() {
+            return Ok(true);
+        }
         let (lpos, rpos) = (self.left.pos, self.right.pos);
         let (left_end, right_end) = match (&self.left.current, &self.right.current) {
             (None, None) => return Ok(false),
@@ -578,6 +589,109 @@ impl Merge {
             self.right_unmatched(rpos, end);
         }
         Ok(true)
+    }
+
+    /// Whether [`Merge::join_run`] may join whole keys: without a residual
+    /// (or a scalar subquery's one-match check) a key's output follows from
+    /// its rows alone (every pair, or each row of one side once, or none),
+    /// and the other rows are those of keys with no match.
+    fn joins_whole_keys(&self) -> bool {
+        self.shared.filter.is_none() && !self.shared.single_match
+    }
+
+    /// Joins the streams' current batches key by key, in place: what the
+    /// phases do for a key, without their steps per key. Stops at a full
+    /// output, at a batch's end, and at a key whose rows reach the end of
+    /// either batch (they may go on in the next one) or whose output doesn't
+    /// fit, which the phases then take. `false` when it joined nothing.
+    fn join_run(&mut self) -> bool {
+        let (Some(l), Some(r)) = (self.left.current.clone(), self.right.current.clone()) else {
+            return false;
+        };
+        let (ln, rn) = (l.batch.num_rows(), r.batch.num_rows());
+        let from = (self.left.pos, self.right.pos);
+        let mut keys = 0_u64;
+        while self.out.len() < self.batch_rows && self.left.pos < ln && self.right.pos < rn {
+            let (lpos, rpos) = (self.left.pos, self.right.pos);
+            let (lk, rk) = (l.key(lpos), r.key(rpos));
+            if !l.is_matchable(lpos) {
+                self.left_unmatched(lpos, l.upper_bound(lpos, lk));
+                continue;
+            }
+            if !r.is_matchable(rpos) {
+                self.right_unmatched(rpos, r.upper_bound(rpos, rk));
+                continue;
+            }
+            match lk.cmp(rk) {
+                std::cmp::Ordering::Less => self.left_unmatched(lpos, l.lower_bound(lpos, rk)),
+                std::cmp::Ordering::Greater => self.right_unmatched(rpos, r.lower_bound(rpos, lk)),
+                std::cmp::Ordering::Equal => {
+                    let (lend, rend) = (l.upper_bound(lpos, lk), r.upper_bound(rpos, rk));
+                    if lend == ln || rend == rn || !self.key_fits(lend - lpos, rend - rpos) {
+                        break;
+                    }
+                    self.join_key(&l, lpos..lend, &r, rpos..rend);
+                    self.left.pos = lend;
+                    self.right.pos = rend;
+                    keys += 1;
+                }
+            }
+        }
+        if keys > 0 {
+            self.counters
+                .keys_in_place
+                .fetch_add(keys, Ordering::Relaxed);
+        }
+        (self.left.pos, self.right.pos) != from
+    }
+
+    /// Whether the output has room for a key of `left` and `right` rows.
+    fn key_fits(&self, left: usize, right: usize) -> bool {
+        let rows = match self.join_type() {
+            JoinType::Inner | JoinType::LeftOuter | JoinType::RightOuter | JoinType::FullOuter => {
+                left.saturating_mul(right)
+            }
+            JoinType::LeftSemi | JoinType::Existence => left,
+            JoinType::RightSemi => right,
+            JoinType::LeftAnti | JoinType::RightAnti | JoinType::NullAwareAnti => 0,
+        };
+        rows <= self.batch_rows.saturating_sub(self.out.len())
+    }
+
+    /// The output of a key whose rows are `left` of `l` and `right` of `r`,
+    /// all of them: as the phases give it without a residual.
+    fn join_key(
+        &mut self,
+        l: &Keyed,
+        left: std::ops::Range<usize>,
+        r: &Keyed,
+        right: std::ops::Range<usize>,
+    ) {
+        match self.join_type() {
+            JoinType::Inner | JoinType::LeftOuter | JoinType::RightOuter | JoinType::FullOuter => {
+                let ls = self.out.left_source(&l.batch, l.serial);
+                let rs = self.out.right_source(&r.batch, r.serial);
+                // In `product`'s order.
+                for j in right {
+                    for i in left.clone() {
+                        self.out.left_rows.push((ls, i));
+                        self.out.right_rows.push((rs, j));
+                    }
+                }
+            }
+            t @ (JoinType::LeftSemi | JoinType::Existence) => {
+                let ls = self.out.left_source(&l.batch, l.serial);
+                self.out.left_rows.extend(left.clone().map(|i| (ls, i)));
+                if t == JoinType::Existence {
+                    self.out.exists.extend(left.map(|_| true));
+                }
+            }
+            JoinType::RightSemi => {
+                let rs = self.out.right_source(&r.batch, r.serial);
+                self.out.right_rows.extend(right.map(|j| (rs, j)));
+            }
+            JoinType::LeftAnti | JoinType::RightAnti | JoinType::NullAwareAnti => {}
+        }
     }
 
     /// Left rows `start..end` of the current batch match nothing.
@@ -1368,6 +1482,10 @@ impl Source for SortMergeJoin {
             (
                 std::borrow::Cow::Borrowed("groups_spilled"),
                 Metric::Count(self.counters.groups_spilled.load(Ordering::Relaxed)),
+            ),
+            (
+                std::borrow::Cow::Borrowed("keys_in_place"),
+                Metric::Count(self.counters.keys_in_place.load(Ordering::Relaxed)),
             ),
             (
                 std::borrow::Cow::Borrowed("spill_file_bytes"),

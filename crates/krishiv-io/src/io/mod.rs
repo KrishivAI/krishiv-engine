@@ -1067,6 +1067,21 @@ impl IoContext {
         outcome
     }
 
+    /// `file`'s metadata as read by `format` if the cache holds an entry
+    /// loaded with at least `needs`, without any read: `None` otherwise, or
+    /// when a metadata key in `options` is a secret reference.
+    #[must_use]
+    pub fn cached_metadata<F: FileFormat + ?Sized>(
+        &self,
+        format: &F,
+        file: &FileRef,
+        needs: MetadataNeeds,
+        options: &FormatOptions,
+    ) -> Option<Arc<dyn FileMetadata>> {
+        let key = CacheKey::new(format.name(), file, options.metadata_fingerprint_now()?);
+        self.sched.cache.get(&key, needs).ok()
+    }
+
     /// [`Self::read_metadata`] as an owned future that runs on the I/O
     /// runtime when the scheduler has one: a scan starts reading the next
     /// file's footer while it decodes the current file. The result lands in
