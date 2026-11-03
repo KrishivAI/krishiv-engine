@@ -2847,7 +2847,28 @@ fn having_over_global(
     plan: &Arc<LogicalPlan>,
 ) -> Option<(Arc<LogicalPlan>, Arc<Expr>, BoundColumn)> {
     let filter = match &plan.node {
-        PlanNode::Project { input, exprs } if exprs.len() == 1 => input,
+        PlanNode::Project { input, exprs } if exprs.len() == 1 => {
+            // The projection must be the aggregate's value itself.
+            let ExprNode::Resolved(ResolvedExpr::Column(c)) = &exprs[0].node else {
+                return None;
+            };
+            let PlanNode::Filter { input: agg, .. } = &input.node else {
+                return None;
+            };
+            let PlanNode::Aggregate { aggregates, .. } = &agg.node else {
+                return None;
+            };
+            let [item] = &aggregates[..] else {
+                return None;
+            };
+            let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &item.node else {
+                return None;
+            };
+            if output.id != c.id {
+                return None;
+            }
+            input
+        }
         PlanNode::Filter { .. } => plan,
         _ => return None,
     };
