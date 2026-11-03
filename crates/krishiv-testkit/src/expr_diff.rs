@@ -192,7 +192,7 @@ fn documented_divergence(m: &Mismatch, ev: &mut dyn Evaluator) -> bool {
 }
 
 /// Replays every case and returns the minimal mismatches, sorted by key, without the
-/// documented divergences ([`documented_divergence`]).
+/// documented divergences (the ADR 0023 date arithmetic overflow, see `documented_divergence`).
 pub fn run(fixture: &Fixture, ev: &mut dyn Evaluator) -> Vec<Mismatch> {
     let mut bad: BTreeMap<(&str, bool), Option<Expect>> = BTreeMap::new();
     for c in &fixture.cases {

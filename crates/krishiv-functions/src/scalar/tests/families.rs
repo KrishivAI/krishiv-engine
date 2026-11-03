@@ -512,6 +512,9 @@ fn one_argument_floor_and_ceil_keep_a_scale_zero_decimal_type() {
             &DataType::Decimal128(9, 0),
             "{f}(decimal(10,2))"
         );
+        let r = run(f, &[&decimals(&[Some(5), None, Some(-7)], 9, 0)]);
+        assert_eq!(r.data_type(), &DataType::Decimal128(9, 0), "{f} result");
+        assert_eq!(dec_values(&r), [Some(5), None, Some(-7)], "{f} values");
     }
 }
 

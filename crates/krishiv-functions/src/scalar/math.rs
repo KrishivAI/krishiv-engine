@@ -274,14 +274,13 @@ fn ceil_floor(t: &DataType, scale: Option<i32>, ceil: bool, one_arg: bool) -> Op
         DataType::Float64 if one_arg => Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
             Ok(Arc::new(math::ceil_floor_to_long(&x.array::<Float64Type>(0)?, ceil)) as ArrayRef)
         }),
+        // Spark's one-argument `floor`/`ceil` keep the type of a decimal whose scale is 0
+        // (`case dt @ DecimalType.Fixed(_, 0) => dt`), and its values are already whole.
+        DataType::Decimal128(_, 0) if one_arg => {
+            Binding::new(t.clone(), |x: &Inputs<'_>| x.column(0))
+        }
         DataType::Decimal128(p, s) => {
-            // Spark's one-argument `floor`/`ceil` keep the type of a decimal whose scale is 0
-            // (`case dt @ DecimalType.Fixed(_, 0) => dt`); otherwise one more integral digit.
-            let (rp, rs) = if one_arg && *s == 0 {
-                (*p, 0)
-            } else {
-                round_decimal_type(*p, *s, scale.unwrap_or(0))
-            };
+            let (rp, rs) = round_decimal_type(*p, *s, scale.unwrap_or(0));
             let out = DataType::Decimal128(rp, rs);
             let empty = out.clone();
             Binding::new(out, move |x: &Inputs<'_>| {
