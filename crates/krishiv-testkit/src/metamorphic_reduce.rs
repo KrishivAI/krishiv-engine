@@ -247,7 +247,11 @@ impl fmt::Display for Verdict {
 fn same_cell(a: &str, b: &str) -> bool {
     match (number(a), number(b)) {
         (Some(x), Some(y)) => {
-            x == y || (x.is_nan() && y.is_nan()) || (x - y).abs() <= 1e-9 * x.abs().max(y.abs())
+            x == y
+                || (x.is_nan() && y.is_nan())
+                // The tolerance is for two finite numbers: with an infinity in play the bound itself is
+                // infinite and every pair would pass.
+                || (x.is_finite() && y.is_finite() && (x - y).abs() <= 1e-9 * x.abs().max(y.abs()))
         }
         _ => a == b,
     }
@@ -277,7 +281,17 @@ pub fn spark_verdict(
     small: &Pred,
     kept: &[usize],
 ) -> Verdict {
+    // The engine answers over the same reduced rows Spark gets, then gets the full view back.
+    if f.source == 0
+        && let Err(e) = r.run(&nulls_setup(kept))
+    {
+        return Verdict::Unavailable(format!("the engine could not define the reduced view: {e}"));
+    }
     let stmts = statements(r, f.oracle, f.source, small);
+    if f.source == 0 {
+        let all: Vec<usize> = (0..NULLS_ROWS.len()).collect();
+        drop(r.run(&nulls_setup(&all)));
+    }
     let queries: Vec<String> = stmts.iter().map(|(q, _)| q.clone()).collect();
     let setup = if f.source == 0 {
         vec![nulls_setup(kept)]
@@ -340,4 +354,19 @@ pub fn render(f: &Finding, small: &Pred, kept: &[usize], verdict: &Verdict) -> S
 #[must_use]
 pub fn raw(text: &str) -> impl fmt::Display {
     Raw(text.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_cell;
+
+    #[test]
+    fn the_relative_tolerance_is_for_finite_numbers_only() {
+        assert!(same_cell("1.0000000001", "1.0000000002"));
+        assert!(same_cell("Infinity", "Infinity"));
+        assert!(same_cell("NaN", "NaN"));
+        assert!(!same_cell("0", "Infinity"));
+        assert!(!same_cell("Infinity", "-Infinity"));
+        assert!(!same_cell("5", "Infinity"));
+    }
 }

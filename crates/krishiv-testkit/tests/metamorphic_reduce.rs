@@ -111,12 +111,20 @@ fn spark_agreeing_with_the_engine_makes_it_an_oracle_artefact() -> R {
     let f = nan_finding(&mut r)?;
     let small = reduce_finding(&mut r, &f);
     let kept = reduce_rows(&mut r, &f, &small)?;
+    // Spark's canned answers are the engine's over the reduced rows; the verdict installs that view itself.
     r.run(&nulls_setup(&kept))?;
     let same: HashMap<_, _> = statements(&mut r, f.oracle, f.source, &small)
         .into_iter()
         .collect();
+    let all: Vec<usize> = (0..10).collect();
+    r.run(&nulls_setup(&all))?;
     let v = spark_verdict(&mut r, &mut Canned(same), &f, &small, &kept);
     assert_eq!(v, Verdict::OracleArtefact);
+    assert_eq!(
+        r.run("SELECT COUNT(*) FROM nulls")?[0][0],
+        "10",
+        "the full view is back"
+    );
     Ok(())
 }
 

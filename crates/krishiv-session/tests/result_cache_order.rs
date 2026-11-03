@@ -17,11 +17,12 @@ fn run(s: &Session, sql: &str) -> Vec<RecordBatch> {
     block_on(async { s.sql(sql).await.unwrap().collect().await.unwrap() })
 }
 
-/// The batches as text, in the order they came, batch boundaries included.
+/// The batches as text, in the order they came, batch boundaries included. Every row is written out:
+/// the `Debug` of a whole array elides its middle elements, so a reorder there would not show.
 fn shape(batches: &[RecordBatch]) -> String {
     batches
         .iter()
-        .map(|b| format!("{b:?}"))
+        .map(|b| flat(std::slice::from_ref(b)).join(";"))
         .collect::<Vec<_>>()
         .join("|")
 }
