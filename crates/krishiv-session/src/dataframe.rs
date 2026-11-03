@@ -1323,9 +1323,27 @@ impl DataFrame {
     ) -> Result<(krishiv_exec::planner::PhysicalPlan, CacheFill), KrishivError> {
         let key = CacheKey::of(&a.analyzed);
         let hit = self.session.state.cache.lookup(&key).is_some();
-        let owned = self.cache_substituted(a)?;
-        let analyzed = owned.as_ref().unwrap_or(&a.analyzed);
-        let (_, physical) = self.session.physical(analyzed, &a.env).await?;
+        let planned = match self.cache_substituted(a) {
+            Ok(owned) => {
+                let analyzed = owned.as_ref().unwrap_or(&a.analyzed);
+                self.session.physical(analyzed, &a.env).await
+            }
+            Err(error) => Err(error),
+        };
+        let physical = match planned {
+            Ok((_, physical)) => physical,
+            Err(error) => {
+                // The query analyzed but never ran: an action's planning failure is a row of
+                // `system.queries` too (no execution began, so it has no other row).
+                let id = self.session.state.queries.record_refused(
+                    a.env.text.as_deref(),
+                    a.env.statement_class,
+                    &error,
+                );
+                *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
+                return Err(error);
+            }
+        };
         let fill = if hit || self.cache_request.is_none() {
             CacheFill::No
         } else {

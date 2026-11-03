@@ -986,10 +986,16 @@ impl QueryLog {
         id
     }
 
-    /// Records a statement that failed before it ran: parsing, analysis or
-    /// an access check. A denial is `denied`; a cancellation `cancelled`.
-    pub(crate) fn record_refused(&self, text: &str, error: &KrishivError) {
-        let id = self.begin(Some(text), None);
+    /// Records a statement that failed before it ran: parsing, analysis,
+    /// an access check or physical planning. A denial is `denied`; a
+    /// cancellation `cancelled`. Returns the row's id.
+    pub(crate) fn record_refused(
+        &self,
+        text: Option<&str>,
+        class: Option<&'static str>,
+        error: &KrishivError,
+    ) -> String {
+        let id = self.begin(text, class);
         let class = error.error_class().name();
         let state = outcome_state(class);
         self.finish(
@@ -1003,6 +1009,7 @@ impl QueryLog {
                 totals: None,
             },
         );
+        id
     }
 
     /// Turns the finished query `id` into a failed one: the write it ran completed its stream but a

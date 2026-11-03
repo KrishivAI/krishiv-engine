@@ -527,9 +527,11 @@ impl Session {
         if let Err(error) = &result
             && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
         {
-            self.state
-                .queries
-                .record_refused(krishiv_sql::redact_sql(query).as_str(), error);
+            self.state.queries.record_refused(
+                Some(krishiv_sql::redact_sql(query).as_str()),
+                None,
+                error,
+            );
         }
         result
     }
