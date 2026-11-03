@@ -90,6 +90,21 @@ pub enum TableKind {
     View,
 }
 
+/// The `_metadata` column a file-backed table's scan can add (Spark's
+/// hidden metadata column of file sources).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum FileMetadata {
+    /// The table has none (memory tables, versioned table formats).
+    #[default]
+    None,
+    /// `file_path`, `file_name`, `file_size`, `file_block_start`,
+    /// `file_block_length`, `file_modification_time`.
+    Basic,
+    /// [`Self::Basic`] and `row_index` (Parquet).
+    WithRowIndex,
+}
+
 /// The metadata of a table at one version.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableMeta {
@@ -101,6 +116,8 @@ pub struct TableMeta {
     pub version: Option<TableVersion>,
     /// Table or view.
     pub kind: TableKind,
+    /// The hidden `_metadata` column a read of it can add.
+    pub file_metadata: FileMetadata,
 }
 
 /// The metadata half of a catalog (spec 13 §7); scans and writes are an
@@ -680,6 +697,7 @@ impl MemoryCatalog {
             columns,
             version,
             kind: TableKind::Table,
+            file_metadata: FileMetadata::None,
         };
         self.tables.insert((namespace, ident.name), meta);
         self.epoch += 1;

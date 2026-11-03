@@ -152,7 +152,11 @@ jobs:
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-llvm-cov,cargo-nextest
-      - run: cargo xtask coverage --all-features --html
+      # No `--branch`: with branch coverage `llvm-cov export -format=lcov` crashes on the pinned
+      # nightly after all tests pass ("functions have mismatched data", then a stack dump), as it
+      # did every night from 2026-10-26 (the probe PR #440 ran the four variants: only
+      # `--no-branch` completes). Branch coverage returns when the LLVM bug is fixed.
+      - run: cargo xtask coverage --all-features --html --no-branch
       - name: Per-crate summary
         run: cargo xtask coverage-summary --markdown | tee -a "$GITHUB_STEP_SUMMARY"
       # The newest coverage-report artifact is the previous nightly's (this run uploads its own

@@ -153,6 +153,7 @@ pub use plan::{
     ALIAS_PART_SEP, Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind,
     JoinStrategy, LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs,
     TABLE_FUNCTION_NAME_SEP, TableVersion, UnpivotColumnSet, generator_arg,
+    without_generated_marker,
 };
 pub use raises::{conjuncts, may_raise};
 pub use walk::{MAX_DEPTH, check_depth};
