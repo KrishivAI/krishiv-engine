@@ -106,3 +106,10 @@ def test_a_tie_group_cut_by_limit_may_hold_other_rows():
     assert m.rows_equal([["7", "9"], *ref[1:]], ref, True, False, [0.0], [1], frozenset(), 3) is not None
     # The keys themselves still must agree.
     assert m.rows_equal([["1", "9"], ["2", "5"], ["3", "6"]], ref, True, False, [0.0], [1], frozenset(), 3) is not None
+
+
+def test_a_single_last_row_at_the_limit_compares_whole():
+    # q02 orders by keys that name one row: a corrupted last row is not a tie.
+    ref = [["1", "a"], ["2", "b"], ["3", "c"]]
+    got = [["1", "a"], ["2", "b"], ["3", "CORRUPTED"]]
+    assert m.rows_equal(got, ref, True, False, [0.0], [0], frozenset(), 3) is not None

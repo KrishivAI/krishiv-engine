@@ -206,8 +206,8 @@ def rows_equal(
 
     An ordered result may differ from the reference in the order of rows that tie on the ORDER BY keys: it
     passes when the sets of rows are equal and the key columns agree position by position. When the query's
-    LIMIT cut the result (`len(ref) >= limit`), the last tie group may hold other rows in each result: only
-    its keys must agree. Columns in `text_cols` compare as text.
+    LIMIT cut the result (`len(ref) >= limit`), the last tie group, when it holds two or more rows, may hold
+    other rows in each result: only its keys must agree. Columns in `text_cols` compare as text.
     """
     first = [0.0]
     diff = _rows_diff(got, ref, ordered, answer, first, text_cols)
@@ -225,8 +225,13 @@ def rows_equal(
         return diff
     end = len(ref)
     if limit is not None and ref and len(ref) >= limit:
-        while end > 0 and same_keys(ref[end - 1], ref[-1]):
-            end -= 1
+        start = end
+        while start > 0 and same_keys(ref[start - 1], ref[-1]):
+            start -= 1
+        # Only a visible tie (two or more rows on the last keys) may hide
+        # other rows past the cut; a single last row compares whole.
+        if end - start >= 2:
+            end = start
     if _rows_diff(got[:end], ref[:end], False, answer, tie_worst, text_cols) is not None:
         return diff
     worst[0] = max(worst[0], tie_worst[0])
