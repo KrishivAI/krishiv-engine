@@ -22,6 +22,7 @@ import datetime as dt
 import fcntl
 import json
 import math
+import os
 import random
 import statistics
 import threading
@@ -46,11 +47,43 @@ def load_bound(record: dict) -> float:
     """The 1-minute load above which a run is indicative only.
 
     The run's own threads drive the load average up (``--threads 12`` reaches about 12 on an idle
-    machine), so the bound during the run is ``LOAD_INDICATIVE`` of *other* load on top of them. A
-    record without ``threads`` (older results) keeps the plain bound.
+    machine), so the bound during the run is ``LOAD_INDICATIVE`` of *other* load on top of them,
+    counting at most the machine's CPUs. A record without ``threads`` (older results) keeps the
+    plain bound.
+
+    This is less sensitive than the plain bound: short queries keep the run's own share of the
+    average below ``threads``, and other work of up to ``LOAD_INDICATIVE`` plus that gap then goes
+    unnoticed during the run. Other work already there when the run starts is caught by the load
+    at start, which is judged against the plain bound.
     """
     threads = record.get("threads")
-    return LOAD_INDICATIVE + (threads if isinstance(threads, int) and threads > 0 else 0)
+    if not isinstance(threads, int) or threads <= 0:
+        return LOAD_INDICATIVE
+    return LOAD_INDICATIVE + min(threads, os.cpu_count() or threads)
+
+
+def load_line(record: dict) -> str:
+    """The report line on the machine load: what was measured, the bound and why it is indicative."""
+    s = record["summary"]
+    bound = s["load_bound"]
+    own = bound - LOAD_INDICATIVE
+    makeup = (
+        f"{LOAD_INDICATIVE:g} of other load plus the run's {own:g} threads"
+        if own > 0
+        else f"{LOAD_INDICATIVE:g}, as the record has no thread count"
+    )
+    start = record["load_at_start"]
+    verdict = "INDICATIVE ONLY" if s["indicative"] else "load within bound"
+    reasons = []
+    if math.isnan(start) or start > LOAD_INDICATIVE:
+        reasons.append(f"load at start {start:.1f} is not at most {LOAD_INDICATIVE:g}")
+    if math.isnan(s["max_load"]) or s["max_load"] > bound:
+        reasons.append(f"max load {s['max_load']:.1f} is above the bound")
+    why = f" ({'; '.join(reasons)})" if reasons else ""
+    return (
+        f"Load: at start {start:.1f}, max 1-min average {s['max_load']:.1f}; bound {bound:g} "
+        f"({makeup}): {verdict}{why}."
+    )
 
 
 BOOTSTRAP_ITERS = 2000
@@ -345,12 +378,7 @@ def markdown(record: dict) -> str:
         )
     else:
         lines.append(f"No query passed the correctness check (0/{s['queries_total']}).")
-    tag = "INDICATIVE ONLY" if s["indicative"] else "load within bound"
-    lines.append(
-        f"Max 1-min load average {s['max_load']:.1f} (bound {s.get('load_bound', LOAD_INDICATIVE):g}: "
-        f"{LOAD_INDICATIVE:g} of other load, plus the run's own threads; load at start must be below "
-        f"{LOAD_INDICATIVE:g}): {tag}."
-    )
+    lines.append(load_line(record))
     return "\n".join(lines)
 
 

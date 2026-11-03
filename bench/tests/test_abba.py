@@ -132,7 +132,24 @@ def test_the_runs_own_threads_do_not_make_it_indicative():
     s = abba.summarize(idle)
     assert not s["indicative"]
     assert s["load_bound"] == pytest.approx(16.0)
-    assert "load within bound" in abba.markdown({**idle, "summary": s})
+    idle["summary"] = s
+    text = abba.markdown(idle)
+    assert "load within bound" in text
+    assert "bound 16" in text
+
+
+def test_the_report_line_says_why_a_run_is_indicative():
+    busy = _wide_record(start=9.0, peak=9.0, threads=12)
+    busy["summary"] = abba.summarize(busy)
+    line = abba.load_line(busy)
+    assert "INDICATIVE ONLY" in line
+    assert "load at start 9.0 is not at most 4" in line
+    noisy = _wide_record(start=1.0, peak=20.0, threads=12)
+    noisy["summary"] = abba.summarize(noisy)
+    assert "max load 20.0 is above the bound" in abba.load_line(noisy)
+    old = _wide_record(start=1.0, peak=1.0, threads=None)
+    old["summary"] = abba.summarize(old)
+    assert "no thread count" in abba.load_line(old)
 
 
 def test_other_load_is_still_flagged():
