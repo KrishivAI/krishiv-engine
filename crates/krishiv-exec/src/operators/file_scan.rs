@@ -329,6 +329,12 @@ pub struct FileScanMetrics {
     pub units_pruned: u64,
     /// Pages skipped by page indexes.
     pub pages_pruned: u64,
+    /// Row groups whose page index failed a check and was not used.
+    pub page_index_rejected: u64,
+    /// Units a stored Bloom filter ruled out (also in `units_pruned`).
+    pub units_pruned_bloom: u64,
+    /// Units whose Bloom filter failed a check and was not used.
+    pub bloom_rejected: u64,
     /// Rows decoded.
     pub rows: u64,
     /// Bytes pushed into decoders.
@@ -350,9 +356,9 @@ pub struct FileScanMetrics {
 impl FileScanMetrics {
     /// The `EXPLAIN ANALYZE` counters, once a split was read: units
     /// (row groups) decoded and skipped, rows and bytes decoded, and how
-    /// the row filter ran (`row_filter_*` only where it did); the decode
-    /// over-commit when there was any. Page-index pruning is not counted:
-    /// the Parquet reader does not read page indexes.
+    /// the row filter ran (`row_filter_*` only where it did); the page
+    /// index and stored Bloom filters' work where either pruned or was
+    /// rejected; the decode over-commit when there was any.
     pub(super) fn extra(&self) -> crate::metrics::ExtraMetrics {
         let mut out = Vec::new();
         if self.splits > 0 {
@@ -372,6 +378,18 @@ impl FileScanMetrics {
                 ("row_filter_kept", self.row_filter_kept),
             ]));
         }
+        if self.pages_pruned > 0 || self.page_index_rejected > 0 {
+            out.extend(crate::metrics::counts([
+                ("scan_pages_pruned", self.pages_pruned),
+                ("page_index_rejected", self.page_index_rejected),
+            ]));
+        }
+        if self.units_pruned_bloom > 0 || self.bloom_rejected > 0 {
+            out.extend(crate::metrics::counts([
+                ("scan_units_pruned_bloom", self.units_pruned_bloom),
+                ("bloom_rejected", self.bloom_rejected),
+            ]));
+        }
         if self.decode_overcommit_bytes > 0 {
             out.extend(crate::metrics::counts([(
                 "decode_overcommit_bytes",
@@ -387,6 +405,9 @@ impl FileScanMetrics {
         self.units += m.units;
         self.units_pruned += m.units_pruned;
         self.pages_pruned += m.pages_pruned;
+        self.page_index_rejected += m.page_index_rejected;
+        self.units_pruned_bloom += m.units_pruned_bloom;
+        self.bloom_rejected += m.bloom_rejected;
         self.rows += m.rows;
         self.bytes += m.bytes_pushed;
         self.units_filtered += m.units_filtered;
@@ -1527,11 +1548,17 @@ mod tests {
         let extra = m.extra();
         assert_eq!(value(&extra, "scan_splits"), Some(1));
         assert_eq!(value(&extra, "row_filter_rows"), None);
+        assert_eq!(value(&extra, "scan_pages_pruned"), None);
+        assert_eq!(value(&extra, "scan_units_pruned_bloom"), None);
         let mut filtered = unit;
         filtered.units_filtered = 2;
         filtered.units_unfiltered = 1;
         filtered.row_filter_rows = 50;
         filtered.row_filter_kept = 5;
+        filtered.pages_pruned = 3;
+        filtered.page_index_rejected = 1;
+        filtered.units_pruned_bloom = 1;
+        filtered.bloom_rejected = 2;
         m.add(&filtered, 0);
         let extra = m.extra();
         for (name, want) in [
@@ -1544,6 +1571,10 @@ mod tests {
             ("row_filter_units_skipped", 1),
             ("row_filter_rows", 50),
             ("row_filter_kept", 5),
+            ("scan_pages_pruned", 3),
+            ("page_index_rejected", 1),
+            ("scan_units_pruned_bloom", 1),
+            ("bloom_rejected", 2),
         ] {
             assert_eq!(value(&extra, name), Some(want), "{name}");
         }

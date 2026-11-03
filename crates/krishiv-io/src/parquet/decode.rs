@@ -43,10 +43,13 @@ use parquet::arrow::push_decoder::{
 };
 use parquet::arrow::{ProjectionMask, RowNumber};
 use parquet::errors::ParquetError;
+use parquet::file::metadata::ParquetMetaDataBuilder;
+use parquet::file::metadata::page_index::PageIndexBuilder;
+use parquet::file::page_index::offset_index::PageLocation;
 
 use super::calendar::Guard;
 use super::meta::{ParquetMetadata, spark_read_type};
-use super::page_stage::PageStage;
+use super::page_stage::{Offsets, PageStage};
 use super::row_filter::{CACHE_BYTES, LateMaterialization, Worth};
 use crate::error::{FormatError, FormatResult};
 use crate::format::{Decoder, ScanUnitMetrics, Step, UnitPlan};
@@ -147,6 +150,22 @@ pub(crate) struct ParquetDecoder {
     late: LateMaterialization,
     /// The projected leaves.
     leaves: Vec<usize>,
+    /// The projection the push decoder is built with.
+    mask: ProjectionMask,
+    /// Every leaf a fetch of this decoder reads: the output leaves plus
+    /// the leaves the pushed predicate and the runtime filters name (the
+    /// row filter reads those under a separate projection).
+    attach_leaves: Vec<usize>,
+    /// Row groups whose offset indexes are attached: their pages are
+    /// fetched as the selection needs them, so they are not prefetched
+    /// whole.
+    sparse_units: Vec<usize>,
+    /// The attached offset indexes' pages by column chunk (sorted by start):
+    /// what [`Self::check_page_headers`] walks in a sparse range.
+    sparse: Vec<(Range<u64>, Vec<PageLocation>)>,
+    /// Heap bytes of the footer copy the attached offset indexes live in
+    /// (held by the reader; the cached footer is not shared with it).
+    attached_bytes: usize,
     /// The row filter's leaves while it is on (the only ones prefetched).
     late_leaves: Vec<usize>,
     /// The page-index stage (`page_stage.rs`) until it has decided.
@@ -188,6 +207,14 @@ fn projection_mask(meta: &ParquetMetadata, paths: &[ColumnPath]) -> (ProjectionM
     )
 }
 
+/// The footer with the offset indexes attached, and the pages they list.
+struct Attached {
+    reader: ArrowReaderMetadata,
+    sparse: Vec<(Range<u64>, Vec<PageLocation>)>,
+    /// Heap bytes of the footer copy with the offset indexes.
+    bytes: usize,
+}
+
 impl ParquetDecoder {
     pub(crate) fn new(
         meta: &Arc<ParquetMetadata>,
@@ -200,6 +227,7 @@ impl ParquetDecoder {
         let guard = Guard::new(meta.calendars, meta.reader.parquet_schema(), &roots, o);
         let row_index = req.metadata_cols.row_index;
         let (mask, leaves) = projection_mask(meta, &req.projection);
+        let mask_kept = mask.clone();
         let mut planned = Vec::with_capacity(units.units.len());
         let mut pruned = 0u64;
         for u in &units.units {
@@ -333,10 +361,34 @@ impl ParquetDecoder {
         // only a scan that pushes a filter and allows it.
         // Not with `_metadata.row_index`: row numbers under a page-skipping
         // selection are not verified yet (design section 5, stage 3).
-        let pages = if o.bool("pageIndex").unwrap_or(true) && !row_index {
+        let page = o.bool("pageIndex").unwrap_or(true) && !row_index;
+        let bloom = o.bool("bloomFilter").unwrap_or(true);
+        // The row filter reads the predicate's and the runtime filters'
+        // columns under a projection of its own: an offset index attached
+        // for some of a row group's fetched columns and not others would
+        // throw arrow-rs's sparse-read bookkeeping out of step.
+        let mut attach_leaves = leaves.clone();
+        let mut filter_columns: Vec<ColumnPath> = req
+            .predicate
+            .iter()
+            .flat_map(|p| p.columns().into_iter().cloned())
+            .collect();
+        // A runtime filter still pending now may publish after the indexes
+        // are attached and the row filter then reads its column, so its
+        // column counts whatever its current value.
+        filter_columns.extend(
+            req.dynamic
+                .iter()
+                .filter_map(|d| d.column())
+                .map(|(c, _)| c.clone()),
+        );
+        attach_leaves.extend(projection_mask(meta, &filter_columns).1);
+        attach_leaves.sort_unstable();
+        attach_leaves.dedup();
+        let pages = if page || bloom {
             req.predicate.as_ref().and_then(|p| {
                 let units: Vec<usize> = planned.iter().map(|u| u.index).collect();
-                PageStage::plan(meta, &units, p)
+                PageStage::plan(meta, &units, p, &attach_leaves, page, bloom)
             })
         } else {
             None
@@ -367,6 +419,11 @@ impl ParquetDecoder {
             leaves,
             late_leaves,
             pages,
+            mask: mask_kept,
+            attach_leaves,
+            sparse_units: Vec::new(),
+            sparse: Vec::new(),
+            attached_bytes: 0,
         })
     }
 
@@ -457,7 +514,7 @@ impl ParquetDecoder {
         }
         let late = self.late.want();
         if !changed {
-            return self.rebuild(None, late, false);
+            return self.rebuild(None, late, false, None);
         }
         let remaining = decoder.row_groups_remaining();
         let start = self.planned.len().saturating_sub(remaining);
@@ -493,7 +550,7 @@ impl ParquetDecoder {
                 .map(|u| RowGroupSelection::new(u.index, u.selection.clone()))
                 .collect()
         });
-        self.rebuild(selections, late, true)
+        self.rebuild(selections, late, true, None)
     }
 
     /// Rebuilds the decoder at a row-group boundary when the remaining row
@@ -505,9 +562,13 @@ impl ParquetDecoder {
         selections: Option<Vec<RowGroupSelection>>,
         late: bool,
         regenerated: bool,
+        reader: Option<ArrowReaderMetadata>,
     ) -> FormatResult<()> {
         let bounds = self.dynamic_filtered(true);
-        let refresh = late != self.late.is_on()
+        // A decoder built over other metadata starts from the request's
+        // settings, so it always gets the row filter again.
+        let refresh = reader.is_some()
+            || late != self.late.is_on()
             || (regenerated && (late || !bounds.is_empty() || self.late.filters_first()));
         if selections.is_none() && !refresh {
             return Ok(());
@@ -529,19 +590,25 @@ impl ParquetDecoder {
                 predicate_mask(meta, cols, leaves, picked, planned)
             })
         });
+        let mask = self.mask.clone();
         let rebuilt = super::contain("planning", FormatError::Corrupt, || {
-            decoder
-                .into_builder()
-                .and_then(|mut b| {
-                    if let Some(s) = selections {
-                        b = b.with_row_group_selections(s);
-                    }
-                    if let Some(f) = filter {
-                        b = b.with_row_filter(f);
-                    }
-                    b.build()
-                })
-                .map_err(|e| FormatError::Corrupt(e.to_string()))
+            match reader {
+                Some(r) => Ok(ParquetPushDecoderBuilder::new_with_metadata(r)
+                    .with_projection(mask)
+                    .with_batch_size(BATCH_ROWS)
+                    .with_max_predicate_cache_size(CACHE_BYTES)),
+                None => decoder.into_builder(),
+            }
+            .and_then(|mut b| {
+                if let Some(s) = selections {
+                    b = b.with_row_group_selections(s);
+                }
+                if let Some(f) = filter {
+                    b = b.with_row_filter(f);
+                }
+                b.build()
+            })
+            .map_err(|e| FormatError::Corrupt(e.to_string()))
         })?;
         self.decoder = Some(rebuilt);
         Ok(())
@@ -571,6 +638,19 @@ impl ParquetDecoder {
     /// only an offset index lets arrow-rs fetch part of a chunk. Loading the
     /// page index would need this check to handle partial ranges.
     fn check_page_headers(&self, ranges: &[Range<u64>], bytes: &[Bytes]) -> FormatResult<()> {
+        // Pages of a chunk whose offset index is attached arrive in sparse
+        // ranges: walk the headers of the pages each range holds.
+        for (range, held) in ranges.iter().zip(bytes) {
+            let first = self.sparse.partition_point(|(c, _)| c.end <= range.start);
+            for (chunk, pages) in self.sparse[first..]
+                .iter()
+                .take_while(|(c, _)| c.start < range.end)
+            {
+                super::index_guard::sparse_pages(held, range.start, chunk.start, pages).map_err(
+                    |why| FormatError::Corrupt(format!("a page header is malformed: {}", why.0)),
+                )?;
+            }
+        }
         for (range, held) in ranges.iter().zip(bytes) {
             let first = self.chunk_ranges.partition_point(|c| c.start < range.start);
             let inside = self.chunk_ranges[first..]
@@ -601,14 +681,16 @@ impl ParquetDecoder {
         if !stage.complete() {
             return Ok(());
         }
-        let decisions = stage.finish(&self.meta);
+        let outcome = stage.finish(&self.meta);
         self.metrics.pages_pruned += stage.pages_pruned;
         self.metrics.page_index_rejected += stage.rejected;
+        self.metrics.units_pruned_bloom += stage.bloom_pruned;
+        self.metrics.bloom_rejected += stage.bloom_rejected;
         self.pages = None;
-        if decisions.is_empty() {
+        if outcome.decisions.is_empty() {
             return Ok(());
         }
-        for d in decisions {
+        for d in outcome.decisions {
             if let Some(u) = self.planned.iter_mut().find(|u| u.index == d.index) {
                 u.selection = Some(match u.selection.take() {
                     Some(existing) => existing.intersection(&d.keep),
@@ -625,13 +707,95 @@ impl ParquetDecoder {
                 .is_none_or(ParquetSelection::selects_any)
         });
         self.metrics.units_pruned += (before - self.planned.len()) as u64;
+        let attached = self.attached(&outcome.offsets)?;
+        let (reader, sparse, attached_bytes) = match attached {
+            Some(a) => (Some(a.reader), a.sparse, a.bytes),
+            None => (None, Vec::new(), 0),
+        };
+        let sparse_units: Vec<usize> = if reader.is_some() {
+            self.planned
+                .iter()
+                .filter(|u| u.selection.is_some())
+                .map(|u| u.index)
+                .collect()
+        } else {
+            Vec::new()
+        };
         let selections = self
             .planned
             .iter()
             .map(|u| RowGroupSelection::new(u.index, u.selection.clone()))
             .collect();
         let late = self.late.want();
-        self.rebuild(Some(selections), late, false)
+        self.rebuild(Some(selections), late, false, reader)?;
+        self.sparse = sparse;
+        self.attached_bytes = attached_bytes;
+        self.sparse_units = sparse_units;
+        Ok(())
+    }
+
+    /// The footer with the offset indexes attached, so that arrow-rs asks
+    /// only for the pages a selection needs, or `None` to keep reading
+    /// whole chunks. All or nothing: in arrow-rs 60 a projected column
+    /// without an offset index in a row group that has a selection and a
+    /// page index leaves the sparse-read bookkeeping of the row group's
+    /// columns out of step. So every planned unit with a selection needs an
+    /// offset index for every projected leaf.
+    fn attached(&self, offsets: &[Offsets]) -> FormatResult<Option<Attached>> {
+        let mut with_selection = self
+            .planned
+            .iter()
+            .filter(|u| u.selection.is_some())
+            .peekable();
+        if with_selection.peek().is_none() {
+            return Ok(None);
+        }
+        let covered = with_selection.all(|u| {
+            offsets
+                .iter()
+                .find(|o| o.index == u.index)
+                .is_some_and(|o| {
+                    self.attach_leaves
+                        .iter()
+                        .all(|l| o.leaves.iter().any(|(leaf, _)| leaf == l))
+                })
+        });
+        if !covered {
+            return Ok(None);
+        }
+        let footer = self.meta.reader.metadata();
+        let columns = footer.file_metadata().schema_descr().num_columns();
+        let options = self.meta.reader_options.clone();
+        let planned: Vec<usize> = self.planned.iter().map(|u| u.index).collect();
+        super::contain("attaching the offset indexes", FormatError::Corrupt, || {
+            let mut builder = PageIndexBuilder::new(footer.num_row_groups(), columns);
+            for o in offsets.iter().filter(|o| planned.contains(&o.index)) {
+                for (leaf, index) in &o.leaves {
+                    builder.put_offset_index(index.clone(), o.index, *leaf);
+                }
+            }
+            let metadata = ParquetMetaDataBuilder::new_from_metadata(footer.as_ref().clone())
+                .set_page_index(Some(Arc::new(builder.build())))
+                .build();
+            let bytes = metadata.memory_size();
+            let reader = ArrowReaderMetadata::try_new(Arc::new(metadata), options)
+                .map_err(|e| FormatError::Corrupt(e.to_string()))?;
+            let mut sparse = Vec::new();
+            for o in offsets.iter().filter(|o| planned.contains(&o.index)) {
+                let rg = footer.row_group(o.index);
+                for (leaf, index) in &o.leaves {
+                    if let Some(range) = chunk(rg, *leaf) {
+                        sparse.push((range, index.page_locations().clone()));
+                    }
+                }
+            }
+            sparse.sort_by_key(|(r, _)| (r.start, r.end));
+            Ok(Some(Attached {
+                reader,
+                sparse,
+                bytes,
+            }))
+        })
     }
 
     fn step_inner(&mut self) -> FormatResult<Step> {
@@ -761,7 +925,10 @@ impl Decoder for ParquetDecoder {
         if self.late.is_guess()
             && self.reader.is_none()
             && !decoder.is_at_row_group_boundary()
-            && let Some(u) = next.checked_sub(1).and_then(|i| self.planned.get(i))
+            && let Some(u) = next
+                .checked_sub(1)
+                .and_then(|i| self.planned.get(i))
+                .filter(|u| !self.sparse_units.contains(&u.index))
         {
             let rg = self.meta.reader.metadata().row_group(u.index);
             for l in &self.leaves {
@@ -779,7 +946,12 @@ impl Decoder for ParquetDecoder {
         // groups of a selective filter). Otherwise every chunk is prefetched,
         // as the next row group may be read without the filter.
         if self.late.filters_first() && !self.late.is_guess() {
-            for u in self.planned.iter().skip(next) {
+            for u in self
+                .planned
+                .iter()
+                .skip(next)
+                .filter(|u| !self.sparse_units.contains(&u.index))
+            {
                 let rg = self.meta.reader.metadata().row_group(u.index);
                 let chunks: Vec<Range<u64>> = self
                     .late_leaves
@@ -795,7 +967,13 @@ impl Decoder for ParquetDecoder {
             }
             return out;
         }
-        for chunks in self.planned.iter().skip(next).map(|u| &u.chunks) {
+        for chunks in self
+            .planned
+            .iter()
+            .skip(next)
+            .filter(|u| !self.sparse_units.contains(&u.index))
+            .map(|u| &u.chunks)
+        {
             let size: u64 = chunks.iter().map(|r| r.end - r.start).sum();
             if total + size > max_bytes {
                 break;
@@ -813,6 +991,8 @@ impl Decoder for ParquetDecoder {
                 usize::try_from(d.buffered_bytes()).unwrap_or(usize::MAX)
             })
             .saturating_add(self.pages.as_ref().map_or(0, PageStage::held_bytes))
+            .saturating_add(sparse_bytes(&self.sparse))
+            .saturating_add(self.attached_bytes)
     }
 
     fn working_bytes(&self) -> usize {
@@ -1008,4 +1188,15 @@ fn spark_read_array(a: &ArrayRef) -> FormatResult<ArrayRef> {
         }
         _ => Arc::clone(a),
     })
+}
+
+/// The bytes the page locations kept for the sparse header checks hold:
+/// a copy of each attached chunk's offset index, alive while the decoder
+/// is, so it counts toward the decoder's buffered bytes.
+fn sparse_bytes(sparse: &[(Range<u64>, Vec<PageLocation>)]) -> usize {
+    sparse
+        .iter()
+        .map(|(_, pages)| pages.capacity() * std::mem::size_of::<PageLocation>())
+        .sum::<usize>()
+        .saturating_add(std::mem::size_of_val(sparse))
 }

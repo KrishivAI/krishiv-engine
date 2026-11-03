@@ -66,6 +66,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_PREFETCH_BYTES,
     &IO_LATE_MATERIALIZATION,
     &IO_PARQUET_PAGE_INDEX_ENABLED,
+    &IO_PARQUET_BLOOM_FILTER_ENABLED,
     &IO_FOOTER_READ_BYTES,
     &IO_METADATA_CACHE_BYTES,
     &IO_MULTIPART_PART_BYTES,
@@ -266,6 +267,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.legacy.statisticalAggregate",
         &LEGACY_STATISTICAL_AGGREGATE,
+    ),
+    (
+        "krishiv.io.parquet.bloomFilter.enabled",
+        &IO_PARQUET_BLOOM_FILTER_ENABLED,
     ),
     (
         "krishiv.runtimeFilter.adaptive.minRows",
@@ -1063,6 +1068,20 @@ pub static IO_PARQUET_PAGE_INDEX_ENABLED: ConfigEntry = ConfigEntry {
           decide and skips the pages the pushed filter rules out. Returned rows are the same \
           either way: the index only prunes, and an index that fails a check is ignored. Files \
           without a page index pay nothing.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.parquet.bloomFilter.enabled`.
+pub static IO_PARQUET_BLOOM_FILTER_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.parquet.bloomFilter.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether a Parquet scan reads the stored Bloom filters of the row groups its statistics \
+          could not decide and skips a row group when a pushed equality or IN literal cannot be \
+          in it. Returned rows are the same either way: the filter only prunes, and a filter \
+          that fails a check is ignored. Files without Bloom filters pay nothing.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,
