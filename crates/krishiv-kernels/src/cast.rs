@@ -1093,9 +1093,26 @@ fn from_string<O: OffsetSizeTrait>(
                     }
                     // Spark reads a time of day as today's, for TIMESTAMP only.
                     Parsed::NeedsClock if ntz => fail(mode, None, || invalid(i)),
-                    Parsed::NeedsClock => Err(KernelError::unsupported(
-                        "a timestamp string that depends on the query clock (a time of day)",
-                    )),
+                    Parsed::NeedsClock => {
+                        // Today's date in the session zone, from the query start.
+                        let Some(start) = opts.time_zone.query_start_micros() else {
+                            return Err(KernelError::unsupported(
+                                "a timestamp string that depends on the query clock (a time of day)",
+                            ));
+                        };
+                        let secs = start.div_euclid(1_000_000);
+                        let local =
+                            secs.saturating_add(i64::from(opts.time_zone.offset_at_utc(secs)));
+                        let today = i32::try_from(local.div_euclid(86_400)).unwrap_or(0);
+                        match crate::text::spark_string_to_timestamp(
+                            s.value(i),
+                            opts.time_zone,
+                            today,
+                        ) {
+                            Ok(Some(v)) => Ok(Some(v)),
+                            _ => fail(mode, None, || invalid(i)),
+                        }
+                    }
                     Parsed::Malformed => fail(mode, None, || invalid(i)),
                 }
             })?;

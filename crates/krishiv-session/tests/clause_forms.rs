@@ -1181,3 +1181,24 @@ fn sum_and_avg_of_a_timestamp_are_doubles() -> R {
     }
     Ok(())
 }
+
+/// A time of day without a date is on the query's date: `hour('10:11:12')`
+/// and the cast to `TIMESTAMP` (Spark reads today's date in the session zone).
+#[test]
+fn a_time_of_day_string_is_on_the_query_date() -> R {
+    let s = Session::new()?;
+    let b = block_on(
+        block_on(s.sql(
+            "SELECT hour('10:11:12'), minute('10:11:12'), second('10:11:12.5'), \
+             CAST('T23:59' AS TIMESTAMP) = CAST(CAST(current_date() AS STRING) || ' 23:59:00' AS TIMESTAMP)",
+        ))?
+        .collect(),
+    )?;
+    let int = |i: usize| {
+        arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Int32Type>(b[0].column(i))
+            .value(0)
+    };
+    assert_eq!((int(0), int(1)), (10, 11));
+    assert!(arrow_array::cast::AsArray::as_boolean(b[0].column(3)).value(0));
+    Ok(())
+}
