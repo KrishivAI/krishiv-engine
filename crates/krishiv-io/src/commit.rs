@@ -409,16 +409,24 @@ impl DirectoryWrite {
             .filter(|p| !new.contains(p))
             .map(|p| io.delete(&self.store, p))
             .collect();
-        futures::stream::iter(deletes)
+        // With a log entry published the rows are durably visible: a failure of the old objects'
+        // deletion or of the marker is maintenance, never a failed write (a retry of an append
+        // would publish the same rows again under a new job id).
+        let logged = self.log.is_some();
+        let cleaned = futures::stream::iter(deletes)
             .buffer_unordered(PARALLEL_DELETES)
             .try_collect::<Vec<()>>()
-            .await?;
-        io.put_object(
-            &self.store,
-            &self.dir.clone().join(SUCCESS_MARKER),
-            Bytes::new(),
-        )
-        .await?;
+            .await
+            .map(|_| ());
+        after_publish(logged, "deleting the replaced files", cleaned)?;
+        let marker = io
+            .put_object(
+                &self.store,
+                &self.dir.clone().join(SUCCESS_MARKER),
+                Bytes::new(),
+            )
+            .await;
+        after_publish(logged, "writing the success marker", marker)?;
         Ok(files)
     }
 
@@ -540,6 +548,19 @@ fn partition_of(rel: &str) -> Vec<(String, Option<String>)> {
     let mut parts: Vec<&str> = rel.split('/').collect();
     parts.pop();
     parts.into_iter().filter_map(crate::parse_segment).collect()
+}
+
+/// The outcome of a step after the commit point. In a logged write the entry is published, so a
+/// failure is logged and the write still succeeds; without a log the step is part of the commit
+/// and its failure fails the write.
+fn after_publish(logged: bool, step: &str, outcome: Result<()>) -> Result<()> {
+    match outcome {
+        Err(e) if logged => {
+            tracing::warn!(error = %e, step, "the write is committed; a step after the commit failed");
+            Ok(())
+        }
+        other => other,
+    }
 }
 
 /// Whether `name` is a data file of the write with job id `job`: anchored

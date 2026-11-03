@@ -289,22 +289,51 @@ fn a_partition_subdirectory_read_with_base_path_shows_only_committed_files() {
     assert_eq!(n, 1, "the abandoned file is outside the root's log");
 }
 
-/// Writes `p=a` (one committed file) under a logged root and copies an abandoned file beside it.
-fn logged_partition_with_a_stray_file() -> (tempfile::TempDir, std::path::PathBuf, Session) {
+#[test]
+fn a_partition_read_with_base_path_notices_a_committed_file_that_is_gone() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    for _ in 0..2 {
+        let df = block_on(s.sql("SELECT 1 AS id, 'a' AS p")).unwrap();
+        block_on(df.write().partition_by(["p"]).mode("append").parquet(&path)).unwrap();
+    }
+    let part = root.join("p=a");
+    let mut files: Vec<_> = std::fs::read_dir(&part)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .collect();
+    files.sort();
+    assert_eq!(files.len(), 2);
+    let read = |s: &Session| {
+        s.read()
+            .option("basePath", path.as_str())
+            .parquet([format!("{path}/p=a").as_str()])
+    };
+    assert_eq!(block_on(read(&s).count()).unwrap(), 2);
+    // One of the directory's committed files disappears (a concurrent overwrite's cleanup):
+    // the read refuses instead of returning the rows that are left.
+    std::fs::remove_file(&files[0]).unwrap();
+    let err = block_on(read(&s).count()).unwrap_err();
+    assert_eq!(err.error_class().name(), "KRISHIV_CONCURRENT_COMMIT");
+}
+
+#[test]
+fn a_glob_below_a_base_path_root_shows_only_committed_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
     let s = Session::new().unwrap();
     s.conf()
         .set("krishiv.sql.files.commitProtocol", "LOG")
         .unwrap();
     let df = block_on(s.sql("SELECT 1 AS id, 'a' AS p")).unwrap();
-    block_on(
-        df.write()
-            .partition_by(["p"])
-            .mode("append")
-            .parquet(root.to_str().unwrap()),
-    )
-    .unwrap();
+    block_on(df.write().partition_by(["p"]).mode("append").parquet(&path)).unwrap();
     let part = root.join("p=a");
     let data = std::fs::read_dir(&part)
         .unwrap()
@@ -312,43 +341,35 @@ fn logged_partition_with_a_stray_file() -> (tempfile::TempDir, std::path::PathBu
         .find(|p| p.extension().is_some_and(|e| e == "parquet"))
         .unwrap();
     std::fs::copy(&data, part.join("part-99999-dead.c000.snappy.parquet")).unwrap();
-    (dir, root, s)
-}
-
-#[test]
-fn a_glob_inside_a_base_path_root_shows_only_committed_files() {
-    let (_dir, root, s) = logged_partition_with_a_stray_file();
-    let path = root.to_str().unwrap();
     let df = s
         .read()
-        .option("basePath", path)
+        .option("basePath", path.as_str())
         .parquet([format!("{path}/p=a/*.parquet").as_str()]);
-    let n = block_on(df.count()).unwrap();
-    assert_eq!(n, 1, "the abandoned file is outside the root's log");
-}
-
-#[test]
-fn a_base_path_read_notices_a_committed_file_that_is_gone() {
-    let (_dir, root, s) = logged_partition_with_a_stray_file();
-    let path = root.to_str().unwrap();
-    for entry in std::fs::read_dir(root.join("p=a")).unwrap() {
-        let p = entry.unwrap().path();
-        if p.extension().is_some_and(|e| e == "parquet") && !p.to_string_lossy().contains("dead") {
-            std::fs::remove_file(p).unwrap();
-        }
-    }
-    let df = s
-        .read()
-        .option("basePath", path)
-        .parquet([format!("{path}/p=a").as_str()]);
-    let err = block_on(df.count()).unwrap_err();
-    assert_eq!(err.error_class().name(), "KRISHIV_CONCURRENT_COMMIT");
+    assert_eq!(
+        block_on(df.count()).unwrap(),
+        1,
+        "the abandoned file is outside the root's log"
+    );
 }
 
 #[test]
 fn a_partition_directory_read_by_its_own_path_shows_only_the_roots_committed_files() {
-    let (_dir, root, s) = logged_partition_with_a_stray_file();
-    let path = root.to_str().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'a' AS p")).unwrap();
+    block_on(df.write().partition_by(["p"]).mode("append").parquet(&path)).unwrap();
+    let part = root.join("p=a");
+    let data = std::fs::read_dir(&part)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .unwrap();
+    std::fs::copy(&data, part.join("part-99999-dead.c000.snappy.parquet")).unwrap();
     // No basePath: the log of the root above the `p=a` directory still applies.
     let df = s.read().parquet([format!("{path}/p=a").as_str()]);
     assert_eq!(

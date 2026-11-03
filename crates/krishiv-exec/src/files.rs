@@ -554,49 +554,39 @@ impl FileReads {
         let at = self.paths.locate_with_options(prefix, options)?;
         let base = at.path.parts().count();
         let mut matched = std::collections::BTreeMap::new();
-        // A glob under a logged directory expands over its committed files only: an abandoned
-        // append's files would otherwise come back as roots of their own. With a `basePath` whose
-        // root holds the log (`root/p=a/*.parquet`), that root's log applies.
-        let logged: Option<(
-            usize,
-            Arc<BTreeMap<String, krishiv_io::commit_log::AddedFile>>,
-        )> = match Box::pin(self.committed_files(&at)).await? {
-            Some(files) => Some((base, Arc::new(files))),
-            None => match &mode.base {
-                Some(root) if at.path.prefix_matches(&root.path) => {
-                    Box::pin(self.committed_files(root))
-                        .await?
-                        .map(|files| (root.path.parts().count(), Arc::new(files)))
-                }
-                Some(_) => None,
-                None => self.logged_ancestor(&at).await?,
-            },
+        // A glob under a logged directory (or below a logged `basePath`) expands over its committed
+        // files only: an abandoned append's files would otherwise come back as roots of their own.
+        // `outer` is the log's root depth and its files, keyed relative to that root.
+        let own = Box::pin(self.committed_files(&at)).await?;
+        let outer = match (own, &mode.base) {
+            (Some(files), _) => Some((base, Arc::new(files))),
+            (None, Some(root)) if at.path.prefix_matches(&root.path) => {
+                Box::pin(self.committed_files(root))
+                    .await?
+                    .map(|files| (root.path.parts().count(), Arc::new(files)))
+            }
+            // A glob whose prefix is a partition directory of a logged root.
+            (None, None) => self.logged_ancestor(&at).await?,
+            _ => None,
         };
-        // The names between the log's root and `at`.
-        let pre: Vec<String> = logged.as_ref().map_or_else(Vec::new, |(root, _)| {
-            at.path
-                .parts()
-                .skip(*root)
-                .map(|p| p.as_ref().to_owned())
-                .collect()
-        });
         // The committed files this glob covers: each must still be there, or a concurrent overwrite
         // deleted some and the read would silently lose rows.
-        let mut expected: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
-        if let Some((_, files)) = &logged {
+        let mut expected: std::collections::BTreeSet<Vec<String>> =
+            std::collections::BTreeSet::new();
+        if let Some((root_depth, files)) = &outer {
+            let at_parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
             for rel in files.keys() {
-                let names: Vec<&str> = rel.split('/').collect();
-                if names.len() <= pre.len()
-                    || names[..pre.len()].iter().zip(&pre).any(|(a, b)| a != b)
-                {
+                let mut all: Vec<String> = at_parts[..*root_depth].to_vec();
+                all.extend(rel.split('/').map(str::to_owned));
+                if all.len() <= base || all[..base] != at_parts[..] {
                     continue;
                 }
-                let names = &names[pre.len()..];
+                let names: Vec<&str> = all[base..].iter().map(String::as_str).collect();
                 if names.iter().any(|n| hidden(n)) {
                     continue;
                 }
                 if (1..=names.len()).any(|n| glob.matches(&names[..n])) {
-                    expected.insert(rel.as_str());
+                    expected.insert(all);
                 }
             }
         }
@@ -608,18 +598,17 @@ impl FileReads {
                 .skip(base)
                 .map(|p| p.as_ref().to_owned())
                 .collect();
-            if let Some((root, files)) = &logged {
-                let rel = meta
+            if let Some((root_depth, files)) = &outer {
+                let all: Vec<String> = meta
                     .location
                     .parts()
-                    .skip(*root)
                     .map(|p| p.as_ref().to_owned())
-                    .collect::<Vec<_>>()
-                    .join("/");
+                    .collect();
+                let rel = all[(*root_depth).min(all.len())..].join("/");
                 if !files.contains_key(&rel) {
                     continue;
                 }
-                if expected.contains(rel.as_str()) {
+                if expected.contains(&all) {
                     found += 1;
                 }
             }
@@ -637,7 +626,8 @@ impl FileReads {
                 }
             }
         }
-        if logged.is_none() && self.log_appeared(&at, mode).await? {
+        // An unlogged listing is rechecked: a first logged write may have made its log since.
+        if outer.is_none() && self.log_appeared(&at, mode).await? {
             return Err(krishiv_common::error::KrishivConcurrentCommit {
                 root: at.display.clone(),
                 version: "the version this read started at".to_owned(),
@@ -660,7 +650,7 @@ impl FileReads {
         let inner = ListMode {
             recursive: mode.recursive,
             base: mode.base.clone(),
-            logged,
+            logged: outer,
         };
         for (names, path) in matched {
             let display = format!("{}/{}", at.display.trim_end_matches('/'), names.join("/"));
@@ -860,7 +850,7 @@ impl FileReads {
             _ => None,
         };
         let mut seen = 0;
-        let mut seen_inherited = 0_usize;
+        let mut seen_inherited = 0;
         for meta in self.io.list(&at.store, &at.path).await? {
             let below: Vec<_> = meta.location.parts().skip(base).collect();
             if below.iter().any(|p| hidden(p.as_ref())) {
@@ -905,34 +895,26 @@ impl FileReads {
             }
             .into());
         }
-        // The snapshot's files under `at` (the inherited log's, not hidden): each must still be there.
-        if let Some((root_base, files)) = &inherited {
-            let pre: Vec<String> = at
-                .path
-                .parts()
-                .skip(*root_base)
-                .map(|p| p.as_ref().to_owned())
-                .collect();
-            let expected = files
-                .keys()
-                .filter(|rel| {
-                    let names: Vec<&str> = rel.split('/').collect();
-                    names.len() > pre.len()
-                        && names[..pre.len()].iter().zip(&pre).all(|(a, b)| a == b)
-                        && !names[pre.len()..].iter().any(|n| hidden(n))
-                })
-                .count();
-            if seen_inherited < expected {
-                return Err(krishiv_common::error::KrishivConcurrentCommit {
-                    root: at.display.clone(),
-                    version: "the version this read started at".to_owned(),
+        let missing = match (&committed, &inherited) {
+            (Some(files), _) => seen < files.len(),
+            // The root's snapshot lists the files of this directory too: one that is gone (a
+            // concurrent overwrite deleted it) must not shrink the read silently.
+            (None, Some((root_base, files))) => {
+                let mut prefix = at
+                    .path
+                    .parts()
+                    .skip(*root_base)
+                    .map(|p| p.as_ref().to_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                if !prefix.is_empty() {
+                    prefix.push('/');
                 }
-                .into());
+                seen_inherited < files.keys().filter(|k| k.starts_with(&prefix)).count()
             }
-        }
-        if let Some(files) = &committed
-            && seen < files.len()
-        {
+            (None, None) => false,
+        };
+        if missing {
             // A committed file is gone (a concurrent overwrite deleted it).
             return Err(krishiv_common::error::KrishivConcurrentCommit {
                 root: at.display.clone(),

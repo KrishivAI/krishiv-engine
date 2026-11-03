@@ -98,6 +98,9 @@ pub(in crate::analyzer) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128
                     )),
                 ),
             },
+            // The base is keyed below; where the expression was written is not
+            // part of what it computes.
+            ExprNode::Resolved(ResolvedExpr::Field { ordinal, .. }) => format!("g{ordinal}"),
             other => format!("u{other:?}"),
         }
         .into_bytes();
