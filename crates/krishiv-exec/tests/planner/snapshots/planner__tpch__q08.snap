@@ -7,40 +7,41 @@ Sort [o_year#60 ASC NULLS FIRST]
    +- Project [o_year#60, (sum(CASE WHEN (nation#62 == 'BRAZIL') THEN volume#61 ELSE 0.0000 END)#4611686018427387918 / sum(volume#61)#4611686018427387919) AS mkt_share#63]
       +- HashAggregate keys=[o_year#60], functions=[sum(CASE WHEN (nation#62 == 'BRAZIL') THEN volume#61 ELSE 0.0000 END), sum(volume#61)]
          +- Exchange hashpartitioning(o_year#60)
-            +- Project [o_year#60, CASE WHEN (nation#62 == 'BRAZIL') THEN volume#61 ELSE 0.0000 END, volume#61]
-               +- Project [extract('year', o_orderdate#36) AS o_year#60, (l_extendedprice#21 * (1 - l_discount#22)) AS volume#61, n_name#54 AS nation#62]
-                  +- HashJoin Inner, [l_suppkey#18] = [s_suppkey#9], RuntimeFilter #7: l_suppkey#18 -> spark_catalog.default.lineitem.l_suppkey
-                     :- Project [l_suppkey#18, l_extendedprice#21, l_discount#22, o_orderdate#36]
-                     :  +- HashJoin Inner, [l_partkey#17] = [p_partkey#0], RuntimeFilter #5: l_partkey#17 -> spark_catalog.default.lineitem.l_partkey
-                     :     :- Project [l_partkey#17, l_suppkey#18, l_extendedprice#21, l_discount#22, o_orderdate#36]
-                     :     :  +- HashJoin Inner, [l_orderkey#16] = [o_orderkey#32], RuntimeFilter #4: l_orderkey#16 -> spark_catalog.default.lineitem.l_orderkey
-                     :     :     :- Scan spark_catalog.default.lineitem [l_orderkey#16, l_partkey#17, l_suppkey#18, l_extendedprice#21, l_discount#22]
-                     :     :     +- BroadcastExchange
-                     :     :        +- Project [o_orderkey#32, o_orderdate#36]
-                     :     :           +- HashJoin Inner, [o_custkey#33] = [c_custkey#41], RuntimeFilter #3: o_custkey#33 -> spark_catalog.default.orders.o_custkey
-                     :     :              :- Filter ((o_orderdate#36 >= DATE '1995-01-01') and (o_orderdate#36 <= DATE '1996-12-31'))
-                     :     :              :  +- Scan spark_catalog.default.orders [o_orderkey#32, o_custkey#33, o_orderdate#36], PushedFilters: [((o_orderdate#36 >= DATE '1995-01-01') and (o_orderdate#36 <= DATE '1996-12-31'))]
-                     :     :              +- BroadcastExchange
-                     :     :                 +- Project [c_custkey#41]
-                     :     :                    +- HashJoin Inner, [c_nationkey#44] = [n_nationkey#49], RuntimeFilter #2: c_nationkey#44 -> spark_catalog.default.customer.c_nationkey
-                     :     :                       :- Scan spark_catalog.default.customer [c_custkey#41, c_nationkey#44]
-                     :     :                       +- BroadcastExchange
-                     :     :                          +- Project [n_nationkey#49]
-                     :     :                             +- HashJoin Inner, [n_regionkey#51] = [r_regionkey#57], RuntimeFilter #1: n_regionkey#51 -> spark_catalog.default.nation.n_regionkey
-                     :     :                                :- Project [n_nationkey#49, n_regionkey#51]
-                     :     :                                :  +- Scan spark_catalog.default.nation [n_nationkey#49, n_name#50, n_regionkey#51]
-                     :     :                                +- BroadcastExchange
-                     :     :                                   +- Project [r_regionkey#57]
-                     :     :                                      +- Filter (r_name#58 == 'AMERICA')
-                     :     :                                         +- Scan spark_catalog.default.region [r_regionkey#57, r_name#58], PushedFilters: [(r_name#58 == 'AMERICA')]
-                     :     +- BroadcastExchange
-                     :        +- Project [p_partkey#0]
-                     :           +- Filter (p_type#4 == 'ECONOMY ANODIZED STEEL')
-                     :              +- Scan spark_catalog.default.part [p_partkey#0, p_type#4], PushedFilters: [(p_type#4 == 'ECONOMY ANODIZED STEEL')]
-                     +- BroadcastExchange
-                        +- Project [s_suppkey#9, n_name#54]
-                           +- HashJoin Inner, [s_nationkey#12] = [n_nationkey#53], RuntimeFilter #6: s_nationkey#12 -> spark_catalog.default.supplier.s_nationkey
-                              :- Scan spark_catalog.default.supplier [s_suppkey#9, s_nationkey#12]
-                              +- BroadcastExchange
-                                 +- Project [n_nationkey#53, n_name#54]
-                                    +- Scan spark_catalog.default.nation [n_nationkey#49, n_name#50, n_regionkey#51] (ids +4)
+            +- PartialHashAggregate keys=[o_year#60], functions=[sum(CASE WHEN (nation#62 == 'BRAZIL') THEN volume#61 ELSE 0.0000 END), sum(volume#61)]
+               +- Project [o_year#60, CASE WHEN (nation#62 == 'BRAZIL') THEN volume#61 ELSE 0.0000 END, volume#61]
+                  +- Project [extract('year', o_orderdate#36) AS o_year#60, (l_extendedprice#21 * (1 - l_discount#22)) AS volume#61, n_name#54 AS nation#62]
+                     +- HashJoin Inner, [l_suppkey#18] = [s_suppkey#9], RuntimeFilter #7: l_suppkey#18 -> spark_catalog.default.lineitem.l_suppkey
+                        :- Project [l_suppkey#18, l_extendedprice#21, l_discount#22, o_orderdate#36]
+                        :  +- HashJoin Inner, [l_partkey#17] = [p_partkey#0], RuntimeFilter #5: l_partkey#17 -> spark_catalog.default.lineitem.l_partkey
+                        :     :- Project [l_partkey#17, l_suppkey#18, l_extendedprice#21, l_discount#22, o_orderdate#36]
+                        :     :  +- HashJoin Inner, [l_orderkey#16] = [o_orderkey#32], RuntimeFilter #4: l_orderkey#16 -> spark_catalog.default.lineitem.l_orderkey
+                        :     :     :- Scan spark_catalog.default.lineitem [l_orderkey#16, l_partkey#17, l_suppkey#18, l_extendedprice#21, l_discount#22]
+                        :     :     +- BroadcastExchange
+                        :     :        +- Project [o_orderkey#32, o_orderdate#36]
+                        :     :           +- HashJoin Inner, [o_custkey#33] = [c_custkey#41], RuntimeFilter #3: o_custkey#33 -> spark_catalog.default.orders.o_custkey
+                        :     :              :- Filter ((o_orderdate#36 >= DATE '1995-01-01') and (o_orderdate#36 <= DATE '1996-12-31'))
+                        :     :              :  +- Scan spark_catalog.default.orders [o_orderkey#32, o_custkey#33, o_orderdate#36], PushedFilters: [((o_orderdate#36 >= DATE '1995-01-01') and (o_orderdate#36 <= DATE '1996-12-31'))]
+                        :     :              +- BroadcastExchange
+                        :     :                 +- Project [c_custkey#41]
+                        :     :                    +- HashJoin Inner, [c_nationkey#44] = [n_nationkey#49], RuntimeFilter #2: c_nationkey#44 -> spark_catalog.default.customer.c_nationkey
+                        :     :                       :- Scan spark_catalog.default.customer [c_custkey#41, c_nationkey#44]
+                        :     :                       +- BroadcastExchange
+                        :     :                          +- Project [n_nationkey#49]
+                        :     :                             +- HashJoin Inner, [n_regionkey#51] = [r_regionkey#57], RuntimeFilter #1: n_regionkey#51 -> spark_catalog.default.nation.n_regionkey
+                        :     :                                :- Project [n_nationkey#49, n_regionkey#51]
+                        :     :                                :  +- Scan spark_catalog.default.nation [n_nationkey#49, n_name#50, n_regionkey#51]
+                        :     :                                +- BroadcastExchange
+                        :     :                                   +- Project [r_regionkey#57]
+                        :     :                                      +- Filter (r_name#58 == 'AMERICA')
+                        :     :                                         +- Scan spark_catalog.default.region [r_regionkey#57, r_name#58], PushedFilters: [(r_name#58 == 'AMERICA')]
+                        :     +- BroadcastExchange
+                        :        +- Project [p_partkey#0]
+                        :           +- Filter (p_type#4 == 'ECONOMY ANODIZED STEEL')
+                        :              +- Scan spark_catalog.default.part [p_partkey#0, p_type#4], PushedFilters: [(p_type#4 == 'ECONOMY ANODIZED STEEL')]
+                        +- BroadcastExchange
+                           +- Project [s_suppkey#9, n_name#54]
+                              +- HashJoin Inner, [s_nationkey#12] = [n_nationkey#53], RuntimeFilter #6: s_nationkey#12 -> spark_catalog.default.supplier.s_nationkey
+                                 :- Scan spark_catalog.default.supplier [s_suppkey#9, s_nationkey#12]
+                                 +- BroadcastExchange
+                                    +- Project [n_nationkey#53, n_name#54]
+                                       +- Scan spark_catalog.default.nation [n_nationkey#49, n_name#50, n_regionkey#51] (ids +4)

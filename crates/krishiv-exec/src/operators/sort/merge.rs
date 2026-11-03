@@ -180,6 +180,24 @@ pub(crate) fn data_bytes(batch: &Batch) -> usize {
     SpillWriter::frame_bytes(batch)
 }
 
+/// Buffer slack a held batch may carry over its rows' bytes before
+/// [`owned_rows`] copies it.
+const SLICE_SLACK_BYTES: usize = 16 << 10;
+
+/// `batch`, or a copy of its rows when its buffers are far larger than they
+/// are ([`data_bytes`]): a small slice of a large batch (a scan's morsel of
+/// a decoded batch), or views into shared pages, would keep, and be charged
+/// for, the whole buffers. For rows an operator holds until it spills them.
+/// Interleaving shares view buffers, so views are compacted on top.
+pub(crate) fn owned_rows(batch: Batch) -> Result<Batch> {
+    let data = data_bytes(&batch);
+    if batch.data().get_array_memory_size() <= 2 * data + SLICE_SLACK_BYTES {
+        return Ok(batch);
+    }
+    let rows: Vec<(usize, usize)> = (0..batch.num_rows()).map(|r| (0, r)).collect();
+    crate::join::compact_views(interleave_batches(&batch.schema(), &[batch], &rows)?)
+}
+
 fn weight_bytes(batch: &Batch) -> usize {
     match batch.weights() {
         Weights::Const(_) => 0,

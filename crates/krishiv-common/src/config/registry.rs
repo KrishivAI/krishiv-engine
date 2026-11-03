@@ -17,6 +17,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &STORE_ASSIGNMENT_POLICY,
     &CTE_PRECEDENCE_POLICY,
     &MAP_KEY_DEDUP_POLICY,
+    &AUTO_BROADCAST_JOIN_THRESHOLD,
     &TARGET_PARTITION_BYTES,
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
@@ -261,6 +262,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_CODING_ERROR_ACTION,
     ),
     (
+        "spark.sql.autoBroadcastJoinThreshold",
+        &AUTO_BROADCAST_JOIN_THRESHOLD,
+    ),
+    (
         "spark.sql.leafNodeDefaultParallelism",
         &LEAF_NODE_DEFAULT_PARALLELISM,
     ),
@@ -279,6 +284,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.runtimeFilter.inList.maxValues",
         &RUNTIME_FILTER_IN_LIST_MAX_VALUES,
+    ),
+    (
+        "krishiv.sql.autoBroadcastJoinThreshold",
+        &AUTO_BROADCAST_JOIN_THRESHOLD,
     ),
     (
         "krishiv.sql.leafNodeDefaultParallelism",
@@ -452,6 +461,21 @@ pub static MAP_KEY_DEDUP_POLICY: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.mapKeyDedupPolicy"),
+};
+
+/// The largest estimated join build broadcast without a hint (P2-T174
+/// unit 4).
+pub static AUTO_BROADCAST_JOIN_THRESHOLD: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.autoBroadcastJoinThreshold",
+    value_type: ValueType::SignedSize,
+    #[expect(clippy::cast_possible_wrap, reason = "10 MiB")]
+    default: Some(ConfigValue::Int((10 * MIB) as i64)),
+    doc: "The largest estimated size, in bytes, of a join input that is broadcast to every \
+          task without a hint. A negative value turns broadcasting by size off; a \
+          `BROADCAST` hint still broadcasts.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.autoBroadcastJoinThreshold"),
 };
 
 /// Target partition size, replacing a fixed shuffle partition count.
