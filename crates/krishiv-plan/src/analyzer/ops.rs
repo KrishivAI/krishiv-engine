@@ -585,7 +585,17 @@ impl Resolver<'_> {
                         let mut cx = Self::cx(&c.out, &rels, env, op);
                         cx.lateral = lca.then_some(&lateral[..]);
                         cx.windows = WindowUse::Allowed;
-                        items.push(self.bind(&item, &cx)?);
+                        let bound = self.bind(&item, &cx)?;
+                        if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) =
+                            &bound.expr.node
+                        {
+                            lateral.push(Attr {
+                                col: output.clone(),
+                                qual: no_qual(),
+                                source: None,
+                            });
+                        }
+                        items.push(bound);
                     }
                     continue;
                 }
@@ -610,7 +620,17 @@ impl Resolver<'_> {
                         let mut cx = Self::cx(&c.out, &rels, env, op);
                         cx.lateral = lca.then_some(&lateral[..]);
                         cx.windows = WindowUse::Allowed;
-                        items.push(self.bind(&item, &cx)?);
+                        let bound = self.bind(&item, &cx)?;
+                        if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) =
+                            &bound.expr.node
+                        {
+                            lateral.push(Attr {
+                                col: output.clone(),
+                                qual: no_qual(),
+                                source: None,
+                            });
+                        }
+                        items.push(bound);
                     }
                     continue;
                 }
@@ -633,7 +653,16 @@ impl Resolver<'_> {
                     let mut cx = Self::cx(&c.out, &rels, env, op);
                     cx.lateral = lca.then_some(&lateral[..]);
                     cx.windows = WindowUse::Allowed;
-                    items.push(self.bind(&item, &cx)?);
+                    let bound = self.bind(&item, &cx)?;
+                    if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &bound.expr.node
+                    {
+                        lateral.push(Attr {
+                            col: output.clone(),
+                            qual: no_qual(),
+                            source: None,
+                        });
+                    }
+                    items.push(bound);
                 }
                 continue;
             }
