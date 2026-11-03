@@ -280,6 +280,36 @@ fn filter_compacts_view_columns_it_keeps_little_of() {
         assert_eq!(got, want.iter().map(String::as_bytes).collect::<Vec<_>>());
         assert_eq!(out.data().column(2).len(), keep);
     }
+    // A slice of the batch (as a scan cuts one page into batches) shares
+    // four times its own bytes; keeping most of its rows still shares them.
+    let slice = Batch::new(input.data().slice(0, 25));
+    let f = Filter::new(
+        Arc::clone(&schema),
+        Arc::new(FnPredicate(|b: &RecordBatch| {
+            Ok(BooleanArray::from_iter(
+                (0..b.num_rows()).map(|i| Some(i % 5 < 4)),
+            ))
+        })),
+    );
+    let mut local = f.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    let out = out_batch(
+        f.execute(&slice, &mut local)
+            .unwrap_or_else(|e| unreachable!("{e}")),
+    )
+    .unwrap_or_else(|| unreachable!("rows survive"));
+    assert_eq!(held(&out), (in_s, in_b));
+    assert_eq!(out.num_rows(), 20);
+    // Four rows kept of a five-row slice use a twenty-fifth of the buffers
+    // (as after a scan that dropped rows itself): compacted, although the
+    // filter dropped little.
+    let out = out_batch(
+        f.execute(&Batch::new(input.data().slice(50, 5)), &mut local)
+            .unwrap_or_else(|e| unreachable!("{e}")),
+    )
+    .unwrap_or_else(|| unreachable!("rows survive"));
+    let (s, b) = held(&out);
+    assert!(s < in_s / 16 && b < in_b / 16, "{s} {b} of {in_s} {in_b}");
+    assert_eq!(out.num_rows(), 4);
 }
 
 /// `a + 1`, or an expression that misbehaves.
