@@ -147,7 +147,6 @@ fn a_user_column_named_exists_never_collides() {
 fn forms_spark_folds_before_any_join_are_refused() {
     let env = env();
     for sql in [
-        "SELECT a FROM t WHERE NULL IN (SELECT a FROM t) OR s = 's0'",
         "SELECT a FROM t WHERE a IN (SELECT 1) OR s = 's0'",
         "SELECT a FROM t x WHERE NOT (x.a NOT IN (SELECT a FROM t)) OR s = 's0'",
     ] {
@@ -161,6 +160,27 @@ fn forms_spark_folds_before_any_join_are_refused() {
             "{sql}: {e}"
         );
     }
+}
+
+/// `NULL IN (subquery)` is NULL over some rows (false over none), so under
+/// `OR` only the other branch keeps rows (T184).
+#[test]
+fn null_in_a_subquery_under_or_keeps_only_the_other_branch() {
+    let env = env();
+    assert_eq!(
+        rows(
+            &env,
+            "SELECT s FROM t WHERE NULL IN (SELECT a FROM t) OR s = 's0'"
+        ),
+        ["s0"]
+    );
+    assert_eq!(
+        rows(
+            &env,
+            "SELECT s FROM t WHERE NULL IN (SELECT a FROM t WHERE a < 0) OR s = 's0'"
+        ),
+        ["s0"]
+    );
 }
 
 #[test]

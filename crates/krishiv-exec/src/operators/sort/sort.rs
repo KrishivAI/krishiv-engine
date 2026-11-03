@@ -26,7 +26,9 @@ use arrow_schema::SchemaRef;
 use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
-use krishiv_memory::{ConsumerHandle, MemoryError, Reservation, SpillScope, SpillSignal};
+use krishiv_memory::{
+    ConsumerHandle, MemoryError, Reservation, SpillScope, SpillSignal, SpillWriter,
+};
 use krishiv_types::batch::Batch;
 
 use super::keys::{KeyEncoder, SortKey};
@@ -38,6 +40,7 @@ use super::{BATCH_SLACK_BYTES, SPILL_BATCH_BYTES, SPILL_BUFFER_BYTES, blocking, 
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, run_blocking};
+use crate::join::compact_views;
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::operators::{global_ref, local_mut};
 use crate::output_spill::{OutputSpill, SpillUnread, Unfinished, refused};
@@ -1335,11 +1338,13 @@ impl Sink for Sort {
         }
         let data = data_bytes(&input);
         let row_bytes = l.buffer.row_bytes.max(data.div_ceil(rows));
-        // A small slice of a large batch would keep (and account) the whole
-        // batch: keep a copy of its rows instead.
+        // A small slice of a large batch, or views into an exchange's shared
+        // pages, would keep (and account) the whole buffers: keep a copy of
+        // its rows instead. Interleaving shares view buffers, so views are
+        // compacted on top.
         let input = if input.data().get_array_memory_size() > 2 * data + SLICE_SLACK_BYTES {
             let rows: Vec<(usize, usize)> = (0..rows).map(|r| (0, r)).collect();
-            interleave_batches(&input.schema(), &[input], &rows)?
+            compact_views(interleave_batches(&input.schema(), &[input], &rows)?)?
         } else {
             input
         };
@@ -1778,10 +1783,11 @@ impl Sort {
                 let need = merge_need(&runs, runs.len(), l.batch_rows, false);
                 // Only memory to spare: half the pool stays for the
                 // operators above, whose memory is not reclaimed from a
-                // merge in progress.
+                // merge in progress. The limit may be a pool's above the
+                // query's (a session's query pool has none of its own).
                 let pool = handle.pool();
                 let spare = pool
-                    .limit()
+                    .effective_limit()
                     .is_none_or(|limit| pool.reserved().saturating_add(need) <= limit / 2);
                 if !spare || budget.try_grow(need).is_err() {
                     return Ok(Err((runs, slot)));
@@ -1993,8 +1999,11 @@ fn write_rest(
     let (mut max_batch_bytes, mut row_bytes) = (0, 1);
     while let Some(batch) = merger.next(rows)? {
         query.check_cancelled()?;
-        max_batch_bytes = max_batch_bytes.max(batch.data().get_array_memory_size());
-        row_bytes = row_bytes.max(data_bytes(&batch).div_ceil(batch.num_rows().max(1)));
+        // What reading the frame back costs: the writer compacts view
+        // columns, whose batch here still shares its inputs' buffers.
+        let bytes = SpillWriter::frame_bytes(&batch);
+        max_batch_bytes = max_batch_bytes.max(bytes);
+        row_bytes = row_bytes.max(bytes.div_ceil(batch.num_rows().max(1)));
         writer.write(&batch).map_err(KrishivError::from)?;
     }
     let file = writer.finish().map_err(KrishivError::from)?;

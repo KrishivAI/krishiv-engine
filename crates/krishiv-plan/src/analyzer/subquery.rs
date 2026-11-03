@@ -324,7 +324,7 @@ fn negated_in(e: &Arc<Expr>) -> Option<&Arc<Expr>> {
 }
 
 /// Whether `e` is a NULL literal or a cast of one.
-fn null_literal(e: &Expr) -> bool {
+pub(super) fn null_literal(e: &Expr) -> bool {
     match &e.node {
         ExprNode::Literal(v) => matches!(v, Literal::Null(_)),
         ExprNode::Cast { expr, .. } | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {
@@ -364,6 +364,27 @@ fn positive_literal(e: &Expr) -> bool {
         ExprNode::Cast { expr, .. } => positive_literal(expr),
         _ => false,
     }
+}
+
+/// Whether `p` reads the outer query and is one row for each outer row:
+/// a global aggregate under projections and aliases (no filter, so no
+/// `HAVING`).
+pub(super) fn one_row_aggregate(p: &Arc<LogicalPlan>) -> bool {
+    if !has_outer(Node::Plan(p)) {
+        return false;
+    }
+    fn walk(p: &LogicalPlan) -> bool {
+        match &p.node {
+            PlanNode::Aggregate {
+                grouping: Grouping::GroupBy(keys),
+                ..
+            } => keys.is_empty(),
+            PlanNode::Project { input, .. } => walk(input),
+            PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => walk(input),
+            _ => false,
+        }
+    }
+    walk(p)
 }
 
 /// Whether an aggregate sits under `p`'s projections and filters.
@@ -562,6 +583,11 @@ impl Rewriter {
             PlanNode::Project { input, exprs } => {
                 self.project(&p, Arc::clone(input), exprs.clone())
             }
+            PlanNode::Aggregate {
+                input,
+                grouping: Grouping::GroupBy(keys),
+                aggregates,
+            } => self.aggregate(&p, Arc::clone(input), keys, aggregates),
             PlanNode::Join {
                 left,
                 right,
@@ -860,6 +886,55 @@ impl Rewriter {
         Ok(node(PlanNode::Project { input: base, exprs }, p.origin))
     }
 
+    /// An aggregate whose keys or calls (or their `FILTER`s) read a
+    /// correlated subquery: the subquery joins to the input below the
+    /// aggregate, which reads the join's column (Spark pushes the
+    /// expression into a projection under the aggregate).
+    fn aggregate(
+        &mut self,
+        p: &Arc<LogicalPlan>,
+        input: Arc<LogicalPlan>,
+        keys: &[Arc<Expr>],
+        aggregates: &[Arc<Expr>],
+    ) -> R<Arc<LogicalPlan>> {
+        let all: Vec<Arc<Expr>> = keys.iter().chain(aggregates).cloned().collect();
+        if !all
+            .iter()
+            .any(|e| self.reads_correlated(e) || self.existential(e))
+        {
+            return Ok(Arc::clone(p));
+        }
+        // Spark rejects a correlated scalar subquery here
+        // (`MUST_AGGREGATE_CORRELATED_SCALAR_SUBQUERY` for a key).
+        if all.iter().any(|e| {
+            subqueries(e).iter().any(|s| {
+                matches!(
+                    s.node,
+                    ExprNode::Subquery {
+                        kind: SubqueryKind::Scalar,
+                        ..
+                    }
+                ) && self.correlated(s)
+            })
+        }) {
+            return Err(unsupported(
+                "correlated subqueries outside a filter or a projection",
+                p.origin,
+            ));
+        }
+        let (base, all) = self.existence(input, all)?;
+        let (base, mut all) = self.scalars(base, all)?;
+        let aggregates = all.split_off(keys.len());
+        Ok(node(
+            PlanNode::Aggregate {
+                input: base,
+                grouping: Grouping::GroupBy(all),
+                aggregates,
+            },
+            p.origin,
+        ))
+    }
+
     /// Whether `e` holds an `EXISTS` or `IN` subquery that an existence
     /// join computes: a correlated `EXISTS`, or any `IN`. (An uncorrelated
     /// `EXISTS` stays an expression computed once.)
@@ -984,7 +1059,7 @@ impl Rewriter {
     /// A predicate subquery as a semi or anti join of `left` with it.
     fn semi(&mut self, left: Arc<LogicalPlan>, pred: &Pred) -> R<Arc<LogicalPlan>> {
         let keep = !pred.values.is_empty();
-        let (inner, corr) = if on_path(&pred.plan, set_op_or_join) {
+        let (inner, corr) = if on_path(&pred.plan, needs_domain) {
             let (inner, inner_keys, outer_keys) = self.domain(&left, &pred.plan)?;
             let corr = inner_keys
                 .into_iter()
@@ -1509,7 +1584,7 @@ impl Rewriter {
         } else {
             None
         };
-        if on_path(input, set_op_or_join) {
+        if on_path(input, needs_domain) {
             if !keys.is_empty() {
                 return Err(unsupported(
                     "correlated scalar subqueries with GROUP BY",
@@ -1684,7 +1759,7 @@ impl Rewriter {
             ));
         };
         let value = value.clone();
-        let through_domain = on_path(plan, set_op_or_join);
+        let through_domain = on_path(plan, needs_domain);
         if !through_domain && aggregates_below(plan) {
             return Err(unsupported(
                 "a correlated scalar subquery of this shape",
