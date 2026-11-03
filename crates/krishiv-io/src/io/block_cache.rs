@@ -152,6 +152,45 @@ pub struct BlockCache {
 /// Most runs fetched from the store at the same time by one cache.
 const MAX_CONCURRENT_FETCHES: usize = 8;
 
+/// Whether `e` was raised by the cache itself (a refused reservation, a timeout, a short read, a
+/// size mismatch, a failed task), not by the store.
+fn is_cache_error(e: &object_store::Error) -> bool {
+    matches!(
+        e,
+        object_store::Error::Generic {
+            store: "block cache",
+            ..
+        }
+    )
+}
+
+/// The error a failed run is reported as. A failure of the cache stays a cache error (the plain
+/// read answers); a failure of the store is the store's: it is returned, not asked again at once,
+/// with `NotFound` and `Precondition` kept as they are and any other error behind a source chain
+/// that still reaches its `TransientError` for the scheduler's retry.
+fn run_failure(e: &Arc<object_store::Error>, location: &Path) -> object_store::Error {
+    if is_cache_error(e) {
+        return object_store::Error::Generic {
+            store: "block cache",
+            source: e.to_string().into(),
+        };
+    }
+    match e.as_ref() {
+        object_store::Error::NotFound { .. } => object_store::Error::NotFound {
+            path: location.to_string(),
+            source: Box::new(Arc::clone(e)),
+        },
+        object_store::Error::Precondition { .. } => object_store::Error::Precondition {
+            path: location.to_string(),
+            source: Box::new(Arc::clone(e)),
+        },
+        _ => object_store::Error::Generic {
+            store: "object store",
+            source: Box::new(Arc::clone(e)),
+        },
+    }
+}
+
 /// A random part for a directory name (the hasher is seeded randomly per process).
 fn random_suffix() -> u64 {
     use std::hash::{BuildHasher, Hasher};
@@ -513,10 +552,18 @@ fn purge_dead(root: &std::path::Path) {
         {
             continue;
         }
-        let Ok(lock) = std::fs::OpenOptions::new()
-            .write(true)
-            .open(entry.path().join(LOCK_FILE))
-        else {
+        let lock_path = entry.path().join(LOCK_FILE);
+        // A cache that is being created has its lock file before it holds the lock: a lock file
+        // made a moment ago belongs to a cache that has not locked it yet.
+        let young = std::fs::metadata(&lock_path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_none_or(|age| age < std::time::Duration::from_secs(60));
+        if young {
+            continue;
+        }
+        let Ok(lock) = std::fs::OpenOptions::new().write(true).open(&lock_path) else {
             continue;
         };
         // A free lock: nobody owns the directory. Held (a live cache of this or another process,
@@ -828,12 +875,7 @@ impl CachingStore {
         for (run, index, b) in waits {
             let blocks = match run.await {
                 Ok(blocks) => blocks,
-                Err(e) => {
-                    return Err(object_store::Error::Generic {
-                        store: "block cache",
-                        source: e.to_string().into(),
-                    });
-                }
+                Err(e) => return Err(run_failure(&e, location)),
             };
             parts[at(b - first)] = blocks.get(index).cloned();
         }
@@ -888,8 +930,10 @@ impl ObjectStore for CachingStore {
             match self.cached_range(location, &options, range).await {
                 Ok(Some(result)) => return Ok(result),
                 Ok(None) => {}
-                // A failure of the cache path is the store's to report, through the plain read.
-                Err(_) => bump(&self.cache.counters.errors, 1),
+                // A failure of the cache is answered by the plain read; one of the store is its own
+                // answer (the scheduler classifies and retries it), not a reason to ask again.
+                Err(e) if is_cache_error(&e) => bump(&self.cache.counters.errors, 1),
+                Err(e) => return Err(e),
             }
         }
         self.inner.get_opts(location, options).await

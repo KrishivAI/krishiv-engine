@@ -1595,13 +1595,11 @@ mod block_cache_tests;
 mod tests;
 
 /// The user's id for the name of a per-user default directory (as the spill directory's):
-/// the owner of `/proc/self`, else empty.
+/// the effective user id on Unix (the one files are created with), else empty.
 fn user_suffix() -> String {
     #[cfg(unix)]
     {
-        std::fs::metadata("/proc/self")
-            .map(|m| std::os::unix::fs::MetadataExt::uid(&m).to_string())
-            .unwrap_or_default()
+        rustix::process::geteuid().as_raw().to_string()
     }
     #[cfg(not(unix))]
     {

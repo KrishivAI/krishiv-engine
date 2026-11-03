@@ -362,11 +362,20 @@ fn the_disk_part_is_emptied_at_start() {
     std::fs::create_dir_all(&dead).unwrap();
     std::fs::write(dead.join("stale.blk"), b"old").unwrap();
     std::fs::write(dead.join(".lock"), b"").unwrap();
+    // A lock file made a moment ago belongs to a cache still being created: only an old one counts.
+    let old = std::time::SystemTime::now() - Duration::from_secs(300);
+    std::fs::File::options()
+        .write(true)
+        .open(dead.join(".lock"))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
     // A directory whose lock is held (a live cache, perhaps of another PID namespace sharing the
     // directory) stays, and so does one without a lock file.
     let held = dir.path().join("p4294967293-0");
     std::fs::create_dir_all(&held).unwrap();
     let held_lock = std::fs::File::create(held.join(".lock")).unwrap();
+    held_lock.set_modified(old).unwrap();
     held_lock.try_lock().unwrap();
     let unlocked_layout = dir.path().join("p4294967292-0");
     std::fs::create_dir_all(&unlocked_layout).unwrap();
@@ -736,4 +745,24 @@ fn caches_never_share_or_empty_a_directory() {
         );
     }
     drop((first, second));
+}
+
+/// A failure of the store is the store's answer, once: it is not asked again by the plain read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_store_failure_is_returned_not_retried() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (_inner, cache, store) = direct(tmp.path(), 1 << 20, 0);
+    // The object does not exist, though the scheduler sent a size for it.
+    let mut options = sized(300_000);
+    options.range = Some(object_store::GetRange::Bounded(0..100));
+    let e = store
+        .get_opts(&Path::from("missing"), options)
+        .await
+        .unwrap_err();
+    assert!(matches!(e, object_store::Error::NotFound { .. }), "{e}");
+    assert_eq!(
+        cache.stats().errors,
+        0,
+        "a store failure is not a cache error"
+    );
 }

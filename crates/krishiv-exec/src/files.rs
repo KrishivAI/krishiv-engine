@@ -759,9 +759,6 @@ impl FileReads {
             .is_some_and(|name| parse_segment(name).is_some())
         {
             parts.pop();
-            if parts.is_empty() {
-                break;
-            }
             display = display
                 .rsplit_once('/')
                 .map_or_else(String::new, |(head, _)| head.to_owned());
@@ -855,7 +852,12 @@ impl FileReads {
         // shows only the files that root committed.
         let inherited = match (&committed, &mode.logged, &mode.base) {
             (None, Some(logged), _) => Some(logged.clone()),
-            (None, None, Some(base)) => self.base_log(base).await?,
+            // The nearest logged ancestor of the directory itself (it may sit between the base and
+            // the directory), else the base's own log or the base's ancestors'.
+            (None, None, Some(base)) => match self.logged_ancestor(at).await? {
+                Some(found) => Some(found),
+                None => self.base_log(base).await?,
+            },
             // A partition directory read by its own path: the log of the root above it.
             (None, None, None) => self.logged_ancestor(at).await?,
             _ => None,
