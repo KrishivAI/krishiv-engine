@@ -359,3 +359,19 @@ fn column_aliases_on_a_file_table_keep_its_metadata() {
         2
     );
 }
+
+#[test]
+fn a_late_bound_aggregate_reads_the_hidden_column() {
+    let s = session();
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM p HAVING count(_metadata) > 0"),
+        1
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT id FROM p GROUP BY id ORDER BY count(_metadata.file_name)"
+        ),
+        2
+    );
+}
