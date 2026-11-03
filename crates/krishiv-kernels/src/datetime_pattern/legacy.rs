@@ -275,6 +275,20 @@ impl LegacyPattern {
                                 let sign = if offset < 0 { '-' } else { '+' };
                                 let _ = write!(out, "GMT{sign}{:02}:{:02}", a / 3600, a / 60 % 60);
                             } else {
+                                // `TimeZone.getTimeZone(ZoneId)` reads the offset `Z` as
+                                // `UTC`; `UT` is no `TimeZone` id, so it falls back to `GMT`.
+                                let id = match id {
+                                    "Z" => "UTC",
+                                    "UT" => "GMT",
+                                    _ if fixed => {
+                                        if id.starts_with("GMT") {
+                                            "GMT"
+                                        } else {
+                                            "UTC"
+                                        }
+                                    }
+                                    _ => id,
+                                };
                                 out.push_str(&zone_name(
                                     id,
                                     offset,
@@ -636,7 +650,7 @@ struct Parsed {
     dow: Option<(i64, u32)>,
     hour_of_day: Option<(i64, u32)>,
     hour12: Option<(i64, u32)>,
-    /// A one-based hour (`k`, `h`) read as 0 or past its range.
+    /// A one-based hour (`k`, `h`) read outside its range (1-24, 1-12).
     bad_hour: bool,
     pm: Option<(bool, u32)>,
     minute: Option<i64>,
@@ -726,12 +740,14 @@ impl Parsed {
             'D' => self.doy = Some((value, st)),
             'H' => self.hour_of_day = Some((value, st)),
             // 24 reads as 0 (no carry), as `SimpleDateFormat` does.
+            // `SimpleDateFormat` refuses an out-of-range one-based hour as
+            // it reads it, so a later `H` or `K` cannot overwrite it.
             'k' => {
-                self.bad_hour |= value == 0;
+                self.bad_hour |= !(1..=24).contains(&value);
                 self.hour_of_day = Some((if value == 24 { 0 } else { value }, st));
             }
             'h' => {
-                self.bad_hour |= value == 0;
+                self.bad_hour |= !(1..=12).contains(&value);
                 self.hour12 = Some((if value == 12 { 0 } else { value }, st));
             }
             'K' => self.hour12 = Some((value, st)),
@@ -1784,6 +1800,42 @@ mod tests {
             rules: &FixedOffset(0),
         };
         assert_eq!(p.format_timestamp(0, utc).unwrap(), "Z Z Z|+0000 +0000");
+    }
+
+    /// `TimeZone.getTimeZone(ZoneId)` names the offset `Z` `UTC` and the
+    /// unknown id `UT` `GMT` (Java 21 `FastDateFormat`, Codex on #417).
+    #[test]
+    fn zero_offset_aliases_take_the_utc_and_gmt_names() {
+        let p = LegacyPattern::new("z zzzz").unwrap();
+        let show = |id| {
+            p.format_timestamp(
+                0,
+                Zone {
+                    id,
+                    rules: &FixedOffset(0),
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(show("Z"), "UTC Coordinated Universal Time");
+        assert_eq!(show("UT"), "GMT Greenwich Mean Time");
+        assert_eq!(show("UTC"), "UTC Coordinated Universal Time");
+    }
+
+    /// A non-lenient `SimpleDateFormat` refuses `h` outside 1-12 and `k`
+    /// outside 1-24 as it reads them, whatever field follows.
+    #[test]
+    fn an_out_of_range_one_based_hour_fails_even_when_overwritten() {
+        assert_eq!(local("yyyy-MM-dd h K", "2024-01-01 13 1"), None);
+        assert_eq!(local("yyyy-MM-dd k H", "2024-01-01 25 1"), None);
+        assert_eq!(
+            local("yyyy-MM-dd k", "2024-01-01 24"),
+            Some(micros(2024, 1, 1, 0, 0, 0, 0))
+        );
+        assert_eq!(
+            local("yyyy-MM-dd h K", "2024-01-01 12 1"),
+            Some(micros(2024, 1, 1, 1, 0, 0, 0))
+        );
     }
 
     /// `java.util.TimeZone` drops the transitions before 1900: earlier
