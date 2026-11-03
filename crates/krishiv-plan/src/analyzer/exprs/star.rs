@@ -394,6 +394,35 @@ impl Resolver<'_> {
         self.apply_except(s, &out, origin)
     }
 
+    /// The columns `t.*` stands for when `t` is the left side of the
+    /// enclosing `JOIN LATERAL` (`SELECT t1.*` in its right side), as column
+    /// names to resolve like any outer reference. Empty for any other star.
+    pub(in crate::analyzer) fn lateral_star(&self, s: &Star, cx: &Cx<'_>) -> Vec<Vec<String>> {
+        if s.plan_id.is_some()
+            || s.regex.is_some()
+            || s.position.is_some()
+            || s.qualifier.is_empty()
+            || !s.except.is_empty()
+            || !s.replace.is_empty()
+        {
+            return Vec::new();
+        }
+        let cs = self.ctx.conf.case_sensitive;
+        let Some(level) = cx.env.outer.last().filter(|l| l.lateral && cx.outer) else {
+            return Vec::new();
+        };
+        level
+            .scope
+            .iter()
+            .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+            .map(|a| {
+                let mut name = a.qual.to_vec();
+                name.push(a.col.name.clone());
+                name
+            })
+            .collect()
+    }
+
     /// `EXCEPT_OVERLAPPING_COLUMNS` when one entry of `s.except` is a prefix
     /// of another.
     fn except_overlap(&self, s: &Star, origin: Origin) -> Result<(), AnalysisError> {

@@ -126,6 +126,12 @@ pub(super) struct Rel {
 #[derive(Clone)]
 pub(super) struct Level {
     pub(super) scope: Arc<[Attr]>,
+    /// The left side of a `JOIN LATERAL`: unlike a subquery's enclosing
+    /// query, it stays in reach from further in.
+    pub(super) lateral: bool,
+    /// The columns a `USING` join merged away on the left side of a `JOIN LATERAL`: they
+    /// answer to a qualified name only.
+    pub(super) hidden: Arc<[Attr]>,
 }
 
 /// A scope environment: the CTEs visible and the enclosing queries.
@@ -422,9 +428,16 @@ impl Resolver<'_> {
                     continue;
                 }
                 stack.push((Arc::clone(&p), true));
+                // A lateral join resolves its right side in its own
+                // environment (the left side in scope), so it starts both.
                 if !matches!(
                     p.node,
-                    PlanNode::WithCte { .. } | PlanNode::UnionLoop { .. }
+                    PlanNode::WithCte { .. }
+                        | PlanNode::UnionLoop { .. }
+                        | PlanNode::Join {
+                            kind: crate::JoinKind::LateralInner | crate::JoinKind::LateralLeft,
+                            ..
+                        }
                 ) {
                     let mut kids = Vec::new();
                     p.for_each_child(&mut |c| kids.push(self.rep(c)));

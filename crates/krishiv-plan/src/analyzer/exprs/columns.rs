@@ -405,12 +405,22 @@ impl Resolver<'_> {
             };
             return self.expr(alias, &inner);
         }
-        // Only the immediately enclosing query, as Spark 4.2 resolves.
+        // Only the immediately enclosing query, as Spark 4.2 resolves (a
+        // nested lateral join's right side sees its own left side only).
         let levels = cx.env.outer.iter().enumerate().rev().take(1);
         for (level, outer) in levels.filter(|_| cx.outer) {
-            if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
+            let mut hit = self.find(&outer.scope, &c.name, origin, false)?;
+            if hit.is_none() && c.name.len() > 1 {
+                hit = self.find(&outer.hidden, &c.name, origin, false)?;
+            }
+            if let Some((a, used)) = hit {
                 self.used(&a);
-                return self.resolve_attr(&a, used, &c.name, origin, Some(level), cx, false);
+                let b = self.resolve_attr(&a, used, &c.name, origin, Some(level), cx, false)?;
+                return Ok(if outer.lateral && used == c.name.len() {
+                    qualify_lateral(b, &a)
+                } else {
+                    b
+                });
             }
         }
         // The parameters of the SQL function being resolved rank after
@@ -939,6 +949,8 @@ impl Resolver<'_> {
         }
         outer.push(super::super::resolve::Level {
             scope: scope.into(),
+            lateral: false,
+            hidden: Arc::from(Vec::new()),
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }
@@ -995,4 +1007,24 @@ impl Resolver<'_> {
         );
         Ok((expr, ty))
     }
+}
+
+/// The outer reference `b` to `a`, a column of a lateral join's left side,
+/// named as Spark prints it inside a name: `outer(t.c)`, qualified.
+fn qualify_lateral(mut b: Bound, a: &Attr) -> Bound {
+    let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &b.expr.node else {
+        return b;
+    };
+    let mut col = c.clone();
+    let qual: Vec<&str> = a.qual.iter().map(String::as_str).collect();
+    col.name = format!(
+        "outer({}{}{})",
+        qual.join("."),
+        if qual.is_empty() { "" } else { "." },
+        c.name
+    );
+    b.expr = Arc::new(
+        Expr::new(ExprNode::Resolved(ResolvedExpr::OuterColumn(col))).with_origin(b.expr.origin),
+    );
+    b
 }

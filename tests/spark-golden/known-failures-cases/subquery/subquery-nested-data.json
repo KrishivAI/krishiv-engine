@@ -7,13 +7,7 @@
       26
     ],
     "query-features": [
-      9,
-      10,
-      11,
-      12,
-      18,
-      19,
-      20
+      11
     ]
   },
   "file": "subquery/subquery-nested-data",

@@ -16,6 +16,8 @@ use krishiv_common::error::{
     UnresolvedAllInGroupBy, UnresolvedUsingColumnForJoin, UnsupportedExprForOperator,
     UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy, UnsupportedGeneratorNestedInExpressions,
+    UnsupportedSubqueryExpressionCategoryLateralJoinConditionNonDeterministic,
+    UnsupportedSubqueryExpressionCategoryNonDeterministicLateralSubqueries,
 };
 
 use super::analytics::Analytics;
@@ -634,7 +636,23 @@ impl Resolver<'_> {
                     }
                     continue;
                 }
-                let expanded = self.expand(s, &cx, e.origin)?;
+                let expanded = match self.expand(s, &cx, e.origin) {
+                    Ok(expanded) => expanded,
+                    Err(err) => {
+                        // `SELECT t1.*` inside a lateral join's right side
+                        // reads the left side's columns.
+                        let names = self.lateral_star(s, &cx);
+                        if names.is_empty() {
+                            return Err(err);
+                        }
+                        for name in names {
+                            let col = Arc::new(Expr::column(name).with_origin(e.origin));
+                            let b = self.bind(&col, &cx)?;
+                            items.push(self.named(b)?);
+                        }
+                        continue;
+                    }
+                };
                 let replaced = self.replacements(s, &expanded, e.origin)?;
                 for (a, with) in expanded.iter().zip(replaced) {
                     let Some(with) = with else {
@@ -2970,8 +2988,59 @@ impl Resolver<'_> {
         condition: &JoinCondition,
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
-        let l = self.child(left, env)?;
-        let mut r = self.child(right, env)?;
+        let lateral = matches!(kind, JoinKind::LateralInner | JoinKind::LateralLeft);
+        let l = if lateral {
+            self.rel(left, env)?
+        } else {
+            self.child(left, env)?
+        };
+        // `JOIN LATERAL`: the right side reads the left side's columns as an
+        // enclosing query's. The joined relation reads none of that level.
+        let kind = match kind {
+            JoinKind::LateralInner => JoinKind::Inner,
+            JoinKind::LateralLeft => JoinKind::LeftOuter,
+            k => k,
+        };
+        let mut r = if lateral {
+            let mut outer = env.outer.clone();
+            outer.push(super::resolve::Level {
+                scope: Arc::clone(&l.out),
+                lateral: true,
+                hidden: Arc::clone(&l.hidden),
+            });
+            let inner = self.env(env.ctes.clone(), env.ctes_id, outer);
+            let mut r = self.rel(right, &inner)?;
+            r.outer = r.outer.filter(|k| *k < env.outer.len());
+            // Spark's `CheckAnalysis`: a lateral subquery holds no
+            // nondeterministic expression.
+            let mut nondeterministic = false;
+            let _ = crate::walk::visit_distinct(crate::walk::Node::Plan(&r.plan), |n| {
+                if let crate::walk::Node::Expr(e) = n
+                    && matches!(
+                        &e.node,
+                        ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
+                            deterministic: false,
+                            ..
+                        }))
+                    )
+                {
+                    nondeterministic = true;
+                    return std::ops::ControlFlow::Break(());
+                }
+                std::ops::ControlFlow::<()>::Continue(())
+            });
+            if nondeterministic && !at_most_one_row(&l.plan) {
+                return Err(AnalysisError::new(
+                    UnsupportedSubqueryExpressionCategoryNonDeterministicLateralSubqueries {
+                        tree_node: r.plan.to_string(),
+                    },
+                    p.origin,
+                ));
+            }
+            r
+        } else {
+            self.child(right, env)?
+        };
         if let (Some(a), Some(b)) = (l.ids, r.ids)
             && a.0 <= b.1
             && b.0 <= a.1
@@ -3055,6 +3124,14 @@ impl Resolver<'_> {
                 }
                 // Spark's `CheckAnalysis`: a join condition holds no
                 // nondeterministic expression.
+                if lateral && !super::sqlfn::is_deterministic(&b.expr) {
+                    return Err(AnalysisError::new(
+                        UnsupportedSubqueryExpressionCategoryLateralJoinConditionNonDeterministic {
+                            condition: pretty(&b.shown(), self.ctx.conf.session_zone),
+                        },
+                        p.origin,
+                    ));
+                }
                 if !super::sqlfn::is_deterministic(&b.expr) {
                     return Err(AnalysisError::new(
                         InvalidNonDeterministicExpressions {
@@ -4389,4 +4466,27 @@ fn not_constant(e: &Expr) -> bool {
     let mut found = false;
     e.for_each_child(&mut |c| found = found || not_constant(c));
     found
+}
+
+/// Whether `p` returns at most one row, as Spark's `maxRows` has it.
+fn at_most_one_row(p: &LogicalPlan) -> bool {
+    match &p.node {
+        PlanNode::OneRowRelation => true,
+        PlanNode::InlineTable { rows, .. } => rows.len() <= 1,
+        PlanNode::Limit { limit, .. } => matches!(
+            &limit.node,
+            ExprNode::Literal(Literal::Integer(v)) if (0..=1).contains(v)
+        ),
+        PlanNode::Aggregate {
+            grouping: Grouping::GroupBy(keys),
+            ..
+        } if keys.is_empty() => true,
+        PlanNode::Project { input, .. }
+        | PlanNode::Filter { input, .. }
+        | PlanNode::Sort { input, .. }
+        | PlanNode::SubqueryAlias { input, .. }
+        | PlanNode::Shift { input, .. }
+        | PlanNode::Window { input, .. } => at_most_one_row(input),
+        _ => false,
+    }
 }
