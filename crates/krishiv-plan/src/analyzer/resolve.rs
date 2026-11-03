@@ -126,9 +126,17 @@ pub(super) struct Rel {
 #[derive(Clone)]
 pub(super) struct Level {
     pub(super) scope: Arc<[Attr]>,
+    /// The left side of a `JOIN LATERAL`: unlike a subquery's enclosing
+    /// query, it stays in reach from further in.
+    pub(super) lateral: bool,
     /// The columns a `USING` join of that query merged away: not
-    /// resolvable by name, but a qualified star still lists them.
+    /// resolvable by name (a lateral right side reaches them by a qualified
+    /// name), but a qualified star still lists them.
     pub(super) hidden: Arc<[Attr]>,
+    /// The input columns of the aggregate a `HAVING` subquery sits in that its
+    /// output does not carry, searched first: Spark binds an outer name to the
+    /// aggregate input before an output alias of the same name.
+    pub(super) fallback: Arc<[Attr]>,
 }
 
 /// A scope environment: the CTEs visible and the enclosing queries.
@@ -441,9 +449,16 @@ impl Resolver<'_> {
                     continue;
                 }
                 stack.push((Arc::clone(&p), true));
+                // A lateral join resolves its right side in its own
+                // environment (the left side in scope), so it starts both.
                 if !matches!(
                     p.node,
-                    PlanNode::WithCte { .. } | PlanNode::UnionLoop { .. }
+                    PlanNode::WithCte { .. }
+                        | PlanNode::UnionLoop { .. }
+                        | PlanNode::Join {
+                            kind: crate::JoinKind::LateralInner | crate::JoinKind::LateralLeft,
+                            ..
+                        }
                 ) {
                     let mut kids = Vec::new();
                     p.for_each_child(&mut |c| kids.push(self.rep(c)));

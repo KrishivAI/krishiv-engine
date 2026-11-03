@@ -2,9 +2,6 @@
   "cases": {
     "depends-on-command": [
       13
-    ],
-    "test-udfs": [
-      26
     ]
   },
   "file": "udf/udf-group-by",

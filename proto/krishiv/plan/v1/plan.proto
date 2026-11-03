@@ -158,7 +158,20 @@ message Node {
     SortMergeJoinNode sort_merge_join = 21;
     // feature: late_fetch
     LateFetchNode late_fetch = 24;
+    // feature: exchange_source
+    ExchangeSourceNode exchange_source = 25;
   }
+}
+
+// feature: exchange_source
+// The rows a task reads from an exchange another stage wrote: a leaf of a
+// plan fragment. Which partitions it reads is task data.
+message ExchangeSourceNode {
+  uint64 id = 1;
+  // How the exchange placed its rows.
+  Partitioning partitioning = 2;
+  // Its columns (Arrow IPC `Schema` flatbuffer).
+  bytes schema = 3;
 }
 
 // feature: late_fetch

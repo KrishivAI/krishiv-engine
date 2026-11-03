@@ -148,6 +148,8 @@ fn by_node(p: &QueryProfile) -> BTreeMap<u32, Vec<(OperatorId, &OperatorEntry)>>
 /// Extra metrics that depend on the query's hash seed (how keys spread
 /// over partitions and collide) or on how morsels split over drivers (how
 /// often a table grew), masked with the other volatile values.
+/// Also masked: every `exchange_` counter (a fused aggregation's exchange
+/// statistics), which depend on how many drivers ran and what they met.
 const VOLATILE: [&str; 6] = [
     "hash_buckets",
     "hash_resizes",
@@ -267,7 +269,9 @@ impl Printer<'_> {
     fn extra(&self, e: &OperatorEntry) -> String {
         let mut out = Vec::new();
         for (name, v) in &e.extra {
-            if self.opts.mask_volatile && VOLATILE.contains(&name.as_ref()) {
+            if self.opts.mask_volatile
+                && (VOLATILE.contains(&name.as_ref()) || name.starts_with("exchange_"))
+            {
                 out.push(format!("{name}=<n>"));
                 continue;
             }

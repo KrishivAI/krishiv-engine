@@ -18,7 +18,7 @@ use super::{BuildRows, Pairing, ProbeBits, Rest, Shared, unit_weights};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::operator::{FlushOutput, LocalState, Operator, OperatorOutput};
-use crate::operators::local_mut;
+use crate::operators::{local_mut, owned_rows};
 
 /// The most pairing steps (each at most `TARGET_PAIRS` pairs) one
 /// `execute` call runs before it returns.
@@ -208,12 +208,14 @@ impl Operator for ProbeOp {
         unit_weights(input)?;
         let l = local_mut::<ProbeLocal>(local, "NestedLoopJoin")?;
         if let Some(d) = &mut l.disk {
-            // The build spilled: the rows wait for the flush phase.
+            // The build spilled: the rows wait for the flush phase, held for
+            // their own bytes, not for a larger batch they are a slice of.
+            let input = owned_rows(input.clone())?;
             let bytes = input.data().get_array_memory_size();
             if d.reservation.try_grow(bytes).is_err() {
                 return Ok(OperatorOutput::NeedMemory { bytes });
             }
-            d.buffered.push(input.data().clone());
+            d.buffered.push(input.into_parts().0);
             d.signal.set_spillable_bytes(d.reservation.size());
             return Ok(OperatorOutput::NeedMoreInput(None));
         }

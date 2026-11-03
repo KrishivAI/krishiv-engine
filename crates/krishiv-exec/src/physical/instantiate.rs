@@ -51,12 +51,16 @@ use krishiv_udf_sdk::UdfLibrary;
 use object_store::path::Path;
 
 use super::{
-    AggregatePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
-    ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SharedPlan, SortMergeJoinPlan,
-    SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
+    AggregatePlan, ExchangeId, ExchangePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode,
+    PhysicalPlan, ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SharedPlan,
+    SortMergeJoinPlan, SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
 };
-use crate::aggregate::{AggregateNode, AggregateSpec, HashAggregate, distinct_plan};
+use crate::aggregate::{
+    AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, HashAggregate,
+    distinct_plan,
+};
 use crate::error::{Result, internal};
+use crate::exchange::{Exchange, ExchangeRead, ExchangeSink, ExchangeWrite, MapOutputId};
 use crate::join::{
     HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, NestedLoopJoin, NestedLoopJoinNode,
     NestedLoopSpec, SortMergeJoin, SortMergeJoinNode,
@@ -110,6 +114,11 @@ pub struct WorkerContext {
     /// unset.
     values: Option<Arc<dyn ValueService>>,
     producer: Producer,
+    /// Where exchanges between stages are written and read.
+    exchange: Option<Arc<dyn Exchange>>,
+    /// Whether a partial and a final aggregate around an exchange run as one
+    /// breaker (the default; see [`fused_aggregate`]).
+    fuse_aggregates: bool,
 }
 
 /// Which task of a stage instantiates a plan fragment: the stage, its
@@ -134,6 +143,24 @@ pub struct TaskSpec {
     /// without an entry plans its own splits exactly as today, so
     /// single-process behaviour is unchanged.
     pub scans: BTreeMap<ScanId, ScanSplits>,
+    /// What each [`PhysNode::ExchangeSource`] of the fragment reads, by
+    /// exchange id (design P2-T176 §2.2).
+    pub exchanges: BTreeMap<ExchangeId, ExchangeInput>,
+    /// The reduce partitions the fragment's root exchange writes, when the
+    /// task is a map task of that exchange; `None` lowers a root exchange
+    /// as on one worker.
+    pub output: Option<u32>,
+}
+
+/// What one task reads from one exchange of another stage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExchangeInput {
+    /// The attempt of the stage that wrote it.
+    pub stage_attempt: u32,
+    /// The map partitions it was written by: `0..maps`.
+    pub maps: u32,
+    /// The reduce partitions this task reads.
+    pub reduce: Vec<u32>,
 }
 
 impl TaskSpec {
@@ -148,6 +175,8 @@ impl TaskSpec {
             partitions: 1,
             attempt: 0,
             scans: BTreeMap::new(),
+            exchanges: BTreeMap::new(),
+            output: None,
         }
     }
 }
@@ -166,6 +195,8 @@ impl WorkerContext {
             config: None,
             values: None,
             producer: Producer::default(),
+            exchange: None,
+            fuse_aggregates: true,
         }
     }
 
@@ -244,9 +275,41 @@ impl WorkerContext {
         self
     }
 
-    /// The spill scope, if spilling.
+    /// The same context writing and reading the exchanges between stages
+    /// through `exchange`: what a task's root exchange and its
+    /// [`PhysNode::ExchangeSource`]s instantiate with.
+    #[must_use]
+    pub fn with_exchange(mut self, exchange: Arc<dyn Exchange>) -> Self {
+        self.exchange = Some(exchange);
+        self
+    }
+
+    /// The same context running a partial aggregate, its exchange and its
+    /// final aggregate as written (`false`) instead of as one breaker: the
+    /// operators a worker runs on each side of a cut exchange, for tests.
+    #[must_use]
+    pub fn with_fused_aggregates(mut self, fuse: bool) -> Self {
+        self.fuse_aggregates = fuse;
+        self
+    }
+
+    /// The fixed spill scope, if one is set ([`Self::with_spill`]).
     pub fn spill(&self) -> Option<&SpillScope> {
         self.spill.as_ref()
+    }
+
+    /// The scope an instantiation spills into: the fixed one, else a new
+    /// one from the factory ([`Self::with_spill_scopes`]); `None` without
+    /// spilling.
+    ///
+    /// # Errors
+    /// When the factory cannot create the spill directory.
+    pub fn spill_scope(&self) -> Result<Option<SpillScope>> {
+        match (&self.spill, &self.scopes) {
+            (Some(scope), _) => Ok(Some(scope.clone())),
+            (None, Some(scopes)) => Ok(Some(scopes.scope()?)),
+            (None, None) => Ok(None),
+        }
     }
 
     /// The relation store, if batch splits resolve through one.
@@ -268,6 +331,8 @@ impl fmt::Debug for WorkerContext {
             .field("config", &self.config.is_some())
             .field("values", &self.values.is_some())
             .field("producer", &self.producer)
+            .field("exchange", &self.exchange.is_some())
+            .field("fuse_aggregates", &self.fuse_aggregates)
             .finish_non_exhaustive()
     }
 }
@@ -286,12 +351,34 @@ pub fn instantiate_task(
     worker: &WorkerContext,
     task: &TaskSpec,
 ) -> Result<Arc<dyn ExecNode>> {
+    Ok(instantiate_with_schemas(plan, worker, task)?.0)
+}
+
+/// The columns of the input of each exchange of `plan` (shared plans
+/// included), as `worker` instantiates it whole: what a fragmenter gives
+/// the [`PhysNode::ExchangeSource`] it puts in an exchange's place. The
+/// operators built are dropped unrun.
+///
+/// # Errors
+/// As [`instantiate_task`].
+pub fn exchange_schemas(
+    plan: &PhysicalPlan,
+    worker: &WorkerContext,
+) -> Result<BTreeMap<ExchangeId, SchemaRef>> {
+    // A fused aggregate never builds the exchange between its phases, which
+    // a fragmenter cuts like any other.
+    let written = worker.clone().with_fused_aggregates(false);
+    Ok(instantiate_with_schemas(plan, &written, &TaskSpec::whole())?.1)
+}
+
+/// [`instantiate_task`], with the schema of each exchange's input.
+fn instantiate_with_schemas(
+    plan: &PhysicalPlan,
+    worker: &WorkerContext,
+    task: &TaskSpec,
+) -> Result<(Arc<dyn ExecNode>, BTreeMap<ExchangeId, SchemaRef>)> {
     let run = || {
-        let spill = match (&worker.spill, &worker.scopes) {
-            (Some(scope), _) => Some(scope.clone()),
-            (None, Some(scopes)) => Some(scopes.scope()?),
-            (None, None) => None,
-        };
+        let spill = worker.spill_scope()?;
         let mut env = EvalEnv::from_plan(plan.env());
         // The UDFs travel with the worker, never with the plan.
         env.udfs = worker.udfs.clone();
@@ -308,12 +395,22 @@ pub fn instantiate_task(
             shared: HashMap::new(),
             shared_plans: Arc::from(plan.shared()),
             loops: HashMap::new(),
+            schemas: BTreeMap::new(),
+            unit_weights: HashSet::new(),
         };
         for root in plan.roots() {
             cx.declare_filters(root)?;
         }
         cx.build_shared()?;
-        let built = cx.node(plan.root())?;
+        let built = match (task.output, plan.root()) {
+            (Some(partitions), PhysNode::Exchange(e)) => cx.exchange_write(e, partitions)?,
+            (Some(_), _) => {
+                return Err(internal(
+                    "a map task whose fragment does not end in an exchange".to_owned(),
+                ));
+            }
+            (None, root) => cx.node(root)?,
+        };
         if built.schema.fields() != plan.schema().fields() {
             return Err(internal(format!(
                 "the plan instantiates to {:?} where it planned {:?}",
@@ -325,11 +422,12 @@ pub fn instantiate_task(
         // returns its rows in slice order, as Spark collects partitions in
         // order: one driver keeps it (several would hand their batches to
         // the result in completion order).
-        Ok(if reads_range_in_order(plan.root()) {
+        let node: Arc<dyn ExecNode> = if reads_range_in_order(plan.root()) {
             Arc::new(OrderedNode { inner: built.node })
         } else {
             built.node
-        })
+        };
+        Ok((node, cx.schemas))
     };
     // Instantiation recurses once per node, as planning does.
     krishiv_common::stack::on_big_stack(run)
@@ -366,6 +464,11 @@ struct Instantiation<'a> {
     /// The table each enclosing recursive CTE's [`PhysNode::LoopRef`]s read,
     /// by loop id: the previous round, for a round being instantiated.
     loops: HashMap<u32, Arc<Output>>,
+    /// The columns of each exchange's input built so far.
+    schemas: BTreeMap<ExchangeId, SchemaRef>,
+    /// Aggregate nodes (by address) that refuse weights other than 1: the
+    /// partial phase of a written-out `DISTINCT` aggregation.
+    unit_weights: HashSet<usize>,
 }
 
 /// What a recursive CTE needs to instantiate its recursive term once per
@@ -411,6 +514,8 @@ impl Detached {
                 shared: HashMap::new(),
                 shared_plans: Arc::clone(&self.shared_plans),
                 loops,
+                schemas: BTreeMap::new(),
+                unit_weights: HashSet::new(),
             };
             cx.declare_filters(node)?;
             for sp in cx.shared_plans.iter() {
@@ -472,6 +577,233 @@ pub(crate) fn node_ids<'a>(roots: impl IntoIterator<Item = &'a PhysNode>) -> Has
         }
     }
     ids
+}
+
+/// The final phase reading the output of `partial` (its keys, then each
+/// aggregate's state columns): grouped by those keys, each aggregate merging
+/// its states. [`fused_aggregate`] recognizes the pair.
+pub(crate) fn final_of(partial: &AggregatePlan) -> Result<AggregatePlan> {
+    let k = partial.group_by.len();
+    let mut at = k;
+    let mut aggregates = Vec::with_capacity(partial.aggregates.len());
+    for a in &partial.aggregates {
+        let m = a.merging(at);
+        at += m.args.len();
+        aggregates.push(m);
+    }
+    if partial.output != AggregateOutput::Partial || partial.distinct.iter().any(|d| *d) {
+        return Err(internal(
+            "a final phase over a plan that is not a partial one".to_owned(),
+        ));
+    }
+    Ok(AggregatePlan {
+        group_by: (0..k).collect(),
+        distinct: vec![false; aggregates.len()],
+        aggregates,
+        output: AggregateOutput::Final,
+    })
+}
+
+/// `Final ← Exchange(Hash | Single) ← Partial` as one aggregation (design
+/// P2-T174 §2.2): the partial node, the node below it, and the plan of the
+/// single breaker over that node, whose radix partitions stand for the
+/// exchange's and whose finalize merge is its reader side. `None` for any
+/// other shape: `aggregate` is not exactly the final phase
+/// [`final_of`] plans over the partial.
+pub(crate) fn fused_aggregate<'p>(
+    aggregate: &AggregatePlan,
+    input: &'p PhysNode,
+) -> Option<(&'p PhysNode, &'p PhysNode, AggregatePlan)> {
+    let PhysNode::Exchange(e) = input else {
+        return None;
+    };
+    if !matches!(
+        e.partitioning,
+        Partitioning::Hash { .. } | Partitioning::Single
+    ) {
+        return None;
+    }
+    let partial = e.input.as_ref();
+    let PhysNode::Aggregate {
+        input: below,
+        aggregate: p,
+    } = partial
+    else {
+        return None;
+    };
+    if p.output != AggregateOutput::Partial || final_of(p).ok().as_ref() != Some(aggregate) {
+        return None;
+    }
+    Some((
+        partial,
+        below.as_ref(),
+        AggregatePlan {
+            output: AggregateOutput::Final,
+            ..p.clone()
+        },
+    ))
+}
+
+/// The phases of `single`, an aggregation with `DISTINCT` aggregates over raw
+/// input, around an exchange (Spark's single-distinct plan, as
+/// [`distinct_plan`] runs it in one place): a partial phase grouped by the
+/// keys and the distinct arguments computing the other aggregates' states; a
+/// partial merge after the exchange on the same columns, which removes the
+/// pairs several tasks sent; and the final phase grouped by the keys, which
+/// aggregates each distinct value once (as plain aggregates over the now
+/// distinct argument columns) and merges the other states. `None` where
+/// [`distinct_plan`] has no such plan: no distinct aggregate, distinct
+/// aggregates over different arguments or with a filter, or input that is not
+/// raw.
+pub(crate) fn distinct_phases(single: &AggregatePlan) -> Option<[AggregatePlan; 3]> {
+    if single.output != AggregateOutput::Final
+        || single.distinct.len() != single.aggregates.len()
+        || single.aggregates.iter().any(|a| a.input != AggInput::Raw)
+    {
+        return None;
+    }
+    let mut dargs: Option<&[usize]> = None;
+    for (a, &d) in single.aggregates.iter().zip(&single.distinct) {
+        if d && (a.mask.is_some() || *dargs.get_or_insert(&a.args) != a.args.as_slice()) {
+            return None;
+        }
+    }
+    let dargs = dargs?;
+    let k = single.group_by.len();
+    let width = k + dargs.len();
+    let others: Vec<AggregateExpr> = single
+        .aggregates
+        .iter()
+        .zip(&single.distinct)
+        .filter(|(_, d)| !**d)
+        .map(|(a, _)| a.clone())
+        .collect();
+    let first = AggregatePlan {
+        group_by: single.group_by.iter().chain(dargs).copied().collect(),
+        distinct: vec![false; others.len()],
+        aggregates: others,
+        output: AggregateOutput::Partial,
+    };
+    let mut at = width;
+    let mut merged = Vec::with_capacity(first.aggregates.len());
+    for a in &first.aggregates {
+        let m = a.merging(at);
+        at += m.args.len();
+        merged.push(m);
+    }
+    let merge = AggregatePlan {
+        group_by: (0..width).collect(),
+        distinct: vec![false; merged.len()],
+        aggregates: merged.clone(),
+        output: AggregateOutput::Partial,
+    };
+    let mut merged = merged.into_iter();
+    let mut aggregates = Vec::with_capacity(single.aggregates.len());
+    for (a, &d) in single.aggregates.iter().zip(&single.distinct) {
+        aggregates.push(if d {
+            AggregateExpr {
+                args: (k..width).collect(),
+                ..a.clone()
+            }
+        } else {
+            merged.next()?
+        });
+    }
+    let last = AggregatePlan {
+        group_by: (0..k).collect(),
+        distinct: vec![false; aggregates.len()],
+        aggregates,
+        output: AggregateOutput::Final,
+    };
+    Some([first, merge, last])
+}
+
+/// `Final ← PartialMerge ← Exchange(Hash | Single) ← Partial`, the phases
+/// [`distinct_phases`] plans, as the one aggregation they came from: the node
+/// the partial node, the node below it and that aggregation. `None` for any
+/// other shape.
+pub(crate) fn fused_distinct<'p>(
+    last: &AggregatePlan,
+    input: &'p PhysNode,
+) -> Option<(&'p PhysNode, &'p PhysNode, AggregatePlan)> {
+    let PhysNode::Aggregate {
+        input: exchange,
+        aggregate: merge,
+    } = input
+    else {
+        return None;
+    };
+    let PhysNode::Exchange(e) = exchange.as_ref() else {
+        return None;
+    };
+    if !matches!(
+        e.partitioning,
+        Partitioning::Hash { .. } | Partitioning::Single
+    ) {
+        return None;
+    }
+    let partial = e.input.as_ref();
+    let PhysNode::Aggregate {
+        input: below,
+        aggregate: first,
+    } = partial
+    else {
+        return None;
+    };
+    let k = last.group_by.len();
+    let dargs = first.group_by.get(k..)?;
+    // The final phase's raw aggregates are the distinct ones; the others
+    // merge the partial phase's states, in order.
+    let mut others = first.aggregates.iter();
+    let mut aggregates = Vec::with_capacity(last.aggregates.len());
+    let mut distinct = Vec::with_capacity(last.aggregates.len());
+    for a in &last.aggregates {
+        if a.input == AggInput::Raw {
+            aggregates.push(AggregateExpr {
+                args: dargs.to_vec(),
+                ..a.clone()
+            });
+            distinct.push(true);
+        } else {
+            aggregates.push(others.next()?.clone());
+            distinct.push(false);
+        }
+    }
+    let single = AggregatePlan {
+        group_by: first.group_by.get(..k)?.to_vec(),
+        aggregates,
+        distinct,
+        output: AggregateOutput::Final,
+    };
+    let phases = distinct_phases(&single)?;
+    (phases[0] == *first && phases[1] == *merge && phases[2] == *last).then_some((
+        partial,
+        below.as_ref(),
+        single,
+    ))
+}
+
+/// A fused aggregation (see [`fused_aggregate`]): one [`HashAggregate`]
+/// whose sink side is tagged with the partial node's id.
+struct FusedAggregateNode {
+    partial: Option<u32>,
+    input: Arc<dyn ExecNode>,
+    agg: Arc<HashAggregate>,
+}
+
+impl ExecNode for FusedAggregateNode {
+    fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+        if let Some(id) = self.partial {
+            b.enter_node(id);
+        }
+        let sink = Arc::clone(&self.agg) as Arc<dyn Sink>;
+        let id = b.child_pipeline(sink, Arc::clone(&self.input));
+        if self.partial.is_some() {
+            b.exit_node();
+        }
+        b.set_breaker_source(Arc::clone(&self.agg) as Arc<dyn Source>, id?)
+            .map(drop)
+    }
 }
 
 /// A plan node whose operators report under its id.
@@ -833,8 +1165,30 @@ impl Instantiation<'_> {
                 Ok(breaker(input, Arc::clone(&top) as Arc<dyn Sink>, top))
             }
             PhysNode::Aggregate { input, aggregate } => {
+                if self.worker.fuse_aggregates
+                    && let Some((partial, below, fused)) = fused_aggregate(aggregate, input)
+                {
+                    return self.fused(partial, below, &fused);
+                }
+                if let Some((partial, below, single)) = fused_distinct(aggregate, input) {
+                    if self.worker.fuse_aggregates {
+                        let input = self.node(below)?;
+                        let spec =
+                            aggregate_spec(&input.schema, &single, &self.env, self.spill.clone());
+                        let schema = spec.output_schema()?;
+                        let node = aggregate_node(input.node, spec, &single.distinct)?;
+                        return Ok(Built { node, schema });
+                    }
+                    // Written out, the partial phase is where a row's weight
+                    // is lost: it refuses weights other than 1, as the fused
+                    // plan's first phase does.
+                    self.unit_weights.insert(std::ptr::from_ref(partial).addr());
+                }
+                let unit = self.unit_weights.contains(&std::ptr::from_ref(n).addr());
                 let input = self.node(input)?;
-                let spec = aggregate_spec(&input.schema, aggregate, &self.env, self.spill.clone());
+                let mut spec =
+                    aggregate_spec(&input.schema, aggregate, &self.env, self.spill.clone());
+                spec.require_unit_weights = unit;
                 let schema = spec.output_schema()?;
                 let node = aggregate_node(input.node, spec, &aggregate.distinct)?;
                 Ok(Built { node, schema })
@@ -887,8 +1241,92 @@ impl Instantiation<'_> {
             PhysNode::Exchange(e) if e.partitioning == Partitioning::Broadcast => {
                 self.broadcast(e.id, &e.input)
             }
-            PhysNode::Exchange(e) => self.node(&e.input),
+            PhysNode::Exchange(e) => {
+                let input = self.node(&e.input)?;
+                self.schemas.insert(e.id, Arc::clone(&input.schema));
+                Ok(input)
+            }
+            PhysNode::ExchangeSource {
+                id,
+                partitioning,
+                schema,
+            } => self.exchange_source(*id, partitioning, schema),
         }
+    }
+
+    /// The exchange `e` written as this map task's output, over
+    /// `partitions` reduce partitions.
+    fn exchange_write(&mut self, e: &ExchangePlan, partitions: u32) -> Result<Built> {
+        let exchange = self.exchange()?;
+        let input = self.node(&e.input)?;
+        let sink = Arc::new(ExchangeSink::new(
+            exchange,
+            MapOutputId {
+                exchange: e.id,
+                stage_attempt: self.task.stage_attempt,
+                map: self.task.partition,
+                attempt: self.task.attempt,
+            },
+            e.partitioning.clone(),
+            partitions,
+            Arc::clone(&input.schema),
+        )?);
+        Ok(Built {
+            schema: input.schema,
+            node: Arc::new(ExchangeWrite {
+                input: input.node,
+                sink,
+            }),
+        })
+    }
+
+    /// The rows this task reads from the exchange `id` of another stage
+    /// (its [`TaskSpec::exchanges`] entry). A gather is read by one driver
+    /// in map order; a broadcast is published as this producer's partial,
+    /// as on one worker.
+    fn exchange_source(
+        &mut self,
+        id: super::ExchangeId,
+        partitioning: &Partitioning,
+        schema: &SchemaRef,
+    ) -> Result<Built> {
+        let exchange = self.exchange()?;
+        let input = self.task.exchanges.get(&id).ok_or_else(|| {
+            internal(format!(
+                "exchange {} is read by a task that names no input of it",
+                id.0
+            ))
+        })?;
+        let ordered = *partitioning == Partitioning::Single;
+        let source = Arc::new(ExchangeRead::new(
+            exchange,
+            id,
+            input.stage_attempt,
+            &input.reduce,
+            input.maps,
+            Arc::clone(schema),
+            ordered,
+        ));
+        let node: Arc<dyn ExecNode> = Arc::new(SourceNode(source));
+        let built = Built {
+            schema: Arc::clone(schema),
+            node: if ordered {
+                Arc::new(OrderedNode { inner: node })
+            } else {
+                node
+            },
+        };
+        if *partitioning == Partitioning::Broadcast {
+            return self.publish_broadcast(id, built);
+        }
+        Ok(built)
+    }
+
+    fn exchange(&self) -> Result<Arc<dyn Exchange>> {
+        self.worker
+            .exchange
+            .clone()
+            .ok_or_else(|| internal("a task with exchanges on a worker without one".to_owned()))
     }
 
     fn scan(&self, s: &ScanNode) -> Result<Built> {
@@ -1103,8 +1541,35 @@ impl Instantiation<'_> {
     /// The input of the broadcast exchange `id`, published as this
     /// producer's partial of its value: on one worker the join over it
     /// shares one build among its drivers.
+    /// The aggregation `fused` over `below` as one breaker (see
+    /// [`fused_aggregate`]): its sink side reports under the partial node
+    /// `partial`, its source side under the final one.
+    fn fused(
+        &mut self,
+        partial: &PhysNode,
+        below: &PhysNode,
+        fused: &AggregatePlan,
+    ) -> Result<Built> {
+        let input = self.node(below)?;
+        let spec = aggregate_spec(&input.schema, fused, &self.env, self.spill.clone());
+        let schema = spec.output_schema()?;
+        let node = Arc::new(FusedAggregateNode {
+            partial: self.ids.get(&std::ptr::from_ref(partial).addr()).copied(),
+            input: input.node,
+            agg: HashAggregate::fused(spec)?,
+        });
+        Ok(Built { node, schema })
+    }
+
     fn broadcast(&mut self, id: super::ExchangeId, input: &PhysNode) -> Result<Built> {
         let input = self.node(input)?;
+        self.schemas.insert(id, Arc::clone(&input.schema));
+        self.publish_broadcast(id, input)
+    }
+
+    /// `input` published as this producer's partial of the broadcast
+    /// exchange `id`.
+    fn publish_broadcast(&mut self, id: super::ExchangeId, input: Built) -> Result<Built> {
         let value = ValueId::Broadcast(id);
         let published = self.values.publish(Partial {
             value,
@@ -1195,10 +1660,14 @@ fn operator(input: Built, op: Arc<dyn Operator>) -> Built {
 /// sort below a window with partitioning): the sort's buckets, which the
 /// exchange lowers into on one worker (design P2-T055 4a).
 fn hash_buckets<'p>(input: &'p PhysNode, keys: &[SortKey]) -> Option<&'p [usize]> {
-    let PhysNode::Exchange(e) = input else {
-        return None;
+    // A reduce task's sort reads a hash exchange's partition: the buckets
+    // split it again by the sort's own table hash (P2-T176 unit 1).
+    let partitioning = match input {
+        PhysNode::Exchange(e) => &e.partitioning,
+        PhysNode::ExchangeSource { partitioning, .. } => partitioning,
+        _ => return None,
     };
-    let Partitioning::Hash { keys: hash, .. } = &e.partitioning else {
+    let Partitioning::Hash { keys: hash, .. } = partitioning else {
         return None;
     };
     let mut lead: Vec<usize> = keys.get(..hash.len())?.iter().map(|k| k.column).collect();
@@ -1638,5 +2107,94 @@ mod tests {
         let mut b = PipelineBuilder::new(Arc::new(crate::testing::Count::default()));
         let e = Arc::new(Unbuilt).build_pipelines(&mut b).unwrap_err();
         assert!(e.to_string().contains("validation-only"), "{e}");
+    }
+
+    /// `rows`, under the phases [`super::distinct_phases`] plans for `single`,
+    /// around a hash exchange.
+    fn written(single: &super::AggregatePlan) -> (crate::physical::PhysNode, super::AggregatePlan) {
+        use crate::physical::{ExchangeId, ExchangePlan, Partitioning, PhysNode, RangeNode};
+
+        let [first, merge, last] = super::distinct_phases(single).unwrap();
+        let rows = PhysNode::Range(RangeNode {
+            start: 0,
+            end: 10,
+            step: 1,
+            num_slices: None,
+            output: krishiv_plan::AttrId(0),
+        });
+        let first = PhysNode::Aggregate {
+            input: Box::new(rows),
+            aggregate: first,
+        };
+        let moved = PhysNode::Exchange(ExchangePlan {
+            id: ExchangeId(0),
+            input: Box::new(first),
+            partitioning: Partitioning::Single,
+        });
+        let merge = PhysNode::Aggregate {
+            input: Box::new(moved),
+            aggregate: merge,
+        };
+        (merge, last)
+    }
+
+    /// `count(DISTINCT c1), sum(c2), max(c1) GROUP BY c0`.
+    fn single() -> super::AggregatePlan {
+        use crate::aggregate::{AggregateExpr, AggregateFunction as F, AggregateOutput};
+        use arrow_schema::DataType;
+
+        super::AggregatePlan {
+            group_by: vec![0],
+            aggregates: vec![
+                AggregateExpr::new(F::Count, 1, DataType::Int64, "c"),
+                AggregateExpr::new(F::Sum, 2, DataType::Int64, "s"),
+                AggregateExpr::new(F::Max, 1, DataType::Int64, "m"),
+            ],
+            distinct: vec![true, false, false],
+            output: AggregateOutput::Final,
+        }
+    }
+
+    #[test]
+    fn written_distinct_phases_fuse_back_into_their_aggregation() {
+        let single = single();
+        let (merge, last) = written(&single);
+        let (partial, below, fused) = super::fused_distinct(&last, &merge).unwrap();
+        assert_eq!(fused, single);
+        assert!(matches!(below, crate::physical::PhysNode::Range(_)));
+        assert!(matches!(
+            partial,
+            crate::physical::PhysNode::Aggregate { .. }
+        ));
+        let [first, merged, final_] = super::distinct_phases(&single).unwrap();
+        // Keys, the distinct argument, then the other aggregates' states.
+        assert_eq!(first.group_by, [0, 1]);
+        assert_eq!(first.aggregates.len(), 2);
+        assert_eq!(merged.group_by, [0, 1]);
+        assert_eq!(final_.group_by, [0]);
+        assert_eq!(final_.aggregates[0].args, [1]);
+    }
+
+    /// Any change to one phase is a plan instantiation runs as written.
+    #[test]
+    fn a_near_miss_of_the_distinct_phases_does_not_fuse() {
+        let single = single();
+        let (merge, mut last) = written(&single);
+        last.aggregates.swap(1, 2);
+        assert!(super::fused_distinct(&last, &merge).is_none());
+        let (mut merge, last) = written(&single);
+        if let crate::physical::PhysNode::Aggregate { aggregate, .. } = &mut merge {
+            aggregate.group_by = vec![0];
+        }
+        assert!(super::fused_distinct(&last, &merge).is_none());
+        // Distinct aggregates over different arguments, or one with a
+        // filter, have no phases.
+        let mut two = single.clone();
+        two.distinct = vec![true, false, true];
+        two.aggregates[2].args = vec![2];
+        assert!(super::distinct_phases(&two).is_none());
+        let mut masked = single;
+        masked.aggregates[0].mask = Some(3);
+        assert!(super::distinct_phases(&masked).is_none());
     }
 }

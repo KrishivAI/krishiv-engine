@@ -17,7 +17,7 @@ use super::{Marks, Shared, unit_weights};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
-use crate::operators::{global_ref, local_mut};
+use crate::operators::{global_ref, local_mut, owned_rows};
 use crate::output_spill::refused;
 use crate::sync::{Mutex, lock};
 
@@ -85,7 +85,7 @@ pub(super) fn ready(global: &GlobalState) -> Result<Arc<Ready>> {
 /// writer draws. Batches are written in slices of a bounded size, so the
 /// writer's scratch stays within the loan whatever their width. On success
 /// the batches' bytes are released and the file returned; on failure nothing
-/// was freed.
+/// was freed and the reservation holds what it held before.
 pub(super) async fn write(
     ctx: &TaskContext,
     scope: &SpillScope,
@@ -100,9 +100,15 @@ pub(super) async fn write(
     }
     let lent = reservation.size().min(SCRATCH_BYTES);
     reservation.shrink_to_credit(lent);
-    let scratch = ctx.consumer().reservation().for_spill_scratch();
+    // The scratch returns to credit when dropped, so a refused write can
+    // always take back what was lent.
+    let scratch = ctx
+        .consumer()
+        .reservation()
+        .for_spill_scratch()
+        .releasing_to_credit();
     let restore = |reservation: &mut Reservation| {
-        // Nothing was freed: the lent bytes go back.
+        // Nothing was freed: the lent bytes go back, from credit only.
         let _ = reservation.try_grow(lent);
         ctx.consumer().consumer().release_credit();
     };
@@ -180,6 +186,9 @@ impl Sink for BuildSink {
         }
         unit_weights(&input)?;
         let l = local_mut::<BuildLocal>(local, "NestedLoopJoinBuild")?;
+        // A scan's morsel can be a slice of a much larger batch: held as is,
+        // every driver would keep and be charged the whole buffers.
+        let input = owned_rows(input)?;
         let bytes = input.data().get_array_memory_size();
         if l.reservation.try_grow(bytes).is_err() {
             return Ok(SinkStatus::NeedMemory { bytes });

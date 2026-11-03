@@ -349,6 +349,69 @@ fn cte_precedence_policy_parses_and_defaults() {
     );
 }
 
+/// Spark's `byteFromString` (Spark 4.2 oracle, `ops/reports/2026-11-03-broadcast-threshold-semantics.md`).
+#[test]
+fn signed_sizes_parse_as_spark_does() {
+    let size = |s| ValueType::SignedSize.parse(s);
+    for (raw, want) in [
+        ("10485760", 10 << 20),
+        ("-1", -1),
+        ("-10", -10),
+        ("0", 0),
+        ("10m", 10 << 20),
+        ("10MB", 10 << 20),
+        ("10mb", 10 << 20),
+        (" 10m ", 10 << 20),
+        ("-1m", -(1 << 20)),
+        ("- 1", -1),
+        ("-  1m", -(1 << 20)),
+        ("1g", 1 << 30),
+        ("1t", 1 << 40),
+        ("1p", 1 << 50),
+        ("9223372036854775807", i64::MAX),
+        ("8589934591g", i64::MAX - (1 << 30) + 1),
+    ] {
+        assert_eq!(size(raw), Ok(ConfigValue::Int(want)), "{raw}");
+    }
+    for raw in [
+        "1.5m",
+        "1x",
+        "abc",
+        "",
+        "-",
+        "--1",
+        "+5m",
+        "10 m",
+        "1e3",
+        "9223372036854775808",
+        "8589934592g",
+    ] {
+        assert!(size(raw).is_err(), "{raw}");
+    }
+}
+
+#[test]
+fn the_broadcast_threshold_defaults_to_10_mib_under_both_keys() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&AUTO_BROADCAST_JOIN_THRESHOLD),
+        Some(&ConfigValue::Int(10 << 20))
+    );
+    c.set("spark.sql.autoBroadcastJoinThreshold", "-1").unwrap();
+    assert_eq!(
+        c.get(&AUTO_BROADCAST_JOIN_THRESHOLD),
+        Some(&ConfigValue::Int(-1))
+    );
+    assert!(
+        c.set("krishiv.sql.autoBroadcastJoinThreshold", "1.5m")
+            .is_err()
+    );
+    assert_eq!(
+        lookup("spark.sql.autoBroadcastJoinThreshold").map(|e| e.key),
+        Some(AUTO_BROADCAST_JOIN_THRESHOLD.key)
+    );
+}
+
 #[test]
 fn spark_aliases_map_to_krishiv_keys() {
     let mut c = Config::new();
