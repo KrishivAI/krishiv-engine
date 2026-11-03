@@ -101,28 +101,53 @@ const MAX_ALTERNATIVES: usize = 4096;
 /// Longest pattern segment (after runs of `*` are collapsed): the matcher recurses once per character.
 const MAX_SEGMENT_CHARS: usize = 1024;
 
-/// `a***b` is `a*b` inside a segment: a run of unescaped stars matches what one does.
+/// `a***b` is `a*b` inside a segment: a run of unescaped stars matches what one does. A star in a
+/// character class (`[#-**-z]`) is a literal member of it, so classes are copied unchanged.
 fn collapse_stars(segment: &str) -> String {
+    let chars: Vec<char> = segment.chars().collect();
     let mut out = String::with_capacity(segment.len());
-    let mut escaped = false;
+    let mut i = 0;
     let mut last_star = false;
-    for c in segment.chars() {
-        if escaped {
-            escaped = false;
-            last_star = false;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\\' {
             out.push(c);
-        } else if c == '\\' {
-            escaped = true;
+            if let Some(&next) = chars.get(i + 1) {
+                out.push(next);
+            }
+            i += 2;
             last_star = false;
-            out.push(c);
+        } else if c == '[' {
+            // The class runs to its closing `]` as `class` reads it: an optional `^` or `!`, then a
+            // first member that may be `]`, then members (with escapes) up to the next `]`.
+            let mut j = i + 1;
+            if matches!(chars.get(j), Some('^' | '!')) {
+                j += 1;
+            }
+            let mut first = true;
+            let mut closed = None;
+            while j < chars.len() {
+                if chars[j] == ']' && !first {
+                    closed = Some(j);
+                    break;
+                }
+                first = false;
+                j += if chars[j] == '\\' { 2 } else { 1 };
+            }
+            let end = closed.map_or(chars.len(), |k| k + 1);
+            out.extend(&chars[i..end.min(chars.len())]);
+            i = end;
+            last_star = false;
         } else if c == '*' {
             if !last_star {
                 out.push(c);
             }
             last_star = true;
+            i += 1;
         } else {
-            last_star = false;
             out.push(c);
+            last_star = false;
+            i += 1;
         }
     }
     out
@@ -363,6 +388,10 @@ mod tests {
         );
         assert!(Glob::parse(&"a?".repeat(2_000)).is_err());
         assert!(m("/d/a**b", "/d/axyb"));
+        // Stars inside a character class are members of it, not wildcards to collapse.
+        assert!(m("/d/[#-**-z]", "/d/b"));
+        assert!(m("/d/[)-**-z].parquet", "/d/b.parquet"));
+        assert!(m("/d/[]**]x", "/d/*x"));
         assert!(m("/d/a\\**b", "/d/a*xb"));
     }
 

@@ -228,7 +228,23 @@ impl BlockCache {
             #[cfg(unix)]
             std::os::unix::fs::DirBuilderExt::mode(&mut leaf, 0o700);
             match leaf.create(&dir) {
-                Ok(()) => break dir,
+                Ok(()) => {
+                    // A root another user created (or owns the parent of) could be used to plant
+                    // blocks: the root must be ours, as the directory just made in it is.
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::MetadataExt;
+                        let (root, own) = (std::fs::metadata(&cfg.dir)?, std::fs::metadata(&dir)?);
+                        if root.uid() != own.uid() {
+                            drop(std::fs::remove_dir(&dir));
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::PermissionDenied,
+                                "the cache directory belongs to another user",
+                            ));
+                        }
+                    }
+                    break dir;
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 16 => {
                     attempt += 1;
                 }
@@ -710,7 +726,9 @@ impl CachingStore {
                     for ((name, key), block) in keys.iter().zip(&blocks) {
                         // Its own allocation: a slice would keep the whole run's buffer alive while
                         // the pool is charged for the block only.
-                        cache.remember(*name, &Bytes::copy_from_slice(block));
+                        if cache.cfg.memory_bytes > 0 {
+                            cache.remember(*name, &Bytes::copy_from_slice(block));
+                        }
                         cache.persist(*name, key.clone(), block.clone()).await;
                     }
                     Ok(Arc::new(blocks))

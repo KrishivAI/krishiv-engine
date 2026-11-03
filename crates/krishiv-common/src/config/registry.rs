@@ -1109,7 +1109,7 @@ pub static IO_CACHE_PATH: ConfigEntry = ConfigEntry {
     key: "krishiv.io.cache.path",
     value_type: ValueType::String,
     default: None,
-    doc: "Directory of the block cache's disk part (a local SSD). Each cache uses a subdirectory of its own, empties it when created and removes it when dropped; subdirectories no running cache holds any longer are removed too. When unset: `krishiv-block-cache` under the system temp directory.",
+    doc: "Directory of the block cache's disk part (a local SSD). Each cache uses a subdirectory of its own, empties it when created and removes it when dropped; subdirectories no running cache holds any longer are removed too. When unset: `krishiv-block-cache-<uid>` under the system temp directory (a directory this user does not own is refused).",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,

@@ -410,3 +410,58 @@ fn a_write_into_a_partition_directory_of_a_logged_root_is_refused() {
     let n = block_on(s.read().parquet([path.as_str()]).count()).unwrap();
     assert_eq!(n, 1);
 }
+
+/// A nested partition path is written when no ancestor has a log, even if its parent exists: the
+/// ancestors are probed through the store as the path names it, not the one anchored at the target.
+#[test]
+fn a_nested_partition_path_without_an_ancestor_log_is_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "NONE")
+        .unwrap();
+    std::fs::create_dir_all(root.join("p=a")).unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id")).unwrap();
+    let nested = root.join("p=a/q=b");
+    block_on(df.write().mode("append").parquet(nested.to_str().unwrap())).unwrap();
+    let n = block_on(s.read().parquet([nested.to_str().unwrap()]).count()).unwrap();
+    assert_eq!(n, 1);
+}
+
+/// With `basePath` on a partition directory whose root holds the log, the root's log applies.
+#[test]
+fn a_base_path_on_a_partition_directory_uses_the_roots_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'a' AS p, 'x' AS q")).unwrap();
+    block_on(
+        df.write()
+            .partition_by(["p", "q"])
+            .mode("append")
+            .parquet(&path),
+    )
+    .unwrap();
+    let leaf = root.join("p=a/q=x");
+    let data = std::fs::read_dir(&leaf)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .unwrap();
+    std::fs::copy(&data, leaf.join("part-99999-dead.c000.snappy.parquet")).unwrap();
+    let base = root.join("p=a");
+    let df = s
+        .read()
+        .option("basePath", base.to_str().unwrap())
+        .parquet([leaf.to_str().unwrap()]);
+    assert_eq!(
+        block_on(df.count()).unwrap(),
+        1,
+        "the abandoned file is not read"
+    );
+}

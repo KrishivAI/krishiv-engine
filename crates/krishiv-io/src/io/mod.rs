@@ -360,7 +360,10 @@ impl IoConfig {
                         .get(&IO_CACHE_PATH)
                         .and_then(ConfigValue::as_str)
                         .map_or_else(
-                            || std::env::temp_dir().join("krishiv-block-cache"),
+                            || {
+                                std::env::temp_dir()
+                                    .join(format!("krishiv-block-cache-{}", user_suffix()))
+                            },
                             PathBuf::from,
                         ),
                     disk_bytes: size_of(c, &IO_CACHE_DISK_BYTES, 10 << 30),
@@ -1590,3 +1593,18 @@ impl<T> Drop for AbortOnDrop<T> {
 mod block_cache_tests;
 #[cfg(test)]
 mod tests;
+
+/// The user's id for the name of a per-user default directory (as the spill directory's):
+/// the owner of `/proc/self`, else empty.
+fn user_suffix() -> String {
+    #[cfg(unix)]
+    {
+        std::fs::metadata("/proc/self")
+            .map(|m| std::os::unix::fs::MetadataExt::uid(&m).to_string())
+            .unwrap_or_default()
+    }
+    #[cfg(not(unix))]
+    {
+        String::new()
+    }
+}

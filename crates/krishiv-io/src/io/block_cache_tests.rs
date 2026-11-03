@@ -624,10 +624,20 @@ async fn a_changed_object_falls_back_to_the_store() {
         .unwrap();
     assert_eq!(got.len(), 10);
     assert!(cache.stats().errors > 0);
-    // An empty or past-the-end range is not cached either.
+    // A range past the end of the object is not cached: the store answers it (cut at the end, as
+    // `object_store` cuts it), and nothing is counted as a miss for it.
+    let misses = cache.stats().misses;
     let mut options = sized(300_000);
     options.range = Some(GetRange::Bounded(299_990..300_005));
-    let _ = store.get_opts(&a, options).await;
+    let tail = store
+        .get_opts(&a, options)
+        .await
+        .unwrap()
+        .bytes()
+        .await
+        .unwrap();
+    assert_eq!(tail.len(), 10);
+    assert_eq!(cache.stats().misses, misses);
 }
 
 /// A pool that cannot hold a block's fetch refuses it, and the read is answered by the store; the
@@ -675,7 +685,7 @@ async fn fetch_buffers_are_reserved_from_the_pool() {
         &data[usize::try_from(5 * BLOCK).unwrap()..][..100]
     );
     assert!(cache.stats().misses > 0);
-    assert!(root.reserved() as u64 <= cache.memory_used());
+    assert_eq!(root.reserved() as u64, cache.memory_used());
 }
 
 /// A read with many separate runs of missing blocks fetches them all, a few at a time.

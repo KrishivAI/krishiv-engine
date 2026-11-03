@@ -215,6 +215,7 @@ async fn a_checkpoint_of_a_newer_format_is_refused() {
         .await
         .unwrap();
     let e = l.snapshot().await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivCommitLogCorrupt);
     assert!(e.to_string().contains("newer"), "{e}");
 }
 

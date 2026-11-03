@@ -2054,19 +2054,18 @@ async fn uses_commit_log(
     }
     // A partition directory (`name=value`) below a logged root cannot be committed on its own: the
     // root's readers would never see its files, and a log of its own would shadow the root's. The
-    // write goes through the root.
+    // write goes through the root. The ancestors are probed through the store as the path names
+    // it (`at.store`), not the one anchored at the target, which cannot see above it; the root
+    // may be the store's own root (an empty path).
     let mut parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
     while parts
         .last()
         .is_some_and(|name| name.split_once('=').is_some_and(|(k, _)| !k.is_empty()))
     {
         parts.pop();
-        if parts.is_empty() {
-            break;
-        }
         let parent = krishiv_io::commit_log::CommitLog::new(
             io,
-            store.clone(),
+            at.store.clone(),
             object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
             at.display.clone(),
         );

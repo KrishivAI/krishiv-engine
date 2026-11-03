@@ -248,15 +248,7 @@ async fn ranges_heads_links_and_conditions_read_as_asked() {
             )
             .await
             .unwrap_err();
-        assert!(
-            matches!(
-                e,
-                object_store::Error::Precondition { .. }
-                    | object_store::Error::NotModified { .. }
-                    | object_store::Error::Generic { .. }
-            ),
-            "{e}"
-        );
+        assert!(matches!(e, object_store::Error::Precondition { .. }), "{e}");
         // A link is not followed: its head is the link itself, its body is refused.
         symlink(f.outside.join("keep"), f.root.join("a/t/link")).unwrap();
         let link_head = s
@@ -278,8 +270,35 @@ async fn ranges_heads_links_and_conditions_read_as_asked() {
             .await
             .unwrap_err();
         // Refused as a violation of the anchor, not read through to the file outside.
+        assert!(
+            matches!(e, object_store::Error::PermissionDenied { .. }),
+            "{e}"
+        );
         assert!(!format!("{e}").contains("outside"), "{e}");
     }
+}
+
+/// A head wants the metadata only: a file that cannot be read can still be headed.
+#[tokio::test]
+async fn a_head_needs_no_read_permission() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    let s = store(&f, false);
+    put(&s, &obj(&f, "t/x"), b"12345").await.unwrap();
+    let file = f.root.join("a/t/x");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // A superuser reads it anyway; the point is for everyone else.
+    let head = s
+        .get_opts(
+            &obj(&f, "t/x"),
+            GetOptions {
+                head: true,
+                ..GetOptions::default()
+            },
+        )
+        .await;
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(head.unwrap().meta.size, 5);
 }
 
 /// A FIFO at the target is an object whose metadata can be read; opening it must not wait for a

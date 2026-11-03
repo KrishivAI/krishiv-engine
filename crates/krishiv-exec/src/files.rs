@@ -560,11 +560,7 @@ impl FileReads {
         let own = Box::pin(self.committed_files(&at)).await?;
         let outer = match (own, &mode.base) {
             (Some(files), _) => Some((base, Arc::new(files))),
-            (None, Some(root)) if at.path.prefix_matches(&root.path) => {
-                Box::pin(self.committed_files(root))
-                    .await?
-                    .map(|files| (root.path.parts().count(), Arc::new(files)))
-            }
+            (None, Some(root)) if at.path.prefix_matches(&root.path) => self.base_log(root).await?,
             // A glob whose prefix is a partition directory of a logged root.
             (None, None) => self.logged_ancestor(&at).await?,
             _ => None,
@@ -781,6 +777,23 @@ impl FileReads {
         Ok(None)
     }
 
+    /// The log that applies to a read with `basePath` `base`: the base's own, else the nearest
+    /// logged ancestor of the base reached through `name=value` directories.
+    async fn base_log(
+        &self,
+        base: &LocatedPath,
+    ) -> Result<
+        Option<(
+            usize,
+            Arc<BTreeMap<String, krishiv_io::commit_log::AddedFile>>,
+        )>,
+    > {
+        if let Some(files) = Box::pin(self.committed_files(base)).await? {
+            return Ok(Some((base.path.parts().count(), Arc::new(files))));
+        }
+        self.logged_ancestor(base).await
+    }
+
     /// Whether a commit log exists now for `at` (or for the `basePath` root above it): checked after an
     /// unlogged listing, because a first logged write to an existing directory creates its log before
     /// its tasks write files, so a listing taken in between would accept uncommitted files.
@@ -790,7 +803,7 @@ impl FileReads {
         }
         match &mode.base {
             Some(root) if at.path.prefix_matches(&root.path) => {
-                Ok(Box::pin(self.committed_files(root)).await?.is_some())
+                Ok(self.base_log(root).await?.is_some())
             }
             Some(_) => Ok(false),
             None => Ok(self.logged_ancestor(at).await?.is_some()),
@@ -842,9 +855,7 @@ impl FileReads {
         // shows only the files that root committed.
         let inherited = match (&committed, &mode.logged, &mode.base) {
             (None, Some(logged), _) => Some(logged.clone()),
-            (None, None, Some(base)) => Box::pin(self.committed_files(base))
-                .await?
-                .map(|files| (base.path.parts().count(), Arc::new(files))),
+            (None, None, Some(base)) => self.base_log(base).await?,
             // A partition directory read by its own path: the log of the root above it.
             (None, None, None) => self.logged_ancestor(at).await?,
             _ => None,
