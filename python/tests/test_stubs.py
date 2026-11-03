@@ -5,14 +5,17 @@
 extension with the standard library only, so it runs in every test
 environment. ``test_mypy_strict_examples`` and ``test_stubtest_native`` run
 the mypy checks (``mypy --strict`` over ``examples/`` and ``mypy.stubtest``
-against the built extension); they skip when mypy is not installed. The
+against the built extension); they skip when mypy is not installed, unless
+``KRISHIV_REQUIRE_MYPY=1`` (the wheel test job sets it), when they fail. The
 commands, in the style of the ``python-quality`` job, are in ``README.md``.
 """
 
 from __future__ import annotations
 
 import ast
+import importlib
 import inspect
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -113,8 +116,17 @@ def test_native_stub_matches_runtime() -> None:
         assert stub_names == runtime_names, f"{name}: stub {stub_names} != runtime {runtime_names}"
 
 
+def _need_mypy() -> None:
+    """Skip without mypy, unless CI requires it (``KRISHIV_REQUIRE_MYPY=1``): then fail."""
+    if os.environ.get("KRISHIV_REQUIRE_MYPY") == "1":
+        # A missing mypy must fail the job, not skip the check.
+        importlib.import_module("mypy")
+    else:
+        pytest.importorskip("mypy")
+
+
 def test_mypy_strict_examples() -> None:
-    pytest.importorskip("mypy")
+    _need_mypy()
     proc = subprocess.run(
         [sys.executable, "-m", "mypy", "--strict", "examples/basic.py", "examples/dataframe_ops.py"],
         cwd=PYTHON_DIR,
@@ -125,11 +137,13 @@ def test_mypy_strict_examples() -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-def test_stubtest_native() -> None:
-    pytest.importorskip("mypy")
+def test_stubtest_native(tmp_path: Path) -> None:
+    _need_mypy()
+    # Not from the source tree: its `krishiv` package would shadow the installed wheel (it has the
+    # stub but no compiled extension), and stubtest imports the runtime module.
     proc = subprocess.run(
         [sys.executable, "-m", "mypy.stubtest", "krishiv._native", "--concise", "--ignore-disjoint-bases"],
-        cwd=PYTHON_DIR,
+        cwd=tmp_path,
         capture_output=True,
         text=True,
         check=False,
