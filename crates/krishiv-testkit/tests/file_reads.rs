@@ -166,11 +166,9 @@ fn directories_list_like_spark() {
         .unwrap();
     let got = env.block_on(r.infer("mock", &paths(&["/q"]), &none));
     assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature);
-    // Globs and credentials in paths.
-    for p in ["/d/*", "s3://user:secret@bucket/k"] {
-        let got = env.block_on(r.infer("mock", &paths(&[p]), &none));
-        assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature, "{p}");
-    }
+    // Credentials in paths (globs are expanded: see `partition_discovery` in krishiv-session).
+    let got = env.block_on(r.infer("mock", &paths(&["s3://user:secret@bucket/k"]), &none));
+    assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature);
     // Paths come before the format: a missing path of a format without a
     // reader here is PATH_NOT_FOUND, an existing one of a Spark built-in
     // source without an implementation is unsupported.
@@ -289,9 +287,9 @@ fn parquet_types_and_options() {
     let opt = |k: &str, v: &str| BTreeMap::from([(k.to_owned(), OptionValue::from_user(k, v))]);
     let got = env.block_on(r.infer("parquet", &paths(&["/t"]), &opt("binaryAsString", "maybe")));
     assert_eq!(class(got).0, ErrorClass::KrishivInvalidFormatOptionValue);
-    // Merging schemas is not ignored: it is not supported yet.
+    // Merging the schemas of one file gives that file's schema.
     let got = env.block_on(r.infer("parquet", &paths(&["/t"]), &opt("MERGESCHEMA", " True")));
-    assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(columns(got).len(), 3);
     let got = env.block_on(r.infer("parquet", &paths(&["/t"]), &opt("mergeSchema", "false")));
     assert_eq!(columns(got).len(), 3);
     let (session, _) = Config::from_pairs([("spark.sql.parquet.mergeSchema", "true")]).unwrap();
@@ -302,7 +300,7 @@ fn parquet_types_and_options() {
         Arc::new(session),
     );
     let got = env.block_on(merging.infer("parquet", &paths(&["/t"]), &BTreeMap::new()));
-    assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(columns(got).len(), 3);
     // The read option wins over the session's.
     let got = env.block_on(merging.infer("parquet", &paths(&["/t"]), &opt("mergeSchema", "false")));
     assert_eq!(columns(got).len(), 3);
