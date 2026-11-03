@@ -2317,6 +2317,24 @@ dependencies = [
 [[package]]
 name = "krishiv-scheduler"
 version = "0.1.0-alpha"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "futures",
+ "krishiv-common",
+ "krishiv-exec",
+ "krishiv-io",
+ "krishiv-memory",
+ "krishiv-optimizer",
+ "krishiv-plan",
+ "krishiv-plan-codec",
+ "krishiv-shuffle",
+ "krishiv-sql",
+ "krishiv-types",
+ "object_store",
+ "tempfile",
+ "tokio",
+]
 
 [[package]]
 name = "krishiv-server"
@@ -2361,6 +2379,17 @@ dependencies = [
 [[package]]
 name = "krishiv-shuffle"
 version = "0.1.0-alpha"
+dependencies = [
+ "arrow-array",
+ "arrow-ipc",
+ "arrow-schema",
+ "futures",
+ "krishiv-common",
+ "krishiv-exec",
+ "krishiv-memory",
+ "tempfile",
+ "thiserror",
+]
 
 [[package]]
 name = "krishiv-sim"
