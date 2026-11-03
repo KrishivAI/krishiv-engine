@@ -23,8 +23,6 @@ order when the query has a top-level ORDER BY (rows that tie on its keys may swa
 from __future__ import annotations
 
 import argparse
-import csv
-import io
 import json
 import subprocess
 import sys
@@ -32,7 +30,7 @@ import time
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from krishiv_bench.compare import derive_sort_keys, has_top_level_order_by, load_tpch_answers
+from krishiv_bench.compare import derive_limit, derive_sort_keys, has_top_level_order_by, load_tpch_answers
 
 TABLES = ["customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"]
 REL_TOL = 1e-6
@@ -96,10 +94,55 @@ def run_cli(args: argparse.Namespace) -> None:
         if p.returncode != 0:
             out[q] = {"error": f"exit {p.returncode}: {p.stderr.strip()[:500]}"}
         else:
-            rows = list(csv.reader(io.StringIO(p.stdout)))[1:]  # the header row
-            out[q] = {"rows": [[c if c != "" else None for c in r] for r in rows], "seconds": seconds}
+            out[q] = {"rows": csv_cells(p.stdout)[1:], "seconds": seconds}  # [1:]: the header row
         print(q, "ERROR" if "error" in out[q] else f"{len(out[q]['rows'])} rows", file=sys.stderr)
     Path(args.out).write_text(json.dumps(out))
+
+
+def csv_cells(text: str) -> list[list[str | None]]:
+    """Rows of the CLI's CSV output: an unquoted empty field is NULL, a quoted one (`""`) the empty string.
+
+    `csv.reader` cannot tell the two apart. Every line ends a row, so a one-column NULL row is an empty line.
+    """
+    rows: list[list[str | None]] = []
+    row: list[str | None] = []
+    field: list[str] = []
+    quoted = in_quotes = False
+    i, n = 0, len(text)
+
+    def end_field() -> None:
+        nonlocal quoted
+        row.append("".join(field) if field or quoted else None)
+        field.clear()
+        quoted = False
+
+    while i < n:
+        c = text[i]
+        if in_quotes:
+            if c == '"' and i + 1 < n and text[i + 1] == '"':
+                field.append('"')
+                i += 1
+            elif c == '"':
+                in_quotes = False
+            else:
+                field.append(c)
+        elif c == '"':
+            in_quotes = quoted = True
+        elif c == ",":
+            end_field()
+        elif c in "\r\n":
+            if c == "\r" and i + 1 < n and text[i + 1] == "\n":
+                i += 1
+            end_field()
+            rows.append(row)
+            row = []
+        else:
+            field.append(c)
+        i += 1
+    if field or quoted or row:
+        end_field()
+        rows.append(row)
+    return rows
 
 
 # ------------------------------------------------------------------ comparison
@@ -157,26 +200,35 @@ def rows_equal(
     worst: list[float],
     sort_keys: list[int] | None = None,
     text_cols: frozenset[int] = frozenset(),
+    limit: int | None = None,
 ) -> str | None:
     """None when equal, else a one-line difference.
 
     An ordered result may differ from the reference in the order of rows that tie on the ORDER BY keys: it
-    passes when the sets of rows are equal and the key columns agree position by position. Columns in
-    `text_cols` compare as text.
+    passes when the sets of rows are equal and the key columns agree position by position. When the query's
+    LIMIT cut the result (`len(ref) >= limit`), the last tie group may hold other rows in each result: only
+    its keys must agree. Columns in `text_cols` compare as text.
     """
     first = [0.0]
     diff = _rows_diff(got, ref, ordered, answer, first, text_cols)
     if diff is None:
         worst[0] = max(worst[0], first[0])
         return None
-    if not ordered or not sort_keys:
+    if not ordered or not sort_keys or len(got) != len(ref):
         return diff
     tie_worst = [0.0]
-    if _rows_diff(got, ref, False, answer, tie_worst, text_cols) is not None:
+
+    def same_keys(g, r) -> bool:
+        return all(cells_equal(g[k], r[k], answer, tie_worst, k in text_cols) for k in sort_keys)
+
+    if not all(same_keys(g, r) for g, r in zip(got, ref, strict=True)):
         return diff
-    for g, r in zip(got, ref, strict=True):
-        if any(not cells_equal(g[k], r[k], answer, tie_worst, k in text_cols) for k in sort_keys):
-            return diff
+    end = len(ref)
+    if limit is not None and ref and len(ref) >= limit:
+        while end > 0 and same_keys(ref[end - 1], ref[-1]):
+            end -= 1
+    if _rows_diff(got[:end], ref[:end], False, answer, tie_worst, text_cols) is not None:
+        return diff
     worst[0] = max(worst[0], tie_worst[0])
     return None
 
@@ -223,15 +275,15 @@ def check(args: argparse.Namespace) -> int:
             lines.append(f"| {q} | - | ERROR | ERROR | {(res or {}).get('error', 'missing')[:160]} |")
             continue
         got, ordered = res["rows"], has_top_level_order_by(sql)
-        keys = derive_sort_keys(sql)
+        keys, limit = derive_sort_keys(sql), derive_limit(sql)[0]
         official = "n/a"
         detail = ""
         duck_rows, text_cols = duckdb_rows(Path(args.data), sql)
         if q in answers:
-            d = rows_equal(got, answers[q], ordered, True, worst, keys, text_cols)
+            d = rows_equal(got, answers[q], ordered, True, worst, keys, text_cols, limit)
             official = "ok" if d is None else "MISMATCH"
             detail += "" if d is None else f"official: {d}; "
-        d2 = rows_equal(got, duck_rows, ordered, False, worst, keys, text_cols)
+        d2 = rows_equal(got, duck_rows, ordered, False, worst, keys, text_cols, limit)
         duck = "ok" if d2 is None else "MISMATCH"
         detail += "" if d2 is None else f"DuckDB: {d2}"
         if official in ("ok", "n/a") and duck == "ok":

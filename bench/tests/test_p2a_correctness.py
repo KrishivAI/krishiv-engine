@@ -85,3 +85,24 @@ def test_an_empty_string_is_not_null_against_duckdb():
     assert diff([[None]], [[None]]) is None
     # The official answer text cannot tell them apart.
     assert diff([[None]], [[""]], answer=True) is None
+
+
+def test_cli_csv_keeps_a_quoted_empty_string_apart_from_null():
+    # krishiv-cli's csv_field quotes the empty string; NULL is an unquoted empty field.
+    assert m.csv_cells('revenue\n""\n') == [["revenue"], [""]]
+    assert m.csv_cells("revenue\n\n") == [["revenue"], [None]]
+    assert m.csv_cells('a,b\n,""\r\n"x,""y""\nz",1\n') == [["a", "b"], [None, ""], ['x,"y"\nz', "1"]]
+    assert diff(m.csv_cells('revenue\n""\n')[1:], [[None]]) is not None
+
+
+def test_a_tie_group_cut_by_limit_may_hold_other_rows():
+    # q03 orders by revenue and date only: with 11 orders tied at the tenth place, either may be kept.
+    ref = [["1", "9"], ["2", "5"], ["3", "5"]]
+    got = [["1", "9"], ["4", "5"], ["2", "5"]]
+    assert m.rows_equal(got, ref, True, False, [0.0], [1], frozenset(), 3) is None
+    # Without a cut, or outside the last group, the rows must be the same.
+    assert m.rows_equal(got, ref, True, False, [0.0], [1], frozenset(), 4) is not None
+    assert m.rows_equal(got, ref, True, False, [0.0], [1], frozenset(), None) is not None
+    assert m.rows_equal([["7", "9"], *ref[1:]], ref, True, False, [0.0], [1], frozenset(), 3) is not None
+    # The keys themselves still must agree.
+    assert m.rows_equal([["1", "9"], ["2", "5"], ["3", "6"]], ref, True, False, [0.0], [1], frozenset(), 3) is not None
