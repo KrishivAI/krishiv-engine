@@ -40,7 +40,12 @@ REL_TOL = 1e-6
 
 def query_ids(only: list[str] | None) -> list[str]:
     ids = [f"q{n:02d}" for n in range(1, 23)]
-    return [q for q in ids if not only or q in only]
+    if only is None:
+        return ids
+    unknown = sorted(set(only) - set(ids))
+    if unknown or not only:
+        raise SystemExit(f"unknown query ids {unknown or only!r}: expected some of q01..q22")
+    return [q for q in ids if q in only]
 
 
 def cell_text(v) -> str | None:
@@ -119,7 +124,8 @@ def cells_equal(a: str | None, b: str | None, answer: bool, worst: list[float]) 
         return (a in (None, "")) and (b in (None, ""))
     da, db = as_decimal(a), as_decimal(b)
     if da is None or db is None:
-        return a.strip() == b.strip()
+        # Text is exact; only CHAR padding at the end may differ, never leading characters.
+        return a.rstrip() == b.rstrip()
     if answer:
         # The official answers hold doubles at full precision for averages and ratios; under Spark's
         # decimal semantics the engine returns them as decimals of a smaller scale. Equal means: the same
@@ -128,6 +134,11 @@ def cells_equal(a: str | None, b: str | None, answer: bool, worst: list[float]) 
         return round(da, scale) == round(db, scale)
     if da == db:
         return True
+    if decimal_places(da) == decimal_places(db):
+        # Counts, keys and sums of decimals have the same scale in both engines: they must be equal.
+        # The tolerance below is only for values whose scale differs (Spark's decimal `avg` against
+        # DuckDB's double).
+        return False
     rel = float(abs(da - db) / max(abs(da), abs(db), Decimal(1)))
     worst[0] = max(worst[0], rel)
     return rel <= REL_TOL
