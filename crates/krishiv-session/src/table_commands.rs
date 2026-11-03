@@ -3220,7 +3220,8 @@ mod owned_directory_tests {
         // The path now names another directory (swapped meanwhile): left alone.
         let c = tmp.path().join("c");
         let guard = OwnedDirectory::create(c.clone()).unwrap();
-        std::fs::remove_dir(&c).unwrap();
+        // Renamed aside, not removed: a removed directory's inode number may be reused by the new one.
+        std::fs::rename(&c, tmp.path().join("c-moved")).unwrap();
         std::fs::create_dir(&c).unwrap();
         std::fs::write(c.join("theirs"), b"y").unwrap();
         drop(guard);

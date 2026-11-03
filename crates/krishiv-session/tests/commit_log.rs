@@ -496,3 +496,31 @@ fn a_glob_under_a_base_path_uses_a_log_between_the_base_and_the_prefix() {
         "the abandoned file is not read"
     );
 }
+
+/// A log made at an intermediate partition directory between `basePath` and the read path while the
+/// read lists is noticed by the recheck (the same resolution order as the first lookup).
+#[test]
+fn an_intermediate_log_below_a_base_path_is_found_by_the_recheck_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let mid = out.join("p=a");
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'x' AS q")).unwrap();
+    block_on(
+        df.write()
+            .partition_by(["q"])
+            .mode("append")
+            .parquet(mid.to_str().unwrap()),
+    )
+    .unwrap();
+    // The directory read by its own path under an unlogged basePath: the log between them applies.
+    let leaf = mid.join("q=x");
+    let df = s
+        .read()
+        .option("basePath", out.to_str().unwrap())
+        .parquet([leaf.to_str().unwrap()]);
+    assert_eq!(block_on(df.count()).unwrap(), 1);
+}

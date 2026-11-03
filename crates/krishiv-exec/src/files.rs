@@ -806,7 +806,12 @@ impl FileReads {
             return Ok(true);
         }
         match &mode.base {
+            // The same order as the read itself: the nearest logged ancestor of the path (it may sit
+            // between the base and the path), then the base's own log and its ancestors'.
             Some(root) if at.path.prefix_matches(&root.path) => {
+                if self.logged_ancestor(at).await?.is_some() {
+                    return Ok(true);
+                }
                 Ok(self.base_log(root).await?.is_some())
             }
             Some(_) => Ok(false),
