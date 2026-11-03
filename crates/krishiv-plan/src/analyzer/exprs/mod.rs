@@ -790,6 +790,11 @@ fn builtin_op(name: &str, arity: usize) -> Option<crate::Builtin> {
     crate::Builtin::from_name(name).filter(|b| !b.is_analyzer_internal())
 }
 
+/// Whether `name` is the bare hidden `_metadata` column.
+fn is_metadata(name: &[String]) -> bool {
+    matches!(name, [n] if n.eq_ignore_ascii_case(super::ops::METADATA_COLUMN))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

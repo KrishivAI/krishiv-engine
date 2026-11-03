@@ -84,6 +84,21 @@ pub(super) enum Widen {
     /// An aggregate (under the projections of its lateral aliases): it
     /// adds grouping attributes to its output.
     Aggregate(Arc<AggInfo>),
+    /// A file scan: it adds its hidden `_metadata` column to its output.
+    Scan,
+    /// `inner` with every attribute id shifted by `offset` (the second
+    /// side of a self-join): widening shifts what `inner` widens to.
+    Shift { inner: Rel, offset: u64 },
+    /// A join of `left` and `right` (their `hidden` kept): the hidden
+    /// `_metadata` columns of either input come from widening it.
+    Join {
+        left: Rel,
+        right: Rel,
+        kind: crate::JoinKind,
+        condition: crate::JoinCondition,
+        /// Whether the left and right outputs turn nullable.
+        nullable: (bool, bool),
+    },
 }
 
 /// A resolved relation and its output scope.

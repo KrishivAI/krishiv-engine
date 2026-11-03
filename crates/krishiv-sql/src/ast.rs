@@ -1458,6 +1458,8 @@ pub enum AlterNamespaceAction {
     SetProperties(Vec<TableOption>),
     /// `SET LOCATION '...'`.
     SetLocation(String),
+    /// `COMMENT ON SCHEMA name IS 'comment'` (`None` for `IS NULL`).
+    SetComment(Option<String>),
     /// `DEFAULT COLLATION ...`.
     DefaultCollation(ObjectName),
 }

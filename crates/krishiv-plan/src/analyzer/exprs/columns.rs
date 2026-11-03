@@ -232,7 +232,7 @@ impl Resolver<'_> {
                 qual: super::super::ops::no_qual(),
                 source: None,
             };
-            return self.resolve_attr(&a, 1, &c.name, origin, None, true);
+            return self.resolve_attr(&a, 1, &c.name, origin, None, cx, true);
         }
         if let Some(id) = c.plan_id {
             let a = self.plan_column(id, &c.name, cx, origin)?;
@@ -257,8 +257,10 @@ impl Resolver<'_> {
         // The columns a `USING` join merged away answer to a qualified name.
         let joined: Vec<Attr>;
         let hidden = match (cx.rels, cx.agg_scope.is_some() && in_agg) {
-            ([r], false) if c.name.len() > 1 => Some(&r.hidden[..]),
-            ([r], true) if c.name.len() > 1 => r.agg.as_ref().map(|i| &i.input.hidden[..]),
+            ([r], false) if c.name.len() > 1 || is_metadata(&c.name) => Some(&r.hidden[..]),
+            ([r], true) if c.name.len() > 1 || is_metadata(&c.name) => {
+                r.agg.as_ref().map(|i| &i.input.hidden[..])
+            }
             // A join condition reads the merged-away columns of both inputs.
             (rels, false) if c.name.len() > 1 && rels.len() > 1 => {
                 joined = rels.iter().flat_map(|r| r.hidden.iter().cloned()).collect();
@@ -283,10 +285,10 @@ impl Resolver<'_> {
                         && self.serves_path(&k, &c.name[k_used..])
                     {
                         self.used(&k);
-                        return self.resolve_attr(&k, k_used, &c.name, origin, None, false);
+                        return self.resolve_attr(&k, k_used, &c.name, origin, None, cx, false);
                     }
                     self.used(&a);
-                    return self.resolve_attr(&a, used, &c.name, origin, None, false);
+                    return self.resolve_attr(&a, used, &c.name, origin, None, cx, false);
                 }
                 Ok(None) => {
                     lenient_dup = lenient_dup || lenient;
@@ -377,7 +379,7 @@ impl Resolver<'_> {
         for (level, outer) in levels.filter(|_| cx.outer) {
             if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
                 self.used(&a);
-                return self.resolve_attr(&a, used, &c.name, origin, Some(level), false);
+                return self.resolve_attr(&a, used, &c.name, origin, Some(level), cx, false);
             }
         }
         // The parameters of the SQL function being resolved rank after
@@ -784,6 +786,10 @@ impl Resolver<'_> {
     /// or the struct fields the leftover parts name below it (Spark's
     /// `GetStructField` chain), resolved under `spark.sql.caseSensitive`.
     /// `outer` is `Some` for a column of the enclosing query.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one binding site shared by columns, outer references and lambda variables"
+    )]
     pub(super) fn resolve_attr(
         &mut self,
         a: &Attr,
@@ -791,6 +797,7 @@ impl Resolver<'_> {
         parts: &[String],
         origin: Origin,
         outer: Option<usize>,
+        cx: &Cx<'_>,
         lambda: bool,
     ) -> Result<Bound, AnalysisError> {
         // A reference keeps the spelling it was written with.
@@ -816,7 +823,19 @@ impl Resolver<'_> {
         let mut ty = column(&col);
         let mut base = Arc::new(Expr::new(node).with_origin(origin));
         let mut parent = parts[used - 1].clone();
-        for part in &parts[used..] {
+        for (i, part) in parts.iter().enumerate().skip(used) {
+            // A map below the path: the rest are lookups (`m.a.b` is `m['a']['b']`).
+            if matches!(ty.data_type, Some(DataType::Map(_))) {
+                let mut chain = Expr::clone(&base);
+                for rest in &parts[i..] {
+                    chain = Expr::new(ExprNode::Field {
+                        base: Arc::new(chain),
+                        name: rest.clone(),
+                    })
+                    .with_origin(origin);
+                }
+                return self.expr(&Arc::new(chain), cx);
+            }
             let st = match &ty.data_type {
                 Some(DataType::Struct(st)) => st.clone(),
                 _ => {

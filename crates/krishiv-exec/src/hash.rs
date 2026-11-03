@@ -34,6 +34,7 @@ use hashbrown::hash_table::Entry;
 use krishiv_common::error::KrishivUnsupportedFeature;
 
 use crate::error::{Result, internal};
+use crate::map_keys::sort_maps;
 
 /// The key hash: foldhash with a per-query seed. Never observable (Spark's
 /// observable hash is Murmur3, in the kernels).
@@ -108,7 +109,10 @@ impl KeyEncoder {
     /// # Errors
     /// `INTERNAL_ERROR` if a column does not have its key type.
     pub fn encode(&self, columns: &[ArrayRef]) -> Result<Rows> {
-        let normalized: Vec<ArrayRef> = columns.iter().map(normalize_key).collect();
+        let normalized = columns
+            .iter()
+            .map(|c| sort_maps(&normalize_key(c)))
+            .collect::<Result<Vec<ArrayRef>>>()?;
         self.converter
             .convert_columns(&normalized)
             .map_err(|e| internal(e.to_string()))

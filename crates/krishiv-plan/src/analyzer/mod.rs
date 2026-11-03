@@ -112,11 +112,12 @@ pub use access::{authorize, insufficient_permissions, namespace_parts, table_ide
 pub use builtins::BuiltinFunctions;
 pub use catalog::{
     AccessDecision, AccessPolicy, AllowAll, ArgType, Arity, BoxFuture, BuiltinTableFunctions,
-    CallTypes, Catalog, CatalogResolver, Constant, DenyAll, FileSchemaResolver, FunctionEntry,
-    FunctionLookup, FunctionRegistry, InputBuilder, InputType, Inputs, MemoryCatalog, NameForm,
-    Operator, PolicyVersion, Principal, PrincipalKind, Privilege, ResultType, RowColumnPolicy,
-    Securable, SourceKind, SqlFrontend, TableColumn, TableFunctionKind, TableFunctionLookup,
-    TableFunctionRegistry, TableIdent, TableKind, TableMeta,
+    CallTypes, Catalog, CatalogResolver, Constant, DenyAll, FileMetadata, FileSchemaResolver,
+    FunctionEntry, FunctionLookup, FunctionRegistry, InputBuilder, InputType, Inputs,
+    MemoryCatalog, NameForm, Operator, PolicyVersion, Principal, PrincipalKind, Privilege,
+    ResultType, RowColumnPolicy, Securable, SourceKind, SqlFrontend, TableColumn,
+    TableFunctionKind, TableFunctionLookup, TableFunctionRegistry, TableIdent, TableKind,
+    TableMeta,
 };
 pub use sqlfn::{SqlFunction, SqlParam};
 pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, variable_name};
