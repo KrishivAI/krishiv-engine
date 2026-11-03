@@ -990,9 +990,11 @@ fn arithmetic(
     // Without ANSI a string beside a number is read as a `double`, and so is
     // the number (Spark 4.2: `2147483647 + '1'` is `2.147483648E9`); the cast
     // of text that is no number gives NULL.
+    let text_or_number = |t: Option<&T>| t.is_none_or(|t| *t == T::String || is_numeric(t));
     if !ansi
-        && let (Some(x), Some(y)) = (a.ty, b.ty)
-        && ((*x == T::String && is_numeric(y)) || (is_numeric(x) && *y == T::String))
+        && (matches!(a.ty, Some(T::String)) || matches!(b.ty, Some(T::String)))
+        && text_or_number(a.ty)
+        && text_or_number(b.ty)
     {
         return Ok(Typed {
             casts: vec![

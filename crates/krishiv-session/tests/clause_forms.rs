@@ -1190,7 +1190,8 @@ fn a_time_of_day_string_is_on_the_query_date() -> R {
     let b = block_on(
         block_on(s.sql(
             "SELECT hour('10:11:12'), minute('10:11:12'), second('10:11:12.5'), \
-             CAST('T23:59' AS TIMESTAMP) = CAST(CAST(current_date() AS STRING) || ' 23:59:00' AS TIMESTAMP)",
+             CAST('T23:59' AS TIMESTAMP) = CAST(CAST(current_date() AS STRING) || ' 23:59:00' AS TIMESTAMP), \
+             CAST('T10:00:00-12:00' AS TIMESTAMP) = CAST(CONCAT(CAST(CAST(current_timestamp() - INTERVAL 12 HOURS AS DATE) AS STRING), ' 10:00:00-12:00') AS TIMESTAMP)",
         ))?
         .collect(),
     )?;
@@ -1200,6 +1201,8 @@ fn a_time_of_day_string_is_on_the_query_date() -> R {
     };
     assert_eq!((int(0), int(1)), (10, 11));
     assert!(arrow_array::cast::AsArray::as_boolean(b[0].column(3)).value(0));
+    // A zone in the text sets the date: the day it is at -12:00, not in the session zone.
+    assert!(arrow_array::cast::AsArray::as_boolean(b[0].column(4)).value(0));
     Ok(())
 }
 
@@ -1212,7 +1215,8 @@ fn arithmetic_with_a_string_and_ansi_off_is_a_double() -> R {
     block_on(s.sql("SET spark.sql.ansi.enabled=false"))?;
     let b = block_on(
         block_on(s.sql(
-            "SELECT 2147483647 + '1', try_divide(1, '0'), '3' * 2, 'x' + 1, try_multiply(2147483647, '-2')",
+            "SELECT 2147483647 + '1', try_divide(1, '0'), '3' * 2, 'x' + 1, try_multiply(2147483647, '-2'), \
+             '1' + '2', '1' + NULL",
         ))?
         .collect(),
     )?;
@@ -1227,5 +1231,7 @@ fn arithmetic_with_a_string_and_ansi_off_is_a_double() -> R {
     assert_eq!(col(2), Some(6.0));
     assert_eq!(col(3), None);
     assert_eq!(col(4), Some(-4_294_967_294.0));
+    assert_eq!(col(5), Some(3.0));
+    assert_eq!(col(6), None);
     Ok(())
 }
