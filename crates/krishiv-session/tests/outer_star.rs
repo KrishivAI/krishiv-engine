@@ -65,6 +65,45 @@ fn an_outer_star_includes_the_using_columns_of_the_outer_query() {
     );
 }
 
+/// A local struct column named like an enclosing relation wins: `t.*` expands
+/// the struct's fields, not the outer relation.
+#[test]
+fn a_local_struct_column_wins_over_the_outer_relation() -> R {
+    let s = Session::new()?;
+    let batches = block_on(async {
+        s.sql(
+            "select (select t.* from (select named_struct('k', 2) as t) as s) \
+             from values (1) as t(k)",
+        )
+        .await?
+        .collect()
+        .await
+    })?;
+    assert_eq!(batches[0].column(0).as_primitive::<Int32Type>().value(0), 2);
+    Ok(())
+}
+
+/// The generated `_metadata` column of a file source is not part of an
+/// outer star: `p.*` is just `k`.
+#[test]
+fn an_outer_star_over_a_file_table_skips_the_metadata_column() -> R {
+    let dir = tempfile::tempdir()?;
+    let s = Session::new()?;
+    s.conf().set(
+        "spark.sql.warehouse.dir",
+        dir.path().to_str().unwrap_or_default(),
+    )?;
+    for sql in [
+        "create table p (k int) using parquet",
+        "insert into p values (1)",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await })?;
+    }
+    let batches = block_on(async { s.sql("select (select p.*) from p").await?.collect().await })?;
+    assert_eq!(batches[0].column(0).as_primitive::<Int32Type>().value(0), 1);
+    Ok(())
+}
+
 #[test]
 fn a_temporary_function_named_by_identifier_takes_no_database() {
     let s = Session::new().unwrap();

@@ -579,12 +579,6 @@ impl Resolver<'_> {
         for e in exprs {
             if let ExprNode::Star(s) = &e.node {
                 let cx = Self::cx(&c.out, &rels, env, op);
-                if let Some(outer) = self.outer_star(s, &cx, e.origin)? {
-                    for b in outer {
-                        items.push(self.named(b)?);
-                    }
-                    continue;
-                }
                 // `* EXCEPT (s.f)` and `s.* EXCEPT (...)` rebuild the structs.
                 if let Some(nested) = self.nested_except_items(s, &cx, e.origin)? {
                     for item in nested {
@@ -637,6 +631,14 @@ impl Resolver<'_> {
                             });
                         }
                         items.push(bound);
+                    }
+                    continue;
+                }
+                // `t.*` in a subquery where `t` is the enclosing query's: after
+                // the local forms above (a local struct column of that name wins).
+                if let Some(outer) = self.outer_star(s, &cx, e.origin)? {
+                    for b in outer {
+                        items.push(self.named(b)?);
                     }
                     continue;
                 }

@@ -328,6 +328,9 @@ impl Resolver<'_> {
             .hidden
             .iter()
             .chain(cx.env.outer[level].scope.iter())
+            // Generated metadata (`_metadata` of a file source) is not part
+            // of a star, as in `expand`.
+            .filter(|a| !crate::analyzer::ops::is_generated_metadata(a))
             .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
             .cloned()
             .collect();
