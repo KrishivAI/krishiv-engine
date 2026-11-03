@@ -174,19 +174,10 @@ fn prefix(row: &[u8]) -> u64 {
 
 /// The bytes of `batch`'s rows (what a copy of them, or a spill frame,
 /// holds), without the slack of the buffers it shares: a per-row size that
-/// does not depend on the batch's length.
+/// does not depend on the batch's length. A view column counts only the
+/// bytes its views reference, not the whole data buffers it shares.
 pub(crate) fn data_bytes(batch: &Batch) -> usize {
-    let columns: usize = batch
-        .data()
-        .columns()
-        .iter()
-        .map(|c| {
-            c.to_data()
-                .get_slice_memory_size()
-                .unwrap_or_else(|_| c.get_array_memory_size())
-        })
-        .sum();
-    columns + batch.num_rows() * weight_bytes(batch)
+    SpillWriter::frame_bytes(batch)
 }
 
 fn weight_bytes(batch: &Batch) -> usize {

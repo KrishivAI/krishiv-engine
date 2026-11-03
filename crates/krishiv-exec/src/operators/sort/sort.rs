@@ -40,6 +40,7 @@ use super::{BATCH_SLACK_BYTES, SPILL_BATCH_BYTES, SPILL_BUFFER_BYTES, blocking, 
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, run_blocking};
+use crate::join::compact_views;
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::operators::{global_ref, local_mut};
 use crate::output_spill::{OutputSpill, SpillUnread, Unfinished, refused};
@@ -1337,11 +1338,13 @@ impl Sink for Sort {
         }
         let data = data_bytes(&input);
         let row_bytes = l.buffer.row_bytes.max(data.div_ceil(rows));
-        // A small slice of a large batch would keep (and account) the whole
-        // batch: keep a copy of its rows instead.
+        // A small slice of a large batch, or views into an exchange's shared
+        // pages, would keep (and account) the whole buffers: keep a copy of
+        // its rows instead. Interleaving shares view buffers, so views are
+        // compacted on top.
         let input = if input.data().get_array_memory_size() > 2 * data + SLICE_SLACK_BYTES {
             let rows: Vec<(usize, usize)> = (0..rows).map(|r| (0, r)).collect();
-            interleave_batches(&input.schema(), &[input], &rows)?
+            compact_views(interleave_batches(&input.schema(), &[input], &rows)?)?
         } else {
             input
         };

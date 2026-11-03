@@ -362,6 +362,52 @@ async fn a_spilled_run_of_views_is_sized_as_written() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Batches of views into shared buffers (an exchange's output) are kept as
+/// compacted copies and charged by their rows: charged by the buffers, ten
+/// slices of one page charged (and held) the page ten times, and a sort
+/// under a limit spilled a run per batch (51K spill files on a partitioned
+/// window over 60M `lineitem` rows at 1 GB).
+#[tokio::test(start_paused = true)]
+async fn sunk_views_into_shared_buffers_are_charged_by_their_rows() {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("s", DataType::Utf8View, false),
+    ]));
+    let n = 200usize;
+    let k = Int64Array::from_iter_values((0..n as i64).rev());
+    let s = StringViewArray::from_iter_values((0..n).map(|i| format!("{i:0>1000}")));
+    let whole = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(s)])
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let shared = whole.get_array_memory_size();
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let root = TreePool::new(&MemoryConfig::default());
+    let query = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        ExecConfig::default(),
+        root.child("q", None),
+    );
+    let ctx = TaskContext::new(
+        Arc::clone(&query),
+        executor,
+        SpillOwner::new(),
+        OperatorId(0),
+        "Sort",
+    );
+    let sort = Sort::new(schema, &[SortKey::asc(0)], None).unwrap();
+    let global = Sink::global_state(&sort, &ctx).unwrap();
+    let mut local = Sink::local_state(&sort, &ctx, &global).unwrap();
+    for at in (0..n).step_by(20) {
+        let slice = Batch::new(whole.slice(at, 20));
+        assert!(slice.data().get_array_memory_size() > shared / 2);
+        sort.sink(slice, &mut local, &global).unwrap();
+    }
+    let held = ctx.consumer().consumer().peak();
+    assert!(held < 2 * shared, "held {held} B, one page {shared} B");
+    drop((local, global, ctx, query));
+    assert_eq!(root.reserved(), 0);
+}
+
 /// Intermediate merges rewrite only as many runs as it takes to get down to
 /// the fan-in: 16 runs at fan-in 8 merge 8, then 2 (10 runs rewritten, not
 /// 16); 15 runs merge 8; a deep level merges full groups first.
