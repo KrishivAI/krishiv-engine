@@ -259,6 +259,8 @@ impl Cutter<'_> {
                 .into());
             }
             PhysNode::Range(_) => holds.single = true,
+            // Its one row comes once: every task of the stage would emit it.
+            PhysNode::OneRow if !subquery => holds.single = true,
             PhysNode::Scan(_) | PhysNode::LateFetch { .. } => holds.scans = true,
             PhysNode::NestedLoopJoin(j) if j.join_type.builds_preserved() => holds.single = true,
             PhysNode::HashJoin(j)

@@ -160,6 +160,10 @@ pub fn route(
                         .as_ref(),
                 );
             }
+            if columns.is_empty() {
+                out.resize(batch.num_rows(), 0);
+                return Ok(());
+            }
             return scheme.partitions(&columns, partitions, out);
         }
         Partitioning::RoundRobin => batch.columns().iter().map(AsRef::as_ref).collect(),
@@ -168,6 +172,11 @@ pub fn route(
             return Ok(());
         }
     };
+    if columns.is_empty() {
+        // Rows without columns (a projection keeping none) have no hash.
+        out.resize(batch.num_rows(), 0);
+        return Ok(());
+    }
     HashScheme::KeyGroupV1.partitions(&columns, partitions, out)
 }
 

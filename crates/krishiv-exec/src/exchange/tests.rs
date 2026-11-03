@@ -83,6 +83,21 @@ fn round_robin_routes_by_the_whole_row_whatever_the_batches() {
 }
 
 #[test]
+fn rows_without_columns_are_routed_not_dropped() {
+    let b = RecordBatch::try_new_with_options(
+        Arc::new(Schema::empty()),
+        vec![],
+        &arrow_array::RecordBatchOptions::new().with_row_count(Some(5)),
+    )
+    .unwrap();
+    for p in [Partitioning::RoundRobin, hash(vec![])] {
+        let mut out = Vec::new();
+        route(&p, &b, 4, &mut out).unwrap();
+        assert_eq!(out, vec![0; 5]);
+    }
+}
+
+#[test]
 fn gathers_broadcasts_and_ranges_write_partition_zero() {
     let b = batch(50);
     let range = Partitioning::Range {

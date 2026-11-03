@@ -141,6 +141,23 @@ fn a_hash_stage_without_whole_inputs_may_run_as_many_tasks() {
 }
 
 #[test]
+fn a_one_row_branch_beside_a_hash_read_runs_as_one_task() {
+    // `SELECT k FROM t GROUP BY k UNION ALL SELECT 0 ORDER BY k`: the
+    // constant branch would come once per task of the stage writing the
+    // range exchange.
+    let root = exchange(
+        2,
+        PhysNode::Union {
+            inputs: vec![exchange(1, range(), hash()), PhysNode::OneRow],
+        },
+        Partitioning::Single,
+    );
+    let stages = fragment(&plan(root), &schemas(&[1, 2])).unwrap();
+    assert_eq!(stages.len(), 3);
+    assert!(stages[1].single);
+}
+
+#[test]
 fn a_fragment_is_not_cut_again() {
     let source = PhysNode::ExchangeSource {
         id: ExchangeId(9),

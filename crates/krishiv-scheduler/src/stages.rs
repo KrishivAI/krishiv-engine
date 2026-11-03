@@ -31,7 +31,7 @@ use futures::future::{BoxFuture, Either};
 use futures::stream::BoxStream;
 use futures::stream::FuturesUnordered;
 use krishiv_common::error::{InternalError, KrishivError, OperationCanceled};
-use krishiv_exec::exchange::{Exchange, reduce_partitions};
+use krishiv_exec::exchange::reduce_partitions;
 use krishiv_exec::physical::Partitioning;
 use krishiv_exec::physical::{
     ExchangeInput, PhysicalPlan, ScanId, ScanSplits, TaskSpec, WorkerContext, exchange_schemas,
@@ -42,6 +42,9 @@ use krishiv_shuffle::LocalShuffle;
 use krishiv_types::batch::Batch;
 
 use crate::fragment::{Stage, fragment};
+
+/// The map tasks of each running query, by query (the query itself first).
+type Running = Mutex<HashMap<QueryId, Vec<Weak<QueryContext>>>>;
 
 type Result<T> = std::result::Result<T, KrishivError>;
 
@@ -80,7 +83,7 @@ pub struct StageRunner {
     splits: Option<Arc<dyn StageSplits>>,
     next_task: Arc<AtomicU64>,
     /// The map tasks running for each query, cancelled with it.
-    running: Arc<Mutex<HashMap<QueryId, Vec<Weak<QueryContext>>>>>,
+    running: Arc<Running>,
 }
 
 impl fmt::Debug for StageRunner {
@@ -310,6 +313,14 @@ impl StageRunner {
         worker: WorkerContext,
         query: Arc<QueryContext>,
     ) -> Result<BoxStream<'static, Result<Batch>>> {
+        // One scope for the query: its shuffle and every task spill there.
+        let (worker, shuffle) = match worker.spill_scope()? {
+            Some(scope) => (
+                worker.with_spill(scope.clone()),
+                LocalShuffle::on_disk(scope),
+            ),
+            None => (worker, LocalShuffle::in_memory()),
+        };
         let schemas = {
             let (plan, worker) = (plan.clone(), worker.clone());
             let out = Arc::new(Mutex::new(None));
@@ -329,11 +340,7 @@ impl StageRunner {
         };
         let stages = fragment(&plan, &schemas)?;
         let plans = self.plans(&stages)?;
-        let shuffle: Arc<dyn Exchange> = Arc::new(match worker.spill() {
-            Some(scope) => LocalShuffle::on_disk(scope.clone()),
-            None => LocalShuffle::in_memory(),
-        });
-        let worker = worker.with_exchange(shuffle);
+        let worker = worker.with_exchange(Arc::new(shuffle));
         let (root, maps) = stages
             .split_last()
             .ok_or_else(|| internal("a plan without stages".to_owned()))?;
@@ -370,6 +377,48 @@ impl StageRunner {
     }
 }
 
+impl StageRunner {
+    /// The number of queries whose submission is running: what a cancel
+    /// can still reach through the runner.
+    #[must_use]
+    pub fn running_queries(&self) -> usize {
+        self.running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
+}
+
+/// A query's entry in [`StageRunner::running`], removed when dropped: when
+/// its submission ends, or is dropped unfinished (a timeout, a client gone).
+struct Registered {
+    running: Arc<Running>,
+    id: QueryId,
+}
+
+impl Registered {
+    fn new(running: &Arc<Running>, query: &Arc<QueryContext>) -> Self {
+        let id = query.id();
+        running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, vec![Arc::downgrade(query)]);
+        Self {
+            running: Arc::clone(running),
+            id,
+        }
+    }
+}
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        self.running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.id);
+    }
+}
+
 impl Scheduler for StageRunner {
     fn submit(
         &self,
@@ -386,20 +435,12 @@ impl Scheduler for StageRunner {
             next_task: Arc::clone(&self.next_task),
             running: Arc::clone(&self.running),
         };
-        let id = query.id();
-        let running = Arc::clone(&self.running);
         // The query itself first: a cancel before or between its stages
         // ends it too.
-        running
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(id, vec![Arc::downgrade(&query)]);
+        let registered = Registered::new(&self.running, &query);
         Box::pin(async move {
             let out = runner.run(plan, worker, query).await;
-            running
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .remove(&id);
+            drop(registered);
             out
         })
     }

@@ -13,13 +13,14 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow_array::RecordBatch;
 use futures::StreamExt as _;
 use krishiv_common::config::Config;
 use krishiv_common::error::KrishivError;
 use krishiv_exec::physical::{
-    PhysNode, PhysicalPlan, ScanId, ScanNode, ScanSplits, SplitFileRef, WorkerContext,
+    PhysNode, PhysicalPlan, ScanId, ScanNode, ScanSplits, SpillScopes, SplitFileRef, WorkerContext,
     assign_file_splits, plan_file_partitions,
 };
 use krishiv_exec::planner::{
@@ -34,7 +35,7 @@ use krishiv_io::split::SplitConfig;
 use krishiv_io::{
     FileFormat, FileRef, FormatOptions, IoConfig, IoScheduler, MetadataNeeds, StoreId,
 };
-use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, TreePool};
+use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_plan::analyzer::testing::{block_on, context};
 use krishiv_plan::analyzer::{
     AnalysisContext, Analyzer as _, DefaultAnalyzer, MemoryCatalog, ResolutionConf, TableColumn,
@@ -312,8 +313,24 @@ fn tpch_sf0_01_on_stages_equals_one_worker() {
     assert!(only.is_some() || cut >= 22, "{cut} cuts");
 }
 
+/// Scopes from one spill manager, counted.
+#[derive(Debug)]
+struct Counted {
+    manager: SpillManager,
+    made: AtomicUsize,
+}
+
+impl SpillScopes for Counted {
+    fn scope(&self) -> Result<SpillScope, KrishivError> {
+        self.made.fetch_add(1, Ordering::Relaxed);
+        Ok(self.manager.scope()?)
+    }
+}
+
 /// Under a 16 MiB pool the exchange writers' buffers spill as frames to
-/// the query's spill directory, and the rows still match.
+/// the query's spill directory, and the rows still match. A worker with a
+/// scope factory (as a session's) spills its shuffle and its tasks into one
+/// scope per query.
 #[test]
 fn stages_under_a_16_mib_pool_match() {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -337,17 +354,29 @@ fn stages_under_a_16_mib_pool_match() {
         ..SpillConfig::default()
     })
     .unwrap();
-    for q in [3, 9, 13, 18] {
+    let scopes = Arc::new(Counted {
+        manager: SpillManager::open(&SpillConfig {
+            dir: dir.path().join("scopes"),
+            ..SpillConfig::default()
+        })
+        .unwrap(),
+        made: AtomicUsize::new(0),
+    });
+    let queries = [3, 9, 13, 18];
+    for q in queries {
         let plan = tpch.plan(q).unwrap();
         let worker =
             WorkerContext::new(Arc::clone(&tpch.tables) as _).with_spill(spill.scope().unwrap());
         let mut want = run(&plain, &plan, &worker, &big, 1).unwrap();
+        let factory = WorkerContext::new(Arc::clone(&tpch.tables) as _)
+            .with_spill_scopes(Arc::clone(&scopes) as _);
         let mut got =
-            run(&stages, &plan, &worker, &small, 2).unwrap_or_else(|e| panic!("q{q:02}: {e}"));
+            run(&stages, &plan, &factory, &small, 2).unwrap_or_else(|e| panic!("q{q:02}: {e}"));
         want.sort();
         got.sort();
         assert_eq!(got, want, "q{q:02}");
     }
+    assert_eq!(scopes.made.load(Ordering::Relaxed), queries.len());
     assert_eq!(small.reserved(), 0);
 }
 
@@ -466,4 +495,32 @@ fn a_cancel_before_the_stages_run_ends_the_query() {
     assert_eq!(root.reserved(), 0);
     // The runner forgets the query: a later cancel of its id is a no-op.
     stages.cancel(QueryId(6));
+    assert_eq!(stages.running_queries(), 0);
+}
+
+#[test]
+fn a_submission_dropped_unpolled_is_forgotten() {
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let stages = StageRunner::new(Arc::clone(&executor) as _, 4).unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let query = QueryContext::new(
+        QueryId(7),
+        WorkloadClass::Interactive,
+        ExecConfig::default(),
+        root.child("q7", None),
+    );
+    let submitted = stages.submit(
+        tpch.plan(1).unwrap(),
+        WorkerContext::new(Arc::clone(&tpch.tables) as _),
+        query,
+    );
+    assert_eq!(stages.running_queries(), 1);
+    // A timeout or a client gone drops the submission unfinished.
+    drop(submitted);
+    assert_eq!(stages.running_queries(), 0);
 }

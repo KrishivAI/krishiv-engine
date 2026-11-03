@@ -293,9 +293,23 @@ impl WorkerContext {
         self
     }
 
-    /// The spill scope, if spilling.
+    /// The fixed spill scope, if one is set ([`Self::with_spill`]).
     pub fn spill(&self) -> Option<&SpillScope> {
         self.spill.as_ref()
+    }
+
+    /// The scope an instantiation spills into: the fixed one, else a new
+    /// one from the factory ([`Self::with_spill_scopes`]); `None` without
+    /// spilling.
+    ///
+    /// # Errors
+    /// When the factory cannot create the spill directory.
+    pub fn spill_scope(&self) -> Result<Option<SpillScope>> {
+        match (&self.spill, &self.scopes) {
+            (Some(scope), _) => Ok(Some(scope.clone())),
+            (None, Some(scopes)) => Ok(Some(scopes.scope()?)),
+            (None, None) => Ok(None),
+        }
     }
 
     /// The relation store, if batch splits resolve through one.
@@ -364,11 +378,7 @@ fn instantiate_with_schemas(
     task: &TaskSpec,
 ) -> Result<(Arc<dyn ExecNode>, BTreeMap<ExchangeId, SchemaRef>)> {
     let run = || {
-        let spill = match (&worker.spill, &worker.scopes) {
-            (Some(scope), _) => Some(scope.clone()),
-            (None, Some(scopes)) => Some(scopes.scope()?),
-            (None, None) => None,
-        };
+        let spill = worker.spill_scope()?;
         let mut env = EvalEnv::from_plan(plan.env());
         // The UDFs travel with the worker, never with the plan.
         env.udfs = worker.udfs.clone();
