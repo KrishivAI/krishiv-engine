@@ -510,3 +510,45 @@ fn a_result_cache_hit_has_its_own_row_in_the_history() {
     );
     assert_eq!(rows, ["finished|etl", "finished|etl"], "{rows:?}");
 }
+
+#[test]
+fn the_result_cache_probe_does_not_count_a_relation_cache_hit_twice() {
+    let s = Session::new().unwrap();
+    // A relation in the cache: a frame that asked for it, run once.
+    let cached = block_on(s.sql("SELECT id FROM range(10)")).unwrap().cache();
+    block_on(cached.count()).unwrap();
+    let hits = |s: &Session| -> u64 {
+        strings_in(
+            s,
+            "SELECT CAST(hits AS STRING) FROM system.caches WHERE cache = 'relation'",
+        )[0]
+        .parse()
+        .unwrap()
+    };
+    // A second frame over the same plan reads it: one execution is one hit, with the result cache
+    // on or off (its eligibility probe is not a lookup).
+    let run_again = |s: &Session| {
+        let before = hits(s);
+        let df = block_on(s.sql("SELECT id FROM range(10)")).unwrap();
+        assert_eq!(
+            block_on(df.collect())
+                .unwrap()
+                .iter()
+                .map(arrow_array::RecordBatch::num_rows)
+                .sum::<usize>(),
+            10
+        );
+        hits(s) - before
+    };
+    let without = run_again(&s);
+    s.conf().set("krishiv.resultCache.enabled", "true").unwrap();
+    let with = run_again(&s);
+    assert_eq!(
+        without, 1,
+        "relation cache hits for one run without the result cache"
+    );
+    assert_eq!(
+        with, 1,
+        "relation cache hits for one run with the result cache"
+    );
+}

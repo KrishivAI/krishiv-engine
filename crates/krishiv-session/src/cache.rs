@@ -398,6 +398,16 @@ impl RelationCache {
     /// snapshots the plan now scans, by hidden name, so the query keeps them
     /// even if the cache is cleared before it is planned.
     pub(crate) fn substitute(&self, analyzed: &AnalyzedPlan) -> Option<Substituted> {
+        self.substitute_counting(analyzed, true)
+    }
+
+    /// Whether [`Self::substitute`] would replace a subplan, without counting a hit or a miss: a
+    /// probe (is this plan eligible for the shared result cache?) is not a lookup of the execution.
+    pub(crate) fn would_substitute(&self, analyzed: &AnalyzedPlan) -> bool {
+        self.substitute_counting(analyzed, false).is_some()
+    }
+
+    fn substitute_counting(&self, analyzed: &AnalyzedPlan, count: bool) -> Option<Substituted> {
         // Nothing cached: skip hashing every node of the plan.
         if self
             .state
@@ -451,10 +461,14 @@ impl RelationCache {
             })
             .unwrap_or(Arc::clone(&root));
         if Arc::ptr_eq(&out, &root) {
-            self.misses.fetch_add(1, Ordering::Relaxed);
+            if count {
+                self.misses.fetch_add(1, Ordering::Relaxed);
+            }
             None
         } else {
-            self.hits.fetch_add(1, Ordering::Relaxed);
+            if count {
+                self.hits.fetch_add(1, Ordering::Relaxed);
+            }
             Some(Substituted { plan: out, tables })
         }
     }

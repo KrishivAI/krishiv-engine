@@ -369,19 +369,26 @@ pub(crate) fn parse_traceparent(header: &str) -> Option<String> {
         .then(|| (*trace).to_owned())
 }
 
+/// The name of the memory pool of the query whose `system.queries` row is `query_id`.
+pub(crate) fn pool_name(query_id: &str) -> String {
+    format!("query-{query_id}")
+}
+
+/// The query a memory path belongs to: `process/query-<id>/...` names the pool of query `<id>`, or a
+/// consumer below it.
+fn query_of_path(path: &str) -> Option<String> {
+    path.split('/')
+        .nth(1)
+        .and_then(|p| p.strip_prefix("query-"))
+        .map(str::to_owned)
+}
+
 /// The columns' values for `table` now.
 fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
     if table.eq_ignore_ascii_case("memory") {
         let entries = sources.memory.snapshot().entries;
         let worker = vec![Some(LOCAL_WORKER); entries.len()];
-        // `process/query-<id>/...`: the query of a pool or consumer below one.
-        let query = |path: &str| {
-            path.split('/')
-                .nth(1)
-                .and_then(|p| p.strip_prefix("query-"))
-                .map(str::to_owned)
-        };
-        let queries: Vec<Option<String>> = entries.iter().map(|e| query(&e.path)).collect();
+        let queries: Vec<Option<String>> = entries.iter().map(|e| query_of_path(&e.path)).collect();
         return vec![
             text(worker.into_iter()),
             text(entries.iter().map(|e| Some(e.path.as_str()))),
@@ -1237,6 +1244,20 @@ mod tests {
         assert_eq!(row.statement_class, Some("READ"));
         assert_eq!(row.tags, [("team".to_owned(), "etl".to_owned())]);
         assert_eq!(row.error_class, None);
+    }
+
+    #[test]
+    fn a_query_pool_is_named_by_its_history_id_and_found_again() {
+        let log = QueryLog::default();
+        let id = log.begin(Some("SELECT 1"), None);
+        let pool = pool_name(&id);
+        assert_eq!(query_of_path(&format!("process/{pool}")), Some(id.clone()));
+        assert_eq!(
+            query_of_path(&format!("process/{pool}/hash-join")),
+            Some(id)
+        );
+        assert_eq!(query_of_path("process/shuffle"), None);
+        assert_eq!(query_of_path("process"), None);
     }
 
     #[test]

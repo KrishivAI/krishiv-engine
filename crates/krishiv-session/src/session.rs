@@ -1638,8 +1638,18 @@ impl Session {
         env: &QueryEnv,
         detailed: bool,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
+        // The history row first: its id names the query's memory pool, so `system.memory.query_id`
+        // joins `system.queries.query_id`.
+        let log_id = self
+            .state
+            .queries
+            .begin(env.text.as_deref(), env.statement_class);
+        *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         let id = QueryId(self.state.query_ids.fetch_add(1, Ordering::Relaxed));
-        let pool = self.state.memory.child(&format!("query-{}", id.0), None);
+        let pool = self
+            .state
+            .memory
+            .child(&crate::system::pool_name(&log_id), None);
         let query = QueryContext::new(
             id,
             WorkloadClass::Interactive,
@@ -1656,11 +1666,6 @@ impl Session {
         if metrics_on {
             self.state.metrics.query_begin(query.class());
         }
-        let log_id = self
-            .state
-            .queries
-            .begin(env.text.as_deref(), env.statement_class);
-        *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         let row_id = log_id.clone();
         let mut pending = PendingFold(Some(QueryFold {
             query: Arc::clone(&query),

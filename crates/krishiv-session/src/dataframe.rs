@@ -1259,7 +1259,7 @@ impl DataFrame {
             // A cached relation substituted into the plan makes the rows depend on this
             // session's state: neither served from nor stored into the shared cache.
             .filter(|_| {
-                self.session.state.cache.substitute(&a.analyzed).is_none()
+                !self.session.state.cache.would_substitute(&a.analyzed)
                     && self
                         .session
                         .state
