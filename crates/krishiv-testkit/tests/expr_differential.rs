@@ -206,6 +206,15 @@ impl Evaluator for Wraps {
     }
 }
 
+/// It raises one error class in both ANSI modes.
+struct Always(&'static str);
+
+impl Evaluator for Always {
+    fn eval(&mut self, _sql: &str, _ansi: bool) -> Expect {
+        Expect::Error(self.0.to_owned())
+    }
+}
+
 fn one_case(sql: &str, ansi: bool, spark: &str) -> Result<Fixture, String> {
     Fixture::parse(&format!(
         r#"{{"setup": "x", "cases": [{{"sql": {sql:?}, "ansi": {ansi}, "kids": [], "schema": "date", "rows": ["{spark}"]}}]}}"#
@@ -243,15 +252,8 @@ fn the_date_arithmetic_overflow_divergence_is_not_reported_and_nothing_else_is()
         );
     }
     // Reported: ANSI off, another class, another expression.
-    assert_eq!(
-        count(
-            "date_add(dt, i)",
-            false,
-            "ARITHMETIC_OVERFLOW",
-            "2000-01-01"
-        )?,
-        1
-    );
+    let ansi_off = one_case("date_add(dt, i)", false, "2000-01-01")?;
+    assert_eq!(run(&ansi_off, &mut Always("ARITHMETIC_OVERFLOW")).len(), 1);
     assert_eq!(
         count("date_add(dt, i)", true, "DIVIDE_BY_ZERO", "2000-01-01")?,
         1
