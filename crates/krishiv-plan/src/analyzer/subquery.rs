@@ -36,7 +36,6 @@ use krishiv_common::error::{
     UnsupportedSubqueryExpressionCategoryAccessingOuterQueryColumnIsNotAllowed,
     UnsupportedSubqueryExpressionCategoryCorrelatedReference,
     UnsupportedSubqueryExpressionCategoryUnsupportedCorrelatedExpressionInJoinCondition,
-    UnsupportedSubqueryExpressionCategoryUnsupportedInExistsSubquery,
 };
 use krishiv_types::DataType;
 
@@ -566,20 +565,6 @@ impl Rewriter {
             PlanNode::Filter { input, predicate } => self.filter(&p, Arc::clone(input), predicate),
             PlanNode::Project { input, exprs } => {
                 self.project(&p, Arc::clone(input), exprs.clone())
-            }
-            PlanNode::Join {
-                left,
-                right,
-                condition: JoinCondition::On(on),
-                ..
-            } if self.existential(on) && reads_left(left, right) => {
-                // Spark: a lateral join's condition holds no IN or EXISTS.
-                Err(AnalysisError::new(
-                    UnsupportedSubqueryExpressionCategoryUnsupportedInExistsSubquery {
-                        tree_node: p.to_string(),
-                    },
-                    p.origin,
-                ))
             }
             PlanNode::Join {
                 left,

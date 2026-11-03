@@ -18,6 +18,7 @@ use krishiv_common::error::{
     UnsupportedFeatureLateralColumnAliasInGroupBy, UnsupportedGeneratorNestedInExpressions,
     UnsupportedSubqueryExpressionCategoryLateralJoinConditionNonDeterministic,
     UnsupportedSubqueryExpressionCategoryNonDeterministicLateralSubqueries,
+    UnsupportedSubqueryExpressionCategoryUnsupportedInExistsSubquery,
 };
 
 use super::analytics::Analytics;
@@ -3123,6 +3124,16 @@ impl Resolver<'_> {
                         p.origin,
                     ));
                 }
+                // Spark: the condition of a lateral join holds no IN or EXISTS
+                // subquery (the bound plan does not remember the LATERAL).
+                if lateral && holds_in_or_exists(&b.expr) {
+                    return Err(AnalysisError::new(
+                        UnsupportedSubqueryExpressionCategoryUnsupportedInExistsSubquery {
+                            tree_node: p.to_string(),
+                        },
+                        p.origin,
+                    ));
+                }
                 // Spark's `CheckAnalysis`: a join condition holds no
                 // nondeterministic expression.
                 if lateral && !super::sqlfn::is_deterministic(&b.expr) {
@@ -3911,6 +3922,25 @@ impl Resolver<'_> {
         }
         Ok(rel)
     }
+}
+
+/// Whether `e` holds an `IN` or `EXISTS` subquery.
+fn holds_in_or_exists(e: &Arc<Expr>) -> bool {
+    crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| match n {
+        crate::walk::Node::Expr(x)
+            if matches!(
+                &x.node,
+                ExprNode::Subquery {
+                    kind: crate::SubqueryKind::Exists | crate::SubqueryKind::In(_),
+                    ..
+                }
+            ) =>
+        {
+            std::ops::ControlFlow::Break(())
+        }
+        _ => std::ops::ControlFlow::Continue(()),
+    })
+    .is_break()
 }
 
 /// The name of the hidden column of file sources.

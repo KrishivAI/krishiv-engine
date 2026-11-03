@@ -322,13 +322,25 @@ fn lateral_after_using_join_reads_merged_and_original_keys() -> R {
 #[test]
 fn an_in_subquery_in_the_on_of_a_lateral_join_is_refused() -> R {
     let s = session()?;
-    let err = error_of(
-        &s,
+    // Correlated or not: the bound plan of an uncorrelated LATERAL is a plain join.
+    for sql in [
         "SELECT t1.c1, s.y FROM t1 JOIN LATERAL (SELECT t1.c2 AS y) s ON t1.c1 IN (SELECT c1 FROM t2)",
-    );
-    assert!(
-        err.contains("UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.UNSUPPORTED_IN_EXISTS_SUBQUERY"),
-        "{err}"
+        "SELECT t1.c1, s.y FROM t1 JOIN LATERAL (SELECT 1 AS y) s ON t1.c1 IN (SELECT c1 FROM t2)",
+        "SELECT t1.c1, s.y FROM t1 LEFT JOIN LATERAL (SELECT 1 AS y) s ON EXISTS (SELECT 1 FROM t2)",
+    ] {
+        let err = error_of(&s, sql);
+        assert!(
+            err.contains("UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.UNSUPPORTED_IN_EXISTS_SUBQUERY"),
+            "{sql}: {err}"
+        );
+    }
+    // A plain join keeps its IN in the ON.
+    assert_eq!(
+        run(
+            &s,
+            "SELECT t1.c1 FROM t1 JOIN t2 ON t1.c1 = t2.c1 AND t1.c1 IN (SELECT c1 FROM t2)"
+        )?,
+        ["0", "0"]
     );
     Ok(())
 }
