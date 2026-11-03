@@ -792,6 +792,47 @@ mod tests {
         Ok(())
     }
 
+    /// A timestamp's type and zone are part of the answer (Comet 1.2.0 check 3): the same wall
+    /// clock under `timestamp_ntz` instead of `timestamp` fails on the schema, and the same type
+    /// rendered in another session zone fails on the rows.
+    #[test]
+    fn a_mislabeled_timestamp_fails() -> R {
+        const TS: &str = "-- !query\nselect ts from t\n-- !query schema\nstruct<ts:timestamp>\n-- !query output\n2024-03-10 01:30:00\n";
+        let statements = parse_results(TS)?;
+        let answer = |schema: &str, row: &str| {
+            Ok(QueryOutput {
+                schema: schema.into(),
+                rows: vec![vec![row.to_owned()]],
+                sorted: None,
+            })
+        };
+        let mut right = Canned(vec![(
+            "select ts from t",
+            answer("struct<ts:timestamp>", "2024-03-10 01:30:00"),
+        )]);
+        assert!(run_file(&mut right, "t", &statements, &plain()).cases[0].passed());
+        let mut ntz = Canned(vec![(
+            "select ts from t",
+            answer("struct<ts:timestamp_ntz>", "2024-03-10 01:30:00"),
+        )]);
+        let f = run_file(&mut ntz, "t", &statements, &plain());
+        assert_eq!(
+            f.cases[0].detail,
+            "schema struct<ts:timestamp_ntz> (want struct<ts:timestamp>)"
+        );
+        let mut other_zone = Canned(vec![(
+            "select ts from t",
+            answer("struct<ts:timestamp>", "2024-03-10 09:30:00"),
+        )]);
+        let f = run_file(&mut other_zone, "t", &statements, &plain());
+        assert!(
+            f.cases[0].detail.starts_with("rows differ at row 0"),
+            "{}",
+            f.cases[0].detail
+        );
+        Ok(())
+    }
+
     #[test]
     fn failed_cases_say_why() -> R {
         let statements = parse_results(OUT)?;
