@@ -458,6 +458,15 @@ impl RowTable {
         self.groups
     }
 
+    /// Calls `f` with the stored `h` of every row, partition by partition.
+    pub(crate) fn for_each_hash(&self, mut f: impl FnMut(u64)) {
+        for part in &self.parts {
+            for row in part.rows.chunks_exact(self.stride) {
+                f(word(row, 0));
+            }
+        }
+    }
+
     /// Counts the clears of a full fixed index into `counter`.
     pub(crate) fn with_abandons(mut self, counter: Arc<AtomicU64>) -> Self {
         self.abandons = Some(counter);

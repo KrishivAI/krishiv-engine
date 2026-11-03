@@ -15,7 +15,7 @@ use super::{Env, table};
 /// `t` (10 rows, as [`super::env`]) and `big`, the same rows with
 /// statistics claiming 100 million: a build of `big` is too large to
 /// broadcast.
-fn env() -> Env {
+pub(super) fn env() -> Env {
     let (schema, batches) = table(10);
     let columns: Vec<TableColumn> = schema
         .fields()
@@ -179,8 +179,9 @@ fn a_join_on_an_aggregated_key_exchanges_only_the_other_side() {
        +- Project [a#0, count(1)#4611686018427387904 AS n#3] (ids +4)
           +- HashAggregate keys=[a#0], functions=[count(1)]
              +- Exchange hashpartitioning(a#0)
-                +- Project [a#0]
-                   +- Scan spark_catalog.default.big [a#0, s#2]
+                +- PartialHashAggregate keys=[a#0], functions=[count(1)]
+                   +- Project [a#0]
+                      +- Scan spark_catalog.default.big [a#0, s#2]
     ");
     // Through a CTE reference, which renames the definition's columns.
     let sql = "WITH g AS (SELECT a, count(*) AS n FROM big GROUP BY a) \

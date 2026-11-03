@@ -458,6 +458,27 @@ impl Table {
         }
     }
 
+    /// Counts each of the table's rows (groups, or a cleared fixed index's
+    /// duplicates) into `into` by its stored key hash, each with an even
+    /// share of the table's bytes: what an exchange after this table's
+    /// partial phase would carry (`physical::fused_aggregate`).
+    pub(crate) fn record_exchange(&self, into: &mut crate::ExchangeStats) {
+        let n = self.len();
+        if n == 0 {
+            return;
+        }
+        let per = u64::try_from(self.memory_size() / n).unwrap_or(u64::MAX);
+        match self {
+            Self::Keys(t) if t.core.keys() == 0 => into.add(0, per),
+            Self::Keys(t) => {
+                for &h in t.keys.hashes() {
+                    into.add(h, per);
+                }
+            }
+            Self::Rows(t) => t.for_each_hash(|h| into.add(h, per)),
+        }
+    }
+
     /// Group counts of the table's radix partitions, in position order
     /// (one partition for an `AggTable`).
     pub(crate) fn part_lens(&self) -> Vec<usize> {

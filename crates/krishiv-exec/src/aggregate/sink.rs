@@ -36,9 +36,10 @@ use krishiv_memory::{
 };
 use krishiv_types::batch::{Batch, Weights};
 
-use super::rowtable::{Mode, RowTable, WIDEN_GROUPS};
+use super::rowtable::{Mode, PARTS, RowTable, WIDEN_GROUPS};
 use super::table::{AggCore, AggTable, Table};
 use super::{AggregateSpec, is_order_sensitive, unsupported};
+use crate::ExchangeStats;
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, run_blocking};
@@ -115,6 +116,10 @@ pub struct HashAggregate {
     /// Groups at which thread-local row tables widen to their radix
     /// partitions (tests widen early).
     widen_at: usize,
+    /// What an exchange between this breaker's partial and final phases
+    /// would carry, when the breaker stands for both (a fused aggregation,
+    /// `physical::fused_aggregate`).
+    exchange: Option<Mutex<ExchangeStats>>,
     /// Tests: once this many final-phase tasks finished, no further task
     /// gets its memory (forces the flush and spill paths).
     #[cfg(test)]
@@ -136,11 +141,32 @@ impl HashAggregate {
             counters: Arc::default(),
             row_mode: None,
             widen_at: WIDEN_GROUPS,
+            exchange: None,
             #[cfg(test)]
             stall_after: None,
             #[cfg(test)]
             output_gate: None,
         }))
+    }
+
+    /// [`new`](Self::new) for a partial and a final phase around an exchange
+    /// run as one breaker: it also records the exchange's statistics
+    /// ([`exchange_stats`](Self::exchange_stats)).
+    ///
+    /// # Errors
+    /// As [`new`](Self::new).
+    pub fn fused(spec: AggregateSpec) -> Result<Arc<Self>> {
+        let mut agg = Self::new(spec)?;
+        if let Some(a) = Arc::get_mut(&mut agg) {
+            a.exchange = Some(Mutex::new(ExchangeStats::new(PARTS)));
+        }
+        Ok(agg)
+    }
+
+    /// The statistics of the exchange this breaker stands for, merged over
+    /// the drivers that ended their input ([`fused`](Self::fused) only).
+    pub fn exchange_stats(&self) -> Option<ExchangeStats> {
+        self.exchange.as_ref().map(|m| lock(m).clone())
     }
 
     /// [`new`](Self::new) whose row tables (when the row layout is on)
@@ -154,6 +180,7 @@ impl HashAggregate {
             row_mode: Some(mode),
             // Small test inputs widen too.
             widen_at: 64,
+            exchange: None,
             stall_after: None,
             output_gate: None,
         }))
@@ -173,6 +200,7 @@ impl HashAggregate {
             row_mode: Some(mode),
             // Small test inputs widen too.
             widen_at: 64,
+            exchange: None,
             stall_after: Some(finished),
             output_gate: None,
         }))
@@ -190,6 +218,7 @@ impl HashAggregate {
             counters: Arc::default(),
             row_mode: None,
             widen_at: WIDEN_GROUPS,
+            exchange: None,
             stall_after: None,
             output_gate: Some(gate),
         }))
@@ -481,6 +510,9 @@ struct Local {
     /// The scheduler-assigned partition of this driver: combined tables
     /// merge in this order (see [`Run::partition`]).
     partition: u32,
+    /// This driver's report as a map task of a fused aggregation's exchange:
+    /// its tables spilled so far.
+    exchange: Option<ExchangeStats>,
 }
 
 /// A partition being merged from disk.
@@ -1306,6 +1338,7 @@ impl Sink for HashAggregate {
             consumer: Arc::clone(memory.consumer()),
             global: Arc::clone(g),
             partition: ctx.partition(),
+            exchange: self.exchange.as_ref().map(|_| ExchangeStats::new(PARTS)),
         }))
     }
 
@@ -1347,6 +1380,7 @@ impl Sink for HashAggregate {
             signal,
             consumer,
             partition,
+            exchange,
             ..
         } = *l;
         // A large row table still narrow widens to its radix partitions
@@ -1354,6 +1388,11 @@ impl Sink for HashAggregate {
         // others), so the final phase merges partitions in parallel (see
         // `rowtable`'s width docs). Only with memory to spare.
         table.widen_if(false, |bytes| reservation.try_grow(bytes).is_ok())?;
+        if let (Some(mut report), Some(total)) = (exchange, &self.exchange) {
+            table.record_exchange(&mut report);
+            report.end_task();
+            lock(total).merge(&report);
+        }
         // Keep the headroom: a later spill of this table needs scratch.
         shrink_to(&mut reservation, table.memory_size() + self.headroom());
         let g = global(g)?;
@@ -1434,6 +1473,9 @@ impl Sink for HashAggregate {
             let own = if l.table.not_worth_spilling() {
                 None
             } else {
+                if let Some(report) = l.exchange.as_mut() {
+                    l.table.record_exchange(report);
+                }
                 let fresh = self.new_table(g, true)?;
                 Some(std::mem::replace(&mut l.table, fresh))
             };
@@ -1540,6 +1582,9 @@ impl Sink for HashAggregate {
             ));
         }
         out.extend(crate::metrics::probe_metrics(&c.probes.get()));
+        if let Some(e) = &self.exchange {
+            out.extend(lock(e).metrics());
+        }
         out
     }
 }

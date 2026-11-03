@@ -110,24 +110,11 @@ impl Planner<'_> {
             .iter()
             .map(|c| input.column_attr(*c))
             .collect::<Result<_>>()?;
-        let input = if k == 0 {
-            self.require(input, Distribution::Single)?
+        let required = if k == 0 {
+            Distribution::Single
         } else {
-            self.require(input, Distribution::Clustered(&key_attrs))?
+            Distribution::Clustered(&key_attrs)
         };
-        let plan = AggregatePlan {
-            group_by: columns[..k].to_vec(),
-            aggregates,
-            distinct,
-            output: AggregateOutput::Final,
-        };
-        // Validates the aggregate (over an input that is never run) and
-        // gives its schema.
-        let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
-        let schema = spec.output_schema()?;
-        aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
-        let mut layout: Vec<AttrId> = columns[..k].iter().map(|c| input.layout[*c]).collect();
-        layout.extend(calls.iter().map(|c| c.id));
         let detail = format!(
             "keys={}, functions=[{}]",
             list(keys),
@@ -137,6 +124,36 @@ impl Planner<'_> {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+        // Two phases where rows must move (design P2-T174 §2.1): each task's
+        // partial states cross the exchange instead of its rows. Instantiation
+        // fuses the three nodes back into one breaker on one worker.
+        let (input, plan) = if input.placement.satisfies(required) || distinct.iter().any(|d| *d) {
+            let input = self.require(input, required)?;
+            let plan = AggregatePlan {
+                group_by: columns[..k].to_vec(),
+                aggregates,
+                distinct,
+                output: AggregateOutput::Final,
+            };
+            (input, plan)
+        } else {
+            let partial = AggregatePlan {
+                group_by: columns[..k].to_vec(),
+                distinct: vec![false; aggregates.len()],
+                aggregates,
+                output: AggregateOutput::Partial,
+            };
+            let plan = crate::physical::final_of(&partial)?;
+            let partial = self.partial_node(input, partial, &detail)?;
+            (self.require(partial, required)?, plan)
+        };
+        // Validates the aggregate (over an input that is never run) and
+        // gives its schema.
+        let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
+        let schema = spec.output_schema()?;
+        aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
+        let mut layout: Vec<AttrId> = plan.group_by.iter().map(|c| input.layout[*c]).collect();
+        layout.extend(calls.iter().map(|c| c.id));
         // Grouping keys keep their attributes: a filter on one drops whole
         // groups, which the producer above would drop anyway.
         let sites = super::runtime_filter::kept(&input.sites, &layout[..k]);
@@ -188,6 +205,41 @@ impl Planner<'_> {
             .map(|e| replace(e, &key_ids, &call_ids))
             .collect::<Result<Vec<_>>>()?;
         self.project(agg, &rewritten)
+    }
+
+    /// The partial phase `plan` of an aggregation over `input`: its keys keep
+    /// their attributes, each state column gets a fresh one.
+    fn partial_node(
+        &mut self,
+        input: Planned,
+        plan: AggregatePlan,
+        detail: &str,
+    ) -> Result<Planned> {
+        let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
+        let schema = spec.output_schema()?;
+        aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
+        let k = plan.group_by.len();
+        let mut layout: Vec<AttrId> = plan.group_by.iter().map(|c| input.layout[*c]).collect();
+        for _ in k..schema.fields().len() {
+            layout.push(self.fresh_id());
+        }
+        let sites = super::runtime_filter::kept(&input.sites, &layout[..k]);
+        let placement = input.placement.clone().restrict(&layout);
+        Ok(Planned {
+            node: PhysNode::Aggregate {
+                input: Box::new(input.node),
+                aggregate: plan,
+            },
+            schema,
+            layout,
+            explain: super::explain::ExplainNode::new(
+                "PartialHashAggregate",
+                detail,
+                vec![input.explain],
+            ),
+            sites,
+            placement,
+        })
     }
 
     /// Collects the aggregate calls of `e`.

@@ -55,7 +55,9 @@ use super::{
     ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SharedPlan, SortMergeJoinPlan,
     SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
 };
-use crate::aggregate::{AggregateNode, AggregateSpec, HashAggregate, distinct_plan};
+use crate::aggregate::{
+    AggregateNode, AggregateOutput, AggregateSpec, HashAggregate, distinct_plan,
+};
 use crate::error::{Result, internal};
 use crate::join::{
     HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, NestedLoopJoin, NestedLoopJoinNode,
@@ -110,6 +112,9 @@ pub struct WorkerContext {
     /// unset.
     values: Option<Arc<dyn ValueService>>,
     producer: Producer,
+    /// Whether a partial and a final aggregate around an exchange run as one
+    /// breaker (the default; see [`fused_aggregate`]).
+    fuse_aggregates: bool,
 }
 
 /// Which task of a stage instantiates a plan fragment: the stage, its
@@ -166,6 +171,7 @@ impl WorkerContext {
             config: None,
             values: None,
             producer: Producer::default(),
+            fuse_aggregates: true,
         }
     }
 
@@ -244,6 +250,15 @@ impl WorkerContext {
         self
     }
 
+    /// The same context running a partial aggregate, its exchange and its
+    /// final aggregate as written (`false`) instead of as one breaker: the
+    /// operators a worker runs on each side of a cut exchange, for tests.
+    #[must_use]
+    pub fn with_fused_aggregates(mut self, fuse: bool) -> Self {
+        self.fuse_aggregates = fuse;
+        self
+    }
+
     /// The spill scope, if spilling.
     pub fn spill(&self) -> Option<&SpillScope> {
         self.spill.as_ref()
@@ -268,6 +283,7 @@ impl fmt::Debug for WorkerContext {
             .field("config", &self.config.is_some())
             .field("values", &self.values.is_some())
             .field("producer", &self.producer)
+            .field("fuse_aggregates", &self.fuse_aggregates)
             .finish_non_exhaustive()
     }
 }
@@ -472,6 +488,94 @@ pub(crate) fn node_ids<'a>(roots: impl IntoIterator<Item = &'a PhysNode>) -> Has
         }
     }
     ids
+}
+
+/// The final phase reading the output of `partial` (its keys, then each
+/// aggregate's state columns): grouped by those keys, each aggregate merging
+/// its states. [`fused_aggregate`] recognizes the pair.
+pub(crate) fn final_of(partial: &AggregatePlan) -> Result<AggregatePlan> {
+    let k = partial.group_by.len();
+    let mut at = k;
+    let mut aggregates = Vec::with_capacity(partial.aggregates.len());
+    for a in &partial.aggregates {
+        let m = a.merging(at);
+        at += m.args.len();
+        aggregates.push(m);
+    }
+    if partial.output != AggregateOutput::Partial || partial.distinct.iter().any(|d| *d) {
+        return Err(internal(
+            "a final phase over a plan that is not a partial one".to_owned(),
+        ));
+    }
+    Ok(AggregatePlan {
+        group_by: (0..k).collect(),
+        distinct: vec![false; aggregates.len()],
+        aggregates,
+        output: AggregateOutput::Final,
+    })
+}
+
+/// `Final ← Exchange(Hash | Single) ← Partial` as one aggregation (design
+/// P2-T174 §2.2): the partial node, the node below it, and the plan of the
+/// single breaker over that node, whose radix partitions stand for the
+/// exchange's and whose finalize merge is its reader side. `None` for any
+/// other shape: `aggregate` is not exactly the final phase
+/// [`final_of`] plans over the partial.
+pub(crate) fn fused_aggregate<'p>(
+    aggregate: &AggregatePlan,
+    input: &'p PhysNode,
+) -> Option<(&'p PhysNode, &'p PhysNode, AggregatePlan)> {
+    let PhysNode::Exchange(e) = input else {
+        return None;
+    };
+    if !matches!(
+        e.partitioning,
+        Partitioning::Hash { .. } | Partitioning::Single
+    ) {
+        return None;
+    }
+    let partial = e.input.as_ref();
+    let PhysNode::Aggregate {
+        input: below,
+        aggregate: p,
+    } = partial
+    else {
+        return None;
+    };
+    if p.output != AggregateOutput::Partial || final_of(p).ok().as_ref() != Some(aggregate) {
+        return None;
+    }
+    Some((
+        partial,
+        below.as_ref(),
+        AggregatePlan {
+            output: AggregateOutput::Final,
+            ..p.clone()
+        },
+    ))
+}
+
+/// A fused aggregation (see [`fused_aggregate`]): one [`HashAggregate`]
+/// whose sink side is tagged with the partial node's id.
+struct FusedAggregateNode {
+    partial: Option<u32>,
+    input: Arc<dyn ExecNode>,
+    agg: Arc<HashAggregate>,
+}
+
+impl ExecNode for FusedAggregateNode {
+    fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+        if let Some(id) = self.partial {
+            b.enter_node(id);
+        }
+        let sink = Arc::clone(&self.agg) as Arc<dyn Sink>;
+        let id = b.child_pipeline(sink, Arc::clone(&self.input));
+        if self.partial.is_some() {
+            b.exit_node();
+        }
+        b.set_breaker_source(Arc::clone(&self.agg) as Arc<dyn Source>, id?)
+            .map(drop)
+    }
 }
 
 /// A plan node whose operators report under its id.
@@ -833,6 +937,11 @@ impl Instantiation<'_> {
                 Ok(breaker(input, Arc::clone(&top) as Arc<dyn Sink>, top))
             }
             PhysNode::Aggregate { input, aggregate } => {
+                if self.worker.fuse_aggregates
+                    && let Some((partial, below, fused)) = fused_aggregate(aggregate, input)
+                {
+                    return self.fused(partial, below, &fused);
+                }
                 let input = self.node(input)?;
                 let spec = aggregate_spec(&input.schema, aggregate, &self.env, self.spill.clone());
                 let schema = spec.output_schema()?;
@@ -1103,6 +1212,26 @@ impl Instantiation<'_> {
     /// The input of the broadcast exchange `id`, published as this
     /// producer's partial of its value: on one worker the join over it
     /// shares one build among its drivers.
+    /// The aggregation `fused` over `below` as one breaker (see
+    /// [`fused_aggregate`]): its sink side reports under the partial node
+    /// `partial`, its source side under the final one.
+    fn fused(
+        &mut self,
+        partial: &PhysNode,
+        below: &PhysNode,
+        fused: &AggregatePlan,
+    ) -> Result<Built> {
+        let input = self.node(below)?;
+        let spec = aggregate_spec(&input.schema, fused, &self.env, self.spill.clone());
+        let schema = spec.output_schema()?;
+        let node = Arc::new(FusedAggregateNode {
+            partial: self.ids.get(&std::ptr::from_ref(partial).addr()).copied(),
+            input: input.node,
+            agg: HashAggregate::fused(spec)?,
+        });
+        Ok(Built { node, schema })
+    }
+
     fn broadcast(&mut self, id: super::ExchangeId, input: &PhysNode) -> Result<Built> {
         let input = self.node(input)?;
         let value = ValueId::Broadcast(id);
