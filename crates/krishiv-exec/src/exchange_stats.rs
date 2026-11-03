@@ -63,6 +63,22 @@ impl ExchangeStats {
         self.keys.add(h);
     }
 
+    /// Counts `rows` rows of `bytes` in all into partition `p` (whose keys
+    /// `keys` sketches, at [`EXCHANGE_HLL_BITS`]): a table that already
+    /// sketches its radix partitions reports them without a walk.
+    pub(crate) fn add_partition(&mut self, p: usize, rows: u64, bytes: u64, keys: &Hll) {
+        if let Some(at) = self.partitions.get_mut(p) {
+            at.rows += rows;
+            at.bytes += bytes;
+        }
+        self.keys.merge(keys);
+    }
+
+    /// The partitions this report counts into.
+    pub(crate) fn partition_count(&self) -> usize {
+        self.partitions.len()
+    }
+
     /// Ends one map task's report.
     pub(crate) fn end_task(&mut self) {
         self.map_tasks += 1;

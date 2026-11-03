@@ -325,6 +325,7 @@ pub fn instantiate_task(
             shared: HashMap::new(),
             shared_plans: Arc::from(plan.shared()),
             loops: HashMap::new(),
+            unit_weights: HashSet::new(),
         };
         for root in plan.roots() {
             cx.declare_filters(root)?;
@@ -383,6 +384,9 @@ struct Instantiation<'a> {
     /// The table each enclosing recursive CTE's [`PhysNode::LoopRef`]s read,
     /// by loop id: the previous round, for a round being instantiated.
     loops: HashMap<u32, Arc<Output>>,
+    /// Aggregate nodes (by address) that refuse weights other than 1: the
+    /// partial phase of a written-out `DISTINCT` aggregation.
+    unit_weights: HashSet<usize>,
 }
 
 /// What a recursive CTE needs to instantiate its recursive term once per
@@ -428,6 +432,7 @@ impl Detached {
                 shared: HashMap::new(),
                 shared_plans: Arc::clone(&self.shared_plans),
                 loops,
+                unit_weights: HashSet::new(),
             };
             cx.declare_filters(node)?;
             for sp in cx.shared_plans.iter() {
@@ -632,11 +637,12 @@ pub(crate) fn distinct_phases(single: &AggregatePlan) -> Option<[AggregatePlan; 
 
 /// `Final ← PartialMerge ← Exchange(Hash | Single) ← Partial`, the phases
 /// [`distinct_phases`] plans, as the one aggregation they came from: the node
-/// below the partial and that aggregation. `None` for any other shape.
+/// the partial node, the node below it and that aggregation. `None` for any
+/// other shape.
 pub(crate) fn fused_distinct<'p>(
     last: &AggregatePlan,
     input: &'p PhysNode,
-) -> Option<(&'p PhysNode, AggregatePlan)> {
+) -> Option<(&'p PhysNode, &'p PhysNode, AggregatePlan)> {
     let PhysNode::Aggregate {
         input: exchange,
         aggregate: merge,
@@ -653,10 +659,11 @@ pub(crate) fn fused_distinct<'p>(
     ) {
         return None;
     }
+    let partial = e.input.as_ref();
     let PhysNode::Aggregate {
         input: below,
         aggregate: first,
-    } = e.input.as_ref()
+    } = partial
     else {
         return None;
     };
@@ -686,8 +693,11 @@ pub(crate) fn fused_distinct<'p>(
         output: AggregateOutput::Final,
     };
     let phases = distinct_phases(&single)?;
-    (phases[0] == *first && phases[1] == *merge && phases[2] == *last)
-        .then_some((below.as_ref(), single))
+    (phases[0] == *first && phases[1] == *merge && phases[2] == *last).then_some((
+        partial,
+        below.as_ref(),
+        single,
+    ))
 }
 
 /// A fused aggregation (see [`fused_aggregate`]): one [`HashAggregate`]
@@ -1077,18 +1087,25 @@ impl Instantiation<'_> {
                 {
                     return self.fused(partial, below, &fused);
                 }
-                if self.worker.fuse_aggregates
-                    && let Some((below, single)) = fused_distinct(aggregate, input)
-                {
-                    let input = self.node(below)?;
-                    let spec =
-                        aggregate_spec(&input.schema, &single, &self.env, self.spill.clone());
-                    let schema = spec.output_schema()?;
-                    let node = aggregate_node(input.node, spec, &single.distinct)?;
-                    return Ok(Built { node, schema });
+                if let Some((partial, below, single)) = fused_distinct(aggregate, input) {
+                    if self.worker.fuse_aggregates {
+                        let input = self.node(below)?;
+                        let spec =
+                            aggregate_spec(&input.schema, &single, &self.env, self.spill.clone());
+                        let schema = spec.output_schema()?;
+                        let node = aggregate_node(input.node, spec, &single.distinct)?;
+                        return Ok(Built { node, schema });
+                    }
+                    // Written out, the partial phase is where a row's weight
+                    // is lost: it refuses weights other than 1, as the fused
+                    // plan's first phase does.
+                    self.unit_weights.insert(std::ptr::from_ref(partial).addr());
                 }
+                let unit = self.unit_weights.contains(&std::ptr::from_ref(n).addr());
                 let input = self.node(input)?;
-                let spec = aggregate_spec(&input.schema, aggregate, &self.env, self.spill.clone());
+                let mut spec =
+                    aggregate_spec(&input.schema, aggregate, &self.env, self.spill.clone());
+                spec.require_unit_weights = unit;
                 let schema = spec.output_schema()?;
                 let node = aggregate_node(input.node, spec, &aggregate.distinct)?;
                 Ok(Built { node, schema })
@@ -1912,5 +1929,94 @@ mod tests {
         let mut b = PipelineBuilder::new(Arc::new(crate::testing::Count::default()));
         let e = Arc::new(Unbuilt).build_pipelines(&mut b).unwrap_err();
         assert!(e.to_string().contains("validation-only"), "{e}");
+    }
+
+    /// `rows`, under the phases [`super::distinct_phases`] plans for `single`,
+    /// around a hash exchange.
+    fn written(single: &super::AggregatePlan) -> (crate::physical::PhysNode, super::AggregatePlan) {
+        use crate::physical::{ExchangeId, ExchangePlan, Partitioning, PhysNode, RangeNode};
+
+        let [first, merge, last] = super::distinct_phases(single).unwrap();
+        let rows = PhysNode::Range(RangeNode {
+            start: 0,
+            end: 10,
+            step: 1,
+            num_slices: None,
+            output: krishiv_plan::AttrId(0),
+        });
+        let first = PhysNode::Aggregate {
+            input: Box::new(rows),
+            aggregate: first,
+        };
+        let moved = PhysNode::Exchange(ExchangePlan {
+            id: ExchangeId(0),
+            input: Box::new(first),
+            partitioning: Partitioning::Single,
+        });
+        let merge = PhysNode::Aggregate {
+            input: Box::new(moved),
+            aggregate: merge,
+        };
+        (merge, last)
+    }
+
+    /// `count(DISTINCT c1), sum(c2), max(c1) GROUP BY c0`.
+    fn single() -> super::AggregatePlan {
+        use crate::aggregate::{AggregateExpr, AggregateFunction as F, AggregateOutput};
+        use arrow_schema::DataType;
+
+        super::AggregatePlan {
+            group_by: vec![0],
+            aggregates: vec![
+                AggregateExpr::new(F::Count, 1, DataType::Int64, "c"),
+                AggregateExpr::new(F::Sum, 2, DataType::Int64, "s"),
+                AggregateExpr::new(F::Max, 1, DataType::Int64, "m"),
+            ],
+            distinct: vec![true, false, false],
+            output: AggregateOutput::Final,
+        }
+    }
+
+    #[test]
+    fn written_distinct_phases_fuse_back_into_their_aggregation() {
+        let single = single();
+        let (merge, last) = written(&single);
+        let (partial, below, fused) = super::fused_distinct(&last, &merge).unwrap();
+        assert_eq!(fused, single);
+        assert!(matches!(below, crate::physical::PhysNode::Range(_)));
+        assert!(matches!(
+            partial,
+            crate::physical::PhysNode::Aggregate { .. }
+        ));
+        let [first, merged, final_] = super::distinct_phases(&single).unwrap();
+        // Keys, the distinct argument, then the other aggregates' states.
+        assert_eq!(first.group_by, [0, 1]);
+        assert_eq!(first.aggregates.len(), 2);
+        assert_eq!(merged.group_by, [0, 1]);
+        assert_eq!(final_.group_by, [0]);
+        assert_eq!(final_.aggregates[0].args, [1]);
+    }
+
+    /// Any change to one phase is a plan instantiation runs as written.
+    #[test]
+    fn a_near_miss_of_the_distinct_phases_does_not_fuse() {
+        let single = single();
+        let (merge, mut last) = written(&single);
+        last.aggregates.swap(1, 2);
+        assert!(super::fused_distinct(&last, &merge).is_none());
+        let (mut merge, last) = written(&single);
+        if let crate::physical::PhysNode::Aggregate { aggregate, .. } = &mut merge {
+            aggregate.group_by = vec![0];
+        }
+        assert!(super::fused_distinct(&last, &merge).is_none());
+        // Distinct aggregates over different arguments, or one with a
+        // filter, have no phases.
+        let mut two = single.clone();
+        two.distinct = vec![true, false, true];
+        two.aggregates[2].args = vec![2];
+        assert!(super::distinct_phases(&two).is_none());
+        let mut masked = single;
+        masked.aggregates[0].mask = Some(3);
+        assert!(super::distinct_phases(&masked).is_none());
     }
 }

@@ -262,6 +262,8 @@ const SKETCH_ROWS: usize = 4096;
 
 /// Register bits of the per-partition sketches.
 const PART_HLL_BITS: u32 = 10;
+// A fused aggregation reports these sketches as its exchange's.
+const _: () = assert!(PART_HLL_BITS == crate::EXCHANGE_HLL_BITS);
 /// Register bits of a fixed index's input sample.
 const ADAPT_HLL_BITS: u32 = 12;
 

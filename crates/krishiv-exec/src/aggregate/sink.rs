@@ -156,11 +156,17 @@ impl HashAggregate {
     /// # Errors
     /// As [`new`](Self::new).
     pub fn fused(spec: AggregateSpec) -> Result<Arc<Self>> {
-        let mut agg = Self::new(spec)?;
-        if let Some(a) = Arc::get_mut(&mut agg) {
-            a.exchange = Some(Mutex::new(ExchangeStats::new(PARTS)));
-        }
-        Ok(agg)
+        Ok(Arc::new(Self {
+            core: Arc::new(AggCore::new(spec)?),
+            counters: Arc::default(),
+            row_mode: None,
+            widen_at: WIDEN_GROUPS,
+            exchange: Some(Mutex::new(ExchangeStats::new(PARTS))),
+            #[cfg(test)]
+            stall_after: None,
+            #[cfg(test)]
+            output_gate: None,
+        }))
     }
 
     /// The statistics of the exchange this breaker stands for, merged over
@@ -1473,9 +1479,6 @@ impl Sink for HashAggregate {
             let own = if l.table.not_worth_spilling() {
                 None
             } else {
-                if let Some(report) = l.exchange.as_mut() {
-                    l.table.record_exchange(report);
-                }
                 let fresh = self.new_table(g, true)?;
                 Some(std::mem::replace(&mut l.table, fresh))
             };
@@ -1489,10 +1492,15 @@ impl Sink for HashAggregate {
                 .map(|_| std::mem::replace(&mut l.reservation, s.consumer.reservation()));
             let freed_own = held.as_ref().map_or(0, Reservation::size);
             let own_partition = l.partition;
-            let runs = ctx
+            // The table spilled is part of this driver's map-task report.
+            let mut report = l.exchange.as_ref().map(|_| ExchangeStats::new(PARTS));
+            let (runs, report) = ctx
                 .run_blocking(move || {
                     let mut runs = Vec::new();
                     if let Some(t) = &own {
+                        if let Some(r) = report.as_mut() {
+                            t.record_exchange(r);
+                        }
                         if let Some(h) = held.as_mut() {
                             lend_headroom(h);
                         }
@@ -1503,9 +1511,12 @@ impl Sink for HashAggregate {
                         lend_headroom(&mut r);
                         runs.push(s.write_run(&t, 0, 0, p)?);
                     }
-                    Ok(runs)
+                    Ok((runs, report))
                 })
                 .await?;
+            if let (Some(mine), Some(r)) = (l.exchange.as_mut(), report) {
+                mine.merge(&r);
+            }
             lock(&g.inner).runs.extend(runs);
             l.signal.set_spillable_bytes(0);
             Ok(freed_own + freed_combined)
