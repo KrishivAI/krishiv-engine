@@ -282,7 +282,17 @@ fn number_as_carrier(unscaled: i128, scale: i8, unit: i64) -> Option<i64> {
     } else {
         v.checked_mul(power)?
     };
-    i64::try_from(v.to_i128()?).ok()
+    let carrier = i64::try_from(v.to_i128()?).ok()?;
+    // The product is checked for overflow with its fraction, then an end
+    // field above the carrier's unit (year, day, hour, minute) drops what is
+    // below it toward zero: Spark 4.2 gives 80 minutes for `80.5BD` as
+    // `INTERVAL MINUTE`, 81 months as `INTERVAL MONTH`, and overflows at
+    // `106751991.5BD` days though 106751991 days fit.
+    if unit == 1 || unit == MICROS_PER_SECOND {
+        Some(carrier)
+    } else {
+        carrier.checked_sub(carrier.checked_rem(unit)?)
+    }
 }
 
 /// SQL text of a number for `CAST_OVERFLOW`.
@@ -389,10 +399,7 @@ mod tests {
             number_as_carrier(-thirty_digits, 30, SECOND),
             Some(-1_123_457)
         );
-        assert_eq!(
-            number_as_carrier(thirty_digits, 30, DAY),
-            Some(97_066_666_571)
-        );
+        assert_eq!(number_as_carrier(thirty_digits, 30, DAY), Some(DAY));
         assert_eq!(number_as_carrier(5, 38, DAY), Some(0));
         assert_eq!(
             number_as_carrier(9_223_372_036_854_775_807, 6, SECOND),
@@ -415,7 +422,8 @@ mod tests {
         assert_eq!(number_as_carrier(-just_under, 37, SECOND), Some(-1_000_001));
         // 5165.2083333333333333333333333333333330
         let months = 51_652_083_333_333_333_333_333_333_333_333_333_330_i128;
-        assert_eq!(number_as_carrier(months, 34, 12), Some(61_983));
+        // A year end field takes the whole years: 5165 of them.
+        assert_eq!(number_as_carrier(months, 34, 12), Some(61_980));
         // 9223372036854.7758074999999999999999999
         let top = 92_233_720_368_547_758_074_999_999_999_999_999_999_i128;
         assert_eq!(number_as_carrier(top, 25, SECOND), None);
@@ -451,6 +459,22 @@ mod tests {
         let out =
             interval_to_integral(&big, MICROS_PER_SECOND, &DataType::Int8, true, names()).unwrap();
         assert!(out.is_null(0));
+    }
+
+    #[test]
+    fn a_decimal_end_field_above_the_carrier_unit_truncates() {
+        // (Spark 4.2: 80.5 as minute 80, as month 81, as year 80.)
+        // 80.5 and -80.5 as minutes: 80 and -80; as months: 81 and -81.
+        let a = Decimal128Array::from(vec![805_i128, -805])
+            .with_precision_and_scale(10, 1)
+            .unwrap();
+        let min = number_to_day_time(&a, 60 * MICROS_PER_SECOND, false, names()).unwrap();
+        assert_eq!(min.value(0), 80 * 60 * MICROS_PER_SECOND);
+        assert_eq!(min.value(1), -80 * 60 * MICROS_PER_SECOND);
+        let months = number_to_year_month(&a, 1, false, names()).unwrap();
+        assert_eq!((months.value(0), months.value(1)), (81, -81));
+        let years = number_to_year_month(&a, 12, false, names()).unwrap();
+        assert_eq!(years.value(0), 80 * 12);
     }
 
     #[test]
