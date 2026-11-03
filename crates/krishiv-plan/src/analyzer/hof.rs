@@ -31,7 +31,7 @@ use krishiv_common::error::{
     InvalidLambdaFunctionCallDuplicateArgNames, InvalidLambdaFunctionCallNonHigherOrderFunction,
     InvalidLambdaFunctionCallNumArgsMismatch, WrongNumArgsWithoutSuggestion,
 };
-use krishiv_types::DataType;
+use krishiv_types::{ArrayType, DataType, MapType, StructField, StructType};
 
 use super::AnalysisError;
 use super::bind::{addr, same, unsupported};
@@ -287,8 +287,20 @@ impl Resolver<'_> {
                 done.push((key(i), bound));
             }
         }
-        if h == Hof::MapZipWith {
-            self.widen_map_keys(&mut done, key(0), key(1));
+        if matches!(h, Hof::MapZipWith) {
+            self.unify_map_keys(f, &mut done);
+        }
+        // `aggregate`'s accumulator takes whatever the merge produces, so
+        // the seed's struct fields are nullable (a merge may yield NULL for
+        // a field the seed wrote non-null).
+        if matches!(h, Hof::Aggregate | Hof::Reduce)
+            && f.args.len() > 1
+            && let Some(slot) = done.iter().position(|(k, _)| *k == key(1))
+            && let Some(zero) = done[slot].1.ty.data_type.clone()
+            && nullable_fields(&zero) != zero
+        {
+            let widened = self.implicit_cast(&done[slot].1, Some(nullable_fields(&zero)));
+            done[slot].1 = widened;
         }
         let values: Vec<Option<DataType>> = h
             .values()
@@ -309,52 +321,72 @@ impl Resolver<'_> {
         Ok(done)
     }
 
-    /// `map_zip_with` over maps whose key types differ: both maps are cast
-    /// to the keys' wider type (Spark's `MapZipWithCoercion`, which skips a
-    /// pair whose cast could fail or has no wider type, leaving the result
-    /// rule to raise `MAP_ZIP_WITH_DIFF_TYPES`).
-    fn widen_map_keys(&self, done: &mut [(usize, Bound)], first: usize, second: usize) {
-        let pos = |k: usize| done.iter().position(|(a, _)| *a == k);
-        let (Some(i), Some(j)) = (pos(first), pos(second)) else {
-            return;
-        };
-        let (Some(DataType::Map(a)), Some(DataType::Map(b))) =
-            (&done[i].1.ty.data_type, &done[j].1.ty.data_type)
-        else {
-            return;
-        };
-        if a.key_type().equals_structurally(b.key_type(), true) {
+    /// `map_zip_with` over maps whose key types differ: both maps' keys are
+    /// cast to the wider type (Spark's `MapZipWith` coercion,
+    /// `findWiderTypeForTwo`), the values keep their types.
+    fn unify_map_keys(&self, f: &FunctionCall, done: &mut [(usize, Bound)]) {
+        if f.args.len() < 2 {
             return;
         }
-        let arg = |t| coerce::Arg {
-            ty: Some(t),
-            nullable: false,
-            literal: None,
-        };
-        let rules = coerce::Rules::new(self.ctx.conf.ansi, self.ctx.conf.case_sensitive);
-        let Some(Some(wide)) = coerce::wider_type(&arg(a.key_type()), &arg(b.key_type()), rules)
-        else {
+        let keys = [addr(&*f.args[0]), addr(&*f.args[1])];
+        let maps: Vec<Option<MapType>> = keys
+            .iter()
+            .map(|k| {
+                done.iter()
+                    .find(|(d, _)| d == k)
+                    .and_then(|(_, b)| match &b.ty.data_type {
+                        Some(DataType::Map(m)) => Some((**m).clone()),
+                        _ => None,
+                    })
+            })
+            .collect();
+        let [Some(first), Some(second)] = &maps[..] else {
             return;
         };
-        if coerce::force_nullable(a.key_type(), &wide)
-            || coerce::force_nullable(b.key_type(), &wide)
+        if first
+            .key_type()
+            .equals_structurally(second.key_type(), true)
         {
             return;
         }
-        let with_key = |m: &krishiv_types::MapType| {
-            DataType::Map(
-                krishiv_types::MapType::new(
-                    wide.clone(),
-                    m.value_type().clone(),
-                    m.value_contains_null(),
+        let conf = self.ctx.conf;
+        let rules = coerce::Rules::new(conf.ansi, conf.case_sensitive);
+        let (left, right) = (
+            coerce::Arg {
+                ty: Some(first.key_type()),
+                nullable: false,
+                literal: None,
+            },
+            coerce::Arg {
+                ty: Some(second.key_type()),
+                nullable: false,
+                literal: None,
+            },
+        );
+        // ANSI mode never promotes a string against another type.
+        let found = if conf.ansi {
+            coerce::wider_type_without_string_promotion(&left, &right, conf.case_sensitive)
+        } else {
+            coerce::wider_type(&left, &right, rules)
+        };
+        let Some(Some(wider)) = found else {
+            return;
+        };
+        for (key, map) in keys.iter().zip([first, second]) {
+            if map.key_type() == &wider {
+                continue;
+            }
+            let target = DataType::Map(
+                MapType::new(
+                    wider.clone(),
+                    map.value_type().clone(),
+                    map.value_contains_null(),
                 )
                 .into(),
-            )
-        };
-        let (ta, tb) = (with_key(a), with_key(b));
-        for (idx, to) in [(i, ta), (j, tb)] {
-            let cast = self.implicit_cast_as(&done[idx].1, Some(to), false);
-            done[idx].1 = cast;
+            );
+            if let Some((_, b)) = done.iter_mut().find(|(d, _)| d == key) {
+                *b = self.implicit_cast(b, Some(target));
+            }
         }
     }
 
@@ -414,7 +446,18 @@ impl Resolver<'_> {
         self.lambdas.push(LambdaFrame { vars: vars.clone() });
         let body = self.expr_in(step, &inner, cx);
         self.lambdas.pop();
-        let body = body?;
+        let mut body = body?;
+        // `aggregate`'s merge body has the accumulator's type up to field
+        // names (`(0 AS sum, 0 AS n)` against `(acc.sum + x, acc.n + 1)`):
+        // Spark compares structurally, and the value is the accumulator's.
+        if matches!(h, Hof::Aggregate | Hof::Reduce)
+            && position == 2
+            && let (Some(Some(zero)), Some(merged)) = (values.get(1), &body.ty.data_type)
+            && zero != merged
+            && zero.equals_structurally(merged, true)
+        {
+            body = self.implicit_cast(&body, Some(zero.clone()));
+        }
         // An aggregate or window over the lambda's elements is no outer
         // query aggregate: a constant lambda's own aggregates stay outer
         // aggregates, as the generic path resolves them.
@@ -549,4 +592,28 @@ fn duplicate_param(params: &[String], cs: bool) -> Option<Vec<String>> {
         }
     }
     None
+}
+
+/// `t` with every struct field, array element and map value nullable: the accumulator of `aggregate`
+/// takes whatever the merge produces, NULL included.
+fn nullable_fields(t: &DataType) -> DataType {
+    match t {
+        DataType::Struct(st) => {
+            DataType::Struct(StructType::new(st.fields().iter().map(|f| {
+                StructField::new(f.name().to_owned(), nullable_fields(f.data_type()), true)
+            })))
+        }
+        DataType::Array(a) => {
+            DataType::Array(ArrayType::new(nullable_fields(a.element_type()), true).into())
+        }
+        DataType::Map(m) => DataType::Map(
+            MapType::new(
+                nullable_fields(m.key_type()),
+                nullable_fields(m.value_type()),
+                true,
+            )
+            .into(),
+        ),
+        other => other.clone(),
+    }
 }

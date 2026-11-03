@@ -1213,12 +1213,43 @@ impl DataFrame {
     }
 
     async fn execute_stream_here(&self) -> Result<RecordBatchStream, KrishivError> {
+        // Before the query is analyzed, so an invalidation that runs while it executes keeps
+        // its rows out of the result cache.
+        let generation = crate::result_cache::global().generation();
         let a = self.analysis().await?;
+        // The reads were authorized by the analysis: a hit serves only what this principal's
+        // own run of the query would return.
+        // A frame that asked for a relation cache (`cache()`, `persist()`) runs the query: its
+        // snapshot is filled from the run, whatever the shared store holds.
+        let result = crate::result_cache::settings(&a.env)
+            .filter(|_| self.cache_request.is_none())
+            .and_then(|settings| self.session.result_key(&a).map(|key| (settings, key)))
+            // A cached relation substituted into the plan makes the rows depend on this
+            // session's state: neither served from nor stored into the shared cache.
+            .filter(|_| {
+                self.session.state.cache.substitute(&a.analyzed).is_none()
+                    && self
+                        .session
+                        .state
+                        .cache
+                        .lookup(&CacheKey::of(&a.analyzed))
+                        .is_none()
+            });
+        if let Some((settings, key)) = &result
+            && let Some((batches, _age)) = crate::result_cache::global().lookup(key, settings.ttl)
+        {
+            return Ok(crate::carrier::client_stream(crate::result_cache::replay(
+                batches,
+            )));
+        }
         let (physical, fill) = self.physical_cached(&a).await?;
         let stream = self.session.run(&physical, &a.env).await?;
-        Ok(crate::carrier::client_stream(
-            fill.fill(stream, &self.session.state.cache),
-        ))
+        let stream = fill.fill(stream, &self.session.state.cache);
+        let stream = match result {
+            Some((settings, key)) => crate::result_cache::fill(stream, key, generation, settings),
+            None => stream,
+        };
+        Ok(crate::carrier::client_stream(stream))
     }
 
     /// The physical plan with every cached (sub)plan substituted, and what
@@ -1575,6 +1606,9 @@ impl DataFrame {
             mode: "error".to_owned(),
             options: BTreeMap::new(),
             partition_by: Vec::new(),
+            bucket_by: None,
+            sort_by: None,
+            format_set: false,
         }
     }
 
@@ -1667,6 +1701,29 @@ impl DataFrame {
         options: Vec<(String, String)>,
         partition_by: Vec<String>,
     ) -> Result<(), KrishivError> {
+        self.write_to_with(format, mode, path, options, partition_by, None, None)
+            .await
+    }
+
+    /// [`Self::write_to`] with the `bucket_by` (count and columns) and
+    /// `sort_by` state of the writer, which `save` refuses as Spark does.
+    ///
+    /// # Errors
+    /// As [`DataFrameWriter::save`].
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one bridge call carrying the whole writer state"
+    )]
+    pub async fn write_to_with(
+        &self,
+        format: &str,
+        mode: &str,
+        path: &str,
+        options: Vec<(String, String)>,
+        partition_by: Vec<String>,
+        bucket_by: Option<(i32, Vec<String>)>,
+        sort_by: Option<Vec<String>>,
+    ) -> Result<(), KrishivError> {
         let mut writer = self.write().format(format).mode(mode);
         for (key, value) in &options {
             writer = writer.option(key, value);
@@ -1674,7 +1731,58 @@ impl DataFrame {
         if !partition_by.is_empty() {
             writer = writer.partition_by(partition_by.iter().map(String::as_str));
         }
+        if let Some((buckets, cols)) = bucket_by {
+            writer = writer.bucket_by(buckets, cols);
+        }
+        if let Some(cols) = sort_by {
+            writer = writer.sort_by(cols);
+        }
         writer.save(path).await
+    }
+
+    /// Writes this DataFrame's rows to the table `table` (PySpark's
+    /// `DataFrameWriter.saveAsTable`, or `insertInto` when `insert_into` is
+    /// set, collected as one call): `format`, `mode`, `options` pairs and the
+    /// `partition_by`, `bucket_by` (count and columns) and `sort_by` state.
+    ///
+    /// # Errors
+    /// As [`DataFrameWriter::save_as_table`] or [`DataFrameWriter::insert_into`].
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one bridge call carrying the whole writer state"
+    )]
+    pub async fn write_table_with(
+        &self,
+        insert_into: bool,
+        table: &str,
+        format: Option<&str>,
+        mode: &str,
+        options: Vec<(String, String)>,
+        partition_by: Vec<String>,
+        bucket_by: Option<(i32, Vec<String>)>,
+        sort_by: Option<Vec<String>>,
+    ) -> Result<(), KrishivError> {
+        let mut writer = self.write().mode(mode);
+        if let Some(format) = format {
+            writer = writer.format(format);
+        }
+        for (key, value) in &options {
+            writer = writer.option(key, value);
+        }
+        if !partition_by.is_empty() {
+            writer = writer.partition_by(partition_by.iter().map(String::as_str));
+        }
+        if let Some((buckets, cols)) = bucket_by {
+            writer = writer.bucket_by(buckets, cols);
+        }
+        if let Some(cols) = sort_by {
+            writer = writer.sort_by(cols);
+        }
+        if insert_into {
+            writer.insert_into(table).await
+        } else {
+            writer.save_as_table(table).await
+        }
     }
 
     /// Registers this DataFrame as the temporary view `name`, replacing any
@@ -1887,6 +1995,13 @@ pub struct DataFrameWriter {
     mode: String,
     options: BTreeMap<String, OptionValue>,
     partition_by: Vec<String>,
+    /// `bucketBy`: the bucket count and columns.
+    bucket_by: Option<(i32, Vec<String>)>,
+    /// `sortBy`.
+    sort_by: Option<Vec<String>>,
+    /// Whether [`Self::format`] was called: a table writer without one uses
+    /// `spark.sql.sources.default`.
+    format_set: bool,
 }
 
 impl DataFrameWriter {
@@ -1907,7 +2022,7 @@ impl DataFrameWriter {
         self
     }
 
-    /// The file format (default `parquet`).
+    /// The file format (default `spark.sql.sources.default`).
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -1916,6 +2031,7 @@ impl DataFrameWriter {
     /// ```
     pub fn format(mut self, format: &str) -> Self {
         format.clone_into(&mut self.format);
+        self.format_set = true;
         self
     }
 
@@ -1999,6 +2115,7 @@ impl DataFrameWriter {
     /// [`Self::save`], returning the partition directories (`col=value/...`
     /// below `path`, escaped) that hold the committed files.
     pub(crate) async fn save_reporting(self, path: &str) -> Result<Vec<String>, KrishivError> {
+        self.assert_not_bucketed("save")?;
         let target = WriteTarget {
             format: self.format,
             mode: self.mode,
@@ -2011,11 +2128,183 @@ impl DataFrameWriter {
         session
             .on_executor(async move {
                 let a = df.analysis().await?;
+                // Files hold a geometry or geography as a WKB column with a
+                // Parquet logical type (P2-T181 unit U3); until it lands, a
+                // spatial value is not written as the `{srid, wkb}` struct
+                // Spark cannot read.
+                if a.analyzed
+                    .output
+                    .iter()
+                    .any(|c| krishiv_types::geo::holds_spatial(&c.data_type))
+                {
+                    return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: "writing GEOMETRY or GEOGRAPHY columns to files".to_owned(),
+                    }
+                    .into());
+                }
                 // A write reads the cache like any other action.
                 let (physical, _) = df.physical_cached(&a).await?;
-                df.session.write_files(physical, &a.env, target).await
+                let types: Vec<_> = a
+                    .analyzed
+                    .output
+                    .iter()
+                    .map(|c| c.data_type.clone())
+                    .collect();
+                df.session
+                    .write_files(physical, &a.env, target, &types)
+                    .await
             })
             .await
+    }
+
+    /// Buckets the output by `cols` into `buckets` buckets (PySpark's
+    /// `bucketBy`). Only `saveAsTable` takes a bucketed layout in Spark, and
+    /// the engine has no bucketed tables yet: `save` and `insertInto` fail as
+    /// in Spark and `save_as_table` with `KRISHIV_UNSUPPORTED_FEATURE`.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let w = s.table("t").write().bucket_by(4, ["a"]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn bucket_by(
+        mut self,
+        buckets: i32,
+        cols: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Self {
+        self.bucket_by = Some((
+            buckets,
+            cols.into_iter().map(|c| c.as_ref().to_owned()).collect(),
+        ));
+        self
+    }
+
+    /// Sorts each bucket by `cols` (PySpark's `sortBy`); needs `bucket_by`.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let w = s.table("t").write().bucket_by(4, ["a"]).sort_by(["b"]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn sort_by(mut self, cols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
+        self.sort_by = Some(cols.into_iter().map(|c| c.as_ref().to_owned()).collect());
+        self
+    }
+
+    /// Spark's `isBucketed` and `assertNotBucketed(operation)`: `sortBy`
+    /// without `bucketBy` is `SORT_BY_WITHOUT_BUCKETING`; a bucketed write
+    /// through `operation` is refused.
+    fn assert_not_bucketed(&self, operation: &str) -> Result<(), KrishivError> {
+        match (&self.bucket_by, &self.sort_by) {
+            (None, None) => Ok(()),
+            (None, Some(_)) => Err(krishiv_common::error::SortByWithoutBucketing {}.into()),
+            (Some(_), None) => Err(krishiv_common::error::LegacyErrorTemp1312 {
+                operation: operation.to_owned(),
+            }
+            .into()),
+            (Some(_), Some(_)) => Err(krishiv_common::error::LegacyErrorTemp1313 {
+                operation: operation.to_owned(),
+            }
+            .into()),
+        }
+    }
+
+    /// The table request of `saveAsTable` and `insertInto`.
+    fn table_spec(&self, table: &str) -> crate::table_commands::V2WriteSpec {
+        crate::table_commands::V2WriteSpec {
+            table: table.to_owned(),
+            provider: self.format_set.then(|| self.format.clone()),
+            options: self.options.clone(),
+            properties: BTreeMap::new(),
+            partitioned_by: self.partition_by.clone(),
+            cluster_by: Vec::new(),
+        }
+    }
+
+    /// Saves the rows as the table `table` (PySpark's `saveAsTable`). The
+    /// mode is Spark's: `errorifexists` (the default) fails with
+    /// `TABLE_OR_VIEW_ALREADY_EXISTS` when the table exists, `ignore` leaves
+    /// it, `append` adds the rows by column name, and `overwrite` drops an
+    /// existing table and creates it again as Spark does (a query that reads
+    /// the table it replaces fails with `UNSUPPORTED_OVERWRITE.TABLE`, and
+    /// whatever can refuse the new table is checked before the old one is
+    /// dropped). The format is [`Self::format`] (default `parquet`).
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # s.register_batches("t", schema, vec![])?;
+    /// futures::executor::block_on(s.table("t").write().save_as_table("u"))?;
+    /// assert_eq!(futures::executor::block_on(s.table("u").count())?, 0);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// `INVALID_SAVE_MODE`; `SORT_BY_WITHOUT_BUCKETING`;
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for `bucket_by`, `partition_by`, an
+    /// append that does not match the table;
+    /// `UNSUPPORTED_OVERWRITE.TABLE`;
+    /// `TABLE_OR_VIEW_ALREADY_EXISTS`; analysis and write errors.
+    pub async fn save_as_table(self, table: &str) -> Result<(), KrishivError> {
+        let mode = krishiv_io::SaveMode::parse(&self.mode)?;
+        if let (None, Some(_)) = (&self.bucket_by, &self.sort_by) {
+            return Err(krishiv_common::error::SortByWithoutBucketing {}.into());
+        }
+        if self.bucket_by.is_some() {
+            return Err(KrishivUnsupportedFeature {
+                feature: "bucketBy".to_owned(),
+            }
+            .into());
+        }
+        let spec = self.table_spec(table);
+        let df = self.df;
+        let session = df.session.clone();
+        session
+            .on_executor(async move { df.session.exec_save_as_table(&df, spec, mode).await })
+            .await
+    }
+
+    /// Inserts the rows into the existing table `table` by position
+    /// (PySpark's `insertInto`). `errorifexists`, `ignore` and `append` all
+    /// append, as in Spark; `overwrite` is `INSERT OVERWRITE` by position.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # s.register_batches("t", schema, vec![])?;
+    /// futures::executor::block_on(s.table("t").write().save_as_table("u"))?;
+    /// futures::executor::block_on(s.table("t").write().insert_into("u"))?;
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// `INVALID_SAVE_MODE`; the bucketing errors of `save`;
+    /// `PARTITION_BY_NOT_ALLOWED_WITH_INSERT_INTO` after `partition_by`;
+    /// `TABLE_OR_VIEW_NOT_FOUND`; the arity and write errors of `INSERT INTO`.
+    pub async fn insert_into(self, table: &str) -> Result<(), KrishivError> {
+        let mode = krishiv_io::SaveMode::parse(&self.mode)?;
+        self.assert_not_bucketed("insertInto")?;
+        if !self.partition_by.is_empty() {
+            return Err(krishiv_common::error::PartitionByNotAllowedWithInsertInto {
+                table_name: table.to_owned(),
+            }
+            .into());
+        }
+        let df = self.df;
+        let table = table.to_owned();
+        let session = df.session.clone();
+        session
+            .on_executor(async move { df.session.exec_insert_into(&df, &table, mode).await })
+            .await
+    }
+
+    /// Writes the rows as text files under `path` (PySpark's `write.text`):
+    /// one string column.
+    ///
+    /// # Errors
+    /// As [`Self::save`].
+    pub async fn text(self, path: &str) -> Result<(), KrishivError> {
+        self.format("text").save(path).await
     }
 
     /// Writes the rows as Parquet files under `path` (PySpark's
@@ -2056,8 +2345,6 @@ impl DataFrameWriter {
     }
 
     /// Writes the rows as JSON files under `path` (PySpark's `write.json`).
-    /// The engine has no JSON writer yet: the write fails with
-    /// `KRISHIV_UNSUPPORTED_FEATURE`.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -2065,8 +2352,8 @@ impl DataFrameWriter {
     /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
     /// # s.register_batches("t", schema, vec![])?;
     /// let out = dir.path().join("t");
-    /// let e = futures::executor::block_on(s.table("t").write().json(out.to_str().unwrap())).unwrap_err();
-    /// assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    /// futures::executor::block_on(s.table("t").write().json(out.to_str().unwrap()))?;
+    /// assert!(out.is_dir());
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     ///

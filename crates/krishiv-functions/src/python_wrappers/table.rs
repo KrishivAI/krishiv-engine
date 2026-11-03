@@ -26,6 +26,27 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ),
     ("make_time", "TIME has no Python mapping yet (P2-T181)"),
     ("time", "TIME has no Python mapping yet (P2-T181)"),
+    ("current_time", "TIME has no Python mapping yet (P2-T181)"),
+    (
+        "st_asbinary",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
+    (
+        "st_geogfromwkb",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
+    (
+        "st_geomfromwkb",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
+    (
+        "st_setsrid",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
+    (
+        "st_srid",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
     (
         "time_from_micros",
         "TIME has no Python mapping yet (P2-T181)",
@@ -321,6 +342,7 @@ pub(super) fn rows() -> Vec<Row> {
         "degrees",
         "exp",
         "expm1",
+        "factorial",
         "hex",
         "hour",
         "initcap",
@@ -458,7 +480,7 @@ pub(super) fn rows() -> Vec<Row> {
     for name in ["date_diff", "datediff"] {
         rows.push(Row::new(name, "end: ColumnOrName, start: ColumnOrName"));
     }
-    for name in ["date_part", "extract"] {
+    for name in ["date_part", "datepart", "extract"] {
         rows.push(Row::new(name, "field: Column, source: ColumnOrName"));
     }
     for name in ["date_add", "date_sub", "dateadd"] {

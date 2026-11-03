@@ -12,6 +12,7 @@
 
 mod decode;
 mod encode;
+mod intervals;
 mod options;
 mod schema;
 
@@ -27,6 +28,7 @@ use futures::future::BoxFuture;
 use krishiv_common::error::CodecNotAvailableWithAvailableCodecsSuggestion;
 
 use self::decode::{AvroDecoder, Parsed, parse_header, parse_long};
+use self::intervals::typed_fields;
 use self::options::{AvroOptions, OPTIONS, Rebase};
 use self::schema::{fields_of_record, schema_kind};
 use crate::error::{FormatError, FormatResult, unsupported};
@@ -63,22 +65,23 @@ fn corrupt_footer(reason: impl Into<String>) -> FormatError {
 ///
 /// # Errors
 /// `CODEC_NOT_AVAILABLE.WITH_AVAILABLE_CODECS_SUGGESTION` for zstandard;
-/// `KRISHIV_UNSUPPORTED_FEATURE` for `bzip2` and `xz`.
+/// `KRISHIV_UNSUPPORTED_FEATURE` for `xz`.
 fn block_codec(codec: Codec) -> FormatResult<apache_avro::Codec> {
     use apache_avro::Codec as AvCodec;
     match codec {
         Codec::Null => Ok(AvCodec::Null),
         Codec::Deflate => Ok(AvCodec::Deflate(apache_avro::DeflateSettings::default())),
         Codec::Snappy => Ok(AvCodec::Snappy),
+        Codec::Bzip2 => Ok(AvCodec::Bzip2(apache_avro::Bzip2Settings::default())),
         Codec::Zstandard => Err(FormatError::Other(
             CodecNotAvailableWithAvailableCodecsSuggestion {
                 codec_name: codec.header_name().to_owned(),
-                available_codecs: "uncompressed, deflate, snappy".to_owned(),
+                available_codecs: "uncompressed, deflate, snappy, bzip2".to_owned(),
             }
             .into(),
         )),
-        Codec::Bzip2 | Codec::Xz => Err(FormatError::Other(unsupported(format!(
-            "the Avro {} codec (only uncompressed, snappy and deflate are supported)",
+        Codec::Xz => Err(FormatError::Other(unsupported(format!(
+            "the Avro {} codec (only uncompressed, snappy, deflate and bzip2 are supported)",
             codec.header_name()
         )))),
     }
@@ -175,7 +178,7 @@ fn reader_of(json: &str) -> FormatResult<(AvroSchema, SchemaRef)> {
             "the schema is not a record",
         )));
     }
-    let fields = fields_of_record(&parsed)?;
+    let fields = typed_fields(fields_of_record(&parsed)?, &parsed, json)?;
     Ok((parsed, Arc::new(arrow_schema::Schema::new(fields))))
 }
 
@@ -246,7 +249,7 @@ async fn read_meta(io: &IoContext, file: &FileRef, o: &AvroOptions) -> FormatRes
     let (reader, arrow) = match &o.avro_schema {
         Some(json) => reader_of(json)?,
         None => {
-            let fields = fields_of_record(&writer)?;
+            let fields = typed_fields(fields_of_record(&writer)?, &writer, schema_json)?;
             (writer.clone(), Arc::new(arrow_schema::Schema::new(fields)))
         }
     };

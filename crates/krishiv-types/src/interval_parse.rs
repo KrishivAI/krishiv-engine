@@ -140,24 +140,42 @@ fn fraction_micros(fraction: &str) -> Option<i64> {
     kept.parse::<i64>().ok()?.checked_mul(scale)
 }
 
-/// `CAST(string AS <day-time type>)`, in microseconds. The first field is
-/// unbounded and the others stay in their range; the sum wraps, as Spark's
-/// `Long` arithmetic does (`CAST('106751992' AS INTERVAL DAY)` is negative).
+/// `CAST(string AS <day-time type>)`, in microseconds. The first field takes
+/// at most 9 digits for a day, 10 for an hour, 12 for a minute and 13 for a
+/// second, leading zeros included, and the others stay in their range. One
+/// field other than seconds wraps, as Spark's `Long` arithmetic does
+/// (`CAST('106751992' AS INTERVAL DAY)` is negative); seconds and a range of
+/// fields fail past the `long` range instead.
 ///
 /// # Errors
 /// `INVALID_INTERVAL_FORMAT.UNMATCHED_FORMAT_STRING_WITH_NOTICE` for another
-/// form, and `.INTERVAL_PARSING` for a field out of range. Spark raises the
-/// second with no class; the class is Krishiv's, as named in design P2-T001b.
+/// form, and `.INTERVAL_PARSING` for a field or a sum out of range. For most of
+/// those Spark raises a bare `IllegalArgumentException` or `ArithmeticException`;
+/// the class is Krishiv's, as named in design P2-T001b.
 pub fn cast_to_day_time(
     input: &str,
     start: DayTimeField,
     end: DayTimeField,
 ) -> Result<i64, KrishivError> {
-    const SIZES: [(DayTimeField, i64, i64); 4] = [
-        (DayTimeField::Day, MICROS_PER_DAY, i64::MAX),
-        (DayTimeField::Hour, MICROS_PER_HOUR, 23),
-        (DayTimeField::Minute, MICROS_PER_MINUTE, 59),
-        (DayTimeField::Second, MICROS_PER_SECOND, 59),
+    // Field, its microseconds, the largest value after the first field, and
+    // as the first field its most digits and its largest value in a range.
+    const SIZES: [(DayTimeField, i64, i64, usize, i64); 4] = [
+        (DayTimeField::Day, MICROS_PER_DAY, i64::MAX, 9, 106_751_991),
+        (DayTimeField::Hour, MICROS_PER_HOUR, 23, 10, 2_562_047_788),
+        (
+            DayTimeField::Minute,
+            MICROS_PER_MINUTE,
+            59,
+            12,
+            153_722_867_280,
+        ),
+        (
+            DayTimeField::Second,
+            MICROS_PER_SECOND,
+            59,
+            13,
+            9_223_372_036_854,
+        ),
     ];
     let qualifier = || qualifier(start.name(), end.name());
     let unmatched = || -> KrishivError {
@@ -187,8 +205,11 @@ pub fn cast_to_day_time(
     // `d h:m:s`: a space after a day, a colon after the rest.
     let mut rest = body;
     let mut total = 0_i64;
+    // One field wraps as `Long` arithmetic does, but for seconds; a range is
+    // checked.
+    let exact = start != end || end == DayTimeField::Second;
     let fields = SIZES.iter().filter(|(f, ..)| *f >= start && *f <= end);
-    for (at, (field, size, max)) in fields.enumerate() {
+    for (at, (field, size, max, first_digits, first_max)) in fields.enumerate() {
         let separator = if *field == DayTimeField::Day {
             ' '
         } else {
@@ -208,18 +229,32 @@ pub fn cast_to_day_time(
             text = whole;
         }
         // Only the first field takes more than two digits.
-        if !digits(text) || (at > 0 && text.len() > 2) {
+        if !digits(text) || text.len() > if at > 0 { 2 } else { *first_digits } {
             return Err(unmatched());
         }
         let v: i64 = text.parse().map_err(|_| parsing())?;
-        if at > 0 && v > *max {
+        if v > if at > 0 {
+            *max
+        } else if exact {
+            *first_max
+        } else {
+            i64::MAX
+        } {
             return Err(parsing());
         }
-        total = total
-            .wrapping_add(v.wrapping_mul(*size))
-            .wrapping_add(micros);
+        total = if exact {
+            v.checked_mul(*size)
+                .and_then(|x| x.checked_mul(sign))
+                .and_then(|x| total.checked_add(x))
+                .and_then(|x| x.checked_add(micros.wrapping_mul(sign)))
+                .ok_or_else(parsing)?
+        } else {
+            total
+                .wrapping_add(v.wrapping_mul(*size).wrapping_mul(sign))
+                .wrapping_add(micros.wrapping_mul(sign))
+        };
     }
-    Ok(total.wrapping_mul(sign))
+    Ok(total)
 }
 
 /// The form of `start TO end` in Spark's message.

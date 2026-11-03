@@ -114,6 +114,12 @@ pub fn workflow_violations(name: &str, text: &str) -> Vec<String> {
                 ));
             }
         }
+        if let Some(key) = plain_value_ending_in_colon(t) {
+            out.push(format!(
+                "{name}:{}: the value of `{key}` is a plain scalar that ends in a colon, which YAML reads as a mapping key and GitHub rejects the whole file; quote it",
+                i + 1
+            ));
+        }
         let uses = t
             .strip_prefix("- uses:")
             .or_else(|| t.strip_prefix("uses:"));
@@ -128,6 +134,27 @@ pub fn workflow_violations(name: &str, text: &str) -> Vec<String> {
         }
     }
     out
+}
+
+/// The key of a `key: value` line whose value is an unquoted scalar ending in a colon (for
+/// example `FILTER: ^unsafe:`): YAML parses that as a nested mapping and fails, so GitHub
+/// refuses the workflow, and no job (a required check included) ever runs.
+fn plain_value_ending_in_colon(line: &str) -> Option<&str> {
+    let body = line.strip_prefix("- ").unwrap_or(line);
+    let (key, value) = body.split_once(": ")?;
+    let key_is_name = !key.is_empty()
+        && key
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    let value = value.trim_end();
+    let plain = !value.is_empty()
+        && !value.starts_with(['\'', '"', '[', '{', '|', '>', '&', '*', '!', '#', '$'])
+        && !value.contains(" #");
+    (key_is_name && plain && value.ends_with(':')).then_some(key)
 }
 
 /// Whether a comment line in the first lines of `text` carries the SPDX tag.

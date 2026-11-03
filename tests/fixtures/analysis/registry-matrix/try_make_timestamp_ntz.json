@@ -42,11 +42,11 @@
     },
     {
       "id": "try_make_timestamp_ntz#436863d95f0a/ansi_on",
-      "reason": "SELECT try_make_timestamp_ntz(DATE'2014-12-28', NULL) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT try_make_timestamp_ntz(DATE'2014-12-28', NULL) | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "try_make_timestamp_ntz#436863d95f0a/ansi_off",
-      "reason": "SELECT try_make_timestamp_ntz(DATE'2014-12-28', NULL) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT try_make_timestamp_ntz(DATE'2014-12-28', NULL) | UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "try_make_timestamp_ntz#5a03e7c81d3a/ansi_on",

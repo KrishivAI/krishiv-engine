@@ -36,6 +36,10 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_SPILL_SCRATCH_RESERVE,
     &MEMORY_RESIDENT_GUARD,
     &CACHE_MAX_BYTES,
+    &DETERMINISTIC_ORDER,
+    &RESULT_CACHE_ENABLED,
+    &RESULT_CACHE_TTL,
+    &RESULT_CACHE_MAX_BYTES,
     &SPILL_DIR,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
@@ -59,6 +63,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_MAX_REQUEST_BYTES,
     &IO_PREFETCH_BYTES,
     &IO_LATE_MATERIALIZATION,
+    &IO_PARQUET_PAGE_INDEX_ENABLED,
     &IO_FOOTER_READ_BYTES,
     &IO_METADATA_CACHE_BYTES,
     &IO_MULTIPART_PART_BYTES,
@@ -74,6 +79,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
+    &LATE_FETCH_MAX_ROWS,
     &CTE_RECURSION_LEVEL_LIMIT,
     &CTE_RECURSION_ROW_LIMIT,
     &LEGACY_CODING_ERROR_ACTION,
@@ -108,6 +114,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.agent.gateBytes", &AGENT_GATE_BYTES),
     ("krishiv.metrics.enabled", &METRICS_ENABLED),
     ("krishiv.network.timeout", &NETWORK_TIMEOUT),
+    ("krishiv.resultCache.ttl", &RESULT_CACHE_TTL),
     ("krishiv.sql.defaultPath", &SQL_DEFAULT_PATH),
     ("krishiv.experimental.ivm", &EXPERIMENTAL_IVM),
     ("krishiv.io.coalesceBytes", &IO_COALESCE_BYTES),
@@ -118,6 +125,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.path.enabled", &SQL_PATH_ENABLED),
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
+    ("krishiv.deterministicOrder", &DETERMINISTIC_ORDER),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
     ("krishiv.exec.join.strategy", &EXEC_JOIN_STRATEGY),
     ("krishiv.io.blockingThreads", &IO_BLOCKING_THREADS),
@@ -127,8 +135,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
+    ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
+    ("krishiv.resultCache.maxBytes", &RESULT_CACHE_MAX_BYTES),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
@@ -139,6 +149,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.spill.dropBehindBytes", &SPILL_DROP_BEHIND_BYTES),
     ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
+    ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
     ("spark.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     (
@@ -220,6 +231,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.files.maxPartitionBytes",
         &FILES_MAX_PARTITION_BYTES,
+    ),
+    (
+        "krishiv.io.parquet.pageIndex.enabled",
+        &IO_PARQUET_PAGE_INDEX_ENABLED,
     ),
     (
         "krishiv.runtimeFilter.bloom.maxBytes",
@@ -684,6 +699,68 @@ pub static CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Reproducible results: one driver per pipeline.
+pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
+    key: "krishiv.deterministicOrder",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Make a query's result reproducible: every pipeline runs on one driver, so partial \
+          states (a decimal `sum` or `avg`, whose overflow can depend on the order of the \
+          merges) are merged in the order the input arrives and a query without `ORDER BY` \
+          returns its rows in the same order on every run, byte for byte, for the engine's \
+          own scans. Costs the parallelism of the query: meant for reproducing a result, \
+          comparing two builds, and tests. Memory pressure from other queries in the process \
+          can still change when an operator spills, and so the order of what it returns, and the \
+          branches of a `UNION ALL` under an operator that must see all of them (a hash join \
+          probing a union) still run side by side. Off by default.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Whether the process-wide result cache serves and stores query results.
+pub static RESULT_CACHE_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.resultCache.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Keep the rows of a query for later runs of the same query by any session of the process \
+          with the same principal and access-policy version. Only queries over permanent \
+          catalog tables with no non-deterministic function are cached. Entries are dropped by \
+          `REFRESH TABLE`, `CLEAR CACHE` and every write the engine commits to a table they \
+          read; a change made outside the engine is not seen until the entry expires. Off by \
+          default.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// How long a result-cache entry is served.
+pub static RESULT_CACHE_TTL: ConfigEntry = ConfigEntry {
+    key: "krishiv.resultCache.ttl",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(24 * 60 * 60))),
+    doc: "How long the result cache serves an entry, counted from when it was stored; an older \
+          entry is dropped before the next lookup and the query runs again. `0s` never \
+          expires. Needs `krishiv.resultCache.enabled`.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Byte cap of the process-wide result cache.
+pub static RESULT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.resultCache.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(64 * MIB)),
+    doc: "Most bytes the result cache holds, for the whole process, as Arrow batches outside the \
+          query memory pool; the setting of the session that stores a result applies. A result \
+          larger than the cap is not stored; when a new result would pass the cap the oldest \
+          entries go first, and entries past their ttl go whenever a result is stored. Needs `krishiv.resultCache.enabled`.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
 /// Directory for spill files.
 pub static SPILL_DIR: ConfigEntry = ConfigEntry {
     key: "krishiv.spill.dir",
@@ -951,6 +1028,20 @@ pub static IO_PREFETCH_BYTES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// `krishiv.io.parquet.pageIndex.enabled`.
+pub static IO_PARQUET_PAGE_INDEX_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.parquet.pageIndex.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether a Parquet scan reads the page index of the row groups its statistics could not \
+          decide and skips the pages the pushed filter rules out. Returned rows are the same \
+          either way: the index only prunes, and an index that fails a check is ignored. Files \
+          without a page index pay nothing.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
 /// `krishiv.io.lateMaterialization`.
 pub static IO_LATE_MATERIALIZATION: ConfigEntry = ConfigEntry {
     key: "krishiv.io.lateMaterialization",
@@ -1147,6 +1238,19 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
+};
+
+/// `krishiv.exec.lateFetch.maxRows`.
+pub static LATE_FETCH_MAX_ROWS: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.lateFetch.maxRows",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(50)),
+    doc: "Most rows (limit plus offset) an ORDER BY ... LIMIT over a file scan may rank while \
+          reading only the sort keys and filter columns, fetching the other columns for the rows \
+          kept; 0 turns it off. Results are the same either way.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
 };
 
 /// `spark.sql.cteRecursionLevelLimit`.

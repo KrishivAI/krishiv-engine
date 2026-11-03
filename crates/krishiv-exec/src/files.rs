@@ -424,7 +424,7 @@ impl FileReads {
             // (plans stay pure data): the read's `fs.*` options override
             // the session configuration.
             let at = self.paths.locate_with_options(text, options)?;
-            self.list_path(&at, &mut listed).await?;
+            self.list_path(&at, known.is_some(), &mut listed).await?;
         }
         listed.sort_by(|a, b| a.0.path.as_ref().cmp(b.0.path.as_ref()));
         let format = match self.formats.get(format) {
@@ -506,11 +506,12 @@ impl FileReads {
         })
     }
 
-    /// Adds the files `at` names to `out`, each with the `name=value`
+    /// Adds the files `at` names to `out` (none when it is absent and `missing_is_empty`), each with the `name=value`
     /// directories between `at` and the file.
     async fn list_path(
         &self,
         at: &LocatedPath,
+        missing_is_empty: bool,
         out: &mut Vec<(FileRef, Vec<Segment>)>,
     ) -> Result<()> {
         if let Some(meta) = self.io.head(&at.store, &at.path).await? {
@@ -520,6 +521,11 @@ impl FileReads {
             return Ok(());
         }
         if !self.io.is_directory(&at.store, &at.path).await? {
+            // A catalog table whose location is not made yet (an external
+            // table's first write makes it) holds no rows.
+            if missing_is_empty {
+                return Ok(());
+            }
             return Err(PathNotFound {
                 path: at.display.clone(),
             }

@@ -443,6 +443,7 @@ fn constructs_map_to_one_feature_or_the_baseline() {
     );
     let write = WritePlan {
         partition_by: vec![0],
+        column_types: std::collections::BTreeMap::new(),
         ..base
     };
     let node = node_of(write);
@@ -528,6 +529,28 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
             missing: vec!["shared_subplan".to_owned()]
         }
     );
+    // A reader without `late_fetch` refuses the node and a row id alone.
+    let late_fetch = cases()
+        .into_iter()
+        .find(|(n, _)| n == "late_fetch")
+        .unwrap()
+        .1;
+    let top = late_fetch.root().children()[0];
+    let row_id = plan_of(top.children()[0].clone());
+    for plan in [late_fetch.clone(), row_id] {
+        let err = decode_with(
+            &encode(&plan).unwrap(),
+            &Limits::default(),
+            &ReaderFeatures::only([]),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CodecError::UnsupportedFeatures {
+                missing: vec!["late_fetch".to_owned()]
+            }
+        );
+    }
     // A reader without `lambda_functions` refuses the lambda plan naming
     // the feature, even though it knows `nested_types`.
     let bytes = encode(
@@ -603,6 +626,55 @@ fn a_reader_without_the_filter_feature_refuses_a_masked_aggregate() {
             missing: vec!["aggregate_filter".to_owned()]
         }
     );
+}
+
+#[test]
+fn a_reader_without_write_column_types_refuses_the_plan_naming_it() {
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "write_files_column_types")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let reader = ReaderFeatures::only([Feature::WritePlan, Feature::IntervalTypes]);
+    assert!(!reader.contains(Feature::WriteColumnTypes));
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &reader).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["write_column_types".to_owned()]
+        }
+    );
+    assert_eq!(Feature::WriteColumnTypes.kind(), FeatureKind::Semantic);
+}
+
+/// The header lists each feature of a write, and the Spark types it names
+/// even when its input holds none of them.
+#[test]
+fn a_partitioned_write_with_column_types_lists_every_feature() {
+    let write = krishiv_exec::physical::WritePlan {
+        partition_by: vec![0],
+        column_types: std::collections::BTreeMap::from([(
+            0,
+            krishiv_types::DataType::YearMonthInterval {
+                start: krishiv_types::YearMonthField::Year,
+                end: krishiv_types::YearMonthField::Month,
+            },
+        )]),
+        ..inventory::write_plan()
+    };
+    let features = plan_features(&plan_of(PhysNode::WriteFiles {
+        input: Box::new(PhysNode::OneRow),
+        write: Some(write),
+    }));
+    for feature in [
+        Feature::IntervalTypes,
+        Feature::PartitionedWrites,
+        Feature::WriteColumnTypes,
+    ] {
+        assert!(features.contains(&feature), "{feature}: {features:?}");
+    }
 }
 
 #[test]

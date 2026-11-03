@@ -28,16 +28,19 @@ use std::sync::Arc;
 
 use arrow_array::builder::ArrayBuilder;
 use arrow_array::builder::{
-    BinaryViewBuilder, BooleanBuilder, Date32Builder, Decimal128Builder, Float32Builder,
-    Float64Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder, StringViewBuilder,
-    TimestampMicrosecondBuilder,
+    BinaryViewBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
+    DurationMicrosecondBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
+    Int32Builder, Int64Builder, IntervalMonthDayNanoBuilder, IntervalYearMonthBuilder,
+    StringViewBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
 };
 use arrow_array::{Array, ArrayRef, NullArray, StringArray};
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow_schema::{DataType as ArrowType, FieldRef, Fields};
+use arrow_schema::{DataType as ArrowType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
 use krishiv_common::error::{
     InternalError, KrishivError, MalformedRecordInParsingWithoutSuggestion,
 };
+use krishiv_types::interval_parse::{cast_to_day_time, cast_to_year_month, parse_string};
+use krishiv_types::{DataType as SparkType, DayTimeField, YearMonthField};
 
 use super::JsonOptions;
 use super::base64;
@@ -603,7 +606,11 @@ fn convert_key(text: &str, keys: &Builder) -> Result<Key, Poison> {
             .ok_or(Poison),
         Scalar::Date(_) => spark_string_to_date(text).map(Key::Date).ok_or(Poison),
         Scalar::Binary(_) => base64::decode(text).map(Key::Binary).ok_or(Poison),
-        Scalar::Timestamp { .. } => Err(Poison),
+        Scalar::Time(_)
+        | Scalar::Timestamp { .. }
+        | Scalar::YearMonth { .. }
+        | Scalar::DayTime { .. }
+        | Scalar::Calendar(_) => Err(Poison),
     }
 }
 
@@ -835,6 +842,22 @@ fn read_string(raw: RawStr<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), F
                 None => Err(Poison.into()),
             }
         }
+        Scalar::Time(b) => {
+            let parsed = match &ctx.opts.time_format {
+                Some(pattern) => pattern
+                    .parse_local(&text, false)
+                    .map_err(|_| Poison)?
+                    .map(|m| m.rem_euclid(86_400_000_000).wrapping_mul(1_000)),
+                None => crate::cast::time::parse_time(&text),
+            };
+            match parsed {
+                Some(v) => {
+                    b.append_value(v);
+                    Ok(())
+                }
+                None => Err(Poison.into()),
+            }
+        }
         Scalar::Timestamp { builder, ntz } => {
             let parsed = if *ntz {
                 match &ctx.opts.timestamp_ntz_format {
@@ -880,6 +903,34 @@ fn read_string(raw: RawStr<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), F
             }
             None => Err(Poison.into()),
         },
+        Scalar::YearMonth {
+            builder,
+            start,
+            end,
+        } => {
+            builder.append_value(cast_to_year_month(&text, *start, *end).map_err(|_| Poison)?);
+            Ok(())
+        }
+        Scalar::DayTime {
+            builder,
+            start,
+            end,
+        } => {
+            builder.append_value(cast_to_day_time(&text, *start, *end).map_err(|_| Poison)?);
+            Ok(())
+        }
+        // Spark's `safeStringToInterval`: text that is no interval is NULL, not
+        // a malformed record, even with `FAILFAST`.
+        Scalar::Calendar(b) => {
+            match parse_string(&text) {
+                Ok((c, _)) => b.append_value(
+                    crate::csv::calendar_value(c)
+                        .map_err(|e| Fault::Internal(e.error().clone()))?,
+                ),
+                Err(_) => b.append_null(),
+            }
+            Ok(())
+        }
         _ => Err(Poison.into()),
     }
 }
@@ -1156,6 +1207,8 @@ enum Scalar {
     Binary(BinaryViewBuilder),
     /// `date`.
     Date(Date32Builder),
+    /// `time`.
+    Time(Time64NanosecondBuilder),
     /// `timestamp` (`ntz = false`) or `timestamp_ntz`.
     Timestamp {
         /// The values.
@@ -1163,6 +1216,26 @@ enum Scalar {
         /// Whether zone-less.
         ntz: bool,
     },
+    /// An ANSI year-month interval.
+    YearMonth {
+        /// The values.
+        builder: IntervalYearMonthBuilder,
+        /// Its start field.
+        start: YearMonthField,
+        /// Its end field.
+        end: YearMonthField,
+    },
+    /// An ANSI day-time interval.
+    DayTime {
+        /// The values.
+        builder: DurationMicrosecondBuilder,
+        /// Its start field.
+        start: DayTimeField,
+        /// Its end field.
+        end: DayTimeField,
+    },
+    /// A calendar interval.
+    Calendar(IntervalMonthDayNanoBuilder),
 }
 
 impl Scalar {
@@ -1180,7 +1253,11 @@ impl Scalar {
             Self::Str(b) => b.append_null(),
             Self::Binary(b) => b.append_null(),
             Self::Date(b) => b.append_null(),
+            Self::Time(b) => b.append_null(),
             Self::Timestamp { builder, .. } => builder.append_null(),
+            Self::YearMonth { builder, .. } => builder.append_null(),
+            Self::DayTime { builder, .. } => builder.append_null(),
+            Self::Calendar(b) => b.append_null(),
         }
     }
 
@@ -1206,6 +1283,7 @@ impl Scalar {
             Self::Str(mut b) => Arc::new(b.finish()),
             Self::Binary(mut b) => Arc::new(b.finish()),
             Self::Date(mut b) => Arc::new(b.finish()),
+            Self::Time(mut b) => Arc::new(b.finish()),
             Self::Timestamp { mut builder, ntz } => {
                 let mut array = builder.finish();
                 if !ntz {
@@ -1213,6 +1291,9 @@ impl Scalar {
                 }
                 Arc::new(array)
             }
+            Self::YearMonth { mut builder, .. } => Arc::new(builder.finish()),
+            Self::DayTime { mut builder, .. } => Arc::new(builder.finish()),
+            Self::Calendar(mut b) => Arc::new(b.finish()),
         };
         if array.data_type() != target {
             return Err(InternalError {
@@ -1276,6 +1357,34 @@ enum Builder {
 }
 
 impl Builder {
+    /// A builder reading a field of `field`'s type: the Arrow carrier of an
+    /// interval has no fields, so they come from the field's tag.
+    fn for_field(field: &Field) -> Result<Self, KrishivError> {
+        Ok(match SparkType::from_arrow_field(field) {
+            Ok(SparkType::YearMonthInterval { start, end }) => Self::year_month(start, end),
+            Ok(SparkType::DayTimeInterval { start, end }) => Self::day_time(start, end),
+            _ => return Self::for_type(field.data_type()),
+        })
+    }
+
+    /// A builder reading a year-month interval.
+    fn year_month(start: YearMonthField, end: YearMonthField) -> Self {
+        Self::Scalar(Scalar::YearMonth {
+            builder: IntervalYearMonthBuilder::new(),
+            start,
+            end,
+        })
+    }
+
+    /// A builder reading a day-time interval.
+    fn day_time(start: DayTimeField, end: DayTimeField) -> Self {
+        Self::Scalar(Scalar::DayTime {
+            builder: DurationMicrosecondBuilder::new(),
+            start,
+            end,
+        })
+    }
+
     /// A builder reading `target`.
     fn for_type(target: &ArrowType) -> Result<Self, KrishivError> {
         Ok(match target {
@@ -1297,14 +1406,26 @@ impl Builder {
                 Self::Scalar(Scalar::Binary(BinaryViewBuilder::new()))
             }
             ArrowType::Date32 => Self::Scalar(Scalar::Date(Date32Builder::new())),
+            ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond) => {
+                Self::Scalar(Scalar::Time(Time64NanosecondBuilder::new()))
+            }
             ArrowType::Timestamp(_, tz) => Self::Scalar(Scalar::Timestamp {
                 builder: TimestampMicrosecondBuilder::new(),
                 ntz: tz.is_none(),
             }),
+            ArrowType::Interval(IntervalUnit::YearMonth) => {
+                Self::year_month(YearMonthField::Year, YearMonthField::Month)
+            }
+            ArrowType::Duration(TimeUnit::Microsecond) => {
+                Self::day_time(DayTimeField::Day, DayTimeField::Second)
+            }
+            ArrowType::Interval(IntervalUnit::MonthDayNano) => {
+                Self::Scalar(Scalar::Calendar(IntervalMonthDayNanoBuilder::new()))
+            }
             ArrowType::List(field) => Self::List {
                 field: Arc::clone(field),
                 offsets: vec![0],
-                values: Box::new(Self::for_type(field.data_type())?),
+                values: Box::new(Self::for_field(field)?),
                 valid: Vec::new(),
             },
             ArrowType::LargeList(_) => {
@@ -1315,10 +1436,9 @@ impl Builder {
             }
             ArrowType::Map(field, _) => {
                 let (keys, values) = match field.data_type() {
-                    ArrowType::Struct(entries) if entries.len() == 2 => (
-                        Self::for_type(entries[0].data_type())?,
-                        Self::for_type(entries[1].data_type())?,
-                    ),
+                    ArrowType::Struct(entries) if entries.len() == 2 => {
+                        (Self::for_field(&entries[0])?, Self::for_field(&entries[1])?)
+                    }
                     other => {
                         return Err(InternalError {
                             message: format!("a map value with entries {other}"),
@@ -1337,7 +1457,7 @@ impl Builder {
             ArrowType::Struct(fields) => Self::Struct {
                 children: fields
                     .iter()
-                    .map(|f| Self::for_type(f.data_type()))
+                    .map(|f| Self::for_field(f))
                     .collect::<Result<Vec<_>, _>>()?,
                 fields: fields.clone(),
                 valid: Vec::new(),
@@ -1375,7 +1495,11 @@ impl Builder {
                 Scalar::Str(b) => len_of(b),
                 Scalar::Binary(b) => len_of(b),
                 Scalar::Date(b) => len_of(b),
+                Scalar::Time(b) => len_of(b),
                 Scalar::Timestamp { builder, .. } => len_of(builder),
+                Scalar::YearMonth { builder, .. } => len_of(builder),
+                Scalar::DayTime { builder, .. } => len_of(builder),
+                Scalar::Calendar(b) => len_of(b),
             },
         }
     }

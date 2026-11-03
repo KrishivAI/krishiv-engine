@@ -38,6 +38,7 @@ mod csv;
 mod datetime;
 mod element;
 mod format;
+mod geo;
 mod hash;
 mod interval;
 mod json;
@@ -58,7 +59,7 @@ mod vector;
 mod xml;
 
 pub use json::schema_of_json_ddl;
-pub use regex::{extract_all_pieces, split_regex};
+pub use regex::{FullMatch, extract_all_pieces, split_regex};
 pub use xml::schema_of_xml_ddl;
 
 use std::fmt;
@@ -462,7 +463,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 31] = [
+const FAMILIES: [(&[&str], Binder); 32] = [
     (array::NAMES, array::bind),
     (collection::NAMES, collection::bind),
     (string::NAMES, string::bind),
@@ -485,6 +486,7 @@ const FAMILIES: [(&[&str], Binder); 31] = [
     (codec::NAMES, codec::bind),
     (r#struct::NAMES, r#struct::bind),
     (url::NAMES, url::bind),
+    (geo::NAMES, geo::bind),
     (csv::NAMES, csv::bind),
     (format::NAMES, format::bind),
     (xml::NAMES, xml::bind),
@@ -526,6 +528,7 @@ pub fn is_argument_pure(name: &str) -> bool {
         "json_array_length",
         "json_object_keys",
         "get_json_object",
+        "factorial",
     ]
     .contains(&lower.as_str())
     {

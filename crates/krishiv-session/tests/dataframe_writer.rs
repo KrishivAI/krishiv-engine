@@ -390,28 +390,13 @@ fn partition_by_with_bogus_mode_reports_invalid_save_mode() {
 fn unknown_format_fails_with_unsupported_feature() {
     let dir = tempfile::tempdir().unwrap();
     let s = session();
-    // The JSON shortcut (the engine has no JSON writer yet).
-    let err = block_on(s.table("people").write().json(&out(&dir, "j"))).unwrap_err();
+    // A Spark built-in source without an implementation, through `format`.
+    let path = out(&dir, "orc");
+    let err = block_on(s.table("people").write().format("orc").save(&path)).unwrap_err();
     assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
-    assert!(err.to_string().contains("writing the json format"), "{err}");
-    // Any other Spark built-in source without an implementation, through
-    // `format`.
-    for format in ["text", "orc"] {
-        let path = out(&dir, format);
-        let err = block_on(s.table("people").write().format(format).save(&path)).unwrap_err();
-        assert_eq!(
-            err.error_class().name(),
-            "KRISHIV_UNSUPPORTED_FEATURE",
-            "{format}"
-        );
-        assert!(
-            err.to_string()
-                .contains(&format!("writing the {format} format")),
-            "{err}"
-        );
-        // The failed write leaves nothing behind.
-        assert!(!dir.path().join(format).exists());
-    }
+    assert!(err.to_string().contains("writing the orc format"), "{err}");
+    // The failed write leaves nothing behind.
+    assert!(!dir.path().join("orc").exists());
 }
 
 #[test]
@@ -531,7 +516,42 @@ fn csv_save_modes_append_overwrite_error_ignore() {
 }
 
 #[test]
-fn csv_compression_codec_fails_with_unsupported_feature() {
+fn csv_compression_codecs_write_suffixed_files_that_read_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session();
+    let plain = out(&dir, "plain");
+    block_on(s.table("people").write().format("csv").save(&plain)).unwrap();
+    let want = csv_rows(&s, &plain, &[]);
+    for (codec, suffix) in [
+        ("gzip", ".csv.gz"),
+        ("bzip2", ".csv.bz2"),
+        ("lz4", ".csv.lz4"),
+        ("snappy", ".csv.snappy"),
+        ("deflate", ".csv.deflate"),
+    ] {
+        let path = out(&dir, codec);
+        block_on(
+            s.table("people")
+                .write()
+                .format("csv")
+                .option("compression", codec)
+                .save(&path),
+        )
+        .unwrap();
+        let names: Vec<String> = std::fs::read_dir(&path)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            names.iter().any(|n| n.ends_with(suffix)),
+            "{codec}: {names:?}"
+        );
+        assert_eq!(csv_rows(&s, &path, &[]), want, "{codec}");
+    }
+}
+
+#[test]
+fn csv_unknown_compression_codec_fails_with_codec_not_available() {
     let dir = tempfile::tempdir().unwrap();
     let s = session();
     let path = out(&dir, "t");
@@ -539,12 +559,14 @@ fn csv_compression_codec_fails_with_unsupported_feature() {
         s.table("people")
             .write()
             .format("csv")
-            .option("compression", "gzip")
+            .option("compression", "zstd")
             .save(&path),
     )
     .unwrap_err();
-    assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
-    assert!(err.to_string().contains("compression codec gzip"), "{err}");
+    assert_eq!(
+        err.error_class().name(),
+        "CODEC_NOT_AVAILABLE.WITH_AVAILABLE_CODECS_SUGGESTION"
+    );
     assert!(!dir.path().join("t").exists());
 }
 

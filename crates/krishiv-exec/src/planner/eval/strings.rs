@@ -186,6 +186,39 @@ struct Concat {
 }
 
 pub(super) fn concat(args: Vec<Arc<dyn PhysExpr>>, nullable: bool) -> Result<Arc<dyn PhysExpr>> {
+    // `concat(array, array, ...)`: the arrays joined, NULL if any is NULL.
+    // Arrays that differ only in the child field's name or nullability
+    // (`item` from a registered batch, `element` from a literal) are one
+    // Spark type: their element types are what must agree.
+    let element = |t: &ArrowType| match t {
+        ArrowType::List(f) => Some(f.data_type().clone()),
+        _ => None,
+    };
+    if let Some(first) = args.first()
+        && let Some(want) = element(first.data_type())
+        && args
+            .iter()
+            .all(|a| element(a.data_type()).as_ref() == Some(&want))
+    {
+        // The child is nullable if any input's is: the result holds both.
+        let child_nullable = args.iter().any(|a| match a.data_type() {
+            ArrowType::List(f) => f.is_nullable(),
+            _ => false,
+        });
+        let out = match first.data_type() {
+            ArrowType::List(f) => ArrowType::List(Arc::new(arrow_schema::Field::new(
+                f.name().clone(),
+                want,
+                child_nullable,
+            ))),
+            other => other.clone(),
+        };
+        return Ok(Arc::new(ConcatArrays {
+            args,
+            out,
+            nullable,
+        }));
+    }
     let binary = !args.is_empty() && args.iter().all(|a| is_binary(a.data_type()));
     if args.is_empty() || !(binary || args.iter().all(|a| is_string(a.data_type()))) {
         return Err(unsupported("concat of non-string values"));
@@ -195,6 +228,88 @@ pub(super) fn concat(args: Vec<Arc<dyn PhysExpr>>, nullable: bool) -> Result<Arc
         nullable,
         binary,
     }))
+}
+
+/// `concat(a1, a2, ...)` over arrays of one type.
+#[derive(Debug)]
+struct ConcatArrays {
+    args: Vec<Arc<dyn PhysExpr>>,
+    out: ArrowType,
+    nullable: bool,
+}
+
+impl PhysExpr for ConcatArrays {
+    fn data_type(&self) -> &ArrowType {
+        &self.out
+    }
+
+    fn nullable(&self) -> bool {
+        self.nullable
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let values = self
+            .args
+            .iter()
+            .map(|a| a.eval(batch, partition))
+            .collect::<Result<Vec<_>>>()?;
+        let scalar = values.iter().all(Value::is_scalar);
+        let rows = if scalar { 1 } else { batch.num_rows() };
+        let lists: Vec<&arrow_array::ListArray> =
+            values.iter().map(|v| v.array().as_list::<i32>()).collect();
+        let children: Vec<&dyn Array> = lists.iter().map(|l| l.values().as_ref()).collect();
+        let at = |k: usize, row: usize| if values[k].is_scalar() { 0 } else { row };
+        let mut offsets = Vec::with_capacity(rows + 1);
+        offsets.push(0_i32);
+        let mut valid = Vec::with_capacity(rows);
+        let mut picks: Vec<(usize, usize)> = Vec::new();
+        for row in 0..rows {
+            let ok = lists
+                .iter()
+                .enumerate()
+                .all(|(k, l)| l.is_valid(at(k, row)));
+            if ok {
+                for (k, l) in lists.iter().enumerate() {
+                    let r = at(k, row);
+                    let bound =
+                        |i: i32| usize::try_from(i).map_err(|_| internal("a negative list offset"));
+                    let (start, end) = (
+                        bound(l.value_offsets()[r])?,
+                        bound(l.value_offsets()[r + 1])?,
+                    );
+                    picks.extend((start..end).map(|i| (k, i)));
+                }
+            }
+            valid.push(ok);
+            offsets.push(
+                i32::try_from(picks.len())
+                    .map_err(|_| internal("a concatenated array is too big"))?,
+            );
+        }
+        let ArrowType::List(field) = &self.out else {
+            return Err(internal("concat of arrays typed as a non-list"));
+        };
+        let child = if children.iter().all(|c| c.is_empty()) || picks.is_empty() {
+            arrow_array::new_empty_array(field.data_type())
+        } else {
+            arrow_select::interleave::interleave(&children, &picks)
+                .map_err(|e| internal(&e.to_string()))?
+        };
+        let out: ArrayRef = Arc::new(
+            arrow_array::ListArray::try_new(
+                Arc::clone(field),
+                OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                child,
+                Some(NullBuffer::from(valid)),
+            )
+            .map_err(|e| internal(&e.to_string()))?,
+        );
+        Ok(if scalar {
+            Value::Scalar(out)
+        } else {
+            Value::Array(out)
+        })
+    }
 }
 
 impl PhysExpr for Concat {

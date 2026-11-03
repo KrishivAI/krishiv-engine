@@ -169,6 +169,17 @@ struct Compiled {
 
 impl Compiled {
     fn new(pattern: &str, function: &'static str) -> Result<Self, KrishivError> {
+        Self::with_anchors(pattern, function, false)
+    }
+
+    /// Like [`Compiled::new`]; with `whole`, the translated regex must match all of the input.
+    /// The anchors go around the translation, so a Java pattern that runs to its end (`\Qfoo`,
+    /// a `(?x)` comment) cannot swallow them.
+    fn with_anchors(
+        pattern: &str,
+        function: &'static str,
+        whole: bool,
+    ) -> Result<Self, KrishivError> {
         let invalid = || -> KrishivError {
             InvalidParameterValuePattern {
                 function_name: function.to_owned(),
@@ -178,8 +189,15 @@ impl Compiled {
             .into()
         };
         let plain = java::translate(pattern, false).map_err(|_| invalid())?;
+        let anchor = |t: &str| {
+            if whole {
+                format!("\\A(?:{t})\\z")
+            } else {
+                t.to_owned()
+            }
+        };
         let build = |p: &str| {
-            RegexBuilder::new(p)
+            RegexBuilder::new(&anchor(p))
                 .backtrack_limit(BACKTRACK_LIMIT)
                 .build()
                 .map_err(|_| invalid())
@@ -235,6 +253,44 @@ impl Compiled {
             }
             .into()),
         }
+    }
+}
+
+/// A Java regular expression that has to match the whole of a text (`Matcher.matches`), as Spark
+/// matches a quoted column regex against column names.
+pub struct FullMatch(Compiled);
+
+impl std::fmt::Debug for FullMatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("FullMatch").field(&self.0.source).finish()
+    }
+}
+
+impl FullMatch {
+    /// Compiles the Java regex `pattern`, ignoring case when `ignore_case`.
+    ///
+    /// # Errors
+    /// `INVALID_PARAMETER_VALUE.PATTERN` for a pattern Java would refuse (or this engine cannot
+    /// translate).
+    pub fn new(pattern: &str, ignore_case: bool) -> Result<Self, KrishivError> {
+        let flags = if ignore_case { "(?i)" } else { "" };
+        let compiled = Compiled::with_anchors(
+            &format!("{flags}{pattern}"),
+            "`quotedRegexColumnNames`",
+            true,
+        )?;
+        Ok(Self(compiled))
+    }
+
+    /// Whether the pattern matches all of `text`.
+    ///
+    /// # Errors
+    /// `KRISHIV_REGEXP_BACKTRACK_LIMIT_EXCEEDED` for a pattern that backtracks past the cap.
+    pub fn is_match(&self, text: &str) -> Result<bool, KrishivError> {
+        self.0
+            .for_input(text)
+            .is_match(text)
+            .map_err(|e| self.0.backtrack(e))
     }
 }
 

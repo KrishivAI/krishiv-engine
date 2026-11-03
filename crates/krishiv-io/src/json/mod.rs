@@ -6,8 +6,8 @@
 //! Only flat schemas are supported: a nested object or array in the
 //! requested schema is `KRISHIV_UNSUPPORTED_FEATURE`. A nested value in the
 //! *data* is a malformed record (nulls plus the raw record in PERMISSIVE,
-//! dropped in DROPMALFORMED, failed in FAILFAST). Compressed files are
-//! `KRISHIV_UNSUPPORTED_FEATURE` for now.
+//! dropped in DROPMALFORMED, failed in FAILFAST). Files in the Hadoop codecs
+//! (`.gz`, `.deflate`, `.bz2`, `.lz4`, `.snappy`) read and write as in Spark (`text/codec.rs`).
 
 mod convert;
 mod decode;
@@ -56,8 +56,8 @@ impl FileFormat for JsonFormat {
         c
     }
 
-    fn file_suffix(&self, _o: &FormatOptions) -> String {
-        ".json".to_owned()
+    fn file_suffix(&self, o: &FormatOptions) -> String {
+        crate::text::output_suffix(".json", o)
     }
 
     fn infer_schema<'a>(
@@ -116,7 +116,9 @@ impl FileFormat for JsonFormat {
         o: &'a FormatOptions,
     ) -> BoxFuture<'a, FormatResult<Box<dyn Encoder>>> {
         Box::pin(std::future::ready(
-            encode::JsonEncoder::new(&schema, o).map(|e| Box::new(e) as Box<dyn Encoder>),
+            encode::JsonEncoder::new(&schema, o)
+                .map(|e| Box::new(e) as Box<dyn Encoder>)
+                .and_then(|e| crate::text::compress_output(e, o)),
         ))
     }
 

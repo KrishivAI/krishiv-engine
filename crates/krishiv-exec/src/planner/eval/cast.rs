@@ -69,7 +69,12 @@ pub(crate) fn coerce_to(
     };
     let parts = parts(e.data_type(), to.clone(), mode, env)?;
     let nullable = e.nullable() || parts.mode != KernelMode::Ansi;
-    Ok(Arc::new(Cast { e, parts, nullable }))
+    Ok(Arc::new(Cast {
+        e,
+        parts,
+        nullable,
+        geography: None,
+    }))
 }
 
 /// `(l, r)` with operands of one Spark `STRING` or `BINARY` in different
@@ -97,15 +102,75 @@ struct Cast {
     e: Arc<dyn PhysExpr>,
     parts: CastParts,
     nullable: bool,
+    /// The target is a geography: every value's coordinates must be
+    /// geographic (a geometry of the same SRID casts to it).
+    geography: Option<DataType>,
 }
 
 /// Whether a cast between `from` and `to` reads the session time zone.
 fn needs_zone(from: &ArrowType, to: &ArrowType) -> bool {
     let zoned = |t: &ArrowType| matches!(t, ArrowType::Timestamp(_, Some(_)));
     let wall_clock = |t: &ArrowType| matches!(t, ArrowType::Timestamp(_, None));
+    let element = |t: &ArrowType| match t {
+        ArrowType::List(f) | ArrowType::LargeList(f) | ArrowType::FixedSizeList(f, _) => {
+            Some(f.data_type().clone())
+        }
+        _ => None,
+    };
+    // A nested cast casts each element, entry or field: any of them may
+    // read the zone (`array<timestamp>` to `array<string>`).
+    if let (Some(f), Some(t)) = (element(from), element(to)) {
+        return needs_zone(&f, &t);
+    }
+    // A nested value cast to text renders every timestamp inside it in
+    // the session zone.
+    if matches!(
+        to,
+        ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View
+    ) && matches!(
+        from,
+        ArrowType::List(_)
+            | ArrowType::LargeList(_)
+            | ArrowType::FixedSizeList(..)
+            | ArrowType::Map(..)
+            | ArrowType::Struct(_)
+    ) {
+        return holds_zoned(from);
+    }
+    match (from, to) {
+        (ArrowType::Map(f, _), ArrowType::Map(t, _)) => {
+            return match (f.data_type(), t.data_type()) {
+                (ArrowType::Struct(f), ArrowType::Struct(t)) => f
+                    .iter()
+                    .zip(t.iter())
+                    .any(|(f, t)| needs_zone(f.data_type(), t.data_type())),
+                _ => false,
+            };
+        }
+        (ArrowType::Struct(f), ArrowType::Struct(t)) => {
+            return f
+                .iter()
+                .zip(t.iter())
+                .any(|(f, t)| needs_zone(f.data_type(), t.data_type()));
+        }
+        _ => {}
+    }
     (zoned(from) && !matches!(to, ArrowType::Int64 | ArrowType::Timestamp(_, Some(_))))
         || (zoned(to) && !matches!(from, ArrowType::Int64 | ArrowType::Timestamp(_, Some(_))))
         || (wall_clock(from) && zoned(to))
+}
+
+/// Whether `t` is, or holds at any depth, a timestamp with a zone.
+fn holds_zoned(t: &ArrowType) -> bool {
+    match t {
+        ArrowType::Timestamp(_, Some(_)) => true,
+        ArrowType::List(f) | ArrowType::LargeList(f) | ArrowType::FixedSizeList(f, _) => {
+            holds_zoned(f.data_type())
+        }
+        ArrowType::Map(f, _) => holds_zoned(f.data_type()),
+        ArrowType::Struct(fields) => fields.iter().any(|f| holds_zoned(f.data_type())),
+        _ => false,
+    }
 }
 
 /// A cast's plan data, without its child: what [`NullIf`](super::cond::NullIf)
@@ -314,7 +379,132 @@ pub(super) fn compile(
     // Every cast to a narrower or textual type can produce NULL in legacy
     // and `TRY_CAST` modes; ANSI keeps the input's nullability.
     let nullable = e.nullable() || parts.mode != KernelMode::Ansi;
-    Ok(Arc::new(Cast { e, parts, nullable }))
+    let geography = holds_geography(to).then(|| to.clone());
+    Ok(Arc::new(Cast {
+        e,
+        parts,
+        nullable,
+        geography,
+    }))
+}
+
+/// Whether `t` is, or holds, a geography.
+fn holds_geography(t: &DataType) -> bool {
+    match t {
+        DataType::Geography { .. } => true,
+        DataType::Array(a) => holds_geography(a.element_type()),
+        DataType::Map(m) => holds_geography(m.key_type()) || holds_geography(m.value_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| holds_geography(f.data_type())),
+        _ => false,
+    }
+}
+
+/// The part of `values` the offsets of a (possibly sliced) list or map point
+/// at.
+fn visible<O>(values: &ArrayRef, offsets: &arrow_buffer::OffsetBuffer<O>) -> ArrayRef
+where
+    O: arrow_array::OffsetSizeTrait,
+{
+    let o = offsets.as_ref();
+    let (Some(first), Some(last)) = (o.first(), o.last()) else {
+        return Arc::clone(values);
+    };
+    let (start, end) = (first.as_usize(), last.as_usize());
+    values.slice(start, end.saturating_sub(start))
+}
+
+/// `col` with the rows of a NULL parent marked NULL too.
+fn under_parent_nulls(col: &ArrayRef, parent: Option<&arrow_buffer::NullBuffer>) -> ArrayRef {
+    let Some(parent) = parent else {
+        return Arc::clone(col);
+    };
+    let nulls = arrow_buffer::NullBuffer::union(col.nulls(), Some(parent));
+    let built = col.to_data().into_builder().nulls(nulls).build();
+    built.map_or_else(|_| Arc::clone(col), arrow_array::make_array)
+}
+
+/// `check_geography` on every geography inside `a`, of the Spark type `t`.
+fn check_geography_in(a: &ArrayRef, t: &DataType) -> Result<()> {
+    use arrow_array::cast::AsArray;
+    if !holds_geography(t) {
+        return Ok(());
+    }
+    match t {
+        DataType::Geography { .. } => check_geography(a),
+        DataType::Array(e) => {
+            // Only the elements the visible rows point at: a sliced list keeps
+            // the whole backing values array.
+            let values = if let Some(l) = a.as_list_opt::<i32>() {
+                let o = l.offsets();
+                visible(l.values(), o)
+            } else if let Some(l) = a.as_list_opt::<i64>() {
+                let o = l.offsets();
+                visible(l.values(), o)
+            } else if let Some(l) = a.as_list_view_opt::<i32>() {
+                Arc::clone(l.values())
+            } else if let Some(l) = a.as_list_view_opt::<i64>() {
+                Arc::clone(l.values())
+            } else {
+                return Err(internal("a cast to an array of geography of a non-list"));
+            };
+            check_geography_in(&values, e.element_type())
+        }
+        DataType::Map(m) => {
+            let Some(map) = a.as_map_opt() else {
+                return Err(internal("a cast to a map of geography of a non-map"));
+            };
+            check_geography_in(&visible(map.keys(), map.offsets()), m.key_type())?;
+            check_geography_in(&visible(map.values(), map.offsets()), m.value_type())
+        }
+        DataType::Struct(s) => {
+            let Some(st) = a.as_struct_opt() else {
+                return Err(internal("a cast to a struct of geography of a non-struct"));
+            };
+            for (col, f) in st.columns().iter().zip(s.fields()) {
+                // A field under a NULL struct is no logical value.
+                let col = under_parent_nulls(col, st.nulls());
+                check_geography_in(&col, f.data_type())?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// `TRY_CAST`: `a` with every row that holds an invalid geography (of the
+/// Spark type `t`) replaced by NULL; valid rows are kept.
+fn null_invalid_geography(a: &ArrayRef, t: &DataType) -> Result<ArrayRef> {
+    // `take` of one row copies only that row's list elements; a `slice` of a
+    // list keeps the whole backing values array, so one invalid element would
+    // null every row.
+    let keep: arrow_array::BooleanArray = (0..a.len())
+        .map(|i| {
+            let idx = arrow_array::UInt64Array::from(vec![i as u64]);
+            let row = arrow_select::take::take(a.as_ref(), &idx, None)
+                .map_err(|e| internal(&e.to_string()))?;
+            Ok(Some(check_geography_in(&row, t).is_ok()))
+        })
+        .collect::<Result<_>>()?;
+    let nulls = arrow_array::new_null_array(a.data_type(), a.len());
+    arrow_select::zip::zip(&keep, a, &nulls).map_err(|e| internal(&e.to_string()))
+}
+
+/// Fails with `WKB_PARSE_ERROR` on a value of `spatial` (the struct of a
+/// geometry or geography) with a coordinate outside longitude and latitude.
+fn check_geography(spatial: &ArrayRef) -> Result<()> {
+    use krishiv_types::geo::{ByteOrder, SpatialKind, rewrite};
+    let wkb = spatial
+        .as_struct_opt()
+        .and_then(|s| s.column(1).as_binary_view_opt().map(|w| (s, w)));
+    let Some((s, wkb)) = wkb else {
+        return Err(internal(
+            "a cast to geography of a value that is no spatial struct",
+        ));
+    };
+    for row in (0..s.len()).filter(|r| s.is_valid(*r)) {
+        rewrite(wkb.value(row), SpatialKind::Geography, ByteOrder::Ndr)?;
+    }
+    Ok(())
 }
 
 /// `CAST(interval AS STRING)`. The Arrow carrier has no fields, so the
@@ -331,27 +521,49 @@ pub(super) fn interval_to_string(e: Arc<dyn PhysExpr>, from: DataType) -> Arc<dy
 
 /// `a`, of the interval type `from`, as `CAST(.. AS STRING)` writes it.
 pub(super) fn render_interval(from: &DataType, a: &dyn Array) -> Result<ArrayRef> {
-    use arrow_array::StringViewArray;
     use arrow_array::types::{
-        DurationMicrosecondType, IntervalMonthDayNanoType, IntervalYearMonthType,
+        ArrowPrimitiveType, DurationMicrosecondType, IntervalMonthDayNanoType,
+        IntervalYearMonthType,
     };
-    use krishiv_types::interval::{calendar_string, day_time_string, year_month_string};
-    let out: StringViewArray = match (from, a.data_type()) {
-        (DataType::YearMonthInterval { start, end }, ArrowType::Interval(_)) => a
-            .as_primitive::<IntervalYearMonthType>()
-            .iter()
-            .map(|v| v.map(|m| year_month_string(m, *start, *end)))
-            .collect(),
-        (DataType::DayTimeInterval { start, end }, ArrowType::Duration(_)) => a
-            .as_primitive::<DurationMicrosecondType>()
-            .iter()
-            .map(|v| v.map(|m| day_time_string(m, *start, *end)))
-            .collect(),
-        (DataType::CalendarInterval, ArrowType::Interval(_)) => a
-            .as_primitive::<IntervalMonthDayNanoType>()
-            .iter()
-            .map(|v| v.map(|i| calendar_string(i.months, i.days, i.nanoseconds / 1000)))
-            .collect(),
+    use arrow_array::{PrimitiveArray, StringViewArray, builder::StringViewBuilder};
+    use krishiv_types::interval::{calendar_string, write_day_time, write_year_month};
+
+    /// The rendered rows, through one reused buffer.
+    fn rendered<T: ArrowPrimitiveType>(
+        a: &PrimitiveArray<T>,
+        write: impl Fn(&mut String, T::Native),
+    ) -> StringViewArray {
+        let mut out = StringViewBuilder::with_capacity(a.len());
+        let mut text = String::new();
+        for v in a {
+            match v {
+                Some(v) => {
+                    text.clear();
+                    write(&mut text, v);
+                    out.append_value(&text);
+                }
+                None => out.append_null(),
+            }
+        }
+        out.finish()
+    }
+
+    let out = match (from, a.data_type()) {
+        (DataType::YearMonthInterval { start, end }, ArrowType::Interval(_)) => {
+            rendered(a.as_primitive::<IntervalYearMonthType>(), |text, m| {
+                write_year_month(text, m, *start, *end);
+            })
+        }
+        (DataType::DayTimeInterval { start, end }, ArrowType::Duration(_)) => {
+            rendered(a.as_primitive::<DurationMicrosecondType>(), |text, m| {
+                write_day_time(text, m, *start, *end);
+            })
+        }
+        (DataType::CalendarInterval, ArrowType::Interval(_)) => {
+            rendered(a.as_primitive::<IntervalMonthDayNanoType>(), |text, i| {
+                text.push_str(&calendar_string(i.months, i.days, i.nanoseconds / 1000));
+            })
+        }
         (from, carrier) => {
             return Err(internal(&format!("a {from} value carried as {carrier}")));
         }
@@ -649,7 +861,15 @@ impl PhysExpr for Cast {
 
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
         let v = self.e.eval(batch, partition)?;
-        let out = apply(&self.parts, v.array())?;
+        let mut out = apply(&self.parts, v.array())?;
+        if let Some(to) = &self.geography
+            && check_geography_in(&out, to).is_err()
+        {
+            if self.parts.mode != KernelMode::Try {
+                check_geography_in(&out, to)?;
+            }
+            out = null_invalid_geography(&out, to)?;
+        }
         Ok(match v {
             Value::Scalar(_) => Value::Scalar(out),
             Value::Array(_) => Value::Array(out),

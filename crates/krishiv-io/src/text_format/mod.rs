@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Spark's `text` format: [`TextFormat`], lines (or a whole file) into one
-//! `value` string column, and an encoder for one string column. Compressed
-//! files are `KRISHIV_UNSUPPORTED_FEATURE` for now.
+//! `value` string column, and an encoder for one string column. Files in the
+//! Hadoop codecs (`.gz`, `.deflate`, `.bz2`, `.lz4`, `.snappy`) read and write as in Spark.
 
 mod convert;
 mod decode;
@@ -50,8 +50,8 @@ impl FileFormat for TextFormat {
         c
     }
 
-    fn file_suffix(&self, _o: &FormatOptions) -> String {
-        ".txt".to_owned()
+    fn file_suffix(&self, o: &FormatOptions) -> String {
+        crate::text::output_suffix(".txt", o)
     }
 
     fn infer_schema<'a>(
@@ -113,7 +113,9 @@ impl FileFormat for TextFormat {
         o: &'a FormatOptions,
     ) -> BoxFuture<'a, FormatResult<Box<dyn Encoder>>> {
         Box::pin(std::future::ready(
-            encode::TextEncoder::new(&schema, o).map(|e| Box::new(e) as Box<dyn Encoder>),
+            encode::TextEncoder::new(&schema, o)
+                .map(|e| Box::new(e) as Box<dyn Encoder>)
+                .and_then(|e| crate::text::compress_output(e, o)),
         ))
     }
 

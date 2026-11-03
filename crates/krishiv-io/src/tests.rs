@@ -1655,6 +1655,7 @@ fn capabilities_and_metadata_needs() {
         page_pruning: false,
         page_checksums: false,
         write: false,
+        random_access: None,
     };
     assert!(
         caps.is_splittable("a.csv")

@@ -1,25 +1,12 @@
 {
   "cases": {
-    "depends-on-command": [
-      100
-    ],
-    "nested-interval-types": [
-      38,
-      39
-    ],
     "query-features": [
-      40,
-      43,
       44,
       62,
       67,
       68,
       71,
       72
-    ],
-    "sql-commands": [
-      97,
-      99
     ]
   },
   "file": "postgreSQL/with",

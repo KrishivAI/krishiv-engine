@@ -39,7 +39,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
-use arrow_schema::SchemaRef;
+use arrow_schema::{Field, Schema, SchemaRef};
 use krishiv_common::config::Config;
 use krishiv_common::error::KrishivUnsupportedFeature;
 use krishiv_io::{
@@ -64,9 +64,9 @@ use crate::join::{
 use crate::loops::UnionLoopSource;
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
-    Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, Generate, NullOf, Predicate, Project,
-    ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdown, ScanPushdowns, Sort,
-    SortKey, TopN,
+    Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, Generate, LateFetch, NullOf,
+    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdown,
+    ScanPushdowns, Sort, SortKey, TopN,
 };
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
@@ -798,9 +798,38 @@ impl Instantiation<'_> {
                 let op = group_limit_op(&input.schema, limit)?;
                 Ok(operator(input, op))
             }
-            PhysNode::TopN { input, keys, limit } => {
+            PhysNode::LateFetch {
+                input,
+                scan,
+                file_col,
+                row_col,
+                output,
+            } => {
                 let input = self.node(input)?;
-                let top = top_n_op(&input.schema, keys, *limit)?;
+                // Not a scan of its own: the row id names each file, so the
+                // task's splits don't apply.
+                let fetch = Arc::new(LateFetch::new(
+                    &input.schema,
+                    self.worker.tables.provider(&scan.scan)?.scan()?,
+                    scan.projection.clone(),
+                    *file_col,
+                    *row_col,
+                    output.clone(),
+                )?);
+                Ok(breaker(input, Arc::clone(&fetch) as Arc<dyn Sink>, fetch))
+            }
+            PhysNode::TopN {
+                input,
+                keys,
+                limit,
+                bound,
+            } => {
+                let input = self.node(input)?;
+                let top = top_n(&input.schema, keys, *limit)?;
+                let top = Arc::new(match bound {
+                    Some(id) => top.with_bound(Arc::clone(&self.values), *id),
+                    None => top,
+                });
                 Ok(breaker(input, Arc::clone(&top) as Arc<dyn Sink>, top))
             }
             PhysNode::Aggregate { input, aggregate } => {
@@ -859,6 +888,12 @@ impl Instantiation<'_> {
     fn scan(&self, s: &ScanNode) -> Result<Built> {
         let factory = self.worker.tables.provider(&s.scan)?.scan()?;
         let factory = self.splits(s.id, factory)?;
+        if s.row_id && !factory.supports_take() {
+            return Err(internal(format!(
+                "scan {} has a row id its table can't read back",
+                s.id.0
+            )));
+        }
         let table = factory.table_schema();
         let mut filters = Vec::new();
         if let Some(f) = &s.filter {
@@ -883,6 +918,7 @@ impl Instantiation<'_> {
             projection: Some(s.projection.clone()),
             filters,
             dynamic,
+            row_id: s.row_id,
             ..ScanPushdowns::default()
         })?;
         Ok(Built {
@@ -951,10 +987,27 @@ impl Instantiation<'_> {
         };
         let (options, _) = format.options().parse(&write.options, config)?;
         let input = self.node(input)?;
+        let mut fields: Vec<Arc<Field>> = input.schema.fields().to_vec();
+        for (column, spark_type) in &write.column_types {
+            let f = fields.get_mut(*column).ok_or_else(|| {
+                internal(format!(
+                    "write column type of column {column}, out of range"
+                ))
+            })?;
+            *f = Arc::new(spark_type.to_arrow_field_with_storage(
+                f.name(),
+                f.data_type().clone(),
+                f.is_nullable(),
+            )?);
+        }
+        let written = Arc::new(Schema::new_with_metadata(
+            fields,
+            input.schema.metadata().clone(),
+        ));
         let sink = Arc::new(FileWriteSink::try_new(
             Arc::clone(&format),
             io,
-            Arc::clone(&input.schema),
+            written,
             options,
             WriteOptions {
                 store: StoreId::new(&write.store),
@@ -1319,9 +1372,13 @@ pub(crate) fn sort_op(
 }
 
 pub(crate) fn top_n_op(schema: &SchemaRef, keys: &[SortKey], limit: u64) -> Result<Arc<TopN>> {
+    Ok(Arc::new(top_n(schema, keys, limit)?))
+}
+
+fn top_n(schema: &SchemaRef, keys: &[SortKey], limit: u64) -> Result<TopN> {
     let limit =
         usize::try_from(limit).map_err(|_| internal("top-N limit out of range".to_owned()))?;
-    Ok(Arc::new(TopN::new(Arc::clone(schema), keys, 0, limit)?))
+    TopN::new(Arc::clone(schema), keys, 0, limit)
 }
 
 /// The filter pushed into a scan of `scan` over its table schema `table`.

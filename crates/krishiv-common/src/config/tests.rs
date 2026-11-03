@@ -167,6 +167,16 @@ fn the_exec_seed_is_unset_until_given() {
 }
 
 #[test]
+fn late_fetch_max_rows_parses_and_defaults() {
+    let mut c = Config::new();
+    let get = |c: &Config| c.get(&LATE_FETCH_MAX_ROWS).and_then(ConfigValue::as_int);
+    assert_eq!(get(&c), Some(50));
+    c.set("krishiv.exec.lateFetch.maxRows", "0").unwrap();
+    assert_eq!(get(&c), Some(0));
+    assert!(c.set("krishiv.exec.lateFetch.maxRows", "many").is_err());
+}
+
+#[test]
 fn spill_entries_parse_and_default() {
     let mut c = Config::new();
     let get = |c: &Config| {
@@ -679,4 +689,61 @@ fn cte_recursion_limits_default_and_alias() {
     assert_eq!(c.set("spark.sql.cteRecursionRowLimit", "-1").unwrap(), None);
     assert_eq!(c.get(&CTE_RECURSION_ROW_LIMIT), Some(&ConfigValue::Int(-1)));
     assert!(c.set("krishiv.sql.cteRecursionLevelLimit", "many").is_err());
+}
+
+#[test]
+fn result_cache_entries_parse_and_default() {
+    use super::registry::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        (
+            c.get(&RESULT_CACHE_ENABLED).and_then(ConfigValue::as_bool),
+            c.get(&RESULT_CACHE_TTL).and_then(ConfigValue::as_duration),
+            c.get(&RESULT_CACHE_MAX_BYTES)
+                .and_then(ConfigValue::as_size),
+        )
+    };
+    // Off by default, a day, 64 MiB.
+    assert_eq!(
+        get(&c),
+        (
+            Some(false),
+            Some(std::time::Duration::from_secs(24 * 60 * 60)),
+            Some(64 << 20)
+        )
+    );
+    c.set("krishiv.resultCache.enabled", "true").unwrap();
+    c.set("krishiv.resultCache.ttl", "30m").unwrap();
+    c.set("krishiv.resultCache.maxBytes", "1g").unwrap();
+    assert_eq!(
+        get(&c),
+        (
+            Some(true),
+            Some(std::time::Duration::from_secs(1800)),
+            Some(1 << 30)
+        )
+    );
+    c.set("krishiv.resultCache.ttl", "0s").unwrap();
+    assert_eq!(
+        c.get(&RESULT_CACHE_TTL).and_then(ConfigValue::as_duration),
+        Some(std::time::Duration::ZERO)
+    );
+    assert!(c.set("krishiv.resultCache.enabled", "maybe").is_err());
+    assert!(c.set("krishiv.resultCache.maxBytes", "lots").is_err());
+}
+
+#[test]
+fn deterministic_order_is_off_by_default_and_parses() {
+    use super::registry::DETERMINISTIC_ORDER;
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&DETERMINISTIC_ORDER).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    c.set("krishiv.deterministicOrder", "true").unwrap();
+    assert_eq!(
+        c.get(&DETERMINISTIC_ORDER).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert!(c.set("krishiv.deterministicOrder", "sometimes").is_err());
 }

@@ -6,18 +6,21 @@ use std::sync::Arc;
 
 use arrow_array::builder::{
     BinaryBuilder, BinaryViewBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
-    Float32Builder, Float64Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder,
-    LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
-    TimestampMicrosecondBuilder,
+    DurationMicrosecondBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
+    Int32Builder, Int64Builder, IntervalYearMonthBuilder, LargeBinaryBuilder, LargeStringBuilder,
+    StringBuilder, StringViewBuilder, TimestampMicrosecondBuilder,
 };
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Decimal64Type, Decimal128Type};
+use arrow_array::types::{
+    Decimal64Type, Decimal128Type, DurationMicrosecondType, IntervalYearMonthType,
+};
 use arrow_array::{Array, ArrayRef, new_null_array};
-use arrow_schema::{DataType, TimeUnit};
+use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
 use krishiv_common::error::KrishivError;
 use krishiv_kernels::text::{
     java_parse_decimal, java_parse_double, java_parse_float, java_parse_integral,
 };
+use krishiv_types::{DayTimeField, YearMonthField};
 
 use super::options::CsvOptions;
 use crate::error::unsupported;
@@ -71,14 +74,34 @@ pub(crate) enum Kind {
     Date,
     Timestamp,
     TimestampNtz,
+    /// An ANSI interval, with the fields its text form names.
+    YearMonth(YearMonthField, YearMonthField),
+    DayTime(DayTimeField, DayTimeField),
     Null,
 }
 
 impl Kind {
+    /// The kind of a column: [`Self::of`], with an interval's fields from the
+    /// field's tag.
+    ///
+    /// # Errors
+    /// As [`Self::of`].
+    pub(crate) fn of_field(f: &Field) -> Result<Self, KrishivError> {
+        match krishiv_types::DataType::from_arrow_field(f) {
+            Ok(krishiv_types::DataType::YearMonthInterval { start, end }) => {
+                Ok(Self::YearMonth(start, end))
+            }
+            Ok(krishiv_types::DataType::DayTimeInterval { start, end }) => {
+                Ok(Self::DayTime(start, end))
+            }
+            _ => Self::of(f.data_type()),
+        }
+    }
+
     /// The kind for an Arrow type.
     ///
     /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE` for nested and interval types.
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for nested types and calendar intervals.
     pub(crate) fn of(dt: &DataType) -> Result<Self, KrishivError> {
         Ok(match dt {
             DataType::Boolean => Self::Bool,
@@ -94,6 +117,12 @@ impl Kind {
             DataType::Date32 => Self::Date,
             DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => Self::Timestamp,
             DataType::Timestamp(TimeUnit::Microsecond, None) => Self::TimestampNtz,
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                Self::YearMonth(YearMonthField::Year, YearMonthField::Month)
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                Self::DayTime(DayTimeField::Day, DayTimeField::Second)
+            }
             DataType::Null => Self::Null,
             other => {
                 return Err(unsupported(format!(
@@ -192,7 +221,40 @@ impl Converter<'_> {
             Kind::Date => Val::I64(i64::from(self.dt.parse_date(s)?.ok_or_else(bad)?)),
             Kind::Timestamp => Val::I64(self.dt.parse_timestamp(s)?.ok_or_else(bad)?),
             Kind::TimestampNtz => Val::I64(self.dt.parse_ntz(s)?.ok_or_else(bad)?),
+            Kind::YearMonth(..) | Kind::DayTime(..) => interval_of_text(kind, s)?,
         })
+    }
+}
+
+/// `text` as an ANSI interval of `kind`, by Spark's cast from a string.
+///
+/// # Errors
+/// [`Conv::Malformed`] for text that is no such interval.
+pub(crate) fn interval_of_text(kind: &Kind, text: &str) -> Result<Val, Conv> {
+    use krishiv_types::interval_parse::{cast_to_day_time, cast_to_year_month};
+    let value = match kind {
+        Kind::YearMonth(start, end) => cast_to_year_month(text, *start, *end).map(i64::from),
+        Kind::DayTime(start, end) => cast_to_day_time(text, *start, *end),
+        _ => return Err(Conv::Malformed),
+    };
+    value.map(Val::I64).map_err(|_| Conv::Malformed)
+}
+
+/// Row `i` of an interval column of `kind` in Spark's text form (`None`: not
+/// an interval kind).
+pub(crate) fn interval_text(kind: &Kind, a: &dyn Array, i: usize) -> Option<String> {
+    match kind {
+        Kind::YearMonth(start, end) => Some(krishiv_types::interval::year_month_string(
+            a.as_primitive::<IntervalYearMonthType>().value(i),
+            *start,
+            *end,
+        )),
+        Kind::DayTime(start, end) => Some(krishiv_types::interval::day_time_string(
+            a.as_primitive::<DurationMicrosecondType>().value(i),
+            *start,
+            *end,
+        )),
+        _ => None,
     }
 }
 
@@ -213,6 +275,8 @@ pub(crate) enum Column {
     LargeBinary(LargeBinaryBuilder),
     Date(Date32Builder),
     Timestamp(TimestampMicrosecondBuilder),
+    YearMonth(IntervalYearMonthBuilder),
+    DayTime(DurationMicrosecondBuilder),
     Null(usize, DataType),
 }
 
@@ -248,6 +312,12 @@ impl Column {
                     None => b,
                 })
             }
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                Self::YearMonth(IntervalYearMonthBuilder::new())
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                Self::DayTime(DurationMicrosecondBuilder::new())
+            }
             DataType::Null => Self::Null(0, DataType::Null),
             other => match StrBuilder::for_type(other) {
                 Some(b) => Self::Str(b),
@@ -273,6 +343,8 @@ impl Column {
             (Self::LargeBinary(b), Val::Bytes(x)) => b.append_value(x),
             (Self::Date(b), Val::I64(x)) => b.append_option(i32::try_from(*x).ok()),
             (Self::Timestamp(b), Val::I64(x)) => b.append_value(*x),
+            (Self::YearMonth(b), Val::I64(x)) => b.append_option(i32::try_from(*x).ok()),
+            (Self::DayTime(b), Val::I64(x)) => b.append_value(*x),
             (Self::Null(n, _), _) => *n += 1,
             (c, _) => c.append_null(),
         }
@@ -295,6 +367,8 @@ impl Column {
             Self::LargeBinary(b) => b.append_null(),
             Self::Date(b) => b.append_null(),
             Self::Timestamp(b) => b.append_null(),
+            Self::YearMonth(b) => b.append_null(),
+            Self::DayTime(b) => b.append_null(),
             Self::Null(n, _) => *n += 1,
         }
     }
@@ -316,6 +390,8 @@ impl Column {
             Self::LargeBinary(b) => Arc::new(b.finish()),
             Self::Date(b) => Arc::new(b.finish()),
             Self::Timestamp(b) => Arc::new(b.finish()),
+            Self::YearMonth(b) => Arc::new(b.finish()),
+            Self::DayTime(b) => Arc::new(b.finish()),
             Self::Null(n, dt) => {
                 let rows = std::mem::take(n);
                 new_null_array(dt, rows)
