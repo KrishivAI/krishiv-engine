@@ -18,12 +18,13 @@
 
 use krishiv_common::error::{
     CreateViewWithIfNotExistsAndReplace, FailedToParseTooComplex, IdentifierTooManyNameParts,
-    InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax, InvalidSqlPathSchemaReference,
+    InvalidIdentifier, InvalidIntervalFormatTimezoneIntervalOutOfRange, InvalidResetCommandFormat,
+    InvalidSetSyntax, InvalidSqlPathSchemaReference,
     InvalidSqlSyntaxCreateRoutineWithIfNotExistsAndReplace,
     InvalidSqlSyntaxCreateTempFuncWithDatabase, InvalidSqlSyntaxCreateTempFuncWithIfNotExists,
     InvalidStatementOrClause, InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature,
-    LegacyErrorTemp0035, LegacyErrorTemp0053, ParseEmptyStatement, ParseSyntaxError,
-    SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
+    LegacyErrorTemp0035, LegacyErrorTemp0045, LegacyErrorTemp0053, ParseEmptyStatement,
+    ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
 };
 
 use crate::ast::Span;
@@ -247,6 +248,21 @@ pub(crate) fn unsupported_set_time_zone(form: &str, span: Span) -> ParseError {
         KrishivUnsupportedFeature {
             feature: form.to_owned(),
         },
+        span,
+    )
+}
+
+/// `_LEGACY_ERROR_TEMP_0045`: `SET TIME ZONE` followed by anything but `LOCAL`, a string or one
+/// interval (Spark's catch-all alternative of the rule).
+pub(crate) fn invalid_time_zone_displacement(span: Span) -> ParseError {
+    at(LegacyErrorTemp0045 {}, span)
+}
+
+/// `INVALID_INTERVAL_FORMAT.TIMEZONE_INTERVAL_OUT_OF_RANGE`: a `SET TIME ZONE INTERVAL` outside
+/// [-18, +18] hours or with a fraction of a second; `input` is the offending part as Spark shows it.
+pub(crate) fn time_zone_interval_out_of_range(input: String, span: Span) -> ParseError {
+    at(
+        InvalidIntervalFormatTimezoneIntervalOutOfRange { input },
         span,
     )
 }

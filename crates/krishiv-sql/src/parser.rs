@@ -19,6 +19,7 @@ mod ddl;
 mod expr;
 mod function;
 mod script;
+mod time_zone;
 mod types;
 
 use std::collections::HashMap;
@@ -715,6 +716,30 @@ impl<'s> Parser<'s> {
     /// Start of the current token (end of input if none).
     fn start(&self) -> usize {
         self.tok(0).map_or(self.src.len(), |t| t.span.start)
+    }
+
+    /// Whether only `;`s (or, in a script, the statement's own `;`) remain.
+    fn at_command_end(&self) -> bool {
+        if self.in_script > 0 {
+            return self.pos >= self.toks.len() || self.sym_at(0, Sym::Semi);
+        }
+        self.toks
+            .iter()
+            .skip(self.pos)
+            .all(|t| t.kind == TokenKind::Sym(Sym::Semi))
+    }
+
+    /// The span from `start` to the end of the statement's last token before a `;`: the query
+    /// context of an error Spark raises on the whole command.
+    fn statement_tail_span(&self, start: usize) -> Span {
+        let end = self
+            .toks
+            .iter()
+            .skip(self.pos.saturating_sub(1))
+            .take_while(|t| t.kind != TokenKind::Sym(Sym::Semi))
+            .last()
+            .map_or(start, |t| t.span.end);
+        Span::new(start, end.max(start))
     }
 
     /// The span from `start` to the end of the last consumed token.
@@ -1913,14 +1938,47 @@ impl<'s> Parser<'s> {
                 }
                 let rest = self.src.get(from..end).unwrap_or_default();
                 let form = format!("SET TIME ZONE {}", rest.trim_matches(|c: char| c <= ' '));
-                return Self::fatal(error::unsupported_set_time_zone(
-                    &form,
-                    self.span_from(start),
+                // Spark's rule has a catch-all alternative: an interval that does not parse, or
+                // anything after it, is `_LEGACY_ERROR_TEMP_0045`.
+                let Ok(crate::ast::Literal::Interval(interval)) = self.interval() else {
+                    return Self::fatal(error::invalid_time_zone_displacement(
+                        self.statement_tail_span(start),
+                    ));
+                };
+                if !self.at_command_end() {
+                    return Self::fatal(error::invalid_time_zone_displacement(
+                        self.statement_tail_span(start),
+                    ));
+                }
+                let Some(p) = time_zone::parts(&interval) else {
+                    return Self::fatal(error::unsupported_set_time_zone(
+                        &form,
+                        self.span_from(start),
+                    ));
+                };
+                match time_zone::outcome(p) {
+                    time_zone::Outcome::OutOfRange(input) => {
+                        return Self::fatal(error::time_zone_interval_out_of_range(
+                            input,
+                            self.statement_tail_span(start),
+                        ));
+                    }
+                    time_zone::Outcome::Zone(zone) => (TimeZone::Named(zone), interval.span),
+                }
+            }
+            // Nothing, or something that is no zone: the rule's catch-all alternative.
+            _ => {
+                return Self::fatal(error::invalid_time_zone_displacement(
+                    self.statement_tail_span(start),
                 ));
             }
-            _ => return self.fail(),
         };
         let span = self.span_from(start);
+        if !self.at_command_end() {
+            return Self::fatal(error::invalid_time_zone_displacement(
+                self.statement_tail_span(start),
+            ));
+        }
         self.command_end()?;
         Ok(Statement::Set(Set {
             kind: SetKind::TimeZone { zone, zone_span },
