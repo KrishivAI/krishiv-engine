@@ -101,7 +101,10 @@ pub fn distinct_plan(
                 "a DISTINCT aggregate with a FILTER clause".to_owned(),
             ));
         }
-        if d && *dargs.get_or_insert(&a.args) != a.args.as_slice() {
+        // The same arguments in any order are one distinct set (Spark keys
+        // the set of an aggregate's children), `corr(DISTINCT x, y)` beside
+        // `corr(DISTINCT y, x)`.
+        if d && !same_set(dargs.get_or_insert(&a.args), &a.args) {
             return Err(unsupported(
                 "DISTINCT aggregates over different arguments".to_owned(),
             ));
@@ -130,7 +133,11 @@ pub fn distinct_plan(
     for (a, &d) in spec.aggregates.iter().zip(distinct) {
         if d {
             aggregates.push(AggregateExpr {
-                args: (k..k + dargs.len()).collect(),
+                args: a
+                    .args
+                    .iter()
+                    .filter_map(|x| dargs.iter().position(|d| d == x).map(|i| k + i))
+                    .collect(),
                 ..a.clone()
             });
         } else {
@@ -147,6 +154,16 @@ pub fn distinct_plan(
     };
     let inner = AggregateNode::new(input, HashAggregate::new(first)?);
     Ok(AggregateNode::new(inner, HashAggregate::new(second)?))
+}
+
+/// Whether `a` and `b` hold the same column indices, in any order.
+fn same_set(a: &[usize], b: &[usize]) -> bool {
+    let (mut a, mut b) = (a.to_vec(), b.to_vec());
+    a.sort_unstable();
+    a.dedup();
+    b.sort_unstable();
+    b.dedup();
+    a == b
 }
 
 /// `UNION` (distinct) of the rows of `input` (the `UNION ALL` of the

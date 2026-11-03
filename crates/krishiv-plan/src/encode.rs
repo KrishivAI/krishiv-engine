@@ -764,6 +764,8 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     JoinKind::Cross => 7,
                     JoinKind::Existence(_) => 8,
                     JoinKind::Single => 9,
+                    JoinKind::LateralInner => 10,
+                    JoinKind::LateralLeft => 11,
                 };
                 self.u8(tag);
                 if let JoinKind::Existence(id) = kind {

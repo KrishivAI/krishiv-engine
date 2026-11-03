@@ -139,7 +139,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -205,7 +205,24 @@ pub mod node {
         /// feature: late_fetch
         #[prost(message, tag = "24")]
         LateFetch(super::LateFetchNode),
+        /// feature: exchange_source
+        #[prost(message, tag = "25")]
+        ExchangeSource(super::ExchangeSourceNode),
     }
+}
+/// feature: exchange_source
+/// The rows a task reads from an exchange another stage wrote: a leaf of a
+/// plan fragment. Which partitions it reads is task data.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExchangeSourceNode {
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    /// How the exchange placed its rows.
+    #[prost(message, optional, tag = "2")]
+    pub partitioning: ::core::option::Option<Partitioning>,
+    /// Its columns (Arrow IPC `Schema` flatbuffer).
+    #[prost(bytes = "vec", tag = "3")]
+    pub schema: ::prost::alloc::vec::Vec<u8>,
 }
 /// feature: late_fetch
 /// The rows of `input` with columns read from their files by row id.

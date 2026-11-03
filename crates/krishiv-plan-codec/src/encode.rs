@@ -222,6 +222,15 @@ impl Encoder {
             }
             PhysNode::Scan(scan) => Kind::Scan(self.scan(scan)?),
             PhysNode::OneRow => Kind::OneRow(pb::Empty {}),
+            PhysNode::ExchangeSource {
+                id,
+                partitioning: p,
+                schema,
+            } => Kind::ExchangeSource(pb::ExchangeSourceNode {
+                id: id.0,
+                partitioning: Some(partitioning(p)),
+                schema: schema_bytes(schema),
+            }),
             PhysNode::SharedRead { id, layout } => Kind::SharedRead(pb::SharedReadNode {
                 id: id.0,
                 layout: layout.iter().map(|a| a.0).collect(),

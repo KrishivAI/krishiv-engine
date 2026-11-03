@@ -66,11 +66,14 @@ mod shared_tests;
 #[cfg(test)]
 pub(crate) use instantiate::node_ids;
 pub(crate) use instantiate::{
-    Detached, Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, generate_op,
-    group_limit_op, hash_join, nested_loop_join, project_op, replicate_op, scan_filter,
-    sort_merge_join, sort_op, top_n_op,
+    Detached, Unbuilt, Values, aggregate_node, aggregate_spec, distinct_phases, expand_op,
+    filter_op, final_of, generate_op, group_limit_op, hash_join, nested_loop_join, project_op,
+    replicate_op, scan_filter, sort_merge_join, sort_op, top_n_op,
 };
-pub use instantiate::{SpillScopes, TaskSpec, WorkerContext, instantiate, instantiate_task};
+pub use instantiate::{
+    ExchangeInput, SpillScopes, TaskSpec, WorkerContext, exchange_schemas, instantiate,
+    instantiate_task,
+};
 pub use krishiv_memory::{RelationLease, RelationRef, RelationStore};
 pub use splits::{
     ScanSplits, SplitFileRef, assign_batch_splits, assign_file_splits, deal_ranges, files_of,
@@ -491,6 +494,21 @@ pub enum PhysNode {
     },
     /// Moves rows between partitions.
     Exchange(ExchangePlan),
+    /// The rows a task reads from the exchange `id`, written by the tasks
+    /// of another stage: a leaf of a plan fragment, where the fragmenter
+    /// cut the plan (design P2-T176 §2.1). Which reduce partitions a task
+    /// reads, and from how many map tasks, is task data
+    /// ([`TaskSpec::exchanges`](crate::physical::TaskSpec::exchanges)).
+    ExchangeSource {
+        /// The exchange read.
+        id: ExchangeId,
+        /// How the exchange placed its rows: the reader keeps what the
+        /// operators above an exchange rely on (hash buckets of a sort,
+        /// a broadcast build).
+        partitioning: Partitioning,
+        /// The exchange's columns.
+        schema: SchemaRef,
+    },
     /// The rows of a shared plan, under the reader's attribute ids.
     SharedRead {
         /// The plan read.
@@ -892,6 +910,7 @@ plan_data!(enum PhysNode {
     Union { inputs },
     WriteFiles { input, write },
     Exchange(exchange),
+    ExchangeSource { id, partitioning, schema },
     SharedRead { id, layout },
     UnionLoop { id, anchor, recursive, layout, nullable, limits },
     LoopRef { id, layout },
@@ -948,6 +967,7 @@ impl PhysNode {
             | Self::OneRow
             | Self::Range(_)
             | Self::SharedRead { .. }
+            | Self::ExchangeSource { .. }
             | Self::LoopRef { .. } => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
@@ -986,12 +1006,13 @@ impl PhysNode {
     }
 
     /// [`Self::children`], mutable.
-    pub(crate) fn children_mut(&mut self) -> Vec<&mut PhysNode> {
+    pub fn children_mut(&mut self) -> Vec<&mut PhysNode> {
         match self {
             Self::Scan(_)
             | Self::OneRow
             | Self::Range(_)
             | Self::SharedRead { .. }
+            | Self::ExchangeSource { .. }
             | Self::LoopRef { .. } => Vec::new(),
             Self::Filter {
                 input, subqueries, ..

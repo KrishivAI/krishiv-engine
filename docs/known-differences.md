@@ -25,3 +25,11 @@ in one engine still raises in the other.
 both off (the default) nothing differs. See [reference/result-cache.md](reference/result-cache.md) for
 what is cached, when entries go, and the one staleness the cache accepts (a change made outside the
 engine, until the entry expires or `REFRESH TABLE`).
+
+## A malformed value of a Spark config key fails at `SET`
+
+A Spark key that Krishiv maps to a typed setting (for example
+`spark.sql.autoBroadcastJoinThreshold`) is checked when it is set: a value
+that does not parse fails the `SET` with `KRISHIV_INVALID_CONFIG_VALUE`.
+Spark stores the string and fails when a query reads it, with
+`INVALID_CONF_VALUE.TYPE_MISMATCH` (SQLSTATE 22022).

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from . import compare
-from .abba import LOAD_INDICATIVE, bench_lock, bootstrap_ci, discover_tables, loadavg, summarize, wait_idle
+from .abba import bench_lock, bootstrap_ci, discover_tables, load_line, loadavg, summarize, wait_idle
 from .adapters import Dataset
 from .adapters.base import check_query, result_rows
 from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
@@ -136,8 +136,7 @@ def markdown(record: dict) -> str:
         )
     else:
         lines.append(f"No query passed the A-vs-B correctness check (0/{s['queries_total']}).")
-    tag = "INDICATIVE ONLY" if s["indicative"] else "load within bound"
-    lines.append(f"Max 1-min load average {s['max_load']:.1f} (bound {LOAD_INDICATIVE:g}): {tag}.")
+    lines.append(load_line(record))
     return "\n".join(lines)
 
 
@@ -196,6 +195,7 @@ def run_ab(
             "shared, never dropped; both sides read the same Parquet files",
             "bench_lock_wait_s": waited,
             "load_at_start": loadavg(),
+            "threads": threads,
             "queries": {},
         }
         try:
