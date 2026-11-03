@@ -201,6 +201,25 @@ impl SessionEvaluator {
     }
 }
 
+impl SessionEvaluator {
+    /// Like [`SessionEvaluator::new`], but the table `t` is materialized once: a fixture with a
+    /// large `VALUES` view would otherwise be planned again for every expression.
+    ///
+    /// # Errors
+    /// When the session, the view or the copy fails.
+    pub fn new_materialized(setup: &str) -> Result<Self, String> {
+        let source = setup.replacen("VIEW t AS", "VIEW t_source AS", 1);
+        if source == setup {
+            return Err("the setup does not define the view `t`".to_owned());
+        }
+        let mut ev = Self::new(&source)?;
+        ev.engine
+            .execute("CREATE TABLE t AS SELECT * FROM t_source")
+            .map_err(|e| e.message)?;
+        Ok(ev)
+    }
+}
+
 impl Evaluator for SessionEvaluator {
     fn eval(&mut self, sql: &str, ansi: bool) -> Expect {
         if self.ansi != Some(ansi) {

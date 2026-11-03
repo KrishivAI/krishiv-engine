@@ -53,7 +53,7 @@ mismatches ratcheted in `expr-differential-known-failures.json`; command `expr-d
 queries against DuckDB's rows (`tests/fixtures/query-oracle/`, `tests/scripts/gen_query_oracle.py`); `metamorphic` is TLP and
 NoREC over generated predicates with no second engine, an expression-tree reducer and regression files
 (`tests/fixtures/metamorphic/regressions/*.json`, replayed by the `regressions_hold` test; command `metamorphic-hunt`, the
-nightly `differential` job). A planted-bug test per oracle proves it finds what it is for.
+nightly `differential` job). A planted-bug test per oracle proves it finds what it is for. `float_edge_sweep` (Comet 1.2.0 check 1) crosses `-0.0`, `NaN`, `+/-Infinity`, subnormals, the extremes and NULL with arithmetic, comparison, window-aggregate, ordering, cast, math, hash and collection functions for DOUBLE and FLOAT in both ANSI modes against Spark 4.2 (`tests/fixtures/spark-4.2.0/float-edge-sweep.json`, `tests/scripts/gen_float_edge_sweep.py`; ratchet `float-edge-sweep-known-failures.json`).
 
 ## Key files
 Paths are relative to this crate.
