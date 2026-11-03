@@ -173,3 +173,22 @@ fn partition_columns_of_different_lengths_are_refused() {
     let e = partition_segments(&[a, b], Some(0)).unwrap_err();
     assert!(e.to_string().contains("different lengths"), "{e}");
 }
+
+#[test]
+fn many_stars_before_a_missing_suffix_stay_cheap() {
+    // 4 million calls without memoization; a few hundred with it.
+    let glob = crate::partition::glob::Glob::parse("********b").unwrap();
+    let name = "a".repeat(40);
+    assert!(!glob.matches(&[name.as_str()]));
+    assert!(glob.matches(&[format!("{name}b").as_str()]));
+}
+
+#[test]
+fn repeated_brace_groups_are_bounded() {
+    // 2^30 alternatives would exhaust memory; the pattern is refused before they are built.
+    let pattern = "{a,b}".repeat(30);
+    let err = crate::partition::glob::Glob::parse(&pattern).unwrap_err();
+    assert!(err.contains("alternatives"), "{err}");
+    // A reasonable number still works.
+    assert!(crate::partition::glob::Glob::parse(&"{a,b}".repeat(8)).is_ok());
+}
