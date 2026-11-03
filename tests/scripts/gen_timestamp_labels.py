@@ -143,9 +143,7 @@ def main():
             case = {"sql": e, "ansi": ansi, "kids": [], "root": True}
             case.update(results[e])
             cases.append(case)
-    json.dump(
-        {"spark": spark.version, "timeZone": args.zone, "setup": setup, "cases": cases}, sys.stdout, indent=0
-    )
+    json.dump({"spark": spark.version, "timeZone": args.zone, "setup": setup, "cases": cases}, sys.stdout, indent=0)
     sys.stdout.write("\n")
 
 
