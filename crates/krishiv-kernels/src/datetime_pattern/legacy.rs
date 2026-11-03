@@ -294,7 +294,8 @@ impl LegacyPattern {
     }
 
     /// `s` as an instant: its zone or offset, else `session`. `Ok(None)`
-    /// when `s` does not match (Spark raises `CANNOT_PARSE_TIMESTAMP`).
+    /// when `s` does not match (Spark raises `CANNOT_PARSE_TIMESTAMP`) or
+    /// the instant is past the microsecond range.
     ///
     /// # Errors
     /// Never.
@@ -303,15 +304,28 @@ impl LegacyPattern {
         s: &str,
         session: &dyn TimeZoneRules,
     ) -> Result<Option<i64>, KrishivError> {
-        let Some((local, zone)) = self.parse_fields(s, session.region_id()) else {
-            return Ok(None);
+        Ok(self.instant(s, session).ok())
+    }
+
+    /// `s` as an instant, telling a text that does not match from a date
+    /// past the microsecond range: Spark's `millisToMicros` raises the
+    /// latter as an `ArithmeticException` whatever the parse-error policy.
+    pub(crate) fn instant(&self, s: &str, session: &dyn TimeZoneRules) -> Result<i64, Unmatched> {
+        let (local, zone) = self
+            .parse_fields(s, session.region_id())
+            .ok_or(Unmatched::Text)?;
+        let local = local.ok_or(Unmatched::Overflow)?;
+        let shift = |offset: i32| {
+            local
+                .checked_sub(i64::from(offset) * MICROS_PER_SECOND)
+                .ok_or(Unmatched::Overflow)
         };
-        Ok(match zone {
+        match zone {
             None => legacy_local_to_utc(local, session),
-            Some(Zone_::Offset(o)) => local.checked_sub(i64::from(o) * MICROS_PER_SECOND),
+            Some(Zone_::Offset(o)) => shift(o),
             Some(Zone_::Region(id)) => match crate::datetime::resolve_zone(&id) {
                 Ok(z) => legacy_local_to_utc(local, &z),
-                Err(_) => None,
+                Err(_) => Err(Unmatched::Text),
             },
             Some(Zone_::Standard { id, raw, dst }) => {
                 // The calendar reads the standard offset at the wall time.
@@ -323,9 +337,9 @@ impl LegacyPattern {
                     }
                     Err(_) => raw,
                 };
-                local.checked_sub(i64::from(offset + dst) * MICROS_PER_SECOND)
+                shift(offset + dst)
             }
-        })
+        }
     }
 
     /// `s` as a local date-time; a zone in `s` is read and ignored.
@@ -336,7 +350,7 @@ impl LegacyPattern {
         Ok(self
             .parse_fields(s, None)
             .filter(|(_, zone)| allow_zone || zone.is_none())
-            .map(|(local, _)| local))
+            .and_then(|(local, _)| local))
     }
 
     /// `s` as a date (days since the epoch): time and zone are ignored.
@@ -346,12 +360,13 @@ impl LegacyPattern {
     pub fn parse_date(&self, s: &str) -> Result<Option<i32>, KrishivError> {
         Ok(self
             .parse_fields(s, None)
-            .and_then(|(local, _)| i32::try_from(local.div_euclid(MICROS_PER_DAY)).ok()))
+            .and_then(|(local, _)| local)
+            .and_then(|local| i32::try_from(local.div_euclid(MICROS_PER_DAY)).ok()))
     }
 
     /// The fields of `s`; zone names are looked up in `session`'s own row
     /// first (`None` where the zone is read and ignored).
-    fn parse_fields(&self, s: &str, session: Option<&str>) -> Option<(i64, Option<Zone_>)> {
+    fn parse_fields(&self, s: &str, session: Option<&str>) -> Option<Resolved> {
         let text: Vec<char> = s.chars().collect();
         let mut st = Parsed::default();
         let mut pos = 0;
@@ -396,7 +411,7 @@ impl LegacyPattern {
 /// real rules' (LMT before 1900): Spark rebases the parsed instant so the
 /// wall clock survives, while only the printed offset letters use the raw
 /// `java.util.TimeZone` offset.
-fn legacy_local_to_utc(local: i64, tz: &dyn TimeZoneRules) -> Option<i64> {
+fn legacy_local_to_utc(local: i64, tz: &dyn TimeZoneRules) -> Result<i64, Unmatched> {
     let secs = local.div_euclid(MICROS_PER_SECOND);
     let near = [
         tz.offset_at_utc(secs.saturating_sub(86_400)),
@@ -405,8 +420,11 @@ fn legacy_local_to_utc(local: i64, tz: &dyn TimeZoneRules) -> Option<i64> {
     let offset = near
         .into_iter()
         .filter(|&o| tz.offset_at_utc(secs.saturating_sub(i64::from(o))) == o)
-        .min()?;
-    local.checked_sub(i64::from(offset).checked_mul(MICROS_PER_SECOND)?)
+        .min()
+        .ok_or(Unmatched::Text)?;
+    local
+        .checked_sub(i64::from(offset) * MICROS_PER_SECOND)
+        .ok_or(Unmatched::Overflow)
 }
 
 fn is_numeric(c: char, n: usize) -> bool {
@@ -569,6 +587,20 @@ fn write_offset(out: &mut String, offset: i32, colon: bool, minutes: bool, zulu:
         let _ = write!(out, "{:02}", a / 60 % 60);
     }
 }
+
+#[derive(Debug)]
+/// Why a LEGACY parse gave no instant.
+pub(crate) enum Unmatched {
+    /// The text does not match the pattern, or names a date or zone the
+    /// calendar refuses.
+    Text,
+    /// The date is past the microsecond range.
+    Overflow,
+}
+
+/// The resolved local micros (`None` past the microsecond range) and the
+/// zone the text named.
+type Resolved = (Option<i64>, Option<Zone_>);
 
 #[derive(Debug, Clone)]
 enum Zone_ {
@@ -840,7 +872,7 @@ impl Parsed {
             && self.dow.is_none_or(|(v, _)| v == dow_sun1(real))
     }
 
-    fn resolve(self, today: (i64, u32, u32)) -> Option<(i64, Option<Zone_>)> {
+    fn resolve(self, today: (i64, u32, u32)) -> Option<Resolved> {
         if !self.year_two {
             // The year of the era is positive: no year 0 (nor `0000 BC`).
             if self.year.is_some_and(|(y, _)| y <= 0) {
@@ -859,13 +891,13 @@ impl Parsed {
         // The century is chosen on the year of the era, before a BC era
         // turns the year around (`99 BC` is 1999 BC).
         let chosen = match self.resolve_in(base, false) {
-            Some(first) if first.0.div_euclid(MICROS_PER_DAY) >= start_days => base,
+            Some((Some(first), _)) if first.div_euclid(MICROS_PER_DAY) >= start_days => base,
             _ => base + 100,
         };
         self.resolve_in(chosen, self.era_bc)
     }
 
-    fn resolve_in(&self, year: i64, bc: bool) -> Option<(i64, Option<Zone_>)> {
+    fn resolve_in(&self, year: i64, bc: bool) -> Option<Resolved> {
         if self.bad_hour {
             return None;
         }
@@ -901,12 +933,12 @@ impl Parsed {
             // weekday of the month, as `GregorianCalendar` falls back to
             // `DAY_OF_WEEK_IN_MONTH` 1.
             Mode::Dowim
-        } else if self.doy.is_some_and(|(_, s)| {
-            self.month0
-                .map(|(_, s)| s)
-                .max(self.dom.map(|(_, s)| s))
-                .is_none_or(|m| s > m)
-        }) {
+        } else if self
+            .doy
+            .is_some_and(|(_, s)| self.dom.is_none_or(|(_, m)| s > m))
+        {
+            // `Calendar.selectFields` weighs a day of year against the day of
+            // month alone; a month is then only checked against the result.
             Mode::Doy
         } else {
             Mode::Dom
@@ -1004,7 +1036,9 @@ impl Parsed {
             return None;
         }
         let tod = ((hour * 60 + minute) * 60 + second) * MICROS_PER_SECOND + millis * 1000;
-        let local = days.checked_mul(MICROS_PER_DAY)?.checked_add(tod)?;
+        let local = days
+            .checked_mul(MICROS_PER_DAY)
+            .and_then(|micros| micros.checked_add(tod));
         Some((local, self.zone.clone()))
     }
 }
@@ -1452,7 +1486,7 @@ mod tests {
     fn zone_display_names_parse_short_and_long_and_the_week_year_uses_the_hybrid_day() {
         let p = LegacyPattern::new("yyyy-MM-dd HH:mm z").unwrap();
         let offset = |t: &str| {
-            let (local, _) = p.parse_fields(t, None)?;
+            let local = p.parse_fields(t, None)?.0?;
             let utc = p.parse_timestamp(t, &FixedOffset(0)).ok()??;
             i32::try_from((local - utc) / MICROS_PER_SECOND).ok()
         };
@@ -1492,6 +1526,36 @@ mod tests {
         assert_eq!(local("yyyy-ww-u", "2024-9223372036854775807-1"), None);
         assert_eq!(local("yyyy-MM-W-u", "2024-01-9223372036854775807-1"), None);
         assert_eq!(local("yyyy-MM-F-u", "2024-01-9223372036854775807-1"), None);
+    }
+
+    // Non-lenient `SimpleDateFormat` on Java 21 (2026-11-03): the date
+    // parses, and `Math.multiplyExact(millis, 1000)` throws.
+    #[test]
+    fn a_date_past_the_micros_range_is_an_overflow_not_a_mismatch() {
+        let p = LegacyPattern::new("yyyy-MM-dd").unwrap();
+        let utc = FixedOffset(0);
+        assert!(matches!(
+            p.instant("300000-01-01", &utc),
+            Err(Unmatched::Overflow)
+        ));
+        assert!(matches!(
+            p.instant("2024-13-01", &utc),
+            Err(Unmatched::Text)
+        ));
+        assert_eq!(p.parse_timestamp("300000-01-01", &utc).unwrap(), None);
+    }
+
+    // Non-lenient `SimpleDateFormat` on Java 21 (2026-11-03): only the day
+    // of month competes with the day of year; a month is checked after.
+    #[test]
+    fn a_month_after_the_day_of_year_does_not_displace_it() {
+        let feb29 = Some(days_from_civil(2024, 2, 29).unwrap() * MICROS_PER_DAY);
+        assert_eq!(local("yyyy-DDD-MM", "2024-060-02"), feb29);
+        assert_eq!(local("yyyy-DDD-MM", "2024-060-03"), None);
+        assert_eq!(local("yyyy-MM-DDD", "2024-02-060"), feb29);
+        assert_eq!(local("yyyy-DDD-MM-dd", "2024-060-02-29"), feb29);
+        assert_eq!(local("yyyy-dd-DDD-MM", "2024-29-060-02"), feb29);
+        assert_eq!(local("yyyy-DDD-dd", "2024-060-29"), None);
     }
 
     #[test]
