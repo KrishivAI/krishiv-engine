@@ -156,18 +156,23 @@ impl Mismatch {
 /// kept). With all-literal arguments Spark raises a bare `ArithmeticException` instead of wrapping.
 /// Such a mismatch is not reported, so a seeded nightly run does not find a new variant of it
 /// every day; a parent of such a case is already left out, as for any mismatching child.
-fn documented_divergence(m: &Mismatch) -> bool {
+///
+/// When Spark returned rows the engine must prove it wraps: its own ANSI-off answer to the same
+/// expression equals Spark's rows, so an `ARITHMETIC_OVERFLOW` that is not about the `int` range
+/// (a real bug in the function) is still reported.
+fn documented_divergence(m: &Mismatch, ev: &mut dyn Evaluator) -> bool {
     let date_arith = ["date_add(", "date_sub(", "datediff("]
         .iter()
         .any(|f| m.sql.contains(f));
-    let spark_wraps_or_throws = match &m.spark {
-        Expect::Rows { .. } => true,
+    if !(m.ansi && date_arith)
+        || !matches!(&m.got, Expect::Error(class) if class == "ARITHMETIC_OVERFLOW")
+    {
+        return false;
+    }
+    match &m.spark {
+        Expect::Rows { .. } => ev.eval(&m.sql, false) == m.spark,
         Expect::Error(class) => class == "ArithmeticException",
-    };
-    m.ansi
-        && date_arith
-        && spark_wraps_or_throws
-        && matches!(&m.got, Expect::Error(class) if class == "ARITHMETIC_OVERFLOW")
+    }
 }
 
 /// Replays every case and returns the minimal mismatches, sorted by key, without the
@@ -194,8 +199,8 @@ pub fn run(fixture: &Fixture, ev: &mut dyn Evaluator) -> Vec<Mismatch> {
                 got,
             })
         })
-        .filter(|m| !documented_divergence(m))
         .collect();
+    out.retain(|m| !documented_divergence(m, ev));
     out.sort_by_key(Mismatch::key);
     out.dedup_by_key(|m| m.key());
     out

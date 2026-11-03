@@ -187,12 +187,22 @@ fn cli_reports_new_and_known_mismatches() -> R {
     Ok(())
 }
 
-/// An evaluator that answers every expression with one fixed error class.
-struct Always(&'static str);
+/// Under ANSI it raises one error class; with ANSI off it answers `rows` (the wrap of ADR 0023).
+struct Wraps {
+    class: &'static str,
+    rows: &'static str,
+}
 
-impl Evaluator for Always {
-    fn eval(&mut self, _sql: &str, _ansi: bool) -> Expect {
-        Expect::Error(self.0.to_owned())
+impl Evaluator for Wraps {
+    fn eval(&mut self, _sql: &str, ansi: bool) -> Expect {
+        if ansi {
+            Expect::Error(self.class.to_owned())
+        } else {
+            Expect::Rows {
+                schema: "date".to_owned(),
+                rows: vec![self.rows.to_owned()],
+            }
+        }
     }
 }
 
@@ -204,26 +214,57 @@ fn one_case(sql: &str, ansi: bool, spark: &str) -> Result<Fixture, String> {
 
 /// ADR 0023: past the `int` day range `date_add`/`date_sub`/`datediff` wrap silently in Spark and
 /// raise `ARITHMETIC_OVERFLOW` under ANSI here, by decision. That divergence is not reported, but
-/// nothing near it is: ANSI off, another error class and another expression all are.
+/// nothing near it is: ANSI off, another error class, another expression, and an overflow whose
+/// ANSI-off answer is not Spark's rows (so it is not the wrap) all are.
 #[test]
 fn the_date_arithmetic_overflow_divergence_is_not_reported_and_nothing_else_is() -> R {
-    let overflow = |sql: &str, ansi: bool, class: &'static str| -> Result<usize, String> {
+    let count = |sql: &str, ansi: bool, class: &'static str, wrapped: &'static str| {
         let fx = one_case(sql, ansi, "2000-01-01")?;
-        Ok(run(&fx, &mut Always(class)).len())
+        Ok::<usize, String>(
+            run(
+                &fx,
+                &mut Wraps {
+                    class,
+                    rows: wrapped,
+                },
+            )
+            .len(),
+        )
     };
     for f in [
         "date_add(dt, i)",
         "date_sub(dt, i)",
         "datediff(dt, date_add(dt, i))",
     ] {
-        assert_eq!(overflow(f, true, "ARITHMETIC_OVERFLOW")?, 0, "{f}");
+        assert_eq!(
+            count(f, true, "ARITHMETIC_OVERFLOW", "2000-01-01")?,
+            0,
+            "{f}"
+        );
     }
     // Reported: ANSI off, another class, another expression.
     assert_eq!(
-        overflow("date_add(dt, i)", false, "ARITHMETIC_OVERFLOW")?,
+        count(
+            "date_add(dt, i)",
+            false,
+            "ARITHMETIC_OVERFLOW",
+            "2000-01-01"
+        )?,
         1
     );
-    assert_eq!(overflow("date_add(dt, i)", true, "DIVIDE_BY_ZERO")?, 1);
-    assert_eq!(overflow("(i + l)", true, "ARITHMETIC_OVERFLOW")?, 1);
+    assert_eq!(
+        count("date_add(dt, i)", true, "DIVIDE_BY_ZERO", "2000-01-01")?,
+        1
+    );
+    assert_eq!(
+        count("(i + l)", true, "ARITHMETIC_OVERFLOW", "2000-01-01")?,
+        1
+    );
+    // Reported: the engine raises, but with ANSI off it does not give Spark's rows, so the
+    // overflow is not the documented wrap.
+    assert_eq!(
+        count("date_add(dt, i)", true, "ARITHMETIC_OVERFLOW", "1999-12-31")?,
+        1
+    );
     Ok(())
 }
