@@ -394,6 +394,27 @@ fn single_array_must_be_a_table() {
 }
 
 #[test]
+fn a_struct_window_past_its_child_is_rejected() {
+    // Length 2 at offset 1 over a child of 2 rows reaches row 3: arrow-rs's full validation
+    // accepts it and slicing the child then panics (found by the `capsule_import` fuzz target).
+    let child = Int64Array::from(vec![1, 2]).into_data();
+    let struct_type = DataType::Struct(vec![Field::new("id", DataType::Int64, false)].into());
+    // SAFETY: deliberately inconsistent data, as a foreign producer may send.
+    let data = unsafe {
+        ArrayData::new_unchecked(struct_type.clone(), 2, None, None, 1, vec![], vec![child])
+    };
+    let schema_c = FFI_ArrowSchema::try_from(&Field::new("", struct_type, false)).unwrap();
+    let mut array_c = FFI_ArrowArray::new(&data);
+    // SAFETY: valid C structs owned by this frame.
+    let err = unsafe { ffi::import_array(&raw const schema_c, &raw mut array_c) }.unwrap_err();
+    assert!(
+        err.to_string().starts_with("[KRISHIV_INVALID_ARROW_DATA]")
+            && err.to_string().contains("struct window"),
+        "{err}"
+    );
+}
+
+#[test]
 fn short_children_are_rejected() {
     // A struct of length 3 whose child has 2 rows: arrow-rs would panic
     // building a batch from it; the import validates first.

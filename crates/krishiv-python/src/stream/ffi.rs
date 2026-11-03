@@ -389,6 +389,33 @@ unsafe fn check_raw_array(
     for (child, child_type) in children.into_iter().zip(child_types) {
         // SAFETY: a child of a valid array is a valid array (caller).
         unsafe { check_raw_array(child, child_type, depth + 1) }?;
+        if matches!(data_type, DataType::Struct(_)) {
+            // A struct's window (offset + length) must lie inside every child: arrow-rs slices
+            // the children by it, and a short child panics there (found by the `capsule_import`
+            // fuzz target).
+            // SAFETY: the child was just checked as a valid array.
+            let have = unsafe { child.read_unaligned() }.length;
+            if usize::try_from(have).map_or(true, |h| h < total) {
+                return Err(invalid(format!(
+                    "a struct window of {total} rows over a child of {have} rows"
+                )));
+            }
+        }
+        if let DataType::FixedSizeList(_, size) = data_type {
+            // The values must cover every slot the parent's window reaches, offset included:
+            // arrow-rs's own check ignores the offset, and slicing a short child panics.
+            // SAFETY: the child was just checked as a valid array.
+            let have = unsafe { child.read_unaligned() }.length;
+            let need = usize::try_from(*size)
+                .ok()
+                .and_then(|w| total.checked_mul(w))
+                .ok_or_else(|| invalid("a fixed-size list's value count overflows"))?;
+            if usize::try_from(have).map_or(true, |h| h < need) {
+                return Err(invalid(format!(
+                    "a fixed-size list of {total} slots of {size} values has {have} values"
+                )));
+            }
+        }
     }
     match (data_type, a.dictionary.is_null()) {
         // SAFETY: the dictionary of a valid array is a valid array (caller).

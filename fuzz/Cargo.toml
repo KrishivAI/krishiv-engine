@@ -11,6 +11,11 @@ publish = false
 [package.metadata]
 cargo-fuzz = true
 
+# `capsule_import` includes crates/krishiv-python/src/stream/ffi.rs by path, which is what
+# uses these two; cargo-machete cannot see through the path include.
+[package.metadata.cargo-machete]
+ignored = ["arrow-data", "krishiv-common"]
+
 [dependencies]
 libfuzzer-sys = "0.4.10"
 prost = "0.14.4"
