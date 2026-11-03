@@ -756,6 +756,56 @@ mod tests {
         (sink, global, query, ctx, dir)
     }
 
+    /// A driver's spill whose writer is refused (here a cancelled scope)
+    /// gives back the scratch it lent: the batches stay in memory, charged
+    /// as much as before, and the pool holds what it held. (That nobody else
+    /// takes the lent bytes meanwhile, which the scratch's return to credit
+    /// ensures, needs a concurrent claimant; this test has none.)
+    #[tokio::test]
+    async fn a_refused_spill_write_restores_the_batches_reservation() {
+        let pool = TreePool::new(&MemoryConfig::default());
+        let query = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Batch,
+            ExecConfig::default(),
+            pool.child("q", None),
+        );
+        let ctx = TaskContext::new(
+            Arc::clone(&query),
+            TokioExecutor::deterministic(1).unwrap(),
+            SpillOwner::new(),
+            OperatorId(1),
+            "shared",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let scope = SpillManager::open(&SpillConfig {
+            dir: dir.path().join("spill"),
+            ..SpillConfig::default()
+        })
+        .unwrap()
+        .scope()
+        .unwrap();
+        let sink = SharedSink::new(schema(), Some(scope.clone()));
+        let global = sink.global_state(&ctx).unwrap();
+        let mut local = sink.local_state(&ctx, &global).unwrap();
+        for start in [0, 3, 6] {
+            sink.sink(batch(start, 3), &mut local, &global).unwrap();
+        }
+        let held = local_mut::<SinkLocal>(&mut local, "test")
+            .unwrap()
+            .reservation
+            .size();
+        assert!(held > 0);
+        let reserved = pool.reserved();
+        scope.cancel().unwrap();
+        assert!(sink.spill(&mut local, 1, &ctx).await.is_err());
+        let l = local_mut::<SinkLocal>(&mut local, "test").unwrap();
+        assert_eq!(l.reservation.size(), held);
+        assert_eq!(l.batches.len(), 3);
+        assert!(l.segments.is_empty());
+        assert_eq!(pool.reserved(), reserved);
+    }
+
     /// A reader's context: the finalized sink state as its dependency.
     fn reader_ctx(query: &Arc<QueryContext>, dep: &GlobalState) -> TaskContext {
         TaskContext::new(

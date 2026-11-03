@@ -489,24 +489,24 @@ fn many_drivers_spill_wide_build_batches() {
         blocking_threads: 12,
         ..ExecutorConfig::default()
     };
-    for join_type in [JoinType::Inner, JoinType::FullOuter] {
-        let (got, counters) = run_on(
-            join_type,
-            Some(near()),
-            batches("p", &probe, 16),
-            batches("b", &build, 150_000),
-            Some(16 << 20),
-            executor,
-        )
-        .unwrap();
-        assert_eq!(
-            got,
-            expected_by(join_type, &is_near, &probe, &build),
-            "{join_type:?}"
-        );
-        assert!(
-            counter(&counters, "build_spills") > 0,
-            "{join_type:?}: {counters:?}"
-        );
-    }
+    // One join type: the build is the same for every type.
+    let join_type = JoinType::FullOuter;
+    let (got, counters) = run_on(
+        join_type,
+        Some(near()),
+        batches("p", &probe, 16),
+        batches("b", &build, 150_000),
+        Some(16 << 20),
+        executor,
+    )
+    .unwrap();
+    assert_eq!(
+        got,
+        expected_by(join_type, &is_near, &probe, &build),
+        "{join_type:?}"
+    );
+    assert!(
+        counter(&counters, "build_spills") > 0,
+        "{join_type:?}: {counters:?}"
+    );
 }

@@ -176,10 +176,11 @@ pub(crate) struct OrderKey {
 }
 
 impl OrderKey {
-    /// `keys` (columns of `layout`) as attributes.
-    pub(crate) fn of(keys: &[SortKey], layout: &[AttrId]) -> Vec<Self> {
+    /// `keys` (columns of `layout`) as attributes; `None` when a key is not
+    /// in `layout`, so neither a provided nor a required order is cut short.
+    pub(crate) fn of(keys: &[SortKey], layout: &[AttrId]) -> Option<Vec<Self>> {
         keys.iter()
-            .map_while(|k| {
+            .map(|k| {
                 Some(Self {
                     attr: *layout.get(k.column)?,
                     descending: k.descending,
@@ -1596,7 +1597,7 @@ impl<'a> Planner<'a> {
         let schema = sort_op(&input.schema, &keys, None)?.schema();
         let layout = input.layout.clone();
         let sites = input.sites.clone();
-        let ordering = OrderKey::of(&keys, &layout);
+        let ordering = OrderKey::of(&keys, &layout).unwrap_or_default();
         let mut planned = input.wrap(
             |input| PhysNode::Sort { input, keys },
             schema,

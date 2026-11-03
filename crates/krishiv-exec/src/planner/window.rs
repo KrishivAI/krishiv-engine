@@ -180,7 +180,9 @@ impl Planner<'_> {
                 layout,
                 ("TopN", format!("{n}, {sort_detail}")),
             )
-        } else if !keys.is_empty() && sorted_for(&input.ordering, &OrderKey::of(&keys, &layout), np)
+        } else if !keys.is_empty()
+            && OrderKey::of(&keys, &layout)
+                .is_some_and(|want| sorted_for(&input.ordering, &want, np))
         {
             // Already in this order within each partition (another window's
             // sort, Spark's `EnsureRequirements` ordering check): no sort.
@@ -189,7 +191,7 @@ impl Planner<'_> {
             input
         } else {
             let sort_schema = crate::physical::sort_op(&input.schema, &keys, None)?.schema();
-            let ordering = OrderKey::of(&keys, &layout);
+            let ordering = OrderKey::of(&keys, &layout).unwrap_or_default();
             let mut sorted = input.wrap(
                 |input| PhysNode::Sort { input, keys },
                 sort_schema,

@@ -104,8 +104,10 @@ impl ValueType {
                 .map(ConfigValue::Size)
                 .ok_or_else(|| "expected a byte size such as `128m` or `1g`".to_owned()),
             ValueType::SignedSize => {
+                // Spark's `byteFromString` strips the sign, then
+                // `byteStringAs` trims what follows.
                 let (sign, magnitude) = match s.strip_prefix('-') {
-                    Some(rest) => (-1, rest),
+                    Some(rest) => (-1, rest.trim_start()),
                     None => (1, s),
                 };
                 parse_with_unit(magnitude, SIZE_UNITS, "b")
