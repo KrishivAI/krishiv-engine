@@ -411,6 +411,14 @@ async fn colliding_table_names_are_refused_and_dotted_directories_stay_whole() {
     assert!(err && text.contains("both name the table"), "{text}");
     // Without the collision, `sales.2025` and `sales.2026` are two tables.
     std::fs::remove_dir_all(data.join("Sales")).unwrap();
+    // A name that sorts between the two (`Zebra`, case-sensitively) does not
+    // hide the collision.
+    std::fs::write(data.join("Sales.parquet"), b"").unwrap();
+    std::fs::write(data.join("Zebra.parquet"), b"").unwrap();
+    let (text, err) = call(&t, "run_query", json!({"sql": "SELECT 1"})).await;
+    assert!(err && text.contains("both name the table"), "{text}");
+    std::fs::remove_file(data.join("Sales.parquet")).unwrap();
+    std::fs::remove_file(data.join("Zebra.parquet")).unwrap();
     std::fs::remove_file(data.join("sales.parquet")).unwrap();
     let (text, _) = call(&t, "list_tables", json!({})).await;
     assert!(

@@ -840,11 +840,12 @@ fn data_tables(data: &Path) -> Result<Vec<(String, String)>, KrishivError> {
             Some((name, path.canonicalize().ok()?.to_str()?.to_owned()))
         })
         .collect();
-    out.sort();
-    // The session catalog matches names without case: two entries that
-    // meet are ambiguous, and neither may silently replace the other.
+    // The session catalog keys names by `to_lowercase`: two entries with
+    // one key are ambiguous, and neither may silently replace the other.
+    // Sorting by that key puts them side by side.
+    out.sort_by_cached_key(|(name, path)| (name.to_lowercase(), name.clone(), path.clone()));
     for pair in out.windows(2) {
-        if pair[0].0.eq_ignore_ascii_case(&pair[1].0) {
+        if pair[0].0.to_lowercase() == pair[1].0.to_lowercase() {
             return Err(krishiv_common::error::InvalidParameterValueString {
                 parameter: "--data".to_owned(),
                 function_name: "krishiv mcp".to_owned(),
