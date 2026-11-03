@@ -283,7 +283,15 @@ pub(super) fn sparse_pages(
     if let Some(first) = pages.first().and_then(|p| u64::try_from(p.offset).ok()) {
         walk(chunk_start, first)?;
     }
-    for p in pages {
+    // The locations are increasing (checked before they were attached), so
+    // only the pages from the first one at or after `start` to the first one
+    // at or past `end` can lie inside the bytes: a fetch of K ranges of an
+    // N-page chunk costs O(K log N) plus the pages fetched, not O(K N).
+    let from = pages.partition_point(|p| u64::try_from(p.offset).map_or(true, |o| o < start));
+    for p in pages[from..]
+        .iter()
+        .take_while(|p| u64::try_from(p.offset).is_ok_and(|o| o < end))
+    {
         let (Ok(offset), Ok(size)) = (
             u64::try_from(p.offset),
             u64::try_from(p.compressed_page_size),

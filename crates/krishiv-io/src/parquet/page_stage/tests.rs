@@ -512,3 +512,87 @@ fn a_predicate_only_column_does_not_break_the_sparse_read() {
         assert!(got.len() < 20_000);
     }
 }
+
+/// A runtime filter on an unprojected column, still pending when the scan
+/// opens and published while it reads: the row filter then reads its
+/// column in the next row group, and the scan stays correct. The filter's
+/// column counts toward the offset-index coverage from the start (Codex on
+/// #450); this file did not fail without that, so the test guards the
+/// result, not the bookkeeping failure.
+#[test]
+#[cfg(not(loom))] // Runtime filters use loom's primitives under `--cfg loom`.
+fn a_runtime_filter_published_after_open_does_not_break_the_sparse_read() {
+    use crate::ByteRange;
+    use crate::{
+        FilterId, FilterSnapshot, KeyFilterBuilder, KeyFilterOptions, RuntimeFilter, ScanFilter,
+        ScanOptions, ScanStream,
+    };
+
+    let env = Env::new();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("u", DataType::Int64, false),
+    ]));
+    let k = Int64Array::from_iter_values(0..ROWS);
+    let u = Int64Array::from_iter_values((0..ROWS).map(|i| (i * 7919) % ROWS));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(k) as ArrayRef, Arc::new(u) as ArrayRef],
+    )
+    .unwrap();
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(10_000))
+        .set_data_page_row_count_limit(PAGE_ROWS)
+        .set_write_batch_size(PAGE_ROWS)
+        .set_dictionary_enabled(false)
+        .set_statistics_enabled(EnabledStatistics::Page)
+        .build();
+    let f = env.put("two_groups.parquet", write(&[batch], props));
+    let o = env.options(&[]);
+    let mut req = ScanRequest::new(Arc::clone(&schema), vec![ColumnPath::new("k")]);
+    req.predicate = Some(k_between(9_000, 11_000));
+    req.row_filter = crate::request::RowFilterPolicy::On;
+    let filter = Arc::new(RuntimeFilter::new(
+        FilterId(1),
+        ColumnPath::new("u"),
+        DataType::Int64,
+    ));
+    req.dynamic
+        .push(ScanFilter::new(Arc::clone(&filter), &schema).unwrap());
+    let mut b = KeyFilterBuilder::new(DataType::Int64, KeyFilterOptions::default()).unwrap();
+    let keep: Vec<i64> = (0..ROWS).step_by(3).collect();
+    b.add(&Int64Array::from(keep), None).unwrap();
+    let keys = Arc::new(b.finish());
+    let got = env.rt.block_on(async {
+        let pool: Arc<dyn krishiv_memory::MemoryPool> =
+            krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+        let id = pool.register("scan", None);
+        let mut s = ScanStream::open(
+            &env.io,
+            &ParquetFormat,
+            f.clone(),
+            ByteRange::whole(f.size),
+            &req,
+            &o,
+            krishiv_memory::Reservation::new(pool, id),
+            ScanOptions::default(),
+        )
+        .await
+        .unwrap();
+        let mut out = vec![s.next_batch().await.unwrap().unwrap()];
+        filter.publish(FilterSnapshot::Final(Arc::clone(&keys)));
+        while let Some(b) = s.next_batch().await.unwrap() {
+            out.push(b);
+        }
+        ks(&out)
+    });
+    // Every row in range whose `u` passes survives; nothing outside the
+    // pages the predicate kept is read.
+    let passes = |k: i64| ((k * 7919) % ROWS) % 3 == 0;
+    assert!(
+        (9_000..=11_000)
+            .filter(|&k| k < 10_000 || passes(k))
+            .all(|k| got.contains(&k))
+    );
+    assert!(got.len() < 20_000);
+}

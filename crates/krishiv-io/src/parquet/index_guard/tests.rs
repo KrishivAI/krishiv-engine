@@ -325,6 +325,21 @@ fn a_hostile_page_header_inside_a_sparse_range_is_rejected() {
         first_row_index: 0,
     };
     assert!(sparse_pages(&page, 1000, 1000, &[wild]).is_ok());
+    // Among many pages, the one the bytes hold is found and walked; the
+    // pages before and after it are not this range's.
+    let len = i32::try_from(page.len()).expect("small");
+    let many: Vec<PageLocation> = (0..1000_i64)
+        .map(|i| PageLocation {
+            offset: 1000 + i * i64::from(len),
+            compressed_page_size: len,
+            first_row_index: i,
+        })
+        .collect();
+    let at = 1000 + 500 * u64::try_from(len).expect("positive");
+    let err = sparse_pages(&page, at, 1000, &many).expect_err("walked");
+    assert!(err.0.contains("larger than the bytes left"), "{err:?}");
+    // Bytes that start inside a page hold no whole page: nothing to walk.
+    assert!(sparse_pages(&page[1..], at + 1, 1000, &many).is_ok());
 }
 
 /// A `ColumnIndex` of two INT64 pages whose `nan_counts` list has one

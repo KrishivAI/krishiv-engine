@@ -368,11 +368,15 @@ impl ParquetDecoder {
             .iter()
             .flat_map(|p| p.columns().into_iter().cloned())
             .collect();
-        for d in &req.dynamic {
-            if let Some(p) = d.predicate() {
-                filter_columns.extend(p.columns().into_iter().cloned());
-            }
-        }
+        // A runtime filter still pending now may publish after the indexes
+        // are attached and the row filter then reads its column, so its
+        // column counts whatever its current value.
+        filter_columns.extend(
+            req.dynamic
+                .iter()
+                .filter_map(|d| d.column())
+                .map(|(c, _)| c.clone()),
+        );
         attach_leaves.extend(projection_mask(meta, &filter_columns).1);
         attach_leaves.sort_unstable();
         attach_leaves.dedup();
@@ -975,6 +979,7 @@ impl Decoder for ParquetDecoder {
                 usize::try_from(d.buffered_bytes()).unwrap_or(usize::MAX)
             })
             .saturating_add(self.pages.as_ref().map_or(0, PageStage::held_bytes))
+            .saturating_add(sparse_bytes(&self.sparse))
     }
 
     fn working_bytes(&self) -> usize {
@@ -1170,4 +1175,15 @@ fn spark_read_array(a: &ArrayRef) -> FormatResult<ArrayRef> {
         }
         _ => Arc::clone(a),
     })
+}
+
+/// The bytes the page locations kept for the sparse header checks hold:
+/// a copy of each attached chunk's offset index, alive while the decoder
+/// is, so it counts toward the decoder's buffered bytes.
+fn sparse_bytes(sparse: &[(Range<u64>, Vec<PageLocation>)]) -> usize {
+    sparse
+        .iter()
+        .map(|(_, pages)| pages.capacity() * std::mem::size_of::<PageLocation>())
+        .sum::<usize>()
+        .saturating_add(std::mem::size_of_val(sparse))
 }
