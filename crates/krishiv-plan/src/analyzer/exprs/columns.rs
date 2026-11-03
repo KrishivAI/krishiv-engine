@@ -74,6 +74,37 @@ pub(in crate::analyzer) fn unresolved(
     )
 }
 
+/// `UNRESOLVED_COLUMN` for `parts` named in `s.* EXCEPT (...)`, proposing the
+/// fields of the struct `s` (Spark resolves the entry against them).
+pub(in crate::analyzer) fn unresolved_in_fields(
+    parts: &[String],
+    fields: &krishiv_types::StructType,
+    origin: Origin,
+) -> AnalysisError {
+    let candidates = fields
+        .fields()
+        .iter()
+        .map(|f| vec![f.name().to_owned()])
+        .collect();
+    let ranked = closest(&parts.join("."), candidates);
+    let object_name = quoted(parts);
+    if ranked.is_empty() {
+        return AnalysisError::new(UnresolvedColumnWithoutSuggestion { object_name }, origin);
+    }
+    let proposal = ranked
+        .iter()
+        .map(|p| quoted(p))
+        .collect::<Vec<_>>()
+        .join(", ");
+    AnalysisError::new(
+        UnresolvedColumnWithSuggestion {
+            object_name,
+            proposal,
+        },
+        origin,
+    )
+}
+
 /// The quoted names of `attrs`, comma-separated.
 pub(in crate::analyzer) fn names(attrs: &[Attr], _qualified: bool) -> String {
     attrs
@@ -374,12 +405,32 @@ impl Resolver<'_> {
             };
             return self.expr(alias, &inner);
         }
-        // Only the immediately enclosing query, as Spark 4.2 resolves.
+        // Only the immediately enclosing query, as Spark 4.2 resolves (a
+        // nested lateral join's right side sees its own left side only).
         let levels = cx.env.outer.iter().enumerate().rev().take(1);
         for (level, outer) in levels.filter(|_| cx.outer) {
-            if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
+            // Spark binds an unqualified outer name to the aggregate's input
+            // first (an output alias of the same name is then not reached),
+            // so the input columns the output does not carry come first.
+            let mut hit = if outer.fallback.is_empty() {
+                None
+            } else {
+                self.find(&outer.fallback, &c.name, origin, false)?
+            };
+            if hit.is_none() {
+                hit = self.find(&outer.scope, &c.name, origin, false)?;
+            }
+            if hit.is_none() && outer.lateral && c.name.len() > 1 {
+                hit = self.find(&outer.hidden, &c.name, origin, false)?;
+            }
+            if let Some((a, used)) = hit {
                 self.used(&a);
-                return self.resolve_attr(&a, used, &c.name, origin, Some(level), cx, false);
+                let b = self.resolve_attr(&a, used, &c.name, origin, Some(level), cx, false)?;
+                return Ok(if outer.lateral && used == c.name.len() {
+                    qualify_lateral(b, &a)
+                } else {
+                    b
+                });
             }
         }
         // `grouping__id` is the grouping id Spark's aggregate rule reads
@@ -596,11 +647,12 @@ impl Resolver<'_> {
         let mut names = Vec::with_capacity(kids.len());
         for (i, k) in kids.iter().enumerate() {
             let name = match &k.expr.node {
-                ExprNode::Resolved(
-                    ResolvedExpr::Column(c)
-                    | ResolvedExpr::OuterColumn(c)
-                    | ResolvedExpr::LambdaVar(c),
-                ) => c.name.clone(),
+                ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::LambdaVar(c)) => {
+                    c.name.clone()
+                }
+                // A lateral reference is named `outer(t.x)` for display; the
+                // struct field is the column's own name.
+                ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => outer_column_name_of(&c.name),
                 ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
                 ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
                 _ => format!("col{}", i + 1),
@@ -922,6 +974,19 @@ impl Resolver<'_> {
         if cx.agg_scope.is_some() {
             scope.extend(cx.extra.unwrap_or_default().iter().cloned());
         }
+        // Spark resolves a reference to an input column that is no grouping
+        // column too (the check after analysis refuses it), before the
+        // aggregate's own output.
+        let fallback: Arc<[Attr]> = cx.agg_scope.map_or_else(
+            || Arc::from(Vec::new()),
+            |input| {
+                input
+                    .iter()
+                    .filter(|a| !scope.iter().any(|s| s.col.id == a.col.id))
+                    .cloned()
+                    .collect()
+            },
+        );
         let hidden: Vec<Attr> = cx
             .rels
             .iter()
@@ -929,7 +994,9 @@ impl Resolver<'_> {
             .collect();
         outer.push(super::super::resolve::Level {
             scope: scope.into(),
+            lateral: false,
             hidden: hidden.into(),
+            fallback,
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }
@@ -985,5 +1052,43 @@ impl Resolver<'_> {
             .with_origin(e.origin),
         );
         Ok((expr, ty))
+    }
+}
+
+/// The outer reference `b` to `a`, a column of a lateral join's left side,
+/// named as Spark prints it inside a name: `outer(t.c)`, qualified.
+fn qualify_lateral(mut b: Bound, a: &Attr) -> Bound {
+    let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &b.expr.node else {
+        return b;
+    };
+    let mut col = c.clone();
+    let qual: Vec<&str> = a.qual.iter().map(String::as_str).collect();
+    // A column name holding a dot is quoted, so the name taken back out of
+    // this text (`pretty::outer_column_name`) is the column's, not its tail.
+    let name = if c.name.contains('.') {
+        format!("`{}`", c.name.replace('`', "``"))
+    } else {
+        c.name.clone()
+    };
+    col.name = format!(
+        "outer({}{}{})",
+        qual.join("."),
+        if qual.is_empty() { "" } else { "." },
+        name
+    );
+    b.expr = Arc::new(
+        Expr::new(ExprNode::Resolved(ResolvedExpr::OuterColumn(col))).with_origin(b.expr.origin),
+    );
+    b
+}
+
+/// The column an `outer(..)` display name stands for; any other name as it is.
+fn outer_column_name_of(name: &str) -> String {
+    match name
+        .strip_prefix("outer(")
+        .and_then(|n| n.strip_suffix(')'))
+    {
+        Some(inner) => super::pretty::outer_column_name(inner),
+        None => name.to_owned(),
     }
 }

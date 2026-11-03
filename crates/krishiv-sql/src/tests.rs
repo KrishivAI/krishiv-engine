@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 
 use krishiv_common::error::ErrorClass;
 
-use super::ast::{BinaryOp, ExprKind, SetExprKind, Span};
+use super::ast::{BinaryOp, ExprKind, SetExprKind, SetKind, Span, Statement};
 use super::lexer::{TokenKind, tokenize, unescape_string};
 use super::*;
 
@@ -1403,6 +1403,67 @@ fn set_statements() {
         parse_statement("SELECT set FROM set", &d),
         Ok(Statement::Query(_))
     ));
+}
+
+/// `SET TIME ZONE` as Spark 4.2's `visitSetTimeZone` reads it: an interval within [-18, 18] hours
+/// is an offset zone; the others are `TIMEZONE_INTERVAL_OUT_OF_RANGE` (the first of months, days,
+/// whole hours, truncated seconds); anything that is no zone is `_LEGACY_ERROR_TEMP_0045`.
+#[test]
+fn set_time_zone_follows_spark() {
+    let d = ParserOptions::default();
+    let zone = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::Set(s) => match s.kind {
+            SetKind::TimeZone { zone, .. } => zone,
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    };
+    for (sql, want) in [
+        ("SET TIME ZONE INTERVAL 10 HOURS", "+10:00"),
+        ("SET TIME ZONE INTERVAL -8 HOURS", "-08:00"),
+        ("SET TIME ZONE INTERVAL 0 HOURS", "Z"),
+        ("SET TIME ZONE INTERVAL 5 HOURS 30 MINUTES", "+05:30"),
+        ("SET TIME ZONE INTERVAL '18:00' HOUR TO MINUTE", "+18:00"),
+        (
+            "SET TIME ZONE INTERVAL 1 HOURS 2 MINUTES 3 SECONDS",
+            "+01:02:03",
+        ),
+    ] {
+        assert_eq!(zone(sql), ast::TimeZone::Named(want.to_owned()), "{sql}");
+    }
+    let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
+    for (sql, input) in [
+        ("SET TIME ZONE INTERVAL 3 DAYS", "3"),
+        ("SET TIME ZONE INTERVAL 1 MONTH", "1"),
+        ("SET TIME ZONE INTERVAL 24 HOURS", "24"),
+        ("SET TIME ZONE INTERVAL '19:40:32' HOUR TO SECOND", "19"),
+        ("SET TIME ZONE INTERVAL 10 HOURS 1 MILLISECOND", "36000"),
+    ] {
+        let e = fail(sql);
+        assert_eq!(
+            e.error.error_class().name(),
+            "INVALID_INTERVAL_FORMAT.TIMEZONE_INTERVAL_OUT_OF_RANGE",
+            "{sql}"
+        );
+        assert!(
+            e.error.to_string().contains(&format!("\"{input}\""))
+                || e.error.to_string().contains(input),
+            "{sql}: {}",
+            e.error
+        );
+        // The whole statement is the query context.
+        assert_eq!(e.span.start, 0, "{sql}");
+        assert_eq!(e.span.end, sql.len(), "{sql}");
+    }
+    for sql in ["SET TIME ZONE", "SET TIME ZONE INTERVAL 10 HOURS 'GMT+1'"] {
+        let e = fail(sql);
+        assert_eq!(
+            e.error.error_class().name(),
+            "_LEGACY_ERROR_TEMP_0045",
+            "{sql}"
+        );
+        assert_eq!((e.span.start, e.span.end), (0, sql.len()), "{sql}");
+    }
 }
 
 /// `SET` errors, positions and precedence as Spark 4.2 raises them.

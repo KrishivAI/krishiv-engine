@@ -1256,6 +1256,14 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 },
             }),
         ),
+        (
+            "exchange_source",
+            PhysNode::ExchangeSource {
+                id: ExchangeId(17),
+                partitioning: Partitioning::Single,
+                schema: schema(),
+            },
+        ),
     ]
 }
 

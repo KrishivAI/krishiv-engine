@@ -1,7 +1,6 @@
 {
   "cases": {
     "depends-on-command": [
-      1,
       2
     ],
     "parser-tail": [

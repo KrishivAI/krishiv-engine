@@ -142,7 +142,7 @@ pub fn spark_string_to_timestamp(
     today: i32,
 ) -> Result<Option<i64>, KrishivError> {
     let parsed = match parse(s.as_bytes()) {
-        Parsed::NeedsClock => {
+        Parsed::NeedsClock(_) => {
             let time = s.trim_matches(|c: char| c <= ' ' || c == '\u{7f}');
             let time = time.strip_prefix('T').unwrap_or(time);
             let mut text = String::new();
@@ -166,8 +166,26 @@ pub fn spark_string_to_timestamp(
             };
             Ok(local_to_utc(local, &zone))
         }
-        Parsed::NeedsClock | Parsed::Malformed => Ok(None),
+        Parsed::NeedsClock(_) | Parsed::Malformed => Ok(None),
     }
+}
+
+/// Today's date (days since the epoch) at the instant `start_micros` in the
+/// zone a time-of-day string names, else in `session`: Spark reads
+/// `T10:00-12:00` on the date it is at `-12:00`, not in the session zone.
+pub(crate) fn today_in_zone(
+    zone: &Zone,
+    session: &dyn TimeZoneRules,
+    start_micros: i64,
+) -> Option<i32> {
+    let secs = start_micros.div_euclid(1_000_000);
+    let offset = match zone {
+        Zone::Session => session.offset_at_utc(secs),
+        Zone::Offset(o) => *o,
+        Zone::Region(id) => crate::datetime::resolve_zone(id).ok()?.offset_at_utc(secs),
+    };
+    let local = secs.checked_add(i64::from(offset))?;
+    i32::try_from(local.div_euclid(86_400)).ok()
 }
 
 /// Spark's `stringToTimestampWithoutTimeZone(s, allowTimeZone = false)`

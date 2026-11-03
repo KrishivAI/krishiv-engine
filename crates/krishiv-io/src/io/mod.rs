@@ -58,8 +58,10 @@ use object_store::{
 };
 use tokio::sync::Semaphore;
 
-pub use self::block_cache::{BlockCache, BlockCacheConfig, CacheStats, CachingStore, ObjectSize};
-pub use self::cache::{CacheKey, MetadataCache};
+pub use self::block_cache::{
+    BlockCache, BlockCacheConfig, CacheStats as BlockCacheStats, CachingStore, ObjectSize,
+};
+pub use self::cache::{CacheKey, CacheStats, MetadataCache};
 pub use self::coalesce::{Coalesced, Waste, coalesce, coalesce_with};
 pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
 pub use self::pace::StorePolicy;
@@ -578,7 +580,7 @@ impl IoScheduler {
 
     /// What the block cache has done (`None` when it is off).
     #[must_use]
-    pub fn block_cache_stats(&self) -> Option<CacheStats> {
+    pub fn block_cache_stats(&self) -> Option<BlockCacheStats> {
         self.block_cache.as_ref().map(|c| c.stats())
     }
 

@@ -437,6 +437,7 @@ impl Resolver<'_> {
         let rules = coerce::Rules {
             ansi,
             case_sensitive: self.ctx.conf.case_sensitive,
+            concat_binary_as_string: self.ctx.conf.concat_binary_as_string,
         };
         match coerce::operator(
             Builtin::Eq,

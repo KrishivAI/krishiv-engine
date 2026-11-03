@@ -828,7 +828,43 @@ fn except_field_of_a_flat_column_is_not_found() -> R {
             Err(e) => e,
             Ok(df) => block_on(df.collect()).expect_err("EXCEPT of a missing field must fail"),
         };
-        assert_eq!(e.error_class().name(), "FIELD_NOT_FOUND", "{sql}: {e}");
+        assert_eq!(
+            e.error_class().name(),
+            "INVALID_EXTRACT_BASE_FIELD_TYPE",
+            "{sql}: {e}"
+        );
+    }
+    Ok(())
+}
+
+/// The classes Spark 4.2 raises for an `EXCEPT` path that does not name a
+/// struct field (probed on a real run).
+#[test]
+fn except_paths_below_non_structs_and_missing_fields_use_spark_classes() -> R {
+    let s = Session::new()?;
+    for (sql, class) in [
+        (
+            "SELECT * EXCEPT (id.x) FROM VALUES (1) AS t(id)",
+            "INVALID_EXTRACT_BASE_FIELD_TYPE",
+        ),
+        (
+            "SELECT * EXCEPT (m.k) FROM VALUES (map('a', 1)) AS t(m)",
+            "EXCEPT_NESTED_COLUMN_INVALID_TYPE",
+        ),
+        (
+            "SELECT * EXCEPT (arr.x) FROM VALUES (array(named_struct('x', 1))) AS t(arr)",
+            "EXCEPT_NESTED_COLUMN_INVALID_TYPE",
+        ),
+        (
+            "SELECT data.* EXCEPT (nope) FROM VALUES (named_struct('a', 1)) AS t(data)",
+            "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+        ),
+    ] {
+        let e = match block_on(s.sql(sql)) {
+            Err(e) => e,
+            Ok(df) => block_on(df.collect()).expect_err("must fail"),
+        };
+        assert_eq!(e.error_class().name(), class, "{sql}: {e}");
     }
     Ok(())
 }
@@ -1130,6 +1166,126 @@ fn qualify_errors() -> R {
     Ok(())
 }
 
+/// A table alias wins over a struct column of the same name, and a NULL
+/// struct under a nested `EXCEPT` becomes a struct of NULL fields (Spark
+/// 4.2: `{"b":null}`).
+#[test]
+fn except_alias_beats_struct_column_and_null_struct_is_rebuilt() -> R {
+    let s = Session::new()?;
+    let rows = |sql: &str| -> R<String> {
+        let batches = block_on(block_on(s.sql(sql))?.collect())?;
+        Ok(batches
+            .iter()
+            .map(|b| format!("{}x{}", b.num_rows(), b.num_columns()))
+            .collect::<Vec<_>>()
+            .join(","))
+    };
+    assert_eq!(
+        rows("SELECT t.* EXCEPT (a) FROM (SELECT named_struct('a', 1, 'b', 2) AS t, 5 AS a) t")?,
+        "1x1"
+    );
+    assert_eq!(
+        rows(
+            "SELECT s.b IS NULL AS n, s IS NULL AS sn FROM (SELECT * EXCEPT (s.a) \
+             FROM VALUES (CAST(NULL AS STRUCT<a:INT,b:INT>)) AS t(s))"
+        )?,
+        "1x2"
+    );
+    let b = block_on(
+        block_on(s.sql(
+            "SELECT s IS NULL FROM (SELECT * EXCEPT (s.a) \
+             FROM VALUES (CAST(NULL AS STRUCT<a:INT,b:INT>)) AS t(s))",
+        ))?
+        .collect(),
+    )?;
+    assert!(!arrow_array::cast::AsArray::as_boolean(b[0].column(0)).value(0));
+    Ok(())
+}
+
+/// A `HAVING` subquery reading a column the aggregate does not group by is
+/// a correlated reference Spark refuses (`first(t1.col2)` resolves against
+/// the aggregate's input, then fails the check), not an unresolved column.
+#[test]
+fn having_subquery_over_a_non_grouping_column_is_a_correlated_reference() -> R {
+    let s = Session::new()?;
+    block_on(async {
+        s.sql("CREATE TEMPORARY VIEW t1(col1, col2) AS VALUES (1, 'a')")
+            .await?;
+        let e = s
+            .sql("SELECT col1 FROM t1 GROUP BY col1 HAVING EXISTS (SELECT first(t1.col2) == 0)")
+            .await
+            .map(|_| ())
+            .expect_err("must fail");
+        assert_eq!(
+            e.error_class().name(),
+            "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE",
+            "{e}"
+        );
+        Ok(())
+    })
+}
+
+/// DISTINCT aggregates over the same columns in a different order are one
+/// distinct set: `corr(DISTINCT x, y)` beside `corr(DISTINCT y, x)`.
+#[test]
+fn distinct_aggregates_over_the_same_columns_in_any_order() -> R {
+    let s = Session::new()?;
+    let b = block_on(
+        block_on(s.sql(
+            "SELECT corr(DISTINCT x, y), corr(DISTINCT y, x), count(*) \
+             FROM (VALUES (1, 1), (2, 2), (2, 2)) t(x, y)",
+        ))?
+        .collect(),
+    )?;
+    let f = |i: usize| {
+        arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Float64Type>(b[0].column(i))
+            .value(0)
+    };
+    assert!((f(0) - 1.0).abs() < 1e-12 && (f(1) - 1.0).abs() < 1e-12);
+    assert_eq!(
+        arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Int64Type>(b[0].column(2))
+            .value(0),
+        3
+    );
+    Ok(())
+}
+
+/// A scalar subquery with no relation reads the outer query's columns in
+/// its select list (`HAVING (SELECT col1 = 1)`, having.sql 33-36).
+#[test]
+fn a_scalar_subquery_without_a_relation_reads_outer_columns() -> R {
+    let s = Session::new()?;
+    let count = |sql: &str| -> R<usize> {
+        Ok(block_on(block_on(s.sql(sql))?.collect())?
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum())
+    };
+    assert_eq!(
+        count("SELECT col1 AS alias FROM values(1) GROUP BY col1 HAVING (SELECT col1 = 1)")?,
+        1
+    );
+    assert_eq!(
+        count(
+            "SELECT col1 FROM values(named_struct('a', 1)) GROUP BY col1 HAVING (SELECT col1.a = 1)"
+        )?,
+        1
+    );
+    assert_eq!(
+        count("SELECT col1 FROM values(array(1)) GROUP BY col1 HAVING (SELECT col1[0] = 1)")?,
+        1
+    );
+    assert_eq!(
+        count("SELECT col1 FROM values(map('a', 1)) GROUP BY col1 HAVING (SELECT col1[0] = 1)")?,
+        0
+    );
+    assert_eq!(
+        count("SELECT a, (SELECT a + 1) FROM values(1), (2) t(a)")?,
+        2
+    );
+    Ok(())
+}
+
 /// The fields a struct star expands to are lateral column aliases for the
 /// select items after them, as explicit `s.a AS a` is.
 #[test]
@@ -1146,5 +1302,219 @@ fn struct_star_fields_are_lateral_aliases() -> R {
         .value(0);
         assert_eq!(n, 2, "{sql}");
     }
+    Ok(())
+}
+
+/// `sum`, `avg` and `mean` of a `TIMESTAMP` read it as seconds (`DOUBLE`), as
+/// Spark 4.2 does; a `DATE` or `TIMESTAMP_NTZ` is refused.
+#[test]
+fn sum_and_avg_of_a_timestamp_are_doubles() -> R {
+    let s = Session::new()?;
+    block_on(s.sql("SET spark.sql.session.timeZone=UTC"))?;
+    let b = block_on(
+        block_on(s.sql(
+            "SELECT avg(c), mean(c), sum(c) FROM VALUES (timestamp'2020-01-01 00:00:00') AS t(c)",
+        ))?
+        .collect(),
+    )?;
+    for i in 0..3 {
+        let v = arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Float64Type>(
+            b[0].column(i),
+        )
+        .value(0);
+        assert!((v - 1_577_836_800.0).abs() < 1e-6, "column {i}: {v}");
+    }
+    for sql in [
+        "SELECT avg(c) FROM VALUES (date'2020-01-01') AS t(c)",
+        "SELECT mean(c) FROM VALUES (timestamp_ntz'2020-01-01') AS t(c)",
+    ] {
+        let e = block_on(s.sql(sql)).map(|_| ()).expect_err("must fail");
+        assert_eq!(
+            e.error_class().name(),
+            "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+            "{sql}"
+        );
+    }
+    Ok(())
+}
+
+/// A time of day without a date is on the query's date: `hour('10:11:12')`
+/// and the cast to `TIMESTAMP` (Spark reads today's date in the session zone).
+#[test]
+fn a_time_of_day_string_is_on_the_query_date() -> R {
+    let s = Session::new()?;
+    let b = block_on(
+        block_on(s.sql(
+            "SELECT hour('10:11:12'), minute('10:11:12'), second('10:11:12.5'), \
+             CAST('T23:59' AS TIMESTAMP) = CAST(CAST(current_date() AS STRING) || ' 23:59:00' AS TIMESTAMP), \
+             CAST('T10:00:00-12:00' AS TIMESTAMP) = CAST(CONCAT(CAST(CAST(current_timestamp() - INTERVAL 12 HOURS AS DATE) AS STRING), ' 10:00:00-12:00') AS TIMESTAMP)",
+        ))?
+        .collect(),
+    )?;
+    let int = |i: usize| {
+        arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Int32Type>(b[0].column(i))
+            .value(0)
+    };
+    assert_eq!((int(0), int(1)), (10, 11));
+    assert!(arrow_array::cast::AsArray::as_boolean(b[0].column(3)).value(0));
+    // A zone in the text sets the date: the day it is at -12:00, not in the session zone.
+    assert!(arrow_array::cast::AsArray::as_boolean(b[0].column(4)).value(0));
+    Ok(())
+}
+
+/// With ANSI off a string beside a number in arithmetic is read as a `double`
+/// (Spark 4.2: `2147483647 + '1'` is `2.147483648E9`, text that is no number
+/// gives NULL).
+#[test]
+fn arithmetic_with_a_string_and_ansi_off_is_a_double() -> R {
+    let s = Session::new()?;
+    block_on(s.sql("SET spark.sql.ansi.enabled=false"))?;
+    let b = block_on(
+        block_on(s.sql(
+            "SELECT 2147483647 + '1', try_divide(1, '0'), '3' * 2, 'x' + 1, try_multiply(2147483647, '-2'), \
+             '1' + '2', '1' + NULL",
+        ))?
+        .collect(),
+    )?;
+    let col = |i: usize| {
+        let a = arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Float64Type>(
+            b[0].column(i),
+        );
+        (!a.is_null(0)).then(|| a.value(0))
+    };
+    assert_eq!(col(0), Some(2_147_483_648.0));
+    assert_eq!(col(1), None);
+    assert_eq!(col(2), Some(6.0));
+    assert_eq!(col(3), None);
+    assert_eq!(col(4), Some(-4_294_967_294.0));
+    assert_eq!(col(5), Some(3.0));
+    assert_eq!(col(6), None);
+    Ok(())
+}
+
+/// `try_add` and `try_subtract` of a date and a day count are `date_add` and
+/// `date_sub`, with ANSI on or off.
+#[test]
+fn try_add_and_try_subtract_of_a_date_and_days() -> R {
+    for ansi in ["true", "false"] {
+        let s = Session::new()?;
+        block_on(s.sql(&format!("SET spark.sql.ansi.enabled={ansi}")))?;
+        let b = block_on(
+            block_on(s.sql(
+                "SELECT try_add(date'2021-01-01', 1), try_add(1, date'2021-01-01'), try_subtract(date'2021-01-02', 1)",
+            ))?
+            .collect(),
+        )?;
+        let days = |i: usize| {
+            arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Date32Type>(
+                b[0].column(i),
+            )
+            .value(0)
+        };
+        // 2021-01-01 is day 18628.
+        assert_eq!(
+            (days(0), days(1), days(2)),
+            (18629, 18629, 18628),
+            "ansi {ansi}"
+        );
+    }
+    Ok(())
+}
+
+/// A scalar aggregate subquery whose correlation is not an equality joins
+/// the distinct outer values (Spark's `DecorrelateInnerQuery`): `min` and
+/// `count` per outer row, NULL and 0 where nothing matched.
+#[test]
+fn a_scalar_subquery_correlated_by_an_inequality() -> R {
+    let s = Session::new()?;
+    block_on(s.sql("CREATE OR REPLACE TEMPORARY VIEW t1 AS VALUES (0, 1), (1, 2) t1(c1, c2)"))?;
+    block_on(s.sql("CREATE OR REPLACE TEMPORARY VIEW t2 AS VALUES (0, 2), (0, 3) t2(c1, c2)"))?;
+    let rows = |sql: &str| -> R<Vec<String>> {
+        let mut out = Vec::new();
+        for b in block_on(block_on(s.sql(sql))?.collect())? {
+            let a = b.column(0);
+            for i in 0..b.num_rows() {
+                out.push(if a.is_null(i) {
+                    "NULL".to_owned()
+                } else {
+                    arrow_cast_to_string(a, i)
+                });
+            }
+        }
+        out.sort();
+        Ok(out)
+    };
+    assert_eq!(
+        rows("SELECT (SELECT min(c2) FROM t2 WHERE t1.c1 > t2.c1) FROM t1")?,
+        ["2", "NULL"]
+    );
+    assert_eq!(
+        rows("SELECT (SELECT min(c2) FROM t2 WHERE t1.c1 >= t2.c1 AND t1.c2 < t2.c2) FROM t1")?,
+        ["2", "3"]
+    );
+    assert_eq!(
+        rows("SELECT (SELECT count(*) FROM t2 WHERE t1.c1 > t2.c1) FROM t1")?,
+        ["0", "2"]
+    );
+    Ok(())
+}
+
+fn arrow_cast_to_string(a: &dyn arrow_array::Array, i: usize) -> String {
+    use arrow_array::cast::AsArray;
+    match a.data_type() {
+        arrow_schema::DataType::Int32 => a
+            .as_primitive::<arrow_array::types::Int32Type>()
+            .value(i)
+            .to_string(),
+        arrow_schema::DataType::Int64 => a
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .value(i)
+            .to_string(),
+        other => format!("<{other}>"),
+    }
+}
+
+/// A `HAVING` over a correlated global aggregate: NULL where it rejects the
+/// value, and a count over no matches is 0 for the `HAVING` (Spark's count
+/// bug cases).
+#[test]
+fn a_correlated_scalar_aggregate_with_having() -> R {
+    let s = Session::new()?;
+    block_on(s.sql("CREATE OR REPLACE TEMPORARY VIEW t1 AS VALUES (0, 1), (1, 2) t1(c1, c2)"))?;
+    block_on(s.sql("CREATE OR REPLACE TEMPORARY VIEW t2 AS VALUES (0, 2), (0, 3) t2(c1, c2)"))?;
+    let rows = |sql: &str| -> R<Vec<String>> {
+        let mut out = Vec::new();
+        for b in block_on(block_on(s.sql(sql))?.collect())? {
+            let a = b.column(b.num_columns() - 1);
+            for i in 0..b.num_rows() {
+                out.push(if a.is_null(i) {
+                    "NULL".to_owned()
+                } else {
+                    arrow_cast_to_string(a, i)
+                });
+            }
+        }
+        out.sort();
+        Ok(out)
+    };
+    // t1.c1 = 0 has two matches, t1.c1 = 1 none.
+    assert_eq!(
+        rows(
+            "SELECT c1, c2, (SELECT count(*) cnt FROM t2 WHERE t1.c1 = t2.c1 HAVING cnt = 0) FROM t1"
+        )?,
+        ["0", "NULL"]
+    );
+    assert_eq!(
+        rows(
+            "SELECT c1, (SELECT count(*) FROM t2 WHERE t1.c1 = t2.c1 HAVING count(*) >= 2) FROM t1"
+        )?,
+        ["2", "NULL"]
+    );
+    assert_eq!(
+        rows(
+            "SELECT c1, (SELECT count(*) FROM t2 WHERE t1.c1 = t2.c1 HAVING count(*) <= 1) FROM t1"
+        )?,
+        ["0", "NULL"]
+    );
     Ok(())
 }

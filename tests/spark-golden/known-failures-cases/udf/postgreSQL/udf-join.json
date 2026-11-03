@@ -3,19 +3,6 @@
     "depends-on-command": [
       93,
       148
-    ],
-    "test-udfs": [
-      174,
-      175,
-      176,
-      177,
-      178,
-      179,
-      180,
-      181,
-      182,
-      183,
-      184
     ]
   },
   "file": "udf/postgreSQL/udf-join",

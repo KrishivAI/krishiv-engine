@@ -55,14 +55,26 @@ pub(super) struct Rules {
     /// `spark.sql.caseSensitive`: struct field names match by case when
     /// nested types meet.
     pub(super) case_sensitive: bool,
+    /// `spark.sql.function.concatBinaryAsString`.
+    pub(super) concat_binary_as_string: bool,
 }
 
 impl Rules {
+    /// The rules for `ansi` and `case_sensitive`, with the defaults of the rest.
+    pub(super) const fn new(ansi: bool, case_sensitive: bool) -> Self {
+        Self {
+            ansi,
+            case_sensitive,
+            concat_binary_as_string: false,
+        }
+    }
+
     /// The rules of `call`.
     fn of(call: &CallTypes<'_>) -> Self {
         Self {
             ansi: call.ansi(),
             case_sensitive: call.case_sensitive(),
+            concat_binary_as_string: call.concat_binary_as_string(),
         }
     }
 }
@@ -199,6 +211,7 @@ fn common(
     let rules = Rules {
         ansi: true,
         case_sensitive,
+        concat_binary_as_string: false,
     };
     common_in(a, b, literal, rules, Nested::Tightest)
 }
@@ -470,6 +483,7 @@ pub(super) fn wider_type_without_string_promotion(
             let rules = Rules {
                 ansi: false,
                 case_sensitive,
+                concat_binary_as_string: false,
             };
             common_in(a, b, false, rules, Nested::Wider)
         }
@@ -760,7 +774,10 @@ fn concat(args: &[Arg<'_>], rules: Rules) -> Result<Typed, Mismatch> {
         common_all(args, rules)
             .ok_or_else(|| Mismatch::DataDiff(args.iter().map(|a| a.ty.cloned()).collect(), false))?
             .unwrap_or(DataType::Null)
-    } else if !args.is_empty() && args.iter().all(|a| a.ty == Some(&DataType::Binary)) {
+    } else if !args.is_empty()
+        && args.iter().all(|a| a.ty == Some(&DataType::Binary))
+        && !rules.concat_binary_as_string
+    {
         DataType::Binary
     } else {
         DataType::String
@@ -969,6 +986,24 @@ fn arithmetic(
         if let Some(m) = text.or_else(|| datetime_decimal(op, a, b)) {
             return Err(m);
         }
+    }
+    // Without ANSI a string beside a number is read as a `double`, and so is
+    // the number (Spark 4.2: `2147483647 + '1'` is `2.147483648E9`); the cast
+    // of text that is no number gives NULL.
+    let text_or_number = |t: Option<&T>| t.is_none_or(|t| *t == T::String || is_numeric(t));
+    if !ansi
+        && (matches!(a.ty, Some(T::String)) || matches!(b.ty, Some(T::String)))
+        && text_or_number(a.ty)
+        && text_or_number(b.ty)
+    {
+        return Ok(Typed {
+            casts: vec![
+                cast_to(a.ty, Some(&T::Double)),
+                cast_to(b.ty, Some(&T::Double)),
+            ],
+            data_type: T::Double,
+            nullable: true,
+        });
     }
     legacy_strings(&[*a, *b], ansi)?;
     let (x, y) = match (a.ty, b.ty) {
@@ -1384,14 +1419,23 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
         (_, InputType::Any)
         | (Some(DataType::Map(_)), InputType::Map)
         | (Some(DataType::Array(_)), InputType::Array) => Some(from.cloned()),
-        (Some(t), InputType::Numeric { .. } | InputType::StrictNumeric) if is_numeric(t) => {
+        (
+            Some(t),
+            InputType::Numeric { .. } | InputType::StrictNumeric | InputType::NumericOrTimestamp,
+        ) if is_numeric(t) => Some(Some(t.clone())),
+        (Some(t), InputType::Numeric { intervals: true } | InputType::NumericOrTimestamp)
+            if is_ansi_interval(t) =>
+        {
             Some(Some(t.clone()))
         }
-        (Some(t), InputType::Numeric { intervals: true }) if is_ansi_interval(t) => {
-            Some(Some(t.clone()))
+        (Some(T::Timestamp), InputType::NumericOrTimestamp) => Some(Some(T::Double)),
+        (
+            None,
+            InputType::Numeric { .. } | InputType::StrictNumeric | InputType::NumericOrTimestamp,
+        )
+        | (Some(T::String), InputType::Numeric { .. } | InputType::NumericOrTimestamp) => {
+            Some(Some(T::Double))
         }
-        (None, InputType::Numeric { .. } | InputType::StrictNumeric)
-        | (Some(T::String), InputType::Numeric { .. }) => Some(Some(T::Double)),
         // A type of the collection stays; another takes the first member
         // it may be cast to (Spark's `TypeCollection`), except that a number
         // is not narrowed or widened into one (`date_add(d, 1L)` and
@@ -1869,6 +1913,7 @@ mod tests {
         Rules {
             ansi,
             case_sensitive: false,
+            concat_binary_as_string: false,
         }
     }
 

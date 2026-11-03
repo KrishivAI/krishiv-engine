@@ -78,6 +78,7 @@ pub mod console;
 mod context;
 mod driver;
 mod error;
+pub mod exchange;
 mod exchange_stats;
 mod executor;
 pub mod files;

@@ -3048,7 +3048,7 @@ fn star_except_drops_overlaps_and_rejects_nested_fields_of_a_flat_column() {
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["a", "a", "a.b"])]);
     assert_eq!(class(&run(plan, &ctx())), "EXCEPT_OVERLAPPING_COLUMNS");
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["a.b"])]);
-    assert_eq!(class(&run(plan, &ctx())), "FIELD_NOT_FOUND");
+    assert_eq!(class(&run(plan, &ctx())), "INVALID_EXTRACT_BASE_FIELD_TYPE");
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["z"])]);
     assert_eq!(
         class(&run(plan, &ctx())),
@@ -3519,7 +3519,7 @@ fn legacy_flag_confs_follow_session_confs() {
     // booleans are not registry entries, so `SET` does not validate them).
     let odd_bool = conf(&[("spark.sql.legacy.allowParameterlessCount", "sometimes")]);
     assert!(!odd_bool.allow_parameterless_count);
-    assert_eq!(ResolutionConf::KEYS.len(), 23);
+    assert_eq!(ResolutionConf::KEYS.len(), 24);
     let charsets = conf(&[
         ("spark.sql.legacy.javaCharsets", "true"),
         ("spark.sql.legacy.codingErrorAction", "TRUE"),

@@ -1,10 +1,6 @@
 {
   "entries": [
     {
-      "id": "try_subtract#0edc9301ffa2/ansi_off",
-      "reason": "SELECT try_subtract(2, '1') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
       "id": "try_subtract#170516e36186/ansi_on",
       "reason": "SELECT try_subtract(2, TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -21,54 +17,6 @@
       "reason": "SELECT try_subtract(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "try_subtract#1cae3483a411/ansi_on",
-      "reason": "SELECT try_subtract(DATE'9999-12-31', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#1cae3483a411/ansi_off",
-      "reason": "SELECT try_subtract(DATE'9999-12-31', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#2b174bd6e11e/ansi_on",
-      "reason": "SELECT try_subtract(DATE'1582-10-10', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#2b174bd6e11e/ansi_off",
-      "reason": "SELECT try_subtract(DATE'1582-10-10', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#3582769ddd53/ansi_on",
-      "reason": "SELECT try_subtract(DATE'0001-01-01', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#3582769ddd53/ansi_off",
-      "reason": "SELECT try_subtract(DATE'0001-01-01', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#390e55785593/ansi_on",
-      "reason": "SELECT try_subtract(DATE'2024-02-29', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#390e55785593/ansi_off",
-      "reason": "SELECT try_subtract(DATE'2024-02-29', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#488502a062f0/ansi_on",
-      "reason": "SELECT try_subtract(CAST(NULL AS date), 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#488502a062f0/ansi_off",
-      "reason": "SELECT try_subtract(CAST(NULL AS date), 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#6ab14af75051/ansi_on",
-      "reason": "SELECT try_subtract(date'2021-01-02', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#6ab14af75051/ansi_off",
-      "reason": "SELECT try_subtract(date'2021-01-02', 1) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "try_subtract#756b9b8d8ece/ansi_on",
       "reason": "SELECT try_subtract(2, DATE'2024-02-29') | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -77,24 +25,12 @@
       "reason": "SELECT try_subtract(2, DATE'2024-02-29') | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "try_subtract#847188c1be3e/ansi_off",
-      "reason": "SELECT try_subtract('abc', 1) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "try_subtract#901361175675/ansi_off",
-      "reason": "SELECT try_subtract(2, 'abc') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
       "id": "try_subtract#c6ab435c35e2/ansi_on",
       "reason": "SELECT try_subtract(2, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_subtract#c6ab435c35e2/ansi_off",
       "reason": "SELECT try_subtract(2, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_subtract#e73b9f9913d5/ansi_off",
-      "reason": "SELECT try_subtract('1', 1) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
       "id": "try_subtract#f2cd0274bcdc/ansi_on",
