@@ -90,6 +90,48 @@ fn a_large_build_is_partitioned_and_a_small_one_broadcast() {
     );
 }
 
+/// `spark.sql.autoBroadcastJoinThreshold` (Spark's `canBroadcastBySize`,
+/// `ops/reports/2026-11-03-broadcast-threshold-semantics.md`): a negative
+/// value turns broadcasting by size off, 0 broadcasts only an empty build,
+/// and a hint broadcasts whatever the threshold.
+#[test]
+fn the_broadcast_threshold_setting_decides_by_size() {
+    let env = env();
+    let with = |threshold: &str, sql: &str| {
+        let mut config = krishiv_common::config::Config::new();
+        config
+            .set("spark.sql.autoBroadcastJoinThreshold", threshold)
+            .unwrap();
+        let plan = env
+            .plan_with(sql, config)
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let mut out = Vec::new();
+        exchanges(plan.explain(), &mut out);
+        out
+    };
+    let small = "SELECT x.s FROM big x JOIN t y ON x.a = y.a";
+    let partitioned = [
+        "Exchange hashpartitioning(a#0)",
+        "Exchange hashpartitioning(a#3)",
+    ];
+    assert_eq!(with("10m", small), ["BroadcastExchange"]);
+    assert_eq!(with("-1", small), partitioned);
+    assert_eq!(with("-10", small), partitioned);
+    assert_eq!(with("0", small), partitioned);
+    // Raised past the large build's estimate, it is broadcast too.
+    assert_eq!(
+        with("1p", "SELECT x.s FROM big x JOIN big y ON x.a = y.a"),
+        ["BroadcastExchange"]
+    );
+    assert_eq!(
+        with(
+            "-1",
+            "SELECT /*+ BROADCAST(y) */ x.s FROM big x JOIN t y ON x.a = y.a"
+        ),
+        ["BroadcastExchange"]
+    );
+}
+
 #[test]
 fn hints_choose_the_distribution() {
     let env = env();

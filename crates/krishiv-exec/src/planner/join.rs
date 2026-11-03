@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_schema::DataType as ArrowType;
+use krishiv_common::config::{AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue};
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, CastMode, Expr, ExprNode, FunctionId, JoinCondition, JoinKind,
     JoinStrategy, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction,
@@ -187,12 +188,20 @@ impl Planner<'_> {
             .get(&krishiv_common::config::EXEC_JOIN_BUILD_SIDE)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
+        let broadcast_max = broadcast_max_bytes(&self.cx.config);
         let preferred = if choice.distribution.is_none() && build_side && !merge {
             let probe_stats = self.input_stats(probe_plan, &probe.schema);
             let build_stats = self.input_stats(build_plan, &build.schema);
-            let other = orient(join_type, single_match, &probe_stats, &build_stats);
+            let other = orient(
+                join_type,
+                single_match,
+                &probe_stats,
+                &build_stats,
+                broadcast_max,
+            );
             let flips = other != join_type
-                || (join_type == JoinType::FullOuter && builds_left(&probe_stats, &build_stats));
+                || (join_type == JoinType::FullOuter
+                    && builds_left(&probe_stats, &build_stats, broadcast_max));
             flips.then_some((other, probe_stats, build_stats))
         } else {
             None
@@ -233,7 +242,9 @@ impl Planner<'_> {
             JoinDistribution::Partitioned
         } else {
             choice.distribution.unwrap_or(
-                if estimated_bytes(build_rows, &build.schema) <= BROADCAST_MAX_BYTES {
+                if broadcast_max
+                    .is_some_and(|max| estimated_bytes(build_rows, &build.schema) <= max)
+                {
                     JoinDistribution::Broadcast
                 } else {
                     JoinDistribution::Partitioned
@@ -598,9 +609,18 @@ pub(crate) struct Choice {
     pub(crate) merge: bool,
 }
 
-/// The largest estimated build a hash join broadcasts without a hint: 10
-/// MiB, the default of Spark's `spark.sql.autoBroadcastJoinThreshold`.
-pub(crate) const BROADCAST_MAX_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
+/// The largest estimated build a hash join broadcasts without a hint:
+/// `spark.sql.autoBroadcastJoinThreshold` (10 MiB by default), `None` when
+/// it is negative, which turns broadcasting by size off (Spark's
+/// `canBroadcastBySize`). A hint still broadcasts.
+pub(crate) fn broadcast_max_bytes(config: &Config) -> Option<f64> {
+    let max = config
+        .get(&AUTO_BROADCAST_JOIN_THRESHOLD)
+        .and_then(ConfigValue::as_int)
+        .unwrap_or(10 << 20);
+    #[expect(clippy::cast_precision_loss, reason = "compared with an estimate")]
+    (max >= 0).then_some(max as f64)
+}
 
 /// The estimated bytes of `rows` rows of `schema`, after Spark's size
 /// estimate: 8 bytes per row plus each column's default size.

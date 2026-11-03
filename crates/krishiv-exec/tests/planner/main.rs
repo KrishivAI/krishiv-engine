@@ -209,8 +209,14 @@ impl Env {
     }
 
     fn plan(&self, sql: &str) -> Result<Runnable, KrishivError> {
+        self.plan_with(sql, Config::new())
+    }
+
+    /// [`Env::plan`] under the session settings `config`.
+    fn plan_with(&self, sql: &str, config: Config) -> Result<Runnable, KrishivError> {
         let plan = krishiv_optimizer::optimize(&self.analyze(sql)).unwrap();
-        Ok(self.runnable(DefaultPlanner.plan(&plan, &self.cx())?))
+        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::new(config));
+        Ok(self.runnable(DefaultPlanner.plan(&plan, &cx)?))
     }
 
     fn runnable(&self, plan: PhysicalPlan) -> Runnable {

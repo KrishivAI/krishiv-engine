@@ -58,6 +58,10 @@ pub enum ValueType {
     /// `b`, `k`/`kb`, `m`/`mb`, `g`/`gb`, `t`/`tb`, `p`/`pb` (as Spark);
     /// no suffix means bytes.
     Size,
+    /// A byte count that may be negative (Spark's `bytesConf` with
+    /// `byteFromString`): an optional `-`, then a [`ValueType::Size`]
+    /// whose magnitude fits an `i64`. Stored as a [`ConfigValue::Int`].
+    SignedSize,
     /// A duration: a number with an optional suffix `us`, `ms`, `s`,
     /// `m`/`min`, `h`, `d` (as Spark); no suffix means seconds.
     Duration,
@@ -99,6 +103,18 @@ impl ValueType {
             ValueType::Size => parse_with_unit(s, SIZE_UNITS, "b")
                 .map(ConfigValue::Size)
                 .ok_or_else(|| "expected a byte size such as `128m` or `1g`".to_owned()),
+            ValueType::SignedSize => {
+                let (sign, magnitude) = match s.strip_prefix('-') {
+                    Some(rest) => (-1, rest),
+                    None => (1, s),
+                };
+                parse_with_unit(magnitude, SIZE_UNITS, "b")
+                    .and_then(|n| i64::try_from(n).ok())
+                    .map(|n| ConfigValue::Int(sign * n))
+                    .ok_or_else(|| {
+                        "expected a byte size such as `10m`, or a negative number".to_owned()
+                    })
+            }
             ValueType::Duration => parse_with_unit(s, DURATION_UNITS_US, "s")
                 .map(|us| ConfigValue::Duration(Duration::from_micros(us)))
                 .ok_or_else(|| "expected a duration such as `500ms` or `120s`".to_owned()),
@@ -130,6 +146,7 @@ impl fmt::Display for ValueType {
             ValueType::Int => f.write_str("int"),
             ValueType::PositiveInt => f.write_str("positive int"),
             ValueType::Size => f.write_str("size"),
+            ValueType::SignedSize => f.write_str("signed size"),
             ValueType::Duration => f.write_str("duration"),
             ValueType::String => f.write_str("string"),
             ValueType::TimeZone => f.write_str("time zone"),
@@ -252,7 +269,8 @@ fn parse_with_unit(s: &str, units: &[(&str, u64)], default_unit: &str) -> Option
 pub enum ConfigValue {
     /// A [`ValueType::Bool`] value.
     Bool(bool),
-    /// A [`ValueType::Int`] or [`ValueType::PositiveInt`] value.
+    /// A [`ValueType::Int`], [`ValueType::PositiveInt`] or
+    /// [`ValueType::SignedSize`] value (bytes).
     Int(i64),
     /// A [`ValueType::Size`] value, in bytes.
     Size(u64),
