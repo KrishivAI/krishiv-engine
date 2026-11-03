@@ -119,6 +119,7 @@ macro_rules! registry {
 registry! {
     (aggregate_filter, AggregateFilter, POST_MIGRATION_READER_VERSION, Semantic, "An aggregate's `FILTER (WHERE ...)` mask column."),
     (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
+    (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (generate, Generate, POST_MIGRATION_READER_VERSION, Semantic, "The `Generate` node (`explode`, `posexplode`, `inline` and their `_outer` forms)."),
@@ -326,6 +327,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::Generate { .. } => Some(Feature::Generate),
             PhysNode::Range(_) => Some(Feature::Range),
             PhysNode::SharedRead { .. } => Some(Feature::SharedSubplan),
+            PhysNode::ExchangeSource { .. } => Some(Feature::ExchangeSource),
             PhysNode::UnionLoop { .. } | PhysNode::LoopRef { .. } => Some(Feature::UnionLoop),
             PhysNode::SortMergeJoin(_) => Some(Feature::SortMergeJoin),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
@@ -538,6 +540,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         PhysNode::SortMergeJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::Exchange(e) => f(Construct::Partitioning(&e.partitioning)),
+        PhysNode::ExchangeSource { partitioning, .. } => f(Construct::Partitioning(partitioning)),
         PhysNode::Scan(_)
         | PhysNode::LateFetch { .. }
         | PhysNode::OneRow
@@ -682,7 +685,8 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         | PhysNode::Aggregate { .. }
         | PhysNode::Union { .. }
         | PhysNode::WriteFiles { .. }
-        | PhysNode::Exchange(_) => {}
+        | PhysNode::Exchange(_)
+        | PhysNode::ExchangeSource { .. } => {}
     }
     // Expressions share subtrees: each is visited once.
     let mut seen = std::collections::HashSet::new();

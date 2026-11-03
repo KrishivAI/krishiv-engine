@@ -699,6 +699,8 @@ impl QueryCatalog {
                 partitions,
                 attempt: 0,
                 scans: BTreeMap::new(),
+                exchanges: BTreeMap::new(),
+                output: None,
             })
             .collect();
         for (id, kind) in assigned {
@@ -881,7 +883,10 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
     fn go<'a>(node: &'a PhysNode, out: &mut Leaves<'a>) {
         match node {
             PhysNode::Scan(scan) => out.scans.push(scan),
-            PhysNode::OneRow | PhysNode::SharedRead { .. } | PhysNode::LoopRef { .. } => {}
+            PhysNode::OneRow
+            | PhysNode::SharedRead { .. }
+            | PhysNode::LoopRef { .. }
+            | PhysNode::ExchangeSource { .. } => {}
             PhysNode::UnionLoop {
                 anchor, recursive, ..
             } => {

@@ -51,12 +51,13 @@ use krishiv_udf_sdk::UdfLibrary;
 use object_store::path::Path;
 
 use super::{
-    AggregatePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
-    ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SharedPlan, SortMergeJoinPlan,
-    SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
+    AggregatePlan, ExchangeId, ExchangePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode,
+    PhysicalPlan, ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SharedPlan,
+    SortMergeJoinPlan, SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
 };
 use crate::aggregate::{AggregateNode, AggregateSpec, HashAggregate, distinct_plan};
 use crate::error::{Result, internal};
+use crate::exchange::{Exchange, ExchangeRead, ExchangeSink, ExchangeWrite, MapOutputId};
 use crate::join::{
     HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, NestedLoopJoin, NestedLoopJoinNode,
     NestedLoopSpec, SortMergeJoin, SortMergeJoinNode,
@@ -110,6 +111,8 @@ pub struct WorkerContext {
     /// unset.
     values: Option<Arc<dyn ValueService>>,
     producer: Producer,
+    /// Where exchanges between stages are written and read.
+    exchange: Option<Arc<dyn Exchange>>,
 }
 
 /// Which task of a stage instantiates a plan fragment: the stage, its
@@ -134,6 +137,24 @@ pub struct TaskSpec {
     /// without an entry plans its own splits exactly as today, so
     /// single-process behaviour is unchanged.
     pub scans: BTreeMap<ScanId, ScanSplits>,
+    /// What each [`PhysNode::ExchangeSource`] of the fragment reads, by
+    /// exchange id (design P2-T176 §2.2).
+    pub exchanges: BTreeMap<ExchangeId, ExchangeInput>,
+    /// The reduce partitions the fragment's root exchange writes, when the
+    /// task is a map task of that exchange; `None` lowers a root exchange
+    /// as on one worker.
+    pub output: Option<u32>,
+}
+
+/// What one task reads from one exchange of another stage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExchangeInput {
+    /// The attempt of the stage that wrote it.
+    pub stage_attempt: u32,
+    /// The map partitions it was written by: `0..maps`.
+    pub maps: u32,
+    /// The reduce partitions this task reads.
+    pub reduce: Vec<u32>,
 }
 
 impl TaskSpec {
@@ -148,6 +169,8 @@ impl TaskSpec {
             partitions: 1,
             attempt: 0,
             scans: BTreeMap::new(),
+            exchanges: BTreeMap::new(),
+            output: None,
         }
     }
 }
@@ -166,6 +189,7 @@ impl WorkerContext {
             config: None,
             values: None,
             producer: Producer::default(),
+            exchange: None,
         }
     }
 
@@ -244,6 +268,15 @@ impl WorkerContext {
         self
     }
 
+    /// The same context writing and reading the exchanges between stages
+    /// through `exchange`: what a task's root exchange and its
+    /// [`PhysNode::ExchangeSource`]s instantiate with.
+    #[must_use]
+    pub fn with_exchange(mut self, exchange: Arc<dyn Exchange>) -> Self {
+        self.exchange = Some(exchange);
+        self
+    }
+
     /// The spill scope, if spilling.
     pub fn spill(&self) -> Option<&SpillScope> {
         self.spill.as_ref()
@@ -268,6 +301,7 @@ impl fmt::Debug for WorkerContext {
             .field("config", &self.config.is_some())
             .field("values", &self.values.is_some())
             .field("producer", &self.producer)
+            .field("exchange", &self.exchange.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -286,6 +320,29 @@ pub fn instantiate_task(
     worker: &WorkerContext,
     task: &TaskSpec,
 ) -> Result<Arc<dyn ExecNode>> {
+    Ok(instantiate_with_schemas(plan, worker, task)?.0)
+}
+
+/// The columns of the input of each exchange of `plan` (shared plans
+/// included), as `worker` instantiates it whole: what a fragmenter gives
+/// the [`PhysNode::ExchangeSource`] it puts in an exchange's place. The
+/// operators built are dropped unrun.
+///
+/// # Errors
+/// As [`instantiate_task`].
+pub fn exchange_schemas(
+    plan: &PhysicalPlan,
+    worker: &WorkerContext,
+) -> Result<BTreeMap<ExchangeId, SchemaRef>> {
+    Ok(instantiate_with_schemas(plan, worker, &TaskSpec::whole())?.1)
+}
+
+/// [`instantiate_task`], with the schema of each exchange's input.
+fn instantiate_with_schemas(
+    plan: &PhysicalPlan,
+    worker: &WorkerContext,
+    task: &TaskSpec,
+) -> Result<(Arc<dyn ExecNode>, BTreeMap<ExchangeId, SchemaRef>)> {
     let run = || {
         let spill = match (&worker.spill, &worker.scopes) {
             (Some(scope), _) => Some(scope.clone()),
@@ -308,12 +365,21 @@ pub fn instantiate_task(
             shared: HashMap::new(),
             shared_plans: Arc::from(plan.shared()),
             loops: HashMap::new(),
+            schemas: BTreeMap::new(),
         };
         for root in plan.roots() {
             cx.declare_filters(root)?;
         }
         cx.build_shared()?;
-        let built = cx.node(plan.root())?;
+        let built = match (task.output, plan.root()) {
+            (Some(partitions), PhysNode::Exchange(e)) => cx.exchange_write(e, partitions)?,
+            (Some(_), _) => {
+                return Err(internal(
+                    "a map task whose fragment does not end in an exchange".to_owned(),
+                ));
+            }
+            (None, root) => cx.node(root)?,
+        };
         if built.schema.fields() != plan.schema().fields() {
             return Err(internal(format!(
                 "the plan instantiates to {:?} where it planned {:?}",
@@ -325,11 +391,12 @@ pub fn instantiate_task(
         // returns its rows in slice order, as Spark collects partitions in
         // order: one driver keeps it (several would hand their batches to
         // the result in completion order).
-        Ok(if reads_range_in_order(plan.root()) {
+        let node: Arc<dyn ExecNode> = if reads_range_in_order(plan.root()) {
             Arc::new(OrderedNode { inner: built.node })
         } else {
             built.node
-        })
+        };
+        Ok((node, cx.schemas))
     };
     // Instantiation recurses once per node, as planning does.
     krishiv_common::stack::on_big_stack(run)
@@ -366,6 +433,8 @@ struct Instantiation<'a> {
     /// The table each enclosing recursive CTE's [`PhysNode::LoopRef`]s read,
     /// by loop id: the previous round, for a round being instantiated.
     loops: HashMap<u32, Arc<Output>>,
+    /// The columns of each exchange's input built so far.
+    schemas: BTreeMap<ExchangeId, SchemaRef>,
 }
 
 /// What a recursive CTE needs to instantiate its recursive term once per
@@ -411,6 +480,7 @@ impl Detached {
                 shared: HashMap::new(),
                 shared_plans: Arc::clone(&self.shared_plans),
                 loops,
+                schemas: BTreeMap::new(),
             };
             cx.declare_filters(node)?;
             for sp in cx.shared_plans.iter() {
@@ -887,8 +957,92 @@ impl Instantiation<'_> {
             PhysNode::Exchange(e) if e.partitioning == Partitioning::Broadcast => {
                 self.broadcast(e.id, &e.input)
             }
-            PhysNode::Exchange(e) => self.node(&e.input),
+            PhysNode::Exchange(e) => {
+                let input = self.node(&e.input)?;
+                self.schemas.insert(e.id, Arc::clone(&input.schema));
+                Ok(input)
+            }
+            PhysNode::ExchangeSource {
+                id,
+                partitioning,
+                schema,
+            } => self.exchange_source(*id, partitioning, schema),
         }
+    }
+
+    /// The exchange `e` written as this map task's output, over
+    /// `partitions` reduce partitions.
+    fn exchange_write(&mut self, e: &ExchangePlan, partitions: u32) -> Result<Built> {
+        let exchange = self.exchange()?;
+        let input = self.node(&e.input)?;
+        let sink = Arc::new(ExchangeSink::new(
+            exchange,
+            MapOutputId {
+                exchange: e.id,
+                stage_attempt: self.task.stage_attempt,
+                map: self.task.partition,
+                attempt: self.task.attempt,
+            },
+            e.partitioning.clone(),
+            partitions,
+            Arc::clone(&input.schema),
+        )?);
+        Ok(Built {
+            schema: input.schema,
+            node: Arc::new(ExchangeWrite {
+                input: input.node,
+                sink,
+            }),
+        })
+    }
+
+    /// The rows this task reads from the exchange `id` of another stage
+    /// (its [`TaskSpec::exchanges`] entry). A gather is read by one driver
+    /// in map order; a broadcast is published as this producer's partial,
+    /// as on one worker.
+    fn exchange_source(
+        &mut self,
+        id: super::ExchangeId,
+        partitioning: &Partitioning,
+        schema: &SchemaRef,
+    ) -> Result<Built> {
+        let exchange = self.exchange()?;
+        let input = self.task.exchanges.get(&id).ok_or_else(|| {
+            internal(format!(
+                "exchange {} is read by a task that names no input of it",
+                id.0
+            ))
+        })?;
+        let ordered = *partitioning == Partitioning::Single;
+        let source = Arc::new(ExchangeRead::new(
+            exchange,
+            id,
+            input.stage_attempt,
+            &input.reduce,
+            input.maps,
+            Arc::clone(schema),
+            ordered,
+        ));
+        let node: Arc<dyn ExecNode> = Arc::new(SourceNode(source));
+        let built = Built {
+            schema: Arc::clone(schema),
+            node: if ordered {
+                Arc::new(OrderedNode { inner: node })
+            } else {
+                node
+            },
+        };
+        if *partitioning == Partitioning::Broadcast {
+            return self.publish_broadcast(id, built);
+        }
+        Ok(built)
+    }
+
+    fn exchange(&self) -> Result<Arc<dyn Exchange>> {
+        self.worker
+            .exchange
+            .clone()
+            .ok_or_else(|| internal("a task with exchanges on a worker without one".to_owned()))
     }
 
     fn scan(&self, s: &ScanNode) -> Result<Built> {
@@ -1105,6 +1259,13 @@ impl Instantiation<'_> {
     /// shares one build among its drivers.
     fn broadcast(&mut self, id: super::ExchangeId, input: &PhysNode) -> Result<Built> {
         let input = self.node(input)?;
+        self.schemas.insert(id, Arc::clone(&input.schema));
+        self.publish_broadcast(id, input)
+    }
+
+    /// `input` published as this producer's partial of the broadcast
+    /// exchange `id`.
+    fn publish_broadcast(&mut self, id: super::ExchangeId, input: Built) -> Result<Built> {
         let value = ValueId::Broadcast(id);
         let published = self.values.publish(Partial {
             value,
@@ -1195,10 +1356,14 @@ fn operator(input: Built, op: Arc<dyn Operator>) -> Built {
 /// sort below a window with partitioning): the sort's buckets, which the
 /// exchange lowers into on one worker (design P2-T055 4a).
 fn hash_buckets<'p>(input: &'p PhysNode, keys: &[SortKey]) -> Option<&'p [usize]> {
-    let PhysNode::Exchange(e) = input else {
-        return None;
+    // A reduce task's sort reads a hash exchange's partition: the buckets
+    // split it again by the sort's own table hash (P2-T176 unit 1).
+    let partitioning = match input {
+        PhysNode::Exchange(e) => &e.partitioning,
+        PhysNode::ExchangeSource { partitioning, .. } => partitioning,
+        _ => return None,
     };
-    let Partitioning::Hash { keys: hash, .. } = &e.partitioning else {
+    let Partitioning::Hash { keys: hash, .. } = partitioning else {
         return None;
     };
     let mut lead: Vec<usize> = keys.get(..hash.len())?.iter().map(|k| k.column).collect();
