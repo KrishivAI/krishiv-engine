@@ -357,8 +357,9 @@ fn resolution_corpus_matches_spark() {
     // since `date + int`, `int + date` and `date - int` became `date_add`
     // and `date_sub`; 118 since P2-T115 unit 3 resolved two more correlated
     // subqueries; 117 since unit 4 resolved one under a join; 13 since
-    // interval literals and date and timestamp arithmetic, P2-T001b).
-    assert_eq!(gaps, 13, "statements in documented gaps");
+    // interval literals and date and timestamp arithmetic, P2-T001b; 12
+    // since a correlated `EXISTS` in an aggregate's key or `FILTER`).
+    assert_eq!(gaps, 12, "statements in documented gaps");
     assert_eq!(by_design, NULLABLE_BY_DESIGN.len());
     // Classes of lateral aliases, ordinals and type coercion, each matched
     // against Spark above.

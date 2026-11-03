@@ -3,16 +3,22 @@
 //!
 //! Times are integer nanoseconds (`*_ns`), sizes integer bytes. Members
 //! appear in a fixed order; operators and pipelines are listed by id. A
-//! reader rejects another format or version, a missing or mistyped member
-//! and an unknown enum value, so a document either round-trips exactly or
-//! does not load.
+//! reader rejects another format or a different major version and a missing
+//! or mistyped member it knows, but ignores members it does not know (a
+//! newer `minor` only adds members) and keeps an unknown metric kind as
+//! text, so a document written by a later minor still loads. `usage` is
+//! derived from the operators, so it is written and not read back, as is `environment` (the build that
+//! wrote the document; no configuration values, so nothing secret).
 
 use std::borrow::Cow;
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
-use super::{PROFILE_FORMAT, PROFILE_VERSION, ProfileError, ProfileNode, QueryProfile};
+use super::{
+    PROFILE_FORMAT, PROFILE_MINOR, PROFILE_VERSION, ProfileError, ProfileNode, QueryProfile,
+    QueryUsage,
+};
 use crate::context::OperatorId;
 use crate::metrics::{
     DriverStats, Metric, OperatorEntry, OperatorMetrics, OperatorRole, PipelineMetrics,
@@ -31,9 +37,10 @@ impl QueryProfile {
     pub fn to_json_value(&self) -> Value {
         let m = &self.metrics;
         let d = &m.drivers;
-        json!({
+        let mut doc = json!({
             "format": PROFILE_FORMAT,
             "version": PROFILE_VERSION,
+            "minor": PROFILE_MINOR,
             "detailed": self.detailed,
             "query": {
                 "wall_time_ns": ns(m.wall_time),
@@ -59,7 +66,17 @@ impl QueryProfile {
             })).collect::<Vec<_>>(),
             "plan": plan_json(&self.plan),
             "operators": m.operators.iter().map(|(id, e)| operator_json(*id, e)).collect::<Vec<_>>(),
-        })
+            "usage": usage_json(&QueryUsage::of(m)),
+            "environment": {
+                "krishiv_version": env!("CARGO_PKG_VERSION"),
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+            },
+        });
+        if let (Some(p), Some(o)) = (&self.planning, doc.as_object_mut()) {
+            o.insert("planning".to_owned(), p.clone());
+        }
+        doc
     }
 
     /// The profile as one line of JSON.
@@ -129,10 +146,16 @@ impl QueryProfile {
                 return Err(ProfileError::new(format!("operator {} listed twice", id.0)));
             }
         }
+        let planning = match o.get("planning") {
+            None | Some(Value::Null) => None,
+            Some(p) if p.is_object() => Some(p.clone()),
+            Some(_) => return Err(ProfileError::new("planning is not an object")),
+        };
         Ok(Self {
             plan,
             metrics,
             detailed,
+            planning,
         })
     }
 }
@@ -167,6 +190,18 @@ fn plan_json(root: &ProfileNode) -> Value {
     )
 }
 
+fn usage_json(u: &QueryUsage) -> Value {
+    json!({
+        "fidelity": u.fidelity,
+        "wall_ns": ns(u.wall),
+        "cpu_ns": ns(u.cpu),
+        "rows_out": u.rows_out,
+        "peak_memory_bytes": u.peak_memory_bytes,
+        "spill_bytes": u.spill_bytes,
+        "scan": { "bytes": u.scan_bytes, "rows": u.scan_rows },
+    })
+}
+
 fn operator_json(id: OperatorId, e: &OperatorEntry) -> Value {
     let m = &e.metrics;
     json!({
@@ -175,6 +210,11 @@ fn operator_json(id: OperatorId, e: &OperatorEntry) -> Value {
         "node": e.node,
         "role": e.role.as_str(),
         "pipelines": e.pipelines,
+        "instances": {
+            "count": m.drivers,
+            "min_rows_out": m.min_driver_rows_out,
+            "max_rows_out": m.max_driver_rows_out,
+        },
         "metrics": {
             "drivers": m.drivers,
             "rows_in": m.rows_in,
@@ -293,6 +333,10 @@ fn operator_of(v: &Value) -> R<(OperatorId, OperatorEntry)> {
         })
         .collect::<R<Vec<_>>>()?;
     let m = obj(member(o, "metrics")?, "metrics")?;
+    let instances = match o.get("instances") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(obj(v, "instances")?),
+    };
     let metrics = OperatorMetrics {
         drivers: u64_of(m, "drivers")?,
         rows_in: u64_of(m, "rows_in")?,
@@ -312,6 +356,10 @@ fn operator_of(v: &Value) -> R<(OperatorId, OperatorEntry)> {
         // Added within v1: absent in documents written before them.
         spill_files: opt_u64(m, "spill_files")?.unwrap_or(0),
         spill_write_bytes: opt_u64(m, "spill_write_bytes")?.unwrap_or(0),
+        // Added in minor 1: absent in earlier documents. The count is the
+        // driver count, so only the spread is read.
+        min_driver_rows_out: instances.map_or(Ok(0), |i| u64_of(i, "min_rows_out"))?,
+        max_driver_rows_out: instances.map_or(Ok(0), |i| u64_of(i, "max_rows_out"))?,
     };
     let mut extra = Vec::new();
     for x in arr(o, "extra")? {
@@ -326,7 +374,11 @@ fn operator_of(v: &Value) -> R<(OperatorId, OperatorEntry)> {
             "count" => Metric::Count(u64_of(x, "value")?),
             "max" => Metric::Max(u64_of(x, "value")?),
             "text" => Metric::Text(str_of(x, "value")?.to_owned()),
-            k => return Err(ProfileError::new(format!("unknown metric kind {k:?}"))),
+            // A kind a later minor added: kept as its text, never rejected.
+            _ => Metric::Text(match member(x, "value")? {
+                Value::String(t) => t.clone(),
+                other => other.to_string(),
+            }),
         };
         extra.push((Cow::Owned(name), value));
     }
