@@ -1285,3 +1285,22 @@ fn a_scalar_subquery_without_a_relation_reads_outer_columns() -> R {
     );
     Ok(())
 }
+
+/// The fields a struct star expands to are lateral column aliases for the
+/// select items after them, as explicit `s.a AS a` is.
+#[test]
+fn struct_star_fields_are_lateral_aliases() -> R {
+    let s = Session::new()?;
+    for sql in [
+        "SELECT s.*, a + 1 AS n FROM (SELECT named_struct('a', 1) AS s) t",
+        "SELECT s.* EXCEPT (b), a + 1 AS n FROM (SELECT named_struct('a', 1, 'b', 2) AS s) t",
+    ] {
+        let b = block_on(block_on(s.sql(sql))?.collect())?;
+        let n = arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Int32Type>(
+            b[0].column(b[0].num_columns() - 1),
+        )
+        .value(0);
+        assert_eq!(n, 2, "{sql}");
+    }
+    Ok(())
+}

@@ -504,7 +504,7 @@ impl Session {
             .iter()
             .map(|c| StoreColumn {
                 name: c.name.clone(),
-                data_type: c.data_type.clone(),
+                data_type: krishiv_plan::without_generated_marker(&c.data_type),
                 nullable: c.nullable,
                 default: None,
                 comment: None,
@@ -904,7 +904,7 @@ impl Session {
                     .iter()
                     .map(|c| StoreColumn {
                         name: c.name.clone(),
-                        data_type: c.data_type.clone(),
+                        data_type: krishiv_plan::without_generated_marker(&c.data_type),
                         nullable: c.nullable,
                         default: None,
                         comment: None,
@@ -1640,7 +1640,7 @@ impl Session {
             .iter()
             .map(|c| StoreColumn {
                 name: c.name.clone(),
-                data_type: c.data_type.clone(),
+                data_type: krishiv_plan::without_generated_marker(&c.data_type),
                 nullable: true,
                 default: None,
                 comment: None,
@@ -1736,7 +1736,7 @@ impl Session {
                     .iter()
                     .map(|c| StoreColumn {
                         name: c.name.clone(),
-                        data_type: c.data_type.clone(),
+                        data_type: krishiv_plan::without_generated_marker(&c.data_type),
                         nullable: c.nullable,
                         default: None,
                         comment: None,
@@ -2159,7 +2159,7 @@ impl Session {
             .iter()
             .map(|c| TableColumn {
                 name: c.name.clone(),
-                data_type: c.data_type.clone(),
+                data_type: krishiv_plan::without_generated_marker(&c.data_type),
                 nullable: c.nullable,
             })
             .collect();

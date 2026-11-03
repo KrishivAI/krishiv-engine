@@ -293,3 +293,85 @@ fn struct_expansion_of_the_hidden_column_takes_except() {
         ]
     );
 }
+
+#[test]
+fn a_table_column_named_metadata_merged_by_using_stays_in_a_qualified_star() {
+    let s = session();
+    assert_eq!(
+        names(
+            &s,
+            "SELECT r.* FROM (SELECT 1 AS _metadata) l JOIN (SELECT 1 AS _metadata, 2 AS x) r USING (_metadata)"
+        ),
+        ["_metadata", "x"]
+    );
+}
+
+#[test]
+fn chained_using_joins_keep_the_metadata_of_every_input() {
+    let s = session();
+    block_on(s.sql("CREATE TABLE d(id INT, w STRING) USING PARQUET")).unwrap();
+    block_on(s.sql("INSERT INTO d VALUES (1, 'z')")).unwrap();
+    assert_eq!(
+        count(
+            &s,
+            "SELECT p._metadata.file_name FROM p JOIN c USING (id) JOIN d USING (id)"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT d._metadata.file_name FROM p JOIN c USING (id) JOIN d USING (id)"
+        ),
+        1
+    );
+}
+
+#[test]
+fn a_materialized_metadata_column_keeps_the_captured_values() {
+    let s = session();
+    block_on(s.sql("CREATE TABLE q USING PARQUET AS SELECT id, _metadata FROM p")).unwrap();
+    // Read back as a table column, not regenerated for q's own files.
+    assert_eq!(
+        names(&s, "SELECT * FROM q"),
+        ["id", "_metadata"],
+        "the stored column is an ordinary one"
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT id FROM q WHERE _metadata.file_name IN (SELECT _metadata.file_name FROM p)"
+        ),
+        2,
+        "q keeps p's file names, not its own"
+    );
+}
+
+#[test]
+fn column_aliases_on_a_file_table_keep_its_metadata() {
+    let s = session();
+    assert_eq!(
+        count(&s, "SELECT x._metadata.file_name FROM p AS x(a, b)"),
+        2
+    );
+    assert_eq!(
+        count(&s, "SELECT _metadata.file_size, a FROM p AS x(a, b)"),
+        2
+    );
+}
+
+#[test]
+fn a_late_bound_aggregate_reads_the_hidden_column() {
+    let s = session();
+    assert_eq!(
+        count(&s, "SELECT count(*) FROM p HAVING count(_metadata) > 0"),
+        1
+    );
+    assert_eq!(
+        count(
+            &s,
+            "SELECT id FROM p GROUP BY id ORDER BY count(_metadata.file_name)"
+        ),
+        2
+    );
+}

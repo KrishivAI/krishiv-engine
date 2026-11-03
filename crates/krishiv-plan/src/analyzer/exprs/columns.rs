@@ -289,7 +289,9 @@ impl Resolver<'_> {
         let joined: Vec<Attr>;
         let hidden = match (cx.rels, cx.agg_scope.is_some() && in_agg) {
             ([r], false) if c.name.len() > 1 || is_metadata(&c.name) => Some(&r.hidden[..]),
-            ([r], true) if c.name.len() > 1 => r.agg.as_ref().map(|i| &i.input.hidden[..]),
+            ([r], true) if c.name.len() > 1 || is_metadata(&c.name) => {
+                r.agg.as_ref().map(|i| &i.input.hidden[..])
+            }
             // A join condition reads the merged-away columns of both inputs.
             (rels, false) if c.name.len() > 1 && rels.len() > 1 => {
                 joined = rels.iter().flat_map(|r| r.hidden.iter().cloned()).collect();

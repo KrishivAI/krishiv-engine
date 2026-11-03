@@ -650,6 +650,24 @@ pub struct Scan {
 /// taken for it.
 pub(crate) const GENERATED_METADATA_KEY: &str = "krishiv.generated_file_metadata";
 
+/// `t` without the analyzer's provenance marker on the fields of a generated
+/// `_metadata` struct: what a stored column keeps when a query's output is
+/// materialized (`CREATE TABLE .. AS SELECT _metadata`), so the stored
+/// values are never mistaken for the generated column.
+#[must_use]
+pub fn without_generated_marker(t: &krishiv_types::DataType) -> krishiv_types::DataType {
+    use krishiv_types::{DataType, StructField, StructType};
+    let DataType::Struct(s) = t else {
+        return t.clone();
+    };
+    DataType::Struct(StructType::new(s.fields().iter().map(|f| {
+        let mut map = f.metadata().as_map().clone();
+        map.remove(GENERATED_METADATA_KEY);
+        StructField::new(f.name(), f.data_type().clone(), f.nullable())
+            .with_metadata(krishiv_types::Metadata::from_map(map))
+    })))
+}
+
 impl Scan {
     /// The hidden `_metadata` column of a file source this scan outputs
     /// (always last), if it does: a struct of the source's own fields.
