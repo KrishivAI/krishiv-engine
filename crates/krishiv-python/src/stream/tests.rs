@@ -437,6 +437,20 @@ fn a_struct_window_past_its_child_is_rejected() {
 }
 
 #[test]
+fn a_sliced_fixed_size_list_with_short_values_is_rejected() {
+    // Three slots at offset 1 reach slot 4: eight values are needed and the list has six, the
+    // right count for an unsliced list of three.
+    let list_type = DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
+    let values = Int64Array::from(vec![1, 2, 3, 4, 5, 6]).into_data();
+    let list = unchecked(list_type, 3, 1, vec![values]);
+    let err = import_inconsistent_struct(list, 3, 0);
+    assert!(
+        err.starts_with("[KRISHIV_INVALID_ARROW_DATA]") && err.contains("fixed-size list"),
+        "{err}"
+    );
+}
+
+#[test]
 fn a_fixed_size_list_with_short_values_is_rejected() {
     // Three slots of two values need six values; the list has four.
     let list_type = DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
