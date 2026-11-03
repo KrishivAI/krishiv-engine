@@ -27,9 +27,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use futures::StreamExt as _;
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, Either};
 use futures::stream::BoxStream;
-use krishiv_common::error::{InternalError, KrishivError};
+use futures::stream::FuturesUnordered;
+use krishiv_common::error::{InternalError, KrishivError, OperationCanceled};
 use krishiv_exec::exchange::{Exchange, reduce_partitions};
 use krishiv_exec::physical::Partitioning;
 use krishiv_exec::physical::{
@@ -46,6 +47,12 @@ type Result<T> = std::result::Result<T, KrishivError>;
 
 /// Deals a stage's scans to its tasks: the coordinator's split assignment
 /// (P2-T178), over the tables the query opened.
+///
+/// Only the scans of the fragment's streaming pipeline may be dealt: the
+/// probe side of each join, never a build side, a subquery's plan, a shared
+/// plan's body or a late fetch, which every task reads whole (no entry). A
+/// dealt build side would join each task's probe rows with part of the
+/// build and lose rows.
 pub trait StageSplits: Send + Sync + fmt::Debug {
     /// The splits of each task of a stage running `fragment`, at most
     /// `tasks` of them; `None` to read every scan whole in one task.
@@ -59,7 +66,10 @@ pub trait StageSplits: Send + Sync + fmt::Debug {
     ) -> Result<Option<Vec<BTreeMap<ScanId, ScanSplits>>>>;
 }
 
-/// The in-process stage scheduler (see the module docs).
+/// The in-process stage scheduler (see the module docs). The worker it is
+/// given must not set a value service of its own
+/// ([`WorkerContext::with_values`]): every task's instantiation needs fresh
+/// values, as one worker's does.
 pub struct StageRunner {
     executor: Arc<dyn Executor>,
     /// Runs map tasks, each on a query context of its own.
@@ -125,11 +135,14 @@ impl StageRunner {
         let mut plans: Vec<Option<Plan>> = vec![None; stages.len()];
         // Readers come after what they read: decide from the root down.
         for stage in stages.iter().rev() {
+            // A subquery's input is read whole by every task: it does not
+            // partition the stage.
             let reads_hash = stage.inputs.iter().any(|i| {
-                matches!(
-                    i.partitioning,
-                    Partitioning::Hash { .. } | Partitioning::RoundRobin
-                )
+                !i.subquery
+                    && matches!(
+                        i.partitioning,
+                        Partitioning::Hash { .. } | Partitioning::RoundRobin
+                    )
             });
             let (tasks, splits) =
                 if stage.output.is_none() || stage.single || (reads_hash && stage.scans) {
@@ -184,7 +197,7 @@ impl StageRunner {
             let writer = plans
                 .get(input.stage)
                 .ok_or_else(|| internal("an input stage without a plan".to_owned()))?;
-            let reduce = if writer.writes > 1 && plan.tasks > 1 {
+            let reduce = if writer.writes > 1 && plan.tasks > 1 && !input.subquery {
                 vec![partition]
             } else {
                 (0..writer.writes).collect()
@@ -248,7 +261,6 @@ impl StageRunner {
     ) -> Result<()> {
         query.check_cancelled()?;
         let name = format!("stage-{}-task-{}", spec.stage, spec.partition);
-        let node = Self::instantiate(&self.executor, stage.plan.clone(), worker, spec).await?;
         let id = QueryId(self.next_task.fetch_add(1, Ordering::Relaxed));
         let task = QueryContext::new(
             id,
@@ -256,27 +268,40 @@ impl StageRunner {
             query.config().clone(),
             query.pool().child(&name, None),
         );
+        // Registered before anything runs: a cancel from here on reaches it.
         self.running
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .entry(query.id())
             .or_default()
             .push(Arc::downgrade(&task));
-        if query.is_cancelled() {
+        let node = Self::instantiate(&self.executor, stage.plan.clone(), worker, spec).await?;
+        query.check_cancelled()?;
+        let mut stream = self.tasks.execute(node, Arc::clone(&task)).await?;
+        let outcome = {
+            let drained = std::pin::pin!(async {
+                while let Some(batch) = stream.next().await {
+                    if batch?.num_rows() > 0 {
+                        return Err(internal(format!("map task {name} returned rows")));
+                    }
+                }
+                Ok(())
+            });
+            // The task ends with the query: a cancel or a sibling's failure.
+            let cancelled = std::pin::pin!(query.cancelled());
+            match futures::future::select(drained, cancelled).await {
+                Either::Left((outcome, _)) => outcome,
+                Either::Right(((), _)) => Err(query.error().unwrap_or_else(canceled)),
+            }
+        };
+        if outcome.is_err() {
             task.cancel();
         }
-        let mut stream = self.tasks.execute(node, Arc::clone(&task)).await?;
-        while let Some(batch) = stream.next().await {
-            if batch?.num_rows() > 0 {
-                return Err(internal(format!("map task {name} returned rows")));
-            }
-        }
         drop(stream);
+        // Its drivers have ended and its memory is back before it returns.
         task.finished().await;
-        match task.error() {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
+        outcome?;
+        task.error().map_or(Ok(()), Err)
     }
 
     async fn run(
@@ -314,18 +339,33 @@ impl StageRunner {
             .ok_or_else(|| internal("a plan without stages".to_owned()))?;
         for stage in maps {
             let tasks = plans.get(stage.id).map_or(1, |p| p.tasks);
-            let runs = (0..tasks)
+            let mut runs = (0..tasks)
                 .map(|t| {
                     let spec = Self::spec(stage, &plans, t);
                     let worker = worker.clone();
                     let query = &query;
                     async move { self.map_task(stage, worker, spec?, query).await }
                 })
-                .collect::<Vec<_>>();
-            futures::future::try_join_all(runs).await?;
+                .collect::<FuturesUnordered<_>>();
+            // The first failure fails the query, which ends the other tasks;
+            // each returns only once its memory is released.
+            let mut failed = None;
+            while let Some(outcome) = runs.next().await {
+                if let Err(e) = outcome
+                    && failed.is_none()
+                {
+                    query.fail(e.clone());
+                    failed = Some(e);
+                }
+            }
+            if let Some(e) = failed {
+                return Err(e);
+            }
+            query.check_cancelled()?;
         }
         let spec = Self::spec(root, &plans, 0)?;
         let node = Self::instantiate(&self.executor, root.plan.clone(), worker, spec).await?;
+        query.check_cancelled()?;
         self.roots.execute(node, query).await
     }
 }
@@ -348,6 +388,12 @@ impl Scheduler for StageRunner {
         };
         let id = query.id();
         let running = Arc::clone(&self.running);
+        // The query itself first: a cancel before or between its stages
+        // ends it too.
+        running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(id, vec![Arc::downgrade(&query)]);
         Box::pin(async move {
             let out = runner.run(plan, worker, query).await;
             running
@@ -375,4 +421,8 @@ impl Scheduler for StageRunner {
 
 fn internal(message: String) -> KrishivError {
     InternalError { message }.into()
+}
+
+fn canceled() -> KrishivError {
+    OperationCanceled {}.into()
 }

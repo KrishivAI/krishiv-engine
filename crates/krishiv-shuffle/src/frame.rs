@@ -119,9 +119,21 @@ pub enum FrameError {
 /// # Errors
 /// [`FrameError::Body`] for a body past 4 GiB.
 pub fn encode(header: &FrameHeader, body: &[u8]) -> Result<Vec<u8>, FrameError> {
+    let mut out = Vec::with_capacity(HEADER_BYTES + body.len());
+    out.extend_from_slice(&header_bytes(header, body)?);
+    out.extend_from_slice(body);
+    Ok(out)
+}
+
+/// The header bytes of the frame of `header` and `body` (the body follows
+/// them), for writing the two without copying the body.
+///
+/// # Errors
+/// [`FrameError::Body`] for a body past 4 GiB.
+pub fn header_bytes(header: &FrameHeader, body: &[u8]) -> Result<Vec<u8>, FrameError> {
     let len = u32::try_from(body.len())
         .map_err(|_| FrameError::Body(format!("a body of {} bytes", body.len())))?;
-    let mut out = Vec::with_capacity(HEADER_BYTES + body.len());
+    let mut out = Vec::with_capacity(HEADER_BYTES);
     out.extend_from_slice(&MAGIC);
     out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
     out.push(header.kind.code());
@@ -138,7 +150,6 @@ pub fn encode(header: &FrameHeader, body: &[u8]) -> Result<Vec<u8>, FrameError> 
     ] {
         out.extend_from_slice(&v.to_le_bytes());
     }
-    out.extend_from_slice(body);
     Ok(out)
 }
 

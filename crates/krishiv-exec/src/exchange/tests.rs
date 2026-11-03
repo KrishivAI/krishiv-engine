@@ -126,6 +126,19 @@ fn split_keeps_every_row_once_in_input_order() {
         assert_eq!(values(rows), want);
     }
     assert_eq!(parts.iter().map(|(_, r)| r.num_rows()).sum::<usize>(), 100);
+    // Each partition owns its rows' memory: together about the batch's.
+    let big = batch(20_000);
+    let routes: Vec<u32> = (0..20_000).map(|i| i % 4).collect();
+    let owned: usize = split(&big, &routes)
+        .unwrap()
+        .iter()
+        .map(|(_, r)| r.get_array_memory_size())
+        .sum();
+    assert!(
+        owned <= big.get_array_memory_size() * 3 / 2,
+        "{owned} for {}",
+        big.get_array_memory_size()
+    );
     // One partition: the batch as it is.
     let one = split(&b, &[1; 100]).unwrap();
     assert_eq!(one.len(), 1);
@@ -186,9 +199,17 @@ impl super::Exchange for RecordingExchange {
 }
 
 fn sink_ctx(limit: Option<usize>) -> (Arc<krishiv_memory::TreePool>, crate::TaskContext) {
+    sink_ctx_quantum(limit, krishiv_memory::MemoryConfig::default().quantum)
+}
+
+fn sink_ctx_quantum(
+    limit: Option<usize>,
+    quantum: usize,
+) -> (Arc<krishiv_memory::TreePool>, crate::TaskContext) {
     use krishiv_memory::{MemoryConfig, MemoryPool as _, SpillOwner, TreePool};
     let root = TreePool::new(&MemoryConfig {
         limit,
+        quantum,
         ..MemoryConfig::default()
     });
     let q = crate::QueryContext::new(
@@ -316,4 +337,124 @@ fn a_full_pool_asks_for_memory_before_taking_a_batch() {
         batch(1).schema(),
     );
     assert!(e.is_err());
+}
+
+#[test]
+fn a_batch_spread_over_partitions_is_charged_once() {
+    use crate::operator::Sink as _;
+    use krishiv_memory::MemoryPool as _;
+    let (root, ctx) = sink_ctx_quantum(None, 1);
+    let recorded = Arc::new(Recorded::default());
+    let b = batch(4000);
+    let sink = sink_of(&recorded, &b);
+    let global = sink.global_state(&ctx).unwrap();
+    let mut local = sink.local_state(&ctx, &global).unwrap();
+    sink.sink(
+        krishiv_types::batch::Batch::new(b.clone()),
+        &mut local,
+        &global,
+    )
+    .unwrap();
+    // Below a frame per partition, nothing went out: four partitions hold
+    // the batch's rows once between them, not four times (a slice reports
+    // its whole parent's buffers).
+    assert!(recorded.writes.lock().unwrap().is_empty());
+    let input = b.get_array_memory_size();
+    assert!(
+        root.reserved() <= 2 * input,
+        "{} for {input}",
+        root.reserved()
+    );
+    drop(local);
+}
+
+/// An exchange whose every reader yields one batch, then the end.
+#[derive(Debug)]
+struct OneBatch(RecordBatch);
+
+struct OneBatchReader(Option<RecordBatch>);
+
+impl super::ExchangeReader for OneBatchReader {
+    fn next(&mut self) -> futures::future::BoxFuture<'_, crate::Result<super::ExchangeFrame>> {
+        let frame = match self.0.take() {
+            Some(b) => super::ExchangeFrame::Data(b),
+            None => super::ExchangeFrame::End,
+        };
+        Box::pin(std::future::ready(Ok(frame)))
+    }
+}
+
+impl super::Exchange for OneBatch {
+    fn writer(
+        &self,
+        _output: super::MapOutputId,
+        _partitions: u32,
+        _schema: arrow_schema::SchemaRef,
+    ) -> crate::Result<Box<dyn super::ExchangeWriter>> {
+        Err(crate::error::internal("read only".to_owned()))
+    }
+
+    fn reader(
+        &self,
+        _exchange: crate::physical::ExchangeId,
+        _stage_attempt: u32,
+        _map: u32,
+        _reduce: u32,
+    ) -> crate::Result<Box<dyn super::ExchangeReader>> {
+        Ok(Box::new(OneBatchReader(Some(self.0.clone()))))
+    }
+}
+
+#[test]
+fn a_reader_takes_every_pair_and_refuses_another_schema() {
+    use crate::operator::Source as _;
+    use futures::FutureExt as _;
+    let (_root, ctx) = sink_ctx(None);
+    let b = batch(10);
+    let read = |exchange: OneBatch, ordered: bool| {
+        super::ExchangeRead::new(
+            Arc::new(exchange),
+            crate::physical::ExchangeId(1),
+            0,
+            &[0, 2],
+            3,
+            b.schema(),
+            ordered,
+        )
+    };
+    // Reduce partitions 0 and 2 of maps 0..3: six pairs, one batch each.
+    let source = read(OneBatch(b.clone()), false);
+    let global = source.global_state(&ctx).unwrap();
+    assert_eq!(source.max_parallelism(&global), 6);
+    let mut local = source.local_state(&ctx, &global).unwrap();
+    let mut rows = 0;
+    while let Some(got) = source
+        .get_data(&mut local, &global)
+        .now_or_never()
+        .unwrap()
+        .unwrap()
+    {
+        rows += got.num_rows();
+    }
+    assert_eq!(rows, 60);
+    assert_eq!(source.morsels_claimed(&local), 6);
+    // A gather is read by one driver.
+    let ordered = read(OneBatch(b.clone()), true);
+    assert_eq!(ordered.max_parallelism(&global), 1);
+    // A frame of other columns is an error, not rows.
+    let other = RecordBatch::try_new(
+        Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, false)])),
+        vec![Arc::new(Int64Array::from(vec![1]))],
+    )
+    .unwrap();
+    let wrong = read(OneBatch(other), false);
+    let global = wrong.global_state(&ctx).unwrap();
+    let mut local = wrong.local_state(&ctx, &global).unwrap();
+    assert!(
+        wrong
+            .get_data(&mut local, &global)
+            .now_or_never()
+            .unwrap()
+            .is_err()
+    );
 }

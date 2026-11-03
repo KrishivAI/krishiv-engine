@@ -350,3 +350,120 @@ fn stages_under_a_16_mib_pool_match() {
     }
     assert_eq!(small.reserved(), 0);
 }
+
+/// Deals as [`Dealer`] does, but task 1 of every dealt stage reads a file
+/// that does not exist.
+#[derive(Debug)]
+struct Failing(Dealer);
+
+impl StageSplits for Failing {
+    fn splits(
+        &self,
+        fragment: &PhysicalPlan,
+        tasks: u32,
+    ) -> Result<Option<Vec<BTreeMap<ScanId, ScanSplits>>>, KrishivError> {
+        let mut dealt = self.0.splits(fragment, tasks)?;
+        if let Some(task) = dealt.as_mut().and_then(|d| d.get_mut(1)) {
+            for splits in task.values_mut() {
+                if let ScanSplits::Files { files, .. } = splits {
+                    let moved: Vec<SplitFileRef> = files
+                        .iter()
+                        .map(|f| SplitFileRef {
+                            path: object_store::path::Path::from("missing.parquet"),
+                            ..f.clone()
+                        })
+                        .collect();
+                    *files = Arc::from(moved);
+                }
+            }
+        }
+        Ok(dealt)
+    }
+}
+
+fn submit_and_drain(
+    scheduler: &dyn Scheduler,
+    plan: &PhysicalPlan,
+    worker: &WorkerContext,
+    query: &Arc<QueryContext>,
+    before: impl FnOnce(),
+) -> Result<usize, KrishivError> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let submitted = scheduler.submit(plan.clone(), worker.clone(), Arc::clone(query));
+        before();
+        let mut stream = submitted.await?;
+        let mut rows = 0;
+        while let Some(b) = stream.next().await {
+            rows += b?.num_rows();
+        }
+        query.finished().await;
+        Ok(rows)
+    })
+}
+
+#[test]
+fn a_failing_map_task_ends_its_stage_and_frees_its_memory() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let stages = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_splits(Arc::new(Failing(Dealer(tpch.files.clone()))));
+    let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let worker = WorkerContext::new(Arc::clone(&tpch.tables) as _);
+    let plan = tpch.plan(1).unwrap();
+    let query = QueryContext::new(
+        QueryId(5),
+        WorkloadClass::Interactive,
+        ExecConfig::default(),
+        root.child("q5", None),
+    );
+    let e = submit_and_drain(&stages, &plan, &worker, &query, || {}).unwrap_err();
+    assert_ne!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::OperationCanceled,
+        "{e}"
+    );
+    // Every task has released its memory when `submit` fails, and the
+    // query carries the error.
+    assert_eq!(root.reserved(), 0);
+    assert!(query.error().is_some());
+}
+
+#[test]
+fn a_cancel_before_the_stages_run_ends_the_query() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let stages = StageRunner::new(Arc::clone(&executor) as _, 4).unwrap();
+    let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let worker = WorkerContext::new(Arc::clone(&tpch.tables) as _);
+    let plan = tpch.plan(5).unwrap();
+    let query = QueryContext::new(
+        QueryId(6),
+        WorkloadClass::Interactive,
+        ExecConfig::default(),
+        root.child("q6", None),
+    );
+    let e = submit_and_drain(&stages, &plan, &worker, &query, || {
+        stages.cancel(QueryId(6));
+    })
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::OperationCanceled,
+        "{e}"
+    );
+    assert_eq!(root.reserved(), 0);
+    // The runner forgets the query: a later cancel of its id is a no-op.
+    stages.cancel(QueryId(6));
+}

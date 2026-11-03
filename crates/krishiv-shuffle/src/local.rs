@@ -82,7 +82,9 @@ struct MapOutput {
 #[derive(Debug)]
 struct OutputFile {
     path: PathBuf,
-    file: File,
+    /// Open while the output is written; each reader opens its own, so a
+    /// committed output holds no descriptor.
+    file: Option<File>,
 }
 
 impl Drop for OutputFile {
@@ -116,8 +118,9 @@ impl LocalShuffle {
     }
 
     /// The map partitions of `exchange` at `stage_attempt` with a committed
-    /// output, and the attempt each reader reads.
+    /// output, and the attempt each reader reads (diagnostics and tests).
     #[must_use]
+    #[doc(hidden)]
     pub fn committed(&self, exchange: ExchangeId, stage_attempt: u32) -> BTreeMap<u32, u32> {
         self.inner
             .committed
@@ -155,7 +158,10 @@ impl Exchange for LocalShuffle {
                     .create_new(true)
                     .open(&path)
                     .map_err(|e| io("create", &path, &e))?;
-                Some(OutputFile { path, file })
+                Some(OutputFile {
+                    path,
+                    file: Some(file),
+                })
             }
             None => None,
         };
@@ -198,8 +204,13 @@ impl Exchange for LocalShuffle {
                 exchange.0
             )));
         }
+        let file = match &output.file {
+            Some(f) => Some(File::open(&f.path).map_err(|e| io("open", &f.path, &e))?),
+            None => None,
+        };
         Ok(Box::new(LocalReader {
             output,
+            file,
             reduce,
             next: 0,
         }))
@@ -232,14 +243,21 @@ impl LocalWriter {
                 .map_err(|_| internal("too many frames in one partition".to_owned()))?,
             reduce,
         };
-        let bytes = frame::encode(&header, body).map_err(|e| internal(e.to_string()))?;
         match &mut self.output.file {
-            None => frames.push(Location::Memory(bytes)),
+            None => frames.push(Location::Memory(
+                frame::encode(&header, body).map_err(|e| internal(e.to_string()))?,
+            )),
             Some(f) => {
-                f.file
-                    .write_all(&bytes)
+                let head =
+                    frame::header_bytes(&header, body).map_err(|e| internal(e.to_string()))?;
+                let file = f
+                    .file
+                    .as_mut()
+                    .ok_or_else(|| internal("a frame written after its commit".to_owned()))?;
+                file.write_all(&head)
+                    .and_then(|()| file.write_all(body))
                     .map_err(|e| io("write", &f.path, &e))?;
-                let len = bytes.len() as u64;
+                let len = (head.len() + body.len()) as u64;
                 frames.push(Location::File {
                     offset: self.offset,
                     len,
@@ -272,8 +290,14 @@ impl ExchangeWriter for LocalWriter {
             self.append(reduce, FrameKind::End, &[])?;
         }
         let LocalWriter {
-            shuffle, output, ..
+            shuffle,
+            mut output,
+            ..
         } = *self;
+        if let Some(f) = &mut output.file {
+            // Closed: readers open their own.
+            f.file = None;
+        }
         let key = (output.id.exchange, output.id.stage_attempt);
         let map = output.id.map;
         // A later attempt of a committed map partition is dropped here,
@@ -292,6 +316,8 @@ impl ExchangeWriter for LocalWriter {
 
 struct LocalReader {
     output: Arc<MapOutput>,
+    /// The output's file, opened for this reader.
+    file: Option<File>,
     reduce: u32,
     next: usize,
 }
@@ -315,17 +341,15 @@ impl LocalReader {
         let bytes: &[u8] = match location {
             Location::Memory(b) => b,
             Location::File { offset, len } => {
-                let f = o
-                    .file
-                    .as_ref()
-                    .ok_or_else(|| internal("a frame on disk without its file".to_owned()))?;
+                let (Some(f), Some(file)) = (o.file.as_ref(), self.file.as_ref()) else {
+                    return Err(internal("a frame on disk without its file".to_owned()));
+                };
                 let mut buf = vec![
                     0_u8;
                     usize::try_from(*len)
                         .map_err(|_| internal(format!("a frame of {len} bytes")))?
                 ];
-                f.file
-                    .read_exact_at(&mut buf, *offset)
+                file.read_exact_at(&mut buf, *offset)
                     .map_err(|e| io("read", &f.path, &e))?;
                 read = buf;
                 &read
@@ -368,7 +392,14 @@ impl LocalReader {
             FrameKind::Data => Ok(ExchangeFrame::Data(
                 frame::body_batch(body).map_err(|e| corrupt(o, self.reduce, e.to_string()))?,
             )),
-            FrameKind::End => Ok(ExchangeFrame::End),
+            // The header is not under the checksum: an `End` must be the
+            // partition's last frame, or a damaged kind would cut it short.
+            FrameKind::End if self.next == frames.len() => Ok(ExchangeFrame::End),
+            FrameKind::End => Err(corrupt(
+                o,
+                self.reduce,
+                format!("an end frame at {at} of {}", frames.len()),
+            )),
             FrameKind::Value => Err(corrupt(
                 o,
                 self.reduce,

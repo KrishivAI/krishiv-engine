@@ -33,6 +33,9 @@ pub struct StageInput {
     pub stage: usize,
     /// How it places rows.
     pub partitioning: Partitioning,
+    /// It is read by a subquery's plan, whose value each task computes
+    /// over the whole exchange.
+    pub subquery: bool,
 }
 
 /// One stage of a fragmented plan.
@@ -64,7 +67,8 @@ type Result<T> = std::result::Result<T, KrishivError>;
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a hash exchange without a routing
 /// function (a plan written before it was named, design P2-T171 I4), or a
 /// nondeterministic shared plan read by several stages (each would compute
-/// it again); `INTERNAL_ERROR` for an exchange without a schema.
+/// it again); `INTERNAL_ERROR` for an exchange without a schema, or a plan
+/// that already reads an exchange source (a fragment).
 pub fn fragment(
     plan: &PhysicalPlan,
     schemas: &BTreeMap<ExchangeId, SchemaRef>,
@@ -218,6 +222,7 @@ impl Cutter<'_> {
                     exchange: e.id,
                     stage,
                     partitioning: e.partitioning.clone(),
+                    subquery,
                 });
                 return Ok(PhysNode::ExchangeSource {
                     id: e.id,
@@ -243,6 +248,15 @@ impl Cutter<'_> {
             }
             PhysNode::SharedRead { id, .. } => {
                 holds.shared.insert(*id);
+            }
+            PhysNode::ExchangeSource { id, .. } => {
+                return Err(InternalError {
+                    message: format!(
+                        "exchange source {} in a plan being cut into stages (a fragment)",
+                        id.0
+                    ),
+                }
+                .into());
             }
             PhysNode::Range(_) => holds.single = true,
             PhysNode::Scan(_) | PhysNode::LateFetch { .. } => holds.scans = true,

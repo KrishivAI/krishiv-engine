@@ -48,6 +48,8 @@ use crate::sync::{Mutex, lock};
 /// Rows buffered per reduce partition before they go out as one frame.
 const FRAME_ROWS: usize = 8192;
 /// Bytes buffered per reduce partition before they go out as one frame.
+/// Emitting one concatenates and encodes it: up to about this much scratch,
+/// not charged to the pool.
 const FRAME_BYTES: usize = 1 << 20;
 
 /// One map task's output of one exchange: what a commit makes visible and a
@@ -122,7 +124,9 @@ pub trait ExchangeWriter: Send {
 
 /// One reduce partition of one map output.
 pub trait ExchangeReader: Send {
-    /// The next frame; [`ExchangeFrame::End`] after the last.
+    /// The next frame; [`ExchangeFrame::End`] after the last. A local
+    /// implementation may read a file here, on the reading driver, as a
+    /// spill read does.
     fn next(&mut self) -> BoxFuture<'_, Result<ExchangeFrame>>;
 }
 
@@ -131,7 +135,8 @@ pub trait ExchangeReader: Send {
 ///
 /// # Errors
 /// An exchange without a routing function ([`HashScheme::Unpinned`]); a
-/// key type the routing hash does not cover.
+/// key type the routing hash does not cover (for round-robin, any column
+/// of such a type).
 pub fn route(
     partitioning: &Partitioning,
     batch: &RecordBatch,
@@ -326,21 +331,23 @@ impl Sink for ExchangeSink {
         }
         let mut routes = std::mem::take(&mut l.routes);
         route(&self.partitioning, data, self.partitions, &mut routes)?;
-        let slices = split(data, &routes)?;
+        let parts = split(data, &routes)?;
         l.routes = routes;
-        // The slices replace the input in memory: charge what they hold.
-        let held: usize = slices.iter().map(|(_, b)| b.get_array_memory_size()).sum();
+        // The partitions' rows replace the input in memory: charge what
+        // they hold.
+        let held: usize = parts.iter().map(|(_, b)| b.get_array_memory_size()).sum();
         l.reservation.shrink(bytes);
         if l.reservation.try_grow(held).is_err() {
-            // Hand the slices on at once rather than ask for memory with
+            // Hand the rows on at once rather than ask for memory with
             // half the input applied.
-            for (p, b) in slices {
+            for (p, b) in parts {
                 write(&l.global, p, &b)?;
             }
+            l.signal.set_spillable_bytes(l.reservation.size());
             return Ok(SinkStatus::NeedMoreInput);
         }
         let mut full = Vec::new();
-        for (p, b) in slices {
+        for (p, b) in parts {
             let buffered = l
                 .buffers
                 .get_mut(p)
@@ -407,6 +414,9 @@ fn write(global: &GlobalState, p: usize, batch: &RecordBatch) -> Result<()> {
 
 /// `batch`'s rows by reduce partition `routes[i]`, in input order within
 /// each partition: `(partition, rows)` for each partition that has rows.
+/// Each partition's rows are copied into buffers of their own, so what one
+/// holds is what it is charged (a slice would report the whole batch's
+/// buffers once per partition).
 fn split(batch: &RecordBatch, routes: &[u32]) -> Result<Vec<(usize, RecordBatch)>> {
     let Some(&first) = routes.first() else {
         return Ok(Vec::new());
@@ -415,32 +425,22 @@ fn split(batch: &RecordBatch, routes: &[u32]) -> Result<Vec<(usize, RecordBatch)
         return Ok(vec![(first as usize, batch.clone())]);
     }
     let parts = routes.iter().map(|&r| r as usize).max().unwrap_or(0) + 1;
-    let mut counts = vec![0_u32; parts + 1];
-    for &r in routes {
-        counts[r as usize + 1] += 1;
-    }
-    for i in 1..counts.len() {
-        counts[i] += counts[i - 1];
-    }
-    let starts = counts.clone();
-    let mut order = vec![0_u32; routes.len()];
+    let mut rows: Vec<Vec<u32>> = vec![Vec::new(); parts];
     for (row, &r) in routes.iter().enumerate() {
-        let slot = &mut counts[r as usize];
-        order[*slot as usize] =
-            u32::try_from(row).map_err(|_| internal(format!("row {row} of a batch")))?;
-        *slot += 1;
-    }
-    let indices = UInt32Array::from(order);
-    let sorted = arrow_select::take::take_record_batch(batch, &indices)
-        .map_err(|e| internal(e.to_string()))?;
-    let mut out = Vec::new();
-    for p in 0..parts {
-        let (start, end) = (starts[p] as usize, starts[p + 1] as usize);
-        if end > start {
-            out.push((p, sorted.slice(start, end - start)));
+        let row = u32::try_from(row).map_err(|_| internal(format!("row {row} of a batch")))?;
+        if let Some(p) = rows.get_mut(r as usize) {
+            p.push(row);
         }
     }
-    Ok(out)
+    rows.into_iter()
+        .enumerate()
+        .filter(|(_, r)| !r.is_empty())
+        .map(|(p, r)| {
+            let taken = arrow_select::take::take_record_batch(batch, &UInt32Array::from(r))
+                .map_err(|e| internal(e.to_string()))?;
+            Ok((p, taken))
+        })
+        .collect()
 }
 
 impl Source for ExchangeSink {

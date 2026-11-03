@@ -227,3 +227,79 @@ fn writes_are_checked() {
     .unwrap();
     assert!(w.write(0, &other).is_err());
 }
+
+/// The on-disk output of map 0 and the byte offset of each frame in it.
+fn one_output_on_disk() -> (
+    tempfile::TempDir,
+    LocalShuffle,
+    std::path::PathBuf,
+    Vec<usize>,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let manager = SpillManager::open(&SpillConfig {
+        dir: dir.path().join("spill"),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let scope = manager.scope().unwrap();
+    let shuffle = LocalShuffle::on_disk(scope.clone());
+    write_and_commit(&shuffle, 0, 0, 0);
+    let path = std::fs::read_dir(scope.dir())
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let bytes = std::fs::read(&path).unwrap();
+    let mut offsets = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        offsets.push(at);
+        at += HEADER_BYTES + frame::body_len(&bytes[at..]).unwrap();
+    }
+    (dir, shuffle, path, offsets)
+}
+
+#[test]
+fn a_damaged_frame_kind_is_corrupt_not_a_short_partition() {
+    // Frames in write order: p0 data, p1 data, p0 data, p0 end, p1 end.
+    let (_dir, shuffle, path, offsets) = one_output_on_disk();
+    assert_eq!(offsets.len(), 5);
+    let mut bytes = std::fs::read(&path).unwrap();
+    // The first data frame of partition 0 claims to be its end.
+    bytes[offsets[0] + 6] = 2;
+    std::fs::write(&path, &bytes).unwrap();
+    let e = read(&shuffle, 0, 0).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivSpillFileCorrupt, "{e}");
+    // A value frame among rows.
+    bytes[offsets[0] + 6] = 3;
+    std::fs::write(&path, &bytes).unwrap();
+    let e = read(&shuffle, 0, 0).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivSpillFileCorrupt, "{e}");
+    // A frame of another map output in this one's place.
+    bytes[offsets[0] + 6] = 1;
+    bytes[offsets[0] + 20] = 9;
+    std::fs::write(&path, &bytes).unwrap();
+    let e = read(&shuffle, 0, 0).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivSpillFileCorrupt, "{e}");
+    // A truncated file.
+    std::fs::write(&path, &bytes[..offsets[1]]).unwrap();
+    let e = read(&shuffle, 0, 1).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivSpillIoError, "{e}");
+}
+
+#[test]
+fn a_committed_output_holds_no_open_file() {
+    // Readers open the file themselves: removing the file under a committed
+    // output makes the next reader fail to open it.
+    let (_dir, shuffle, path, _) = one_output_on_disk();
+    let mut early = shuffle.reader(ExchangeId(7), 0, 0, 1).unwrap();
+    std::fs::remove_file(&path).unwrap();
+    let e = read(&shuffle, 0, 0).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivSpillIoError, "{e}");
+    // One opened before still reads (its descriptor keeps the file).
+    assert!(matches!(
+        block_on(early.next()).unwrap(),
+        ExchangeFrame::Data(_)
+    ));
+}

@@ -123,27 +123,32 @@ fn every_exchange_is_cut_and_stages_come_before_their_readers() {
 #[test]
 fn a_hash_stage_without_whole_inputs_may_run_as_many_tasks() {
     let root = exchange(
-        2,
+        3,
         PhysNode::Union {
-            inputs: vec![
-                PhysNode::ExchangeSource {
-                    id: ExchangeId(9),
-                    partitioning: hash(),
-                    schema: schema(),
-                },
-                exchange(1, range(), hash()),
-            ],
+            inputs: vec![exchange(1, range(), hash()), exchange(2, range(), hash())],
         },
         Partitioning::Single,
     );
-    let stages = fragment(&plan(root), &schemas(&[1, 2])).unwrap();
-    // Stage 1 writes the gather; it reads a hash exchange and an existing
-    // source and holds nothing that must run whole.
-    assert_eq!(stages.len(), 3);
-    assert!(!stages[1].single);
-    assert_eq!(stages[1].inputs.len(), 1);
+    let stages = fragment(&plan(root), &schemas(&[1, 2, 3])).unwrap();
+    // Stage 2 writes the gather; it reads two hash exchanges and holds
+    // nothing that must run whole.
+    assert_eq!(stages.len(), 4);
+    assert!(!stages[2].single);
+    assert_eq!(stages[2].inputs.len(), 2);
+    assert!(stages[2].inputs.iter().all(|i| !i.subquery));
     // The root only reads the gather: one task.
-    assert!(stages[2].single);
+    assert!(stages[3].single);
+}
+
+#[test]
+fn a_fragment_is_not_cut_again() {
+    let source = PhysNode::ExchangeSource {
+        id: ExchangeId(9),
+        partitioning: hash(),
+        schema: schema(),
+    };
+    let e = fragment(&plan(exchange(1, source, hash())), &schemas(&[1])).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
 }
 
 #[test]
