@@ -3924,23 +3924,28 @@ impl Resolver<'_> {
     }
 }
 
-/// Whether `e` holds an `IN` or `EXISTS` subquery.
+/// Whether the expression tree of `e` holds an `IN` or `EXISTS` subquery of
+/// its own. A subquery's plan is not entered: a scalar subquery holding an
+/// `IN` inside is Spark-valid in a lateral join's condition.
 fn holds_in_or_exists(e: &Arc<Expr>) -> bool {
-    crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| match n {
-        crate::walk::Node::Expr(x)
-            if matches!(
-                &x.node,
-                ExprNode::Subquery {
-                    kind: crate::SubqueryKind::Exists | crate::SubqueryKind::In(_),
-                    ..
-                }
-            ) =>
-        {
-            std::ops::ControlFlow::Break(())
+    let mut stack = vec![Arc::clone(e)];
+    let mut seen = HashSet::new();
+    while let Some(x) = stack.pop() {
+        if !seen.insert(super::bind::addr(&*x)) {
+            continue;
         }
-        _ => std::ops::ControlFlow::Continue(()),
-    })
-    .is_break()
+        if matches!(
+            &x.node,
+            ExprNode::Subquery {
+                kind: crate::SubqueryKind::Exists | crate::SubqueryKind::In(_),
+                ..
+            }
+        ) {
+            return true;
+        }
+        x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
+    }
+    false
 }
 
 /// The name of the hidden column of file sources.

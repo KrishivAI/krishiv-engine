@@ -334,6 +334,15 @@ fn an_in_subquery_in_the_on_of_a_lateral_join_is_refused() -> R {
             "{sql}: {err}"
         );
     }
+    // A scalar subquery holding an IN is not an IN of the condition itself.
+    assert_eq!(
+        run(
+            &s,
+            "SELECT t1.c1, s.y FROM t1 JOIN LATERAL (SELECT 1 AS y) s \
+             ON (SELECT count(*) FROM t2 WHERE c1 IN (SELECT c1 FROM t1)) > 0"
+        )?,
+        ["0|1", "1|1"]
+    );
     // A plain join keeps its IN in the ON.
     assert_eq!(
         run(
