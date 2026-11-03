@@ -1235,3 +1235,32 @@ fn arithmetic_with_a_string_and_ansi_off_is_a_double() -> R {
     assert_eq!(col(6), None);
     Ok(())
 }
+
+/// `try_add` and `try_subtract` of a date and a day count are `date_add` and
+/// `date_sub`, with ANSI on or off.
+#[test]
+fn try_add_and_try_subtract_of_a_date_and_days() -> R {
+    for ansi in ["true", "false"] {
+        let s = Session::new()?;
+        block_on(s.sql(&format!("SET spark.sql.ansi.enabled={ansi}")))?;
+        let b = block_on(
+            block_on(s.sql(
+                "SELECT try_add(date'2021-01-01', 1), try_add(1, date'2021-01-01'), try_subtract(date'2021-01-02', 1)",
+            ))?
+            .collect(),
+        )?;
+        let days = |i: usize| {
+            arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Date32Type>(
+                b[0].column(i),
+            )
+            .value(0)
+        };
+        // 2021-01-01 is day 18628.
+        assert_eq!(
+            (days(0), days(1), days(2)),
+            (18629, 18629, 18628),
+            "ansi {ansi}"
+        );
+    }
+    Ok(())
+}

@@ -119,10 +119,10 @@ pub(super) fn date_with_days(
     let typed = |t: &ArgType| !matches!(t.data_type, None | Some(DataType::Null));
     let string = |t: &ArgType| matches!(t.data_type, Some(DataType::String));
     match op {
-        "+" if date(left) && typed(right) => Some(("date_add", false)),
-        "+" if date(right) && string(left) => Some(("date_add", false)),
-        "+" if date(right) && typed(left) => Some(("date_add", true)),
-        "-" if date(left) && typed(right) && !string(right) && !date(right) => {
+        "+" | "try_add" if date(left) && typed(right) => Some(("date_add", false)),
+        "+" | "try_add" if date(right) && string(left) => Some(("date_add", false)),
+        "+" | "try_add" if date(right) && typed(left) => Some(("date_add", true)),
+        "-" | "try_subtract" if date(left) && typed(right) && !string(right) && !date(right) => {
             Some(("date_sub", false))
         }
         _ => None,
