@@ -339,6 +339,7 @@ fn existence_and_single_match_specs() {
         probe_schema: Arc::clone(&schema),
         build_schema: Arc::clone(&schema),
         filter: None,
+        spill: None,
     })
     .unwrap();
     assert_eq!(
@@ -671,6 +672,7 @@ async fn exists_of(
                 probe_schema: Arc::clone(&probe.0),
                 build_schema: Arc::clone(&build.0),
                 filter: Some(Arc::new(NullAwareEq { p: *p, b: *b })),
+                spill: None,
             })
             .unwrap(),
             build: build_scan,
@@ -902,6 +904,7 @@ fn nested_loop_existence_matches_the_reference() {
                 probe_schema: schema(),
                 build_schema: schema(),
                 filter: Some(Arc::new(KeyAndV)),
+                spill: None,
             })
             .unwrap(),
             build: scan(&schema(), batches(&data(&build), 64)),
