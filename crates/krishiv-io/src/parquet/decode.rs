@@ -163,6 +163,9 @@ pub(crate) struct ParquetDecoder {
     /// The attached offset indexes' pages by column chunk (sorted by start):
     /// what [`Self::check_page_headers`] walks in a sparse range.
     sparse: Vec<(Range<u64>, Vec<PageLocation>)>,
+    /// Heap bytes of the footer copy the attached offset indexes live in
+    /// (held by the reader; the cached footer is not shared with it).
+    attached_bytes: usize,
     /// The row filter's leaves while it is on (the only ones prefetched).
     late_leaves: Vec<usize>,
     /// The page-index stage (`page_stage.rs`) until it has decided.
@@ -208,6 +211,8 @@ fn projection_mask(meta: &ParquetMetadata, paths: &[ColumnPath]) -> (ProjectionM
 struct Attached {
     reader: ArrowReaderMetadata,
     sparse: Vec<(Range<u64>, Vec<PageLocation>)>,
+    /// Heap bytes of the footer copy with the offset indexes.
+    bytes: usize,
 }
 
 impl ParquetDecoder {
@@ -418,6 +423,7 @@ impl ParquetDecoder {
             attach_leaves,
             sparse_units: Vec::new(),
             sparse: Vec::new(),
+            attached_bytes: 0,
         })
     }
 
@@ -702,9 +708,9 @@ impl ParquetDecoder {
         });
         self.metrics.units_pruned += (before - self.planned.len()) as u64;
         let attached = self.attached(&outcome.offsets)?;
-        let (reader, sparse) = match attached {
-            Some(a) => (Some(a.reader), a.sparse),
-            None => (None, Vec::new()),
+        let (reader, sparse, attached_bytes) = match attached {
+            Some(a) => (Some(a.reader), a.sparse, a.bytes),
+            None => (None, Vec::new(), 0),
         };
         let sparse_units: Vec<usize> = if reader.is_some() {
             self.planned
@@ -723,6 +729,7 @@ impl ParquetDecoder {
         let late = self.late.want();
         self.rebuild(Some(selections), late, false, reader)?;
         self.sparse = sparse;
+        self.attached_bytes = attached_bytes;
         self.sparse_units = sparse_units;
         Ok(())
     }
@@ -770,6 +777,7 @@ impl ParquetDecoder {
             let metadata = ParquetMetaDataBuilder::new_from_metadata(footer.as_ref().clone())
                 .set_page_index(Some(Arc::new(builder.build())))
                 .build();
+            let bytes = metadata.memory_size();
             let reader = ArrowReaderMetadata::try_new(Arc::new(metadata), options)
                 .map_err(|e| FormatError::Corrupt(e.to_string()))?;
             let mut sparse = Vec::new();
@@ -782,7 +790,11 @@ impl ParquetDecoder {
                 }
             }
             sparse.sort_by_key(|(r, _)| (r.start, r.end));
-            Ok(Some(Attached { reader, sparse }))
+            Ok(Some(Attached {
+                reader,
+                sparse,
+                bytes,
+            }))
         })
     }
 
@@ -980,6 +992,7 @@ impl Decoder for ParquetDecoder {
             })
             .saturating_add(self.pages.as_ref().map_or(0, PageStage::held_bytes))
             .saturating_add(sparse_bytes(&self.sparse))
+            .saturating_add(self.attached_bytes)
     }
 
     fn working_bytes(&self) -> usize {
