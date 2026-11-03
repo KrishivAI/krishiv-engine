@@ -72,15 +72,21 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("legacy_time_parser").features,
         ["legacy_time_parser"]
     );
-    // Every registered feature occurs in some inventory case, except
-    // `legacy_statistical_aggregate`: it fires only around a moment
-    // aggregate, and the encoder refuses every moment aggregate (pinned by
-    // the TPC-DS ratchet), so no encodable case can use it. The test below
-    // pins its `plan_features` rule on plans that are never encoded.
+    assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
+    assert_eq!(
+        message("aggregate_any_value").features,
+        ["any_value_by_aggregates"]
+    );
+    assert_eq!(
+        message("aggregate_max_min_by").features,
+        ["any_value_by_aggregates", "nested_types"]
+    );
+    assert_eq!(
+        message("aggregate_moments_legacy_statistical").features,
+        ["legacy_statistical_aggregate", "moment_aggregates"]
+    );
+    // Every registered feature occurs in some inventory case.
     for f in Feature::ALL {
-        if *f == Feature::LegacyStatisticalAggregate {
-            continue;
-        }
         assert!(
             cases().iter().any(|(_, p)| plan_features(p).contains(f)),
             "{f}: no inventory case uses it"
@@ -111,10 +117,9 @@ fn a_feature_in_a_subquery_plan_counts() {
 }
 
 /// `legacy_statistical_aggregate` fires only for a plan that sets the flag
-/// around a moment aggregate. The flag alone changes nothing the encoder
-/// can write (it refuses every moment aggregate), so such plans list no
-/// feature: a reader without it keeps reading them, and the flag itself
-/// still round-trips.
+/// around a moment aggregate. The flag alone changes nothing a worker
+/// computes, so such plans list no feature: a reader without it keeps
+/// reading them, and the flag itself still round-trips.
 #[test]
 fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
     use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
@@ -160,14 +165,33 @@ fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
         decode_with(&bytes, &Limits::default(), &without).unwrap(),
         flag_only
     );
-    // A moment aggregate without the flag lists none either.
-    assert!(plan_features(&plan_of(aggregate_node())).is_empty());
+    // A moment aggregate without the flag lists only its own feature.
+    assert_eq!(
+        plan_features(&plan_of(aggregate_node()))
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [Feature::MomentAggregates]
+    );
     // Both together list the feature: in an aggregate node, ...
     let with_both = plan_of_env(aggregate_node(), legacy());
     assert_eq!(
         plan_features(&with_both).into_iter().collect::<Vec<_>>(),
-        [Feature::LegacyStatisticalAggregate]
+        [
+            Feature::LegacyStatisticalAggregate,
+            Feature::MomentAggregates
+        ]
     );
+    // A reader with the moments but without the flag refuses it naming
+    // the flag: it would give NULL where the plan asks for NaN.
+    let bytes = encode(&with_both).unwrap();
+    let moments_only = ReaderFeatures::only([Feature::MomentAggregates]);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &moments_only).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["legacy_statistical_aggregate".to_owned()]
+        }
+    );
+    assert_eq!(decode(&bytes).unwrap(), with_both);
     // ... in a window function, ...
     let window = plan_of_env(
         PhysNode::Window {
@@ -187,7 +211,11 @@ fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
     );
     assert_eq!(
         plan_features(&window).into_iter().collect::<Vec<_>>(),
-        [Feature::LegacyStatisticalAggregate, Feature::Window]
+        [
+            Feature::LegacyStatisticalAggregate,
+            Feature::MomentAggregates,
+            Feature::Window
+        ]
     );
     // ... and in a subquery plan ...
     let subquery = plan_of_env(
@@ -204,7 +232,10 @@ fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
     );
     assert_eq!(
         plan_features(&subquery).into_iter().collect::<Vec<_>>(),
-        [Feature::LegacyStatisticalAggregate]
+        [
+            Feature::LegacyStatisticalAggregate,
+            Feature::MomentAggregates
+        ]
     );
     // ... but never for another aggregate under the flag.
     let plain = plan_of_env(
@@ -378,6 +409,24 @@ fn constructs_map_to_one_feature_or_the_baseline() {
             &krishiv_exec::aggregate::AggregateFunction::ApproxCountDistinct { p: 14 }
         )),
         Some(Feature::PercentileAggregates)
+    );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::CovarPop
+        )),
+        Some(Feature::MomentAggregates)
+    );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::AnyValue { ignore_nulls: true }
+        )),
+        Some(Feature::AnyValueByAggregates)
+    );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::First { ignore_nulls: true }
+        )),
+        None
     );
     // A frame needs a feature only for an offset bound: the `Window`
     // node's format carries the others, `CURRENT ROW` at both ends included.
@@ -731,6 +780,21 @@ fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
             missing: vec!["percentile_aggregates".to_owned()]
         }
     );
+    // Likewise the moment and the `any_value`/`max_by`/`min_by` plans.
+    for (case, feature) in [
+        ("aggregate_moments", "moment_aggregates"),
+        ("aggregate_any_value", "any_value_by_aggregates"),
+        ("aggregate_max_min_by", "any_value_by_aggregates"),
+    ] {
+        let bytes = encode(&cases().into_iter().find(|(n, _)| n == case).unwrap().1).unwrap();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &reader).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec![feature.to_owned()]
+            },
+            "{case}"
+        );
+    }
 }
 
 #[test]

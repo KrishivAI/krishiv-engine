@@ -517,6 +517,10 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "aggregate_vectors"
             | "aggregate_mode_regr_bit_listagg"
             | "aggregate_listagg"
+            | "aggregate_moments"
+            | "aggregate_any_value"
+            | "aggregate_max_min_by"
+            | "aggregate_moments_legacy_statistical"
             | "write_files_partitioned"
             | "write_files_column_types"
             | "aggregate_percentiles" => 6,
@@ -990,6 +994,15 @@ fn counts_and_enums_are_validated() {
     };
     a.distinct.pop();
     corrupt(&m, "distinct flags");
+
+    // `ignore_nulls` belongs to `first`, `last` and `any_value` only.
+    let mut m = message("aggregate_max_min_by");
+    let last = m.nodes.len() - 1;
+    let pb::node::Kind::Aggregate(a) = node_mut(&mut m, last) else {
+        panic!("not an aggregate")
+    };
+    a.aggregates[0].ignore_nulls = true;
+    corrupt(&m, "`ignore_nulls` on a function without it");
 }
 
 #[test]
@@ -1210,11 +1223,11 @@ fn an_exchange_without_a_partitioning_kind_is_corrupt() {
     corrupt(&m, "partitioning kind is missing");
 }
 
-/// `any_value`, `max_by` and `min_by` have no ids in the format yet: a plan
-/// holding one is refused with the typed error (not encoded as another
-/// function), in an aggregate node and as a window function.
+/// `any_value`, `max_by` and `min_by` round-trip as themselves (not as
+/// another function) and list their feature, in an aggregate node and as
+/// a window function.
 #[test]
-fn aggregates_the_format_does_not_know_are_refused() {
+fn any_value_max_by_and_min_by_round_trip_in_aggregates_and_windows() {
     use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
     use krishiv_exec::physical::AggregatePlan;
     use krishiv_exec::window::{WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan};
@@ -1245,14 +1258,11 @@ fn aggregates_the_format_does_not_know_are_refused() {
         ),
     ];
     for e in exprs {
-        let refused = |plan: &PhysicalPlan| {
-            let err = encode(plan).unwrap_err();
-            assert!(
-                matches!(&err, CodecError::Unsupported(m) if m.contains("aggregate function")),
-                "{err:?}"
-            );
+        let round_trips = |plan: &PhysicalPlan| {
+            assert_eq!(round_trip(plan), *plan);
+            assert!(plan_features(plan).contains(&Feature::AnyValueByAggregates));
         };
-        refused(&plan_of(PhysNode::Aggregate {
+        round_trips(&plan_of(PhysNode::Aggregate {
             input: Box::new(inventory::scan()),
             aggregate: AggregatePlan {
                 group_by: vec![0],
@@ -1261,7 +1271,7 @@ fn aggregates_the_format_does_not_know_are_refused() {
                 output: AggregateOutput::Final,
             },
         }));
-        refused(&plan_of(PhysNode::Window {
+        round_trips(&plan_of(PhysNode::Window {
             input: Box::new(inventory::scan()),
             window: WindowPlan {
                 partition_by: Vec::new(),

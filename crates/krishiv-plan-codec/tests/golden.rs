@@ -189,9 +189,8 @@ fn the_registry_is_sorted_and_every_feature_has_goldens() {
         let dir = root().join(id);
         let files = std::fs::read_dir(&dir).map_or(0, Iterator::count);
         // `legacy_statistical_aggregate` fires only around a moment
-        // aggregate, and the encoder refuses every moment aggregate (pinned
-        // by the TPC-DS ratchet), so no encodable plan can carry it yet: it
-        // has no golden files until one can.
+        // aggregate, whose feature sorts after it, so its plans file under
+        // `moment_aggregates` and it has no directory of its own.
         assert!(
             files > 0 || *f == Feature::LegacyStatisticalAggregate,
             "{id}: no golden files in {}",

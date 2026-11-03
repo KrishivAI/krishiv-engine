@@ -564,6 +564,30 @@ enum AggregateFunction {
   AGGREGATE_FUNCTION_PERCENTILE_DISC = 32;
   // feature: percentile_aggregates
   AGGREGATE_FUNCTION_APPROX_COUNT_DISTINCT = 33;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_STDDEV_SAMP = 34;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_STDDEV_POP = 35;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_VAR_SAMP = 36;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_VAR_POP = 37;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_SKEWNESS = 38;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_KURTOSIS = 39;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_CORR = 40;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_COVAR_SAMP = 41;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_COVAR_POP = 42;
+  // feature: any_value_by_aggregates
+  AGGREGATE_FUNCTION_ANY_VALUE = 43;
+  // feature: any_value_by_aggregates
+  AGGREGATE_FUNCTION_MAX_BY = 44;
+  // feature: any_value_by_aggregates
+  AGGREGATE_FUNCTION_MIN_BY = 45;
 }
 
 enum AggregateInput {
@@ -574,7 +598,7 @@ enum AggregateInput {
 
 message AggregateExpr {
   AggregateFunction function = 1;
-  // `first` / `last` only.
+  // `first`, `last` and `any_value` only.
   bool ignore_nulls = 2;
   repeated uint64 args = 3;
   AggregateInput input = 4;

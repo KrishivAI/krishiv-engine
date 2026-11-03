@@ -119,6 +119,7 @@ macro_rules! registry {
 // (id, variant, legacy level, kind, meaning)
 registry! {
     (aggregate_filter, AggregateFilter, POST_MIGRATION_READER_VERSION, Semantic, "An aggregate's `FILTER (WHERE ...)` mask column."),
+    (any_value_by_aggregates, AnyValueByAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The `any_value`, `max_by` and `min_by` aggregates."),
     (collated_strings, CollatedStrings, POST_MIGRATION_READER_VERSION, Semantic, "STRING types with a collation other than UTF8_BINARY, by canonical name."),
     (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
@@ -139,6 +140,7 @@ registry! {
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (mode_regr_bit_listagg_aggs, ModeRegrBitListaggAggs, POST_MIGRATION_READER_VERSION, Semantic, "The `mode`, regression (`regr_*`), bitwise (`bit_and`, `bit_or`, `bit_xor`), `listagg`/`string_agg` and `try_sum`/`try_avg` aggregates."),
+    (moment_aggregates, MomentAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The moment aggregates (`stddev_samp`, `stddev_pop`, `var_samp`, `var_pop`, `skewness`, `kurtosis`, `corr`, `covar_samp`, `covar_pop`)."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
     (partial_aggregate, PartialAggregate, POST_MIGRATION_READER_VERSION, Optimization, "Partial aggregates below a join, whose states a later aggregate merges (eager aggregation)."),
     (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout)."),
@@ -491,10 +493,8 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::Min
             | AggregateFunction::Max
             | AggregateFunction::First { .. }
-            | AggregateFunction::Last { .. }
-            // These are not encodable yet: the encoder refuses them, so
-            // none reaches a worker.
-            | AggregateFunction::StddevSamp
+            | AggregateFunction::Last { .. } => None,
+            AggregateFunction::StddevSamp
             | AggregateFunction::StddevPop
             | AggregateFunction::VarSamp
             | AggregateFunction::VarPop
@@ -502,10 +502,10 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::Kurtosis
             | AggregateFunction::Corr
             | AggregateFunction::CovarSamp
-            | AggregateFunction::CovarPop
-            | AggregateFunction::AnyValue { .. }
+            | AggregateFunction::CovarPop => Some(Feature::MomentAggregates),
+            AggregateFunction::AnyValue { .. }
             | AggregateFunction::MaxBy
-            | AggregateFunction::MinBy => None,
+            | AggregateFunction::MinBy => Some(Feature::AnyValueByAggregates),
             AggregateFunction::CollectList
             | AggregateFunction::CollectSet
             | AggregateFunction::VectorSum

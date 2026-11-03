@@ -1030,6 +1030,18 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         ModeMax => AggregateFunction::ModeMax,
         TrySum => AggregateFunction::TrySum,
         TryAvg => AggregateFunction::TryAvg,
+        StddevSamp => AggregateFunction::StddevSamp,
+        StddevPop => AggregateFunction::StddevPop,
+        VarSamp => AggregateFunction::VarSamp,
+        VarPop => AggregateFunction::VarPop,
+        Skewness => AggregateFunction::Skewness,
+        Kurtosis => AggregateFunction::Kurtosis,
+        Corr => AggregateFunction::Corr,
+        CovarSamp => AggregateFunction::CovarSamp,
+        CovarPop => AggregateFunction::CovarPop,
+        AnyValue => AggregateFunction::AnyValue { ignore_nulls: ignore },
+        MaxBy => AggregateFunction::MaxBy,
+        MinBy => AggregateFunction::MinBy,
         Listagg => if a.listagg_desc.len() != a.listagg_nulls_first.len() {
             return Err(corrupt("a listagg state of another shape than its orders"));
         } else {
@@ -1057,7 +1069,9 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
     }
     let takes_ignore = matches!(
         function,
-        AggregateFunction::First { .. } | AggregateFunction::Last { .. }
+        AggregateFunction::First { .. }
+            | AggregateFunction::Last { .. }
+            | AggregateFunction::AnyValue { .. }
     );
     if ignore && !takes_ignore {
         return Err(corrupt("`ignore_nulls` on a function without it"));

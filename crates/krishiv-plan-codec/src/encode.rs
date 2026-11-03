@@ -1042,23 +1042,20 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 nested,
             ));
         }
-        // The format has no code for these yet.
-        f @ (AggregateFunction::StddevSamp
-        | AggregateFunction::StddevPop
-        | AggregateFunction::VarSamp
-        | AggregateFunction::VarPop
-        | AggregateFunction::Skewness
-        | AggregateFunction::Kurtosis
-        | AggregateFunction::Corr
-        | AggregateFunction::CovarSamp
-        | AggregateFunction::CovarPop
-        | AggregateFunction::AnyValue { .. }
-        | AggregateFunction::MaxBy
-        | AggregateFunction::MinBy) => {
-            return Err(CodecError::Unsupported(format!(
-                "the aggregate function {f:?}"
-            )));
+        AggregateFunction::StddevSamp => (pb::AggregateFunction::StddevSamp, false),
+        AggregateFunction::StddevPop => (pb::AggregateFunction::StddevPop, false),
+        AggregateFunction::VarSamp => (pb::AggregateFunction::VarSamp, false),
+        AggregateFunction::VarPop => (pb::AggregateFunction::VarPop, false),
+        AggregateFunction::Skewness => (pb::AggregateFunction::Skewness, false),
+        AggregateFunction::Kurtosis => (pb::AggregateFunction::Kurtosis, false),
+        AggregateFunction::Corr => (pb::AggregateFunction::Corr, false),
+        AggregateFunction::CovarSamp => (pb::AggregateFunction::CovarSamp, false),
+        AggregateFunction::CovarPop => (pb::AggregateFunction::CovarPop, false),
+        AggregateFunction::AnyValue { ignore_nulls } => {
+            (pb::AggregateFunction::AnyValue, *ignore_nulls)
         }
+        AggregateFunction::MaxBy => (pb::AggregateFunction::MaxBy, false),
+        AggregateFunction::MinBy => (pb::AggregateFunction::MinBy, false),
     };
     Ok(pb::AggregateExpr {
         function: function as i32,

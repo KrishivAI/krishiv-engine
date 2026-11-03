@@ -404,6 +404,54 @@ pub(crate) fn mode_regr_bit_listagg_exprs() -> Vec<AggregateExpr> {
     ]
 }
 
+/// One aggregate of each moment variant: the pair moments read two
+/// columns.
+pub(crate) fn moment_aggregate_exprs() -> Vec<AggregateExpr> {
+    let one = |function| AggregateExpr::new(function, 0, ArrowType::Float64, "x");
+    let pair = |function| AggregateExpr {
+        args: vec![0, 1],
+        ..one(function)
+    };
+    vec![
+        one(AggregateFunction::StddevSamp),
+        one(AggregateFunction::StddevPop),
+        one(AggregateFunction::VarSamp),
+        one(AggregateFunction::VarPop),
+        one(AggregateFunction::Skewness),
+        one(AggregateFunction::Kurtosis),
+        pair(AggregateFunction::Corr),
+        pair(AggregateFunction::CovarSamp),
+        pair(AggregateFunction::CovarPop),
+    ]
+}
+
+/// `any_value` with and without `IGNORE NULLS`.
+pub(crate) fn any_value_exprs() -> Vec<AggregateExpr> {
+    let any = |ignore_nulls| {
+        AggregateExpr::new(
+            AggregateFunction::AnyValue { ignore_nulls },
+            0,
+            ArrowType::Utf8View,
+            "x",
+        )
+    };
+    vec![any(false), any(true)]
+}
+
+/// `max_by` and `min_by`: they take a struct argument, so the case uses
+/// `nested_types` too.
+pub(crate) fn max_min_by_exprs() -> Vec<AggregateExpr> {
+    let by = |function| {
+        AggregateExpr::by(
+            function,
+            (0, 1),
+            (ArrowType::Utf8View, ArrowType::Int64),
+            "x",
+        )
+    };
+    vec![by(AggregateFunction::MaxBy), by(AggregateFunction::MinBy)]
+}
+
 fn window_function(function: WindowFunction, frame: WindowFrame, name: &str) -> WindowFunctionPlan {
     WindowFunctionPlan {
         function,
@@ -1033,6 +1081,42 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "aggregate_moments",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: moment_aggregate_exprs(),
+                    distinct: vec![false; 9],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_any_value",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: any_value_exprs(),
+                    distinct: vec![false; 2],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_max_min_by",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: max_min_by_exprs(),
+                    distinct: vec![false; 2],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
             "aggregate_listagg",
             PhysNode::Aggregate {
                 input: boxed(scan()),
@@ -1553,7 +1637,27 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     legacy.legacy_statistical_aggregate = true;
     out.push((
         "one_row_legacy_statistical_aggregate".to_owned(),
-        plan_of_env(PhysNode::OneRow, legacy),
+        plan_of_env(PhysNode::OneRow, legacy.clone()),
+    ));
+    out.push((
+        "aggregate_moments_legacy_statistical".to_owned(),
+        plan_of_env(
+            PhysNode::Aggregate {
+                input: Box::new(scan()),
+                aggregate: AggregatePlan {
+                    group_by: Vec::new(),
+                    aggregates: vec![AggregateExpr::new(
+                        AggregateFunction::StddevSamp,
+                        0,
+                        ArrowType::Float64,
+                        "s",
+                    )],
+                    distinct: vec![false],
+                    output: AggregateOutput::Final,
+                },
+            },
+            legacy,
+        ),
     ));
     out.push(("nested_types".to_owned(), plan_of(nested_types())));
     out.push(("lambda_functions".to_owned(), plan_of(lambda_functions())));

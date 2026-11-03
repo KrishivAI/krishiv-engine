@@ -644,7 +644,7 @@ pub struct AggregateNode {
 pub struct AggregateExpr {
     #[prost(enumeration = "AggregateFunction", tag = "1")]
     pub function: i32,
-    /// `first` / `last` only.
+    /// `first`, `last` and `any_value` only.
     #[prost(bool, tag = "2")]
     pub ignore_nulls: bool,
     #[prost(uint64, repeated, tag = "3")]
@@ -1685,6 +1685,30 @@ pub enum AggregateFunction {
     PercentileDisc = 32,
     /// feature: percentile_aggregates
     ApproxCountDistinct = 33,
+    /// feature: moment_aggregates
+    StddevSamp = 34,
+    /// feature: moment_aggregates
+    StddevPop = 35,
+    /// feature: moment_aggregates
+    VarSamp = 36,
+    /// feature: moment_aggregates
+    VarPop = 37,
+    /// feature: moment_aggregates
+    Skewness = 38,
+    /// feature: moment_aggregates
+    Kurtosis = 39,
+    /// feature: moment_aggregates
+    Corr = 40,
+    /// feature: moment_aggregates
+    CovarSamp = 41,
+    /// feature: moment_aggregates
+    CovarPop = 42,
+    /// feature: any_value_by_aggregates
+    AnyValue = 43,
+    /// feature: any_value_by_aggregates
+    MaxBy = 44,
+    /// feature: any_value_by_aggregates
+    MinBy = 45,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1727,6 +1751,18 @@ impl AggregateFunction {
             Self::PercentileApprox => "AGGREGATE_FUNCTION_PERCENTILE_APPROX",
             Self::PercentileDisc => "AGGREGATE_FUNCTION_PERCENTILE_DISC",
             Self::ApproxCountDistinct => "AGGREGATE_FUNCTION_APPROX_COUNT_DISTINCT",
+            Self::StddevSamp => "AGGREGATE_FUNCTION_STDDEV_SAMP",
+            Self::StddevPop => "AGGREGATE_FUNCTION_STDDEV_POP",
+            Self::VarSamp => "AGGREGATE_FUNCTION_VAR_SAMP",
+            Self::VarPop => "AGGREGATE_FUNCTION_VAR_POP",
+            Self::Skewness => "AGGREGATE_FUNCTION_SKEWNESS",
+            Self::Kurtosis => "AGGREGATE_FUNCTION_KURTOSIS",
+            Self::Corr => "AGGREGATE_FUNCTION_CORR",
+            Self::CovarSamp => "AGGREGATE_FUNCTION_COVAR_SAMP",
+            Self::CovarPop => "AGGREGATE_FUNCTION_COVAR_POP",
+            Self::AnyValue => "AGGREGATE_FUNCTION_ANY_VALUE",
+            Self::MaxBy => "AGGREGATE_FUNCTION_MAX_BY",
+            Self::MinBy => "AGGREGATE_FUNCTION_MIN_BY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1766,6 +1802,18 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_PERCENTILE_APPROX" => Some(Self::PercentileApprox),
             "AGGREGATE_FUNCTION_PERCENTILE_DISC" => Some(Self::PercentileDisc),
             "AGGREGATE_FUNCTION_APPROX_COUNT_DISTINCT" => Some(Self::ApproxCountDistinct),
+            "AGGREGATE_FUNCTION_STDDEV_SAMP" => Some(Self::StddevSamp),
+            "AGGREGATE_FUNCTION_STDDEV_POP" => Some(Self::StddevPop),
+            "AGGREGATE_FUNCTION_VAR_SAMP" => Some(Self::VarSamp),
+            "AGGREGATE_FUNCTION_VAR_POP" => Some(Self::VarPop),
+            "AGGREGATE_FUNCTION_SKEWNESS" => Some(Self::Skewness),
+            "AGGREGATE_FUNCTION_KURTOSIS" => Some(Self::Kurtosis),
+            "AGGREGATE_FUNCTION_CORR" => Some(Self::Corr),
+            "AGGREGATE_FUNCTION_COVAR_SAMP" => Some(Self::CovarSamp),
+            "AGGREGATE_FUNCTION_COVAR_POP" => Some(Self::CovarPop),
+            "AGGREGATE_FUNCTION_ANY_VALUE" => Some(Self::AnyValue),
+            "AGGREGATE_FUNCTION_MAX_BY" => Some(Self::MaxBy),
+            "AGGREGATE_FUNCTION_MIN_BY" => Some(Self::MinBy),
             _ => None,
         }
     }
