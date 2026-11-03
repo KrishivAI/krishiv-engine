@@ -116,6 +116,8 @@ def main():
     args = ap.parse_args()
     here = pathlib.Path(__file__).resolve().parent
     spec = importlib.util.spec_from_file_location("gen_expr_differential", here / "gen_expr_differential.py")
+    if spec is None or spec.loader is None:
+        raise SystemExit("cannot load gen_expr_differential.py")
     base = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(base)
     from pyspark.sql import SparkSession
