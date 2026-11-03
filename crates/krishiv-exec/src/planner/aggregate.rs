@@ -184,6 +184,7 @@ impl Planner<'_> {
         let sites = super::runtime_filter::kept(&input.sites, &layout[..k]);
         let placement = input.placement.clone().restrict(&layout);
         let agg = Planned {
+            ordering: Vec::new(),
             node: PhysNode::Aggregate {
                 input: Box::new(input.node),
                 aggregate: plan,
@@ -252,6 +253,7 @@ impl Planner<'_> {
         let sites = super::runtime_filter::kept(&input.sites, &layout[..k]);
         let placement = input.placement.clone().restrict(&layout);
         Ok(Planned {
+            ordering: Vec::new(),
             node: PhysNode::Aggregate {
                 input: Box::new(input.node),
                 aggregate: plan,
@@ -333,6 +335,7 @@ impl Planner<'_> {
         let sites = super::runtime_filter::kept(&input.sites, &layout[..k]);
         let placement = input.placement.clone().restrict(&layout);
         Ok(Planned {
+            ordering: Vec::new(),
             node: PhysNode::Aggregate {
                 input: Box::new(input.node),
                 aggregate: plan,

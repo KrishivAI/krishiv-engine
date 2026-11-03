@@ -357,6 +357,7 @@ impl Planner<'_> {
             .ok_or_else(|| super::build::internal("exchange id overflow"))?;
         let (title, detail, placement) = describe(&partitioning, &input.schema, &input.layout)?;
         Ok(Planned {
+            ordering: Vec::new(),
             node: PhysNode::Exchange(ExchangePlan {
                 id,
                 input: Box::new(input.node),

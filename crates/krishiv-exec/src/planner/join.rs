@@ -364,6 +364,7 @@ impl Planner<'_> {
                 sorted(build.explain, &build_exprs),
             ];
             return Ok(Planned {
+                ordering: Vec::new(),
                 schema,
                 node: PhysNode::SortMergeJoin(plan),
                 layout,
@@ -397,6 +398,7 @@ impl Planner<'_> {
         )?
         .schema();
         Ok(Planned {
+            ordering: Vec::new(),
             schema,
             node: PhysNode::HashJoin(plan),
             layout,
@@ -492,6 +494,7 @@ impl Planner<'_> {
         let schema =
             nested_loop_join(&probe_schema, &build_schema, &plan, &self.env, None)?.schema();
         Ok(Planned {
+            ordering: Vec::new(),
             schema,
             node: PhysNode::NestedLoopJoin(plan),
             layout,

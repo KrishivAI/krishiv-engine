@@ -12,7 +12,7 @@ use krishiv_plan::{
 };
 
 use super::aggregate::{aggregate_expr, lower};
-use super::build::{Planned, Planner, internal, list, orders, unsupported};
+use super::build::{OrderKey, Planned, Planner, internal, list, orders, unsupported};
 use super::properties::Distribution;
 use crate::aggregate::AggregateFunction;
 use crate::aggregate::is_moment;
@@ -180,14 +180,24 @@ impl Planner<'_> {
                 layout,
                 ("TopN", format!("{n}, {sort_detail}")),
             )
+        } else if !keys.is_empty() && sorted_for(&input.ordering, &OrderKey::of(&keys, &layout), np)
+        {
+            // Already in this order within each partition (another window's
+            // sort, Spark's `EnsureRequirements` ordering check): no sort.
+            // A sort without keys stays: it is what gathers the rows of a
+            // single-partition exchange into one stream.
+            input
         } else {
             let sort_schema = crate::physical::sort_op(&input.schema, &keys, None)?.schema();
-            input.wrap(
+            let ordering = OrderKey::of(&keys, &layout);
+            let mut sorted = input.wrap(
                 |input| PhysNode::Sort { input, keys },
                 sort_schema,
                 layout,
                 ("Sort", sort_detail),
-            )
+            );
+            sorted.ordering = ordering;
+            sorted
         };
         let sorted = match group {
             Some((function, limit)) => {
@@ -436,5 +446,73 @@ fn ntile_buckets(f: &krishiv_plan::ResolvedFunction) -> Result<i32> {
         _ => Err(unsupported(
             "ntile with a bucket count that is not an int literal",
         )),
+    }
+}
+
+/// Whether rows in the order `have` within each partition are in the order a
+/// window needs, `want`: its `partitions` partitioning keys, then its
+/// ordering. The partitioning keys need only keep equal keys together, so
+/// `have` may lead with them in any order and direction; the ordering
+/// must match key for key, as Spark's `SortOrder.satisfies` does.
+pub(crate) fn sorted_for(have: &[OrderKey], want: &[OrderKey], partitions: usize) -> bool {
+    let Some(lead) = have.get(..partitions) else {
+        return false;
+    };
+    let (keys, ordering) = want.split_at(partitions.min(want.len()));
+    // `want` lists each partitioning key once per mention; `have`'s lead
+    // must hold exactly that set (a key outside it would split partitions).
+    lead.iter().all(|k| keys.iter().any(|w| w.attr == k.attr))
+        && keys.iter().all(|w| lead.iter().any(|k| k.attr == w.attr))
+        && have.get(partitions..partitions + ordering.len()) == Some(ordering)
+}
+
+#[cfg(test)]
+mod tests {
+    use krishiv_plan::AttrId;
+
+    use super::{OrderKey, sorted_for};
+
+    fn key(attr: u64, descending: bool, nulls_first: bool) -> OrderKey {
+        OrderKey {
+            attr: AttrId(attr),
+            descending,
+            nulls_first,
+        }
+    }
+
+    fn asc(attr: u64) -> OrderKey {
+        key(attr, false, true)
+    }
+
+    #[test]
+    fn the_same_order_or_a_longer_one_satisfies() {
+        let want = [asc(1), asc(2), key(3, true, false)];
+        assert!(sorted_for(&want, &want, 2));
+        assert!(sorted_for(&[&want[..], &[asc(4)]].concat(), &want, 2));
+        assert!(!sorted_for(&want[..2], &want, 2));
+        assert!(!sorted_for(&[], &want, 2));
+        // No partitioning: only the ordering counts.
+        assert!(sorted_for(&[asc(5)], &[asc(5)], 0));
+        assert!(!sorted_for(&[asc(6)], &[asc(5)], 0));
+    }
+
+    #[test]
+    fn partitioning_keys_may_lead_in_any_order_and_direction() {
+        let want = [asc(1), asc(2), asc(3)];
+        assert!(sorted_for(&[key(2, true, false), asc(1), asc(3)], &want, 2));
+        // The same keys, but a different ordering key or direction.
+        assert!(!sorted_for(&[asc(2), asc(1), key(3, true, true)], &want, 2));
+        assert!(!sorted_for(
+            &[asc(2), asc(1), key(3, false, false)],
+            &want,
+            2
+        ));
+        // A partitioning key replaced by another, or the ordering key moved
+        // into the lead.
+        assert!(!sorted_for(&[asc(1), asc(4), asc(3)], &want, 2));
+        assert!(!sorted_for(&[asc(1), asc(3), asc(2)], &want, 2));
+        // A repeated partitioning key takes a place in the lead.
+        assert!(!sorted_for(&[asc(1), asc(2)], &[asc(1), asc(1), asc(2)], 2));
+        assert!(sorted_for(&[asc(1), asc(1)], &[asc(1), asc(1)], 2));
     }
 }

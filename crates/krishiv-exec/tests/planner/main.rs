@@ -171,7 +171,12 @@ struct Env {
 }
 
 fn env() -> Env {
-    let (schema, batches) = table(10);
+    env_of(10)
+}
+
+/// [`env`] with `n` rows in `t`.
+fn env_of(n: i32) -> Env {
+    let (schema, batches) = table(n);
     let columns = schema
         .fields()
         .iter()
