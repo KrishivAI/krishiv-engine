@@ -1202,3 +1202,30 @@ fn a_time_of_day_string_is_on_the_query_date() -> R {
     assert!(arrow_array::cast::AsArray::as_boolean(b[0].column(3)).value(0));
     Ok(())
 }
+
+/// With ANSI off a string beside a number in arithmetic is read as a `double`
+/// (Spark 4.2: `2147483647 + '1'` is `2.147483648E9`, text that is no number
+/// gives NULL).
+#[test]
+fn arithmetic_with_a_string_and_ansi_off_is_a_double() -> R {
+    let s = Session::new()?;
+    block_on(s.sql("SET spark.sql.ansi.enabled=false"))?;
+    let b = block_on(
+        block_on(s.sql(
+            "SELECT 2147483647 + '1', try_divide(1, '0'), '3' * 2, 'x' + 1, try_multiply(2147483647, '-2')",
+        ))?
+        .collect(),
+    )?;
+    let col = |i: usize| {
+        let a = arrow_array::cast::AsArray::as_primitive::<arrow_array::types::Float64Type>(
+            b[0].column(i),
+        );
+        (!a.is_null(0)).then(|| a.value(0))
+    };
+    assert_eq!(col(0), Some(2_147_483_648.0));
+    assert_eq!(col(1), None);
+    assert_eq!(col(2), Some(6.0));
+    assert_eq!(col(3), None);
+    assert_eq!(col(4), Some(-4_294_967_294.0));
+    Ok(())
+}

@@ -987,6 +987,22 @@ fn arithmetic(
             return Err(m);
         }
     }
+    // Without ANSI a string beside a number is read as a `double`, and so is
+    // the number (Spark 4.2: `2147483647 + '1'` is `2.147483648E9`); the cast
+    // of text that is no number gives NULL.
+    if !ansi
+        && let (Some(x), Some(y)) = (a.ty, b.ty)
+        && ((*x == T::String && is_numeric(y)) || (is_numeric(x) && *y == T::String))
+    {
+        return Ok(Typed {
+            casts: vec![
+                cast_to(a.ty, Some(&T::Double)),
+                cast_to(b.ty, Some(&T::Double)),
+            ],
+            data_type: T::Double,
+            nullable: true,
+        });
+    }
     legacy_strings(&[*a, *b], ansi)?;
     let (x, y) = match (a.ty, b.ty) {
         // `NULL / x` divides doubles (`x / NULL` takes x's type).
