@@ -19,7 +19,6 @@ pub use krishiv_session::Principal
 pub use krishiv_session::PrincipalKind
 pub use krishiv_session::Privilege
 pub use krishiv_session::QueryProfile
-pub use krishiv_session::ReadOnlyPolicy
 pub use krishiv_session::ReturnField
 pub use krishiv_session::ScalarUdf
 pub use krishiv_session::Securable
@@ -117,6 +116,7 @@ pub const krishiv_session::agent::DEFAULT_MAX_BYTES: usize
 pub const krishiv_session::agent::DEFAULT_MAX_CELL_CHARS: usize
 pub const krishiv_session::agent::DEFAULT_MAX_ROWS: usize
 pub fn krishiv_session::agent::cell(&dyn arrow_array::array::Array, usize, &str, &krishiv_kernels::datetime::zone::ZoneRef) -> alloc::string::String
+pub fn krishiv_session::agent::field_cell(&arrow_schema::field::Field, &dyn arrow_array::array::Array, usize, &str, &krishiv_kernels::datetime::zone::ZoneRef) -> alloc::string::String
 pub fn krishiv_session::agent::render_batches(&arrow_schema::schema::Schema, &[arrow_array::record_batch::RecordBatch], &krishiv_session::agent::AgentRender<'_>) -> krishiv_session::agent::AgentResult
 pub fn krishiv_session::agent::render_error(&krishiv_common::error::KrishivError, core::option::Option<&krishiv_session::agent::ErrorSource<'_>>, core::option::Option<&str>) -> alloc::string::String
 pub fn krishiv_session::agent::render_estimate(u64, u64, u64, &[alloc::string::String]) -> alloc::string::String
