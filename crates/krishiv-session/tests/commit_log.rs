@@ -465,3 +465,34 @@ fn a_base_path_on_a_partition_directory_uses_the_roots_log() {
         "the abandoned file is not read"
     );
 }
+
+/// A glob whose prefix is a partition directory with a log of its own, below an unlogged `basePath`.
+#[test]
+fn a_glob_under_a_base_path_uses_a_log_between_the_base_and_the_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let logged = out.join("p=a");
+    let path = logged.to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'x' AS q")).unwrap();
+    block_on(df.write().partition_by(["q"]).mode("append").parquet(&path)).unwrap();
+    let leaf = logged.join("q=x");
+    let data = std::fs::read_dir(&leaf)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .unwrap();
+    std::fs::copy(&data, leaf.join("part-99999-dead.c000.snappy.parquet")).unwrap();
+    let df = s
+        .read()
+        .option("basePath", out.to_str().unwrap())
+        .parquet([format!("{}/*.parquet", leaf.to_str().unwrap()).as_str()]);
+    assert_eq!(
+        block_on(df.count()).unwrap(),
+        1,
+        "the abandoned file is not read"
+    );
+}

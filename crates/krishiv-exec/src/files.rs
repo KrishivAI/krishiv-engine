@@ -560,7 +560,14 @@ impl FileReads {
         let own = Box::pin(self.committed_files(&at)).await?;
         let outer = match (own, &mode.base) {
             (Some(files), _) => Some((base, Arc::new(files))),
-            (None, Some(root)) if at.path.prefix_matches(&root.path) => self.base_log(root).await?,
+            // The nearest logged ancestor of the glob's prefix (it may sit between the base and the
+            // prefix), else the base's own log or its ancestors'.
+            (None, Some(root)) if at.path.prefix_matches(&root.path) => {
+                match self.logged_ancestor(&at).await? {
+                    Some(found) => Some(found),
+                    None => self.base_log(root).await?,
+                }
+            }
             // A glob whose prefix is a partition directory of a logged root.
             (None, None) => self.logged_ancestor(&at).await?,
             _ => None,
