@@ -152,6 +152,14 @@ pub(crate) struct ParquetDecoder {
     leaves: Vec<usize>,
     /// The projection the push decoder is built with.
     mask: ProjectionMask,
+    /// Every leaf a fetch of this decoder reads: the output leaves plus
+    /// the leaves the pushed predicate and the runtime filters name (the
+    /// row filter reads those under a separate projection).
+    attach_leaves: Vec<usize>,
+    /// Row groups whose offset indexes are attached: their pages are
+    /// fetched as the selection needs them, so they are not prefetched
+    /// whole.
+    sparse_units: Vec<usize>,
     /// The attached offset indexes' pages by column chunk (sorted by start):
     /// what [`Self::check_page_headers`] walks in a sparse range.
     sparse: Vec<(Range<u64>, Vec<PageLocation>)>,
@@ -348,16 +356,30 @@ impl ParquetDecoder {
         // only a scan that pushes a filter and allows it.
         // Not with `_metadata.row_index`: row numbers under a page-skipping
         // selection are not verified yet (design section 5, stage 3).
-        let pages = if o.bool("pageIndex").unwrap_or(true) && !row_index {
+        let page = o.bool("pageIndex").unwrap_or(true) && !row_index;
+        let bloom = o.bool("bloomFilter").unwrap_or(true);
+        // The row filter reads the predicate's and the runtime filters'
+        // columns under a projection of its own: an offset index attached
+        // for some of a row group's fetched columns and not others would
+        // throw arrow-rs's sparse-read bookkeeping out of step.
+        let mut attach_leaves = leaves.clone();
+        let mut filter_columns: Vec<ColumnPath> = req
+            .predicate
+            .iter()
+            .flat_map(|p| p.columns().into_iter().cloned())
+            .collect();
+        for d in &req.dynamic {
+            if let Some(p) = d.predicate() {
+                filter_columns.extend(p.columns().into_iter().cloned());
+            }
+        }
+        attach_leaves.extend(projection_mask(meta, &filter_columns).1);
+        attach_leaves.sort_unstable();
+        attach_leaves.dedup();
+        let pages = if page || bloom {
             req.predicate.as_ref().and_then(|p| {
                 let units: Vec<usize> = planned.iter().map(|u| u.index).collect();
-                PageStage::plan(
-                    meta,
-                    &units,
-                    p,
-                    &leaves,
-                    o.bool("bloomFilter").unwrap_or(true),
-                )
+                PageStage::plan(meta, &units, p, &attach_leaves, page, bloom)
             })
         } else {
             None
@@ -389,6 +411,8 @@ impl ParquetDecoder {
             late_leaves,
             pages,
             mask: mask_kept,
+            attach_leaves,
+            sparse_units: Vec::new(),
             sparse: Vec::new(),
         })
     }
@@ -678,6 +702,15 @@ impl ParquetDecoder {
             Some(a) => (Some(a.reader), a.sparse),
             None => (None, Vec::new()),
         };
+        let sparse_units: Vec<usize> = if reader.is_some() {
+            self.planned
+                .iter()
+                .filter(|u| u.selection.is_some())
+                .map(|u| u.index)
+                .collect()
+        } else {
+            Vec::new()
+        };
         let selections = self
             .planned
             .iter()
@@ -686,6 +719,7 @@ impl ParquetDecoder {
         let late = self.late.want();
         self.rebuild(Some(selections), late, false, reader)?;
         self.sparse = sparse;
+        self.sparse_units = sparse_units;
         Ok(())
     }
 
@@ -710,7 +744,7 @@ impl ParquetDecoder {
                 .iter()
                 .find(|o| o.index == u.index)
                 .is_some_and(|o| {
-                    self.leaves
+                    self.attach_leaves
                         .iter()
                         .all(|l| o.leaves.iter().any(|(leaf, _)| leaf == l))
                 })
@@ -875,7 +909,10 @@ impl Decoder for ParquetDecoder {
         if self.late.is_guess()
             && self.reader.is_none()
             && !decoder.is_at_row_group_boundary()
-            && let Some(u) = next.checked_sub(1).and_then(|i| self.planned.get(i))
+            && let Some(u) = next
+                .checked_sub(1)
+                .and_then(|i| self.planned.get(i))
+                .filter(|u| !self.sparse_units.contains(&u.index))
         {
             let rg = self.meta.reader.metadata().row_group(u.index);
             for l in &self.leaves {
@@ -893,7 +930,12 @@ impl Decoder for ParquetDecoder {
         // groups of a selective filter). Otherwise every chunk is prefetched,
         // as the next row group may be read without the filter.
         if self.late.filters_first() && !self.late.is_guess() {
-            for u in self.planned.iter().skip(next) {
+            for u in self
+                .planned
+                .iter()
+                .skip(next)
+                .filter(|u| !self.sparse_units.contains(&u.index))
+            {
                 let rg = self.meta.reader.metadata().row_group(u.index);
                 let chunks: Vec<Range<u64>> = self
                     .late_leaves
@@ -909,7 +951,13 @@ impl Decoder for ParquetDecoder {
             }
             return out;
         }
-        for chunks in self.planned.iter().skip(next).map(|u| &u.chunks) {
+        for chunks in self
+            .planned
+            .iter()
+            .skip(next)
+            .filter(|u| !self.sparse_units.contains(&u.index))
+            .map(|u| &u.chunks)
+        {
             let size: u64 = chunks.iter().map(|r| r.end - r.start).sum();
             if total + size > max_bytes {
                 break;

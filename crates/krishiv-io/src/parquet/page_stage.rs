@@ -210,6 +210,7 @@ impl PageStage {
         units: &[usize],
         predicate: &PushdownExpr,
         read_leaves: &[usize],
+        page: bool,
         bloom: bool,
     ) -> Option<Self> {
         let conjuncts: Vec<PushdownExpr> = conjuncts_of(predicate)
@@ -227,7 +228,7 @@ impl PageStage {
             let rg = footer.row_group(index);
             let row_group = meta.row_groups.get(index)?;
             let mut columns: Vec<IndexedColumn> = Vec::new();
-            for (n, c) in conjuncts.iter().enumerate() {
+            for (n, c) in conjuncts.iter().enumerate().filter(|_| page) {
                 // Statistics decided this conjunct for the unit already.
                 if prune(c, &row_group.statistics) != TriState::Unknown {
                     continue;

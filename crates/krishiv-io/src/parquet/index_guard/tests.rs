@@ -394,3 +394,25 @@ fn an_unknown_boolean_list_is_walked_like_the_decoder_does() {
     let err = column_index(&bytes, PhysicalType::INT64, 1).expect_err("a huge count");
     assert!(err.0.contains("larger than the bytes left"), "{err:?}");
 }
+
+/// A Bloom header that does not name the block / XXH64 / uncompressed
+/// filter the bitset is read as is refused, so it cannot prune.
+#[test]
+fn a_bloom_header_of_another_kind_is_refused() {
+    let declared = 0..4096;
+    let ok = bloom_header_bytes(64);
+    assert!(bloom_header(&ok, &declared).is_ok());
+    // The compression union holds member 2 (a field the reader does not know).
+    let mut other_compression = ok;
+    let n = other_compression.len();
+    other_compression[n - 4] = 0x2c;
+    assert!(bloom_header(&other_compression, &declared).is_err());
+    // The algorithm is missing.
+    let mut missing = vec![0x15];
+    missing.extend(zigzag(64));
+    for _ in 0..2 {
+        missing.extend([0x1c, 0x1c, 0x00, 0x00]);
+    }
+    missing.push(0x00);
+    assert!(bloom_header(&missing, &declared).is_err());
+}

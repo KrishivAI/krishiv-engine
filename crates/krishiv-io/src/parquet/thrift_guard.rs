@@ -156,6 +156,18 @@ pub(super) fn bloom_header(buf: &[u8]) -> Result<(u32, usize), &'static str> {
     };
     let raw = walk.varint()?;
     let num_bytes = u32::try_from(unzigzag(raw)).map_err(|_| "a negative Bloom bitset size")?;
+    // The bitset is read as a split-block, XXH64, uncompressed filter, so
+    // the header must say exactly that: `algorithm` BLOCK, `hash` XXHASH and
+    // `compression` UNCOMPRESSED, each a union holding its first member
+    // (field 2, 3 and 4, each a struct holding an empty struct as field 1).
+    // Any other spelling is not used (an unknown member would read as a
+    // definitive negative against a filter of another kind).
+    const KIND: [u8; 13] = [
+        0x1c, 0x1c, 0x00, 0x00, 0x1c, 0x1c, 0x00, 0x00, 0x1c, 0x1c, 0x00, 0x00, 0x00,
+    ];
+    if buf.get(walk.pos..walked.len) != Some(&KIND[..]) {
+        return Err("a Bloom filter that is not a block, XXH64, uncompressed one");
+    }
     Ok((num_bytes, walked.len))
 }
 

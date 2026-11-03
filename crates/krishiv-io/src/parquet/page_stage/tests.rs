@@ -455,3 +455,60 @@ fn the_session_setting_switches_the_bloom_stage() {
     assert_eq!(pruned(&[(key, "false")], &[("bloomFilter", "true")]), 1);
     assert_eq!(pruned(&[], &[("bloomFilter", "false")]), 0);
 }
+
+// ---- review of #450 ----
+
+/// The Bloom stage does not depend on the page-index switch.
+#[test]
+fn bloom_works_with_the_page_index_off() {
+    let env = Env::new();
+    let f = parity_file(&env, true);
+    let o = env.options(&[("pageIndex", "false")]);
+    let (_, m) = parity_scan(&env, &f, &o, v_eq(4_001));
+    assert_eq!(m.units_pruned_bloom, 1, "{m:?}");
+    assert_eq!(m.pages_pruned, 0);
+    // And the page stage works with Bloom off.
+    let (f2, _) = file(&env, EnabledStatistics::Page);
+    let o = env.options(&[("bloomFilter", "false")]);
+    let req = request(&env, &f2, &o, k_between(9_000, 9_700));
+    let (_, m) = env.scan_metered(&f2, &req, &o).unwrap();
+    assert!(m.pages_pruned > 0 && m.units_pruned_bloom == 0, "{m:?}");
+}
+
+/// A predicate column outside the output projection is part of the
+/// attach coverage: the row filter fetches it under a selection too, so a
+/// column without an offset index there means nothing is attached and the
+/// scan is still correct.
+#[test]
+fn a_predicate_only_column_does_not_break_the_sparse_read() {
+    let env = Env::new();
+    let (f, _) = file(&env, EnabledStatistics::Page);
+    let o = env.options(&[]);
+    let schema = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &f, MetadataNeeds::default(), &o),
+        )
+        .unwrap()
+        .schema();
+    // Project `k` only, filter on `k` and the unprojected `u`.
+    let mut req = ScanRequest::new(schema, vec![ColumnPath::new("k")]);
+    req.predicate = Some(PushdownExpr::And(vec![
+        k_between(9_000, 9_700),
+        PushdownExpr::cmp(ColumnPath::new("u"), CmpOp::GtEq, ScalarValue::Int64(0)),
+    ]));
+    for policy in [
+        crate::request::RowFilterPolicy::On,
+        crate::request::RowFilterPolicy::Off,
+    ] {
+        req.row_filter = policy;
+        let (out, m) = env.scan_metered(&f, &req, &o).unwrap();
+        let got = ks(&out);
+        assert!(
+            (9_000..=9_700).all(|k| got.contains(&k)),
+            "{policy:?} {m:?}"
+        );
+        assert!(got.len() < 20_000);
+    }
+}
