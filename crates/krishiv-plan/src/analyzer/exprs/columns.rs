@@ -420,7 +420,7 @@ impl Resolver<'_> {
             if hit.is_none() {
                 hit = self.find(&outer.scope, &c.name, origin, false)?;
             }
-            if hit.is_none() && c.name.len() > 1 {
+            if hit.is_none() && outer.lateral && c.name.len() > 1 {
                 hit = self.find(&outer.hidden, &c.name, origin, false)?;
             }
             if let Some((a, used)) = hit {
@@ -432,6 +432,17 @@ impl Resolver<'_> {
                     b
                 });
             }
+        }
+        // `grouping__id` is the grouping id Spark's aggregate rule reads
+        // before a function parameter of that name can: outside a grouping
+        // context it is `UNSUPPORTED_GROUPING_EXPRESSION`.
+        if let [name] = &c.name[..]
+            && name.eq_ignore_ascii_case("grouping__id")
+            && !cx.grouping
+            && !self.ctx.conf.udf_parameter_shadows_function
+            && self.has_parameter(name)
+        {
+            return Err(AnalysisError::new(UnsupportedGroupingExpression {}, origin));
         }
         // The parameters of the SQL function being resolved rank after
         // everything else, but before a session variable.
@@ -481,10 +492,18 @@ impl Resolver<'_> {
         if self.parameter_attrs().is_empty() {
             return Err(unresolved(&c.name, cx.scope, origin));
         }
+        // A parameter the name matches is out of reach here (the body
+        // nests deeper than a parameter is visible), and Spark proposes
+        // nothing for it.
+        let cs = self.ctx.conf.case_sensitive;
         let candidates: Vec<Attr> = cx
             .scope
             .iter()
-            .chain(self.parameter_attrs())
+            .chain(
+                self.parameter_attrs()
+                    .iter()
+                    .filter(|a| !matches!(&c.name[..], [n] if same(&a.col.name, n, cs))),
+            )
             .cloned()
             .collect();
         Err(unresolved(&c.name, &candidates, origin))
@@ -841,7 +860,7 @@ impl Resolver<'_> {
         clippy::too_many_arguments,
         reason = "one binding site shared by columns, outer references and lambda variables"
     )]
-    pub(super) fn resolve_attr(
+    pub(in crate::analyzer) fn resolve_attr(
         &mut self,
         a: &Attr,
         used: usize,
@@ -955,7 +974,7 @@ impl Resolver<'_> {
             scope.extend(cx.extra.unwrap_or_default().iter().cloned());
         }
         // Spark resolves a reference to an input column that is no grouping
-        // column too (the check after analysis refuses it), after the
+        // column too (the check after analysis refuses it), before the
         // aggregate's own output.
         let fallback: Arc<[Attr]> = cx.agg_scope.map_or_else(
             || Arc::from(Vec::new()),
@@ -967,10 +986,15 @@ impl Resolver<'_> {
                     .collect()
             },
         );
+        let hidden: Vec<Attr> = cx
+            .rels
+            .iter()
+            .flat_map(|r| r.hidden.iter().cloned())
+            .collect();
         outer.push(super::super::resolve::Level {
             scope: scope.into(),
             lateral: false,
-            hidden: Arc::from(Vec::new()),
+            hidden: hidden.into(),
             fallback,
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)

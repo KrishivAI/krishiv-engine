@@ -286,6 +286,66 @@ impl Resolver<'_> {
             .collect())
     }
 
+    /// `t.*` in a subquery where `t` is no relation of its own scope but
+    /// the enclosing query's: the outer references to that relation's
+    /// columns (Spark 4.2 expands an outer star). `None` when the star
+    /// is anything else.
+    pub(in crate::analyzer) fn outer_star(
+        &mut self,
+        s: &Star,
+        cx: &Cx<'_>,
+        origin: Origin,
+    ) -> Result<Option<Vec<Bound>>, AnalysisError> {
+        let cs = self.ctx.conf.case_sensitive;
+        if s.plan_id.is_some()
+            || s.qualifier.is_empty()
+            || s.position.is_some()
+            || s.regex.is_some()
+            || !s.except.is_empty()
+            || !s.replace.is_empty()
+            || !cx.outer
+            || cx
+                .scope
+                .iter()
+                .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+            // A `USING` join merges columns away from the scope but the
+            // relation is still this query's: it shadows the outer one.
+            || cx.rels.iter().any(|r| {
+                r.hidden
+                    .iter()
+                    .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+            })
+        {
+            return Ok(None);
+        }
+        // Only the immediately enclosing query, as for a column.
+        let Some(level) = cx.env.outer.len().checked_sub(1) else {
+            return Ok(None);
+        };
+        // The merged-away columns of a `USING` join come first, as in
+        // `expand`.
+        let attrs: Vec<Attr> = cx.env.outer[level]
+            .hidden
+            .iter()
+            .chain(cx.env.outer[level].scope.iter())
+            // Generated metadata (`_metadata` of a file source) is not part
+            // of a star, as in `expand`.
+            .filter(|a| !crate::analyzer::ops::is_generated_metadata(a))
+            .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+            .cloned()
+            .collect();
+        if attrs.is_empty() {
+            return Ok(None);
+        }
+        let mut out = Vec::with_capacity(attrs.len());
+        for a in &attrs {
+            self.used(a);
+            let parts = [a.col.name.clone()];
+            out.push(self.resolve_attr(a, 1, &parts, origin, Some(level), cx, false)?);
+        }
+        Ok(Some(out))
+    }
+
     /// The attributes `*`, `t.*` or `df["*"]` stands for.
     pub(in crate::analyzer) fn expand(
         &mut self,
@@ -392,35 +452,6 @@ impl Resolver<'_> {
             return Ok(out);
         }
         self.apply_except(s, &out, origin)
-    }
-
-    /// The columns `t.*` stands for when `t` is the left side of the
-    /// enclosing `JOIN LATERAL` (`SELECT t1.*` in its right side), as column
-    /// names to resolve like any outer reference. Empty for any other star.
-    pub(in crate::analyzer) fn lateral_star(&self, s: &Star, cx: &Cx<'_>) -> Vec<Vec<String>> {
-        if s.plan_id.is_some()
-            || s.regex.is_some()
-            || s.position.is_some()
-            || s.qualifier.is_empty()
-            || !s.except.is_empty()
-            || !s.replace.is_empty()
-        {
-            return Vec::new();
-        }
-        let cs = self.ctx.conf.case_sensitive;
-        let Some(level) = cx.env.outer.last().filter(|l| l.lateral && cx.outer) else {
-            return Vec::new();
-        };
-        level
-            .scope
-            .iter()
-            .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
-            .map(|a| {
-                let mut name = a.qual.to_vec();
-                name.push(a.col.name.clone());
-                name
-            })
-            .collect()
     }
 
     /// `EXCEPT_OVERLAPPING_COLUMNS` when one entry of `s.except` is a prefix
