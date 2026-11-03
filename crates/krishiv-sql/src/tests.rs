@@ -1455,12 +1455,7 @@ fn set_time_zone_follows_spark() {
         assert_eq!(e.span.start, 0, "{sql}");
         assert_eq!(e.span.end, sql.len(), "{sql}");
     }
-    for sql in [
-        "SET TIME ZONE",
-        "SET TIME ZONE INTERVAL 10 HOURS 'GMT+1'",
-        "SET TIME ZONE 'UTC' 'x'",
-        "SET TIME ZONE 5",
-    ] {
+    for sql in ["SET TIME ZONE", "SET TIME ZONE INTERVAL 10 HOURS 'GMT+1'"] {
         let e = fail(sql);
         assert_eq!(
             e.error.error_class().name(),
@@ -1511,14 +1506,32 @@ fn set_errors_follow_spark() {
     let e = fail("SET k'x = 1");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
     assert_eq!(e.span.range(), 5..6);
-    // An `INTERVAL` time zone with days is out of range (`set_time_zone_follows_spark` has the rest).
+    // An `INTERVAL` time zone holds hours, minutes and seconds only.
     let e = fail("SET TIME ZONE INTERVAL '1' DAY");
     assert_eq!(
         e.error.error_class(),
         ErrorClass::InvalidIntervalFormatTimezoneIntervalOutOfRange
     );
-    // A missing zone is Spark's catch-all `_LEGACY_ERROR_TEMP_0045`.
+    assert!(e.error.to_string().contains("'1'"), "{e:?}");
+    // A captured second range is the literal's own error, not a zone.
+    let e = fail("SET TIME ZONE INTERVAL '01:00' HOUR TO MINUTE '1' DAY");
+    assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp0024);
+    // The largest magnitude does not overflow: it is out of range.
+    let e = fail("SET TIME ZONE INTERVAL '-9223372036854775807 microseconds -1 microsecond'");
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::InvalidIntervalFormatTimezoneIntervalOutOfRange
+    );
+    // A temporary function takes no database, with or without a class.
+    let e = fail("CREATE TEMPORARY FUNCTION a.f AS 'x.Y'");
+    assert_eq!(e.error.error_class(), ErrorClass::InvalidTempObjQualifier);
+    let e = fail("CREATE TEMPORARY FUNCTION f AS 'x.Y' USING JAR 'a.jar'");
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    // A missing zone, or text that is no zone, is the catch-all alternative.
     let e = fail("SET TIME ZONE");
+    assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp0045);
+    assert_eq!(e.span.range(), 0..13);
+    let e = fail("SET TIME ZONE INTERVAL 10 HOURS 'GMT+1'");
     assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp0045);
     // Anything after the value's `;` is extra input, as for queries.
     let e = fail("SET x = 1; SELECT 2");

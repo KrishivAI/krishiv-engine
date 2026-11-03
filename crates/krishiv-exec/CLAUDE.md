@@ -76,9 +76,23 @@ plan, and a deterministic one (the optimizer's `ShareCte`) only in a second pass
 `PhysicalPlan`; `QueryRunner::execute` runs an already instantiated `ExecNode` graph.
 `planner/aggregate.rs` also lowers `PlanNode::PartialAggregate` (P2-T167) onto a partial hash aggregate, and a call over
 `ResolvedExpr::StateInput` onto one merging its states; it refuses states the optimizer typed differently.
+`exchange/` (P2-T176 unit 1) the spec 13 §6 traits `Exchange`/`ExchangeWriter`/`ExchangeReader` (blocking mode,
+commit before read, first committed attempt wins), `route` (hash by the plan's `HashScheme`, round-robin by the routing
+hash of the whole row, gathers/broadcasts/ranges to partition 0), `ExchangeSink` (a map task's root: rows routed and
+buffered per reduce partition under the driver's consumer, a spill hands them to the writer as frames, commit at
+finalize) and `ExchangeRead` (a reduce task's `PhysNode::ExchangeSource`: `(map, reduce)` pairs as morsels, one driver
+in map order for a gather). `instantiate_task` writes a root exchange when `TaskSpec::output` is set and reads each
+source as `TaskSpec::exchanges` says; `exchange_schemas` gives a fragmenter each exchange's columns. Storage is
+`krishiv-shuffle`'s, fragments and stages are `krishiv-scheduler`'s.
 `planner/properties.rs` (P2-T174) the ADR 0012 property pass: required distributions and provided placements (by
 attribute id); `Exchange` nodes (`Hash` on the routing hash, `Single`, `Broadcast`, `RoundRobin`, `Range`) are inserted
 only where a requirement is unmet; on one worker instantiation lowers each exchange into the operators around it.
+An aggregate over rows that must move is planned in two phases, `Aggregate{Partial}` -> exchange -> `Aggregate{Final}`
+over states (`planner/aggregate.rs`, design P2-T174 unit 2; `DISTINCT`: partial over keys and argument, exchange,
+partial merge, final, `physical::distinct_phases`, fused back by `fused_distinct`); `physical::fused_aggregate`
+runs the three as one `HashAggregate::fused` breaker on one worker (`WorkerContext::with_fused_aggregates(false)` runs
+them as written, for tests), whose drivers record the `ExchangeStats` (`exchange_stats.rs`: rows and bytes per
+partition, `Hll(10)` of the keys) that `EXPLAIN ANALYZE` prints as `exchange_*`.
 
 ## Key files
 Paths are relative to this crate.

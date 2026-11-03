@@ -74,6 +74,37 @@ pub(in crate::analyzer) fn unresolved(
     )
 }
 
+/// `UNRESOLVED_COLUMN` for `parts` named in `s.* EXCEPT (...)`, proposing the
+/// fields of the struct `s` (Spark resolves the entry against them).
+pub(in crate::analyzer) fn unresolved_in_fields(
+    parts: &[String],
+    fields: &krishiv_types::StructType,
+    origin: Origin,
+) -> AnalysisError {
+    let candidates = fields
+        .fields()
+        .iter()
+        .map(|f| vec![f.name().to_owned()])
+        .collect();
+    let ranked = closest(&parts.join("."), candidates);
+    let object_name = quoted(parts);
+    if ranked.is_empty() {
+        return AnalysisError::new(UnresolvedColumnWithoutSuggestion { object_name }, origin);
+    }
+    let proposal = ranked
+        .iter()
+        .map(|p| quoted(p))
+        .collect::<Vec<_>>()
+        .join(", ");
+    AnalysisError::new(
+        UnresolvedColumnWithSuggestion {
+            object_name,
+            proposal,
+        },
+        origin,
+    )
+}
+
 /// The quoted names of `attrs`, comma-separated.
 pub(in crate::analyzer) fn names(attrs: &[Attr], _qualified: bool) -> String {
     attrs
@@ -232,7 +263,7 @@ impl Resolver<'_> {
                 qual: super::super::ops::no_qual(),
                 source: None,
             };
-            return self.resolve_attr(&a, 1, &c.name, origin, None, true);
+            return self.resolve_attr(&a, 1, &c.name, origin, None, cx, true);
         }
         if let Some(id) = c.plan_id {
             let a = self.plan_column(id, &c.name, cx, origin)?;
@@ -257,8 +288,10 @@ impl Resolver<'_> {
         // The columns a `USING` join merged away answer to a qualified name.
         let joined: Vec<Attr>;
         let hidden = match (cx.rels, cx.agg_scope.is_some() && in_agg) {
-            ([r], false) if c.name.len() > 1 => Some(&r.hidden[..]),
-            ([r], true) if c.name.len() > 1 => r.agg.as_ref().map(|i| &i.input.hidden[..]),
+            ([r], false) if c.name.len() > 1 || is_metadata(&c.name) => Some(&r.hidden[..]),
+            ([r], true) if c.name.len() > 1 || is_metadata(&c.name) => {
+                r.agg.as_ref().map(|i| &i.input.hidden[..])
+            }
             // A join condition reads the merged-away columns of both inputs.
             (rels, false) if c.name.len() > 1 && rels.len() > 1 => {
                 joined = rels.iter().flat_map(|r| r.hidden.iter().cloned()).collect();
@@ -283,10 +316,10 @@ impl Resolver<'_> {
                         && self.serves_path(&k, &c.name[k_used..])
                     {
                         self.used(&k);
-                        return self.resolve_attr(&k, k_used, &c.name, origin, None, false);
+                        return self.resolve_attr(&k, k_used, &c.name, origin, None, cx, false);
                     }
                     self.used(&a);
-                    return self.resolve_attr(&a, used, &c.name, origin, None, false);
+                    return self.resolve_attr(&a, used, &c.name, origin, None, cx, false);
                 }
                 Ok(None) => {
                     lenient_dup = lenient_dup || lenient;
@@ -372,13 +405,44 @@ impl Resolver<'_> {
             };
             return self.expr(alias, &inner);
         }
-        // Only the immediately enclosing query, as Spark 4.2 resolves.
+        // Only the immediately enclosing query, as Spark 4.2 resolves (a
+        // nested lateral join's right side sees its own left side only).
         let levels = cx.env.outer.iter().enumerate().rev().take(1);
         for (level, outer) in levels.filter(|_| cx.outer) {
-            if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
-                self.used(&a);
-                return self.resolve_attr(&a, used, &c.name, origin, Some(level), false);
+            // Spark binds an unqualified outer name to the aggregate's input
+            // first (an output alias of the same name is then not reached),
+            // so the input columns the output does not carry come first.
+            let mut hit = if outer.fallback.is_empty() {
+                None
+            } else {
+                self.find(&outer.fallback, &c.name, origin, false)?
+            };
+            if hit.is_none() {
+                hit = self.find(&outer.scope, &c.name, origin, false)?;
             }
+            if hit.is_none() && outer.lateral && c.name.len() > 1 {
+                hit = self.find(&outer.hidden, &c.name, origin, false)?;
+            }
+            if let Some((a, used)) = hit {
+                self.used(&a);
+                let b = self.resolve_attr(&a, used, &c.name, origin, Some(level), cx, false)?;
+                return Ok(if outer.lateral && used == c.name.len() {
+                    qualify_lateral(b, &a)
+                } else {
+                    b
+                });
+            }
+        }
+        // `grouping__id` is the grouping id Spark's aggregate rule reads
+        // before a function parameter of that name can: outside a grouping
+        // context it is `UNSUPPORTED_GROUPING_EXPRESSION`.
+        if let [name] = &c.name[..]
+            && name.eq_ignore_ascii_case("grouping__id")
+            && !cx.grouping
+            && !self.ctx.conf.udf_parameter_shadows_function
+            && self.has_parameter(name)
+        {
+            return Err(AnalysisError::new(UnsupportedGroupingExpression {}, origin));
         }
         // The parameters of the SQL function being resolved rank after
         // everything else, but before a session variable.
@@ -428,10 +492,18 @@ impl Resolver<'_> {
         if self.parameter_attrs().is_empty() {
             return Err(unresolved(&c.name, cx.scope, origin));
         }
+        // A parameter the name matches is out of reach here (the body
+        // nests deeper than a parameter is visible), and Spark proposes
+        // nothing for it.
+        let cs = self.ctx.conf.case_sensitive;
         let candidates: Vec<Attr> = cx
             .scope
             .iter()
-            .chain(self.parameter_attrs())
+            .chain(
+                self.parameter_attrs()
+                    .iter()
+                    .filter(|a| !matches!(&c.name[..], [n] if same(&a.col.name, n, cs))),
+            )
             .cloned()
             .collect();
         Err(unresolved(&c.name, &candidates, origin))
@@ -575,11 +647,12 @@ impl Resolver<'_> {
         let mut names = Vec::with_capacity(kids.len());
         for (i, k) in kids.iter().enumerate() {
             let name = match &k.expr.node {
-                ExprNode::Resolved(
-                    ResolvedExpr::Column(c)
-                    | ResolvedExpr::OuterColumn(c)
-                    | ResolvedExpr::LambdaVar(c),
-                ) => c.name.clone(),
+                ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::LambdaVar(c)) => {
+                    c.name.clone()
+                }
+                // A lateral reference is named `outer(t.x)` for display; the
+                // struct field is the column's own name.
+                ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => outer_column_name_of(&c.name),
                 ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
                 ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
                 _ => format!("col{}", i + 1),
@@ -784,13 +857,18 @@ impl Resolver<'_> {
     /// or the struct fields the leftover parts name below it (Spark's
     /// `GetStructField` chain), resolved under `spark.sql.caseSensitive`.
     /// `outer` is `Some` for a column of the enclosing query.
-    pub(super) fn resolve_attr(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one binding site shared by columns, outer references and lambda variables"
+    )]
+    pub(in crate::analyzer) fn resolve_attr(
         &mut self,
         a: &Attr,
         used: usize,
         parts: &[String],
         origin: Origin,
         outer: Option<usize>,
+        cx: &Cx<'_>,
         lambda: bool,
     ) -> Result<Bound, AnalysisError> {
         // A reference keeps the spelling it was written with.
@@ -816,7 +894,19 @@ impl Resolver<'_> {
         let mut ty = column(&col);
         let mut base = Arc::new(Expr::new(node).with_origin(origin));
         let mut parent = parts[used - 1].clone();
-        for part in &parts[used..] {
+        for (i, part) in parts.iter().enumerate().skip(used) {
+            // A map below the path: the rest are lookups (`m.a.b` is `m['a']['b']`).
+            if matches!(ty.data_type, Some(DataType::Map(_))) {
+                let mut chain = Expr::clone(&base);
+                for rest in &parts[i..] {
+                    chain = Expr::new(ExprNode::Field {
+                        base: Arc::new(chain),
+                        name: rest.clone(),
+                    })
+                    .with_origin(origin);
+                }
+                return self.expr(&Arc::new(chain), cx);
+            }
             let st = match &ty.data_type {
                 Some(DataType::Struct(st)) => st.clone(),
                 _ => {
@@ -884,8 +974,29 @@ impl Resolver<'_> {
         if cx.agg_scope.is_some() {
             scope.extend(cx.extra.unwrap_or_default().iter().cloned());
         }
+        // Spark resolves a reference to an input column that is no grouping
+        // column too (the check after analysis refuses it), before the
+        // aggregate's own output.
+        let fallback: Arc<[Attr]> = cx.agg_scope.map_or_else(
+            || Arc::from(Vec::new()),
+            |input| {
+                input
+                    .iter()
+                    .filter(|a| !scope.iter().any(|s| s.col.id == a.col.id))
+                    .cloned()
+                    .collect()
+            },
+        );
+        let hidden: Vec<Attr> = cx
+            .rels
+            .iter()
+            .flat_map(|r| r.hidden.iter().cloned())
+            .collect();
         outer.push(super::super::resolve::Level {
             scope: scope.into(),
+            lateral: false,
+            hidden: hidden.into(),
+            fallback,
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }
@@ -941,5 +1052,43 @@ impl Resolver<'_> {
             .with_origin(e.origin),
         );
         Ok((expr, ty))
+    }
+}
+
+/// The outer reference `b` to `a`, a column of a lateral join's left side,
+/// named as Spark prints it inside a name: `outer(t.c)`, qualified.
+fn qualify_lateral(mut b: Bound, a: &Attr) -> Bound {
+    let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &b.expr.node else {
+        return b;
+    };
+    let mut col = c.clone();
+    let qual: Vec<&str> = a.qual.iter().map(String::as_str).collect();
+    // A column name holding a dot is quoted, so the name taken back out of
+    // this text (`pretty::outer_column_name`) is the column's, not its tail.
+    let name = if c.name.contains('.') {
+        format!("`{}`", c.name.replace('`', "``"))
+    } else {
+        c.name.clone()
+    };
+    col.name = format!(
+        "outer({}{}{})",
+        qual.join("."),
+        if qual.is_empty() { "" } else { "." },
+        name
+    );
+    b.expr = Arc::new(
+        Expr::new(ExprNode::Resolved(ResolvedExpr::OuterColumn(col))).with_origin(b.expr.origin),
+    );
+    b
+}
+
+/// The column an `outer(..)` display name stands for; any other name as it is.
+fn outer_column_name_of(name: &str) -> String {
+    match name
+        .strip_prefix("outer(")
+        .and_then(|n| n.strip_suffix(')'))
+    {
+        Some(inner) => super::pretty::outer_column_name(inner),
+        None => name.to_owned(),
     }
 }

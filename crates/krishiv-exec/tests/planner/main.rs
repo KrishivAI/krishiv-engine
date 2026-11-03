@@ -33,7 +33,9 @@ mod shared;
 mod splits;
 mod string_encoding;
 mod sum_rewrite;
+mod tpcds_merge;
 mod tpch;
+mod two_phase;
 mod union;
 mod union_order;
 mod window;
@@ -169,7 +171,12 @@ struct Env {
 }
 
 fn env() -> Env {
-    let (schema, batches) = table(10);
+    env_of(10)
+}
+
+/// [`env`] with `n` rows in `t`.
+fn env_of(n: i32) -> Env {
+    let (schema, batches) = table(n);
     let columns = schema
         .fields()
         .iter()
@@ -207,8 +214,14 @@ impl Env {
     }
 
     fn plan(&self, sql: &str) -> Result<Runnable, KrishivError> {
+        self.plan_with(sql, Config::new())
+    }
+
+    /// [`Env::plan`] under the session settings `config`.
+    fn plan_with(&self, sql: &str, config: Config) -> Result<Runnable, KrishivError> {
         let plan = krishiv_optimizer::optimize(&self.analyze(sql)).unwrap();
-        Ok(self.runnable(DefaultPlanner.plan(&plan, &self.cx())?))
+        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::new(config));
+        Ok(self.runnable(DefaultPlanner.plan(&plan, &cx)?))
     }
 
     fn runnable(&self, plan: PhysicalPlan) -> Runnable {
@@ -453,17 +466,47 @@ fn a_self_join_instance_reads_shifted_ids() {
     assert_eq!(e.error_class(), ErrorClass::InternalError);
 }
 
+/// A `FULL OUTER JOIN` without an equality key is a nested loop that
+/// returns the matched pairs, then each side's unmatched rows padded with
+/// NULLs (design P2-T052b §2.2), as a brute force over the table does.
+#[test]
+fn a_full_outer_join_without_a_key_is_a_nested_loop() {
+    let env = env();
+    let sql = "SELECT x.a, y.a FROM t AS x FULL OUTER JOIN t AS y ON x.a < y.a";
+    let plan = env.plan(sql).unwrap();
+    let explain = plan.to_string();
+    assert!(explain.contains("NestedLoopJoin FullOuter"), "{explain}");
+    let (_, values) = env.rows("SELECT a FROM t");
+    let values: Vec<Option<i32>> = values.iter().map(|v| v.parse().ok()).collect();
+    let s = |v: Option<i32>| v.map_or_else(|| "NULL".to_owned(), |v| v.to_string());
+    let hit = |x: Option<i32>, y: Option<i32>| matches!((x, y), (Some(x), Some(y)) if x < y);
+    let mut want = Vec::new();
+    for &x in &values {
+        let mut matched = false;
+        for &y in &values {
+            if hit(x, y) {
+                matched = true;
+                want.push(format!("{}|{}", s(x), s(y)));
+            }
+        }
+        if !matched {
+            want.push(format!("{}|NULL", s(x)));
+        }
+    }
+    for &y in &values {
+        if !values.iter().any(|&x| hit(x, y)) {
+            want.push(format!("NULL|{}", s(y)));
+        }
+    }
+    want.sort();
+    let (_, mut got) = env.rows(sql);
+    got.sort();
+    assert_eq!(got, want);
+}
+
 #[test]
 fn unsupported_and_inconsistent_plans_fail_clearly() {
     let env = env();
-    // A `FULL OUTER JOIN` without an equality key has no nested loop yet.
-    let sql = "SELECT x.a FROM t AS x FULL OUTER JOIN t AS y ON x.a < y.a";
-    let e = env.plan(sql).unwrap_err();
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
-        "{sql}: {e}"
-    );
     // An unresolved plan.
     let unresolved = Plan::try_new(LogicalPlan::table(["t"])).unwrap();
     let e = DefaultPlanner.plan(&unresolved, &env.cx()).unwrap_err();

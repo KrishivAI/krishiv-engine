@@ -10,3 +10,17 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+arrow-array.workspace = true
+arrow-ipc.workspace = true
+arrow-schema.workspace = true
+futures = { workspace = true, features = ["alloc"] }
+krishiv-common = { path = "../krishiv-common" }
+krishiv-exec = { path = "../krishiv-exec" }
+krishiv-memory = { path = "../krishiv-memory" }
+thiserror.workspace = true
+
+[dev-dependencies]
+futures = { workspace = true, features = ["executor"] }
+tempfile.workspace = true

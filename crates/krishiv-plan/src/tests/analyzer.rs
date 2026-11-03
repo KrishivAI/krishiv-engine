@@ -3020,9 +3020,9 @@ fn order_by_all_sorts_by_every_output_column() {
 }
 
 /// `* EXCEPT` drops the named columns; overlapping entries and nested
-/// fields fail with Spark's classes, unknown names resolve as usual.
+/// fields of a non-struct column fail, unknown names resolve as usual.
 #[test]
-fn star_except_drops_overlaps_and_rejects_nested() {
+fn star_except_drops_overlaps_and_rejects_nested_fields_of_a_flat_column() {
     use crate::Star;
 
     let except = |cols: &[&str]| {
@@ -3048,7 +3048,7 @@ fn star_except_drops_overlaps_and_rejects_nested() {
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["a", "a", "a.b"])]);
     assert_eq!(class(&run(plan, &ctx())), "EXCEPT_OVERLAPPING_COLUMNS");
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["a.b"])]);
-    assert_eq!(class(&run(plan, &ctx())), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(class(&run(plan, &ctx())), "INVALID_EXTRACT_BASE_FIELD_TYPE");
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["z"])]);
     assert_eq!(
         class(&run(plan, &ctx())),
@@ -3341,6 +3341,41 @@ fn inline_table_of_unevaluable_expressions_fails() {
     );
 }
 
+/// A cell that raises when Spark evaluates it while resolving the table is
+/// `FAILED_SQL_EXPRESSION_EVALUATION` (ANSI: `CAST('nan' AS INT)` fails;
+/// without ANSI it is NULL and the table resolves).
+#[test]
+fn inline_table_cell_that_fails_to_evaluate() {
+    let bad = || {
+        Expr::new(ExprNode::Cast {
+            expr: Arc::new(s("nan")),
+            to: DataType::Integer,
+            mode: crate::CastMode::Ansi,
+        })
+    };
+    let mut on = ctx();
+    on.conf.ansi = true;
+    let r = run(inline_table(vec![vec![int(1)], vec![bad()]], &["a"]), &on);
+    assert_eq!(
+        class(&r),
+        "INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION"
+    );
+    // The cast-named function form fails the same way.
+    let named = f("boolean", vec![s("XXX")]);
+    let r = run(inline_table(vec![vec![named]], &["a"]), &on);
+    assert_eq!(
+        class(&r),
+        "INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION"
+    );
+    let try_cast = Expr::new(ExprNode::Cast {
+        expr: Arc::new(s("nan")),
+        to: DataType::Integer,
+        mode: crate::CastMode::Try,
+    });
+    let r = run(inline_table(vec![vec![try_cast]], &["a"]), &on);
+    assert_eq!(class(&r), "OK");
+}
+
 /// The clock functions evaluate once per query, so they may stay.
 #[test]
 fn inline_table_of_clock_calls_resolves() {
@@ -3484,7 +3519,7 @@ fn legacy_flag_confs_follow_session_confs() {
     // booleans are not registry entries, so `SET` does not validate them).
     let odd_bool = conf(&[("spark.sql.legacy.allowParameterlessCount", "sometimes")]);
     assert!(!odd_bool.allow_parameterless_count);
-    assert_eq!(ResolutionConf::KEYS.len(), 22);
+    assert_eq!(ResolutionConf::KEYS.len(), 24);
     let charsets = conf(&[
         ("spark.sql.legacy.javaCharsets", "true"),
         ("spark.sql.legacy.codingErrorAction", "TRUE"),

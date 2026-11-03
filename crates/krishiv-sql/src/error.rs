@@ -18,8 +18,7 @@
 
 use krishiv_common::error::{
     CreateViewWithIfNotExistsAndReplace, FailedToParseTooComplex, IdentifierTooManyNameParts,
-    InvalidIdentifier, InvalidIntervalFormatTimezoneIntervalOutOfRange, InvalidResetCommandFormat,
-    InvalidSetSyntax, InvalidSqlPathSchemaReference,
+    InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax, InvalidSqlPathSchemaReference,
     InvalidSqlSyntaxCreateRoutineWithIfNotExistsAndReplace,
     InvalidSqlSyntaxCreateTempFuncWithDatabase, InvalidSqlSyntaxCreateTempFuncWithIfNotExists,
     InvalidStatementOrClause, InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature,
@@ -241,30 +240,21 @@ pub(crate) fn invalid_temp_obj_qualifier(
     )
 }
 
-/// `KRISHIV_UNSUPPORTED_FEATURE` for the `SET TIME ZONE` form `form`
-/// (e.g. an `INTERVAL` zone).
-pub(crate) fn unsupported_set_time_zone(form: &str, span: Span) -> ParseError {
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a function implemented by a JVM class.
+pub(crate) fn unsupported_function_class(span: Span) -> ParseError {
     at(
         KrishivUnsupportedFeature {
-            feature: form.to_owned(),
+            feature: "CREATE FUNCTION ... AS 'class' (a function implemented by a JVM class)"
+                .to_owned(),
         },
         span,
     )
 }
 
-/// `_LEGACY_ERROR_TEMP_0045`: `SET TIME ZONE` followed by anything but `LOCAL`, a string or one
-/// interval (Spark's catch-all alternative of the rule).
+/// `_LEGACY_ERROR_TEMP_0045`: `SET TIME ZONE` followed by neither a zone
+/// nor an interval.
 pub(crate) fn invalid_time_zone_displacement(span: Span) -> ParseError {
     at(LegacyErrorTemp0045 {}, span)
-}
-
-/// `INVALID_INTERVAL_FORMAT.TIMEZONE_INTERVAL_OUT_OF_RANGE`: a `SET TIME ZONE INTERVAL` outside
-/// [-18, +18] hours or with a fraction of a second; `input` is the offending part as Spark shows it.
-pub(crate) fn time_zone_interval_out_of_range(input: String, span: Span) -> ParseError {
-    at(
-        InvalidIntervalFormatTimezoneIntervalOutOfRange { input },
-        span,
-    )
 }
 
 /// `_LEGACY_ERROR_TEMP_0035`: a bare `ALTER TABLE ... CHANGE column`

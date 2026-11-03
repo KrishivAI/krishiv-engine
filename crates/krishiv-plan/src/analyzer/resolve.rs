@@ -84,6 +84,21 @@ pub(super) enum Widen {
     /// An aggregate (under the projections of its lateral aliases): it
     /// adds grouping attributes to its output.
     Aggregate(Arc<AggInfo>),
+    /// A file scan: it adds its hidden `_metadata` column to its output.
+    Scan,
+    /// `inner` with every attribute id shifted by `offset` (the second
+    /// side of a self-join): widening shifts what `inner` widens to.
+    Shift { inner: Rel, offset: u64 },
+    /// A join of `left` and `right` (their `hidden` kept): the hidden
+    /// `_metadata` columns of either input come from widening it.
+    Join {
+        left: Rel,
+        right: Rel,
+        kind: crate::JoinKind,
+        condition: crate::JoinCondition,
+        /// Whether the left and right outputs turn nullable.
+        nullable: (bool, bool),
+    },
 }
 
 /// A resolved relation and its output scope.
@@ -111,6 +126,17 @@ pub(super) struct Rel {
 #[derive(Clone)]
 pub(super) struct Level {
     pub(super) scope: Arc<[Attr]>,
+    /// The left side of a `JOIN LATERAL`: unlike a subquery's enclosing
+    /// query, it stays in reach from further in.
+    pub(super) lateral: bool,
+    /// The columns a `USING` join of that query merged away: not
+    /// resolvable by name (a lateral right side reaches them by a qualified
+    /// name), but a qualified star still lists them.
+    pub(super) hidden: Arc<[Attr]>,
+    /// The input columns of the aggregate a `HAVING` subquery sits in that its
+    /// output does not carry, searched first: Spark binds an outer name to the
+    /// aggregate input before an output alias of the same name.
+    pub(super) fallback: Arc<[Attr]>,
 }
 
 /// A scope environment: the CTEs visible and the enclosing queries.
@@ -127,6 +153,10 @@ pub(super) struct Env {
 
 pub(super) struct Resolver<'a> {
     pub(super) ctx: &'a AnalysisContext,
+    /// The context with `spark.sql.ansi.enabled` inverted, swapped in with
+    /// `ctx` while the body of a function captured under the other mode
+    /// resolves.
+    pub(super) flipped: &'a AnalysisContext,
     pub(super) b: &'a Bindings,
     pub(super) next_id: u64,
     next_env: usize,
@@ -151,6 +181,13 @@ pub(super) struct Resolver<'a> {
     /// `exprs::expr_in`): every [`RESOLVE_STEP`] levels run on a fresh
     /// stack.
     pub(super) expr_depth: usize,
+    /// Nodes under the key argument of an AES call (ADR 0042), shared by
+    /// every nested `expr_in` (lambda bodies, subqueries) so the secret
+    /// context is inherited on all analysis paths; cleared when the
+    /// outermost expression finishes. `secret_scope` is set while a secret
+    /// node's children are bound, so a nested pass marks its root.
+    pub(super) secret: std::collections::HashSet<usize>,
+    pub(super) secret_scope: bool,
     op_outer: Option<usize>,
     root_env: Option<Arc<Env>>,
     /// Constant folding's values over this pass (see `fold::Memo`).
@@ -179,8 +216,11 @@ pub(super) fn resolve(
     ctx: &AnalysisContext,
     b: &Bindings,
 ) -> Result<Resolved, AnalysisError> {
+    let mut other = ctx.clone();
+    other.conf.ansi = !ctx.conf.ansi;
     let mut r = Resolver {
         ctx,
+        flipped: &other,
         b,
         next_id: 0,
         next_env: 0,
@@ -191,6 +231,8 @@ pub(super) fn resolve(
         columns: vec![BTreeSet::new(); b.securables.len()],
         depth: 0,
         expr_depth: 0,
+        secret: std::collections::HashSet::new(),
+        secret_scope: false,
         op_outer: None,
         root_env: None,
         folds: std::cell::RefCell::default(),
@@ -407,9 +449,16 @@ impl Resolver<'_> {
                     continue;
                 }
                 stack.push((Arc::clone(&p), true));
+                // A lateral join resolves its right side in its own
+                // environment (the left side in scope), so it starts both.
                 if !matches!(
                     p.node,
-                    PlanNode::WithCte { .. } | PlanNode::UnionLoop { .. }
+                    PlanNode::WithCte { .. }
+                        | PlanNode::UnionLoop { .. }
+                        | PlanNode::Join {
+                            kind: crate::JoinKind::LateralInner | crate::JoinKind::LateralLeft,
+                            ..
+                        }
                 ) {
                     let mut kids = Vec::new();
                     p.for_each_child(&mut |c| kids.push(self.rep(c)));

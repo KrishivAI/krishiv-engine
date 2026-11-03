@@ -148,6 +148,10 @@ pub(crate) struct SqlArgs {
     /// `text`/`json` only).
     #[arg(long = "explain-format", value_enum, requires = "explain")]
     explain_format: Option<ExplainFormat>,
+    /// With --explain-analyze and JSON output: add the plan at every planning
+    /// stage (as --explain-verbose shows it) to the profile's `planning` member.
+    #[arg(long, requires = "explain_analyze")]
+    planning: bool,
 }
 
 impl SqlArgs {
@@ -180,6 +184,13 @@ pub(crate) fn run(args: &SqlArgs) -> i32 {
             io::stderr(),
             "error: the argument '--json' cannot be used with '--explain-format {}'\n\nFor more information, try '--help'.",
             format.name(),
+        );
+        return 2;
+    }
+    if args.planning && explain_format(args) != ExplainFormat::Json {
+        let _ = writeln!(
+            io::stderr(),
+            "error: '--planning' needs JSON output: add '--json' or '--explain-format json'\n\nFor more information, try '--help'."
         );
         return 2;
     }
@@ -347,7 +358,11 @@ fn print_explain(out: &mut dyn Write, df: &DataFrame, args: &SqlArgs) -> Result<
     // `explain_*_with`, so there is a single route to each document and no
     // second rendering that can drift.
     let format = explain_format(args);
-    let text = if args.explain_analyze {
+    let text = if args.explain_analyze && args.planning {
+        futures::executor::block_on(df.explain_analyze_verbose())
+            .map_err(|e| e.to_string())?
+            .to_json()
+    } else if args.explain_analyze {
         match format.graph_format() {
             None => {
                 let p =

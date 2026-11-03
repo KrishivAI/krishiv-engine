@@ -3,9 +3,6 @@
     "depends-on-command": [
       4,
       8
-    ],
-    "sql-commands": [
-      2
     ]
   },
   "file": "view-conf",

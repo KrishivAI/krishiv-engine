@@ -17,6 +17,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &STORE_ASSIGNMENT_POLICY,
     &CTE_PRECEDENCE_POLICY,
     &MAP_KEY_DEDUP_POLICY,
+    &AUTO_BROADCAST_JOIN_THRESHOLD,
     &TARGET_PARTITION_BYTES,
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
@@ -53,6 +54,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &FILES_MIN_PARTITION_NUM,
     &FILES_MAX_PARTITION_NUM,
     &PARTITION_OVERWRITE_MODE,
+    &FILES_COMMIT_PROTOCOL,
     &BUCKETING_MAX_BUCKETS,
     &LEAF_NODE_DEFAULT_PARALLELISM,
     &IO_MAX_CONCURRENT_REQUESTS,
@@ -170,6 +172,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
     ("krishiv.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
+    ("krishiv.sql.files.commitProtocol", &FILES_COMMIT_PROTOCOL),
     ("spark.sql.avro.compression.codec", &AVRO_COMPRESSION_CODEC),
     (
         "spark.sql.cteRecursionLevelLimit",
@@ -249,6 +252,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_CODING_ERROR_ACTION,
     ),
     (
+        "spark.sql.autoBroadcastJoinThreshold",
+        &AUTO_BROADCAST_JOIN_THRESHOLD,
+    ),
+    (
         "spark.sql.leafNodeDefaultParallelism",
         &LEAF_NODE_DEFAULT_PARALLELISM,
     ),
@@ -267,6 +274,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.runtimeFilter.inList.maxValues",
         &RUNTIME_FILTER_IN_LIST_MAX_VALUES,
+    ),
+    (
+        "krishiv.sql.autoBroadcastJoinThreshold",
+        &AUTO_BROADCAST_JOIN_THRESHOLD,
     ),
     (
         "krishiv.sql.leafNodeDefaultParallelism",
@@ -440,6 +451,21 @@ pub static MAP_KEY_DEDUP_POLICY: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.mapKeyDedupPolicy"),
+};
+
+/// The largest estimated join build broadcast without a hint (P2-T174
+/// unit 4).
+pub static AUTO_BROADCAST_JOIN_THRESHOLD: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.autoBroadcastJoinThreshold",
+    value_type: ValueType::SignedSize,
+    #[expect(clippy::cast_possible_wrap, reason = "10 MiB")]
+    default: Some(ConfigValue::Int((10 * MIB) as i64)),
+    doc: "The largest estimated size, in bytes, of a join input that is broadcast to every \
+          task without a hint. A negative value turns broadcasting by size off; a \
+          `BROADCAST` hint still broadcasts.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.autoBroadcastJoinThreshold"),
 };
 
 /// Target partition size, replacing a fixed shuffle partition count.
@@ -1404,6 +1430,23 @@ pub static PARTITION_OVERWRITE_MODE: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.sources.partitionOverwriteMode"),
+};
+
+/// `krishiv.sql.files.commitProtocol`.
+pub static FILES_COMMIT_PROTOCOL: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.files.commitProtocol",
+    value_type: ValueType::Enum(&["AUTO", "LOG", "NONE"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("NONE"))),
+    doc: "How a write to a plain directory is committed: `LOG` records every commit in \
+          `_krishiv_log/` (put-if-absent, so concurrent writers cannot both take a version), and \
+          Krishiv readers of the directory then see only committed files; `NONE` is Spark's plain \
+          commit (files under their final names, `_SUCCESS`; the default until the log is the \
+          default); `AUTO` uses the log \
+          where the store supports put-if-absent and the plain commit, with a warning, where it \
+          does not.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
 };
 
 /// `krishiv.agent.gateBytes`.
