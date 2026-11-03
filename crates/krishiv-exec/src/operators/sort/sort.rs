@@ -26,7 +26,9 @@ use arrow_schema::SchemaRef;
 use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
-use krishiv_memory::{ConsumerHandle, MemoryError, Reservation, SpillScope, SpillSignal};
+use krishiv_memory::{
+    ConsumerHandle, MemoryError, Reservation, SpillScope, SpillSignal, SpillWriter,
+};
 use krishiv_types::batch::Batch;
 
 use super::keys::{KeyEncoder, SortKey};
@@ -1994,8 +1996,11 @@ fn write_rest(
     let (mut max_batch_bytes, mut row_bytes) = (0, 1);
     while let Some(batch) = merger.next(rows)? {
         query.check_cancelled()?;
-        max_batch_bytes = max_batch_bytes.max(batch.data().get_array_memory_size());
-        row_bytes = row_bytes.max(data_bytes(&batch).div_ceil(batch.num_rows().max(1)));
+        // What reading the frame back costs: the writer compacts view
+        // columns, whose batch here still shares its inputs' buffers.
+        let bytes = SpillWriter::frame_bytes(&batch);
+        max_batch_bytes = max_batch_bytes.max(bytes);
+        row_bytes = row_bytes.max(bytes.div_ceil(batch.num_rows().max(1)));
         writer.write(&batch).map_err(KrishivError::from)?;
     }
     let file = writer.finish().map_err(KrishivError::from)?;

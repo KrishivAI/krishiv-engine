@@ -17,6 +17,7 @@ use arrow_schema::SchemaRef;
 use arrow_select::interleave::interleave;
 use krishiv_memory::{
     ConsumerHandle, MemoryError, Reservation, SpillError, SpillFile, SpillReader, SpillScope,
+    SpillWriter,
 };
 use krishiv_types::batch::{Batch, Weights};
 
@@ -1094,9 +1095,11 @@ pub(crate) fn write_run(
     let (mut max_batch_bytes, mut row_bytes) = (0, 1);
     while let Some(batch) = merger.next(batch_rows)? {
         query.check_cancelled()?;
-        let bytes = batch.data().get_array_memory_size();
+        // As read back: the writer compacts view columns, which here still
+        // share their inputs' buffers.
+        let bytes = SpillWriter::frame_bytes(&batch);
         max_batch_bytes = max_batch_bytes.max(bytes);
-        row_bytes = row_bytes.max(data_bytes(&batch).div_ceil(batch.num_rows().max(1)));
+        row_bytes = row_bytes.max(bytes.div_ceil(batch.num_rows().max(1)));
         if let Err(e) = writer.write(&batch) {
             return refused(e);
         }
