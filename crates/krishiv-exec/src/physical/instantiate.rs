@@ -844,7 +844,13 @@ impl Instantiation<'_> {
             PhysNode::NestedLoopJoin(j) => {
                 let probe = self.node(&j.probe)?;
                 let build = self.node(&j.build)?;
-                let join = nested_loop_join(&probe.schema, &build.schema, j, &self.env)?;
+                let join = nested_loop_join(
+                    &probe.schema,
+                    &build.schema,
+                    j,
+                    &self.env,
+                    self.spill.clone(),
+                )?;
                 Ok(Built {
                     schema: join.schema(),
                     node: Arc::new(NestedLoopJoinNode {
@@ -1535,12 +1541,14 @@ pub(crate) fn nested_loop_join(
     build: &SchemaRef,
     j: &NestedLoopPlan,
     env: &EvalEnv,
+    spill: Option<SpillScope>,
 ) -> Result<NestedLoopJoin> {
     NestedLoopJoin::try_new(NestedLoopSpec {
         join_type: j.join_type,
         probe_schema: Arc::clone(probe),
         build_schema: Arc::clone(build),
         filter: residual(probe, build, j.residual.as_ref(), env)?,
+        spill,
     })
 }
 
