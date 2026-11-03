@@ -32,6 +32,11 @@ pub trait TimeZoneRules: Send + Sync + std::fmt::Debug {
     fn legacy_offset_at_utc(&self, utc_seconds: i64) -> i32 {
         self.offset_at_utc(utc_seconds)
     }
+    /// The zone's region id (`Asia/Kolkata`), whose own zone names the
+    /// legacy parser tries first; `None` (the default) for a fixed offset.
+    fn region_id(&self) -> Option<&str> {
+        None
+    }
 }
 
 /// A zone with one fixed offset (`UTC` is `FixedOffset(0)`).

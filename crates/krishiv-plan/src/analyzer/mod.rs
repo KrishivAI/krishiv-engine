@@ -237,6 +237,13 @@ impl TimeZoneRules for SessionZone {
             Self::Region(r) => r.zone.legacy_offset_at_utc(utc_seconds),
         }
     }
+
+    fn region_id(&self) -> Option<&str> {
+        match self {
+            Self::Fixed(_) => None,
+            Self::Region(r) => r.zone.region_id(),
+        }
+    }
 }
 
 /// How nested `WITH` definitions with the same name resolve

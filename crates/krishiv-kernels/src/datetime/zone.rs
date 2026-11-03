@@ -104,6 +104,13 @@ impl TimeZoneRules for ZoneRef {
             _ => self.offset_at_utc(utc_seconds),
         }
     }
+
+    fn region_id(&self) -> Option<&str> {
+        match self {
+            Self::Fixed(_) => None,
+            Self::Named(zone) => zone.iana_name(),
+        }
+    }
 }
 
 impl ZoneRef {

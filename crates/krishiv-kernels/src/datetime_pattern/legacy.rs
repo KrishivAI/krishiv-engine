@@ -25,7 +25,7 @@ use std::fmt::Write as _;
 use krishiv_common::error::{InvalidDatetimePatternWithSuggestion, KrishivError};
 
 use super::format::{MICROS_PER_DAY, MONTHS, zone_name};
-use super::legacy_zones::{DIGIT_ZEROS, ZONE_STRINGS};
+use super::legacy_zones::{DIGIT_ZEROS, ZONE_STRINGS, ZoneStrings, zone_row};
 use super::{DOC_ROOT, Zone, unsupported};
 use crate::cast::TimeZoneRules;
 use crate::cast::datetime::{civil_from_days, days_from_civil, days_in_month};
@@ -303,7 +303,7 @@ impl LegacyPattern {
         s: &str,
         session: &dyn TimeZoneRules,
     ) -> Result<Option<i64>, KrishivError> {
-        let Some((local, zone)) = self.parse_fields(s) else {
+        let Some((local, zone)) = self.parse_fields(s, session.region_id()) else {
             return Ok(None);
         };
         Ok(match zone {
@@ -334,7 +334,7 @@ impl LegacyPattern {
     /// Never.
     pub fn parse_local(&self, s: &str, allow_zone: bool) -> Result<Option<i64>, KrishivError> {
         Ok(self
-            .parse_fields(s)
+            .parse_fields(s, None)
             .filter(|(_, zone)| allow_zone || zone.is_none())
             .map(|(local, _)| local))
     }
@@ -345,11 +345,13 @@ impl LegacyPattern {
     /// Never.
     pub fn parse_date(&self, s: &str) -> Result<Option<i32>, KrishivError> {
         Ok(self
-            .parse_fields(s)
+            .parse_fields(s, None)
             .and_then(|(local, _)| i32::try_from(local.div_euclid(MICROS_PER_DAY)).ok()))
     }
 
-    fn parse_fields(&self, s: &str) -> Option<(i64, Option<Zone_>)> {
+    /// The fields of `s`; zone names are looked up in `session`'s own row
+    /// first (`None` where the zone is read and ignored).
+    fn parse_fields(&self, s: &str, session: Option<&str>) -> Option<(i64, Option<Zone_>)> {
         let text: Vec<char> = s.chars().collect();
         let mut st = Parsed::default();
         let mut pos = 0;
@@ -375,7 +377,7 @@ impl LegacyPattern {
                     let abut =
                         matches!(self.toks.get(i + 1), Some(Tok::Field(d, dn)) if is_numeric(*d, *dn))
                             .then_some(*n);
-                    pos = st.field(&text, pos, *c, *n, abut)?;
+                    pos = st.field(&text, pos, *c, *n, abut, session)?;
                 }
             }
         }
@@ -625,6 +627,7 @@ impl Parsed {
         c: char,
         n: usize,
         abut: Option<usize>,
+        session: Option<&str>,
     ) -> Option<usize> {
         // `SimpleDateFormat` skips spaces and tabs before a field, nothing
         // else (a newline or an ideographic space is not a blank).
@@ -670,7 +673,7 @@ impl Parsed {
                 return Some(p);
             }
             'z' | 'Z' => {
-                let (p, z) = zone(text, pos)?;
+                let (p, z) = zone(text, pos, session)?;
                 self.zone = Some(z);
                 return Some(p);
             }
@@ -1162,7 +1165,7 @@ fn zone_iso(text: &[char], pos: usize, n: usize) -> Option<(usize, Zone_)> {
 /// sign and `hhmm` (RFC 822); `GMT` (any case), alone or with a sign, one or
 /// two hour digits, a colon and two minute digits; else a zone name (see
 /// [`parse_zone_name`]). Nothing else: no `Z`, `+hh:mm` or region id.
-fn zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
+fn zone(text: &[char], pos: usize, session: Option<&str>) -> Option<(usize, Zone_)> {
     let c = *text.get(pos)?;
     if matches!(c, '+' | '-') {
         return numeric_zone(text, pos + 1, c == '-', false);
@@ -1173,7 +1176,7 @@ fn zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
             _ => Some((p, Zone_::Offset(0))),
         };
     }
-    parse_zone_name(text, pos)
+    parse_zone_name(text, pos, session)
 }
 
 /// `SimpleDateFormat.subParseNumericZone` from the first hour digit: two
@@ -1202,44 +1205,52 @@ fn numeric_zone(
     Some((end, Zone_::Offset(if negative { -secs } else { secs })))
 }
 
-/// `SimpleDateFormat.subParseZoneString`: the first row of the JVM's zone
-/// strings with a name (long standard, short standard, long daylight, short
-/// daylight) that starts the text, ignoring case; only that name is read
-/// (`PSTfoo` is `PST`). A standard name is the zone's standard offset at
+/// `SimpleDateFormat.subParseZoneString`: the session zone's own row of the
+/// JVM's zone strings (`session`, its id), else the first row with a name
+/// (long standard, short standard, long daylight, short daylight) that
+/// starts the text, ignoring case; only that name is read (`PSTfoo` is
+/// `PST`). So `IST` is India in `Asia/Kolkata`, Ireland in `Europe/Dublin`
+/// and Israel elsewhere. A standard name is the zone's standard offset at
 /// that time (`ALMT` is +06:00 in January 2024, +05:00 since March), a
-/// daylight one adds its saving; a name its row uses for both kinds of time, or a
-/// daylight name of a zone without saving, leaves the zone's own rules to
-/// decide. Spark's parser first tries the session zone's own row; that is
-/// not done here (it differs only where the session zone's names are found
-/// in an earlier row too, such as `"IST"` in `Asia/Kolkata`).
-fn parse_zone_name(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
-    for row in ZONE_STRINGS {
-        for (i, name) in row.names.iter().enumerate() {
-            let Some(end) = name_at(text, pos, name) else {
-                continue;
-            };
-            let same = row
-                .names
-                .get(i + 2)
-                .is_some_and(|other| java_equals_ignore_case(name, other));
-            let daylight = i >= 2;
-            let zone = if same || (daylight && row.dst == 0) {
-                if crate::datetime::resolve_zone(row.id).is_ok() {
-                    Zone_::Region(row.id.to_owned())
-                } else {
-                    Zone_::Offset(row.raw)
-                }
-            } else {
-                Zone_::Standard {
-                    id: row.id,
-                    raw: row.raw,
-                    dst: if daylight { row.dst } else { 0 },
-                }
-            };
-            return Some((end, zone));
-        }
+/// daylight one adds its saving; a name its row uses for both kinds of time,
+/// or a daylight name of a zone without saving, leaves the zone's own rules
+/// to decide. The JVM default zone's row, which Java tries second, is not:
+/// it is the host's, not the query's.
+fn parse_zone_name(text: &[char], pos: usize, session: Option<&str>) -> Option<(usize, Zone_)> {
+    if let Some(row) = session.and_then(zone_row)
+        && let Some(found) = match_zone_row(text, pos, &row)
+    {
+        return Some(found);
     }
-    None
+    ZONE_STRINGS
+        .iter()
+        .find_map(|row| match_zone_row(text, pos, row))
+}
+
+/// `SimpleDateFormat.matchZoneString` on one row, and the zone it gives.
+fn match_zone_row(text: &[char], pos: usize, row: &ZoneStrings) -> Option<(usize, Zone_)> {
+    row.names.iter().enumerate().find_map(|(i, name)| {
+        let end = name_at(text, pos, name)?;
+        let same = row
+            .names
+            .get(i + 2)
+            .is_some_and(|other| java_equals_ignore_case(name, other));
+        let daylight = i >= 2;
+        let zone = if same || (daylight && row.dst == 0) {
+            if crate::datetime::resolve_zone(row.id).is_ok() {
+                Zone_::Region(row.id.to_owned())
+            } else {
+                Zone_::Offset(row.raw)
+            }
+        } else {
+            Zone_::Standard {
+                id: row.id,
+                raw: row.raw,
+                dst: if daylight { row.dst } else { 0 },
+            }
+        };
+        Some((end, zone))
+    })
 }
 
 /// Where `name` (non-empty) ends if it starts `text` at `pos`, ignoring
@@ -1441,7 +1452,7 @@ mod tests {
     fn zone_display_names_parse_short_and_long_and_the_week_year_uses_the_hybrid_day() {
         let p = LegacyPattern::new("yyyy-MM-dd HH:mm z").unwrap();
         let offset = |t: &str| {
-            let (local, _) = p.parse_fields(t)?;
+            let (local, _) = p.parse_fields(t, None)?;
             let utc = p.parse_timestamp(t, &FixedOffset(0)).ok()??;
             i32::try_from((local - utc) / MICROS_PER_SECOND).ok()
         };
