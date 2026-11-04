@@ -126,11 +126,26 @@ def test_bars_are_scaled_to_the_heaviest_operator() -> None:
 
 def test_a_deep_plan_renders_without_recursion_trouble() -> None:
     doc = profile()
-    plan = [{"id": i, "name": f"N{i}", "detail": "", "children": [i + 1] if i < 299 else []} for i in range(300)]
+    depth = 5000
+    plan = [{"id": i, "name": f"N{i}", "detail": "", "children": [i + 1]} for i in range(depth - 1)]
+    plan.append({"id": depth - 1, "name": f"N{depth - 1}", "detail": "", "children": []})
     doc["plan"] = plan
     doc["operators"] = [op for op in doc["operators"] if op["node"] is None]
     html = ProfileView(doc).to_html()
-    assert "N299" in html
+    assert f"N{depth - 1}" in html
+
+
+def test_shared_children_are_rendered_once_and_bad_indexes_skipped() -> None:
+    doc = profile()
+    n = 40  # two edges from each node to the next: 2**40 paths, but 40 nodes
+    doc["plan"] = [
+        {"id": i, "name": f"N{i}", "detail": "", "children": [i + 1, i + 1, -1, n + 5] if i < n - 1 else []}
+        for i in range(n)
+    ]
+    doc["operators"] = [op for op in doc["operators"] if op["node"] is None]
+    html = ProfileView(doc).to_html()
+    assert len(html) < 100_000
+    assert html.count('class="name">N7<') == 1
 
 
 def test_a_cyclic_plan_does_not_loop() -> None:

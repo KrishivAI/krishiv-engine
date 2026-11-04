@@ -151,19 +151,39 @@ class ProfileView:
             out.append(f'<span class="num">facts</span><span class="num">{escape(" · ".join(facts))}</span></div>')
             return "".join(out)
 
-        def node_html(position: int, seen: set[int]) -> str:
-            if position in seen:  # a malformed document must not loop
-                return ""
-            seen = seen | {position}
-            node = plan[position]
-            ident = node.get("id")
-            head = (
-                f'<div class="node"><span class="name">{escape(str(node["name"]))}</span>'
-                f'<span class="detail">{escape(str(node["detail"]))}</span></div>'
-            )
-            ops = "".join(operator_block(op) for op in by_node.get(int(ident), [])) if ident is not None else ""
-            kids = "".join(node_html(int(c), seen) for c in node.get("children", []))
-            return f"<li>{head}{ops}{('<ul>' + kids + '</ul>') if kids else ''}</li>"
+        def plan_html() -> str:
+            # Iterative, so a deep plan cannot hit the recursion limit, and every node is
+            # rendered at most once: a malformed document with shared or cyclic children
+            # can neither loop nor blow the page up exponentially. Child positions outside
+            # the plan are skipped.
+            out: list[str] = []
+            seen = {0}
+            stack: list[int | str] = [0]
+            while stack:
+                item = stack.pop()
+                if isinstance(item, str):
+                    out.append(item)
+                    continue
+                node = plan[item]
+                ident = node.get("id")
+                ops = "".join(operator_block(op) for op in by_node.get(int(ident), [])) if ident is not None else ""
+                out.append(
+                    f'<li><div class="node"><span class="name">{escape(str(node["name"]))}</span>'
+                    f'<span class="detail">{escape(str(node["detail"]))}</span></div>{ops}'
+                )
+                kids: list[int] = []
+                for c in node.get("children", []):
+                    c = int(c)
+                    if 0 <= c < len(plan) and c not in seen:
+                        seen.add(c)
+                        kids.append(c)
+                if kids:
+                    out.append("<ul>")
+                    stack.append("</ul></li>")
+                    stack.extend(reversed(kids))
+                else:
+                    out.append("</li>")
+            return "".join(out)
 
         summary = [
             ("wall", _ns(int(query["wall_time_ns"]))),
@@ -182,7 +202,7 @@ class ProfileView:
             + "".join(f"<span>{escape(k)} <b>{escape(v)}</b></span>" for k, v in summary)
             + "</div>",
             "<h2>Plan</h2>",
-            f"<ul>{node_html(0, set())}</ul>" if plan else "<p>(empty plan)</p>",
+            f"<ul>{plan_html()}</ul>" if plan else "<p>(empty plan)</p>",
         ]
         if loose:
             parts.append("<h2>Result</h2>" + "".join(operator_block(op) for op in loose))
