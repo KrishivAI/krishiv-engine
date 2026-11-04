@@ -410,3 +410,38 @@ def test_run_reproduce_rejects_nonpositive_reps_and_runs():
         reproduce.run_reproduce("tpch", 1, reps=0)
     with pytest.raises(SystemExit, match="at least 1"):
         reproduce.run_reproduce("tpch", 1, runs=-1)
+
+
+def test_a_timed_run_whose_result_differs_from_the_verified_one_fails():
+    import pytest
+
+    from krishiv_bench.adapters.base import Engine, Query
+    from krishiv_bench.adapters.process import EngineError
+    from krishiv_bench.reproduce import _timed
+
+    class Eng(Engine):
+        def __init__(self, got):
+            self.got = got
+
+        def version(self):
+            return "x"
+
+        def setup(self, dataset):
+            pass
+
+        def run(self, query):
+            return []
+
+        def timed_run(self, query):
+            return 3, 0.5
+
+        def result_checksum(self):
+            return self.got
+
+    q = Query("q", "SELECT 1", "tpch")
+    good = {"kinds": ["rows"], "values": [3]}
+    assert _timed(Eng(good), q, 3, good) == 0.5
+    with pytest.raises(EngineError, match="checksum differs"):
+        _timed(Eng({"kinds": ["rows"], "values": [4]}), q, 3, good)
+    with pytest.raises(EngineError, match="returned 3 rows"):
+        _timed(Eng(good), q, 4, good)

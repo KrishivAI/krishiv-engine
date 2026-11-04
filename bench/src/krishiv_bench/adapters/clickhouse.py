@@ -119,8 +119,10 @@ class ClickHouseEngine(Engine):
 
     def timed_run(self, query: Query) -> tuple[int, float]:
         t0 = time.perf_counter()
-        n = self._table(query).num_rows
-        return n, time.perf_counter() - t0
+        table = self._table(query)
+        secs = time.perf_counter() - t0
+        self._pending = table
+        return table.num_rows, secs
 
     def begin_measure(self) -> None:
         self._p.reset()

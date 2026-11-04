@@ -35,10 +35,13 @@ class _SparkSQLEngine(Engine):
         return [tuple(r) for r in self.spark.sql(query.sql).collect()]
 
     def timed_run(self, query: Query) -> tuple[int, float]:
-        """Count rows engine-side: the answer can be large, so it is never collected into Python objects."""
+        """The full result as Arrow record batches (``toArrow``), never Python row objects."""
+        df = self.spark.sql(query.sql)
         t0 = time.perf_counter()
-        n = self.spark.sql(query.sql).count()
-        return n, time.perf_counter() - t0
+        table = df.toArrow()
+        secs = time.perf_counter() - t0
+        self._pending = table
+        return table.num_rows, secs
 
     def teardown(self) -> None:
         if self.spark is not None:

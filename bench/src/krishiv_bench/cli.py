@@ -231,6 +231,14 @@ def main(argv=None) -> None:
     rr.add_argument("--runs", type=int, help="hot runs per process for theirs (default: the published source's)")
     rr.add_argument("--their-timeout", type=float, help="per-run timeout for theirs (default: the source's)")
     rr.add_argument("--runner", help=RUNNER_HELP)
+    rr.add_argument(
+        "--sequential",
+        action="store_true",
+        help="ours method: one engine alive at a time per query (a fresh worker each), 2*reps samples per engine",
+    )
+    rr.add_argument(
+        "--cgroup-gb", type=int, help="with --sequential: MemoryMax (GB, no swap) of each engine worker's cgroup scope"
+    )
     rr.add_argument("--profile", action="store_true", help="also record Krishiv's per-phase wall times (ours method)")
     _add_memcap_args(rr)
     rf = sub.add_parser(
@@ -401,6 +409,8 @@ def main(argv=None) -> None:
             a.runs,
             a.their_timeout,
             a.profile,
+            sequential=a.sequential,
+            cap_gb=a.cgroup_gb,
         )
     elif a.cmd == "ledger":
         from .ledger import run_ledger
