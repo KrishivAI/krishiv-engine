@@ -43,10 +43,10 @@ pub use epoch::{
     timestamp_from_seconds_decimal, timestamp_from_seconds_double, unix_time,
 };
 pub use format::{
-    ParsePolicy, format_timestamps, parse_date_one, parse_dates, parse_ntz, parse_ntz_one,
-    parse_timestamp_one, parse_timestamps, seconds_to_timestamps,
+    ParsePolicy, TimePattern, format_timestamps, parse_date_one, parse_dates, parse_ntz,
+    parse_ntz_one, parse_timestamp_one, parse_timestamps, seconds_to_timestamps,
 };
-pub use make::{TimestampFields, make_timestamp};
+pub use make::{TimestampFields, make_timestamp, make_timestamp_from_date};
 pub use unit::{TimestampUnit, timestamp_add, timestamp_diff};
 pub use zone::{ZoneRef, resolve_zone, zone_id};
 
@@ -99,11 +99,12 @@ fn day_arith<B: arrow_array::ArrowPrimitiveType<Native = i32>>(
 }
 
 /// `date_add(start, days)`: `start + days`. `mode` is the ANSI policy of the
-/// session: `AnsiError` raises `ARITHMETIC_OVERFLOW` where the day number
-/// leaves the `int` range, `NullOnOverflow` (`try_add`) gives NULL; any other
-/// mode wraps like Java's `int` addition, as Spark does with ANSI off
-/// (`date_add('2016-07-30', 2147483647)` is a date before the epoch). With
-/// ANSI on this differs from Spark, which wraps silently (ADR 0023).
+/// session: `NullOnOverflow` (`try_add`) gives NULL where the day number
+/// leaves the `int` range; any other mode, ANSI included, wraps like Java's
+/// `int` addition, as Spark does (`date_add('2016-07-30', 2147483647)` is a
+/// date before the epoch; found by the expression differential test).
+/// Only an all-literal call differs: Spark's constant folding raises a bare
+/// `java.lang.ArithmeticException`.
 ///
 /// # Errors
 /// `ARITHMETIC_OVERFLOW` as above; `INTERNAL_ERROR` for operands of different
@@ -114,7 +115,7 @@ pub fn date_add(
     mode: OverflowMode,
     ctx: &KernelCtx,
 ) -> Result<Date32Array, KernelError> {
-    if matches!(mode, OverflowMode::AnsiError | OverflowMode::NullOnOverflow) {
+    if mode == OverflowMode::NullOnOverflow {
         return day_arith(start, days, i32::checked_add, mode, ctx);
     }
     let out = with_days(start, |s| {
@@ -134,7 +135,7 @@ pub fn date_sub(
     mode: OverflowMode,
     ctx: &KernelCtx,
 ) -> Result<Date32Array, KernelError> {
-    if matches!(mode, OverflowMode::AnsiError | OverflowMode::NullOnOverflow) {
+    if mode == OverflowMode::NullOnOverflow {
         return day_arith(start, days, i32::checked_sub, mode, ctx);
     }
     let out = with_days(start, |s| {
@@ -372,7 +373,7 @@ fn month_length(year: i64, month: u32) -> u32 {
 /// Day number `months` calendar months after `days`, the day of the month
 /// clamped to the target month (`2020-01-31 + 1 month` is `2020-02-29`), as
 /// Java's `LocalDate.plusMonths`.
-fn add_months(days: i64, months: i64) -> Option<i64> {
+pub(crate) fn add_months(days: i64, months: i64) -> Option<i64> {
     let (year, month, day) = civil_from_days(days);
     let total = year
         .checked_mul(12)?
@@ -390,7 +391,11 @@ fn add_months(days: i64, months: i64) -> Option<i64> {
 /// `java.time.ZonedDateTime.plusDays`/`plusMonths` do: in a DST overlap the
 /// result stays on the side of the transition the start was on. Otherwise
 /// (not in an overlap, or in a gap) the usual resolution applies.
-fn local_to_utc_keeping(local: i64, tz: &dyn TimeZoneRules, preferred: i32) -> Option<i64> {
+pub(crate) fn local_to_utc_keeping(
+    local: i64,
+    tz: &dyn TimeZoneRules,
+    preferred: i32,
+) -> Option<i64> {
     let candidate = local.checked_sub(i64::from(preferred).checked_mul(1_000_000)?)?;
     if tz.offset_at_utc(candidate.div_euclid(1_000_000)) == preferred {
         Some(candidate)
@@ -517,7 +522,7 @@ pub fn timestamp_add_day_time(
 }
 
 /// The value of an operand at row `i`; `None` is NULL.
-fn at<T: ArrowPrimitiveType>(o: &Operand<'_, T>, i: usize) -> Option<T::Native> {
+pub(crate) fn at<T: ArrowPrimitiveType>(o: &Operand<'_, T>, i: usize) -> Option<T::Native> {
     match o {
         Operand::Array(a) => a.is_valid(i).then(|| a.value(i)),
         Operand::Scalar(v) => *v,

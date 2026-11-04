@@ -814,6 +814,7 @@ impl Parser<'_> {
                     ExprKind::Wildcard {
                         qualifier: vec![],
                         except,
+                        regex: None,
                     },
                     start,
                 ));
@@ -865,6 +866,21 @@ impl Parser<'_> {
             self.bump();
         }
         out
+    }
+
+    /// One string token, unescaped (a property key is a single `stringLit` token, so `'path' '/x'`
+    /// is the key `path` and the value `/x`).
+    pub(super) fn single_string(&mut self) -> Option<String> {
+        if !self.single_string_at(0) {
+            return None;
+        }
+        let s = unescape_string(
+            self.text(0),
+            !self.opts.escaped_string_literals,
+            self.opts.consecutive_string_literals,
+        );
+        self.bump();
+        Some(s)
     }
 
     /// One string token (`singleStringLitWithoutMarker`) at offset `n`.
@@ -1037,6 +1053,7 @@ impl Parser<'_> {
                 let kind = ExprKind::Wildcard {
                     qualifier: parts,
                     except,
+                    regex: None,
                 };
                 return Ok(self.mk(kind, start));
             }
@@ -1052,6 +1069,20 @@ impl Parser<'_> {
                 parts,
             };
             return self.function_call(name, start);
+        }
+        // Under `spark.sql.parser.quotedRegexColumnNames` a backquoted name in a select item is a
+        // regular expression over the column names (the last part; the rest is its table).
+        if self.opts.quoted_regex_column_names
+            && self.in_named > 0
+            && parts.last().is_some_and(|p| p.quoted)
+            && let Some(last) = parts.pop()
+        {
+            let kind = ExprKind::Wildcard {
+                qualifier: parts,
+                except: Vec::new(),
+                regex: Some(last.value.into_boxed_str()),
+            };
+            return Ok(self.mk(kind, start));
         }
         Ok(self.mk(ExprKind::Column(parts), start))
     }
@@ -1782,7 +1813,7 @@ impl Parser<'_> {
     /// after the first (Spark's `errorCapturing...Interval`) is kept as
     /// `trailing`.
     #[inline(never)]
-    fn interval(&mut self) -> PR<Literal> {
+    pub(super) fn interval(&mut self) -> PR<Literal> {
         let start = self.start();
         let keyword = self.keyword_ident();
         let single = self.interval_value_len(0) == Some(1) && self.single_string_at(0);

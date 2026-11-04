@@ -186,12 +186,13 @@ impl Resolver<'_> {
         let cx = Self::cx(&c.out, &rels, env, "Aggregate");
         let mut out = Vec::with_capacity(items.len());
         for item in items {
-            let (inner, alias) = match &item.node {
-                ExprNode::Alias { expr, name } => (expr, Some(name)),
-                _ => (item, None),
+            let (inner, alias, names) = match &item.node {
+                ExprNode::Alias { expr, name } => (expr, Some(name), None),
+                ExprNode::MultiAlias { expr, names } => (expr, None, Some(names)),
+                _ => (item, None, None),
             };
             let is_stack = matches!(&inner.node, ExprNode::Function(f)
-                if f.unqualified() == Some("stack") && f.args.len() >= 2);
+                if f.unqualified().is_some_and(|n| n.eq_ignore_ascii_case("stack")) && f.args.len() >= 2);
             if !is_stack {
                 out.push(Arc::clone(item));
                 continue;
@@ -200,15 +201,22 @@ impl Resolver<'_> {
             let call = Arc::new(
                 Expr::function("inline", vec![(*array).clone()]).with_origin(inner.origin),
             );
-            out.push(match alias {
-                Some(name) => Arc::new(
+            out.push(match (alias, names) {
+                (_, Some(names)) => Arc::new(
+                    Expr::new(ExprNode::MultiAlias {
+                        expr: call,
+                        names: names.clone(),
+                    })
+                    .with_origin(item.origin),
+                ),
+                (Some(name), None) => Arc::new(
                     Expr::new(ExprNode::Alias {
                         expr: call,
                         name: name.clone(),
                     })
                     .with_origin(item.origin),
                 ),
-                None => call,
+                (None, None) => call,
             });
         }
         Ok(out)
@@ -223,7 +231,11 @@ impl Resolver<'_> {
         let ExprNode::Function(f) = &arg.node else {
             return Ok(Arc::clone(arg));
         };
-        if f.unqualified() != Some("stack") || f.args.len() < 2 {
+        if !f
+            .unqualified()
+            .is_some_and(|n| n.eq_ignore_ascii_case("stack"))
+            || f.args.len() < 2
+        {
             return Ok(Arc::clone(arg));
         }
         let origin = arg.origin;
@@ -392,7 +404,7 @@ pub(super) struct ExtractedGenerator {
     /// The column holding the argument in the aggregate's output.
     input: BoundColumn,
     /// The item's alias, when it had one.
-    name: Option<String>,
+    name: Vec<String>,
 }
 
 /// Whether `name` (as written) is one of the explode-family generators.
@@ -435,7 +447,7 @@ impl Resolver<'_> {
         &mut self,
         origin: Origin,
         items: Vec<Bound>,
-        alias: Option<String>,
+        alias: Vec<String>,
     ) -> Result<(Vec<Bound>, Option<ExtractedGenerator>), AnalysisError> {
         let zone = self.ctx.conf.session_zone;
         let mut found = None;
@@ -459,6 +471,16 @@ impl Resolver<'_> {
                         UnsupportedGeneratorMultiGenerator {
                             num: "2".to_owned(),
                             generators: format!("{}, {}", shown(first), shown(i)),
+                        },
+                        b.expr.origin,
+                    ));
+                }
+                if let ExprNode::Resolved(ResolvedExpr::Function(g)) = &inner.node
+                    && g.args.iter().any(super::ops::has_generator)
+                {
+                    return Err(AnalysisError::new(
+                        UnsupportedGeneratorNestedInExpressions {
+                            expression: format!("\"{}\"", pretty(inner, zone)),
                         },
                         b.expr.origin,
                     ));
@@ -559,7 +581,7 @@ impl Resolver<'_> {
             lateral: Vec::new(),
             shown: None,
         };
-        let names: Vec<String> = g.name.iter().cloned().collect();
+        let names = g.name.clone();
         let columns = self.generated_columns(origin, g.kind, g.outer, &arg, &names)?;
         let qual: Arc<[String]> = Arc::from(Vec::<String>::new());
         let carried: Vec<Attr> = agg

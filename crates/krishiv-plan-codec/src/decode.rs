@@ -22,7 +22,7 @@ use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
     WindowFunctionPlan, WindowPlan,
 };
-use krishiv_exec::{RowStageSettings, SortKey};
+use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, CastMode, DayTimeField, Expr, ExprNode, FunctionId, FunctionKind,
@@ -316,6 +316,7 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         map_key_dedup_last_win: env.map_key_dedup_last_win.unwrap_or(false),
         legacy_java_charsets: env.legacy_java_charsets.unwrap_or(false),
         legacy_coding_error_action: env.legacy_coding_error_action.unwrap_or(false),
+        legacy_time_parser: env.legacy_time_parser.unwrap_or(false),
     };
     if !env.zone_name_matches_zone() {
         return Err(corrupt("a session zone name that is not its offset"));
@@ -454,6 +455,11 @@ impl Decoder {
         Ok(match required(&m.kind, "a node kind")? {
             Kind::Scan(s) => PhysNode::Scan(self.scan(s)?),
             Kind::OneRow(_) => PhysNode::OneRow,
+            Kind::ExchangeSource(e) => PhysNode::ExchangeSource {
+                id: ExchangeId(e.id),
+                partitioning: partitioning(required(&e.partitioning, "the partitioning")?)?,
+                schema: schema_from(&e.schema)?,
+            },
             Kind::SharedRead(s) => PhysNode::SharedRead {
                 id: SharedId(s.id),
                 layout: layout(&s.layout),
@@ -549,10 +555,18 @@ impl Decoder {
                 input: self.boxed(s.input)?,
                 keys: sort_keys(&s.keys)?,
             },
+            Kind::LateFetch(f) => PhysNode::LateFetch {
+                input: self.boxed(f.input)?,
+                scan: self.scan(required(&f.scan, "a late fetch scan")?)?,
+                file_col: usize_of(f.file_col)?,
+                row_col: usize_of(f.row_col)?,
+                output: f.output.iter().map(fetch_slot).collect::<Result<_>>()?,
+            },
             Kind::TopN(t) => PhysNode::TopN {
                 input: self.boxed(t.input)?,
                 keys: sort_keys(&t.keys)?,
                 limit: t.limit,
+                bound: t.bound.map(FilterId),
             },
             Kind::Window(w) => PhysNode::Window {
                 input: self.boxed(w.input)?,
@@ -745,6 +759,7 @@ impl Decoder {
                 min_rows: row_stage.min_rows,
                 max_pass_rate: row_stage.max_pass_rate,
             },
+            row_id: s.row_id,
         })
     }
 
@@ -828,6 +843,14 @@ impl Decoder {
             deterministic: f.deterministic,
         })
     }
+}
+
+fn fetch_slot(s: &pb::FetchSlot) -> Result<FetchSlot> {
+    use pb::fetch_slot::Kind;
+    Ok(match required(&s.kind, "a late fetch slot")? {
+        Kind::Input(i) => FetchSlot::Input(usize_of(*i)?),
+        Kind::Fetched(i) => FetchSlot::Fetched(usize_of(*i)?),
+    })
 }
 
 fn sort_keys(v: &[pb::SortKey]) -> Result<Vec<SortKey>> {
@@ -1057,6 +1080,14 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         arg_type: type_from(&a.arg_type)?,
         name: a.name.clone(),
         mask: a.mask.map(usize_of).transpose()?,
+        element: if a.result_element.is_empty() {
+            None
+        } else {
+            match schema_from(&a.result_element)?.fields().iter().as_slice() {
+                [field] => Some(Arc::clone(field)),
+                _ => return Err(corrupt("an aggregate element that is not one field")),
+            }
+        },
     })
 }
 
@@ -1268,6 +1299,17 @@ fn write_plan(m: &pb::WritePlan) -> Result<WritePlan> {
         max_records_per_file: m.max_records_per_file,
         target_file_bytes: m.target_file_bytes,
         partition_by: usizes(&m.partition_by)?,
+        column_types: m
+            .column_types
+            .iter()
+            .map(|c| {
+                let t = c
+                    .data_type
+                    .as_ref()
+                    .ok_or_else(|| corrupt("a write column without a type"))?;
+                Ok((usize_of(c.column)?, spark_type(t)?))
+            })
+            .collect::<Result<_>>()?,
     })
 }
 

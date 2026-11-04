@@ -56,7 +56,9 @@ variants!(
     Union,
     WriteFiles,
     Exchange,
+    ExchangeSource,
     SharedRead,
+    LateFetch,
     UnionLoop,
     LoopRef,
 );
@@ -85,7 +87,9 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Union { .. } => Variant::Union,
         PhysNode::WriteFiles { .. } => Variant::WriteFiles,
         PhysNode::Exchange(_) => Variant::Exchange,
+        PhysNode::ExchangeSource { .. } => Variant::ExchangeSource,
         PhysNode::SharedRead { .. } => Variant::SharedRead,
+        PhysNode::LateFetch { .. } => Variant::LateFetch,
     }
 }
 
@@ -136,6 +140,32 @@ fn a_filters_scan_wait_round_trips() {
     join.runtime_filters[0].options.scan_waits = true;
     let plan = plan_of(PhysNode::HashJoin(join));
     assert_eq!(round_trip(&plan), plan);
+}
+
+/// A top-N's bound survives the wire and needs no feature: a plan without it
+/// is the same plan with scans that prune less. The field is ignorable, so
+/// the goldens only ever hold it unset.
+#[test]
+fn a_top_n_bound_round_trips_and_is_ignorable() {
+    let (_, plain) = cases().into_iter().find(|(n, _)| n == "top_n").unwrap();
+    let PhysNode::TopN {
+        input,
+        keys,
+        limit,
+        bound: None,
+    } = plain.root().clone()
+    else {
+        panic!("not a top-N without a bound");
+    };
+    let bound = plan_of(PhysNode::TopN {
+        input,
+        keys,
+        limit,
+        bound: Some(krishiv_io::FilterId(3)),
+    });
+    assert_eq!(round_trip(&bound), bound);
+    assert_eq!(plan_features(&bound), plan_features(&plain));
+    assert_ne!(encode(&bound).unwrap(), encode(&plain).unwrap());
 }
 
 #[test]
@@ -468,15 +498,18 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
             "window_group_limit"
+            | "late_fetch"
             | "sort_merge_join"
             | "partial_aggregate"
             | "shared_subplan"
+            | "exchange_source"
             | "rust_udf"
             | "nested_types"
             | "struct_field"
             | "lambda_functions"
             | "map_key_dedup_policy"
             | "legacy_charset_switches"
+            | "legacy_time_parser"
             | "session_zone_name"
             | "aggregate_filter"
             | "range"
@@ -485,6 +518,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "aggregate_mode_regr_bit_listagg"
             | "aggregate_listagg"
             | "write_files_partitioned"
+            | "write_files_column_types"
             | "aggregate_percentiles" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.

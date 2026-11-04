@@ -66,11 +66,14 @@ mod shared_tests;
 #[cfg(test)]
 pub(crate) use instantiate::node_ids;
 pub(crate) use instantiate::{
-    Detached, Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, generate_op,
-    group_limit_op, hash_join, nested_loop_join, project_op, replicate_op, scan_filter,
-    sort_merge_join, sort_op, top_n_op,
+    Detached, Unbuilt, Values, aggregate_node, aggregate_spec, distinct_phases, expand_op,
+    filter_op, final_of, generate_op, group_limit_op, hash_join, nested_loop_join, project_op,
+    replicate_op, scan_filter, sort_merge_join, sort_op, top_n_op,
 };
-pub use instantiate::{SpillScopes, TaskSpec, WorkerContext, instantiate, instantiate_task};
+pub use instantiate::{
+    ExchangeInput, SpillScopes, TaskSpec, WorkerContext, exchange_schemas, instantiate,
+    instantiate_task,
+};
 pub use krishiv_memory::{RelationLease, RelationRef, RelationStore};
 pub use splits::{
     ScanSplits, SplitFileRef, assign_batch_splits, assign_file_splits, deal_ranges, files_of,
@@ -80,7 +83,7 @@ pub use splits::{
 use crate::aggregate::{AggregateExpr, AggregateOutput};
 use crate::error::Result;
 use crate::join::JoinType;
-use crate::operators::{RowStageSettings, SortKey};
+use crate::operators::{FetchSlot, RowStageSettings, SortKey};
 use crate::planner::ExplainNode;
 use crate::window::{GroupLimitPlan, WindowPlan};
 
@@ -296,6 +299,10 @@ pub struct ExprEnv {
     /// what they cannot map instead of raising. A plan that sets it needs
     /// the `legacy_charset_switches` codec feature.
     pub legacy_coding_error_action: bool,
+    /// `spark.sql.legacy.timeParserPolicy = LEGACY`: the datetime pattern
+    /// functions use the `SimpleDateFormat` parser. A plan that sets it
+    /// needs the `legacy_time_parser` codec feature.
+    pub legacy_time_parser: bool,
 }
 
 impl ExprEnv {
@@ -403,6 +410,21 @@ pub enum PhysNode {
         /// The sort keys.
         keys: Vec<SortKey>,
     },
+    /// The rows of `input`, in order, with columns read from their files by
+    /// the row id `input` carries (design P2-T063). `scan` isn't a child: it
+    /// says how to read, and the row id says which file.
+    LateFetch {
+        /// The rows.
+        input: Box<PhysNode>,
+        /// The table and the columns to read, as its `output` and `projection`.
+        scan: ScanNode,
+        /// The column of `input` with each row's encoded file.
+        file_col: usize,
+        /// The column of `input` with each row's position in its file.
+        row_col: usize,
+        /// The output's columns.
+        output: Vec<FetchSlot>,
+    },
     /// The first `limit` rows of `input` in the order of `keys`.
     TopN {
         /// The input.
@@ -411,6 +433,9 @@ pub enum PhysNode {
         keys: Vec<SortKey>,
         /// The row count.
         limit: u64,
+        /// The runtime filter it offers its bound on the first key through,
+        /// to a scan below (design P2-T063).
+        bound: Option<FilterId>,
     },
     /// Window functions over `input`, which is sorted by the plan's
     /// partitioning, then its ordering: the input's columns, then one per
@@ -469,6 +494,21 @@ pub enum PhysNode {
     },
     /// Moves rows between partitions.
     Exchange(ExchangePlan),
+    /// The rows a task reads from the exchange `id`, written by the tasks
+    /// of another stage: a leaf of a plan fragment, where the fragmenter
+    /// cut the plan (design P2-T176 §2.1). Which reduce partitions a task
+    /// reads, and from how many map tasks, is task data
+    /// ([`TaskSpec::exchanges`](crate::physical::TaskSpec::exchanges)).
+    ExchangeSource {
+        /// The exchange read.
+        id: ExchangeId,
+        /// How the exchange placed its rows: the reader keeps what the
+        /// operators above an exchange rely on (hash buckets of a sort,
+        /// a broadcast build).
+        partitioning: Partitioning,
+        /// The exchange's columns.
+        schema: SchemaRef,
+    },
     /// The rows of a shared plan, under the reader's attribute ids.
     SharedRead {
         /// The plan read.
@@ -537,6 +577,9 @@ pub struct ScanNode {
     pub runtime_filters: Vec<ScanRuntimeFilter>,
     /// The runtime filters' row-stage settings.
     pub row_stage: RowStageSettings,
+    /// Whether the output ends in the row id (file, then position) that a
+    /// [`PhysNode::LateFetch`] above reads.
+    pub row_id: bool,
 }
 
 /// A range source: `range(start, end, step, numSlices)` (Spark's `Range`).
@@ -776,6 +819,9 @@ pub struct WritePlan {
     /// A partitioned write sorts its input by these columns directly
     /// below the writer.
     pub partition_by: Vec<usize>,
+    /// The input columns whose Spark type their Arrow type doesn't say (an
+    /// interval's fields), for the writer's footers and text forms.
+    pub column_types: BTreeMap<usize, krishiv_types::DataType>,
 }
 
 impl WritePlan {
@@ -839,7 +885,8 @@ plan_data!(struct ExprEnv {
     user,
     map_key_dedup_last_win,
     legacy_java_charsets,
-    legacy_coding_error_action
+    legacy_coding_error_action,
+    legacy_time_parser
 });
 plan_data!(enum PhysNode {
     Scan(scan),
@@ -852,7 +899,8 @@ plan_data!(enum PhysNode {
     Generate { input, layout, kind, outer, arg, subqueries },
     Expand { input, layout, projections, nullable, subqueries },
     Sort { input, keys },
-    TopN { input, keys, limit },
+    LateFetch { input, scan, file_col, row_col, output },
+    TopN { input, keys, limit, bound },
     Window { input, window },
     WindowGroupLimit { input, limit },
     Aggregate { input, aggregate },
@@ -862,6 +910,7 @@ plan_data!(enum PhysNode {
     Union { inputs },
     WriteFiles { input, write },
     Exchange(exchange),
+    ExchangeSource { id, partitioning, schema },
     SharedRead { id, layout },
     UnionLoop { id, anchor, recursive, layout, nullable, limits },
     LoopRef { id, layout },
@@ -875,9 +924,16 @@ plan_data!(struct WritePlan {
     job_uuid,
     max_records_per_file,
     target_file_bytes,
-    partition_by
+    partition_by,
+    column_types
 });
-plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage });
+plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage, row_id });
+plan_data!(
+    enum FetchSlot {
+        Input(index),
+        Fetched(index),
+    }
+);
 plan_data!(struct RangeNode { start, end, step, num_slices, output });
 plan_data!(struct ScanFilter { layout, predicate, exact });
 plan_data!(struct ScanRuntimeFilter { id, column, key_type });
@@ -911,6 +967,7 @@ impl PhysNode {
             | Self::OneRow
             | Self::Range(_)
             | Self::SharedRead { .. }
+            | Self::ExchangeSource { .. }
             | Self::LoopRef { .. } => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
@@ -932,6 +989,7 @@ impl PhysNode {
             Self::Limit { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
+            | Self::LateFetch { input, .. }
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
@@ -948,12 +1006,13 @@ impl PhysNode {
     }
 
     /// [`Self::children`], mutable.
-    pub(crate) fn children_mut(&mut self) -> Vec<&mut PhysNode> {
+    pub fn children_mut(&mut self) -> Vec<&mut PhysNode> {
         match self {
             Self::Scan(_)
             | Self::OneRow
             | Self::Range(_)
             | Self::SharedRead { .. }
+            | Self::ExchangeSource { .. }
             | Self::LoopRef { .. } => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
@@ -975,6 +1034,7 @@ impl PhysNode {
             Self::Limit { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
+            | Self::LateFetch { input, .. }
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }

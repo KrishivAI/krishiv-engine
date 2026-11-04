@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use arrow_schema::DataType as ArrowType;
+use krishiv_common::config::{AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue};
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, CastMode, Expr, ExprNode, FunctionId, JoinCondition, JoinKind,
     JoinStrategy, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction,
@@ -109,10 +110,23 @@ impl Planner<'_> {
             // condition as the filter.
             return self.nested_loop(left, right, JoinType::Inner, kind, &conjuncts);
         }
+        // A join without an equality key is a nested loop. Without a hint
+        // it builds the smaller input of an inner, cross or full join, as
+        // Spark's `JoinSelection` (`getSmallerSide`: the right input unless
+        // it is estimated larger than the left; design P2-T052b §2.2).
+        let smaller_left = keys.is_empty()
+            && choice.distribution.is_none()
+            && matches!(
+                kind,
+                JoinKind::Inner | JoinKind::Cross | JoinKind::FullOuter
+            )
+            && self.input_stats(&logical.1, &right.schema).bytes
+                > self.input_stats(&logical.0, &left.schema).bytes;
         // The build side: right, else left (a right outer join is a left
         // outer join with the sides swapped).
-        let build_left =
-            (choice.build_left && kind != JoinKind::Single) || kind == JoinKind::RightOuter;
+        let build_left = (choice.build_left && kind != JoinKind::Single)
+            || kind == JoinKind::RightOuter
+            || smaller_left;
         let join_type = match kind {
             JoinKind::LeftOuter | JoinKind::RightOuter | JoinKind::Single => JoinType::LeftOuter,
             JoinKind::FullOuter => JoinType::FullOuter,
@@ -174,12 +188,20 @@ impl Planner<'_> {
             .get(&krishiv_common::config::EXEC_JOIN_BUILD_SIDE)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
+        let broadcast_max = broadcast_max_bytes(&self.cx.config);
         let preferred = if choice.distribution.is_none() && build_side && !merge {
             let probe_stats = self.input_stats(probe_plan, &probe.schema);
             let build_stats = self.input_stats(build_plan, &build.schema);
-            let other = orient(join_type, single_match, &probe_stats, &build_stats);
+            let other = orient(
+                join_type,
+                single_match,
+                &probe_stats,
+                &build_stats,
+                broadcast_max,
+            );
             let flips = other != join_type
-                || (join_type == JoinType::FullOuter && builds_left(&probe_stats, &build_stats));
+                || (join_type == JoinType::FullOuter
+                    && builds_left(&probe_stats, &build_stats, broadcast_max));
             flips.then_some((other, probe_stats, build_stats))
         } else {
             None
@@ -220,7 +242,9 @@ impl Planner<'_> {
             JoinDistribution::Partitioned
         } else {
             choice.distribution.unwrap_or(
-                if estimated_bytes(build_rows, &build.schema) <= BROADCAST_MAX_BYTES {
+                if broadcast_max
+                    .is_some_and(|max| estimated_bytes(build_rows, &build.schema) <= max)
+                {
                     JoinDistribution::Broadcast
                 } else {
                     JoinDistribution::Partitioned
@@ -340,6 +364,7 @@ impl Planner<'_> {
                 sorted(build.explain, &build_exprs),
             ];
             return Ok(Planned {
+                ordering: Vec::new(),
                 schema,
                 node: PhysNode::SortMergeJoin(plan),
                 layout,
@@ -373,6 +398,7 @@ impl Planner<'_> {
         )?
         .schema();
         Ok(Planned {
+            ordering: Vec::new(),
             schema,
             node: PhysNode::HashJoin(plan),
             layout,
@@ -410,8 +436,8 @@ impl Planner<'_> {
         }
     }
 
-    /// A join without an equality conjunct: a nested-loop join building the
-    /// right input.
+    /// A join without an equality conjunct: a nested-loop join building
+    /// `build`.
     fn nested_loop(
         &mut self,
         probe: Planned,
@@ -429,7 +455,10 @@ impl Planner<'_> {
         let filter = residual_of(&probe, &build, residual);
         let mut layout = probe.layout.clone();
         let mut sites = probe.sites.clone();
-        if matches!(join_type, JoinType::Inner | JoinType::LeftOuter) {
+        if matches!(
+            join_type,
+            JoinType::Inner | JoinType::LeftOuter | JoinType::FullOuter
+        ) {
             layout.extend(&build.layout);
         }
         if let JoinKind::Existence(id) = kind {
@@ -438,13 +467,23 @@ impl Planner<'_> {
         if join_type == JoinType::Inner {
             sites.extend(build.sites.iter().cloned());
         }
+        if join_type == JoinType::FullOuter {
+            // Neither side may be filtered at its scan.
+            sites.clear();
+        }
         let r: Vec<String> = residual.iter().map(ToString::to_string).collect();
         let detail = if r.is_empty() {
             format!("{join_type:?}")
         } else {
             format!("{join_type:?}, {}", r.join(" AND "))
         };
-        let placement = probe.placement.clone().restrict(&layout);
+        // Rows stay where the probe placed them; a full outer join's
+        // unmatched build rows come out of whichever driver emits them.
+        let placement = if join_type == JoinType::FullOuter {
+            Placement::Unknown
+        } else {
+            probe.placement.clone().restrict(&layout)
+        };
         let (probe_schema, build_schema) = (Arc::clone(&probe.schema), Arc::clone(&build.schema));
         let plan = NestedLoopPlan {
             probe: Box::new(probe.node),
@@ -452,8 +491,10 @@ impl Planner<'_> {
             join_type,
             residual: filter,
         };
-        let schema = nested_loop_join(&probe_schema, &build_schema, &plan, &self.env)?.schema();
+        let schema =
+            nested_loop_join(&probe_schema, &build_schema, &plan, &self.env, None)?.schema();
         Ok(Planned {
+            ordering: Vec::new(),
             schema,
             node: PhysNode::NestedLoopJoin(plan),
             layout,
@@ -571,9 +612,18 @@ pub(crate) struct Choice {
     pub(crate) merge: bool,
 }
 
-/// The largest estimated build a hash join broadcasts without a hint: 10
-/// MiB, the default of Spark's `spark.sql.autoBroadcastJoinThreshold`.
-pub(crate) const BROADCAST_MAX_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
+/// The largest estimated build a hash join broadcasts without a hint:
+/// `spark.sql.autoBroadcastJoinThreshold` (10 MiB by default), `None` when
+/// it is negative, which turns broadcasting by size off (Spark's
+/// `canBroadcastBySize`). A hint still broadcasts.
+pub(crate) fn broadcast_max_bytes(config: &Config) -> Option<f64> {
+    let max = config
+        .get(&AUTO_BROADCAST_JOIN_THRESHOLD)
+        .and_then(ConfigValue::as_int)
+        .unwrap_or(10 << 20);
+    #[expect(clippy::cast_precision_loss, reason = "compared with an estimate")]
+    (max >= 0).then_some(max as f64)
+}
 
 /// The estimated bytes of `rows` rows of `schema`, after Spark's size
 /// estimate: 8 bytes per row plus each column's default size.

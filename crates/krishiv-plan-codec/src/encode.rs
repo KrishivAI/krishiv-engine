@@ -18,7 +18,7 @@ use krishiv_exec::physical::{
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
-use krishiv_exec::{RowStageSettings, SortKey};
+use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, KeyFilterOptions};
 use krishiv_plan::{
     AttrId, BoundColumn, CastMode, DayTimeField, Expr, ExprNode, FunctionId, FunctionKind, Literal,
@@ -158,6 +158,7 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         map_key_dedup_last_win: env.map_key_dedup_last_win.then_some(true),
         legacy_java_charsets: env.legacy_java_charsets.then_some(true),
         legacy_coding_error_action: env.legacy_coding_error_action.then_some(true),
+        legacy_time_parser: env.legacy_time_parser.then_some(true),
     }
 }
 
@@ -221,6 +222,15 @@ impl Encoder {
             }
             PhysNode::Scan(scan) => Kind::Scan(self.scan(scan)?),
             PhysNode::OneRow => Kind::OneRow(pb::Empty {}),
+            PhysNode::ExchangeSource {
+                id,
+                partitioning: p,
+                schema,
+            } => Kind::ExchangeSource(pb::ExchangeSourceNode {
+                id: id.0,
+                partitioning: Some(partitioning(p)),
+                schema: schema_bytes(schema),
+            }),
             PhysNode::SharedRead { id, layout } => Kind::SharedRead(pb::SharedReadNode {
                 id: id.0,
                 layout: layout.iter().map(|a| a.0).collect(),
@@ -328,10 +338,29 @@ impl Encoder {
                 input: self.node_index(input)?,
                 keys: keys.iter().map(sort_key).collect(),
             }),
-            PhysNode::TopN { input, keys, limit } => Kind::TopN(pb::TopNNode {
+            PhysNode::LateFetch {
+                input,
+                scan,
+                file_col,
+                row_col,
+                output,
+            } => Kind::LateFetch(pb::LateFetchNode {
+                input: self.node_index(input)?,
+                scan: Some(self.scan(scan)?),
+                file_col: *file_col as u64,
+                row_col: *row_col as u64,
+                output: output.iter().map(fetch_slot).collect(),
+            }),
+            PhysNode::TopN {
+                input,
+                keys,
+                limit,
+                bound,
+            } => Kind::TopN(pb::TopNNode {
                 input: self.node_index(input)?,
                 keys: keys.iter().map(sort_key).collect(),
                 limit: *limit,
+                bound: bound.map(|b| b.0),
             }),
             PhysNode::Aggregate { input, aggregate } => {
                 Kind::Aggregate(self.aggregate(input, aggregate)?)
@@ -347,7 +376,10 @@ impl Encoder {
             }),
             PhysNode::WriteFiles { input, write } => Kind::WriteFiles(pb::WriteFilesNode {
                 input: self.node_index(input)?,
-                write: write.as_ref().map(write_plan).transpose()?,
+                write: write
+                    .as_ref()
+                    .map(|w| write_plan(w, &self.nested))
+                    .transpose()?,
             }),
             PhysNode::Exchange(exchange) => Kind::Exchange(self.exchange(exchange)?),
             PhysNode::Expand {
@@ -522,6 +554,7 @@ impl Encoder {
                 .map(|f| scan_filter(f, &self.nested))
                 .collect(),
             row_stage: Some(row_stage(&node.row_stage)),
+            row_id: node.row_id,
         })
     }
 
@@ -674,6 +707,16 @@ fn bound_column(c: &BoundColumn, nested: &Cell<bool>) -> Result<pb::BoundColumn>
 
 fn column_path(p: &ColumnPath) -> pb::ColumnPath {
     pb::ColumnPath { parts: p.0.clone() }
+}
+
+fn fetch_slot(s: &FetchSlot) -> pb::FetchSlot {
+    use pb::fetch_slot::Kind;
+    pb::FetchSlot {
+        kind: Some(match *s {
+            FetchSlot::Input(i) => Kind::Input(i as u64),
+            FetchSlot::Fetched(i) => Kind::Fetched(i as u64),
+        }),
+    }
 }
 
 fn sort_key(k: &SortKey) -> pb::SortKey {
@@ -855,6 +898,14 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
 }
 
 fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
+    let mut expr = aggregate_function(a, nested)?;
+    if let Some(f) = &a.element {
+        expr.result_element = schema_bytes(&arrow_schema::Schema::new(vec![Arc::clone(f)]));
+    }
+    Ok(expr)
+}
+
+fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
     // The decoder refuses what the analyzer and planner never produce, so the
     // encoder refuses it too instead of writing a plan that cannot be read.
     let bad_percentages = |ps: &[f64]| {
@@ -1095,7 +1146,7 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
 }
 
 /// A file write as plan data.
-fn write_plan(write: &WritePlan) -> Result<pb::WritePlan> {
+fn write_plan(write: &WritePlan, nested: &Cell<bool>) -> Result<pb::WritePlan> {
     Ok(pb::WritePlan {
         format: write.format.clone(),
         options: write
@@ -1109,6 +1160,16 @@ fn write_plan(write: &WritePlan) -> Result<pb::WritePlan> {
         max_records_per_file: write.max_records_per_file,
         target_file_bytes: write.target_file_bytes,
         partition_by: indexes(&write.partition_by),
+        column_types: write
+            .column_types
+            .iter()
+            .map(|(column, t)| {
+                Ok(pb::WriteColumnType {
+                    column: *column as u64,
+                    data_type: Some(spark_type(t, nested)?),
+                })
+            })
+            .collect::<Result<_>>()?,
     })
 }
 

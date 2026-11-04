@@ -67,8 +67,10 @@ holds that crate's invariants, and the module docs (`//!`) at the top of the nam
 | L6 | `krishiv-connect`, `krishiv-flight-sql`, `krishiv-mcp`, `krishiv-server`, `krishiv-python`, `krishiv-ui-assets` |
 | L7 | `krishiv` (facade), `krishiv-cli`, `krishiv-bench-runner`; test crates `krishiv-testkit`, `krishiv-sim` |
 
-Several crates are placeholders with a short `lib.rs` and no implementation yet: `krishiv-shuffle`,
-`krishiv-scheduler`, `krishiv-state`, `krishiv-stream`, `krishiv-flight-sql`, `krishiv-mcp`, both SDK crates and
+`krishiv-scheduler` cuts a plan into stages at its exchanges and runs them as tasks in one process over
+`krishiv-shuffle`'s local shuffle (P2-T176 unit 1); the session still runs every query on one worker.
+
+Several crates are placeholders with a short `lib.rs` and no implementation yet: `krishiv-state`, `krishiv-stream`, `krishiv-flight-sql`, `krishiv-mcp`, both SDK crates and
 the four connector crates.
 
 ## Where does X live
@@ -86,6 +88,8 @@ the four connector crates.
 | Memory pool, reservations, spill | `crates/krishiv-memory/src/` (`pool.rs`, `reservation.rs`, `spill.rs`, `spillfile/`); the driver side in `crates/krishiv-exec/src/driver.rs` |
 | File formats and the scan | `crates/krishiv-io/src/` (`format.rs`, `scan.rs`, `scan_gate.rs`, `parquet/`, `csv/`, `text/`, `split/`); path listing in `crates/krishiv-exec/src/files.rs` |
 | Runtime filters | produced and consumed in `crates/krishiv-io/src/runtime_filter/`; planned in `crates/krishiv-exec/src/planner/runtime_filter.rs`; operator in `crates/krishiv-exec/src/operators/runtime_filter.rs` |
+| Stages, exchanges and the local shuffle | fragmenter and `StageRunner` in `crates/krishiv-scheduler/src/`; exchange traits, writer sink and reader in `crates/krishiv-exec/src/exchange/`; frame format v1 and `LocalShuffle` in `crates/krishiv-shuffle/src/` |
+| Top-N bound and late fetch | `crates/krishiv-exec/src/operators/late_fetch.rs`, `crates/krishiv-exec/src/operators/sort/topn.rs`; planned by `Planner::late_fetch`; reads in `crates/krishiv-io/src/take.rs`, bound in `crates/krishiv-io/src/runtime_filter/bound.rs` |
 | Golden tests | `crates/krishiv-testkit/src/golden/` (runner over `tests/spark-golden/`, exclusions in `tests/spark-golden/exclusions.json`); generated fixtures in `tests/fixtures/` with generators in `tests/scripts/gen_*.py` |
 | Ratchets | `crates/krishiv-plan-codec/tests/ratchet.rs` (TPC-H and TPC-DS plans round-trip, with a list of unplanned queries that may only shrink); manifests in `tests/fixtures/analysis/` (one file per function or coercion file) checked by `crates/krishiv-testkit/tests/{type_coercion,registry_matrix}.rs` |
 | Benchmarks | `bench/` (harness `src/krishiv_bench/`, adapters in `adapters/`, queries in `queries/`); Rust runner `crates/krishiv-bench-runner/` |

@@ -528,6 +528,16 @@ fn path_prefix_policy_keeps_paths_under_its_roots() {
     assert_eq!(read(&format!("{r}/%2e%2e/outside/data")), DENIED);
     assert_eq!(read(&format!("file://{r}/data")), "OK");
 
+    // A datasource temporary view is checked when it is created, whether or not the path exists.
+    let view = |p: &str| {
+        class(block_on(s.sql(&format!(
+            "CREATE TEMPORARY VIEW v(a INT) USING parquet OPTIONS (PATH '{p}')"
+        ))))
+    };
+    assert_eq!(view(&format!("{}/data", outside.display())), DENIED);
+    assert_eq!(view("/etc/passwd-not-there"), DENIED);
+    assert_eq!(view(&format!("{r}/data")), "OK");
+
     // Writes: under the root only, nothing created outside it.
     let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
     block_on(df.write().parquet(root.join("new").to_str().unwrap())).unwrap();
@@ -1476,4 +1486,205 @@ fn a_script_is_authorized_by_its_strongest_statement() {
     ] {
         assert_eq!(class(block_on(s.sql(sql))), "OK", "{sql}");
     }
+}
+
+fn all_but_create(_: &Securable, p: Privilege) -> AccessDecision {
+    if p == Privilege::Create {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+/// The table writers of a DataFrame (`saveAsTable`, `insertInto`, `writeTo`) make the checks of
+/// the statements they stand for: `Create` for a new table, `Modify` for rows added to one.
+#[test]
+fn dataframe_table_writers_are_authorized_like_their_statements() {
+    // Creating a table needs Create in its namespace.
+    let s = session(Policy::new(all_but_create));
+    let tables = s.temp_table_names();
+    assert_eq!(
+        class(block_on(s.table("t").write().save_as_table("made"))),
+        DENIED
+    );
+    assert_eq!(
+        class(block_on(s.table("t").write_to_table("made2").create())),
+        DENIED
+    );
+    assert_eq!(s.temp_table_names(), tables, "no catalog change");
+    assert_eq!(
+        class(block_on(s.table("made").count())),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+
+    // Writing rows, into a new table or an existing one, needs Modify on it
+    // (as `CREATE TABLE ... AS SELECT` and `INSERT INTO` do).
+    let s = session(Policy::new(all_but_modify));
+    let tables = s.temp_table_names();
+    assert_eq!(
+        class(block_on(s.table("t").write().save_as_table("made"))),
+        DENIED
+    );
+    assert_eq!(
+        class(block_on(s.table("t").write().insert_into("made"))),
+        DENIED
+    );
+    assert_eq!(
+        class(block_on(s.table("t").write_to_table("made").append())),
+        DENIED
+    );
+    assert_eq!(
+        class(block_on(
+            s.table("t").write().mode("append").save_as_table("made")
+        )),
+        DENIED
+    );
+    assert_eq!(s.temp_table_names(), tables, "no catalog change");
+    assert_eq!(
+        class(block_on(s.table("made").count())),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+
+    // Everything allowed: the same calls work.
+    let s = session(Policy::new(allow));
+    block_on(s.table("t").write().save_as_table("made")).unwrap();
+    block_on(s.table("t").write().insert_into("made")).unwrap();
+    assert_eq!(block_on(s.table("made").count()).unwrap(), 6);
+}
+
+fn no_drop(_: &Securable, p: Privilege) -> AccessDecision {
+    if p == Privilege::Drop {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+/// Overwriting a table drops it first, which needs `Drop`; the overwrite of its rows needs `Modify`.
+#[test]
+fn dataframe_overwrites_need_drop_and_modify() {
+    let s = session(Policy::new(no_drop));
+    block_on(s.table("t").write().save_as_table("made")).unwrap();
+    assert_eq!(
+        class(block_on(
+            s.table("t").write().mode("overwrite").save_as_table("made")
+        )),
+        DENIED
+    );
+    assert_eq!(
+        block_on(s.table("made").count()).unwrap(),
+        3,
+        "the table is still there"
+    );
+    // insertInto overwrite needs only Modify, which this policy allows.
+    block_on(s.table("t").write().mode("overwrite").insert_into("made")).unwrap();
+
+    let s = session(Policy::new(all_but_modify));
+    assert_eq!(
+        class(block_on(
+            s.table("t").write().mode("overwrite").insert_into("made")
+        )),
+        DENIED
+    );
+}
+
+/// `ignore` on an existing table is still authorized: a denial must not tell an existing table
+/// from a missing one.
+#[test]
+fn ignore_mode_on_an_existing_table_is_authorized_like_a_create() {
+    let s = session(Policy::new(all_but_create));
+    // `t` is a registered table, so the target exists; the CTAS check denies both alike.
+    assert_eq!(
+        class(block_on(
+            s.table("t").write().mode("ignore").save_as_table("t")
+        )),
+        DENIED
+    );
+    assert_eq!(
+        class(block_on(
+            s.table("t").write().mode("ignore").save_as_table("missing")
+        )),
+        DENIED
+    );
+}
+
+static PATHS_LOCKED: AtomicBool = AtomicBool::new(false);
+
+fn lock_paths_later(securable: &Securable, p: Privilege) -> AccessDecision {
+    if PATHS_LOCKED.load(Ordering::SeqCst) && matches!(securable, Securable::Path(_)) {
+        deny()
+    } else {
+        let _ = (securable, p);
+        AccessDecision::Allow
+    }
+}
+
+/// The write of an overwrite asks the policy about the table's directory; that must be asked
+/// before the old table is dropped, or a denial there loses the table.
+#[test]
+fn a_denied_path_does_not_lose_the_table_an_overwrite_would_replace() {
+    let s = session(Policy::new(lock_paths_later));
+    block_on(s.table("t").write().save_as_table("made")).unwrap();
+    PATHS_LOCKED.store(true, Ordering::SeqCst);
+    let denied = class(block_on(
+        s.table("t").write().mode("overwrite").save_as_table("made"),
+    ));
+    PATHS_LOCKED.store(false, Ordering::SeqCst);
+    assert_eq!(denied, DENIED);
+    assert_eq!(
+        block_on(s.table("made").count()).unwrap(),
+        3,
+        "the table survived the denial"
+    );
+}
+
+/// A denied append is reported as a denial whether or not the table is there, and whatever the
+/// format asked for: the metadata of a table the caller may not write is not consulted first.
+#[test]
+fn an_append_is_authorized_before_the_table_is_inspected() {
+    let s = session(Policy::new(all_but_modify));
+    let (a, b) = (
+        class(block_on(
+            s.table("t")
+                .write()
+                .format("csv")
+                .mode("append")
+                .save_as_table("t"),
+        )),
+        class(block_on(
+            s.table("t")
+                .write()
+                .format("csv")
+                .mode("append")
+                .save_as_table("missing"),
+        )),
+    );
+    assert_eq!((a.as_str(), b.as_str()), (DENIED, DENIED));
+}
+
+/// A CTAS into a warehouse the policy denies is refused before any directory is made: the missing
+/// warehouse and the table directory are not left behind.
+#[test]
+fn a_denied_ctas_creates_no_directories() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    let warehouse = tmp.path().join("outside").join("wh");
+    let policy = PathPrefixPolicy::new([&root], Arc::new(AllowAll)).unwrap();
+    let s = session(Arc::new(policy));
+    s.conf()
+        .set("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
+        .unwrap();
+    let e = block_on(async {
+        s.sql("CREATE TABLE w USING parquet AS SELECT 1 AS a")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), DENIED);
+    assert!(
+        !tmp.path().join("outside").exists(),
+        "no parent was created"
+    );
 }

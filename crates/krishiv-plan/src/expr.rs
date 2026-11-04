@@ -120,6 +120,14 @@ pub enum ExprNode {
         /// The output name.
         name: String,
     },
+    /// An unresolved `expr AS (a, b, ..)`: several output names, valid
+    /// only over a generator (`MULTI_ALIAS_WITHOUT_GENERATOR` otherwise).
+    MultiAlias {
+        /// The aliased expression.
+        expr: Arc<Expr>,
+        /// The output names, in order.
+        names: Vec<String>,
+    },
     /// A subquery used as an expression.
     Subquery {
         /// Scalar, `EXISTS` or `IN`.
@@ -188,6 +196,10 @@ pub struct Star {
     /// `|> AGGREGATE ... GROUP BY n`: the star stands for the `n`-th
     /// column (from 1) of the input only.
     pub position: Option<usize>,
+    /// `spark.sql.parser.quotedRegexColumnNames`: the star stands for the columns (of the
+    /// qualifier, if any) whose names the regular expression matches in full, as Spark's
+    /// `UnresolvedRegex`.
+    pub regex: Option<String>,
     /// The DataFrame the star expands, for PySpark's `df["*"]`; resolved
     /// as for [`ColumnRef::plan_id`].
     pub plan_id: Option<PlanId>,
@@ -695,6 +707,7 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(
@@ -756,6 +769,7 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(

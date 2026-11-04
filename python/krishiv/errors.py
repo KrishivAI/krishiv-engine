@@ -63,6 +63,7 @@ _TEMPLATES = {
     "CANNOT_BE_NONE": "Argument `<arg_name>` cannot be None.",
     "WRONG_NUM_COLUMNS": "Function `<func_name>` should take at least <num_cols> columns.",
     "UNSUPPORTED_DATA_TYPE": "Unsupported DataType `<data_type>`.",
+    "UNSUPPORTED_DATA_TYPE_FOR_ARROW_CONVERSION": "<data_type> is not supported in conversion to Arrow.",
     "DIFFERENT_ROWS": "<error_msg>",
     "DIFFERENT_SCHEMA": "Schemas do not match.\n--- actual\n+++ expected\n<error_msg>",
     "DIFFERENT_PANDAS_DATAFRAME": (

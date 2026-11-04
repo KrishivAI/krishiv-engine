@@ -14,11 +14,11 @@
 //!   bounds at 4 KiB (parquet-mr drops longer ones; arrow-rs truncates them
 //!   and marks them inexact, which readers treat as such), so huge values
 //!   cannot bloat the footer.
-//! - **Footer metadata:** `org.apache.spark.version` (below) and arrow-rs's
-//!   `ARROW:schema`; Spark's own schema JSON
-//!   (`org.apache.spark.sql.parquet.row.metadata`) is not written, Spark
-//!   reads the Parquet types instead (the same Spark types for every type
-//!   the engine has; checked in the interop fixtures).
+//! - **Footer metadata:** `org.apache.spark.version` (below), Spark's own
+//!   schema JSON (`org.apache.spark.sql.parquet.row.metadata`, the only place
+//!   an ANSI interval's type survives) and arrow-rs's `ARROW:schema`.
+//! - **Intervals** as Spark stores them: year-month in a plain `INT32`,
+//!   day-time in a plain `INT64`. A calendar interval is refused, at any depth.
 //! - **Strings are UTF-8.** A `string` column stored as binary (non-UTF-8
 //!   bytes, tagged `krishiv.spark_type`) is refused: it can be written
 //!   neither as a valid `STRING` nor as `binary` without changing its type.
@@ -38,12 +38,12 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::TimestampMicrosecondType;
+use arrow_array::types::{Int32Type, IntervalYearMonthType, TimestampMicrosecondType};
 use arrow_array::{
     Array, ArrayRef, LargeListArray, ListArray, MapArray, RecordBatch, StructArray,
     TimestampMillisecondArray,
 };
-use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
+use arrow_schema::{DataType, Field, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit};
 use bytes::Bytes;
 use krishiv_common::error::{
     CodecNotAvailableWithAvailableCodecsSuggestion,
@@ -58,7 +58,7 @@ use parquet::file::properties::{
 };
 
 use super::ParquetFormat;
-use super::calendar;
+use super::{calendar, intervals};
 use crate::error::{FormatError, FormatResult};
 use crate::format::FileMetadata;
 use crate::format::{Encoder, WrittenFile};
@@ -125,6 +125,10 @@ pub(crate) struct Settings {
     extension: &'static str,
     compression: Compression,
     millis: bool,
+    /// Whether the data has year-month intervals ([`to_stored`]).
+    year_month: bool,
+    /// The footer's Spark schema.
+    row_metadata: Option<String>,
     rebase: Rebase,
     /// Whether the data has dates or timestamps (values to check).
     datetimes: bool,
@@ -187,6 +191,7 @@ impl Settings {
             "v2" | "PARQUET_2_0" => WriterVersion::PARQUET_2_0,
             _ => WriterVersion::PARQUET_1_0,
         };
+        crate::error::refuse_calendar_intervals("Parquet", schema)?;
         if schema.fields().iter().any(|f| binary_string(f)) {
             return Err(unsupported(
                 "writing a string column holding invalid UTF-8 to Parquet",
@@ -196,6 +201,8 @@ impl Settings {
             extension,
             compression,
             millis: millis && has(is_timestamp),
+            year_month: has(is_year_month),
+            row_metadata: intervals::row_metadata(schema),
             rebase,
             datetimes: has(is_datetime),
             block_size: int(o, "parquet.block.size", 128 << 20),
@@ -220,6 +227,12 @@ impl Settings {
             kv.push(KeyValue::new(
                 "org.apache.spark.legacyDateTime".to_owned(),
                 String::new(),
+            ));
+        }
+        if let Some(json) = &self.row_metadata {
+            kv.push(KeyValue::new(
+                intervals::ROW_METADATA_KEY.to_owned(),
+                json.clone(),
             ));
         }
         WriterProperties::builder()
@@ -273,6 +286,10 @@ fn is_timestamp(t: &DataType) -> bool {
     matches!(t, DataType::Timestamp(TimeUnit::Microsecond, Some(_)))
 }
 
+fn is_year_month(t: &DataType) -> bool {
+    matches!(t, DataType::Interval(IntervalUnit::YearMonth))
+}
+
 fn is_datetime(t: &DataType) -> bool {
     matches!(t, DataType::Date32 | DataType::Timestamp(_, Some(_)))
 }
@@ -288,13 +305,18 @@ fn any_type(t: &DataType, f: fn(&DataType) -> bool) -> bool {
     }
 }
 
-/// `a` with its timestamps (with a time zone) in milliseconds, rounded down
-/// as Spark does (`floorDiv`), at any depth.
-fn to_millis(a: &ArrayRef) -> FormatResult<ArrayRef> {
+/// `a` as it is stored, at any depth: year-month intervals as their `int`s
+/// and, with `millis`, timestamps (with a time zone) in milliseconds, rounded
+/// down as Spark does (`floorDiv`).
+fn to_stored(a: &ArrayRef, millis: bool) -> FormatResult<ArrayRef> {
     let bad = |e: arrow_schema::ArrowError| FormatError::WriteFailed(e.to_string());
     let retyped = |f: &Field, t: &DataType| Arc::new(f.clone().with_data_type(t.clone()));
     Ok(match a.data_type() {
-        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => {
+        DataType::Interval(IntervalUnit::YearMonth) => Arc::new(
+            a.as_primitive::<IntervalYearMonthType>()
+                .reinterpret_cast::<Int32Type>(),
+        ),
+        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) if millis => {
             let micros = a.as_primitive::<TimestampMicrosecondType>();
             let millis: TimestampMillisecondArray = micros.unary(|v| v.div_euclid(1000));
             Arc::new(millis.with_timezone(Arc::clone(tz)))
@@ -304,7 +326,7 @@ fn to_millis(a: &ArrayRef) -> FormatResult<ArrayRef> {
             let columns = s
                 .columns()
                 .iter()
-                .map(to_millis)
+                .map(|c| to_stored(c, millis))
                 .collect::<FormatResult<Vec<_>>>()?;
             let fields: Fields = fields
                 .iter()
@@ -315,7 +337,7 @@ fn to_millis(a: &ArrayRef) -> FormatResult<ArrayRef> {
         }
         DataType::List(f) => {
             let l = a.as_list::<i32>();
-            let values = to_millis(l.values())?;
+            let values = to_stored(l.values(), millis)?;
             let f = retyped(f, values.data_type());
             Arc::new(
                 ListArray::try_new(f, l.offsets().clone(), values, l.nulls().cloned())
@@ -324,7 +346,7 @@ fn to_millis(a: &ArrayRef) -> FormatResult<ArrayRef> {
         }
         DataType::LargeList(f) => {
             let l = a.as_list::<i64>();
-            let values = to_millis(l.values())?;
+            let values = to_stored(l.values(), millis)?;
             let f = retyped(f, values.data_type());
             Arc::new(
                 LargeListArray::try_new(f, l.offsets().clone(), values, l.nulls().cloned())
@@ -334,7 +356,7 @@ fn to_millis(a: &ArrayRef) -> FormatResult<ArrayRef> {
         DataType::Map(f, sorted) => {
             let m = a.as_map();
             let entries: ArrayRef = Arc::new(m.entries().clone());
-            let entries = to_millis(&entries)?;
+            let entries = to_stored(&entries, millis)?;
             let f = retyped(f, entries.data_type());
             Arc::new(
                 MapArray::try_new(
@@ -354,7 +376,7 @@ fn to_millis(a: &ArrayRef) -> FormatResult<ArrayRef> {
 /// The Parquet encoder of one file (see the module docs).
 pub(crate) struct ParquetEncoder {
     writer: ArrowWriter<Vec<u8>>,
-    /// The schema of the batches the writer takes (milliseconds applied).
+    /// The schema of the batches the writer takes ([`to_stored`] applied).
     schema: SchemaRef,
     settings: Settings,
     options: FormatOptions,
@@ -369,7 +391,7 @@ impl ParquetEncoder {
         tweak: impl FnOnce(WriterPropertiesBuilder) -> WriterPropertiesBuilder,
     ) -> FormatResult<Self> {
         let settings = Settings::new(schema, o)?;
-        let schema = if settings.millis {
+        let schema = if settings.millis || settings.year_month {
             let empty = RecordBatch::new_empty(Arc::clone(schema));
             let fields: Vec<Field> = schema
                 .fields()
@@ -378,7 +400,7 @@ impl ParquetEncoder {
                 .map(|(f, c)| {
                     Ok(f.as_ref()
                         .clone()
-                        .with_data_type(to_millis(c)?.data_type().clone()))
+                        .with_data_type(to_stored(c, settings.millis)?.data_type().clone()))
                 })
                 .collect::<FormatResult<_>>()?;
             Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
@@ -428,11 +450,11 @@ impl Encoder for ParquetEncoder {
             }
         }
         let converted;
-        let batch = if self.settings.millis {
+        let batch = if self.settings.millis || self.settings.year_month {
             let columns = batch
                 .columns()
                 .iter()
-                .map(to_millis)
+                .map(|c| to_stored(c, self.settings.millis))
                 .collect::<FormatResult<_>>()?;
             converted = RecordBatch::try_new(Arc::clone(&self.schema), columns)
                 .map_err(|e| FormatError::WriteFailed(e.to_string()))?;

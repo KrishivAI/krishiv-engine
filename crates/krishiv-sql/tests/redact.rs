@@ -129,3 +129,75 @@ fn errors_and_lowered_plans_never_hold_the_canary() {
         }
     }
 }
+
+/// The key argument of the AES functions is a secret in query text, however
+/// the call is written; the other arguments stay.
+#[test]
+fn an_aes_key_argument_is_redacted_in_query_text() {
+    for sql in [
+        "SELECT aes_encrypt(1, 'Canary7f3a9c')",
+        "SELECT AES_DECRYPT(unhex('00'), 'Canary7f3a9c', 'GCM')",
+        "SELECT try_aes_decrypt(f(a, b), 'Canary7f3a9c' || x, 'GCM')",
+        "SELECT builtin.aes_encrypt(1, Canary7f3a9c)",
+        "SELECT `aes_encrypt`(1, 'Canary7f3a9c'",
+        "SELECT \"aes_encrypt\"(1, 'Canary7f3a9c')",
+        "SELECT \"try_aes_decrypt\"(1, 'Canary7f3a9c')",
+        "SELECT aes_encrypt(DISTINCT 1, 'Canary7f3a9c')",
+        "SELECT aes_encrypt(map('a', 'S')::MAP<STRING,STRING>['a'], 'Canary7f3a9c', 'XYZ')",
+        "SELECT aes_encrypt(x::STRUCT<a: ARRAY<INT>, b: INT>.b, 'Canary7f3a9c')",
+        "SELECT aes_encrypt(named_struct('a','Spark','b','x')::STRUCT<`a`: STRING, `b`: STRING>.a, 'Canary7f3a9c', 'XYZ')",
+        "SELECT aes_encrypt(x::STRUCT<`a` ARRAY<INT>, `b` INT>.b, 'Canary7f3a9c')",
+        "SELECT aes_encrypt(map('a','S')::MAP<CHARACTER(5), CHARACTER(5)>['a'], 'Canary7f3a9c', 'XYZ')",
+        "SELECT aes_encrypt(x::ARRAY<GEOMETRY(4326)>[0], 'Canary7f3a9c')",
+        "SELECT aes_encrypt(named_struct('a','Spark','b','x')::STRUCT<a STRING, b STRING>.a, 'Canary7f3a9c', 'XYZ')",
+        "SELECT aes_encrypt(x::STRUCT<\"a\": INT, \"b\": INT>.b, 'Canary7f3a9c')",
+        "SELECT aes_encrypt(CASE WHEN map < 1 THEN 'a' ELSE 'b' END, 'Canary7f3a9c') FROM t",
+        "SELECT aes_encrypt(CASE WHEN array < col THEN 'a' ELSE 'b' END, 'Canary7f3a9c') FROM t",
+        "SELECT aes_encrypt(CASE WHEN map < col THEN 'a' ELSE map('a','Spark')::MAP<STRING,STRING>['a'] END, 'Canary7f3a9c') FROM t",
+        "SELECT aes_encrypt(key => 'Canary7f3a9c', input => 1)",
+        "SELECT aes_decrypt(input => unhex('00'), mode => 'GCM', key => 'Canary7f3a9c')",
+        "SELECT aes_encrypt(aes_encrypt(1, 'Canary7f3a9c'), 'Canary7f3a9c')",
+        "SELECT aes_encrypt(1, 'Canary7f3a9c' || (SELECT max(x) FROM t))",
+        "SELECT aes_encrypt(CASE WHEN map < col THEN 'a' ELSE 'b' END, 'Canary7f3a9c', CASE WHEN x > 0 THEN 'GCM' ELSE 'CBC' END) FROM t",
+    ] {
+        let r = redact_sql(sql);
+        for at in 0..sql.len() {
+            assert!(!leaks(r.fragment(at..sql.len())), "{sql} @ {at}");
+        }
+        assert!(!leaks(r.as_str()), "{sql} -> {}", r.as_str());
+    }
+    assert_eq!(
+        redact_sql("SELECT aes_encrypt(f(1, 2), 'k', 'GCM')").as_str(),
+        "SELECT aes_encrypt(*********(redacted))"
+    );
+    let plain = "SELECT other(1, 'k') , aes_encrypt()";
+    assert_eq!(redact_sql(plain).as_str(), plain);
+}
+
+/// A wide AES call is masked in one linear pass: ordinary columns named like
+/// type words never trigger a rescan of the call.
+#[test]
+fn a_wide_aes_call_redacts_in_linear_time() {
+    let args = vec!["map"; 20_000].join(", ");
+    let sql = format!("SELECT aes_encrypt(concat_ws('', {args}), 'Canary7f3a9c') FROM t");
+    let r = redact_sql(&sql);
+    assert!(!leaks(r.as_str()));
+}
+
+/// Deeply nested and unterminated AES calls are masked in one linear pass.
+#[test]
+fn nested_aes_calls_redact_in_linear_time() {
+    let nested = format!(
+        "{}1, 'Canary7f3a9c'{}",
+        "aes_encrypt(".repeat(5_000),
+        ")".repeat(5_000)
+    );
+    let open = "aes_encrypt(".repeat(20_000);
+    for sql in [
+        format!("SELECT {nested}"),
+        format!("SELECT {open}'Canary7f3a9c'"),
+    ] {
+        let r = redact_sql(&sql);
+        assert!(!leaks(r.as_str()));
+    }
+}

@@ -48,7 +48,12 @@ impl Session {
     /// VIEW`, `DROP VIEW`) explains as its own plan text. A query that
     /// fails to analyze or plan is part of the text, not an error; a
     /// syntax error is an error.
-    pub(crate) async fn explain_statement(&self, e: &Explain) -> Result<DataFrame, KrishivError> {
+    pub(crate) async fn explain_statement(
+        &self,
+        e: &Explain,
+        env: crate::session::QueryEnv,
+        redacted: &krishiv_common::redact::RedactedSql,
+    ) -> Result<DataFrame, KrishivError> {
         if !matches!(&*e.statement, Statement::Query(_)) {
             let text = command_plan(&e.statement)?;
             return self.one_row(&text).await;
@@ -66,11 +71,15 @@ impl Session {
         let text = match e.mode {
             // Krishiv's extensions (ADR 0023): a query that fails to
             // analyze, plan or run is an error, not part of the text.
-            krishiv_sql::ast::ExplainMode::Analyze => explained
-                .profiled(false)
-                .await?
-                .1
-                .to_text(krishiv_exec::profile::TextOptions::default()),
+            krishiv_sql::ast::ExplainMode::Analyze => {
+                // The query runs here, so its row shows the EXPLAIN statement and its class.
+                explained.analyzed_in_with_text(env, Some(redacted)).await?;
+                explained
+                    .profiled(false)
+                    .await?
+                    .1
+                    .to_text(krishiv_exec::profile::TextOptions::default())
+            }
             krishiv_sql::ast::ExplainMode::Verbose => explained.verbose().await?.to_text(),
             mode => explained.explain_text(mode.into(), true).await?,
         };
@@ -256,7 +265,15 @@ impl Session {
         let statement = krishiv_sql::parse_statement(&resolved, &env.parser).map_err(|e| {
             crate::session::sql_context(e.error, &redacted, e.span.start, e.span.end)
         })?;
-        let source = match &statement {
+        // `EXPLAIN ANALYZE` runs its statement: what it reads is what the
+        // statement reads.
+        let mut statement = &statement;
+        while let Statement::Explain(e) = statement
+            && e.mode == krishiv_sql::ast::ExplainMode::Analyze
+        {
+            statement = &e.statement;
+        }
+        let source = match statement {
             Statement::Query(q) => q,
             Statement::Insert(i) if i.source.is_none() && i.clauses.len() == 1 => {
                 &i.clauses[0].query
@@ -391,7 +408,12 @@ impl DataFrame {
         let stats = ProviderStatistics(
             Arc::clone(&planned.analysis.env.catalog) as Arc<dyn TableProviderResolver>
         );
-        Ok(render(mode, &parsed, &planned, &stats))
+        let mut text = render(mode, &parsed, &planned, &stats);
+        // Only when the cache is on for the query, so the plan text stays Spark's by default.
+        if let Some(note) = self.session.result_cache_note(&planned.analysis) {
+            let _ = write!(text, "\n== Result Cache ==\n{note}\n");
+        }
+        Ok(text)
     }
 }
 

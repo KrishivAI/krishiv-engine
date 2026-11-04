@@ -269,6 +269,30 @@ PYSPARK_CALLS = [
         ("call", "convert_timezone", (("lit", "UTC"), ("lit", "Asia/Hong_Kong"), ("col", "ts"))),
     ),
     (
+        lambda: F.make_ym_interval(months="m"),
+        ("call", "make_ym_interval", (("lit", 0), ("col", "m"))),
+    ),
+    (
+        lambda: F.make_dt_interval("d", secs="s"),
+        ("call", "make_dt_interval", (("col", "d"), ("lit", 0), ("lit", 0), ("col", "s"))),
+    ),
+    (
+        lambda: F.make_interval(weeks="w"),
+        (
+            "call",
+            "make_interval",
+            (("lit", 0), ("lit", 0), ("col", "w"), ("lit", 0), ("lit", 0), ("lit", 0), ("lit", 0)),
+        ),
+    ),
+    (
+        lambda: F.try_make_interval("y"),
+        (
+            "call",
+            "try_make_interval",
+            (("col", "y"), ("lit", 0), ("lit", 0), ("lit", 0), ("lit", 0), ("lit", 0), ("lit", 0)),
+        ),
+    ),
+    (
         lambda: F.convert_timezone(None, F.lit("Asia/Hong_Kong"), "ts"),
         ("call", "convert_timezone", (("lit", "Asia/Hong_Kong"), ("col", "ts"))),
     ),

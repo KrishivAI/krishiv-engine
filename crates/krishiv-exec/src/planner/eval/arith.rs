@@ -5,18 +5,18 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type,
+    Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, IntervalYearMonthType,
 };
 use arrow_array::{Array, ArrayRef, PrimitiveArray, RecordBatch};
-use arrow_schema::DataType as ArrowType;
+use arrow_schema::{DataType as ArrowType, IntervalUnit, TimeUnit};
 use krishiv_kernels::decimal::{
     DecimalCarrier, DecimalOp, DecimalOperand, DecimalPlan, decimal_arith_any,
     decimal_integral_divide_any, decimal_unary,
 };
 use krishiv_kernels::integer::{self, SparkIntegral, UnaryOp};
 use krishiv_kernels::{
-    Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Mul, NullOnOverflow, Sub, float,
+    Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Mul, NullOnOverflow, Sub, float, interval,
 };
 use krishiv_plan::Builtin;
 
@@ -157,6 +157,10 @@ where
 }
 
 impl PhysExpr for Binary {
+    fn is_constant(&self) -> bool {
+        self.l.is_constant() && self.r.is_constant()
+    }
+
     fn data_type(&self) -> &ArrowType {
         &self.out
     }
@@ -226,6 +230,10 @@ pub(super) fn negative(e: Arc<dyn PhysExpr>, env: &EvalEnv) -> Result<Arc<dyn Ph
 }
 
 impl PhysExpr for Negative {
+    fn is_constant(&self) -> bool {
+        self.e.is_constant()
+    }
+
     fn data_type(&self) -> &ArrowType {
         self.e.data_type()
     }
@@ -277,14 +285,23 @@ impl PhysExpr for Negative {
     }
 }
 
+/// What `div` reads its operands as.
+#[derive(Debug, Clone, Copy)]
+enum DivideOperands {
+    Long,
+    /// The operands' decimal types.
+    Decimal((u8, i8), (u8, i8)),
+    YearMonth,
+    DayTime,
+}
+
 /// `l div r` (`IntegralDivide`): a `bigint` truncated towards zero, from
-/// `bigint` or decimal operands (the analyzer cast them).
+/// `bigint`, decimal or ANSI interval operands (the analyzer cast them).
 #[derive(Debug)]
 struct IntegralDivide {
     l: Arc<dyn PhysExpr>,
     r: Arc<dyn PhysExpr>,
-    /// Decimal operands' types.
-    decimal: Option<((u8, i8), (u8, i8))>,
+    operands: DivideOperands,
     ansi: bool,
     kernels: KernelCtx,
 }
@@ -294,24 +311,36 @@ pub(super) fn integral_divide(
     r: Arc<dyn PhysExpr>,
     env: &EvalEnv,
 ) -> Result<Arc<dyn PhysExpr>> {
-    let decimal = match (l.data_type(), r.data_type()) {
-        (ArrowType::Int64, ArrowType::Int64) => None,
+    let operands = match (l.data_type(), r.data_type()) {
+        (ArrowType::Int64, ArrowType::Int64) => DivideOperands::Long,
         (
             ArrowType::Decimal64(lp, ls) | ArrowType::Decimal128(lp, ls),
             ArrowType::Decimal64(rp, rs) | ArrowType::Decimal128(rp, rs),
-        ) => Some(((*lp, *ls), (*rp, *rs))),
+        ) => DivideOperands::Decimal((*lp, *ls), (*rp, *rs)),
+        (
+            ArrowType::Interval(IntervalUnit::YearMonth),
+            ArrowType::Interval(IntervalUnit::YearMonth),
+        ) => DivideOperands::YearMonth,
+        (
+            ArrowType::Duration(TimeUnit::Microsecond),
+            ArrowType::Duration(TimeUnit::Microsecond),
+        ) => DivideOperands::DayTime,
         (lt, rt) => return Err(unsupported(&format!("`div` on {lt} and {rt}"))),
     };
     Ok(Arc::new(IntegralDivide {
         l,
         r,
-        decimal,
+        operands,
         ansi: env.ansi,
         kernels: env.kernels,
     }))
 }
 
 impl PhysExpr for IntegralDivide {
+    fn is_constant(&self) -> bool {
+        self.l.is_constant() && self.r.is_constant()
+    }
+
     fn data_type(&self) -> &ArrowType {
         &ArrowType::Int64
     }
@@ -330,8 +359,8 @@ impl PhysExpr for IntegralDivide {
             l = Value::Array(Arc::clone(l.array()));
         }
         let ctx = &self.kernels;
-        let out: ArrayRef = match self.decimal {
-            None => {
+        let out: ArrayRef = match self.operands {
+            DivideOperands::Long => {
                 let (a, b) = (prim::<Int64Type>(&l), prim::<Int64Type>(&r));
                 Arc::new(if self.ansi {
                     integer::integral_divide::<AnsiError>(a, b, ctx)?
@@ -339,7 +368,7 @@ impl PhysExpr for IntegralDivide {
                     integer::integral_divide::<JavaWrap>(a, b, ctx)?
                 })
             }
-            Some((lt, rt)) => {
+            DivideOperands::Decimal(lt, rt) => {
                 let (a, b) = (decimal_operand(&l)?, decimal_operand(&r)?);
                 Arc::new(if self.ansi {
                     decimal_integral_divide_any::<AnsiError>(a, b, lt, rt, ctx)?
@@ -347,6 +376,16 @@ impl PhysExpr for IntegralDivide {
                     decimal_integral_divide_any::<NullOnOverflow>(a, b, lt, rt, ctx)?
                 })
             }
+            DivideOperands::YearMonth => Arc::new(interval::integral_divide_year_month(
+                prim::<IntervalYearMonthType>(&l),
+                prim::<IntervalYearMonthType>(&r),
+                self.ansi,
+            )?),
+            DivideOperands::DayTime => Arc::new(interval::integral_divide_day_time(
+                prim::<DurationMicrosecondType>(&l),
+                prim::<DurationMicrosecondType>(&r),
+                self.ansi,
+            )?),
         };
         Ok(if scalar {
             Value::Scalar(out)

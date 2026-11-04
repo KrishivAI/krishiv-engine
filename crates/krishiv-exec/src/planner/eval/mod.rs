@@ -44,7 +44,8 @@ use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, new_n
 use arrow_schema::{DataType as ArrowType, SchemaRef};
 use krishiv_common::config::{
     ANSI_ENABLED, Config, LEGACY_CODING_ERROR_ACTION, LEGACY_JAVA_CHARSETS,
-    LEGACY_STATISTICAL_AGGREGATE, MAP_KEY_DEDUP_POLICY, SESSION_TIME_ZONE,
+    LEGACY_STATISTICAL_AGGREGATE, LEGACY_TIME_PARSER_POLICY, MAP_KEY_DEDUP_POLICY,
+    SESSION_TIME_ZONE,
 };
 use krishiv_common::error::{KrishivError, KrishivUdfNotAvailable};
 use krishiv_kernels::KernelCtx;
@@ -170,6 +171,11 @@ pub(crate) trait PhysExpr: Send + Sync + fmt::Debug {
     fn is_constant(&self) -> bool {
         false
     }
+    /// This expression with a row's own arithmetic overflow as NULL instead of
+    /// an error, if it can do that without running again by row (`TryEval`).
+    fn null_on_overflow(&self) -> Option<Arc<dyn PhysExpr>> {
+        None
+    }
 }
 
 /// What every expression of one query is evaluated with.
@@ -204,9 +210,16 @@ pub(crate) struct EvalEnv {
     pub(crate) legacy_java_charsets: bool,
     /// `spark.sql.legacy.codingErrorAction`; plan data, like the dedup policy.
     pub(crate) legacy_coding_error_action: bool,
+    /// `spark.sql.legacy.timeParserPolicy = LEGACY`; plan data too.
+    pub(crate) legacy_time_parser: bool,
     /// Counts the unseeded random binds of one plan instantiation (see
     /// [`BindOptions::seed_salt`](krishiv_functions::scalar::BindOptions::seed_salt)).
     pub(crate) seed_salt: Arc<AtomicU64>,
+    /// Added to the partition index the random functions draw their stream
+    /// for. Spark runs round `k` of a recursive CTE as a fresh plan whose
+    /// seeded random streams start at partition `k - 1` (`rand(7)` gives
+    /// the seed's first value in round 1, `rand(8)`'s in round 2, ...).
+    pub(crate) partition_shift: u32,
 }
 
 impl EvalEnv {
@@ -252,6 +265,10 @@ impl EvalEnv {
         };
         let legacy_java_charsets = flag(&LEGACY_JAVA_CHARSETS);
         let legacy_coding_error_action = flag(&LEGACY_CODING_ERROR_ACTION);
+        let legacy_time_parser = config
+            .get(&LEGACY_TIME_PARSER_POLICY)
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("LEGACY"));
         let query_start_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -269,7 +286,9 @@ impl EvalEnv {
             map_key_dedup_last_win,
             legacy_java_charsets,
             legacy_coding_error_action,
+            legacy_time_parser,
             seed_salt: Arc::new(AtomicU64::new(0)),
+            partition_shift: 0,
         }
     }
 
@@ -295,7 +314,9 @@ impl EvalEnv {
             map_key_dedup_last_win: env.map_key_dedup_last_win,
             legacy_java_charsets: env.legacy_java_charsets,
             legacy_coding_error_action: env.legacy_coding_error_action,
+            legacy_time_parser: env.legacy_time_parser,
             seed_salt: Arc::new(AtomicU64::new(0)),
+            partition_shift: 0,
         }
     }
 
@@ -311,6 +332,7 @@ impl EvalEnv {
             map_key_dedup_last_win: self.map_key_dedup_last_win,
             legacy_java_charsets: self.legacy_java_charsets,
             legacy_coding_error_action: self.legacy_coding_error_action,
+            legacy_time_parser: self.legacy_time_parser,
         }
     }
 }
@@ -391,6 +413,9 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             Some(from) if *to == krishiv_types::DataType::String => {
                 Ok(cast::interval_to_string(compile(expr, input)?, from))
             }
+            from if cast::is_interval_cast(from.as_ref(), to) => {
+                cast::interval_cast(compile(expr, input)?, from, to, *mode)
+            }
             _ => {
                 let mut child = compile(expr, input)?;
                 if let Some(part) = expr
@@ -424,6 +449,11 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                     f.args.first().and_then(|a| a.nested_interval_type()),
                 )
             {
+                let from = if name == "to_json" {
+                    nested_cast::without_key_intervals(&from)
+                } else {
+                    from
+                };
                 *first = nested_cast::interval_leaves(Arc::clone(first), from);
             }
             match &f.id {
@@ -459,6 +489,14 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
         // Includes subqueries: the planner replaces those it runs by
         // columns ([`Input::subqueries`]).
         _ => Err(unsupported_expr(e)),
+    }
+}
+
+/// The `ansiEnabled` a calendar operator takes as its last argument.
+fn exact_flag(f: &ResolvedFunction) -> Result<bool> {
+    match f.args.last().map(|a| &a.node) {
+        Some(ExprNode::Literal(Literal::Boolean(v))) => Ok(*v),
+        _ => Err(unsupported("a calendar operator without its mode")),
     }
 }
 
@@ -521,6 +559,25 @@ fn builtin(
             let r = args.pop().ok_or_else(arity)?;
             let l = args.pop().ok_or_else(arity)?;
             interval::binary(b, l, r, out, f.nullable, env)?
+        }
+        (
+            Builtin::DateAddInterval
+            | Builtin::MultiplyInterval
+            | Builtin::DivideInterval
+            | Builtin::CalendarAdd
+            | Builtin::CalendarSubtract,
+            3,
+        ) => {
+            let exact = exact_flag(f)?;
+            args.pop();
+            let r = args.pop().ok_or_else(arity)?;
+            let l = args.pop().ok_or_else(arity)?;
+            interval::calendar_binary(b, l, r, out, f.nullable, exact, env)?
+        }
+        (Builtin::CalendarNegate, 2) => {
+            let exact = exact_flag(f)?;
+            args.pop();
+            interval::calendar_negate(args.pop().ok_or_else(arity)?, exact)
         }
         (Builtin::ExtractAnsiIntervalDays, 1) => interval::unary(b, args.pop().ok_or_else(arity)?),
         (Builtin::TryEval, 1) => interval::try_eval(args.pop().ok_or_else(arity)?, f.deterministic),
@@ -942,7 +999,9 @@ mod tests {
             map_key_dedup_last_win: false,
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
+            legacy_time_parser: false,
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            partition_shift: 0,
         }
     }
 

@@ -138,7 +138,7 @@ impl Opts {
             Purpose::Parse
         };
         let pattern = |v: &str, name: &str| -> Result<DateTimePattern, KrishivError> {
-            datetime_option_as(v, func, name, purpose)
+            datetime_option_as(v, func, name, purpose, false)
         };
         for (k, v) in pairs {
             match k.to_ascii_lowercase().as_str() {
@@ -730,6 +730,7 @@ fn bind_from_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
         check_read_type(f.data_type())?;
     }
     let return_type = DataType::Struct(fields.clone());
+    super::json::refuse_legacy_dates("from_xml", &return_type, opts.legacy_time_parser)?;
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
     let today = krishiv_kernels::datetime::current_date(opts.query_start_micros, zone.as_ref())
         .map_err(KrishivError::from)?;
@@ -1091,6 +1092,7 @@ fn bind_to_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         }
         parsed = Opts::parse(&map_pairs(&args[1])?, "to_xml")?;
     }
+    super::json::refuse_legacy_dates("to_xml", &args[0].data_type(), opts.legacy_time_parser)?;
     let default = |p: &str| DateTimePattern::new(p, Purpose::Format);
     let date = parsed
         .date

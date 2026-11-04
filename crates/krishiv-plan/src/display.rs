@@ -82,6 +82,27 @@ impl LogicalPlan {
     }
 }
 
+thread_local! {
+    /// Set while [`identity_string`] prints: secrets stay in the text.
+    static IDENTITY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `e` as text for comparing expressions inside the engine (an aggregate's
+/// identity, a grouping key's): the display without redaction, so two calls
+/// that differ only in an AES key stay different. Never show or log it.
+#[doc(hidden)]
+#[must_use]
+pub fn identity_string(e: &Expr) -> String {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            IDENTITY.with(|c| c.set(self.0));
+        }
+    }
+    let _reset = Reset(IDENTITY.with(|c| c.replace(true)));
+    e.to_string()
+}
+
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if walk::too_deep(Node::Expr(self)) {
@@ -818,6 +839,10 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 Name(std::slice::from_ref(name))
             )));
         }
+        ExprNode::MultiAlias { expr, names } => {
+            out.push(Piece::Expr(expr));
+            out.push(Piece::Owned(format!(" AS ({})", names.join(", "))));
+        }
         ExprNode::Field { base, name } => {
             out.push(Piece::Expr(base));
             out.push(Piece::Owned(format!(
@@ -994,6 +1019,22 @@ fn call<'a>(
     };
     // `a [NOT] LIKE|ILIKE ANY|SOME|ALL (p, ...)`, as Spark writes the form.
     match (op, args.len()) {
+        // The key of `aes_encrypt`/`aes_decrypt` never reaches a plan, an
+        // error message or a log (ADR 0042).
+        _ if crate::analyzer::is_aes_function(name)
+            && args.len() >= 2
+            && !IDENTITY.with(std::cell::Cell::get) =>
+        {
+            out.push(Piece::Owned(format!("{name}(")));
+            if distinct {
+                out.push(Piece::Str("DISTINCT "));
+            }
+            out.extend([arg(0), Piece::Str(", ***")]);
+            for a in &args[2..] {
+                out.extend([Piece::Str(", "), Piece::Expr(a)]);
+            }
+            out.push(Piece::Str(")"));
+        }
         (Some(op), n) if n >= 1 && op.quantified_like().is_some() => {
             let q = op.quantified_like().unwrap_or_default();
             out.extend([arg(0), Piece::Str(if q.negated { " NOT " } else { " " })]);

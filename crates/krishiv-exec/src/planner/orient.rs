@@ -24,15 +24,13 @@
 //!   probe row, which a build-side outer join does not see.
 //! - Inner joins keep the join orderer's choice.
 //! - A build the planner would broadcast (at most
-//!   [`BROADCAST_MAX_BYTES`](super::join::BROADCAST_MAX_BYTES)) stays.
+//!   `spark.sql.autoBroadcastJoinThreshold`, [`broadcast_max_bytes`](super::join::broadcast_max_bytes)) stays.
 //! - Otherwise the left input is built when the right one costs more than
 //!   [`STATS_FACTOR`] times as much (both sides estimated from table
 //!   statistics), or [`DEFAULT_FACTOR`] times (either side from default
 //!   estimates). A tie keeps the right input.
 
 use crate::join::JoinType;
-
-use super::join::BROADCAST_MAX_BYTES;
 
 /// How much larger the right input's table must be to build the left one,
 /// when both estimates rest on table statistics.
@@ -101,22 +99,29 @@ pub(crate) fn flipped(t: JoinType, single_match: bool) -> Option<JoinType> {
 /// The join type of a hash join whose right input builds by default, given
 /// its inputs: `join_type` itself (build right), or the variant that builds
 /// the left input.
+/// `broadcast_max` is the largest build the planner broadcasts, `None`
+/// when broadcasting by size is off.
 pub(crate) fn orient(
     join_type: JoinType,
     single_match: bool,
     left: &InputStats,
     right: &InputStats,
+    broadcast_max: Option<f64>,
 ) -> JoinType {
     match flipped(join_type, single_match) {
-        Some(other) if builds_left(left, right) => other,
+        Some(other) if builds_left(left, right, broadcast_max) => other,
         _ => join_type,
     }
 }
 
 /// Whether the statistics say to build the left input of a join that can
-/// build either.
-pub(crate) fn builds_left(left: &InputStats, right: &InputStats) -> bool {
-    if right.bytes <= BROADCAST_MAX_BYTES {
+/// build either; `broadcast_max` as for [`orient`].
+pub(crate) fn builds_left(
+    left: &InputStats,
+    right: &InputStats,
+    broadcast_max: Option<f64>,
+) -> bool {
+    if broadcast_max.is_some_and(|max| right.bytes <= max) {
         return false;
     }
     let factor =
@@ -131,9 +136,20 @@ pub(crate) fn builds_left(left: &InputStats, right: &InputStats) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{InputStats, JoinType, StatsSource, flipped};
 
     const MIB: f64 = 1024.0 * 1024.0;
+
+    /// Spark's default `spark.sql.autoBroadcastJoinThreshold`.
+    const BROADCAST_MAX_BYTES: f64 = 10.0 * MIB;
+
+    fn orient(t: JoinType, single: bool, left: &InputStats, right: &InputStats) -> JoinType {
+        super::orient(t, single, left, right, Some(BROADCAST_MAX_BYTES))
+    }
+
+    fn builds_left(left: &InputStats, right: &InputStats) -> bool {
+        super::builds_left(left, right, Some(BROADCAST_MAX_BYTES))
+    }
 
     fn stats(bytes: f64, source: StatsSource) -> InputStats {
         InputStats {
@@ -231,6 +247,24 @@ mod tests {
             ),
             JoinType::RightSemi
         );
+    }
+
+    /// With broadcasting by size off, a small right input no longer stays
+    /// the build for being broadcastable: only the factor decides.
+    #[test]
+    fn without_a_broadcast_threshold_only_the_factor_decides() {
+        let (left, right) = (known(1.0), known(1.0 * MIB));
+        assert!(!builds_left(&left, &right));
+        assert!(super::builds_left(&left, &right, None));
+        assert_eq!(
+            super::orient(JoinType::LeftSemi, false, &left, &right, None),
+            JoinType::RightSemi
+        );
+        // A tie or a smaller right input still keeps the right build.
+        assert!(!super::builds_left(&right, &right, None));
+        assert!(!super::builds_left(&right, &left, None));
+        // A threshold of 0 broadcasts nothing larger than 0 bytes.
+        assert!(super::builds_left(&left, &right, Some(0.0)));
     }
 
     #[test]

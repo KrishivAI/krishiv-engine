@@ -34,6 +34,8 @@
 )]
 
 mod format;
+pub mod legacy;
+mod legacy_zones;
 pub(crate) mod parse;
 mod zone_names;
 
@@ -177,6 +179,9 @@ enum Item {
 pub struct DateTimePattern {
     pattern: String,
     items: Vec<Item>,
+    /// Set under `spark.sql.legacy.timeParserPolicy=LEGACY`: every method
+    /// then answers from the `SimpleDateFormat`/`FastDateFormat` pattern.
+    legacy: Option<Box<legacy::LegacyPattern>>,
 }
 
 /// Why a pattern does not compile, before mapping to Spark's class.
@@ -202,6 +207,7 @@ impl DateTimePattern {
             Ok(items) => Ok(Self {
                 pattern: pattern.to_owned(),
                 items,
+                legacy: None,
             }),
             Err(Reject::Unsupported(what)) => Err(KrishivUnsupportedFeature {
                 feature: format!("the datetime pattern letter {what}"),
@@ -209,6 +215,22 @@ impl DateTimePattern {
             .into()),
             Err(reject) => Err(spark_error(pattern, &reject)),
         }
+    }
+
+    /// [`Self::new`], or the legacy `SimpleDateFormat`/`FastDateFormat`
+    /// pattern when `legacy` (`timeParserPolicy=LEGACY`).
+    ///
+    /// # Errors
+    /// As the chosen pattern kind.
+    pub fn new_with(pattern: &str, purpose: Purpose, legacy: bool) -> Result<Self, KrishivError> {
+        if !legacy {
+            return Self::new(pattern, purpose);
+        }
+        Ok(Self {
+            pattern: pattern.to_owned(),
+            items: Vec::new(),
+            legacy: Some(Box::new(legacy::LegacyPattern::new(pattern)?)),
+        })
     }
 
     /// The pattern text.
@@ -220,6 +242,9 @@ impl DateTimePattern {
     /// Whether the pattern prints or reads a zone or offset.
     #[must_use]
     pub fn has_zone(&self) -> bool {
+        if let Some(l) = &self.legacy {
+            return l.has_zone();
+        }
         fn any(items: &[Item]) -> bool {
             items.iter().any(|i| match i {
                 Item::Offset(_) | Item::Localized { .. } | Item::ZoneId | Item::ZoneName { .. } => {
@@ -235,6 +260,9 @@ impl DateTimePattern {
     /// Whether the pattern has a time-of-day field.
     #[must_use]
     pub fn has_time(&self) -> bool {
+        if self.legacy.is_some() {
+            return true;
+        }
         fn any(items: &[Item]) -> bool {
             items.iter().any(|i| match i {
                 Item::Number(n) => matches!(
@@ -264,6 +292,9 @@ impl DateTimePattern {
     /// instant within an offset of the `i64` range) or the pattern prints
     /// the name of a zone that needs the time-zone database.
     pub fn format_timestamp(&self, micros: i64, zone: Zone<'_>) -> Result<String, KrishivError> {
+        if let Some(l) = &self.legacy {
+            return l.format_timestamp(micros, zone);
+        }
         let offset = zone.rules.offset_at_utc(micros.div_euclid(1_000_000));
         let local = micros
             .checked_add(i64::from(offset) * 1_000_000)
@@ -276,6 +307,9 @@ impl DateTimePattern {
     /// # Errors
     /// A pattern with a zone or offset (a local date-time has none).
     pub fn format_local(&self, local: i64) -> Result<String, KrishivError> {
+        if let Some(l) = &self.legacy {
+            return l.format_local(local);
+        }
         format::format(&self.items, local, None, true)
     }
 
@@ -284,6 +318,9 @@ impl DateTimePattern {
     /// # Errors
     /// A pattern with time-of-day or zone fields (a date has none).
     pub fn format_date(&self, days: i32) -> Result<String, KrishivError> {
+        if let Some(l) = &self.legacy {
+            return l.format_date(days);
+        }
         format::format_days(&self.items, i64::from(days))
     }
 
@@ -299,6 +336,9 @@ impl DateTimePattern {
         s: &str,
         session: &dyn TimeZoneRules,
     ) -> Result<Option<i64>, KrishivError> {
+        if let Some(l) = &self.legacy {
+            return l.parse_timestamp(s, session);
+        }
         let Some(p) = parse::parse(&self.items, s) else {
             return Ok(None);
         };
@@ -321,6 +361,9 @@ impl DateTimePattern {
     /// is ignored when `allow_zone`, else the string does not match. An
     /// unresolvable zone id does not match either.
     pub fn parse_local(&self, s: &str, allow_zone: bool) -> Result<Option<i64>, KrishivError> {
+        if let Some(l) = &self.legacy {
+            return l.parse_local(s, allow_zone);
+        }
         let Some(p) = parse::parse(&self.items, s) else {
             return Ok(None);
         };
@@ -341,6 +384,9 @@ impl DateTimePattern {
     /// readers parse dates: time and zone fields are read but ignored. An
     /// unresolvable zone id does not match either.
     pub fn parse_date(&self, s: &str) -> Result<Option<i32>, KrishivError> {
+        if let Some(l) = &self.legacy {
+            return l.parse_date(s);
+        }
         let Some(p) = parse::parse(&self.items, s) else {
             return Ok(None);
         };

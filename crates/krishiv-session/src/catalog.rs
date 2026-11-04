@@ -35,7 +35,8 @@ use krishiv_exec::planner::{FileTable, MemoryTable, TableProvider, TableProvider
 use krishiv_io::IoContext;
 use krishiv_io::split::SplitConfig;
 use krishiv_plan::analyzer::{
-    BoxFuture, Catalog, CatalogResolver, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
+    BoxFuture, Catalog, CatalogResolver, FileMetadata, NameForm, TableColumn, TableIdent,
+    TableKind, TableMeta,
 };
 use krishiv_plan::{
     ALIAS_PART_SEP, Cte, Expr, ExprNode, LogicalPlan, Origin, PlanNode, ReadSource, Scan,
@@ -376,6 +377,8 @@ pub(crate) struct QueryCatalog {
     namespace: Vec<String>,
     /// The SQL path (`SET PATH`) as this query sees it.
     path: Vec<Vec<String>>,
+    /// What the `system` tables read.
+    system: crate::system::Sources,
 }
 
 impl QueryCatalog {
@@ -405,6 +408,7 @@ impl QueryCatalog {
         files: Arc<FileReads>,
         scans: FileScans,
         default_path: &str,
+        system: crate::system::Sources,
     ) -> Self {
         let epoch = session.epoch();
         let namespace = vec![session.current_namespace()];
@@ -420,6 +424,7 @@ impl QueryCatalog {
             epoch,
             namespace,
             path,
+            system,
         }
     }
 
@@ -529,8 +534,10 @@ impl QueryCatalog {
                     }
                     _ => return None,
                 };
+                // The hidden `_metadata` column is the scan's, not the table's.
+                let columns = scan.output.len() - usize::from(scan.metadata_column().is_some());
                 let table = Arc::new(Schema::new(
-                    scan.output
+                    scan.output[..columns]
                         .iter()
                         .map(|c| c.data_type.to_arrow_field(c.name.clone(), c.nullable))
                         .collect::<Vec<_>>(),
@@ -692,6 +699,8 @@ impl QueryCatalog {
                 partitions,
                 attempt: 0,
                 scans: BTreeMap::new(),
+                exchanges: BTreeMap::new(),
+                output: None,
             })
             .collect();
         for (id, kind) in assigned {
@@ -874,7 +883,10 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
     fn go<'a>(node: &'a PhysNode, out: &mut Leaves<'a>) {
         match node {
             PhysNode::Scan(scan) => out.scans.push(scan),
-            PhysNode::OneRow | PhysNode::SharedRead { .. } | PhysNode::LoopRef { .. } => {}
+            PhysNode::OneRow
+            | PhysNode::SharedRead { .. }
+            | PhysNode::LoopRef { .. }
+            | PhysNode::ExchangeSource { .. } => {}
             PhysNode::UnionLoop {
                 anchor, recursive, ..
             } => {
@@ -890,6 +902,7 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             | PhysNode::Limit { input, .. }
             | PhysNode::Sort { input, .. }
             | PhysNode::TopN { input, .. }
+            | PhysNode::LateFetch { input, .. }
             | PhysNode::Window { input, .. }
             | PhysNode::WindowGroupLimit { input, .. }
             | PhysNode::Aggregate { input, .. }
@@ -994,7 +1007,18 @@ impl QueryCatalog {
             columns,
             version: None,
             kind: TableKind::Table,
+            file_metadata: file_metadata(&table.provider),
         })
+    }
+}
+
+/// The `_metadata` column of a table read through the file source
+/// `provider` (Spark: file sources; row positions only from Parquet).
+fn file_metadata(provider: &str) -> FileMetadata {
+    match provider.to_ascii_lowercase().as_str() {
+        "parquet" => FileMetadata::WithRowIndex,
+        "orc" | "csv" | "json" | "text" | "avro" | "xml" | "binaryfile" => FileMetadata::Basic,
+        _ => FileMetadata::None,
     }
 }
 
@@ -1065,6 +1089,13 @@ impl Catalog for QueryCatalog {
                 }
                 TempTable::View { columns, .. } => (columns.clone(), TableKind::View),
             };
+            let file_metadata = match &*table {
+                TempTable::Files {
+                    source: ReadSource::Files { format, .. },
+                    ..
+                } => file_metadata(format),
+                _ => FileMetadata::None,
+            };
             self.loaded
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -1078,6 +1109,7 @@ impl Catalog for QueryCatalog {
                 columns,
                 version: None,
                 kind,
+                file_metadata,
             }))
         })
     }
@@ -1101,6 +1133,9 @@ impl CatalogResolver for QueryCatalogs {
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
+        if crate::system::is_system(name) {
+            return Some(Arc::new(crate::system::SystemCatalog));
+        }
         name.eq_ignore_ascii_case(CATALOG)
             .then(|| Arc::clone(&self.0) as Arc<dyn Catalog>)
     }
@@ -1113,6 +1148,17 @@ impl CatalogResolver for QueryCatalogs {
 impl TableProviderResolver for QueryCatalog {
     fn provider(&self, scan: &Scan) -> Result<Arc<dyn TableProvider>, KrishivError> {
         match &scan.source {
+            ReadSource::Table { name, .. } if crate::system::is_system_table(name) => {
+                let table = name.last().map_or("", String::as_str);
+                crate::system::provider(table, &self.system)?
+                    .map(|t| t as Arc<dyn TableProvider>)
+                    .ok_or_else(|| {
+                        InternalError {
+                            message: format!("the system table {table} does not exist"),
+                        }
+                        .into()
+                    })
+            }
             ReadSource::Table { name, .. } => {
                 let last = name.last().map_or("", String::as_str);
                 // Analysis loaded every table a scan names.
@@ -1958,6 +2004,11 @@ impl Pinner<'_> {
         {
             if is_hidden_name(last) || is_cache_name(last) {
                 self.owned.insert(last.to_lowercase());
+                return Ok(Arc::clone(plan));
+            }
+            // A `system` table is the engine's, whatever the session names
+            // its own tables: it is read as it is when the view is queried.
+            if crate::system::is_system_table(name) {
                 return Ok(Arc::clone(plan));
             }
             let key = last.to_lowercase();
@@ -2848,6 +2899,7 @@ mod tests {
                 filter: None,
                 runtime_filters: Vec::new(),
                 row_stage: RowStageSettings::default(),
+                row_id: false,
             }),
             Arc::new(Schema::new(vec![Field::new(
                 "id",
@@ -2865,6 +2917,7 @@ mod tests {
                 map_key_dedup_last_win: false,
                 legacy_java_charsets: false,
                 legacy_coding_error_action: false,
+                legacy_time_parser: false,
             },
         )
     }

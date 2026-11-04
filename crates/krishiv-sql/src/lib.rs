@@ -58,6 +58,19 @@ pub use lower::{
 pub use params::{ParameterMarker, parameter_markers};
 pub use redact::redact_sql;
 
+/// Spark's check that a temporary function's name takes no database
+/// (`INVALID_TEMP_OBJ_QUALIFIER`), for a name an `IDENTIFIER(...)` clause
+/// supplied after parsing.
+///
+/// # Errors
+/// `INVALID_TEMP_OBJ_QUALIFIER` at `span`.
+pub fn check_temporary_function_name(
+    name: &ast::ObjectName,
+    span: ast::Span,
+) -> Result<(), ParseError> {
+    parser::check_temporary_function_name(name, span)
+}
+
 /// The deepest tree the parser builds, counted in nested expressions,
 /// queries and relations; deeper statements fail with
 /// `FAILED_TO_PARSE_TOO_COMPLEX` at the span of the whole statement (Spark's
@@ -115,6 +128,12 @@ pub struct ParserOptions {
     /// `spark.sql.legacy.viewSchemaBindingMode` (on by default): a view may
     /// take `WITH SCHEMA ...`; off, the clause is `FEATURE_NOT_ENABLED`.
     pub view_schema_binding: bool,
+    /// `spark.sql.parser.quotedRegexColumnNames`: a backquoted name in a select item is a regular
+    /// expression over the column names.
+    pub quoted_regex_column_names: bool,
+    /// `spark.sql.legacy.parser.havingWithoutGroupByAsWhere`: a `HAVING` with no `GROUP BY` over
+    /// a select list with no aggregate call filters rows like `WHERE`.
+    pub having_without_group_by_as_where: bool,
 }
 
 impl Default for ParserOptions {
@@ -156,6 +175,11 @@ impl ParserOptions {
             ),
             case_sensitive: on("spark.sql.caseSensitive", false),
             view_schema_binding: on("spark.sql.legacy.viewSchemaBindingMode", true),
+            quoted_regex_column_names: on("spark.sql.parser.quotedRegexColumnNames", false),
+            having_without_group_by_as_where: on(
+                "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
+                false,
+            ),
         }
     }
 }

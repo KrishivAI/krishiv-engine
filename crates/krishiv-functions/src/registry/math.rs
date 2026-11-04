@@ -4,12 +4,15 @@
 //! and the `try_*` arithmetic. The arithmetic ones are typed as the
 //! operators are ([`Inputs::Operator`]).
 
-use krishiv_common::error::{DatatypeMismatchNonFoldableInput, KrishivError, NonFoldableArgument};
+use krishiv_common::error::{
+    DatatypeMismatchDataDiffTypes, DatatypeMismatchNonFoldableInput, KrishivError,
+    NonFoldableArgument,
+};
 use krishiv_kernels::decimal::{DecimalOp, result_type};
 use krishiv_kernels::math::round_decimal_type;
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{DataType, DayTimeField, DecimalType, YearMonthField};
 
-use super::defs::{Spec, exact, scalar, typed};
+use super::defs::{Spec, exact, is_numeric_type, scalar, typed};
 use crate::signature::{ArgType, CallTypes, Constant, InputBuilder, InputType, Inputs, Operator};
 
 // ---- the `double` functions ----
@@ -27,8 +30,36 @@ fn binary(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Double, c)
 }
 
-/// `width_bucket`: a `bigint`, NULL for a bad bucket count or range.
-fn width_bucket(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+/// `width_bucket`: a `bigint`, NULL for a bad bucket count or range. The value
+/// and bounds are all `double`s or all ANSI intervals of one family, else
+/// `DATA_DIFF_TYPES` (Spark's `checkForSameTypeInputExpr`); an untyped `NULL`
+/// read as a `double` doesn't meet an interval.
+fn width_bucket(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let family = |t: Option<&DataType>| match t {
+        Some(DataType::YearMonthInterval { .. }) => 1,
+        Some(DataType::DayTimeInterval { .. }) => 2,
+        _ => 0,
+    };
+    let first = family(c.data_type(0));
+    if (1..3).any(|i| family(c.data_type(i)) != first) {
+        let sql = |i: usize| c.sql(i).unwrap_or_default();
+        let name = |i: usize| {
+            c.data_type(i)
+                .map_or_else(|| "VOID".to_owned(), DataType::sql)
+        };
+        return Err(DatatypeMismatchDataDiffTypes {
+            sql_expr: format!(
+                "\"width_bucket({}, {}, {}, {})\"",
+                sql(0),
+                sql(1),
+                sql(2),
+                sql(3)
+            ),
+            function_name: "`width_bucket`".to_owned(),
+            data_type: format!("(\"{}\" or \"{}\" or \"{}\")", name(0), name(1), name(2)),
+        }
+        .into());
+    }
     Ok(ArgType::new(DataType::Long, true))
 }
 
@@ -179,6 +210,11 @@ fn ceil_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
 
 fn ceil_type(function: &str, c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let t = match c.data_type(0) {
+        // One argument and a scale of 0: Spark keeps the type
+        // (`case dt @ DecimalType.Fixed(_, 0) => dt`), no extra integral digit.
+        Some(DataType::Decimal(d)) if c.args().len() == 1 && d.scale() == 0 => {
+            DataType::Decimal(*d)
+        }
         Some(DataType::Decimal(d)) => {
             let scale = if c.args().len() > 1 {
                 int_scale(c, function)?
@@ -208,11 +244,6 @@ fn extremum(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         data_type: c.args().iter().find_map(|t| t.data_type.clone()),
         nullable: c.args().iter().all(|t| t.nullable),
     })
-}
-
-/// `width_bucket`: a `bigint`, NULL outside its domain, so always nullable.
-fn always_nullable_long(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    Ok(ArgType::new(DataType::Long, true))
 }
 
 /// `abs`, `positive`, `negative`: the argument's type (a string or NULL is `double`).
@@ -264,39 +295,79 @@ arithmetic!(try_multiply, Operator::Multiply);
 arithmetic!(try_divide, Operator::Divide);
 arithmetic!(remainder, Operator::Remainder);
 
+pub(super) const fn is_ansi_interval(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::YearMonthInterval { .. } | DataType::DayTimeInterval { .. }
+    )
+}
+
+/// `abs`, `positive`, `negative`: an ANSI interval stays as it is.
+fn abs_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![match c.data_type(0) {
+        Some(t) if is_ansi_interval(t) => InputType::Any,
+        _ => InputType::Numeric { intervals: true },
+    }]
+}
+
+/// `sign`: Spark's `TypeCollection(DoubleType, YearMonthIntervalType,
+/// DayTimeIntervalType)`. A number or a string casts to `DOUBLE`; any other type
+/// is refused naming the collection.
+fn sign_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![double_or_interval(c.data_type(0))]
+}
+
+/// `width_bucket(value, min, max, buckets)`: `sign`'s collection for the value
+/// and both bounds, and a `bigint` bucket count.
+fn width_bucket_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    let mut out: Vec<InputType> = (0..3).map(|i| double_or_interval(c.data_type(i))).collect();
+    out.push(exact(DataType::Long));
+    out
+}
+
+fn double_or_interval(t: Option<&DataType>) -> InputType {
+    match t {
+        Some(t) if is_ansi_interval(t) => InputType::Any,
+        None | Some(DataType::String | DataType::Null) => exact(DataType::Double),
+        Some(t) if is_numeric_type(t) => exact(DataType::Double),
+        Some(_) => InputType::StrictOneOf(vec![
+            DataType::Double,
+            DataType::YearMonthInterval {
+                start: YearMonthField::Year,
+                end: YearMonthField::Month,
+            },
+            DataType::DayTimeInterval {
+                start: DayTimeField::Day,
+                end: DayTimeField::Second,
+            },
+        ]),
+    }
+}
+
 pub(super) fn specs() -> Vec<Spec> {
     let double = Inputs::Expects(vec![exact(DataType::Double)]);
     let mut out = scalar(
         &[
             "sqrt", "cbrt", "exp", "expm1", "ln", "log10", "log2", "log1p", "sin", "cos", "tan",
             "asin", "acos", "atan", "sinh", "cosh", "tanh", "asinh", "acosh", "atanh", "cot",
-            "csc", "sec", "degrees", "radians", "rint", "sign", "signum", "log",
+            "csc", "sec", "degrees", "radians", "rint", "log",
         ],
         &double,
         unary,
     );
+    out.extend(scalar(
+        &["sign", "signum"],
+        &Inputs::Built(InputBuilder(sign_inputs)),
+        unary,
+    ));
     // `log(base, x)` is NULL outside its domain too.
     out.extend(scalar(&["pow", "power", "atan2", "hypot"], &double, binary));
-    let width = Inputs::Expects(vec![
-        exact(DataType::Double),
-        exact(DataType::Double),
-        exact(DataType::Double),
-        exact(DataType::Long),
-    ]);
-    out.extend(scalar(&["width_bucket"], &width, width_bucket));
-    out.extend(scalar(&["pi", "e"], &Inputs::Any, constant));
-    // `width_bucket(value, min, max, buckets)`: NULL outside its domain,
-    // so always nullable.
     out.extend(scalar(
         &["width_bucket"],
-        &Inputs::Expects(vec![
-            exact(DataType::Double),
-            exact(DataType::Double),
-            exact(DataType::Double),
-            exact(DataType::Long),
-        ]),
-        always_nullable_long,
+        &Inputs::Built(InputBuilder(width_bucket_inputs)),
+        width_bucket,
     ));
+    out.extend(scalar(&["pi", "e"], &Inputs::Any, constant));
     let numeric = || InputType::Numeric { intervals: false };
     let rounding = Inputs::Expects(vec![numeric(), exact(DataType::Integer)]);
     out.extend(scalar(&["round"], &rounding, round_fn));
@@ -309,10 +380,9 @@ pub(super) fn specs() -> Vec<Spec> {
         &Inputs::CommonNoStrings,
         extremum,
     ));
-    let numeric_or_interval = Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
     out.extend(scalar(
         &["abs", "positive", "negative"],
-        &numeric_or_interval,
+        &Inputs::Built(InputBuilder(abs_inputs)),
         same_type,
     ));
     let op = Inputs::Operator;

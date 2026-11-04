@@ -186,3 +186,89 @@ fn cli_reports_new_and_known_mismatches() -> R {
     std::fs::remove_dir_all(&dir)?;
     Ok(())
 }
+
+/// Under ANSI it raises one error class; with ANSI off it answers `rows` (the wrap of ADR 0023).
+struct Wraps {
+    class: &'static str,
+    rows: &'static str,
+}
+
+impl Evaluator for Wraps {
+    fn eval(&mut self, _sql: &str, ansi: bool) -> Expect {
+        if ansi {
+            Expect::Error(self.class.to_owned())
+        } else {
+            Expect::Rows {
+                schema: "date".to_owned(),
+                rows: vec![self.rows.to_owned()],
+            }
+        }
+    }
+}
+
+/// It raises one error class in both ANSI modes.
+struct Always(&'static str);
+
+impl Evaluator for Always {
+    fn eval(&mut self, _sql: &str, _ansi: bool) -> Expect {
+        Expect::Error(self.0.to_owned())
+    }
+}
+
+fn one_case(sql: &str, ansi: bool, spark: &str) -> Result<Fixture, String> {
+    Fixture::parse(&format!(
+        r#"{{"setup": "x", "cases": [{{"sql": {sql:?}, "ansi": {ansi}, "kids": [], "schema": "date", "rows": ["{spark}"]}}]}}"#
+    ))
+}
+
+/// ADR 0023: past the `int` day range `date_add`/`date_sub`/`datediff` wrap silently in Spark and
+/// raise `ARITHMETIC_OVERFLOW` under ANSI here, by decision. That divergence is not reported, but
+/// nothing near it is: ANSI off, another error class, another expression, an overflow on a day
+/// that is in range (Spark's rows hold no wrapped value) and an overflow whose ANSI-off answer is
+/// not Spark's rows all are.
+#[test]
+fn the_date_arithmetic_overflow_divergence_is_not_reported_and_nothing_else_is() -> R {
+    // A date Spark prints after a wrap past the int range; and one in range.
+    const WRAPPED: &str = "-5877611-08-19";
+    const IN_RANGE: &str = "2000-01-01";
+    // Reports found with Spark's `spark_rows` and an engine that raises `class` under ANSI and
+    // answers `ansi_off_rows` with ANSI off.
+    let count = |sql: &str, class: &'static str, spark_rows: &str, ansi_off_rows: &'static str| {
+        let fx = one_case(sql, true, spark_rows)?;
+        let ev = &mut Wraps {
+            class,
+            rows: ansi_off_rows,
+        };
+        Ok::<usize, String>(run(&fx, ev).len())
+    };
+    for f in [
+        "date_add(dt, i)",
+        "date_sub(dt, i)",
+        "datediff(dt, date_add(dt, i))",
+    ] {
+        assert_eq!(count(f, "ARITHMETIC_OVERFLOW", WRAPPED, WRAPPED)?, 0, "{f}");
+    }
+    // Reported: ANSI off, another class, another expression.
+    let ansi_off = one_case("date_add(dt, i)", false, WRAPPED)?;
+    assert_eq!(run(&ansi_off, &mut Always("ARITHMETIC_OVERFLOW")).len(), 1);
+    assert_eq!(
+        count("date_add(dt, i)", "DIVIDE_BY_ZERO", WRAPPED, WRAPPED)?,
+        1
+    );
+    assert_eq!(
+        count("(i + l)", "ARITHMETIC_OVERFLOW", WRAPPED, WRAPPED)?,
+        1
+    );
+    // Reported: the engine raises, but with ANSI off it does not give Spark's rows.
+    assert_eq!(
+        count("date_add(dt, i)", "ARITHMETIC_OVERFLOW", WRAPPED, IN_RANGE)?,
+        1
+    );
+    // Reported: the engine raises on a day that is in range (Spark's rows hold no wrapped
+    // value), however its ANSI-off answer compares.
+    assert_eq!(
+        count("date_add(dt, i)", "ARITHMETIC_OVERFLOW", IN_RANGE, IN_RANGE)?,
+        1
+    );
+    Ok(())
+}

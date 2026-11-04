@@ -715,7 +715,7 @@ impl JsonDecoder {
                     .iter()
                     .position(|n| *n == f.name())
                     .ok_or_else(|| internal(format!("no column {}", f.name())))?;
-                let kind = kind_of(f.data_type())?;
+                let kind = kind_of(f)?;
                 columns.push(Column::new(f.data_type())?);
                 outs.push(Out::Data { slot, kind });
                 continue;
@@ -739,12 +739,14 @@ impl JsonDecoder {
         });
         let source = if opts.multi_line {
             Source::Whole {
-                reader: WholeReader::new(m.size, split),
+                reader: WholeReader::new(m.size, split).compressed(m.codec),
                 text: None,
                 pos: 0,
             }
         } else {
-            Source::Lines(LineReader::new(m.size, split, true, opts.line_sep.clone()))
+            Source::Lines(
+                LineReader::new(m.size, split, true, opts.line_sep.clone()).compressed(m.codec),
+            )
         };
         let metrics = ScanUnitMetrics {
             units: units.units.len() as u64,
@@ -918,10 +920,13 @@ impl JsonDecoder {
                         }
                         Err(Conv::Fatal(e)) => {
                             // A conversion that cannot be done at all (a
-                            // region time zone) fails the scan even in
+                            // unknown time zone) fails the scan even in
                             // PERMISSIVE. Nested values never reach here:
                             // they are `Malformed` above.
-                            if e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE" {
+                            if matches!(
+                                e.error_class().name(),
+                                "KRISHIV_UNSUPPORTED_FEATURE" | "INVALID_TIMEZONE"
+                            ) {
                                 return Err(FormatError::Other(e));
                             }
                             if bad.is_none() {

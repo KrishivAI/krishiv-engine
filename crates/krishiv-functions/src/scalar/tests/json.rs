@@ -853,3 +853,34 @@ fn schema_of_json_deep_nesting_is_null() {
     let out = f.invoke(&[col(&json)], json.len()).unwrap();
     assert_eq!(text(&out), owned(&[None]));
 }
+
+/// Under LEGACY, Spark reads JSON dates with a lenient `FastDateFormat`
+/// (`2024-02-30` is March 1), which Krishiv does not model: a `DATE` or
+/// `TIMESTAMP` field is refused, a `TIMESTAMP_NTZ` or other field is not.
+#[test]
+fn from_json_refuses_dates_under_the_legacy_time_parser() {
+    let json = strs(&[Some("{\"d\":\"2024-02-30\"}")]);
+    let fmt = opts(&[("dateFormat", "yyyy-MM-dd")]);
+    let bind = |ddl: &str| {
+        let schema = strs(&[Some(ddl)]);
+        bind_scalar(
+            "from_json",
+            &[
+                json.data_type().clone().into(),
+                schema_arg_of(&schema),
+                BindArg::Literal(Arc::clone(&fmt)),
+            ],
+            &BindOptions::new().with_legacy_time_parser(true),
+        )
+    };
+    for ddl in ["d Date", "d Timestamp", "a ARRAY<STRUCT<d: DATE>>"] {
+        let err = bind(ddl).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            err.contains("KRISHIV_UNSUPPORTED_FEATURE") && err.contains("LEGACY"),
+            "{ddl}: {err}"
+        );
+    }
+    for ddl in ["d TIMESTAMP_NTZ", "d STRING"] {
+        assert!(bind(ddl).is_ok(), "{ddl}");
+    }
+}

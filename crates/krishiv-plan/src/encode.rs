@@ -71,7 +71,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 9;
+pub const ENCODING_VERSION: u16 = 10;
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
@@ -764,6 +764,8 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     JoinKind::Cross => 7,
                     JoinKind::Existence(_) => 8,
                     JoinKind::Single => 9,
+                    JoinKind::LateralInner => 10,
+                    JoinKind::LateralLeft => 11,
                 };
                 self.u8(tag);
                 if let JoinKind::Existence(id) = kind {
@@ -1145,6 +1147,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 except,
                 replace,
                 position,
+                regex,
                 plan_id,
             }) => {
                 self.u8(3);
@@ -1160,6 +1163,9 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
                 if let Some(n) = position {
                     self.len(*n);
+                }
+                if let Some(r) = regex {
+                    self.str(r);
                 }
             }
             ExprNode::Function(FunctionCall {
@@ -1201,6 +1207,12 @@ impl<'k, 'a> Encoder<'k, 'a> {
             ExprNode::Alias { expr, name } => {
                 self.u8(6);
                 self.str(name);
+                self.expr(expr);
+            }
+            ExprNode::MultiAlias { expr, names } => {
+                self.u8(33);
+                self.len(names.len());
+                names.iter().for_each(|n| self.str(n));
                 self.expr(expr);
             }
             ExprNode::Subquery { kind, plan } => {

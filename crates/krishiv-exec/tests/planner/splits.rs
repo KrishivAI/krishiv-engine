@@ -72,6 +72,7 @@ fn scan_plan(table: Arc<dyn TableProvider>, nullable: bool) -> (PhysicalPlan, Ar
         filter: None,
         runtime_filters: Vec::new(),
         row_stage: krishiv_exec::RowStageSettings::default(),
+        row_id: false,
     });
     let schema = Arc::new(Schema::new(vec![Field::new(
         "id",
@@ -92,6 +93,7 @@ fn scan_plan(table: Arc<dyn TableProvider>, nullable: bool) -> (PhysicalPlan, Ar
             map_key_dedup_last_win: false,
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
+            legacy_time_parser: false,
         },
     );
     let tables = Arc::new(Stub { table });

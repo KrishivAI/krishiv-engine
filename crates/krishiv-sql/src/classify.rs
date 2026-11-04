@@ -475,6 +475,7 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
                 | AlterTableAction::ChangeColumn { .. }
                 | AlterTableAction::AlterColumn { .. }
                 | AlterTableAction::SetTblProperties(_)
+                | AlterTableAction::SetComment(_)
                 | AlterTableAction::UnsetTblProperties { .. }
                 | AlterTableAction::SetSerdeProperties(_)
                 | AlterTableAction::SetPartitionSerdeProperties { .. }
@@ -500,6 +501,7 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
             match &a.action {
                 AlterNamespaceAction::SetLocation(l) => out.push(t(O::Path(l), Modify)),
                 AlterNamespaceAction::SetProperties(_)
+                | AlterNamespaceAction::SetComment(_)
                 | AlterNamespaceAction::DefaultCollation(_) => {}
             }
             out

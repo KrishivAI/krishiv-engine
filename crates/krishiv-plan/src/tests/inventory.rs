@@ -70,6 +70,7 @@ fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
         ExprNode::UpdateFields { .. } => "ExprNode::UpdateFields",
         ExprNode::Cast { .. } => "ExprNode::Cast",
         ExprNode::Alias { .. } => "ExprNode::Alias",
+        ExprNode::MultiAlias { .. } => "ExprNode::MultiAlias",
         ExprNode::Subquery { .. } => "ExprNode::Subquery",
         ExprNode::Window(_) => "ExprNode::Window",
         ExprNode::Lambda { .. } => "ExprNode::Lambda",
@@ -151,6 +152,7 @@ fn df(id: i64) -> LogicalPlan {
 /// Each DataFrame-slice operation, as the API builds it.
 fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
     let star = Expr::new(ExprNode::Star(Star {
+        regex: None,
         replace: Vec::new(),
         position: None,
         qualifier: Vec::new(),

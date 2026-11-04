@@ -74,9 +74,14 @@ pub struct ParquetMetadata {
     /// Options the reader schema was built with (a decoder needing virtual
     /// columns rebuilds it from the same footer).
     pub(crate) reader_options: ArrowReaderOptions,
-    /// The file-native schema in engine types (what decoders produce).
+    /// The file-native schema in engine types (what decoders produce, with the
+    /// footer's ANSI interval types: see [`super::intervals`]).
     pub(crate) schema: SchemaRef,
     pub(crate) row_groups: Vec<RowGroup>,
+    /// The file's size in bytes (index and Bloom ranges are checked against it).
+    pub(crate) size: u64,
+    /// Whether the writer ordered binary statistics by signed bytes.
+    pub(crate) legacy_writer: bool,
     statistics: FileStatistics,
     heap: usize,
 }
@@ -92,6 +97,10 @@ impl FileMetadata for ParquetMetadata {
 
     fn heap_size(&self) -> usize {
         self.heap
+    }
+
+    fn unit_count(&self) -> Option<u64> {
+        Some(self.row_groups.len() as u64)
     }
 }
 
@@ -245,12 +254,15 @@ fn describe_checked(
     let reader = ArrowReaderMetadata::try_new(Arc::clone(meta), reader_options.clone())
         .map_err(footer_error)?;
     let schema = Arc::new(Schema::new_with_metadata(
-        reader
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| Arc::new(spark_read_field(f)))
-            .collect::<Vec<FieldRef>>(),
+        super::intervals::typed(
+            reader
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| Arc::new(spark_read_field(f)))
+                .collect::<Vec<FieldRef>>(),
+            meta.file_metadata().key_value_metadata(),
+        ),
         reader.schema().metadata().clone(),
     ));
     let legacy_writer = legacy_binary_stats(meta.file_metadata().created_by());
@@ -299,6 +311,8 @@ fn describe_checked(
         reader_options,
         schema,
         row_groups: planned,
+        size,
+        legacy_writer,
         statistics,
         heap,
     })
@@ -462,7 +476,7 @@ fn spark_read_field(f: &FieldRef) -> Field {
 }
 
 /// The type of the leaf at `path` (structs only).
-fn leaf_type<'a>(schema: &'a Schema, path: &[String]) -> Option<&'a DataType> {
+pub(super) fn leaf_type<'a>(schema: &'a Schema, path: &[String]) -> Option<&'a DataType> {
     let (first, rest) = path.split_first()?;
     let mut dt = schema.field_with_name(first).ok()?.data_type();
     for name in rest {
@@ -489,7 +503,7 @@ fn legacy_binary_stats(created_by: Option<&str>) -> bool {
 }
 
 /// Statistics of one leaf column chunk in its engine type `dt`.
-fn column_statistics(
+pub(super) fn column_statistics(
     path: ColumnPath,
     d: &ColumnDescriptor,
     dt: &DataType,

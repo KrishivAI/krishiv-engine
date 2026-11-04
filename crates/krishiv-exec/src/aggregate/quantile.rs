@@ -31,11 +31,11 @@ use std::sync::Arc;
 use arrow_array::builder::ArrayBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
-    Int32Type, Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, BinaryArray, Float64Array, Int64Array, ListArray};
-use arrow_schema::{DataType, Field, TimeUnit};
+use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
 
 use crate::error::{Result, internal};
 
@@ -79,8 +79,8 @@ const HEAD_SIZE: usize = 50_000;
 const COMPRESS_THRESHOLD: usize = 10_000;
 
 /// Whether `t` is a type the exact percentiles take here: Spark's
-/// numeric input (`NumericAndAnsiInterval` has no interval here); the
-/// approximate one also reads dates and timestamps as doubles.
+/// `NumericAndAnsiInterval` input; the approximate one also reads dates and
+/// timestamps as doubles.
 pub(crate) fn quantile_supported(t: &DataType, approx: bool) -> bool {
     match t {
         DataType::Int8
@@ -90,7 +90,9 @@ pub(crate) fn quantile_supported(t: &DataType, approx: bool) -> bool {
         | DataType::Float32
         | DataType::Float64
         | DataType::Decimal64(..)
-        | DataType::Decimal128(..) => true,
+        | DataType::Decimal128(..)
+        | DataType::Interval(IntervalUnit::YearMonth)
+        | DataType::Duration(TimeUnit::Microsecond) => true,
         DataType::Date32 | DataType::Timestamp(TimeUnit::Microsecond, _) if approx => true,
         _ => false,
     }
@@ -765,6 +767,12 @@ pub(crate) fn double_of(a: &ArrayRef, i: usize) -> Result<Option<f64>> {
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             a.as_primitive::<TimestampMicrosecondType>().value(i) as f64
         }
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            f64::from(a.as_primitive::<IntervalYearMonthType>().value(i))
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            a.as_primitive::<DurationMicrosecondType>().value(i) as f64
+        }
         t => return Err(internal(format!("a quantile value of type {t}"))),
     }))
 }
@@ -814,6 +822,7 @@ mod tests {
             arg_type: t,
             name: "q".to_owned(),
             mask: None,
+            element: None,
         }
     }
 

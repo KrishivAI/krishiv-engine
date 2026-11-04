@@ -2,10 +2,10 @@
 //! Registry functions, bound to their kernels by the built-in function
 //! registry's execution binding (`krishiv_functions::scalar`, P2-T153).
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, ListArray, RecordBatch, StructArray};
+use arrow_array::{Array, ArrayRef, ListArray, MapArray, RecordBatch, StructArray};
 use arrow_schema::DataType as ArrowType;
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, ScalarFunction, bind_scalar};
 use krishiv_kernels::map::DedupPolicy;
@@ -72,6 +72,10 @@ pub(super) fn compile_udf(
             view,
             relabel: false,
             nullable: f.nullable,
+            partition_shift: 0,
+            folded: None,
+            constant: false,
+            secret_arg: None,
         }),
         canonical,
     ))
@@ -128,10 +132,14 @@ fn wide_literal(l: &Literal) -> Result<ArrayRef> {
     recarried_array(&a, &client_arrow_type(a.data_type()))
 }
 
-/// Whether `a` and `b` differ at most in the nullability of nested fields.
+/// Whether `a` and `b` differ at most in the nullability and tags of nested
+/// fields (an interval's fields live in its field's tag; a binding has only the
+/// carrier to read).
 pub(super) fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
     match (a, b) {
-        (ArrowType::List(x), ArrowType::List(y)) => same_shape(x.data_type(), y.data_type()),
+        (ArrowType::List(x), ArrowType::List(y)) | (ArrowType::Map(x, _), ArrowType::Map(y, _)) => {
+            same_shape(x.data_type(), y.data_type())
+        }
         (ArrowType::Struct(x), ArrowType::Struct(y)) => {
             x.len() == y.len()
                 && x.iter()
@@ -155,6 +163,26 @@ pub(super) fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
                     list.offsets().clone(),
                     relabeled(list.values(), f.data_type())?,
                     list.nulls().cloned(),
+                )
+                .map_err(|e| internal(&e.to_string()))?,
+            ))
+        }
+        ArrowType::Map(f, sorted) if array.data_type() != to => {
+            let map = array
+                .as_map_opt()
+                .ok_or_else(|| internal("a relabelled map is not a map"))?;
+            let entries: ArrayRef = Arc::new(map.entries().clone());
+            let entries = relabeled(&entries, f.data_type())?;
+            let entries = entries
+                .as_struct_opt()
+                .ok_or_else(|| internal("relabelled map entries are not a struct"))?;
+            Ok(Arc::new(
+                MapArray::try_new(
+                    Arc::clone(f),
+                    map.offsets().clone(),
+                    entries.clone(),
+                    map.nulls().cloned(),
+                    *sorted,
                 )
                 .map_err(|e| internal(&e.to_string()))?,
             ))
@@ -226,8 +254,11 @@ pub(super) fn compile(
             java_charsets: input.env.legacy_java_charsets,
             replace_malformed: input.env.legacy_coding_error_action,
         })
+        .with_legacy_time_parser(input.env.legacy_time_parser)
         .with_user(Arc::clone(&input.env.user))
         .with_seed_salt(Arc::clone(&input.env.seed_salt));
+    let args_constant = args.iter().all(|a| a.is_constant());
+    let is_aes_encrypt = name.eq_ignore_ascii_case("aes_encrypt");
     let function = bind_scalar(name, &bind_args, &opts).map_err(|err| {
         if err.error_class() == krishiv_common::error::ErrorClass::KrishivUnsupportedFeature {
             unsupported_expr(e)
@@ -261,9 +292,34 @@ pub(super) fn compile(
             view,
             relabel,
             nullable: f.nullable,
+            partition_shift: if is_stateful(name) {
+                input.env.partition_shift
+            } else {
+                0
+            },
+            // `aes_encrypt` of constants is folded once for the query, as
+            // Spark's constant folding does: one IV for every row and batch
+            // (a column argument draws an IV per row).
+            folded: (is_aes_encrypt && args_constant).then(OnceLock::new),
+            // A pure function of constants (`unhex('..')`) is one value for
+            // every row, so an enclosing call over it folds too.
+            constant: args_constant
+                && (is_aes_encrypt || krishiv_functions::scalar::is_constant_of_constants(name)),
+            secret_arg: ["aes_encrypt", "aes_decrypt", "try_aes_decrypt"]
+                .iter()
+                .any(|f| name.eq_ignore_ascii_case(f))
+                .then_some(1),
         }),
         canonical,
     ))
+}
+
+/// Functions whose value stream is drawn per partition (see
+/// `krishiv_functions::scalar::random`).
+fn is_stateful(name: &str) -> bool {
+    ["rand", "random", "randn", "uniform", "randstr", "uuid"]
+        .iter()
+        .any(|n| name.eq_ignore_ascii_case(n))
 }
 
 /// A bound registry function over its arguments.
@@ -277,6 +333,15 @@ struct Call {
     /// Give the result the analyzer's nested field flags.
     relabel: bool,
     nullable: bool,
+    /// Added to the partition the function draws its stream for.
+    partition_shift: u32,
+    /// The one-row result of a call over constants that Spark folds once.
+    folded: Option<OnceLock<ArrayRef>>,
+    /// Whether the value is the same for every row (see `is_constant`).
+    constant: bool,
+    /// The argument whose evaluation errors must not show their values (an
+    /// AES key, ADR 0042).
+    secret_arg: Option<usize>,
 }
 
 impl PhysExpr for Call {
@@ -284,29 +349,67 @@ impl PhysExpr for Call {
         &self.out
     }
 
+    fn is_constant(&self) -> bool {
+        self.constant
+    }
+
     fn nullable(&self) -> bool {
         self.nullable
     }
 
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        if let Some(cell) = &self.folded {
+            if let Some(row) = cell.get() {
+                return Ok(Value::Scalar(Arc::clone(row)));
+            }
+            // Evaluated for one row; a failure is not remembered.
+            let one = self.call(batch, partition, 1)?;
+            let row = cell.get_or_init(|| one);
+            return Ok(Value::Scalar(Arc::clone(row)));
+        }
+        if self.constant {
+            // A pure call over constants is one value: a one-row scalar, so
+            // an enclosing call sees every argument at the same length.
+            return Ok(Value::Scalar(self.call(batch, partition, 1)?));
+        }
+        Ok(Value::Array(self.call(
+            batch,
+            partition,
+            batch.num_rows(),
+        )?))
+    }
+}
+
+impl Call {
+    /// The function's values for `rows` rows, in the result's carrier.
+    fn call(&self, batch: &RecordBatch, partition: u32, rows: usize) -> Result<ArrayRef> {
         let args = self
             .args
             .iter()
-            .map(|a| {
-                Ok(match a.eval(batch, partition)? {
+            .enumerate()
+            .map(|(i, a)| {
+                let v = a.eval(batch, partition).map_err(|e| {
+                    // A failure while evaluating the key shows no value of it.
+                    if self.secret_arg == Some(i) {
+                        e.with_redacted_parameters()
+                    } else {
+                        e
+                    }
+                })?;
+                Ok(match v {
                     Value::Array(v) => Arg::Array(v),
                     Value::Scalar(v) => Arg::Scalar(v),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let out = self
-            .function
-            .invoke_in(&args, batch.num_rows(), partition)?;
+        let out =
+            self.function
+                .invoke_in(&args, rows, partition.saturating_add(self.partition_shift))?;
         let out = if self.relabel {
             relabeled(&out, &self.out)?
         } else {
             out
         };
-        Ok(Value::Array(if self.view { to_view(&out)? } else { out }))
+        if self.view { to_view(&out) } else { Ok(out) }
     }
 }

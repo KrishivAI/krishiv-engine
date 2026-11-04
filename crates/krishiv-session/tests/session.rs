@@ -774,14 +774,14 @@ fn session_user_and_local_timestamp() {
         &ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
     );
     assert!(!schema.field(0).is_nullable());
-    // `current_time` is a TIME, which has no Krishiv type yet.
+    // `current_time` is a TIME: refused while the type is gated off.
     for sql in [
         "SELECT current_time() FROM events",
         "SELECT current_time(3) FROM events",
     ] {
         assert_eq!(
             sql_error(&s, sql).error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
+            ErrorClass::UnsupportedTimeType,
             "{sql}"
         );
     }
@@ -941,6 +941,10 @@ fn file_views_read_the_files_there_when_the_query_runs() {
     let root = dir.path().join("t");
     let root = root.to_str().unwrap().to_owned();
     let s = session();
+    // A file another writer adds shows up in the next run only without a commit log.
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "NONE")
+        .unwrap();
     block_on(s.table("people").select(["id"]).write().parquet(&root)).unwrap();
     block_on(
         s.read()
@@ -1073,6 +1077,7 @@ fn avro_writes_read_back() {
     let names: Vec<String> = std::fs::read_dir(dir.path().join("out"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n != "_krishiv_log")
         .collect();
     assert!(names.iter().any(|n| n.ends_with(".avro")), "{names:?}");
     // ... and they read back as they were written.

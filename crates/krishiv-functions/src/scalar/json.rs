@@ -52,7 +52,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         "json_array_length" => array_length(args),
         "json_object_keys" => object_keys(args),
         "get_json_object" => get_object(args),
-        "schema_of_json" => schema_of(args),
+        "schema_of_json" => schema_of(args, opts),
         "from_json" => from(args, opts),
         "to_json" => to(args, opts),
         _ => return Some((listed, Err(bad_types(listed, args)))),
@@ -105,7 +105,7 @@ fn get_object(args: &[BindArg]) -> Result<Binding, KrishivError> {
 /// (Jackson's default `MAX_JSON_DEPTH`), which no DDL string could name
 /// back; malformed JSON fails with `KRISHIV_MALFORMED_JSON`, as Spark
 /// raises a parse error instead of returning `NULL`).
-fn schema_of(args: &[BindArg]) -> Result<Binding, KrishivError> {
+fn schema_of(args: &[BindArg], _opts: &BindOptions) -> Result<Binding, KrishivError> {
     let (json, options) = match args {
         [json] => (json, None),
         [json, options] => (json, Some(options)),
@@ -114,7 +114,9 @@ fn schema_of(args: &[BindArg]) -> Result<Binding, KrishivError> {
     if !is_string(&json.data_type()) {
         return Err(bad_types("schema_of_json", args));
     }
-    let options = read_options(options)?;
+    // Inference reads no date pattern unless asked (`inferTimestamp`), and
+    // then the corrected one, as Spark's inference does.
+    let options = read_options(options, false)?;
     let drop = options.drop_field_if_all_null;
     Ok(Binding::new(ArrowDataType::Utf8, move |x: &Inputs<'_>| {
         let inferred = infer_json(&x.strings(0)?, &options)?;
@@ -225,8 +227,10 @@ fn from(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
     if !is_string(&json.data_type()) {
         return Err(bad_types("from_json", args));
     }
-    let target = krishiv_types::arrow::client_arrow_type(&read_schema(schema)?.to_arrow());
-    let options = read_options(options)?;
+    let declared = read_schema(schema)?;
+    let target = krishiv_types::arrow::client_arrow_type(&declared.to_arrow());
+    refuse_legacy_dates("from_json", &target, opts.legacy_time_parser)?;
+    let options = read_options(options, false)?;
     if matches!(
         options.mode,
         krishiv_kernels::json::ParseMode::DropMalformed
@@ -241,7 +245,8 @@ fn from(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
     let zone = Arc::clone(&opts.time_zone);
     let start = opts.query_start_micros;
     Ok(Binding::new(target.clone(), move |x: &Inputs<'_>| {
-        read_json(&x.strings(0)?, &target, &options, zone.as_ref(), start)
+        let read = read_json(&x.strings(0)?, &target, &options, zone.as_ref(), start)?;
+        truncate_times(&read, &declared)
     }))
 }
 
@@ -261,11 +266,49 @@ fn to(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
     ) {
         return Err(bad_types("to_json", args));
     }
-    let options = read_options(options)?;
+    refuse_legacy_dates("to_json", &value.data_type(), opts.legacy_time_parser)?;
+    let options = read_options(options, false)?;
     let zone = Arc::clone(&opts.time_zone);
     Ok(Binding::new(ArrowDataType::Utf8, move |x: &Inputs<'_>| {
         write_json(&x.column(0)?, &options, zone.as_ref())
     }))
+}
+
+/// Under `spark.sql.legacy.timeParserPolicy=LEGACY`, Spark's JSON, CSV and
+/// XML functions read and write `DATE` and `TIMESTAMP` fields with a lenient
+/// `FastDateFormat` (`2024-02-30` is March 1, `SSSSSS` a fraction of a
+/// second, its own default patterns), which Krishiv does not model: a type
+/// holding such a field is refused rather than answered with the corrected
+/// formatter. `TIMESTAMP_NTZ` never takes the legacy formatter.
+pub(super) fn refuse_legacy_dates(
+    func: &str,
+    ty: &ArrowDataType,
+    legacy: bool,
+) -> Result<(), KrishivError> {
+    fn has_dates(ty: &ArrowDataType) -> bool {
+        match ty {
+            ArrowDataType::Date32 | ArrowDataType::Date64 => true,
+            ArrowDataType::Timestamp(_, zone) => zone.is_some(),
+            ArrowDataType::Struct(fields) => fields.iter().any(|f| has_dates(f.data_type())),
+            ArrowDataType::List(f)
+            | ArrowDataType::LargeList(f)
+            | ArrowDataType::ListView(f)
+            | ArrowDataType::LargeListView(f)
+            | ArrowDataType::FixedSizeList(f, _)
+            | ArrowDataType::Map(f, _) => has_dates(f.data_type()),
+            _ => false,
+        }
+    }
+    if legacy && has_dates(ty) {
+        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: format!(
+                "{func} of a DATE or TIMESTAMP field with \
+                 spark.sql.legacy.timeParserPolicy=LEGACY (the FastDateFormat formatter)"
+            ),
+        }
+        .into());
+    }
+    Ok(())
 }
 
 /// The schema argument's value, parsed as Spark parses a `from_json`
@@ -285,7 +328,7 @@ fn read_schema(arg: &BindArg) -> Result<DataType, KrishivError> {
 }
 
 /// The options argument's compiled form (absent is the defaults).
-fn read_options(arg: Option<&BindArg>) -> Result<JsonOptions, KrishivError> {
+fn read_options(arg: Option<&BindArg>, legacy: bool) -> Result<JsonOptions, KrishivError> {
     let Some(arg) = arg else {
         return Ok(JsonOptions::new());
     };
@@ -324,5 +367,102 @@ fn read_options(arg: Option<&BindArg>) -> Result<JsonOptions, KrishivError> {
         }
         options.insert(keys.value(row).to_owned(), values.value(row).to_owned());
     }
-    JsonOptions::from_map(&options)
+    JsonOptions::from_map_with(&options, legacy)
+}
+
+/// `array` with every `TIME(p)` value cut to its declared precision `p`
+/// (the reader appends the parsed microseconds whole), through arrays,
+/// maps and structs. Arrays without a time in their type come back as they
+/// are.
+fn truncate_times(array: &ArrayRef, declared: &DataType) -> Result<ArrayRef, KrishivError> {
+    use arrow_array::{ListArray, MapArray, StructArray, Time64NanosecondArray};
+    if !holds_short_time(declared) {
+        return Ok(Arc::clone(array));
+    }
+    let fail = |e: arrow_schema::ArrowError| internal(e.to_string());
+    Ok(match declared {
+        DataType::Time { precision } => {
+            let unit = 10_i64.pow(u32::from(9 - (*precision).min(9)));
+            let times = array
+                .as_any()
+                .downcast_ref::<Time64NanosecondArray>()
+                .ok_or_else(|| internal("a TIME column that is not Time64(ns)".to_owned()))?;
+            Arc::new(times.unary::<_, arrow_array::types::Time64NanosecondType>(|v| v - v % unit))
+        }
+        DataType::Array(a) => {
+            let list = array.as_list::<i32>();
+            let values = truncate_times(list.values(), a.element_type())?;
+            Arc::new(
+                ListArray::try_new(
+                    match list.data_type() {
+                        ArrowDataType::List(f) => Arc::clone(f),
+                        _ => return Err(internal("an array column that is not a list".to_owned())),
+                    },
+                    list.offsets().clone(),
+                    values,
+                    list.nulls().cloned(),
+                )
+                .map_err(fail)?,
+            )
+        }
+        DataType::Struct(st) => {
+            let s = array.as_struct();
+            let columns = s
+                .columns()
+                .iter()
+                .zip(st.fields())
+                .map(|(c, f)| truncate_times(c, f.data_type()))
+                .collect::<Result<Vec<_>, _>>()?;
+            Arc::new(
+                StructArray::try_new(s.fields().clone(), columns, s.nulls().cloned())
+                    .map_err(fail)?,
+            )
+        }
+        DataType::Map(m) => {
+            let map = array.as_map();
+            let keys = truncate_times(map.keys(), m.key_type())?;
+            let values = truncate_times(map.values(), m.value_type())?;
+            let entries = match map.data_type() {
+                ArrowDataType::Map(f, _) => match f.data_type() {
+                    ArrowDataType::Struct(fields) => StructArray::try_new(
+                        fields.clone(),
+                        vec![keys, values],
+                        map.entries().nulls().cloned(),
+                    )
+                    .map_err(fail)?,
+                    _ => {
+                        return Err(internal(
+                            "a map entries column that is no struct".to_owned(),
+                        ));
+                    }
+                },
+                _ => return Err(internal("a map column that is no map".to_owned())),
+            };
+            let ArrowDataType::Map(field, sorted) = map.data_type() else {
+                return Err(internal("a map column that is no map".to_owned()));
+            };
+            Arc::new(
+                MapArray::try_new(
+                    Arc::clone(field),
+                    map.offsets().clone(),
+                    entries,
+                    map.nulls().cloned(),
+                    *sorted,
+                )
+                .map_err(fail)?,
+            )
+        }
+        _ => Arc::clone(array),
+    })
+}
+
+/// Whether `t` is or holds a `TIME(p)` with `p < 6`.
+fn holds_short_time(t: &DataType) -> bool {
+    match t {
+        DataType::Time { precision } => *precision < 6,
+        DataType::Array(a) => holds_short_time(a.element_type()),
+        DataType::Map(m) => holds_short_time(m.key_type()) || holds_short_time(m.value_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| holds_short_time(f.data_type())),
+        _ => false,
+    }
 }

@@ -64,6 +64,7 @@ fn query_results_are_written_committed_and_read_back() {
             max_records_per_file: 0,
             target_file_bytes: 0,
             partition_by: Vec::new(),
+            column_types: std::collections::BTreeMap::new(),
         })
         .unwrap()
         .with_io(io.clone())
@@ -126,6 +127,7 @@ fn query_results_are_written_committed_and_read_back() {
                 max_records_per_file: 0,
                 target_file_bytes: 0,
                 partition_by: Vec::new(),
+                column_types: std::collections::BTreeMap::new(),
             }),
         },
         krishiv_exec::physical::WritePlan::result_schema(),
@@ -140,6 +142,7 @@ fn query_results_are_written_committed_and_read_back() {
             map_key_dedup_last_win: false,
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
+            legacy_time_parser: false,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()));
@@ -165,6 +168,7 @@ fn query_results_are_written_committed_and_read_back() {
         max_records_per_file: 0,
         target_file_bytes: 0,
         partition_by: Vec::new(),
+        column_types: std::collections::BTreeMap::new(),
     };
     let bad_plan = krishiv_exec::physical::PhysicalPlan::new(
         PhysNode::WriteFiles {
@@ -183,6 +187,7 @@ fn query_results_are_written_committed_and_read_back() {
             map_key_dedup_last_win: false,
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
+            legacy_time_parser: false,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
@@ -322,6 +327,7 @@ fn two_tasks_write_disjoint_files_named_by_partition() {
             filter: None,
             runtime_filters: Vec::new(),
             row_stage: krishiv_exec::RowStageSettings::default(),
+            row_id: false,
         });
         let write = WritePlan {
             format: "parquet".to_owned(),
@@ -332,6 +338,7 @@ fn two_tasks_write_disjoint_files_named_by_partition() {
             max_records_per_file: 0,
             target_file_bytes: 0,
             partition_by: Vec::new(),
+            column_types: std::collections::BTreeMap::new(),
         };
         let plan = krishiv_exec::physical::PhysicalPlan::new(
             PhysNode::WriteFiles {
@@ -350,6 +357,7 @@ fn two_tasks_write_disjoint_files_named_by_partition() {
                 map_key_dedup_last_win: false,
                 legacy_java_charsets: false,
                 legacy_coding_error_action: false,
+                legacy_time_parser: false,
             },
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
@@ -504,6 +512,7 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
             filter: None,
             runtime_filters: Vec::new(),
             row_stage: krishiv_exec::RowStageSettings::default(),
+            row_id: false,
         });
         let write = WritePlan {
             format: "parquet".to_owned(),
@@ -514,6 +523,7 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
             max_records_per_file: 0,
             target_file_bytes: 0,
             partition_by: Vec::new(),
+            column_types: std::collections::BTreeMap::new(),
         };
         let plan = krishiv_exec::physical::PhysicalPlan::new(
             PhysNode::WriteFiles {
@@ -532,6 +542,7 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
                 map_key_dedup_last_win: false,
                 legacy_java_charsets: false,
                 legacy_coding_error_action: false,
+                legacy_time_parser: false,
             },
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
@@ -703,6 +714,7 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
             filter: None,
             runtime_filters: Vec::new(),
             row_stage: krishiv_exec::RowStageSettings::default(),
+            row_id: false,
         });
         let write = WritePlan {
             format: "parquet".to_owned(),
@@ -713,6 +725,7 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
             max_records_per_file: 0,
             target_file_bytes: 0,
             partition_by: Vec::new(),
+            column_types: std::collections::BTreeMap::new(),
         };
         let plan = krishiv_exec::physical::PhysicalPlan::new(
             PhysNode::WriteFiles {
@@ -731,6 +744,7 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
                 map_key_dedup_last_win: false,
                 legacy_java_charsets: false,
                 legacy_coding_error_action: false,
+                legacy_time_parser: false,
             },
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
@@ -812,6 +826,7 @@ fn a_write_without_a_write_plan_is_refused() {
             map_key_dedup_last_win: false,
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
+            legacy_time_parser: false,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()));
@@ -849,6 +864,7 @@ fn a_write_without_a_configuration_is_refused() {
                 max_records_per_file: 0,
                 target_file_bytes: 0,
                 partition_by: Vec::new(),
+                column_types: std::collections::BTreeMap::new(),
             }),
         },
         krishiv_exec::physical::WritePlan::result_schema(),
@@ -863,6 +879,7 @@ fn a_write_without_a_configuration_is_refused() {
             map_key_dedup_last_win: false,
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
+            legacy_time_parser: false,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
@@ -894,6 +911,7 @@ fn a_partitioned_write_sorts_by_the_partition_columns_below_the_writer() {
         max_records_per_file: 0,
         target_file_bytes: 0,
         partition_by,
+        column_types: std::collections::BTreeMap::new(),
     };
     // A partition column the input does not have is refused, not
     // indexed.
@@ -949,6 +967,7 @@ fn a_write_with_an_out_of_range_partition_column_is_refused() {
                 max_records_per_file: 0,
                 target_file_bytes: 0,
                 partition_by: vec![9],
+                column_types: std::collections::BTreeMap::new(),
             }),
         },
         WritePlan::result_schema(),
@@ -963,6 +982,7 @@ fn a_write_with_an_out_of_range_partition_column_is_refused() {
             map_key_dedup_last_win: false,
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
+            legacy_time_parser: false,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))

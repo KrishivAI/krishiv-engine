@@ -68,6 +68,10 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("legacy_charset_switches").features,
         ["legacy_charset_switches"]
     );
+    assert_eq!(
+        message("legacy_time_parser").features,
+        ["legacy_time_parser"]
+    );
     // Every registered feature occurs in some inventory case, except
     // `legacy_statistical_aggregate`: it fires only around a moment
     // aggregate, and the encoder refuses every moment aggregate (pinned by
@@ -443,6 +447,7 @@ fn constructs_map_to_one_feature_or_the_baseline() {
     );
     let write = WritePlan {
         partition_by: vec![0],
+        column_types: std::collections::BTreeMap::new(),
         ..base
     };
     let node = node_of(write);
@@ -528,6 +533,28 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
             missing: vec!["shared_subplan".to_owned()]
         }
     );
+    // A reader without `late_fetch` refuses the node and a row id alone.
+    let late_fetch = cases()
+        .into_iter()
+        .find(|(n, _)| n == "late_fetch")
+        .unwrap()
+        .1;
+    let top = late_fetch.root().children()[0];
+    let row_id = plan_of(top.children()[0].clone());
+    for plan in [late_fetch.clone(), row_id] {
+        let err = decode_with(
+            &encode(&plan).unwrap(),
+            &Limits::default(),
+            &ReaderFeatures::only([]),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CodecError::UnsupportedFeatures {
+                missing: vec!["late_fetch".to_owned()]
+            }
+        );
+    }
     // A reader without `lambda_functions` refuses the lambda plan naming
     // the feature, even though it knows `nested_types`.
     let bytes = encode(
@@ -603,6 +630,55 @@ fn a_reader_without_the_filter_feature_refuses_a_masked_aggregate() {
             missing: vec!["aggregate_filter".to_owned()]
         }
     );
+}
+
+#[test]
+fn a_reader_without_write_column_types_refuses_the_plan_naming_it() {
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "write_files_column_types")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let reader = ReaderFeatures::only([Feature::WritePlan, Feature::IntervalTypes]);
+    assert!(!reader.contains(Feature::WriteColumnTypes));
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &reader).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["write_column_types".to_owned()]
+        }
+    );
+    assert_eq!(Feature::WriteColumnTypes.kind(), FeatureKind::Semantic);
+}
+
+/// The header lists each feature of a write, and the Spark types it names
+/// even when its input holds none of them.
+#[test]
+fn a_partitioned_write_with_column_types_lists_every_feature() {
+    let write = krishiv_exec::physical::WritePlan {
+        partition_by: vec![0],
+        column_types: std::collections::BTreeMap::from([(
+            0,
+            krishiv_types::DataType::YearMonthInterval {
+                start: krishiv_types::YearMonthField::Year,
+                end: krishiv_types::YearMonthField::Month,
+            },
+        )]),
+        ..inventory::write_plan()
+    };
+    let features = plan_features(&plan_of(PhysNode::WriteFiles {
+        input: Box::new(PhysNode::OneRow),
+        write: Some(write),
+    }));
+    for feature in [
+        Feature::IntervalTypes,
+        Feature::PartitionedWrites,
+        Feature::WriteColumnTypes,
+    ] {
+        assert!(features.contains(&feature), "{feature}: {features:?}");
+    }
 }
 
 #[test]
@@ -1148,6 +1224,11 @@ fn interval_types_and_literals_need_their_feature() {
     layout.truncate(1);
     assert!(to_message(&plan_of(root)).unwrap().features.is_empty());
     assert_eq!(message("interval_scan").features, ["interval_types"]);
+    assert!(
+        message("interval_array_aggregate")
+            .features
+            .contains(&"interval_types".to_owned())
+    );
     assert_eq!(
         message("interval_nested").features,
         ["interval_types", "nested_types"]
@@ -1202,6 +1283,31 @@ fn interval_types_and_literals_need_their_feature() {
             "{case}"
         );
         assert!(decode(&bytes).is_ok(), "{case}");
+    }
+}
+
+/// The analyzer's internal functions travel by name, and an older reader
+/// refuses them through the interval feature.
+#[test]
+fn internal_interval_functions_travel_by_name_under_their_feature() {
+    use krishiv_plan::{Builtin, FunctionId};
+    for b in [
+        Builtin::DateAddInterval,
+        Builtin::MultiplyInterval,
+        Builtin::DivideInterval,
+        Builtin::CalendarAdd,
+        Builtin::CalendarSubtract,
+        Builtin::CalendarNegate,
+    ] {
+        assert!(Builtin::ALL.contains(&b), "{b:?}");
+        assert!(b.is_analyzer_internal(), "{b:?}");
+        assert_eq!(Builtin::from_name(b.name()), Some(b));
+        let id = FunctionId::Builtin(b);
+        assert_eq!(
+            feature_of(Construct::Function(&id)),
+            Some(Feature::IntervalTypes),
+            "{b:?}"
+        );
     }
 }
 

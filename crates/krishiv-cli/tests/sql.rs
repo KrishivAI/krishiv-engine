@@ -337,6 +337,23 @@ fn explain_analyze_prints_the_profile() {
 }
 
 #[test]
+fn explain_analyze_planning_adds_the_stages() {
+    let q = "select a from (select 1 as a, 2 as b) where a > 0";
+    let o = krishiv(
+        &["sql", "--explain-analyze", "--planning", "--json", "-e", q],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let p = krishiv::QueryProfile::from_json(out(&o).trim()).expect("profile JSON");
+    let planning = p.planning.expect("planning member");
+    assert!(planning["steps"].as_array().is_some_and(|a| !a.is_empty()));
+    let o = krishiv(&["sql", "--explain-analyze", "--planning", "-e", q], None);
+    // A usage error (exit 2) before any statement runs.
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("needs JSON output"), "{}", err(&o));
+}
+
+#[test]
 fn explain_verbose_prints_the_rules() {
     let q = "select a from (select 1 as a, 2 as b) where a > 0";
     let o = krishiv(&["sql", "--explain-verbose", "-e", q], None);

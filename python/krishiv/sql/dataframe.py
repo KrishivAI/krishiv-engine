@@ -191,7 +191,7 @@ class DataFrame:
         except ImportError:
             return None
         rows = _eager_max_rows(self._session)
-        table = self.limit(rows).toArrow()
+        table = self.limit(rows)._shown()._arrow()
         cells = _convert.table_cells(table, self._session_zone())
         columns = [(name, type_) for name, type_ in self.dtypes]
         return _convert.repr_html_string(columns, cells)
@@ -1782,7 +1782,18 @@ class DataFrame:
         return _convert.session_zone(self._session.conf.get("spark.sql.session.timeZone", "UTC") or "UTC")
 
     def toArrow(self) -> Any:
-        """The result as a ``pyarrow.Table`` (needs pyarrow)."""
+        """The result as a ``pyarrow.Table`` (needs pyarrow). As PySpark's Connect client, it refuses a year-month or
+        calendar interval at any depth, by its Spark type."""
+        table = self._arrow()
+        if any(_convert.not_collectable_arrow(f.type) for f in table.schema):
+            raise PySparkTypeError(
+                errorClass="UNSUPPORTED_DATA_TYPE_FOR_ARROW_CONVERSION",
+                messageParameters={"data_type": repr(_convert.not_collectable(self.schema))},
+            )
+        return table
+
+    def _arrow(self) -> Any:
+        """The result as a ``pyarrow.Table``, whatever its types."""
         pa = _convert.require_pyarrow("toArrow")
         stream = self._df.execute()
         try:
@@ -1797,7 +1808,7 @@ class DataFrame:
     def toPandas(self) -> Any:
         """The result as a ``pandas.DataFrame``, converted from Arrow (needs pyarrow and pandas). Instants are
         wall-clock times in the session time zone without a zone, as Spark's ``toPandas``."""
-        table = self.toArrow()
+        table = self._arrow()
         try:
             importlib.import_module("pandas")  # pandas itself is optional: only checked here
         except ImportError as e:
@@ -1805,8 +1816,16 @@ class DataFrame:
         return _convert.session_local(table, self._session_zone()).to_pandas()
 
     def collect(self) -> list[Row]:
-        """All result rows (needs pyarrow)."""
-        return _convert.rows_of(self.toArrow())
+        """All result rows (needs pyarrow). As PySpark's Connect client, it refuses a year-month or calendar interval
+        at any depth, by its Arrow type."""
+        table = self._arrow()
+        for f in table.schema:
+            if (name := _convert.not_collectable_arrow(f.type)) is not None:
+                raise PySparkTypeError(
+                    errorClass="UNSUPPORTED_DATA_TYPE_FOR_ARROW_CONVERSION",
+                    messageParameters={"data_type": name},
+                )
+        return _convert.rows_of(table)
 
     def take(self, num: int) -> list[Row]:
         return self.limit(num).collect()
@@ -1831,8 +1850,21 @@ class DataFrame:
         if not isinstance(truncate, bool | int):
             raise not_expected_type("truncate", "bool or int", truncate)
         rows = min(max(n, 0), _SHOW_MAX)  # Spark's bounds: MAX_ROUNDED_ARRAY_LENGTH - 1
-        cells = _convert.table_cells(self.limit(rows + 1).toArrow(), self._session_zone())
+        cells = _convert.table_cells(self.limit(rows + 1)._shown()._arrow(), self._session_zone())
         print(_convert.show_string(self.columns, cells, rows, truncate, vertical), end="")
+
+    def _shown(self) -> DataFrame:
+        """This frame with its interval columns as text, cast by the engine, which knows their fields."""
+        types = [t for _, t in self.dtypes]
+        if not any(_convert.holds_interval(t) for t in types):
+            return self
+        names = [f"_{i}" for i in range(len(types))]
+        return self.toDF(*names).selectExpr(
+            *(
+                f"CAST({n} AS STRING) AS {n}" if _convert.holds_interval(t) else n
+                for n, t in zip(names, types, strict=True)
+            )
+        )
 
     def explain(
         self,

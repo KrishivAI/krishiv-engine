@@ -10,6 +10,7 @@
 //! and a key of the map's key type.
 
 use krishiv_common::error::{
+    DatatypeMismatchInvalidOrderingType, DatatypeMismatchMapFunctionDiffTypes,
     DatatypeMismatchUnexpectedInputType, InvalidExtractBaseFieldType, KrishivError,
 };
 use krishiv_types::DataType;
@@ -53,6 +54,16 @@ fn get(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 /// `element_at` / `try_element_at`: the array element or the map value.
 fn element_at_named(name: &'static str, c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     match c.data_type(0) {
+        Some(DataType::Map(m)) if key_fields_differ(m.key_type(), c.data_type(1)) => {
+            Err(DatatypeMismatchMapFunctionDiffTypes {
+                sql_expr: call_sql(name, c),
+                function_name: format!("`{name}`"),
+                data_type: "\"MAP\"".to_owned(),
+                left_type: quoted(c.data_type(0)),
+                right_type: quoted(c.data_type(1)),
+            }
+            .into())
+        }
         Some(DataType::Map(m)) => Ok(ArgType::new(m.value_type().clone(), true)),
         Some(DataType::Array(_)) => element_of(name, c),
         _ => Err(unexpected(name, c, 0, "(\"ARRAY\" or \"MAP\")")),
@@ -99,6 +110,20 @@ fn subscript(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         .into());
     }
     match c.data_type(0) {
+        // `GetMapValue` orders its keys, which `element_at` finds out only when
+        // it runs.
+        Some(DataType::Map(m)) if m.key_type() == &DataType::CalendarInterval => {
+            Err(DatatypeMismatchInvalidOrderingType {
+                sql_expr: format!(
+                    "\"{}[{}]\"",
+                    c.sql(0).unwrap_or_default(),
+                    c.sql(1).unwrap_or_default()
+                ),
+                function_name: "`getmapvalue`".to_owned(),
+                data_type: format!("\"{}\"", m.key_type().sql()),
+            }
+            .into())
+        }
         Some(DataType::Map(m)) => Ok(ArgType::new(m.value_type().clone(), true)),
         Some(DataType::Array(a)) => Ok(ArgType::new(a.element_type().clone(), true)),
         other => Err(InvalidExtractBaseFieldType {
@@ -109,8 +134,30 @@ fn subscript(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     }
 }
 
-/// The second argument: the map's key type, else an `INT` index.
+/// `element_at`'s arguments: as [`index_inputs`], but a key whose interval fields
+/// differ from the map's stays as it is for the result rule to refuse.
 fn element_at_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    if let Some(DataType::Map(m)) = c.data_type(0)
+        && key_fields_differ(m.key_type(), c.data_type(1))
+    {
+        return vec![InputType::Any, InputType::Any];
+    }
+    index_inputs(c)
+}
+
+/// Whether `key` is an ANSI interval of the map key's family with other fields:
+/// `element_at` takes them as different types.
+fn key_fields_differ(map_key: &DataType, key: Option<&DataType>) -> bool {
+    use DataType as T;
+    match (map_key, key) {
+        (T::YearMonthInterval { .. }, Some(k @ T::YearMonthInterval { .. }))
+        | (T::DayTimeInterval { .. }, Some(k @ T::DayTimeInterval { .. })) => map_key != k,
+        _ => false,
+    }
+}
+
+/// The second argument: the map's key type, else an `INT` index.
+fn index_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     let second = match c.data_type(0) {
         Some(DataType::Map(m)) => exact(m.key_type().clone()),
         _ => exact(DataType::Integer),
@@ -130,7 +177,7 @@ fn subscript_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     if matches!(c.data_type(0), Some(DataType::Array(_))) && !integral {
         return vec![InputType::Any, InputType::Any];
     }
-    element_at_inputs(c)
+    index_inputs(c)
 }
 
 /// The signatures of this family.

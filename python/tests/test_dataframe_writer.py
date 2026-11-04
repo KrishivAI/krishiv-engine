@@ -161,12 +161,7 @@ def test_partition_by_with_bogus_mode_raises_invalid_save_mode(df: DataFrame, tm
 
 
 def test_unknown_format_raises_unsupported(df: DataFrame, tmp_path: Any) -> None:
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        df.write.json(str(tmp_path / "j"))
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-    assert "writing the json format" in str(bad.value)
-
-    for format in ("text", "orc"):
+    for format in ("orc",):
         path = str(tmp_path / format)
         with pytest.raises(errors.UnsupportedOperationException) as bad:
             df.write.format(format).save(path)
@@ -203,13 +198,11 @@ def test_csv_modes(df: DataFrame, tmp_path: Any) -> None:
     assert len(df.sparkSession.read.csv(fresh).collect()) == 3
 
 
-def test_csv_compression_option_raises_unsupported(df: DataFrame, tmp_path: Any) -> None:
+def test_csv_gzip_compression_writes_gz_files_and_reads_back(df: DataFrame, tmp_path: Any) -> None:
     path = str(tmp_path / "t")
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        df.write.option("compression", "gzip").csv(path)
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-    assert "compression codec gzip" in str(bad.value)
-    assert not os.path.exists(path)
+    df.write.option("compression", "gzip").csv(path)
+    assert any(name.endswith(".csv.gz") for name in os.listdir(path))
+    assert len(df.sparkSession.read.csv(path).collect()) == len(df.collect())
 
 
 def test_unknown_mode_raises_invalid_save_mode(df: DataFrame, tmp_path: Any) -> None:
@@ -387,3 +380,90 @@ def test_writeto_signatures_match_pyspark() -> None:
     assert list(inspect.signature(W2.overwrite).parameters) == ["self", "condition"]
     for name in ("create", "replace", "createOrReplace", "append", "overwritePartitions"):
         assert list(inspect.signature(getattr(W2, name)).parameters) == ["self"], name
+
+
+def error_class(exc: errors.PySparkException) -> str:
+    return exc.getCondition() or ""
+
+
+def test_save_as_table_modes_and_insert_into(spark: SparkSession, df: DataFrame) -> None:
+    df.write.saveAsTable("saved")
+    assert dicts(spark.table("saved")) == dicts(df)
+    with pytest.raises(errors.PySparkException) as exists:
+        df.write.saveAsTable("saved")
+    assert error_class(exists.value) == "TABLE_OR_VIEW_ALREADY_EXISTS"
+    df.write.mode("ignore").saveAsTable("saved")
+    assert spark.table("saved").count() == 3
+    df.select("name", "id").write.mode("append").saveAsTable("saved")  # appended by name
+    assert spark.table("saved").count() == 6
+    df.write.insertInto("saved")
+    assert spark.table("saved").count() == 9
+    df.filter("id > 1").write.mode("overwrite").saveAsTable("saved")
+    assert spark.table("saved").count() == 2
+    with pytest.raises(errors.PySparkException) as self_read:
+        spark.table("saved").write.mode("overwrite").saveAsTable("saved")
+    assert error_class(self_read.value) == "UNSUPPORTED_OVERWRITE.TABLE"
+    df.filter("id = 1").write.insertInto("saved", overwrite=True)
+    assert spark.table("saved").count() == 1
+    with pytest.raises(errors.PySparkException) as missing:
+        df.write.insertInto("missing")
+    assert error_class(missing.value) == "TABLE_OR_VIEW_NOT_FOUND"
+
+
+def test_bucketing_is_refused_as_spark_refuses_it(df: DataFrame, tmp_path: Any) -> None:
+    path = str(tmp_path / "out")
+    with pytest.raises(errors.PySparkException) as bucketed_save:
+        df.write.bucketBy(2, "id").save(path)
+    assert error_class(bucketed_save.value) == "_LEGACY_ERROR_TEMP_1312"
+    with pytest.raises(errors.PySparkException) as both:
+        df.write.bucketBy(2, "id").sortBy("name").parquet(path)
+    assert error_class(both.value) == "_LEGACY_ERROR_TEMP_1313"
+    with pytest.raises(errors.PySparkException) as sort_only:
+        df.write.sortBy("name").save(path)
+    assert error_class(sort_only.value) == "SORT_BY_WITHOUT_BUCKETING"
+    with pytest.raises(errors.PySparkException) as table:
+        df.write.bucketBy(2, ["id"]).saveAsTable("b")
+    assert error_class(table.value) == "KRISHIV_UNSUPPORTED_FEATURE"
+    with pytest.raises(errors.PySparkException) as partitioned:
+        df.write.partitionBy("id").insertInto("b")
+    assert error_class(partitioned.value) == "PARTITION_BY_NOT_ALLOWED_WITH_INSERT_INTO"
+
+
+def test_text_writes_one_column_and_orc_is_unsupported(spark: SparkSession, df: DataFrame, tmp_path: Any) -> None:
+    path = str(tmp_path / "t")
+    df.select("name").write.text(path)
+    assert spark.read.format("text").load(path).count() == 3
+    with pytest.raises(errors.PySparkException):
+        df.write.text(str(tmp_path / "two"))  # two columns: Spark's text source takes one
+    with pytest.raises(errors.PySparkException) as orc:
+        df.write.format("orc").save(str(tmp_path / "o"))
+    assert error_class(orc.value) == "KRISHIV_UNSUPPORTED_FEATURE"
+
+
+def test_bucket_by_and_sort_by_reject_a_list_with_more_columns(df: DataFrame) -> None:
+    with pytest.raises(errors.PySparkValueError) as both:
+        df.write.bucketBy(2, ["id"], "name")
+    assert error_class(both.value) == "CANNOT_SET_TOGETHER"
+    with pytest.raises(errors.PySparkValueError):
+        df.write.sortBy(["id"], "name")
+
+
+def test_bucket_by_and_sort_by_validate_their_arguments(df: DataFrame) -> None:
+    with pytest.raises(errors.PySparkTypeError):
+        df.write.bucketBy("2", "id")  # ty: ignore[invalid-argument-type]
+    with pytest.raises(errors.PySparkTypeError):
+        df.write.bucketBy(2, 5)  # ty: ignore[invalid-argument-type]
+    with pytest.raises(errors.PySparkTypeError):
+        df.write.sortBy(["id", 5])  # ty: ignore[invalid-argument-type]
+    assert df.write.bucketBy(2, ("id", "name")) is not None
+    assert df.write.sortBy(("name",)) is not None
+
+
+def test_save_as_table_takes_format_mode_partition_by_and_options(spark: SparkSession, df: DataFrame) -> None:
+    with pytest.raises(errors.PySparkTypeError):
+        df.write.saveAsTable(5)  # ty: ignore[invalid-argument-type]
+    df.write.saveAsTable("fm", format="parquet", mode="error", compression=None)
+    assert spark.table("fm").count() == 3
+    with pytest.raises(errors.PySparkException) as parted:
+        df.write.saveAsTable("pm", partitionBy="id")
+    assert error_class(parted.value) == "KRISHIV_UNSUPPORTED_FEATURE"

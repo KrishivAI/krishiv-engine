@@ -42,19 +42,22 @@ fn a_shared_correlation_under_or_is_a_correlation() {
     }
 }
 
+/// A disjunct with no correlation makes the filter a correlation that is not
+/// an equality: the subquery joins the distinct outer values (Spark's
+/// `DecorrelateInnerQuery`). `t` has `b < 20` for two rows, and `b > 50` for
+/// `a` = 6, 8, 9.
 #[test]
-fn a_correlation_only_one_disjunct_holds_stays_refused() {
+fn a_correlation_only_one_disjunct_holds_joins_the_outer_values() {
     let env = env();
-    let sql = "SELECT a FROM t x WHERE (SELECT count(*) FROM t y \
-               WHERE (y.a = x.a AND y.b > 50) OR y.b < 20) > 0";
-    let plan =
-        krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
-            .unwrap();
-    let e = block_on(DefaultAnalyzer.analyze(&plan, &env.ctx)).unwrap_err();
+    let (_, rows) = env.rows(
+        "SELECT CONCAT(COALESCE(CAST(a AS STRING), 'n'), '|', CAST((SELECT count(*) FROM t y \
+         WHERE (y.a = x.a AND y.b > 50) OR y.b < 20) AS STRING)) FROM t x ORDER BY a",
+    );
     assert_eq!(
-        e.error.error_class().name(),
-        "KRISHIV_UNSUPPORTED_FEATURE",
-        "{e}"
+        rows,
+        [
+            "n|2", "n|2", "0|2", "1|2", "2|2", "4|2", "5|2", "6|3", "8|3", "9|3"
+        ]
     );
 }
 

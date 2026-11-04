@@ -37,9 +37,21 @@
 //!   comparisons for page indexes, `Membership` for dictionary values and
 //!   stored Bloom filters) once the reader exposes them.
 
+mod bloom_probe;
 mod calendar;
 mod decode;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "stage 2b of P2-T080b; T085 decides when to fetch the dictionary and calls it"
+    )
+)]
+mod dict_probe;
+mod index_guard;
+mod intervals;
 mod meta;
+mod page_stage;
 mod row_filter;
 mod thrift_guard;
 mod write;
@@ -55,8 +67,8 @@ use self::meta::SchemaOptions;
 pub use self::write::SPARK_FILE_VERSION;
 use crate::error::{FormatError, FormatResult};
 use crate::format::{
-    Capabilities, Decoder, Encoder, FileFormat, FileMetadata, MetadataNeeds, ScanUnit, Splittable,
-    UnitPlan,
+    Capabilities, Decoder, Encoder, FileFormat, FileMetadata, Granularity, MetadataNeeds, ScanUnit,
+    Splittable, UnitPlan,
 };
 use crate::io::{ByteRange, FileRef, IoContext};
 use crate::options::{FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec};
@@ -106,6 +118,24 @@ static OPTIONS: OptionSchema = OptionSchema {
             metadata_key: false,
             doc: "Read: evaluate the pushed filter before decoding the other columns \
                   (`auto` decides per row group).",
+        },
+        OptionSpec {
+            name: "pageIndex",
+            kind: OptionKind::Bool,
+            default: OptionDefault::Bool(true),
+            conf_fallback: Some("krishiv.io.parquet.pageIndex.enabled"),
+            metadata_key: false,
+            doc: "Read: skip the pages of a column chunk that the pushed filter and the file's \
+                  page index rule out.",
+        },
+        OptionSpec {
+            name: "bloomFilter",
+            kind: OptionKind::Bool,
+            default: OptionDefault::Bool(true),
+            conf_fallback: Some("krishiv.io.parquet.bloomFilter.enabled"),
+            metadata_key: false,
+            doc: "Read: skip the row groups whose stored Bloom filter shows that a pushed \
+                  equality or IN literal is absent.",
         },
         OptionSpec {
             name: "compression",
@@ -267,6 +297,7 @@ impl FileFormat for ParquetFormat {
         c.row_index = true;
         c.selection = true;
         c.write = true;
+        c.random_access = Some(Granularity::Unit);
         c
     }
 

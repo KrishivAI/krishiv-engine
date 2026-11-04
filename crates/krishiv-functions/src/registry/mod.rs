@@ -21,10 +21,12 @@ mod bitwise;
 mod catalog;
 mod collection;
 mod conditional;
+mod crypto;
 mod csv;
 mod defs;
 mod element;
 mod generator;
+mod geo;
 mod hashing;
 mod hof;
 mod json;
@@ -322,6 +324,9 @@ impl Registry {
                     kind: spec.kind,
                     // A function Spark rejects in every probe is taken as
                     // nondeterministic: the optimizer then never moves it.
+                    // `aes_encrypt` stays as the catalog lists it (a real
+                    // Spark run accepts it inside `count(DISTINCT ...)`);
+                    // the engine still draws an IV per row.
                     deterministic: row.deterministic.unwrap_or(false),
                     since: row.since,
                     arity: row.arity.clone(),

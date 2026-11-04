@@ -29,6 +29,7 @@ fn rows(s: &Session, sql: &str) -> Vec<Vec<String>> {
                             .as_primitive::<arrow_array::types::Int64Type>()
                             .value(i)
                             .to_string(),
+                        arrow_schema::DataType::Utf8View => c.as_string_view().value(i).to_owned(),
                         other => format!("<{other}>"),
                     }
                 });
@@ -644,4 +645,67 @@ fn a_round_local_shared_cte_inside_a_shared_recursive_cte_runs() {
               SELECT a.m FROM b a JOIN b c ON a.x = c.x)) \
              SELECT a.n FROM r a JOIN r c ON a.n = c.n ORDER BY 1";
     assert_eq!(column(rows(&s, q)), vec!["1", "2", "3"]);
+}
+
+#[test]
+fn a_seeded_random_in_the_recursive_term_follows_the_round_number() {
+    let s = Session::new().unwrap();
+    // Spark 4.2: the anchor and round 1 both draw the first value of seed 7;
+    // round k then draws that of seed 7 + (k - 1) (`rand(8)`, `rand(9)`):
+    // each round is a fresh plan at partition k - 1.
+    let q = "WITH RECURSIVE r(n, val) AS (SELECT 1, rand(7) UNION ALL \
+             SELECT n + 1, rand(7) FROM r WHERE n < 4) SELECT CAST(val AS STRING) FROM r ORDER BY n";
+    assert_eq!(
+        column(rows(&s, q)),
+        vec![
+            "0.28188121484885875",
+            "0.28188121484885875",
+            "0.4836508543933039",
+            "0.7145670158242735"
+        ]
+    );
+}
+
+#[test]
+fn a_seeded_random_draws_a_multi_row_round_as_one_partition() {
+    let s = Session::new().unwrap();
+    // Spark 4.2 (`local[2]`): the anchor has two partitions, but each round
+    // runs as one partition at index k - 1 and draws its rows in order,
+    // round 1 from seed 7, round 2 from seed 8.
+    let q = "WITH RECURSIVE r(k, n, val) AS (SELECT id, 0, CAST(0 AS DOUBLE) FROM range(0, 4, 1, 2) \
+             UNION ALL SELECT k, n + 1, rand(7) FROM r WHERE n < 2) \
+             SELECT CAST(val AS STRING) FROM r WHERE n > 0 ORDER BY n, k";
+    assert_eq!(
+        column(rows(&s, q)),
+        vec![
+            "0.28188121484885875",
+            "0.45998819035056326",
+            "0.7690971666031955",
+            "0.6631414615273216",
+            "0.4836508543933039",
+            "0.734216416644485",
+            "0.25330679322428096",
+            "0.4312578829567928",
+        ]
+    );
+}
+
+#[test]
+fn a_seeded_random_draws_every_small_round_in_row_order() {
+    let s = Session::new().unwrap();
+    // Spark 4.2 (`local[2]`), a three-partition anchor and three rounds.
+    let q = "WITH RECURSIVE r(k, n, val) AS (SELECT id, 0, CAST(0 AS DOUBLE) FROM range(0, 6, 1, 3) \
+             UNION ALL SELECT k, n + 1, rand(7) FROM r WHERE n < 3) \
+             SELECT CAST(val AS STRING) FROM r WHERE n = 3 ORDER BY k";
+    assert_eq!(
+        column(rows(&s, q)),
+        vec![
+            "0.7145670158242735",
+            "0.46621774950712846",
+            "0.029547784789351605",
+            "0.21474380201107057",
+            "0.9470787892248768",
+            "0.7393043885872892",
+        ]
+    );
 }

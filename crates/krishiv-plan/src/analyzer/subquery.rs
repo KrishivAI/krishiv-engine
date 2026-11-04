@@ -69,7 +69,7 @@ pub(super) fn rewrite(
     functions: &dyn FunctionRegistry,
     profile: SparkProfile,
 ) -> R<Arc<LogicalPlan>> {
-    if !has_subquery(Node::Plan(root)) {
+    if !has_subquery(Node::Plan(root)) && !has_outer(Node::Plan(root)) {
         return Ok(Arc::clone(root));
     }
     let mut r = Rewriter {
@@ -77,6 +77,7 @@ pub(super) fn rewrite(
         done: HashMap::new(),
         correlated: HashMap::new(),
         depth: 0,
+        lateral: false,
         row_number: match functions.lookup(&["row_number".to_owned()], profile) {
             FunctionLookup::Found(entry) => Some((entry.id, entry.kind)),
             _ => None,
@@ -97,6 +98,9 @@ struct Rewriter {
     depth: usize,
     /// The registry's `row_number`, for a subquery's per-row `LIMIT`.
     row_number: Option<(FunctionId, FunctionKind)>,
+    /// Decorrelating a lateral join's right side: a global aggregate on the
+    /// way keeps its one row per domain value.
+    lateral: bool,
 }
 
 /// A predicate subquery conjunct, as a join.
@@ -324,7 +328,7 @@ fn negated_in(e: &Arc<Expr>) -> Option<&Arc<Expr>> {
 }
 
 /// Whether `e` is a NULL literal or a cast of one.
-fn null_literal(e: &Expr) -> bool {
+pub(super) fn null_literal(e: &Expr) -> bool {
     match &e.node {
         ExprNode::Literal(v) => matches!(v, Literal::Null(_)),
         ExprNode::Cast { expr, .. } | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {
@@ -364,6 +368,27 @@ fn positive_literal(e: &Expr) -> bool {
         ExprNode::Cast { expr, .. } => positive_literal(expr),
         _ => false,
     }
+}
+
+/// Whether `p` reads the outer query and is one row for each outer row:
+/// a global aggregate under projections and aliases (no filter, so no
+/// `HAVING`).
+pub(super) fn one_row_aggregate(p: &Arc<LogicalPlan>) -> bool {
+    if !has_outer(Node::Plan(p)) {
+        return false;
+    }
+    fn walk(p: &LogicalPlan) -> bool {
+        match &p.node {
+            PlanNode::Aggregate {
+                grouping: Grouping::GroupBy(keys),
+                ..
+            } => keys.is_empty(),
+            PlanNode::Project { input, .. } => walk(input),
+            PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => walk(input),
+            _ => false,
+        }
+    }
+    walk(p)
 }
 
 /// Whether an aggregate sits under `p`'s projections and filters.
@@ -562,12 +587,23 @@ impl Rewriter {
             PlanNode::Project { input, exprs } => {
                 self.project(&p, Arc::clone(input), exprs.clone())
             }
+            PlanNode::Aggregate {
+                input,
+                grouping: Grouping::GroupBy(keys),
+                aggregates,
+            } => self.aggregate(&p, Arc::clone(input), keys, aggregates),
             PlanNode::Join {
                 left,
                 right,
                 kind,
                 condition: JoinCondition::On(on),
             } if self.existential(on) => self.join(&p, left, right, kind, on),
+            PlanNode::Join {
+                left,
+                right,
+                kind: kind @ (JoinKind::Inner | JoinKind::LeftOuter),
+                condition,
+            } if reads_left(left, right) => self.lateral(&p, left, right, *kind, condition),
             _ => {
                 let mut bad = false;
                 p.for_each_expr(&mut |e| bad |= self.reads_correlated(e));
@@ -838,6 +874,107 @@ impl Rewriter {
         Ok(columns(joined, &out))
     }
 
+    /// `left JOIN LATERAL right`, `right` reading `left`'s columns: an
+    /// ordinary join of the two on `right`'s correlated predicates (lifted
+    /// out as for an `IN` subquery) and the join's own condition. The
+    /// output is the join's, as it was.
+    fn lateral(
+        &mut self,
+        p: &Arc<LogicalPlan>,
+        left: &Arc<LogicalPlan>,
+        right: &Arc<LogicalPlan>,
+        kind: JoinKind,
+        condition: &JoinCondition,
+    ) -> R<Arc<LogicalPlan>> {
+        let out = output(p)?;
+        // A right side that is a select list over no relation is one row per
+        // left row: the expressions read over the left side's own columns. No
+        // domain, so a nondeterministic left side is evaluated once.
+        if (matches!(kind, JoinKind::Inner) || matches!(condition, JoinCondition::None))
+            && let Some(row) = one_row_select(right)
+            && !row.iter().any(|e| has_subquery(Node::Expr(e)))
+        {
+            let mut exprs: Vec<Arc<Expr>> = output(left)?
+                .iter()
+                .map(|c| col_expr(c, Origin::UNKNOWN))
+                .collect();
+            exprs.extend(row.iter().map(|e| Renumber::NONE.inner(e)));
+            let mut plan = node(
+                PlanNode::Project {
+                    input: Arc::clone(left),
+                    exprs,
+                },
+                p.origin,
+            );
+            if let JoinCondition::On(on) = condition {
+                plan = node(
+                    PlanNode::Filter {
+                        input: plan,
+                        predicate: Arc::clone(on),
+                    },
+                    p.origin,
+                );
+            }
+            return Ok(plan);
+        }
+        if !plan_is_deterministic(left) && on_path_through(right, lateral_hit, true) {
+            return Err(unsupported(
+                "a lateral join over a nondeterministic input that its right side correlates with",
+                p.origin,
+            ));
+        }
+        let (inner, corr) = if on_path_through(right, lateral_hit, true) {
+            self.lateral = true;
+            let domained = self.domain(left, right);
+            self.lateral = false;
+            let (inner, inner_keys, outer_keys) = domained?;
+            let corr = inner_keys
+                .into_iter()
+                .zip(outer_keys)
+                .map(|(i, o)| boolean(Builtin::EqNullSafe, vec![i, o]))
+                .collect();
+            (inner, corr)
+        } else {
+            self.pull(right, true)?
+        };
+        let (inner, renumber) = self.disjoint(left, inner)?;
+        let mut cond: Vec<Arc<Expr>> = corr.iter().map(|c| renumber.inner(c)).collect();
+        if let JoinCondition::On(on) = condition {
+            // The condition reads the right side's columns as renumbered.
+            cond.push(renumber.inner(on));
+        }
+        let joined = node(
+            PlanNode::Join {
+                left: Arc::clone(left),
+                right: inner,
+                kind,
+                condition: and_all(cond).map_or(JoinCondition::None, JoinCondition::On),
+            },
+            p.origin,
+        );
+        // The right side's columns come back under the attributes the plan
+        // above reads them as, where the join renumbered them.
+        let exprs = out
+            .iter()
+            .map(|c| {
+                let id = renumber.id(c.id);
+                if id == c.id {
+                    col_expr(c, Origin::UNKNOWN)
+                } else {
+                    let read = BoundColumn { id, ..c.clone() };
+                    alias(col_expr(&read, Origin::UNKNOWN), c)
+                }
+            })
+            .collect();
+        Ok(node(
+            PlanNode::Project {
+                input: joined,
+                exprs,
+            },
+            Origin::UNKNOWN,
+        ))
+    }
+
     /// Whether `e` holds a correlated subquery.
     fn reads_correlated(&mut self, e: &Arc<Expr>) -> bool {
         subqueries(e).iter().any(|s| self.correlated(s))
@@ -858,6 +995,55 @@ impl Rewriter {
         let (base, exprs) = self.existence(input, exprs)?;
         let (base, exprs) = self.scalars(base, exprs)?;
         Ok(node(PlanNode::Project { input: base, exprs }, p.origin))
+    }
+
+    /// An aggregate whose keys or calls (or their `FILTER`s) read a
+    /// correlated subquery: the subquery joins to the input below the
+    /// aggregate, which reads the join's column (Spark pushes the
+    /// expression into a projection under the aggregate).
+    fn aggregate(
+        &mut self,
+        p: &Arc<LogicalPlan>,
+        input: Arc<LogicalPlan>,
+        keys: &[Arc<Expr>],
+        aggregates: &[Arc<Expr>],
+    ) -> R<Arc<LogicalPlan>> {
+        let all: Vec<Arc<Expr>> = keys.iter().chain(aggregates).cloned().collect();
+        if !all
+            .iter()
+            .any(|e| self.reads_correlated(e) || self.existential(e))
+        {
+            return Ok(Arc::clone(p));
+        }
+        // Spark rejects a correlated scalar subquery here
+        // (`MUST_AGGREGATE_CORRELATED_SCALAR_SUBQUERY` for a key).
+        if all.iter().any(|e| {
+            subqueries(e).iter().any(|s| {
+                matches!(
+                    s.node,
+                    ExprNode::Subquery {
+                        kind: SubqueryKind::Scalar,
+                        ..
+                    }
+                ) && self.correlated(s)
+            })
+        }) {
+            return Err(unsupported(
+                "correlated subqueries outside a filter or a projection",
+                p.origin,
+            ));
+        }
+        let (base, all) = self.existence(input, all)?;
+        let (base, mut all) = self.scalars(base, all)?;
+        let aggregates = all.split_off(keys.len());
+        Ok(node(
+            PlanNode::Aggregate {
+                input: base,
+                grouping: Grouping::GroupBy(all),
+                aggregates,
+            },
+            p.origin,
+        ))
     }
 
     /// Whether `e` holds an `EXISTS` or `IN` subquery that an existence
@@ -984,7 +1170,7 @@ impl Rewriter {
     /// A predicate subquery as a semi or anti join of `left` with it.
     fn semi(&mut self, left: Arc<LogicalPlan>, pred: &Pred) -> R<Arc<LogicalPlan>> {
         let keep = !pred.values.is_empty();
-        let (inner, corr) = if on_path(&pred.plan, set_op_or_join) {
+        let (inner, corr) = if on_path(&pred.plan, needs_domain) {
             let (inner, inner_keys, outer_keys) = self.domain(&left, &pred.plan)?;
             let corr = inner_keys
                 .into_iter()
@@ -1226,64 +1412,7 @@ impl Rewriter {
     ) -> R<(Arc<LogicalPlan>, Vec<Arc<Expr>>)> {
         let unsupported_limit =
             || unsupported("a correlated subquery's LIMIT of this form", plan.origin);
-        // The analyzer puts a Project between the Limit and the Sort when
-        // the sort columns are not selected: the window ranks below it.
-        let ordered = |sort: &Arc<LogicalPlan>| match &sort.node {
-            PlanNode::Sort { input, order, .. }
-                if !order.iter().any(|o| has_outer(Node::Expr(&o.expr))) =>
-            {
-                Some((Arc::clone(input), order.clone()))
-            }
-            _ => None,
-        };
-        // The projection moves above the ranking filter, so a nondeterministic
-        // one would see only the kept rows.
-        if let PlanNode::Project { exprs, .. } = &input.node
-            && !exprs.iter().all(super::sqlfn::is_deterministic)
-        {
-            return Err(unsupported_limit());
-        }
-        // The select lists and derived tables above the sort rebuild above
-        // the ranking; they keep its order.
-        let mut layers = Vec::new();
-        let mut at = input;
-        loop {
-            match &at.node {
-                PlanNode::Project { input, exprs }
-                    if !exprs.iter().any(|e| has_outer(Node::Expr(e))) =>
-                {
-                    layers.push(at);
-                    at = input;
-                }
-                PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
-                    layers.push(at);
-                    at = input;
-                }
-                _ => break,
-            }
-        }
-        let (below, order) = match ordered(at) {
-            Some((below, order)) => {
-                let moves = |l: &&Arc<LogicalPlan>| match &l.node {
-                    PlanNode::Project { exprs, .. } => {
-                        !exprs.iter().all(super::sqlfn::is_deterministic)
-                    }
-                    _ => false,
-                };
-                if layers.iter().any(moves) {
-                    return Err(unsupported_limit());
-                }
-                (below, order)
-            }
-            None => {
-                layers.clear();
-                (Arc::clone(input), Vec::new())
-            }
-        };
-        // `pull` drops a sort, which is right only with no limit above it.
-        if order.is_empty() && sorts(&below) {
-            return Err(unsupported_limit());
-        }
+        let (below, order, layers) = peel_limit(plan, input)?;
         let (inner, corr) = self.pull(&below, true)?;
         let mut partition_by = Vec::new();
         for c in &corr {
@@ -1304,6 +1433,46 @@ impl Rewriter {
                 _ => return Err(unsupported_limit()),
             }
         }
+        let extra: Vec<BoundColumn> = corr.iter().flat_map(inner_columns).collect();
+        let out_plan = self.rank(plan, inner, partition_by, order, limit, &layers, &extra)?;
+        Ok((out_plan, corr))
+    }
+
+    /// `LIMIT limit` over `input` on a lateral join's correlation path: the
+    /// rows ranked up to `limit` within each domain value, in `input`'s
+    /// order. Returns the plan and the domain columns' renumbering.
+    fn limited_domain(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+        limit: &Arc<Expr>,
+        distinct: &Arc<LogicalPlan>,
+        domain: &[BoundColumn],
+    ) -> R<(Arc<LogicalPlan>, Renumber)> {
+        let (below, order, layers) = peel_limit(plan, input)?;
+        let (inner, renumber) = self.domained(&below, distinct, domain)?;
+        let extra = domain_columns(domain, renumber);
+        let partition_by = extra.iter().map(|c| col_expr(c, Origin::UNKNOWN)).collect();
+        let out_plan = self.rank(plan, inner, partition_by, order, limit, &layers, &extra)?;
+        Ok((out_plan, renumber))
+    }
+
+    /// The rows of `inner` ranked up to `limit` within each `partition_by`,
+    /// in `order`, under the `layers` the limit's input had; the `extra`
+    /// columns pass through the layers' projections.
+    #[expect(clippy::too_many_arguments, reason = "one step of two callers")]
+    fn rank(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        inner: Arc<LogicalPlan>,
+        partition_by: Vec<Arc<Expr>>,
+        order: Vec<SortOrder>,
+        limit: &Arc<Expr>,
+        layers: &[Arc<LogicalPlan>],
+        extra: &[BoundColumn],
+    ) -> R<Arc<LogicalPlan>> {
+        let unsupported_limit =
+            || unsupported("a correlated subquery's LIMIT of this form", plan.origin);
         let Some((id, kind)) = self.row_number.clone() else {
             return Err(unsupported_limit());
         };
@@ -1360,16 +1529,14 @@ impl Rewriter {
             plan.origin,
         );
         let mut out_plan = columns(filtered, &out);
-        for layer in layers.into_iter().rev() {
+        for layer in layers.iter().rev() {
             let rebuilt = match &layer.node {
                 PlanNode::Project { exprs, .. } => {
                     let mut exprs = exprs.clone();
                     let mut have: HashSet<AttrId> = output(layer)?.iter().map(|c| c.id).collect();
-                    for c in &corr {
-                        for col in inner_columns(c) {
-                            if have.insert(col.id) {
-                                exprs.push(col_expr(&col, Origin::UNKNOWN));
-                            }
+                    for col in extra {
+                        if have.insert(col.id) {
+                            exprs.push(col_expr(col, Origin::UNKNOWN));
                         }
                     }
                     PlanNode::Project {
@@ -1386,7 +1553,7 @@ impl Rewriter {
             };
             out_plan = node(rebuilt, layer.origin);
         }
-        Ok((out_plan, corr))
+        Ok(out_plan)
     }
 
     /// `right`, renumbered where its attribute ids would meet `left`'s (so
@@ -1461,6 +1628,9 @@ impl Rewriter {
         base: Arc<LogicalPlan>,
         plan: &Arc<LogicalPlan>,
     ) -> R<(Arc<LogicalPlan>, Arc<Expr>)> {
+        if let Some((agg, predicate, value)) = having_over_global(plan) {
+            return self.scalar_having(base, &agg, &predicate, &value);
+        }
         let PlanNode::Aggregate {
             input,
             grouping: Grouping::GroupBy(keys),
@@ -1509,7 +1679,9 @@ impl Rewriter {
         } else {
             None
         };
-        if on_path(input, set_op_or_join) {
+        if on_path(input, needs_domain)
+            || (non_equality_correlation(input) && deterministic_filters(input))
+        {
             if !keys.is_empty() {
                 return Err(unsupported(
                     "correlated scalar subqueries with GROUP BY",
@@ -1557,6 +1729,47 @@ impl Rewriter {
             &outer_keys,
             false,
         )
+    }
+
+    /// `(SELECT agg FROM .. WHERE <correlation> HAVING pred(agg))`: the
+    /// aggregate's value per outer row, NULL where the `HAVING` rejects it
+    /// (a global aggregate has one row, so a rejected row is no row). A
+    /// count over no matches is 0 and meets the `HAVING` as such.
+    fn scalar_having(
+        &mut self,
+        base: Arc<LogicalPlan>,
+        agg: &Arc<LogicalPlan>,
+        predicate: &Arc<Expr>,
+        value: &BoundColumn,
+    ) -> R<(Arc<LogicalPlan>, Arc<Expr>)> {
+        let (base, v) = self.scalar(base, agg)?;
+        let id = value.id;
+        let mut other = false;
+        let pred = Arc::clone(predicate).transform_up(&mut |x: Arc<Expr>| {
+            Ok::<_, std::convert::Infallible>(match &x.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == id => Arc::clone(&v),
+                ExprNode::Resolved(ResolvedExpr::Column(_)) => {
+                    other = true;
+                    x
+                }
+                _ => x,
+            })
+        });
+        let pred = pred.unwrap_or_else(|never| match never {});
+        if other || has_outer(Node::Expr(&pred)) || has_subquery(Node::Expr(&pred)) {
+            return Err(unsupported(
+                "a correlated scalar subquery of this shape",
+                predicate.origin,
+            ));
+        }
+        let null = Arc::new(Expr::literal(Literal::Null(Some(value.data_type.clone()))));
+        let guarded = call(
+            Builtin::When,
+            vec![pred, v, null],
+            value.data_type.clone(),
+            true,
+        );
+        Ok((base, guarded))
     }
 
     /// The left outer join of `base` with the aggregate of `inner` (the
@@ -1684,7 +1897,22 @@ impl Rewriter {
             ));
         };
         let value = value.clone();
-        let through_domain = on_path(plan, set_op_or_join);
+        // `(SELECT outer_col = 1)`: a select list over no relation is one
+        // row whatever the outer row, so its value is the expression read
+        // over the outer query's own columns.
+        if let PlanNode::Project { input, exprs } = &plan.node
+            && matches!(input.node, PlanNode::OneRowRelation)
+            && let [e] = &exprs[..]
+            && !has_subquery(Node::Expr(e))
+        {
+            let read = Renumber::NONE.inner(e);
+            let read = match &read.node {
+                ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => Arc::clone(expr),
+                _ => read,
+            };
+            return Ok((base, read));
+        }
+        let through_domain = on_path(plan, needs_domain);
         if !through_domain && aggregates_below(plan) {
             return Err(unsupported(
                 "a correlated scalar subquery of this shape",
@@ -1751,6 +1979,14 @@ impl Rewriter {
     /// outer columns they match, null-safely (a NULL outer value owns its
     /// own rows).
     fn domain(&mut self, base: &Arc<LogicalPlan>, input: &Arc<LogicalPlan>) -> R<Lifted> {
+        // The outer rows serve as the left input and under the domain: a
+        // nondeterministic outer input would be evaluated twice.
+        if !plan_is_deterministic(base) {
+            return Err(unsupported(
+                "a correlated subquery over a nondeterministic outer input",
+                input.origin,
+            ));
+        }
         let domain = plan_outer_columns(input);
         let visible: HashSet<AttrId> = output(base)?.iter().map(|c| c.id).collect();
         if !domain.iter().all(|c| visible.contains(&c.id)) {
@@ -1798,7 +2034,12 @@ impl Rewriter {
     ) -> R<(Arc<LogicalPlan>, Renumber)> {
         // Below the last set operation or join, the correlation lifts as
         // it does anywhere else and meets the domain in a join's condition.
-        if !on_path(plan, needs_domain) {
+        let hit: fn(&LogicalPlan) -> bool = if self.lateral {
+            lateral_hit
+        } else {
+            needs_domain
+        };
+        if !on_path_through(plan, hit, self.lateral) {
             let (inner, corr) = self.pull(plan, true)?;
             let (right, renumber) = self.shifted(Arc::clone(distinct))?;
             let cond = corr.iter().map(|c| renumber.outer(c)).collect();
@@ -1869,6 +2110,20 @@ impl Rewriter {
                 // No limit above (it stops the path): the order means nothing.
                 self.domained(input, distinct, domain)
             }
+            // A global aggregate has a row for an outer row without matches
+            // (a lateral join's right side): aggregated per domain value,
+            // it joins the domain on the left, and a row that found no
+            // match reads the aggregates over no rows.
+            PlanNode::Aggregate {
+                input,
+                grouping: Grouping::GroupBy(keys),
+                aggregates,
+            } if keys.is_empty() && self.lateral => {
+                if aggregates.iter().any(|e| has_outer(Node::Expr(e))) {
+                    return Err(correlated_reference(aggregates, plan.origin));
+                }
+                self.global_aggregate(plan, input, aggregates, distinct, domain)
+            }
             PlanNode::Aggregate {
                 input,
                 grouping: Grouping::GroupBy(keys),
@@ -1904,6 +2159,32 @@ impl Rewriter {
                     aggregates: aggregates.iter().chain(&extra).cloned().collect(),
                 };
                 Ok((node(agg, plan.origin), renumber))
+            }
+            PlanNode::Generate {
+                input,
+                kind,
+                outer,
+                arg,
+                output,
+                names,
+                qualifier,
+            } => {
+                let (inner, renumber) = self.domained(input, distinct, domain)?;
+                let generate = PlanNode::Generate {
+                    input: inner,
+                    kind: *kind,
+                    outer: *outer,
+                    arg: renumber.outer(arg),
+                    output: output.clone(),
+                    names: names.clone(),
+                    qualifier: qualifier.clone(),
+                };
+                Ok((node(generate, plan.origin), renumber))
+            }
+            PlanNode::Limit { input, limit }
+                if self.lateral && positive_literal(limit) && !has_outer(Node::Expr(limit)) =>
+            {
+                self.limited_domain(plan, input, limit, distinct, domain)
             }
             PlanNode::ReplicateRows { input, count } => {
                 let (inner, renumber) = self.domained(input, distinct, domain)?;
@@ -1945,6 +2226,115 @@ impl Rewriter {
                 plan.origin,
             )),
         }
+    }
+
+    /// A global aggregate `plan` (over `input`) on a lateral join's
+    /// correlation path: the aggregates per domain value, outer-joined to
+    /// the domain, with the value over no rows where nothing matched.
+    fn global_aggregate(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+        aggregates: &[Arc<Expr>],
+        distinct: &Arc<LogicalPlan>,
+        domain: &[BoundColumn],
+    ) -> R<(Arc<LogicalPlan>, Renumber)> {
+        let (inner, renumber) = self.domained(input, distinct, domain)?;
+        let keys: Vec<Arc<Expr>> = domain_columns(domain, renumber)
+            .iter()
+            .map(|c| col_expr(c, Origin::UNKNOWN))
+            .collect();
+        let out = output(plan)?;
+        let marker = BoundColumn {
+            id: self.fresh(),
+            name: "matched".to_owned(),
+            data_type: DataType::Boolean,
+            nullable: false,
+        };
+        // The aggregates under fresh attributes, then the keys and a marker.
+        let mut inner_out = Vec::with_capacity(out.len());
+        let mut grouped = Vec::with_capacity(aggregates.len() + keys.len() + 1);
+        let mut defaults = Vec::with_capacity(aggregates.len());
+        for (e, o) in aggregates.iter().zip(&out) {
+            let value = match &e.node {
+                ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => Arc::clone(expr),
+                _ => Arc::clone(e),
+            };
+            let fresh = BoundColumn {
+                id: self.fresh(),
+                ..o.clone()
+            };
+            defaults.push(over_no_rows(&value)?);
+            grouped.push(alias(value, &fresh));
+            inner_out.push(fresh);
+        }
+        grouped.extend(keys.iter().cloned());
+        grouped.push(alias(
+            Arc::new(Expr::literal(Literal::Boolean(true))),
+            &marker,
+        ));
+        let agg = node(
+            PlanNode::Aggregate {
+                input: inner,
+                grouping: Grouping::GroupBy(keys.clone()),
+                aggregates: grouped,
+            },
+            plan.origin,
+        );
+        let (domain_side, dom) = self.shifted(Arc::clone(distinct))?;
+        let cond = domain_columns(domain, dom)
+            .iter()
+            .zip(&keys)
+            .map(|(d, k)| {
+                boolean(
+                    Builtin::EqNullSafe,
+                    vec![col_expr(d, Origin::UNKNOWN), Arc::clone(k)],
+                )
+            })
+            .collect();
+        let join = node(
+            PlanNode::Join {
+                left: domain_side,
+                right: agg,
+                kind: JoinKind::LeftOuter,
+                condition: and_all(cond).map_or(JoinCondition::None, JoinCondition::On),
+            },
+            plan.origin,
+        );
+        let unmatched = boolean(
+            Builtin::IsNull,
+            vec![col_expr(
+                &BoundColumn {
+                    nullable: true,
+                    ..marker
+                },
+                Origin::UNKNOWN,
+            )],
+        );
+        let mut exprs: Vec<Arc<Expr>> = Vec::with_capacity(out.len() + domain.len());
+        for ((o, fresh), default) in out.iter().zip(&inner_out).zip(defaults) {
+            let read = col_expr(
+                &BoundColumn {
+                    nullable: true,
+                    ..fresh.clone()
+                },
+                Origin::UNKNOWN,
+            );
+            let value = call(
+                Builtin::When,
+                vec![Arc::clone(&unmatched), default, read],
+                o.data_type.clone(),
+                o.nullable,
+            );
+            exprs.push(alias(value, o));
+        }
+        exprs.extend(
+            domain_columns(domain, dom)
+                .iter()
+                .map(|c| col_expr(c, Origin::UNKNOWN)),
+        );
+        let project = PlanNode::Project { input: join, exprs };
+        Ok((node(project, plan.origin), dom))
     }
 
     /// A join on the correlation path: the domain goes under the side a
@@ -2149,10 +2539,98 @@ fn needs_domain(p: &LogicalPlan) -> bool {
             if exprs.iter().any(|e| has_outer(Node::Expr(e))))
 }
 
+/// [`needs_domain`], a limit (ranked within each domain value), a global
+/// aggregate (one row for every outer row, matches or not) or a grouped
+/// aggregate over a correlation that is not an equality (`pull` would group
+/// by the correlated column, which only an equality allows).
+fn lateral_hit(p: &LogicalPlan) -> bool {
+    needs_domain(p)
+        || matches!(&p.node, PlanNode::Limit { .. })
+        || matches!(&p.node, PlanNode::Aggregate { grouping: Grouping::GroupBy(keys), input, .. }
+            if keys.is_empty() || non_equality_correlation(input))
+}
+
+/// Whether a filter on the correlation path from `p` down holds an outer
+/// reference outside an equality of an inner column and an outer expression.
+fn non_equality_correlation(p: &LogicalPlan) -> bool {
+    match &p.node {
+        PlanNode::Filter { input, predicate } => {
+            // As `pull` reads it: the common conjuncts of a disjunction first.
+            let predicate = &factor_or(predicate);
+            conjuncts(predicate)
+                .iter()
+                .any(|c| has_outer(Node::Expr(c)) && !is_outer_equality(c))
+                || non_equality_correlation(input)
+        }
+        PlanNode::Project { input, .. }
+        | PlanNode::Generate { input, .. }
+        | PlanNode::Sort { input, .. } => non_equality_correlation(input),
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+            non_equality_correlation(input)
+        }
+        _ => false,
+    }
+}
+
+/// The select list of `p` when it is a projection over no relation (under
+/// plain aliases): one row whatever the outer row.
+fn one_row_select(p: &Arc<LogicalPlan>) -> Option<Vec<Arc<Expr>>> {
+    match &p.node {
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+            one_row_select(input)
+        }
+        PlanNode::Project { input, exprs } if matches!(input.node, PlanNode::OneRowRelation) => {
+            Some(exprs.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Whether no expression of the plan `p` is nondeterministic.
+fn plan_is_deterministic(p: &Arc<LogicalPlan>) -> bool {
+    visit_distinct(Node::Plan(p), |n| match n {
+        Node::Expr(e)
+            if matches!(
+                &e.node,
+                ExprNode::Resolved(ResolvedExpr::Function(f)) if !f.deterministic
+            ) =>
+        {
+            ControlFlow::Break(())
+        }
+        _ => ControlFlow::Continue(()),
+    })
+    .is_continue()
+}
+
+/// Whether every filter on the correlation path from `p` down is
+/// deterministic: a nondeterministic predicate lifted into a domain join's
+/// condition would be evaluated per domain row and inner row, not per row of
+/// the subquery's input.
+fn deterministic_filters(p: &LogicalPlan) -> bool {
+    match &p.node {
+        PlanNode::Filter { input, predicate } => {
+            super::sqlfn::is_deterministic(predicate) && deterministic_filters(input)
+        }
+        PlanNode::Project { input, .. }
+        | PlanNode::Generate { input, .. }
+        | PlanNode::Sort { input, .. } => deterministic_filters(input),
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+            deterministic_filters(input)
+        }
+        _ => true,
+    }
+}
+
 /// Whether `hit` holds on the correlation path from `p` down, through what
 /// [`Rewriter::domained`] goes through. A global aggregate ends the path: it
 /// has one row for an outer row without matches, which a domain would lose.
 fn on_path(p: &Arc<LogicalPlan>, hit: fn(&LogicalPlan) -> bool) -> bool {
+    on_path_through(p, hit, false)
+}
+
+/// [`on_path`], also through a global aggregate when `global` (a lateral
+/// join's right side: the domain is kept by an outer join above it).
+fn on_path_through(p: &Arc<LogicalPlan>, hit: fn(&LogicalPlan) -> bool, global: bool) -> bool {
     if !has_outer(Node::Plan(p)) {
         return false;
     }
@@ -2162,13 +2640,17 @@ fn on_path(p: &Arc<LogicalPlan>, hit: fn(&LogicalPlan) -> bool) -> bool {
     match &p.node {
         PlanNode::Project { input, .. }
         | PlanNode::Filter { input, .. }
-        | PlanNode::Sort { input, .. } => on_path(input, hit),
-        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => on_path(input, hit),
+        | PlanNode::Generate { input, .. }
+        | PlanNode::Sort { input, .. } => on_path_through(input, hit, global),
+        PlanNode::Limit { input, .. } if global => on_path_through(input, hit, global),
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+            on_path_through(input, hit, global)
+        }
         PlanNode::Aggregate {
             input,
             grouping: Grouping::GroupBy(keys),
             ..
-        } if !keys.is_empty() => on_path(input, hit),
+        } if !keys.is_empty() || global => on_path_through(input, hit, global),
         _ => false,
     }
 }
@@ -2233,6 +2715,120 @@ fn with_domain(
 ) -> Vec<BoundColumn> {
     out.extend(domain_columns(domain, renumber));
     out
+}
+
+/// `value` as the attribute `output`.
+fn alias(value: Arc<Expr>, output: &BoundColumn) -> Arc<Expr> {
+    Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+        expr: value,
+        output: output.clone(),
+    })))
+}
+
+/// `e`, an aggregate output, over no rows: each aggregate call read as its
+/// value over no input (`count` 0, the others NULL).
+fn over_no_rows(e: &Arc<Expr>) -> R<Arc<Expr>> {
+    Arc::clone(e).transform_up(&mut |x: Arc<Expr>| match &x.node {
+        ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
+            let zero = match f.id.name() {
+                "count" | "count_if" | "approx_count_distinct" => Literal::Long(0),
+                "sum" | "avg" | "min" | "max" | "any_value" | "first" | "last" | "first_value"
+                | "last_value" | "stddev" | "stddev_samp" | "stddev_pop" | "variance"
+                | "var_samp" | "var_pop" | "bool_and" | "bool_or" | "every" | "some" | "any"
+                | "bit_and" | "bit_or" | "bit_xor" | "median" | "mode" | "corr" => {
+                    Literal::Null(Some(f.data_type.clone()))
+                }
+                _ => {
+                    return Err(unsupported(
+                        "this aggregate in a lateral subquery over no rows",
+                        x.origin,
+                    ));
+                }
+            };
+            Ok(Arc::new(Expr::literal(zero)))
+        }
+        _ => Ok(x),
+    })
+}
+
+/// A `LIMIT`'s input split for ranking: what the limit reads rows of, the
+/// order it takes them in, and the select lists and derived tables above
+/// the sort, outermost first, which rebuild above the ranking.
+type PeeledLimit = (Arc<LogicalPlan>, Vec<SortOrder>, Vec<Arc<LogicalPlan>>);
+
+fn peel_limit(plan: &Arc<LogicalPlan>, input: &Arc<LogicalPlan>) -> R<PeeledLimit> {
+    let unsupported_limit =
+        || unsupported("a correlated subquery's LIMIT of this form", plan.origin);
+    // The analyzer puts a Project between the Limit and the Sort when
+    // the sort columns are not selected: the window ranks below it.
+    let ordered = |sort: &Arc<LogicalPlan>| match &sort.node {
+        PlanNode::Sort { input, order, .. }
+            if !order.iter().any(|o| has_outer(Node::Expr(&o.expr))) =>
+        {
+            Some((Arc::clone(input), order.clone()))
+        }
+        _ => None,
+    };
+    // The projection moves above the ranking filter, so a nondeterministic
+    // one would see only the kept rows.
+    if let PlanNode::Project { exprs, .. } = &input.node
+        && !exprs.iter().all(super::sqlfn::is_deterministic)
+    {
+        return Err(unsupported_limit());
+    }
+    // The select lists and derived tables above the sort rebuild above
+    // the ranking; they keep its order.
+    let mut layers = Vec::new();
+    let mut at = input;
+    loop {
+        match &at.node {
+            PlanNode::Project { input, exprs }
+                if !exprs.iter().any(|e| has_outer(Node::Expr(e))) =>
+            {
+                layers.push(Arc::clone(at));
+                at = input;
+            }
+            PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+                layers.push(Arc::clone(at));
+                at = input;
+            }
+            _ => break,
+        }
+    }
+    let (below, order) = match ordered(at) {
+        Some((below, order)) => {
+            let moves = |l: &Arc<LogicalPlan>| match &l.node {
+                PlanNode::Project { exprs, .. } => {
+                    !exprs.iter().all(super::sqlfn::is_deterministic)
+                }
+                _ => false,
+            };
+            if layers.iter().any(moves) {
+                return Err(unsupported_limit());
+            }
+            (below, order)
+        }
+        None => {
+            layers.clear();
+            (Arc::clone(input), Vec::new())
+        }
+    };
+    // `pull` drops a sort, which is right only with no limit above it.
+    if order.is_empty() && sorts(&below) {
+        return Err(unsupported_limit());
+    }
+    Ok((below, order, layers))
+}
+
+/// Whether `right` reads a column of `left`: a lateral join's right side.
+fn reads_left(left: &Arc<LogicalPlan>, right: &Arc<LogicalPlan>) -> bool {
+    let Ok(out) = output(left) else {
+        return false;
+    };
+    let ids: HashSet<AttrId> = out.iter().map(|c| c.id).collect();
+    plan_outer_columns(right)
+        .iter()
+        .any(|c| ids.contains(&c.id))
 }
 
 /// The outer columns `plan` reads, in the order they are met.
@@ -2394,6 +2990,59 @@ fn equality_keys(corr: &[Arc<Expr>], origin: Origin) -> R<Keys> {
         outer_keys.push(Arc::clone(o));
     }
     Ok((inner_keys, outer_keys))
+}
+
+/// `plan` as a global aggregate of one value under a `HAVING` (a filter on
+/// its value, possibly under a projection of that value): the aggregate, the
+/// predicate and the value's column.
+fn having_over_global(
+    plan: &Arc<LogicalPlan>,
+) -> Option<(Arc<LogicalPlan>, Arc<Expr>, BoundColumn)> {
+    let filter = match &plan.node {
+        PlanNode::Project { input, exprs } if exprs.len() == 1 => {
+            // The projection must be the aggregate's value itself.
+            let ExprNode::Resolved(ResolvedExpr::Column(c)) = &exprs[0].node else {
+                return None;
+            };
+            let PlanNode::Filter { input: agg, .. } = &input.node else {
+                return None;
+            };
+            let PlanNode::Aggregate { aggregates, .. } = &agg.node else {
+                return None;
+            };
+            let [item] = &aggregates[..] else {
+                return None;
+            };
+            let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &item.node else {
+                return None;
+            };
+            if output.id != c.id {
+                return None;
+            }
+            input
+        }
+        PlanNode::Filter { .. } => plan,
+        _ => return None,
+    };
+    let PlanNode::Filter { input, predicate } = &filter.node else {
+        return None;
+    };
+    let PlanNode::Aggregate {
+        grouping: Grouping::GroupBy(keys),
+        aggregates,
+        ..
+    } = &input.node
+    else {
+        return None;
+    };
+    let [item] = &aggregates[..] else {
+        return None;
+    };
+    let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &item.node else {
+        return None;
+    };
+    keys.is_empty()
+        .then(|| (Arc::clone(input), Arc::clone(predicate), output.clone()))
 }
 
 /// Spark's refusal of a correlated reference where it cannot be lifted, naming

@@ -743,10 +743,29 @@ impl Lowerer {
         Ok(plan)
     }
 
+    /// A `HAVING` condition as Spark's `AstBuilder` reads it: a predicate, or else cast to boolean.
+    fn having_predicate(&mut self, h: &Expr) -> R<Arc<IrExpr>> {
+        let predicate = self.expr(h)?;
+        Ok(arc(if is_predicate(&predicate) {
+            predicate
+        } else {
+            let span = h.span;
+            self.ex(
+                ExprNode::Cast {
+                    expr: arc(predicate),
+                    to: krishiv_types::DataType::Boolean,
+                    mode: CastMode::Default,
+                },
+                span,
+            )
+        }))
+    }
+
     fn pipe_op(&mut self, plan: LogicalPlan, op: &PipeOp) -> R<LogicalPlan> {
         let star = |l: &Self, except: Vec<Vec<String>>| {
             arc(l.ex(
                 ExprNode::Star(Star {
+                    regex: None,
                     replace: Vec::new(),
                     position: None,
                     qualifier: Vec::new(),
@@ -874,6 +893,7 @@ impl Lowerer {
                     let value = arc(self.expr(&a.value)?);
                     let star = self.ex(
                         ExprNode::Star(Star {
+                            regex: None,
                             qualifier: Vec::new(),
                             except: Vec::new(),
                             replace: vec![(name.value.clone(), value)],
@@ -926,6 +946,7 @@ impl Lowerer {
                     let key = match self.position(e) {
                         Some(position) => arc(self.ex(
                             ExprNode::Star(Star {
+                                regex: None,
                                 qualifier: Vec::new(),
                                 except: Vec::new(),
                                 replace: Vec::new(),
@@ -1105,7 +1126,13 @@ impl Lowerer {
                 },
                 item.span,
             ),
-            Some(_) => return Err(unsupported("multi-name aliases", item.span)),
+            Some(Alias::List(l)) => self.ex(
+                ExprNode::MultiAlias {
+                    expr: arc(e),
+                    names: l.iter().map(|n| n.value.clone()).collect(),
+                },
+                item.span,
+            ),
         }))
     }
 
@@ -1290,6 +1317,7 @@ impl Lowerer {
         );
         let star = self.ex(
             ExprNode::Star(Star {
+                regex: None,
                 replace: Vec::new(),
                 position: None,
                 qualifier: vec![qualifier],
@@ -1341,7 +1369,18 @@ impl Lowerer {
             }
             items.push(self.select_item(item)?);
         }
-        if s.group_by.is_none() && s.having.is_none() && !(aggregates && has_generator) {
+        // `spark.sql.legacy.parser.havingWithoutGroupByAsWhere`: a `HAVING` with no `GROUP BY` over
+        // a select list with no aggregate call filters the rows (as `WHERE` does; aggregates in
+        // it are `INVALID_WHERE_CONDITION`) instead of making the query one global group.
+        let having_filter = s.having_as_where
+            && s.group_by.is_none()
+            && s.having.is_some()
+            && !aggregates
+            && !has_generator;
+        if s.group_by.is_none()
+            && (s.having.is_none() || having_filter)
+            && !(aggregates && has_generator)
+        {
             plan = self.node(
                 PlanNode::Project {
                     input: arc(plan),
@@ -1349,6 +1388,16 @@ impl Lowerer {
                 },
                 s.span,
             );
+            if let Some(h) = s.having.as_ref().filter(|_| having_filter) {
+                let predicate = self.having_predicate(h)?;
+                plan = self.node(
+                    PlanNode::Filter {
+                        input: arc(plan),
+                        predicate,
+                    },
+                    s.span,
+                );
+            }
         } else {
             let grouping = match &s.group_by {
                 Some(g) => self.grouping(g)?,
@@ -1363,22 +1412,7 @@ impl Lowerer {
                 s.span,
             );
             if let Some(h) = &s.having {
-                let predicate = self.expr(h)?;
-                // As Spark's AstBuilder: a `HAVING` that is not a predicate is
-                // cast to boolean.
-                let predicate = arc(if is_predicate(&predicate) {
-                    predicate
-                } else {
-                    let span = h.span;
-                    self.ex(
-                        ExprNode::Cast {
-                            expr: arc(predicate),
-                            to: krishiv_types::DataType::Boolean,
-                            mode: CastMode::Default,
-                        },
-                        span,
-                    )
-                });
+                let predicate = self.having_predicate(h)?;
                 plan = self.node(
                     PlanNode::Filter {
                         input: arc(plan),
@@ -1583,7 +1617,11 @@ impl Lowerer {
                     PlanNode::Join {
                         left: arc(left),
                         right: arc(right),
-                        kind: IrJoin::Inner,
+                        kind: if r.lateral {
+                            IrJoin::LateralInner
+                        } else {
+                            IrJoin::Inner
+                        },
                         condition: JoinCondition::None,
                     },
                     r.span,
@@ -1608,9 +1646,6 @@ impl Lowerer {
     }
 
     fn relation(&mut self, r: &Relation) -> R<LogicalPlan> {
-        if r.lateral {
-            return Err(unsupported("LATERAL subqueries", r.span));
-        }
         // Spark rejects a relation carrying both clauses
         // (`NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT`, also raised for the
         // pipe-operator chain in the goldens): a `PIVOT ... UNPIVOT ...`
@@ -1646,10 +1681,23 @@ impl Lowerer {
 
     /// `[INNER] JOIN right constraint` onto `plan`.
     fn join(&mut self, plan: LogicalPlan, j: &Join) -> R<LogicalPlan> {
-        if j.lateral {
-            return Err(unsupported("LATERAL joins", j.span));
-        }
         let kind = match j.kind {
+            JoinKind::Inner | JoinKind::Cross if j.lateral => IrJoin::LateralInner,
+            JoinKind::Left if j.lateral => IrJoin::LateralLeft,
+            kind if j.lateral => {
+                let join_type = match kind {
+                    JoinKind::Right => "RIGHT OUTER",
+                    JoinKind::Full => "FULL OUTER",
+                    JoinKind::LeftSemi => "LEFT SEMI",
+                    _ => "LEFT ANTI",
+                };
+                return Err(err(
+                    krishiv_common::error::InvalidLateralJoinType {
+                        join_type: join_type.to_owned(),
+                    },
+                    j.span,
+                ));
+            }
             JoinKind::Inner => IrJoin::Inner,
             JoinKind::Cross => IrJoin::Cross,
             JoinKind::Left => IrJoin::LeftOuter,
@@ -2045,7 +2093,11 @@ impl Lowerer {
                     base
                 }
             }
-            ExprKind::Wildcard { qualifier, except } => self.ex(
+            ExprKind::Wildcard {
+                qualifier,
+                except,
+                regex,
+            } => self.ex(
                 ExprNode::Star(Star {
                     replace: Vec::new(),
                     position: None,
@@ -2054,6 +2106,7 @@ impl Lowerer {
                         .iter()
                         .map(|n| n.parts.iter().map(|p| p.value.clone()).collect())
                         .collect(),
+                    regex: regex.as_deref().map(str::to_owned),
                     plan_id: None,
                 }),
                 sp,
