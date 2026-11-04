@@ -564,6 +564,43 @@ async fn hf_without_a_token_on_a_gated_dataset_is_a_store_error() {
     assert!(sched.context().head(&store, &path).await.unwrap().is_some());
 }
 
+/// A per-read `fs.hf.endpoint` is the caller's host: the session's `fs.hf.token` is withheld from it, and
+/// only a token given in the same per-read options goes there.
+#[tokio::test]
+async fn hf_session_token_is_withheld_from_a_per_read_endpoint() {
+    use krishiv_common::secret::OptionValue;
+    use std::collections::BTreeMap;
+    let body = parquet_bytes();
+    let server = serve(body.clone());
+    let endpoint = format!("http://127.0.0.1:{}", server.port);
+    let config = test_config(&[("fs.hf.token", "hf_Session-1")]);
+    for (per_read_token, want) in [(false, None), (true, Some("Bearer hf_Caller-2"))] {
+        let mut options = BTreeMap::new();
+        options.insert(
+            "fs.hf.endpoint".to_owned(),
+            OptionValue::from_user("fs.hf.endpoint", endpoint.clone()),
+        );
+        if per_read_token {
+            options.insert(
+                "fs.hf.token".to_owned(),
+                OptionValue::from_user("fs.hf.token", "hf_Caller-2"),
+            );
+        }
+        server.log.lock().unwrap().clear();
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let registry = StoreRegistry::new(Arc::clone(&config));
+        let (store, path, _) = registry
+            .ensure_with_options(&sched, "hf://datasets/acme/tiny/data/t.parquet", &options)
+            .unwrap();
+        assert!(sched.context().head(&store, &path).await.unwrap().is_some());
+        let log = server.log.lock().unwrap();
+        assert!(!log.is_empty());
+        for (_, _, auth) in log.iter() {
+            assert_eq!(auth.as_deref(), want, "per-read token: {per_read_token}");
+        }
+    }
+}
+
 /// The commit log relies on `PutMode::Create` (`If-None-Match: *`): of two
 /// creates of one object, the second must fail as "exists", and the first
 /// writer's bytes must stay (P2-T082b).

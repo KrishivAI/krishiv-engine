@@ -506,12 +506,14 @@ fn hf_store(
         url.bucket,
         url.revision.as_deref().unwrap_or("main")
     );
-    // The server's `HF_TOKEN` goes only to the host the server chose (the default or a session
-    // setting): a per-read `fs.hf.endpoint` is the caller's, and must not receive it.
+    // The server's tokens (`HF_TOKEN`, a session `fs.hf.token`) go only to the host the server chose (the
+    // default or a session setting): a per-read `fs.hf.endpoint` is the caller's, and must not receive them.
+    // The session's `fs.hf.token` is withheld from a per-read endpoint too; only a per-read token goes there.
     let caller_endpoint = find_option(options, HF_ENDPOINT).is_some();
+    let caller_token = find_option(options, HF_TOKEN).is_some();
     let token = match cred(config, options, HF_TOKEN)? {
+        _ if caller_endpoint && !caller_token => None,
         Some(token) => Some(token),
-        None if caller_endpoint => None,
         None => std::env::var("HF_TOKEN")
             .ok()
             .filter(|t| !t.is_empty())

@@ -151,6 +151,8 @@ class ProfileView:
             out.append(f'<span class="num">facts</span><span class="num">{escape(" · ".join(facts))}</span></div>')
             return "".join(out)
 
+        placed: set[int] = set()  # node ids of the plan nodes the tree shows
+
         def plan_html() -> str:
             # Iterative, so a deep plan cannot hit the recursion limit, and every node is
             # rendered at most once: a malformed document with shared or cyclic children
@@ -166,6 +168,8 @@ class ProfileView:
                     continue
                 node = plan[item]
                 ident = node.get("id")
+                if ident is not None:
+                    placed.add(int(ident))
                 ops = "".join(operator_block(op) for op in by_node.get(int(ident), [])) if ident is not None else ""
                 out.append(
                     f'<li><div class="node"><span class="name">{escape(str(node["name"]))}</span>'
@@ -204,6 +208,8 @@ class ProfileView:
             "<h2>Plan</h2>",
             f"<ul>{plan_html()}</ul>" if plan else "<p>(empty plan)</p>",
         ]
+        # Operators with no node, or a node the plan does not show, are listed rather than dropped.
+        loose += [op for node, ops in by_node.items() if node not in placed for op in ops]
         if loose:
             parts.append("<h2>Result</h2>" + "".join(operator_block(op) for op in loose))
         pipelines = doc["pipelines"]

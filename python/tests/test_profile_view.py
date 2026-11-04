@@ -265,3 +265,12 @@ def test_the_q9_page_shows_every_operator_and_pipeline() -> None:
     assert html.count('class="op"') == len(doc["operators"])
     for pipeline in doc["pipelines"]:
         assert f"pipeline {pipeline['id']}" in html
+
+
+def test_operators_whose_node_is_not_in_the_plan_are_listed_under_result() -> None:
+    doc = profile()
+    doc["operators"][0]["node"] = 999  # no such plan node
+    doc["operators"][0]["name"] = "OrphanOperator"
+    html = ProfileView(doc).to_html()
+    assert html.count("OrphanOperator") == 1
+    assert html.index("OrphanOperator") > html.index("<h2>Result</h2>")
