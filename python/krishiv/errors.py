@@ -227,7 +227,7 @@ class PySparkException(Exception):
         message: str | None = None,
         errorClass: str | None = None,
         messageParameters: dict[str, Any] | None = None,
-        contexts: list[QueryContext] | list[tuple] | None = None,
+        contexts: list[QueryContext] | list[tuple[Any, ...]] | None = None,
         sqlState: str | None = None,
         rendered: str | None = None,
     ) -> None:
@@ -417,7 +417,7 @@ def _from_native(
     sql_state: str | None,
     message: str,
     parameters: dict[str, str],
-    contexts: list[tuple] | None = None,
+    contexts: list[tuple[Any, ...]] | None = None,
     rendered: str | None = None,
 ) -> PySparkException:
     """The exception for an engine error (called by ``krishiv._native``); ``rendered`` is

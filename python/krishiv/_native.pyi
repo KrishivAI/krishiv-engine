@@ -29,6 +29,7 @@ __all__ = [
     "count_star",
     "expr",
     "lit",
+    "map_literal",
 ]
 
 @final

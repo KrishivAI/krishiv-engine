@@ -16,7 +16,7 @@ their types.
 from __future__ import annotations
 
 import datetime
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from decimal import Decimal
 from functools import reduce
 from typing import Any, cast
@@ -139,7 +139,8 @@ def infer_schema(rows: list[list[Any]], names: list[str], timestamp_ntz: bool = 
     holds empty lists and dicts)."""
     if not rows:
         raise PySparkValueError(errorClass="CANNOT_INFER_EMPTY_SCHEMA")
-    merged = reduce(merge_type, (infer_row(row, names, timestamp_ntz) for row in rows))
+    row_types: Iterable[DataType] = (infer_row(row, names, timestamp_ntz) for row in rows)
+    merged = reduce(merge_type, row_types)
     if has_nulltype(merged):
         raise PySparkValueError(errorClass="CANNOT_DETERMINE_TYPE")
     return cast(StructType, merged)
