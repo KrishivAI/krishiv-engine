@@ -2414,6 +2414,10 @@ name = "krishiv-state"
 version = "0.1.0-alpha"
 
 [[package]]
+name = "krishiv-store"
+version = "0.1.0-alpha"
+
+[[package]]
 name = "krishiv-stream"
 version = "0.1.0-alpha"
 

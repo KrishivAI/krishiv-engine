@@ -1,0 +1,17 @@
+[package]
+name = "krishiv-store"
+description = "Object-store layer shared by the Krishiv engine and platform: URLs, store building, credentials (ADR 0044)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Meant to be published (ADR 0044); stays unpublished until the owner's first release of it.
+publish = false
+
+[lints]
+workspace = true
+
+# Dependencies arrive with the code (unit S1 of design/P3-shared-storage-layer.md):
+# krishiv-common and object_store only (layer L1).
+[dependencies]
