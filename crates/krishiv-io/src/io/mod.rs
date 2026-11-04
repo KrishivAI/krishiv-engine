@@ -22,6 +22,7 @@
 
 #[cfg(unix)]
 pub mod beneath;
+pub mod block_cache;
 pub mod cache;
 mod coalesce;
 pub mod fault;
@@ -35,6 +36,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -42,9 +44,11 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::future::{BoxFuture, try_join_all};
 use krishiv_common::config::{
-    Config, ConfigValue, IO_COALESCE_BYTES, IO_COALESCE_WASTE_BYTES, IO_COALESCE_WASTE_DIVISOR,
-    IO_FOOTER_READ_BYTES, IO_MAX_CONCURRENT_REQUESTS, IO_MAX_REQUEST_BYTES, IO_MAX_RETRIES,
-    IO_METADATA_CACHE_BYTES, IO_MULTIPART_PART_BYTES, IO_REQUEST_TIMEOUT,
+    Config, ConfigValue, IO_CACHE_BLOCK_BYTES, IO_CACHE_DISK_BYTES, IO_CACHE_ENABLED,
+    IO_CACHE_MEMORY_BYTES, IO_CACHE_PATH, IO_COALESCE_BYTES, IO_COALESCE_WASTE_BYTES,
+    IO_COALESCE_WASTE_DIVISOR, IO_FOOTER_READ_BYTES, IO_MAX_CONCURRENT_REQUESTS,
+    IO_MAX_REQUEST_BYTES, IO_MAX_RETRIES, IO_METADATA_CACHE_BYTES, IO_MULTIPART_PART_BYTES,
+    IO_REQUEST_TIMEOUT,
 };
 use krishiv_common::secret::{OptionValue, SecretString};
 use krishiv_memory::{ConsumerHandle, MemoryPool, Reservation};
@@ -54,6 +58,9 @@ use object_store::{
 };
 use tokio::sync::Semaphore;
 
+pub use self::block_cache::{
+    BlockCache, BlockCacheConfig, CacheStats as BlockCacheStats, CachingStore, ObjectSize,
+};
 pub use self::cache::{CacheKey, CacheStats, MetadataCache};
 pub use self::coalesce::{Coalesced, Waste, coalesce, coalesce_with};
 pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
@@ -290,6 +297,8 @@ pub struct IoConfig {
     pub retry_max: Duration,
     /// Seed of the jitter (deterministic tests).
     pub seed: u64,
+    /// The local block cache of remote reads (`krishiv.io.cache.*`); `None`: off.
+    pub block_cache: Option<BlockCacheConfig>,
 }
 
 impl Default for IoConfig {
@@ -344,6 +353,25 @@ impl IoConfig {
             retry_base: Duration::from_millis(50),
             retry_max: Duration::from_secs(10),
             seed: 0x5EED,
+            block_cache: c
+                .get(&IO_CACHE_ENABLED)
+                .and_then(ConfigValue::as_bool)
+                .unwrap_or(false)
+                .then(|| BlockCacheConfig {
+                    dir: c
+                        .get(&IO_CACHE_PATH)
+                        .and_then(ConfigValue::as_str)
+                        .map_or_else(
+                            || {
+                                std::env::temp_dir()
+                                    .join(format!("krishiv-block-cache-{}", user_suffix()))
+                            },
+                            PathBuf::from,
+                        ),
+                    disk_bytes: size_of(c, &IO_CACHE_DISK_BYTES, 10 << 30),
+                    memory_bytes: size_of(c, &IO_CACHE_MEMORY_BYTES, 64 << 20),
+                    block_bytes: size_of(c, &IO_CACHE_BLOCK_BYTES, 1 << 20),
+                }),
         }
     }
 }
@@ -416,6 +444,8 @@ pub struct IoScheduler {
     config: IoConfig,
     stores: RwLock<HashMap<StoreId, Registered>>,
     cache: MetadataCache,
+    /// The local block cache of remote reads, when `krishiv.io.cache.enabled`.
+    block_cache: Option<Arc<BlockCache>>,
     runtime: Option<tokio::runtime::Handle>,
     totals: IoCounters,
     jitter: AtomicU64,
@@ -444,7 +474,14 @@ impl IoScheduler {
     }
 
     fn build(config: IoConfig, runtime: Option<tokio::runtime::Handle>) -> Arc<Self> {
+        // A cache that cannot start (no directory) is off, never an error.
+        let block_cache = config.block_cache.clone().and_then(|c| {
+            BlockCache::new(c)
+                .inspect_err(|e| tracing::warn!("the block cache is off: {e}"))
+                .ok()
+        });
         Arc::new(Self {
+            block_cache,
             cache: MetadataCache::new(config.metadata_cache_bytes),
             jitter: AtomicU64::new(config.seed),
             config,
@@ -484,6 +521,13 @@ impl IoScheduler {
         policy: StorePolicy,
         whole_listing: bool,
     ) {
+        // Remote reads go through the block cache (local files never do).
+        let store: Arc<dyn ObjectStore> = match &self.block_cache {
+            Some(cache) if id.is_remote() => {
+                Arc::new(CachingStore::new(store, id.to_string(), Arc::clone(cache)))
+            }
+            _ => store,
+        };
         let lane = Arc::new(Lane {
             permits: Semaphore::new(self.config.max_concurrent_requests),
             pacer: Pacer::new(policy),
@@ -529,6 +573,15 @@ impl IoScheduler {
     /// [`MetadataCache::attach_pool`]).
     pub fn attach_memory(&self, pool: &Arc<dyn MemoryPool>) {
         self.cache.attach_pool(pool);
+        if let Some(c) = &self.block_cache {
+            c.attach_pool(pool);
+        }
+    }
+
+    /// What the block cache has done (`None` when it is off).
+    #[must_use]
+    pub fn block_cache_stats(&self) -> Option<BlockCacheStats> {
+        self.block_cache.as_ref().map(|c| c.stats())
     }
 
     /// The metadata cache.
@@ -953,9 +1006,11 @@ impl IoContext {
             let outcome = {
                 let _permit = lane.admit(Direction::Read, &file.path).await?;
                 self.count(|c| &c.requests, 1);
+                let mut extensions = ScheduledRequest.into_extensions();
+                extensions.insert(ObjectSize(file.size));
                 let mut opts = GetOptions {
                     range: Some(GetRange::Bounded(range.clone())),
-                    extensions: ScheduledRequest.into_extensions(),
+                    extensions,
                     ..GetOptions::default()
                 };
                 match &file.version {
@@ -1537,4 +1592,19 @@ impl<T> Drop for AbortOnDrop<T> {
 }
 
 #[cfg(test)]
+mod block_cache_tests;
+#[cfg(test)]
 mod tests;
+
+/// The user's id for the name of a per-user default directory (as the spill directory's):
+/// the effective user id on Unix (the one files are created with), else empty.
+fn user_suffix() -> String {
+    #[cfg(unix)]
+    {
+        rustix::process::geteuid().as_raw().to_string()
+    }
+    #[cfg(not(unix))]
+    {
+        String::new()
+    }
+}

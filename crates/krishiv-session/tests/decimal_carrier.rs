@@ -211,7 +211,10 @@ fn file_formats_round_trip_both_carriers() {
                 // The reader's own tests read CSV on both carriers.
                 let mut text = String::new();
                 for file in std::fs::read_dir(path).unwrap() {
-                    text += &std::fs::read_to_string(file.unwrap().path()).unwrap();
+                    let file = file.unwrap();
+                    if file.file_name() != "_krishiv_log" {
+                        text += &std::fs::read_to_string(file.path()).unwrap();
+                    }
                 }
                 assert!(text.contains("1.50") && text.contains("-2.75"), "{text}");
                 continue;

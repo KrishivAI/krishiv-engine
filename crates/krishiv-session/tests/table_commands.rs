@@ -294,6 +294,22 @@ fn ctas_writes_then_adds_the_table() {
     assert_eq!(class(&s, "SELECT * FROM bad"), "TABLE_OR_VIEW_NOT_FOUND");
 }
 
+/// A CTAS that fails while writing removes the directory it made, so the
+/// same statement can be retried (and then succeeds).
+#[test]
+fn a_failed_ctas_leaves_no_directory_and_can_be_retried() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "SET spark.sql.ansi.enabled = true");
+    let _ = err(
+        &s,
+        "CREATE TABLE w USING parquet AS SELECT CAST('x' AS INT) AS a",
+    );
+    assert!(!dir.path().join("w").exists());
+    run(&s, "CREATE TABLE w USING parquet AS SELECT 1 AS a");
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM w"), ["1"]);
+}
+
 #[test]
 fn create_table_like_copies_columns() {
     let dir = tempfile::tempdir().unwrap();
@@ -560,9 +576,12 @@ fn insert_overwrite_never_loses_the_old_rows_before_the_new_ones_are_complete() 
     // manifest commit of P2-T082b) both: never fewer rows than the smaller side, and never none. The directory
     // listing re-reads a directory in which an entry vanished, so a file replaced mid-listing is replaced in
     // it. Until that commit a reader that listed the old files can also lose one to the overwrite's cleanup:
-    // that is the only error allowed.
+    // that is the only error allowed (with the commit log, which is the default, the read says
+    // `KRISHIV_CONCURRENT_COMMIT` instead: retry it).
     assert!(
-        errors.iter().all(|e| e.contains("FILE_NOT_EXIST")),
+        errors
+            .iter()
+            .all(|e| e.contains("FILE_NOT_EXIST") || e.contains("KRISHIV_CONCURRENT_COMMIT")),
         "{errors:?}"
     );
     let allowed: std::collections::BTreeSet<&str> = ["3", "5", "8"].into();
@@ -956,4 +975,23 @@ fn insert_values_refuse_scalar_subqueries() {
     );
     // Without a subquery nothing changes.
     run(&s, "INSERT INTO t VALUES (1), (2)");
+}
+
+/// A CTAS owns the directory it makes: a concurrent or earlier one at the same location is never
+/// touched by a failure, and a dropped (cancelled) statement removes only what it made.
+#[test]
+fn a_failed_ctas_never_removes_a_directory_it_did_not_create() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "SET spark.sql.ansi.enabled = true");
+    // Another statement's table directory with data in it.
+    let other = dir.path().join("w");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("keep.txt"), b"data").unwrap();
+    let e = err(
+        &s,
+        "CREATE TABLE w USING parquet AS SELECT CAST('x' AS INT) AS a",
+    );
+    assert_eq!(e.error_class().name(), "LOCATION_ALREADY_EXISTS", "{e}");
+    assert_eq!(std::fs::read(other.join("keep.txt")).unwrap(), b"data");
 }

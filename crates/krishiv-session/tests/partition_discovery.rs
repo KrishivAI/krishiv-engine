@@ -58,6 +58,10 @@ fn written(s: &Session, dir: &std::path::Path, years: &[i32], regions: &[Option<
     )
     .unwrap();
     s.register_batches("t", schema, vec![batch]).unwrap();
+    // The tests add files the way another engine would; a log would hide them.
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "NONE")
+        .unwrap();
     let root = dir.join("t");
     let root = root.to_str().unwrap().to_owned();
     block_on(
@@ -264,7 +268,8 @@ fn base_path_keeps_partition_columns_of_a_subdirectory() {
         .read()
         .option("basePath", other.path().to_str().unwrap())
         .parquet([sub.as_str()]);
-    assert!(block_on(df.schema()).is_err());
+    let e = block_on(df.schema()).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
 }
 
 #[test]

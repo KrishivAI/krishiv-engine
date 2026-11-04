@@ -228,7 +228,7 @@ fn csv_shortcut_round_trips_with_options() {
     let mut header = false;
     for entry in std::fs::read_dir(dir.path().join("t")).unwrap() {
         let entry = entry.unwrap();
-        if entry.file_name() != "_SUCCESS" {
+        if entry.file_name() != "_SUCCESS" && entry.file_name() != "_krishiv_log" {
             let text = std::fs::read_to_string(entry.path()).unwrap();
             header |= text.lines().next().is_some_and(|line| line == "id|name");
         }
@@ -541,6 +541,7 @@ fn csv_compression_codecs_write_suffixed_files_that_read_back() {
         let names: Vec<String> = std::fs::read_dir(&path)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n != "_krishiv_log")
             .collect();
         assert!(
             names.iter().any(|n| n.ends_with(suffix)),
@@ -567,7 +568,11 @@ fn csv_unknown_compression_codec_fails_with_codec_not_available() {
         err.error_class().name(),
         "CODEC_NOT_AVAILABLE.WITH_AVAILABLE_CODECS_SUGGESTION"
     );
-    assert!(!dir.path().join("t").exists());
+    // Nothing is written; the commit log of the new directory (initialized before the files) may be there.
+    let left: Vec<_> = std::fs::read_dir(dir.path().join("t"))
+        .map(|d| d.map(|e| e.unwrap().file_name()).collect())
+        .unwrap_or_default();
+    assert!(left.iter().all(|n| n == "_krishiv_log"), "{left:?}");
 }
 
 #[test]

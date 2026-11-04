@@ -184,6 +184,42 @@ async fn a_checkpoint_bounds_replay_and_equals_the_full_replay() {
 }
 
 #[tokio::test]
+async fn a_checkpoint_of_a_newer_format_is_refused() {
+    let s = setup();
+    let l = log(&s);
+    let mut base = None;
+    for i in 0..CHECKPOINT_EVERY {
+        base = Some(
+            l.commit(
+                base,
+                &entry(
+                    &format!("w{i}"),
+                    CommitMode::Append,
+                    &[&format!("f{i:03}")],
+                    &[],
+                ),
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let at = Path::from(format!(
+        "t/_krishiv_log/{:020}.checkpoint.json",
+        CHECKPOINT_EVERY - 1
+    ));
+    let body = s.inner.get(&at).await.unwrap().bytes().await.unwrap();
+    let mut v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    v["format"] = serde_json::json!(FORMAT + 1);
+    s.inner
+        .put(&at, serde_json::to_vec(&v).unwrap().into())
+        .await
+        .unwrap();
+    let e = l.snapshot().await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivCommitLogCorrupt);
+    assert!(e.to_string().contains("newer"), "{e}");
+}
+
+#[tokio::test]
 async fn a_gap_is_corruption() {
     let s = setup();
     let l = log(&s);

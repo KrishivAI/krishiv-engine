@@ -609,7 +609,16 @@ impl ObjectStore for BeneathStore {
                         name.as_str(),
                         AtFlags::empty(),
                     )
-                    .map_err(|e| errno(&location, e))
+                    .map_err(|e| match e {
+                        // The file system cannot make hard links: put-if-absent is unsupported
+                        // here (the commit protocol then falls back or refuses by its setting).
+                        Errno::PERM | Errno::OPNOTSUPP | Errno::NOSYS => {
+                            object_store::Error::NotSupported {
+                                source: Box::new(std::io::Error::from(e)),
+                            }
+                        }
+                        e => errno(&location, e),
+                    })
                 } else {
                     renameat(&parent, staging.as_str(), &parent, name.as_str())
                         .map_err(|e| errno(&location, e))
@@ -655,22 +664,25 @@ impl ObjectStore for BeneathStore {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> StoreResult<GetResult> {
         let head = options.head;
-        let range = options.range;
+        let range = options.range.clone();
         let store = self.clone();
         let location = location.clone();
         blocking(move || {
             let (parent, name) = store.parent_and_name(&location, false)?;
-            let st = statat(&parent, name.as_str(), AtFlags::SYMLINK_NOFOLLOW)
-                .map_err(|e| errno(&location, e))?;
-            // A directory is not an object.
-            if FileType::from_raw_mode(st.st_mode) == FileType::Directory {
-                return Err(object_store::Error::NotFound {
-                    path: location.to_string(),
-                    source: Box::new(std::io::Error::other("is a directory")),
-                });
-            }
-            let meta = meta_of(location.clone(), &st);
+            // A head only needs the metadata: it is read without opening the file (no read
+            // permission, no wait on a FIFO), and a link is an object of its own (its size is its
+            // target path's length).
             if head {
+                let st = statat(&parent, name.as_str(), AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(|e| errno(&location, e))?;
+                if FileType::from_raw_mode(st.st_mode) == FileType::Directory {
+                    return Err(object_store::Error::NotFound {
+                        path: location.to_string(),
+                        source: Box::new(std::io::Error::other("is a directory")),
+                    });
+                }
+                let meta = meta_of(location.clone(), &st);
+                options.check_preconditions(&meta)?;
                 return Ok(GetResult {
                     payload: GetResultPayload::Stream(futures::stream::empty().boxed()),
                     range: 0..meta.size,
@@ -679,17 +691,35 @@ impl ObjectStore for BeneathStore {
                     extensions: Default::default(),
                 });
             }
-            // A body is read whole (the objects read through this store are
-            // small log entries), without following a link.
+            // A body: one descriptor for the metadata, the preconditions and the bytes, without
+            // following a link, so a concurrent publish cannot pair the old file's metadata with
+            // the new bytes. Non-blocking, so a FIFO is not waited on.
             let fd = openat(
                 &parent,
                 name.as_str(),
                 OFlags::RDONLY
                     .union(OFlags::NOFOLLOW)
+                    .union(OFlags::NONBLOCK)
                     .union(OFlags::CLOEXEC),
                 Mode::empty(),
             )
-            .map_err(|e| errno(&location, e))?;
+            .map_err(|e| match e {
+                // A link (`ELOOP`, or `EMLINK` on some systems) is not read through.
+                Errno::LOOP | Errno::MLINK => violation(&location, "a link is not read through"),
+                e => errno(&location, e),
+            })?;
+            let st = rustix::fs::fstat(&fd).map_err(|e| errno(&location, e))?;
+            // A directory is not an object; only a regular file has a body (a FIFO or a device
+            // would block or never end).
+            if FileType::from_raw_mode(st.st_mode) != FileType::RegularFile {
+                return Err(object_store::Error::NotFound {
+                    path: location.to_string(),
+                    source: Box::new(std::io::Error::other("not a regular file")),
+                });
+            }
+            let meta = meta_of(location.clone(), &st);
+            options.check_preconditions(&meta)?;
+            // A body is read whole (the objects read through this store are small log entries).
             let mut body = Vec::new();
             std::io::Read::read_to_end(&mut File::from(fd), &mut body).map_err(io_err)?;
             let size = body.len() as u64;

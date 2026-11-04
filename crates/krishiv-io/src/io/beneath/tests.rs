@@ -147,6 +147,196 @@ async fn create_mode_publishes_once_and_never_overwrites() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn exactly_one_of_many_concurrent_creates_wins() {
+    for components in [false, true] {
+        let f = fixture();
+        let s = store(&f, components);
+        let at = obj(&f, "t/log/0");
+        let mut tasks = Vec::new();
+        for i in 0..8_u8 {
+            let (s, at) = (s.clone(), at.clone());
+            tasks.push(tokio::spawn(async move {
+                s.put_opts(
+                    &at,
+                    PutPayload::from(Bytes::from(vec![i; 16])),
+                    PutOptions {
+                        mode: object_store::PutMode::Create,
+                        ..PutOptions::default()
+                    },
+                )
+                .await
+            }));
+        }
+        let mut wins = 0;
+        for t in tasks {
+            match t.await.unwrap() {
+                Ok(_) => wins += 1,
+                Err(object_store::Error::AlreadyExists { .. }) => {}
+                Err(e) => panic!("{e}"),
+            }
+        }
+        assert_eq!(wins, 1, "components = {components}");
+        // The file holds one writer's whole body and no staging file is left.
+        let body = std::fs::read(f.root.join("a/t/log/0")).unwrap();
+        assert_eq!(body.len(), 16);
+        assert!(body.iter().all(|b| *b == body[0]));
+        assert_eq!(tree(&f.root.join("a/t/log")).len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn ranges_heads_links_and_conditions_read_as_asked() {
+    use object_store::GetRange;
+    for components in [false, true] {
+        let f = fixture();
+        let s = store(&f, components);
+        put(&s, &obj(&f, "t/x"), b"0123456789").await.unwrap();
+        let read = |range: Option<GetRange>| {
+            let s = s.clone();
+            let at = obj(&f, "t/x");
+            async move {
+                s.get_opts(
+                    &at,
+                    GetOptions {
+                        range,
+                        ..GetOptions::default()
+                    },
+                )
+                .await
+            }
+        };
+        for (range, want) in [
+            (GetRange::Bounded(2..5), &b"234"[..]),
+            (GetRange::Offset(7), b"789"),
+            (GetRange::Suffix(4), b"6789"),
+        ] {
+            let got = read(Some(range)).await.unwrap().bytes().await.unwrap();
+            assert_eq!(&got[..], want);
+        }
+        // A range past the end is cut to it; one that starts beyond it is an error.
+        let cut = read(Some(GetRange::Bounded(8..20)))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(&cut[..], b"89");
+        assert!(read(Some(GetRange::Bounded(11..12))).await.is_err());
+        assert!(read(Some(GetRange::Offset(11))).await.is_err());
+        // A head request returns the metadata and no bytes.
+        let head = s
+            .get_opts(
+                &obj(&f, "t/x"),
+                GetOptions {
+                    head: true,
+                    ..GetOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(head.meta.size, 10);
+        assert!(head.bytes().await.unwrap().is_empty());
+        // A condition that fails is refused before any byte is read.
+        let e = s
+            .get_opts(
+                &obj(&f, "t/x"),
+                GetOptions {
+                    if_match: Some("\"nope\"".to_owned()),
+                    ..GetOptions::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(e, object_store::Error::Precondition { .. }), "{e}");
+        // A link is not followed: its head is the link itself, its body is refused.
+        symlink(f.outside.join("keep"), f.root.join("a/t/link")).unwrap();
+        let link_head = s
+            .get_opts(
+                &obj(&f, "t/link"),
+                GetOptions {
+                    head: true,
+                    ..GetOptions::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            link_head.meta.size,
+            f.outside.join("keep").as_os_str().len() as u64
+        );
+        let e = s
+            .get_opts(&obj(&f, "t/link"), GetOptions::default())
+            .await
+            .unwrap_err();
+        // Refused as a violation of the anchor, not read through to the file outside.
+        assert!(
+            matches!(e, object_store::Error::PermissionDenied { .. }),
+            "{e}"
+        );
+        assert!(!format!("{e}").contains("outside"), "{e}");
+    }
+}
+
+/// A head wants the metadata only: a file that cannot be read can still be headed.
+#[tokio::test]
+async fn a_head_needs_no_read_permission() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = fixture();
+    let s = store(&f, false);
+    put(&s, &obj(&f, "t/x"), b"12345").await.unwrap();
+    let file = f.root.join("a/t/x");
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // A superuser reads it anyway; the point is for everyone else.
+    let head = s
+        .get_opts(
+            &obj(&f, "t/x"),
+            GetOptions {
+                head: true,
+                ..GetOptions::default()
+            },
+        )
+        .await;
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(head.unwrap().meta.size, 5);
+}
+
+/// A FIFO at the target is an object whose metadata can be read; opening it must not wait for a
+/// writer, and it has no body to read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fifo_is_headed_without_blocking_and_has_no_body() {
+    let f = fixture();
+    let s = store(&f, false);
+    let path = f.root.join("a/t");
+    std::fs::create_dir_all(&path).unwrap();
+    let fifo = path.join("pipe");
+    // mkfifo through the command (the crate forbids unsafe code).
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if !matches!(made, Ok(st) if st.success()) {
+        return;
+    }
+    let head = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        s.get_opts(
+            &obj(&f, "t/pipe"),
+            GetOptions {
+                head: true,
+                ..GetOptions::default()
+            },
+        ),
+    )
+    .await
+    .expect("a head of a FIFO must not block");
+    assert!(head.is_ok(), "{head:?}");
+    let body = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        s.get_opts(&obj(&f, "t/pipe"), GetOptions::default()),
+    )
+    .await
+    .expect("a body read of a FIFO must not block");
+    assert!(matches!(body, Err(object_store::Error::NotFound { .. })));
+}
+
 #[tokio::test]
 async fn put_modes_other_than_overwrite_and_create_are_refused() {
     let f = fixture();

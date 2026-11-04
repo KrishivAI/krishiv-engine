@@ -351,3 +351,176 @@ fn a_glob_below_a_base_path_root_shows_only_committed_files() {
         "the abandoned file is outside the root's log"
     );
 }
+
+#[test]
+fn a_partition_directory_read_by_its_own_path_shows_only_the_roots_committed_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'a' AS p")).unwrap();
+    block_on(df.write().partition_by(["p"]).mode("append").parquet(&path)).unwrap();
+    let part = root.join("p=a");
+    let data = std::fs::read_dir(&part)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .unwrap();
+    std::fs::copy(&data, part.join("part-99999-dead.c000.snappy.parquet")).unwrap();
+    // No basePath: the log of the root above the `p=a` directory still applies.
+    let df = s.read().parquet([format!("{path}/p=a").as_str()]);
+    assert_eq!(
+        block_on(df.count()).unwrap(),
+        1,
+        "the abandoned file is not read"
+    );
+    // And a glob below the root.
+    let df = s.read().parquet([format!("{path}/p=a/*.parquet").as_str()]);
+    assert_eq!(block_on(df.count()).unwrap(), 1);
+}
+
+#[test]
+fn a_write_into_a_partition_directory_of_a_logged_root_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'a' AS p")).unwrap();
+    block_on(df.write().partition_by(["p"]).mode("append").parquet(&path)).unwrap();
+    let df = block_on(s.sql("SELECT 2 AS id")).unwrap();
+    let err = block_on(
+        df.write()
+            .mode("append")
+            .parquet(format!("{path}/p=a").as_str()),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class().name(),
+        "KRISHIV_UNSUPPORTED_FEATURE",
+        "{err}"
+    );
+    // Nothing was added, and the root still reads its one committed row.
+    assert!(!root.join("p=a/_krishiv_log").exists());
+    let n = block_on(s.read().parquet([path.as_str()]).count()).unwrap();
+    assert_eq!(n, 1);
+}
+
+/// A nested partition path is written when no ancestor has a log, even if its parent exists: the
+/// ancestors are probed through the store as the path names it, not the one anchored at the target.
+#[test]
+fn a_nested_partition_path_without_an_ancestor_log_is_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "NONE")
+        .unwrap();
+    std::fs::create_dir_all(root.join("p=a")).unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id")).unwrap();
+    let nested = root.join("p=a/q=b");
+    block_on(df.write().mode("append").parquet(nested.to_str().unwrap())).unwrap();
+    let n = block_on(s.read().parquet([nested.to_str().unwrap()]).count()).unwrap();
+    assert_eq!(n, 1);
+}
+
+/// With `basePath` on a partition directory whose root holds the log, the root's log applies.
+#[test]
+fn a_base_path_on_a_partition_directory_uses_the_roots_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("out");
+    let path = root.to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'a' AS p, 'x' AS q")).unwrap();
+    block_on(
+        df.write()
+            .partition_by(["p", "q"])
+            .mode("append")
+            .parquet(&path),
+    )
+    .unwrap();
+    let leaf = root.join("p=a/q=x");
+    let data = std::fs::read_dir(&leaf)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .unwrap();
+    std::fs::copy(&data, leaf.join("part-99999-dead.c000.snappy.parquet")).unwrap();
+    let base = root.join("p=a");
+    let df = s
+        .read()
+        .option("basePath", base.to_str().unwrap())
+        .parquet([leaf.to_str().unwrap()]);
+    assert_eq!(
+        block_on(df.count()).unwrap(),
+        1,
+        "the abandoned file is not read"
+    );
+}
+
+/// A glob whose prefix is a partition directory with a log of its own, below an unlogged `basePath`.
+#[test]
+fn a_glob_under_a_base_path_uses_a_log_between_the_base_and_the_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let logged = out.join("p=a");
+    let path = logged.to_str().unwrap().to_owned();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'x' AS q")).unwrap();
+    block_on(df.write().partition_by(["q"]).mode("append").parquet(&path)).unwrap();
+    let leaf = logged.join("q=x");
+    let data = std::fs::read_dir(&leaf)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|e| e == "parquet"))
+        .unwrap();
+    std::fs::copy(&data, leaf.join("part-99999-dead.c000.snappy.parquet")).unwrap();
+    let df = s
+        .read()
+        .option("basePath", out.to_str().unwrap())
+        .parquet([format!("{}/*.parquet", leaf.to_str().unwrap()).as_str()]);
+    assert_eq!(
+        block_on(df.count()).unwrap(),
+        1,
+        "the abandoned file is not read"
+    );
+}
+
+/// A log made at an intermediate partition directory between `basePath` and the read path while the
+/// read lists is noticed by the recheck (the same resolution order as the first lookup).
+#[test]
+fn an_intermediate_log_below_a_base_path_is_found_by_the_recheck_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let mid = out.join("p=a");
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "LOG")
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS id, 'x' AS q")).unwrap();
+    block_on(
+        df.write()
+            .partition_by(["q"])
+            .mode("append")
+            .parquet(mid.to_str().unwrap()),
+    )
+    .unwrap();
+    // The directory read by its own path under an unlogged basePath: the log between them applies.
+    let leaf = mid.join("q=x");
+    let df = s
+        .read()
+        .option("basePath", out.to_str().unwrap())
+        .parquet([leaf.to_str().unwrap()]);
+    assert_eq!(block_on(df.count()).unwrap(), 1);
+}

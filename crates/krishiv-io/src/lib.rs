@@ -66,9 +66,9 @@ pub use io::beneath::{AnchorError, BeneathStore};
 #[cfg(unix)]
 pub use io::local_listing::SettledLocalFileSystem;
 pub use io::{
-    ByteRange, CacheStats, FileRef, Held, IoConfig, IoContext, IoCounters, IoScheduler,
-    ObjectScheme, ParsedUrl, PinnedStore, PutIfAbsent, SecretResolver, StoreId, StorePolicy,
-    StoreRegistry, Tail, VersionToken, parse_object_url,
+    BlockCacheStats, ByteRange, CacheStats, FileRef, Held, IoConfig, IoContext, IoCounters,
+    IoScheduler, ObjectScheme, ParsedUrl, PinnedStore, PutIfAbsent, SecretResolver, StoreId,
+    StorePolicy, StoreRegistry, Tail, VersionToken, parse_object_url,
 };
 pub use json::JsonFormat;
 pub use options::{

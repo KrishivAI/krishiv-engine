@@ -560,11 +560,16 @@ impl FileReads {
         let own = Box::pin(self.committed_files(&at)).await?;
         let outer = match (own, &mode.base) {
             (Some(files), _) => Some((base, Arc::new(files))),
+            // The nearest logged ancestor of the glob's prefix (it may sit between the base and the
+            // prefix), else the base's own log or its ancestors'.
             (None, Some(root)) if at.path.prefix_matches(&root.path) => {
-                Box::pin(self.committed_files(root))
-                    .await?
-                    .map(|files| (root.path.parts().count(), Arc::new(files)))
+                match self.logged_ancestor(&at).await? {
+                    Some(found) => Some(found),
+                    None => self.base_log(root).await?,
+                }
             }
+            // A glob whose prefix is a partition directory of a logged root.
+            (None, None) => self.logged_ancestor(&at).await?,
             _ => None,
         };
         // The committed files this glob covers: each must still be there, or a concurrent overwrite
@@ -623,6 +628,14 @@ impl FileReads {
                         .or_insert_with(|| Path::from_iter(meta.location.parts().take(base + n)));
                 }
             }
+        }
+        // An unlogged listing is rechecked: a first logged write may have made its log since.
+        if outer.is_none() && self.log_appeared(&at, mode).await? {
+            return Err(krishiv_common::error::KrishivConcurrentCommit {
+                root: at.display.clone(),
+                version: "the version this read started at".to_owned(),
+            }
+            .into());
         }
         if found < expected.len() {
             return Err(krishiv_common::error::KrishivConcurrentCommit {
@@ -734,6 +747,78 @@ impl FileReads {
         }
     }
 
+    /// The log of the nearest ancestor of `at`, reached through `name=value` directories only (a
+    /// partition directory read by its own path): the ancestor's depth and its committed files,
+    /// `None` when no such ancestor has a log.
+    async fn logged_ancestor(
+        &self,
+        at: &LocatedPath,
+    ) -> Result<
+        Option<(
+            usize,
+            Arc<BTreeMap<String, krishiv_io::commit_log::AddedFile>>,
+        )>,
+    > {
+        let mut parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
+        let mut display = at.display.clone();
+        while parts
+            .last()
+            .is_some_and(|name| parse_segment(name).is_some())
+        {
+            parts.pop();
+            display = display
+                .rsplit_once('/')
+                .map_or_else(String::new, |(head, _)| head.to_owned());
+            let parent = LocatedPath {
+                store: at.store.clone(),
+                path: Path::from_iter(parts.iter().map(String::as_str)),
+                display: display.clone(),
+            };
+            if let Some(files) = Box::pin(self.committed_files(&parent)).await? {
+                return Ok(Some((parts.len(), Arc::new(files))));
+            }
+        }
+        Ok(None)
+    }
+
+    /// The log that applies to a read with `basePath` `base`: the base's own, else the nearest
+    /// logged ancestor of the base reached through `name=value` directories.
+    async fn base_log(
+        &self,
+        base: &LocatedPath,
+    ) -> Result<
+        Option<(
+            usize,
+            Arc<BTreeMap<String, krishiv_io::commit_log::AddedFile>>,
+        )>,
+    > {
+        if let Some(files) = Box::pin(self.committed_files(base)).await? {
+            return Ok(Some((base.path.parts().count(), Arc::new(files))));
+        }
+        self.logged_ancestor(base).await
+    }
+
+    /// Whether a commit log exists now for `at` (or for the `basePath` root above it): checked after an
+    /// unlogged listing, because a first logged write to an existing directory creates its log before
+    /// its tasks write files, so a listing taken in between would accept uncommitted files.
+    async fn log_appeared(&self, at: &LocatedPath, mode: &ListMode) -> Result<bool> {
+        if Box::pin(self.committed_files(at)).await?.is_some() {
+            return Ok(true);
+        }
+        match &mode.base {
+            // The same order as the read itself: the nearest logged ancestor of the path (it may sit
+            // between the base and the path), then the base's own log and its ancestors'.
+            Some(root) if at.path.prefix_matches(&root.path) => {
+                if self.logged_ancestor(at).await?.is_some() {
+                    return Ok(true);
+                }
+                Ok(self.base_log(root).await?.is_some())
+            }
+            Some(_) => Ok(false),
+            None => Ok(self.logged_ancestor(at).await?.is_some()),
+        }
+    }
+
     async fn list_path(
         &self,
         at: &LocatedPath,
@@ -779,9 +864,14 @@ impl FileReads {
         // shows only the files that root committed.
         let inherited = match (&committed, &mode.logged, &mode.base) {
             (None, Some(logged), _) => Some(logged.clone()),
-            (None, None, Some(base)) => Box::pin(self.committed_files(base))
-                .await?
-                .map(|files| (base.path.parts().count(), Arc::new(files))),
+            // The nearest logged ancestor of the directory itself (it may sit between the base and
+            // the directory), else the base's own log or the base's ancestors'.
+            (None, None, Some(base)) => match self.logged_ancestor(at).await? {
+                Some(found) => Some(found),
+                None => self.base_log(base).await?,
+            },
+            // A partition directory read by its own path: the log of the root above it.
+            (None, None, None) => self.logged_ancestor(at).await?,
             _ => None,
         };
         let mut seen = 0;
@@ -822,6 +912,13 @@ impl FileReads {
                 .collect();
             let segments = Self::base_segments(at, mode, &names)?;
             out.push((FileRef::from_meta(at.store.clone(), &meta), segments));
+        }
+        if committed.is_none() && inherited.is_none() && self.log_appeared(at, mode).await? {
+            return Err(krishiv_common::error::KrishivConcurrentCommit {
+                root: at.display.clone(),
+                version: "the version this read started at".to_owned(),
+            }
+            .into());
         }
         let missing = match (&committed, &inherited) {
             (Some(files), _) => seen < files.len(),
