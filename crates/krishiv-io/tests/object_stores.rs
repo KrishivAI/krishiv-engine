@@ -325,6 +325,374 @@ async fn azure_round_trip() {
     .await;
 }
 
+/// A one-file web server on loopback that honours `Range`, logging each
+/// request line and its `Range` header.
+/// (request line, `Range` header, `Authorization` header) per request.
+type RequestLog = Arc<std::sync::Mutex<Vec<(String, Option<String>, Option<String>)>>>;
+
+struct RangeServer {
+    port: u16,
+    log: RequestLog,
+}
+
+fn serve(body: Vec<u8>) -> RangeServer {
+    serve_gated(body, None)
+}
+
+/// As [`serve`], answering `401` unless the request carries `Authorization: Bearer <token>`.
+fn serve_gated(body: Vec<u8>, token: Option<&'static str>) -> RangeServer {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = Arc::clone(&log);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let request = line.trim().to_owned();
+                let mut range = None;
+                let mut auth = None;
+                loop {
+                    let mut h = String::new();
+                    reader.read_line(&mut h).unwrap();
+                    let h = h.trim();
+                    if h.is_empty() {
+                        break;
+                    }
+                    if let Some(v) = h.to_ascii_lowercase().strip_prefix("range:") {
+                        range = Some(v.trim().to_owned());
+                    }
+                    if h.to_ascii_lowercase().starts_with("authorization:") {
+                        auth = h.split_once(':').map(|(_, v)| v.trim().to_owned());
+                    }
+                }
+                seen.lock()
+                    .unwrap()
+                    .push((request.clone(), range.clone(), auth.clone()));
+                let head = request.starts_with("HEAD");
+                if let Some(token) = token
+                    && auth.as_deref() != Some(&format!("Bearer {token}"))
+                {
+                    let denied = "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n";
+                    if stream.write_all(denied.as_bytes()).is_err() {
+                        break;
+                    }
+                    continue;
+                }
+                let (status, slice) = match range.as_deref().and_then(|r| r.strip_prefix("bytes="))
+                {
+                    Some(r) => {
+                        let (a, b) = r.split_once('-').unwrap();
+                        let a: usize = a.parse().unwrap();
+                        let b: usize = b.parse::<usize>().unwrap().min(body.len() - 1);
+                        (
+                            format!(
+                                "206 Partial Content\r\nContent-Range: bytes {a}-{b}/{}",
+                                body.len()
+                            ),
+                            &body[a..=b],
+                        )
+                    }
+                    None => ("200 OK".to_owned(), &body[..]),
+                };
+                let length = if head { body.len() } else { slice.len() };
+                let mut out = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {length}\r\nAccept-Ranges: bytes\r\nLast-Modified: Tue, 03 Nov 2026 00:00:00 GMT\r\nConnection: keep-alive\r\n\r\n"
+                )
+                .into_bytes();
+                if !head {
+                    out.extend_from_slice(slice);
+                }
+                if stream.write_all(&out).is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    RangeServer { port, log }
+}
+
+/// An `http://` URL to a loopback server reads like a file: `HEAD` for the
+/// size, then only `Range` requests (P2-T195 unit 1).
+#[tokio::test]
+async fn https_store_reads_ranges_only() {
+    let body = parquet_bytes();
+    let server = serve(body.clone());
+    let config = test_config(&[]);
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(config);
+    let url = format!("http://127.0.0.1:{}/data/t.parquet", server.port);
+    let (store, path, display) = registry.ensure(&sched, &url).unwrap();
+    assert_eq!(display, url);
+    let io = sched.context();
+    let meta = io.head(&store, &path).await.unwrap().unwrap();
+    assert_eq!(meta.size, body.len() as u64);
+    let file = FileRef::from_meta(store.clone(), &meta);
+    let got = io.get_ranges(&file, &[0..file.size]).await.unwrap();
+    assert_eq!(&got[0][..], &body[..]);
+    let (ids, _) = read_parquet(&got[0]);
+    assert_eq!(ids, vec![1, 2, 3]);
+    for (request, range, _) in server.log.lock().unwrap().iter() {
+        assert!(
+            request.starts_with("HEAD") || range.is_some(),
+            "a whole-file GET: {request}"
+        );
+    }
+}
+
+#[test]
+fn http_urls_name_a_store_by_authority_and_refuse_credentials_and_remote_plain_http() {
+    let ok = krishiv_io::parse_object_url("https://example.com:8443/a/b.parquet").unwrap();
+    assert_eq!(ok.store_id.key(), "https://example.com:8443");
+    assert_eq!(ok.key.as_ref(), "a/b.parquet");
+    assert!(krishiv_io::parse_object_url("https://user:pw@example.com/x").is_err());
+    assert!(krishiv_io::parse_object_url("https://example.com/x?token=1").is_err());
+    let config = test_config(&[]);
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(config);
+    let e = registry
+        .ensure(&sched, "http://example.com/x.parquet")
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
+
+/// Per-read `fs.*` options from `pairs`.
+fn hf_options(
+    pairs: &[(&str, &str)],
+) -> std::collections::BTreeMap<String, krishiv_common::secret::OptionValue> {
+    pairs
+        .iter()
+        .map(|(k, v)| {
+            (
+                (*k).to_owned(),
+                krishiv_common::secret::OptionValue::from_user(k, *v),
+            )
+        })
+        .collect()
+}
+
+/// Reads `url` whole through a registry with `pairs` and checks the bytes;
+/// returns the display path and the registry's `Debug` text.
+async fn read_hf(body: &[u8], pairs: &[(&str, &str)], url: &str) -> (String, String) {
+    // The endpoint and token are per-read options: a token goes to an overridden endpoint only that way.
+    let options = hf_options(pairs);
+    let config = test_config(&[]);
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(config);
+    let (store, path, display) = registry.ensure_with_options(&sched, url, &options).unwrap();
+    let io = sched.context();
+    let meta = io.head(&store, &path).await.unwrap().unwrap();
+    let file = FileRef::from_meta(store, &meta);
+    let got = io.get_ranges(&file, &[0..file.size]).await.unwrap();
+    assert_eq!(&got[0][..], body);
+    (display, format!("{registry:?}"))
+}
+
+/// `hf://datasets/<org>/<name>[@rev]/<path>` resolves to the `resolve`
+/// endpoint, sends the token as a bearer header only when one is set, and
+/// reads the same bytes as `https://` (P2-T195 unit 2).
+#[tokio::test]
+async fn hf_paths_read_through_the_resolve_endpoint_with_a_bearer_token() {
+    let body = parquet_bytes();
+    let server = serve(body.clone());
+    let endpoint = format!("http://127.0.0.1:{}", server.port);
+    let (display, debug) = read_hf(
+        &body,
+        &[
+            ("fs.hf.endpoint", endpoint.as_str()),
+            ("fs.hf.token", "hf_Canary-7"),
+        ],
+        "hf://datasets/acme/tiny@v2/data/t.parquet",
+    )
+    .await;
+    assert_eq!(display, "hf://datasets/acme/tiny@v2/data/t.parquet");
+    assert!(!debug.contains("Canary-7"), "{debug}");
+    read_hf(
+        &body,
+        &[("fs.hf.endpoint", endpoint.as_str())],
+        "hf://datasets/acme/tiny/data/t.parquet",
+    )
+    .await;
+    let log = server.log.lock().unwrap();
+    let first = log.iter().find(|(r, _, _)| r.starts_with("HEAD")).unwrap();
+    assert!(
+        first
+            .0
+            .contains("/datasets/acme/tiny/resolve/v2/data/t.parquet"),
+        "{}",
+        first.0
+    );
+    assert_eq!(first.2.as_deref(), Some("Bearer hf_Canary-7"));
+    let tokenless: Vec<_> = log
+        .iter()
+        .filter(|(r, _, _)| r.contains("/resolve/main/"))
+        .collect();
+    assert!(!tokenless.is_empty());
+    assert!(tokenless.iter().all(|(_, _, a)| a.is_none()));
+    drop(log);
+    for bad in [
+        "hf://models/a/b/c",
+        "hf://datasets/a",
+        "hf://datasets/a b/c/d",
+    ] {
+        assert!(krishiv_io::parse_object_url(bad).is_err(), "{bad}");
+    }
+}
+
+/// A gated dataset without a (or with a wrong) token fails with a store
+/// error that names the path but never the token; no panic (P2-T195).
+#[tokio::test]
+async fn hf_without_a_token_on_a_gated_dataset_is_a_store_error() {
+    let server = serve_gated(parquet_bytes(), Some("hf_right"));
+    let endpoint = format!("http://127.0.0.1:{}", server.port);
+    for pairs in [
+        vec![("fs.hf.endpoint", endpoint.as_str())],
+        vec![
+            ("fs.hf.endpoint", endpoint.as_str()),
+            ("fs.hf.token", "hf_Wrong-9"),
+        ],
+    ] {
+        let config = test_config(&[]);
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let registry = StoreRegistry::new(config);
+        let (store, path, _) = registry
+            .ensure_with_options(
+                &sched,
+                "hf://datasets/acme/gated/t.parquet",
+                &hf_options(&pairs),
+            )
+            .unwrap();
+        let e = sched.context().head(&store, &path).await.unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivObjectStoreRequestFailed);
+        assert!(!format!("{e:?}").contains("Wrong-9"));
+    }
+    // The right token reads.
+    let config = test_config(&[]);
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(config);
+    let (store, path, _) = registry
+        .ensure_with_options(
+            &sched,
+            "hf://datasets/acme/gated/t.parquet",
+            &hf_options(&[
+                ("fs.hf.endpoint", endpoint.as_str()),
+                ("fs.hf.token", "hf_right"),
+            ]),
+        )
+        .unwrap();
+    assert!(sched.context().head(&store, &path).await.unwrap().is_some());
+}
+
+/// A per-read `fs.hf.endpoint` is the caller's host: the session's `fs.hf.token` is withheld from it, and
+/// only a token given in the same per-read options goes there.
+#[tokio::test]
+async fn hf_session_token_is_withheld_from_a_per_read_endpoint() {
+    use krishiv_common::secret::OptionValue;
+    use std::collections::BTreeMap;
+    let body = parquet_bytes();
+    let server = serve(body.clone());
+    let endpoint = format!("http://127.0.0.1:{}", server.port);
+    // A session endpoint (clients can `SET fs.*`) is as caller-controlled as a per-read one: the session
+    // token is withheld from it as well.
+    let both = test_config(&[
+        ("fs.hf.token", "hf_Session-1"),
+        ("fs.hf.endpoint", endpoint.as_str()),
+    ]);
+    {
+        // Scoped: the one-connection test server must see this client's connection close.
+        let sched = IoScheduler::new(IoConfig::from_config(&both));
+        let registry = StoreRegistry::new(Arc::clone(&both));
+        let (store, path, _) = registry
+            .ensure(&sched, "hf://datasets/acme/tiny/data/t.parquet")
+            .unwrap();
+        assert!(sched.context().head(&store, &path).await.unwrap().is_some());
+        assert!(
+            server
+                .log
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(_, _, a)| a.is_none()),
+            "the session token reached a session endpoint"
+        );
+    }
+    let config = test_config(&[("fs.hf.token", "hf_Session-1")]);
+    for (per_read_token, want) in [(false, None), (true, Some("Bearer hf_Caller-2"))] {
+        let mut options = BTreeMap::new();
+        options.insert(
+            "fs.hf.endpoint".to_owned(),
+            OptionValue::from_user("fs.hf.endpoint", endpoint.clone()),
+        );
+        if per_read_token {
+            options.insert(
+                "fs.hf.token".to_owned(),
+                OptionValue::from_user("fs.hf.token", "hf_Caller-2"),
+            );
+        }
+        server.log.lock().unwrap().clear();
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let registry = StoreRegistry::new(Arc::clone(&config));
+        let (store, path, _) = registry
+            .ensure_with_options(&sched, "hf://datasets/acme/tiny/data/t.parquet", &options)
+            .unwrap();
+        assert!(sched.context().head(&store, &path).await.unwrap().is_some());
+        let log = server.log.lock().unwrap();
+        assert!(!log.is_empty());
+        for (_, _, auth) in log.iter() {
+            assert_eq!(auth.as_deref(), want, "per-read token: {per_read_token}");
+        }
+    }
+}
+
+/// `hf://` names that would leave the dataset's path once the URL is parsed are refused, and a token is
+/// never attached to a plain-http endpoint that is not loopback.
+#[test]
+fn hf_names_cannot_leave_the_dataset_path_and_tokens_need_https() {
+    for bad in [
+        "hf://datasets/../tiny/x",
+        "hf://datasets/..@../api/whoami-v2",
+        "hf://datasets/acme/..@main/x",
+        "hf://datasets/./tiny/x",
+        "hf://datasets/acme/tiny@../x",
+    ] {
+        assert!(krishiv_io::parse_object_url(bad).is_err(), "{bad}");
+    }
+    let config = test_config(&[]);
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(config);
+    let options = hf_options(&[
+        ("fs.hf.endpoint", "http://example.com"),
+        ("fs.hf.token", "hf_Canary-9"),
+    ]);
+    let e = registry
+        .ensure_with_options(&sched, "hf://datasets/acme/tiny/t.parquet", &options)
+        .unwrap_err();
+    assert!(!e.to_string().contains("Canary-9"), "{e}");
+    assert!(e.to_string().contains("https"), "{e}");
+    // Userinfo can hide the real host behind a loopback-looking one.
+    for endpoint in [
+        "http://localhost:x@evil.example",
+        "http://127.0.0.1:80@evil.example",
+    ] {
+        let config = test_config(&[("fs.hf.endpoint", endpoint), ("fs.hf.token", "hf_Canary-9")]);
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let registry = StoreRegistry::new(config);
+        // A session token is withheld from a session endpoint, so use the per-read pair.
+        let options = hf_options(&[("fs.hf.endpoint", endpoint), ("fs.hf.token", "hf_Canary-9")]);
+        let e = registry
+            .ensure_with_options(&sched, "hf://datasets/acme/tiny/t.parquet", &options)
+            .unwrap_err();
+        // Refused either as a secret-bearing endpoint or by the https rule; never sent.
+        assert!(!e.to_string().contains("Canary-9"), "{endpoint}: {e}");
+    }
+}
+
 /// The commit log relies on `PutMode::Create` (`If-None-Match: *`): of two
 /// creates of one object, the second must fail as "exists", and the first
 /// writer's bytes must stay (P2-T082b).

@@ -632,6 +632,14 @@ jobs:
         run: |
           uv venv --python "$PY" "$RUNNER_TEMP/venv"
           uv pip install --python "$RUNNER_TEMP/venv/bin/python" dist/*.whl pytest pytest-cov
+          # P2-T130: python/tests/test_stubs.py runs `mypy --strict` over the examples and
+          # `mypy.stubtest` against the built extension; both skip when mypy is absent. The pin is
+          # the one python/README.md shows. Required on the coverage leg; elsewhere a missing
+          # wheel skips them with a notice.
+          if ! uv pip install --python "$RUNNER_TEMP/venv/bin/python" "mypy==2.4.0"; then
+            if [ "$COVERAGE" = "true" ]; then exit 1; fi
+            echo "::notice::mypy has no install for this interpreter; the stub checks are skipped"
+          fi
           # The Arrow PyCapsule consumers the bridge tests run against, from
           # binary wheels only. All are required on abi3; Polars and DuckDB
           # publish no free-threaded wheels yet, so on cp314t a missing one
