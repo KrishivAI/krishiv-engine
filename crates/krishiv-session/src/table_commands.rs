@@ -1687,6 +1687,16 @@ impl Session {
         // cancelled, so a failed first write (and the commit log it started) leaves nothing and the
         // statement can be retried. The write goes into that empty directory (`append`).
         // An external location keeps `errorifexists`: a CTAS never replaces files already there.
+        // The policy is asked about the destination first: a denied CTAS must not create the warehouse or
+        // the table directory on the way to being refused (the writer asks again for the files it writes).
+        if table.managed {
+            self.authorize_path(
+                &table.location,
+                &[Privilege::Modify, Privilege::Create],
+                StatementClass::Write,
+            )
+            .await?;
+        }
         let owned = if table.managed {
             Some(
                 OwnedDirectory::create(table.location.clone()).map_err(|e| match e {

@@ -1661,3 +1661,30 @@ fn an_append_is_authorized_before_the_table_is_inspected() {
     );
     assert_eq!((a.as_str(), b.as_str()), (DENIED, DENIED));
 }
+
+/// A CTAS into a warehouse the policy denies is refused before any directory is made: the missing
+/// warehouse and the table directory are not left behind.
+#[test]
+fn a_denied_ctas_creates_no_directories() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    std::fs::create_dir(&root).unwrap();
+    let warehouse = tmp.path().join("outside").join("wh");
+    let policy = PathPrefixPolicy::new([&root], Arc::new(AllowAll)).unwrap();
+    let s = session(Arc::new(policy));
+    s.conf()
+        .set("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
+        .unwrap();
+    let e = block_on(async {
+        s.sql("CREATE TABLE w USING parquet AS SELECT 1 AS a")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), DENIED);
+    assert!(
+        !tmp.path().join("outside").exists(),
+        "no parent was created"
+    );
+}
