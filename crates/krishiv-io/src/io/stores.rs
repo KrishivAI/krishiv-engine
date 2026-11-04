@@ -17,7 +17,9 @@
 //! (`http://` only for a loopback host) and `hf://datasets/<org>/<name>[@rev]/<path>`
 //! (a Krishiv extension, not Spark behaviour, so no `spark.*` key: reads
 //! through the Hugging Face `resolve` endpoint with `fs.hf.token` or
-//! `HF_TOKEN` as a bearer header, `fs.hf.endpoint` for the host). Both are
+//! `HF_TOKEN` as a bearer header, `fs.hf.endpoint` for the host; with an
+//! endpoint override a token is sent only when the same per-read options
+//! carry it, and only over https or to a loopback host). Both are
 //! byte-range reads and `HEAD` only; no listing or globs. Anything else with a scheme is
 //! `KRISHIV_UNSUPPORTED_FEATURE`, as are paths that smuggle credentials in
 //! the URL itself (user info): like the rest of the engine, this layer only
@@ -134,7 +136,9 @@ pub const AZURE_ACCOUNT_KEY: &str = "fs.azure.account.key";
 pub const AZURE_SAS: &str = "fs.azure.sas";
 
 /// `fs.hf.token`: the Hugging Face access token (falls back to the
-/// `HF_TOKEN` environment variable). A secret; never in a plan.
+/// `HF_TOKEN` environment variable, for the default host only). With an
+/// `fs.hf.endpoint` override it is used only as a per-read option. A secret;
+/// never in a plan.
 pub const HF_TOKEN: &str = "fs.hf.token";
 /// `fs.hf.endpoint`: the Hugging Face host (default `https://huggingface.co`).
 pub const HF_ENDPOINT: &str = "fs.hf.endpoint";
@@ -489,9 +493,10 @@ fn build(
 }
 
 /// A Hugging Face dataset at one revision, read through the `resolve`
-/// endpoint with byte ranges. The token (`fs.hf.token`, else `HF_TOKEN` unless
-/// the endpoint is a per-read option) is
-/// sent as a sensitive bearer header; reqwest drops it on a redirect to
+/// endpoint with byte ranges. The token (`fs.hf.token`, else `HF_TOKEN`, both
+/// for the default host only; with an endpoint override, only a per-read
+/// `fs.hf.token`) is sent as a sensitive bearer header, over https or to a
+/// loopback host; reqwest drops it on a redirect to
 /// another host (the CDN), and it is never in a plan, error or log.
 #[cfg(feature = "cloud")]
 fn hf_store(
