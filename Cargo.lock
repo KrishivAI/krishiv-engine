@@ -2159,10 +2159,10 @@ dependencies = [
  "flate2",
  "futures",
  "hashbrown",
- "http",
  "krishiv-common",
  "krishiv-kernels",
  "krishiv-memory",
+ "krishiv-store",
  "krishiv-types",
  "loom",
  "lz4_flex",
@@ -2414,6 +2414,15 @@ dependencies = [
 [[package]]
 name = "krishiv-state"
 version = "0.1.0-alpha"
+
+[[package]]
+name = "krishiv-store"
+version = "0.1.0-alpha"
+dependencies = [
+ "http",
+ "krishiv-common",
+ "object_store",
+]
 
 [[package]]
 name = "krishiv-stream"

@@ -34,10 +34,10 @@ krishiv-common = { path = "../krishiv-common" }
 # Spark value text conversions and datetime patterns (CSV, JSON, text).
 krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-memory = { path = "../krishiv-memory" }
+# URL parsing, store building and pacing budgets (ADR 0044); `cloud` turns on its builders.
+krishiv-store = { path = "../krishiv-store" }
 krishiv-types = { path = "../krishiv-types" }
 memchr.workspace = true
-# Bearer header of `hf://` reads (T195); only with `cloud`.
-http = { workspace = true, optional = true }
 # `fs`: the local store reads use wraps `LocalFileSystem` (`io/local_listing.rs`).
 object_store = { workspace = true, features = ["fs"] }
 # The Parquet reader (P2-T080a): arrow-rs's push decoder and the codecs files
@@ -73,11 +73,11 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync
 loom.workspace = true
 
 [features]
-# Cloud object stores (S3, GCS, Azure, read-only https): the `aws`/`azure`/`gcp`/`http` features of
-# `object_store` (reqwest over rustls). Opt-in so the default build stays
+# Cloud object stores (S3, GCS, Azure, read-only https): `krishiv-store/cloud`, i.e. the `aws`/`azure`/`gcp`/`http`
+# features of `object_store` (reqwest over rustls). Opt-in so the default build stays
 # inside the dependency and binary-size budgets. Without it, cloud URLs fail
 # with `KRISHIV_UNSUPPORTED_FEATURE`.
-cloud = ["object_store/aws", "object_store/azure", "object_store/gcp", "object_store/http", "dep:http"]
+cloud = ["krishiv-store/cloud"]
 
 # The emulator round-trips need the cloud builders.
 [[test]]
