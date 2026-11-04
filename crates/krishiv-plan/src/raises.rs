@@ -43,6 +43,31 @@ pub fn may_raise(e: &Expr, ansi: bool) -> bool {
     !never_raises(e, ansi)
 }
 
+/// Whether `e` holds no nondeterministic call (`rand`, `monotonically_increasing_id`,
+/// ...), so evaluating it twice gives the same values. An unresolved call
+/// counts as nondeterministic.
+#[must_use]
+pub fn is_deterministic(e: &Expr) -> bool {
+    let mut nondeterministic = false;
+    let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+        if let crate::walk::Node::Expr(x) = n {
+            match &x.node {
+                ExprNode::Function(_) => {
+                    nondeterministic = true;
+                    return std::ops::ControlFlow::Break(());
+                }
+                ExprNode::Resolved(ResolvedExpr::Function(f)) if !f.deterministic => {
+                    nondeterministic = true;
+                    return std::ops::ControlFlow::Break(());
+                }
+                _ => {}
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    !nondeterministic
+}
+
 /// The conjuncts of `e` in written order (`a AND (b AND c)` gives `a`,
 /// `b`, `c`): the order a filter short-circuits in.
 #[must_use]

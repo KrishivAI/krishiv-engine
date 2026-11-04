@@ -456,7 +456,29 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 };
                 *first = nested_cast::interval_leaves(Arc::clone(first), from);
             }
-            match &f.id {
+            // Evaluated once, the operator then sees the two operands as the
+            // columns 0 and 1 of a batch of their values.
+            let split = if guards_right_operand(f, &args, input.env.ansi) {
+                let (right, left) = (args.pop(), args.pop());
+                left.zip(right)
+            } else {
+                None
+            };
+            if let Some((l, r)) = &split {
+                args = vec![
+                    Arc::new(Column {
+                        index: 0,
+                        data_type: l.data_type().clone(),
+                        nullable: l.nullable(),
+                    }),
+                    Arc::new(Column {
+                        index: 1,
+                        data_type: r.data_type().clone(),
+                        nullable: true,
+                    }),
+                ];
+            }
+            let built = match &f.id {
                 FunctionId::Builtin(b) => builtin(*b, f, args, input, e),
                 FunctionId::Registry { name, .. } => {
                     if name == "coalesce" {
@@ -484,12 +506,50 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                     func::compile_udf(&udf, f, args, input, e)
                 }
                 _ => Err(unsupported_expr(e)),
+            };
+            match split {
+                Some((l, r)) => built.map(|op| logic::left_then_right(l, r, op)),
+                None => built,
             }
         }
         // Includes subqueries: the planner replaces those it runs by
         // columns ([`Input::subqueries`]).
         _ => Err(unsupported_expr(e)),
     }
+}
+
+/// Spark's `BinaryExpression.eval` returns NULL on a NULL left
+/// value without evaluating the right operand: when the right operand may
+/// raise and the left may be NULL, the right one is evaluated only where the
+/// left is set (see [`logic::left_then_right`]). Not `/`, `%` and `div`: Spark's
+/// `DivModLike.eval` evaluates the divisor first, and a failing divisor raises
+/// whatever the left value is.
+fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: bool) -> bool {
+    let guarded = match &f.id {
+        FunctionId::Builtin(b) => matches!(
+            b,
+            Builtin::Eq
+                | Builtin::Lt
+                | Builtin::LtEq
+                | Builtin::Gt
+                | Builtin::GtEq
+                | Builtin::Add
+                | Builtin::Subtract
+                | Builtin::Multiply
+        ),
+        FunctionId::Registry { name, .. } => {
+            matches!(name.as_str(), "nullif" | "date_add" | "date_sub")
+        }
+        _ => false,
+    };
+    guarded
+        && matches!(
+            (args, f.args.as_slice()),
+            ([left, _], [left_ir, right_ir])
+                if left.nullable()
+                    && krishiv_plan::is_deterministic(left_ir)
+                    && krishiv_plan::may_raise(right_ir, ansi)
+        )
 }
 
 /// The `ansiEnabled` a calendar operator takes as its last argument.
