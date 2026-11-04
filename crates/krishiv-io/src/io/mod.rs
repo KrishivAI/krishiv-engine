@@ -50,7 +50,7 @@ use krishiv_common::config::{
     IO_MAX_REQUEST_BYTES, IO_MAX_RETRIES, IO_METADATA_CACHE_BYTES, IO_MULTIPART_PART_BYTES,
     IO_REQUEST_TIMEOUT,
 };
-use krishiv_common::secret::{OptionValue, SecretString};
+use krishiv_common::secret::SecretString;
 use krishiv_memory::{ConsumerHandle, MemoryPool, Reservation};
 use object_store::path::Path;
 use object_store::{
@@ -64,13 +64,13 @@ pub use self::block_cache::{
 pub use self::cache::{CacheKey, CacheStats, MetadataCache};
 pub use self::coalesce::{Coalesced, Waste, coalesce, coalesce_with};
 pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
-pub use self::pace::StorePolicy;
 use self::pace::{Direction, Pacer};
 pub use self::stores::{
     AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,
-    GCS_KEYFILE, GCS_STORAGE_ROOT_URL, ObjectScheme, ParsedUrl, S3_ACCESS_KEY, S3_ENDPOINT,
-    S3_ENDPOINT_REGION, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_KEY, S3_SESSION_TOKEN,
-    StoreRegistry, parse_object_url,
+    GCS_KEYFILE, GCS_STORAGE_ROOT_URL, ObjectScheme, OpenedStore, ParsedUrl, S3_ACCESS_KEY,
+    S3_ENDPOINT, S3_ENDPOINT_REGION, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_KEY,
+    S3_SESSION_TOKEN, StoreRegistry, StoreSettings, parse_object_url, register,
+    register_with_options,
 };
 pub use self::upload::Upload;
 use crate::error::{
@@ -78,72 +78,10 @@ use crate::error::{
 };
 use crate::format::{FileFormat, FileMetadata, MetadataNeeds, ReadAt};
 use crate::options::{FormatOptions, NoSecrets};
+pub use krishiv_store::{StoreId, StorePolicy};
 
 /// Largest footer read a format may ask for in one tail read.
 pub const MAX_TAIL_BYTES: u64 = 1024 * 1024;
-
-/// Identifies a registered store, e.g. `s3://bucket`. Its text is printed in
-/// paths, so it must not hold credentials (they are redacted if it does).
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct StoreId(Arc<str>);
-
-impl StoreId {
-    /// A store id.
-    #[must_use]
-    pub fn new(id: impl AsRef<str>) -> Self {
-        Self(Arc::from(id.as_ref()))
-    }
-
-    /// Whether the store is an object store or HTTP (by the id's URL
-    /// scheme), where a request costs latency: local files are `file`.
-    #[must_use]
-    pub fn is_remote(&self) -> bool {
-        const REMOTE: [&str; 10] = [
-            "s3", "s3a", "gs", "gcs", "az", "azure", "abfs", "abfss", "http", "https",
-        ];
-        self.0
-            .split_once("://")
-            .is_some_and(|(scheme, _)| REMOTE.iter().any(|r| scheme.eq_ignore_ascii_case(r)))
-    }
-}
-
-/// Separates a store's name from the alias of one write's private
-/// registration of it (see [`StoreId::private_to`]).
-const PRIVATE_MARK: &str = "#private-";
-
-impl StoreId {
-    /// The id under which one write (`job`) registers its own store for the
-    /// same location as `self`: a distinct registry key whose text, in every
-    /// message and in `EXPLAIN`, is still `self`'s.
-    #[must_use]
-    pub fn private_to(&self, job: &str) -> Self {
-        Self::new(format!("{}{PRIVATE_MARK}{job}", self.0))
-    }
-
-    /// The full registry key: [`Display`](fmt::Display) hides the alias of
-    /// [`Self::private_to`] and redacts credentials.
-    #[must_use]
-    pub fn key(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for StoreId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let shown = self
-            .0
-            .split_once(PRIVATE_MARK)
-            .map_or(&*self.0, |(name, _)| name);
-        // Typed redaction (ADR 0038): URL credentials never print.
-        OptionValue::from_user("path", shown).fmt(f)
-    }
-}
-
-impl fmt::Debug for StoreId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "StoreId({self})")
-    }
-}
 
 /// The version of a file seen at listing; every read checks it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

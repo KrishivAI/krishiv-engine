@@ -46,6 +46,7 @@ use krishiv_common::secret::OptionValue;
 use krishiv_io::{
     FileFormat, FileRef, FormatOptions, FormatRegistry, IoContext, IoScheduler, Segment, StoreId,
     StoreRegistry, is_spark_file_source, parse_object_url, parse_segment, partition_columns,
+    register, register_with_options,
 };
 use krishiv_plan::analyzer::{FileSchemaResolver, SourceKind, TableColumn};
 use krishiv_types::DataType;
@@ -213,7 +214,7 @@ impl PathLocator for ObjectPaths {
         if !cloud {
             return self.local.locate(path);
         }
-        let (store, key, display) = self.stores.ensure(&self.sched, path)?;
+        let (store, key, display) = register(&self.sched, &self.stores, path)?;
         Ok(LocatedPath {
             store,
             path: key,
@@ -233,9 +234,8 @@ impl PathLocator for ObjectPaths {
         if !cloud {
             return self.local.locate(path);
         }
-        let (store, key, display) = self
-            .stores
-            .ensure_with_options(&self.sched, path, options)?;
+        let (store, key, display) =
+            register_with_options(&self.sched, &self.stores, path, options)?;
         Ok(LocatedPath {
             store,
             path: key,

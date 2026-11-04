@@ -11,7 +11,9 @@ users.
 
 ## Key files
 Paths are relative to this crate.
-- `src/lib.rs` crate docs (skeleton until S1 moves `krishiv-io/src/io/stores.rs` here)
+- `src/lib.rs` crate docs and re-exports; `src/stores.rs` URL parsing (`ObjectScheme`, `ParsedUrl`, `parse_object_url`), the `fs.*` key constants, `StoreRegistry` (store building and caching per `StoreId`, per-read option overrides, `open`/`open_with_options` → `OpenedStore`) and the scheme builders (S3, GCS, Azure, https, `hf://` behind `cloud`)
+- `src/settings.rs` `StoreSettings` (raw `fs.*` text by key, exact then ASCII case-insensitive; implemented for the engine's `Config`, `BTreeMap<String, String>`, `HashMap<String, String>` and `Arc<T>`); `src/id.rs` `StoreId` (redacting `Display`); `src/policy.rs` `StorePolicy` (pacing budgets per scheme); `src/error.rs` the `Result` alias and the two error helpers
+- `tests/settings.rs` (S2): every key resolves the same from a `Config` and from maps, case-insensitively
 
 ## Invariants
 - No engine-internal type in a public signature: no `IoScheduler`, `MemoryPool`, plan, session or Arrow type. Settings
