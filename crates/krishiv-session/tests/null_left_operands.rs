@@ -83,3 +83,14 @@ fn a_long_left_associated_chain_evaluates_each_operand_once() {
         some(&[Some("0"), Some("40"), Some("80")])
     );
 }
+
+#[test]
+fn division_evaluates_the_divisor_first_as_spark_does() {
+    // `DivModLike.eval` evaluates the right operand before the left one is
+    // checked for NULL: the divisor's error surfaces on a NULL-left row.
+    for (op, divisor) in [("/", "1 / id"), ("%", "1 / id"), ("div", "id - id")] {
+        let sql = format!("select cast(nullif(id, 0) {op} ({divisor}) as string) from range(3)");
+        let err = strings(&sql).unwrap_err();
+        assert!(err.contains("BY_ZERO"), "{op}: {err}");
+    }
+}

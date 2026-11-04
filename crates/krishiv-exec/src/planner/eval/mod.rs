@@ -518,10 +518,12 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
     }
 }
 
-/// Spark's null-intolerant binary expressions return NULL on a NULL left
+/// Spark's `BinaryExpression.eval` returns NULL on a NULL left
 /// value without evaluating the right operand: when the right operand may
 /// raise and the left may be NULL, the right one is evaluated only where the
-/// left is set (see [`logic::left_then_right`]).
+/// left is set (see [`logic::left_then_right`]). Not `/`, `%` and `div`: Spark's
+/// `DivModLike.eval` evaluates the divisor first, and a failing divisor raises
+/// whatever the left value is.
 fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: bool) -> bool {
     let guarded = match &f.id {
         FunctionId::Builtin(b) => matches!(
@@ -534,9 +536,6 @@ fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: 
                 | Builtin::Add
                 | Builtin::Subtract
                 | Builtin::Multiply
-                | Builtin::Divide
-                | Builtin::Remainder
-                | Builtin::IntegralDivide
         ),
         FunctionId::Registry { name, .. } => {
             matches!(name.as_str(), "nullif" | "date_add" | "date_sub")
