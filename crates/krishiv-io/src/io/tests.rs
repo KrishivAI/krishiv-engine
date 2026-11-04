@@ -828,3 +828,13 @@ fn the_block_cache_directory_defaults_to_a_per_user_temp_directory() {
     assert!(name.starts_with("krishiv-block-cache-"), "{name}");
     assert_eq!(dir.parent().unwrap(), std::env::temp_dir());
 }
+
+#[test]
+fn if_unmodified_since_allows_the_rest_of_the_microsecond_or_of_a_whole_second() {
+    use super::unmodified_since_limit;
+    let ns = |d: Option<chrono::DateTime<chrono::Utc>>| d.unwrap().timestamp_nanos_opt().unwrap();
+    assert_eq!(ns(unmodified_since_limit(1_500_001)), 1_500_001_999);
+    // A whole-second token is an HTTP date: the store may hold a later fraction of that second.
+    assert_eq!(ns(unmodified_since_limit(2_000_000)), 3_000_000_000);
+    assert!(unmodified_since_limit(i64::MAX).is_none());
+}

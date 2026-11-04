@@ -622,6 +622,25 @@ impl IoScheduler {
     }
 }
 
+/// The `If-Unmodified-Since` limit for a file seen as modified at `micros`
+/// (no ETag). The token is truncated to microseconds, so the rest of that
+/// microsecond is allowed (stores keep nanoseconds). A whole-second token is
+/// most likely an HTTP date (one-second resolution) of a store that keeps a
+/// finer mtime, and the header is itself formatted to the second, so the limit
+/// is the next second boundary; a change within the same second then goes
+/// unseen, as with any HTTP-date validator.
+fn unmodified_since_limit(micros: i64) -> Option<chrono::DateTime<chrono::Utc>> {
+    let slack_ns = if micros % 1_000_000 == 0 {
+        1_000_000_000
+    } else {
+        999
+    };
+    micros
+        .checked_mul(1000)
+        .and_then(|ns| ns.checked_add(slack_ns))
+        .map(chrono::DateTime::from_timestamp_nanos)
+}
+
 fn splitmix(mut z: u64) -> u64 {
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
@@ -1016,12 +1035,7 @@ impl IoContext {
                 match &file.version {
                     VersionToken::ETag(e) => opts.if_match = Some(e.to_string()),
                     VersionToken::Modified(us) => {
-                        // The token is truncated to microseconds; allow the
-                        // rest of that microsecond (stores keep nanoseconds).
-                        opts.if_unmodified_since = us
-                            .checked_mul(1000)
-                            .and_then(|ns| ns.checked_add(999))
-                            .map(chrono::DateTime::from_timestamp_nanos);
+                        opts.if_unmodified_since = unmodified_since_limit(*us);
                     }
                     VersionToken::Immutable => {}
                 }
