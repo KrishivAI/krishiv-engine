@@ -81,7 +81,7 @@ fn zone_names_prefer_the_session_zone() {
 /// `timeParserPolicy=LEGACY`, non-ANSI; `None` is NULL).
 #[test]
 fn resolution_edge_cases_match_spark() {
-    let cases: [(&str, &str, &str, Option<i64>); 19] = [
+    let cases: [(&str, &str, &str, Option<i64>); 26] = [
         // A 24-hour field stays when no AM/PM marker completes the 12-hour one.
         (
             "UTC",
@@ -107,6 +107,16 @@ fn resolution_edge_cases_match_spark() {
         ("UTC", "-5", "yyyy", None),
         ("UTC", "2024-01--1", "yyyy-MM-dd", None),
         ("UTC", "2024--1-01", "yyyy-MM-dd", None),
+        // A signed year is no two-digit year (-20 is week year -20).
+        ("UTC", "-20", "Y", Some(-62_798_371_200)),
+        ("UTC", "-20", "YY", Some(-62_798_371_200)),
+        // `DecimalFormat` reads an exponent inside the field's width.
+        ("UTC", "2E3", "yyyy", Some(946_684_800)),
+        ("UTC", "2024 25E-1", "yyyy dd", Some(1_704_153_600)),
+        ("UTC", "1E1", "HH", Some(36_000)),
+        // The cutover month's Gregorian days fail a week-of-month resolution.
+        ("UTC", "1582 10 2 1", "yyyy MM W u", None),
+        ("UTC", "1582 10 2 1", "yyyy MM F u", None),
         // The calendar year is checked only when the text has one.
         ("UTC", "1", "w", Some(-345_600)),
         ("UTC", "1970 1", "yyyy w", None),

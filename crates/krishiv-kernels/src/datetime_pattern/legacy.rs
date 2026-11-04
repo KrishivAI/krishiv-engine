@@ -275,7 +275,7 @@ impl LegacyPattern {
                     match c {
                         'z' => {
                             let fixed = id.starts_with(['+', '-'])
-                                || ["UTC+", "UTC-", "GMT+", "GMT-"]
+                                || ["UTC+", "UTC-", "GMT+", "GMT-", "UT+", "UT-"]
                                     .iter()
                                     .any(|p| id.starts_with(p));
                             if fixed && offset != 0 {
@@ -290,7 +290,10 @@ impl LegacyPattern {
                                     "Z" => "UTC",
                                     "UT" => "GMT",
                                     _ if fixed => {
-                                        if id.starts_with("GMT") {
+                                        if id.starts_with("GMT")
+                                            || id.starts_with("UT+")
+                                            || id.starts_with("UT-")
+                                        {
                                             "GMT"
                                         } else {
                                             "UTC"
@@ -753,7 +756,7 @@ impl Parsed {
             'y' | 'Y' => {
                 // A two-digit year waits for the rest of the date: the
                 // window starts on a day, not at a year.
-                self.year_two = n <= 2 && digits == 2;
+                self.year_two = n <= 2 && digits == 2 && sign == 0;
                 self.year = Some((value, st));
                 self.year_is_week = c == 'Y';
             }
@@ -1001,6 +1004,13 @@ impl Parsed {
             // A Julian-only leap day (1500-02-29) has March 1's label, whose
             // real day is the next one.
             let (y, m, d) = civil_from_days(days);
+            // A non-lenient `GregorianCalendar` refuses every Gregorian day of
+            // the cutover month in a week-of-month or day-of-week-in-month
+            // resolution (Spark 4.2: '1582 10 2 1' with 'yyyy MM W u' is NULL,
+            // the same with 'F'; the day-of-month path accepts 1582-10-18).
+            if matches!(mode, Mode::Wom | Mode::Dowim) && (y, m) == (1582, 10) && d >= 15 {
+                return None;
+            }
             julian_leap = real_day(days, y, m, d) != real;
             days
         } else if matches!(mode, Mode::Doy) {
@@ -1160,7 +1170,35 @@ fn today() -> (i64, u32, u32) {
 /// and where they end. Any decimal digit counts, as `DecimalFormat` reads
 /// a numeric field (`٢٠٢٤` is 2024).
 fn number(text: &[char], pos: usize, limit: Option<usize>) -> Option<(i64, usize)> {
-    number_of(text, pos, limit, java_digit)
+    let (mut value, mut end) = number_of(text, pos, limit, java_digit)?;
+    // `DecimalFormat` also reads an exponent: `E`, an optional `-` and
+    // digits, all inside the field's width (Spark 4.2: '2E3' with 'yyyy' is
+    // 2000, '25E-1' with 'dd' is 2, '1E+1' is 1). The result is truncated.
+    if text.get(end) == Some(&'E') && limit.is_none_or(|l| end + 1 - pos < l) {
+        let neg = text.get(end + 1) == Some(&'-');
+        let start = end + 1 + usize::from(neg);
+        let room = limit.map(|l| l.saturating_sub(start - pos));
+        if room != Some(0)
+            && let Some((exp, e2)) = number_of(text, start, room, java_digit)
+        {
+            {
+                let scaled = if neg {
+                    u32::try_from(exp)
+                        .ok()
+                        .and_then(|x| 10_i64.checked_pow(x))
+                        .map_or(0, |p| value / p)
+                } else {
+                    u32::try_from(exp)
+                        .ok()
+                        .and_then(|x| 10_i64.checked_pow(x))
+                        .and_then(|p| value.checked_mul(p))?
+                };
+                value = scaled;
+                end = e2;
+            }
+        }
+    }
+    Some((value, end))
 }
 
 /// [`number`] with ASCII digits only, as the zone fields read them.
@@ -1919,6 +1957,17 @@ mod tests {
         assert_eq!(show("Z"), "UTC Coordinated Universal Time");
         assert_eq!(show("UT"), "GMT Greenwich Mean Time");
         assert_eq!(show("UTC"), "UTC Coordinated Universal Time");
+    }
+
+    /// A `UT+hh:mm` session zone prints as `GMT+hh:mm` (Spark 4.2.0, LEGACY).
+    #[test]
+    fn a_ut_prefixed_offset_prints_as_gmt() {
+        let p = LegacyPattern::new("z zzzz").unwrap();
+        let z = Zone {
+            id: "UT+05:30",
+            rules: &FixedOffset(19_800),
+        };
+        assert_eq!(p.format_timestamp(0, z).unwrap(), "GMT+05:30 GMT+05:30");
     }
 
     /// A non-lenient `SimpleDateFormat` refuses `h` outside 1-12 and `k`
