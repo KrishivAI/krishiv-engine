@@ -601,6 +601,30 @@ async fn hf_session_token_is_withheld_from_a_per_read_endpoint() {
     }
 }
 
+/// `hf://` names that would leave the dataset's path once the URL is parsed are refused, and a token is
+/// never attached to a plain-http endpoint that is not loopback.
+#[test]
+fn hf_names_cannot_leave_the_dataset_path_and_tokens_need_https() {
+    for bad in [
+        "hf://datasets/..@../api/whoami-v2",
+        "hf://datasets/acme/..@main/x",
+        "hf://datasets/./tiny/x",
+        "hf://datasets/acme/tiny@../x",
+    ] {
+        assert!(krishiv_io::parse_object_url(bad).is_err(), "{bad}");
+    }
+    let config = test_config(&[
+        ("fs.hf.endpoint", "http://example.com"),
+        ("fs.hf.token", "hf_Canary-9"),
+    ]);
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(config);
+    let e = registry
+        .ensure(&sched, "hf://datasets/acme/tiny/t.parquet")
+        .unwrap_err();
+    assert!(!e.to_string().contains("Canary-9"), "{e}");
+}
+
 /// The commit log relies on `PutMode::Create` (`If-None-Match: *`): of two
 /// creates of one object, the second must fail as "exists", and the first
 /// writer's bytes must stay (P2-T082b).

@@ -318,8 +318,10 @@ fn parse_hf(scheme: &str, rest: &str) -> Result<ParsedUrl> {
         Some((name, rev)) => (name, rev),
         None => (name_rev, "main"),
     };
+    // `.` and `..` are refused: URL parsing would resolve them and leave the dataset's path.
     let plain = |t: &str| {
         !t.is_empty()
+            && !t.chars().all(|c| c == '.')
             && t.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     };
@@ -506,19 +508,28 @@ fn hf_store(
         url.bucket,
         url.revision.as_deref().unwrap_or("main")
     );
-    // The server's tokens (`HF_TOKEN`, a session `fs.hf.token`) go only to the host the server chose (the
-    // default or a session setting): a per-read `fs.hf.endpoint` is the caller's, and must not receive them.
-    // The session's `fs.hf.token` is withheld from a per-read endpoint too; only a per-read token goes there.
+    // `HF_TOKEN` (the server's own) goes only to the default host: any endpoint override, per-read or a
+    // session setting (clients can `SET fs.*`), would let a caller collect it. A session `fs.hf.token` is
+    // withheld from a per-read endpoint too; only a per-read token goes there.
+    let custom_endpoint = text(config, options, HF_ENDPOINT)?.is_some();
     let caller_endpoint = find_option(options, HF_ENDPOINT).is_some();
     let caller_token = find_option(options, HF_TOKEN).is_some();
     let token = match cred(config, options, HF_TOKEN)? {
         _ if caller_endpoint && !caller_token => None,
         Some(token) => Some(token),
+        None if custom_endpoint => None,
         None => std::env::var("HF_TOKEN")
             .ok()
             .filter(|t| !t.is_empty())
             .map(SecretString::new),
     };
+    if token.is_some() && !endpoint.starts_with("https://") && !loopback_endpoint(endpoint) {
+        return Err(invalid_option(
+            HF_ENDPOINT,
+            "a token is sent only over https (or to a loopback host)",
+        )
+        .into());
+    }
     let mut client =
         object_store::ClientOptions::new().with_allow_http(allows_http(Some(endpoint)));
     if let Some(token) = token {
@@ -537,6 +548,19 @@ fn hf_store(
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
         .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
+}
+
+/// Whether `endpoint` (`http://host[:port][/...]`) names a loopback host.
+#[cfg(feature = "cloud")]
+fn loopback_endpoint(endpoint: &str) -> bool {
+    let rest = endpoint.split_once("://").map_or(endpoint, |(_, r)| r);
+    let authority = rest.split('/').next().unwrap_or_default();
+    let host = if let Some(v6) = authority.strip_prefix('[') {
+        v6.split(']').next().unwrap_or_default()
+    } else {
+        authority.split(':').next().unwrap_or_default()
+    };
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
 }
 
 /// A read-only store over `https://host[:port]` (`http://` only for a
