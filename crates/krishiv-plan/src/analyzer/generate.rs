@@ -111,8 +111,11 @@ impl Resolver<'_> {
             wide.hidden = Arc::clone(&child.hidden);
             wide
         };
-        let rels = [&c];
-        let cx = Self::cx(&c.out, &rels, env, "Generate");
+        // The argument reads the visible columns only (a bare `c1` after
+        // `JOIN .. USING (c1)` is the merged column, not ambiguous); column
+        // ids are the same in the widened child the projection below reads.
+        let rels = [&child];
+        let cx = Self::cx(&child.out, &rels, env, "Generate");
         let arg = &self.stack_rows(arg, &cx)?;
         let b = self.bind(arg, &cx)?;
         if super::ops::has_generator(&b.expr) {
@@ -133,7 +136,7 @@ impl Resolver<'_> {
         // does not carry: an exploded array is not copied once per element.
         // A resolved node read again already has it as a column.
         let (below, arg_col) = match crate::generator_arg(&b.expr) {
-            Some(_) if resolved => (c.clone(), Arc::clone(&b.expr)),
+            Some(_) if resolved => (c, Arc::clone(&b.expr)),
             _ => {
                 let col = self.attr("_generate_arg", &b.ty);
                 let mut items: Vec<Arc<Expr>> = c

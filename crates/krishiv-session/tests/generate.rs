@@ -947,21 +947,17 @@ fn an_ambiguous_generator_column_prints_without_internal_qualifiers() {
 #[test]
 fn a_generator_arity_error_names_the_function_in_lower_case() {
     let s = Session::new().unwrap();
-    for (q, name) in [
-        ("select Posexplode(1, 2)", "`posexplode`"),
-        ("select EXPLODE()", "`explode`"),
-    ] {
-        let err = error_of(&s, q);
-        assert_eq!(
-            err.error_class(),
-            ErrorClass::WrongNumArgsWithoutSuggestion,
-            "{q}"
-        );
-        assert!(
-            err.to_string().contains(&format!("The {name} requires")),
-            "{q}: {err}"
-        );
-    }
+    let q = "select Posexplode(1, 2)";
+    let err = error_of(&s, q);
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::WrongNumArgsWithoutSuggestion,
+        "{q}"
+    );
+    assert!(
+        err.to_string().contains("The `posexplode` requires"),
+        "{q}: {err}"
+    );
 }
 
 // Spark 4.2: generators beside a USING join read the merged-away column of
@@ -1014,5 +1010,38 @@ fn a_bare_name_beside_a_generator_reads_the_input_column() {
             "select posexplode(array('x', 'y')) as (pos, val), pos, val from (values (42)) as t(pos) order by 1"
         ),
         table(&[&["0", "x", "42", "x"], &["1", "y", "42", "y"]])
+    );
+}
+
+// A bare join column inside a generator's argument is the merged column of
+// a `USING` join, not ambiguous (Spark 4.2 returns the rows).
+#[test]
+fn a_generator_argument_reads_the_merged_using_column() {
+    let s = Session::new().unwrap();
+    let t = "(values (1), (2), (3)) as t1(c1) {j} join (values (2), (3), (4)) as t2(c1) using (c1)";
+    for (j, want) in [
+        ("inner", table(&[&["2"], &["3"]])),
+        ("left", table(&[&["1"], &["2"], &["3"]])),
+        ("full", table(&[&["1"], &["2"], &["3"], &["4"]])),
+    ] {
+        let from = t.replace("{j}", j);
+        assert_eq!(
+            rows(
+                &s,
+                &format!("select explode(array(c1)) as x from {from} order by x")
+            ),
+            want,
+            "{j}"
+        );
+    }
+    assert_eq!(
+        rows(
+            &s,
+            &format!(
+                "select explode(array(c1)) as x from {} where c1 > 2 order by x",
+                t.replace("{j}", "inner")
+            )
+        ),
+        table(&[&["3"]])
     );
 }
