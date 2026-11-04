@@ -160,6 +160,23 @@ impl Resolver<'_> {
                     ));
                 }
             }
+            // `m.k` on a map is the lookup `m['k']` (Spark's `ExtractValue`).
+            ExprNode::Field { base: _, name }
+                if matches!(kids[0].ty.data_type, Some(DataType::Map(_))) =>
+            {
+                let call = Expr::function(
+                    "__subscript",
+                    vec![
+                        Expr::clone(&kids[0].expr),
+                        Expr::new(ExprNode::Literal(Literal::String(name.clone())))
+                            .with_origin(e.origin),
+                    ],
+                )
+                .with_origin(e.origin);
+                let mut b = self.expr(&Arc::new(call), cx)?;
+                b.carry_markers(kids);
+                return Ok(b);
+            }
             ExprNode::Field { base: _, name } => {
                 let (expr, ty) = self.struct_field(e, &kids[0], name)?;
                 Bound {
@@ -390,6 +407,10 @@ impl Resolver<'_> {
                     // resolved child drops its markers: carry them over.
                     let mut b = self.expr(&Arc::new(call), cx)?;
                     b.carry_markers(&kids[..n]);
+                    // The `try_` forms are nullable, as Spark types them.
+                    if lookup_name.starts_with("try_") {
+                        b = make_nullable(b);
+                    }
                     // Shown as Spark names it, over the operands as written
                     // (a session variable keeps its name).
                     b.shown = Some(Arc::new(
@@ -815,6 +836,18 @@ impl Resolver<'_> {
                         WrongNumArgsWithoutSuggestion {
                             function_name: format!("`{}`", entry.id.name()),
                             expected_num: format!("[{}]", counts.join(", ")),
+                            actual_num: n.to_string(),
+                            docroot: SPARK_DOC_ROOT.to_owned(),
+                        },
+                        e.origin,
+                    ));
+                }
+                // `aes_encrypt` takes two to six arguments (seven pass the six the catalog probes).
+                if is_builtin_entry(&entry) && entry.id.name() == "aes_encrypt" && n > 6 {
+                    return Err(AnalysisError::new(
+                        WrongNumArgsWithoutSuggestion {
+                            function_name: "`aes_encrypt`".to_owned(),
+                            expected_num: "[2, 3, 4, 5, 6]".to_owned(),
                             actual_num: n.to_string(),
                             docroot: SPARK_DOC_ROOT.to_owned(),
                         },
@@ -1412,7 +1445,7 @@ impl Resolver<'_> {
             ExprNode::MultiAlias { expr, names } => {
                 return Err(AnalysisError::new(
                     krishiv_common::error::MultiAliasWithoutGenerator {
-                        names: format!("({})", names.join(", ")),
+                        names: names.join(", "),
                         expr: format!("\"{}\"", pretty(expr, self.ctx.conf.session_zone)),
                     },
                     e.origin,
@@ -1465,8 +1498,15 @@ impl Resolver<'_> {
                 };
                 let level = cx.env.outer.len();
                 let expr = rebuilt(ExprNode::Subquery { kind, plan });
+                let original = Arc::clone(&expr);
+                let shown = shown_call(&expr, kids, &values);
+                let expr = self.null_in_subquery(expr);
+                let expr = self.in_global_aggregate(expr);
+                // A rewrite must not rename the output column: the written `IN`
+                // stays the shown form when no coercion gave one.
+                let shown = shown.or_else(|| (!Arc::ptr_eq(&original, &expr)).then_some(original));
                 Bound {
-                    shown: shown_call(&expr, kids, &values),
+                    shown,
                     expr,
                     outer: [outer, rel.outer.filter(|&l| l < level)]
                         .into_iter()
@@ -1504,6 +1544,101 @@ impl Resolver<'_> {
     }
 }
 
+impl Resolver<'_> {
+    /// `v IN (correlated global aggregate)`: the aggregate has exactly one
+    /// row for each outer row (a count of nothing is 0), so the `IN` is
+    /// `v = (scalar subquery)`, which the scalar path decorrelates with
+    /// its count-bug handling. Any other `IN` is returned as it came.
+    fn in_global_aggregate(&self, e: Arc<Expr>) -> Arc<Expr> {
+        let ExprNode::Subquery {
+            kind: SubqueryKind::In(values),
+            plan,
+        } = &e.node
+        else {
+            return e;
+        };
+        let [value] = &values[..] else { return e };
+        if !matches!(plan.node, crate::PlanNode::Aggregate { .. })
+            || !crate::analyzer::subquery::one_row_aggregate(plan)
+        {
+            return e;
+        }
+        let scalar = Arc::new(
+            Expr::new(ExprNode::Subquery {
+                kind: SubqueryKind::Scalar,
+                plan: Arc::clone(plan),
+            })
+            .with_origin(e.origin),
+        );
+        let nullable = crate::analyzer::subquery::typed(value).1
+            || crate::analyzer::subquery::typed(&scalar).1;
+        Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::Builtin(Builtin::Eq),
+                    kind: FunctionKind::Scalar,
+                    args: vec![Arc::clone(value), scalar],
+                    distinct: false,
+                    filter: None,
+                    within_group: Vec::new(),
+                    data_type: DataType::Boolean,
+                    nullable,
+                    deterministic: true,
+                },
+            )))
+            .with_origin(e.origin),
+        )
+    }
+
+    /// `NULL IN (subquery)`: Spark folds it by whether the subquery has
+    /// rows. It is `exists(subquery) AND NULL`: NULL over rows, false over
+    /// none (NULL either way under
+    /// `spark.sql.legacy.nullInEmptyListBehavior`). Any other `IN` is
+    /// returned as it came.
+    fn null_in_subquery(&self, e: Arc<Expr>) -> Arc<Expr> {
+        let ExprNode::Subquery {
+            kind: SubqueryKind::In(values),
+            plan,
+        } = &e.node
+        else {
+            return e;
+        };
+        let [value] = &values[..] else { return e };
+        if !crate::analyzer::subquery::null_literal(value) {
+            return e;
+        }
+        let null = Arc::new(Expr::new(ExprNode::Literal(Literal::Null(Some(
+            DataType::Boolean,
+        )))));
+        if self.ctx.conf.legacy_null_in_empty_list {
+            return null;
+        }
+        let exists = Arc::new(
+            Expr::new(ExprNode::Subquery {
+                kind: SubqueryKind::Exists,
+                plan: Arc::clone(plan),
+            })
+            .with_origin(e.origin),
+        );
+        Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::Builtin(Builtin::And),
+                    kind: FunctionKind::Scalar,
+                    args: vec![exists, null],
+                    distinct: false,
+                    filter: None,
+                    within_group: Vec::new(),
+                    data_type: DataType::Boolean,
+                    nullable: true,
+                    deterministic: true,
+                },
+            )))
+            .with_origin(e.origin),
+        )
+    }
+}
+
 /// Whether `t` is or holds a map at any depth (Spark does not order it).
 fn holds_map(t: &DataType) -> bool {
     match t {
@@ -1512,4 +1647,17 @@ fn holds_map(t: &DataType) -> bool {
         DataType::Struct(s) => s.fields().iter().any(|f| holds_map(f.data_type())),
         _ => false,
     }
+}
+
+/// `b` typed nullable (the expression's own flag too).
+fn make_nullable(mut b: Bound) -> Bound {
+    b.ty.nullable = true;
+    if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &b.expr.node {
+        let mut f = f.clone();
+        f.nullable = true;
+        b.expr = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f))).with_origin(b.expr.origin),
+        );
+    }
+    b
 }

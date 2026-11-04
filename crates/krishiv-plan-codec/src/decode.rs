@@ -455,6 +455,11 @@ impl Decoder {
         Ok(match required(&m.kind, "a node kind")? {
             Kind::Scan(s) => PhysNode::Scan(self.scan(s)?),
             Kind::OneRow(_) => PhysNode::OneRow,
+            Kind::ExchangeSource(e) => PhysNode::ExchangeSource {
+                id: ExchangeId(e.id),
+                partitioning: partitioning(required(&e.partitioning, "the partitioning")?)?,
+                schema: schema_from(&e.schema)?,
+            },
             Kind::SharedRead(s) => PhysNode::SharedRead {
                 id: SharedId(s.id),
                 layout: layout(&s.layout),

@@ -35,7 +35,8 @@ use krishiv_exec::planner::{FileTable, MemoryTable, TableProvider, TableProvider
 use krishiv_io::IoContext;
 use krishiv_io::split::SplitConfig;
 use krishiv_plan::analyzer::{
-    BoxFuture, Catalog, CatalogResolver, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
+    BoxFuture, Catalog, CatalogResolver, FileMetadata, NameForm, TableColumn, TableIdent,
+    TableKind, TableMeta,
 };
 use krishiv_plan::{
     ALIAS_PART_SEP, Cte, Expr, ExprNode, LogicalPlan, Origin, PlanNode, ReadSource, Scan,
@@ -533,8 +534,10 @@ impl QueryCatalog {
                     }
                     _ => return None,
                 };
+                // The hidden `_metadata` column is the scan's, not the table's.
+                let columns = scan.output.len() - usize::from(scan.metadata_column().is_some());
                 let table = Arc::new(Schema::new(
-                    scan.output
+                    scan.output[..columns]
                         .iter()
                         .map(|c| c.data_type.to_arrow_field(c.name.clone(), c.nullable))
                         .collect::<Vec<_>>(),
@@ -696,6 +699,8 @@ impl QueryCatalog {
                 partitions,
                 attempt: 0,
                 scans: BTreeMap::new(),
+                exchanges: BTreeMap::new(),
+                output: None,
             })
             .collect();
         for (id, kind) in assigned {
@@ -878,7 +883,10 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
     fn go<'a>(node: &'a PhysNode, out: &mut Leaves<'a>) {
         match node {
             PhysNode::Scan(scan) => out.scans.push(scan),
-            PhysNode::OneRow | PhysNode::SharedRead { .. } | PhysNode::LoopRef { .. } => {}
+            PhysNode::OneRow
+            | PhysNode::SharedRead { .. }
+            | PhysNode::LoopRef { .. }
+            | PhysNode::ExchangeSource { .. } => {}
             PhysNode::UnionLoop {
                 anchor, recursive, ..
             } => {
@@ -999,7 +1007,18 @@ impl QueryCatalog {
             columns,
             version: None,
             kind: TableKind::Table,
+            file_metadata: file_metadata(&table.provider),
         })
+    }
+}
+
+/// The `_metadata` column of a table read through the file source
+/// `provider` (Spark: file sources; row positions only from Parquet).
+fn file_metadata(provider: &str) -> FileMetadata {
+    match provider.to_ascii_lowercase().as_str() {
+        "parquet" => FileMetadata::WithRowIndex,
+        "orc" | "csv" | "json" | "text" | "avro" | "xml" | "binaryfile" => FileMetadata::Basic,
+        _ => FileMetadata::None,
     }
 }
 
@@ -1070,6 +1089,13 @@ impl Catalog for QueryCatalog {
                 }
                 TempTable::View { columns, .. } => (columns.clone(), TableKind::View),
             };
+            let file_metadata = match &*table {
+                TempTable::Files {
+                    source: ReadSource::Files { format, .. },
+                    ..
+                } => file_metadata(format),
+                _ => FileMetadata::None,
+            };
             self.loaded
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -1083,6 +1109,7 @@ impl Catalog for QueryCatalog {
                 columns,
                 version: None,
                 kind,
+                file_metadata,
             }))
         })
     }

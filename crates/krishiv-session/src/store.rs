@@ -272,6 +272,8 @@ pub(crate) trait CatalogStore: Send + Sync {
     fn has_namespace(&self, namespace: &str) -> bool;
     /// Adds a namespace; `false` when it exists already (nothing changes).
     fn create_namespace(&self, namespace: &str, meta: NamespaceMeta) -> bool;
+    /// Changes a namespace's metadata with `change`; `false` when it does not exist.
+    fn alter_namespace(&self, namespace: &str, change: &dyn Fn(&mut NamespaceMeta)) -> bool;
     /// Removes a namespace; with `cascade` also its tables, which are returned so that the caller can delete
     /// the managed ones' data after the metadata change.
     ///
@@ -383,6 +385,16 @@ impl CatalogStore for InMemoryCatalogStore {
             return false;
         }
         state.namespaces.insert(namespace.to_owned(), meta);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        true
+    }
+
+    fn alter_namespace(&self, namespace: &str, change: &dyn Fn(&mut NamespaceMeta)) -> bool {
+        let mut state = self.lock();
+        let Some(meta) = state.namespaces.get_mut(namespace) else {
+            return false;
+        };
+        change(meta);
         self.epoch.fetch_add(1, Ordering::AcqRel);
         true
     }

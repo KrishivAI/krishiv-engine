@@ -17,6 +17,7 @@ use arrow_schema::SchemaRef;
 use arrow_select::interleave::interleave;
 use krishiv_memory::{
     ConsumerHandle, MemoryError, Reservation, SpillError, SpillFile, SpillReader, SpillScope,
+    SpillWriter,
 };
 use krishiv_types::batch::{Batch, Weights};
 
@@ -173,19 +174,28 @@ fn prefix(row: &[u8]) -> u64 {
 
 /// The bytes of `batch`'s rows (what a copy of them, or a spill frame,
 /// holds), without the slack of the buffers it shares: a per-row size that
-/// does not depend on the batch's length.
+/// does not depend on the batch's length. A view column counts only the
+/// bytes its views reference, not the whole data buffers it shares.
 pub(crate) fn data_bytes(batch: &Batch) -> usize {
-    let columns: usize = batch
-        .data()
-        .columns()
-        .iter()
-        .map(|c| {
-            c.to_data()
-                .get_slice_memory_size()
-                .unwrap_or_else(|_| c.get_array_memory_size())
-        })
-        .sum();
-    columns + batch.num_rows() * weight_bytes(batch)
+    SpillWriter::frame_bytes(batch)
+}
+
+/// Buffer slack a held batch may carry over its rows' bytes before
+/// [`owned_rows`] copies it.
+const SLICE_SLACK_BYTES: usize = 16 << 10;
+
+/// `batch`, or a copy of its rows when its buffers are far larger than they
+/// are ([`data_bytes`]): a small slice of a large batch (a scan's morsel of
+/// a decoded batch), or views into shared pages, would keep, and be charged
+/// for, the whole buffers. For rows an operator holds until it spills them.
+/// Interleaving shares view buffers, so views are compacted on top.
+pub(crate) fn owned_rows(batch: Batch) -> Result<Batch> {
+    let data = data_bytes(&batch);
+    if batch.data().get_array_memory_size() <= 2 * data + SLICE_SLACK_BYTES {
+        return Ok(batch);
+    }
+    let rows: Vec<(usize, usize)> = (0..batch.num_rows()).map(|r| (0, r)).collect();
+    crate::join::compact_views(interleave_batches(&batch.schema(), &[batch], &rows)?)
 }
 
 fn weight_bytes(batch: &Batch) -> usize {
@@ -1094,9 +1104,11 @@ pub(crate) fn write_run(
     let (mut max_batch_bytes, mut row_bytes) = (0, 1);
     while let Some(batch) = merger.next(batch_rows)? {
         query.check_cancelled()?;
-        let bytes = batch.data().get_array_memory_size();
+        // As read back: the writer compacts view columns, which here still
+        // share their inputs' buffers.
+        let bytes = SpillWriter::frame_bytes(&batch);
         max_batch_bytes = max_batch_bytes.max(bytes);
-        row_bytes = row_bytes.max(data_bytes(&batch).div_ceil(batch.num_rows().max(1)));
+        row_bytes = row_bytes.max(bytes.div_ceil(batch.num_rows().max(1)));
         if let Err(e) = writer.write(&batch) {
             return refused(e);
         }

@@ -57,13 +57,14 @@ pub(crate) use range::Range;
 pub use replicate::ReplicateRows;
 pub(crate) use runtime_filter::RowStage;
 pub use runtime_filter::{RowStageSettings, RuntimeFilters};
+pub(crate) use scan::scan_metadata;
 pub use scan::{
     FileSelections, FilterPushdown, MemoryScan, PushedFilter, ScanPushdown, ScanPushdowns, TakeRows,
 };
 #[cfg(all(test, not(loom)))]
 use scan::{ScanGlobal, ScanLocal};
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortKey, SortMetrics, TopN};
-pub(crate) use sort::{KeyEncoder, blocking, data_bytes};
+pub(crate) use sort::{KeyEncoder, blocking, data_bytes, owned_rows};
 pub use union::UnionAlign;
 
 use crate::error::{Result, internal};

@@ -49,15 +49,16 @@ TopN 10, [revenue#33 DESC NULLS LAST, o_orderdate#12 ASC NULLS FIRST]
       +- Project [l_orderkey#17, sum((l_extendedprice#22 * (1 - l_discount#23)))#4611686018427387927 AS revenue#33, o_orderdate#12, o_shippriority#15]
          +- HashAggregate keys=[l_orderkey#17, o_orderdate#12, o_shippriority#15], functions=[sum((l_extendedprice#22 * (1 - l_discount#23)))]
             +- Exchange hashpartitioning(l_orderkey#17, o_orderdate#12, o_shippriority#15)
-               +- Project [l_orderkey#17, o_orderdate#12, o_shippriority#15, (l_extendedprice#22 * (1 - l_discount#23))]
-                  +- Project [o_orderdate#12, o_shippriority#15, l_orderkey#17, l_extendedprice#22, l_discount#23]
-                     +- HashJoin Inner, [o_orderkey#8] = [l_orderkey#17], RuntimeFilter #2: o_orderkey#8 -> spark_catalog.default.orders.o_orderkey
-                        :- Project [o_orderkey#8, o_orderdate#12, o_shippriority#15]
-                        :  +- HashJoin Inner, [c_custkey#0] = [o_custkey#9], RuntimeFilter #1: c_custkey#0 -> spark_catalog.default.customer.c_custkey
-                        :     :- Project [c_custkey#0]
-                        :     :  +- Scan spark_catalog.default.customer [c_custkey#0, c_mktsegment#6], PushedFilters: [(c_mktsegment#6 == 'BUILDING')]
-                        :     +- BroadcastExchange
-                        :        +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12, o_shippriority#15], PushedFilters: [(o_orderdate#12 < DATE '1995-03-15')]
-                        +- BroadcastExchange
-                           +- Project [l_orderkey#17, l_extendedprice#22, l_discount#23]
-                              +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_extendedprice#22, l_discount#23, l_shipdate#27], PushedFilters: [(l_shipdate#27 > DATE '1995-03-15')]
+               +- PartialHashAggregate keys=[l_orderkey#17, o_orderdate#12, o_shippriority#15], functions=[sum((l_extendedprice#22 * (1 - l_discount#23)))]
+                  +- Project [l_orderkey#17, o_orderdate#12, o_shippriority#15, (l_extendedprice#22 * (1 - l_discount#23))]
+                     +- Project [o_orderdate#12, o_shippriority#15, l_orderkey#17, l_extendedprice#22, l_discount#23]
+                        +- HashJoin Inner, [o_orderkey#8] = [l_orderkey#17], RuntimeFilter #2: o_orderkey#8 -> spark_catalog.default.orders.o_orderkey
+                           :- Project [o_orderkey#8, o_orderdate#12, o_shippriority#15]
+                           :  +- HashJoin Inner, [c_custkey#0] = [o_custkey#9], RuntimeFilter #1: c_custkey#0 -> spark_catalog.default.customer.c_custkey
+                           :     :- Project [c_custkey#0]
+                           :     :  +- Scan spark_catalog.default.customer [c_custkey#0, c_mktsegment#6], PushedFilters: [(c_mktsegment#6 == 'BUILDING')]
+                           :     +- BroadcastExchange
+                           :        +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12, o_shippriority#15], PushedFilters: [(o_orderdate#12 < DATE '1995-03-15')]
+                           +- BroadcastExchange
+                              +- Project [l_orderkey#17, l_extendedprice#22, l_discount#23]
+                                 +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_extendedprice#22, l_discount#23, l_shipdate#27], PushedFilters: [(l_shipdate#27 > DATE '1995-03-15')]

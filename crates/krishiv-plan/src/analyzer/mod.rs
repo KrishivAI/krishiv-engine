@@ -75,6 +75,16 @@ mod builtins;
 mod catalog;
 mod coerce;
 mod exprs;
+
+/// Whether `name` is an AES function, in any letter case: the key is the
+/// second argument and must not reach a name, a plan or an error (ADR 0042).
+pub(crate) fn is_aes_function(name: &str) -> bool {
+    // A qualified call (`builtin.aes_encrypt`) is judged by its last segment.
+    let name = name.rsplit('.').next().unwrap_or(name);
+    ["aes_encrypt", "aes_decrypt", "try_aes_decrypt"]
+        .iter()
+        .any(|f| name.eq_ignore_ascii_case(f))
+}
 mod fold;
 mod fold_ops;
 mod generate;
@@ -112,11 +122,12 @@ pub use access::{authorize, insufficient_permissions, namespace_parts, table_ide
 pub use builtins::BuiltinFunctions;
 pub use catalog::{
     AccessDecision, AccessPolicy, AllowAll, ArgType, Arity, BoxFuture, BuiltinTableFunctions,
-    CallTypes, Catalog, CatalogResolver, Constant, DenyAll, FileSchemaResolver, FunctionEntry,
-    FunctionLookup, FunctionRegistry, InputBuilder, InputType, Inputs, MemoryCatalog, NameForm,
-    Operator, PolicyVersion, Principal, PrincipalKind, Privilege, ResultType, RowColumnPolicy,
-    Securable, SourceKind, SqlFrontend, TableColumn, TableFunctionKind, TableFunctionLookup,
-    TableFunctionRegistry, TableIdent, TableKind, TableMeta,
+    CallTypes, Catalog, CatalogResolver, Constant, DenyAll, FileMetadata, FileSchemaResolver,
+    FunctionEntry, FunctionLookup, FunctionRegistry, InputBuilder, InputType, Inputs,
+    MemoryCatalog, NameForm, Operator, PolicyVersion, Principal, PrincipalKind, Privilege,
+    ResultType, RowColumnPolicy, Securable, SourceKind, SqlFrontend, TableColumn,
+    TableFunctionKind, TableFunctionLookup, TableFunctionRegistry, TableIdent, TableKind,
+    TableMeta,
 };
 pub use sqlfn::{SqlFunction, SqlParam};
 pub use variables::{LocalFrame, SessionVariable, VariableSnapshot, variable_name};
@@ -224,6 +235,13 @@ impl TimeZoneRules for SessionZone {
         match self {
             Self::Fixed(off) => *off,
             Self::Region(r) => r.zone.legacy_offset_at_utc(utc_seconds),
+        }
+    }
+
+    fn region_id(&self) -> Option<&str> {
+        match self {
+            Self::Fixed(_) => None,
+            Self::Region(r) => r.zone.region_id(),
         }
     }
 }
@@ -339,6 +357,12 @@ pub struct ResolutionConf {
     /// `spark.sql.legacy.interval.enabled`: Spark's literals become calendar
     /// intervals; refused here (`KRISHIV_UNSUPPORTED_FEATURE`).
     pub legacy_interval: bool,
+    /// `spark.sql.legacy.nullInEmptyListBehavior`: `NULL IN (empty
+    /// subquery)` is NULL instead of false.
+    pub legacy_null_in_empty_list: bool,
+    /// `spark.sql.function.concatBinaryAsString`: `concat` of binaries
+    /// returns a string.
+    pub concat_binary_as_string: bool,
 }
 
 impl Default for ResolutionConf {
@@ -367,13 +391,15 @@ impl Default for ResolutionConf {
             legacy_time_parser: false,
             time_type: false,
             legacy_interval: false,
+            legacy_null_in_empty_list: false,
+            concat_binary_as_string: false,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 22] = [
+    pub const KEYS: [&'static str; 24] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -396,6 +422,8 @@ impl ResolutionConf {
         "spark.sql.legacy.negativeIndexInArrayInsert",
         "spark.sql.timeType.enabled",
         "spark.sql.legacy.interval.enabled",
+        "spark.sql.legacy.nullInEmptyListBehavior",
+        "spark.sql.function.concatBinaryAsString",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -452,6 +480,8 @@ impl ResolutionConf {
             legacy_negative_index_in_array_insert: on(Self::KEYS[19]),
             time_type: on(Self::KEYS[20]),
             legacy_interval: on(Self::KEYS[21]),
+            legacy_null_in_empty_list: on(Self::KEYS[22]),
+            concat_binary_as_string: on(Self::KEYS[23]),
         }
     }
 }
@@ -550,6 +580,8 @@ impl ContextFingerprint {
             c.legacy_negative_index_in_array_insert,
             c.time_type,
             c.legacy_interval,
+            c.legacy_null_in_empty_list,
+            c.concat_binary_as_string,
         ];
         num(
             &mut b,

@@ -63,6 +63,8 @@ pub struct Case {
 pub struct Fixture {
     /// The statement that creates the table `t` the expressions read.
     pub setup: String,
+    /// `spark.sql.session.timeZone` the answers were taken under, when the fixture sets one.
+    pub time_zone: Option<String>,
     /// All cases: roots and their sub-expressions.
     pub cases: Vec<Case>,
 }
@@ -119,7 +121,12 @@ impl Fixture {
                 expect,
             });
         }
-        Ok(Self { setup, cases })
+        let time_zone = v.get("timeZone").and_then(Value::as_str).map(str::to_owned);
+        Ok(Self {
+            setup,
+            time_zone,
+            cases,
+        })
     }
 }
 
@@ -150,7 +157,49 @@ impl Mismatch {
     }
 }
 
-/// Replays every case and returns the minimal mismatches, sorted by key.
+/// Whether a cell of Spark's answer is a day number that wrapped past the `int` range: a date
+/// outside years 1 to 9999 (`-5877611-08-19`, `+10000-01-01`), or a day difference larger than
+/// any two valid dates can have (the span of 0001-01-01 to 9999-12-31 is 3,652,058 days).
+fn is_wrapped_day_value(cell: &str) -> bool {
+    let signed_date = cell.starts_with(['+', '-'])
+        && cell.chars().nth(1).is_some_and(|c| c.is_ascii_digit())
+        && cell[1..].contains('-');
+    signed_date
+        || cell
+            .parse::<i64>()
+            .is_ok_and(|v| v.unsigned_abs() > 3_700_000)
+}
+
+/// Whether `m` is the divergence ADR 0023 records (owner decision, 2026-10-18): `date_add`,
+/// `date_sub` and `datediff` past the `int` day range wrap silently in Spark, in both ANSI modes,
+/// and raise `ARITHMETIC_OVERFLOW` under ANSI here (`try_*` gives NULL; with ANSI off the wrap is
+/// kept). With all-literal arguments Spark raises a bare `ArithmeticException` instead of wrapping.
+/// Such a mismatch is not reported, so a seeded nightly run does not find a new variant of it
+/// every day; a parent of such a case is already left out, as for any mismatching child.
+///
+/// When Spark returned rows the mismatch must be a wrap: Spark's rows hold a wrapped day value
+/// ([`is_wrapped_day_value`]; an in-range day cannot overflow), and the engine's own ANSI-off
+/// answer to the same expression equals them. An `ARITHMETIC_OVERFLOW` that is not about the
+/// `int` range (a real bug in the function) is therefore still reported.
+fn documented_divergence(m: &Mismatch, ev: &mut dyn Evaluator) -> bool {
+    let date_arith = ["date_add(", "date_sub(", "datediff("]
+        .iter()
+        .any(|f| m.sql.contains(f));
+    if !(m.ansi && date_arith)
+        || !matches!(&m.got, Expect::Error(class) if class == "ARITHMETIC_OVERFLOW")
+    {
+        return false;
+    }
+    match &m.spark {
+        Expect::Rows { rows, .. } => {
+            rows.iter().any(|cell| is_wrapped_day_value(cell)) && ev.eval(&m.sql, false) == m.spark
+        }
+        Expect::Error(class) => class == "ArithmeticException",
+    }
+}
+
+/// Replays every case and returns the minimal mismatches, sorted by key, without the
+/// documented divergences (the ADR 0023 date arithmetic overflow, see `documented_divergence`).
 pub fn run(fixture: &Fixture, ev: &mut dyn Evaluator) -> Vec<Mismatch> {
     let mut bad: BTreeMap<(&str, bool), Option<Expect>> = BTreeMap::new();
     for c in &fixture.cases {
@@ -174,6 +223,7 @@ pub fn run(fixture: &Fixture, ev: &mut dyn Evaluator) -> Vec<Mismatch> {
             })
         })
         .collect();
+    out.retain(|m| !documented_divergence(m, ev));
     out.sort_by_key(Mismatch::key);
     out.dedup_by_key(|m| m.key());
     out
@@ -198,6 +248,48 @@ impl SessionEvaluator {
             .map_err(|e| e.message)?;
         engine.execute(setup).map_err(|e| e.message)?;
         Ok(Self { engine, ansi: None })
+    }
+}
+
+impl SessionEvaluator {
+    /// Like [`SessionEvaluator::new_materialized`] for a fixture, with the session time zone the
+    /// fixture's answers were taken under set *before* the setup runs, so the table's timestamps
+    /// are read in that zone.
+    ///
+    /// # Errors
+    /// When the session, the zone, the view or the copy fails.
+    pub fn for_fixture(fixture: &Fixture) -> Result<Self, String> {
+        let source = fixture.setup.replacen("VIEW t AS", "VIEW t_source AS", 1);
+        if source == fixture.setup {
+            return Err("the setup does not define the view `t`".to_owned());
+        }
+        let mut engine = SessionEngine::new().map_err(|e| e.message)?;
+        engine
+            .reset(&SessionSetup::plain(TestKind::Regular))
+            .map_err(|e| e.message)?;
+        if let Some(zone) = &fixture.time_zone {
+            engine
+                .execute(&format!("SET spark.sql.session.timeZone={zone}"))
+                .map_err(|e| e.message)?;
+        }
+        engine.execute(&source).map_err(|e| e.message)?;
+        engine
+            .execute("CREATE TABLE t AS SELECT * FROM t_source")
+            .map_err(|e| e.message)?;
+        Ok(Self { engine, ansi: None })
+    }
+
+    /// Like [`SessionEvaluator::new`], but the table `t` is materialized once: a fixture with a
+    /// large `VALUES` view would otherwise be planned again for every expression.
+    ///
+    /// # Errors
+    /// When the session, the view or the copy fails.
+    pub fn new_materialized(setup: &str) -> Result<Self, String> {
+        Self::for_fixture(&Fixture {
+            setup: setup.to_owned(),
+            time_zone: None,
+            cases: Vec::new(),
+        })
     }
 }
 

@@ -628,6 +628,8 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
             x(&["source-guard"]),
             x(&["check-format-neutral"]),
             x(&["registry-coverage"]),
+            // Report only until P2-T193 turns it into a gate.
+            x(&["maps-check", "--report"]),
             x(&["metrics-gate"]),
             x(&["dco", "--base", base]),
             Cmd::new(

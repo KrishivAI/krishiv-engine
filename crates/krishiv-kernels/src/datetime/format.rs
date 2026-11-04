@@ -21,7 +21,7 @@ use arrow_schema::DataType;
 
 use super::resolve_zone;
 use crate::cast::datetime::{MICROS_PER_DAY, local_to_utc, utc_to_local};
-use crate::datetime_pattern::legacy::LegacyPattern;
+use crate::datetime_pattern::legacy::{LegacyPattern, Unmatched};
 use crate::datetime_pattern::parse::Fail;
 use crate::datetime_pattern::{DateTimePattern, Purpose, Zone};
 use crate::error::{KernelError, with_capacity};
@@ -303,10 +303,10 @@ pub(crate) fn instant_of(
     let pattern = match pattern {
         TimePattern::Corrected(p) => p,
         TimePattern::Legacy(p) => {
-            return match p.parse_timestamp(s, session) {
-                Ok(Some(micros)) => Ok(micros),
-                _ => Err(unparseable(s)),
-            };
+            return p.instant(s, session).map_err(|why| match why {
+                Unmatched::Text => unparseable(s),
+                Unmatched::Overflow => ParseFail::Overflow,
+            });
         }
     };
     let parsed = pattern.parse_detailed(s).map_err(|fail| match fail {

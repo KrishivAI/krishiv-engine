@@ -39,6 +39,16 @@ pub(in crate::analyzer) fn pretty(e: &Expr, zone: Option<SessionZone>) -> String
         }
         done.insert(addr(x), s);
     }
+    // A bare lateral reference is named by its column, as Spark's
+    // `OuterReference` is.
+    if let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+        && let Some(inner) = c
+            .name
+            .strip_prefix("outer(")
+            .and_then(|n| n.strip_suffix(')'))
+    {
+        return outer_column_name(inner);
+    }
     done.remove(&addr(e)).unwrap_or_default()
 }
 
@@ -475,6 +485,14 @@ pub(super) fn call(
     arg_names: Option<&[Option<String>]>,
     data_type: Option<&DataType>,
 ) -> String {
+    // The key of `aes_encrypt`/`aes_decrypt` never reaches a name, an error
+    // message or a log (ADR 0042).
+    if super::super::is_aes_function(name) && k.len() >= 2 {
+        let mut shown: Vec<&str> = k.to_vec();
+        shown[1] = "***";
+        let d = if distinct { "DISTINCT " } else { "" };
+        return format!("{name}({d}{})", shown.join(", "));
+    }
     let infix = |sym: &str| format!("({} {sym} {})", k[0], k[1]);
     // `[NOT] LIKE|ILIKE ANY|SOME|ALL` with literal patterns: Spark's
     // `LikeAny`-family name, `likeany(child)` (the child is `lower(child)`
@@ -812,4 +830,26 @@ pub(super) fn special_float(v: f64) -> &'static str {
     } else {
         "-Infinity"
     }
+}
+
+/// The column named by the inside of an `outer(..)` reference: the text after
+/// the qualifier's last dot, or the backquoted name (dots and doubled
+/// backquotes inside it kept) that ends it.
+pub(super) fn outer_column_name(inner: &str) -> String {
+    if let Some(quoted) = inner.strip_suffix('`') {
+        // Scan back to the opening backquote: a doubled one is part of the name.
+        let chars: Vec<char> = quoted.chars().collect();
+        let mut i = chars.len();
+        while i > 0 {
+            i -= 1;
+            if chars[i] == '`' {
+                if i > 0 && chars[i - 1] == '`' {
+                    i -= 1;
+                } else {
+                    return chars[i + 1..].iter().collect::<String>().replace("``", "`");
+                }
+            }
+        }
+    }
+    inner.rsplit('.').next().unwrap_or(inner).to_owned()
 }

@@ -57,6 +57,11 @@ impl Planner<'_> {
         if n == 0 || total > max_rows || order.iter().any(|o| has_subquery(&o.expr)) {
             return Ok(None);
         }
+        // The hidden `_metadata` column is made by the file scan, which a
+        // late fetch of the other columns would bypass.
+        if scan.metadata_column().is_some() {
+            return Ok(None);
+        }
         let provider = self.cx.tables.provider(scan)?;
         let factory = provider.scan()?;
         if !factory.supports_take() {

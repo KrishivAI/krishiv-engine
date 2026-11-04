@@ -33,8 +33,11 @@ use crate::physical::{AggregatePlan, PhysNode, aggregate_node, aggregate_spec};
 
 /// One aggregate call of the output expressions.
 struct Call {
-    /// Its text, which identifies equal calls.
+    /// Its text (redacted where it holds a secret): the name of its result.
     key: String,
+    /// Its text with nothing redacted, which identifies equal calls (two calls
+    /// differing only in an AES key are different calls). Never shown.
+    ident: String,
     f: ResolvedFunction,
     /// The column of its result.
     id: AttrId,
@@ -107,24 +110,11 @@ impl Planner<'_> {
             .iter()
             .map(|c| input.column_attr(*c))
             .collect::<Result<_>>()?;
-        let input = if k == 0 {
-            self.require(input, Distribution::Single)?
+        let required = if k == 0 {
+            Distribution::Single
         } else {
-            self.require(input, Distribution::Clustered(&key_attrs))?
+            Distribution::Clustered(&key_attrs)
         };
-        let plan = AggregatePlan {
-            group_by: columns[..k].to_vec(),
-            aggregates,
-            distinct,
-            output: AggregateOutput::Final,
-        };
-        // Validates the aggregate (over an input that is never run) and
-        // gives its schema.
-        let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
-        let schema = spec.output_schema()?;
-        aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
-        let mut layout: Vec<AttrId> = columns[..k].iter().map(|c| input.layout[*c]).collect();
-        layout.extend(calls.iter().map(|c| c.id));
         let detail = format!(
             "keys={}, functions=[{}]",
             list(keys),
@@ -134,11 +124,67 @@ impl Planner<'_> {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+        let single = AggregatePlan {
+            group_by: columns[..k].to_vec(),
+            aggregates,
+            distinct,
+            output: AggregateOutput::Final,
+        };
+        // Phases where rows must move (design P2-T174 §2.1): each task's
+        // partial states cross the exchange instead of its rows.
+        // Instantiation fuses the phases back into one aggregation on one
+        // worker.
+        let (input, plan) = if input.placement.satisfies(required) {
+            (input, single)
+        } else if !single.distinct.iter().any(|d| *d) {
+            let partial = AggregatePlan {
+                output: AggregateOutput::Partial,
+                ..single
+            };
+            let plan = crate::physical::final_of(&partial)?;
+            let partial = self.partial_node(input, partial, "PartialHashAggregate", &detail)?;
+            (self.require(partial, required)?, plan)
+        } else if let Some([first, merge, last]) = crate::physical::distinct_phases(&single) {
+            // Spark's plan for a distinct aggregate: the partial phase groups
+            // by the keys and the distinct arguments, the exchange hashes the
+            // keys, and after it a partial merge removes the pairs several
+            // tasks sent before the final phase aggregates each distinct value
+            // once.
+            let darg_names: Vec<String> = first.group_by[k..]
+                .iter()
+                .map(|c| input.schema.field(*c).name().clone())
+                .collect();
+            let detail = format!(
+                "keys={}, distinct=[{}], functions=[{}]",
+                list(keys),
+                darg_names.join(", "),
+                calls
+                    .iter()
+                    .filter(|c| !c.f.distinct)
+                    .map(|c| c.key.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let first = self.partial_node(input, first, "PartialHashAggregate", &detail)?;
+            let moved = self.require(first, required)?;
+            let merged = self.partial_node(moved, merge, "PartialMergeHashAggregate", &detail)?;
+            (merged, last)
+        } else {
+            (self.require(input, required)?, single)
+        };
+        // Validates the aggregate (over an input that is never run) and
+        // gives its schema.
+        let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
+        let schema = spec.output_schema()?;
+        aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
+        let mut layout: Vec<AttrId> = plan.group_by.iter().map(|c| input.layout[*c]).collect();
+        layout.extend(calls.iter().map(|c| c.id));
         // Grouping keys keep their attributes: a filter on one drops whole
         // groups, which the producer above would drop anyway.
         let sites = super::runtime_filter::kept(&input.sites, &layout[..k]);
         let placement = input.placement.clone().restrict(&layout);
         let agg = Planned {
+            ordering: Vec::new(),
             node: PhysNode::Aggregate {
                 input: Box::new(input.node),
                 aggregate: plan,
@@ -156,7 +202,7 @@ impl Planner<'_> {
                 let field = agg.schema.field(i);
                 let data_type = krishiv_types::DataType::from_arrow(field.data_type())?;
                 key_ids.insert(
-                    e.to_string(),
+                    krishiv_plan::identity_string(e),
                     BoundColumn {
                         id: agg.layout[i],
                         name: e.to_string(),
@@ -170,7 +216,7 @@ impl Planner<'_> {
             .iter()
             .map(|c| {
                 (
-                    c.key.as_str(),
+                    c.ident.as_str(),
                     BoundColumn {
                         id: c.id,
                         name: c.key.clone(),
@@ -185,6 +231,39 @@ impl Planner<'_> {
             .map(|e| replace(e, &key_ids, &call_ids))
             .collect::<Result<Vec<_>>>()?;
         self.project(agg, &rewritten)
+    }
+
+    /// The partial phase `plan` of an aggregation over `input`: its keys keep
+    /// their attributes, each state column gets a fresh one.
+    fn partial_node(
+        &mut self,
+        input: Planned,
+        plan: AggregatePlan,
+        name: &str,
+        detail: &str,
+    ) -> Result<Planned> {
+        let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
+        let schema = spec.output_schema()?;
+        aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
+        let k = plan.group_by.len();
+        let mut layout: Vec<AttrId> = plan.group_by.iter().map(|c| input.layout[*c]).collect();
+        for _ in k..schema.fields().len() {
+            layout.push(self.fresh_id());
+        }
+        let sites = super::runtime_filter::kept(&input.sites, &layout[..k]);
+        let placement = input.placement.clone().restrict(&layout);
+        Ok(Planned {
+            ordering: Vec::new(),
+            node: PhysNode::Aggregate {
+                input: Box::new(input.node),
+                aggregate: plan,
+            },
+            schema,
+            layout,
+            explain: super::explain::ExplainNode::new(name, detail, vec![input.explain]),
+            sites,
+            placement,
+        })
     }
 
     /// Collects the aggregate calls of `e`.
@@ -256,6 +335,7 @@ impl Planner<'_> {
         let sites = super::runtime_filter::kept(&input.sites, &layout[..k]);
         let placement = input.placement.clone().restrict(&layout);
         Ok(Planned {
+            ordering: Vec::new(),
             node: PhysNode::Aggregate {
                 input: Box::new(input.node),
                 aggregate: plan,
@@ -277,13 +357,15 @@ impl Planner<'_> {
             && f.kind == FunctionKind::Aggregate
         {
             let key = e.to_string();
-            if !out.iter().any(|c| c.key == key) {
+            let ident = krishiv_plan::identity_string(e);
+            if !out.iter().any(|c| c.ident == ident) {
                 if !matches!(f.id, FunctionId::Registry { .. }) {
                     return Err(unsupported(&format!("the aggregate {key}")));
                 }
                 let id = self.fresh_id();
                 out.push(Call {
                     key,
+                    ident,
                     f: f.clone(),
                     id,
                 });
@@ -311,7 +393,7 @@ fn replace(
         if matches!(x.node, ExprNode::Resolved(ResolvedExpr::Alias { .. })) {
             return Ok::<_, krishiv_common::error::KrishivError>(x);
         }
-        let text = x.to_string();
+        let text = krishiv_plan::identity_string(&x);
         let found = calls.get(text.as_str()).or_else(|| keys.get(&text));
         Ok(match found {
             Some(c) => Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(

@@ -249,7 +249,7 @@ pub(crate) unsafe fn check_array(
     data_type: &DataType,
 ) -> Result<(), KrishivError> {
     // SAFETY: forwarded from the caller; `RawArray` is the C layout.
-    unsafe { check_raw_array(array.cast(), data_type, 0) }
+    unsafe { check_raw_array(array.cast(), data_type, 0) }.map(drop)
 }
 
 #[expect(
@@ -260,7 +260,7 @@ unsafe fn check_raw_array(
     array: *const RawArray,
     data_type: &DataType,
     depth: usize,
-) -> Result<(), KrishivError> {
+) -> Result<usize, KrishivError> {
     if depth > MAX_DEPTH {
         return Err(invalid(format!(
             "the array is nested deeper than {MAX_DEPTH} levels"
@@ -388,18 +388,39 @@ unsafe fn check_raw_array(
     let children = unsafe { pointers(a.children, n_children, "array child") }?;
     for (child, child_type) in children.into_iter().zip(child_types) {
         // SAFETY: a child of a valid array is a valid array (caller).
-        unsafe { check_raw_array(child, child_type, depth + 1) }?;
+        let have = unsafe { check_raw_array(child, child_type, depth + 1) }?;
+        if matches!(data_type, DataType::Struct(_)) && have < total {
+            // A struct's window (offset + length) must lie inside every child: arrow-rs slices
+            // the children by it, and a short child panics there (found by the `capsule_import`
+            // fuzz target).
+            return Err(invalid(format!(
+                "a struct window of {total} rows over a child of {have} rows"
+            )));
+        }
+        if let DataType::FixedSizeList(_, size) = data_type {
+            // The values must cover every slot the parent's window reaches, offset included:
+            // arrow-rs's own check ignores the offset, and slicing a short child panics.
+            let need = usize::try_from(*size)
+                .ok()
+                .and_then(|w| total.checked_mul(w))
+                .ok_or_else(|| invalid("a fixed-size list's value count overflows"))?;
+            if have < need {
+                return Err(invalid(format!(
+                    "a fixed-size list of {total} slots of {size} values has {have} values"
+                )));
+            }
+        }
     }
     match (data_type, a.dictionary.is_null()) {
         // SAFETY: the dictionary of a valid array is a valid array (caller).
         (DataType::Dictionary(_, values), false) => unsafe {
-            check_raw_array(a.dictionary, values, depth + 1)
+            check_raw_array(a.dictionary, values, depth + 1).map(|_| length)
         },
         (DataType::Dictionary(..), true) => Err(invalid("a dictionary array has no dictionary")),
         (_, false) => Err(invalid(format!(
             "an array of type {data_type} has a dictionary"
         ))),
-        (_, true) => Ok(()),
+        (_, true) => Ok(length),
     }
 }
 
@@ -616,11 +637,15 @@ fn validated_batch(schema: SchemaRef, data: &ArrayData) -> Result<RecordBatch, K
     if data.null_count() > 0 {
         return Err(invalid("a table's struct array has null rows"));
     }
-    let columns: Vec<_> = data
-        .child_data()
-        .iter()
-        .map(|child| arrow_array::make_array(child.slice(data.offset(), data.len())))
-        .collect();
+    // Slicing and building the arrays can still panic on data `validate_full` accepted (a
+    // fixed-size list whose parent offset leaves its values short, found by the
+    // `capsule_import` fuzz target), so it is contained like the validation.
+    let columns: Vec<_> = catch_panic(|| {
+        data.child_data()
+            .iter()
+            .map(|child| arrow_array::make_array(child.slice(data.offset(), data.len())))
+            .collect()
+    })?;
     let options = RecordBatchOptions::new().with_row_count(Some(data.len()));
     RecordBatch::try_new_with_options(schema, columns, &options)
         .map_err(|e| invalid(arrow_message(&e)))

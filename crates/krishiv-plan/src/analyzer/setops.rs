@@ -29,10 +29,12 @@ use std::sync::Arc;
 use krishiv_common::error::{
     ColumnAlreadyExists, IncompatibleColumnType,
     InvalidInlineTableCannotEvaluateExpressionInInlineTable,
+    InvalidInlineTableFailedSqlExpressionEvaluation,
     InvalidInlineTableIncompatibleTypesInInlineTable, KrishivInvalidPartitionNumber,
     LegacyErrorTemp1047, LegacyErrorTemp1048, NumColumnsMismatch, UnresolvedColumnAmongFieldNames,
     UnsupportedFeatureSetOperationOnMapType,
 };
+use krishiv_functions::signature::Constant;
 use krishiv_types::DataType;
 
 use super::bind::{same, unsupported};
@@ -151,6 +153,25 @@ impl Resolver<'_> {
                 // `CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE`.
                 let b = self.bind(cell, &cx)?;
                 self.check_inline_bound(&b)?;
+                // Spark evaluates each cell while resolving the table: a
+                // cell that raises is `FAILED_SQL_EXPRESSION_EVALUATION`.
+                // Only an invalid cast input is taken as a failure of the
+                // cell: the folder cannot yet evaluate every valid literal
+                // (wide decimals, NaN), so any other fold error leaves the
+                // table to the executor.
+                if let Some(Constant::Error(why)) = self.fold(&b.expr, self.ctx.conf.ansi)
+                    && why.error_class().name() == "CAST_INVALID_INPUT"
+                {
+                    return Err(AnalysisError::new(
+                        InvalidInlineTableFailedSqlExpressionEvaluation {
+                            sql_expr: format!(
+                                "\"{}\"",
+                                pretty(&b.shown(), self.ctx.conf.session_zone)
+                            ),
+                        },
+                        o,
+                    ));
+                }
                 cells.push(b);
             }
             bound.push(cells);
@@ -167,6 +188,7 @@ impl Resolver<'_> {
                     let rules = coerce::Rules {
                         ansi: true,
                         case_sensitive,
+                        concat_binary_as_string: false,
                     };
                     coerce::wider_type(&x, &y, rules)
                 } else {
@@ -402,6 +424,7 @@ impl Resolver<'_> {
                 let rules = coerce::Rules {
                     ansi,
                     case_sensitive: self.ctx.conf.case_sensitive,
+                    concat_binary_as_string: false,
                 };
                 let wider = coerce::wider_type(&arg(Some(&acc)), &arg(Some(here)), rules);
                 acc = wider.map(|t| t.unwrap_or(DataType::Null)).ok_or_else(|| {

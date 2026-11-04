@@ -553,3 +553,27 @@ impl Source for MemoryScan {
         self.runtime.extra_metrics()
     }
 }
+
+/// The `_metadata` fields a resolved scan outputs (its last column).
+#[must_use]
+pub(crate) fn scan_metadata(scan: &krishiv_plan::Scan) -> MetadataCols {
+    let mut cols = MetadataCols::default();
+    let Some(krishiv_types::DataType::Struct(fields)) =
+        scan.metadata_column().map(|c| &c.data_type)
+    else {
+        return cols;
+    };
+    for f in fields.fields() {
+        match f.name() {
+            "file_path" => cols.file_path = true,
+            "file_name" => cols.file_name = true,
+            "file_size" => cols.file_size = true,
+            "file_block_start" => cols.file_block_start = true,
+            "file_block_length" => cols.file_block_length = true,
+            "file_modification_time" => cols.file_modification_time = true,
+            "row_index" => cols.row_index = true,
+            _ => {}
+        }
+    }
+    cols
+}

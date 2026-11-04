@@ -36,7 +36,7 @@ pub(crate) enum Parsed {
     /// the session zone, which depends on the query clock. (`now`, `today`,
     /// `epoch` and the like are not timestamps in a column; Spark converts them
     /// in string literals only, which is the analyzer's job.)
-    NeedsClock,
+    NeedsClock(Zone),
     /// Not a timestamp.
     Malformed,
 }
@@ -63,7 +63,7 @@ pub enum TimestampText {
 pub fn timestamp_text(s: &str) -> TimestampText {
     match parse(s.as_bytes()) {
         Parsed::At(..) => TimestampText::DateTime,
-        Parsed::NeedsClock => TimestampText::TimeOnly,
+        Parsed::NeedsClock(_) => TimestampText::TimeOnly,
         Parsed::Malformed => TimestampText::Malformed,
     }
 }
@@ -89,10 +89,9 @@ pub(crate) fn parse(s: &[u8]) -> Parsed {
         let mut c = Cursor { s, at: 0 };
         c.eat(b'T');
         // The time must be well formed; its zone is checked, not applied.
-        return if time_of_day(&mut c).is_some() {
-            Parsed::NeedsClock
-        } else {
-            Parsed::Malformed
+        return match time_of_day(&mut c) {
+            Some((_, zone)) => Parsed::NeedsClock(zone),
+            None => Parsed::Malformed,
         };
     }
     datetime(s).unwrap_or(Parsed::Malformed)
@@ -329,9 +328,13 @@ mod tests {
         ] {
             assert_eq!(at(bad), None, "{bad}");
         }
-        assert_eq!(parse(b"T10:00"), Parsed::NeedsClock);
-        assert_eq!(parse(b"10:00:00"), Parsed::NeedsClock);
-        assert_eq!(parse(b"3:4"), Parsed::NeedsClock);
+        assert_eq!(parse(b"T10:00"), Parsed::NeedsClock(Zone::Session));
+        assert_eq!(parse(b"10:00:00"), Parsed::NeedsClock(Zone::Session));
+        assert_eq!(parse(b"3:4"), Parsed::NeedsClock(Zone::Session));
+        assert_eq!(
+            parse(b"T10:00:00-12:00"),
+            Parsed::NeedsClock(Zone::Offset(-43_200))
+        );
         for special in ["now", "today", "epoch", "yesterday", "tomorrow", "t10:00"] {
             assert_eq!(parse(special.as_bytes()), Parsed::Malformed, "{special}");
         }

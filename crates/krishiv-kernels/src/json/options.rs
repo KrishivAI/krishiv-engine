@@ -108,9 +108,11 @@ impl JsonOptions {
         Self::from_map_with(options, false)
     }
 
-    /// [`Self::from_map`], with the datetime patterns compiled as the legacy
-    /// `SimpleDateFormat`/`FastDateFormat` ones when `legacy`
-    /// (`spark.sql.legacy.timeParserPolicy=LEGACY`).
+    /// [`Self::from_map`], with the date and zoned timestamp patterns
+    /// compiled as the legacy (`SimpleDateFormat`) ones when `legacy`.
+    /// Spark's JSON functions use a lenient `FastDateFormat` there instead,
+    /// which this does not model, so the SQL functions pass `false` and
+    /// refuse `LEGACY` for a `DATE` or `TIMESTAMP` field.
     ///
     /// # Errors
     /// As [`Self::from_map`].
@@ -138,11 +140,12 @@ impl JsonOptions {
                     out.timestamp_output =
                         Some(DateTimePattern::new_with(value, Purpose::Format, legacy)?);
                 }
+                // Spark builds the NTZ formatter with `forTimestampNTZ`, which
+                // never takes the legacy one, whatever the parser policy.
                 "timestampNTZFormat" => {
-                    let pattern = DateTimePattern::new_with(value, Purpose::Parse, legacy)?;
+                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
                     out.timestamp_ntz_format = Some(pattern);
-                    out.timestamp_ntz_output =
-                        Some(DateTimePattern::new_with(value, Purpose::Format, legacy)?);
+                    out.timestamp_ntz_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
                 "primitivesAsString" => out.primitives_as_string = is_true(value),
                 "prefersDecimal" => out.prefers_decimal = is_true(value),
@@ -193,4 +196,25 @@ impl JsonOptions {
 /// Spark's `toBoolean`: only `"true"` (any case, trimmed) is true.
 fn is_true(value: &str) -> bool {
     value.trim().eq_ignore_ascii_case("true")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_ntz_pattern_stays_on_the_corrected_formatter_under_legacy() {
+        let options = BTreeMap::from([(
+            "timestampNTZFormat".to_owned(),
+            "yyyy-MM-dd HH:mm:ss.SSSSSS".to_owned(),
+        )]);
+        let o = JsonOptions::from_map_with(&options, true).unwrap();
+        let text = "2024-01-02 03:04:05.000123";
+        let ntz = o.timestamp_ntz_format.as_ref().unwrap();
+        let micros = ntz.parse_local(text, false).unwrap().unwrap();
+        // `.000123` is 123 microseconds, not the legacy 123 milliseconds.
+        assert_eq!(micros.rem_euclid(1_000_000), 123);
+        let output = o.timestamp_ntz_output.as_ref().unwrap();
+        assert_eq!(output.format_local(micros).unwrap(), text);
+    }
 }

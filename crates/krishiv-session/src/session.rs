@@ -2,7 +2,7 @@
 //! [`Session`] and [`SessionBuilder`], and the query pipeline every
 //! action runs: analyze → optimize → physical plan → run.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
@@ -148,6 +148,9 @@ pub(crate) struct SessionState {
     /// The spill directory, opened by the first query that plans for
     /// execution (`krishiv.spill.*` are build-time keys).
     spill: Arc<Mutex<Option<SpillManager>>>,
+    /// Whether a store creates objects only if absent (the commit log's
+    /// probe), by store id; per session, never process-wide.
+    commit_log_probes: Mutex<HashMap<String, bool>>,
     io: Arc<IoScheduler>,
     formats: Arc<FormatRegistry>,
     /// The session's content-addressed relations: every memory table's
@@ -158,6 +161,8 @@ pub(crate) struct SessionState {
     planner: Arc<dyn PhysicalPlanner>,
     plan_ids: AtomicI64,
     query_ids: AtomicU64,
+    /// The queries `system.queries` lists.
+    pub(crate) queries: Arc<crate::system::QueryLog>,
     /// SQL source ids handed to view lowerings: every `CREATE TEMPORARY
     /// VIEW` lowers its query with an id of its own, so errors raised
     /// while expanding a view point into the view's text, not the outer
@@ -335,6 +340,8 @@ impl SessionBuilder {
                 as Arc<dyn FunctionRegistry>,
             None => Arc::new(SessionFunctions::new(Arc::clone(&udfs))) as Arc<dyn FunctionRegistry>,
         };
+        let principal = Arc::new(self.principal.unwrap_or_else(Principal::local_user));
+        let queries = Arc::new(crate::system::QueryLog::new(&principal.name));
         Ok(Session {
             locals: Arc::from([]),
             state: Arc::new(SessionState {
@@ -343,11 +350,12 @@ impl SessionBuilder {
                 cache,
                 variables: Arc::new(SessionVariables::default()),
                 profile: self.profile,
-                principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
+                principal,
                 policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
                 functions,
                 udfs,
                 sql_functions: SqlFunctions::default(),
+                commit_log_probes: Mutex::new(HashMap::new()),
                 runner: QueryRunner::new(Arc::clone(&executor)),
                 executor,
                 memory,
@@ -361,6 +369,7 @@ impl SessionBuilder {
                 planner: Arc::new(DefaultPlanner),
                 plan_ids: AtomicI64::new(0),
                 query_ids: AtomicU64::new(0),
+                queries,
                 sql_sources: AtomicU32::new(1),
             }),
         })
@@ -505,9 +514,117 @@ impl Session {
     /// Spark's parse and analysis errors; `KRISHIV_UNSUPPORTED_FEATURE`
     /// for statements other than queries and commands.
     pub async fn sql(&self, query: &str) -> Result<DataFrame, KrishivError> {
-        let (session, query) = (self.clone(), query.to_owned());
-        self.on_executor(async move { session.sql_here(&query).await })
-            .await
+        let (session, text) = (self.clone(), query.to_owned());
+        let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
+        let marker = Arc::clone(&row);
+        let result = self
+            .on_executor(async move { session.sql_here_marked(&text, marker).await })
+            .await;
+        // A statement refused before it ran (parse, analysis, access) is a
+        // row of `system.queries` too, with the text as the session may show it.
+        // ...unless a query already ran inside `sql` (an `EXPLAIN ANALYZE`
+        // that failed while it ran): that one has its row.
+        if let Err(error) = &result
+            && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
+        {
+            self.state.queries.record_refused(
+                Some(krishiv_sql::redact_sql(query).as_str()),
+                None,
+                error,
+            );
+        }
+        result
+    }
+
+    /// Makes the queries this session starts next belong to the W3C trace of
+    /// `traceparent` (`version-trace_id-parent_id-flags`): `system.queries`
+    /// shows the trace id. An inbound header from a protocol front end is
+    /// passed here.
+    ///
+    /// ```
+    /// let s = krishiv_session::Session::new()?;
+    /// s.set_trace_context("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")?;
+    /// assert_eq!(s.trace_id().as_deref(), Some("4bf92f3577b34da6a3ce929d0e0e4736"));
+    /// assert!(s.set_trace_context("not a header").is_err());
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// `INVALID_PARAMETER_VALUE.STRING` for a header that is not a valid
+    /// `traceparent`; the previous trace stays.
+    pub fn set_trace_context(&self, traceparent: &str) -> Result<(), KrishivError> {
+        let Some(trace_id) = crate::system::parse_traceparent(traceparent) else {
+            return Err(krishiv_common::error::InvalidParameterValueString {
+                parameter: "traceparent".to_owned(),
+                function_name: "Session::set_trace_context".to_owned(),
+                invalid_value: format!(
+                    "{traceparent} (expected version-trace_id-parent_id-flags as W3C Trace Context writes it)"
+                ),
+            }
+            .into());
+        };
+        self.state.queries.set_trace_id(Some(trace_id));
+        Ok(())
+    }
+
+    /// Tags the queries this session starts next (`system.queries.tags`):
+    /// a key of 1 to 128 characters, a value of up to 256, at most 32 tags.
+    /// Setting a key again replaces its value.
+    ///
+    /// ```
+    /// let s = krishiv_session::Session::new()?;
+    /// s.set_tag("team", "etl")?;
+    /// assert_eq!(s.tags(), [("team".to_owned(), "etl".to_owned())]);
+    /// s.remove_tag("team");
+    /// assert!(s.tags().is_empty());
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// `INVALID_PARAMETER_VALUE.STRING` for an empty or over-long key, an
+    /// over-long value or a 33rd tag; the tags stay as they were.
+    pub fn set_tag(&self, key: &str, value: &str) -> Result<(), KrishivError> {
+        use crate::system::{MAX_TAG_KEY, MAX_TAG_VALUE};
+        let refuse = |why: &str| {
+            Err(krishiv_common::error::InvalidParameterValueString {
+                parameter: "tag".to_owned(),
+                function_name: "Session::set_tag".to_owned(),
+                invalid_value: format!("{key} ({why})"),
+            }
+            .into())
+        };
+        if key.is_empty() || key.chars().count() > MAX_TAG_KEY {
+            return refuse("a key has 1 to 128 characters");
+        }
+        if value.chars().count() > MAX_TAG_VALUE {
+            return refuse("a value has at most 256 characters");
+        }
+        if !self.state.queries.try_set_tag(key, value) {
+            return refuse("a session carries at most 32 tags");
+        }
+        Ok(())
+    }
+
+    /// Removes the tag `key`, if the session has it.
+    pub fn remove_tag(&self, key: &str) {
+        self.state.queries.remove_tag(key);
+    }
+
+    /// The session's tags, by key.
+    #[must_use]
+    pub fn tags(&self) -> Vec<(String, String)> {
+        self.state.queries.tags()
+    }
+
+    /// Ends the trace [`Session::set_trace_context`] set.
+    pub fn clear_trace_context(&self) {
+        self.state.queries.set_trace_id(None);
+    }
+
+    /// The trace id in effect, if any.
+    #[must_use]
+    pub fn trace_id(&self) -> Option<String> {
+        self.state.queries.trace_id()
     }
 
     /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.
@@ -523,21 +640,48 @@ impl Session {
     }
 
     pub(crate) async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
-        let env = self.query_env();
+        self.sql_here_marked(query, Arc::default()).await
+    }
+
+    /// [`Self::sql_here`], with `row` as the statement's slot for the id of the `system.queries`
+    /// row a query of it began.
+    pub(crate) async fn sql_here_marked(
+        &self,
+        query: &str,
+        row: Arc<std::sync::Mutex<Option<String>>>,
+    ) -> Result<DataFrame, KrishivError> {
+        let mut env = self.query_env();
+        env.row = row;
         let query = self.substituted(query);
         let query: &str = &query;
         // `IDENTIFIER(expr)` names are evaluated first, so the statement is parsed, authorized and
         // run with the names they stand for.
         let resolved = self.resolve_identifier_clauses(query, &env.parser).await?;
+        let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
         let query: &str = &resolved;
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+        // Spark refuses a database on a temporary function named by an
+        // `IDENTIFIER(...)` clause when it drops it; the parser sees only the
+        // evaluated name.
+        if named_by_clause
+            && let Statement::DropFunction(f) = &statement
+            && f.temporary
+        {
+            krishiv_sql::check_temporary_function_name(&f.name, f.span)
+                .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+        }
         // Before any side effect: what the statement writes, creates or
         // drops (its reads are checked by analysis, first thing).
         let class = krishiv_sql::classify(&statement);
         self.authorize_statement(&statement, class, &env).await?;
-        self.run_statement(statement, env, query, &redacted).await
+        env.statement_class = Some(class.name());
+        let df = self.run_statement(statement, env, query, &redacted).await?;
+        // Whatever frame the statement returns (a command's result too) shows the statement's
+        // text and class when it runs.
+        df.with_statement(&redacted, class.name());
+        Ok(df)
     }
 
     /// Runs the parsed, authorized `statement`.
@@ -557,7 +701,7 @@ impl Session {
                 df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)
             }
-            Statement::Explain(e) => self.explain_statement(&e).await,
+            Statement::Explain(e) => self.explain_statement(&e, env, redacted).await,
             Statement::Set(s) => self.exec_set(&s, redacted).await,
             Statement::Reset(r) => self.exec_reset(&r).await,
             Statement::CreateView(v) => self.exec_create_view(&v).await,
@@ -577,6 +721,7 @@ impl Session {
             Statement::DropTable(d) => self.exec_drop_table(&d).await,
             Statement::CreateNamespace(n) => self.exec_create_namespace(&n, query).await,
             Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
+            Statement::AlterNamespace(a) => self.exec_alter_namespace(&a, query).await,
             Statement::Use(u) => self.exec_use(&u).await,
             Statement::Show(s) => Box::pin(self.exec_show(&s, query)).await,
             Statement::Describe(d) => Box::pin(self.exec_describe(&d, query)).await,
@@ -1089,6 +1234,10 @@ impl Session {
                 .unwrap_or_default(),
             crate::system::Sources {
                 memory: Arc::clone(&self.state.memory),
+                queries: Arc::clone(&self.state.queries),
+                io: Arc::clone(&self.state.io),
+                relations: Arc::clone(&self.state.cache),
+                metrics: Arc::clone(&self.state.metrics),
             },
         ));
         let resolution = {
@@ -1153,6 +1302,9 @@ impl Session {
             catalog_epoch,
             variables_version: variables.version,
             policy_version: self.state.policy.version().0,
+            text: None,
+            statement_class: None,
+            row: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1472,8 +1624,34 @@ impl Session {
         env: &QueryEnv,
         detailed: bool,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
+        let (stream, query, _) = self
+            .run_on_query_logged(physical, worker, env, detailed)
+            .await?;
+        Ok((stream, query))
+    }
+
+    /// As [`Self::run_on_query`], also returning the id of the `system.queries` row this execution
+    /// began, so the caller keeps it for itself: the statement's slot in `env` is shared by every
+    /// execution of the same analyzed frame.
+    async fn run_on_query_logged(
+        &self,
+        physical: &PhysicalPlan,
+        worker: WorkerContext,
+        env: &QueryEnv,
+        detailed: bool,
+    ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
+        // The history row first: its id names the query's memory pool, so `system.memory.query_id`
+        // joins `system.queries.query_id`.
+        let log_id = self
+            .state
+            .queries
+            .begin(env.text.as_deref(), env.statement_class);
+        *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         let id = QueryId(self.state.query_ids.fetch_add(1, Ordering::Relaxed));
-        let pool = self.state.memory.child(&format!("query-{}", id.0), None);
+        let pool = self
+            .state
+            .memory
+            .child(&crate::system::pool_name(&log_id), None);
         let query = QueryContext::new(
             id,
             WorkloadClass::Interactive,
@@ -1483,26 +1661,20 @@ impl Session {
             },
             pool,
         );
-        if !metrics_enabled(&env.config) {
-            let stream = self
-                .state
-                .runner
-                .submit(physical.clone(), worker, Arc::clone(&query))
-                .await?;
-            return Ok((
-                Box::pin(stream.map(|b| b.and_then(into_record_batch))),
-                query,
-            ));
+        // The query's row in `system.queries`, and (when metrics are on) its
+        // one metrics fold, both closed by the guard when the stream ends,
+        // fails or is dropped.
+        let metrics_on = metrics_enabled(&env.config);
+        if metrics_on {
+            self.state.metrics.query_begin(query.class());
         }
-        // The fold below runs exactly once per started query; without it a
-        // query is invisible to the registry. The guard folds it when this
-        // future is dropped before the stream exists (a cancel during
-        // `submit`).
-        self.state.metrics.query_begin(query.class());
+        let row_id = log_id.clone();
         let mut pending = PendingFold(Some(QueryFold {
             query: Arc::clone(&query),
             state: Arc::clone(&self.state),
             start: QueryStart::capture(&self.state),
+            metrics_on,
+            log_id,
         }));
         match self
             .state
@@ -1524,6 +1696,7 @@ impl Session {
                 Ok((
                     Box::pin(stream.map(|b| b.and_then(into_record_batch))),
                     query,
+                    row_id,
                 ))
             }
         }
@@ -1554,6 +1727,8 @@ struct QueryStart {
     arbitration: ArbitrationStats,
     cache_hits: u64,
     cache_misses: u64,
+    bytes_read: u64,
+    bytes_written: u64,
 }
 
 impl QueryStart {
@@ -1564,6 +1739,8 @@ impl QueryStart {
             arbitration: state.memory_tree.stats(),
             cache_hits: IoCounters::get(&totals.cache_hits),
             cache_misses: IoCounters::get(&totals.cache_misses),
+            bytes_read: IoCounters::get(&totals.bytes_read),
+            bytes_written: IoCounters::get(&totals.bytes_written),
         }
     }
 
@@ -1572,7 +1749,14 @@ impl QueryStart {
     /// if any; otherwise the query's own error decides the outcome (none is
     /// success). A zero wall time means the query never finished (a
     /// cancelled stream dropped early): the duration then runs to now.
-    fn fold(self, state: &SessionState, query: &QueryContext, error: Option<&KrishivError>) {
+    fn fold(
+        self,
+        state: &SessionState,
+        query: &QueryContext,
+        error: Option<&KrishivError>,
+        metrics_on: bool,
+        log_id: &str,
+    ) {
         let stored = query.error();
         let (status, error_class) = Status::from_error(error.or(stored.as_ref()));
         let metrics = query.metrics();
@@ -1585,6 +1769,63 @@ impl QueryStart {
         } else {
             wall
         };
+        state.queries.finish(
+            log_id,
+            &crate::system::Finished {
+                state: match status {
+                    Status::Succeeded => "finished",
+                    Status::Failed => "failed",
+                    Status::Cancelled => "cancelled",
+                    Status::Denied => "denied",
+                },
+                wall_ns: i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX),
+                peak_memory_bytes: i64::try_from(metrics.memory.peak_reserved).unwrap_or(i64::MAX),
+                error_class: error_class.as_deref(),
+                // The most operators one query keeps.
+                operators: metrics
+                    .operators
+                    .iter()
+                    .take(500)
+                    .map(|(id, e)| crate::system::OperatorRow::of(log_id, *id, e, metrics.workers))
+                    .collect(),
+                totals: Some(crate::system::Totals {
+                    rows_produced: metrics
+                        .operators
+                        .values()
+                        .filter(|e| e.node.is_none() && e.role == krishiv_exec::OperatorRole::Sink)
+                        .map(|e| i64::try_from(e.metrics.rows_in).unwrap_or(i64::MAX))
+                        .max(),
+                    // Process-wide deltas: concurrent queries see each other's I/O.
+                    bytes_read: i64::try_from(
+                        IoCounters::get(&state.io.totals().bytes_read)
+                            .saturating_sub(self.bytes_read),
+                    )
+                    .unwrap_or(i64::MAX),
+                    bytes_written: i64::try_from(
+                        IoCounters::get(&state.io.totals().bytes_written)
+                            .saturating_sub(self.bytes_written),
+                    )
+                    .unwrap_or(i64::MAX),
+                    workload_class: query.class().as_str(),
+                    cpu_ns: i64::try_from(metrics.drivers.busy.as_nanos()).unwrap_or(i64::MAX),
+                    spill_bytes: metrics
+                        .operators
+                        .values()
+                        .map(|e| i64::try_from(e.metrics.spill_write_bytes).unwrap_or(i64::MAX))
+                        .fold(0, i64::saturating_add),
+                    spill_files: metrics
+                        .operators
+                        .values()
+                        .map(|e| i64::try_from(e.metrics.spill_files).unwrap_or(i64::MAX))
+                        .fold(0, i64::saturating_add),
+                    pipelines: i64::try_from(metrics.pipelines.len()).unwrap_or(i64::MAX),
+                    workers: i64::try_from(metrics.workers).unwrap_or(i64::MAX),
+                }),
+            },
+        );
+        if !metrics_on {
+            return;
+        }
         let totals = state.io.totals();
         let arbitration = state.memory_tree.stats();
         state.metrics.fold(&QueryOutcome {
@@ -1608,11 +1849,21 @@ struct QueryFold {
     query: Arc<QueryContext>,
     state: Arc<SessionState>,
     start: QueryStart,
+    /// `krishiv.metrics.enabled` as the query started.
+    metrics_on: bool,
+    /// The query's id in `system.queries`.
+    log_id: String,
 }
 
 impl QueryFold {
     fn finish(self, error: Option<&KrishivError>) {
-        self.start.fold(&self.state, &self.query, error);
+        self.start.fold(
+            &self.state,
+            &self.query,
+            error,
+            self.metrics_on,
+            &self.log_id,
+        );
     }
 }
 
@@ -1842,6 +2093,22 @@ impl Session {
                 // `ignore` found the path: nothing is written.
                 return Ok(Vec::new());
             };
+            // Boxed: the statement futures are on the recursion of nested
+            // scripts, so a larger write future would overflow their stack.
+            let write = if Box::pin(uses_commit_log(
+                &env.config,
+                &self.state.commit_log_probes,
+                &io,
+                &store,
+                &at,
+                &job,
+            ))
+            .await?
+            {
+                Box::pin(write.logged(&io)).await?
+            } else {
+                write
+            };
             let plan = physical.into_write(WritePlan {
                 format: format.name().to_owned(),
                 options: options.clone(),
@@ -1854,24 +2121,36 @@ impl Session {
                 column_types,
             })?;
             let worker = self.worker(env);
-            let mut rows = self.run_on_query(&plan, worker, env, false).await?.0;
+            let (mut rows, _, row_id) = self.run_on_query_logged(&plan, worker, env, false).await?;
             let mut batches = Vec::new();
             while let Some(batch) = rows.next().await {
                 batches.push(batch?);
             }
             drop(rows);
             let files = committed_files(&batches)?;
-            if let Err(denied) = crate::access::still_physical(self, &at) {
-                // The files the query wrote are under the anchor: remove
-                // them (best effort) before refusing.
-                for f in &files {
-                    drop(io.delete(&store, &f.path).await);
+            // The query's stream has ended and its `system.queries` row says `finished`: a failure
+            // of the steps that follow is the write's outcome, so the row is corrected.
+            let after_run = async {
+                if let Err(denied) = crate::access::still_physical(self, &at) {
+                    // The files the query wrote are under the anchor: remove
+                    // them (best effort) before refusing.
+                    for f in &files {
+                        drop(io.delete(&store, &f.path).await);
+                    }
+                    return Err(denied);
                 }
-                return Err(denied);
+                write
+                    .commit(&io, format.as_ref(), schema, &parsed, files.clone())
+                    .await
             }
-            let committed = write
-                .commit(&io, format.as_ref(), schema, &parsed, files)
-                .await?;
+            .await;
+            let committed = match after_run {
+                Ok(committed) => committed,
+                Err(error) => {
+                    self.state.queries.fail(&row_id, &error);
+                    return Err(error);
+                }
+            };
             // The engine's own write may have replaced a cached path: entries
             // reading files are dropped, so the next action lists them again.
             // (An external change drops nothing and stays invisible.)
@@ -1885,7 +2164,7 @@ impl Session {
                 let below: Vec<String> = f
                     .path
                     .prefix_match(&at.path)
-                    .map(|parts| parts.map(|p| percent_decoded(p.as_ref())).collect())
+                    .map(|parts| parts.map(|p| p.as_ref().to_owned()).collect())
                     .unwrap_or_default();
                 if let Some((_, leaf)) = below.split_last()
                     && !leaf.is_empty()
@@ -1993,6 +2272,97 @@ fn partition_overwrite_is_dynamic(
         == Some("DYNAMIC"))
 }
 
+/// Whether this write goes through the commit log:
+/// `krishiv.sql.files.commitProtocol` `LOG`, or `AUTO` where the store
+/// creates objects only if absent (probed once per write; a store that
+/// fails the probe falls back to the plain commit with a warning).
+async fn uses_commit_log(
+    config: &Config,
+    probes: &Mutex<HashMap<String, bool>>,
+    io: &krishiv_io::IoContext,
+    store: &StoreId,
+    at: &krishiv_exec::files::LocatedPath,
+    job: &str,
+) -> Result<bool, KrishivError> {
+    let protocol = config
+        .get(&krishiv_common::config::FILES_COMMIT_PROTOCOL)
+        .and_then(ConfigValue::as_str)
+        .map(str::to_ascii_uppercase);
+    let log = krishiv_io::commit_log::CommitLog::new(
+        io,
+        store.clone(),
+        at.path.clone(),
+        at.display.clone(),
+    );
+    // A directory that already has a log stays logged whatever the setting says: readers apply the
+    // log, so a write that skipped it would succeed and stay invisible.
+    if log.exists().await? {
+        return Ok(true);
+    }
+    // A partition directory (`name=value`) below a logged root cannot be committed on its own: the
+    // root's readers would never see its files, and a log of its own would shadow the root's. The
+    // write goes through the root. The ancestors are probed through the store as the path names
+    // it (`at.store`), not the one anchored at the target, which cannot see above it; the root
+    // may be the store's own root (an empty path).
+    let mut parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
+    while parts
+        .last()
+        .is_some_and(|name| name.split_once('=').is_some_and(|(k, _)| !k.is_empty()))
+    {
+        parts.pop();
+        let parent = krishiv_io::commit_log::CommitLog::new(
+            io,
+            at.store.clone(),
+            object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
+            at.display.clone(),
+        );
+        if parent.exists().await? {
+            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: format!(
+                    "a write into a partition directory below a directory with a commit log ({}): write through the directory that has the log",
+                    at.display
+                ),
+            }
+            .into());
+        }
+    }
+    if protocol.as_deref() == Some("NONE") {
+        return Ok(false);
+    }
+    let known = probes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(at.store.key())
+        .copied();
+    let supported = match known {
+        Some(supported) => supported,
+        None => {
+            let supported = log.supports_put_if_absent(job).await?;
+            probes
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(at.store.key().to_owned(), supported);
+            supported
+        }
+    };
+    if !supported {
+        if protocol.as_deref() == Some("LOG") {
+            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: format!(
+                    "the commit log on a store without put-if-absent ({})",
+                    at.display
+                ),
+            }
+            .into());
+        }
+        tracing::warn!(
+            path = %at.display,
+            "the store does not create objects only if absent: writing without the commit log"
+        );
+    }
+    Ok(supported)
+}
+
 /// The `maxRecordsPerFile` write option (`FILE_SOURCE_OPTIONS`), case
 /// insensitive; 0 (unlimited) when unset.
 fn max_records_per_file(
@@ -2084,7 +2454,10 @@ fn committed_files(
             let rows = u64::try_from(rows.value(i))
                 .map_err(|_| internal(format!("a written file of {} rows", rows.value(i))))?;
             out.push(krishiv_io::WrittenFileInfo {
-                path: object_store::path::Path::from(path.value(i)),
+                // As the writer made it (`Path::parse`: the escaped directory names stay as text), so it names
+                // the key a listing returns; `Path::from` would encode the `%` of `%2F` a second time.
+                path: object_store::path::Path::parse(path.value(i))
+                    .map_err(|e| internal(format!("a written file with an invalid path ({e})")))?,
                 size,
                 rows,
                 statistics: FileStatistics::with_rows(Precision::Exact(rows)),
@@ -2386,6 +2759,7 @@ fn conf_values<'k>(config: &Config, keys: &[&'k str]) -> BTreeMap<&'k str, Strin
 }
 
 /// The analysis inputs of one query and the versions they were taken at.
+#[derive(Clone)]
 pub(crate) struct QueryEnv {
     pub(crate) config: Arc<Config>,
     pub(crate) parser: ParserOptions,
@@ -2408,6 +2782,16 @@ pub(crate) struct QueryEnv {
     /// The access policy's version when the query started: an analysis made under another one
     /// is not reused, since its reads were authorized under the old rules.
     pub(crate) policy_version: u64,
+    /// The statement as the session may show it (redacted), for
+    /// `system.queries`; `None` for a query no SQL text started.
+    pub(crate) text: Option<Arc<str>>,
+    /// The statement's class (`StatementClass::name`), for `system.queries`.
+    pub(crate) statement_class: Option<&'static str>,
+    /// The id of the `system.queries` row the statement's latest query began, if any: `sql`
+    /// records a refusal only for a statement that never got a row, and a write corrects its row
+    /// when a step after its run fails. Statement-local, so another statement of the same
+    /// session cannot set or clear it.
+    pub(crate) row: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a
@@ -2452,30 +2836,6 @@ impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
     }
-}
-
-/// An object-store path part as the file system names it: object_store percent-encodes characters it does
-/// not keep in a part (`%` among them), so `13%253A33` is the directory `13%3A33`.
-fn percent_decoded(part: &str) -> String {
-    let bytes = part.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let hex = |b: u8| char::from(b).to_digit(16);
-        if bytes[i] == b'%'
-            && let (Some(Some(h)), Some(Some(l))) = (
-                bytes.get(i + 1).map(|b| hex(*b)),
-                bytes.get(i + 2).map(|b| hex(*b)),
-            )
-        {
-            out.push(u8::try_from(h * 16 + l).unwrap_or(b'?'));
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
 }
 
 #[cfg(test)]

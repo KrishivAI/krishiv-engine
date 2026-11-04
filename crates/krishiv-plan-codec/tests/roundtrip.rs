@@ -56,6 +56,7 @@ variants!(
     Union,
     WriteFiles,
     Exchange,
+    ExchangeSource,
     SharedRead,
     LateFetch,
     UnionLoop,
@@ -86,6 +87,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Union { .. } => Variant::Union,
         PhysNode::WriteFiles { .. } => Variant::WriteFiles,
         PhysNode::Exchange(_) => Variant::Exchange,
+        PhysNode::ExchangeSource { .. } => Variant::ExchangeSource,
         PhysNode::SharedRead { .. } => Variant::SharedRead,
         PhysNode::LateFetch { .. } => Variant::LateFetch,
     }
@@ -500,6 +502,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "sort_merge_join"
             | "partial_aggregate"
             | "shared_subplan"
+            | "exchange_source"
             | "rust_udf"
             | "nested_types"
             | "struct_field"

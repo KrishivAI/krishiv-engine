@@ -35,6 +35,7 @@
 
 mod format;
 pub mod legacy;
+mod legacy_zones;
 pub(crate) mod parse;
 mod zone_names;
 

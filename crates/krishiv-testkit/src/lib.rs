@@ -20,6 +20,7 @@ pub mod hash_fixture;
 pub mod kernel_eval;
 pub mod manifest_dir;
 pub mod metamorphic;
+pub mod metamorphic_reduce;
 pub mod query_oracle;
 pub mod slt;
 

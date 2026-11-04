@@ -59,7 +59,7 @@ Paths are relative to this crate.
   default is the machine's zone, as in Spark: `krishiv-session/src/conf.rs`). The
   database is `jiff-tzdb` 0.1.9 as pinned in `Cargo.lock`; the crate does not record its IANA release. `spark.sql.legacy.timeParserPolicy=LEGACY`
   (the `SimpleDateFormat` parser) switches the pattern functions to `LegacyPattern` (`BindOptions::legacy_time_parser`, plan data
-  through the `legacy_time_parser` codec feature; also read by the `from_json`/`to_json`/`from_csv`/`to_csv` `dateFormat`/`timestampFormat` options; the XML functions and the file readers do not read it yet). A literal zone reads every row with one lookup (`Zones::One`; a NULL literal zone is
+  through the `legacy_time_parser` codec feature; the `from_json`/`to_json`/`from_csv`/`to_csv` functions read it only to refuse a `DATE` or `TIMESTAMP` field (`refuse_legacy_dates`), as Spark's lenient `FastDateFormat` there is not modelled; `from_xml`/`to_xml` read it only to refuse a `DATE` or `TIMESTAMP` field the same way; the file readers do not read it yet). A literal zone reads every row with one lookup (`Zones::One`; a NULL literal zone is
   NULL for every row), a column resolves per row (the resolution itself is cached per thread). Out-of-range results raise `DATETIME_OVERFLOW` with ANSI on and are NULL
   with it off (as `next_day`'s bad name and `make_date`'s bad field already do). A literal pattern compiles once per bind;
   a column pattern compiles per distinct value behind a small bounded cache. Parse failures are `CANNOT_PARSE_TIMESTAMP`
@@ -113,3 +113,10 @@ Paths are relative to this crate.
   `format_string`/`printf` (`scalar/format.rs`) is Java's `Formatter` over string, boolean, integral, float/double and (for `%s` only, as in Spark) decimal arguments: no `%h %a %t`; Java's format exceptions are `KRISHIV_INVALID_FORMAT_STRING`. The `decode(expr, search, result, ...)` form is a CASE the analyzer builds (`decode_case`).
   Not implemented (`KnownUnsupported`): `parse_url`/`try_parse_url`, `sentences`, `split`
   (array results), `collate`/`collation`/`collations`, `randstr` (no seeded random source).
+
+## AES (ADR 0042)
+`scalar/aes.rs` + `registry/crypto.rs`: `aes_encrypt`, `aes_decrypt`, `try_aes_decrypt` over the RustCrypto `aes`, `cbc` and
+`aes-gcm` crates (ECB/CBC with PKCS or DEFAULT padding, GCM with DEFAULT; 16/24/32-byte keys; CBC and GCM output is IV || ciphertext
+(|| tag); an empty IV on encryption draws OS random bytes, so the result differs per row). Errors carry only lengths and the mode
+text as Spark's do; the key argument prints as `***` in plans, errors and derived names (`krishiv-plan` `display.rs` and
+`analyzer/exprs.rs` `call`), which differs from Spark's names on purpose. `try_aes_decrypt` is NULL on any failure of a row.

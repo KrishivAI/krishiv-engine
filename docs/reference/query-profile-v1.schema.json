@@ -9,6 +9,39 @@
   "properties": {
     "format": { "const": "krishiv.query-profile" },
     "version": { "const": 1 },
+    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`. A reader ignores members it does not know." },
+    "planning": { "$ref": "#/$defs/planning", "description": "Present for EXPLAIN ANALYZE VERBOSE (added in minor 1)." },
+    "environment": {
+      "type": "object",
+      "description": "The build that wrote the document (added in minor 1). Never configuration values. A reader ignores it.",
+      "required": ["krishiv_version", "os", "arch"],
+      "additionalProperties": false,
+      "properties": {
+        "krishiv_version": { "type": "string" },
+        "os": { "type": "string" },
+        "arch": { "type": "string" }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "description": "Measured usage (T138): sums of the operators' counters. Derived, so a reader recomputes it. Object-store counts, principal and tags follow with the session context (T136).",
+      "required": ["fidelity", "wall_ns", "cpu_ns", "rows_out", "peak_memory_bytes", "spill_bytes", "scan"],
+      "additionalProperties": false,
+      "properties": {
+        "fidelity": { "type": "string", "description": "`measured`. A reader keeps an unknown string." },
+        "wall_ns": { "$ref": "#/$defs/u64" },
+        "cpu_ns": { "$ref": "#/$defs/u64", "description": "Compute time summed over every operator and driver." },
+        "rows_out": { "$ref": "#/$defs/u64", "description": "Rows the sinks received." },
+        "peak_memory_bytes": { "$ref": "#/$defs/u64", "description": "Summed over workers: an upper bound." },
+        "spill_bytes": { "$ref": "#/$defs/u64" },
+        "scan": {
+          "type": "object",
+          "required": ["bytes", "rows"],
+          "additionalProperties": false,
+          "properties": { "bytes": { "$ref": "#/$defs/u64" }, "rows": { "$ref": "#/$defs/u64" } }
+        }
+      }
+    },
     "detailed": {
       "type": "boolean",
       "description": "Whether the costlier detailed metrics (hash-table probe lengths) were collected."
@@ -90,6 +123,17 @@
           },
           "role": { "enum": ["source", "operator", "sink"] },
           "pipelines": { "type": "array", "items": { "$ref": "#/$defs/u32" } },
+          "instances": {
+            "type": "object",
+            "description": "Added in minor 1: the spread over the drivers that ran the operator (skew). Mergeable: counts add, minima and maxima combine.",
+            "required": ["count", "min_rows_out", "max_rows_out"],
+            "additionalProperties": false,
+            "properties": {
+              "count": { "$ref": "#/$defs/u64" },
+              "min_rows_out": { "$ref": "#/$defs/u64", "description": "The fewest rows one driver produced (0 when count is 0)." },
+              "max_rows_out": { "$ref": "#/$defs/u64" }
+            }
+          },
           "metrics": {
             "type": "object",
             "required": [
@@ -153,6 +197,48 @@
   },
   "$defs": {
     "u64": { "type": "integer", "minimum": 0, "maximum": 18446744073709551615 },
-    "u32": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+    "u32": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "planning": {
+      "type": "object",
+      "description": "The plan at every planning stage (EXPLAIN ANALYZE VERBOSE, `DataFrame.explain_analyze_verbose`).",
+      "required": ["parsed", "analyzed", "steps", "optimized", "physical"],
+      "additionalProperties": false,
+      "properties": {
+        "parsed": { "type": "string" },
+        "analyzed": { "type": "string" },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["batch", "round", "rule", "plan", "diff"],
+            "additionalProperties": false,
+            "properties": {
+              "batch": { "type": "string" },
+              "round": { "$ref": "#/$defs/u64" },
+              "rule": { "type": "string" },
+              "plan": { "type": "string" },
+              "diff": { "type": "string" }
+            }
+          }
+        },
+        "optimized": { "type": "string" },
+        "physical": { "type": "string" }
+      }
+    },
+    "explainVerbose": {
+      "type": "object",
+      "description": "The second root of this file, selected by `format` = `krishiv.explain-verbose` (EXPLAIN VERBOSE as JSON): planning only, no run. The same minor/must-ignore rule applies.",
+      "required": ["format", "version", "parsed", "analyzed", "steps", "optimized", "physical"],
+      "additionalProperties": false,
+      "properties": {
+        "format": { "const": "krishiv.explain-verbose" },
+        "version": { "const": 1 },
+        "parsed": { "$ref": "#/$defs/planning/properties/parsed" },
+        "analyzed": { "$ref": "#/$defs/planning/properties/analyzed" },
+        "steps": { "$ref": "#/$defs/planning/properties/steps" },
+        "optimized": { "$ref": "#/$defs/planning/properties/optimized" },
+        "physical": { "$ref": "#/$defs/planning/properties/physical" }
+      }
+    }
   }
 }

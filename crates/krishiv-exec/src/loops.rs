@@ -117,6 +117,11 @@ struct Round {
     rows: u64,
 }
 
+/// `spark.sql.cteRecursionAnchorRowsLimitToConvertToLocalRelation`'s
+/// default (an internal Spark config): the most rows of a round that Spark
+/// turns into a `LocalRelation`.
+const LOCAL_RELATION_ROWS: u64 = 100;
+
 struct State {
     run: Option<Run>,
     /// The table the next round reads: the previous run's rows.
@@ -375,6 +380,12 @@ async fn end_run_impl(totals: &Totals, st: &mut State) -> Result<bool> {
         return Ok(false);
     }
     round.flush().await?;
+    // Spark makes a round of at most `LOCAL_RELATION_ROWS` rows a
+    // `LocalRelation`: the next round reads it as one partition, in order,
+    // so its seeded random functions draw one stream (`UnionLoopExec`).
+    if round.rows <= LOCAL_RELATION_ROWS {
+        round.out.read_by_one_driver();
+    }
     st.prev = Some(round.out);
     Ok(true)
 }

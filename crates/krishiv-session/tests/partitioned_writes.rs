@@ -57,6 +57,7 @@ fn layout(root: &std::path::Path) -> Vec<String> {
         let mut entries: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
             .map(|e| e.unwrap().path())
+            .filter(|p| !p.ends_with("_krishiv_log"))
             .collect();
         entries.sort();
         for path in entries {

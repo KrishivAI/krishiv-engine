@@ -183,6 +183,9 @@ pub(super) struct CastParts {
     pub(super) kernel_to: ArrowType,
     pub(super) mode: KernelMode,
     pub(super) zone: krishiv_kernels::datetime::ZoneRef,
+    /// The query start instant (microseconds since the epoch), which a time of
+    /// day cast to `TIMESTAMP` takes its date from.
+    pub(super) query_start: i64,
     /// Where the `time(p)` targets are: a time cast to `time(p)` drops the
     /// digits below `p` (a string cast keeps them, as Spark does:
     /// `time_to_micros(cast('09:08:01.987654' as time(1)))` is
@@ -301,6 +304,7 @@ pub(super) fn parts(
         kernel_to,
         mode,
         zone,
+        query_start: env.query_start_micros,
         precision: Precision::None,
     })
 }
@@ -319,8 +323,39 @@ impl CastParts {
             kernel_to,
             mode: self.mode,
             zone: self.zone.clone(),
+            query_start: self.query_start,
             precision,
         }
+    }
+}
+
+/// The session zone of a cast, with the query start instant for a time of day
+/// cast to `TIMESTAMP`.
+#[derive(Debug)]
+struct ClockedZone<'a> {
+    inner: &'a krishiv_kernels::datetime::ZoneRef,
+    query_start: i64,
+}
+
+impl krishiv_kernels::datetime::TimeZoneRules for ClockedZone<'_> {
+    fn offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        self.inner.offset_at_utc(utc_seconds)
+    }
+
+    fn offset_for_local(&self, local_seconds: i64) -> i32 {
+        self.inner.offset_for_local(local_seconds)
+    }
+
+    fn legacy_offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        self.inner.legacy_offset_at_utc(utc_seconds)
+    }
+
+    fn region_id(&self) -> Option<&str> {
+        self.inner.region_id()
+    }
+
+    fn query_start_micros(&self) -> Option<i64> {
+        Some(self.query_start)
     }
 }
 
@@ -334,9 +369,13 @@ pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
         return nested_cast::cast(p, a);
     }
     let input = from_view(a)?;
+    let zone = ClockedZone {
+        inner: &p.zone,
+        query_start: p.query_start,
+    };
     let opts = CastOptions {
         mode: p.mode,
-        time_zone: &p.zone,
+        time_zone: &zone,
     };
     let out = cast(input.as_ref(), &p.kernel_to, &opts)?;
     let out = match (input.data_type(), out.data_type()) {

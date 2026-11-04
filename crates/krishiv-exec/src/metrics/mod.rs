@@ -64,12 +64,30 @@ pub struct OperatorMetrics {
     pub blocked_on_memory: Duration,
     /// Time waiting on a `Blocked` sink (backpressure).
     pub blocked_on_sink: Duration,
+    /// The fewest rows one driver produced (skew; meaningful when
+    /// [`drivers`](Self::drivers) is not 0).
+    pub min_driver_rows_out: u64,
+    /// The most rows one driver produced.
+    pub max_driver_rows_out: u64,
 }
 
 impl OperatorMetrics {
     /// Adds `o` (another driver's or worker's counters), saturating (a
     /// merged profile may come from a document).
     pub fn merge(&mut self, o: &Self) {
+        // The spread of rows per driver merges as min and max over the
+        // drivers that ran (a side with none has no spread).
+        match (self.drivers, o.drivers) {
+            (_, 0) => {}
+            (0, _) => {
+                self.min_driver_rows_out = o.min_driver_rows_out;
+                self.max_driver_rows_out = o.max_driver_rows_out;
+            }
+            _ => {
+                self.min_driver_rows_out = self.min_driver_rows_out.min(o.min_driver_rows_out);
+                self.max_driver_rows_out = self.max_driver_rows_out.max(o.max_driver_rows_out);
+            }
+        }
         self.drivers = self.drivers.saturating_add(o.drivers);
         self.rows_in = self.rows_in.saturating_add(o.rows_in);
         self.batches_in = self.batches_in.saturating_add(o.batches_in);
@@ -97,6 +115,8 @@ impl OperatorMetrics {
         self.drivers = 1;
         self.max_driver_compute_time = self.compute_time;
         self.max_driver_blocked_on_io = self.blocked_on_io;
+        self.min_driver_rows_out = self.rows_out;
+        self.max_driver_rows_out = self.rows_out;
     }
 
     pub(crate) fn input(&mut self, rows: usize) {
@@ -445,6 +465,27 @@ mod tests {
         };
         m.as_driver();
         m
+    }
+
+    #[test]
+    fn rows_per_driver_merge_as_min_and_max() {
+        let mut total = OperatorMetrics::default();
+        for (ms, rows) in [(5, 10), (40, 1), (7, 3)] {
+            total.merge(&op(ms, rows));
+        }
+        assert_eq!(
+            (total.min_driver_rows_out, total.max_driver_rows_out),
+            (1, 10)
+        );
+        // A side without drivers has no spread and changes nothing.
+        let mut other = OperatorMetrics::default();
+        other.merge(&total);
+        other.merge(&OperatorMetrics::default());
+        assert_eq!(
+            (other.min_driver_rows_out, other.max_driver_rows_out),
+            (1, 10)
+        );
+        assert_eq!(other.drivers, 3);
     }
 
     #[test]

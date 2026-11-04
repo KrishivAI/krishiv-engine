@@ -25,6 +25,7 @@ use std::fmt::Write as _;
 use krishiv_common::error::{InvalidDatetimePatternWithSuggestion, KrishivError};
 
 use super::format::{MICROS_PER_DAY, MONTHS, zone_name};
+use super::legacy_zones::{DIGIT_ZEROS, ZONE_STRINGS, ZoneStrings, zone_row};
 use super::{DOC_ROOT, Zone, unsupported};
 use crate::cast::TimeZoneRules;
 use crate::cast::datetime::{civil_from_days, days_from_civil, days_in_month};
@@ -217,12 +218,21 @@ impl LegacyPattern {
                 'G' => out.push_str(if year >= 1 { "AD" } else { "BC" }),
                 'Y' => {
                     // The week year: the year of the week's Saturday.
+                    // `Calendar.getWeekYear` is not a year of the era: a BC week
+                    // year prints as the signed astronomical year (Spark 4.2:
+                    // `-0005-06-01` with 'Y YY YYY' is `-5 -05 -005`).
                     let (wy, _, _) = civil_from_days(week_year_anchor(days, real, year, doy));
-                    let era_year = if wy >= 1 { wy } else { 1 - wy };
+                    if wy < 0 {
+                        out.push('-');
+                    }
                     if n == 2 {
-                        let _ = write!(out, "{:02}", era_year % 100);
+                        let _ = write!(out, "{:02}", wy.unsigned_abs() % 100);
                     } else {
-                        pad(&mut out, era_year, n);
+                        pad(
+                            &mut out,
+                            i64::try_from(wy.unsigned_abs()).unwrap_or(i64::MAX),
+                            n,
+                        );
                     }
                 }
                 'y' => {
@@ -265,7 +275,7 @@ impl LegacyPattern {
                     match c {
                         'z' => {
                             let fixed = id.starts_with(['+', '-'])
-                                || ["UTC+", "UTC-", "GMT+", "GMT-"]
+                                || ["UTC+", "UTC-", "GMT+", "GMT-", "UT+", "UT-"]
                                     .iter()
                                     .any(|p| id.starts_with(p));
                             if fixed && offset != 0 {
@@ -274,6 +284,23 @@ impl LegacyPattern {
                                 let sign = if offset < 0 { '-' } else { '+' };
                                 let _ = write!(out, "GMT{sign}{:02}:{:02}", a / 3600, a / 60 % 60);
                             } else {
+                                // `TimeZone.getTimeZone(ZoneId)` reads the offset `Z` as
+                                // `UTC`; `UT` is no `TimeZone` id, so it falls back to `GMT`.
+                                let id = match id {
+                                    "Z" => "UTC",
+                                    "UT" => "GMT",
+                                    _ if fixed => {
+                                        if id.starts_with("GMT")
+                                            || id.starts_with("UT+")
+                                            || id.starts_with("UT-")
+                                        {
+                                            "GMT"
+                                        } else {
+                                            "UTC"
+                                        }
+                                    }
+                                    _ => id,
+                                };
                                 out.push_str(&zone_name(
                                     id,
                                     offset,
@@ -293,7 +320,8 @@ impl LegacyPattern {
     }
 
     /// `s` as an instant: its zone or offset, else `session`. `Ok(None)`
-    /// when `s` does not match (Spark raises `CANNOT_PARSE_TIMESTAMP`).
+    /// when `s` does not match (Spark raises `CANNOT_PARSE_TIMESTAMP`) or
+    /// the instant is past the microsecond range.
     ///
     /// # Errors
     /// Never.
@@ -302,17 +330,42 @@ impl LegacyPattern {
         s: &str,
         session: &dyn TimeZoneRules,
     ) -> Result<Option<i64>, KrishivError> {
-        let Some((local, zone)) = self.parse_fields(s) else {
-            return Ok(None);
+        Ok(self.instant(s, session).ok())
+    }
+
+    /// `s` as an instant, telling a text that does not match from a date
+    /// past the microsecond range: Spark's `millisToMicros` raises the
+    /// latter as an `ArithmeticException` whatever the parse-error policy.
+    pub(crate) fn instant(&self, s: &str, session: &dyn TimeZoneRules) -> Result<i64, Unmatched> {
+        let (local, zone) = self
+            .parse_fields(s, session.region_id())
+            .ok_or(Unmatched::Text)?;
+        let local = local.ok_or(Unmatched::Overflow)?;
+        let shift = |offset: i32| {
+            local
+                .checked_sub(i64::from(offset) * MICROS_PER_SECOND)
+                .ok_or(Unmatched::Overflow)
         };
-        Ok(match zone {
+        match zone {
             None => legacy_local_to_utc(local, session),
-            Some(Zone_::Offset(o)) => local.checked_sub(i64::from(o) * MICROS_PER_SECOND),
+            Some(Zone_::Offset(o)) => shift(o),
             Some(Zone_::Region(id)) => match crate::datetime::resolve_zone(&id) {
                 Ok(z) => legacy_local_to_utc(local, &z),
-                Err(_) => None,
+                Err(_) => Err(Unmatched::Text),
             },
-        })
+            Some(Zone_::Standard { id, raw, dst }) => {
+                // The calendar reads the standard offset at the wall time.
+                let offset = match crate::datetime::resolve_zone(id) {
+                    Ok(z) => {
+                        let secs = local.div_euclid(MICROS_PER_SECOND);
+                        let first = z.standard_offset_at_utc(secs - i64::from(raw));
+                        z.standard_offset_at_utc(secs - i64::from(first + dst))
+                    }
+                    Err(_) => raw,
+                };
+                shift(offset + dst)
+            }
+        }
     }
 
     /// `s` as a local date-time; a zone in `s` is read and ignored.
@@ -321,9 +374,9 @@ impl LegacyPattern {
     /// Never.
     pub fn parse_local(&self, s: &str, allow_zone: bool) -> Result<Option<i64>, KrishivError> {
         Ok(self
-            .parse_fields(s)
+            .parse_fields(s, None)
             .filter(|(_, zone)| allow_zone || zone.is_none())
-            .map(|(local, _)| local))
+            .and_then(|(local, _)| local))
     }
 
     /// `s` as a date (days since the epoch): time and zone are ignored.
@@ -332,11 +385,14 @@ impl LegacyPattern {
     /// Never.
     pub fn parse_date(&self, s: &str) -> Result<Option<i32>, KrishivError> {
         Ok(self
-            .parse_fields(s)
-            .and_then(|(local, _)| i32::try_from(local.div_euclid(MICROS_PER_DAY)).ok()))
+            .parse_fields(s, None)
+            .and_then(|(local, _)| local)
+            .and_then(|local| i32::try_from(local.div_euclid(MICROS_PER_DAY)).ok()))
     }
 
-    fn parse_fields(&self, s: &str) -> Option<(i64, Option<Zone_>)> {
+    /// The fields of `s`; zone names are looked up in `session`'s own row
+    /// first (`None` where the zone is read and ignored).
+    fn parse_fields(&self, s: &str, session: Option<&str>) -> Option<Resolved> {
         let text: Vec<char> = s.chars().collect();
         let mut st = Parsed::default();
         let mut pos = 0;
@@ -354,15 +410,19 @@ impl LegacyPattern {
                 }
                 Tok::Field(c, n) => {
                     // `SimpleDateFormat` skips spaces and tabs before a field.
+                    let start = pos;
                     while text.get(pos).is_some_and(|x| matches!(x, ' ' | '\t')) {
                         pos += 1;
                     }
                     // A number directly followed by another number in the
-                    // pattern reads exactly its run length.
+                    // pattern reads exactly its run length, counted from the
+                    // field's start: skipped blanks use it up (`subParse`
+                    // parses up to `start + count`; Spark 4.2: '2024-01-01  123'
+                    // with 'yyyy-MM-dd HHmm' is 01:23).
                     let abut =
                         matches!(self.toks.get(i + 1), Some(Tok::Field(d, dn)) if is_numeric(*d, *dn))
-                            .then_some(*n);
-                    pos = st.field(&text, pos, *c, *n, abut)?;
+                            .then_some(n.saturating_sub(pos - start));
+                    pos = st.field(&text, pos, *c, *n, abut, session)?;
                 }
             }
         }
@@ -381,7 +441,7 @@ impl LegacyPattern {
 /// real rules' (LMT before 1900): Spark rebases the parsed instant so the
 /// wall clock survives, while only the printed offset letters use the raw
 /// `java.util.TimeZone` offset.
-fn legacy_local_to_utc(local: i64, tz: &dyn TimeZoneRules) -> Option<i64> {
+fn legacy_local_to_utc(local: i64, tz: &dyn TimeZoneRules) -> Result<i64, Unmatched> {
     let secs = local.div_euclid(MICROS_PER_SECOND);
     let near = [
         tz.offset_at_utc(secs.saturating_sub(86_400)),
@@ -390,8 +450,11 @@ fn legacy_local_to_utc(local: i64, tz: &dyn TimeZoneRules) -> Option<i64> {
     let offset = near
         .into_iter()
         .filter(|&o| tz.offset_at_utc(secs.saturating_sub(i64::from(o))) == o)
-        .min()?;
-    local.checked_sub(i64::from(offset).checked_mul(MICROS_PER_SECOND)?)
+        .min()
+        .ok_or(Unmatched::Text)?;
+    local
+        .checked_sub(i64::from(offset) * MICROS_PER_SECOND)
+        .ok_or(Unmatched::Overflow)
 }
 
 fn is_numeric(c: char, n: usize) -> bool {
@@ -555,10 +618,30 @@ fn write_offset(out: &mut String, offset: i32, colon: bool, minutes: bool, zulu:
     }
 }
 
+#[derive(Debug)]
+/// Why a LEGACY parse gave no instant.
+pub(crate) enum Unmatched {
+    /// The text does not match the pattern, or names a date or zone the
+    /// calendar refuses.
+    Text,
+    /// The date is past the microsecond range.
+    Overflow,
+}
+
+/// The resolved local micros (`None` past the microsecond range) and the
+/// zone the text named.
+type Resolved = (Option<i64>, Option<Zone_>);
+
 #[derive(Debug, Clone)]
 enum Zone_ {
     Offset(i32),
     Region(String),
+    /// A zone name: the region's standard offset at that time plus `dst`.
+    Standard {
+        id: &'static str,
+        raw: i32,
+        dst: i32,
+    },
 }
 
 /// The calendar fields a parse sets, each with the order it was set in (the
@@ -583,7 +666,7 @@ struct Parsed {
     dow: Option<(i64, u32)>,
     hour_of_day: Option<(i64, u32)>,
     hour12: Option<(i64, u32)>,
-    /// A one-based hour (`k`, `h`) read as 0 or past its range.
+    /// A one-based hour (`k`, `h`) read outside its range (1-24, 1-12).
     bad_hour: bool,
     pm: Option<(bool, u32)>,
     minute: Option<i64>,
@@ -606,9 +689,11 @@ impl Parsed {
         c: char,
         n: usize,
         abut: Option<usize>,
+        session: Option<&str>,
     ) -> Option<usize> {
-        // Every field skips leading blanks.
-        while text.get(pos).is_some_and(|x| x.is_whitespace()) {
+        // `SimpleDateFormat` skips spaces and tabs before a field, nothing
+        // else (a newline or an ideographic space is not a blank).
+        while text.get(pos).is_some_and(|x| matches!(x, ' ' | '\t')) {
             pos += 1;
         }
         let st = self.stamp();
@@ -650,19 +735,28 @@ impl Parsed {
                 return Some(p);
             }
             'z' | 'Z' => {
-                let (p, z) = zone(text, pos, c == 'Z')?;
+                let (p, z) = zone(text, pos, session)?;
                 self.zone = Some(z);
                 return Some(p);
             }
             _ => {}
         }
-        let (value, end) = number(text, pos, abut)?;
-        let digits = end - pos;
+        // `DecimalFormat` reads a minus sign, which counts toward a width.
+        // Every field's minimum is at least 0 for a non-lenient calendar but
+        // the week year's, which `setWeekDate` takes as it is (Spark 4.2:
+        // '-5' with 'YYYY' is -0006-12-27, with 'yyyy' NULL).
+        let sign = usize::from(text.get(pos) == Some(&'-'));
+        let (value, end) = number(text, pos + sign, abut.map(|l| l.saturating_sub(sign)))?;
+        let value = if sign == 1 { -value } else { value };
+        if value < 0 && c != 'Y' {
+            return None;
+        }
+        let digits = end - pos - sign;
         match c {
             'y' | 'Y' => {
                 // A two-digit year waits for the rest of the date: the
                 // window starts on a day, not at a year.
-                self.year_two = n <= 2 && digits == 2;
+                self.year_two = n <= 2 && digits == 2 && sign == 0;
                 self.year = Some((value, st));
                 self.year_is_week = c == 'Y';
             }
@@ -671,12 +765,14 @@ impl Parsed {
             'D' => self.doy = Some((value, st)),
             'H' => self.hour_of_day = Some((value, st)),
             // 24 reads as 0 (no carry), as `SimpleDateFormat` does.
+            // `SimpleDateFormat` refuses an out-of-range one-based hour as
+            // it reads it, so a later `H` or `K` cannot overwrite it.
             'k' => {
-                self.bad_hour |= value == 0;
+                self.bad_hour |= !(1..=24).contains(&value);
                 self.hour_of_day = Some((if value == 24 { 0 } else { value }, st));
             }
             'h' => {
-                self.bad_hour |= value == 0;
+                self.bad_hour |= !(1..=12).contains(&value);
                 self.hour12 = Some((if value == 12 { 0 } else { value }, st));
             }
             'K' => self.hour12 = Some((value, st)),
@@ -739,13 +835,9 @@ impl Parsed {
         }
     }
 
-    /// The day a week-field group names (`GregorianCalendar.computeTime`,
-    /// `Locale.US`: weeks start on Sunday, a week 1 may hold one day).
-    fn week_date(&self, year: i64, mode: Mode) -> Option<i64> {
-        self.week_real(year, mode).map(label_of_real)
-    }
-
-    /// [`Self::week_date`] as a real epoch day.
+    /// The real epoch day a week-field group names
+    /// (`GregorianCalendar.computeTime`, `Locale.US`: weeks start on Sunday,
+    /// a week 1 may hold one day).
     fn week_real(&self, year: i64, mode: Mode) -> Option<i64> {
         let on_or_before = |d: i64, dow: i64| d - (dow_sun1(d) - dow).rem_euclid(7);
         // Real epoch days: the Julian calendar's before the cutover.
@@ -788,19 +880,28 @@ impl Parsed {
     }
 
     /// A non-lenient `Calendar` rejects a result that disagrees with a
-    /// field that was set.
-    fn week_fields_agree(&self, days: i64, year: i64) -> bool {
-        let (y, m, d) = civil_from_days(days);
+    /// field that was set. `days` is the result's label and `(y, m, d)` the
+    /// hybrid-calendar date it names (`1500-02-29` for a Julian-only leap
+    /// day, whose label is March 1). `year` is the astronomical year, or for
+    /// a winning week year the week year as parsed: `setWeekDate` compares
+    /// `getWeekYear` (astronomical) with it, so a BC era beside a positive
+    /// week year (`2020 BC` with `YYYY G`) is refused.
+    fn week_fields_agree(&self, days: i64, year: i64, (y, m, d): (i64, u32, u32)) -> bool {
         let (_, hdoy) = hybrid_week_fields(days, y, m, d);
         let real = real_day(days, y, m, d);
-        let year_ok = if self.year_is_week {
+        // A year is checked only when the text set one (Spark 4.2: '1' with
+        // 'w' is 1969-12-28, the start of 1970's week 1).
+        let year_ok = if self.year.is_none() {
+            true
+        } else if self.year_is_week {
             civil_from_days(week_year_anchor(days, real, y, hdoy)).0 == year
         } else {
             y == year
         };
-        // A week year with no week field ignores the month and day.
-        let by_week_year =
-            self.year_is_week && self.woy.is_none() && self.wom.is_none() && self.dowim.is_none();
+        // A winning week year (`Y`) is `Calendar.setWeekDate`, which sets
+        // the month and day itself: the parsed ones are ignored, the other
+        // fields must still agree.
+        let by_week_year = self.year_is_week;
         year_ok
             && (by_week_year || self.month0.is_none_or(|(v, _)| v == i64::from(m) - 1))
             && (by_week_year || self.dom.is_none_or(|(v, _)| v == i64::from(d)))
@@ -815,35 +916,46 @@ impl Parsed {
             && self.dow.is_none_or(|(v, _)| v == dow_sun1(real))
     }
 
-    fn resolve(self, today: (i64, u32, u32)) -> Option<(i64, Option<Zone_>)> {
+    fn resolve(self, today: (i64, u32, u32)) -> Option<Resolved> {
         if !self.year_two {
-            // The year of the era is positive: no year 0 (nor `0000 BC`).
-            if self.year.is_some_and(|(y, _)| y <= 0) {
+            // The year of the era is positive: no year 0 (nor `0000 BC`). A
+            // week year is no year of the era: `setWeekDate` takes `0` or
+            // `-5` as it is (Spark 4.2: '0' with 'YYYY' is -0001-12-28).
+            if self.year.is_some_and(|(y, _)| y <= 0) && !(self.year_is_week && !self.era_bc) {
                 return None;
             }
             return self.resolve_in(self.year.map_or(1970, |(y, _)| y), self.era_bc);
         }
-        // `yy`: the century of the window start, one later when the date
-        // falls before the window's first day.
+        // `yy` (`SimpleDateFormat.subParse`): the century of the window
+        // start, one later for digits below the start year's; only the start
+        // year's own digits are decided by the date, one century later when
+        // it falls before the window's first day. A date that fails its
+        // fields fails, whatever the century (Spark 4.2: '99-01-01 Thu' with
+        // 'yy-MM-dd E' is NULL). The century is chosen on the year of the
+        // era, before a BC era turns the year around (`99 BC` is 1999 BC).
         let two = self.year.map_or(0, |(y, _)| y);
         let (ny, nm, nd) = today;
         let start = ny - 80;
+        let ambiguous = start.rem_euclid(100);
+        let base = start - ambiguous + two + if two >= ambiguous { 0 } else { 100 };
+        if two != ambiguous {
+            return self.resolve_in(base, self.era_bc);
+        }
         let start_days = days_from_civil(start, nm, nd.min(days_in_month(start, nm)))?;
-        let base = start - start.rem_euclid(100) + two;
-        // The provisional century may lack the date (`00-02-29` in 1900).
-        // The century is chosen on the year of the era, before a BC era
-        // turns the year around (`99 BC` is 1999 BC).
-        let chosen = match self.resolve_in(base, false) {
-            Some(first) if first.0.div_euclid(MICROS_PER_DAY) >= start_days => base,
-            _ => base + 100,
+        let chosen = match self.resolve_in(base, false)? {
+            (Some(first), _) if first.div_euclid(MICROS_PER_DAY) < start_days => base + 100,
+            _ => base,
         };
         self.resolve_in(chosen, self.era_bc)
     }
 
-    fn resolve_in(&self, year: i64, bc: bool) -> Option<(i64, Option<Zone_>)> {
+    fn resolve_in(&self, year: i64, bc: bool) -> Option<Resolved> {
         if self.bad_hour {
             return None;
         }
+        // `setWeekDate` checks the result's week year against the week year
+        // as parsed, before the era turns it around.
+        let parsed = year;
         let mut year = year;
         if bc {
             year = 1 - year;
@@ -861,12 +973,13 @@ impl Parsed {
             return None;
         }
         let weeky = self.woy.is_some() || self.wom.is_some() || self.dowim.is_some();
-        // A week year (`Y`) with no week field is week 1 of that week year;
-        // a month or day beside it is ignored (Spark 4.2: '2020' with
-        // 'YYYY' is 2019-12-29).
-        let week_year_only = self.year_is_week && !weeky;
+        // A winning week year (`Y`) is the week date of that week year, its
+        // week of year (1 by default) and day of week (Sunday by default),
+        // as `CalendarBuilder.establish` calls `setWeekDate`; a month or day
+        // beside it is ignored (Spark 4.2: '2020' with 'YYYY' is 2019-12-29,
+        // '2020-01-03-05' with 'YYYY-ww-MM-dd' too).
         let mut julian_leap = false;
-        let mode = if week_year_only {
+        let mode = if self.year_is_week {
             Mode::Woy
         } else if weeky {
             self.week_mode()
@@ -875,18 +988,31 @@ impl Parsed {
             // weekday of the month, as `GregorianCalendar` falls back to
             // `DAY_OF_WEEK_IN_MONTH` 1.
             Mode::Dowim
-        } else if self.doy.is_some_and(|(_, s)| {
-            self.month0
-                .map(|(_, s)| s)
-                .max(self.dom.map(|(_, s)| s))
-                .is_none_or(|m| s > m)
-        }) {
+        } else if self
+            .doy
+            .is_some_and(|(_, s)| self.dom.is_none_or(|(_, m)| s > m))
+        {
+            // `Calendar.selectFields` weighs a day of year against the day of
+            // month alone; a month is then only checked against the result.
             Mode::Doy
         } else {
             Mode::Dom
         };
         let days = if matches!(mode, Mode::Wom | Mode::Dowim | Mode::Woy) {
-            self.week_date(year, mode)?
+            let real = self.week_real(year, mode)?;
+            let days = label_of_real(real);
+            // A Julian-only leap day (1500-02-29) has March 1's label, whose
+            // real day is the next one.
+            let (y, m, d) = civil_from_days(days);
+            // A non-lenient `GregorianCalendar` refuses every Gregorian day of
+            // the cutover month in a week-of-month or day-of-week-in-month
+            // resolution (Spark 4.2: '1582 10 2 1' with 'yyyy MM W u' is NULL,
+            // the same with 'F'; the day-of-month path accepts 1582-10-18).
+            if matches!(mode, Mode::Wom | Mode::Dowim) && (y, m) == (1582, 10) && d >= 15 {
+                return None;
+            }
+            julian_leap = real_day(days, y, m, d) != real;
+            days
         } else if matches!(mode, Mode::Doy) {
             let (d, _) = self.doy?;
             if !(1..=hybrid_year_len(year)).contains(&d) {
@@ -929,30 +1055,47 @@ impl Parsed {
         if days > cutover && days < cutover + 11 {
             return None;
         }
-        if (weeky || week_year_only || self.dow.is_some() || self.doy.is_some())
-            && !julian_leap
-            && !self.week_fields_agree(days, year)
+        // A Julian-only leap day is checked as the day it is (February 29),
+        // before it reads as March 1.
+        let label = if julian_leap {
+            (civil_from_days(days).0, 2, 29)
+        } else {
+            civil_from_days(days)
+        };
+        if (weeky || self.year_is_week || self.dow.is_some() || self.doy.is_some())
+            && !self.week_fields_agree(days, if self.year_is_week { parsed } else { year }, label)
         {
             return None;
         }
-        let hour = match (self.hour_of_day, self.hour12) {
-            (Some((h, hs)), other) if other.is_none_or(|(_, os)| hs > os) => {
+        // `GregorianCalendar.computeTime`: the 12-hour group counts as set
+        // only with both its fields (`aggregateStamp`), so `hh` without `a`
+        // does not displace `HH` (Spark 4.2: '13 01' with 'HH hh' is 13:00);
+        // with neither group complete, the later of `h` and `a` decides.
+        let hod = self.hour_of_day.map(|(_, s)| s);
+        let mut best = hod.max(self.hour12.zip(self.pm).map(|((_, a), (_, b))| a.max(b)));
+        if best.is_none() {
+            best = self.hour12.map(|(_, s)| s).max(self.pm.map(|(_, s)| s));
+        }
+        let pm = if self.pm.is_some_and(|(pm, _)| pm) {
+            12
+        } else {
+            0
+        };
+        let hour = match (best, self.hour_of_day, self.hour12) {
+            (None, ..) => 0,
+            (b, Some((h, _)), _) if b == hod => {
                 if !(0..24).contains(&h) {
                     return None;
                 }
                 h
             }
-            (_, Some((h, _))) => {
+            (_, _, Some((h, _))) => {
                 if !(0..12).contains(&h) {
                     return None;
                 }
-                h + if self.pm.is_some_and(|(pm, _)| pm) {
-                    12
-                } else {
-                    0
-                }
+                h + pm
             }
-            _ => self.pm.map_or(0, |(pm, _)| if pm { 12 } else { 0 }),
+            _ => pm,
         };
         // Every clock field that was set must agree with the result.
         if self.hour_of_day.is_some_and(|(h, _)| h != hour)
@@ -972,7 +1115,9 @@ impl Parsed {
             return None;
         }
         let tod = ((hour * 60 + minute) * 60 + second) * MICROS_PER_SECOND + millis * 1000;
-        let local = days.checked_mul(MICROS_PER_DAY)?.checked_add(tod)?;
+        let local = days
+            .checked_mul(MICROS_PER_DAY)
+            .and_then(|micros| micros.checked_add(tod));
         Some((local, self.zone.clone()))
     }
 }
@@ -1022,11 +1167,54 @@ fn today() -> (i64, u32, u32) {
 }
 
 /// An unsigned integer at `pos` (`limit` digits at most), as the digits
-/// and where they end.
+/// and where they end. Any decimal digit counts, as `DecimalFormat` reads
+/// a numeric field (`٢٠٢٤` is 2024).
 fn number(text: &[char], pos: usize, limit: Option<usize>) -> Option<(i64, usize)> {
+    let (mut value, mut end) = number_of(text, pos, limit, java_digit)?;
+    // `DecimalFormat` also reads an exponent: `E`, an optional `-` and
+    // digits, all inside the field's width (Spark 4.2: '2E3' with 'yyyy' is
+    // 2000, '25E-1' with 'dd' is 2, '1E+1' is 1). The result is truncated.
+    if text.get(end) == Some(&'E') && limit.is_none_or(|l| end + 1 - pos < l) {
+        let neg = text.get(end + 1) == Some(&'-');
+        let start = end + 1 + usize::from(neg);
+        let room = limit.map(|l| l.saturating_sub(start - pos));
+        if room != Some(0)
+            && let Some((exp, e2)) = number_of(text, start, room, java_digit)
+        {
+            {
+                let scaled = if neg {
+                    u32::try_from(exp)
+                        .ok()
+                        .and_then(|x| 10_i64.checked_pow(x))
+                        .map_or(0, |p| value / p)
+                } else {
+                    u32::try_from(exp)
+                        .ok()
+                        .and_then(|x| 10_i64.checked_pow(x))
+                        .and_then(|p| value.checked_mul(p))?
+                };
+                value = scaled;
+                end = e2;
+            }
+        }
+    }
+    Some((value, end))
+}
+
+/// [`number`] with ASCII digits only, as the zone fields read them.
+fn ascii_number(text: &[char], pos: usize, limit: Option<usize>) -> Option<(i64, usize)> {
+    number_of(text, pos, limit, |c| c.to_digit(10))
+}
+
+fn number_of(
+    text: &[char],
+    pos: usize,
+    limit: Option<usize>,
+    digit: fn(char) -> Option<u32>,
+) -> Option<(i64, usize)> {
     let mut end = pos;
     let mut value: i64 = 0;
-    while let Some(d) = text.get(end).and_then(|c| c.to_digit(10)) {
+    while let Some(d) = text.get(end).and_then(|&c| digit(c)) {
         if limit.is_some_and(|l| end - pos >= l) {
             break;
         }
@@ -1036,7 +1224,21 @@ fn number(text: &[char], pos: usize, limit: Option<usize>) -> Option<(i64, usize
     (end > pos).then_some((value, end))
 }
 
-/// Case-insensitive prefix match of any of `options`.
+/// `Character.digit(c, 10)` in the Basic Multilingual Plane (a field is
+/// read one UTF-16 unit at a time, so no supplementary digit counts).
+fn java_digit(c: char) -> Option<u32> {
+    if let Some(d) = c.to_digit(10) {
+        return Some(d);
+    }
+    let cp = u32::from(c);
+    let i = DIGIT_ZEROS.partition_point(|&z| z <= cp).checked_sub(1)?;
+    let d = cp.checked_sub(*DIGIT_ZEROS.get(i)?)?;
+    (d < 10).then_some(d)
+}
+
+/// Case-insensitive prefix match of any of `options`, as Java's
+/// `regionMatches(true, ..)` (Spark 4.2: '2024-APRİL-01' with 'yyyy-MMMM-dd'
+/// is April 1).
 fn prefix(text: &[char], pos: usize, options: &[&str]) -> Option<usize> {
     options.iter().find_map(|o| {
         let len = o.chars().count();
@@ -1044,7 +1246,7 @@ fn prefix(text: &[char], pos: usize, options: &[&str]) -> Option<usize> {
         slice
             .iter()
             .zip(o.chars())
-            .all(|(a, b)| a.eq_ignore_ascii_case(&b))
+            .all(|(&a, b)| java_same_ignoring_case(a, b))
             .then_some(pos + len)
     })
 }
@@ -1076,7 +1278,7 @@ fn zone_iso(text: &[char], pos: usize, n: usize) -> Option<(usize, Zone_)> {
         return Some((pos + 1, Zone_::Offset(0)));
     }
     let sign = *text.get(pos).filter(|c| matches!(c, '+' | '-'))?;
-    let (hh, mut e) = number(text, pos + 1, Some(2))?;
+    let (hh, mut e) = ascii_number(text, pos + 1, Some(2))?;
     if e - (pos + 1) != 2 {
         return None;
     }
@@ -1088,7 +1290,7 @@ fn zone_iso(text: &[char], pos: usize, n: usize) -> Option<(usize, Zone_)> {
             }
             e += 1;
         }
-        let (m, e2) = number(text, e, Some(2))?;
+        let (m, e2) = ascii_number(text, e, Some(2))?;
         if e2 - e != 2 {
             return None;
         }
@@ -1102,120 +1304,138 @@ fn zone_iso(text: &[char], pos: usize, n: usize) -> Option<(usize, Zone_)> {
     Some((e, Zone_::Offset(if sign == '-' { -secs } else { secs })))
 }
 
-/// A zone: `Z`, `GMT`/`UTC` with an optional offset, `+hh`, `+hhmm`,
-/// `+hh:mm`, or a region id.
-fn zone(text: &[char], pos: usize, rfc822: bool) -> Option<(usize, Zone_)> {
-    if let Some(p) = prefix(text, pos, &["Z"])
-        && !text.get(p).is_some_and(char::is_ascii_alphabetic)
-    {
-        return Some((p, Zone_::Offset(0)));
+/// A `z` or `Z` field, which `SimpleDateFormat.subParse` reads alike: a
+/// sign and `hhmm` (RFC 822); `GMT` (any case), alone or with a sign, one or
+/// two hour digits, a colon and two minute digits; else a zone name (see
+/// [`parse_zone_name`]). Nothing else: no `Z`, `+hh:mm` or region id.
+fn zone(text: &[char], pos: usize, session: Option<&str>) -> Option<(usize, Zone_)> {
+    let c = *text.get(pos)?;
+    if matches!(c, '+' | '-') {
+        return numeric_zone(text, pos + 1, c == '-', false);
     }
-    let mut p = pos;
-    let named = prefix(text, p, &["GMT", "UTC"]);
-    if let Some(q) = named {
-        p = q;
-    }
-    if let Some(&sign) = text.get(p).filter(|c| matches!(c, '+' | '-')) {
-        let (hh, e) = number(text, p + 1, Some(2))?;
-        // `SimpleDateFormat`: after `GMT`/`UTC` a sign, one or two hour
-        // digits, a colon and two minute digits; bare, only `Z` reads an
-        // offset, as exactly `+hhmm`.
-        let (mm, e) = if named.is_some() {
-            if text.get(e) != Some(&':') {
-                return None;
-            }
-            let (m, e2) = number(text, e + 1, Some(2))?;
-            if e2 - (e + 1) != 2 {
-                return None;
-            }
-            (m, e2)
-        } else if rfc822 && e - (p + 1) == 2 {
-            let (m, e2) = number(text, e, Some(2))?;
-            if e2 - e != 2 {
-                return None;
-            }
-            (m, e2)
-        } else {
-            return None;
+    if let Some(p) = prefix(text, pos, &["GMT"]) {
+        return match text.get(p) {
+            Some(&s @ ('+' | '-')) => numeric_zone(text, p + 1, s == '-', true),
+            _ => Some((p, Zone_::Offset(0))),
         };
-        if hh > 23 || mm > 59 {
-            return None;
-        }
-        let secs = i32::try_from(hh * 3600 + mm * 60).ok()?;
-        return Some((e, Zone_::Offset(if sign == '-' { -secs } else { secs })));
     }
-    if let Some(q) = named {
-        return Some((q, Zone_::Offset(0)));
-    }
-    // A long display name ("Pacific Daylight Time"): the longest one that
-    // starts here, with the offset of its short name.
-    let long = super::zone_names::NAMES
-        .iter()
-        .flat_map(|row| [(row[1], row[0]), (row[3], row[2])])
-        .filter(|(full, short)| full.contains(' ') && short_name_offset(short).is_some())
-        .filter_map(|(full, short)| {
-            prefix(text, pos, &[full]).map(|q| (q, short_name_offset(short).unwrap_or(0)))
-        })
-        .max_by_key(|(q, _)| *q);
-    if let Some((q, secs)) = long {
-        return Some((q, Zone_::Offset(secs)));
-    }
-    let mut e = pos;
-    while text
-        .get(e)
-        .is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '_' | '-' | '+'))
-    {
-        e += 1;
-    }
-    if e == pos {
-        return None;
-    }
-    let id: String = text[pos..e].iter().collect();
-    // A standard-time display name is that fixed offset all year, as
-    // `SimpleDateFormat` reads it (not the region's seasonal rules).
-    // Daylight names (`PDT`, ...) are the saving-time offset, also all year.
-    // Offsets in seconds, from a Spark 4.2.0 run under LEGACY (the names
-    // `java.util.TimeZone` knows; its odd entries, `HDT` -10 and `ACDT`
-    // +9:30, are kept as observed).
-    let fixed = short_name_offset(&id);
-    if let Some(secs) = fixed {
-        return Some((e, Zone_::Offset(secs)));
-    }
-    crate::datetime::resolve_zone(&id).ok()?;
-    Some((e, Zone_::Region(id)))
+    parse_zone_name(text, pos, session)
 }
 
-/// The fixed offset (seconds) `SimpleDateFormat` reads a short display
-/// name as, all year; from a Spark 4.2.0 run under LEGACY (the names
-/// `java.util.TimeZone` knows; its odd entries, `HDT` -10 and `ACDT`
-/// +9:30, are kept as observed).
-fn short_name_offset(id: &str) -> Option<i32> {
-    match id {
-        "HST" | "HDT" => Some(-10 * 3600),
-        "AKST" => Some(-9 * 3600),
-        "PST" | "AKDT" => Some(-8 * 3600),
-        "MST" | "PDT" => Some(-7 * 3600),
-        "CST" | "MDT" => Some(-6 * 3600),
-        "EST" | "CDT" => Some(-5 * 3600),
-        "AST" | "EDT" => Some(-4 * 3600),
-        "ART" | "BRT" | "ADT" => Some(-3 * 3600),
-        "NST" => Some(-(3 * 3600 + 1800)),
-        "NDT" => Some(-(2 * 3600 + 1800)),
-        "WET" => Some(0),
-        "CET" | "BST" | "WEST" | "WAT" => Some(3600),
-        "CEST" | "EET" | "IST" | "SAST" | "CAT" => Some(2 * 3600),
-        "EEST" | "MSK" | "EAT" => Some(3 * 3600),
-        "GST" => Some(4 * 3600),
-        "PKT" => Some(5 * 3600),
-        "AWST" | "HKT" | "SGT" => Some(8 * 3600),
-        "JST" | "KST" => Some(9 * 3600),
-        "ACST" | "ACDT" => Some(9 * 3600 + 1800),
-        "AEST" => Some(10 * 3600),
-        "AEDT" => Some(11 * 3600),
-        "NZST" => Some(12 * 3600),
-        "NZDT" => Some(13 * 3600),
-        _ => None,
+/// `SimpleDateFormat.subParseNumericZone` from the first hour digit: two
+/// hour digits, or one before the colon (`colon`), then two minute digits.
+fn numeric_zone(
+    text: &[char],
+    start: usize,
+    negative: bool,
+    colon: bool,
+) -> Option<(usize, Zone_)> {
+    let (hh, mut e) = ascii_number(text, start, Some(2))?;
+    if e - start != 2 && !colon {
+        return None;
     }
+    if colon {
+        if text.get(e) != Some(&':') {
+            return None;
+        }
+        e += 1;
+    }
+    let (mm, end) = ascii_number(text, e, Some(2))?;
+    if end - e != 2 || hh > 23 || mm > 59 {
+        return None;
+    }
+    let secs = i32::try_from(hh * 3600 + mm * 60).ok()?;
+    Some((end, Zone_::Offset(if negative { -secs } else { secs })))
+}
+
+/// `SimpleDateFormat.subParseZoneString`: the session zone's own row of the
+/// JVM's zone strings (`session`, its id), else the first row with a name
+/// (long standard, short standard, long daylight, short daylight) that
+/// starts the text, ignoring case; only that name is read (`PSTfoo` is
+/// `PST`). So `IST` is India in `Asia/Kolkata`, Ireland in `Europe/Dublin`
+/// and Israel elsewhere. A standard name is the zone's standard offset at
+/// that time (`ALMT` is +06:00 in January 2024, +05:00 since March), a
+/// daylight one adds its saving; a name its row uses for both kinds of time,
+/// or a daylight name of a zone without saving, leaves the zone's own rules
+/// to decide. The JVM default zone's row, which Java tries second, is not:
+/// it is the host's, not the query's.
+fn parse_zone_name(text: &[char], pos: usize, session: Option<&str>) -> Option<(usize, Zone_)> {
+    if let Some(row) = session.and_then(zone_row)
+        && let Some(found) = match_zone_row(text, pos, &row)
+    {
+        return Some(found);
+    }
+    ZONE_STRINGS
+        .iter()
+        .find_map(|row| match_zone_row(text, pos, row))
+}
+
+/// `SimpleDateFormat.matchZoneString` on one row, and the zone it gives.
+fn match_zone_row(text: &[char], pos: usize, row: &ZoneStrings) -> Option<(usize, Zone_)> {
+    row.names.iter().enumerate().find_map(|(i, name)| {
+        let end = name_at(text, pos, name)?;
+        let same = row
+            .names
+            .get(i + 2)
+            .is_some_and(|other| java_equals_ignore_case(name, other));
+        let daylight = i >= 2;
+        let zone = if same || (daylight && row.dst == 0) {
+            if crate::datetime::resolve_zone(row.id).is_ok() {
+                Zone_::Region(row.id.to_owned())
+            } else {
+                Zone_::Offset(row.raw)
+            }
+        } else {
+            Zone_::Standard {
+                id: row.id,
+                raw: row.raw,
+                dst: if daylight { row.dst } else { 0 },
+            }
+        };
+        Some((end, zone))
+    })
+}
+
+/// Where `name` (non-empty) ends if it starts `text` at `pos`, ignoring
+/// case as `String.regionMatches(true, ..)` does.
+fn name_at(text: &[char], pos: usize, name: &str) -> Option<usize> {
+    let mut end = pos;
+    for c in name.chars() {
+        if !java_same_ignoring_case(*text.get(end)?, c) {
+            return None;
+        }
+        end += 1;
+    }
+    (end > pos).then_some(end)
+}
+
+fn java_equals_ignore_case(a: &str, b: &str) -> bool {
+    a.chars().count() == b.chars().count()
+        && a.chars()
+            .zip(b.chars())
+            .all(|(x, y)| java_same_ignoring_case(x, y))
+}
+
+/// Java's per-character case-blind equality (single-character mappings).
+fn java_same_ignoring_case(a: char, b: char) -> bool {
+    let upper = |c: char| {
+        let mut u = c.to_uppercase();
+        match (u.next(), u.next()) {
+            (Some(x), None) => x,
+            _ => c,
+        }
+    };
+    // Java's simple mapping: the only character whose full lowercase is
+    // longer, U+0130 (dotted capital I), lowers to `i`.
+    let lower = |c: char| {
+        let mut l = c.to_lowercase();
+        match (l.next(), l.next()) {
+            (Some(x), None) => x,
+            _ if c == '\u{130}' => 'i',
+            _ => c,
+        }
+    };
+    a == b || upper(a) == upper(b) || lower(upper(a)) == lower(upper(b))
 }
 
 #[cfg(test)]
@@ -1281,6 +1501,49 @@ mod tests {
         assert_eq!(f(1582, 10, 15), "1582-10-15 Fri 40 1");
         assert_eq!(f(1582, 10, 20), "1582-10-20 Wed 41 2");
         assert!(f(1500, 3, 15).ends_with(" 12 3"));
+    }
+
+    // Spark 4.2.0 under LEGACY, UTC (probe 2026-11-03, Codex on #417).
+    #[test]
+    fn a_bc_week_year_prints_signed_and_a_year_field_keeps_its_run_length() {
+        let f = |p, y, m, d| fmt(p, days_from_civil(y, m, d).unwrap() * MICROS_PER_DAY);
+        assert_eq!(f("y yyy Y YYY", 1, 1, 1), "1 001 1 001");
+        assert_eq!(f("y yyy Y YYY G", -5, 6, 1), "6 006 -5 -005 BC");
+        assert_eq!(f("Y YY YYYY yyyy G", -3, 1, 1), "-3 -03 -0003 0004 BC");
+        assert_eq!(f("Y YY YYYY yyyy G", -3, 12, 31), "-2 -02 -0002 0004 BC");
+        assert_eq!(f("Y YY YYYY yyyy G", -1, 12, 28), "0 00 0000 0002 BC");
+        assert_eq!(f("Y YY YYYY yyyy G", 0, 12, 28), "1 01 0001 0001 BC");
+        assert_eq!(f("Y YY yyyy", 1000, 12, 31), "1001 01 1000");
+    }
+
+    // Spark 4.2.0 under LEGACY, UTC (probe 2026-11-03, Codex on #417).
+    #[test]
+    fn a_week_year_is_checked_as_parsed_against_the_era() {
+        let d = |y, m, dd| days_from_civil(y, m, dd).unwrap() * MICROS_PER_DAY;
+        for (p, t) in [
+            ("YYYY G", "2020 BC"),
+            ("YYYY G", "-5 BC"),
+            ("YYYY G", "2 BC"),
+            ("YYYY G", "1000 BC"),
+            ("G YYYY", "BC 5"),
+            ("YYYY G ww", "5 BC 20"),
+            ("YYYY G u", "2020 BC 2"),
+            ("YY G", "20 BC"),
+            ("yyyy YYYY G", "2020 2019 BC"),
+        ] {
+            assert_eq!(local(p, t), None, "{p} {t}");
+        }
+        assert_eq!(local("YYYY G", "2020 AD"), Some(d(2019, 12, 29)));
+        assert_eq!(local("YYYY G", "2021 AD"), Some(d(2020, 12, 27)));
+        assert_eq!(local("YYYY", "0"), Some(d(-1, 12, 28)));
+        assert_eq!(local("YYYY G", "0 AD"), Some(d(-1, 12, 28)));
+        // Not matched yet: Spark reads a signed week year ('-5' with 'YYYY'
+        // is -0006-12-27), the numeric fields here take digits only; and
+        // `getWeekYear`'s BC year-end arithmetic accepts '0 BC' and refuses
+        // '1' with 'YYYY G'/'YYYY', where this check does the opposite.
+        // A winning `y` takes the era (`YYYY yyyy G`).
+        assert_eq!(local("YYYY yyyy G", "2020 2019 BC"), Some(d(-2018, 1, 1)));
+        assert_eq!(local("yyyy G", "2020 BC"), Some(d(-2019, 1, 1)));
     }
 
     #[test]
@@ -1371,15 +1634,28 @@ mod tests {
             assert_eq!(local(p, t), Some(d(1500, 3, 1)), "{t}");
         }
         assert_eq!(local("yyyy-MM-dd", "1700-02-29"), None);
+        // Java 21 non-lenient `SimpleDateFormat`: week fields reach the
+        // Julian-only leap day too, and its neighbours keep their own labels.
+        for (p, t) in [
+            ("yyyy-ww-u", "1500-09-6"),
+            ("yyyy-MM-W-u", "1500-02-5-6"),
+            ("yyyy-MM-F-u", "1500-02-5-6"),
+        ] {
+            assert_eq!(local(p, t), Some(d(1500, 3, 1)), "{p} {t}");
+        }
+        assert_eq!(local("yyyy-ww-u", "1500-09-5"), Some(d(1500, 2, 28)));
+        assert_eq!(local("yyyy-MM-W-u", "1500-03-1-7"), Some(d(1500, 3, 1)));
+        assert_eq!(local("yyyy-MM-F-u", "1500-02-5-5"), None);
     }
 
     // Spark 4.2.0 under LEGACY (probe 2026-11-02).
     #[test]
     fn zone_display_names_parse_short_and_long_and_the_week_year_uses_the_hybrid_day() {
         let p = LegacyPattern::new("yyyy-MM-dd HH:mm z").unwrap();
-        let offset = |t: &str| match p.parse_fields(t) {
-            Some((_, Some(Zone_::Offset(o)))) => Some(o),
-            _ => None,
+        let offset = |t: &str| {
+            let local = p.parse_fields(t, None)?.0?;
+            let utc = p.parse_timestamp(t, &FixedOffset(0)).ok()??;
+            i32::try_from((local - utc) / MICROS_PER_SECOND).ok()
         };
         // Spark 4.2.0: 12:00 PDT is 19:00 UTC, whether short or long.
         assert_eq!(offset("2024-07-01 12:00 PDT"), Some(-7 * 3600));
@@ -1417,6 +1693,36 @@ mod tests {
         assert_eq!(local("yyyy-ww-u", "2024-9223372036854775807-1"), None);
         assert_eq!(local("yyyy-MM-W-u", "2024-01-9223372036854775807-1"), None);
         assert_eq!(local("yyyy-MM-F-u", "2024-01-9223372036854775807-1"), None);
+    }
+
+    // Non-lenient `SimpleDateFormat` on Java 21 (2026-11-03): the date
+    // parses, and `Math.multiplyExact(millis, 1000)` throws.
+    #[test]
+    fn a_date_past_the_micros_range_is_an_overflow_not_a_mismatch() {
+        let p = LegacyPattern::new("yyyy-MM-dd").unwrap();
+        let utc = FixedOffset(0);
+        assert!(matches!(
+            p.instant("300000-01-01", &utc),
+            Err(Unmatched::Overflow)
+        ));
+        assert!(matches!(
+            p.instant("2024-13-01", &utc),
+            Err(Unmatched::Text)
+        ));
+        assert_eq!(p.parse_timestamp("300000-01-01", &utc).unwrap(), None);
+    }
+
+    // Non-lenient `SimpleDateFormat` on Java 21 (2026-11-03): only the day
+    // of month competes with the day of year; a month is checked after.
+    #[test]
+    fn a_month_after_the_day_of_year_does_not_displace_it() {
+        let feb29 = Some(days_from_civil(2024, 2, 29).unwrap() * MICROS_PER_DAY);
+        assert_eq!(local("yyyy-DDD-MM", "2024-060-02"), feb29);
+        assert_eq!(local("yyyy-DDD-MM", "2024-060-03"), None);
+        assert_eq!(local("yyyy-MM-DDD", "2024-02-060"), feb29);
+        assert_eq!(local("yyyy-DDD-MM-dd", "2024-060-02-29"), feb29);
+        assert_eq!(local("yyyy-dd-DDD-MM", "2024-29-060-02"), feb29);
+        assert_eq!(local("yyyy-DDD-dd", "2024-060-29"), None);
     }
 
     #[test]
@@ -1633,6 +1939,53 @@ mod tests {
         assert_eq!(p.format_timestamp(0, utc).unwrap(), "Z Z Z|+0000 +0000");
     }
 
+    /// `TimeZone.getTimeZone(ZoneId)` names the offset `Z` `UTC` and the
+    /// unknown id `UT` `GMT` (Java 21 `FastDateFormat`, Codex on #417).
+    #[test]
+    fn zero_offset_aliases_take_the_utc_and_gmt_names() {
+        let p = LegacyPattern::new("z zzzz").unwrap();
+        let show = |id| {
+            p.format_timestamp(
+                0,
+                Zone {
+                    id,
+                    rules: &FixedOffset(0),
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(show("Z"), "UTC Coordinated Universal Time");
+        assert_eq!(show("UT"), "GMT Greenwich Mean Time");
+        assert_eq!(show("UTC"), "UTC Coordinated Universal Time");
+    }
+
+    /// A `UT+hh:mm` session zone prints as `GMT+hh:mm` (Spark 4.2.0, LEGACY).
+    #[test]
+    fn a_ut_prefixed_offset_prints_as_gmt() {
+        let p = LegacyPattern::new("z zzzz").unwrap();
+        let z = Zone {
+            id: "UT+05:30",
+            rules: &FixedOffset(19_800),
+        };
+        assert_eq!(p.format_timestamp(0, z).unwrap(), "GMT+05:30 GMT+05:30");
+    }
+
+    /// A non-lenient `SimpleDateFormat` refuses `h` outside 1-12 and `k`
+    /// outside 1-24 as it reads them, whatever field follows.
+    #[test]
+    fn an_out_of_range_one_based_hour_fails_even_when_overwritten() {
+        assert_eq!(local("yyyy-MM-dd h K", "2024-01-01 13 1"), None);
+        assert_eq!(local("yyyy-MM-dd k H", "2024-01-01 25 1"), None);
+        assert_eq!(
+            local("yyyy-MM-dd k", "2024-01-01 24"),
+            Some(micros(2024, 1, 1, 0, 0, 0, 0))
+        );
+        assert_eq!(
+            local("yyyy-MM-dd h K", "2024-01-01 12 1"),
+            Some(micros(2024, 1, 1, 1, 0, 0, 0))
+        );
+    }
+
     /// `java.util.TimeZone` drops the transitions before 1900: earlier
     /// instants print the zone's raw offset, later ones the database's
     /// (Spark 4.2.0, `timeParserPolicy=LEGACY`, `date_format` in the
@@ -1737,6 +2090,14 @@ mod tests {
             Some(micros(2020, 1, 2, 3, 4, 5, 0))
         );
         assert_eq!(parse("dd-DDD", "01-365"), None);
+        // Only spaces and tabs are skipped before a field (Spark 4.2.0).
+        assert_eq!(parse("yyyy-MM-dd HH", "2024-01-01 \n12"), None);
+        assert_eq!(parse("yyyy-MM-dd HH", "2024-01-01 \u{3000}12"), None);
+        assert_eq!(parse("yyyy-MM-ddHH", "2024-01-01\n12"), None);
+        assert_eq!(
+            parse("yyyy-MM-dd HH", "2024-01-01 \t12"),
+            Some(micros(2024, 1, 1, 12, 0, 0, 0))
+        );
     }
 
     #[test]

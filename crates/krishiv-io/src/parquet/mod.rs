@@ -37,8 +37,17 @@
 //!   comparisons for page indexes, `Membership` for dictionary values and
 //!   stored Bloom filters) once the reader exposes them.
 
+mod bloom_probe;
 mod calendar;
 mod decode;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "stage 2b of P2-T080b; T085 decides when to fetch the dictionary and calls it"
+    )
+)]
+mod dict_probe;
 mod index_guard;
 mod intervals;
 mod meta;
@@ -118,6 +127,15 @@ static OPTIONS: OptionSchema = OptionSchema {
             metadata_key: false,
             doc: "Read: skip the pages of a column chunk that the pushed filter and the file's \
                   page index rule out.",
+        },
+        OptionSpec {
+            name: "bloomFilter",
+            kind: OptionKind::Bool,
+            default: OptionDefault::Bool(true),
+            conf_fallback: Some("krishiv.io.parquet.bloomFilter.enabled"),
+            metadata_key: false,
+            doc: "Read: skip the row groups whose stored Bloom filter shows that a pushed \
+                  equality or IN literal is absent.",
         },
         OptionSpec {
             name: "compression",

@@ -38,11 +38,11 @@ use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{Privilege, Securable, TableColumn, authorize};
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
-    AlterColumnAction, AlterTable, AlterTableAction, AlterView, AlterViewAction, Analyze,
-    AnalyzeColumns, ChangeColumnAction, ColumnName, CreateNamespace, CreatePermanentView,
-    CreateTable, CreateTableLike, CreateView, DdlName, DropBehavior, DropNamespace,
-    DropPermanentView, DropTable, Ident, Insert, InsertClause, Query, TableElement, TableOption,
-    Truncate, Use, ViewColumn,
+    AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable, AlterTableAction,
+    AlterView, AlterViewAction, Analyze, AnalyzeColumns, ChangeColumnAction, ColumnName,
+    CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, CreateView, DdlName,
+    DropBehavior, DropNamespace, DropPermanentView, DropTable, Ident, Insert, InsertClause, Query,
+    TableElement, TableOption, Truncate, Use, ViewColumn,
 };
 use krishiv_types::DataType;
 
@@ -303,6 +303,40 @@ impl Session {
         self.empty_frame().await
     }
 
+    /// `ALTER DATABASE|SCHEMA|NAMESPACE name SET PROPERTIES | SET LOCATION`, and `COMMENT ON SCHEMA`.
+    pub(crate) async fn exec_alter_namespace(
+        &self,
+        a: &AlterNamespace,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        let name = self.namespace_name(&a.name, &env)?;
+        let change: Box<dyn Fn(&mut NamespaceMeta)> = match &a.action {
+            AlterNamespaceAction::SetProperties(properties) => {
+                let properties = options_of(properties, original);
+                Box::new(move |m| m.properties.extend(properties.clone()))
+            }
+            AlterNamespaceAction::SetLocation(l) => {
+                let l = l.clone();
+                Box::new(move |m| m.location = Some(l.clone()))
+            }
+            AlterNamespaceAction::SetComment(c) => {
+                let c = c.clone();
+                Box::new(move |m| m.comment.clone_from(&c))
+            }
+            _ => return Err(unsupported("this ALTER SCHEMA action")),
+        };
+        let found = self.state.catalog.store.alter_namespace(&name, &*change);
+        drop(change);
+        if !found {
+            return Err(SchemaNotFound {
+                schema_name: format!("`{name}`"),
+            }
+            .into());
+        }
+        self.empty_frame().await
+    }
+
     /// `DROP DATABASE|SCHEMA|NAMESPACE [IF EXISTS] name [RESTRICT|CASCADE]`.
     pub(crate) async fn exec_drop_namespace(
         &self,
@@ -474,7 +508,7 @@ impl Session {
             .iter()
             .map(|c| StoreColumn {
                 name: c.name.clone(),
-                data_type: c.data_type.clone(),
+                data_type: krishiv_plan::without_generated_marker(&c.data_type),
                 nullable: c.nullable,
                 default: None,
                 comment: None,
@@ -874,7 +908,7 @@ impl Session {
                     .iter()
                     .map(|c| StoreColumn {
                         name: c.name.clone(),
-                        data_type: c.data_type.clone(),
+                        data_type: krishiv_plan::without_generated_marker(&c.data_type),
                         nullable: c.nullable,
                         default: None,
                         comment: None,
@@ -1610,7 +1644,7 @@ impl Session {
             .iter()
             .map(|c| StoreColumn {
                 name: c.name.clone(),
-                data_type: c.data_type.clone(),
+                data_type: krishiv_plan::without_generated_marker(&c.data_type),
                 nullable: true,
                 default: None,
                 comment: None,
@@ -1647,8 +1681,44 @@ impl Session {
         } else {
             df.clone()
         };
-        // `errorifexists`: a CTAS never replaces files that are already there (an external LOCATION with data).
-        let dirs = self.write_table_rows(&table, &df, "errorifexists").await?;
+        // A managed table's directory is made here, exclusively: that creation is the proof that this
+        // statement owns it (a concurrent CTAS of the same table loses it and fails with
+        // `LOCATION_ALREADY_EXISTS`), and the guard removes it again if the statement fails or is
+        // cancelled, so a failed first write (and the commit log it started) leaves nothing and the
+        // statement can be retried. The write goes into that empty directory (`append`).
+        // An external location keeps `errorifexists`: a CTAS never replaces files already there.
+        // The policy is asked about the destination first: a denied CTAS must not create the warehouse or
+        // the table directory on the way to being refused (the writer asks again for the files it writes).
+        if table.managed {
+            self.authorize_path(
+                &table.location,
+                &[Privilege::Modify, Privilege::Create],
+                StatementClass::Write,
+            )
+            .await?;
+        }
+        let owned = if table.managed {
+            Some(
+                OwnedDirectory::create(table.location.clone()).map_err(|e| match e {
+                    OwnedDirectoryError::Exists => KrishivError::from(LocationAlreadyExists {
+                        identifier: quoted(&table.namespace, &table.name),
+                        location: table.location.display().to_string(),
+                    }),
+                    OwnedDirectoryError::Io(message) => internal(message),
+                })?,
+            )
+        } else {
+            None
+        };
+        let write_mode = if owned.is_some() {
+            "append"
+        } else {
+            "errorifexists"
+        };
+        let dirs = self.write_table_rows(&table, &df, write_mode).await?;
+        if let Some(owned) = owned {
+            owned.keep();
+        }
         self.add_table(table, mode, true).await?;
         // `RepairTableCommand`: the partitions written, with their file statistics.
         self.register_partitions(&name, &dirs, true);
@@ -1706,7 +1776,7 @@ impl Session {
                     .iter()
                     .map(|c| StoreColumn {
                         name: c.name.clone(),
-                        data_type: c.data_type.clone(),
+                        data_type: krishiv_plan::without_generated_marker(&c.data_type),
                         nullable: c.nullable,
                         default: None,
                         comment: None,
@@ -2141,7 +2211,7 @@ impl Session {
             .iter()
             .map(|c| TableColumn {
                 name: c.name.clone(),
-                data_type: c.data_type.clone(),
+                data_type: krishiv_plan::without_generated_marker(&c.data_type),
                 nullable: c.nullable,
             })
             .collect();
@@ -3030,6 +3100,32 @@ mod tests {
     use krishiv_types::{ArrayType, DecimalType};
 
     #[test]
+    fn an_owned_directory_is_exclusive_and_reports_why_it_cannot_be_made() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("a").join("t");
+        let owned = OwnedDirectory::create(path.clone()).unwrap();
+        assert!(matches!(
+            OwnedDirectory::create(path.clone()),
+            Err(OwnedDirectoryError::Exists)
+        ));
+        drop(owned);
+        assert!(!path.exists(), "a directory not kept is removed again");
+        // A file where the parent should be.
+        let file = tmp.path().join("f");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(matches!(
+            OwnedDirectory::create(file.join("t")),
+            Err(OwnedDirectoryError::Io(m)) if m.contains("cannot create")
+        ));
+        // A parent that exists but takes no new entries.
+        #[cfg(target_os = "linux")]
+        assert!(matches!(
+            OwnedDirectory::create(PathBuf::from("/proc/krishiv-owned-directory")),
+            Err(OwnedDirectoryError::Io(_))
+        ));
+    }
+
+    #[test]
     fn ansi_store_assignment() {
         use DataType as T;
         assert!(can_store(&T::Integer, &T::Integer));
@@ -3058,5 +3154,113 @@ mod tests {
         assert_eq!(literal_text("\"x\""), "x");
         assert_eq!(literal_text(" true "), "true");
         assert_eq!(literal_text("'"), "'");
+    }
+}
+
+/// Why an [`OwnedDirectory`] could not be made.
+#[derive(Debug)]
+enum OwnedDirectoryError {
+    /// Something is already at the path (not ours to touch).
+    Exists,
+    Io(String),
+}
+
+/// A directory this statement created exclusively. Dropped without [`Self::keep`] (the statement
+/// failed, or its future was dropped), it removes what is in it, provided the path still names the
+/// directory that was created (same device and inode): a path swapped for another directory in the
+/// meantime is left alone.
+struct OwnedDirectory {
+    path: PathBuf,
+    identity: Option<(u64, u64)>,
+    kept: bool,
+}
+
+impl OwnedDirectory {
+    fn create(path: PathBuf) -> Result<Self, OwnedDirectoryError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                OwnedDirectoryError::Io(format!("cannot create {}: {e}", parent.display()))
+            })?;
+        }
+        match std::fs::create_dir(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(OwnedDirectoryError::Exists);
+            }
+            Err(e) => {
+                return Err(OwnedDirectoryError::Io(format!(
+                    "cannot create {}: {e}",
+                    path.display()
+                )));
+            }
+        }
+        let identity = Self::identity_of(&path);
+        Ok(Self {
+            path,
+            identity,
+            kept: false,
+        })
+    }
+
+    fn identity_of(path: &Path) -> Option<(u64, u64)> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let meta = std::fs::symlink_metadata(path).ok()?;
+            meta.is_dir().then(|| (meta.dev(), meta.ino()))
+        }
+        #[cfg(not(unix))]
+        {
+            let meta = std::fs::symlink_metadata(path).ok()?;
+            meta.is_dir().then_some((0, 0))
+        }
+    }
+
+    /// The statement succeeded: the directory stays.
+    fn keep(mut self) {
+        self.kept = true;
+    }
+}
+
+impl Drop for OwnedDirectory {
+    fn drop(&mut self) {
+        if !self.kept && self.identity.is_some() && Self::identity_of(&self.path) == self.identity {
+            drop(std::fs::remove_dir_all(&self.path));
+        }
+    }
+}
+
+#[cfg(test)]
+mod owned_directory_tests {
+    use super::{OwnedDirectory, OwnedDirectoryError};
+
+    #[test]
+    fn a_dropped_guard_removes_only_the_directory_it_made() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Dropped without `keep` (a failed or cancelled statement): gone, with what was written.
+        let a = tmp.path().join("a");
+        let guard = OwnedDirectory::create(a.clone()).unwrap();
+        std::fs::write(a.join("f"), b"x").unwrap();
+        drop(guard);
+        assert!(!a.exists());
+        // Kept: stays.
+        let b = tmp.path().join("b");
+        OwnedDirectory::create(b.clone()).unwrap().keep();
+        assert!(b.exists());
+        // A path that already exists is not ours.
+        assert!(matches!(
+            OwnedDirectory::create(b.clone()),
+            Err(OwnedDirectoryError::Exists)
+        ));
+        assert!(b.exists());
+        // The path now names another directory (swapped meanwhile): left alone.
+        let c = tmp.path().join("c");
+        let guard = OwnedDirectory::create(c.clone()).unwrap();
+        // Renamed aside, not removed: a removed directory's inode number may be reused by the new one.
+        std::fs::rename(&c, tmp.path().join("c-moved")).unwrap();
+        std::fs::create_dir(&c).unwrap();
+        std::fs::write(c.join("theirs"), b"y").unwrap();
+        drop(guard);
+        assert!(c.join("theirs").exists());
     }
 }

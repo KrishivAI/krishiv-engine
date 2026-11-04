@@ -104,7 +104,83 @@ impl TimeZoneRules for ZoneRef {
             _ => self.offset_at_utc(utc_seconds),
         }
     }
+
+    fn region_id(&self) -> Option<&str> {
+        match self {
+            Self::Fixed(_) => None,
+            Self::Named(zone) => zone.iana_name(),
+        }
+    }
 }
+
+impl ZoneRef {
+    /// `java.util.TimeZone`'s raw (standard) offset at `utc_seconds`, which
+    /// the legacy parser adds a zone name's saving to: the smallest of the
+    /// offset then and the offsets of the periods just before and after it
+    /// that are of the other kind (daylight or not). So daylight time reads
+    /// the standard time around it, a zone whose standard offset changed
+    /// reads the one in force (`America/Scoresbysund` is -02:00 in July
+    /// 2024, its summer after the change; between two different standard
+    /// offsets, the one leaving a one-hour saving), and a zone whose database marks
+    /// winter as daylight time (`Europe/Dublin`) reads its winter offset.
+    /// Before 1900, as [`TimeZoneRules::legacy_offset_at_utc`], the raw
+    /// offset.
+    #[must_use]
+    pub fn standard_offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        let zone = match self {
+            Self::Fixed(fixed) => return fixed.0,
+            Self::Named(zone) => zone,
+        };
+        if utc_seconds < UTC_1900 {
+            return raw_offset(zone);
+        }
+        let Ok(t) = Timestamp::from_second(fold_seconds(utc_seconds)) else {
+            return raw_offset(zone);
+        };
+        let info = zone.to_offset_info(t);
+        let now = info.offset().seconds();
+        let dst = info.dst().is_dst();
+        // The periods just before and after of the other kind. Daylight time
+        // looks past daylight periods for the standard time around it
+        // (London's 1941 double summer time, +02:00, sits between +01:00
+        // summer periods; Java 21 reads +00:00); standard time looks one
+        // period each way. `preceding` starts with the transition into the
+        // current period.
+        let run = if dst { SAME_KIND_RUN } else { 1 };
+        let before = zone
+            .preceding(t)
+            .skip(1)
+            .take(run)
+            .find(|tr| tr.dst().is_dst() != dst)
+            .map(|tr| tr.offset().seconds());
+        let after = zone
+            .following(t)
+            .take(run)
+            .find(|tr| tr.dst().is_dst() != dst)
+            .map(|tr| tr.offset().seconds());
+        // Daylight time between two different standard offsets: the change
+        // came with this period's start or its end, and the standard offset
+        // in force leaves a one-hour saving (Java 21: `America/Bahia_Banderas`
+        // is -06:00 in July 2010, after its April change; `Europe/Istanbul`
+        // +02:00 in July 2016, before its September change).
+        if let (true, Some(b), Some(a)) = (dst, before, after)
+            && a != b
+        {
+            let miss = |std: i32| (i64::from(now) - i64::from(std) - 3600).abs();
+            return match miss(a).cmp(&miss(b)) {
+                std::cmp::Ordering::Less => a,
+                std::cmp::Ordering::Greater => b,
+                std::cmp::Ordering::Equal => a.min(b),
+            };
+        }
+        [before, after].into_iter().flatten().fold(now, i32::min)
+    }
+}
+
+/// How many transitions of the same kind (daylight or not) the standard
+/// offset search walks past on each side; London's war years have the
+/// longest run.
+const SAME_KIND_RUN: usize = 16;
 
 /// 1900-01-01T00:00:00Z: `java.util.TimeZone` (`ZoneInfoFile`) keeps no
 /// transition before it.
@@ -508,5 +584,37 @@ mod tests {
         let cet = resolve_zone("CET").expect("CET");
         assert_eq!(cet.offset_at_utc(utc(2024, 1, 15, 12, 0)), 3600);
         assert_eq!(cet.offset_at_utc(utc(2024, 7, 15, 12, 0)), 7200);
+    }
+
+    /// Java 21 non-lenient `SimpleDateFormat` (`yyyy-MM-dd HH:mm z` with the
+    /// standard name, e.g. `2010-07-01 12:00 CST`): the standard offset in
+    /// force around a change of standard offset.
+    #[test]
+    fn the_standard_offset_follows_a_change_at_either_end_of_summer() {
+        let utc = |y, mo, d| {
+            jiff::civil::date(y, mo, d)
+                .at(12, 0, 0, 0)
+                .to_zoned(TimeZone::UTC)
+                .expect("test date")
+                .timestamp()
+                .as_second()
+        };
+        let std = |zone: &str, y, mo, d| {
+            resolve_zone(zone)
+                .expect("zone")
+                .standard_offset_at_utc(utc(y, mo, d))
+        };
+        // Changed with the April 2010 start of summer: -07:00 to -06:00.
+        assert_eq!(std("America/Bahia_Banderas", 2010, 7, 1), -6 * 3600);
+        assert_eq!(std("America/Bahia_Banderas", 2010, 1, 15), -7 * 3600);
+        assert_eq!(std("America/Bahia_Banderas", 2009, 7, 1), -7 * 3600);
+        // Changed with the March 2024 start of summer: -01:00 to -02:00.
+        assert_eq!(std("America/Scoresbysund", 2024, 7, 1), -2 * 3600);
+        assert_eq!(std("America/Scoresbysund", 2023, 7, 1), -3600);
+        // Changed with the September 2016 end of summer: +02:00 to +03:00.
+        assert_eq!(std("Europe/Istanbul", 2016, 7, 1), 2 * 3600);
+        // Winter marked as daylight time with a negative saving.
+        assert_eq!(std("Europe/Dublin", 2024, 7, 1), 0);
+        assert_eq!(std("Europe/Dublin", 2024, 1, 15), 0);
     }
 }

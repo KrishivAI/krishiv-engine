@@ -854,31 +854,33 @@ fn schema_of_json_deep_nesting_is_null() {
     assert_eq!(text(&out), owned(&[None]));
 }
 
+/// Under LEGACY, Spark reads JSON dates with a lenient `FastDateFormat`
+/// (`2024-02-30` is March 1), which Krishiv does not model: a `DATE` or
+/// `TIMESTAMP` field is refused, a `TIMESTAMP_NTZ` or other field is not.
 #[test]
-fn from_json_date_format_follows_the_legacy_time_parser() {
-    // `MMMMM` is the full month name to `SimpleDateFormat`.
-    let json = strs(&[Some("{\"d\":\"26/October/2015\"}")]);
-    let schema = strs(&[Some("d Date")]);
-    let fmt = opts(&[("dateFormat", "dd/MMMMM/yyyy")]);
-    let f = bind_scalar(
-        "from_json",
-        &[
-            json.data_type().clone().into(),
-            schema_arg_of(&schema),
-            BindArg::Literal(Arc::clone(&fmt)),
-        ],
-        &BindOptions::new().with_legacy_time_parser(true),
-    )
-    .unwrap();
-    let out = f
-        .invoke(&[col(&json), lit(&schema), lit(&fmt)], json.len())
-        .unwrap();
-    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
-    let days: Vec<Option<i32>> = st
-        .column(0)
-        .as_primitive::<arrow_array::types::Date32Type>()
-        .iter()
-        .collect();
-    // 2015-10-26.
-    assert_eq!(days, [Some(16_734)]);
+fn from_json_refuses_dates_under_the_legacy_time_parser() {
+    let json = strs(&[Some("{\"d\":\"2024-02-30\"}")]);
+    let fmt = opts(&[("dateFormat", "yyyy-MM-dd")]);
+    let bind = |ddl: &str| {
+        let schema = strs(&[Some(ddl)]);
+        bind_scalar(
+            "from_json",
+            &[
+                json.data_type().clone().into(),
+                schema_arg_of(&schema),
+                BindArg::Literal(Arc::clone(&fmt)),
+            ],
+            &BindOptions::new().with_legacy_time_parser(true),
+        )
+    };
+    for ddl in ["d Date", "d Timestamp", "a ARRAY<STRUCT<d: DATE>>"] {
+        let err = bind(ddl).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            err.contains("KRISHIV_UNSUPPORTED_FEATURE") && err.contains("LEGACY"),
+            "{ddl}: {err}"
+        );
+    }
+    for ddl in ["d TIMESTAMP_NTZ", "d STRING"] {
+        assert!(bind(ddl).is_ok(), "{ddl}");
+    }
 }

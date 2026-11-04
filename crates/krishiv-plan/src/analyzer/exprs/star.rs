@@ -225,6 +225,46 @@ impl Resolver<'_> {
             .collect())
     }
 
+    /// The field names of the struct column a qualified star in a select
+    /// list names (`s.*`, `t._metadata.*`): in the input, else among the
+    /// columns the relation hides (a file table's `_metadata`). `None` when
+    /// the qualifier is no struct column.
+    pub(in crate::analyzer) fn star_struct_fields(
+        &self,
+        s: &Star,
+        cx: &Cx<'_>,
+        origin: Origin,
+    ) -> Result<Option<Vec<String>>, AnalysisError> {
+        if s.qualifier.is_empty()
+            || s.plan_id.is_some()
+            || s.regex.is_some()
+            || s.position.is_some()
+            || !s.except.is_empty()
+            || !s.replace.is_empty()
+            // A table or alias of the name wins over a struct column of it.
+            || self.qualifier_matches_scope(&s.qualifier, cx)
+        {
+            return Ok(None);
+        }
+        let hidden: &[Attr] = match cx.rels {
+            [r] => &r.hidden[..],
+            _ => &[],
+        };
+        for level in [cx.scope, hidden] {
+            if let Some((a, used)) = self.find(level, &s.qualifier, origin, false)?
+                && used == s.qualifier.len()
+            {
+                return Ok(match &a.col.data_type {
+                    DataType::Struct(st) => {
+                        Some(st.fields().iter().map(|f| f.name().to_owned()).collect())
+                    }
+                    _ => None,
+                });
+            }
+        }
+        Ok(None)
+    }
+
     /// [`Self::expand`] as resolved column expressions with their names.
     pub(super) fn columns_with_names(
         &mut self,
@@ -244,6 +284,66 @@ impl Resolver<'_> {
                 (name, expr)
             })
             .collect())
+    }
+
+    /// `t.*` in a subquery where `t` is no relation of its own scope but
+    /// the enclosing query's: the outer references to that relation's
+    /// columns (Spark 4.2 expands an outer star). `None` when the star
+    /// is anything else.
+    pub(in crate::analyzer) fn outer_star(
+        &mut self,
+        s: &Star,
+        cx: &Cx<'_>,
+        origin: Origin,
+    ) -> Result<Option<Vec<Bound>>, AnalysisError> {
+        let cs = self.ctx.conf.case_sensitive;
+        if s.plan_id.is_some()
+            || s.qualifier.is_empty()
+            || s.position.is_some()
+            || s.regex.is_some()
+            || !s.except.is_empty()
+            || !s.replace.is_empty()
+            || !cx.outer
+            || cx
+                .scope
+                .iter()
+                .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+            // A `USING` join merges columns away from the scope but the
+            // relation is still this query's: it shadows the outer one.
+            || cx.rels.iter().any(|r| {
+                r.hidden
+                    .iter()
+                    .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+            })
+        {
+            return Ok(None);
+        }
+        // Only the immediately enclosing query, as for a column.
+        let Some(level) = cx.env.outer.len().checked_sub(1) else {
+            return Ok(None);
+        };
+        // The merged-away columns of a `USING` join come first, as in
+        // `expand`.
+        let attrs: Vec<Attr> = cx.env.outer[level]
+            .hidden
+            .iter()
+            .chain(cx.env.outer[level].scope.iter())
+            // Generated metadata (`_metadata` of a file source) is not part
+            // of a star, as in `expand`.
+            .filter(|a| !crate::analyzer::ops::is_generated_metadata(a))
+            .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+            .cloned()
+            .collect();
+        if attrs.is_empty() {
+            return Ok(None);
+        }
+        let mut out = Vec::with_capacity(attrs.len());
+        for a in &attrs {
+            self.used(a);
+            let parts = [a.col.name.clone()];
+            out.push(self.resolve_attr(a, 1, &parts, origin, Some(level), cx, false)?);
+        }
+        Ok(Some(out))
     }
 
     /// The attributes `*`, `t.*` or `df["*"]` stands for.
@@ -282,15 +382,20 @@ impl Resolver<'_> {
                 && s.regex.is_none()
                 && !s.qualifier.is_empty()
                 && cx.agg_scope.is_none()
-                && r.hidden
-                    .iter()
-                    .any(|a| qualifier_matches(&a.qual, &s.qualifier, cs)) =>
+                && r.hidden.iter().any(|a| {
+                    !crate::analyzer::ops::is_generated_metadata(a)
+                        && qualifier_matches(&a.qual, &s.qualifier, cs)
+                }) =>
             {
                 // Spark lists the merged-away columns first, then the output.
+                // (A file table's `_metadata` is not one of them.)
                 let mut all: Vec<_> = r
                     .hidden
                     .iter()
-                    .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
+                    .filter(|a| {
+                        !crate::analyzer::ops::is_generated_metadata(a)
+                            && qualifier_matches(&a.qual, &s.qualifier, cs)
+                    })
                     .cloned()
                     .collect();
                 all.extend(out);
@@ -349,19 +454,9 @@ impl Resolver<'_> {
         self.apply_except(s, &out, origin)
     }
 
-    /// What `* EXCEPT (cols)` drops from `out` (the star's own expansion).
-    /// Each entry names one of those columns, bare or qualified with the
-    /// table (as in `ids.id`); longer paths name nested struct fields,
-    /// which need struct support (`KRISHIV_UNSUPPORTED_FEATURE`), and
-    /// unknown names are `UNRESOLVED_COLUMN`. Overlapping entries are
-    /// `EXCEPT_OVERLAPPING_COLUMNS`, checked before anything resolves (as
-    /// Spark checks them).
-    pub(super) fn apply_except(
-        &mut self,
-        s: &Star,
-        out: &[Attr],
-        origin: Origin,
-    ) -> Result<Vec<Attr>, AnalysisError> {
+    /// `EXCEPT_OVERLAPPING_COLUMNS` when one entry of `s.except` is a prefix
+    /// of another.
+    fn except_overlap(&self, s: &Star, origin: Origin) -> Result<(), AnalysisError> {
         let cs = self.ctx.conf.case_sensitive;
         let folded: Vec<Vec<String>> = s
             .except
@@ -384,6 +479,345 @@ impl Resolver<'_> {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// `* EXCEPT (a.b)` and `s.* EXCEPT (...)` over struct columns as the
+    /// items of a select list: each column a nested entry (or a struct
+    /// qualifier) touches is rebuilt without the dropped fields (Spark's
+    /// `DropField`, here [`ExprNode::UpdateFields`]), the others are
+    /// kept. `None` when the star has no nested entry and no struct
+    /// qualifier (the plain path handles it).
+    pub(in crate::analyzer) fn nested_except_items(
+        &mut self,
+        s: &Star,
+        cx: &Cx<'_>,
+        origin: Origin,
+    ) -> Result<Option<Vec<Arc<Expr>>>, AnalysisError> {
+        if s.except.is_empty() || s.plan_id.is_some() || s.regex.is_some() || s.position.is_some() {
+            return Ok(None);
+        }
+        let cs = self.ctx.conf.case_sensitive;
+        let resolved = |c: &BoundColumn| {
+            Arc::new(
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Column(c.clone()))).with_origin(origin),
+            )
+        };
+        // The entries (name, value, type) and, per entry, the field paths
+        // below it to drop (an empty path drops the entry itself).
+        let mut entries: Vec<(String, Arc<Expr>, DataType)> = Vec::new();
+        let mut drops: Vec<Vec<Vec<String>>> = Vec::new();
+        // `data` or `data.s2`: a struct column, or a struct field below one.
+        // A table or alias of the name wins over a struct column of it.
+        let struct_qualifier = if s.qualifier.is_empty()
+            || self.qualifier_matches_scope(&s.qualifier, cx)
+        {
+            None
+        } else {
+            let hidden: &[Attr] = match cx.rels {
+                [r] => &r.hidden[..],
+                _ => &[],
+            };
+            let mut found = None;
+            for level in [cx.scope, hidden] {
+                if let Some(f) = self.find(level, &s.qualifier, origin, false)? {
+                    found = Some(f);
+                    break;
+                }
+            }
+            match found {
+                Some((a, used)) => {
+                    let mut base = resolved(&a.col);
+                    let mut ty = a.col.data_type.clone();
+                    for part in &s.qualifier[used..] {
+                        let DataType::Struct(st) = &ty else {
+                            return Ok(None);
+                        };
+                        let Some(f) = st.fields().iter().find(|f| same(f.name(), part, cs)) else {
+                            return Ok(None);
+                        };
+                        base = Arc::new(
+                            Expr::new(ExprNode::Field {
+                                base,
+                                name: f.name().to_owned(),
+                            })
+                            .with_origin(origin),
+                        );
+                        ty = f.data_type().clone();
+                    }
+                    match ty {
+                        DataType::Struct(st) => Some((a, base, st)),
+                        _ => None,
+                    }
+                }
+                None => None,
+            }
+        };
+        self.except_overlap(s, origin)?;
+        if let Some((attr, root, st)) = struct_qualifier {
+            self.used(&attr);
+            for field in st.fields() {
+                let value = Arc::new(
+                    Expr::new(ExprNode::Field {
+                        base: Arc::clone(&root),
+                        name: field.name().to_owned(),
+                    })
+                    .with_origin(origin),
+                );
+                entries.push((field.name().to_owned(), value, field.data_type().clone()));
+                drops.push(Vec::new());
+            }
+            for path in &s.except {
+                let Some(i) = st
+                    .fields()
+                    .iter()
+                    .position(|f| same(f.name(), &path[0], cs))
+                else {
+                    return Err(unresolved_in_fields(path, &st, origin));
+                };
+                drops[i].push(path[1..].to_vec());
+            }
+        } else {
+            let mut plain = s.clone();
+            plain.except.clear();
+            let out = self.expand(&plain, cx, origin)?;
+            let mut any_nested = false;
+            let mut targets: Vec<(usize, Vec<String>)> = Vec::new();
+            for path in &s.except {
+                let hit = (1..=path.len()).rev().find_map(|j| {
+                    match self.except_top(&path[..j], &out, cs)[..] {
+                        [ref a] => out
+                            .iter()
+                            .position(|o| o.col.id == a.col.id)
+                            .map(|i| (i, j)),
+                        _ => None,
+                    }
+                });
+                let Some((i, j)) = hit else {
+                    return Ok(None);
+                };
+                any_nested |= j < path.len();
+                targets.push((i, path[j..].to_vec()));
+            }
+            if !any_nested {
+                return Ok(None);
+            }
+            for a in &out {
+                entries.push((
+                    a.col.name.clone(),
+                    resolved(&a.col),
+                    a.col.data_type.clone(),
+                ));
+                drops.push(Vec::new());
+            }
+            for (i, rest) in targets {
+                drops[i].push(rest);
+            }
+        }
+        let mut items = Vec::new();
+        for ((name, value, ty), rests) in entries.into_iter().zip(drops) {
+            if rests.iter().any(Vec::is_empty) {
+                continue;
+            }
+            let value = if rests.is_empty() {
+                value
+            } else {
+                self.drop_nested(&value, &ty, &rests, &name, origin)?
+            };
+            items.push(Arc::new(
+                Expr::new(ExprNode::Alias { expr: value, name }).with_origin(origin),
+            ));
+        }
+        Ok(Some(items))
+    }
+
+    /// `base` (a struct of type `ty`) without the fields `rests` name, each
+    /// a path below it: an unknown name is `FIELD_NOT_FOUND`. `shown` is
+    /// how `base` prints in an error. Below a non-struct, Spark raises by
+    /// what the path would extract: a map's value or an array of
+    /// structs' field is `EXCEPT_NESTED_COLUMN_INVALID_TYPE`, anything
+    /// else `INVALID_EXTRACT_BASE_FIELD_TYPE`.
+    fn drop_nested(
+        &self,
+        base: &Arc<Expr>,
+        ty: &DataType,
+        rests: &[Vec<String>],
+        shown: &str,
+        origin: Origin,
+    ) -> Result<Arc<Expr>, AnalysisError> {
+        let cs = self.ctx.conf.case_sensitive;
+        let DataType::Struct(st) = ty else {
+            let first = &rests[0][0];
+            let invalid = |column_name: String, found: String| {
+                AnalysisError::new(
+                    ExceptNestedColumnInvalidType {
+                        column_name,
+                        data_type: found,
+                    },
+                    origin,
+                )
+            };
+            let not_extractable = || {
+                AnalysisError::new(
+                    InvalidExtractBaseFieldType {
+                        base: format!("\"{shown}\""),
+                        other: format!("\"{}\"", ty.sql()),
+                    },
+                    origin,
+                )
+            };
+            return Err(match ty {
+                DataType::Map(m) => {
+                    invalid(format!("{shown}['{first}']"), catalyst_type(m.value_type()))
+                }
+                DataType::Array(a) => match a.element_type() {
+                    DataType::Struct(es) => {
+                        match es.fields().iter().find(|f| same(f.name(), first, cs)) {
+                            Some(f) => invalid(
+                                format!("{shown}.`{first}`"),
+                                format!("ArrayType({},false)", catalyst_type(f.data_type())),
+                            ),
+                            None => unresolved_field(&rests[0], es, origin),
+                        }
+                    }
+                    _ => not_extractable(),
+                },
+                _ => not_extractable(),
+            });
+        };
+        let mut ops: Vec<FieldOp> = Vec::new();
+        let mut seen: Vec<usize> = Vec::new();
+        for rest in rests {
+            let Some(i) = st
+                .fields()
+                .iter()
+                .position(|f| same(f.name(), &rest[0], cs))
+            else {
+                return Err(unresolved_field(rest, st, origin));
+            };
+            if seen.contains(&i) {
+                continue;
+            }
+            seen.push(i);
+            let field = &st.fields()[i];
+            let name = field.name().to_owned();
+            let subs: Vec<Vec<String>> = rests
+                .iter()
+                .filter(|r| same(&r[0], &name, cs))
+                .map(|r| r[1..].to_vec())
+                .collect();
+            if subs.iter().any(Vec::is_empty) {
+                ops.push(FieldOp::Drop { name });
+            } else {
+                let inner = Arc::new(
+                    Expr::new(ExprNode::Field {
+                        base: Arc::clone(base),
+                        name: name.clone(),
+                    })
+                    .with_origin(origin),
+                );
+                let value = self.drop_nested(
+                    &inner,
+                    field.data_type(),
+                    &subs,
+                    &format!("{shown}.{name}"),
+                    origin,
+                )?;
+                ops.push(FieldOp::With { name, value });
+            }
+        }
+        let dropped = ops
+            .iter()
+            .filter(|o| matches!(o, FieldOp::Drop { .. }))
+            .count();
+        if dropped == st.fields().len() {
+            // Every field goes: `struct<>`, which a struct update refuses
+            // but Spark's `EXCEPT` gives (null stays null).
+            let call = |name: &str, args: Vec<Arc<Expr>>| {
+                Arc::new(
+                    Expr::new(ExprNode::Function(FunctionCall {
+                        within_group: Vec::new(),
+                        name: name.to_owned(),
+                        qualifier: Vec::new(),
+                        args,
+                        arg_names: Vec::new(),
+                        distinct: false,
+                        filter: None,
+                    }))
+                    .with_origin(origin),
+                )
+            };
+            let null = Arc::new(
+                Expr::new(ExprNode::Cast {
+                    expr: Arc::new(
+                        Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(origin),
+                    ),
+                    to: DataType::Struct(StructType::new([])),
+                    mode: CastMode::Default,
+                })
+                .with_origin(origin),
+            );
+            return Ok(call(
+                "when",
+                vec![
+                    call("isnull", vec![Arc::clone(base)]),
+                    null,
+                    call("named_struct", vec![]),
+                ],
+            ));
+        }
+        // Spark rebuilds the struct from the kept fields (`CreateStruct`), so
+        // a NULL struct becomes a struct of NULL fields, not NULL.
+        let mut args: Vec<Arc<Expr>> = Vec::new();
+        for field in st.fields() {
+            let name = field.name().to_owned();
+            let value = match ops.iter().find(|o| match o {
+                FieldOp::Drop { name: n } | FieldOp::With { name: n, .. } => *n == name,
+            }) {
+                Some(FieldOp::Drop { .. }) => continue,
+                Some(FieldOp::With { value, .. }) => Arc::clone(value),
+                None => Arc::new(
+                    Expr::new(ExprNode::Field {
+                        base: Arc::clone(base),
+                        name: name.clone(),
+                    })
+                    .with_origin(origin),
+                ),
+            };
+            args.push(Arc::new(
+                Expr::new(ExprNode::Literal(Literal::String(name))).with_origin(origin),
+            ));
+            args.push(value);
+        }
+        Ok(Arc::new(
+            Expr::new(ExprNode::Function(FunctionCall {
+                within_group: Vec::new(),
+                name: "named_struct".to_owned(),
+                qualifier: Vec::new(),
+                args,
+                arg_names: Vec::new(),
+                distinct: false,
+                filter: None,
+            }))
+            .with_origin(origin),
+        ))
+    }
+
+    /// What `* EXCEPT (cols)` drops from `out` (the star's own expansion).
+    /// Each entry names one of those columns, bare or qualified with the
+    /// table (as in `ids.id`); longer paths name nested struct fields,
+    /// which need struct support (`KRISHIV_UNSUPPORTED_FEATURE`), and
+    /// unknown names are `UNRESOLVED_COLUMN`. Overlapping entries are
+    /// `EXCEPT_OVERLAPPING_COLUMNS`, checked before anything resolves (as
+    /// Spark checks them).
+    pub(super) fn apply_except(
+        &mut self,
+        s: &Star,
+        out: &[Attr],
+        origin: Origin,
+    ) -> Result<Vec<Attr>, AnalysisError> {
+        let cs = self.ctx.conf.case_sensitive;
+        self.except_overlap(s, origin)?;
         let mut dropped: Vec<(AttrId, String)> = Vec::new();
         for path in &s.except {
             let raw = path.join(".");
@@ -492,5 +926,21 @@ impl Resolver<'_> {
             })
             .cloned()
             .collect()
+    }
+}
+
+/// A type as Spark's `toString` prints a Catalyst type in an `EXCEPT` error
+/// (`IntegerType`, `StringType`); the SQL name where no short form is known.
+fn catalyst_type(t: &DataType) -> String {
+    match t {
+        DataType::Byte => "ByteType".to_owned(),
+        DataType::Short => "ShortType".to_owned(),
+        DataType::Integer => "IntegerType".to_owned(),
+        DataType::Long => "LongType".to_owned(),
+        DataType::Float => "FloatType".to_owned(),
+        DataType::Double => "DoubleType".to_owned(),
+        DataType::Boolean => "BooleanType".to_owned(),
+        DataType::String => "StringType".to_owned(),
+        other => other.sql(),
     }
 }

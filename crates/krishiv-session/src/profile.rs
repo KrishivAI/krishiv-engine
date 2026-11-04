@@ -4,6 +4,7 @@
 //! optimizer rule that changed it.
 
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 use futures::StreamExt as _;
@@ -73,6 +74,18 @@ impl ExplainVerbose {
             self.optimized, self.physical
         );
         out
+    }
+
+    /// The `planning` member of a profile document: the stages without
+    /// `format` and `version`.
+    #[must_use]
+    pub fn planning_value(&self) -> Value {
+        let mut v: Value = serde_json::from_str(&self.to_json()).unwrap_or_default();
+        if let Some(o) = v.as_object_mut() {
+            o.remove("format");
+            o.remove("version");
+        }
+        v
     }
 
     /// The JSON document (format [`VERBOSE_FORMAT`], version
@@ -270,6 +283,28 @@ impl DataFrame {
             .await
     }
 
+    /// As [`Self::explain_analyze`], with the plan at every planning stage
+    /// ([`Self::explain_verbose`]) in the profile's `planning` member.
+    ///
+    /// # Errors
+    /// Analysis, planning and execution errors.
+    pub async fn explain_analyze_verbose(&self) -> Result<QueryProfile, KrishivError> {
+        let df = self.clone();
+        self.session
+            .on_executor(async move {
+                // One plan for the trace and the run: the one with cached
+                // subplans substituted, which is what executes.
+                let a = df.action_analysis().await?;
+                let substituted = df.cache_substituted(&a)?;
+                let analyzed = substituted.as_ref().unwrap_or(&a.analyzed);
+                let (verbose, physical) = df.verbose_of(&a, analyzed).await?;
+                let (_, mut profile) = df.run_profiled_plan(&a, &physical, false).await?;
+                profile.planning = Some(verbose.planning_value());
+                Ok(profile)
+            })
+            .await
+    }
+
     /// As [`Self::explain_analyze`], also returning the rows.
     ///
     /// # Errors
@@ -288,9 +323,19 @@ impl DataFrame {
         &self,
         keep: bool,
     ) -> Result<(Vec<RecordBatch>, QueryProfile), KrishivError> {
-        let a = self.analysis().await?;
+        let a = self.action_analysis().await?;
         let (physical, _) = self.physical_cached(&a).await?;
-        let (mut stream, query) = self.session.run_profiled(&physical, &a.env).await?;
+        self.run_profiled_plan(&a, &physical, keep).await
+    }
+
+    /// Runs `physical` (the plan of `a`) with detailed metrics.
+    async fn run_profiled_plan(
+        &self,
+        a: &Arc<crate::dataframe::Analysis>,
+        physical: &krishiv_exec::planner::PhysicalPlan,
+        keep: bool,
+    ) -> Result<(Vec<RecordBatch>, QueryProfile), KrishivError> {
+        let (mut stream, query) = self.session.run_profiled(physical, &a.env).await?;
         let mut out = Vec::new();
         while let Some(batch) = stream.next().await {
             let batch = batch?;
@@ -301,7 +346,7 @@ impl DataFrame {
         drop(stream);
         // Every driver has merged its counters once the query finished.
         query.finished().await;
-        Ok((out, QueryProfile::new(&physical, query.metrics(), true)))
+        Ok((out, QueryProfile::new(physical, query.metrics(), true)))
     }
 
     /// The plan at every stage (`EXPLAIN VERBOSE`): parsed, analyzed, after
@@ -371,14 +416,24 @@ impl DataFrame {
     /// As [`Self::verbose`], also returning the physical plan tree
     /// ([`GraphFormat::Mermaid`] and [`GraphFormat::Dot`] graph it).
     pub(crate) async fn verbose_full(&self) -> Result<(ExplainVerbose, ExplainNode), KrishivError> {
-        let parsed = self.plan.to_string();
         let a = self.analysis().await?;
-        let analyzed = a.analyzed.plan.root().to_string();
-        let (optimized, physical, rules) = self
-            .session
-            .physical_traced(&a.analyzed, &a.env, true)
-            .await?;
-        let mut before = analyzed.clone();
+        self.verbose_of(&a, &a.analyzed)
+            .await
+            .map(|(verbose, physical)| (verbose, physical.explain_all()))
+    }
+
+    /// The stages of planning `analyzed` (the analyzed plan of `a`, or that
+    /// plan with cached subplans substituted), with the physical plan.
+    async fn verbose_of(
+        &self,
+        a: &Arc<crate::dataframe::Analysis>,
+        analyzed: &krishiv_plan::analyzer::AnalyzedPlan,
+    ) -> Result<(ExplainVerbose, krishiv_exec::planner::PhysicalPlan), KrishivError> {
+        let parsed = self.plan.to_string();
+        let analyzed_text = analyzed.plan.root().to_string();
+        let (optimized, physical, rules) =
+            self.session.physical_traced(analyzed, &a.env, true).await?;
+        let mut before = analyzed_text.clone();
         let mut steps = Vec::new();
         for r in rules {
             let plan = r.plan.to_string();
@@ -398,12 +453,12 @@ impl DataFrame {
         Ok((
             ExplainVerbose {
                 parsed,
-                analyzed,
+                analyzed: analyzed_text,
                 steps,
                 optimized: optimized.root().to_string(),
                 physical: node.to_string(),
             },
-            node,
+            physical,
         ))
     }
 }
@@ -411,6 +466,53 @@ impl DataFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The writer's members are exactly the schema's `explainVerbose` root.
+    #[test]
+    fn verbose_document_matches_the_schema() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/reference/query-profile-v1.schema.json"
+        );
+        let schema: Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_default())
+                .unwrap_or_default();
+        let root = &schema["$defs"]["explainVerbose"];
+        let v = ExplainVerbose {
+            parsed: "p".into(),
+            analyzed: "a".into(),
+            steps: vec![OptimizerStep {
+                batch: "Rewrite".into(),
+                round: 1,
+                rule: "r".into(),
+                plan: "x".into(),
+                diff: "- y\n".into(),
+            }],
+            optimized: "o".into(),
+            physical: "ph".into(),
+        };
+        let doc: Value = serde_json::from_str(&v.to_json()).unwrap_or_default();
+        let keys = |v: &Value| {
+            let mut k: Vec<String> = v
+                .as_object()
+                .map_or_else(Vec::new, |o| o.keys().cloned().collect());
+            k.sort();
+            k
+        };
+        assert_eq!(keys(&root["properties"]), keys(&doc));
+        let planning = &schema["$defs"]["planning"];
+        assert_eq!(keys(&planning["properties"]), keys(&v.planning_value()));
+        assert_eq!(
+            keys(&planning["properties"]["steps"]["items"]["properties"]),
+            keys(&doc["steps"][0])
+        );
+        assert_eq!(root["properties"]["format"]["const"], VERBOSE_FORMAT);
+        // A later minor adds members; the reader ignores them.
+        let mut later = doc;
+        later["minor"] = 3.into();
+        later["extra"] = serde_json::json!([1]);
+        assert_eq!(ExplainVerbose::from_json(&later.to_string()).ok(), Some(v));
+    }
 
     #[test]
     fn line_diffs() {

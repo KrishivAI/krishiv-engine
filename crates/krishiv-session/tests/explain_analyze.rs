@@ -72,6 +72,49 @@ fn rows(batches: &[RecordBatch]) -> u64 {
 }
 
 #[test]
+fn analyze_verbose_carries_the_planning_stages() {
+    let s = session(2);
+    let df = block_on(s.sql(QUERY)).expect("plans");
+    let p = block_on(df.explain_analyze_verbose()).expect("runs");
+    let planning = p.planning.as_ref().expect("planning");
+    assert!(
+        planning["physical"]
+            .as_str()
+            .is_some_and(|t| t.contains("HashJoin"))
+    );
+    assert!(planning["steps"].as_array().is_some_and(|a| !a.is_empty()));
+    let back = QueryProfile::from_json(&p.to_json()).expect("reads");
+    assert_eq!(back.planning, p.planning);
+    // Plain EXPLAIN ANALYZE writes no planning member.
+    let plain = block_on(df.explain_analyze()).expect("runs");
+    assert!(plain.planning.is_none());
+    assert!(plain.to_json_value().get("planning").is_none());
+}
+
+/// With a cached subplan the trace describes the plan that ran (scans of the
+/// snapshot), not the original: its physical text has one line per node of
+/// the profile's plan.
+#[test]
+fn analyze_verbose_traces_the_cache_substituted_plan() {
+    let s = session(1);
+    // Fill the cache with the filtered orders, then profile a query over it.
+    let cached = block_on(s.sql("SELECT cust, amount FROM orders WHERE amount > 10"))
+        .expect("plans")
+        .cache();
+    block_on(cached.collect()).expect("fills the cache");
+    let df = block_on(s.sql(QUERY)).expect("plans");
+    let p = block_on(df.explain_analyze_verbose()).expect("runs");
+    let planning = p.planning.as_ref().expect("planning");
+    let lines = planning["physical"]
+        .as_str()
+        .unwrap_or_default()
+        .lines()
+        .count();
+    let nodes = p.to_json_value()["plan"].as_array().map_or(0, Vec::len);
+    assert_eq!(lines, nodes, "{}", planning["physical"]);
+}
+
+#[test]
 fn analyze_text_is_stable() {
     let s = session(1);
     let df = block_on(s.sql(QUERY)).unwrap();
@@ -313,6 +356,11 @@ fn a_recursive_cte_reports_its_rounds() {
     };
     assert!(text.contains("UnionLoop"), "{text}");
     // The anchor, four productive rounds and the empty round that ends it.
-    assert!(text.contains("rounds=6"), "{text}");
-    assert!(text.contains("rows=5"), "{text}");
+    // Whole tokens, so `rounds=60` or `rows=50` would not pass.
+    let has = |token: &str| {
+        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '='))
+            .any(|t| t == token)
+    };
+    assert!(has("rounds=6"), "{text}");
+    assert!(has("rows=5"), "{text}");
 }
