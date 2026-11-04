@@ -8,13 +8,13 @@
 #
 # Containers are named krishiv-test-<kind>-<pid> and bind 127.0.0.1 on free ports; only those names are ever
 # removed (never bench-minio or any other container). Images are overridable and should be pinned by digest in CI:
-#   MINIO_IMAGE (default minio/minio), FAKE_GCS_IMAGE (tustvold/fake-gcs-server: object_store uploads through
-#   the XML API, which the upstream fsouza image does not implement; it is object_store's own CI image),
+#   MINIO_IMAGE (default minio/minio), FAKE_GCS_IMAGE (fsouza/fake-gcs-server, the image object_store's own CI
+#   uses; the tustvold image answers the XML PUT with 405),
 #   AZURITE_IMAGE (mcr.microsoft.com/azure-storage/azurite), AZ_CLI_IMAGE (mcr.microsoft.com/azure-cli).
 set -euo pipefail
 
 MINIO_IMAGE="${MINIO_IMAGE:-minio/minio}"
-FAKE_GCS_IMAGE="${FAKE_GCS_IMAGE:-tustvold/fake-gcs-server}"
+FAKE_GCS_IMAGE="${FAKE_GCS_IMAGE:-fsouza/fake-gcs-server}"
 AZURITE_IMAGE="${AZURITE_IMAGE:-mcr.microsoft.com/azure-storage/azurite}"
 AZ_CLI_IMAGE="${AZ_CLI_IMAGE:-mcr.microsoft.com/azure-cli}"
 # Azurite's published development account (public, fixed by Microsoft; not a secret).
@@ -28,6 +28,10 @@ containers=("krishiv-test-minio-$$" "krishiv-test-gcs-$$" "krishiv-test-azurite-
 work="$(mktemp -d)"
 cleanup() {
   status=$?
+  if [ "$status" -ne 0 ] && docker inspect "krishiv-test-gcs-$$" >/dev/null 2>&1; then
+    echo "--- fake-gcs-server log (last 25 lines) ---" >&2
+    docker logs --tail 25 "krishiv-test-gcs-$$" >&2 2>&1 || true
+  fi
   for c in "${containers[@]:-}"; do
     [ -n "$c" ] && docker rm -f "$c" >/dev/null 2>&1 || true
   done
@@ -61,8 +65,21 @@ s3_port="$(start minio 9000 --user "$(id -u):$(id -g)" -v "$work/minio:/data" \
   "$MINIO_IMAGE" server /data)"
 wait_for "http://127.0.0.1:${s3_port}/minio/health/live"
 
-gcs_port="$(start gcs 4443 "$FAKE_GCS_IMAGE" -scheme http -backend memory -port 4443 -public-host localhost:4443)"
-wait_for "http://127.0.0.1:${gcs_port}/storage/v1/b?project=test-project"
+# GCS is opt-in (WITH_GCS=1): no fake-gcs-server image tried (tustvold: 405; fsouza latest, 2026-08: 400 "invalid
+# uploadType") accepts the XML-API PUT that object_store uploads through, so gcs_round_trip cannot pass against an
+# emulator yet; without the endpoint the test only checks offline store construction.
+if [ "${WITH_GCS:-0}" = 1 ]; then
+  # fake-gcs-server routes the XML API (what object_store uploads through) by Host header, so its public host must be
+  # the address the client uses: pick a free port and publish the container on that same port.
+  gcs_port="$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+  docker run -d --rm --name "krishiv-test-gcs-$$" -p "127.0.0.1:${gcs_port}:${gcs_port}" "$FAKE_GCS_IMAGE" \
+    -scheme http -backend memory -port "$gcs_port" -public-host "127.0.0.1:${gcs_port}" -log-level debug >/dev/null
+  wait_for "http://127.0.0.1:${gcs_port}/storage/v1/b?project=test-project"
+  # fake-gcs-server starts without buckets (an upload to a missing one is a 404), unlike the MinIO data dir above.
+  curl -fsS -X POST -H 'Content-Type: application/json' -d '{"name":"krishiv-test"}' \
+    "http://127.0.0.1:${gcs_port}/storage/v1/b?project=test-project" >/dev/null
+  export KRISHIV_TEST_GCS_ENDPOINT="http://127.0.0.1:${gcs_port}"
+fi
 
 az_port="$(start azurite 10000 "$AZURITE_IMAGE" azurite-blob --blobHost 0.0.0.0 --skipApiVersionCheck)"
 wait_for "http://127.0.0.1:${az_port}/devstoreaccount1?comp=list"
@@ -70,7 +87,6 @@ docker run --rm --network host "$AZ_CLI_IMAGE" az storage container create --nam
   --connection-string "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=${AZURITE_KEY};BlobEndpoint=http://127.0.0.1:${az_port}/devstoreaccount1;" >/dev/null
 
 export KRISHIV_TEST_S3_ENDPOINT="http://127.0.0.1:${s3_port}"
-export KRISHIV_TEST_GCS_ENDPOINT="http://127.0.0.1:${gcs_port}"
 export KRISHIV_TEST_AZURE_ENDPOINT="http://127.0.0.1:${az_port}/devstoreaccount1"
 
 # Every step runs even when an earlier one fails; the exit status is non-zero if any did.

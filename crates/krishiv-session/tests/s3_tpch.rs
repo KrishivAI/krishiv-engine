@@ -89,7 +89,7 @@ fn tpch_over_s3_equals_tpch_over_local_files() {
     let io = sched.context();
     // The store layer times its requests with Tokio, which `futures::executor` does not provide.
     let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_time()
+        .enable_all()
         .build()
         .unwrap();
     let mut urls: Vec<(String, Vec<String>)> = Vec::new();
