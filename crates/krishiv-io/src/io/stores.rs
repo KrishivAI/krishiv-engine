@@ -508,20 +508,25 @@ fn hf_store(
         url.bucket,
         url.revision.as_deref().unwrap_or("main")
     );
-    // `HF_TOKEN` (the server's own) goes only to the default host: any endpoint override, per-read or a
-    // session setting (clients can `SET fs.*`), would let a caller collect it. A session `fs.hf.token` is
-    // withheld from a per-read endpoint too; only a per-read token goes there.
+    // A token goes only to the default host, or, with an endpoint override, only when the same per-read
+    // options carry the token: `fs.*` keys can be changed by clients (`SET`), so a session endpoint is as
+    // caller-controlled as a per-read one, and neither may collect the server's `HF_TOKEN` or a session
+    // `fs.hf.token`.
     let custom_endpoint = text(config, options, HF_ENDPOINT)?.is_some();
-    let caller_endpoint = find_option(options, HF_ENDPOINT).is_some();
-    let caller_token = find_option(options, HF_TOKEN).is_some();
-    let token = match cred(config, options, HF_TOKEN)? {
-        _ if caller_endpoint && !caller_token => None,
-        Some(token) => Some(token),
-        None if custom_endpoint => None,
-        None => std::env::var("HF_TOKEN")
-            .ok()
-            .filter(|t| !t.is_empty())
-            .map(SecretString::new),
+    let token = if custom_endpoint {
+        if find_option(options, HF_TOKEN).is_some() {
+            cred(config, options, HF_TOKEN)?
+        } else {
+            None
+        }
+    } else {
+        match cred(config, options, HF_TOKEN)? {
+            Some(token) => Some(token),
+            None => std::env::var("HF_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty())
+                .map(SecretString::new),
+        }
     };
     if token.is_some() && !endpoint.starts_with("https://") && !loopback_endpoint(endpoint) {
         return Err(invalid_option(
@@ -555,6 +560,10 @@ fn hf_store(
 fn loopback_endpoint(endpoint: &str) -> bool {
     let rest = endpoint.split_once("://").map_or(endpoint, |(_, r)| r);
     let authority = rest.split('/').next().unwrap_or_default();
+    // Userinfo (`http://localhost:x@evil.com`) changes the host the URL parser picks: not a loopback form.
+    if authority.contains('@') || authority.contains('\\') {
+        return false;
+    }
     let host = if let Some(v6) = authority.strip_prefix('[') {
         v6.split(']').next().unwrap_or_default()
     } else {

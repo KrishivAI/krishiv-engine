@@ -462,13 +462,30 @@ fn http_urls_name_a_store_by_authority_and_refuse_credentials_and_remote_plain_h
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }
 
+/// Per-read `fs.*` options from `pairs`.
+fn hf_options(
+    pairs: &[(&str, &str)],
+) -> std::collections::BTreeMap<String, krishiv_common::secret::OptionValue> {
+    pairs
+        .iter()
+        .map(|(k, v)| {
+            (
+                (*k).to_owned(),
+                krishiv_common::secret::OptionValue::from_user(k, *v),
+            )
+        })
+        .collect()
+}
+
 /// Reads `url` whole through a registry with `pairs` and checks the bytes;
 /// returns the display path and the registry's `Debug` text.
 async fn read_hf(body: &[u8], pairs: &[(&str, &str)], url: &str) -> (String, String) {
-    let config = test_config(pairs);
+    // The endpoint and token are per-read options: a token goes to an overridden endpoint only that way.
+    let options = hf_options(pairs);
+    let config = test_config(&[]);
     let sched = IoScheduler::new(IoConfig::from_config(&config));
     let registry = StoreRegistry::new(config);
-    let (store, path, display) = registry.ensure(&sched, url).unwrap();
+    let (store, path, display) = registry.ensure_with_options(&sched, url, &options).unwrap();
     let io = sched.context();
     let meta = io.head(&store, &path).await.unwrap().unwrap();
     let file = FileRef::from_meta(store, &meta);
@@ -541,25 +558,33 @@ async fn hf_without_a_token_on_a_gated_dataset_is_a_store_error() {
             ("fs.hf.token", "hf_Wrong-9"),
         ],
     ] {
-        let config = test_config(&pairs);
+        let config = test_config(&[]);
         let sched = IoScheduler::new(IoConfig::from_config(&config));
         let registry = StoreRegistry::new(config);
         let (store, path, _) = registry
-            .ensure(&sched, "hf://datasets/acme/gated/t.parquet")
+            .ensure_with_options(
+                &sched,
+                "hf://datasets/acme/gated/t.parquet",
+                &hf_options(&pairs),
+            )
             .unwrap();
         let e = sched.context().head(&store, &path).await.unwrap_err();
         assert_eq!(e.error_class(), ErrorClass::KrishivObjectStoreRequestFailed);
         assert!(!format!("{e:?}").contains("Wrong-9"));
     }
     // The right token reads.
-    let config = test_config(&[
-        ("fs.hf.endpoint", endpoint.as_str()),
-        ("fs.hf.token", "hf_right"),
-    ]);
+    let config = test_config(&[]);
     let sched = IoScheduler::new(IoConfig::from_config(&config));
     let registry = StoreRegistry::new(config);
     let (store, path, _) = registry
-        .ensure(&sched, "hf://datasets/acme/gated/t.parquet")
+        .ensure_with_options(
+            &sched,
+            "hf://datasets/acme/gated/t.parquet",
+            &hf_options(&[
+                ("fs.hf.endpoint", endpoint.as_str()),
+                ("fs.hf.token", "hf_right"),
+            ]),
+        )
         .unwrap();
     assert!(sched.context().head(&store, &path).await.unwrap().is_some());
 }
@@ -573,6 +598,30 @@ async fn hf_session_token_is_withheld_from_a_per_read_endpoint() {
     let body = parquet_bytes();
     let server = serve(body.clone());
     let endpoint = format!("http://127.0.0.1:{}", server.port);
+    // A session endpoint (clients can `SET fs.*`) is as caller-controlled as a per-read one: the session
+    // token is withheld from it as well.
+    let both = test_config(&[
+        ("fs.hf.token", "hf_Session-1"),
+        ("fs.hf.endpoint", endpoint.as_str()),
+    ]);
+    {
+        // Scoped: the one-connection test server must see this client's connection close.
+        let sched = IoScheduler::new(IoConfig::from_config(&both));
+        let registry = StoreRegistry::new(Arc::clone(&both));
+        let (store, path, _) = registry
+            .ensure(&sched, "hf://datasets/acme/tiny/data/t.parquet")
+            .unwrap();
+        assert!(sched.context().head(&store, &path).await.unwrap().is_some());
+        assert!(
+            server
+                .log
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(_, _, a)| a.is_none()),
+            "the session token reached a session endpoint"
+        );
+    }
     let config = test_config(&[("fs.hf.token", "hf_Session-1")]);
     for (per_read_token, want) in [(false, None), (true, Some("Bearer hf_Caller-2"))] {
         let mut options = BTreeMap::new();
@@ -606,6 +655,7 @@ async fn hf_session_token_is_withheld_from_a_per_read_endpoint() {
 #[test]
 fn hf_names_cannot_leave_the_dataset_path_and_tokens_need_https() {
     for bad in [
+        "hf://datasets/../tiny/x",
         "hf://datasets/..@../api/whoami-v2",
         "hf://datasets/acme/..@main/x",
         "hf://datasets/./tiny/x",
@@ -613,16 +663,34 @@ fn hf_names_cannot_leave_the_dataset_path_and_tokens_need_https() {
     ] {
         assert!(krishiv_io::parse_object_url(bad).is_err(), "{bad}");
     }
-    let config = test_config(&[
+    let config = test_config(&[]);
+    let sched = IoScheduler::new(IoConfig::from_config(&config));
+    let registry = StoreRegistry::new(config);
+    let options = hf_options(&[
         ("fs.hf.endpoint", "http://example.com"),
         ("fs.hf.token", "hf_Canary-9"),
     ]);
-    let sched = IoScheduler::new(IoConfig::from_config(&config));
-    let registry = StoreRegistry::new(config);
     let e = registry
-        .ensure(&sched, "hf://datasets/acme/tiny/t.parquet")
+        .ensure_with_options(&sched, "hf://datasets/acme/tiny/t.parquet", &options)
         .unwrap_err();
     assert!(!e.to_string().contains("Canary-9"), "{e}");
+    assert!(e.to_string().contains("https"), "{e}");
+    // Userinfo can hide the real host behind a loopback-looking one.
+    for endpoint in [
+        "http://localhost:x@evil.example",
+        "http://127.0.0.1:80@evil.example",
+    ] {
+        let config = test_config(&[("fs.hf.endpoint", endpoint), ("fs.hf.token", "hf_Canary-9")]);
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let registry = StoreRegistry::new(config);
+        // A session token is withheld from a session endpoint, so use the per-read pair.
+        let options = hf_options(&[("fs.hf.endpoint", endpoint), ("fs.hf.token", "hf_Canary-9")]);
+        let e = registry
+            .ensure_with_options(&sched, "hf://datasets/acme/tiny/t.parquet", &options)
+            .unwrap_err();
+        // Refused either as a secret-bearing endpoint or by the https rule; never sent.
+        assert!(!e.to_string().contains("Canary-9"), "{endpoint}: {e}");
+    }
 }
 
 /// The commit log relies on `PutMode::Create` (`If-None-Match: *`): of two
