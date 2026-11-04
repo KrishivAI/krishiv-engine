@@ -1828,4 +1828,33 @@ mod tests {
             assert!(error.to_string().contains("`cloud`"), "{input}");
         }
     }
+    /// The web schemes' error paths and names, in the default build (parsing is not behind `cloud`).
+    #[test]
+    fn web_urls_and_hf_names_are_checked_when_parsed() {
+        for bad in [
+            "https://example.com/a?token=1",
+            "http://example.com/a#frag",
+            "hf://models/acme/tiny/x",
+            "hf://datasets/../tiny/x",
+            "hf://datasets/acme/bad name/x",
+            "hf://datasets/acme/tiny@/x",
+        ] {
+            let e = parse_object_url(bad).unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::KrishivUnsupportedFeature,
+                "{bad}"
+            );
+        }
+        let hf = parse_object_url("hf://datasets/acme/tiny@v2/data/t.parquet").unwrap();
+        assert_eq!(hf.scheme.to_string(), "hf");
+        assert_eq!(hf.revision.as_deref(), Some("v2"));
+        let web = parse_object_url("https://example.com/a/b.parquet").unwrap();
+        assert_eq!(web.scheme.to_string(), "https");
+        // Neither web scheme is paced like a cloud service.
+        let _ = (
+            policy_for(ObjectScheme::Http),
+            policy_for(ObjectScheme::HuggingFace),
+        );
+    }
 }

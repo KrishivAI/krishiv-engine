@@ -609,3 +609,23 @@ fn remote_table_urls_get_their_own_errors_not_a_credentials_error() {
         assert!(!err.contains("paths with credentials"), "{url}: {err}");
     }
 }
+
+/// `--table` repeated with one name lists several files of one table.
+#[test]
+fn a_repeated_table_flag_collects_its_urls() {
+    let config = RunnerConfig::from_args(
+        [
+            "--table",
+            "fw=https://example.com/a.parquet",
+            "--table",
+            "fw=https://example.com/b.parquet",
+            "--table",
+            "other=https://example.com/c.parquet",
+        ]
+        .map(str::to_owned),
+    )
+    .unwrap();
+    assert_eq!(config.tables.len(), 2);
+    assert_eq!(config.tables[0].0, "fw");
+    assert_eq!(config.tables[0].1.len(), 2);
+}
