@@ -328,4 +328,69 @@ mod tests {
         assert_eq!(copy_bytes(&plain), 0);
         assert!(compact(&plain).unwrap().is_none());
     }
+
+    /// The exact byte counts of nested slices: the children's bytes plus the
+    /// rebased offsets (and nothing else for fixed-size lists).
+    #[test]
+    fn nested_byte_counts_are_exact() {
+        let values: ArrayRef = Arc::new(long_strings(1000));
+        let field = Arc::new(Field::new("item", DataType::Utf8View, true));
+        // Rows 40 and 41 of 10 values each: values 400..420.
+        let child: ArrayRef = values.slice(400, 20);
+        let child_copy = copy_bytes(&child);
+        assert!(child_copy > 0);
+        let child_frame = frame_bytes(&child);
+        assert_eq!(child_frame, child_copy, "a view array's frame is its copy");
+
+        let list = Arc::new(ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::from_lengths(std::iter::repeat_n(10, 100)),
+            Arc::clone(&values),
+            None,
+        ))
+        .slice(40, 2);
+        assert_eq!(copy_bytes(&list), child_copy + 3 * 4);
+        assert_eq!(frame_bytes(&list), child_frame + 3 * 4);
+
+        let large = Arc::new(LargeListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::from_lengths(std::iter::repeat_n(10, 100)),
+            Arc::clone(&values),
+            None,
+        ))
+        .slice(40, 2);
+        assert_eq!(copy_bytes(&large), child_copy + 3 * 8);
+        assert_eq!(frame_bytes(&large), child_frame + 3 * 8);
+
+        let fixed = Arc::new(FixedSizeListArray::new(
+            Arc::clone(&field),
+            10,
+            Arc::clone(&values),
+            None,
+        ))
+        .slice(40, 2);
+        assert_eq!(copy_bytes(&fixed), child_copy);
+        assert_eq!(frame_bytes(&fixed), child_frame);
+
+        let entries = StructArray::from(vec![
+            (
+                Arc::new(Field::new("keys", DataType::Utf8View, false)),
+                Arc::clone(&values),
+            ),
+            (
+                Arc::new(Field::new("values", DataType::Utf8View, true)),
+                Arc::clone(&values),
+            ),
+        ]);
+        let map = Arc::new(MapArray::new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            OffsetBuffer::from_lengths(std::iter::repeat_n(10, 100)),
+            entries,
+            None,
+            false,
+        ))
+        .slice(40, 2);
+        assert_eq!(copy_bytes(&map), 2 * child_copy + 3 * 4);
+        assert_eq!(frame_bytes(&map), 2 * child_frame + 3 * 4);
+    }
 }
