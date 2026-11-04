@@ -456,6 +456,7 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 };
                 *first = nested_cast::interval_leaves(Arc::clone(first), from);
             }
+            guard_right_operand(f, &mut args, input.env.ansi);
             match &f.id {
                 FunctionId::Builtin(b) => builtin(*b, f, args, input, e),
                 FunctionId::Registry { name, .. } => {
@@ -489,6 +490,41 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
         // Includes subqueries: the planner replaces those it runs by
         // columns ([`Input::subqueries`]).
         _ => Err(unsupported_expr(e)),
+    }
+}
+
+/// Spark's null-intolerant binary expressions return NULL on a NULL left
+/// value without evaluating the right operand: when the right operand may
+/// raise and the left may be NULL, the right one is evaluated only where the
+/// left is set.
+fn guard_right_operand(f: &ResolvedFunction, args: &mut [Arc<dyn PhysExpr>], ansi: bool) {
+    let guarded = match &f.id {
+        FunctionId::Builtin(b) => matches!(
+            b,
+            Builtin::Eq
+                | Builtin::Lt
+                | Builtin::LtEq
+                | Builtin::Gt
+                | Builtin::GtEq
+                | Builtin::Add
+                | Builtin::Subtract
+                | Builtin::Multiply
+                | Builtin::Divide
+                | Builtin::Remainder
+                | Builtin::IntegralDivide
+        ),
+        FunctionId::Registry { name, .. } => {
+            matches!(name.as_str(), "nullif" | "date_add" | "date_sub")
+        }
+        _ => false,
+    };
+    if let ([left, right], [left_ir, right_ir]) = (&mut *args, f.args.as_slice())
+        && guarded
+        && left.nullable()
+        && krishiv_plan::is_deterministic(left_ir)
+        && krishiv_plan::may_raise(right_ir, ansi)
+    {
+        *right = logic::right_where_left_set(Arc::clone(left), Arc::clone(right));
     }
 }
 

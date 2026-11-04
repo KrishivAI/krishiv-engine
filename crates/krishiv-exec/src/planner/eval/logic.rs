@@ -116,6 +116,57 @@ impl PhysExpr for AndOr {
     }
 }
 
+/// The right operand of a null-intolerant binary operator, evaluated only on
+/// the rows where the left operand is not NULL. Spark's `BinaryExpression.eval`
+/// returns NULL as soon as the left value is NULL, so an error in the right
+/// operand (`CAST_INVALID_INPUT`, `DIVIDE_BY_ZERO`, overflow) on such a row
+/// never surfaces. The left operand is evaluated here a second time, for its
+/// validity only (the operator evaluates it first for its values, so a failure
+/// of the left operand still comes first).
+#[derive(Debug)]
+struct RightWhereLeftSet {
+    left: Arc<dyn PhysExpr>,
+    right: Arc<dyn PhysExpr>,
+}
+
+/// Wraps `right` so it sees only the rows where `left` is not NULL.
+pub(super) fn right_where_left_set(
+    left: Arc<dyn PhysExpr>,
+    right: Arc<dyn PhysExpr>,
+) -> Arc<dyn PhysExpr> {
+    Arc::new(RightWhereLeftSet { left, right })
+}
+
+impl PhysExpr for RightWhereLeftSet {
+    fn data_type(&self) -> &ArrowType {
+        self.right.data_type()
+    }
+
+    fn nullable(&self) -> bool {
+        true
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let lv = self.left.eval(batch, partition)?;
+        let rows = batch.num_rows();
+        let Some(nulls) = lv.array().logical_nulls().filter(|n| n.null_count() > 0) else {
+            return self.right.eval(batch, partition);
+        };
+        let valid = if lv.is_scalar() {
+            // A NULL literal on the left: no row evaluates the right side.
+            BooleanBuffer::new_unset(rows)
+        } else {
+            nulls.inner().clone()
+        };
+        Ok(Value::Array(super::eval_where(
+            self.right.as_ref(),
+            batch,
+            &valid,
+            partition,
+        )?))
+    }
+}
+
 /// `NOT`.
 #[derive(Debug)]
 struct Not(Arc<dyn PhysExpr>);
