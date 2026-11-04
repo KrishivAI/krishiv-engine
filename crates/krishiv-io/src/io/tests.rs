@@ -819,3 +819,12 @@ fn the_block_cache_settings_come_from_the_config() {
     assert_eq!(on.memory_bytes, 8 << 20);
     assert_eq!(on.block_bytes, 256 << 10);
 }
+
+#[test]
+fn the_block_cache_directory_defaults_to_a_per_user_temp_directory() {
+    let (c, _) = Config::from_pairs([("krishiv.io.cache.enabled", "true")]).unwrap();
+    let dir = IoConfig::from_config(&c).block_cache.unwrap().dir;
+    let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.starts_with("krishiv-block-cache-"), "{name}");
+    assert_eq!(dir.parent().unwrap(), std::env::temp_dir());
+}

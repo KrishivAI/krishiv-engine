@@ -3100,6 +3100,32 @@ mod tests {
     use krishiv_types::{ArrayType, DecimalType};
 
     #[test]
+    fn an_owned_directory_is_exclusive_and_reports_why_it_cannot_be_made() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("a").join("t");
+        let owned = OwnedDirectory::create(path.clone()).unwrap();
+        assert!(matches!(
+            OwnedDirectory::create(path.clone()),
+            Err(OwnedDirectoryError::Exists)
+        ));
+        drop(owned);
+        assert!(!path.exists(), "a directory not kept is removed again");
+        // A file where the parent should be.
+        let file = tmp.path().join("f");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(matches!(
+            OwnedDirectory::create(file.join("t")),
+            Err(OwnedDirectoryError::Io(m)) if m.contains("cannot create")
+        ));
+        // A parent that exists but takes no new entries.
+        #[cfg(target_os = "linux")]
+        assert!(matches!(
+            OwnedDirectory::create(PathBuf::from("/proc/krishiv-owned-directory")),
+            Err(OwnedDirectoryError::Io(_))
+        ));
+    }
+
+    #[test]
     fn ansi_store_assignment() {
         use DataType as T;
         assert!(can_store(&T::Integer, &T::Integer));
