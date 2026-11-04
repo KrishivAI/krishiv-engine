@@ -89,6 +89,8 @@ struct Lru {
     reservation: Option<Reservation>,
     /// Bumped by every invalidation.
     generation: u64,
+    /// Entries evicted for room (not invalidated).
+    evictions: u64,
 }
 
 impl Lru {
@@ -107,6 +109,7 @@ impl Lru {
             return false;
         };
         self.remove(&victim);
+        self.evictions += 1;
         true
     }
 }
@@ -127,6 +130,23 @@ pub(crate) struct LoadSlot {
     /// completed after that is shared with it).
     pub(crate) completed: AtomicU64,
     pub(crate) loaded: tokio::sync::Mutex<Option<Loaded>>,
+}
+
+/// What a [`MetadataCache`] holds and has done, as `system.caches` shows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CacheStats {
+    /// Entries held.
+    pub entries: u64,
+    /// Bytes held (by [`FileMetadata::heap_size`]).
+    pub bytes: u64,
+    /// The cache's byte limit.
+    pub limit: u64,
+    /// Entries evicted to make room.
+    pub evictions: u64,
+    /// Invalidations (`REFRESH`, `CLEAR CACHE`, writes).
+    pub invalidations: u64,
+    /// Reads in flight.
+    pub loads_in_flight: u64,
 }
 
 /// The process-wide file-metadata cache (see the module docs).
@@ -176,6 +196,28 @@ impl MetadataCache {
     /// The current generation (see the module docs).
     pub(crate) fn generation(&self) -> u64 {
         self.lock().generation
+    }
+
+    /// The cache's size and history now.
+    #[must_use]
+    pub fn stats(&self) -> CacheStats {
+        let (entries, bytes, evictions, invalidations) = {
+            let lru = self.lock();
+            (
+                lru.map.len() as u64,
+                lru.bytes,
+                lru.evictions,
+                lru.generation,
+            )
+        };
+        CacheStats {
+            entries,
+            bytes,
+            limit: self.limit,
+            evictions,
+            invalidations,
+            loads_in_flight: self.loads_in_flight() as u64,
+        }
     }
 
     /// Keys with a read in flight (tests).

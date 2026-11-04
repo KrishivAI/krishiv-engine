@@ -78,6 +78,8 @@ pub mod console;
 mod context;
 mod driver;
 mod error;
+pub mod exchange;
+mod exchange_stats;
 mod executor;
 pub mod files;
 pub mod hash;
@@ -111,6 +113,7 @@ pub use context::{
     QueryId, TaskContext,
 };
 pub use error::Result;
+pub use exchange_stats::{EXCHANGE_HLL_BITS, ExchangeStats, PartitionStats};
 pub use executor::{
     Executor, ExecutorConfig, TaskHandle, TokioClock, TokioExecutor, WorkloadClass,
 };

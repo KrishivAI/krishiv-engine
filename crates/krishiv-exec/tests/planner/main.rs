@@ -35,6 +35,7 @@ mod string_encoding;
 mod sum_rewrite;
 mod tpcds_merge;
 mod tpch;
+mod two_phase;
 mod union;
 mod union_order;
 mod window;
@@ -170,7 +171,12 @@ struct Env {
 }
 
 fn env() -> Env {
-    let (schema, batches) = table(10);
+    env_of(10)
+}
+
+/// [`env`] with `n` rows in `t`.
+fn env_of(n: i32) -> Env {
+    let (schema, batches) = table(n);
     let columns = schema
         .fields()
         .iter()
@@ -208,8 +214,14 @@ impl Env {
     }
 
     fn plan(&self, sql: &str) -> Result<Runnable, KrishivError> {
+        self.plan_with(sql, Config::new())
+    }
+
+    /// [`Env::plan`] under the session settings `config`.
+    fn plan_with(&self, sql: &str, config: Config) -> Result<Runnable, KrishivError> {
         let plan = krishiv_optimizer::optimize(&self.analyze(sql)).unwrap();
-        Ok(self.runnable(DefaultPlanner.plan(&plan, &self.cx())?))
+        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::new(config));
+        Ok(self.runnable(DefaultPlanner.plan(&plan, &cx)?))
     }
 
     fn runnable(&self, plan: PhysicalPlan) -> Runnable {

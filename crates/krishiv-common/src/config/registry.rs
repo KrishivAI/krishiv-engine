@@ -17,6 +17,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &STORE_ASSIGNMENT_POLICY,
     &CTE_PRECEDENCE_POLICY,
     &MAP_KEY_DEDUP_POLICY,
+    &AUTO_BROADCAST_JOIN_THRESHOLD,
     &TARGET_PARTITION_BYTES,
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
@@ -65,6 +66,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_PREFETCH_BYTES,
     &IO_LATE_MATERIALIZATION,
     &IO_PARQUET_PAGE_INDEX_ENABLED,
+    &IO_PARQUET_BLOOM_FILTER_ENABLED,
     &IO_FOOTER_READ_BYTES,
     &IO_METADATA_CACHE_BYTES,
     &IO_MULTIPART_PART_BYTES,
@@ -251,6 +253,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_CODING_ERROR_ACTION,
     ),
     (
+        "spark.sql.autoBroadcastJoinThreshold",
+        &AUTO_BROADCAST_JOIN_THRESHOLD,
+    ),
+    (
         "spark.sql.leafNodeDefaultParallelism",
         &LEAF_NODE_DEFAULT_PARALLELISM,
     ),
@@ -263,12 +269,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_STATISTICAL_AGGREGATE,
     ),
     (
+        "krishiv.io.parquet.bloomFilter.enabled",
+        &IO_PARQUET_BLOOM_FILTER_ENABLED,
+    ),
+    (
         "krishiv.runtimeFilter.adaptive.minRows",
         &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     ),
     (
         "krishiv.runtimeFilter.inList.maxValues",
         &RUNTIME_FILTER_IN_LIST_MAX_VALUES,
+    ),
+    (
+        "krishiv.sql.autoBroadcastJoinThreshold",
+        &AUTO_BROADCAST_JOIN_THRESHOLD,
     ),
     (
         "krishiv.sql.leafNodeDefaultParallelism",
@@ -442,6 +456,21 @@ pub static MAP_KEY_DEDUP_POLICY: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.mapKeyDedupPolicy"),
+};
+
+/// The largest estimated join build broadcast without a hint (P2-T174
+/// unit 4).
+pub static AUTO_BROADCAST_JOIN_THRESHOLD: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.autoBroadcastJoinThreshold",
+    value_type: ValueType::SignedSize,
+    #[expect(clippy::cast_possible_wrap, reason = "10 MiB")]
+    default: Some(ConfigValue::Int((10 * MIB) as i64)),
+    doc: "The largest estimated size, in bytes, of a join input that is broadcast to every \
+          task without a hint. A negative value turns broadcasting by size off; a \
+          `BROADCAST` hint still broadcasts.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.autoBroadcastJoinThreshold"),
 };
 
 /// Target partition size, replacing a fixed shuffle partition count.
@@ -1039,6 +1068,20 @@ pub static IO_PARQUET_PAGE_INDEX_ENABLED: ConfigEntry = ConfigEntry {
           decide and skips the pages the pushed filter rules out. Returned rows are the same \
           either way: the index only prunes, and an index that fails a check is ignored. Files \
           without a page index pay nothing.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.parquet.bloomFilter.enabled`.
+pub static IO_PARQUET_BLOOM_FILTER_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.parquet.bloomFilter.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether a Parquet scan reads the stored Bloom filters of the row groups its statistics \
+          could not decide and skips a row group when a pushed equality or IN literal cannot be \
+          in it. Returned rows are the same either way: the filter only prunes, and a filter \
+          that fails a check is ignored. Files without Bloom filters pay nothing.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

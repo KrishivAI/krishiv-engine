@@ -123,6 +123,7 @@ fn a_real_file_passes_every_check() {
     sparse_pages(
         &slice(&bytes, &chunk),
         chunk.start,
+        chunk.start,
         offsets.page_locations(),
     )
     .expect("page headers");
@@ -313,17 +314,32 @@ fn a_hostile_page_header_inside_a_sparse_range_is_rejected() {
         first_row_index: 0,
     };
     // The page lies inside the pushed bytes: it is walked and refused.
-    let err = sparse_pages(&page, 1000, std::slice::from_ref(&location)).expect_err("walked");
+    let err = sparse_pages(&page, 1000, 1000, std::slice::from_ref(&location)).expect_err("walked");
     assert!(err.0.contains("larger than the bytes left"), "{err:?}");
     // A page outside the pushed range is not this call's to check.
-    assert!(sparse_pages(&page, 5000, std::slice::from_ref(&location)).is_ok());
+    assert!(sparse_pages(&page, 5000, 5000, std::slice::from_ref(&location)).is_ok());
     // A location that overflows is skipped, not a panic.
     let wild = PageLocation {
         offset: i64::MAX,
         compressed_page_size: i32::MAX,
         first_row_index: 0,
     };
-    assert!(sparse_pages(&page, 1000, &[wild]).is_ok());
+    assert!(sparse_pages(&page, 1000, 1000, &[wild]).is_ok());
+    // Among many pages, the one the bytes hold is found and walked; the
+    // pages before and after it are not this range's.
+    let len = i32::try_from(page.len()).expect("small");
+    let many: Vec<PageLocation> = (0..1000_i64)
+        .map(|i| PageLocation {
+            offset: 1000 + i * i64::from(len),
+            compressed_page_size: len,
+            first_row_index: i,
+        })
+        .collect();
+    let at = 1000 + 500 * u64::try_from(len).expect("positive");
+    let err = sparse_pages(&page, at, 1000, &many).expect_err("walked");
+    assert!(err.0.contains("larger than the bytes left"), "{err:?}");
+    // Bytes that start inside a page hold no whole page: nothing to walk.
+    assert!(sparse_pages(&page[1..], at + 1, 1000, &many).is_ok());
 }
 
 /// A `ColumnIndex` of two INT64 pages whose `nan_counts` list has one
@@ -392,4 +408,26 @@ fn an_unknown_boolean_list_is_walked_like_the_decoder_does() {
     ];
     let err = column_index(&bytes, PhysicalType::INT64, 1).expect_err("a huge count");
     assert!(err.0.contains("larger than the bytes left"), "{err:?}");
+}
+
+/// A Bloom header that does not name the block / XXH64 / uncompressed
+/// filter the bitset is read as is refused, so it cannot prune.
+#[test]
+fn a_bloom_header_of_another_kind_is_refused() {
+    let declared = 0..4096;
+    let ok = bloom_header_bytes(64);
+    assert!(bloom_header(&ok, &declared).is_ok());
+    // The compression union holds member 2 (a field the reader does not know).
+    let mut other_compression = ok;
+    let n = other_compression.len();
+    other_compression[n - 4] = 0x2c;
+    assert!(bloom_header(&other_compression, &declared).is_err());
+    // The algorithm is missing.
+    let mut missing = vec![0x15];
+    missing.extend(zigzag(64));
+    for _ in 0..2 {
+        missing.extend([0x1c, 0x1c, 0x00, 0x00]);
+    }
+    missing.push(0x00);
+    assert!(bloom_header(&missing, &declared).is_err());
 }

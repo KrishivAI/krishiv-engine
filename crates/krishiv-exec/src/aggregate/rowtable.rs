@@ -262,6 +262,8 @@ const SKETCH_ROWS: usize = 4096;
 
 /// Register bits of the per-partition sketches.
 const PART_HLL_BITS: u32 = 10;
+// A fused aggregation reports these sketches as its exchange's.
+const _: () = assert!(PART_HLL_BITS == crate::EXCHANGE_HLL_BITS);
 /// Register bits of a fixed index's input sample.
 const ADAPT_HLL_BITS: u32 = 12;
 
@@ -456,6 +458,15 @@ impl RowTable {
     /// whose fixed index was cleared).
     pub(crate) fn len(&self) -> usize {
         self.groups
+    }
+
+    /// Calls `f` with the stored `h` of every row, partition by partition.
+    pub(crate) fn for_each_hash(&self, mut f: impl FnMut(u64)) {
+        for part in &self.parts {
+            for row in part.rows.chunks_exact(self.stride) {
+                f(word(row, 0));
+            }
+        }
     }
 
     /// Counts the clears of a full fixed index into `counter`.

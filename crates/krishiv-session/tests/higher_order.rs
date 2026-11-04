@@ -1261,3 +1261,38 @@ fn size_of_null_follows_ansi() {
         [Some("-1".to_owned())]
     );
 }
+
+/// Maps whose key types differ meet at the keys' wider type
+/// (`typeCoercion/native/mapZipWith`); a pair that has no wider type, or
+/// whose cast could fail, keeps `MAP_ZIP_WITH_DIFF_TYPES`.
+#[test]
+fn map_zip_with_widens_differing_key_types() {
+    let s = session();
+    assert_eq!(
+        strings(
+            &s,
+            "CAST(map_zip_with(map(2Y, 1Y), map(2, 1L), (k, v1, v2) -> struct(k, v1, v2)) AS STRING)",
+            ""
+        ),
+        [Some("{2 -> {2, 1, 1}}".to_owned())]
+    );
+    assert_eq!(
+        strings(
+            &s,
+            "typeof(map_zip_with(map(2, 1), map(CAST(2 AS DECIMAL(36, 0)), 1), (k, v1, v2) -> k))",
+            ""
+        ),
+        [Some("map<decimal(36,0),decimal(36,0)>".to_owned())]
+    );
+    let e = block_on(async {
+        s.sql("SELECT map_zip_with(map(2, 1), map('2', 1), (k, v1, v2) -> k)")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert_eq!(
+        e.error_class().name(),
+        "DATATYPE_MISMATCH.MAP_ZIP_WITH_DIFF_TYPES"
+    );
+}

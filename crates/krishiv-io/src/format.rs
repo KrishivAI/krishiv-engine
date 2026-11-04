@@ -347,6 +347,10 @@ pub struct ScanUnitMetrics {
     pub pages_pruned: u64,
     /// Row groups whose page index failed a check and was not used.
     pub page_index_rejected: u64,
+    /// Units a stored Bloom filter ruled out (also in `units_pruned`).
+    pub units_pruned_bloom: u64,
+    /// Units whose Bloom filter failed a check and was not used.
+    pub bloom_rejected: u64,
     /// Bytes of page-index reads (not part of `bytes_pushed`).
     pub index_bytes: u64,
     /// Rows decoded.
