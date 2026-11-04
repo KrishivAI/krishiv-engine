@@ -55,5 +55,10 @@ class PolarsEngine(Engine):
         import time
 
         t0 = time.perf_counter()
-        height = self._lazy(query).collect().height
-        return height, time.perf_counter() - t0
+        df = self._lazy(query).collect()
+        secs = time.perf_counter() - t0
+        self._pending = df
+        return df.height, secs
+
+    def _as_arrow(self, pending):
+        return pending.to_arrow()

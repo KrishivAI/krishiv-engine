@@ -59,5 +59,13 @@ class DataFusionEngine(Engine):
 
     def timed_run(self, query: Query) -> tuple[int, float]:
         t0 = time.perf_counter()
-        n = sum(b.num_rows for b in self._ctx.sql(query.sql).collect())
-        return n, time.perf_counter() - t0
+        batches = self._ctx.sql(query.sql).collect()
+        secs = time.perf_counter() - t0
+        n = sum(b.num_rows for b in batches)
+        self._pending = batches
+        return n, secs
+
+    def _as_arrow(self, pending):
+        import pyarrow as pa
+
+        return pa.Table.from_batches(pending) if pending else pa.table({})

@@ -79,14 +79,20 @@ class DuckDBEngine(Engine):
     def timed_run(self, query: Query) -> tuple[int, float]:
         """Questions with a checksum query have answers too large to fetch into Python (``h2o-*``): the timed call
         materialises the answer in a temporary table, the benchmark's own method, and counts its rows."""
-        if not query.check_sql:
-            return super().timed_run(query)
         assert self.con is not None, "setup() not called"
+        if not query.check_sql:
+            # The full result as an Arrow table, no Python row objects in the timed span.
+            t0 = time.perf_counter()
+            table = self.con.sql(query.sql).to_arrow_table()
+            secs = time.perf_counter() - t0
+            assert table is not None
+            self._pending = table
+            return table.num_rows, secs
         t0 = time.perf_counter()
         self.con.execute(f"CREATE OR REPLACE TEMP TABLE h2o_ans AS {query.sql}")
         secs = time.perf_counter() - t0
         try:
-            return int(self.con.execute("SELECT COUNT(*) FROM h2o_ans").fetchone()[0]), secs  # ty: ignore[not-subscriptable]
+            return int(self.con.execute("SELECT COUNT(*) FROM h2o_ans").fetchall()[0][0]), secs
         finally:
             self.con.execute("DROP TABLE IF EXISTS h2o_ans")
 
