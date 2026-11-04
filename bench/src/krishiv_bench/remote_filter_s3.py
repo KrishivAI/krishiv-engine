@@ -6,8 +6,8 @@ cannot do that. It answers a ``Range`` request with ``206 Partial Content``; ``r
 the ``object_store`` client behind Polars and Krishiv refuses.
 
 The container is named ``krishiv-bench-rf-<pid>`` and is always removed on exit, error or interrupt; the long-lived
-``bench-minio`` / ``krishiv-bench-minio`` containers are never touched. Engines read ``s3://fwbucket/<file>`` through the
-endpoint and credentials in the environment variables of :meth:`S3Server.env`.
+``bench-minio`` / ``krishiv-bench-minio`` containers are never touched. Engines read ``s3://fwbucket/<file>``
+through the endpoint and credentials in the environment variables of :meth:`S3Server.env`.
 """
 
 from __future__ import annotations
