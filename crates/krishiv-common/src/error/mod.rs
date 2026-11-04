@@ -130,9 +130,9 @@ impl ErrorQueryContext {
 
 /// The user-safe form of a [`KrishivError`] (`KrishivError::for_client`):
 /// the redacted error without a cause, and the `error_id` that finds the
-/// full form in logs and audit. `Display` is the error's, then the id.
+/// full form in logs and audit. `Display` is the error's alone, so a protocol sends the id as a separate field.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{error} (error_id: {error_id})")]
+#[error("{error}")]
 pub struct ClientError {
     error: KrishivError,
     error_id: String,
@@ -317,26 +317,20 @@ impl KrishivError {
     }
 }
 
-/// A fresh `error_id` (the join key between a [`ClientError`] and the full
-/// error in logs and audit): process start time, a process-wide counter and the
-/// process id, in hex. Unique across the errors of one process and, with
-/// the start time, across restarts; it is a join key, not a secret.
+/// A fresh random `error_id` (the join key between a [`ClientError`] and the
+/// full error in logs and audit): 128 bits from the standard library's
+/// randomly keyed hasher. It carries no process, time or count information.
 pub fn new_error_id() -> String {
-    use std::sync::OnceLock;
+    use std::hash::{BuildHasher, Hasher, RandomState};
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    static START: OnceLock<u128> = OnceLock::new();
-    let start = *START.get_or_init(|| {
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    });
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    format!(
-        "{:x}-{:x}-{n:x}",
-        std::process::id(),
-        start & 0xffff_ffff_ffff
-    )
+    let part = |salt: u64| {
+        let mut h = RandomState::new().build_hasher();
+        h.write_u64(n ^ salt);
+        h.finish()
+    };
+    format!("{:016x}{:016x}", part(0), part(0x9e37_79b9_7f4a_7c15))
 }
 
 /// Renders the error-class reference as Markdown (`cargo xtask docs-errors`).

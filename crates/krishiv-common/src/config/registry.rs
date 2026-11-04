@@ -507,7 +507,7 @@ pub static TARGET_PARTITION_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(128 * MIB)),
     doc: "Target size of a partition for scans and exchanges.",
     scope: Scope::Session,
-    settable_by: SettableBy::User,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -962,7 +962,7 @@ pub static FILES_MAX_PARTITION_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(128 * MIB)),
     doc: "Most bytes packed into one file-scan partition (Spark's split planning).",
     scope: Scope::Session,
-    settable_by: SettableBy::User,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.files.maxPartitionBytes"),
 };
@@ -988,7 +988,7 @@ pub static FILES_MIN_PARTITION_NUM: ConfigEntry = ConfigEntry {
     doc: "Suggested minimum number of file-scan partitions. When unset: \
           `krishiv.sql.leafNodeDefaultParallelism`, else the number of worker slots.",
     scope: Scope::Session,
-    settable_by: SettableBy::User,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.files.minPartitionNum"),
 };
@@ -1014,7 +1014,7 @@ pub static BUCKETING_MAX_BUCKETS: ConfigEntry = ConfigEntry {
     doc: "Maximum `CLUSTERED BY ... INTO n BUCKETS` bucket count: a count above it fails \
           with `INVALID_BUCKET_COUNT`.",
     scope: Scope::Session,
-    settable_by: SettableBy::User,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.sources.bucketing.maxBuckets"),
 };
@@ -1443,7 +1443,7 @@ pub static LATE_FETCH_MAX_ROWS: ConfigEntry = ConfigEntry {
           reading only the sort keys and filter columns, fetching the other columns for the rows \
           kept; 0 turns it off. Results are the same either way.",
     scope: Scope::Session,
-    settable_by: SettableBy::User,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };

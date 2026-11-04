@@ -16,7 +16,8 @@
     "message" : [
       "The write to <root> conflicts with a commit made after it started (log version <version>). Another writer changed the directory; retry the write."
     ],
-    "sqlState" : "40001"
+    "sqlState" : "40001",
+    "audience" : "operator"
   },
   "KRISHIV_DECIMAL_REMAINDER_IMPOSSIBLE" : {
     "message" : [
@@ -28,7 +29,8 @@
     "message" : [
       "The file <path> changed while it was being read: it no longer matches the version <version> seen when the scan was planned. Run REFRESH TABLE, or re-run the query to read the new version."
     ],
-    "sqlState" : "KD001"
+    "sqlState" : "KD001",
+    "audience" : "operator"
   },
   "KRISHIV_INSUFFICIENT_PERMISSIONS" : {
     "message" : [

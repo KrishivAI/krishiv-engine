@@ -371,10 +371,7 @@ fn for_client_keeps_user_classes_and_cuts_the_cause() {
     assert!(std::error::Error::source(c.error()).is_none());
     assert!(std::error::Error::source(&c).is_none());
     assert!(!c.error_id().is_empty());
-    assert!(
-        c.to_string()
-            .ends_with(&format!("(error_id: {})", c.error_id()))
-    );
+    assert_eq!(c.to_string(), c.error().to_string());
     // The original is untouched.
     assert!(e.cause().is_some());
 }
@@ -424,4 +421,20 @@ fn for_client_keeps_query_contexts() {
     let e = KrishivError::from(DivideByZero { config: "c".into() })
         .with_query_context(ErrorQueryContext::sql("1/0", 0, 2));
     assert_eq!(e.for_client().error().query_contexts(), e.query_contexts());
+}
+
+#[test]
+fn every_internal_error_class_is_operator_only() {
+    let internal: Vec<_> = ErrorClass::ALL
+        .iter()
+        .filter(|c| c.name().starts_with("INTERNAL_ERROR"))
+        .collect();
+    assert!(internal.len() > 1);
+    assert!(internal.iter().all(|c| c.audience() == Audience::Operator));
+    for c in [
+        ErrorClass::PathNotFound,
+        ErrorClass::KrishivConcurrentCommit,
+    ] {
+        assert_eq!(c.audience(), Audience::Operator, "{}", c.name());
+    }
 }

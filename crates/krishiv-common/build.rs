@@ -122,8 +122,8 @@ fn parse(json: &str, krishiv: bool) -> Result<Vec<Leaf>, BoxError> {
 }
 
 /// Marks the Spark classes named in `error-audience.json` (`{"operator":
-/// [...]}`, each a top-level name covering its sub-classes, or a full
-/// sub-class name) as operator-only. A name that matches no class is an
+/// [...]}`, each a top-level name covering its sub-classes, a full
+/// sub-class name, or a prefix ending in `*`) as operator-only. A name that matches no class is an
 /// error, so a Spark refresh that renames one cannot silently expose it.
 fn apply_audience(leaves: &mut [Leaf], json: &str) -> Result<(), BoxError> {
     let root: Map<String, Value> = serde_json::from_str(json)?;
@@ -135,9 +135,18 @@ fn apply_audience(leaves: &mut [Leaf], json: &str) -> Result<(), BoxError> {
         let name = name
             .as_str()
             .ok_or("error-audience.json: non-string name")?;
+        if name.starts_with("KRISHIV_") {
+            return Err(format!("error-audience.json: {name} sets its own audience").into());
+        }
+        // A trailing `*` names every class with that prefix.
+        let prefix = name.strip_suffix('*');
         let mut hit = false;
         for l in leaves.iter_mut() {
-            if l.name == name || l.name.split('.').next() == Some(name) {
+            let matches = match prefix {
+                Some(p) => l.name.starts_with(p),
+                None => l.name == name || l.name.split('.').next() == Some(name),
+            };
+            if matches {
                 l.operator_only = true;
                 hit = true;
             }

@@ -510,7 +510,7 @@ fn docs_markdown_lists_every_entry_deterministically() {
         assert!(md.contains(&format!("| `{}` |", e.key)), "{}", e.key);
     }
     assert!(
-        md.contains("| `krishiv.exec.targetPartitionBytes` | size | `128MB` | session | user |")
+        md.contains("| `krishiv.exec.targetPartitionBytes` | size | `128MB` | session | admin |")
     );
     assert!(md.contains("`spark.sql.ansi.enabled`"));
     assert!(md.contains("enum (`ANSI`, `LEGACY`, `STRICT`)"));
