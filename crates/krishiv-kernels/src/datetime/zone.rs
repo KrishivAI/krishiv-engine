@@ -140,16 +140,23 @@ impl ZoneRef {
         let info = zone.to_offset_info(t);
         let now = info.offset().seconds();
         let dst = info.dst().is_dst();
-        // `preceding` starts with the transition into the current period.
+        // The periods just before and after of the other kind. Daylight time
+        // looks past daylight periods for the standard time around it
+        // (London's 1941 double summer time, +02:00, sits between +01:00
+        // summer periods; Java 21 reads +00:00); standard time looks one
+        // period each way. `preceding` starts with the transition into the
+        // current period.
+        let run = if dst { SAME_KIND_RUN } else { 1 };
         let before = zone
             .preceding(t)
-            .nth(1)
-            .filter(|tr| tr.dst().is_dst() != dst)
+            .skip(1)
+            .take(run)
+            .find(|tr| tr.dst().is_dst() != dst)
             .map(|tr| tr.offset().seconds());
         let after = zone
             .following(t)
-            .next()
-            .filter(|tr| tr.dst().is_dst() != dst)
+            .take(run)
+            .find(|tr| tr.dst().is_dst() != dst)
             .map(|tr| tr.offset().seconds());
         // Daylight time between two different standard offsets: the change
         // came with this period's start or its end, and the standard offset
@@ -169,6 +176,11 @@ impl ZoneRef {
         [before, after].into_iter().flatten().fold(now, i32::min)
     }
 }
+
+/// How many transitions of the same kind (daylight or not) the standard
+/// offset search walks past on each side; London's war years have the
+/// longest run.
+const SAME_KIND_RUN: usize = 16;
 
 /// 1900-01-01T00:00:00Z: `java.util.TimeZone` (`ZoneInfoFile`) keeps no
 /// transition before it.

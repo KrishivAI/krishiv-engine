@@ -245,8 +245,6 @@ struct Parsed {
     ntz_pattern: Option<DateTimePattern>,
     /// Fallback to lenient grammar.
     fallback: bool,
-    /// `timeParserPolicy=LEGACY`: the date patterns are the legacy ones.
-    legacy: bool,
     /// Quote every value (`to_csv` write).
     quote_all: bool,
     /// Quote values holding a quote.
@@ -309,7 +307,6 @@ impl Parsed {
             timestamp_pattern: None,
             ntz_pattern: None,
             fallback: false,
-            legacy: false,
             quote_all: false,
             escape_quotes: true,
             line_sep: None,
@@ -361,11 +358,13 @@ impl Parsed {
                 }
                 "columnnameofcorruptrecord" => self.corrupt_column = v.clone(),
                 "dateformat" => {
-                    self.date_pattern = Some(datetime_option(v, func, "dateFormat", self.legacy)?);
+                    // LEGACY dates are refused before options apply
+                    // (`refuse_legacy_dates`).
+                    self.date_pattern = Some(datetime_option(v, func, "dateFormat", false)?);
                 }
                 "timestampformat" => {
                     self.timestamp_pattern =
-                        Some(datetime_option(v, func, "timestampFormat", self.legacy)?);
+                        Some(datetime_option(v, func, "timestampFormat", false)?);
                 }
                 // Spark's NTZ formatter (`forTimestampNTZ`) is never the
                 // legacy one.

@@ -356,6 +356,11 @@ fn a_recursive_cte_reports_its_rounds() {
     };
     assert!(text.contains("UnionLoop"), "{text}");
     // The anchor, four productive rounds and the empty round that ends it.
-    assert!(text.contains("rounds=6"), "{text}");
-    assert!(text.contains("rows=5"), "{text}");
+    // Whole tokens, so `rounds=60` or `rows=50` would not pass.
+    let has = |token: &str| {
+        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '='))
+            .any(|t| t == token)
+    };
+    assert!(has("rounds=6"), "{text}");
+    assert!(has("rows=5"), "{text}");
 }

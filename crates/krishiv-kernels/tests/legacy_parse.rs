@@ -75,3 +75,93 @@ fn zone_names_prefer_the_session_zone() {
         assert_eq!(got, Some(want), "{text:?} in {zone}");
     }
 }
+
+/// Field resolution edge cases from the #417 review, with the epoch
+/// seconds a real Spark 4.2.0 run gives (`try_to_timestamp` under
+/// `timeParserPolicy=LEGACY`, non-ANSI; `None` is NULL).
+#[test]
+fn resolution_edge_cases_match_spark() {
+    let cases: [(&str, &str, &str, Option<i64>); 19] = [
+        // A 24-hour field stays when no AM/PM marker completes the 12-hour one.
+        (
+            "UTC",
+            "2024-01-01 13 01",
+            "yyyy-MM-dd HH hh",
+            Some(1_704_114_000),
+        ),
+        (
+            "UTC",
+            "2024-01-01 01 13",
+            "yyyy-MM-dd hh HH",
+            Some(1_704_114_000),
+        ),
+        (
+            "UTC",
+            "2024-01-01 13 01 PM",
+            "yyyy-MM-dd HH hh a",
+            Some(1_704_114_000),
+        ),
+        // A week year takes a sign; other numeric fields don't.
+        ("UTC", "-5", "YYYY", Some(-62_325_417_600)),
+        ("UTC", "-2019", "YYYY", Some(-125_880_739_200)),
+        ("UTC", "-5", "yyyy", None),
+        ("UTC", "2024-01--1", "yyyy-MM-dd", None),
+        ("UTC", "2024--1-01", "yyyy-MM-dd", None),
+        // The calendar year is checked only when the text has one.
+        ("UTC", "1", "w", Some(-345_600)),
+        ("UTC", "1970 1", "yyyy w", None),
+        // Skipped whitespace counts toward an adjacent field's width.
+        (
+            "UTC",
+            "2024-01-01  123",
+            "yyyy-MM-dd HHmm",
+            Some(1_704_072_180),
+        ),
+        (
+            "UTC",
+            "2024-01-01 123",
+            "yyyy-MM-dd HHmm",
+            Some(1_704_110_580),
+        ),
+        // A weekday that doesn't match the window's century is no match.
+        ("UTC", "99-01-01 Thu", "yy-MM-dd E", None),
+        ("UTC", "99-01-01 Fri", "yy-MM-dd E", Some(915_148_800)),
+        // Names match under Java's case folding (dotted capital I).
+        ("UTC", "2024-APRİL-01", "yyyy-MMMM-dd", Some(1_711_929_600)),
+        ("UTC", "2024-april-01", "yyyy-MMMM-dd", Some(1_711_929_600)),
+        // London's 1941 double summer time: the standard offset is +00:00.
+        (
+            "Europe/London",
+            "1941-07-01 12:00 British Summer Time",
+            "yyyy-MM-dd HH:mm z",
+            Some(-899_470_800),
+        ),
+        (
+            "Europe/London",
+            "1941-07-01 12:00 BST",
+            "yyyy-MM-dd HH:mm z",
+            Some(-899_470_800),
+        ),
+        (
+            "Europe/London",
+            "1941-07-01 12:00 GMT",
+            "yyyy-MM-dd HH:mm z",
+            Some(-899_467_200),
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (zone, text, pattern, want) in cases {
+        let session = krishiv_kernels::datetime::resolve_zone(zone).unwrap();
+        let got = LegacyPattern::new(pattern)
+            .unwrap()
+            .parse_timestamp(text, &session)
+            .unwrap()
+            .map(|micros| micros.div_euclid(1_000_000));
+        if got != want {
+            wrong.push(format!(
+                "{text:?} with {pattern:?} in {zone}: {got:?}, Spark {want:?}"
+            ));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}

@@ -407,14 +407,18 @@ impl LegacyPattern {
                 }
                 Tok::Field(c, n) => {
                     // `SimpleDateFormat` skips spaces and tabs before a field.
+                    let start = pos;
                     while text.get(pos).is_some_and(|x| matches!(x, ' ' | '\t')) {
                         pos += 1;
                     }
                     // A number directly followed by another number in the
-                    // pattern reads exactly its run length.
+                    // pattern reads exactly its run length, counted from the
+                    // field's start: skipped blanks use it up (`subParse`
+                    // parses up to `start + count`; Spark 4.2: '2024-01-01  123'
+                    // with 'yyyy-MM-dd HHmm' is 01:23).
                     let abut =
                         matches!(self.toks.get(i + 1), Some(Tok::Field(d, dn)) if is_numeric(*d, *dn))
-                            .then_some(*n);
+                            .then_some(n.saturating_sub(pos - start));
                     pos = st.field(&text, pos, *c, *n, abut, session)?;
                 }
             }
@@ -734,8 +738,17 @@ impl Parsed {
             }
             _ => {}
         }
-        let (value, end) = number(text, pos, abut)?;
-        let digits = end - pos;
+        // `DecimalFormat` reads a minus sign, which counts toward a width.
+        // Every field's minimum is at least 0 for a non-lenient calendar but
+        // the week year's, which `setWeekDate` takes as it is (Spark 4.2:
+        // '-5' with 'YYYY' is -0006-12-27, with 'yyyy' NULL).
+        let sign = usize::from(text.get(pos) == Some(&'-'));
+        let (value, end) = number(text, pos + sign, abut.map(|l| l.saturating_sub(sign)))?;
+        let value = if sign == 1 { -value } else { value };
+        if value < 0 && c != 'Y' {
+            return None;
+        }
+        let digits = end - pos - sign;
         match c {
             'y' | 'Y' => {
                 // A two-digit year waits for the rest of the date: the
@@ -873,7 +886,11 @@ impl Parsed {
     fn week_fields_agree(&self, days: i64, year: i64, (y, m, d): (i64, u32, u32)) -> bool {
         let (_, hdoy) = hybrid_week_fields(days, y, m, d);
         let real = real_day(days, y, m, d);
-        let year_ok = if self.year_is_week {
+        // A year is checked only when the text set one (Spark 4.2: '1' with
+        // 'w' is 1969-12-28, the start of 1970's week 1).
+        let year_ok = if self.year.is_none() {
+            true
+        } else if self.year_is_week {
             civil_from_days(week_year_anchor(days, real, y, hdoy)).0 == year
         } else {
             y == year
@@ -906,19 +923,25 @@ impl Parsed {
             }
             return self.resolve_in(self.year.map_or(1970, |(y, _)| y), self.era_bc);
         }
-        // `yy`: the century of the window start, one later when the date
-        // falls before the window's first day.
+        // `yy` (`SimpleDateFormat.subParse`): the century of the window
+        // start, one later for digits below the start year's; only the start
+        // year's own digits are decided by the date, one century later when
+        // it falls before the window's first day. A date that fails its
+        // fields fails, whatever the century (Spark 4.2: '99-01-01 Thu' with
+        // 'yy-MM-dd E' is NULL). The century is chosen on the year of the
+        // era, before a BC era turns the year around (`99 BC` is 1999 BC).
         let two = self.year.map_or(0, |(y, _)| y);
         let (ny, nm, nd) = today;
         let start = ny - 80;
+        let ambiguous = start.rem_euclid(100);
+        let base = start - ambiguous + two + if two >= ambiguous { 0 } else { 100 };
+        if two != ambiguous {
+            return self.resolve_in(base, self.era_bc);
+        }
         let start_days = days_from_civil(start, nm, nd.min(days_in_month(start, nm)))?;
-        let base = start - start.rem_euclid(100) + two;
-        // The provisional century may lack the date (`00-02-29` in 1900).
-        // The century is chosen on the year of the era, before a BC era
-        // turns the year around (`99 BC` is 1999 BC).
-        let chosen = match self.resolve_in(base, false) {
-            Some((Some(first), _)) if first.div_euclid(MICROS_PER_DAY) >= start_days => base,
-            _ => base + 100,
+        let chosen = match self.resolve_in(base, false)? {
+            (Some(first), _) if first.div_euclid(MICROS_PER_DAY) < start_days => base + 100,
+            _ => base,
         };
         self.resolve_in(chosen, self.era_bc)
     }
@@ -1034,24 +1057,35 @@ impl Parsed {
         {
             return None;
         }
-        let hour = match (self.hour_of_day, self.hour12) {
-            (Some((h, hs)), other) if other.is_none_or(|(_, os)| hs > os) => {
+        // `GregorianCalendar.computeTime`: the 12-hour group counts as set
+        // only with both its fields (`aggregateStamp`), so `hh` without `a`
+        // does not displace `HH` (Spark 4.2: '13 01' with 'HH hh' is 13:00);
+        // with neither group complete, the later of `h` and `a` decides.
+        let hod = self.hour_of_day.map(|(_, s)| s);
+        let mut best = hod.max(self.hour12.zip(self.pm).map(|((_, a), (_, b))| a.max(b)));
+        if best.is_none() {
+            best = self.hour12.map(|(_, s)| s).max(self.pm.map(|(_, s)| s));
+        }
+        let pm = if self.pm.is_some_and(|(pm, _)| pm) {
+            12
+        } else {
+            0
+        };
+        let hour = match (best, self.hour_of_day, self.hour12) {
+            (None, ..) => 0,
+            (b, Some((h, _)), _) if b == hod => {
                 if !(0..24).contains(&h) {
                     return None;
                 }
                 h
             }
-            (_, Some((h, _))) => {
+            (_, _, Some((h, _))) => {
                 if !(0..12).contains(&h) {
                     return None;
                 }
-                h + if self.pm.is_some_and(|(pm, _)| pm) {
-                    12
-                } else {
-                    0
-                }
+                h + pm
             }
-            _ => self.pm.map_or(0, |(pm, _)| if pm { 12 } else { 0 }),
+            _ => pm,
         };
         // Every clock field that was set must agree with the result.
         if self.hour_of_day.is_some_and(|(h, _)| h != hour)
@@ -1164,7 +1198,9 @@ fn java_digit(c: char) -> Option<u32> {
     (d < 10).then_some(d)
 }
 
-/// Case-insensitive prefix match of any of `options`.
+/// Case-insensitive prefix match of any of `options`, as Java's
+/// `regionMatches(true, ..)` (Spark 4.2: '2024-APRİL-01' with 'yyyy-MMMM-dd'
+/// is April 1).
 fn prefix(text: &[char], pos: usize, options: &[&str]) -> Option<usize> {
     options.iter().find_map(|o| {
         let len = o.chars().count();
@@ -1172,7 +1208,7 @@ fn prefix(text: &[char], pos: usize, options: &[&str]) -> Option<usize> {
         slice
             .iter()
             .zip(o.chars())
-            .all(|(a, b)| a.eq_ignore_ascii_case(&b))
+            .all(|(&a, b)| java_same_ignoring_case(a, b))
             .then_some(pos + len)
     })
 }
@@ -1351,10 +1387,13 @@ fn java_same_ignoring_case(a: char, b: char) -> bool {
             _ => c,
         }
     };
+    // Java's simple mapping: the only character whose full lowercase is
+    // longer, U+0130 (dotted capital I), lowers to `i`.
     let lower = |c: char| {
         let mut l = c.to_lowercase();
         match (l.next(), l.next()) {
             (Some(x), None) => x,
+            _ if c == '\u{130}' => 'i',
             _ => c,
         }
     };
