@@ -156,6 +156,11 @@ fn errors_follow_spark() {
     let s = Session::new().unwrap();
     let bad_pad = format!("{}A", &ECB_SPARK[..31]);
     let rows: Vec<(String, &str)> = vec![
+        // More than the six arguments the function takes.
+        (
+            format!("aes_encrypt('Spark', {K}, 'GCM', 'DEFAULT', '', '', 'x')"),
+            "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+        ),
         (
             "aes_encrypt('Spark', 'short')".to_owned(),
             "INVALID_PARAMETER_VALUE.AES_KEY_LENGTH",

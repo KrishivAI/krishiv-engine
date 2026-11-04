@@ -63,6 +63,8 @@ pub struct Case {
 pub struct Fixture {
     /// The statement that creates the table `t` the expressions read.
     pub setup: String,
+    /// `spark.sql.session.timeZone` the answers were taken under, when the fixture sets one.
+    pub time_zone: Option<String>,
     /// All cases: roots and their sub-expressions.
     pub cases: Vec<Case>,
 }
@@ -119,7 +121,12 @@ impl Fixture {
                 expect,
             });
         }
-        Ok(Self { setup, cases })
+        let time_zone = v.get("timeZone").and_then(Value::as_str).map(str::to_owned);
+        Ok(Self {
+            setup,
+            time_zone,
+            cases,
+        })
     }
 }
 
@@ -241,6 +248,48 @@ impl SessionEvaluator {
             .map_err(|e| e.message)?;
         engine.execute(setup).map_err(|e| e.message)?;
         Ok(Self { engine, ansi: None })
+    }
+}
+
+impl SessionEvaluator {
+    /// Like [`SessionEvaluator::new_materialized`] for a fixture, with the session time zone the
+    /// fixture's answers were taken under set *before* the setup runs, so the table's timestamps
+    /// are read in that zone.
+    ///
+    /// # Errors
+    /// When the session, the zone, the view or the copy fails.
+    pub fn for_fixture(fixture: &Fixture) -> Result<Self, String> {
+        let source = fixture.setup.replacen("VIEW t AS", "VIEW t_source AS", 1);
+        if source == fixture.setup {
+            return Err("the setup does not define the view `t`".to_owned());
+        }
+        let mut engine = SessionEngine::new().map_err(|e| e.message)?;
+        engine
+            .reset(&SessionSetup::plain(TestKind::Regular))
+            .map_err(|e| e.message)?;
+        if let Some(zone) = &fixture.time_zone {
+            engine
+                .execute(&format!("SET spark.sql.session.timeZone={zone}"))
+                .map_err(|e| e.message)?;
+        }
+        engine.execute(&source).map_err(|e| e.message)?;
+        engine
+            .execute("CREATE TABLE t AS SELECT * FROM t_source")
+            .map_err(|e| e.message)?;
+        Ok(Self { engine, ansi: None })
+    }
+
+    /// Like [`SessionEvaluator::new`], but the table `t` is materialized once: a fixture with a
+    /// large `VALUES` view would otherwise be planned again for every expression.
+    ///
+    /// # Errors
+    /// When the session, the view or the copy fails.
+    pub fn new_materialized(setup: &str) -> Result<Self, String> {
+        Self::for_fixture(&Fixture {
+            setup: setup.to_owned(),
+            time_zone: None,
+            cases: Vec::new(),
+        })
     }
 }
 

@@ -853,6 +853,18 @@ impl Resolver<'_> {
                         e.origin,
                     ));
                 }
+                // `aes_encrypt` takes two to six arguments (seven pass the six the catalog probes).
+                if is_builtin_entry(&entry) && entry.id.name() == "aes_encrypt" && n > 6 {
+                    return Err(AnalysisError::new(
+                        WrongNumArgsWithoutSuggestion {
+                            function_name: "`aes_encrypt`".to_owned(),
+                            expected_num: "[2, 3, 4, 5, 6]".to_owned(),
+                            actual_num: n.to_string(),
+                            docroot: SPARK_DOC_ROOT.to_owned(),
+                        },
+                        e.origin,
+                    ));
+                }
                 let mut owned: Vec<Bound>;
                 let (kids, n) = if is_builtin_entry(&entry)
                     && entry.id.name() == "assert_true"

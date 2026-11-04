@@ -1,0 +1,6 @@
+[
+  "Kolkata|0|to_json(named_struct('a', ts, 'b', ntz))",
+  "Kolkata|1|to_json(named_struct('a', ts, 'b', ntz))",
+  "Los_Angeles|0|to_json(named_struct('a', ts, 'b', ntz))",
+  "Los_Angeles|1|to_json(named_struct('a', ts, 'b', ntz))"
+]
