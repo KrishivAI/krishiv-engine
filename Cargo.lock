@@ -2159,7 +2159,6 @@ dependencies = [
  "flate2",
  "futures",
  "hashbrown",
- "http",
  "krishiv-common",
  "krishiv-kernels",
  "krishiv-memory",

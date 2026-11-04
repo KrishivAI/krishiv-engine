@@ -59,7 +59,7 @@ holds that crate's invariants, and the module docs (`//!`) at the top of the nam
 | Layer | Crates |
 |---|---|
 | L0 | `krishiv-common` (errors, config registry, redaction, secrets), `krishiv-alloc` |
-| L1 | `krishiv-types` (data types, `Batch`), `krishiv-memory` (pools, spill files), `krishiv-udf-sdk`, `krishiv-connector-sdk` |
+| L1 | `krishiv-types` (data types, `Batch`), `krishiv-memory` (pools, spill files), `krishiv-store` (object-store URLs, settings, store building), `krishiv-udf-sdk`, `krishiv-connector-sdk` |
 | L2 | `krishiv-kernels`, `krishiv-functions` (registry and bindings), `krishiv-io` (formats, scan, runtime filters) |
 | L3 | `krishiv-sql`, `krishiv-plan`, `krishiv-optimizer` |
 | L4 | `krishiv-exec`, `krishiv-plan-codec`, `krishiv-state`, `krishiv-stream` |

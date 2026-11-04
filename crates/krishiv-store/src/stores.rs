@@ -369,6 +369,12 @@ impl StoreRegistry {
     /// [`Config`]: krishiv_common::config::Config
     #[must_use]
     pub fn new<S: StoreSettings + 'static>(settings: Arc<S>) -> Self {
+        Self::from_shared(settings)
+    }
+
+    /// As [`Self::new`], for settings already behind a `dyn StoreSettings`.
+    #[must_use]
+    pub fn from_shared(settings: Arc<dyn StoreSettings>) -> Self {
         Self {
             config: settings,
             stores: Mutex::new(HashMap::new()),
@@ -452,6 +458,7 @@ impl StoreRegistry {
 /// A store opened from a URL by [`StoreRegistry::open`]: everything a scheduler needs to
 /// register it and to address the object.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct OpenedStore {
     /// The id to register the store under (the URL's store id, with a non-secret `#hash` suffix
     /// when per-read `fs.*` options are set).
@@ -769,15 +776,11 @@ fn path_style_access(
         .map(|e| allows_http(Some(&e)) || e.to_ascii_lowercase().contains("localhost")))
 }
 
-/// The session value of an unregistered `key`: the exact session entry
-/// first, else the first session entry matching ASCII case-insensitively,
-/// so the session side resolves the same way the per-read side does (see
-/// the module docs). Session keys are case-sensitive in Hadoop, but this
-/// layer documents case-insensitive matching and the per-read side already
-/// honours it; resolving both sides the same way keeps one spelling from
-/// meaning different things depending on where it is set.
+/// The typed session value of `key`: the exact entry first, else the first entry matching ASCII
+/// case-insensitively ([`StoreSettings::lookup`]), so the session side resolves the same way the
+/// per-read side does (see the module docs).
 #[cfg(feature = "cloud")]
-fn session_raw(config: &dyn StoreSettings, key: &str) -> Option<String> {
+fn session_value(config: &dyn StoreSettings, key: &str) -> Option<OptionValue> {
     config.lookup(key)
 }
 
@@ -827,18 +830,22 @@ fn cred(
             }
         };
     }
-    let raw = session_raw(config, key).filter(|v| !v.is_empty());
-    Ok(match raw.as_deref() {
+    Ok(match session_value(config, key) {
         None => None,
-        Some(raw) => match OptionValue::from_user(key, raw) {
-            OptionValue::Plain(plain) => Some(SecretString::new(plain)),
-            OptionValue::Secret(SecretValue::Inline(secret)) => Some(secret),
-            // Unreachable: `from_user` never builds a reference, and values of
-            // sensitive keys never classify as URLs. Ignoring them is the
-            // fail-safe direction: no value is used that was not typed as the
-            // key demands.
-            OptionValue::Secret(SecretValue::Reference { .. }) | OptionValue::Url(_) => None,
-        },
+        Some(OptionValue::Plain(plain)) => (!plain.is_empty()).then(|| SecretString::new(plain)),
+        Some(OptionValue::Secret(SecretValue::Inline(secret))) => {
+            (!secret.expose_secret().is_empty()).then_some(secret)
+        }
+        Some(OptionValue::Secret(SecretValue::Reference { .. })) => {
+            return Err(invalid_option(
+                key,
+                "a `secret('scope', 'key')` reference cannot be resolved here",
+            )
+            .into());
+        }
+        Some(OptionValue::Url(_)) => {
+            return Err(invalid_option(key, "a URL value is not a credential for this key").into());
+        }
     })
 }
 
@@ -867,11 +874,24 @@ fn text(
         }
         return Ok(Some(trimmed.to_owned()));
     }
-    Ok(session_raw(config, key)
+    Ok(plain_session_value(config, key)?
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(str::to_owned))
+}
+
+/// The session value of a key that is never sensitive, as text: a secret or a URL with
+/// credentials fails (it must not reach an endpoint, region or flag), as a per-read one does.
+#[cfg(feature = "cloud")]
+fn plain_session_value(config: &dyn StoreSettings, key: &str) -> Result<Option<String>> {
+    match session_value(config, key) {
+        None => Ok(None),
+        Some(OptionValue::Plain(plain)) => Ok(Some(plain)),
+        Some(OptionValue::Secret(_) | OptionValue::Url(_)) => {
+            Err(invalid_option(key, "a secret is not allowed here").into())
+        }
+    }
 }
 
 /// Whether `text` allows HTTP connections: only an `http://` endpoint does
@@ -909,7 +929,7 @@ fn flag(
             _ => Err(invalid_option(key, "expected `true` or `false`").into()),
         };
     }
-    match session_raw(config, key)
+    match plain_session_value(config, key)?
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())

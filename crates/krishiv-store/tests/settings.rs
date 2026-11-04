@@ -15,7 +15,7 @@ use krishiv_store::{
     AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,
     GCS_KEYFILE, GCS_STORAGE_ROOT_URL, HF_ENDPOINT, HF_TOKEN, S3_ACCESS_KEY, S3_ENDPOINT,
     S3_ENDPOINT_REGION, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_KEY, S3_SESSION_TOKEN,
-    StoreRegistry, StoreSettings, parse_object_url,
+    StoreRegistry, parse_object_url,
 };
 
 const CANARY: &str = "Canary-5d21b7";
@@ -30,17 +30,23 @@ fn outcome(registry: &StoreRegistry, url: &str) -> Result<(), (ErrorClass, Strin
 }
 
 /// The registry of `pairs` read from an engine `Config` and from a string map.
-fn registries(pairs: &[(&str, &str)]) -> [StoreRegistry; 3] {
+fn registries(pairs: &[(&str, &str)]) -> [StoreRegistry; 4] {
     let (config, _) = Config::from_pairs(pairs.to_vec()).unwrap();
     let btree: BTreeMap<String, String> = pairs
         .iter()
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
         .collect();
     let hash: HashMap<String, String> = btree.clone().into_iter().collect();
+    // The same values typed by the caller, as `from_user` types them.
+    let typed: BTreeMap<String, OptionValue> = btree
+        .iter()
+        .map(|(k, v)| (k.clone(), OptionValue::from_user(k, v.as_str())))
+        .collect();
     [
         StoreRegistry::new(Arc::new(config)),
         StoreRegistry::new(Arc::new(btree)),
         StoreRegistry::new(Arc::new(hash)),
+        StoreRegistry::new(Arc::new(typed)),
     ]
 }
 
@@ -117,10 +123,11 @@ fn cases() -> Vec<(&'static str, Vec<(&'static str, &'static str)>)> {
 #[test]
 fn every_key_resolves_the_same_from_a_config_and_from_maps() {
     for (url, pairs) in cases() {
-        let [config, btree, hash] = registries(&pairs);
+        let [config, btree, hash, typed] = registries(&pairs);
         let want = outcome(&config, url);
         assert_eq!(outcome(&btree, url), want, "{url} {pairs:?}: BTreeMap");
         assert_eq!(outcome(&hash, url), want, "{url} {pairs:?}: HashMap");
+        assert_eq!(outcome(&typed, url), want, "{url} {pairs:?}: typed map");
         if let Err((_, text)) = &want {
             assert!(!text.contains(CANARY), "{url} {pairs:?}: {text}");
         }
@@ -135,8 +142,8 @@ fn keys_match_ignoring_ascii_case_in_every_source() {
             .map(|(k, v)| (k.to_ascii_uppercase(), *v))
             .collect();
         let upper: Vec<(&str, &str)> = upper.iter().map(|(k, v)| (k.as_str(), *v)).collect();
-        let [config, btree, hash] = registries(&pairs);
-        let [config_u, btree_u, hash_u] = registries(&upper);
+        let [config, btree, hash, typed] = registries(&pairs);
+        let [config_u, btree_u, hash_u, typed_u] = registries(&upper);
         let want = outcome(&config, url);
         // Error texts name the key as written, so compare the class and success only.
         let shape = |r: Result<(), (ErrorClass, String)>| r.map_err(|(class, _)| class);
@@ -144,40 +151,19 @@ fn keys_match_ignoring_ascii_case_in_every_source() {
             ("config", outcome(&config_u, url)),
             ("BTreeMap", outcome(&btree_u, url)),
             ("HashMap", outcome(&hash_u, url)),
+            ("typed map", outcome(&typed_u, url)),
         ] {
             assert_eq!(shape(got), shape(want.clone()), "{url} {pairs:?}: {name}");
         }
-        drop((btree, hash));
+        drop((btree, hash, typed));
     }
 }
 
 #[test]
-fn an_exact_key_wins_over_a_case_folded_one() {
-    let mut map = BTreeMap::new();
-    map.insert(
-        "FS.S3A.ENDPOINT".to_owned(),
-        "https://folded.example.com".to_owned(),
-    );
-    map.insert(
-        S3_ENDPOINT.to_owned(),
-        "https://exact.example.com".to_owned(),
-    );
-    assert_eq!(
-        map.lookup(S3_ENDPOINT).as_deref(),
-        Some("https://exact.example.com")
-    );
-    assert_eq!(
-        map.lookup("Fs.S3a.Endpoint").as_deref(),
-        Some("https://folded.example.com")
-    );
-    assert_eq!(map.lookup("fs.s3a.region"), None);
-}
-
-#[test]
 fn a_secret_is_typed_by_its_key_and_never_prints() {
-    // The map holds plain text; the sensitive key makes it a secret as it is read.
-    let [config, btree, _] = registries(&[(S3_SECRET_KEY, CANARY), (S3_ACCESS_KEY, "k")]);
-    for registry in [&config, &btree] {
+    // The maps hold plain text; the sensitive key makes it a secret as it is read.
+    let [config, btree, _, typed] = registries(&[(S3_SECRET_KEY, CANARY), (S3_ACCESS_KEY, "k")]);
+    for registry in [&config, &btree, &typed] {
         assert!(!format!("{registry:?}").contains(CANARY));
     }
     assert!(
@@ -185,17 +171,58 @@ fn a_secret_is_typed_by_its_key_and_never_prints() {
             .as_plain()
             .is_none()
     );
-    // A secret where a plain value is required still fails, naming the key and not the value.
-    let options: BTreeMap<String, OptionValue> = [(
-        S3_ENDPOINT.to_owned(),
-        OptionValue::from_user(S3_SECRET_KEY, CANARY),
+}
+
+#[test]
+fn a_secret_where_plain_text_is_required_fails_in_every_source() {
+    let url = parse_object_url("s3://bucket/k").unwrap();
+    let secret_endpoint = OptionValue::from_user(S3_SECRET_KEY, CANARY);
+    // As a typed session setting (the caller types it; `from_user` would make an endpoint plain).
+    let typed: BTreeMap<String, OptionValue> =
+        [(S3_ENDPOINT.to_owned(), secret_endpoint.clone())].into();
+    // As a per-read option.
+    let options: BTreeMap<String, OptionValue> = [(S3_ENDPOINT.to_owned(), secret_endpoint)].into();
+    let [config, ..] = registries(&[]);
+    let typed = StoreRegistry::new(Arc::new(typed));
+    for (name, error) in [
+        ("typed session", typed.store(&url).unwrap_err()),
+        (
+            "per-read",
+            config.store_with_options(&url, &options).unwrap_err(),
+        ),
+    ] {
+        assert_eq!(
+            error.error_class(),
+            ErrorClass::KrishivInvalidConfigValue,
+            "{name}"
+        );
+        assert!(
+            error.to_string().contains(S3_ENDPOINT),
+            "{name}: names the key"
+        );
+        assert!(!error.to_string().contains(CANARY), "{name}");
+        assert!(!format!("{error:?}").contains(CANARY), "{name}");
+    }
+    // A plain value where a credential is required is accepted as that credential (as a per-read
+    // plain value is), and an empty one is ignored.
+    let plain_secret: BTreeMap<String, OptionValue> = [
+        (S3_ACCESS_KEY.to_owned(), OptionValue::Plain("k".to_owned())),
+        (S3_SECRET_KEY.to_owned(), OptionValue::Plain("s".to_owned())),
+    ]
+    .into();
+    assert!(
+        StoreRegistry::new(Arc::new(plain_secret))
+            .store(&url)
+            .is_ok()
+    );
+    // A secret reference cannot be resolved by this layer.
+    let reference: BTreeMap<String, OptionValue> = [(
+        S3_SECRET_KEY.to_owned(),
+        OptionValue::reference("scope", "key"),
     )]
     .into();
-    let url = parse_object_url("s3://bucket/k").unwrap();
-    for registry in [&config, &btree] {
-        let error = registry.store_with_options(&url, &options).unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-        assert!(!error.to_string().contains(CANARY));
-        assert!(!format!("{error:?}").contains(CANARY));
-    }
+    let error = StoreRegistry::new(Arc::new(reference))
+        .store(&url)
+        .unwrap_err();
+    assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
 }

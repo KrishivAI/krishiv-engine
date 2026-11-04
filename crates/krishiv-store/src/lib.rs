@@ -43,7 +43,7 @@ mod stores;
 pub use error::Result;
 pub use id::StoreId;
 pub use policy::StorePolicy;
-pub use settings::StoreSettings;
+pub use settings::{SettingValue, StoreSettings};
 pub use stores::{
     AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,
     GCS_KEYFILE, GCS_STORAGE_ROOT_URL, HF_ENDPOINT, HF_TOKEN, ObjectScheme, OpenedStore, ParsedUrl,

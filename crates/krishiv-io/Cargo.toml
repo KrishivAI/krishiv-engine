@@ -38,8 +38,6 @@ krishiv-memory = { path = "../krishiv-memory" }
 krishiv-store = { path = "../krishiv-store" }
 krishiv-types = { path = "../krishiv-types" }
 memchr.workspace = true
-# Bearer header of `hf://` reads (T195); only with `cloud`.
-http = { workspace = true, optional = true }
 # `fs`: the local store reads use wraps `LocalFileSystem` (`io/local_listing.rs`).
 object_store = { workspace = true, features = ["fs"] }
 # The Parquet reader (P2-T080a): arrow-rs's push decoder and the codecs files
