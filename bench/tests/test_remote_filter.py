@@ -912,8 +912,8 @@ def test_s3_mode_serves_the_mirror_to_duckdb_and_polars_through_the_environment(
     srv = S3Server(mirror / "fw", _run=docker, _ready=lambda e: True)
     f = run_remote_filter(str(mirror), ["duckdb", "polars"], None, 60, run=run, reps=1, s3=True, _s3_server=srv)
     assert {(e, a, ep) for e, a, ep in seen} == {
-        ("duckdb", '["s3://fw/p.parquet"]', "127.0.0.1:40123"),
-        ("polars", '["s3://fw/p.parquet"]', "127.0.0.1:40123"),
+        ("duckdb", '["s3://fwbucket/p.parquet"]', "127.0.0.1:40123"),
+        ("polars", '["s3://fwbucket/p.parquet"]', "127.0.0.1:40123"),
     }
     assert "KRISHIV_BENCH_S3_ENDPOINT" not in os.environ  # restored
     assert json.loads(f.read_text())["source"] == "s3"
