@@ -358,7 +358,7 @@ pub fn raw(text: &str) -> impl fmt::Display {
 
 #[cfg(test)]
 mod tests {
-    use super::same_cell;
+    use super::{same_answer, same_cell};
 
     #[test]
     fn the_relative_tolerance_is_for_finite_numbers_only() {
@@ -368,5 +368,17 @@ mod tests {
         assert!(!same_cell("0", "Infinity"));
         assert!(!same_cell("Infinity", "-Infinity"));
         assert!(!same_cell("5", "Infinity"));
+    }
+
+    #[test]
+    fn text_cells_compare_exactly_and_failures_compare_by_outcome() {
+        assert!(same_cell("a", "a"));
+        assert!(!same_cell("a", "b"));
+        let rows = Ok(vec![vec!["1".to_owned()]]);
+        let boom: Result<Vec<Vec<String>>, String> = Err("x".to_owned());
+        assert!(same_answer(&rows, &rows));
+        assert!(same_answer(&boom, &Err("y".to_owned())));
+        assert!(!same_answer(&rows, &boom));
+        assert!(!same_answer(&boom, &rows));
     }
 }

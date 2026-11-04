@@ -256,3 +256,55 @@ fn verdicts_say_what_they_found() {
             .contains("Spark not consulted: no spark")
     );
 }
+
+#[test]
+fn a_finding_over_a_generated_source_keeps_all_rows_and_sends_no_setup() -> R {
+    let mut r = bugged()?;
+    let mut f = nan_finding(&mut r)?;
+    let small = reduce_finding(&mut r, &f);
+    f.source = 1;
+    // Sources other than `nulls` read files that are not reduced.
+    assert_eq!(
+        reduce_rows(&mut r, &f, &small)?,
+        (0..10).collect::<Vec<_>>()
+    );
+    struct NoSetup;
+    impl krishiv_testkit::metamorphic_reduce::SparkAnswers for NoSetup {
+        fn answer(
+            &mut self,
+            setup: &[String],
+            queries: &[String],
+        ) -> Result<Vec<Result<Vec<Vec<String>>, String>>, String> {
+            assert!(setup.is_empty(), "no view is redefined for this source");
+            Ok(queries.iter().map(|_| Err("no data".to_owned())).collect())
+        }
+    }
+    let kept: Vec<usize> = (0..10).collect();
+    let v = spark_verdict(&mut r, &mut NoSetup, &f, &small, &kept);
+    let text = render(&f, &small, &kept, &v);
+    assert!(!text.contains("of 10 in `nulls`"), "{text}");
+    Ok(())
+}
+
+#[test]
+fn an_engine_that_cannot_define_the_reduced_view_is_reported() -> R {
+    struct Broken;
+    impl QueryRunner for Broken {
+        fn run(&mut self, _sql: &str) -> Result<Vec<Vec<String>>, String> {
+            Err("no catalog".to_owned())
+        }
+    }
+    let mut r = bugged()?;
+    let f = nan_finding(&mut r)?;
+    let small = reduce_finding(&mut r, &f);
+    let mut spark = PythonSpark {
+        command: vec!["/nonexistent".to_owned()],
+        data: std::path::PathBuf::new(),
+    };
+    let v = spark_verdict(&mut Broken, &mut spark, &f, &small, &[2]);
+    assert!(
+        matches!(&v, Verdict::Unavailable(m) if m.contains("reduced view")),
+        "{v:?}"
+    );
+    Ok(())
+}
