@@ -94,12 +94,16 @@ jobs:
           if [ "$rust" = true ] || [ "$bench" = true ]; then echo "cargo=true" >> "$GITHUB_OUTPUT"; else echo "cargo=false" >> "$GITHUB_OUTPUT"; fi
           echo "Rust-relevant changes: $rust, bench changes: $bench"
       # The instrumented build of a wide change (many dependent packages) can fill
-      # the runner's disk. Drop preinstalled toolchains this job never uses.
+      # the runner's disk (2026-11-04: "No space left on device" at the link with 41 GB free after
+      # the first cleanup). Drop preinstalled toolchains this job never uses.
       - name: Free runner disk
         if: steps.changes.outputs.rust == 'true'
         run: |
           df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium /usr/local/share/boost \
+            /opt/microsoft /opt/az /usr/lib/google-cloud-sdk /usr/lib/mono /usr/local/julia* /usr/local/graalvm \
+            /opt/hostedtoolcache/Java_* /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/go /opt/hostedtoolcache/PyPy
           df -h /
       - name: Toolchain (from rust-toolchain.toml)
         if: steps.changes.outputs.cargo == 'true'
