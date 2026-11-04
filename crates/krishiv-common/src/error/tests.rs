@@ -329,3 +329,99 @@ fn cause_chain_like_spark() {
     }));
     assert_eq!(r.causes().count(), 2);
 }
+
+#[test]
+fn audience_comes_from_the_json_files() {
+    assert_eq!(ErrorClass::DivideByZero.audience(), Audience::User);
+    assert_eq!(ErrorClass::KrishivUnknownConfig.audience(), Audience::User);
+    // Krishiv class marked in krishiv-error-classes.json.
+    assert_eq!(
+        ErrorClass::KrishivSpillIoError.audience(),
+        Audience::Operator
+    );
+    assert_eq!(
+        ErrorClass::KrishivObjectStoreRequestFailed.audience(),
+        Audience::Operator
+    );
+    // Spark class named in error-audience.json, and its sub-classes.
+    assert_eq!(ErrorClass::InternalError.audience(), Audience::Operator);
+    assert!(
+        ErrorClass::ALL
+            .iter()
+            .filter(|c| c.name().starts_with("FAILED_READ_FILE."))
+            .all(|c| c.audience() == Audience::Operator)
+    );
+}
+
+#[test]
+fn for_client_keeps_user_classes_and_cuts_the_cause() {
+    let cause = KrishivError::from(KrishivSpillIoError {
+        operation: "write".into(),
+        path: "/var/spill/x".into(),
+        reason: "disk full".into(),
+    });
+    let e = KrishivError::from(DivideByZero {
+        config: "\"spark.sql.ansi.enabled\"".into(),
+    })
+    .with_cause(cause);
+    let c = e.for_client();
+    assert_eq!(c.error().error_class(), ErrorClass::DivideByZero);
+    assert_eq!(c.error().message(), e.message());
+    assert!(c.error().cause().is_none());
+    assert!(std::error::Error::source(c.error()).is_none());
+    assert!(std::error::Error::source(&c).is_none());
+    assert!(!c.error_id().is_empty());
+    assert!(
+        c.to_string()
+            .ends_with(&format!("(error_id: {})", c.error_id()))
+    );
+    // The original is untouched.
+    assert!(e.cause().is_some());
+}
+
+#[test]
+fn for_client_redacts_operator_classes() {
+    let e = KrishivError::from(KrishivSpillIoError {
+        operation: "write".into(),
+        path: "/var/spill/tenant-7/x".into(),
+        reason: "disk full on host-12".into(),
+    });
+    let c = e.for_client();
+    assert_eq!(c.error().error_class(), e.error_class());
+    assert_eq!(c.error().sql_state(), e.sql_state());
+    let shown = c.to_string();
+    for secret in ["/var/spill", "tenant-7", "host-12", "disk full"] {
+        assert!(!shown.contains(secret), "{shown}");
+        assert!(!format!("{c:?}").contains(secret));
+    }
+    assert!(
+        c.error()
+            .message_parameters()
+            .iter()
+            .all(|(_, v)| v == crate::secret::REDACTED)
+    );
+    // The full form still has the detail.
+    assert!(e.to_string().contains("/var/spill/tenant-7/x"));
+}
+
+#[test]
+fn error_id_joins_the_full_and_client_forms() {
+    let e = KrishivError::from(KrishivSpillIoError {
+        operation: "read".into(),
+        path: "p".into(),
+        reason: "r".into(),
+    });
+    let id = new_error_id();
+    assert_eq!(e.for_client_with_id(id.clone()).error_id(), id);
+    // Fresh ids differ.
+    let a = KrishivError::from(DivideByZero { config: "c".into() });
+    assert_ne!(a.for_client().error_id(), a.for_client().error_id());
+    assert_ne!(new_error_id(), new_error_id());
+}
+
+#[test]
+fn for_client_keeps_query_contexts() {
+    let e = KrishivError::from(DivideByZero { config: "c".into() })
+        .with_query_context(ErrorQueryContext::sql("1/0", 0, 2));
+    assert_eq!(e.for_client().error().query_contexts(), e.query_contexts());
+}
