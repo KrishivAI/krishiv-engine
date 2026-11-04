@@ -95,6 +95,29 @@ def _status_of(e: Exception) -> str:
     return "timeout" if isinstance(e, EngineTimeout) else "error"
 
 
+# Polars' SQL front end does not run every query; these are its errors for a query it cannot plan or execute. Such a
+# query is reported "unsupported" with the error, never rewritten.
+POLARS_UNSUPPORTED = frozenset(
+    {
+        "SQLInterfaceError",
+        "SQLSyntaxError",
+        "UnsuitableSQLError",
+        "ColumnNotFoundError",
+        "SchemaFieldNotFoundError",
+        "InvalidOperationError",
+        "ComputeError",
+        "SchemaError",
+    }
+)
+
+
+def _answer_status(name: str, e: Exception) -> str:
+    """Status of an engine whose untimed answer run raised ``e``."""
+    if name.startswith("polars") and isinstance(e, EngineError) and str(e).split(":")[0] in POLARS_UNSUPPORTED:
+        return "unsupported"
+    return _status_of(e)
+
+
 def setup_engines(engines: MutableMapping[str, Any], ds: Dataset) -> dict[str, dict]:
     """Set up every engine; one that fails is torn down, removed from ``engines`` and returned as a failure verdict.
 
@@ -122,7 +145,7 @@ def correctness(qm: Mapping[str, Query], engines: Mapping[str, Engine]) -> tuple
         try:
             rows[name] = eng.run(check_query(qm[name]))
         except (EngineError, EngineTimeout, EngineCrashed) as e:
-            verdict[name] = _fail(_status_of(e), e)
+            verdict[name] = _fail(_answer_status(name, e), e)
     ref = rows.get(REFERENCE)
     if ref is None:
         for name in rows:
@@ -264,35 +287,48 @@ def sequential_query(
     cpus: dict[str, list[float]] = {}
     nrows = 0
     for name in order:
-        eng = ProcessEngine(name, threads, memory_gb, timeout_s, cap_gb=cap_gb)
-        try:
-            eng.setup(ds)
-            infos[name] = {"version": eng.version(), "config": eng.config(), "build": eng.build_info()}
-            rows[name] = eng.run(check_query(qm[name]))
-            if name == REFERENCE:
-                nrows = result_rows(qm[REFERENCE], rows[name])
-                verdicts[name] = {"status": "ok"}
-            elif REFERENCE not in rows:
-                verdicts[name] = _fail("error", "no DuckDB reference result")
-            else:
-                verdicts[name] = judge(name, rows[name], rows[REFERENCE], qm, rows)
-            if verdicts[name]["status"] != "ok":
-                continue
-            base_n, _ = eng.timed_run(qm[name])
-            if base_n != nrows:
-                raise EngineError(f"result run returned {base_n} rows, expected {nrows}")
-            baseline = eng.result_checksum()
-            samples[name], cpus[name] = [], []
-            for _ in range(samples_n):
-                samples[name].append(_timed(eng, qm[name], nrows, baseline))
-                _note_peak(peaks, name, eng)
-                if (cpu := eng.last_cpu_seconds) is not None:
-                    cpus[name].append(cpu)
-        except (EngineError, EngineTimeout, EngineCrashed) as e:
-            verdicts[name] = _fail(_status_of(e), e)
-            samples.pop(name, None)
-        finally:
-            eng.teardown()
+        # Polars' default engine runs first; if its worker is killed (out of memory), the engine is run again with
+        # Polars' streaming engine ("polars-streaming") and the result says so.
+        attempts = [name, "polars-streaming"] if name == "polars" else [name]
+        for attempt, run_name in enumerate(attempts):
+            eng = ProcessEngine(run_name, threads, memory_gb, timeout_s, cap_gb=cap_gb)
+            phase = "answer"
+            crashed = False
+            try:
+                eng.setup(ds)
+                infos[name] = {"version": eng.version(), "config": eng.config(), "build": eng.build_info()}
+                rows[name] = eng.run(check_query(qm[name]))
+                phase = "timing"
+                if name == REFERENCE:
+                    nrows = result_rows(qm[REFERENCE], rows[name])
+                    verdicts[name] = {"status": "ok"}
+                elif REFERENCE not in rows:
+                    verdicts[name] = _fail("error", "no DuckDB reference result")
+                else:
+                    verdicts[name] = judge(name, rows[name], rows[REFERENCE], qm, rows)
+                if verdicts[name]["status"] != "ok":
+                    break
+                base_n, _ = eng.timed_run(qm[name])
+                if base_n != nrows:
+                    raise EngineError(f"result run returned {base_n} rows, expected {nrows}")
+                baseline = eng.result_checksum()
+                samples[name], cpus[name] = [], []
+                for _ in range(samples_n):
+                    samples[name].append(_timed(eng, qm[name], nrows, baseline))
+                    _note_peak(peaks, name, eng)
+                    if (cpu := eng.last_cpu_seconds) is not None:
+                        cpus[name].append(cpu)
+                if attempt:
+                    verdicts[name]["engine_mode"] = "streaming (the default engine ran out of memory)"
+            except (EngineError, EngineTimeout, EngineCrashed) as e:
+                crashed = isinstance(e, EngineCrashed)
+                status = _answer_status(name, e) if phase == "answer" else _status_of(e)
+                verdicts[name] = _fail(status, e)
+                samples.pop(name, None)
+            finally:
+                eng.teardown()
+            if not (crashed and attempt + 1 < len(attempts)):
+                break
         if name not in (REFERENCE, "krishiv"):
             rows.pop(name, None)  # only DuckDB's and Krishiv's rows are compared against later engines
     entry: dict[str, Any] = {"rows": nrows, "engines": {n: dict(v) for n, v in verdicts.items()}}

@@ -445,3 +445,36 @@ def test_a_timed_run_whose_result_differs_from_the_verified_one_fails():
         _timed(Eng({"kinds": ["rows"], "values": [4]}), q, 3, good)
     with pytest.raises(EngineError, match="returned 3 rows"):
         _timed(Eng(good), q, 4, good)
+
+
+def test_polars_sql_errors_are_unsupported_not_failures():
+    from krishiv_bench.adapters.process import EngineCrashed, EngineError, EngineTimeout
+    from krishiv_bench.reproduce import _answer_status
+
+    assert _answer_status("polars", EngineError("SQLInterfaceError: unsupported SQL")) == "unsupported"
+    assert _answer_status("polars-streaming", EngineError("ColumnNotFoundError: x")) == "unsupported"
+    assert _answer_status("polars", EngineError("MemoryError: x")) == "error"
+    assert _answer_status("duckdb", EngineError("SQLInterfaceError: x")) == "error"
+    assert _answer_status("polars", EngineTimeout("slow")) == "timeout"
+    assert _answer_status("polars", EngineCrashed("died")) == "error"
+
+
+def test_polars_streaming_engine_gives_the_same_rows(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from krishiv_bench.adapters import make_engine
+    from krishiv_bench.adapters.base import Dataset, Query
+
+    pq.write_table(pa.table({"a": [3, 1, 2], "b": ["x", "y", "z"]}), tmp_path / "t.parquet")
+    ds = Dataset("t", 1, tmp_path, ["t"])
+    out = {}
+    for name in ("polars", "polars-streaming"):
+        e = make_engine(name, threads=2)
+        e.setup(ds)
+        q = Query("q", "SELECT b, a FROM t ORDER BY a", "tpch")
+        out[name] = e.run(q)
+        assert e.timed_run(q)[0] == 3
+        assert e.result_checksum() is not None
+        assert e.config()["engine"] == ("streaming" if name.endswith("streaming") else "default")
+    assert out["polars"] == out["polars-streaming"] == [("y", 1), ("z", 2), ("x", 3)]

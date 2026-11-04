@@ -17,7 +17,10 @@ from .base import Dataset, Engine, Query, table_path
 class PolarsEngine(Engine):
     name = "polars"
 
-    def __init__(self, threads: int | None = None, memory_limit: str | None = None):
+    def __init__(self, threads: int | None = None, memory_limit: str | None = None, streaming: bool = False):
+        # streaming: Polars' streaming engine instead of the default in-memory one (the fallback when the default
+        # engine runs out of memory); the reproduce harness asks for it by the name "polars-streaming".
+        self.streaming = streaming
         self.threads = threads or os.cpu_count() or 1
         self.memory_limit = memory_limit  # accepted for interface parity; polars cannot enforce it
         os.environ.setdefault("POLARS_MAX_THREADS", str(self.threads))
@@ -37,6 +40,7 @@ class PolarsEngine(Engine):
             "threads_effective": pl.thread_pool_size(),
             "memory_limit": None,
             "api": "lazy: scan_parquet + SQLContext",
+            "engine": "streaming" if self.streaming else "default",
         }
 
     def setup(self, dataset: Dataset) -> None:
@@ -48,14 +52,18 @@ class PolarsEngine(Engine):
     def _lazy(self, query: Query):
         return self._ctx.execute(query.sql)
 
+    def _collect(self, query: Query):
+        lazy = self._lazy(query)
+        return lazy.collect(engine="streaming") if self.streaming else lazy.collect()
+
     def run(self, query: Query) -> list[tuple]:
-        return self._lazy(query).collect().rows()
+        return self._collect(query).rows()
 
     def timed_run(self, query: Query) -> tuple[int, float]:
         import time
 
         t0 = time.perf_counter()
-        df = self._lazy(query).collect()
+        df = self._collect(query)
         secs = time.perf_counter() - t0
         self._pending = df
         return df.height, secs
