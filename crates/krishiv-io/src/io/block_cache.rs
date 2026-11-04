@@ -689,6 +689,12 @@ impl fmt::Display for CachingStore {
     }
 }
 
+/// One key field, length-prefixed, so no text (a version or scope with a NUL in it) can shift into
+/// its neighbour and make two different reads share a key.
+fn field(text: &str) -> String {
+    format!("{}:{text};", text.len())
+}
+
 /// The object's version as the scheduler pins it on a read.
 fn version_text(options: &GetOptions) -> String {
     if let Some(e) = &options.if_match {
@@ -724,14 +730,19 @@ impl CachingStore {
         let identity = identity.into();
         Self {
             inner,
-            key_prefix: format!("{identity}\0{}", scope.key_text()),
+            key_prefix: format!("{}{}", field(&identity), field(&scope.key_text())),
             identity,
             cache,
         }
     }
 
-    fn block_key(&self, location: &Path, version: &str, block: u64) -> String {
-        format!("{}\0{location}\0{version}\0{block}", self.key_prefix)
+    pub(super) fn block_key(&self, location: &Path, version: &str, block: u64) -> String {
+        format!(
+            "{}{}{}{block}",
+            self.key_prefix,
+            field(location.as_ref()),
+            field(version)
+        )
     }
 
     /// The object a read names, from what the scheduler sent: its size ([`ObjectSize`]) and the

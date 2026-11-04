@@ -11,7 +11,7 @@ use krishiv_common::error::{
     UnsupportedDatasourceForDirectQuery,
 };
 use krishiv_common::redact::RedactedSql;
-use krishiv_common::secret::{OptionValue, SecretValue};
+use krishiv_common::secret::OptionValue;
 
 use super::catalog::quoted;
 use super::{
@@ -153,6 +153,8 @@ enum Found<'a> {
     Files(&'a ReadSource, Origin),
     /// An already-resolved scan of files.
     FileScan(&'a ReadSource, &'a [BoundColumn], Origin),
+    /// The scopes of the secret references in a table read's options (E12).
+    Secrets(Vec<String>, Origin),
 }
 
 /// One node of the walk: reports what it reads, checks its functions, and
@@ -168,7 +170,11 @@ fn visit<'a>(
     match node {
         Node::Plan(p) => {
             match &p.node {
-                PlanNode::Read(ReadSource::Table { name, .. }) => {
+                PlanNode::Read(ReadSource::Table { name, options }) => {
+                    let scopes = super::access::secret_scopes(options.values());
+                    if !scopes.is_empty() {
+                        found.push(Found::Secrets(scopes, p.origin));
+                    }
                     let shadowed = name.len() == 1 && env.iter().any(|c| same(c, &name[0], cs));
                     if !shadowed {
                         found.push(Found::Table(name, p.origin));
@@ -179,7 +185,11 @@ fn visit<'a>(
                 }
                 // A plan resolved elsewhere is checked like a fresh one.
                 PlanNode::Scan(s) => match &s.source {
-                    ReadSource::Table { name, .. } => {
+                    ReadSource::Table { name, options } => {
+                        let scopes = super::access::secret_scopes(options.values());
+                        if !scopes.is_empty() {
+                            found.push(Found::Secrets(scopes, p.origin));
+                        }
                         found.push(Found::Scan(name, s.version, &s.output, p.origin));
                     }
                     source @ ReadSource::Files { .. } => {
@@ -589,6 +599,23 @@ async fn authorize(
     authorize_as(ctx, b, checked, securable, Privilege::Select, origin).await
 }
 
+/// `USAGE` on each secret scope in `scopes` (E12).
+async fn authorize_usage(
+    ctx: &AnalysisContext,
+    b: &mut Bindings,
+    checked: &mut Vec<(Securable, usize)>,
+    scopes: &[String],
+    origin: Origin,
+) -> Result<(), AnalysisError> {
+    for scope in scopes {
+        let securable = Securable::Secret {
+            scope: scope.clone(),
+        };
+        authorize_as(ctx, b, checked, securable, Privilege::Usage, origin).await?;
+    }
+    Ok(())
+}
+
 /// [`authorize`] for `privilege`.
 async fn authorize_as(
     ctx: &AnalysisContext,
@@ -598,7 +625,10 @@ async fn authorize_as(
     privilege: Privilege,
     origin: Origin,
 ) -> Result<usize, AnalysisError> {
-    if let Some((_, i)) = checked.iter().find(|(s, _)| *s == securable) {
+    if let Some((_, i)) = checked
+        .iter()
+        .find(|(s, i)| *s == securable && b.securables[*i].1 == privilege)
+    {
         return Ok(*i);
     }
     super::access::authorize(&*ctx.policy, &ctx.principal, &securable, privilege)
@@ -648,6 +678,10 @@ async fn load(
                 if !known {
                     return Err(unsupported("a scan that does not match its files", origin));
                 }
+                continue;
+            }
+            Found::Secrets(scopes, origin) => {
+                authorize_usage(ctx, b, &mut checked, &scopes, origin).await?;
                 continue;
             }
             Found::Table(name, origin) => (name, None, &[][..], origin, false),
@@ -918,15 +952,10 @@ async fn bind_files(
         authorize(ctx, b, checked, Securable::Path(path.clone()), origin).await?;
     }
     // A `secret('scope', 'key')` reference in the options (or a path) is
-    // resolved for the principal only with USAGE on its scope (E12).
-    for value in options.values().chain(&qualified) {
-        if let OptionValue::Secret(SecretValue::Reference { scope, .. }) = value {
-            let securable = Securable::Secret {
-                scope: scope.clone(),
-            };
-            authorize_as(ctx, b, checked, securable, Privilege::Usage, origin).await?;
-        }
-    }
+    // resolved for the principal only with USAGE on its scope (E12), checked
+    // before anything is listed or inferred.
+    let scopes = super::access::secret_scopes(options.values().chain(&qualified));
+    authorize_usage(ctx, b, checked, &scopes, origin).await?;
     let columns = files
         .infer(format, &qualified, options)
         .await

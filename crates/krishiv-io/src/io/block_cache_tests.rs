@@ -816,3 +816,25 @@ async fn blocks_are_shared_only_within_a_credential_scope() {
     assert_eq!(read(&store(None)).await, 1);
     assert_eq!(read(&store(None)).await, 1);
 }
+
+/// Key fields are length-prefixed: text with separators cannot shift into the next field.
+#[test]
+fn key_fields_cannot_shift_into_each_other() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, cache, _) = direct(tmp.path(), 1 << 20, 1 << 20);
+    let store = |identity: &str, scope: &str| {
+        CachingStore::with_scope(
+            Arc::clone(&inner) as Arc<dyn ObjectStore>,
+            identity,
+            Arc::clone(&cache),
+            &CredentialScope::Principal(scope.to_owned()),
+        )
+    };
+    let p = Path::from("d/a");
+    let k1 = store("s3://b", "x\0y").block_key(&p, "i", 0);
+    let k2 = store("s3://b\0x", "y").block_key(&p, "i", 0);
+    assert_ne!(k1, k2);
+    let k3 = store("s3://b", "x").block_key(&Path::from("d/a"), "i\0", 0);
+    let k4 = store("s3://b", "x").block_key(&Path::from("d/a"), "i", 0);
+    assert_ne!(k3, k4);
+}
