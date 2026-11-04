@@ -755,6 +755,33 @@ fn cte_recursion_limits_default_and_alias() {
 }
 
 #[test]
+fn time_parser_policy_parses_and_defaults() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&LEGACY_TIME_PARSER_POLICY)
+            .and_then(ConfigValue::as_str),
+        Some("EXCEPTION")
+    );
+    c.set("spark.sql.legacy.timeParserPolicy", "legacy")
+        .unwrap();
+    assert_eq!(
+        c.get(&LEGACY_TIME_PARSER_POLICY)
+            .and_then(ConfigValue::as_str),
+        Some("LEGACY")
+    );
+    assert!(c.set("spark.sql.legacy.timeParserPolicy", "NEW").is_err());
+    // The canonical key sets it too.
+    let mut c = Config::new();
+    c.set("krishiv.sql.legacy.timeParserPolicy", "LEGACY")
+        .unwrap();
+    assert_eq!(
+        c.get(&LEGACY_TIME_PARSER_POLICY)
+            .and_then(ConfigValue::as_str),
+        Some("LEGACY")
+    );
+}
+
+#[test]
 fn result_cache_entries_parse_and_default() {
     use super::registry::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
     let mut c = Config::new();

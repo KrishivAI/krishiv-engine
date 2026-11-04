@@ -24,6 +24,19 @@ pub trait TimeZoneRules: Send + Sync + std::fmt::Debug {
     /// overlap, the offset before the transition in a gap (which moves the
     /// time forward by the gap's length).
     fn offset_for_local(&self, local_seconds: i64) -> i32;
+    /// The offset `java.util.TimeZone` gives at `utc_seconds`, which the
+    /// legacy (`SimpleDateFormat`) formatters print. It drops the
+    /// transitions before 1900, so earlier instants have the zone's raw
+    /// offset; the default is [`Self::offset_at_utc`] (zones without such
+    /// history).
+    fn legacy_offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        self.offset_at_utc(utc_seconds)
+    }
+    /// The zone's region id (`Asia/Kolkata`), whose own zone names the
+    /// legacy parser tries first; `None` (the default) for a fixed offset.
+    fn region_id(&self) -> Option<&str> {
+        None
+    }
     /// The query start instant, in microseconds since the epoch, when the
     /// caller has one: a time of day without a date (`CAST('10:11:12' AS
     /// TIMESTAMP)`) is on that instant's date in this zone. Without it such a
@@ -124,7 +137,7 @@ pub(crate) fn civil_from_days(days: i64) -> (i64, u32, u32) {
     )
 }
 
-fn days_in_month(year: i64, month: u32) -> u32 {
+pub(crate) fn days_in_month(year: i64, month: u32) -> u32 {
     match month {
         2 if year.rem_euclid(4) == 0
             && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0) =>

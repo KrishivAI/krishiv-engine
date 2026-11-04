@@ -179,7 +179,8 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | ExprNode::Function(_)
                 | ExprNode::Field { .. }
                 | ExprNode::UpdateFields { .. }
-                | ExprNode::Alias { .. } => false,
+                | ExprNode::Alias { .. }
+                | ExprNode::MultiAlias { .. } => false,
                 ExprNode::Cast { mode, .. } => match mode {
                     CastMode::Default => false,
                     CastMode::Legacy | CastMode::Ansi | CastMode::Try => true,
@@ -435,6 +436,7 @@ impl Teardown {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(

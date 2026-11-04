@@ -23,6 +23,7 @@
 //! last reading pipeline ended (or the query failed), which drops the list,
 //! its memory and its files.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use arrow_schema::SchemaRef;
@@ -92,6 +93,9 @@ pub(crate) struct Output {
     /// Where an [`append`](Output::append) takes its memory (a list that is
     /// written after it was made; none for a finalized shared plan).
     owner: Option<Arc<ConsumerHandle>>,
+    /// Read by one driver, in order: a recursive CTE's small working table,
+    /// which Spark makes a `LocalRelation` (one partition).
+    one_reader: AtomicBool,
 }
 
 impl Output {
@@ -129,6 +133,7 @@ impl Output {
             executor: Arc::clone(executor),
             query: Arc::clone(query),
             owner: Some(owner),
+            one_reader: AtomicBool::new(false),
         });
         if let Some((hook, _, _)) = &out.spill {
             let weak: Weak<dyn SpillUnread> = Arc::downgrade(&out) as Weak<Output>;
@@ -179,6 +184,11 @@ impl Output {
             hook.set_spillable_bytes(self.memory_bytes());
         }
         Ok(())
+    }
+
+    /// Has every reader read the list on one driver, in order.
+    pub(crate) fn read_by_one_driver(&self) {
+        self.one_reader.store(true, Ordering::Relaxed);
     }
 
     fn batches(&self) -> u64 {
@@ -437,6 +447,7 @@ impl Sink for SharedSink {
                 executor: Arc::clone(ctx.executor()),
                 query: Arc::clone(ctx.query()),
                 owner: None,
+                one_reader: AtomicBool::new(false),
             });
             if let Some((hook, _, _)) = &out.spill {
                 let weak: Weak<dyn SpillUnread> = Arc::downgrade(&out) as Weak<Output>;
@@ -596,6 +607,9 @@ impl Source for SharedSource {
 
     fn max_parallelism(&self, global: &GlobalState) -> usize {
         global_ref::<ReaderGlobal>(global, "SharedSource").map_or(1, |g| {
+            if g.output.one_reader.load(Ordering::Relaxed) {
+                return 1;
+            }
             usize::try_from(g.batches).unwrap_or(usize::MAX).max(1)
         })
     }

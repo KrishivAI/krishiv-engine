@@ -769,3 +769,166 @@ fn order_by_an_aggregate_over_a_generator_below_it() {
         2
     );
 }
+
+#[test]
+fn order_by_a_grouping_column_the_generator_select_does_not_list() {
+    let s = Session::new().unwrap();
+    let v = "values (1, array(1, 2)), (2, array(3)) t(k, arr)";
+    // Spark adds the missing grouping column below the Generate.
+    assert_eq!(
+        rows(
+            &s,
+            &format!("select explode(arr) e from {v} group by k, arr order by k, e")
+        ),
+        table(&[&["1"], &["2"], &["3"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            &format!("select explode(arr) e, k from {v} group by k, arr order by k, e")
+        ),
+        table(&[&["1", "1"], &["2", "1"], &["3", "2"]])
+    );
+}
+
+#[test]
+fn nested_generators_under_group_by_are_nested_in_expressions() {
+    let s = Session::new().unwrap();
+    let e = error_of(
+        &s,
+        "select explode(explode(arr)) e from values (1, array(array(1, 2))) t(k, arr) group by k, arr",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::UnsupportedGeneratorNestedInExpressions
+    );
+}
+
+#[test]
+fn stack_matches_spark_edge_cases() {
+    let s = Session::new().unwrap();
+    for (sql, class) in [
+        (
+            "select stack(2, 1, '2')",
+            ErrorClass::DatatypeMismatchStackColumnDiffTypes,
+        ),
+        (
+            "select stack(2, 1, 2) + 1",
+            ErrorClass::UnsupportedGeneratorNestedInExpressions,
+        ),
+        (
+            "select stack(0, 1)",
+            ErrorClass::DatatypeMismatchValueOutOfRange,
+        ),
+        (
+            "select * from stack(2, 1, 2) as t(x, y, z)",
+            ErrorClass::NumTableValueAliasesMismatch,
+        ),
+        (
+            "select * from json_tuple('{\"a\":1}', 'a') as t(x, y)",
+            ErrorClass::NumTableValueAliasesMismatch,
+        ),
+    ] {
+        assert_eq!(error_of(&s, sql).error_class(), class, "{sql}");
+    }
+    assert_eq!(
+        rows(&s, "select stack(cast(2 as int), 1, 2, 3, 4)"),
+        table(&[&["1", "2"], &["3", "4"]])
+    );
+    assert_eq!(
+        rows(&s, "select stack(2, 1, 2, 3)"),
+        table(&[&["1", "2"], &["3", "NULL"]])
+    );
+    assert_eq!(
+        rows(&s, "select * from stack(2, 1, 2) as t(x)"),
+        table(&[&["1"], &["2"]])
+    );
+}
+
+#[test]
+fn generators_beside_aliases_aggregates_and_windows() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        error_of(&s, "select explode(array(1,2)) as (a, b)").error_class(),
+        ErrorClass::UdtfAliasNumberMismatch
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select explode(array_sort(collect_list(x))) from values (1),(2) t(x)"
+        ),
+        table(&[&["1"], &["2"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select count(*), sum(rn), max(rn) from (select explode(arr) e, row_number() over (order by k) rn from values (1, array(1,2)) t(k, arr))"
+        ),
+        table(&[&["2", "3", "2"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select explode(array(1,2)) e, sum(1) over () s from values (1) t(k)"
+        ),
+        table(&[&["1", "2"], &["2", "2"]])
+    );
+}
+
+#[test]
+fn a_multi_name_alias_needs_a_generator() {
+    let s = Session::new().unwrap();
+    let err = error_of(&s, "select 1 as (a, b)");
+    assert_eq!(err.error_class(), ErrorClass::MultiAliasWithoutGenerator);
+    // Spark 4.2.0: `Multi part aliasing (a, b) is not supported with "1" ...`.
+    assert!(err.to_string().contains("aliasing (a, b) is"), "{err}");
+    assert_eq!(
+        error_of(
+            &s,
+            "select k as (a, b), count(*) from values (1) t(k) group by k"
+        )
+        .error_class(),
+        ErrorClass::MultiAliasWithoutGenerator
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select posexplode(arr) as (p, e), count(*) c from values (1, array(5,6)) t(k, arr) group by arr"
+        ),
+        table(&[&["0", "5", "1"], &["1", "6", "1"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select inline(arr) as (x, y), count(*) c from values (array(named_struct('a', 1, 'b', 2))) t(arr) group by arr"
+        ),
+        table(&[&["1", "2", "1"]])
+    );
+}
+
+#[test]
+fn an_ambiguous_generator_column_prints_without_the_internal_qualifier() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "select explode(arr), col from values (array(1), 2) t(arr, col)",
+        "select col, explode(arr) from values (array(1), 2) t(arr, col)",
+    ] {
+        let e = error_of(&s, sql);
+        assert_eq!(e.error_class(), ErrorClass::AmbiguousReference, "{sql}");
+        let text = e.to_string();
+        assert!(text.contains("[`col`, `t`.`col`]"), "{text}");
+        assert!(!text.contains("__krishiv"), "{text}");
+    }
+}
+
+#[test]
+fn a_stack_with_an_alias_list_runs_beside_group_by() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "select stack(2, k, k + 1) as (v) from values (1), (2) t(k) group by k order by v"
+        ),
+        table(&[&["1"], &["2"], &["2"], &["3"]])
+    );
+}

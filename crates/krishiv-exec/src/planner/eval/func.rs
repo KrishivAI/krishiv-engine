@@ -72,6 +72,7 @@ pub(super) fn compile_udf(
             view,
             relabel: false,
             nullable: f.nullable,
+            partition_shift: 0,
             folded: None,
             constant: false,
             secret_arg: None,
@@ -253,6 +254,7 @@ pub(super) fn compile(
             java_charsets: input.env.legacy_java_charsets,
             replace_malformed: input.env.legacy_coding_error_action,
         })
+        .with_legacy_time_parser(input.env.legacy_time_parser)
         .with_user(Arc::clone(&input.env.user))
         .with_seed_salt(Arc::clone(&input.env.seed_salt));
     let args_constant = args.iter().all(|a| a.is_constant());
@@ -290,6 +292,11 @@ pub(super) fn compile(
             view,
             relabel,
             nullable: f.nullable,
+            partition_shift: if is_stateful(name) {
+                input.env.partition_shift
+            } else {
+                0
+            },
             // `aes_encrypt` of constants is folded once for the query, as
             // Spark's constant folding does: one IV for every row and batch
             // (a column argument draws an IV per row).
@@ -307,6 +314,14 @@ pub(super) fn compile(
     ))
 }
 
+/// Functions whose value stream is drawn per partition (see
+/// `krishiv_functions::scalar::random`).
+fn is_stateful(name: &str) -> bool {
+    ["rand", "random", "randn", "uniform", "randstr", "uuid"]
+        .iter()
+        .any(|n| name.eq_ignore_ascii_case(n))
+}
+
 /// A bound registry function over its arguments.
 #[derive(Debug)]
 struct Call {
@@ -318,6 +333,8 @@ struct Call {
     /// Give the result the analyzer's nested field flags.
     relabel: bool,
     nullable: bool,
+    /// Added to the partition the function draws its stream for.
+    partition_shift: u32,
     /// The one-row result of a call over constants that Spark folds once.
     folded: Option<OnceLock<ArrayRef>>,
     /// Whether the value is the same for every row (see `is_constant`).
@@ -385,7 +402,9 @@ impl Call {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let out = self.function.invoke_in(&args, rows, partition)?;
+        let out =
+            self.function
+                .invoke_in(&args, rows, partition.saturating_add(self.partition_shift))?;
         let out = if self.relabel {
             relabeled(&out, &self.out)?
         } else {

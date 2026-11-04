@@ -6,24 +6,20 @@
     ],
     "generators": [
       33,
-      35,
       44,
       46,
-      48,
-      49
+      48
     ],
     "query-features": [
       16,
       18,
       19,
-      20,
       22,
       41,
       42,
       43,
       50,
-      52,
-      53
+      52
     ]
   },
   "file": "generators-resolution-edge-cases",

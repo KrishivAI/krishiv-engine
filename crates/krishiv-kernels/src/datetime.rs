@@ -43,8 +43,8 @@ pub use epoch::{
     timestamp_from_seconds_decimal, timestamp_from_seconds_double, unix_time,
 };
 pub use format::{
-    ParsePolicy, format_timestamps, parse_date_one, parse_dates, parse_ntz, parse_ntz_one,
-    parse_timestamp_one, parse_timestamps, seconds_to_timestamps,
+    ParsePolicy, TimePattern, format_timestamps, parse_date_one, parse_dates, parse_ntz,
+    parse_ntz_one, parse_timestamp_one, parse_timestamps, seconds_to_timestamps,
 };
 pub use make::{TimestampFields, make_timestamp, make_timestamp_from_date};
 pub use unit::{TimestampUnit, timestamp_add, timestamp_diff};
@@ -99,11 +99,12 @@ fn day_arith<B: arrow_array::ArrowPrimitiveType<Native = i32>>(
 }
 
 /// `date_add(start, days)`: `start + days`. `mode` is the ANSI policy of the
-/// session: `AnsiError` raises `ARITHMETIC_OVERFLOW` where the day number
-/// leaves the `int` range, `NullOnOverflow` (`try_add`) gives NULL; any other
-/// mode wraps like Java's `int` addition, as Spark does with ANSI off
-/// (`date_add('2016-07-30', 2147483647)` is a date before the epoch). With
-/// ANSI on this differs from Spark, which wraps silently (ADR 0023).
+/// session: `NullOnOverflow` (`try_add`) gives NULL where the day number
+/// leaves the `int` range; any other mode, ANSI included, wraps like Java's
+/// `int` addition, as Spark does (`date_add('2016-07-30', 2147483647)` is a
+/// date before the epoch; found by the expression differential test).
+/// Only an all-literal call differs: Spark's constant folding raises a bare
+/// `java.lang.ArithmeticException`.
 ///
 /// # Errors
 /// `ARITHMETIC_OVERFLOW` as above; `INTERNAL_ERROR` for operands of different
@@ -114,7 +115,7 @@ pub fn date_add(
     mode: OverflowMode,
     ctx: &KernelCtx,
 ) -> Result<Date32Array, KernelError> {
-    if matches!(mode, OverflowMode::AnsiError | OverflowMode::NullOnOverflow) {
+    if mode == OverflowMode::NullOnOverflow {
         return day_arith(start, days, i32::checked_add, mode, ctx);
     }
     let out = with_days(start, |s| {
@@ -134,7 +135,7 @@ pub fn date_sub(
     mode: OverflowMode,
     ctx: &KernelCtx,
 ) -> Result<Date32Array, KernelError> {
-    if matches!(mode, OverflowMode::AnsiError | OverflowMode::NullOnOverflow) {
+    if mode == OverflowMode::NullOnOverflow {
         return day_arith(start, days, i32::checked_sub, mode, ctx);
     }
     let out = with_days(start, |s| {

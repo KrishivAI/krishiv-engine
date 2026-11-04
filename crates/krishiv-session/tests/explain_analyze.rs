@@ -339,3 +339,28 @@ fn row_layout_joins_report_their_index() {
     assert!(compares >= lookups.map(|l| l / 2), "{probe:?}");
     assert!(probe.extra("max_probe_length").and_then(Metric::value) >= Some(1));
 }
+
+#[test]
+fn a_recursive_cte_reports_its_rounds() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(
+        "EXPLAIN ANALYZE WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r \
+         WHERE n < 5) SELECT n FROM r",
+    ))
+    .unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    let col = batches[0].column(0);
+    let text = match col.data_type() {
+        DataType::Utf8View => col.as_string_view().value(0).to_owned(),
+        _ => col.as_string::<i32>().value(0).to_owned(),
+    };
+    assert!(text.contains("UnionLoop"), "{text}");
+    // The anchor, four productive rounds and the empty round that ends it.
+    // Whole tokens, so `rounds=60` or `rows=50` would not pass.
+    let has = |token: &str| {
+        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '='))
+            .any(|t| t == token)
+    };
+    assert!(has("rounds=6"), "{text}");
+    assert!(has("rows=5"), "{text}");
+}

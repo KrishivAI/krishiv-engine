@@ -205,27 +205,19 @@ impl Stream {
 #[derive(Debug, Default)]
 struct Streams {
     base: Option<i64>,
-    streams: Vec<Stream>,
+    streams: std::collections::HashMap<u32, Stream>,
 }
 
 impl Streams {
-    /// The stream of `partition`: slot `j` draws `seed + j`, seeded once.
+    /// The stream of `partition`: slot `j` draws `seed + j`, seeded once,
+    /// and only the slots asked for exist (a shifted partition index in a
+    /// deep recursion costs one stream, not one per preceding round).
     /// (`seed` is the binding's base seed; the callers pass it unfolded.)
     fn stream(&mut self, partition: u32, seed: i64) -> &mut Stream {
         let base = *self.base.get_or_insert(seed);
-        let index = partition as usize;
-        if self.streams.len() <= index {
-            let have = self.streams.len();
-            self.streams.reserve(index + 1 - have);
-            for slot in have..=index {
-                // `slot <= index`, and `index` is a `u32` widened to
-                // `usize`: `slot` fits a `u32` (the fallback never fires).
-                let p = u32::try_from(slot).unwrap_or(u32::MAX);
-                self.streams
-                    .push(Stream::new(base.wrapping_add(i64::from(p))));
-            }
-        }
-        &mut self.streams[index]
+        self.streams
+            .entry(partition)
+            .or_insert_with(|| Stream::new(base.wrapping_add(i64::from(partition))))
     }
 }
 

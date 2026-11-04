@@ -76,7 +76,6 @@ pub(super) use columns::*;
 use conditionals::*;
 pub(super) use literals::*;
 use operators::*;
-use patterns::*;
 pub(super) use pretty::*;
 pub(super) use semantic::*;
 

@@ -159,6 +159,7 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
         // to `named_struct` shows its children as written); a resolved
         // one is its expression (its output names the attribute).
         ExprNode::Alias { name, .. } => format!("{} AS {name}", k[0]),
+        ExprNode::MultiAlias { names, .. } => format!("{} AS ({})", k[0], names.join(", ")),
         ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
         ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => k.join(", "),
         ExprNode::Field { name, .. } | ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => {

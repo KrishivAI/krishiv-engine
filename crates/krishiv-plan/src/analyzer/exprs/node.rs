@@ -300,17 +300,6 @@ impl Resolver<'_> {
                 // `WITHIN GROUP` ordering keys (which follow it, so
                 // `kids.len()` overcounts `mode`/`listagg`).
                 let n = kids.len() - usize::from(f.filter.is_some()) - f.within_group.len();
-                // Spark's `SimpleDateFormat` time parser is not implemented: a
-                // pattern function under it would answer with the new parser.
-                if self.ctx.conf.legacy_time_parser
-                    && !session_qualified
-                    && is_pattern_function(lookup_name, &kids[..n])
-                {
-                    return Err(unsupported(
-                        "spark.sql.legacy.timeParserPolicy=LEGACY (the SimpleDateFormat time parser)",
-                        e.origin,
-                    ));
-                }
                 if !session_qualified && let Some(which) = GroupingFn::from_name(lookup_name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
                 }
@@ -1449,6 +1438,18 @@ impl Resolver<'_> {
                     }),
                     ..keep(arg_type(to.clone(), nullable))
                 }
+            }
+            // Generators take their several names before this point
+            // (`extract_generator`, lowering): any other expression with
+            // a multi-part alias is an error.
+            ExprNode::MultiAlias { expr, names } => {
+                return Err(AnalysisError::new(
+                    krishiv_common::error::MultiAliasWithoutGenerator {
+                        names: names.join(", "),
+                        expr: format!("\"{}\"", pretty(expr, self.ctx.conf.session_zone)),
+                    },
+                    e.origin,
+                ));
             }
             ExprNode::Alias { name, .. } => {
                 let output = self.attr(name, &kids[0].ty);

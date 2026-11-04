@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The fdlibm routines Java's `StrictMath` runs, for the functions where the
 //! pure-Rust `libm` crate (musl's algorithms) differs from them in the last
-//! bit: `cbrt`, `log10`, `hypot`, `acosh` and `tanh`. Spark calls these
+//! bit: `cbrt`, `log`, `log10`, `hypot`, `acosh` and `tanh`. Spark calls these
 //! through the JVM, so reproducing the same algorithm reproduces its bits.
 //!
 //! The algorithms are Sun Microsystems' fdlibm (1993): "Developed at
@@ -72,6 +72,80 @@ pub(super) fn cbrt(x: f64) -> f64 {
     if negative { -t } else { t }
 }
 
+/// `log(x)` (`e_log.c`): `log(2^k * (1 + f)) = k*ln2 + f - f*f/2 + ...` with
+/// the argument reduced to `sqrt(2)/2 < 1 + f < sqrt(2)`.
+pub(super) fn log(x: f64) -> f64 {
+    const LN2_HI: f64 = f64::from_bits(0x3fe6_2e42_fee0_0000);
+    const LN2_LO: f64 = f64::from_bits(0x3dea_39ef_3579_3c76);
+    const TWO54: f64 = 1.801_439_850_948_198_4e16;
+    const LG1: f64 = 6.666_666_666_666_735e-1;
+    const LG2: f64 = 3.999_999_999_940_942e-1;
+    const LG3: f64 = 2.857_142_874_366_239e-1;
+    const LG4: f64 = 2.222_219_843_214_978_4e-1;
+    const LG5: f64 = 1.818_357_216_161_805e-1;
+    const LG6: f64 = 1.531_383_769_920_937_3e-1;
+    const LG7: f64 = 1.479_819_860_511_658_6e-1;
+    let mut x = x;
+    let mut high = hi(x);
+    let mut k: i32 = 0;
+    if high < 0x0010_0000 {
+        if ((high & 0x7fff_ffff).cast_unsigned() | lo(x)) == 0 {
+            return f64::NEG_INFINITY;
+        }
+        if high < 0 {
+            return f64::NAN;
+        }
+        k = k.wrapping_sub(54);
+        x *= TWO54;
+        high = hi(x);
+    }
+    if high >= 0x7ff0_0000 {
+        return x + x;
+    }
+    k = k.wrapping_add((high >> 20).wrapping_sub(1023));
+    high &= 0x000f_ffff;
+    let i = high.wrapping_add(0x95f64) & 0x10_0000;
+    let x = with_hi(x, high | (i ^ 0x3ff0_0000));
+    k = k.wrapping_add(i >> 20);
+    let f = x - 1.0;
+    let dk = f64::from(k);
+    if (0x000f_ffff & high.wrapping_add(2)) < 3 {
+        if f == 0.0 {
+            return if k == 0 {
+                0.0
+            } else {
+                dk * LN2_HI + dk * LN2_LO
+            };
+        }
+        let r = f * f * (0.5 - 0.333_333_333_333_333_3 * f);
+        return if k == 0 {
+            f - r
+        } else {
+            dk * LN2_HI - ((r - dk * LN2_LO) - f)
+        };
+    }
+    let s = f / (2.0 + f);
+    let z = s * s;
+    let i = high.wrapping_sub(0x6147a);
+    let w = z * z;
+    let j = 0x6b851_i32.wrapping_sub(high);
+    let t1 = w * (LG2 + w * (LG4 + w * LG6));
+    let t2 = z * (LG1 + w * (LG3 + w * (LG5 + w * LG7)));
+    let r = t2 + t1;
+    if (i | j) > 0 {
+        let hfsq = 0.5 * f * f;
+        if k == 0 {
+            f - (hfsq - s * (hfsq + r))
+        } else {
+            dk * LN2_HI - ((hfsq - (s * (hfsq + r) + dk * LN2_LO)) - f)
+        }
+    } else if k == 0 {
+        f - s * (f - r)
+    } else {
+        dk * LN2_HI - ((s * (f - r) - dk * LN2_LO) - f)
+    }
+}
+
 /// `log10(x)` (`e_log10.c`): `log10(2^k * m) = k*log10(2) + log(m)/ln(10)`.
 pub(super) fn log10(x: f64) -> f64 {
     const TWO54: f64 = 1.801_439_850_948_198_4e16;
@@ -101,7 +175,7 @@ pub(super) fn log10(x: f64) -> f64 {
     high = (high & 0x000f_ffff) | (0x3ff_i32.wrapping_sub(i) << 20);
     let y = f64::from(k.wrapping_add(i));
     let x = with_hi(x, high);
-    let z = y * LOG10_2LO + IVLN10 * libm::log(x);
+    let z = y * LOG10_2LO + IVLN10 * log(x);
     z + y * LOG10_2HI
 }
 
@@ -255,6 +329,33 @@ mod tests {
             (log10(0.0), log10(1000.0), log10(f64::INFINITY)),
             (f64::NEG_INFINITY, 3.0, f64::INFINITY)
         );
+        assert_eq!(log(1.0), 0.0);
+        assert_eq!(log(0.01), -4.605_170_185_988_091);
+        assert_eq!(
+            (log(0.0), log(f64::INFINITY)),
+            (f64::NEG_INFINITY, f64::INFINITY)
+        );
+        assert!(log(-1.0).is_nan());
+        // Spark 4.2.0 (`StrictMath.log`) on every branch of `e_log.c`: a
+        // subnormal, near one, either side of sqrt(2)/2 and 2, the largest
+        // finite value, -0.0, NaN and -inf.
+        for (x, want) in [
+            (0.5, -std::f64::consts::LN_2),
+            (4.9e-324, -744.440_071_921_381_2),
+            (1.0e-310, -713.801_378_828_154_2),
+            (2.5e-300, -689.859_237_166_339_5),
+            (1.000_000_1, 9.999_999_505_838_704e-8),
+            (0.999_999_9, -1.000_000_049_473_647_4e-7),
+            (1.797_693_134_862_315_7e308, 709.782_712_893_384),
+            (10.0, std::f64::consts::LN_10),
+            (3.0, 1.098_612_288_668_109_6),
+            (0.75, -0.287_682_072_451_780_9),
+            (1.5, 0.405_465_108_108_164_4),
+        ] {
+            assert_eq!(log(x), want, "log({x})");
+        }
+        assert_eq!(log(-0.0), f64::NEG_INFINITY);
+        assert!(log(f64::NAN).is_nan() && log(f64::NEG_INFINITY).is_nan());
         assert!(log10(-1.0).is_nan() && log10(f64::NAN).is_nan());
         assert!((log10(5e-324) + 323.306_215_343_115_9).abs() < 1e-9);
         assert_eq!(

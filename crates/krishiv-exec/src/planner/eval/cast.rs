@@ -346,6 +346,14 @@ impl krishiv_kernels::datetime::TimeZoneRules for ClockedZone<'_> {
         self.inner.offset_for_local(local_seconds)
     }
 
+    fn legacy_offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        self.inner.legacy_offset_at_utc(utc_seconds)
+    }
+
+    fn region_id(&self) -> Option<&str> {
+        self.inner.region_id()
+    }
+
     fn query_start_micros(&self) -> Option<i64> {
         Some(self.query_start)
     }
