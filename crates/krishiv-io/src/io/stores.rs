@@ -1852,9 +1852,11 @@ mod tests {
         let web = parse_object_url("https://example.com/a/b.parquet").unwrap();
         assert_eq!(web.scheme.to_string(), "https");
         // Neither web scheme is paced like a cloud service.
-        let _ = (
-            policy_for(ObjectScheme::Http),
-            policy_for(ObjectScheme::HuggingFace),
-        );
+        for scheme in [ObjectScheme::Http, ObjectScheme::HuggingFace] {
+            assert_eq!(
+                format!("{:?}", policy_for(scheme)),
+                format!("{:?}", StorePolicy::UNPACED)
+            );
+        }
     }
 }
