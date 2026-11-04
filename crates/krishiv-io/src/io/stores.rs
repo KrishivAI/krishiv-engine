@@ -13,7 +13,14 @@
 //! [`parse_object_url`] splits a user path into its scheme, bucket (or
 //! container) and key: `s3://` and `s3a://`, `gs://`, `abfss://` and
 //! `abfs://` (both `container@account.host/key` and `container/key`), and
-//! `az://container/key`. Anything else with a scheme is
+//! `az://container/key`; the read-only web stores `https://host[:port]/key`
+//! (`http://` only for a loopback host) and `hf://datasets/<org>/<name>[@rev]/<path>`
+//! (a Krishiv extension, not Spark behaviour, so no `spark.*` key: reads
+//! through the Hugging Face `resolve` endpoint with `fs.hf.token` or
+//! `HF_TOKEN` as a bearer header, `fs.hf.endpoint` for the host; with an
+//! endpoint override a token is sent only when the same per-read options
+//! carry it, and only over https or to a loopback host). Both are
+//! byte-range reads and `HEAD` only; no listing or globs. Anything else with a scheme is
 //! `KRISHIV_UNSUPPORTED_FEATURE`, as are paths that smuggle credentials in
 //! the URL itself (user info): like the rest of the engine, this layer only
 //! accepts credentials from configuration, never from paths (plans stay
@@ -128,6 +135,14 @@ pub const AZURE_ACCOUNT_KEY: &str = "fs.azure.account.key";
 /// `fs.azure.sas`: the shared access signature (fallback for the dotted forms).
 pub const AZURE_SAS: &str = "fs.azure.sas";
 
+/// `fs.hf.token`: the Hugging Face access token (falls back to the
+/// `HF_TOKEN` environment variable, for the default host only). With an
+/// `fs.hf.endpoint` override it is used only as a per-read option. A secret;
+/// never in a plan.
+pub const HF_TOKEN: &str = "fs.hf.token";
+/// `fs.hf.endpoint`: the Hugging Face host (default `https://huggingface.co`).
+pub const HF_ENDPOINT: &str = "fs.hf.endpoint";
+
 /// A cloud scheme [`parse_object_url`] recognises.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ObjectScheme {
@@ -137,6 +152,12 @@ pub enum ObjectScheme {
     Gcs,
     /// `abfs://`, `abfss://` and `az://`.
     Azure,
+    /// `https://` (and loopback `http://`): a read-only server of byte
+    /// ranges. The "bucket" is the authority (`host[:port]`).
+    Http,
+    /// `hf://datasets/<org>/<name>[@revision]/<path>`: a Krishiv extension
+    /// over the Hugging Face `resolve` endpoint (read-only, ranges).
+    HuggingFace,
 }
 
 impl fmt::Display for ObjectScheme {
@@ -145,6 +166,8 @@ impl fmt::Display for ObjectScheme {
             Self::S3 => f.write_str("s3"),
             Self::Gcs => f.write_str("gs"),
             Self::Azure => f.write_str("abfss"),
+            Self::Http => f.write_str("https"),
+            Self::HuggingFace => f.write_str("hf"),
         }
     }
 }
@@ -160,6 +183,8 @@ pub struct ParsedUrl {
     pub bucket: String,
     /// The Azure account, from a `container@account.host` URL.
     pub account: Option<String>,
+    /// The revision of an `hf://` dataset (`main` unless `@rev` is written).
+    pub revision: Option<String>,
     /// The key within the bucket.
     pub key: Path,
     /// The store id: `s3://bucket`, `gs://bucket`,
@@ -185,6 +210,8 @@ pub fn parse_object_url(text: &str) -> Result<ParsedUrl> {
         "s3" | "s3a" => ObjectScheme::S3,
         "gs" => ObjectScheme::Gcs,
         "abfs" | "abfss" | "az" => ObjectScheme::Azure,
+        "https" | "http" => ObjectScheme::Http,
+        "hf" => ObjectScheme::HuggingFace,
         _ => {
             return Err(unsupported(format!("paths with the scheme {scheme}")));
         }
@@ -192,6 +219,14 @@ pub fn parse_object_url(text: &str) -> Result<ParsedUrl> {
     let Some(rest) = after.strip_prefix("//") else {
         return Err(unsupported(format!("{scheme} paths without `//`")));
     };
+    if kind == ObjectScheme::Http && rest.contains(['?', '#']) {
+        return Err(unsupported(format!(
+            "{scheme} paths with a query or fragment"
+        )));
+    }
+    if kind == ObjectScheme::HuggingFace {
+        return parse_hf(scheme, rest);
+    }
     let (authority, key) = match rest.find('/') {
         Some(i) => rest.split_at(i),
         None => (rest, ""),
@@ -200,7 +235,7 @@ pub fn parse_object_url(text: &str) -> Result<ParsedUrl> {
         return Err(unsupported(format!("{scheme} paths without a bucket")));
     }
     let (bucket, account) = match kind {
-        ObjectScheme::S3 | ObjectScheme::Gcs => {
+        ObjectScheme::S3 | ObjectScheme::Gcs | ObjectScheme::Http | ObjectScheme::HuggingFace => {
             if authority.contains('@') {
                 return Err(unsupported("paths with credentials".to_owned()));
             }
@@ -223,26 +258,15 @@ pub fn parse_object_url(text: &str) -> Result<ParsedUrl> {
             }
         },
     };
-    // Hadoop-style normalization: `.` is dropped, `..` pops, and empty
-    // segments (doubled slashes) vanish; object_store paths reject `.` and
-    // `..` segments outright.
-    let mut parts: Vec<&str> = Vec::new();
-    for segment in key.split('/') {
-        match segment {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            part => parts.push(part),
-        }
-    }
-    let key = Path::parse(parts.join("/"))
-        .map_err(|e| unsupported(format!("object store paths Spark cannot name ({e})")))?;
+    let key = normalize_key(key)?;
     let store_id = match (&kind, &account) {
         (ObjectScheme::S3, _) => StoreId::new(format!("s3://{bucket}")),
         (ObjectScheme::Gcs, _) => StoreId::new(format!("gs://{bucket}")),
         (ObjectScheme::Azure, Some(account)) => StoreId::new(format!("abfss://{bucket}@{account}")),
         (ObjectScheme::Azure, None) => StoreId::new(format!("abfss://{bucket}")),
+        (ObjectScheme::Http | ObjectScheme::HuggingFace, _) => {
+            StoreId::new(format!("{lower}://{bucket}"))
+        }
     };
     let mut display = format!("{scheme}://{authority}");
     if !key.as_ref().is_empty() {
@@ -254,8 +278,77 @@ pub fn parse_object_url(text: &str) -> Result<ParsedUrl> {
         scheme_text: scheme.to_owned(),
         bucket,
         account,
+        revision: None,
         key,
         store_id,
+        display,
+    })
+}
+
+/// Hadoop-style normalization of a key: `.` is dropped, `..` pops, and empty
+/// segments (doubled slashes) vanish; object_store paths reject `.` and `..`
+/// segments outright.
+fn normalize_key(key: &str) -> Result<Path> {
+    let mut parts: Vec<&str> = Vec::new();
+    for segment in key.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part),
+        }
+    }
+    Path::parse(parts.join("/"))
+        .map_err(|e| unsupported(format!("object store paths Spark cannot name ({e})")))
+}
+
+/// `hf://datasets/<org>/<name>[@revision]/<path>` (the part after `hf://`).
+/// The store is the dataset at one revision; the key is the path in it.
+fn parse_hf(scheme: &str, rest: &str) -> Result<ParsedUrl> {
+    let mut it = rest.splitn(4, '/');
+    let (kind, org, name_rev, key) = (
+        it.next().unwrap_or_default(),
+        it.next().unwrap_or_default(),
+        it.next().unwrap_or_default(),
+        it.next().unwrap_or_default(),
+    );
+    if kind != "datasets" {
+        return Err(unsupported(format!(
+            "{scheme} paths other than hf://datasets/<org>/<name>/<path>"
+        )));
+    }
+    let (name, revision) = match name_rev.split_once('@') {
+        Some((name, rev)) => (name, rev),
+        None => (name_rev, "main"),
+    };
+    // `.` and `..` are refused: URL parsing would resolve them and leave the dataset's path.
+    let plain = |t: &str| {
+        !t.is_empty()
+            && !t.chars().all(|c| c == '.')
+            && t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    if !plain(org) || !plain(name) || !plain(revision) {
+        return Err(unsupported(format!(
+            "{scheme} paths other than hf://datasets/<org>/<name>[@revision]/<path>"
+        )));
+    }
+    let key = normalize_key(key)?;
+    let authority = format!("datasets/{org}/{name}@{revision}");
+    let mut display = format!("hf://{authority}");
+    if !key.as_ref().is_empty() {
+        display.push('/');
+        display.push_str(key.as_ref());
+    }
+    Ok(ParsedUrl {
+        scheme: ObjectScheme::HuggingFace,
+        scheme_text: scheme.to_owned(),
+        bucket: format!("{org}/{name}"),
+        account: None,
+        revision: Some(revision.to_owned()),
+        key,
+        store_id: StoreId::new(format!("hf://{authority}")),
         display,
     })
 }
@@ -359,6 +452,8 @@ fn policy_for(scheme: ObjectScheme) -> StorePolicy {
         ObjectScheme::S3 => StorePolicy::S3,
         ObjectScheme::Gcs => StorePolicy::GCS,
         ObjectScheme::Azure => StorePolicy::AZURE,
+        // A plain web server publishes no per-prefix budget.
+        ObjectScheme::Http | ObjectScheme::HuggingFace => StorePolicy::UNPACED,
     }
 }
 
@@ -392,7 +487,120 @@ fn build(
         ObjectScheme::S3 => s3_store(config, options, url, path_style),
         ObjectScheme::Gcs => gcs_store(config, options, url),
         ObjectScheme::Azure => azure_store(config, options, url),
+        ObjectScheme::Http => http_store(url),
+        ObjectScheme::HuggingFace => hf_store(config, options, url),
     }
+}
+
+/// A Hugging Face dataset at one revision, read through the `resolve`
+/// endpoint with byte ranges. The token (`fs.hf.token`, else `HF_TOKEN`, both
+/// for the default host only; with an endpoint override, only a per-read
+/// `fs.hf.token`) is sent as a sensitive bearer header, over https or to a
+/// loopback host; reqwest drops it on a redirect to
+/// another host (the CDN), and it is never in a plan, error or log.
+#[cfg(feature = "cloud")]
+fn hf_store(
+    config: &Config,
+    options: &BTreeMap<String, OptionValue>,
+    url: &ParsedUrl,
+) -> Result<Arc<dyn ObjectStore>> {
+    use object_store::http::HttpBuilder;
+    let endpoint =
+        text(config, options, HF_ENDPOINT)?.unwrap_or_else(|| "https://huggingface.co".to_owned());
+    let endpoint = endpoint.trim_end_matches('/');
+    let base = format!(
+        "{endpoint}/datasets/{}/resolve/{}",
+        url.bucket,
+        url.revision.as_deref().unwrap_or("main")
+    );
+    // A token goes only to the default host, or, with an endpoint override, only when the same per-read
+    // options carry the token: `fs.*` keys can be changed by clients (`SET`), so a session endpoint is as
+    // caller-controlled as a per-read one, and neither may collect the server's `HF_TOKEN` or a session
+    // `fs.hf.token`.
+    let custom_endpoint = text(config, options, HF_ENDPOINT)?.is_some();
+    let token = if custom_endpoint {
+        if find_option(options, HF_TOKEN).is_some() {
+            cred(config, options, HF_TOKEN)?
+        } else {
+            None
+        }
+    } else {
+        match cred(config, options, HF_TOKEN)? {
+            Some(token) => Some(token),
+            None => std::env::var("HF_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty())
+                .map(SecretString::new),
+        }
+    };
+    if token.is_some() && !endpoint.starts_with("https://") && !loopback_endpoint(endpoint) {
+        return Err(invalid_option(
+            HF_ENDPOINT,
+            "a token is sent only over https (or to a loopback host)",
+        )
+        .into());
+    }
+    let mut client =
+        object_store::ClientOptions::new().with_allow_http(allows_http(Some(endpoint)));
+    if let Some(token) = token {
+        let mut value = http::HeaderValue::from_str(&format!("Bearer {}", token.expose_secret()))
+            .map_err(|_| {
+            invalid_option(HF_TOKEN, "expected a token without control characters")
+        })?;
+        value.set_sensitive(true);
+        let mut headers = http::HeaderMap::new();
+        headers.insert(http::header::AUTHORIZATION, value);
+        client = client.with_default_headers(headers);
+    }
+    HttpBuilder::new()
+        .with_url(base)
+        .with_client_options(client)
+        .build()
+        .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
+        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
+}
+
+/// Whether `endpoint` (`http://host[:port][/...]`) names a loopback host.
+#[cfg(feature = "cloud")]
+fn loopback_endpoint(endpoint: &str) -> bool {
+    let rest = endpoint.split_once("://").map_or(endpoint, |(_, r)| r);
+    let authority = rest.split('/').next().unwrap_or_default();
+    // Userinfo (`http://localhost:x@evil.com`) changes the host the URL parser picks: not a loopback form.
+    if authority.contains('@') || authority.contains('\\') {
+        return false;
+    }
+    let host = if let Some(v6) = authority.strip_prefix('[') {
+        v6.split(']').next().unwrap_or_default()
+    } else {
+        authority.split(':').next().unwrap_or_default()
+    };
+    host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1" || host == "::1"
+}
+
+/// A read-only store over `https://host[:port]` (`http://` only for a
+/// loopback host, for tests): byte-range reads and `HEAD` for sizes. Nothing
+/// is sent but the request itself: no credentials, and redirects are not
+/// followed to another host with a header (the client sends none).
+#[cfg(feature = "cloud")]
+fn http_store(url: &ParsedUrl) -> Result<Arc<dyn ObjectStore>> {
+    use object_store::http::HttpBuilder;
+    let plain = url.store_id.key().starts_with("http://");
+    let host = url
+        .bucket
+        .rsplit_once(':')
+        .map_or(url.bucket.as_str(), |(h, _)| h);
+    if plain && !matches!(host, "localhost" | "127.0.0.1" | "[::1]") {
+        return Err(unsupported(format!(
+            "http:// paths to a host other than the loopback ({})",
+            url.display
+        )));
+    }
+    HttpBuilder::new()
+        .with_url(url.store_id.key())
+        .with_client_options(object_store::ClientOptions::new().with_allow_http(plain))
+        .build()
+        .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
+        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
 }
 
 /// Without the `cloud` feature there are no builders: cloud URLs parse (so
@@ -1618,6 +1826,37 @@ mod tests {
                 "{input}"
             );
             assert!(error.to_string().contains("`cloud`"), "{input}");
+        }
+    }
+    /// The web schemes' error paths and names, in the default build (parsing is not behind `cloud`).
+    #[test]
+    fn web_urls_and_hf_names_are_checked_when_parsed() {
+        for bad in [
+            "https://example.com/a?token=1",
+            "http://example.com/a#frag",
+            "hf://models/acme/tiny/x",
+            "hf://datasets/../tiny/x",
+            "hf://datasets/acme/bad name/x",
+            "hf://datasets/acme/tiny@/x",
+        ] {
+            let e = parse_object_url(bad).unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::KrishivUnsupportedFeature,
+                "{bad}"
+            );
+        }
+        let hf = parse_object_url("hf://datasets/acme/tiny@v2/data/t.parquet").unwrap();
+        assert_eq!(hf.scheme.to_string(), "hf");
+        assert_eq!(hf.revision.as_deref(), Some("v2"));
+        let web = parse_object_url("https://example.com/a/b.parquet").unwrap();
+        assert_eq!(web.scheme.to_string(), "https");
+        // Neither web scheme is paced like a cloud service.
+        for scheme in [ObjectScheme::Http, ObjectScheme::HuggingFace] {
+            assert_eq!(
+                format!("{:?}", policy_for(scheme)),
+                format!("{:?}", StorePolicy::UNPACED)
+            );
         }
     }
 }

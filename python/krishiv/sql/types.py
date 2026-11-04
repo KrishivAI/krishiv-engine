@@ -452,7 +452,7 @@ class StructField(DataType):
         data_type = _apply_collations(_parse_datatype_json_value(json["type"]), json["name"], collations)
         return cls(json["name"], data_type, json.get("nullable", True), metadata)
 
-    def typeName(self) -> str:
+    def typeName(self) -> str:  # type: ignore[override]  # an instance method in Spark too: it raises
         from krishiv.errors import PySparkTypeError
 
         raise PySparkTypeError(errorClass="INVALID_TYPENAME_CALL", messageParameters={})

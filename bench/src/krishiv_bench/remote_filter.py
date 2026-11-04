@@ -521,11 +521,8 @@ def run_remote_filter(
     if not data_arg.strip().startswith("[") and Path(data_arg).is_dir():
         mirror_table_files(Path(data_arg))  # fail before the scopes when the mirror was never downloaded
         mirror_revision = check_mirror_revision(Path(data_arg))
-    if s3:
-        if "krishiv" in names:
-            raise ValueError("--s3 serves DuckDB and Polars; Krishiv reads the local mirror (drop it from --engines)")
-        if data_arg.strip().startswith("[") or not (Path(data_arg) / TABLE).is_dir():
-            raise ValueError(f"--s3 serves the {TABLE}/ part files of a local mirror directory")
+    if s3 and (data_arg.strip().startswith("[") or not (Path(data_arg) / TABLE).is_dir()):
+        raise ValueError(f"--s3 serves the {TABLE}/ part files of a local mirror directory")
     scopes = list(caps) if caps else [None]
     cap_bytes = [parse_size(c) if c else None for c in scopes]
     expected: dict | None = None

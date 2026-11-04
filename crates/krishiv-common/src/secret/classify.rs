@@ -98,7 +98,12 @@ pub(crate) fn url_secret_ranges(url: &str) -> Vec<Range<usize>> {
         let auth_end = url[start..]
             .find(|c: char| matches!(c, '?' | '#') || (semicolon_params && c == ';'))
             .map_or(url.len(), |e| start + e);
-        if let Some(at) = url[start..auth_end].rfind('@') {
+        // `hf://datasets/<org>/<name>@<revision>/...`: the `@` names a revision, not userinfo (the scheme
+        // has no authority; its token is a separate `fs.hf.token` option, never in the URL). Only that shape
+        // is exempt: `hf://user:secret@datasets/...` still has its userinfo redacted.
+        let userinfo_scheme =
+            !(url[..i].eq_ignore_ascii_case("hf") && url[start..].starts_with("datasets/"));
+        if let Some(at) = url[start..auth_end].rfind('@').filter(|_| userinfo_scheme) {
             let userinfo = start..start + at;
             match url[userinfo.clone()].find(':') {
                 Some(colon) => push(&mut out, start + colon + 1..userinfo.end),

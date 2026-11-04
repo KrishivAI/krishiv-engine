@@ -153,8 +153,12 @@ fn reset_peak_rss() -> bool {
 /// Settings of a runner.
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
-    /// Directory holding `<table>.parquet` files (a file or a directory of part files each).
+    /// Directory holding `<table>.parquet` files (a file or a directory of part files each);
+    /// empty when every table comes from `--table`.
     pub data: String,
+    /// Tables read from URLs (`--table NAME=URL`, repeatable; a repeated name adds a source):
+    /// `s3://`, `https://`, `hf://` or local paths, with the `fs.*` settings of `--conf`.
+    pub tables: Vec<(String, Vec<String>)>,
     /// Compute threads of the executor.
     pub threads: usize,
     /// I/O runtime threads (`--io-threads`; default: the executor's
@@ -194,6 +198,7 @@ impl RunnerConfig {
     /// A missing `--data`, an unknown flag or a bad value.
     pub fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self, RunnerError> {
         let mut data = None;
+        let mut tables: Vec<(String, Vec<String>)> = Vec::new();
         let mut threads = std::thread::available_parallelism().map_or(1, usize::from);
         let mut memory_limit = "12g".to_owned();
         let mut io_threads = None;
@@ -206,6 +211,23 @@ impl RunnerConfig {
             };
             match flag.as_str() {
                 "--data" => data = Some(value()?),
+                "--table" => {
+                    let spec = value()?;
+                    let (name, url) = spec
+                        .split_once('=')
+                        .filter(|(n, u)| {
+                            !u.is_empty()
+                                && !n.is_empty()
+                                && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                        })
+                        .ok_or_else(|| {
+                            RunnerError::Config(format!("--table expects NAME=URL, got {spec:?}"))
+                        })?;
+                    match tables.iter_mut().find(|(n, _)| n == name) {
+                        Some((_, urls)) => urls.push(url.to_owned()),
+                        None => tables.push((name.to_owned(), vec![url.to_owned()])),
+                    }
+                }
                 "--threads" => {
                     threads = value()?
                         .parse()
@@ -232,7 +254,16 @@ impl RunnerConfig {
             }
         }
         Ok(Self {
-            data: data.ok_or_else(|| RunnerError::Config("--data DIR is required".to_owned()))?,
+            data: match data {
+                Some(data) => data,
+                None if !tables.is_empty() => String::new(),
+                None => {
+                    return Err(RunnerError::Config(
+                        "--data DIR is required (or --table NAME=URL)".to_owned(),
+                    ));
+                }
+            },
+            tables,
             threads,
             io_threads,
             memory_limit,
@@ -259,8 +290,15 @@ impl Runner {
         let executor = TokioExecutor::new(&config.executor_config()?)?;
         // `SessionBuilder::build` drops configuration warnings; an unknown key would leave the A/B sides
         // identical without saying so, so reject it here.
-        let pairs = std::iter::once(("krishiv.memory.limit", config.memory_limit.as_str()))
-            .chain(config.conf.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        // `fs.*` keys are the object stores' (Hadoop names, read by the store builders),
+        // not registry entries, so they are not checked here.
+        let pairs = std::iter::once(("krishiv.memory.limit", config.memory_limit.as_str())).chain(
+            config
+                .conf
+                .iter()
+                .filter(|(k, _)| !k.to_ascii_lowercase().starts_with("fs."))
+                .map(|(k, v)| (k.as_str(), v.as_str())),
+        );
         let (merged, warnings) = Config::from_pairs(pairs)?;
         if let Some(w) = warnings.first() {
             return Err(RunnerError::Config(format!("--conf not applied: {w}")));
@@ -275,8 +313,13 @@ impl Runner {
         }
         let session = builder.build()?;
         let mut tables = Vec::new();
-        let entries = std::fs::read_dir(&config.data)
-            .map_err(|e| RunnerError::Io(format!("cannot read {}: {e}", config.data)))?;
+        let entries = if config.data.is_empty() {
+            Vec::new()
+        } else {
+            std::fs::read_dir(&config.data)
+                .map_err(|e| RunnerError::Io(format!("cannot read {}: {e}", config.data)))?
+                .collect()
+        };
         for entry in entries {
             let path = entry
                 .map_err(|e| RunnerError::Io(format!("cannot list {}: {e}", config.data)))?
@@ -293,10 +336,19 @@ impl Runner {
             )?;
             tables.push(name);
         }
+        for (name, urls) in &config.tables {
+            futures::executor::block_on(
+                session
+                    .read()
+                    .parquet(urls.iter().map(String::as_str))
+                    .create_or_replace_temp_view(name),
+            )?;
+            tables.push(name.clone());
+        }
         tables.sort();
         if tables.is_empty() {
             return Err(RunnerError::Config(format!(
-                "no <table>.parquet under {}",
+                "no <table>.parquet under {:?} and no --table",
                 config.data
             )));
         }

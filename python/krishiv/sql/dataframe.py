@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 import random
 import sys
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from functools import reduce
 from typing import TYPE_CHECKING, Any, cast
 
@@ -27,6 +27,7 @@ from krishiv.sql.column import Column, _literal, _named
 from krishiv.sql.functions import first as _first
 from krishiv.sql.group import GroupedData
 from krishiv.sql.na import _NO_VALUE, DataFrameNaFunctions
+from krishiv.sql.profile_view import ProfileView
 from krishiv.sql.row import Row
 from krishiv.sql.stat import DataFrameStatFunctions
 from krishiv.sql.types import StructType, _struct_from_columns
@@ -994,7 +995,7 @@ class DataFrame:
         elif withReplacement is None and isinstance(fraction, float):
             replace, frac, sampled_seed = False, fraction, seed
         elif isinstance(withReplacement, float):
-            replace, frac, sampled_seed = False, float(withReplacement), fraction
+            replace, frac, sampled_seed = False, float(withReplacement), None if fraction is None else int(fraction)
         else:
             raise PySparkTypeError(
                 errorClass="NOT_EXPECTED_TYPE",
@@ -1500,21 +1501,22 @@ class DataFrame:
         partitioning hint, which has no effect on one node) comes back as a warning, as Spark
         logs it; the rows never change. Use ``explain`` to see the recorded hint.
         """
-        if len(parameters) == 1 and isinstance(parameters[0], list):
-            parameters = parameters[0]
+        params: Sequence[Any] = (
+            parameters[0] if len(parameters) == 1 and isinstance(parameters[0], list) else parameters
+        )
         if not isinstance(name, str):
             raise not_expected_type("name", "str", name)
         allowed = (str, float, int, Column, list)
         primitives = (str, float, int)
         allowed_repr = ", ".join([t.__name__ for t in allowed[:-1]] + [f"list[{t.__name__}]" for t in primitives])
         converted: list[Any] = []
-        for p in parameters:
+        for p in params:
             if not isinstance(p, allowed):
                 raise PySparkTypeError(
                     errorClass="DISALLOWED_TYPE_FOR_CONTAINER",
                     messageParameters={
                         "arg_name": "parameters",
-                        "arg_type": type(parameters).__name__,
+                        "arg_type": type(params).__name__,
                         "allowed_types": allowed_repr,
                         "item_type": type(p).__name__,
                     },
@@ -1525,7 +1527,7 @@ class DataFrame:
                         errorClass="DISALLOWED_TYPE_FOR_CONTAINER",
                         messageParameters={
                             "arg_name": "parameters",
-                            "arg_type": type(parameters).__name__,
+                            "arg_type": type(params).__name__,
                             "allowed_types": allowed_repr,
                             "item_type": type(p).__name__ + "[" + type(p[0]).__name__ + "]",
                         },
@@ -1882,6 +1884,11 @@ class DataFrame:
         :meth:`explainString` for the text or the JSON document instead of printing.
         """
         print(self.explainString(extended, mode, analyze=analyze, verbose=verbose))
+
+    def profile(self) -> ProfileView:
+        """Runs the query and returns its profile as a viewer (``EXPLAIN ANALYZE``): leave it as
+        the last expression of a notebook cell, or call ``.save("profile.html")``. Krishiv extension."""
+        return ProfileView(self.explainString(analyze=True, json=True))
 
     def explainString(
         self,

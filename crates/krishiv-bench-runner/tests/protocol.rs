@@ -21,6 +21,7 @@ fn runner(dir: &tempfile::TempDir) -> Runner {
         threads: 2,
         io_threads: None,
         memory_limit: "1g".to_owned(),
+        tables: Vec::new(),
         conf: Vec::new(),
     })
     .unwrap()
@@ -89,6 +90,7 @@ fn a_directory_of_parts_is_one_table_and_an_empty_directory_is_refused() {
         threads: 1,
         io_threads: None,
         memory_limit: "1g".to_owned(),
+        tables: Vec::new(),
         conf: Vec::new(),
     })
     .unwrap_err();
@@ -98,6 +100,7 @@ fn a_directory_of_parts_is_one_table_and_an_empty_directory_is_refused() {
         threads: 1,
         io_threads: None,
         memory_limit: "1g".to_owned(),
+        tables: Vec::new(),
         conf: Vec::new(),
     });
     assert!(missing.unwrap_err().to_string().contains("cannot read"));
@@ -114,6 +117,7 @@ fn conf_settings_reach_the_session() {
             threads: 1,
             io_threads: None,
             memory_limit: "1g".to_owned(),
+            tables: Vec::new(),
             conf,
         })
         .unwrap()
@@ -248,6 +252,7 @@ fn dump_runs_the_query_once_and_leaves_no_view() {
         threads: 1,
         io_threads: None,
         memory_limit: "1g".to_owned(),
+        tables: Vec::new(),
         conf: Vec::new(),
     })
     .unwrap();
@@ -509,6 +514,7 @@ fn conf_is_applied_after_the_memory_limit_and_unknown_keys_are_rejected() {
             threads: 1,
             io_threads: None,
             memory_limit: "1g".to_owned(),
+            tables: Vec::new(),
             conf: conf
                 .into_iter()
                 .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -523,4 +529,103 @@ fn conf_is_applied_after_the_memory_limit_and_unknown_keys_are_rejected() {
     assert!(unknown.to_string().contains("no.such.setting"), "{unknown}");
     assert!(unknown.to_string().contains("not applied"), "{unknown}");
     assert!(new(vec![("krishiv.memory.limit", "2g")]).is_ok());
+}
+
+#[test]
+fn table_arguments_register_views_over_urls() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/tpch/q1-lineitem.parquet");
+    let args = |extra: &[&str]| {
+        RunnerConfig::from_args(
+            ["--table", &format!("lineitem=file://{}", fixture.display())]
+                .into_iter()
+                .chain(extra.iter().copied())
+                .map(str::to_owned),
+        )
+    };
+    // No `--data` needed; the table reads through its URL.
+    let config = args(&[
+        "--threads",
+        "2",
+        "--conf",
+        "fs.s3a.endpoint=http://127.0.0.1:9",
+    ])
+    .unwrap();
+    assert!(config.data.is_empty());
+    let r = Runner::new(&config).unwrap();
+    assert_eq!(r.tables(), ["lineitem"]);
+    let reply = r.handle_line(&format!(
+        "RUN {}",
+        encode_path(&{
+            let sql = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(sql.path(), "SELECT count(*) FROM lineitem").unwrap();
+            sql.into_temp_path()
+                .keep()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned()
+        })
+    ));
+    assert!(reply.unwrap().starts_with("OK 1 "), "one count row");
+    // A bad spec, and neither source, are refused.
+    assert!(RunnerConfig::from_args(["--table", "x"].map(str::to_owned)).is_err());
+    assert!(RunnerConfig::from_args(["--threads", "2"].map(str::to_owned)).is_err());
+}
+
+#[test]
+fn remote_table_urls_get_their_own_errors_not_a_credentials_error() {
+    for url in [
+        "hf://datasets/cornell-movie-review-data/rotten_tomatoes/validation.parquet",
+        "http://127.0.0.1:1/datasets/a/b/resolve/main/c.parquet",
+        "s3://fw/p.parquet",
+    ] {
+        // Loopback endpoints and no retries keep every case off the network and fast.
+        let config = RunnerConfig::from_args(
+            [
+                "--conf",
+                "fs.hf.endpoint=http://127.0.0.1:1",
+                "--conf",
+                "fs.s3a.endpoint=http://127.0.0.1:1",
+                "--conf",
+                "fs.s3a.access.key=k",
+                "--conf",
+                "fs.s3a.secret.key=s",
+                "--conf",
+                "fs.s3a.path.style.access=true",
+                "--conf",
+                "krishiv.io.maxRetries=0",
+                "--table",
+                &format!("fw={url}"),
+            ]
+            .map(str::to_owned),
+        )
+        .unwrap();
+        let err = Runner::new(&config)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        // The path classifier's own message, not a store's "lacked valid authentication credentials".
+        assert!(!err.contains("paths with credentials"), "{url}: {err}");
+    }
+}
+
+/// `--table` repeated with one name lists several files of one table.
+#[test]
+fn a_repeated_table_flag_collects_its_urls() {
+    let config = RunnerConfig::from_args(
+        [
+            "--table",
+            "fw=https://example.com/a.parquet",
+            "--table",
+            "fw=https://example.com/b.parquet",
+            "--table",
+            "other=https://example.com/c.parquet",
+        ]
+        .map(str::to_owned),
+    )
+    .unwrap();
+    assert_eq!(config.tables.len(), 2);
+    assert_eq!(config.tables[0].0, "fw");
+    assert_eq!(config.tables[0].1.len(), 2);
 }
