@@ -63,3 +63,23 @@ fn a_failing_right_side_still_raises_where_the_left_is_set() {
     let err = strings("select cast(1 / (id - id) + 1 / id as string) from range(3)").unwrap_err();
     assert!(err.contains("DIVIDE_BY_ZERO"), "{err}");
 }
+
+#[test]
+fn a_long_left_associated_chain_evaluates_each_operand_once() {
+    // 40 terms, each a nullable operand that may raise: re-evaluating the left
+    // subtree at every level would take 2^40 evaluations.
+    let n = 40;
+    let columns: Vec<String> = (0..n)
+        .map(|i| format!("nullif(cast(id as string), 'z') s{i}"))
+        .collect();
+    let sum: Vec<String> = (0..n).map(|i| format!("cast(s{i} as bigint)")).collect();
+    let sql = format!(
+        "select cast({} as string) from (select id, {} from range(3)) order by id",
+        sum.join(" + "),
+        columns.join(", ")
+    );
+    assert_eq!(
+        strings(&sql).unwrap(),
+        some(&[Some("0"), Some("40"), Some("80")])
+    );
+}

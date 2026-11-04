@@ -8,9 +8,9 @@ use arrow_array::types::{
     Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
     Int32Type, Int64Type, Time64NanosecondType, TimestampMicrosecondType,
 };
-use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
+use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow_buffer::{BooleanBuffer, NullBuffer};
-use arrow_schema::DataType as ArrowType;
+use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
 use krishiv_kernels::compare::{
     self, BoolOperand, CompareKind, Equal, Greater, GreaterEq, Less, LessEq, Validity,
 };
@@ -116,54 +116,77 @@ impl PhysExpr for AndOr {
     }
 }
 
-/// The right operand of a null-intolerant binary operator, evaluated only on
-/// the rows where the left operand is not NULL. Spark's `BinaryExpression.eval`
+/// A null-intolerant binary operator whose right operand is evaluated only on
+/// the rows where the left one is not NULL. Spark's `BinaryExpression.eval`
 /// returns NULL as soon as the left value is NULL, so an error in the right
 /// operand (`CAST_INVALID_INPUT`, `DIVIDE_BY_ZERO`, overflow) on such a row
-/// never surfaces. The left operand is evaluated here a second time, for its
-/// validity only (the operator evaluates it first for its values, so a failure
-/// of the left operand still comes first).
+/// never surfaces. The left operand is evaluated once, then the right one over
+/// the rows it leaves, and `op` (the operator compiled over two placeholder
+/// columns, 0 and 1) combines the two columns.
 #[derive(Debug)]
-struct RightWhereLeftSet {
+struct LeftThenRight {
     left: Arc<dyn PhysExpr>,
     right: Arc<dyn PhysExpr>,
+    op: Arc<dyn PhysExpr>,
+    schema: SchemaRef,
 }
 
-/// Wraps `right` so it sees only the rows where `left` is not NULL.
-pub(super) fn right_where_left_set(
+/// `op` over the values of `left` and of `right`, the latter only where the
+/// former is not NULL.
+pub(super) fn left_then_right(
     left: Arc<dyn PhysExpr>,
     right: Arc<dyn PhysExpr>,
+    op: Arc<dyn PhysExpr>,
 ) -> Arc<dyn PhysExpr> {
-    Arc::new(RightWhereLeftSet { left, right })
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("l", left.data_type().clone(), true),
+        Field::new("r", right.data_type().clone(), true),
+    ]));
+    Arc::new(LeftThenRight {
+        left,
+        right,
+        op,
+        schema,
+    })
 }
 
-impl PhysExpr for RightWhereLeftSet {
+impl PhysExpr for LeftThenRight {
     fn data_type(&self) -> &ArrowType {
-        self.right.data_type()
+        self.op.data_type()
     }
 
     fn nullable(&self) -> bool {
-        true
+        self.op.nullable()
     }
 
     fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
-        let lv = self.left.eval(batch, partition)?;
         let rows = batch.num_rows();
-        let Some(nulls) = lv.array().logical_nulls().filter(|n| n.null_count() > 0) else {
-            return self.right.eval(batch, partition);
+        let lv = self.left.eval(batch, partition)?;
+        let rv = match lv.array().logical_nulls().filter(|n| n.null_count() > 0) {
+            None => self.right.eval(batch, partition)?,
+            Some(nulls) => {
+                // A NULL literal on the left: no row evaluates the right side.
+                let set = if lv.is_scalar() {
+                    BooleanBuffer::new_unset(rows)
+                } else {
+                    nulls.inner().clone()
+                };
+                Value::Array(super::eval_where(
+                    self.right.as_ref(),
+                    batch,
+                    &set,
+                    partition,
+                )?)
+            }
         };
-        let valid = if lv.is_scalar() {
-            // A NULL literal on the left: no row evaluates the right side.
-            BooleanBuffer::new_unset(rows)
-        } else {
-            nulls.inner().clone()
-        };
-        Ok(Value::Array(super::eval_where(
-            self.right.as_ref(),
-            batch,
-            &valid,
-            partition,
-        )?))
+        let columns = vec![lv.into_array(rows)?, rv.into_array(rows)?];
+        let pair = RecordBatch::try_new_with_options(
+            Arc::clone(&self.schema),
+            columns,
+            &RecordBatchOptions::new().with_row_count(Some(rows)),
+        )
+        .map_err(|e| internal(&e.to_string()))?;
+        self.op.eval(&pair, partition)
     }
 }
 
