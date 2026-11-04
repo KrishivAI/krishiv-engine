@@ -145,6 +145,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The all-features instrumented build fills the runner's disk (2026-11-04: "No space left
+      # on device" 25 minutes in, the runner could not even write its own log). Drop the
+      # preinstalled toolchains this job never uses, as coverage.yml does.
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
       # Pinned (`COVERAGE_NIGHTLY` in xtask/src/coverage.rs): the nightly of 2026-10-31
       # cannot compile apache-avro 0.22 (async-drop cycle), which ended every run since.
       - name: Nightly toolchain with llvm-tools (branch coverage)
