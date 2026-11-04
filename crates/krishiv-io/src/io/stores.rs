@@ -487,7 +487,8 @@ fn build(
 }
 
 /// A Hugging Face dataset at one revision, read through the `resolve`
-/// endpoint with byte ranges. The token (`fs.hf.token`, else `HF_TOKEN`) is
+/// endpoint with byte ranges. The token (`fs.hf.token`, else `HF_TOKEN` unless
+/// the endpoint is a per-read option) is
 /// sent as a sensitive bearer header; reqwest drops it on a redirect to
 /// another host (the CDN), and it is never in a plan, error or log.
 #[cfg(feature = "cloud")]
@@ -505,8 +506,12 @@ fn hf_store(
         url.bucket,
         url.revision.as_deref().unwrap_or("main")
     );
+    // The server's `HF_TOKEN` goes only to the host the server chose (the default or a session
+    // setting): a per-read `fs.hf.endpoint` is the caller's, and must not receive it.
+    let caller_endpoint = find_option(options, HF_ENDPOINT).is_some();
     let token = match cred(config, options, HF_TOKEN)? {
         Some(token) => Some(token),
+        None if caller_endpoint => None,
         None => std::env::var("HF_TOKEN")
             .ok()
             .filter(|t| !t.is_empty())

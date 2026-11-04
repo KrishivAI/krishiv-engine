@@ -225,4 +225,15 @@ fn object_store_paths_are_not_credentials() {
             "{url} was classified as a credential"
         );
     }
+    // Only the `hf://datasets/...` shape is exempt: userinfo in any other `hf://` URL is a credential.
+    for url in [
+        "hf://user:SECRET@datasets/acme/tiny/t.parquet",
+        "hf://SECRETTOKEN@datasets/acme/tiny/t.parquet",
+        "HF://user:SECRET@host/x",
+    ] {
+        assert!(
+            OptionValue::from_user("path", url).as_plain().is_none(),
+            "{url} was not redacted"
+        );
+    }
 }

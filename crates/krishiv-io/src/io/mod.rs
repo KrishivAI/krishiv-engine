@@ -627,8 +627,9 @@ impl IoScheduler {
 /// microsecond is allowed (stores keep nanoseconds). A whole-second token is
 /// most likely an HTTP date (one-second resolution) of a store that keeps a
 /// finer mtime, and the header is itself formatted to the second, so the limit
-/// is the next second boundary; a change within the same second then goes
-/// unseen, as with any HTTP-date validator.
+/// is the next second boundary. A change to the file up to about two seconds
+/// after the planned mtime can therefore go unseen on a store without an
+/// ETag, as with any HTTP-date validator.
 fn unmodified_since_limit(micros: i64) -> Option<chrono::DateTime<chrono::Utc>> {
     let slack_ns = if micros % 1_000_000 == 0 {
         1_000_000_000
