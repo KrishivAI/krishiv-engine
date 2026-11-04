@@ -577,15 +577,35 @@ fn table_arguments_register_views_over_urls() {
 fn remote_table_urls_get_their_own_errors_not_a_credentials_error() {
     for url in [
         "hf://datasets/cornell-movie-review-data/rotten_tomatoes/validation.parquet",
-        "https://huggingface.co/datasets/a/b/resolve/main/c.parquet",
+        "http://127.0.0.1:1/datasets/a/b/resolve/main/c.parquet",
         "s3://fw/p.parquet",
     ] {
-        let config =
-            RunnerConfig::from_args(["--table", &format!("fw={url}")].map(str::to_owned)).unwrap();
+        // Loopback endpoints and no retries keep every case off the network and fast.
+        let config = RunnerConfig::from_args(
+            [
+                "--conf",
+                "fs.hf.endpoint=http://127.0.0.1:1",
+                "--conf",
+                "fs.s3a.endpoint=http://127.0.0.1:1",
+                "--conf",
+                "fs.s3a.access.key=k",
+                "--conf",
+                "fs.s3a.secret.key=s",
+                "--conf",
+                "fs.s3a.path.style.access=true",
+                "--conf",
+                "krishiv.io.maxRetries=0",
+                "--table",
+                &format!("fw={url}"),
+            ]
+            .map(str::to_owned),
+        )
+        .unwrap();
         let err = Runner::new(&config)
             .err()
             .map(|e| e.to_string())
             .unwrap_or_default();
-        assert!(!err.contains("credentials"), "{url}: {err}");
+        // The path classifier's own message, not a store's "lacked valid authentication credentials".
+        assert!(!err.contains("paths with credentials"), "{url}: {err}");
     }
 }
