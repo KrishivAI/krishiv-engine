@@ -766,3 +766,53 @@ async fn a_store_failure_is_returned_not_retried() {
         "a store failure is not a cache error"
     );
 }
+
+/// E15: a block fetched with one credential scope is never served to another, so a cache hit
+/// cannot hand principal B bytes that only principal A's credentials could read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocks_are_shared_only_within_a_credential_scope() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, cache, _) = direct(tmp.path(), 1 << 20, 1 << 20);
+    let a = Path::from("d/a");
+    inner
+        .put(&a, Bytes::from_static(b"0123456789").into())
+        .await
+        .unwrap();
+    let store = |scope: Option<&CredentialScope>| {
+        let inner = Arc::clone(&inner) as Arc<dyn ObjectStore>;
+        match scope {
+            Some(s) => CachingStore::with_scope(inner, "s3://direct", Arc::clone(&cache), s),
+            None => CachingStore::new(inner, "s3://direct", Arc::clone(&cache)),
+        }
+    };
+    let read = async |s: &CachingStore| {
+        let before = cache.stats().misses;
+        let got = s
+            .get_opts(
+                &a,
+                GetOptions {
+                    range: Some(object_store::GetRange::Bounded(1..3)),
+                    ..sized(10)
+                },
+            )
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(&got[..], b"12");
+        cache.stats().misses - before
+    };
+    let p = |n: &str| CredentialScope::Principal(n.to_owned());
+    // The same principal's second store hits the first one's block.
+    assert_eq!(read(&store(Some(&p("alice")))).await, 1);
+    assert_eq!(read(&store(Some(&p("alice")))).await, 0);
+    // Another principal misses and goes to the store.
+    assert_eq!(read(&store(Some(&p("bob")))).await, 1);
+    // An explicit shared scope is its own scope, not a wildcard over the others.
+    assert_eq!(read(&store(Some(&CredentialScope::Shared))).await, 1);
+    assert_eq!(read(&store(Some(&CredentialScope::Shared))).await, 0);
+    // No scope given: every store is isolated, even over the same identity.
+    assert_eq!(read(&store(None)).await, 1);
+    assert_eq!(read(&store(None)).await, 1);
+}

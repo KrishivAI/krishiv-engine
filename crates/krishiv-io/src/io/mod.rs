@@ -43,6 +43,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::future::{BoxFuture, try_join_all};
+use krishiv_common::Principal;
 use krishiv_common::config::{
     Config, ConfigValue, IO_CACHE_BLOCK_BYTES, IO_CACHE_DISK_BYTES, IO_CACHE_ENABLED,
     IO_CACHE_MEMORY_BYTES, IO_CACHE_PATH, IO_COALESCE_BYTES, IO_COALESCE_WASTE_BYTES,
@@ -59,7 +60,8 @@ use object_store::{
 use tokio::sync::Semaphore;
 
 pub use self::block_cache::{
-    BlockCache, BlockCacheConfig, CacheStats as BlockCacheStats, CachingStore, ObjectSize,
+    BlockCache, BlockCacheConfig, CacheStats as BlockCacheStats, CachingStore, CredentialScope,
+    ObjectSize,
 };
 pub use self::cache::{CacheKey, CacheStats, MetadataCache};
 pub use self::coalesce::{Coalesced, Waste, coalesce, coalesce_with};
@@ -259,12 +261,23 @@ impl ByteRange {
 
 /// Resolves `secret('scope', 'key')` references (the `SecretProvider` of
 /// ADR 0036 R12 implements it).
+///
+/// The resolver is told who asks (E12): the analyzer checks `USAGE` on the
+/// secret's scope for the session's principal, and a provider that keeps
+/// its own grants (a platform secret store) checks the same principal again.
+/// A resolver must never answer one principal from a value fetched for
+/// another without that principal's own check.
 pub trait SecretResolver: Send + Sync + fmt::Debug {
-    /// The secret's plaintext.
+    /// The secret's plaintext, for `principal`.
     ///
     /// # Errors
     /// Whatever the provider reports for an unknown or forbidden secret.
-    fn resolve<'a>(&'a self, scope: &'a str, key: &'a str) -> BoxFuture<'a, Result<SecretString>>;
+    fn resolve<'a>(
+        &'a self,
+        principal: &'a Principal,
+        scope: &'a str,
+        key: &'a str,
+    ) -> BoxFuture<'a, Result<SecretString>>;
 }
 
 /// I/O settings (cluster scope).
@@ -514,6 +527,20 @@ impl IoScheduler {
         self.register(id, store, StorePolicy::UNPACED, true);
     }
 
+    /// Registers (or replaces) the store `id` whose credentials belong to `scope`: its blocks in
+    /// the block cache are shared only with stores of the same identity and scope (E15). The
+    /// other `register_*` methods use [`CredentialScope::Isolated`], so nothing is shared across
+    /// registrations unless the caller says so.
+    pub fn register_store_scoped(
+        &self,
+        id: StoreId,
+        store: Arc<dyn ObjectStore>,
+        policy: StorePolicy,
+        scope: &CredentialScope,
+    ) {
+        self.register_in(id, store, policy, false, scope);
+    }
+
     fn register(
         &self,
         id: StoreId,
@@ -521,11 +548,25 @@ impl IoScheduler {
         policy: StorePolicy,
         whole_listing: bool,
     ) {
+        self.register_in(id, store, policy, whole_listing, &CredentialScope::Isolated);
+    }
+
+    fn register_in(
+        &self,
+        id: StoreId,
+        store: Arc<dyn ObjectStore>,
+        policy: StorePolicy,
+        whole_listing: bool,
+        scope: &CredentialScope,
+    ) {
         // Remote reads go through the block cache (local files never do).
         let store: Arc<dyn ObjectStore> = match &self.block_cache {
-            Some(cache) if id.is_remote() => {
-                Arc::new(CachingStore::new(store, id.to_string(), Arc::clone(cache)))
-            }
+            Some(cache) if id.is_remote() => Arc::new(CachingStore::with_scope(
+                store,
+                id.to_string(),
+                Arc::clone(cache),
+                scope,
+            )),
             _ => store,
         };
         let lane = Arc::new(Lane {
@@ -565,6 +606,7 @@ impl IoScheduler {
             sched: Arc::clone(self),
             counters: Arc::new(IoCounters::default()),
             secrets: Arc::new(CachedSecrets::new(Arc::new(NoSecrets))),
+            principal: Principal::local_user(),
             memory: None,
         }
     }
@@ -717,6 +759,8 @@ pub struct IoContext {
     sched: Arc<IoScheduler>,
     pub(crate) counters: Arc<IoCounters>,
     secrets: Arc<CachedSecrets>,
+    /// Who runs the query: told to the secret resolver (E12).
+    principal: Principal,
     /// The query's consumer for metadata reads ([`Held`] bytes).
     memory: Option<Arc<ConsumerHandle>>,
 }
@@ -727,7 +771,7 @@ pub struct IoContext {
 #[derive(Debug)]
 struct CachedSecrets {
     inner: Arc<dyn SecretResolver>,
-    resolved: std::sync::Mutex<HashMap<(String, String), SecretString>>,
+    resolved: std::sync::Mutex<HashMap<(String, String, String), SecretString>>,
 }
 
 impl CachedSecrets {
@@ -738,26 +782,37 @@ impl CachedSecrets {
         }
     }
 
-    fn cached(&self, scope: &str, key: &str) -> Option<SecretString> {
+    /// Keyed by principal too: a value resolved for one principal is never
+    /// answered to another.
+    fn cache_key(principal: &Principal, scope: &str, key: &str) -> (String, String, String) {
+        (principal.id(), scope.to_owned(), key.to_owned())
+    }
+
+    fn cached(&self, principal: &Principal, scope: &str, key: &str) -> Option<SecretString> {
         self.resolved
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&(scope.to_owned(), key.to_owned()))
+            .get(&Self::cache_key(principal, scope, key))
             .cloned()
     }
 }
 
 impl SecretResolver for CachedSecrets {
-    fn resolve<'a>(&'a self, scope: &'a str, key: &'a str) -> BoxFuture<'a, Result<SecretString>> {
+    fn resolve<'a>(
+        &'a self,
+        principal: &'a Principal,
+        scope: &'a str,
+        key: &'a str,
+    ) -> BoxFuture<'a, Result<SecretString>> {
         Box::pin(async move {
-            if let Some(s) = self.cached(scope, key) {
+            if let Some(s) = self.cached(principal, scope, key) {
                 return Ok(s);
             }
-            let s = self.inner.resolve(scope, key).await?;
+            let s = self.inner.resolve(principal, scope, key).await?;
             self.resolved
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert((scope.to_owned(), key.to_owned()), s.clone());
+                .insert(Self::cache_key(principal, scope, key), s.clone());
             Ok(s)
         })
     }
@@ -803,6 +858,20 @@ impl IoContext {
     pub fn with_secrets(mut self, secrets: Arc<dyn SecretResolver>) -> Self {
         self.secrets = Arc::new(CachedSecrets::new(secrets));
         self
+    }
+
+    /// This context acting for `principal`, the one secret references are
+    /// resolved for. The default is the local user (the embedded session).
+    #[must_use]
+    pub fn with_principal(mut self, principal: Principal) -> Self {
+        self.principal = principal;
+        self
+    }
+
+    /// Who the query runs for.
+    #[must_use]
+    pub fn principal(&self) -> &Principal {
+        &self.principal
     }
 
     /// This context reserving the bytes of metadata reads ([`Self::get_tail`],
@@ -1072,7 +1141,9 @@ impl IoContext {
         needs: MetadataNeeds,
         options: &FormatOptions,
     ) -> Result<Arc<dyn FileMetadata>> {
-        let fingerprint = options.metadata_fingerprint(self.secrets()).await?;
+        let fingerprint = options
+            .metadata_fingerprint(&self.principal, self.secrets())
+            .await?;
         let key = CacheKey::new(format.name(), file, fingerprint);
         let cache = &self.sched.cache;
         if let Ok(m) = cache.get(&key, needs) {

@@ -11,7 +11,7 @@ use krishiv_common::error::{
     UnsupportedDatasourceForDirectQuery,
 };
 use krishiv_common::redact::RedactedSql;
-use krishiv_common::secret::OptionValue;
+use krishiv_common::secret::{OptionValue, SecretValue};
 
 use super::catalog::quoted;
 use super::{
@@ -586,10 +586,21 @@ async fn authorize(
     securable: Securable,
     origin: Origin,
 ) -> Result<usize, AnalysisError> {
+    authorize_as(ctx, b, checked, securable, Privilege::Select, origin).await
+}
+
+/// [`authorize`] for `privilege`.
+async fn authorize_as(
+    ctx: &AnalysisContext,
+    b: &mut Bindings,
+    checked: &mut Vec<(Securable, usize)>,
+    securable: Securable,
+    privilege: Privilege,
+    origin: Origin,
+) -> Result<usize, AnalysisError> {
     if let Some((_, i)) = checked.iter().find(|(s, _)| *s == securable) {
         return Ok(*i);
     }
-    let privilege = Privilege::Select;
     super::access::authorize(&*ctx.policy, &ctx.principal, &securable, privilege)
         .await
         .map_err(|e| AnalysisError::new(e, origin))?;
@@ -905,6 +916,16 @@ async fn bind_files(
         .map_err(fail)?;
     for path in &qualified {
         authorize(ctx, b, checked, Securable::Path(path.clone()), origin).await?;
+    }
+    // A `secret('scope', 'key')` reference in the options (or a path) is
+    // resolved for the principal only with USAGE on its scope (E12).
+    for value in options.values().chain(&qualified) {
+        if let OptionValue::Secret(SecretValue::Reference { scope, .. }) = value {
+            let securable = Securable::Secret {
+                scope: scope.clone(),
+            };
+            authorize_as(ctx, b, checked, securable, Privilege::Usage, origin).await?;
+        }
     }
     let columns = files
         .infer(format, &qualified, options)

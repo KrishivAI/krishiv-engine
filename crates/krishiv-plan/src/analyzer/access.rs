@@ -163,12 +163,13 @@ mod tests {
         Fixed(answers.iter().cloned().collect())
     }
 
-    const ALL: [Privilege; 5] = [
+    const ALL: [Privilege; 6] = [
         Privilege::Select,
         Privilege::Modify,
         Privilege::Create,
         Privilege::Drop,
         Privilege::Monitor,
+        Privilege::Usage,
     ];
 
     #[test]
@@ -256,11 +257,25 @@ mod tests {
             Securable::Path(OptionValue::from_user("path", "file:/a")).to_string(),
             "path 'file:/a'"
         );
+        assert_eq!(
+            Securable::Secret {
+                scope: "prod".to_owned()
+            }
+            .to_string(),
+            "secret `prod`"
+        );
+        assert_eq!(
+            Securable::Connection("lake".to_owned()).to_string(),
+            "connection `lake`"
+        );
         let names: Vec<String> = ALL.iter().map(ToString::to_string).collect();
-        assert_eq!(names, ["SELECT", "MODIFY", "CREATE", "DROP", "MONITOR"]);
+        assert_eq!(
+            names,
+            ["SELECT", "MODIFY", "CREATE", "DROP", "MONITOR", "USAGE"]
+        );
         assert_eq!(
             ALL.map(Privilege::changes),
-            [false, true, true, true, false]
+            [false, true, true, true, false, false]
         );
     }
 }

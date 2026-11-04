@@ -1207,7 +1207,10 @@ impl Session {
         // at listing from the read's option values (P2-T084).
         let stores = Arc::new(StoreRegistry::new(Arc::clone(&config)));
         let files = Arc::new(FileReads::new(
-            self.state.io.context(),
+            self.state
+                .io
+                .context()
+                .with_principal((*self.state.principal).clone()),
             Arc::clone(&self.state.formats),
             Arc::new(ObjectPaths::new(
                 StoreId::new(LOCAL_STORE),
@@ -1218,7 +1221,11 @@ impl Session {
             Arc::clone(&config),
         ));
         let scans = FileScans {
-            io: self.state.io.context(),
+            io: self
+                .state
+                .io
+                .context()
+                .with_principal((*self.state.principal).clone()),
             config: Arc::clone(&config),
             slots: u64::try_from(self.state.executor.parallelism().max(1)).unwrap_or(1),
             runtime: self.state.executor.io_handle().clone(),
@@ -2068,7 +2075,11 @@ impl Session {
             !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
         let max_records = max_records_per_file(&options, format.name())?;
         let at = self.locate_write_path(text, &options, env)?;
-        let io = self.state.io.context();
+        let io = self
+            .state
+            .io
+            .context()
+            .with_principal((*self.state.principal).clone());
         self.authorize_write_path(&at).await?;
         // A link swapped into the checked path since fails the write
         // before anything is replaced, and again before the commit deletes
@@ -2561,7 +2572,12 @@ impl Session {
             state: Arc::clone(&self.state),
             config: Arc::clone(&env.config),
         }))
-        .with_io(self.state.io.context())
+        .with_io(
+            self.state
+                .io
+                .context()
+                .with_principal((*self.state.principal).clone()),
+        )
         .with_formats(Arc::clone(&self.state.formats))
         .with_config(Arc::clone(&env.config))
     }

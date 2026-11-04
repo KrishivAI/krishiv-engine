@@ -616,7 +616,10 @@ fn the_fault_store_delegates_and_flags_unscheduled_requests() {
         assert!(format!("{:?}", s.io).contains("IoContext"));
         let _ = s.io.config();
         let _ = s.io.scheduler();
-        let resolved = s.io.secrets().resolve("a", "b").now_or_never();
+        let resolved =
+            s.io.secrets()
+                .resolve(s.io.principal(), "a", "b")
+                .now_or_never();
         assert!(resolved.is_some_and(|r| r.is_err()));
     });
 }
@@ -717,7 +720,12 @@ fn secrets_are_resolved_once_per_context() {
     #[derive(Debug, Default)]
     struct Counting(AtomicUsize);
     impl SecretResolver for Counting {
-        fn resolve<'a>(&'a self, _s: &'a str, key: &'a str) -> BoxFuture<'a, Result<SecretString>> {
+        fn resolve<'a>(
+            &'a self,
+            _p: &'a krishiv_common::Principal,
+            _s: &'a str,
+            key: &'a str,
+        ) -> BoxFuture<'a, Result<SecretString>> {
             self.0.fetch_add(1, Ordering::Relaxed);
             Box::pin(async move { Ok(SecretString::new(format!("v-{key}"))) })
         }
@@ -730,16 +738,22 @@ fn secrets_are_resolved_once_per_context() {
         for _ in 0..3 {
             assert_eq!(
                 io.secrets()
-                    .resolve("sc", "k")
+                    .resolve(io.principal(), "sc", "k")
                     .await
                     .unwrap()
                     .expose_secret(),
                 "v-k"
             );
         }
-        io.secrets().resolve("sc", "other").await.unwrap();
+        io.secrets()
+            .resolve(io.principal(), "sc", "other")
+            .await
+            .unwrap();
+        // Another principal never gets a value cached for the first.
+        let other = krishiv_common::Principal::new("other", krishiv_common::PrincipalKind::User);
+        io.secrets().resolve(&other, "sc", "k").await.unwrap();
     });
-    assert_eq!(counting.0.load(Ordering::Relaxed), 2);
+    assert_eq!(counting.0.load(Ordering::Relaxed), 3);
 }
 
 #[test]
