@@ -68,6 +68,8 @@ use crate::sql_functions::{QueryFunctions, SqlFunctions};
 use crate::udfs::SessionFunctions;
 use crate::variables::SessionVariables;
 
+mod context;
+
 /// The store id of the local file system.
 const LOCAL_STORE: &str = "file";
 
@@ -165,6 +167,9 @@ pub(crate) struct SessionState {
     query_ids: AtomicU64,
     /// The queries `system.queries` lists.
     pub(crate) queries: Arc<crate::system::QueryLog>,
+    /// The session's id on spans and logs (`telemetry.rs`), and the count of its statements.
+    pub(crate) session_id: String,
+    statements: AtomicU64,
     /// SQL source ids handed to view lowerings: every `CREATE TEMPORARY
     /// VIEW` lowers its query with an id of its own, so errors raised
     /// while expanding a view point into the view's text, not the outer
@@ -372,6 +377,8 @@ impl SessionBuilder {
                 plan_ids: AtomicI64::new(0),
                 query_ids: AtomicU64::new(0),
                 queries,
+                session_id: crate::telemetry::new_session_id(),
+                statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(1),
             }),
         })
@@ -552,7 +559,17 @@ impl Session {
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         let marker = Arc::clone(&row);
         let result = self
-            .on_executor(async move { session.sql_here_marked(&text, marker).await })
+            .on_executor(async move {
+                let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
+                use tracing::Instrument as _;
+                let trace = crate::telemetry::QueryTrace::of(seq, &text);
+                let span = trace.prepare_span(&session.state.session_id);
+                session
+                    .sql_here_marked(&text, marker)
+                    .instrument(span)
+                    .await
+                    .map(|df| df.with_trace(trace))
+            })
             .await;
         // A statement refused before it ran (parse, analysis, access) is a
         // row of `system.queries` too, with the text as the session may show it.
@@ -568,97 +585,6 @@ impl Session {
             );
         }
         result
-    }
-
-    /// Makes the queries this session starts next belong to the W3C trace of
-    /// `traceparent` (`version-trace_id-parent_id-flags`): `system.queries`
-    /// shows the trace id. An inbound header from a protocol front end is
-    /// passed here.
-    ///
-    /// ```
-    /// let s = krishiv_session::Session::new()?;
-    /// s.set_trace_context("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")?;
-    /// assert_eq!(s.trace_id().as_deref(), Some("4bf92f3577b34da6a3ce929d0e0e4736"));
-    /// assert!(s.set_trace_context("not a header").is_err());
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    ///
-    /// # Errors
-    /// `INVALID_PARAMETER_VALUE.STRING` for a header that is not a valid
-    /// `traceparent`; the previous trace stays.
-    pub fn set_trace_context(&self, traceparent: &str) -> Result<(), KrishivError> {
-        let Some(trace_id) = crate::system::parse_traceparent(traceparent) else {
-            return Err(krishiv_common::error::InvalidParameterValueString {
-                parameter: "traceparent".to_owned(),
-                function_name: "Session::set_trace_context".to_owned(),
-                invalid_value: format!(
-                    "{traceparent} (expected version-trace_id-parent_id-flags as W3C Trace Context writes it)"
-                ),
-            }
-            .into());
-        };
-        self.state.queries.set_trace_id(Some(trace_id));
-        Ok(())
-    }
-
-    /// Tags the queries this session starts next (`system.queries.tags`):
-    /// a key of 1 to 128 characters, a value of up to 256, at most 32 tags.
-    /// Setting a key again replaces its value.
-    ///
-    /// ```
-    /// let s = krishiv_session::Session::new()?;
-    /// s.set_tag("team", "etl")?;
-    /// assert_eq!(s.tags(), [("team".to_owned(), "etl".to_owned())]);
-    /// s.remove_tag("team");
-    /// assert!(s.tags().is_empty());
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    ///
-    /// # Errors
-    /// `INVALID_PARAMETER_VALUE.STRING` for an empty or over-long key, an
-    /// over-long value or a 33rd tag; the tags stay as they were.
-    pub fn set_tag(&self, key: &str, value: &str) -> Result<(), KrishivError> {
-        use crate::system::{MAX_TAG_KEY, MAX_TAG_VALUE};
-        let refuse = |why: &str| {
-            Err(krishiv_common::error::InvalidParameterValueString {
-                parameter: "tag".to_owned(),
-                function_name: "Session::set_tag".to_owned(),
-                invalid_value: format!("{key} ({why})"),
-            }
-            .into())
-        };
-        if key.is_empty() || key.chars().count() > MAX_TAG_KEY {
-            return refuse("a key has 1 to 128 characters");
-        }
-        if value.chars().count() > MAX_TAG_VALUE {
-            return refuse("a value has at most 256 characters");
-        }
-        if !self.state.queries.try_set_tag(key, value) {
-            return refuse("a session carries at most 32 tags");
-        }
-        Ok(())
-    }
-
-    /// Removes the tag `key`, if the session has it.
-    pub fn remove_tag(&self, key: &str) {
-        self.state.queries.remove_tag(key);
-    }
-
-    /// The session's tags, by key.
-    #[must_use]
-    pub fn tags(&self) -> Vec<(String, String)> {
-        self.state.queries.tags()
-    }
-
-    /// Ends the trace [`Session::set_trace_context`] set.
-    pub fn clear_trace_context(&self) {
-        self.state.queries.set_trace_id(None);
-    }
-
-    /// The trace id in effect, if any.
-    #[must_use]
-    pub fn trace_id(&self) -> Option<String> {
-        self.state.queries.trace_id()
     }
 
     /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.

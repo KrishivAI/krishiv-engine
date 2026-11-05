@@ -207,6 +207,12 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # telemetry-otlp is off in every default build: compile its code and tests here too, and
+      # keep OpenTelemetry out of the default dependency tree (T125 section 6.5).
+      - run: cargo clippy -p krishiv-session --all-targets --features telemetry-otlp --locked -- -D warnings
+      - run: |
+          cargo tree -e normal -p krishiv --locked > "$RUNNER_TEMP/tree.txt"
+          ! grep -q opentelemetry "$RUNNER_TEMP/tree.txt"
 
   test:
     needs: changes
@@ -234,6 +240,7 @@ jobs:
         env:
           KRISHIV_REQUIRE_TARGETS: baseline,x86_64v3
       - run: cargo test --workspace --doc --locked
+      - run: cargo nextest run -p krishiv-session --features telemetry-otlp --test otlp_collector --locked
 
   deny:
     needs: changes
