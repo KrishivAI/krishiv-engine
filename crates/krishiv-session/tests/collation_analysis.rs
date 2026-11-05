@@ -238,7 +238,7 @@ fn search_and_indeterminate_rules_follow_spark() {
     let s = Session::new().unwrap();
     for sql in [
         "create table t1(a string collate utf8_binary, b string collate utf8_lcase) using parquet",
-        "insert into t1 values('abc', 'abd')",
+        "insert into t1 values('abc', 'abcd')",
     ] {
         block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
     }
