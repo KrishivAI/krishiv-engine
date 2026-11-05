@@ -29,7 +29,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::{
-    R, Rewriter, boolean, call, conjuncts, has_outer, inner_columns, node, on_no_rows, typed,
+    R, Rewriter, boolean, call, conjuncts, has_outer, has_subquery, inner_columns, node,
+    on_no_rows, typed,
 };
 use crate::analyzer::AnalysisError;
 use crate::analyzer::exprs::pretty;
@@ -406,4 +407,109 @@ impl Rewriter {
             plan.origin,
         ))
     }
+}
+
+/// `keys` extended by the columns the subquery joins under an aggregate
+/// added (an existence join's `exists`, a scalar subquery's value) that
+/// `aggregates` read outside an aggregate call. The analyzer lets such a
+/// subquery read only grouping expressions, so its column is fixed within
+/// a group and grouping by it too changes no group; without it the
+/// aggregate would output a column that is neither a key nor aggregated.
+pub(super) fn group_joined(
+    mut keys: Vec<Arc<Expr>>,
+    aggregates: &[Arc<Expr>],
+    before: &[BoundColumn],
+) -> Vec<Arc<Expr>> {
+    let mut stack: Vec<Arc<Expr>> = aggregates.to_vec();
+    while let Some(x) = stack.pop() {
+        if is_call(&x) {
+            continue;
+        }
+        if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &x.node {
+            let joined = !before.iter().any(|b| b.id == c.id);
+            let grouped = keys.iter().any(
+                |k| matches!(&k.node, ExprNode::Resolved(ResolvedExpr::Column(o)) if o.id == c.id),
+            );
+            if joined && !grouped {
+                keys.push(Arc::clone(&x));
+            }
+            continue;
+        }
+        x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
+    }
+    keys
+}
+
+/// `e` with every `NOT` above an `AND`, an `OR` or another `NOT` that holds
+/// a subquery pushed down to its operands (De Morgan's laws and `NOT NOT x =
+/// x`, exact in three-valued logic), as
+/// Spark's `BooleanSimplification` does before its subquery rewrite: a
+/// `NOT` then wraps the `IN` itself, whose null-aware join gives the NULL
+/// that `NOT (a > 5 OR a IN (... NULL ...))` must keep (an existence join's
+/// column alone is never NULL).
+pub(super) fn push_not(e: &Arc<Expr>) -> Arc<Expr> {
+    fn not_of(e: &Arc<Expr>) -> Option<&Arc<Expr>> {
+        match super::builtin_args(e) {
+            Some((Builtin::Not, [x])) => Some(x),
+            _ => None,
+        }
+    }
+    fn push(e: &Arc<Expr>, negate: bool) -> Arc<Expr> {
+        if !has_subquery(Node::Expr(e)) {
+            return if negate {
+                boolean(Builtin::Not, vec![Arc::clone(e)])
+            } else {
+                Arc::clone(e)
+            };
+        }
+        if let Some(x) = not_of(e) {
+            return push(x, !negate);
+        }
+        match super::builtin_args(e) {
+            Some((op @ (Builtin::And | Builtin::Or), [a, b])) => {
+                let op = match (op, negate) {
+                    (Builtin::And, true) => Builtin::Or,
+                    (Builtin::Or, true) => Builtin::And,
+                    (op, _) => op,
+                };
+                boolean(op, vec![push(a, negate), push(b, negate)])
+            }
+            _ if negate => boolean(Builtin::Not, vec![Arc::clone(e)]),
+            _ => Arc::clone(e),
+        }
+    }
+    // Only a `NOT` over a connective or a `NOT` with a subquery inside
+    // changes.
+    let mut changes = false;
+    let mut stack = vec![Arc::clone(e)];
+    while let Some(x) = stack.pop() {
+        if let Some(inner) = not_of(&x)
+            && matches!(
+                super::builtin_args(inner),
+                Some((Builtin::And | Builtin::Or | Builtin::Not, _))
+            )
+            && has_subquery(Node::Expr(inner))
+        {
+            changes = true;
+            break;
+        }
+        x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
+    }
+    if !changes {
+        return Arc::clone(e);
+    }
+    let out = Arc::clone(e).transform_down(&mut |x: Arc<Expr>| {
+        Ok::<_, std::convert::Infallible>(match not_of(&x) {
+            Some(inner)
+                if matches!(
+                    super::builtin_args(inner),
+                    Some((Builtin::And | Builtin::Or | Builtin::Not, _))
+                ) && has_subquery(Node::Expr(inner)) =>
+            {
+                push(inner, true)
+            }
+            _ => x,
+        })
+    });
+    out.unwrap_or_else(|never| match never {})
 }

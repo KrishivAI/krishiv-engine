@@ -320,6 +320,17 @@ pub(super) fn conjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     out
 }
 
+/// `e`'s builtin operator and arguments, if it is a builtin call.
+fn builtin_args(e: &Expr) -> Option<(Builtin, &[Arc<Expr>])> {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => match f.id {
+            FunctionId::Builtin(b) => Some((b, f.args.as_slice())),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// `e`'s operand when `e` is `NOT x`.
 fn not_arg(e: &Arc<Expr>) -> Option<&Arc<Expr>> {
     match &e.node {
@@ -670,7 +681,7 @@ impl Rewriter {
         let mut joins = Vec::new();
         let mut scalars = Vec::new();
         let mut existential = Vec::new();
-        for c in conjuncts(predicate) {
+        for c in conjuncts(&split::push_not(predicate)) {
             let c = self.single_row_in(&c).unwrap_or(c);
             if let Some(pred) = self.predicate(&c) {
                 joins.push(pred);
@@ -976,13 +987,14 @@ impl Rewriter {
                 p.origin,
             ));
         }
+        let before = output(&input)?;
         let (base, all) = self.existence(input, all)?;
         let (base, mut all) = self.scalars(base, all)?;
         let aggregates = all.split_off(keys.len());
         Ok(node(
             PlanNode::Aggregate {
                 input: base,
-                grouping: Grouping::GroupBy(all),
+                grouping: Grouping::GroupBy(split::group_joined(all, &aggregates, &before)),
                 aggregates,
             },
             p.origin,
@@ -1018,6 +1030,7 @@ impl Rewriter {
         exprs: Vec<Arc<Expr>>,
     ) -> R<(Arc<LogicalPlan>, Vec<Arc<Expr>>)> {
         let mut base = base;
+        let exprs: Vec<Arc<Expr>> = exprs.into_iter().map(|e| split::push_not(&e)).collect();
         // (subquery address, null-aware) -> its `exists` column.
         let mut found: HashMap<(usize, bool), Arc<Expr>> = HashMap::new();
         for e in &exprs {
