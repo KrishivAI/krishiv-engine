@@ -55,6 +55,7 @@ use krishiv_common::config::{
     RUNTIME_FILTER_BLOOM_MAX_ITEMS, RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
     RUNTIME_FILTER_ENABLED, RUNTIME_FILTER_EXACT_SET_MAX_VALUES, RUNTIME_FILTER_IN_LIST_MAX_VALUES,
 };
+use krishiv_io::runtime_filter::RuntimeBloom;
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{AttrId, Expr, ExprNode, ReadSource, ResolvedExpr};
 
@@ -177,14 +178,16 @@ pub(crate) struct JoinFilters {
 impl Planner<'_> {
     /// The runtime filters an inner or left semi hash join publishes for
     /// its probe keys (`probe_exprs`, of types `key_types`), given the
-    /// build side's plan and estimated rows.
+    /// build side's plan and estimated rows. A `partitioned` build (one
+    /// partition per task) gets a Bloom size fixed from its estimate, so
+    /// that its partitions' filters merge (design P2-T177 §2.4).
     pub(crate) fn runtime_filters(
         &mut self,
         probe: &Planned,
         probe_exprs: &[Arc<Expr>],
         key_types: &[DataType],
         build: &PhysNode,
-        build_rows: f64,
+        (build_rows, partitioned): (f64, bool),
     ) -> JoinFilters {
         let mut out = JoinFilters {
             filters: Vec::new(),
@@ -236,6 +239,8 @@ impl Planner<'_> {
                         scan_waits: scan_waits(site.scan_rows, build_rows, reads_scan_table),
                         bloom_max_items: s.bloom_max_items,
                         bloom_max_bytes: s.bloom_max_bytes,
+                        bloom_bytes: (bloom && partitioned)
+                            .then(|| planned_bloom_bytes(build_rows, s.bloom_max_bytes)),
                         ..KeyFilterOptions::default()
                     },
                 });
@@ -243,6 +248,19 @@ impl Planner<'_> {
         }
         out
     }
+}
+
+/// The Bloom size in bytes for a build of `build_rows` estimated keys at
+/// the default false-positive rate, at most `max_bytes`.
+fn planned_bloom_bytes(build_rows: f64, max_bytes: usize) -> u32 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a non-negative estimate, capped below by the cost model's bloom_max_items"
+    )]
+    let keys = build_rows.max(1.0).ceil() as u64;
+    let bytes = RuntimeBloom::bytes_for(keys, KeyFilterOptions::default().bloom_fpp).min(max_bytes);
+    u32::try_from(bytes).unwrap_or(u32::MAX)
 }
 
 /// How many times the build must be smaller than a scan of the build's own

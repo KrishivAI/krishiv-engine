@@ -6,7 +6,13 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # pin-utils is unmaintained (repository archived 2026-10-01) and has no
+    # successor release. It comes only from loom 0.7.2, a dev-dependency of
+    # krishiv-exec for its `--cfg loom` concurrency models, never in a
+    # shipped binary. Drop this when loom releases without it.
+    { id = "RUSTSEC-2026-0441", reason = "unmaintained; dev-only, through loom 0.7.2; no safe upgrade" },
+]
 
 [licenses]
 version = 2

@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use krishiv_common::secret::OptionValue;
-use krishiv_exec::physical::{PhysNode, PhysicalPlan};
-use krishiv_plan::{Expr, ReadSource};
+use krishiv_exec::physical::{PhysNode, PhysicalPlan, ProjectItemPlan};
+use krishiv_plan::{AttrId, Expr, Literal, ReadSource};
 use krishiv_plan_codec::proto as pb;
 use krishiv_plan_codec::{
     CodecError, FORMAT_VERSION, Feature, FeatureKind, Limits, MIN_READER_VERSION,
@@ -217,6 +217,35 @@ fn write_with(options: BTreeMap<String, OptionValue>) -> PhysicalPlan {
         input: Box::new(inventory::scan()),
         write: Some(write),
     })
+}
+
+#[test]
+fn an_options_map_with_a_secret_is_refused_without_naming_it() {
+    let map = |key: &str, value: &str| {
+        plan_of(PhysNode::Project {
+            input: Box::new(inventory::scan()),
+            layout: vec![AttrId(1), AttrId(2)],
+            items: vec![ProjectItemPlan::Expr {
+                name: "options".to_owned(),
+                expr: inventory::lit(Literal::Map(vec![
+                    ("mode".to_owned(), "PERMISSIVE".to_owned()),
+                    (key.to_owned(), value.to_owned()),
+                ])),
+            }],
+            nullable: None,
+            subqueries: Vec::new(),
+        })
+    };
+    let plain = map("dateFormat", "yyyy-MM-dd");
+    assert_eq!(decode(&encode(&plain).unwrap()).unwrap(), plain);
+    for (key, value) in [
+        ("password", "canary-map-1c7e-hunter2"),
+        ("path", "s3://user:canary-map-1c7e-hunter2@bucket/x"),
+    ] {
+        let err = encode(&map(key, value)).unwrap_err().to_string();
+        assert!(err.contains(&format!("`{key}`")), "{err}");
+        assert!(!err.contains("canary-map-1c7e-hunter2"), "{err}");
+    }
 }
 
 #[test]
@@ -517,12 +546,23 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "aggregate_vectors"
             | "aggregate_mode_regr_bit_listagg"
             | "aggregate_listagg"
+            | "aggregate_moments"
+            | "aggregate_any_value"
+            | "aggregate_max_min_by"
+            | "aggregate_moments_legacy_statistical"
             | "write_files_partitioned"
             | "write_files_column_types"
-            | "aggregate_percentiles" => 6,
+            | "aggregate_percentiles"
+            | "options_map_literal" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.
-            n if n.starts_with("time_") || n.starts_with("geo_") || n.starts_with("interval_") => 6,
+            n if n.starts_with("time_")
+                || n.starts_with("geo_")
+                || n.starts_with("interval_")
+                || n.starts_with("collated_") =>
+            {
+                6
+            }
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
             "hash_join_existence"
             | "hash_join_full_outer"
@@ -984,6 +1024,15 @@ fn counts_and_enums_are_validated() {
     };
     a.distinct.pop();
     corrupt(&m, "distinct flags");
+
+    // `ignore_nulls` belongs to `first`, `last` and `any_value` only.
+    let mut m = message("aggregate_max_min_by");
+    let last = m.nodes.len() - 1;
+    let pb::node::Kind::Aggregate(a) = node_mut(&mut m, last) else {
+        panic!("not an aggregate")
+    };
+    a.aggregates[0].ignore_nulls = true;
+    corrupt(&m, "`ignore_nulls` on a function without it");
 }
 
 #[test]
@@ -1204,11 +1253,11 @@ fn an_exchange_without_a_partitioning_kind_is_corrupt() {
     corrupt(&m, "partitioning kind is missing");
 }
 
-/// `any_value`, `max_by` and `min_by` have no ids in the format yet: a plan
-/// holding one is refused with the typed error (not encoded as another
-/// function), in an aggregate node and as a window function.
+/// `any_value`, `max_by` and `min_by` round-trip as themselves (not as
+/// another function) and list their feature, in an aggregate node and as
+/// a window function.
 #[test]
-fn aggregates_the_format_does_not_know_are_refused() {
+fn any_value_max_by_and_min_by_round_trip_in_aggregates_and_windows() {
     use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
     use krishiv_exec::physical::AggregatePlan;
     use krishiv_exec::window::{WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan};
@@ -1239,14 +1288,11 @@ fn aggregates_the_format_does_not_know_are_refused() {
         ),
     ];
     for e in exprs {
-        let refused = |plan: &PhysicalPlan| {
-            let err = encode(plan).unwrap_err();
-            assert!(
-                matches!(&err, CodecError::Unsupported(m) if m.contains("aggregate function")),
-                "{err:?}"
-            );
+        let round_trips = |plan: &PhysicalPlan| {
+            assert_eq!(round_trip(plan), *plan);
+            assert!(plan_features(plan).contains(&Feature::AnyValueByAggregates));
         };
-        refused(&plan_of(PhysNode::Aggregate {
+        round_trips(&plan_of(PhysNode::Aggregate {
             input: Box::new(inventory::scan()),
             aggregate: AggregatePlan {
                 group_by: vec![0],
@@ -1255,7 +1301,7 @@ fn aggregates_the_format_does_not_know_are_refused() {
                 output: AggregateOutput::Final,
             },
         }));
-        refused(&plan_of(PhysNode::Window {
+        round_trips(&plan_of(PhysNode::Window {
             input: Box::new(inventory::scan()),
             window: WindowPlan {
                 partition_by: Vec::new(),
