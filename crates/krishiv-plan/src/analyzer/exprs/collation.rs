@@ -237,6 +237,31 @@ impl Resolver<'_> {
             .iter()
             .map(|k| {
                 let mut k = k.clone();
+                let own = match &k.ty.data_type {
+                    Some(DataType::CollatedString(c)) => Some(*c),
+                    Some(DataType::String) => Some(Collation::UTF8_BINARY),
+                    _ => None,
+                };
+                // A string of another collation is shown cast to the call's.
+                // Only a literal is shown cast (a column's implicit cast is not), and the charset
+                // of `encode`/`decode`/`to_binary` is no collated operand.
+                let literal = matches!(strength_of(&k.shown()), Some((_, Strength::Default)));
+                if let (Some(own), Some(want)) = (own, chosen)
+                    && own != want
+                    && literal
+                    && !matches!(
+                        name.as_str(),
+                        "encode" | "decode" | "to_binary" | "try_to_binary"
+                    )
+                {
+                    let shown = Expr::new(ExprNode::Cast {
+                        expr: k.shown(),
+                        to: DataType::collated_string(want),
+                        mode: CastMode::Legacy,
+                    })
+                    .with_origin(e.origin);
+                    k.shown = Some(Arc::new(shown));
+                }
                 if matches!(k.ty.data_type, Some(DataType::CollatedString(_))) {
                     k.ty.data_type = Some(DataType::String);
                 }

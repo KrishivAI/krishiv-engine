@@ -148,6 +148,13 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             k[0].to_owned()
         }
         ExprNode::Collate { name, .. } => format!("collate({}, {name})", k[0]),
+        // The implicit cast of a string to the collation of its call (`CollationTypeCoercion`),
+        // which Spark shows as `' ' collate UTF8_LCASE`; a written `CAST` is a default-mode one.
+        ExprNode::Cast {
+            to: DataType::CollatedString(c),
+            mode: CastMode::Legacy,
+            ..
+        } => format!("{} collate {}", k[0], c.name()),
         ExprNode::Cast { to, mode, .. } => {
             let cast = if *mode == CastMode::Try {
                 "TRY_CAST"
