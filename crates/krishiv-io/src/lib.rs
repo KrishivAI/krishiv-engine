@@ -69,7 +69,7 @@ pub use io::{
     BlockCacheStats, ByteRange, CacheStats, FileRef, Held, IoConfig, IoContext, IoCounters,
     IoScheduler, ObjectScheme, OpenedStore, ParsedUrl, PinnedStore, PutIfAbsent, SecretResolver,
     StoreId, StorePolicy, StoreRegistry, StoreSettings, Tail, VersionToken, parse_object_url,
-    register, register_with_options,
+    query_registry, register, register_with_options,
 };
 pub use json::JsonFormat;
 pub use options::{

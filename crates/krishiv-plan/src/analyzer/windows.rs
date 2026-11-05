@@ -38,6 +38,7 @@ use std::sync::Arc;
 use krishiv_common::error::{
     DatatypeMismatchNonFoldableInput, DatatypeMismatchRangeFrameInvalidType,
     DatatypeMismatchRangeFrameMultiOrder, DatatypeMismatchRangeFrameWithoutOrder,
+    DatatypeMismatchSpecifiedWindowFrameDiffTypes,
     DatatypeMismatchSpecifiedWindowFrameInvalidBound,
     DatatypeMismatchSpecifiedWindowFrameUnacceptedType,
     DatatypeMismatchSpecifiedWindowFrameWrongComparison, DistinctWindowFunctionUnsupported,
@@ -198,12 +199,28 @@ fn is_null_literal(e: &Expr) -> bool {
 const RANGE_BOUND_TYPES: &str =
     "(\"NUMERIC\" or \"INTERVAL DAY TO SECOND\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL\")";
 
+const MICROS_PER_DAY: i64 = 86_400_000_000;
+
 /// A `RANGE` frame bound's value in the units of its ordering key: whole
 /// numbers (integers, dates, and decimals unscaled) or floating point.
 #[derive(Clone, Debug)]
 enum RangeValue {
     Int(i128),
     Float(f64),
+    /// A year-month interval over a date or timestamp key: calendar months, with the interval type's fields
+    /// (the bound stays an interval literal; the executor moves the key by months).
+    Months(
+        i32,
+        krishiv_types::YearMonthField,
+        krishiv_types::YearMonthField,
+    ),
+    /// A day-time interval over a timestamp key: microseconds, with the interval type's fields (the bound stays an
+    /// interval literal, so a stored plan analyzes again; the executor adds whole days on the zone's clock).
+    DayTime(
+        i64,
+        krishiv_types::DayTimeField,
+        krishiv_types::DayTimeField,
+    ),
 }
 
 impl RangeValue {
@@ -211,6 +228,8 @@ impl RangeValue {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a > b,
             (Self::Float(a), Self::Float(b)) => a > b,
+            (Self::Months(a, ..), Self::Months(b, ..)) => a > b,
+            (Self::DayTime(a, ..), Self::DayTime(b, ..)) => a > b,
             _ => false,
         }
     }
@@ -231,6 +250,16 @@ impl RangeValue {
                 data_type: *d,
             },
             (Self::Int(v), _) => Literal::Integer(i32::try_from(*v).ok()?),
+            (Self::DayTime(micros, start, end), _) => Literal::DayTimeInterval {
+                micros: *micros,
+                start: *start,
+                end: *end,
+            },
+            (Self::Months(months, start, end), _) => Literal::YearMonthInterval {
+                months: *months,
+                start: *start,
+                end: *end,
+            },
             (Self::Float(v), T::Float) => Literal::Float(*v as f32),
             (Self::Float(v), _) => Literal::Double(*v),
         })
@@ -262,6 +291,32 @@ fn range_value_signed(
     let ExprNode::Literal(l) = &x.node else {
         return None;
     };
+    // A day-time interval bound over a date (ending in DAY, so whole days) or a timestamp key
+    // (microseconds).
+    if let Literal::DayTimeInterval { micros, start, end } = l {
+        let micros = if negate {
+            micros.checked_neg()?
+        } else {
+            *micros
+        };
+        return match key {
+            T::Date => i32::try_from(micros / MICROS_PER_DAY)
+                .ok()
+                .map(|d| RangeValue::Int(i128::from(d))),
+            T::Timestamp | T::TimestampNtz => Some(RangeValue::DayTime(micros, *start, *end)),
+            _ => None,
+        };
+    }
+    // A year-month interval bound moves a date or timestamp key by calendar months (`PRECEDING` negates it).
+    if let Literal::YearMonthInterval { months, start, end } = l {
+        let months = if negate {
+            months.checked_neg()?
+        } else {
+            *months
+        };
+        return matches!(key, T::Date | T::Timestamp | T::TimestampNtz)
+            .then_some(RangeValue::Months(months, *start, *end));
+    }
     // The literal as an exact decimal `(unscaled, scale)` or a double.
     enum Lit {
         Exact(i128, u8),
@@ -1127,6 +1182,38 @@ impl Resolver<'_> {
         let Some(key) = keys.first().and_then(|k| k.ty.data_type.clone()) else {
             return Err(unsupported("a RANGE frame over an untyped key", origin));
         };
+        // A bound as Spark prints it: `n PRECEDING` is the negation `(- n)`.
+        let bound_sql = |e: &Arc<Expr>| match crate::expr::negated(e) {
+            Some(n) => format!("\"(- {})\"", pretty(n, None)),
+            None => format!("\"{}\"", pretty(e, None)),
+        };
+        let bound_types: Vec<Option<T>> = keys
+            .iter()
+            .skip(spec.order_by.len())
+            .map(|kid| kid.ty.data_type.clone())
+            .collect();
+        // Both bounds are values of one type (`INTERVAL YEAR` and `INTERVAL MONTH` are two types); Spark checks
+        // this before whether either type is valid for the key.
+        // (Numeric keys cast both bounds to the key's type first, so only date and timestamp keys can differ.)
+        if let [Some(lt), Some(ut)] = &bound_types[..]
+            && matches!(key, T::Date | T::Timestamp | T::TimestampNtz)
+            && lt != ut
+            && let (Some(FrameBound::Offset(l)), Some(FrameBound::Offset(u))) = (
+                shown.frame.as_ref().map(|f| &f.lower),
+                shown.frame.as_ref().map(|f| &f.upper),
+            )
+        {
+            return Err(AnalysisError::new(
+                DatatypeMismatchSpecifiedWindowFrameDiffTypes {
+                    sql_expr: frame_sql(shown),
+                    lower: bound_sql(l),
+                    upper: bound_sql(u),
+                    lower_type: quoted(lt),
+                    upper_type: quoted(ut),
+                },
+                origin,
+            ));
+        }
         let mut kids = keys.iter().skip(spec.order_by.len());
         let mut values: [Option<RangeValue>; 2] = [None, None];
         for (k, (b, location)) in [(&frame.lower, "lower"), (&frame.upper, "upper")]
@@ -1134,6 +1221,23 @@ impl Resolver<'_> {
             .enumerate()
         {
             let FrameBound::Offset(x) = b else { continue };
+            // Spark's parser negates every `n PRECEDING` bound (`UnaryMinus`), which raises for the most negative
+            // year-month interval whatever the key's direction (a descending key negates `FOLLOWING` bounds in the
+            // executor).
+            if let Some(inner) = crate::expr::negated(x)
+                && matches!(
+                    &inner.node,
+                    ExprNode::Literal(Literal::YearMonthInterval {
+                        months: i32::MIN,
+                        ..
+                    })
+                )
+            {
+                return Err(AnalysisError::new(
+                    krishiv_common::error::IntervalArithmeticOverflowWithoutSuggestion {},
+                    origin,
+                ));
+            }
             let bt = kids.next().and_then(|kid| kid.ty.data_type.clone());
             let Some(bt) = bt else {
                 return Err(unsupported("a NULL window frame bound", origin));
@@ -1175,7 +1279,31 @@ impl Resolver<'_> {
                 T::Date | T::Timestamp | T::TimestampNtz
                     if !matches!(bt, T::Integer) || key != T::Date =>
                 {
-                    if !numeric(&bt) {
+                    // A day-time interval bound is added to a timestamp key as microseconds, and to a
+                    // date key as days when it ends in DAY (`DateAddInterval`, Spark 4.0 and later: 3.5 raises
+                    // for a date key); any other pairing is
+                    // `RANGE_FRAME_INVALID_TYPE`. A year-month bound moves the key by calendar months.
+                    let day_time_ok = matches!(
+                        (&key, &bt),
+                        (
+                            T::Date,
+                            T::DayTimeInterval {
+                                start: krishiv_types::DayTimeField::Day,
+                                end: krishiv_types::DayTimeField::Day,
+                            },
+                        ) if self.ctx.profile >= super::SparkProfile::V4_0
+                    ) || matches!(
+                        (&key, &bt),
+                        (T::Timestamp | T::TimestampNtz, T::DayTimeInterval { .. })
+                    );
+                    let year_month_ok = matches!(bt, T::YearMonthInterval { .. });
+                    if day_time_ok || year_month_ok {
+                        values[k] = Some(range_value(x, &key).ok_or_else(|| {
+                            unsupported("RANGE window frame bounds other than literals", origin)
+                        })?);
+                        continue;
+                    }
+                    if !numeric(&bt) && !matches!(bt, T::DayTimeInterval { .. }) {
                         return Err(unsupported("interval RANGE window frame bounds", origin));
                     }
                     return Err(AnalysisError::new(

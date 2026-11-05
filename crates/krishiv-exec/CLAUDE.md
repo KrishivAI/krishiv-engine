@@ -58,7 +58,7 @@ them back in order; a partition that does not fit is copied to its own file; fai
 failed, never a short result), `stream.rs` (a partition evaluated from disk: lead and trailing readers, bounded
 memory), `disk.rs` (frames and `lag`/`lead`/`nth_value` of a partition on disk: forward readers, a frame's batches held or folded from the file), `group_limit.rs` (Spark's `WindowGroupLimit`: the exact limit operator below the window, the `Ranker`
 the sort also uses to prune each sorted batch while that pays; the planner infers it for a filter over the window,
-`planner/window.rs`), `tests.rs` (property test against a naive reference; spilled vs in-memory equality).
+`planner/window.rs`), `tests.rs` (property test against a naive reference; spilled vs in-memory equality). `RANGE` value bounds are `FrameBound::RangeInt`/`RangeFloat` (the key's units), `RangeDayTime` (a day-time interval over a `TIMESTAMP`/`TIMESTAMP_NTZ` key: whole days on the zone's clock, then elapsed time) and `RangeMonths` (calendar months over a `DATE` or `TIMESTAMP` key; the `TIMESTAMP` zone is the session's, passed to `Window::new` because the column carries only a marker); `month_tests.rs` (month bounds from disk vs memory in a DST zone).
 Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.
 `loops.rs` (T180 unit 5b) `UnionLoopSource`: a recursive CTE (`PhysNode::UnionLoop`/`LoopRef`) as one source. The anchor and each
 round of the recursive term run as queries of their own over a child `QueryContext` (child memory pool, cancelled with the

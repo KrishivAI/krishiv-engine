@@ -2,9 +2,6 @@
   "cases": {
     "depends-on-command": [
       17
-    ],
-    "test-udfs": [
-      9
     ]
   },
   "file": "udf/udf-window",

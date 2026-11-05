@@ -78,6 +78,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_MULTIPART_PART_BYTES,
     &IO_MAX_RETRIES,
     &IO_REQUEST_TIMEOUT,
+    &IO_CREDENTIALS_REFRESH_SKEW,
     &RUNTIME_FILTER_ENABLED,
     &RUNTIME_FILTER_BLOOM_ENABLED,
     &RUNTIME_FILTER_IN_LIST_MAX_VALUES,
@@ -227,6 +228,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.legacy.timeParserPolicy",
         &LEGACY_TIME_PARSER_POLICY,
+    ),
+    (
+        "krishiv.io.credentials.refreshSkew",
+        &IO_CREDENTIALS_REFRESH_SKEW,
     ),
     (
         "krishiv.memory.abortReleaseTimeout",
@@ -1249,6 +1254,20 @@ pub static IO_REQUEST_TIMEOUT: ConfigEntry = ConfigEntry {
     value_type: ValueType::Duration,
     default: Some(ConfigValue::Duration(Duration::from_secs(30))),
     doc: "Timeout of one object-store request attempt; a timed-out attempt is retried.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.credentials.refreshSkew`.
+pub static IO_CREDENTIALS_REFRESH_SKEW: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.credentials.refreshSkew",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(300))),
+    doc: "How long before its expiry a short-lived object-store credential (vended by a catalog \
+          or a token service) is refreshed. A request that arrives inside this window fetches a \
+          new credential first; an expired credential is never used. `0s` refreshes only at \
+          expiry.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,

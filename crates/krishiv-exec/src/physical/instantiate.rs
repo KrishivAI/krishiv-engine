@@ -1099,10 +1099,10 @@ impl Instantiation<'_> {
             }
             PhysNode::Window { input, window } => {
                 let input = self.node(input)?;
-                let op = crate::window::Window::new(
+                let op = crate::window::Window::with_env(
                     Arc::clone(&input.schema),
                     window.clone(),
-                    self.env.ansi,
+                    &self.env,
                     self.spill.clone(),
                 )?;
                 Ok(operator(input, Arc::new(op)))
