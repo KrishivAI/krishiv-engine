@@ -99,6 +99,7 @@ use krishiv_common::secret::{REDACTED, SecretString};
 use object_store::ObjectStore;
 use object_store::path::Path;
 
+use super::block_cache::CredentialScope;
 use super::{IoScheduler, StoreId, StorePolicy};
 #[cfg(feature = "cloud")]
 use crate::error::store_failed;
@@ -360,6 +361,8 @@ fn parse_hf(scheme: &str, rest: &str) -> Result<ParsedUrl> {
 pub struct StoreRegistry {
     config: Arc<Config>,
     stores: Mutex<HashMap<StoreId, Arc<dyn ObjectStore>>>,
+    /// Whose credentials the stores read with; the block-cache scope they register under (E15).
+    scope: CredentialScope,
 }
 
 impl StoreRegistry {
@@ -369,7 +372,17 @@ impl StoreRegistry {
         Self {
             config,
             stores: Mutex::new(HashMap::new()),
+            scope: CredentialScope::Isolated,
         }
+    }
+
+    /// This registry registering its stores under `scope`, so blocks are reused across the
+    /// queries of one scope (a session passes its principal's) and never across scopes. A
+    /// registry built by [`Self::new`] is isolated: it shares nothing.
+    #[must_use]
+    pub fn with_scope(mut self, scope: CredentialScope) -> Self {
+        self.scope = scope;
+        self
     }
 
     /// The store of `url`'s bucket or container, cached by store id within
@@ -439,7 +452,7 @@ impl StoreRegistry {
         let url = parse_object_url(text)?;
         let store = self.store_with_options(&url, options)?;
         let id = effective_store_id(&url.store_id, options);
-        sched.register_store_with(id.clone(), store, policy_for(url.scheme));
+        sched.register_store_scoped(id.clone(), store, policy_for(url.scheme), &self.scope);
         Ok((id, url.key, url.display))
     }
 }

@@ -32,6 +32,7 @@ use krishiv_common::secret::{OptionValue, SecretString, SecretValue};
 use crate::error::{Result, unsupported};
 use crate::io::SecretResolver;
 use crate::io::stores::is_store_option;
+use krishiv_common::Principal;
 
 /// Options every file source accepts, handled by the framework (listing,
 /// partition discovery, corrupt/missing file handling), never by a format.
@@ -468,6 +469,7 @@ impl FormatOptions {
     pub async fn resolve_secret(
         &self,
         name: &str,
+        principal: &Principal,
         secrets: &dyn SecretResolver,
     ) -> Result<Option<SecretString>> {
         let Some(spec) = self.schema.spec(name) else {
@@ -476,7 +478,7 @@ impl FormatOptions {
         match self.values.get(spec.name) {
             Some(Value::Secret(SecretValue::Inline(s))) => Ok(Some(s.clone())),
             Some(Value::Secret(SecretValue::Reference { scope, key })) => {
-                secrets.resolve(scope, key).await.map(Some)
+                secrets.resolve(principal, scope, key).await.map(Some)
             }
             _ => Ok(None),
         }
@@ -491,6 +493,7 @@ impl FormatOptions {
     /// What the resolver returns for a reference it cannot resolve.
     pub async fn metadata_fingerprint(
         &self,
+        principal: &Principal,
         secrets: &dyn SecretResolver,
     ) -> Result<Option<[u8; 16]>> {
         let mut material = String::new();
@@ -498,10 +501,12 @@ impl FormatOptions {
         for spec in self.schema.options.iter().filter(|o| o.metadata_key) {
             let text = match self.values.get(spec.name) {
                 None => continue,
-                Some(Value::Secret(_)) => match self.resolve_secret(spec.name, secrets).await? {
-                    Some(s) => s,
-                    None => continue,
-                },
+                Some(Value::Secret(_)) => {
+                    match self.resolve_secret(spec.name, principal, secrets).await? {
+                        Some(s) => s,
+                        None => continue,
+                    }
+                }
                 Some(other) => SecretString::new(format!("{other:?}")),
             };
             any = true;
@@ -547,6 +552,7 @@ pub(crate) struct NoSecrets;
 impl SecretResolver for NoSecrets {
     fn resolve<'a>(
         &'a self,
+        _principal: &'a Principal,
         _scope: &'a str,
         _key: &'a str,
     ) -> futures::future::BoxFuture<'a, Result<SecretString>> {

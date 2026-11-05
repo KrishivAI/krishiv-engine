@@ -1196,6 +1196,13 @@ impl Session {
         SourceId(self.state.sql_sources.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// The block-cache scope of this session's stores: its principal. The session's storage
+    /// credentials come from its own configuration, so one principal's queries may share blocks
+    /// and no other principal's may (E15).
+    pub(crate) fn credential_scope(&self) -> krishiv_io::CredentialScope {
+        krishiv_io::CredentialScope::Principal(self.state.principal.id())
+    }
+
     /// The analysis inputs of one query.
     pub(crate) fn query_env(&self) -> QueryEnv {
         // Before any analysis loads a table: a fill is refused if an
@@ -1205,9 +1212,13 @@ impl Session {
         // Cloud stores are built from this snapshot, lazily per query:
         // plans carry only path strings, and the worker resolves the store
         // at listing from the read's option values (P2-T084).
-        let stores = Arc::new(StoreRegistry::new(Arc::clone(&config)));
+        let stores =
+            Arc::new(StoreRegistry::new(Arc::clone(&config)).with_scope(self.credential_scope()));
         let files = Arc::new(FileReads::new(
-            self.state.io.context(),
+            self.state
+                .io
+                .context()
+                .with_principal((*self.state.principal).clone()),
             Arc::clone(&self.state.formats),
             Arc::new(ObjectPaths::new(
                 StoreId::new(LOCAL_STORE),
@@ -1218,7 +1229,11 @@ impl Session {
             Arc::clone(&config),
         ));
         let scans = FileScans {
-            io: self.state.io.context(),
+            io: self
+                .state
+                .io
+                .context()
+                .with_principal((*self.state.principal).clone()),
             config: Arc::clone(&config),
             slots: u64::try_from(self.state.executor.parallelism().max(1)).unwrap_or(1),
             runtime: self.state.executor.io_handle().clone(),
@@ -1934,7 +1949,9 @@ impl Session {
         options: &BTreeMap<String, OptionValue>,
         env: &QueryEnv,
     ) -> Result<krishiv_exec::files::LocatedPath, KrishivError> {
-        let stores = Arc::new(StoreRegistry::new(Arc::clone(&env.config)));
+        let stores = Arc::new(
+            StoreRegistry::new(Arc::clone(&env.config)).with_scope(self.credential_scope()),
+        );
         let at = ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
             self.state.cwd.clone(),
@@ -1951,7 +1968,16 @@ impl Session {
     pub(crate) async fn authorize_write_path(
         &self,
         at: &krishiv_exec::files::LocatedPath,
+        options: &BTreeMap<String, OptionValue>,
     ) -> Result<(), KrishivError> {
+        // The encoder resolves secret options (`encryptionKey`) for this principal: USAGE first.
+        let r = krishiv_plan::analyzer::authorize_secret_refs(
+            &*self.state.policy,
+            &self.state.principal,
+            options.values(),
+        )
+        .await;
+        crate::access::audit(self, StatementClass::Write, r)?;
         let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
         for privilege in [Privilege::Modify, Privilege::Create] {
             let r = authorize(
@@ -2068,8 +2094,12 @@ impl Session {
             !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
         let max_records = max_records_per_file(&options, format.name())?;
         let at = self.locate_write_path(text, &options, env)?;
-        let io = self.state.io.context();
-        self.authorize_write_path(&at).await?;
+        let io = self
+            .state
+            .io
+            .context()
+            .with_principal((*self.state.principal).clone());
+        self.authorize_write_path(&at, &options).await?;
         // A link swapped into the checked path since fails the write
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.
@@ -2561,7 +2591,12 @@ impl Session {
             state: Arc::clone(&self.state),
             config: Arc::clone(&env.config),
         }))
-        .with_io(self.state.io.context())
+        .with_io(
+            self.state
+                .io
+                .context()
+                .with_principal((*self.state.principal).clone()),
+        )
         .with_formats(Arc::clone(&self.state.formats))
         .with_config(Arc::clone(&env.config))
     }

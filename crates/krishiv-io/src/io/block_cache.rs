@@ -4,7 +4,7 @@
 //! [`CachingStore`] wraps an [`ObjectStore`] and answers bounded range reads from aligned blocks
 //! (default 1 MiB) kept in a small memory tier and on local disk. One mechanism covers data pages,
 //! footers and page indexes, which are all ordinary ranges. A block is keyed by the store (as
-//! displayed, so without credentials), the path, the object's version (the `if_match` ETag or the
+//! displayed, so without credentials), the credential scope ([`CredentialScope`]), the path, the object's version (the `if_match` ETag or the
 //! `if_unmodified_since` time the scheduler sends, else none) and the block index: an overwritten
 //! object has a new version and never reaches its old blocks.
 //!
@@ -637,11 +637,43 @@ fn write_block(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectSize(pub u64);
 
+/// Whose credentials a [`CachingStore`] reads with, the part of a block's key that keeps a byte
+/// from being served to a query whose credentials could not have read it (E15): a cache hit skips
+/// the store's own access check.
+///
+/// The default of [`CachingStore::new`] is [`CredentialScope::Isolated`]: sharing across
+/// principals is something a caller asks for, never something it gets by omission.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialScope {
+    /// One engine identity reads for every principal (a single-tenant compute): blocks are shared.
+    /// The caller vouches that a store's credentials grant every principal the same reads.
+    Shared,
+    /// The credentials of one principal (its [`Principal::id`](krishiv_common::Principal::id) or a
+    /// token's subject): blocks are shared only with the same scope text.
+    Principal(String),
+    /// Credentials seen by this registration alone (a random nonce): blocks are never shared.
+    Isolated,
+}
+
+impl CredentialScope {
+    /// The text joined to every block key. An isolated scope draws a fresh process-unique nonce.
+    fn key_text(&self) -> String {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        match self {
+            Self::Shared => "shared".to_owned(),
+            Self::Principal(p) => format!("p:{p}"),
+            Self::Isolated => format!("n:{}", NEXT.fetch_add(1, Ordering::Relaxed)),
+        }
+    }
+}
+
 /// A store whose bounded range reads go through a [`BlockCache`].
 pub struct CachingStore {
     inner: Arc<dyn ObjectStore>,
-    /// The store as displayed (no credentials).
+    /// The store as displayed (no credentials), then the credential scope.
     identity: String,
+    /// `identity`, a separator and the scope text: the head of every block key.
+    key_prefix: String,
     cache: Arc<BlockCache>,
 }
 
@@ -655,6 +687,12 @@ impl fmt::Display for CachingStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "CachingStore({})", self.identity)
     }
+}
+
+/// One key field, length-prefixed, so no text (a version or scope with a NUL in it) can shift into
+/// its neighbour and make two different reads share a key.
+fn field(text: &str) -> String {
+    format!("{}:{text};", text.len())
 }
 
 /// The object's version as the scheduler pins it on a read.
@@ -676,15 +714,35 @@ impl CachingStore {
         identity: impl Into<String>,
         cache: Arc<BlockCache>,
     ) -> Self {
+        Self::with_scope(inner, identity, cache, &CredentialScope::Isolated)
+    }
+
+    /// As [`Self::new`], reading with the credentials of `scope`: blocks are shared only between
+    /// stores of the same identity and an equal scope.
+    #[must_use]
+    pub fn with_scope(
+        inner: Arc<dyn ObjectStore>,
+        identity: impl Into<String>,
+        cache: Arc<BlockCache>,
+        scope: &CredentialScope,
+    ) -> Self {
+        // Both parts are in every key; the display text keeps only the store.
+        let identity = identity.into();
         Self {
             inner,
-            identity: identity.into(),
+            key_prefix: format!("{}{}", field(&identity), field(&scope.key_text())),
+            identity,
             cache,
         }
     }
 
-    fn block_key(&self, location: &Path, version: &str, block: u64) -> String {
-        format!("{}\0{location}\0{version}\0{block}", self.identity)
+    pub(super) fn block_key(&self, location: &Path, version: &str, block: u64) -> String {
+        format!(
+            "{}{}{}{block}",
+            self.key_prefix,
+            field(location.as_ref()),
+            field(version)
+        )
     }
 
     /// The object a read names, from what the scheduler sent: its size ([`ObjectSize`]) and the
