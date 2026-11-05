@@ -504,3 +504,19 @@ def test_worker_stops_quietly_when_the_parent_closed_the_pipe(tmp_path: Path):
     proc.stdin.flush()
     _, err = proc.communicate(timeout=60)
     assert b"BrokenPipeError" not in err
+
+
+def test_line_prints_the_error_text_of_a_failed_engine():
+    ent = {
+        "engines": {
+            "duckdb": {"status": "ok", "median_s": 2.0},
+            "krishiv": {"status": "error", "error": "RunnerError: [KRISHIV_SPILL_CAP_EXCEEDED]\n  spill limit reached"},
+        },
+        "load_before": 1.0,
+        "load_after": 2.0,
+    }
+    lines = reproduce._line("q02", ent).splitlines()
+    assert lines[0] == "  q02: duckdb=2000ms krishiv=error  load 1.0->2.0"
+    assert lines[1] == "    krishiv: RunnerError: [KRISHIV_SPILL_CAP_EXCEEDED] spill limit reached"
+    assert len(lines) == 2
+    assert len(reproduce._one_line("x" * 5000)) == 600

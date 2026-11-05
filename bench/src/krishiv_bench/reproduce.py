@@ -526,11 +526,23 @@ def _line(qid: str, ent: dict) -> str:
     parts = []
     for n, e in ent.get("engines", {}).items():
         parts.append(f"{n}={e['median_s'] * 1000:.0f}ms" if "median_s" in e else f"{n}={e['status']}")
-    return (
+    head = (
         f"  {qid}: "
         + " ".join(parts)
         + f"  load {ent.get('load_before', math.nan):.1f}->{ent.get('load_after', math.nan):.1f}"
     )
+    # A failed engine's error text goes in the log next to the verdict: the summary line alone said only "error".
+    errors = [
+        f"    {n}: {_one_line(e.get('error') or e.get('reason') or e['status'])}"
+        for n, e in ent.get("engines", {}).items()
+        if "median_s" not in e and e.get("status") != "ok"
+    ]
+    return "\n".join([head, *errors])
+
+
+def _one_line(text: object, limit: int = 600) -> str:
+    flat = " ".join(str(text).split())
+    return flat if len(flat) <= limit else flat[: limit - 3] + "..."
 
 
 def _pairs(record: dict, engine: str, base: str, key: str) -> dict[str, tuple[Any, Any]]:
