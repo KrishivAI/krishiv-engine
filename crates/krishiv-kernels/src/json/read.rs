@@ -819,6 +819,20 @@ fn read_scalar_token(lexer: &mut Lexer<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> 
     }
 }
 
+/// Spark's date fallback (`JacksonParser`): the text without `GMT` read by
+/// the lenient default grammar, else as a day count since the epoch (a
+/// Spark 1.5 file), rebased from the Julian calendar.
+fn legacy_date_fallback(text: &str) -> Option<i32> {
+    let clean = text.replace("GMT", "");
+    spark_string_to_date(&clean).or_else(|| {
+        let days: i32 = text.parse().ok()?;
+        i32::try_from(crate::datetime_pattern::legacy::rebase_julian_days(
+            i64::from(days),
+        ))
+        .ok()
+    })
+}
+
 /// One JSON string into `out`.
 fn read_string(raw: RawStr<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), Fault> {
     let text = raw
@@ -831,7 +845,10 @@ fn read_string(raw: RawStr<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), F
         }
         Scalar::Date(b) => {
             let parsed = match &ctx.opts.date_format {
-                Some(pattern) => pattern.parse_date(&text).map_err(|_| Poison)?,
+                Some(pattern) => match pattern.parse_date(&text).map_err(|_| Poison)? {
+                    None if ctx.opts.datetime_fallback => legacy_date_fallback(&text),
+                    other => other,
+                },
                 None => spark_string_to_date(&text),
             };
             match parsed {
@@ -866,9 +883,17 @@ fn read_string(raw: RawStr<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), F
                 }
             } else {
                 match &ctx.opts.timestamp_format {
-                    Some(pattern) => pattern
+                    Some(pattern) => match pattern
                         .parse_timestamp(&text, ctx.zone)
-                        .map_err(|_| Poison)?,
+                        .map_err(|_| Poison)?
+                    {
+                        None if ctx.opts.datetime_fallback => {
+                            let clean = text.replace("GMT", "");
+                            spark_string_to_timestamp(&clean, ctx.zone, ctx.today)
+                                .map_err(|_| Poison)?
+                        }
+                        other => other,
+                    },
                     None => {
                         spark_string_to_timestamp(&text, ctx.zone, ctx.today).map_err(|_| Poison)?
                     }

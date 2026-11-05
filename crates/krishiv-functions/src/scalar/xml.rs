@@ -115,7 +115,7 @@ struct Opts {
 }
 
 impl Opts {
-    fn parse(pairs: &[(String, String)], func: &str) -> Result<Self, KrishivError> {
+    fn parse(pairs: &[(String, String)], func: &str, legacy: bool) -> Result<Self, KrishivError> {
         let mut o = Self {
             mode: Mode::Permissive,
             attribute_prefix: "_".to_owned(),
@@ -138,7 +138,15 @@ impl Opts {
             Purpose::Parse
         };
         let pattern = |v: &str, name: &str| -> Result<DateTimePattern, KrishivError> {
-            datetime_option_as(v, func, name, purpose, false)
+            datetime_option_as(v, func, name, purpose)
+        };
+        // Under LEGACY these two are Spark's lenient `FastDateFormat`.
+        let fast_or = |v: &str, name: &str| -> Result<DateTimePattern, KrishivError> {
+            if legacy {
+                Ok(DateTimePattern::new_fast(v))
+            } else {
+                pattern(v, name)
+            }
         };
         for (k, v) in pairs {
             match k.to_ascii_lowercase().as_str() {
@@ -165,9 +173,9 @@ impl Opts {
                     o.ignore_surrounding_spaces = flag(v, func, "ignoreSurroundingSpaces")?;
                 }
                 "indent" => o.indent = Some(v.clone()),
-                "dateformat" => o.date = Some(pattern(v, "dateFormat")?),
+                "dateformat" => o.date = Some(fast_or(v, "dateFormat")?),
                 "timeformat" => o.time = Some(pattern(v, "timeFormat")?),
-                "timestampformat" => o.timestamp = Some(pattern(v, "timestampFormat")?),
+                "timestampformat" => o.timestamp = Some(fast_or(v, "timestampFormat")?),
                 "timestampntzformat" => o.ntz = Some(pattern(v, "timestampNTZFormat")?),
                 // Accepted and ignored: they select or label input this
                 // function does not read, or change nothing it writes.
@@ -183,6 +191,13 @@ impl Opts {
                 // Spark ignores names it does not know.
                 _ => {}
             }
+        }
+        if legacy && func == "from_xml" {
+            // `XmlOptions` under LEGACY: Spark's default patterns are explicit.
+            o.date
+                .get_or_insert_with(|| DateTimePattern::new_fast("yyyy-MM-dd"));
+            o.timestamp
+                .get_or_insert_with(|| DateTimePattern::new_fast("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"));
         }
         Ok(o)
     }
@@ -718,19 +733,18 @@ fn bind_from_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
     }
     let ddl = literal_string(&args[1])?;
     let fields = struct_fields(&ddl)?;
-    let mut parsed = Opts::parse(&[], "from_xml")?;
+    let mut parsed = Opts::parse(&[], "from_xml", opts.legacy_time_parser)?;
     if args.len() == 3 {
         if !matches!(args[2].data_type(), DataType::Map(_, _)) {
             return Err(bad_types("from_xml", args));
         }
-        parsed = Opts::parse(&map_pairs(&args[2])?, "from_xml")?;
+        parsed = Opts::parse(&map_pairs(&args[2])?, "from_xml", opts.legacy_time_parser)?;
     }
     // Fail at bind for a field type the reader cannot hold.
     for f in &fields {
         check_read_type(f.data_type())?;
     }
     let return_type = DataType::Struct(fields.clone());
-    super::json::refuse_legacy_dates("from_xml", &return_type, opts.legacy_time_parser)?;
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
     let today = krishiv_kernels::datetime::current_date(opts.query_start_micros, zone.as_ref())
         .map_err(KrishivError::from)?;
@@ -1085,23 +1099,39 @@ fn bind_to_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
     if args.is_empty() || args.len() > 2 || !matches!(args[0].data_type(), DataType::Struct(_)) {
         return Err(bad_types("to_xml", args));
     }
-    let mut parsed = Opts::parse(&[], "to_xml")?;
+    let mut parsed = Opts::parse(&[], "to_xml", opts.legacy_time_parser)?;
     if args.len() == 2 {
         if !matches!(args[1].data_type(), DataType::Map(_, _)) {
             return Err(bad_types("to_xml", args));
         }
-        parsed = Opts::parse(&map_pairs(&args[1])?, "to_xml")?;
+        parsed = Opts::parse(&map_pairs(&args[1])?, "to_xml", opts.legacy_time_parser)?;
     }
-    super::json::refuse_legacy_dates("to_xml", &args[0].data_type(), opts.legacy_time_parser)?;
+    let legacy = opts.legacy_time_parser;
     let default = |p: &str| DateTimePattern::new(p, Purpose::Format);
-    let date = parsed
-        .date
-        .clone()
-        .map_or_else(|| default("yyyy-MM-dd"), Ok)?;
-    let timestamp = parsed
-        .timestamp
-        .clone()
-        .map_or_else(|| default("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"), Ok)?;
+    let date = parsed.date.clone().map_or_else(
+        || {
+            if legacy {
+                Ok(DateTimePattern::new_fast("yyyy-MM-dd"))
+            } else {
+                default("yyyy-MM-dd")
+            }
+        },
+        Ok,
+    )?;
+    let timestamp = parsed.timestamp.clone().map_or_else(
+        || {
+            if legacy {
+                Ok(DateTimePattern::new_fast("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"))
+            } else {
+                default("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
+            }
+        },
+        Ok,
+    )?;
+    // Spark's generator builds the timestamp formatter eagerly.
+    if let Some(e) = timestamp.build_error() {
+        return Err(e);
+    }
     let ntz = parsed
         .ntz
         .clone()
@@ -1357,7 +1387,7 @@ fn ddl(t: &T) -> String {
 /// for an option this module does not implement, and the pattern errors of
 /// `dateFormat` and `timestampFormat`.
 pub fn schema_of_xml_ddl(xml: &str, pairs: &[(String, String)]) -> Result<String, KrishivError> {
-    let opts = Opts::parse(pairs, "schema_of_xml")?;
+    let opts = Opts::parse(pairs, "schema_of_xml", false)?;
     Ok(match parse_document(xml) {
         Some(root) => ddl(&infer_elem(&root, &opts, true)),
         None => "STRUCT<_corrupt_record: STRING>".to_owned(),

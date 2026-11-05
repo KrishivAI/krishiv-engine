@@ -292,7 +292,7 @@ pub(super) fn compile(
             view,
             relabel,
             nullable: f.nullable,
-            partition_shift: if is_stateful(name) {
+            partition_shift: if krishiv_functions::scalar::is_stateful(name) {
                 input.env.partition_shift
             } else {
                 0
@@ -312,14 +312,6 @@ pub(super) fn compile(
         }),
         canonical,
     ))
-}
-
-/// Functions whose value stream is drawn per partition (see
-/// `krishiv_functions::scalar::random`).
-fn is_stateful(name: &str) -> bool {
-    ["rand", "random", "randn", "uniform", "randstr", "uuid"]
-        .iter()
-        .any(|n| name.eq_ignore_ascii_case(n))
 }
 
 /// A bound registry function over its arguments.

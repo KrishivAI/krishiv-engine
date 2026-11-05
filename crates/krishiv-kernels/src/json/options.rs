@@ -84,6 +84,11 @@ pub struct JsonOptions {
     pub drop_field_if_all_null: bool,
     /// `mode` (a `from_json` reader flag).
     pub mode: ParseMode,
+    /// `enableDateTimeParsingFallback`: a date or timestamp the pattern does
+    /// not read is read again by the lenient default grammar. Spark's default
+    /// is on under `timeParserPolicy=LEGACY` and when the option names no
+    /// pattern, off otherwise.
+    pub datetime_fallback: bool,
 }
 
 impl JsonOptions {
@@ -109,10 +114,9 @@ impl JsonOptions {
     }
 
     /// [`Self::from_map`], with the date and zoned timestamp patterns
-    /// compiled as the legacy (`SimpleDateFormat`) ones when `legacy`.
-    /// Spark's JSON functions use a lenient `FastDateFormat` there instead,
-    /// which this does not model, so the SQL functions pass `false` and
-    /// refuse `LEGACY` for a `DATE` or `TIMESTAMP` field.
+    /// compiled as Spark's `FastDateFormat` ones (and its default patterns,
+    /// and the lenient fallback) when `legacy`
+    /// (`spark.sql.legacy.timeParserPolicy=LEGACY`).
     ///
     /// # Errors
     /// As [`Self::from_map`].
@@ -121,13 +125,30 @@ impl JsonOptions {
         legacy: bool,
     ) -> Result<Self, KrishivError> {
         let mut out = Self::new();
+        out.datetime_fallback = legacy;
+        if legacy {
+            // Under LEGACY the options carry explicit `FastDateFormat`
+            // patterns even when none is named (`JSONOptions`).
+            out.date_format = Some(DateTimePattern::new_fast(LEGACY_DATE));
+            out.date_output = Some(DateTimePattern::new_fast(LEGACY_DATE));
+            out.timestamp_format = Some(DateTimePattern::new_fast(LEGACY_TIMESTAMP));
+            out.timestamp_output = Some(DateTimePattern::new_fast(LEGACY_TIMESTAMP));
+        }
         for (name, value) in options {
             match name.as_str() {
+                "enableDateTimeParsingFallback" => out.datetime_fallback = is_true(value),
+                "dateFormat" if legacy => {
+                    out.date_format = Some(DateTimePattern::new_fast(value));
+                    out.date_output = Some(DateTimePattern::new_fast(value));
+                }
+                "timestampFormat" if legacy => {
+                    out.timestamp_format = Some(DateTimePattern::new_fast(value));
+                    out.timestamp_output = Some(DateTimePattern::new_fast(value));
+                }
                 "dateFormat" => {
-                    let pattern = DateTimePattern::new_with(value, Purpose::Parse, legacy)?;
+                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
                     out.date_format = Some(pattern);
-                    out.date_output =
-                        Some(DateTimePattern::new_with(value, Purpose::Format, legacy)?);
+                    out.date_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
                 "timeFormat" => {
                     let pattern = DateTimePattern::new(value, Purpose::Parse)?;
@@ -135,10 +156,9 @@ impl JsonOptions {
                     out.time_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
                 "timestampFormat" => {
-                    let pattern = DateTimePattern::new_with(value, Purpose::Parse, legacy)?;
+                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
                     out.timestamp_format = Some(pattern);
-                    out.timestamp_output =
-                        Some(DateTimePattern::new_with(value, Purpose::Format, legacy)?);
+                    out.timestamp_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
                 // Spark builds the NTZ formatter with `forTimestampNTZ`, which
                 // never takes the legacy one, whatever the parser policy.
@@ -178,6 +198,23 @@ impl JsonOptions {
         Ok(out)
     }
 
+    /// Fails for a `timestampFormat` Spark cannot build: its generator
+    /// builds the timestamp formatter eagerly (the date one only when it
+    /// formats a date), so `to_json` fails at once.
+    ///
+    /// # Errors
+    /// Spark's pattern error.
+    pub fn validate_for_write(&self) -> Result<(), KrishivError> {
+        match self
+            .timestamp_output
+            .as_ref()
+            .and_then(DateTimePattern::build_error)
+        {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
     /// The lexer flags of these options.
     #[must_use]
     pub(crate) const fn lexer(&self) -> super::parse::LexerFlags {
@@ -192,6 +229,10 @@ impl JsonOptions {
         }
     }
 }
+
+/// Spark's defaults for the date and timestamp patterns under LEGACY.
+const LEGACY_DATE: &str = "yyyy-MM-dd";
+const LEGACY_TIMESTAMP: &str = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX";
 
 /// Spark's `toBoolean`: only `"true"` (any case, trimmed) is true.
 fn is_true(value: &str) -> bool {

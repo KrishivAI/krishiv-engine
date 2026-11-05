@@ -34,7 +34,7 @@ use krishiv_common::error::KrishivError;
 pub enum TimePattern {
     /// The `DateTimeFormatter` pattern.
     Corrected(DateTimePattern),
-    /// The `SimpleDateFormat`/`FastDateFormat` pattern.
+    /// The `SimpleDateFormat` pattern.
     Legacy(LegacyPattern),
 }
 
