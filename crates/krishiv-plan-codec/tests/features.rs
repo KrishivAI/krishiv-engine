@@ -1052,6 +1052,20 @@ fn the_variant_type_needs_its_feature() {
         Some(Feature::VariantType)
     );
     assert_eq!(Feature::VariantType.kind(), FeatureKind::Semantic);
+    assert_eq!(
+        message("generate_variant_explode").features,
+        ["generate", "variant_explode", "variant_type"]
+    );
+    assert_eq!(
+        feature_of(Construct::Generator(
+            krishiv_plan::GeneratorKind::VariantExplode
+        )),
+        Some(Feature::VariantExplode)
+    );
+    assert_eq!(
+        feature_of(Construct::Generator(krishiv_plan::GeneratorKind::Explode)),
+        None
+    );
     let bytes = message("variant_scan").encode_to_vec();
     let older = ReaderFeatures::only(
         Feature::ALL

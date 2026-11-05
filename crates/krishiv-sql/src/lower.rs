@@ -1146,20 +1146,11 @@ impl Lowerer {
                 return Err(unsupported("a qualified generator name", v.span));
             };
             let lower = name.value.to_ascii_lowercase();
-            let (base, outer_name) = match lower.strip_suffix("_outer") {
-                Some(base) => (base, true),
-                None => (lower.as_str(), false),
-            };
-            let kind = match base {
-                "explode" => krishiv_plan::GeneratorKind::Explode,
-                "posexplode" => krishiv_plan::GeneratorKind::PosExplode,
-                "inline" => krishiv_plan::GeneratorKind::Inline,
-                _ => {
-                    return Err(unsupported(
-                        &format!("the generator function {}", name.value),
-                        v.span,
-                    ));
-                }
+            let Some((kind, outer_name)) = krishiv_plan::GeneratorKind::of_name(&lower) else {
+                return Err(unsupported(
+                    &format!("the generator function {}", name.value),
+                    v.span,
+                ));
             };
             let [arg] = &v.args[..] else {
                 return Err(err(
@@ -1207,17 +1198,10 @@ impl Lowerer {
             return None;
         };
         let lower = name.value.to_ascii_lowercase();
-        let (base, outer) = match lower.strip_suffix("_outer") {
-            Some(base) => (base, true),
-            None => (lower.as_str(), false),
-        };
-        let kind = match base {
-            "explode" => krishiv_plan::GeneratorKind::Explode,
-            "posexplode" => krishiv_plan::GeneratorKind::PosExplode,
-            "inline" => krishiv_plan::GeneratorKind::Inline,
-            // `stack` is `inline` over an array of structs ([`Self::generator_arg`]).
-            "stack" if !outer => krishiv_plan::GeneratorKind::Inline,
-            _ => return None,
+        // `stack` is `inline` over an array of structs ([`Self::generator_arg`]).
+        let (kind, outer) = match lower.as_str() {
+            "stack" => (krishiv_plan::GeneratorKind::Inline, false),
+            other => krishiv_plan::GeneratorKind::of_name(other)?,
         };
         // A window, a filter or DISTINCT makes it no generator call.
         (f.over.is_none() && f.filter.is_none() && f.quantifier.is_none()).then_some((
@@ -1928,22 +1912,26 @@ impl Lowerer {
                 // A generator as a table: `FROM explode(array(1, 2))`
                 // generates from one empty row.
                 let lname = name.parts[0].value.to_ascii_lowercase();
-                let (base, outer) = match lname.strip_suffix("_outer") {
-                    Some(base) => (base, true),
-                    None => (lname.as_str(), false),
-                };
-                let kind = match base {
-                    "explode" => Some(krishiv_plan::GeneratorKind::Explode),
-                    "posexplode" => Some(krishiv_plan::GeneratorKind::PosExplode),
-                    "inline" => Some(krishiv_plan::GeneratorKind::Inline),
-                    "stack" if !outer => Some(krishiv_plan::GeneratorKind::Inline),
-                    _ => None,
+                let (kind, outer) = match lname.as_str() {
+                    "stack" => (Some(krishiv_plan::GeneratorKind::Inline), false),
+                    other => krishiv_plan::GeneratorKind::of_name(other)
+                        .map_or((None, false), |(k, o)| (Some(k), o)),
                 };
                 // `FROM json_tuple(..)` stays a table function: the analyzer
                 // runs it as the select list `SELECT json_tuple(..)` over one
                 // row, and its alias-count error differs from a subquery's.
                 if let (Some(kind), 1) = (kind, name.parts.len()) {
-                    if let Some(a) = args.iter().find(|a| a.name.is_some()) {
+                    // `variant_explode` names its one parameter `input`
+                    // (Spark's `FunctionSignature(InputParameter("input"))`).
+                    let named = |a: &&crate::ast::FunctionArg| match &a.name {
+                        Some(n) => {
+                            kind != krishiv_plan::GeneratorKind::VariantExplode
+                                || args.len() != 1
+                                || !n.value.eq_ignore_ascii_case("input")
+                        }
+                        None => false,
+                    };
+                    if let Some(a) = args.iter().find(named) {
                         return Err(unsupported("table-valued functions", a.span));
                     }
                     let arg = &self.generator_arg(&name.parts[0], args, tf.span)?;

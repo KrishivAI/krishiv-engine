@@ -532,6 +532,7 @@ impl Decoder {
                     Explode => krishiv_plan::GeneratorKind::Explode,
                     PosExplode => krishiv_plan::GeneratorKind::PosExplode,
                     Inline => krishiv_plan::GeneratorKind::Inline,
+                    VariantExplode => krishiv_plan::GeneratorKind::VariantExplode,
                 })?,
                 outer: g.outer,
                 arg: self.expr_ref(g.arg)?,

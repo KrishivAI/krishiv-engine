@@ -1485,6 +1485,8 @@ pub enum GeneratorKind {
     Explode = 1,
     PosExplode = 2,
     Inline = 3,
+    /// feature: variant_explode
+    VariantExplode = 4,
 }
 impl GeneratorKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1497,6 +1499,7 @@ impl GeneratorKind {
             Self::Explode => "GENERATOR_KIND_EXPLODE",
             Self::PosExplode => "GENERATOR_KIND_POS_EXPLODE",
             Self::Inline => "GENERATOR_KIND_INLINE",
+            Self::VariantExplode => "GENERATOR_KIND_VARIANT_EXPLODE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1506,6 +1509,7 @@ impl GeneratorKind {
             "GENERATOR_KIND_EXPLODE" => Some(Self::Explode),
             "GENERATOR_KIND_POS_EXPLODE" => Some(Self::PosExplode),
             "GENERATOR_KIND_INLINE" => Some(Self::Inline),
+            "GENERATOR_KIND_VARIANT_EXPLODE" => Some(Self::VariantExplode),
             _ => None,
         }
     }

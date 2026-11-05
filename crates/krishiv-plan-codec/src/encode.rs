@@ -328,6 +328,9 @@ impl Encoder {
                     krishiv_plan::GeneratorKind::Explode => pb::GeneratorKind::Explode,
                     krishiv_plan::GeneratorKind::PosExplode => pb::GeneratorKind::PosExplode,
                     krishiv_plan::GeneratorKind::Inline => pb::GeneratorKind::Inline,
+                    krishiv_plan::GeneratorKind::VariantExplode => {
+                        pb::GeneratorKind::VariantExplode
+                    }
                 }
                 .into(),
                 outer: *outer,

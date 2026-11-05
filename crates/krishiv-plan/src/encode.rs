@@ -968,6 +968,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     crate::GeneratorKind::Explode => 0,
                     crate::GeneratorKind::PosExplode => 1,
                     crate::GeneratorKind::Inline => 2,
+                    crate::GeneratorKind::VariantExplode => 3,
                 });
                 self.u8(u8::from(*outer));
                 self.expr(arg);

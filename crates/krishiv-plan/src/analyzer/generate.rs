@@ -60,6 +60,12 @@ fn generated(kind: GeneratorKind, ty: &DataType) -> Option<Vec<(String, DataType
             ));
             Some(cols)
         }
+        // Spark's `VariantExplode.elementSchema`.
+        (GeneratorKind::VariantExplode, DataType::Variant) => Some(vec![
+            ("pos".to_owned(), DataType::Integer, false),
+            ("key".to_owned(), DataType::String, true),
+            ("value".to_owned(), DataType::Variant, false),
+        ]),
         (GeneratorKind::Inline, DataType::Array(a)) => match a.element_type() {
             DataType::Struct(s) => Some(
                 s.fields()
@@ -352,6 +358,7 @@ impl Resolver<'_> {
         let Some(cols) = b.ty.data_type.as_ref().and_then(|ty| generated(kind, ty)) else {
             let required = match kind {
                 GeneratorKind::Inline => "\"ARRAY<STRUCT>\"".to_owned(),
+                GeneratorKind::VariantExplode => "\"VARIANT\"".to_owned(),
                 _ => "(\"ARRAY\" or \"MAP\")".to_owned(),
             };
             let shown = pretty(&b.expr, None);
@@ -432,17 +439,7 @@ impl ExtractedGenerator {
 }
 
 fn generator_kind(name: &str) -> Option<(GeneratorKind, bool)> {
-    let (base, outer) = match name.strip_suffix("_outer") {
-        Some(base) => (base, true),
-        None => (name, false),
-    };
-    let kind = match base {
-        "explode" => GeneratorKind::Explode,
-        "posexplode" => GeneratorKind::PosExplode,
-        "inline" => GeneratorKind::Inline,
-        _ => return None,
-    };
-    Some((kind, outer))
+    GeneratorKind::of_name(name)
 }
 
 impl Resolver<'_> {

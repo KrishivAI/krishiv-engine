@@ -154,6 +154,7 @@ registry! {
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
+    (variant_explode, VariantExplode, POST_MIGRATION_READER_VERSION, Semantic, "The `variant_explode` generator (and `variant_explode_outer`): the fields of a variant object or the elements of a variant array."),
     (variant_type, VariantType, POST_MIGRATION_READER_VERSION, Semantic, "The `VARIANT` type (Parquet Variant v1 values, unshredded in memory)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
@@ -223,6 +224,8 @@ pub enum Construct<'a> {
     Lambda,
     /// A `WritePlan` naming the Spark types of input columns.
     WriteColumnTypes,
+    /// A `Generate` node's generator.
+    Generator(krishiv_plan::GeneratorKind),
 }
 
 /// The feature a type needs on its own. The walk reports a type inside an
@@ -439,6 +442,12 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // it misreads the higher-order call's argument.
         Construct::Lambda => Some(Feature::LambdaFunctions),
         Construct::WriteColumnTypes => Some(Feature::WriteColumnTypes),
+        Construct::Generator(kind) => match kind {
+            krishiv_plan::GeneratorKind::VariantExplode => Some(Feature::VariantExplode),
+            krishiv_plan::GeneratorKind::Explode
+            | krishiv_plan::GeneratorKind::PosExplode
+            | krishiv_plan::GeneratorKind::Inline => None,
+        },
         // A type Krishiv does not know cannot be encoded at all. A later
         // feature for a type that can sit inside an array, map or struct
         // (variant, char/varchar, intervals) must look through them: its
@@ -592,6 +601,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         PhysNode::HashJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::SortMergeJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
+        PhysNode::Generate { kind, .. } => f(Construct::Generator(*kind)),
         PhysNode::Exchange(e) => f(Construct::Partitioning(&e.partitioning)),
         // A reduce fragment may name a type only in the schema it reads
         // (a sort by column index above it), so the schema is classified
@@ -617,7 +627,6 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
         | PhysNode::ReplicateRows { .. }
-        | PhysNode::Generate { .. }
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
         | PhysNode::WindowGroupLimit { .. }

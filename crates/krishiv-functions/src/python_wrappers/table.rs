@@ -98,6 +98,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "generator: a `Generate` node, not a DataFrame function yet",
     ),
     (
+        "variant_explode",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
+        "variant_explode_outer",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
         "timestampadd",
         "parsed from `TIMESTAMPADD(unit, n, ts)`; PySpark names it `timestamp_add`",
     ),
