@@ -1074,6 +1074,10 @@ impl Session {
     /// The block-cache scope of this session's stores: its principal. The session's storage
     /// credentials come from its own configuration, so one principal's queries may share blocks
     /// and no other principal's may (E15).
+    /// The scope is the principal and nothing else. The session's own `fs.*` credentials are not
+    /// part of it: changing them with `SET` keeps the same scope (and the same store ids), so
+    /// blocks cached under the old credentials stay readable under the new ones. A session that
+    /// swaps its storage credentials should be replaced by a new session.
     pub(crate) fn credential_scope(&self) -> krishiv_io::CacheScope {
         krishiv_io::CacheScope::Principal(self.state.principal.id())
     }
