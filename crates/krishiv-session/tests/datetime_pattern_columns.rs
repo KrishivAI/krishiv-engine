@@ -359,6 +359,89 @@ fn the_legacy_time_parser_reads_and_prints_legacy_patterns() {
     );
 }
 
+/// Under LEGACY, the JSON, CSV and XML functions read and write dates and
+/// timestamps with Spark's lenient `FastDateFormat` (each row from a Spark
+/// 4.2.0 run, UTC session zone), and `TIMESTAMP_NTZ` stays on the corrected
+/// formatter.
+#[test]
+fn the_legacy_time_parser_gives_the_json_csv_and_xml_functions_fast_date_format() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = LEGACY")).unwrap();
+    for (expr, want) in [
+        // Lenient: February 30 is March 1.
+        (
+            "from_json('{\"d\":\"2024-02-30\"}', 'd date', map('dateFormat', 'yyyy-MM-dd')).d",
+            "2024-03-01",
+        ),
+        // An `S` run is a fraction of a second.
+        (
+            "from_json('{\"t\":\"2024-01-02 03:04:05.000123\"}', 't timestamp', \
+             map('timestampFormat', 'yyyy-MM-dd HH:mm:ss.SSSSSS')).t",
+            "2024-01-02 03:04:05.000123",
+        ),
+        // No options: Spark's own default pattern reads `SSS` as a fraction
+        // of a second too (123456 milliseconds), and prints one back.
+        (
+            "from_json('{\"t\":\"2024-01-02T03:04:05.123456Z\"}', 't timestamp').t",
+            "2024-01-02 03:06:08.456",
+        ),
+        (
+            "to_json(named_struct('t', timestamp_micros(1704164645123456L)), \
+             map('timestampFormat', 'yyyy-MM-dd HH:mm:ss.SSSSSS'))",
+            "{\"t\":\"2024-01-02 03:04:05.123456\"}",
+        ),
+        (
+            "to_json(named_struct('t', timestamp_micros(1704164645123456L)), map('timestampFormat', 'ZZ'))",
+            "{\"t\":\"Z\"}",
+        ),
+        (
+            "to_json(named_struct('d', date'0005-01-01'), map('dateFormat', 'y'))",
+            "{\"d\":\"0005\"}",
+        ),
+        (
+            "from_csv('2024-02-30', 'd date', map('dateFormat', 'yyyy-MM-dd')).d",
+            "2024-03-01",
+        ),
+        (
+            "to_csv(named_struct('d', date'2024-03-01'), map('dateFormat', 'dd/MM/yyyy'))",
+            "01/03/2024",
+        ),
+        (
+            "from_xml('<ROW><d>2024-02-30</d></ROW>', 'd date', map('dateFormat', 'yyyy-MM-dd')).d",
+            "2024-03-01",
+        ),
+        (
+            "from_csv('2024-02-30 10:00:00.000123', 't timestamp', \
+             map('timestampFormat', 'yyyy-MM-dd HH:mm:ss.SSSSSS')).t",
+            "2024-03-01 10:00:00.000123",
+        ),
+        (
+            "from_xml('<ROW><t>2024-02-30 10:00:00.000123</t></ROW>', 't timestamp', \
+             map('timestampFormat', 'yyyy-MM-dd HH:mm:ss.SSSSSS')).t",
+            "2024-03-01 10:00:00.000123",
+        ),
+        (
+            "to_csv(named_struct('t', timestamp_micros(1704164645123456L), 'd', date'2024-01-02'))",
+            "2024-01-02T03:04:05.123Z,2024-01-02",
+        ),
+        (
+            "to_xml(named_struct('t', timestamp_micros(1704164645123456L)), \
+             map('timestampFormat', 'yyyy-MM-dd HH:mm:ss.SSSSSS ZZ'))",
+            "<ROW>\n    <t>2024-01-02 03:04:05.123456 Z</t>\n</ROW>",
+        ),
+        // The NTZ formatter is never the legacy one: February 30 is NULL.
+        (
+            "from_json('{\"t\":\"2024-02-30 04:05:06\"}', 't timestamp_ntz', \
+             map('timestampNTZFormat', 'yyyy-MM-dd HH:mm:ss')).t",
+            "",
+        ),
+    ] {
+        let got = column(&s, expr, "");
+        let want = (!want.is_empty()).then(|| want.to_owned());
+        assert_eq!(got, vec![want], "{expr}");
+    }
+}
+
 /// The legacy parser is not lenient but stops where the pattern does, the
 /// legacy printer knows the week letters, and region offsets before 1900
 /// are `java.util.TimeZone`'s raw offset (each as Spark 4.2.0 answers).

@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The pre-3.0 datetime patterns of `spark.sql.legacy.timeParserPolicy =
-//! LEGACY`: formatting is commons-lang's `FastDateFormat`, parsing is
-//! `java.text.SimpleDateFormat` (non-lenient, so a month 13 or a February 30
-//! is no timestamp), both over the Julian/Gregorian hybrid calendar.
+//! LEGACY`, over the Julian/Gregorian hybrid calendar. The SQL functions use
+//! `java.text.SimpleDateFormat`: its letters print and it parses non-leniently
+//! (a month 13 or a February 30 is no timestamp). Spark's JSON, CSV and XML
+//! options use commons-lang's `FastDateFormat` instead, a lenient parser and
+//! its own printer letters: that is the `fast` flag of [`LegacyPattern`],
+//! modelled in the [`fast`] submodule.
 //!
 //! Spark rebases the proleptic value to the hybrid calendar keeping the
 //! date-time labels, so a field that is the label itself (year, month, day,
@@ -102,6 +105,19 @@ impl LegacyPattern {
             fast: true,
             broken: true,
         }
+    }
+
+    /// The pattern error of a fast pattern that was built lazily.
+    #[must_use]
+    pub fn build_error(&self) -> Option<KrishivError> {
+        if !self.broken {
+            return None;
+        }
+        Some(
+            Self::compile(&self.pattern, true)
+                .err()
+                .unwrap_or_else(|| unsupported("a datetime pattern Spark cannot build")),
+        )
     }
 
     fn compile(pattern: &str, fast: bool) -> Result<Self, KrishivError> {
@@ -237,8 +253,8 @@ impl LegacyPattern {
         tod: i64,
         zone: Option<(i32, &str)>,
     ) -> Result<String, KrishivError> {
-        if self.broken {
-            return Err(unsupported("a datetime pattern Spark cannot build"));
+        if let Some(e) = self.build_error() {
+            return Err(e);
         }
         // The hybrid calendar has no 1582-10-05..14: the rebase of such a
         // label lands on the first Gregorian day.
@@ -1209,6 +1225,14 @@ enum Mode {
     Woy,
 }
 
+/// `RebaseDateTime.rebaseJulianToGregorianDays`: the day count a hybrid
+/// calendar date has, as the day count of the same year-month-day label in
+/// the proleptic Gregorian calendar.
+#[must_use]
+pub fn rebase_julian_days(days: i64) -> i64 {
+    label_of_real(days)
+}
+
 /// Day of week of `days` since the epoch, Sunday = 1.
 fn dow_sun1(days: i64) -> i64 {
     (days + 4).rem_euclid(7) + 1
@@ -1276,7 +1300,14 @@ fn number(text: &[char], pos: usize, limit: Option<usize>) -> Option<(i64, usize
             }
         }
     }
-    Some((value, end))
+    Some((wrap_int(value), end))
+}
+
+/// `Number.intValue()` of a `Long`: the low 32 bits as a signed `int`
+/// (Spark 4.2: '4294969320-01-01' with 'yyyy-MM-dd' is 2024-01-01).
+fn wrap_int(value: i64) -> i64 {
+    let low = u32::try_from(value & 0xFFFF_FFFF).unwrap_or(0);
+    i64::from(i32::from_le_bytes(low.to_le_bytes()))
 }
 
 /// [`number`] with ASCII digits only, as the zone fields read them.

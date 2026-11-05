@@ -1429,8 +1429,10 @@ pub static LEGACY_TIME_PARSER_POLICY: ConfigEntry = ConfigEntry {
     value_type: ValueType::Enum(&["EXCEPTION", "CORRECTED", "LEGACY"]),
     default: Some(ConfigValue::String(Cow::Borrowed("EXCEPTION"))),
     doc: "How the datetime pattern functions (`date_format`, `to_date`, `to_timestamp`, \
-          `unix_timestamp`, `from_unixtime`) read and print patterns. `LEGACY` is the pre-3.0 \
-          `SimpleDateFormat`/`FastDateFormat` behaviour; `CORRECTED` and `EXCEPTION` use the \
+          `unix_timestamp`, `from_unixtime`) and the JSON, CSV and XML functions read and print \
+          patterns. `LEGACY` is the pre-3.0 behaviour: `SimpleDateFormat` for the datetime \
+          functions, and a lenient commons-lang `FastDateFormat` for the `DATE` and `TIMESTAMP` \
+          fields of the JSON, CSV and XML functions; `CORRECTED` and `EXCEPTION` use the \
           `DateTimeFormatter` patterns.",
     scope: Scope::Session,
     version_added: "0.1.0",

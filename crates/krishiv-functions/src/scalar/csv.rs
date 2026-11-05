@@ -245,6 +245,8 @@ struct Parsed {
     ntz_pattern: Option<DateTimePattern>,
     /// Fallback to lenient grammar.
     fallback: bool,
+    /// `spark.sql.legacy.timeParserPolicy=LEGACY`.
+    legacy: bool,
     /// Quote every value (`to_csv` write).
     quote_all: bool,
     /// Quote values holding a quote.
@@ -261,14 +263,13 @@ pub(super) fn datetime_option(
     pattern: &str,
     func: &str,
     option: &str,
-    legacy: bool,
 ) -> Result<DateTimePattern, KrishivError> {
     let purpose = if func == "to_csv" {
         Purpose::Format
     } else {
         Purpose::Parse
     };
-    datetime_option_as(pattern, func, option, purpose, legacy)
+    datetime_option_as(pattern, func, option, purpose)
 }
 
 /// [`datetime_option`] for an explicit `purpose` (the XML functions).
@@ -277,9 +278,8 @@ pub(super) fn datetime_option_as(
     func: &str,
     option: &str,
     purpose: Purpose,
-    legacy: bool,
 ) -> Result<DateTimePattern, KrishivError> {
-    DateTimePattern::new_with(pattern, purpose, legacy).map_err(|e| {
+    DateTimePattern::new(pattern, purpose).map_err(|e| {
         if e.error_class() == ErrorClass::KrishivUnsupportedFeature {
             KrishivUnsupportedFeature {
                 feature: format!("{func} with option {option}"),
@@ -293,8 +293,9 @@ pub(super) fn datetime_option_as(
 
 impl Parsed {
     /// Defaults for `func`.
-    fn defaults() -> Self {
+    fn defaults(legacy: bool) -> Self {
         Self {
+            legacy,
             syntax: Syntax::default(),
             mode: ParseMode::Permissive,
             corrupt_column: "_corrupt_record".to_owned(),
@@ -306,7 +307,7 @@ impl Parsed {
             time_pattern: None,
             timestamp_pattern: None,
             ntz_pattern: None,
-            fallback: false,
+            fallback: legacy,
             quote_all: false,
             escape_quotes: true,
             line_sep: None,
@@ -357,25 +358,32 @@ impl Parsed {
                     };
                 }
                 "columnnameofcorruptrecord" => self.corrupt_column = v.clone(),
+                // Under LEGACY these two are Spark's lenient `FastDateFormat`
+                // (built lazily: a bad pattern only surfaces on use).
                 "dateformat" => {
-                    // LEGACY dates are refused before options apply
-                    // (`refuse_legacy_dates`).
-                    self.date_pattern = Some(datetime_option(v, func, "dateFormat", false)?);
+                    self.date_pattern = Some(if self.legacy {
+                        DateTimePattern::new_fast(v)
+                    } else {
+                        datetime_option(v, func, "dateFormat")?
+                    });
                 }
                 "timestampformat" => {
-                    self.timestamp_pattern =
-                        Some(datetime_option(v, func, "timestampFormat", false)?);
+                    self.timestamp_pattern = Some(if self.legacy {
+                        DateTimePattern::new_fast(v)
+                    } else {
+                        datetime_option(v, func, "timestampFormat")?
+                    });
                 }
                 // Spark's NTZ formatter (`forTimestampNTZ`) is never the
                 // legacy one.
                 "timestampntzformat" => {
-                    self.ntz_pattern = Some(datetime_option(v, func, "timestampNTZFormat", false)?);
+                    self.ntz_pattern = Some(datetime_option(v, func, "timestampNTZFormat")?);
                 }
                 "enabledatetimeparsingfallback" => {
                     self.fallback = v.eq_ignore_ascii_case("true");
                 }
                 "timeformat" => {
-                    self.time_pattern = Some(datetime_option(v, func, "timeFormat", false)?);
+                    self.time_pattern = Some(datetime_option(v, func, "timeFormat")?);
                 }
                 "header" => {
                     // Ignored for `from_csv` (Spark ignores it); `to_csv`
@@ -454,12 +462,7 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
             })
         })
         .collect::<Result<_, _>>()?;
-    let mut parsed = Parsed::defaults();
-    super::json::refuse_legacy_dates(
-        "from_csv",
-        &DataType::Struct(fields.clone()),
-        opts.legacy_time_parser,
-    )?;
+    let mut parsed = Parsed::defaults(opts.legacy_time_parser);
     if args.len() == 3 {
         // Options are a `MAP<STRING, STRING>` literal (analysis checked the
         // types); anything else was refused during analysis.
@@ -468,6 +471,15 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
         }
         let pairs = map_pairs(&args[2])?;
         parsed.apply(&pairs, "from_csv")?;
+    }
+    if opts.legacy_time_parser {
+        // `CSVOptions` under LEGACY: Spark's default patterns are explicit.
+        parsed
+            .date_pattern
+            .get_or_insert_with(|| DateTimePattern::new_fast("yyyy-MM-dd"));
+        parsed
+            .timestamp_pattern
+            .get_or_insert_with(|| DateTimePattern::new_fast("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"));
     }
     let corrupt = fields
         .iter()
@@ -548,8 +560,7 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
             })
         })
         .collect::<Result<_, _>>()?;
-    let mut parsed = Parsed::defaults();
-    super::json::refuse_legacy_dates("to_csv", &DataType::Struct(fields), opts.legacy_time_parser)?;
+    let mut parsed = Parsed::defaults(opts.legacy_time_parser);
     // Writing defaults (Spark's CSV writer): an empty string is written as
     // two quotes, and the whitespace around a value is dropped.
     parsed.syntax.empty_value = "\"\"".to_owned();
@@ -563,14 +574,27 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         parsed.apply(&pairs, "to_csv")?;
     }
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
-    let date_pattern = parsed
-        .date_pattern
-        .clone()
-        .or_else(|| DateTimePattern::new("yyyy-MM-dd", Purpose::Format).ok());
-    let timestamp_pattern = parsed
-        .timestamp_pattern
-        .clone()
-        .or_else(|| DateTimePattern::new("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Purpose::Format).ok());
+    let date_pattern = parsed.date_pattern.clone().or_else(|| {
+        if opts.legacy_time_parser {
+            Some(DateTimePattern::new_fast("yyyy-MM-dd"))
+        } else {
+            DateTimePattern::new("yyyy-MM-dd", Purpose::Format).ok()
+        }
+    });
+    let timestamp_pattern = parsed.timestamp_pattern.clone().or_else(|| {
+        if opts.legacy_time_parser {
+            Some(DateTimePattern::new_fast("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"))
+        } else {
+            DateTimePattern::new("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Purpose::Format).ok()
+        }
+    });
+    // Spark's writer builds the timestamp formatter eagerly.
+    if let Some(e) = timestamp_pattern
+        .as_ref()
+        .and_then(DateTimePattern::build_error)
+    {
+        return Err(e);
+    }
     let ntz_pattern = parsed
         .ntz_pattern
         .clone()

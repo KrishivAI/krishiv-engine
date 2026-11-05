@@ -608,6 +608,7 @@ mod element;
 mod families;
 mod json;
 mod json_tuple;
+mod legacy_fast;
 mod map;
 mod misc;
 mod number;

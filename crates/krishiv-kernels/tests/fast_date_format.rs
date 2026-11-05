@@ -4,7 +4,7 @@
 //! lenient fallback off, and prints.
 
 use krishiv_kernels::datetime::resolve_zone;
-use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose, Zone};
+use krishiv_kernels::datetime_pattern::{DateTimePattern, Zone};
 
 mod fixtures {
     include!("fixtures/fast_date_format_probes.rs");
@@ -18,7 +18,7 @@ fn fast_timestamp_parses_match_spark() {
     let mut wrong = Vec::new();
     for &(zone, text, pattern, want) in fixtures::PARSE_TS {
         let rules = resolve_zone(zone).unwrap();
-        let p = DateTimePattern::new_fast(pattern.unwrap_or(DEFAULT_TS), Purpose::Parse).unwrap();
+        let p = DateTimePattern::new_fast(pattern.unwrap_or(DEFAULT_TS));
         let got = p.parse_timestamp(text, &rules).unwrap();
         if got != want {
             wrong.push(format!(
@@ -39,7 +39,7 @@ fn fast_timestamp_parses_match_spark() {
 fn fast_date_parses_match_spark() {
     let mut wrong = Vec::new();
     for &(text, pattern, want) in fixtures::PARSE_DATE {
-        let p = DateTimePattern::new_fast(pattern.unwrap_or(DEFAULT_DATE), Purpose::Parse).unwrap();
+        let p = DateTimePattern::new_fast(pattern.unwrap_or(DEFAULT_DATE));
         let got = p.parse_date(text).unwrap();
         if got != want {
             wrong.push(format!(
@@ -61,7 +61,7 @@ fn fast_timestamp_prints_match_spark() {
     let mut wrong = Vec::new();
     for &(zone, micros, pattern, want) in fixtures::FORMAT_TS {
         let rules = resolve_zone(zone).unwrap();
-        let p = DateTimePattern::new_fast(pattern.unwrap_or(DEFAULT_TS), Purpose::Format).unwrap();
+        let p = DateTimePattern::new_fast(pattern.unwrap_or(DEFAULT_TS));
         let got = p
             .format_timestamp(
                 micros,
@@ -90,8 +90,7 @@ fn fast_timestamp_prints_match_spark() {
 fn fast_date_prints_match_spark() {
     let mut wrong = Vec::new();
     for &(days, pattern, want) in fixtures::FORMAT_DATE {
-        let p =
-            DateTimePattern::new_fast(pattern.unwrap_or(DEFAULT_DATE), Purpose::Format).unwrap();
+        let p = DateTimePattern::new_fast(pattern.unwrap_or(DEFAULT_DATE));
         let got = p.format_date(days).map_err(|e| e.to_string());
         if got.as_deref() != Ok(want) {
             wrong.push(format!("{days} with {pattern:?}: {got:?}, Spark {want:?}"));
