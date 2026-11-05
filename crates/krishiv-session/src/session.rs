@@ -34,7 +34,7 @@ use krishiv_exec::{
 };
 use krishiv_io::{
     DirectoryWrite, FormatRegistry, IoConfig, IoCounters, IoScheduler, SaveMode, StoreId,
-    StoreRegistry, is_spark_file_source, parse_object_url,
+    is_spark_file_source, parse_object_url,
 };
 use krishiv_memory::{
     ArbitrationStats, MemoryConfig, MemoryPool, RelationStore, SpillConfig, SpillManager,
@@ -1205,7 +1205,10 @@ impl Session {
         // Cloud stores are built from this snapshot, lazily per query:
         // plans carry only path strings, and the worker resolves the store
         // at listing from the read's option values (P2-T084).
-        let stores = Arc::new(StoreRegistry::new(Arc::clone(&config)));
+        let stores = Arc::new(krishiv_io::query_registry(
+            Arc::clone(&config),
+            &self.state.io,
+        ));
         let files = Arc::new(FileReads::new(
             self.state.io.context(),
             Arc::clone(&self.state.formats),
@@ -1934,7 +1937,10 @@ impl Session {
         options: &BTreeMap<String, OptionValue>,
         env: &QueryEnv,
     ) -> Result<krishiv_exec::files::LocatedPath, KrishivError> {
-        let stores = Arc::new(StoreRegistry::new(Arc::clone(&env.config)));
+        let stores = Arc::new(krishiv_io::query_registry(
+            Arc::clone(&env.config),
+            &self.state.io,
+        ));
         let at = ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
             self.state.cwd.clone(),

@@ -2419,9 +2419,13 @@ version = "0.1.0-alpha"
 name = "krishiv-store"
 version = "0.1.0-alpha"
 dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
  "http",
  "krishiv-common",
  "object_store",
+ "tokio",
 ]
 
 [[package]]

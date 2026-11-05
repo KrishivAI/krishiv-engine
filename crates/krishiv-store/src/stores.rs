@@ -87,9 +87,11 @@
 //! cloud store fails with `KRISHIV_UNSUPPORTED_FEATURE`, while parsing URLs
 //! and pacing policies keep working so plans still qualify paths.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 #[cfg(feature = "cloud")]
 use krishiv_common::error::KrishivInvalidConfigValue;
@@ -99,10 +101,15 @@ use krishiv_common::secret::{REDACTED, SecretString};
 use object_store::ObjectStore;
 use object_store::path::Path;
 
+use crate::credentials::{CredentialCache, two_credential_sources};
 #[cfg(feature = "cloud")]
 use crate::error::store_failed;
 use crate::error::{Result, unsupported};
-use crate::{StoreId, StorePolicy, StoreSettings};
+use crate::{
+    CredentialScope, CredentialSource, DEFAULT_REFRESH_SKEW, StoreId, StorePolicy, StoreSettings,
+};
+#[cfg(feature = "cloud")]
+use crate::{RefreshingProvider, RefreshingStore};
 
 /// `fs.s3a.endpoint`: custom endpoint (MinIO, LocalStack).
 pub const S3_ENDPOINT: &str = "fs.s3a.endpoint";
@@ -360,6 +367,37 @@ fn parse_hf(scheme: &str, rest: &str) -> Result<ParsedUrl> {
 pub struct StoreRegistry {
     config: Arc<dyn StoreSettings>,
     stores: Mutex<HashMap<StoreId, Arc<dyn ObjectStore>>>,
+    /// Locations with credentials of their own (see [`Self::with_source`]).
+    scopes: Vec<ScopeEntry>,
+    /// Refresh skew of the sources added next.
+    skew: Duration,
+    /// Every scoped store id this registry handed out, for [`Self::on_release`].
+    scoped_ids: Mutex<HashSet<StoreId>>,
+    release: Mutex<Vec<ReleaseHook>>,
+}
+
+/// Called with each scoped store id when the registry is dropped.
+type ReleaseHook = Arc<dyn Fn(&StoreId) + Send + Sync>;
+
+/// One credential scope of a registry: the location, its process-unique id suffix and the
+/// credential cache every store of the scope signs with.
+struct ScopeEntry {
+    scope: CredentialScope,
+    nonce: String,
+    cache: Arc<CredentialCache>,
+}
+
+/// A process-unique, unguessable-enough suffix for a scoped store id: the `IoScheduler` is
+/// process-wide and registering an id again replaces its entry, so two registries (queries)
+/// must never share a scoped id. A process-wide counter makes it unique; the random part keeps
+/// ids apart across restarts that share a log.
+fn scope_nonce() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let random = std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish();
+    format!("{random:016x}{:x}", COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
 impl StoreRegistry {
@@ -378,7 +416,76 @@ impl StoreRegistry {
         Self {
             config: settings,
             stores: Mutex::new(HashMap::new()),
+            scopes: Vec::new(),
+            skew: DEFAULT_REFRESH_SKEW,
+            scoped_ids: Mutex::new(HashSet::new()),
+            release: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Sets how long before their expiry the credentials of the sources added *after* this
+    /// call are refreshed (default [`DEFAULT_REFRESH_SKEW`]; the engine's config
+    /// `krishiv.io.credentials.refreshSkew`).
+    #[must_use]
+    pub fn with_refresh_skew(mut self, skew: Duration) -> Self {
+        self.skew = skew;
+        self
+    }
+
+    /// Gives the locations under `scope` credentials from `source`: their stores sign with a
+    /// refreshing provider instead of static keys.
+    ///
+    /// - The longest matching prefix wins, on path segments (`warehouse/t1/` does not match
+    ///   `warehouse/t10/`).
+    /// - A scope is registered under a store id with a random nonce, so two registries (two
+    ///   queries on one scheduler) never share a store, and neither reads with the other's
+    ///   credentials.
+    /// - Session-level static keys do not apply under a scope, and an explicit per-read `fs.*`
+    ///   credential on a scoped location fails (`KRISHIV_INVALID_CONFIG_VALUE`: two
+    ///   credential sources for one read). Outside every scope static configuration works as
+    ///   before.
+    #[must_use]
+    pub fn with_source(
+        mut self,
+        scope: CredentialScope,
+        source: Arc<dyn CredentialSource>,
+    ) -> Self {
+        let cache = CredentialCache::system(scope.clone(), source, self.skew);
+        self.scopes.push(ScopeEntry {
+            scope,
+            nonce: scope_nonce(),
+            cache,
+        });
+        self
+    }
+
+    /// Registers `hook` to be called with each scoped store id this registry handed out when
+    /// the registry is dropped (at query end), so the owner of a process-wide scheduler can
+    /// unregister them. Plain, unscoped ids are not reported.
+    pub fn on_release(&self, hook: impl Fn(&StoreId) + Send + Sync + 'static) {
+        self.release
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Arc::new(hook));
+    }
+
+    /// The scoped store ids handed out so far.
+    #[must_use]
+    pub fn scoped_ids(&self) -> Vec<StoreId> {
+        self.scoped_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// The scope covering `url`, the most specific first.
+    fn scope_for(&self, url: &ParsedUrl) -> Option<&ScopeEntry> {
+        self.scopes
+            .iter()
+            .filter(|e| e.scope.store_id() == &url.store_id && e.scope.covers(&url.key))
+            .max_by_key(|e| e.scope.depth())
     }
 
     /// The store of `url`'s bucket or container, cached by store id within
@@ -406,7 +513,11 @@ impl StoreRegistry {
         url: &ParsedUrl,
         options: &BTreeMap<String, OptionValue>,
     ) -> Result<Arc<dyn ObjectStore>> {
-        let id = effective_store_id(&url.store_id, options);
+        let scoped = self.scope_for(url);
+        if let Some(entry) = scoped {
+            reject_credential_options(options, &entry.scope)?;
+        }
+        let id = self.id_of(url, scoped, options);
         if let Some(store) = self
             .stores
             .lock()
@@ -416,12 +527,35 @@ impl StoreRegistry {
         {
             return Ok(store);
         }
-        let store = build(self.config.as_ref(), options, url)?;
+        let store = build(self.config.as_ref(), options, url, scoped.map(|e| &e.cache))?;
+        if scoped.is_some() {
+            self.scoped_ids
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(id.clone());
+        }
         self.stores
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(id, Arc::clone(&store));
         Ok(store)
+    }
+
+    /// The id of `url`'s store under `options`: the URL's store id (with the `#scope:` nonce
+    /// of its credential scope, if any) plus the non-secret hash of the per-read options.
+    fn id_of(
+        &self,
+        url: &ParsedUrl,
+        scoped: Option<&ScopeEntry>,
+        options: &BTreeMap<String, OptionValue>,
+    ) -> StoreId {
+        match scoped {
+            Some(entry) => effective_store_id(
+                &StoreId::new(format!("{}#scope:{}", url.store_id.key(), entry.nonce)),
+                options,
+            ),
+            None => effective_store_id(&url.store_id, options),
+        }
     }
 
     /// Parses `text` and builds its store: the id to register it under, the store, the key within
@@ -446,12 +580,60 @@ impl StoreRegistry {
         let url = parse_object_url(text)?;
         let store = self.store_with_options(&url, options)?;
         Ok(OpenedStore {
-            id: effective_store_id(&url.store_id, options),
+            id: self.id_of(&url, self.scope_for(&url), options),
             store,
             key: url.key,
             display: url.display,
             policy: policy_for(url.scheme),
         })
+    }
+}
+
+impl Drop for StoreRegistry {
+    fn drop(&mut self) {
+        let hooks =
+            std::mem::take(&mut *self.release.lock().unwrap_or_else(PoisonError::into_inner));
+        let ids = std::mem::take(
+            &mut *self
+                .scoped_ids
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        for id in &ids {
+            for hook in &hooks {
+                hook(id);
+            }
+        }
+    }
+}
+
+/// Whether `key` carries a credential (`fs.*`, ASCII case-insensitive): static keys, tokens,
+/// key files and the dotted Azure forms.
+fn is_credential_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    [
+        S3_ACCESS_KEY,
+        S3_SECRET_KEY,
+        S3_SESSION_TOKEN,
+        GCS_KEYFILE,
+        GCS_KEY,
+        AZURE_ACCOUNT_KEY,
+        AZURE_SAS,
+    ]
+    .contains(&lower.as_str())
+        || lower.starts_with("fs.azure.account.key.")
+        || lower.starts_with("fs.azure.sas.")
+}
+
+/// A per-read credential on a scoped location would be a second credential source for the
+/// read: it fails, naming the key and never the value.
+fn reject_credential_options(
+    options: &BTreeMap<String, OptionValue>,
+    scope: &CredentialScope,
+) -> Result<()> {
+    match options.keys().find(|k| is_credential_key(k)) {
+        Some(key) => Err(two_credential_sources(key, scope)),
+        None => Ok(()),
     }
 }
 
@@ -515,6 +697,7 @@ fn build(
     config: &dyn StoreSettings,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
+    scope: Option<&Arc<CredentialCache>>,
 ) -> Result<Arc<dyn ObjectStore>> {
     // Configuration errors keep their class; only builder failures become
     // `KRISHIV_OBJECT_STORE_REQUEST_FAILED` (converted in each scheme
@@ -524,9 +707,9 @@ fn build(
         _ => None,
     };
     match url.scheme {
-        ObjectScheme::S3 => s3_store(config, options, url, path_style),
-        ObjectScheme::Gcs => gcs_store(config, options, url),
-        ObjectScheme::Azure => azure_store(config, options, url),
+        ObjectScheme::S3 => s3_store(config, options, url, path_style, scope),
+        ObjectScheme::Gcs => gcs_store(config, options, url, scope),
+        ObjectScheme::Azure => azure_store(config, options, url, scope),
         ObjectScheme::Http => http_store(url),
         ObjectScheme::HuggingFace => hf_store(config, options, url),
     }
@@ -650,6 +833,7 @@ fn build(
     _config: &dyn StoreSettings,
     _options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
+    _scope: Option<&Arc<CredentialCache>>,
 ) -> Result<Arc<dyn ObjectStore>> {
     Err(unsupported(format!(
         "cloud object stores are not enabled in this build (enable the `cloud` feature): {}",
@@ -967,21 +1151,28 @@ fn s3_store(
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
     path_style: Option<bool>,
+    scope: Option<&Arc<CredentialCache>>,
 ) -> Result<Arc<dyn ObjectStore>> {
-    use object_store::aws::AmazonS3Builder;
+    use object_store::aws::{AmazonS3Builder, AwsCredential};
     let mut builder = AmazonS3Builder::from_env().with_bucket_name(&url.bucket);
     if let Some(endpoint) = text(config, options, S3_ENDPOINT)? {
         builder = builder.with_allow_http(allows_http(Some(&endpoint)));
         builder = builder.with_endpoint(endpoint);
     }
-    if let Some(key) = cred(config, options, S3_ACCESS_KEY)? {
-        builder = builder.with_access_key_id(key.expose_secret());
-    }
-    if let Some(secret) = cred(config, options, S3_SECRET_KEY)? {
-        builder = builder.with_secret_access_key(secret.expose_secret());
-    }
-    if let Some(token) = cred(config, options, S3_SESSION_TOKEN)? {
-        builder = builder.with_token(token.expose_secret());
+    // Under a credential scope the source is the only credential: session keys do not apply.
+    let provider = scope.map(|c| RefreshingProvider::<AwsCredential>::from_cache(Arc::clone(c)));
+    if let Some(provider) = &provider {
+        builder = builder.with_credentials(Arc::new(provider.clone()));
+    } else {
+        if let Some(key) = cred(config, options, S3_ACCESS_KEY)? {
+            builder = builder.with_access_key_id(key.expose_secret());
+        }
+        if let Some(secret) = cred(config, options, S3_SECRET_KEY)? {
+            builder = builder.with_secret_access_key(secret.expose_secret());
+        }
+        if let Some(token) = cred(config, options, S3_SESSION_TOKEN)? {
+            builder = builder.with_token(token.expose_secret());
+        }
     }
     if let Some(region) =
         text(config, options, S3_ENDPOINT_REGION)?.or(text(config, options, S3_REGION)?)
@@ -991,10 +1182,24 @@ fn s3_store(
     if let Some(path_style) = path_style {
         builder = builder.with_virtual_hosted_style_request(!path_style);
     }
-    builder
+    let store = builder
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
+        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))?;
+    Ok(refreshing(store, provider.as_ref()))
+}
+
+/// Wraps `store` so a stale credential gets one forced refresh and one retry, when it signs
+/// with a refreshing `provider`.
+#[cfg(feature = "cloud")]
+fn refreshing<C>(
+    store: Arc<dyn ObjectStore>,
+    provider: Option<&RefreshingProvider<C>>,
+) -> Arc<dyn ObjectStore> {
+    match provider {
+        Some(provider) => Arc::new(RefreshingStore::new(store, provider)),
+        None => store,
+    }
 }
 
 /// A GCS store for `url`'s bucket.
@@ -1008,24 +1213,31 @@ fn gcs_store(
     config: &dyn StoreSettings,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
+    scope: Option<&Arc<CredentialCache>>,
 ) -> Result<Arc<dyn ObjectStore>> {
-    use object_store::gcp::GoogleCloudStorageBuilder;
+    use object_store::gcp::{GcpCredential, GoogleCloudStorageBuilder};
     let mut builder = GoogleCloudStorageBuilder::from_env().with_bucket_name(url.bucket.clone());
-    if let Some(path) = cred(config, options, GCS_KEYFILE)? {
-        builder = builder.with_service_account_path(path.expose_secret());
-    }
-    if let Some(key) = cred(config, options, GCS_KEY)? {
-        builder = builder.with_service_account_key(key.expose_secret());
+    let provider = scope.map(|c| RefreshingProvider::<GcpCredential>::from_cache(Arc::clone(c)));
+    if let Some(provider) = &provider {
+        builder = builder.with_credentials(Arc::new(provider.clone()));
+    } else {
+        if let Some(path) = cred(config, options, GCS_KEYFILE)? {
+            builder = builder.with_service_account_path(path.expose_secret());
+        }
+        if let Some(key) = cred(config, options, GCS_KEY)? {
+            builder = builder.with_service_account_key(key.expose_secret());
+        }
     }
     if let Some(base) =
         text(config, options, GCS_STORAGE_ROOT_URL)?.or(text(config, options, GCS_ENDPOINT)?)
     {
         builder = builder.with_base_url(&base);
     }
-    builder
+    let store = builder
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
+        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))?;
+    Ok(refreshing(store, provider.as_ref()))
 }
 
 /// An Azure Blob store for `url`'s container.
@@ -1039,8 +1251,9 @@ fn azure_store(
     config: &dyn StoreSettings,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
+    scope: Option<&Arc<CredentialCache>>,
 ) -> Result<Arc<dyn ObjectStore>> {
-    use object_store::azure::MicrosoftAzureBuilder;
+    use object_store::azure::{AzureCredential, MicrosoftAzureBuilder};
     let mut builder = MicrosoftAzureBuilder::from_env().with_container_name(url.bucket.clone());
     let account = url
         .account
@@ -1049,21 +1262,27 @@ fn azure_store(
     if let Some(account) = &account {
         builder = builder.with_account(account);
     }
-    if let Some(key) = azure_key(config, options, url, account.as_deref())? {
-        builder = builder.with_access_key(key.expose_secret());
-    }
-    if let Some(sas) = azure_sas(config, options, url, account.as_deref())? {
-        let pairs = sas_pairs(&sas).map_err(|reason| store_failed(&url.display, 1, &reason))?;
-        builder = builder.with_sas_authorization(pairs);
+    let provider = scope.map(|c| RefreshingProvider::<AzureCredential>::from_cache(Arc::clone(c)));
+    if let Some(provider) = &provider {
+        builder = builder.with_credentials(Arc::new(provider.clone()));
+    } else {
+        if let Some(key) = azure_key(config, options, url, account.as_deref())? {
+            builder = builder.with_access_key(key.expose_secret());
+        }
+        if let Some(sas) = azure_sas(config, options, url, account.as_deref())? {
+            let pairs = sas_pairs(&sas).map_err(|reason| store_failed(&url.display, 1, &reason))?;
+            builder = builder.with_sas_authorization(pairs);
+        }
     }
     if let Some(endpoint) = text(config, options, AZURE_ENDPOINT)? {
         builder = builder.with_allow_http(allows_http(Some(&endpoint)));
         builder = builder.with_endpoint(endpoint);
     }
-    builder
+    let store = builder
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
+        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))?;
+    Ok(refreshing(store, provider.as_ref()))
 }
 
 /// The Azure account key: the dotted `fs.azure.account.key.<account>.*`
