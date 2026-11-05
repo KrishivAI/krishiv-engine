@@ -1692,7 +1692,15 @@ impl Session {
         detailed: bool,
         admitted: Option<Admitted>,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
-        let decoded = round_trip(physical, &env.config)?;
+        let decoded = match round_trip(physical, &env.config) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                if let Some(admitted) = admitted {
+                    admitted.fail(&error);
+                }
+                return Err(error);
+            }
+        };
         let physical = decoded.as_ref().unwrap_or(physical);
         // The history row and the permit first (unless the caller took them already, before it
         // changed anything): the row's id names the query's memory pool, so
@@ -1940,12 +1948,12 @@ impl Session {
         // The admission permit before anything is replaced: `DirectoryWrite::begin` deletes what
         // an overwrite replaces, which a refused or cancelled query must not have done.
         let mut admitted = Some(self.admit_query(env).await?);
-        let job = job_uuid();
-        // Every name of the write is resolved relative to the directory
-        // opened here, never through a link (P2-T199). The registration
-        // lives until the write is over.
-        let (store, _registration) = self.anchor_local_write(&at, &job)?;
         let written = async {
+            let job = job_uuid();
+            // Every name of the write is resolved relative to the directory
+            // opened here, never through a link (P2-T199). The registration
+            // lives until the write is over.
+            let (store, _registration) = self.anchor_local_write(&at, &job)?;
             let Some(write) = DirectoryWrite::begin(
                 &io,
                 store.clone(),
