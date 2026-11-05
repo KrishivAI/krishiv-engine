@@ -1047,7 +1047,56 @@ fn expand_streams_one_copy_per_projection_and_keeps_weights() {
         .is_none()
     );
     assert!(matches!(
-        op.execute(&ints(&[7]), &mut local),
+        op.execute(&weighted(&[7], &[1]), &mut local),
+        Ok(OperatorOutput::HaveMoreOutput(_))
+    ));
+}
+
+#[test]
+fn expand_answers_a_small_unweighted_input_as_one_batch() {
+    let (_root, ctx) = ctx();
+    let op = Expand::try_new(vec![
+        expand_projection(false, false),
+        expand_projection(false, true),
+        expand_projection(true, true),
+    ])
+    .unwrap_or_else(|e| unreachable!("{e}"));
+    let mut local = op.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    // Every copy at once, in projection order: one batch, nothing more to come.
+    let out = out_batch(
+        op.execute(&ints(&[1, 2]), &mut local)
+            .unwrap_or_else(|e| unreachable!("{e}")),
+    )
+    .unwrap_or_else(|| unreachable!("one batch"));
+    assert_eq!(
+        col_a(&out),
+        [Some(1), Some(2), Some(1), Some(2), None, None]
+    );
+    assert!(out.is_unweighted());
+    // The next input starts afresh.
+    assert!(
+        out_batch(
+            op.execute(&ints(&[3]), &mut local)
+                .unwrap_or_else(|e| unreachable!("{e}"))
+        )
+        .is_some()
+    );
+}
+
+#[test]
+fn expand_streams_a_large_input_one_copy_at_a_time() {
+    let (_root, ctx) = ctx();
+    let op = Expand::try_new(vec![
+        expand_projection(false, false),
+        expand_projection(false, true),
+        expand_projection(true, true),
+    ])
+    .unwrap_or_else(|e| unreachable!("{e}"));
+    let mut local = op.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    // 400 rows in three copies is over the limit of an answer at once.
+    let rows: Vec<i64> = (0..400).collect();
+    assert!(matches!(
+        op.execute(&ints(&rows), &mut local),
         Ok(OperatorOutput::HaveMoreOutput(_))
     ));
 }

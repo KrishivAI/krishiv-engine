@@ -13,12 +13,23 @@ use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::operator::{LocalState, Operator, OperatorOutput};
 
+/// The most rows an unweighted input batch may expand to and still be answered as one batch.
+const TOGETHER_ROWS: usize = 1024;
+
 /// Emits, for every input batch, one batch per projection: the batch
 /// projected by it. The projections share one output schema. Rows keep their
 /// weights in every copy. Output is produced one projection per
 /// [`Operator::execute`] call (`HaveMoreOutput` until the last), so only
 /// one copy of an input batch exists at a time, and the plain columns of
 /// each copy share the input's buffers.
+///
+/// An unweighted input that expands to at most [`TOGETHER_ROWS`] rows is
+/// answered at once, the copies concatenated in projection order into one
+/// batch: a `VALUES` list is an expansion of one row, and Spark reads it as one
+/// local relation, so an error in a later row surfaces before any operator
+/// above sees the first (Spark computes a lower projection over every row
+/// before the next one starts). The projections run in the same order, so a
+/// seeded random function draws the same values.
 #[derive(Debug)]
 pub struct Expand {
     projects: Vec<Arc<Project>>,
@@ -54,6 +65,22 @@ impl Expand {
         }
         Ok(Arc::new(Self { projects, schema }))
     }
+
+    /// Every projection of `input`, in order, as one batch.
+    fn expand_together(&self, input: &Batch, partition: u32) -> Result<OperatorOutput> {
+        let mut copies = Vec::with_capacity(self.projects.len());
+        for project in &self.projects {
+            let mut local: LocalState = Box::new(PartitionState { partition });
+            let OperatorOutput::NeedMoreInput(Some(out)) = project.execute(input, &mut local)?
+            else {
+                return Err(internal("a projection did not output a batch".to_owned()));
+            };
+            copies.push(out.data().clone());
+        }
+        let all = arrow_select::concat::concat_batches(&self.schema, &copies)
+            .map_err(|e| internal(format!("concatenating the copies of an expansion: {e}")))?;
+        Ok(OperatorOutput::NeedMoreInput(Some(Batch::new(all))))
+    }
 }
 
 /// The next projection to emit for the current input batch, and the
@@ -86,6 +113,12 @@ impl Operator for Expand {
         if input.num_rows() == 0 {
             state.next = 0;
             return Ok(OperatorOutput::NeedMoreInput(None));
+        }
+        if state.next == 0
+            && input.is_unweighted()
+            && input.num_rows().saturating_mul(self.projects.len()) <= TOGETHER_ROWS
+        {
+            return self.expand_together(input, state.partition);
         }
         let project = self
             .projects

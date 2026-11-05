@@ -544,10 +544,44 @@ fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: 
                 | Builtin::Add
                 | Builtin::Subtract
                 | Builtin::Multiply
+                | Builtin::Like
         ),
-        FunctionId::Registry { name, .. } => {
-            matches!(name.as_str(), "nullif" | "date_add" | "date_sub")
-        }
+        // The two-argument functions that are Spark `BinaryExpression`s with its default null handling, checked
+        // against a real Spark 4.2.0 run (a left value that is NULL at run time leaves a failing right operand
+        // unevaluated): `tests/binary_function_operands.rs`.
+        FunctionId::Registry { name, .. } => matches!(
+            name.as_str(),
+            "nullif"
+                | "date_add"
+                | "date_sub"
+                | "add_months"
+                | "next_day"
+                | "trunc"
+                | "date_format"
+                | "power"
+                | "pow"
+                | "atan2"
+                | "hypot"
+                | "log"
+                | "&"
+                | "|"
+                | "^"
+                | "<<"
+                | ">>"
+                | "shiftleft"
+                | "shiftright"
+                | "startswith"
+                | "endswith"
+                | "contains"
+                | "repeat"
+                | "left"
+                | "right"
+                | "instr"
+                | "find_in_set"
+                | "levenshtein"
+                | "array_contains"
+                | "element_at"
+        ),
         _ => false,
     };
     guarded
