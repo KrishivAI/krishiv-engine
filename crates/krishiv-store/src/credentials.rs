@@ -27,9 +27,18 @@
 //! assert!(!format!("{credential:?}").contains("AKIA"));
 //! # Ok::<(), krishiv_common::error::KrishivError>(())
 //! ```
+#![cfg_attr(
+    not(feature = "cloud"),
+    expect(
+        dead_code,
+        reason = "without `cloud` no store signs requests, so the cache is only built"
+    )
+)]
 
+use std::cell::RefCell;
 use std::fmt;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
@@ -303,6 +312,59 @@ impl CredentialRefreshError {
     }
 }
 
+thread_local! {
+    static SERVED: RefCell<Option<Arc<AtomicU64>>> = const { RefCell::new(None) };
+}
+
+const NOT_SERVED: u64 = u64::MAX;
+
+fn record_served(generation: u64) {
+    SERVED.with(|slot| {
+        if let Some(served) = slot.borrow().as_ref() {
+            served.store(generation, Ordering::Relaxed);
+        }
+    });
+}
+
+/// The generation of the credential a wrapped request was last signed with.
+///
+/// [`RefreshingStore`](crate::RefreshingStore) polls a request (or a stream) inside
+/// [`ServedGeneration::enter`]; the provider records the generation it hands to object_store
+/// from within that poll. So a refusal invalidates the credential that was actually used,
+/// even when another request refreshed the cache in between.
+#[derive(Debug, Clone)]
+pub(crate) struct ServedGeneration(Arc<AtomicU64>);
+
+/// Restores the previously active recorder on drop.
+pub(crate) struct Entered(Option<Arc<AtomicU64>>);
+
+impl Drop for Entered {
+    fn drop(&mut self) {
+        let previous = self.0.take();
+        SERVED.with(|slot| *slot.borrow_mut() = previous);
+    }
+}
+
+impl ServedGeneration {
+    pub(crate) fn new() -> Self {
+        Self(Arc::new(AtomicU64::new(NOT_SERVED)))
+    }
+
+    /// Records generations served while the guard lives.
+    pub(crate) fn enter(&self) -> Entered {
+        let previous = SERVED.with(|slot| slot.borrow_mut().replace(Arc::clone(&self.0)));
+        Entered(previous)
+    }
+
+    /// The generation last served, if any credential was.
+    pub(crate) fn get(&self) -> Option<u64> {
+        match self.0.load(Ordering::Relaxed) {
+            NOT_SERVED => None,
+            generation => Some(generation),
+        }
+    }
+}
+
 #[derive(Default)]
 struct CacheState {
     current: Option<Arc<ScopedCredential>>,
@@ -384,6 +446,11 @@ impl CredentialCache {
     }
 
     fn fresh(&self, state: &CacheState) -> Option<Arc<ScopedCredential>> {
+        self.fresh_within(state, self.skew)
+    }
+
+    /// The cached credential if it is not refused and expires more than `skew` from now.
+    fn fresh_within(&self, state: &CacheState, skew: Duration) -> Option<Arc<ScopedCredential>> {
         if state.stale {
             return None;
         }
@@ -393,7 +460,7 @@ impl CredentialCache {
             Some(expiry) => self
                 .clock
                 .now()
-                .checked_add(self.skew)
+                .checked_add(skew)
                 .is_some_and(|horizon| horizon < expiry),
         };
         usable.then(|| Arc::clone(current))
@@ -404,11 +471,29 @@ impl CredentialCache {
     /// # Errors
     /// A [`CredentialRefreshError`] when the fetch failed or the source returned a credential
     /// that is already expired.
+    #[cfg(test)]
     pub(crate) async fn credential(&self) -> Result<Arc<ScopedCredential>, CredentialRefreshError> {
+        self.credential_with_generation().await.map(|(c, _)| c)
+    }
+
+    /// As [`Self::credential`], and records the generation the credential belongs to for the
+    /// request being signed (see [`ServedGeneration`]), so a refusal invalidates that
+    /// credential and not a newer one.
+    pub(crate) async fn signing_credential(
+        &self,
+    ) -> Result<Arc<ScopedCredential>, CredentialRefreshError> {
+        let (credential, generation) = self.credential_with_generation().await?;
+        record_served(generation);
+        Ok(credential)
+    }
+
+    async fn credential_with_generation(
+        &self,
+    ) -> Result<(Arc<ScopedCredential>, u64), CredentialRefreshError> {
         let seen = {
             let state = self.lock();
             if let Some(ok) = self.fresh(&state) {
-                return Ok(ok);
+                return Ok((ok, state.generation));
             }
             state.generation
         };
@@ -417,9 +502,11 @@ impl CredentialCache {
         {
             let state = self.lock();
             if state.generation != seen {
-                // Somebody fetched while we waited: use their answer, success or failure.
-                if let Some(ok) = self.fresh(&state) {
-                    return Ok(ok);
+                // Somebody fetched while we waited: share their answer, success or failure.
+                // A credential inside the refresh window still shares: it is good until it
+                // expires, and the next caller refreshes it.
+                if let Some(ok) = self.fresh_within(&state, Duration::ZERO) {
+                    return Ok((ok, state.generation));
                 }
                 if let Some(reason) = &state.failure {
                     return Err(self.error(reason.clone()));
@@ -444,7 +531,7 @@ impl CredentialCache {
                 state.failure = None;
                 let credential = Arc::new(credential);
                 state.current = Some(Arc::clone(&credential));
-                Ok(credential)
+                Ok((credential, state.generation))
             }
             Err(e) => {
                 let reason = format!("the credential source failed: {e}");
@@ -544,7 +631,11 @@ impl object_store::CredentialProvider for RefreshingProvider<object_store::aws::
     type Credential = object_store::aws::AwsCredential;
 
     async fn get_credential(&self) -> object_store::Result<Arc<Self::Credential>> {
-        let credential = self.cache.credential().await.map_err(provider_error)?;
+        let credential = self
+            .cache
+            .signing_credential()
+            .await
+            .map_err(provider_error)?;
         match &credential.kind {
             // The plaintext lives only inside object_store, for the life of this `Arc`.
             Kind::S3 {
@@ -567,7 +658,11 @@ impl object_store::CredentialProvider for RefreshingProvider<object_store::gcp::
     type Credential = object_store::gcp::GcpCredential;
 
     async fn get_credential(&self) -> object_store::Result<Arc<Self::Credential>> {
-        let credential = self.cache.credential().await.map_err(provider_error)?;
+        let credential = self
+            .cache
+            .signing_credential()
+            .await
+            .map_err(provider_error)?;
         match &credential.kind {
             Kind::Gcs { bearer } => Ok(Arc::new(object_store::gcp::GcpCredential {
                 bearer: bearer.expose_secret().to_owned(),
@@ -584,7 +679,11 @@ impl object_store::CredentialProvider for RefreshingProvider<object_store::azure
 
     async fn get_credential(&self) -> object_store::Result<Arc<Self::Credential>> {
         use object_store::azure::AzureCredential;
-        let credential = self.cache.credential().await.map_err(provider_error)?;
+        let credential = self
+            .cache
+            .signing_credential()
+            .await
+            .map_err(provider_error)?;
         match &credential.kind {
             Kind::AzureSas { query } => {
                 let pairs = sas_query_pairs(query)
@@ -751,6 +850,46 @@ pub(crate) mod tests {
             2,
             "inside the window"
         );
+    }
+
+    #[tokio::test]
+    async fn waiters_share_a_credential_that_lives_less_than_the_skew() {
+        let clock = FakeClock::new();
+        let mut source = CountingSource::new(&clock, Duration::from_secs(60));
+        Arc::get_mut(&mut source).unwrap().delay = Duration::from_millis(50);
+        let cache = cache_for(&source, &clock, Duration::from_secs(300));
+        let tasks: Vec<_> = (0..20)
+            .map(|_| {
+                let cache = Arc::clone(&cache);
+                tokio::spawn(async move { cache.credential().await })
+            })
+            .collect();
+        for task in tasks {
+            task.await.unwrap().unwrap();
+        }
+        assert_eq!(
+            source.fetches.load(Ordering::SeqCst),
+            1,
+            "one fetch answers the burst even though every credential is inside the window"
+        );
+    }
+
+    #[tokio::test]
+    async fn signing_records_the_generation_it_served() {
+        let clock = FakeClock::new();
+        let source = CountingSource::new(&clock, Duration::from_secs(3600));
+        let cache = cache_for(&source, &clock, Duration::ZERO);
+        let served = ServedGeneration::new();
+        assert_eq!(served.get(), None);
+        {
+            let _entered = served.enter();
+            cache.signing_credential().await.unwrap();
+        }
+        assert_eq!(served.get(), Some(cache.generation()));
+        // Outside `enter` nothing is recorded.
+        let other = ServedGeneration::new();
+        cache.signing_credential().await.unwrap();
+        assert_eq!(other.get(), None);
     }
 
     #[tokio::test]
