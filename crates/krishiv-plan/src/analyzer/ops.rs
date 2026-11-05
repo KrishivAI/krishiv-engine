@@ -282,6 +282,7 @@ impl Resolver<'_> {
             agg: None,
             widen,
             hidden: c.hidden.iter().map(sh).collect::<Vec<_>>().into(),
+            generated_from: None,
         })
     }
 
@@ -894,6 +895,18 @@ impl Resolver<'_> {
             && p.origin.sql.is_some()
         {
             return self.having_below_windows(p, &info, predicate, env);
+        }
+        // The same with a generator in the select list: the generator runs
+        // above the windows, and the `HAVING` still filters below them
+        // (Spark 4.3; 4.2 filtered the generated rows after the windows).
+        if p.origin.sql.is_some()
+            && let Some(from) = c.generated_from.clone()
+            && let Some(info) = from.agg.agg.clone()
+            && info.has_windows()
+            && info.having.is_none()
+        {
+            let below = self.having_below_windows(p, &info, predicate, env)?;
+            return self.generate_over_aggregate(p.origin, &below, &from.generator);
         }
         if c.agg.as_ref().is_some_and(|i| !i.has_windows()) {
             let (bounds, agg, extended) =

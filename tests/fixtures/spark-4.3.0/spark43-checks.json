@@ -1,0 +1,227 @@
+{
+ "format_version": 1,
+ "generator": "tests/scripts/gen_spark43_checks_goldens.py",
+ "spark_version": "4.3.0",
+ "cases": [
+  {
+   "id": "nd_alone",
+   "setup": [],
+   "sql": "select count(*) from csv.`{kv}` WITH ('delimiter'='\\u0001') where rand(7) < 0.1",
+   "rows": [
+    [
+     "60"
+    ]
+   ]
+  },
+  {
+   "id": "nd_after_det",
+   "setup": [],
+   "sql": "select count(*) from csv.`{kv}` WITH ('delimiter'='\\u0001') where cast(_c0 as int) % 2 = 0 and rand(7) < 0.3",
+   "rows": [
+    [
+     "77"
+    ]
+   ]
+  },
+  {
+   "id": "nd_before_det",
+   "setup": [],
+   "sql": "select count(*) from csv.`{kv}` WITH ('delimiter'='\\u0001') where rand(7) < 0.3 and cast(_c0 as int) % 2 = 0",
+   "rows": [
+    [
+     "81"
+    ]
+   ]
+  },
+  {
+   "id": "nd_subquery",
+   "setup": [],
+   "sql": "select sum(cast(_c0 as int)) from (select _c0 from csv.`{kv}` WITH ('delimiter'='\\u0001') where rand(11) < 0.2)",
+   "rows": [
+    [
+     "26429"
+    ]
+   ]
+  },
+  {
+   "id": "nd_two_seeds",
+   "setup": [],
+   "sql": "select count(*) from csv.`{kv}` WITH ('delimiter'='\\u0001') where rand(1) < 0.5 and rand(2) < 0.5",
+   "rows": [
+    [
+     "122"
+    ]
+   ]
+  },
+  {
+   "id": "nd_in_select",
+   "setup": [],
+   "sql": "select count(*), sum(cast(_c0 as int)) from (select _c0, rand(5) r from csv.`{kv}` WITH ('delimiter'='\\u0001')) where r < 0.25",
+   "rows": [
+    [
+     "132",
+     "33377"
+    ]
+   ]
+  },
+  {
+   "id": "gen_window_sum",
+   "setup": [
+    "create temporary view d as select * from values (1,10),(2,20),(3,30) as t(k,v)"
+   ],
+   "sql": "select k, explode(array(1,2)) x, sum(v) over () s from d group by k, v having k > 1",
+   "rows": [
+    [
+     "2",
+     "1",
+     "50"
+    ],
+    [
+     "2",
+     "2",
+     "50"
+    ],
+    [
+     "3",
+     "1",
+     "50"
+    ],
+    [
+     "3",
+     "2",
+     "50"
+    ]
+   ]
+  },
+  {
+   "id": "gen_window_count",
+   "setup": [
+    "create temporary view d as select * from values (1,10),(2,20),(3,30) as t(k,v)"
+   ],
+   "sql": "select k, explode(array(1,2)) x, count(*) over () c from d group by k having k > 1",
+   "rows": [
+    [
+     "2",
+     "1",
+     "2"
+    ],
+    [
+     "2",
+     "2",
+     "2"
+    ],
+    [
+     "3",
+     "1",
+     "2"
+    ],
+    [
+     "3",
+     "2",
+     "2"
+    ]
+   ]
+  },
+  {
+   "id": "nogen_window_sum",
+   "setup": [
+    "create temporary view d as select * from values (1,10),(2,20),(3,30) as t(k,v)"
+   ],
+   "sql": "select k, sum(v) over (order by k) s from d group by k, v having k > 1 order by k",
+   "rows": [
+    [
+     "2",
+     "20"
+    ],
+    [
+     "3",
+     "50"
+    ]
+   ]
+  },
+  {
+   "id": "opts_self_join_header_first",
+   "setup": [],
+   "sql": "select a.name, b._c0 from csv.`{people}` WITH ('delimiter'=';','header'='true') a join csv.`{people}` WITH ('delimiter'=';','header'='false') b on true order by 1, 2",
+   "rows": [
+    [
+     "Bob",
+     "Bob"
+    ],
+    [
+     "Bob",
+     "Jorge"
+    ],
+    [
+     "Bob",
+     "name"
+    ],
+    [
+     "Jorge",
+     "Bob"
+    ],
+    [
+     "Jorge",
+     "Jorge"
+    ],
+    [
+     "Jorge",
+     "name"
+    ]
+   ]
+  },
+  {
+   "id": "opts_self_join_header_second",
+   "setup": [],
+   "sql": "select a._c0, b.name from csv.`{people}` WITH ('delimiter'=';','header'='false') a join csv.`{people}` WITH ('delimiter'=';','header'='true') b on true order by 1, 2",
+   "rows": [
+    [
+     "Bob",
+     "Bob"
+    ],
+    [
+     "Bob",
+     "Jorge"
+    ],
+    [
+     "Jorge",
+     "Bob"
+    ],
+    [
+     "Jorge",
+     "Jorge"
+    ],
+    [
+     "name",
+     "Bob"
+    ],
+    [
+     "name",
+     "Jorge"
+    ]
+   ]
+  },
+  {
+   "id": "opts_union",
+   "setup": [],
+   "sql": "select name from csv.`{people}` WITH ('delimiter'=';','header'='true') union all select _c0 from csv.`{people}` WITH ('delimiter'=';','header'='false') order by 1",
+   "rows": [
+    [
+     "Bob"
+    ],
+    [
+     "Bob"
+    ],
+    [
+     "Jorge"
+    ],
+    [
+     "Jorge"
+    ],
+    [
+     "name"
+    ]
+   ]
+  }
+ ]
+}

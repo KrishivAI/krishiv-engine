@@ -396,6 +396,7 @@ impl Resolver<'_> {
 /// argument (named `_gen_input_N`) while the aggregate is built, and a
 /// [`PlanNode::Generate`] over the aggregate's output generates the
 /// columns in the item's place.
+#[derive(Clone)]
 pub(super) struct ExtractedGenerator {
     /// The select item the generator stood at.
     index: usize,
@@ -405,6 +406,12 @@ pub(super) struct ExtractedGenerator {
     input: BoundColumn,
     /// The item's alias, when it had one.
     name: Vec<String>,
+}
+
+/// An aggregate and the generator that runs over it.
+pub(super) struct GeneratedFrom {
+    pub(super) agg: Rel,
+    pub(super) generator: ExtractedGenerator,
 }
 
 /// Whether `name` (as written) is one of the explode-family generators.
@@ -628,6 +635,11 @@ impl Resolver<'_> {
                 order.push(a.clone());
             }
         }
-        Ok(self.projection(origin, &generate, exprs, order))
+        let mut out = self.projection(origin, &generate, exprs, order);
+        out.generated_from = Some(Arc::new(GeneratedFrom {
+            agg: agg.clone(),
+            generator: g.clone(),
+        }));
+        Ok(out)
     }
 }
