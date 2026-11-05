@@ -139,6 +139,60 @@ fn results_match_with_statistics_propagation_on_and_off() {
     assert!(ordered_differently > 0);
 }
 
+/// Design P2-T167's acceptance: Q13 runs its count below the join; the queries
+/// where the rewrite does not pay stay as they were, with the gate that said so.
+#[test]
+fn eager_aggregation_fires_where_the_design_says() {
+    let ctx = support::ctx();
+    let stats = fixture();
+    let decisions = |q: usize| -> (bool, Vec<String>) {
+        let plan = support::resolve(&support::tpch_sql(q), &ctx);
+        let (optimized, steps) =
+            krishiv_optimizer::optimize_traced_with_options(&plan, &stats, &Options::default())
+                .unwrap();
+        (
+            optimized.root().to_string().contains("PartialAggregate"),
+            steps
+                .into_iter()
+                .filter(|s| s.rule == "EagerAggregate")
+                .map(|s| s.note)
+                .collect(),
+        )
+    };
+    let (fired, notes) = decisions(13);
+    assert!(fired, "{notes:?}");
+    assert!(
+        notes[0].starts_with("pushed by [o_custkey]: rows "),
+        "{notes:?}"
+    );
+    for q in [3, 10, 17, 18] {
+        let (fired, notes) = decisions(q);
+        assert!(!fired, "q{q}: {notes:?}");
+    }
+}
+
+/// Switched off, nothing moves and nothing is said.
+#[test]
+fn eager_aggregation_can_be_switched_off() {
+    let plan = support::resolve(&support::tpch_sql(13), &support::ctx());
+    let off = Options {
+        eager_aggregation: false,
+        ..Options::default()
+    };
+    let optimized = optimize_with_options(&plan, &fixture(), &off).unwrap();
+    assert!(!optimized.root().to_string().contains("PartialAggregate"));
+
+    let library = krishiv_udf_sdk::UdfLibrary::new();
+    let mut config = krishiv_common::config::Config::new();
+    let on = krishiv_optimizer::optimize_with_udfs(&plan, &fixture(), &library, &config).unwrap();
+    assert!(on.root().to_string().contains("PartialAggregate"));
+    config
+        .set("krishiv.optimizer.eagerAggregation", "false")
+        .unwrap();
+    let no = krishiv_optimizer::optimize_with_udfs(&plan, &fixture(), &library, &config).unwrap();
+    assert!(!no.root().to_string().contains("PartialAggregate"));
+}
+
 #[test]
 fn large_trees_are_ordered_greedily() {
     // A 12-way chain written backwards, with a filter on one end.
