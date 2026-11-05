@@ -891,3 +891,21 @@ fn settable_by_is_set_for_the_limits_a_user_must_not_raise() {
     // Layers are ordered narrowest (startup) to widest (user).
     assert!(SettableBy::Startup < SettableBy::Admin && SettableBy::Admin < SettableBy::User);
 }
+
+#[test]
+fn plan_round_trip_is_off_by_default_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&EXEC_DEBUG_PLAN_ROUND_TRIP),
+        Some(&ConfigValue::Bool(false))
+    );
+    c.set("krishiv.exec.debug.planRoundTrip", "true").unwrap();
+    assert_eq!(
+        c.get(&EXEC_DEBUG_PLAN_ROUND_TRIP),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert!(
+        c.set("krishiv.exec.debug.planRoundTrip", "sometimes")
+            .is_err()
+    );
+}

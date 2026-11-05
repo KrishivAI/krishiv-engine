@@ -28,7 +28,7 @@ use krishiv_plan::{
     Literal, Origin, PlanId, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SourceId, Span,
     TableVersion, YearMonthField,
 };
-use krishiv_types::{DataType, DecimalType, Srid, parse_data_type};
+use krishiv_types::{Collation, DataType, DecimalType, Srid, parse_data_type};
 
 pub(crate) fn env() -> ExprEnv {
     ExprEnv {
@@ -404,6 +404,54 @@ pub(crate) fn mode_regr_bit_listagg_exprs() -> Vec<AggregateExpr> {
     ]
 }
 
+/// One aggregate of each moment variant: the pair moments read two
+/// columns.
+pub(crate) fn moment_aggregate_exprs() -> Vec<AggregateExpr> {
+    let one = |function| AggregateExpr::new(function, 0, ArrowType::Float64, "x");
+    let pair = |function| AggregateExpr {
+        args: vec![0, 1],
+        ..one(function)
+    };
+    vec![
+        one(AggregateFunction::StddevSamp),
+        one(AggregateFunction::StddevPop),
+        one(AggregateFunction::VarSamp),
+        one(AggregateFunction::VarPop),
+        one(AggregateFunction::Skewness),
+        one(AggregateFunction::Kurtosis),
+        pair(AggregateFunction::Corr),
+        pair(AggregateFunction::CovarSamp),
+        pair(AggregateFunction::CovarPop),
+    ]
+}
+
+/// `any_value` with and without `IGNORE NULLS`.
+pub(crate) fn any_value_exprs() -> Vec<AggregateExpr> {
+    let any = |ignore_nulls| {
+        AggregateExpr::new(
+            AggregateFunction::AnyValue { ignore_nulls },
+            0,
+            ArrowType::Utf8View,
+            "x",
+        )
+    };
+    vec![any(false), any(true)]
+}
+
+/// `max_by` and `min_by`: they take a struct argument, so the case uses
+/// `nested_types` too.
+pub(crate) fn max_min_by_exprs() -> Vec<AggregateExpr> {
+    let by = |function| {
+        AggregateExpr::by(
+            function,
+            (0, 1),
+            (ArrowType::Utf8View, ArrowType::Int64),
+            "x",
+        )
+    };
+    vec![by(AggregateFunction::MaxBy), by(AggregateFunction::MinBy)]
+}
+
 fn window_function(function: WindowFunction, frame: WindowFrame, name: &str) -> WindowFunctionPlan {
     WindowFunctionPlan {
         function,
@@ -603,6 +651,7 @@ pub(crate) fn join_plan(join_type: JoinType) -> HashJoinPlan {
                 bloom_max_bytes: 8 << 20,
                 bloom_fpp: 0.01,
                 bloom_max_fpp: 0.05,
+                bloom_bytes: None,
             },
         }],
         distribution: JoinDistribution::Broadcast,
@@ -1027,6 +1076,42 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     group_by: vec![0],
                     aggregates: mode_regr_bit_listagg_exprs(),
                     distinct: vec![false; 17],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_moments",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: moment_aggregate_exprs(),
+                    distinct: vec![false; 9],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_any_value",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: any_value_exprs(),
+                    distinct: vec![false; 2],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_max_min_by",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: max_min_by_exprs(),
+                    distinct: vec![false; 2],
                     output: AggregateOutput::Final,
                 },
             },
@@ -1552,7 +1637,27 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     legacy.legacy_statistical_aggregate = true;
     out.push((
         "one_row_legacy_statistical_aggregate".to_owned(),
-        plan_of_env(PhysNode::OneRow, legacy),
+        plan_of_env(PhysNode::OneRow, legacy.clone()),
+    ));
+    out.push((
+        "aggregate_moments_legacy_statistical".to_owned(),
+        plan_of_env(
+            PhysNode::Aggregate {
+                input: Box::new(scan()),
+                aggregate: AggregatePlan {
+                    group_by: Vec::new(),
+                    aggregates: vec![AggregateExpr::new(
+                        AggregateFunction::StddevSamp,
+                        0,
+                        ArrowType::Float64,
+                        "s",
+                    )],
+                    distinct: vec![false],
+                    output: AggregateOutput::Final,
+                },
+            },
+            legacy,
+        ),
     ));
     out.push(("nested_types".to_owned(), plan_of(nested_types())));
     out.push(("lambda_functions".to_owned(), plan_of(lambda_functions())));
@@ -1570,7 +1675,30 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
             .into_iter()
             .map(|(name, node)| (name.to_owned(), plan_of(node))),
     );
+    out.push(("collated_output".to_owned(), collated_output()));
     out
+}
+
+/// A collated string type of `name`.
+pub(crate) fn collated(name: &str) -> DataType {
+    DataType::collated_string(Collation::parse(name).unwrap())
+}
+
+/// A plan whose output schema alone names a collated string: its carrier is
+/// `Utf8View`, and only the field's `krishiv.spark_type` tag (at any depth)
+/// says the collation.
+pub(crate) fn collated_output() -> PhysicalPlan {
+    let nested = parse_data_type("array<string collate UNICODE_CI>").unwrap();
+    let schema = Schema::new(vec![
+        Field::new("id", ArrowType::Int64, false),
+        nested.to_arrow_field("names", true),
+    ]);
+    PhysicalPlan::new(
+        scan(),
+        Arc::new(schema),
+        ExplainNode::leaf("Root", ""),
+        env(),
+    )
 }
 
 /// A plan whose environment sets the map-key dedup policy to `LAST_WIN`.
@@ -1769,6 +1897,20 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         nullable: None,
         subqueries: Vec::new(),
     };
+    // One call's options, as `from_json(s, schema, map(...))` carries them.
+    let options_map = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "options".to_owned(),
+            expr: lit(Literal::Map(vec![
+                ("mode".to_owned(), "FAILFAST".to_owned()),
+                ("timestampFormat".to_owned(), "dd/MM/yyyy".to_owned()),
+            ])),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
     let mut interval_columns = file_scan();
     interval_columns.scan.output = vec![
         column(
@@ -1795,8 +1937,30 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         nullable: None,
         subqueries: Vec::new(),
     };
+    // The ICU name and the trim modifier travel in canonical form.
+    let mut collated_columns = file_scan();
+    collated_columns.scan.output = vec![
+        column(3, "lcase", collated("utf8_lcase"), true),
+        column(4, "icu", collated("UNICODE_CI_RTRIM"), false),
+    ];
+    let collated_nested = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "names".to_owned(),
+            expr: lit(Literal::Null(Some(
+                parse_data_type(
+                    "struct<a: string collate UTF8_LCASE, b: map<string, string collate sr_CI>>",
+                )
+                .unwrap(),
+            ))),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
     vec![
         ("interval_literals", interval_literals),
+        ("options_map_literal", options_map),
         ("interval_scan", PhysNode::Scan(interval_columns)),
         ("interval_nested", nested_intervals),
         (
@@ -1815,6 +1979,8 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ("time_project", times),
         ("geo_scan", PhysNode::Scan(spatial)),
         ("geo_join_residual", residual_join),
+        ("collated_scan", PhysNode::Scan(collated_columns)),
+        ("collated_nested", collated_nested),
     ]
 }
 

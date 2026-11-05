@@ -18,7 +18,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use futures::executor::block_on;
 use krishiv_common::config::Config;
-use krishiv_io::{IoConfig, IoScheduler, StoreRegistry};
+use krishiv_io::{IoConfig, IoScheduler, StoreRegistry, register};
 use krishiv_session::Session;
 
 const QUERIES: [&str; 3] = [
@@ -103,7 +103,7 @@ fn tpch_over_s3_equals_tpch_over_local_files() {
         let mut remote = Vec::new();
         for (i, f) in files.iter().enumerate() {
             let url = format!("s3a://krishiv-test/{prefix}/{table}/part-{i:05}.parquet");
-            let (store, path, _) = registry.ensure(&sched, &url).unwrap();
+            let (store, path, _) = register(&sched, &registry, &url).unwrap();
             let bytes = Bytes::from(std::fs::read(f).unwrap());
             rt.block_on(io.put_object(&store, &path, bytes)).unwrap();
             remote.push(url);

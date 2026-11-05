@@ -37,7 +37,7 @@ use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use krishiv_common::config::Config;
 use krishiv_common::error::ErrorClass;
-use krishiv_io::{FileRef, IoConfig, IoScheduler, StoreRegistry};
+use krishiv_io::{FileRef, IoConfig, IoScheduler, StoreRegistry, register, register_with_options};
 use object_store::path::Path;
 
 /// A two-column Parquet file: ids `1, 2, 3` and names `a, NULL, c`.
@@ -121,7 +121,7 @@ async fn write_then_read(config: Arc<Config>, bucket_url: &str) {
     let url = format!("{}/{dir}/t.parquet", bucket_url.trim_end_matches('/'));
     let sched = IoScheduler::new(IoConfig::from_config(&config));
     let registry = StoreRegistry::new(config);
-    let (store, path, display) = registry.ensure(&sched, &url).unwrap();
+    let (store, path, display) = register(&sched, &registry, &url).unwrap();
     assert_eq!(display, url);
     let io = sched.context();
     let bytes = Bytes::from(parquet_bytes());
@@ -199,14 +199,12 @@ async fn s3_round_trip() {
         ]);
         let sched = IoScheduler::new(IoConfig::from_config(&config));
         let registry = StoreRegistry::new(config);
-        let (_, _, display) = registry.ensure(&sched, "s3a://krishiv-test/k").unwrap();
+        let (_, _, display) = register(&sched, &registry, "s3a://krishiv-test/k").unwrap();
         assert_eq!(display, "s3a://krishiv-test/k");
         let bad = test_config(&[("fs.s3a.path.style.access", "banana")]);
         let bad_sched = IoScheduler::new(IoConfig::from_config(&bad));
         let bad_registry = StoreRegistry::new(bad);
-        let err = bad_registry
-            .ensure(&bad_sched, "s3a://krishiv-test/k")
-            .unwrap_err();
+        let err = register(&bad_sched, &bad_registry, "s3a://krishiv-test/k").unwrap_err();
         assert_eq!(err.error_class(), ErrorClass::KrishivInvalidConfigValue);
         return;
     };
@@ -237,7 +235,7 @@ async fn gcs_round_trip() {
         ]);
         let sched = IoScheduler::new(IoConfig::from_config(&config));
         let registry = StoreRegistry::new(config);
-        let (_, _, display) = registry.ensure(&sched, "gs://krishiv-test/k").unwrap();
+        let (_, _, display) = register(&sched, &registry, "gs://krishiv-test/k").unwrap();
         assert_eq!(display, "gs://krishiv-test/k");
         let bad = test_config(&[
             (
@@ -251,9 +249,7 @@ async fn gcs_round_trip() {
         ]);
         let bad_sched = IoScheduler::new(IoConfig::from_config(&bad));
         let bad_registry = StoreRegistry::new(bad);
-        bad_registry
-            .ensure(&bad_sched, "gs://krishiv-test/k")
-            .unwrap_err();
+        register(&bad_sched, &bad_registry, "gs://krishiv-test/k").unwrap_err();
         return;
     };
     ensure_gcs_bucket(&endpoint, "krishiv-test");
@@ -286,12 +282,12 @@ async fn azure_round_trip() {
         ]);
         let sched = IoScheduler::new(IoConfig::from_config(&config));
         let registry = StoreRegistry::new(config);
-        let (_, _, display) = registry
-            .ensure(
-                &sched,
-                "abfss://krishiv-test@devstoreaccount1.dfs.core.windows.net/k",
-            )
-            .unwrap();
+        let (_, _, display) = register(
+            &sched,
+            &registry,
+            "abfss://krishiv-test@devstoreaccount1.dfs.core.windows.net/k",
+        )
+        .unwrap();
         assert_eq!(
             display,
             "abfss://krishiv-test@devstoreaccount1.dfs.core.windows.net/k"
@@ -302,9 +298,12 @@ async fn azure_round_trip() {
         ]);
         let bad_sched = IoScheduler::new(IoConfig::from_config(&bad));
         let bad_registry = StoreRegistry::new(bad);
-        let err = bad_registry
-            .ensure(&bad_sched, "abfss://cont@acct.dfs.core.windows.net/k")
-            .unwrap_err();
+        let err = register(
+            &bad_sched,
+            &bad_registry,
+            "abfss://cont@acct.dfs.core.windows.net/k",
+        )
+        .unwrap_err();
         assert_eq!(
             err.error_class(),
             ErrorClass::KrishivObjectStoreRequestFailed
@@ -428,7 +427,7 @@ async fn https_store_reads_ranges_only() {
     let sched = IoScheduler::new(IoConfig::from_config(&config));
     let registry = StoreRegistry::new(config);
     let url = format!("http://127.0.0.1:{}/data/t.parquet", server.port);
-    let (store, path, display) = registry.ensure(&sched, &url).unwrap();
+    let (store, path, display) = register(&sched, &registry, &url).unwrap();
     assert_eq!(display, url);
     let io = sched.context();
     let meta = io.head(&store, &path).await.unwrap().unwrap();
@@ -456,9 +455,7 @@ fn http_urls_name_a_store_by_authority_and_refuse_credentials_and_remote_plain_h
     let config = test_config(&[]);
     let sched = IoScheduler::new(IoConfig::from_config(&config));
     let registry = StoreRegistry::new(config);
-    let e = registry
-        .ensure(&sched, "http://example.com/x.parquet")
-        .unwrap_err();
+    let e = register(&sched, &registry, "http://example.com/x.parquet").unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }
 
@@ -485,7 +482,7 @@ async fn read_hf(body: &[u8], pairs: &[(&str, &str)], url: &str) -> (String, Str
     let config = test_config(&[]);
     let sched = IoScheduler::new(IoConfig::from_config(&config));
     let registry = StoreRegistry::new(config);
-    let (store, path, display) = registry.ensure_with_options(&sched, url, &options).unwrap();
+    let (store, path, display) = register_with_options(&sched, &registry, url, &options).unwrap();
     let io = sched.context();
     let meta = io.head(&store, &path).await.unwrap().unwrap();
     let file = FileRef::from_meta(store, &meta);
@@ -561,13 +558,13 @@ async fn hf_without_a_token_on_a_gated_dataset_is_a_store_error() {
         let config = test_config(&[]);
         let sched = IoScheduler::new(IoConfig::from_config(&config));
         let registry = StoreRegistry::new(config);
-        let (store, path, _) = registry
-            .ensure_with_options(
-                &sched,
-                "hf://datasets/acme/gated/t.parquet",
-                &hf_options(&pairs),
-            )
-            .unwrap();
+        let (store, path, _) = register_with_options(
+            &sched,
+            &registry,
+            "hf://datasets/acme/gated/t.parquet",
+            &hf_options(&pairs),
+        )
+        .unwrap();
         let e = sched.context().head(&store, &path).await.unwrap_err();
         assert_eq!(e.error_class(), ErrorClass::KrishivObjectStoreRequestFailed);
         assert!(!format!("{e:?}").contains("Wrong-9"));
@@ -576,16 +573,16 @@ async fn hf_without_a_token_on_a_gated_dataset_is_a_store_error() {
     let config = test_config(&[]);
     let sched = IoScheduler::new(IoConfig::from_config(&config));
     let registry = StoreRegistry::new(config);
-    let (store, path, _) = registry
-        .ensure_with_options(
-            &sched,
-            "hf://datasets/acme/gated/t.parquet",
-            &hf_options(&[
-                ("fs.hf.endpoint", endpoint.as_str()),
-                ("fs.hf.token", "hf_right"),
-            ]),
-        )
-        .unwrap();
+    let (store, path, _) = register_with_options(
+        &sched,
+        &registry,
+        "hf://datasets/acme/gated/t.parquet",
+        &hf_options(&[
+            ("fs.hf.endpoint", endpoint.as_str()),
+            ("fs.hf.token", "hf_right"),
+        ]),
+    )
+    .unwrap();
     assert!(sched.context().head(&store, &path).await.unwrap().is_some());
 }
 
@@ -608,9 +605,8 @@ async fn hf_session_token_is_withheld_from_a_per_read_endpoint() {
         // Scoped: the one-connection test server must see this client's connection close.
         let sched = IoScheduler::new(IoConfig::from_config(&both));
         let registry = StoreRegistry::new(Arc::clone(&both));
-        let (store, path, _) = registry
-            .ensure(&sched, "hf://datasets/acme/tiny/data/t.parquet")
-            .unwrap();
+        let (store, path, _) =
+            register(&sched, &registry, "hf://datasets/acme/tiny/data/t.parquet").unwrap();
         assert!(sched.context().head(&store, &path).await.unwrap().is_some());
         assert!(
             server
@@ -638,9 +634,13 @@ async fn hf_session_token_is_withheld_from_a_per_read_endpoint() {
         server.log.lock().unwrap().clear();
         let sched = IoScheduler::new(IoConfig::from_config(&config));
         let registry = StoreRegistry::new(Arc::clone(&config));
-        let (store, path, _) = registry
-            .ensure_with_options(&sched, "hf://datasets/acme/tiny/data/t.parquet", &options)
-            .unwrap();
+        let (store, path, _) = register_with_options(
+            &sched,
+            &registry,
+            "hf://datasets/acme/tiny/data/t.parquet",
+            &options,
+        )
+        .unwrap();
         assert!(sched.context().head(&store, &path).await.unwrap().is_some());
         let log = server.log.lock().unwrap();
         assert!(!log.is_empty());
@@ -670,9 +670,13 @@ fn hf_names_cannot_leave_the_dataset_path_and_tokens_need_https() {
         ("fs.hf.endpoint", "http://example.com"),
         ("fs.hf.token", "hf_Canary-9"),
     ]);
-    let e = registry
-        .ensure_with_options(&sched, "hf://datasets/acme/tiny/t.parquet", &options)
-        .unwrap_err();
+    let e = register_with_options(
+        &sched,
+        &registry,
+        "hf://datasets/acme/tiny/t.parquet",
+        &options,
+    )
+    .unwrap_err();
     assert!(!e.to_string().contains("Canary-9"), "{e}");
     assert!(e.to_string().contains("https"), "{e}");
     // Userinfo can hide the real host behind a loopback-looking one.
@@ -685,9 +689,13 @@ fn hf_names_cannot_leave_the_dataset_path_and_tokens_need_https() {
         let registry = StoreRegistry::new(config);
         // A session token is withheld from a session endpoint, so use the per-read pair.
         let options = hf_options(&[("fs.hf.endpoint", endpoint), ("fs.hf.token", "hf_Canary-9")]);
-        let e = registry
-            .ensure_with_options(&sched, "hf://datasets/acme/tiny/t.parquet", &options)
-            .unwrap_err();
+        let e = register_with_options(
+            &sched,
+            &registry,
+            "hf://datasets/acme/tiny/t.parquet",
+            &options,
+        )
+        .unwrap_err();
         // Refused either as a secret-bearing endpoint or by the https rule; never sent.
         assert!(!e.to_string().contains("Canary-9"), "{endpoint}: {e}");
     }
@@ -711,7 +719,7 @@ async fn s3_put_if_absent_is_exclusive() {
     let url = format!("s3a://krishiv-test/{}/log/0.json", unique_dir());
     let sched = IoScheduler::new(IoConfig::from_config(&config));
     let registry = StoreRegistry::new(config);
-    let (store, path, _) = registry.ensure(&sched, &url).unwrap();
+    let (store, path, _) = register(&sched, &registry, &url).unwrap();
     let io = sched.context();
     let first = io
         .put_if_absent(&store, &path, Bytes::from_static(b"one"))

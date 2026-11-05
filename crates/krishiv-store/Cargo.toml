@@ -1,0 +1,26 @@
+[package]
+name = "krishiv-store"
+description = "Object-store layer shared by the Krishiv engine and platform: URLs, store building, credentials (ADR 0044)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Meant to be published (ADR 0044); stays unpublished until the owner's first release of it.
+publish = false
+
+[lints]
+workspace = true
+
+# krishiv-common and object_store only (layer L1, ADR 0044).
+[dependencies]
+krishiv-common = { path = "../krishiv-common" }
+# Bearer header of `hf://` reads; only with `cloud`.
+http = { workspace = true, optional = true }
+object_store.workspace = true
+
+[features]
+# The S3, GCS, Azure and web builders (reqwest over rustls). Opt-in so the default build stays inside the
+# dependency and binary-size budgets; `krishiv-io/cloud` turns it on. Without it, cloud URLs parse but no
+# store is built (`KRISHIV_UNSUPPORTED_FEATURE`).
+cloud = ["object_store/aws", "object_store/azure", "object_store/gcp", "object_store/http", "dep:http"]

@@ -66,6 +66,8 @@ pub struct SessionEngine {
     /// next session starts or the engine drops), and its text for masking.
     warehouse: Option<std::path::PathBuf>,
     warehouse_text: String,
+    /// Sessions run every plan through `krishiv.plan.v1` first (`krishiv.exec.debug.planRoundTrip`).
+    plan_round_trip: bool,
 }
 
 impl Drop for SessionEngine {
@@ -126,6 +128,7 @@ impl SessionEngine {
             conf: Vec::new(),
             warehouse: None,
             warehouse_text: String::new(),
+            plan_round_trip: false,
         })
     }
 
@@ -133,6 +136,15 @@ impl SessionEngine {
     #[must_use]
     pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// The same engine with the serialize-through mode on in every session
+    /// (`krishiv.exec.debug.planRoundTrip`, P2-T173): each plan is encoded
+    /// to `krishiv.plan.v1` and decoded before it runs.
+    #[must_use]
+    pub const fn with_plan_round_trip(mut self) -> Self {
+        self.plan_round_trip = true;
         self
     }
 
@@ -277,6 +289,9 @@ impl Engine for SessionEngine {
             // statement's verdict does not change from run to run.
             .config("krishiv.exec.seed", "1")
             .config("spark.sql.warehouse.dir", self.warehouse_text.clone());
+        if self.plan_round_trip {
+            builder = builder.config("krishiv.exec.debug.planRoundTrip", "true");
+        }
         for (k, v) in &setup.configs {
             if k == "spark.sql.warehouse.dir" {
                 v.clone_into(&mut self.warehouse_text);
