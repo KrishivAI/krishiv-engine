@@ -1,0 +1,148 @@
+pub mod krishiv_udf_sdk
+#[non_exhaustive] pub enum krishiv_udf_sdk::NullHandling
+pub krishiv_udf_sdk::NullHandling::Custom
+pub krishiv_udf_sdk::NullHandling::Strict
+impl core::clone::Clone for krishiv_udf_sdk::NullHandling
+pub fn krishiv_udf_sdk::NullHandling::clone(&self) -> krishiv_udf_sdk::NullHandling
+impl core::cmp::Eq for krishiv_udf_sdk::NullHandling
+impl core::cmp::PartialEq for krishiv_udf_sdk::NullHandling
+pub fn krishiv_udf_sdk::NullHandling::eq(&self, &krishiv_udf_sdk::NullHandling) -> bool
+impl core::default::Default for krishiv_udf_sdk::NullHandling
+pub fn krishiv_udf_sdk::NullHandling::default() -> krishiv_udf_sdk::NullHandling
+impl core::fmt::Debug for krishiv_udf_sdk::NullHandling
+pub fn krishiv_udf_sdk::NullHandling::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_udf_sdk::NullHandling
+impl core::marker::StructuralPartialEq for krishiv_udf_sdk::NullHandling
+#[non_exhaustive] pub enum krishiv_udf_sdk::Signature
+pub krishiv_udf_sdk::Signature::Coercible(alloc::vec::Vec<krishiv_udf_sdk::UdfInputType>)
+pub krishiv_udf_sdk::Signature::Exact(alloc::vec::Vec<krishiv_udf_sdk::UdfInputType>)
+pub krishiv_udf_sdk::Signature::Variadic
+pub krishiv_udf_sdk::Signature::Variadic::element: krishiv_udf_sdk::UdfInputType
+pub krishiv_udf_sdk::Signature::Variadic::min_arity: usize
+impl krishiv_udf_sdk::Signature
+pub fn krishiv_udf_sdk::Signature::accepts(&self, usize) -> bool
+pub fn krishiv_udf_sdk::Signature::arity_text(&self) -> alloc::string::String
+pub fn krishiv_udf_sdk::Signature::inputs_sql(&self) -> alloc::string::String
+impl core::clone::Clone for krishiv_udf_sdk::Signature
+pub fn krishiv_udf_sdk::Signature::clone(&self) -> krishiv_udf_sdk::Signature
+impl core::cmp::Eq for krishiv_udf_sdk::Signature
+impl core::cmp::PartialEq for krishiv_udf_sdk::Signature
+pub fn krishiv_udf_sdk::Signature::eq(&self, &krishiv_udf_sdk::Signature) -> bool
+impl core::fmt::Debug for krishiv_udf_sdk::Signature
+pub fn krishiv_udf_sdk::Signature::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_udf_sdk::Signature
+#[non_exhaustive] pub enum krishiv_udf_sdk::UdfArg<'a>
+pub krishiv_udf_sdk::UdfArg::Column(&'a arrow_array::array::ArrayRef)
+pub krishiv_udf_sdk::UdfArg::Scalar(&'a arrow_array::array::ArrayRef)
+impl krishiv_udf_sdk::UdfArg<'_>
+pub fn krishiv_udf_sdk::UdfArg<'_>::array(self) -> arrow_array::array::ArrayRef
+impl<'a> core::clone::Clone for krishiv_udf_sdk::UdfArg<'a>
+pub fn krishiv_udf_sdk::UdfArg<'a>::clone(&self) -> krishiv_udf_sdk::UdfArg<'a>
+impl<'a> core::fmt::Debug for krishiv_udf_sdk::UdfArg<'a>
+pub fn krishiv_udf_sdk::UdfArg<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for krishiv_udf_sdk::UdfArg<'a>
+#[non_exhaustive] pub enum krishiv_udf_sdk::UdfInputType
+pub krishiv_udf_sdk::UdfInputType::Any
+pub krishiv_udf_sdk::UdfInputType::Exact(krishiv_types::data_type::DataType)
+pub krishiv_udf_sdk::UdfInputType::Numeric
+pub krishiv_udf_sdk::UdfInputType::Numeric::intervals: bool
+pub krishiv_udf_sdk::UdfInputType::OneOf(alloc::vec::Vec<krishiv_types::data_type::DataType>)
+pub krishiv_udf_sdk::UdfInputType::Strict(krishiv_types::data_type::DataType)
+impl krishiv_udf_sdk::UdfInputType
+pub fn krishiv_udf_sdk::UdfInputType::sql(&self) -> alloc::string::String
+impl core::clone::Clone for krishiv_udf_sdk::UdfInputType
+pub fn krishiv_udf_sdk::UdfInputType::clone(&self) -> krishiv_udf_sdk::UdfInputType
+impl core::cmp::Eq for krishiv_udf_sdk::UdfInputType
+impl core::cmp::PartialEq for krishiv_udf_sdk::UdfInputType
+pub fn krishiv_udf_sdk::UdfInputType::eq(&self, &krishiv_udf_sdk::UdfInputType) -> bool
+impl core::fmt::Debug for krishiv_udf_sdk::UdfInputType
+pub fn krishiv_udf_sdk::UdfInputType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_udf_sdk::UdfInputType
+pub struct krishiv_udf_sdk::ArgField
+pub krishiv_udf_sdk::ArgField::data_type: core::option::Option<krishiv_types::data_type::DataType>
+pub krishiv_udf_sdk::ArgField::nullable: bool
+impl core::clone::Clone for krishiv_udf_sdk::ArgField
+pub fn krishiv_udf_sdk::ArgField::clone(&self) -> krishiv_udf_sdk::ArgField
+impl core::cmp::Eq for krishiv_udf_sdk::ArgField
+impl core::cmp::PartialEq for krishiv_udf_sdk::ArgField
+pub fn krishiv_udf_sdk::ArgField::eq(&self, &krishiv_udf_sdk::ArgField) -> bool
+impl core::fmt::Debug for krishiv_udf_sdk::ArgField
+pub fn krishiv_udf_sdk::ArgField::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_udf_sdk::ArgField
+pub struct krishiv_udf_sdk::InvokeContext
+pub krishiv_udf_sdk::InvokeContext::ansi: bool
+pub krishiv_udf_sdk::InvokeContext::partition: u32
+pub krishiv_udf_sdk::InvokeContext::time_zone: core::option::Option<i32>
+impl core::clone::Clone for krishiv_udf_sdk::InvokeContext
+pub fn krishiv_udf_sdk::InvokeContext::clone(&self) -> krishiv_udf_sdk::InvokeContext
+impl core::cmp::Eq for krishiv_udf_sdk::InvokeContext
+impl core::cmp::PartialEq for krishiv_udf_sdk::InvokeContext
+pub fn krishiv_udf_sdk::InvokeContext::eq(&self, &krishiv_udf_sdk::InvokeContext) -> bool
+impl core::fmt::Debug for krishiv_udf_sdk::InvokeContext
+pub fn krishiv_udf_sdk::InvokeContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_udf_sdk::InvokeContext
+impl core::marker::StructuralPartialEq for krishiv_udf_sdk::InvokeContext
+pub struct krishiv_udf_sdk::ReturnField
+pub krishiv_udf_sdk::ReturnField::data_type: krishiv_types::data_type::DataType
+pub krishiv_udf_sdk::ReturnField::nullable: bool
+impl core::clone::Clone for krishiv_udf_sdk::ReturnField
+pub fn krishiv_udf_sdk::ReturnField::clone(&self) -> krishiv_udf_sdk::ReturnField
+impl core::cmp::Eq for krishiv_udf_sdk::ReturnField
+impl core::cmp::PartialEq for krishiv_udf_sdk::ReturnField
+pub fn krishiv_udf_sdk::ReturnField::eq(&self, &krishiv_udf_sdk::ReturnField) -> bool
+impl core::fmt::Debug for krishiv_udf_sdk::ReturnField
+pub fn krishiv_udf_sdk::ReturnField::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_udf_sdk::ReturnField
+pub struct krishiv_udf_sdk::UdfError
+impl krishiv_udf_sdk::UdfError
+pub fn krishiv_udf_sdk::UdfError::message(&self) -> &str
+pub fn krishiv_udf_sdk::UdfError::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for krishiv_udf_sdk::UdfError
+pub fn krishiv_udf_sdk::UdfError::clone(&self) -> krishiv_udf_sdk::UdfError
+impl core::cmp::Eq for krishiv_udf_sdk::UdfError
+impl core::cmp::PartialEq for krishiv_udf_sdk::UdfError
+pub fn krishiv_udf_sdk::UdfError::eq(&self, &krishiv_udf_sdk::UdfError) -> bool
+impl core::convert::From<&str> for krishiv_udf_sdk::UdfError
+pub fn krishiv_udf_sdk::UdfError::from(&str) -> Self
+impl core::convert::From<alloc::string::String> for krishiv_udf_sdk::UdfError
+pub fn krishiv_udf_sdk::UdfError::from(alloc::string::String) -> Self
+impl core::error::Error for krishiv_udf_sdk::UdfError
+impl core::fmt::Debug for krishiv_udf_sdk::UdfError
+pub fn krishiv_udf_sdk::UdfError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for krishiv_udf_sdk::UdfError
+pub fn krishiv_udf_sdk::UdfError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_udf_sdk::UdfError
+pub struct krishiv_udf_sdk::UdfLibrary
+impl krishiv_udf_sdk::UdfLibrary
+pub fn krishiv_udf_sdk::UdfLibrary::get(&self, &str) -> core::option::Option<alloc::sync::Arc<dyn krishiv_udf_sdk::ScalarUdf>>
+pub fn krishiv_udf_sdk::UdfLibrary::get_versioned(&self, &str, u32) -> core::option::Option<alloc::sync::Arc<dyn krishiv_udf_sdk::ScalarUdf>>
+pub fn krishiv_udf_sdk::UdfLibrary::is_empty(&self) -> bool
+pub fn krishiv_udf_sdk::UdfLibrary::new() -> Self
+pub fn krishiv_udf_sdk::UdfLibrary::register(&self, alloc::sync::Arc<dyn krishiv_udf_sdk::ScalarUdf>) -> core::result::Result<(), krishiv_udf_sdk::UdfError>
+pub fn krishiv_udf_sdk::UdfLibrary::version(&self) -> u64
+impl core::default::Default for krishiv_udf_sdk::UdfLibrary
+pub fn krishiv_udf_sdk::UdfLibrary::default() -> Self
+impl core::fmt::Debug for krishiv_udf_sdk::UdfLibrary
+pub fn krishiv_udf_sdk::UdfLibrary::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_udf_sdk::UdfProperties
+pub krishiv_udf_sdk::UdfProperties::deterministic: bool
+pub krishiv_udf_sdk::UdfProperties::null_handling: krishiv_udf_sdk::NullHandling
+impl core::clone::Clone for krishiv_udf_sdk::UdfProperties
+pub fn krishiv_udf_sdk::UdfProperties::clone(&self) -> krishiv_udf_sdk::UdfProperties
+impl core::cmp::Eq for krishiv_udf_sdk::UdfProperties
+impl core::cmp::PartialEq for krishiv_udf_sdk::UdfProperties
+pub fn krishiv_udf_sdk::UdfProperties::eq(&self, &krishiv_udf_sdk::UdfProperties) -> bool
+impl core::default::Default for krishiv_udf_sdk::UdfProperties
+pub fn krishiv_udf_sdk::UdfProperties::default() -> Self
+impl core::fmt::Debug for krishiv_udf_sdk::UdfProperties
+pub fn krishiv_udf_sdk::UdfProperties::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_udf_sdk::UdfProperties
+impl core::marker::StructuralPartialEq for krishiv_udf_sdk::UdfProperties
+pub trait krishiv_udf_sdk::ScalarUdf: core::marker::Send + core::marker::Sync + core::fmt::Debug + 'static
+pub fn krishiv_udf_sdk::ScalarUdf::invoke(&self, &[krishiv_udf_sdk::UdfArg<'_>], usize, &krishiv_udf_sdk::InvokeContext) -> core::result::Result<arrow_array::array::ArrayRef, krishiv_udf_sdk::UdfError>
+pub fn krishiv_udf_sdk::ScalarUdf::name(&self) -> &str
+pub fn krishiv_udf_sdk::ScalarUdf::properties(&self) -> krishiv_udf_sdk::UdfProperties
+pub fn krishiv_udf_sdk::ScalarUdf::return_field(&self, &[krishiv_udf_sdk::ArgField]) -> core::result::Result<krishiv_udf_sdk::ReturnField, krishiv_udf_sdk::UdfError>
+pub fn krishiv_udf_sdk::ScalarUdf::signature(&self) -> &krishiv_udf_sdk::Signature
+pub fn krishiv_udf_sdk::ScalarUdf::version(&self) -> u32
+pub fn krishiv_udf_sdk::guard_call<T>(&str, &'static str, impl core::ops::function::FnOnce() -> T) -> core::result::Result<T, krishiv_udf_sdk::UdfError>
