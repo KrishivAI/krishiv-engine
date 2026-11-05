@@ -25,7 +25,7 @@ use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_exec::physical::{
     PhysicalPlan, TaskSpec, WorkerContext, exchange_schemas, instantiate_task,
 };
-use krishiv_exec::{Executor, QueryContext, QueryId, QueryRunner, Scheduler};
+use krishiv_exec::{ExecConfig, Executor, QueryContext, QueryId, QueryRunner, Scheduler};
 use krishiv_scheduler::{fragment, stage_tasks};
 use krishiv_types::batch::Batch;
 use turmoil::net::TcpStream;
@@ -107,7 +107,13 @@ impl Inner {
     }
 
     /// Runs `task` of a stage on its worker until an attempt succeeds.
-    async fn run_task(&self, job: u64, fragment: Arc<[u8]>, mut task: TaskSpec) -> Result<()> {
+    async fn run_task(
+        &self,
+        job: u64,
+        fragment: Arc<[u8]>,
+        mut task: TaskSpec,
+        settings: &ExecConfig,
+    ) -> Result<()> {
         let owner = self.workers.owner(task.partition)?;
         let host = self
             .workers
@@ -127,7 +133,7 @@ impl Inner {
                 Request::Run {
                     job,
                     fragment: fragment.to_vec(),
-                    task: encode_task(&task)?,
+                    task: encode_task(&task, settings)?,
                 }
                 .write(&mut stream)
                 .await?;
@@ -176,7 +182,7 @@ impl Inner {
             let specs = tasks.get(stage.id).cloned().unwrap_or_default();
             let mut runs: FuturesUnordered<_> = specs
                 .into_iter()
-                .map(|spec| self.run_task(job, Arc::clone(&bytes), spec))
+                .map(|spec| self.run_task(job, Arc::clone(&bytes), spec, query.config()))
                 .collect();
             let mut failed = None;
             while let Some(outcome) = runs.next().await {

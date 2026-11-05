@@ -202,7 +202,7 @@ impl Host {
     async fn run(&self, job: u64, fragment: &[u8], task: &[u8]) -> Result<()> {
         let plan = krishiv_plan_codec::decode(fragment)
             .map_err(|e| internal(format!("a fragment: {e}")))?;
-        let task = decode_task(task)?;
+        let (task, settings) = decode_task(task)?;
         let name = format!(
             "stage-{}-task-{}-attempt-{}",
             task.stage, task.partition, task.attempt
@@ -216,8 +216,15 @@ impl Host {
             QueryId(self.next_query.fetch_add(1, Ordering::Relaxed)),
             WorkloadClass::Interactive,
             ExecConfig {
-                seed: Some(task_seed(self.seed, job, task.stage, task.partition)),
-                ..ExecConfig::default()
+                // The query's seed when it has one, else the simulation's:
+                // either way per task, never per attempt.
+                seed: Some(task_seed(
+                    settings.seed.unwrap_or(self.seed),
+                    job,
+                    task.stage,
+                    task.partition,
+                )),
+                ..settings
             },
             self.pool.child(&name, None),
         );
