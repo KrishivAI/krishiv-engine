@@ -243,6 +243,7 @@ def _run_fake_suite(monkeypatch: pytest.MonkeyPatch, cold: bool) -> tuple[dict, 
     evicted: list[Path] = []
     monkeypatch.setattr(runner, "make_engine", lambda *a, **k: _Fake())
     monkeypatch.setattr(runner, "load_queries", lambda *a, **k: [Query("q01", "select 1", "tpch")])
+    monkeypatch.setattr(runner, "dataset_provenance", lambda *a, **k: {})  # would run tpchgen-cli
     monkeypatch.setattr(runner, "evict_page_cache", lambda root: evicted.append(root))
     out = runner.run_suite("fake", "tpch", 1, iterations=2, warmup=1, cold=cold)
     return json.loads(out.read_text()), evicted
@@ -310,3 +311,72 @@ def test_self_tree_measure_covers_the_harness_process():
     assert m.cpu_seconds is not None
     assert m.rchar is not None
     assert _E().end_measure() == Measure()  # no window: nothing measured
+
+
+def test_a_child_reaped_inside_the_tree_is_not_counted_twice(tmp_path: Path):
+    """The kernel adds a reaped child's I/O to its parent's /proc io: the child's last sample must not add it again."""
+    data = tmp_path / "blob"
+    data.write_bytes(os.urandom(4 * 2**20))
+    child = f"d = open({str(data)!r}, 'rb').read()"
+    code = (
+        "import subprocess, sys, time\n"
+        "print('ready', flush=True); sys.stdin.readline()\n"
+        f"p = subprocess.Popen([sys.executable, '-c', {child + '; import time; time.sleep(0.3)'!r}])\n"
+        "time.sleep(0.15)\n"  # the sampler sees the child's read before it exits
+        "p.wait()\n"
+        "print('done', flush=True); sys.stdin.readline()\n"
+    )
+    p = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    assert p.stdin is not None
+    assert p.stdout is not None
+    try:
+        assert p.stdout.readline().strip() == "ready"
+        tree = TreeProc(p.pid, interval_s=0.01)
+        tree.start()
+        p.stdin.write("\n")
+        p.stdin.flush()
+        assert p.stdout.readline().strip() == "done"
+        tree.stop()
+        assert tree.io is not None
+        assert 4 * 2**20 <= tree.io.rchar < 6 * 2**20  # once, not about 8 MiB
+    finally:
+        p.stdin.write("\n")
+        p.stdin.close()
+        p.wait(timeout=10)
+
+
+def test_self_measure_adds_no_sampler_reads():
+    """A window over the harness process starts no sampler thread, so a 0.3 s sleep reads next to nothing."""
+    import time
+
+    from krishiv_bench.adapters.proc_mem import SelfTreeMeasure
+
+    class _E(SelfTreeMeasure):
+        pass
+
+    e = _E()
+    e.begin_measure()
+    time.sleep(0.3)
+    m = e.end_measure()
+    assert m.syscr is not None
+    assert m.rchar is not None
+    assert m.syscr < 100
+    assert m.rchar < 20_000
+    assert m.cpu_seconds is not None
+    assert m.cpu_seconds < 0.05
+
+
+def test_ladder_refuses_results_of_different_datasets(tmp_path: Path):
+    for i, name in enumerate(["tpch", "tpch-dbgen"]):
+        r = _result("duckdb", 10 * (i + 1), {"q": 1.0})
+        r["dataset"]["name"] = name
+        (tmp_path / f"r{i}.json").write_text(json.dumps(r))
+    files = sorted(tmp_path.glob("*.json"))
+    with pytest.raises(SystemExit, match="different datasets"):
+        ladder.load_ladder("tpch", files)
+    assert set(ladder.load_ladder("tpch", files, dataset="tpch-dbgen")) == {20.0}
+
+
+def test_ladder_refuses_h2o_suites():
+    with pytest.raises(SystemExit, match="no scale factor"):
+        ladder.load_ladder("h2o-groupby")

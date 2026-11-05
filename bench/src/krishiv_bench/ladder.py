@@ -6,6 +6,7 @@ import itertools
 import json
 from pathlib import Path
 
+from . import h2o
 from .paths import fmt_sf, results_dir
 
 GROWTH_FLAG = 1.5  # ratio-to-reference growth between consecutive scale factors that is flagged
@@ -17,14 +18,24 @@ def load_ladder(
 ) -> dict[float, dict[str, dict]]:
     """``{scale factor: {engine: newest result}}`` of the single-engine ``suite`` results (explicit ``files``, else
     every result in the results directory)."""
+    if h2o.is_h2o(suite):
+        raise SystemExit(f"{suite} has no scale factor: its size is part of the dataset name, so it has no ladder")
     paths = list(files) if files else sorted(results_dir().glob("*.json"))
-    out: dict[float, dict[str, dict]] = {}
+    found: list[dict] = []
     for f in paths:
         r = json.loads(Path(f).read_text())
         if r.get("suite") != suite or "engine" not in r:
             continue
         if dataset and r["dataset"]["name"] != dataset:
             continue
+        found.append(r)
+    names = sorted({r["dataset"]["name"] for r in found})
+    if len(names) > 1:
+        raise SystemExit(
+            f"results of {suite} come from different datasets {names}: a ladder compares one; pass --dataset NAME"
+        )
+    out: dict[float, dict[str, dict]] = {}
+    for r in found:
         sf = float(r["dataset"]["scale_factor"])
         name = r["engine"]["name"]
         have = out.setdefault(sf, {}).get(name)

@@ -110,6 +110,32 @@ class DockerProc:
 
 def descendants(root: int) -> list[int]:
     """``root`` and every live descendant pid (a JVM's helper processes, a runner child), via /proc ppid links."""
+    return list(tree_parents(root))
+
+
+def tree_parents_fast(root: int) -> dict[int, int]:
+    """``tree_parents`` without scanning every process: follows ``/proc/<pid>/task/<tid>/children`` (a few reads
+    for a harness with few threads). Falls back to the scan where the kernel lacks that file."""
+    out: dict[int, int] = {root: 0}
+    todo = [root]
+    while todo:
+        pid = todo.pop()
+        try:
+            for tid in os.listdir(f"/proc/{pid}/task"):
+                for kid in Path(f"/proc/{pid}/task/{tid}/children").read_text().split():
+                    if int(kid) not in out:
+                        out[int(kid)] = pid
+                        todo.append(int(kid))
+        except FileNotFoundError:
+            if Path(f"/proc/{pid}").exists():  # the process lives, so the kernel lacks the children file
+                return tree_parents(root)
+        except (OSError, ValueError):
+            continue  # exited while we were looking
+    return out
+
+
+def tree_parents(root: int) -> dict[int, int]:
+    """``{pid: ppid}`` of ``root`` and every live descendant (``root``'s own ppid is its real parent's)."""
     children: dict[int, list[int]] = {}
     for entry in os.scandir("/proc"):
         if not entry.name.isdigit():
@@ -120,10 +146,14 @@ def descendants(root: int) -> list[int]:
         except (OSError, IndexError, ValueError):
             continue  # exited while we were scanning
         children.setdefault(ppid, []).append(int(entry.name))
-    out, todo = [], [root]
+    parents: dict[int, int] = {}
+    for ppid, kids in children.items():
+        for k in kids:
+            parents[k] = ppid
+    out, todo = {}, [root]
     while todo:
         pid = todo.pop()
-        out.append(pid)
+        out[pid] = parents.get(pid, 0)
         todo.extend(children.get(pid, []))
     return out
 
@@ -149,10 +179,21 @@ class TreeProc:
     sampler (or ``stop``) took minus the reading at ``start`` (zero for a process born inside the window), summed.
     A process that exits between its last sample and ``stop`` loses its final slice (at most ``interval_s``).
     After ``stop``, ``cpu_seconds`` and ``io`` hold them; ``None`` where the platform gave no reading.
+
+    Linux adds a child's I/O counters to its parent's ``/proc/<pid>/io`` when the parent reaps it, so a process
+    seen by the sampler that has exited by ``stop`` is counted only if its parent is not in the tree at ``stop``
+    (otherwise the parent's own counters already hold it). A grandchild reaped by a parent that also exited is
+    still counted twice; CPU is not affected (a reaped child's CPU goes to ``cutime``, not ``utime``).
+
+    ``sample=False`` (for a tree that contains the harness itself) starts no sampler thread: a sampler would add
+    its own /proc reads and CPU to the process it measures. CPU, I/O and peak are then read only at ``start`` and
+    ``stop`` (a few dozen read syscalls, about 10 KB, are the measurement's own cost), the peak being the
+    VmHWM sum; a descendant that exits inside the window is not seen at all.
     """
 
-    def __init__(self, pid: int, interval_s: float = 0.02):
-        self.pid, self.interval_s = pid, interval_s
+    def __init__(self, pid: int, interval_s: float = 0.02, sample: bool = True):
+        self.pid, self.interval_s, self.sample = pid, interval_s, sample
+        self._ppid: dict[int, int] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._peak = 0
@@ -165,7 +206,8 @@ class TreeProc:
 
     def _sample(self) -> int:
         total = 0
-        for pid in descendants(self.pid):
+        for pid, ppid in (tree_parents_fast if not self.sample else tree_parents)(self.pid).items():
+            self._ppid[pid] = ppid
             p = LocalProc(str(pid))
             with contextlib.suppress(OSError, RuntimeError, ValueError):
                 rss, _, cpu = p.read()
@@ -175,9 +217,12 @@ class TreeProc:
                 self._io[pid] = p.read_io()
         return total
 
+    def _tree_pids(self) -> list[int]:
+        return list((tree_parents_fast if not self.sample else tree_parents)(self.pid))
+
     def _hwm_sum(self) -> int:
         total = 0
-        for pid in descendants(self.pid):
+        for pid in self._tree_pids():
             with contextlib.suppress(OSError, RuntimeError, ValueError):
                 total += LocalProc(str(pid)).read()[1]
         return total
@@ -188,16 +233,17 @@ class TreeProc:
             self._stop.wait(self.interval_s)
 
     def start(self) -> None:
-        for pid in descendants(self.pid):
+        for pid in self._tree_pids():
             with contextlib.suppress(OSError):
                 LocalProc(str(pid)).reset()
-        self._cpu, self._io = {}, {}
+        self._cpu, self._io, self._ppid = {}, {}, {}
         self._peak = self._sample()
         self._cpu0, self._io0 = dict(self._cpu), dict(self._io)
         self.cpu_seconds, self.io = None, None
         self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
+        if self.sample:
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
 
     def stop(self) -> int:
         """Ends the window; returns the peak in bytes."""
@@ -206,12 +252,15 @@ class TreeProc:
             self._thread.join()
             self._thread = None
         peak = max(self._peak, self._sample(), self._hwm_sum())
+        alive = set(self._tree_pids())
         if self._cpu:
             self.cpu_seconds = max(0.0, sum(c - self._cpu0.get(pid, 0.0) for pid, c in self._cpu.items()))
         if self._io:
             zero = IoCounters()
             total = IoCounters()
             for pid, c in self._io.items():
+                if pid not in alive and self._ppid.get(pid) in alive:
+                    continue  # reaped by a parent still in the tree: that parent's counters hold it
                 total = total + (c - self._io0.get(pid, zero))
             self.io = total
         return peak
@@ -240,7 +289,7 @@ class SelfTreeMeasure:
 
     def begin_measure(self) -> None:
         self.end_measure()
-        self._tree = TreeProc(os.getpid())
+        self._tree = TreeProc(os.getpid(), sample=False)
         self._tree.start()
 
     def end_measure(self) -> Measure:
