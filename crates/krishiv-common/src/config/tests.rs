@@ -719,6 +719,31 @@ fn agent_gate_defaults_to_one_gib_and_parses_sizes() {
 }
 
 #[test]
+fn join_enumerator_entries_default_and_parse() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&JOIN_ENUMERATOR).and_then(ConfigValue::as_str),
+        Some("dpsub")
+    );
+    assert_eq!(
+        c.get(&JOIN_DP_LIMIT).and_then(ConfigValue::as_int),
+        Some(10)
+    );
+    c.set("krishiv.optimizer.joinEnumerator", "DPhyp").unwrap();
+    assert_eq!(
+        c.get(&JOIN_ENUMERATOR).and_then(ConfigValue::as_str),
+        Some("dphyp")
+    );
+    c.set("krishiv.optimizer.joinDpLimit", "12").unwrap();
+    assert_eq!(
+        c.get(&JOIN_DP_LIMIT).and_then(ConfigValue::as_int),
+        Some(12)
+    );
+    assert!(c.set("krishiv.optimizer.joinEnumerator", "dpccp").is_err());
+    assert!(c.set("krishiv.optimizer.joinDpLimit", "0").is_err());
+}
+
+#[test]
 fn eager_aggregation_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(

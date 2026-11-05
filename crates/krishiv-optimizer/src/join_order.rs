@@ -6,7 +6,13 @@
 //! With up to [`DP_LIMIT`] inputs, dynamic programming over connected
 //! subsets finds the order with the fewest intermediate rows (`C_out`);
 //! above it, a greedy pass repeatedly joins the connected pair with the
-//! smallest result. Only connected subsets are joined, so no cross product
+//! smallest result. That is the default enumerator, `dpsub`; session
+//! configuration `krishiv.optimizer.joinEnumerator` can choose `dphyp`
+//! (dynamic programming over connected subgraph pairs only, [`dp::dphyp`]) or
+//! `greedy`, and `krishiv.optimizer.joinDpLimit` moves the limit (P2-T113).
+//! Every enumerator plans the same tree with the same costs, so they differ
+//! only in which orders they consider; each planned tree is described in
+//! `EXPLAIN VERBOSE` ([`TreeStats`]). Only connected subsets are joined, so no cross product
 //! is planned unless the query itself has one (then its connected parts
 //! are joined last, smallest first). Each conjunct sits at the lowest join
 //! that has its inputs; the larger input of each join is on the left, the
@@ -29,24 +35,134 @@ use crate::expr::{
 use crate::narrow::{equi_columns, selectivity};
 use crate::stats::{RelStats, Statistics, cse_definitions, reads_cse, resolve_cse};
 
+mod dp;
+
 /// An original relation (kept alive) and its rewrite.
 type Rewritten = (Arc<LogicalPlan>, Arc<LogicalPlan>);
 
 /// The most join inputs planned exactly; larger trees are planned greedily.
 pub const DP_LIMIT: usize = 10;
 
-/// `root` with every inner-join tree reordered.
+/// The highest `krishiv.optimizer.joinDpLimit` honoured: `dpsub` considers
+/// about 3^n splits.
+pub(crate) const MAX_DP_LIMIT: usize = 14;
+
+/// The csg-cmp pairs `dphyp` considers before it plans the tree greedily
+/// instead (DuckDB's budget).
+pub(crate) const PAIR_BUDGET: u64 = 10_000;
+
+/// How each inner-join tree is enumerated (`krishiv.optimizer.joinEnumerator`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Enumerator {
+    /// Every split of every subset, up to the limit; greedy above it.
+    DpSub,
+    /// Connected subgraph and complement pairs only, up to [`PAIR_BUDGET`].
+    DpHyp,
+    /// Always greedy.
+    Greedy,
+}
+
+impl Enumerator {
+    /// The configuration value naming it.
+    fn name(self) -> &'static str {
+        match self {
+            Self::DpSub => "dpsub",
+            Self::DpHyp => "dphyp",
+            Self::Greedy => "greedy",
+        }
+    }
+
+    /// The enumerator a configuration value names; `dpsub` for anything else.
+    pub(crate) fn parse(name: &str) -> Self {
+        match name {
+            "dphyp" => Self::DpHyp,
+            "greedy" => Self::Greedy,
+            _ => Self::DpSub,
+        }
+    }
+}
+
+/// The join-ordering choices a session can make.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Settings {
+    pub(crate) enumerator: Enumerator,
+    /// The most inputs `dpsub` plans exactly (at most [`MAX_DP_LIMIT`]).
+    pub(crate) dp_limit: usize,
+    /// Whether to describe each planned tree ([`TreeStats`]).
+    pub(crate) trace: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            enumerator: Enumerator::DpSub,
+            dp_limit: DP_LIMIT,
+            trace: false,
+        }
+    }
+}
+
+/// What planning one inner-join tree did (`EXPLAIN VERBOSE`, one note per
+/// tree): its size, the enumerator, why it fell back to greedy, the pairs
+/// of halves it costed, the estimated `C_out` of the plan, and the plan's
+/// shape as a fingerprint (inputs numbered in their canonical order; the
+/// left of each pair is the probe side).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TreeStats {
+    inputs: usize,
+    /// Pairs of inputs some join condition over exactly those two joins.
+    edges: usize,
+    /// Join conditions over three or more inputs.
+    hyperedges: usize,
+    enumerator: Enumerator,
+    /// Why the tree was planned greedily, if it was: `inputs` (too many for
+    /// the enumerator), `budget` (`dphyp` hit [`PAIR_BUDGET`]), `hyperedge`
+    /// (some part is held together only by a condition over three or more
+    /// inputs) or `forced` (the `greedy` enumerator).
+    fallback: Option<&'static str>,
+    /// Pairs of planned, connected halves costed (csg-cmp pairs).
+    pairs: u64,
+    /// Candidate pairs of halves looked at to find them.
+    considered: u64,
+    cost: f64,
+    shape: String,
+}
+
+impl std::fmt::Display for TreeStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "tree inputs={} edges={} hyperedges={} enumerator={} fallback={} pairs={} considered={} cost={:.6e} shape={}",
+            self.inputs,
+            self.edges,
+            self.hyperedges,
+            self.enumerator.name(),
+            self.fallback.unwrap_or("none"),
+            self.pairs,
+            self.considered,
+            self.cost,
+            self.shape
+        )
+    }
+}
+
+/// `root` with every inner-join tree reordered, and a note per tree planned
+/// (when `settings.trace`).
 pub(crate) fn reorder(
     root: &Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
-) -> Arc<LogicalPlan> {
-    Reorder {
+    settings: Settings,
+) -> (Arc<LogicalPlan>, Vec<String>) {
+    let mut r = Reorder {
         est: Estimator::with_propagation(stats, propagate),
         propagate,
         done: HashMap::new(),
-    }
-    .positional(root)
+        settings,
+        notes: Vec::new(),
+    };
+    let out = r.positional(root);
+    (out, r.notes)
 }
 
 struct Reorder<'a> {
@@ -56,6 +172,9 @@ struct Reorder<'a> {
     propagate: bool,
     /// The original is kept alive so its address stays unique.
     done: HashMap<*const LogicalPlan, Rewritten>,
+    settings: Settings,
+    /// A [`TreeStats`] per tree planned, when tracing.
+    notes: Vec<String>,
 }
 
 fn inner(p: &LogicalPlan) -> bool {
@@ -255,7 +374,12 @@ impl Reorder<'_> {
             // in a cross product. Keep the tree as written.
             return self.children(root);
         }
-        graph.plan()
+        graph.trace = self.settings.trace;
+        let (plan, stats) = graph.plan(self.settings);
+        if self.settings.trace {
+            self.notes.push(stats.to_string());
+        }
+        plan
     }
 }
 
@@ -353,11 +477,20 @@ fn rows(x: f64) -> f64 {
 type Set = u64;
 
 /// The cheapest plan of a subset: the halves it joins (none for an input).
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Best {
     cost: f64,
     left: Set,
     right: Set,
+}
+
+/// A plan of some inputs with its estimated rows, its `C_out` (the rows of
+/// every join in it, summed) and its shape (when tracing).
+struct Built {
+    plan: Arc<LogicalPlan>,
+    rows: f64,
+    cost: f64,
+    shape: String,
 }
 
 /// A conjunct of the tree: the inputs it reads, its selectivity, and
@@ -371,6 +504,8 @@ struct Pred {
 }
 
 struct Graph {
+    /// Whether plans record their shape ([`Settings::trace`]).
+    trace: bool,
     leaves: Vec<Arc<LogicalPlan>>,
     rows: Vec<f64>,
     /// The conjuncts over more than one input.
@@ -526,6 +661,7 @@ impl Graph {
         }
         composite_keys(&mut kept, &all, &owner, &at, &rows);
         Self {
+            trace: false,
             leaves: sorted,
             rows,
             preds: kept,
@@ -601,73 +737,82 @@ impl Graph {
         rows(base * sel)
     }
 
-    fn plan(&self) -> Arc<LogicalPlan> {
-        if self.n() <= DP_LIMIT {
-            self.dp()
-        } else {
-            self.greedy()
+    /// The join conditions as input masks (inputs as bits; empty past 63
+    /// inputs, which only the greedy pass plans).
+    fn masks(&self) -> Vec<Set> {
+        if self.n() >= 64 {
+            return Vec::new();
         }
-    }
-
-    /// Exact dynamic programming over connected subsets (`C_out` cost).
-    fn dp(&self) -> Arc<LogicalPlan> {
-        let n = self.n();
-        let full: Set = (1 << n) - 1;
-        let masks: Vec<Set> = self
-            .preds
+        self.preds
             .iter()
             .filter(|p| p.edge)
             .map(|p| p.on.iter().fold(0, |m, &x| m | (1 << x)))
-            .collect();
-        let bit = |s: Set| move |i: usize| s & (1 << i) != 0;
-        let mut best: HashMap<Set, Best> = (0..n)
-            .map(|i| {
-                (
-                    1 << i,
-                    Best {
-                        cost: 0.0,
-                        left: 0,
-                        right: 0,
-                    },
-                )
-            })
-            .collect();
-        for s in 1..=full {
-            if s.count_ones() < 2 {
-                continue;
+            .collect()
+    }
+
+    /// The tree planned by `settings`' enumerator, and what it did.
+    fn plan(&self, settings: Settings) -> (Arc<LogicalPlan>, TreeStats) {
+        let n = self.n();
+        let masks = self.masks();
+        let enumerator = settings.enumerator;
+        let (table, mut fallback, work) = match enumerator {
+            Enumerator::Greedy => (None, Some("forced"), dp::Work::default()),
+            Enumerator::DpSub if n <= settings.dp_limit.min(MAX_DP_LIMIT) => {
+                let rows_of = |s: Set| self.rows_of(&|i| s & (1 << i) != 0);
+                let (table, work) = dp::dpsub(n, &masks, &rows_of);
+                (Some(table), None, work)
             }
-            let mut found: Option<Best> = None;
-            let low = s.isolate_lowest_one();
-            let mut a = (s - 1) & s;
-            while a > 0 {
-                let b = s & !a;
-                // Each split once (the half holding the lowest input is `a`),
-                // both halves planned, and joined by some conjunct.
-                if a & low != 0
-                    && let (Some(x), Some(y)) = (best.get(&a), best.get(&b))
-                    && masks
-                        .iter()
-                        .any(|&m| m & !s == 0 && m & a != 0 && m & b != 0)
-                {
-                    let cost = x.cost + y.cost;
-                    if found.is_none_or(|f| cost < f.cost) {
-                        found = Some(Best {
-                            cost,
-                            left: a,
-                            right: b,
-                        });
-                    }
+            Enumerator::DpHyp if n < 64 => {
+                let rows_of = |s: Set| self.rows_of(&|i| s & (1 << i) != 0);
+                match dp::dphyp(n, &masks, &rows_of, PAIR_BUDGET) {
+                    Ok((table, work)) => (Some(table), None, work),
+                    Err(work) => (None, Some("budget"), work),
                 }
-                a = (a - 1) & s;
             }
-            if let Some(mut f) = found {
-                f.cost = rows(f.cost + self.rows_of(&bit(s)));
-                best.insert(s, f);
+            Enumerator::DpSub | Enumerator::DpHyp => (None, Some("inputs"), dp::Work::default()),
+        };
+        let built = match table.and_then(|t| self.table_plan(&t, &masks)) {
+            Some(b) => b,
+            None => {
+                // A part held together only by a conjunct over three or more
+                // inputs has no exact plan (no split is connected).
+                fallback = fallback.or(Some("hyperedge"));
+                self.greedy()
+            }
+        };
+        let mut pairs_seen = std::collections::BTreeSet::new();
+        let mut hyperedges = 0;
+        for p in self.preds.iter().filter(|p| p.edge) {
+            match p.on.as_slice() {
+                [a, b] => {
+                    pairs_seen.insert((*a, *b));
+                }
+                [_, _, _, ..] => hyperedges += 1,
+                _ => {}
             }
         }
+        let stats = TreeStats {
+            inputs: n,
+            edges: pairs_seen.len(),
+            hyperedges,
+            enumerator,
+            fallback,
+            pairs: work.pairs,
+            considered: work.considered,
+            cost: built.cost,
+            shape: built.shape,
+        };
+        (built.plan, stats)
+    }
+
+    /// The plan of an exact table: each connected part from the table,
+    /// joined last by cross products; `None` when some part has no plan.
+    fn table_plan(&self, best: &HashMap<Set, Best>, masks: &[Set]) -> Option<Built> {
+        let n = self.n();
+        let bit = |s: Set| move |i: usize| s & (1 << i) != 0;
         // The connected parts of the graph (one when it is connected).
         let mut part: Vec<Set> = (0..n).map(|i| 1 << i).collect();
-        for &m in &masks {
+        for &m in masks {
             let joined = part
                 .iter()
                 .filter(|&&p| p & m != 0)
@@ -675,45 +820,52 @@ impl Graph {
             part.retain(|&p| p & m == 0);
             part.push(joined);
         }
-        // A part held together only by a conjunct over three or more inputs
-        // has no exact plan (no split is connected): plan greedily, which
-        // joins such parts last.
         if part.iter().any(|p| !best.contains_key(p)) {
-            return self.greedy();
+            return None;
         }
         let plans = part
             .into_iter()
-            .map(|p| {
-                let set = (0..n).map(bit(p)).collect();
-                (set, self.build(p, &best), self.rows_of(&bit(p)))
-            })
+            .map(|p| ((0..n).map(bit(p)).collect(), self.build(p, best)))
             .collect();
-        self.cross(plans)
+        Some(self.cross(plans))
     }
 
     /// The plan of `s` from the table.
-    fn build(&self, s: Set, best: &HashMap<Set, Best>) -> Arc<LogicalPlan> {
+    fn build(&self, s: Set, best: &HashMap<Set, Best>) -> Built {
         let bit = |s: Set| move |i: usize| s & (1 << i) != 0;
+        let rows = self.rows_of(&bit(s));
         match best.get(&s) {
             Some(b) if b.left != 0 => {
                 let (l, r) = (self.build(b.left, best), self.build(b.right, best));
                 let on = self.joining(&bit(b.left), &bit(b.right));
-                let (lr, rr) = (self.rows_of(&bit(b.left)), self.rows_of(&bit(b.right)));
-                self.join((l, lr), (r, rr), &on)
+                self.join(l, r, &on, rows)
             }
-            _ => Arc::clone(&self.leaves[s.trailing_zeros() as usize]),
+            _ => self.leaf(s.trailing_zeros() as usize, rows),
+        }
+    }
+
+    /// Input `i` as a plan of `rows` rows.
+    fn leaf(&self, i: usize, rows: f64) -> Built {
+        Built {
+            plan: Arc::clone(&self.leaves[i]),
+            rows,
+            cost: 0.0,
+            shape: if self.trace {
+                i.to_string()
+            } else {
+                String::new()
+            },
         }
     }
 
     /// Greedy ordering: join the connected pair with the fewest result rows
     /// until no pair is connected. Each round reads every conjunct once.
-    fn greedy(&self) -> Arc<LogicalPlan> {
+    fn greedy(&self) -> Built {
         let n = self.n();
         let mut part_of: Vec<usize> = (0..n).collect();
         let mut members: Vec<Vec<usize>> = (0..n).map(|i| vec![i]).collect();
-        let mut parts: Vec<Option<(Arc<LogicalPlan>, f64)>> = (0..n)
-            .map(|i| Some((Arc::clone(&self.leaves[i]), self.rows[i])))
-            .collect();
+        let mut parts: Vec<Option<Built>> =
+            (0..n).map(|i| Some(self.leaf(i, self.rows[i]))).collect();
         loop {
             // The conjuncts between exactly two parts, by pair.
             let mut pairs: BTreeMap<(usize, usize), (f64, bool, Vec<usize>)> = BTreeMap::new();
@@ -730,10 +882,10 @@ impl Graph {
             }
             let mut pick: Option<((usize, usize), f64)> = None;
             for (&(a, b), (sel, edge, _)) in &pairs {
-                let (Some((_, ra)), Some((_, rb))) = (&parts[a], &parts[b]) else {
+                let (Some(pa), Some(pb)) = (&parts[a], &parts[b]) else {
                     continue;
                 };
-                let r = rows(ra * rb * sel);
+                let r = rows(pa.rows * pb.rows * sel);
                 if *edge && pick.is_none_or(|(_, best)| r < best) {
                     pick = Some(((a, b), r));
                 }
@@ -748,7 +900,7 @@ impl Graph {
                 .remove(&(a, b))
                 .map(|(_, _, on)| on)
                 .unwrap_or_default();
-            parts[a] = Some((self.join(pa, pb, &on), r));
+            parts[a] = Some(self.join(pa, pb, &on, r));
             let moved = std::mem::take(&mut members[b]);
             for &x in &moved {
                 part_of[x] = a;
@@ -759,58 +911,66 @@ impl Graph {
             .into_iter()
             .zip(members)
             .filter_map(|(p, m)| {
-                let (plan, r) = p?;
+                let built = p?;
                 let mut set = vec![false; n];
                 m.iter().for_each(|&x| set[x] = true);
-                Some((set, plan, r))
+                Some((set, built))
             })
             .collect();
         self.cross(left)
     }
 
     /// Joins disconnected parts by cross products, largest on the left.
-    fn cross(&self, mut parts: Vec<(Vec<bool>, Arc<LogicalPlan>, f64)>) -> Arc<LogicalPlan> {
-        parts.sort_by(|a, b| b.2.total_cmp(&a.2));
+    fn cross(&self, mut parts: Vec<(Vec<bool>, Built)>) -> Built {
+        parts.sort_by(|a, b| b.1.rows.total_cmp(&a.1.rows));
         let mut it = parts.into_iter();
-        let Some((mut set, mut acc, mut rows)) = it.next() else {
-            return Arc::clone(&self.leaves[0]);
+        let Some((mut set, mut acc)) = it.next() else {
+            return self.leaf(0, self.rows.first().copied().unwrap_or(1.0));
         };
-        for (s, p, r) in it {
+        for (s, p) in it {
             let on = self.joining(&|x| set[x], &|x| s[x]);
-            acc = self.join((acc, rows), (p, r), &on);
-            rows = self::rows(rows * r);
+            let r = self::rows(acc.rows * p.rows);
+            acc = self.join(acc, p, &on, r);
             set = set.iter().zip(&s).map(|(a, b)| *a || *b).collect();
         }
         acc
     }
 
-    /// An inner join of two plans on conjuncts `on`, the larger on the left;
-    /// conjuncts that cannot be join conditions filter its result.
-    fn join(
-        &self,
-        a: (Arc<LogicalPlan>, f64),
-        b: (Arc<LogicalPlan>, f64),
-        on: &[usize],
-    ) -> Arc<LogicalPlan> {
-        let ((left, _), (right, _)) = if b.1 > a.1 { (b, a) } else { (a, b) };
+    /// An inner join of two plans on conjuncts `on`, of `rows` rows, the
+    /// larger on the left; conjuncts that cannot be join conditions filter
+    /// its result.
+    fn join(&self, a: Built, b: Built, on: &[usize], rows: f64) -> Built {
+        let (left, right) = if b.rows > a.rows { (b, a) } else { (a, b) };
         let pick = |edge: bool| {
             on.iter()
                 .filter(move |&&i| self.preds[i].edge == edge)
                 .map(|&i| Arc::clone(&self.preds[i].expr))
         };
         let condition = and_all(pick(true)).map_or(JoinCondition::None, JoinCondition::On);
+        let shape = if self.trace {
+            format!("({} {})", left.shape, right.shape)
+        } else {
+            String::new()
+        };
+        let cost = self::rows(left.cost + right.cost + rows);
         let join = Arc::new(LogicalPlan::new(PlanNode::Join {
-            left,
-            right,
+            left: left.plan,
+            right: right.plan,
             kind: JoinKind::Inner,
             condition,
         }));
-        match and_all(pick(false)) {
+        let plan = match and_all(pick(false)) {
             Some(predicate) => Arc::new(LogicalPlan::new(PlanNode::Filter {
                 input: join,
                 predicate,
             })),
             None => join,
+        };
+        Built {
+            plan,
+            rows,
+            cost,
+            shape,
         }
     }
 }
