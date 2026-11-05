@@ -73,6 +73,11 @@ fn the_header_lists_exactly_the_features_in_use() {
         ["legacy_time_parser"]
     );
     assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
+    // The exchange's schema alone names the collation.
+    assert_eq!(
+        message("collated_exchange_source").features,
+        ["collated_strings", "exchange_source"]
+    );
     assert_eq!(
         message("options_map_literal").features,
         ["options_map_literals"]

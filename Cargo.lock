@@ -2407,6 +2407,26 @@ dependencies = [
 [[package]]
 name = "krishiv-sim"
 version = "0.2.0-alpha"
+dependencies = [
+ "arrow-array",
+ "arrow-schema",
+ "futures",
+ "krishiv-common",
+ "krishiv-exec",
+ "krishiv-io",
+ "krishiv-memory",
+ "krishiv-optimizer",
+ "krishiv-plan",
+ "krishiv-plan-codec",
+ "krishiv-scheduler",
+ "krishiv-shuffle",
+ "krishiv-sql",
+ "krishiv-types",
+ "object_store",
+ "prost",
+ "tokio",
+ "turmoil",
+]
 
 [[package]]
 name = "krishiv-sql"
@@ -3413,6 +3433,16 @@ name = "rand_core"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+
+[[package]]
+name = "rand_distr"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8615d50dcf34fa31f7ab52692afec947c4dd0ab803cc87cb3b0b4570ff7463"
+dependencies = [
+ "num-traits",
+ "rand 0.9.5",
+]
 
 [[package]]
 name = "rand_pcg"
@@ -4504,6 +4534,21 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "turmoil"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0061c28f1469e94771bb8aa626ce6b29265c2fb5034115046a170b0cba2e33d2"
+dependencies = [
+ "bytes",
+ "indexmap",
+ "rand 0.9.5",
+ "rand_distr",
+ "scoped-tls",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "twox-hash"

@@ -1,12 +1,35 @@
 [package]
 name = "krishiv-sim"
-description = "Deterministic simulation testing (DST) harness skeleton"
+description = "Deterministic simulation testing (DST): a cluster of simulated workers on turmoil"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish = false
+
+[dependencies]
+arrow-array.workspace = true
+arrow-schema.workspace = true
+futures = { workspace = true, features = ["std"] }
+krishiv-common = { path = "../krishiv-common" }
+krishiv-exec = { path = "../krishiv-exec" }
+krishiv-memory = { path = "../krishiv-memory" }
+krishiv-plan-codec = { path = "../krishiv-plan-codec" }
+krishiv-scheduler = { path = "../krishiv-scheduler" }
+krishiv-shuffle = { path = "../krishiv-shuffle" }
+krishiv-types = { path = "../krishiv-types" }
+prost = { workspace = true, features = ["derive", "std"] }
+tokio = { workspace = true, features = ["io-util", "rt"] }
+turmoil.workspace = true
+
+[dev-dependencies]
+krishiv-io = { path = "../krishiv-io" }
+krishiv-optimizer = { path = "../krishiv-optimizer" }
+krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
+krishiv-sql = { path = "../krishiv-sql" }
+object_store = { workspace = true, features = ["fs"] }
+tokio = { workspace = true, features = ["io-util", "macros", "rt"] }
 
 [lints]
 workspace = true

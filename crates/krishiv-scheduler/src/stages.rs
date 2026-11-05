@@ -132,104 +132,133 @@ impl StageRunner {
         self.splits = Some(splits);
         self
     }
+}
 
-    /// The task count, written partitions and splits of each stage.
-    fn plans(&self, stages: &[Stage]) -> Result<Vec<Plan>> {
-        let mut plans: Vec<Option<Plan>> = vec![None; stages.len()];
-        // Readers come after what they read: decide from the root down.
-        for stage in stages.iter().rev() {
-            // A subquery's input is read whole by every task: it does not
-            // partition the stage.
-            let reads_hash = stage.inputs.iter().any(|i| {
-                !i.subquery
-                    && matches!(
-                        i.partitioning,
-                        Partitioning::Hash { .. } | Partitioning::RoundRobin
-                    )
-            });
-            let (tasks, splits) =
-                if stage.output.is_none() || stage.single || (reads_hash && stage.scans) {
-                    (1, Vec::new())
-                } else if reads_hash {
-                    (self.partitions, Vec::new())
-                } else if stage.scans
-                    && let Some(splits) = &self.splits
-                    && let Some(dealt) = splits.splits(&stage.plan, self.partitions)?
-                    && !dealt.is_empty()
-                {
-                    let tasks = u32::try_from(dealt.len())
-                        .map_err(|_| internal(format!("{} tasks", dealt.len())))?;
-                    (tasks, dealt)
-                } else {
-                    (1, Vec::new())
-                };
-            let writes = match &stage.output {
-                None => 0,
-                Some((exchange, partitioning)) => {
-                    let reader = stages
-                        .iter()
-                        .find(|s| s.inputs.iter().any(|i| i.exchange == *exchange))
-                        .and_then(|s| plans.get(s.id).cloned().flatten())
-                        .ok_or_else(|| {
-                            internal(format!("exchange {} has no reading stage", exchange.0))
-                        })?;
-                    reduce_partitions(partitioning, reader.tasks)
-                }
-            };
-            if let Some(slot) = plans.get_mut(stage.id) {
-                *slot = Some(Plan {
-                    tasks,
-                    writes,
-                    splits,
-                });
-            }
-        }
-        plans
-            .into_iter()
-            .map(|p| p.ok_or_else(|| internal("a stage without a plan".to_owned())))
-            .collect()
+/// The task specs of each stage of `stages` (by stage id), every task at
+/// attempt 0 of stage attempt 0: the in-process runner's task plan (see the
+/// module docs), which a coordinator of several workers ships as is. Hash
+/// exchanges get `partitions` reduce partitions; `splits` deals the scans of
+/// leaf stages.
+///
+/// # Errors
+/// `INTERNAL_ERROR` for no partitions or an exchange no stage reads;
+/// `splits`' errors.
+pub fn stage_tasks(
+    stages: &[Stage],
+    partitions: u32,
+    splits: Option<&dyn StageSplits>,
+) -> Result<Vec<Vec<TaskSpec>>> {
+    if partitions == 0 {
+        return Err(internal("a task plan without partitions".to_owned()));
     }
-
-    /// Task `partition`'s spec of `stage`.
-    fn spec(stage: &Stage, plans: &[Plan], partition: u32) -> Result<TaskSpec> {
-        let plan = plans
-            .get(stage.id)
-            .ok_or_else(|| internal("a stage without a plan".to_owned()))?;
-        let mut exchanges = BTreeMap::new();
-        for input in &stage.inputs {
-            let writer = plans
-                .get(input.stage)
-                .ok_or_else(|| internal("an input stage without a plan".to_owned()))?;
-            let reduce = if writer.writes > 1 && plan.tasks > 1 && !input.subquery {
-                vec![partition]
-            } else {
-                (0..writer.writes).collect()
-            };
-            exchanges.insert(
-                input.exchange,
-                ExchangeInput {
-                    stage_attempt: 0,
-                    maps: writer.tasks,
-                    reduce,
-                },
-            );
-        }
-        Ok(TaskSpec {
-            stage: u32::try_from(stage.id).map_err(|_| internal(format!("stage {}", stage.id)))?,
-            stage_attempt: 0,
-            partition,
-            partitions: plan.tasks,
-            attempt: 0,
-            scans: plan
-                .splits
-                .get(partition as usize)
-                .cloned()
-                .unwrap_or_default(),
-            exchanges,
-            output: stage.output.as_ref().map(|_| plan.writes),
+    let plans = plans(stages, partitions, splits)?;
+    stages
+        .iter()
+        .map(|stage| {
+            let tasks = plans.get(stage.id).map_or(1, |p| p.tasks);
+            (0..tasks).map(|t| spec(stage, &plans, t)).collect()
         })
-    }
+        .collect()
+}
 
+/// The task count, written partitions and splits of each stage.
+fn plans(stages: &[Stage], partitions: u32, splits: Option<&dyn StageSplits>) -> Result<Vec<Plan>> {
+    let mut plans: Vec<Option<Plan>> = vec![None; stages.len()];
+    // Readers come after what they read: decide from the root down.
+    for stage in stages.iter().rev() {
+        // A subquery's input is read whole by every task: it does not
+        // partition the stage.
+        let reads_hash = stage.inputs.iter().any(|i| {
+            !i.subquery
+                && matches!(
+                    i.partitioning,
+                    Partitioning::Hash { .. } | Partitioning::RoundRobin
+                )
+        });
+        let (tasks, splits) =
+            if stage.output.is_none() || stage.single || (reads_hash && stage.scans) {
+                (1, Vec::new())
+            } else if reads_hash {
+                (partitions, Vec::new())
+            } else if stage.scans
+                && let Some(splits) = splits
+                && let Some(dealt) = splits.splits(&stage.plan, partitions)?
+                && !dealt.is_empty()
+            {
+                let tasks = u32::try_from(dealt.len())
+                    .map_err(|_| internal(format!("{} tasks", dealt.len())))?;
+                (tasks, dealt)
+            } else {
+                (1, Vec::new())
+            };
+        let writes = match &stage.output {
+            None => 0,
+            Some((exchange, partitioning)) => {
+                let reader = stages
+                    .iter()
+                    .find(|s| s.inputs.iter().any(|i| i.exchange == *exchange))
+                    .and_then(|s| plans.get(s.id).cloned().flatten())
+                    .ok_or_else(|| {
+                        internal(format!("exchange {} has no reading stage", exchange.0))
+                    })?;
+                reduce_partitions(partitioning, reader.tasks)
+            }
+        };
+        if let Some(slot) = plans.get_mut(stage.id) {
+            *slot = Some(Plan {
+                tasks,
+                writes,
+                splits,
+            });
+        }
+    }
+    plans
+        .into_iter()
+        .map(|p| p.ok_or_else(|| internal("a stage without a plan".to_owned())))
+        .collect()
+}
+
+/// Task `partition`'s spec of `stage`.
+fn spec(stage: &Stage, plans: &[Plan], partition: u32) -> Result<TaskSpec> {
+    let plan = plans
+        .get(stage.id)
+        .ok_or_else(|| internal("a stage without a plan".to_owned()))?;
+    let mut exchanges = BTreeMap::new();
+    for input in &stage.inputs {
+        let writer = plans
+            .get(input.stage)
+            .ok_or_else(|| internal("an input stage without a plan".to_owned()))?;
+        let reduce = if writer.writes > 1 && plan.tasks > 1 && !input.subquery {
+            vec![partition]
+        } else {
+            (0..writer.writes).collect()
+        };
+        exchanges.insert(
+            input.exchange,
+            ExchangeInput {
+                stage_attempt: 0,
+                maps: writer.tasks,
+                reduce,
+            },
+        );
+    }
+    Ok(TaskSpec {
+        stage: u32::try_from(stage.id).map_err(|_| internal(format!("stage {}", stage.id)))?,
+        stage_attempt: 0,
+        partition,
+        partitions: plan.tasks,
+        attempt: 0,
+        scans: plan
+            .splits
+            .get(partition as usize)
+            .cloned()
+            .unwrap_or_default(),
+        exchanges,
+        output: stage.output.as_ref().map(|_| plan.writes),
+    })
+}
+
+impl StageRunner {
     /// `plan` instantiated as `task` on the blocking pool (instantiation
     /// starts a deep-stack thread).
     async fn instantiate(
@@ -339,19 +368,24 @@ impl StageRunner {
             schemas?
         };
         let stages = fragment(&plan, &schemas)?;
-        let plans = self.plans(&stages)?;
+        let tasks = stage_tasks(&stages, self.partitions, self.splits.as_deref())?;
         let worker = worker.with_exchange(Arc::new(shuffle));
         let (root, maps) = stages
             .split_last()
             .ok_or_else(|| internal("a plan without stages".to_owned()))?;
+        let specs = |stage: &Stage| {
+            tasks
+                .get(stage.id)
+                .cloned()
+                .ok_or_else(|| internal("a stage without tasks".to_owned()))
+        };
         for stage in maps {
-            let tasks = plans.get(stage.id).map_or(1, |p| p.tasks);
-            let mut runs = (0..tasks)
-                .map(|t| {
-                    let spec = Self::spec(stage, &plans, t);
+            let mut runs = specs(stage)?
+                .into_iter()
+                .map(|spec| {
                     let worker = worker.clone();
                     let query = &query;
-                    async move { self.map_task(stage, worker, spec?, query).await }
+                    async move { self.map_task(stage, worker, spec, query).await }
                 })
                 .collect::<FuturesUnordered<_>>();
             // The first failure fails the query, which ends the other tasks;
@@ -370,7 +404,10 @@ impl StageRunner {
             }
             query.check_cancelled()?;
         }
-        let spec = Self::spec(root, &plans, 0)?;
+        let spec = specs(root)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| internal("a root stage without a task".to_owned()))?;
         let node = Self::instantiate(&self.executor, root.plan.clone(), worker, spec).await?;
         query.check_cancelled()?;
         self.roots.execute(node, query).await
