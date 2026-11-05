@@ -121,11 +121,13 @@ impl LegacyPattern {
         let (local, zone) = self.fast_fields(s, false)?;
         let local = local?;
         let offset = zone_offset(local.secs, zone, &FixedOffset(0)).ok()?;
+        // The instant's UTC day is found on the real calendar and only then
+        // rebased to the label (`rebaseJulianToGregorianDays`).
         let secs = local
-            .secs
+            .real_secs
             .checked_sub(i64::from(offset))?
             .checked_add(local.fraction.div_euclid(MICROS_PER_SECOND))?;
-        i32::try_from(secs.div_euclid(86_400)).ok()
+        i32::try_from(label_of_real(secs.div_euclid(86_400))).ok()
     }
 
     /// The local label time and the zone `s` names; `scaled` reads `S` as a
@@ -349,7 +351,11 @@ fn fast_zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
     }
     if let Some(end) = prefix(text, pos, &["GMT"]) {
         // `GMT+05` is no `GMT+h:mm`: the zone name `GMT` is read alone.
-        return zone(text, pos, None).or(Some((end, Zone_::Offset(0))));
+        // `GMT+25:00` has the numeric shape and is refused, not read as `GMT`.
+        return match zone(text, pos, None) {
+            None if gmt_offset_shape(text, end) => None,
+            other => other.or(Some((end, Zone_::Offset(0)))),
+        };
     }
     let mut best: Option<(usize, i32)> = None;
     for row in ZONE_STRINGS.iter() {
@@ -365,6 +371,17 @@ fn fast_zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
         }
     }
     best.map(|(end, offset)| (end, Zone_::Offset(offset)))
+}
+
+/// Whether `text[at..]` reads `[+-]h:mm` or `[+-]hh:mm` (the shape of a
+/// `GMT` offset, whatever its value).
+fn gmt_offset_shape(text: &[char], at: usize) -> bool {
+    let digit = |i: usize| text.get(i).is_some_and(char::is_ascii_digit);
+    if !matches!(text.get(at), Some('+' | '-')) || !digit(at + 1) {
+        return false;
+    }
+    let colon = if digit(at + 2) { at + 3 } else { at + 2 };
+    text.get(colon) == Some(&':') && digit(colon + 1) && digit(colon + 2)
 }
 
 /// The UTC offset, in seconds, that a local label time of `local_secs` has
@@ -403,6 +420,9 @@ fn zone_offset(
 pub(super) struct Local {
     /// Seconds since the epoch of the label time, fraction left out.
     pub(super) secs: i64,
+    /// The same time on the real (Julian before the cutover) day count,
+    /// which a `DATE` shifts by its zone before the day is rebased.
+    pub(super) real_secs: i64,
     /// The fractional part, in microseconds.
     pub(super) fraction: i64,
 }
@@ -480,7 +500,11 @@ fn resolve(
     let local = days
         .checked_mul(86_400)
         .and_then(|d| d.checked_add(total.rem_euclid(86_400)))
-        .map(|secs| Local { secs, fraction });
+        .map(|secs| Local {
+            secs,
+            real_secs: total,
+            fraction,
+        });
     Some((local, st.zone.clone()))
 }
 

@@ -180,3 +180,42 @@ fn fast_parse_second_review_regressions() {
         Some(-12_219_260_699_000_000)
     );
 }
+
+/// The third review round (oracle values, fallback off).
+#[test]
+fn fast_parse_third_review_regressions() {
+    let utc = resolve_zone("UTC").unwrap();
+    let ts = |text: &str| {
+        DateTimePattern::new_fast("yyyy-MM-dd HH:mm:ss z")
+            .parse_timestamp(text, &utc)
+            .unwrap()
+    };
+    // A `GMT` offset of the numeric shape is read whole or refused.
+    assert_eq!(ts("2024-01-01 00:00:00 GMT+25:00"), None);
+    assert_eq!(ts("2024-01-01 00:00:00 GMT+05:61"), None);
+    assert_eq!(
+        ts("2024-01-01 00:00:00 GMT+5:00"),
+        Some(1_704_049_200_000_000)
+    );
+    // Otherwise `GMT` alone is read and the rest is left over.
+    assert_eq!(
+        ts("2024-01-01 00:00:00 GMT+05"),
+        Some(1_704_067_200_000_000)
+    );
+    assert_eq!(
+        ts("2024-01-01 00:00:00 GMT+2500"),
+        Some(1_704_067_200_000_000)
+    );
+    // A `DATE` offset is applied on the real calendar, then the day is rebased.
+    let day = |text: &str| {
+        DateTimePattern::new_fast("yyyy-MM-dd XXX")
+            .parse_date(text)
+            .unwrap()
+    };
+    assert_eq!(day("1582-10-15 +01:00"), Some(-141_438));
+    assert_eq!(day("1582-10-15 +00:00"), Some(-141_427));
+    assert_eq!(day("1582-10-15 -01:00"), Some(-141_427));
+    assert_eq!(day("1500-03-01 +01:00"), Some(-171_605));
+    assert_eq!(day("1500-03-02 +01:00"), Some(-171_605));
+    assert_eq!(day("1582-10-16 +24:00"), None);
+}
