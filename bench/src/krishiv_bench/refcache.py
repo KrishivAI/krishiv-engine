@@ -14,10 +14,11 @@ Two kinds of entry, with different keys:
   memory and the sample count. Used by ``reproduce --sequential``, where the reference runs alone and a replayed time
   is as good as a live one (the machine is the same, which the record states: the entry says when it was measured).
 
-The dataset is identified by its manifest checksum (``$KRISHIV_DATA/manifests``), else by the name, size, modification time
-and first and last 64 KiB of each of its files; the query by the hash of the text the reference runs; the engine by its installed version. A change to any of
-them is a different key, so a stale entry is never read, only left behind.
-"""
+The dataset is identified by its manifest checksum (``$KRISHIV_DATA/manifests``), else by the name, size,
+modification time and first and last 64 KiB of each of its files; the query by the hash of the text the reference
+runs; the engine by its installed version. A change to any of them is a different key, so a stale entry is never
+read, only left behind.
+
 
 from __future__ import annotations
 
