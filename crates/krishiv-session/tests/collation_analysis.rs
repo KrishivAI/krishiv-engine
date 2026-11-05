@@ -19,8 +19,12 @@ fn run(sql: &str) -> Result<Vec<String>, KrishivError> {
         for i in 0..c.len() {
             out.push(if c.is_null(i) {
                 "NULL".to_owned()
+            } else if let Some(v) = c.as_string_view_opt() {
+                v.value(i).to_owned()
+            } else if let Some(v) = c.as_string_opt::<i32>() {
+                v.value(i).to_owned()
             } else {
-                c.as_string_view().value(i).to_owned()
+                format!("{c:?}")
             });
         }
     }
@@ -68,5 +72,51 @@ fn collate_checks_its_input_and_its_name() {
     assert_eq!(
         class("SELECT 'a' COLLATE no_such_collation"),
         ErrorClass::CollationInvalidName
+    );
+}
+
+/// Until the planner rewrites comparing positions onto collation keys, every one of them
+/// refuses a collated value instead of comparing bytes (the execution guard of unit 2a).
+#[test]
+fn comparing_positions_refuse_a_collated_value() {
+    let c = "('a' COLLATE utf8_lcase)";
+    for sql in [
+        // scalar comparisons
+        format!("SELECT {c} = 'A'"),
+        format!("SELECT {c} <=> 'A'"),
+        format!("SELECT {c} < 'A'"),
+        format!("SELECT {c} BETWEEN 'a' AND 'b'"),
+        format!("SELECT {c} IN ('A', 'b')"),
+        // keys
+        format!("SELECT col1 FROM (SELECT {c} AS col1) GROUP BY col1"),
+        format!("SELECT DISTINCT {c}"),
+        format!("SELECT col1 FROM (SELECT {c} AS col1) ORDER BY col1"),
+        format!("SELECT count(DISTINCT c) FROM (SELECT {c} AS c)"),
+        format!("SELECT max(c) FROM (SELECT {c} AS c)"),
+        format!("SELECT c, row_number() OVER (PARTITION BY c ORDER BY c) FROM (SELECT {c} AS c)"),
+        format!("SELECT {c} UNION SELECT {c}"),
+        format!("SELECT {c} INTERSECT SELECT {c}"),
+        format!("SELECT {c} EXCEPT SELECT {c}"),
+        format!("SELECT * FROM (SELECT {c} AS c) a JOIN (SELECT {c} AS c) b ON a.c = b.c"),
+    ] {
+        assert_eq!(
+            class(&sql),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql} must be refused, not compared as bytes"
+        );
+    }
+}
+
+/// What does not compare may still use a collated value.
+#[test]
+fn non_comparing_positions_accept_a_collated_value() {
+    assert_eq!(one("SELECT 'a' COLLATE utf8_lcase"), "a");
+    assert_eq!(
+        one("SELECT c FROM (SELECT 'Ab' COLLATE utf8_lcase AS c) WHERE true"),
+        "Ab"
+    );
+    assert_eq!(
+        one("SELECT CAST(count(c) AS STRING) FROM (SELECT 'a' COLLATE utf8_lcase AS c)"),
+        "1"
     );
 }
