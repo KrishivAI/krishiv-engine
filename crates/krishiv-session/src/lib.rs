@@ -59,6 +59,7 @@ mod introspection;
 mod locals;
 mod partitions;
 mod profile;
+mod query_fold;
 mod recursion;
 mod result_cache;
 mod scripting;
