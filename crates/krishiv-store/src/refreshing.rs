@@ -433,6 +433,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn every_operation_passes_through_to_the_inner_store() {
+        let (store, _, _) = setup(0, denied("access")).await;
+        let k = Path::from("k");
+        assert!(store.to_string().contains("RefreshingStore(Scripted)"));
+        assert!(format!("{store:?}").contains("RefreshingStore"));
+        store
+            .put(&Path::from("p/a"), PutPayload::from_static(b"abc"))
+            .await
+            .unwrap();
+        store
+            .put_multipart(&Path::from("p/m"))
+            .await
+            .unwrap()
+            .abort()
+            .await
+            .ok();
+        let ranges = store.get_ranges(&Path::from("p/a"), &[0..1, 1..3]).await;
+        assert_eq!(ranges.unwrap()[1].as_ref(), b"bc");
+        let listed: Vec<_> = store.list(Some(&Path::from("p"))).collect().await;
+        assert!(listed.iter().all(Result::is_ok));
+        let after: Vec<_> = store
+            .list_with_offset(None, &Path::from("a"))
+            .collect()
+            .await;
+        assert!(after.iter().all(Result::is_ok));
+        let dir = store.list_with_delimiter(None).await.unwrap();
+        assert!(!dir.objects.is_empty() || !dir.common_prefixes.is_empty());
+        store.copy(&k, &Path::from("c")).await.unwrap();
+        store
+            .rename(&Path::from("c"), &Path::from("r"))
+            .await
+            .unwrap();
+        let gone: Vec<_> = store
+            .delete_stream(futures::stream::iter([Ok(Path::from("r"))]).boxed())
+            .collect()
+            .await;
+        assert!(gone.iter().all(Result::is_ok));
+    }
+
+    #[test]
+    fn only_stale_credential_answers_are_recognised() {
+        let missing = object_store::Error::NotFound {
+            path: "k".into(),
+            source: Box::new(Body("gone".into())),
+        };
+        assert!(!is_stale_credential(&missing));
+        let unauth = object_store::Error::Unauthenticated {
+            path: "k".into(),
+            source: Box::new(Body("no".into())),
+        };
+        assert!(is_stale_credential(&unauth));
+        assert!(is_stale_credential(&denied("expired")()));
+        assert!(!is_stale_credential(&denied("access")()));
+    }
+
+    #[tokio::test]
     async fn a_failed_credential_refresh_is_not_retried() {
         let (store, inner, _) = setup(1, || object_store::Error::Unauthenticated {
             path: "s3://b".into(),
