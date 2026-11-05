@@ -1099,7 +1099,22 @@ message Literal {
     DayTimeLiteral day_time = 16;
     // feature: interval_types
     CalendarLiteral calendar = 17;
+    // feature: options_map_literals
+    MapLiteral map = 18;
   }
+}
+
+// feature: options_map_literals
+// A `MAP<STRING, STRING>` literal: one call's options (`from_json`,
+// `from_csv`, `from_xml` and the like), entries in their given order.
+message MapLiteral {
+  repeated MapLiteralEntry entries = 1;
+}
+
+// feature: options_map_literals
+message MapLiteralEntry {
+  string key = 1;
+  string value = 2;
 }
 
 message NullLiteral {

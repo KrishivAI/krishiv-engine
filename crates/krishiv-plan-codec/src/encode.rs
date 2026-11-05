@@ -1337,6 +1337,15 @@ fn literal(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
             days: *days,
             micros: *micros,
         }),
+        Literal::Map(entries) => Kind::Map(pb::MapLiteral {
+            entries: entries
+                .iter()
+                .map(|(key, value)| pb::MapLiteralEntry {
+                    key: key.clone(),
+                    value: value.clone(),
+                })
+                .collect(),
+        }),
         _ => {
             return Err(CodecError::Unsupported(
                 "a literal kind this version does not know".to_owned(),

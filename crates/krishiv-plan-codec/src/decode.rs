@@ -1483,6 +1483,13 @@ fn literal(l: &pb::Literal) -> Result<Literal> {
             days: v.days,
             micros: v.micros,
         },
+        // Bounded by the plan's byte limit: every entry takes wire bytes.
+        Kind::Map(v) => Literal::Map(
+            v.entries
+                .iter()
+                .map(|e| (e.key.clone(), e.value.clone()))
+                .collect(),
+        ),
     })
 }
 

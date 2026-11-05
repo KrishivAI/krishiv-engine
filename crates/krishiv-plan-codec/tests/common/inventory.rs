@@ -1897,6 +1897,20 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         nullable: None,
         subqueries: Vec::new(),
     };
+    // One call's options, as `from_json(s, schema, map(...))` carries them.
+    let options_map = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "options".to_owned(),
+            expr: lit(Literal::Map(vec![
+                ("mode".to_owned(), "FAILFAST".to_owned()),
+                ("timestampFormat".to_owned(), "dd/MM/yyyy".to_owned()),
+            ])),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
     let mut interval_columns = file_scan();
     interval_columns.scan.output = vec![
         column(
@@ -1946,6 +1960,7 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
     };
     vec![
         ("interval_literals", interval_literals),
+        ("options_map_literal", options_map),
         ("interval_scan", PhysNode::Scan(interval_columns)),
         ("interval_nested", nested_intervals),
         (

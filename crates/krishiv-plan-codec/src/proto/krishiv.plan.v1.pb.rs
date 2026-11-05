@@ -1338,7 +1338,7 @@ pub mod data_type {
 pub struct Literal {
     #[prost(
         oneof = "literal::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
     )]
     pub kind: ::core::option::Option<literal::Kind>,
 }
@@ -1381,7 +1381,26 @@ pub mod literal {
         /// feature: interval_types
         #[prost(message, tag = "17")]
         Calendar(super::CalendarLiteral),
+        /// feature: options_map_literals
+        #[prost(message, tag = "18")]
+        Map(super::MapLiteral),
     }
+}
+/// feature: options_map_literals
+/// A `MAP<STRING, STRING>` literal: one call's options (`from_json`,
+/// `from_csv`, `from_xml` and the like), entries in their given order.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MapLiteral {
+    #[prost(message, repeated, tag = "1")]
+    pub entries: ::prost::alloc::vec::Vec<MapLiteralEntry>,
+}
+/// feature: options_map_literals
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MapLiteralEntry {
+    #[prost(string, tag = "1")]
+    pub key: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub value: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NullLiteral {

@@ -74,6 +74,10 @@ fn the_header_lists_exactly_the_features_in_use() {
     );
     assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
     assert_eq!(
+        message("options_map_literal").features,
+        ["options_map_literals"]
+    );
+    assert_eq!(
         message("aggregate_any_value").features,
         ["any_value_by_aggregates"]
     );
