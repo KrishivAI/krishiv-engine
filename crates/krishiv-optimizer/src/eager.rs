@@ -56,7 +56,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_common::error::KrishivError;
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionKind, Grouping, JoinCondition, JoinKind,
     Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction, may_raise,
@@ -113,13 +113,12 @@ pub(crate) fn rewrite(
         });
         match tried {
             Ok((pushed, note)) => {
-                notes.push(note);
+                // Out of attribute ids: leave the plan as it is, as CSE and the sum rewrite do.
                 if next > MAX_ID {
-                    return Err(InternalError {
-                        message: "attribute ids exhausted by eager aggregation".to_owned(),
-                    }
-                    .into());
+                    notes.push("not applied: the plan has no attribute ids left".to_owned());
+                    return Ok(p);
                 }
+                notes.push(note);
                 Ok(pushed)
             }
             Err(why) => {
@@ -586,6 +585,16 @@ impl std::fmt::Display for Gates {
 fn groups_of(keys: &[BoundColumn], side: &RelStats) -> Result<f64, String> {
     let mut groups = 1.0_f64;
     for k in keys {
+        // Values that compare equal but can be told apart above the join (`-0.0` and `0.0`, strings equal under a
+        // collation) would merge in the partial aggregate.
+        if matches!(k.data_type, DataType::Float | DataType::Double)
+            || k.data_type.contains_collation()
+        {
+            return Err(format!(
+                "{} is a floating point or collated key: equal values can still differ above the join",
+                k.name
+            ));
+        }
         let known = side.cols.get(&k.id).filter(|c| c.ndv_known());
         let Some(c) = known else {
             return Err(format!("the distinct count of {} is a guess", k.name));
