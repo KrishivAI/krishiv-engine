@@ -200,6 +200,8 @@ const RANGE_BOUND_TYPES: &str =
 
 /// A `RANGE` frame bound's value in the units of its ordering key: whole
 /// numbers (integers, dates, and decimals unscaled) or floating point.
+const MICROS_PER_DAY: i64 = 86_400_000_000;
+
 #[derive(Clone, Debug)]
 enum RangeValue {
     Int(i128),
@@ -225,7 +227,9 @@ impl RangeValue {
         Some(match (self, key) {
             (Self::Int(v), T::Byte) => Literal::Byte(i8::try_from(*v).ok()?),
             (Self::Int(v), T::Short) => Literal::Short(i16::try_from(*v).ok()?),
-            (Self::Int(v), T::Long) => Literal::Long(i64::try_from(*v).ok()?),
+            (Self::Int(v), T::Long | T::Timestamp | T::TimestampNtz) => {
+                Literal::Long(i64::try_from(*v).ok()?)
+            }
             (Self::Int(v), T::Decimal(d)) => Literal::Decimal {
                 unscaled: *v,
                 data_type: *d,
@@ -262,6 +266,22 @@ fn range_value_signed(
     let ExprNode::Literal(l) = &x.node else {
         return None;
     };
+    // A day-time interval bound over a date (ending in DAY, so whole days) or a timestamp key
+    // (microseconds).
+    if let Literal::DayTimeInterval { micros, .. } = l {
+        let micros = if negate {
+            micros.checked_neg()?
+        } else {
+            *micros
+        };
+        return match key {
+            T::Date => i32::try_from(micros / MICROS_PER_DAY)
+                .ok()
+                .map(|d| RangeValue::Int(i128::from(d))),
+            T::Timestamp | T::TimestampNtz => Some(RangeValue::Int(i128::from(micros))),
+            _ => None,
+        };
+    }
     // The literal as an exact decimal `(unscaled, scale)` or a double.
     enum Lit {
         Exact(i128, u8),
@@ -1175,7 +1195,26 @@ impl Resolver<'_> {
                 T::Date | T::Timestamp | T::TimestampNtz
                     if !matches!(bt, T::Integer) || key != T::Date =>
                 {
-                    if !numeric(&bt) {
+                    // A day-time interval bound is added to a timestamp key as microseconds, and to a
+                    // date key as days when it ends in DAY (`DateAddInterval`); any other pairing is
+                    // `RANGE_FRAME_INVALID_TYPE`. A year-month bound moves the key by calendar months.
+                    let day_time_ok = matches!(
+                        (&key, &bt),
+                        (
+                            T::Date,
+                            T::DayTimeInterval {
+                                start: krishiv_types::DayTimeField::Day,
+                                end: krishiv_types::DayTimeField::Day,
+                            },
+                        ) | (T::Timestamp | T::TimestampNtz, T::DayTimeInterval { .. })
+                    );
+                    if day_time_ok {
+                        values[k] = Some(range_value(x, &key).ok_or_else(|| {
+                            unsupported("RANGE window frame bounds other than literals", origin)
+                        })?);
+                        continue;
+                    }
+                    if !numeric(&bt) && !matches!(bt, T::DayTimeInterval { .. }) {
                         return Err(unsupported("interval RANGE window frame bounds", origin));
                     }
                     return Err(AnalysisError::new(

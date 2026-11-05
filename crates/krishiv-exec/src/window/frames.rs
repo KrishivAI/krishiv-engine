@@ -95,7 +95,7 @@ impl RangeKeys {
     ) -> Result<Option<Self>> {
         use arrow_array::types::{
             Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
-            Int16Type, Int32Type, Int64Type,
+            Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
         };
         let Some(first) = slices.first() else {
             return Ok(None);
@@ -116,6 +116,7 @@ impl RangeKeys {
                     | DataType::Int32
                     | DataType::Int64
                     | DataType::Date32
+                    | DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _)
                     | DataType::Decimal64(..)
                     | DataType::Decimal128(..)
             )
@@ -148,6 +149,7 @@ impl RangeKeys {
                 DataType::Int32 => ints!(Int32Type),
                 DataType::Int64 => ints!(Int64Type),
                 DataType::Date32 => ints!(Date32Type),
+                DataType::Timestamp(..) => ints!(TimestampMicrosecondType),
                 DataType::Decimal64(..) => {
                     let a = col.as_primitive::<Decimal64Type>();
                     ints.extend((0..a.len()).map(|i| i128::from(a.value(i))));
