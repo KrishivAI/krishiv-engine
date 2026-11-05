@@ -3520,27 +3520,6 @@ fn legacy_flag_confs_follow_session_confs() {
     let odd_bool = conf(&[("spark.sql.legacy.allowParameterlessCount", "sometimes")]);
     assert!(!odd_bool.allow_parameterless_count);
     assert_eq!(ResolutionConf::KEYS.len(), 28);
-    let single = conf(&[
-        ("spark.sql.optimizer.scalarSubqueryUseSingleJoin", "false"),
-        (
-            "spark.sql.legacy.scalarSubqueryAllowGroupByNonEqualityCorrelatedPredicate",
-            "true",
-        ),
-    ]);
-    assert!(!single.scalar_single_join && single.legacy_group_by_non_equality);
-    assert!(d.scalar_single_join && !d.legacy_group_by_non_equality);
-    let counts = conf(&[
-        (
-            "spark.sql.optimizer.decorrelateExistsSubqueryLegacyIncorrectCountHandling.enabled",
-            "true",
-        ),
-        (
-            "spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled",
-            " TRUE ",
-        ),
-    ]);
-    assert!(counts.legacy_exists_in_count && counts.legacy_scalar_count);
-    assert!(!d.legacy_exists_in_count && !d.legacy_scalar_count);
     let charsets = conf(&[
         ("spark.sql.legacy.javaCharsets", "true"),
         ("spark.sql.legacy.codingErrorAction", "TRUE"),

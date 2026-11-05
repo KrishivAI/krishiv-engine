@@ -688,4 +688,40 @@ mod tests {
         let keys = group_joined(vec![k], &[count], &before);
         assert_eq!(keys.len(), 1);
     }
+
+    #[test]
+    fn the_subquery_flags_follow_session_confs() {
+        use crate::analyzer::ResolutionConf;
+        let conf = |kv: &[(&str, &str)]| {
+            let kv: Vec<(String, String)> = kv
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect();
+            ResolutionConf::from_conf(|key| {
+                kv.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+            })
+        };
+        let d = ResolutionConf::default();
+        assert!(d.scalar_single_join && !d.legacy_group_by_non_equality);
+        assert!(!d.legacy_exists_in_count && !d.legacy_scalar_count);
+        let single = conf(&[
+            ("spark.sql.optimizer.scalarSubqueryUseSingleJoin", "false"),
+            (
+                "spark.sql.legacy.scalarSubqueryAllowGroupByNonEqualityCorrelatedPredicate",
+                "true",
+            ),
+        ]);
+        assert!(!single.scalar_single_join && single.legacy_group_by_non_equality);
+        let counts = conf(&[
+            (
+                "spark.sql.optimizer.decorrelateExistsSubqueryLegacyIncorrectCountHandling.enabled",
+                "true",
+            ),
+            (
+                "spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled",
+                " TRUE ",
+            ),
+        ]);
+        assert!(counts.legacy_exists_in_count && counts.legacy_scalar_count);
+    }
 }
