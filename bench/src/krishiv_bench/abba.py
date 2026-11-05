@@ -249,6 +249,7 @@ def _run_locked(
         "samples_per_engine": 2 * reps,
         "timeout_s": timeout_s,
         "cold": cold_record(cold),
+        "reference_cache": {"enabled": False},
         "cache_policy": "cold: the dataset is dropped from the OS page cache before every timed run"
         if cold
         else "warm: one untimed correctness run per engine per query, then timed runs; OS page cache "
@@ -270,6 +271,8 @@ def _run_locked(
         krishiv.teardown()
         duck.teardown()
     record["finished_utc"] = dt.datetime.now(dt.UTC).isoformat()
+    if cache is not None:
+        record["reference_cache"] = cache.summary()
     record["summary"] = summarize(record)
     out = results_dir()
     out.mkdir(parents=True, exist_ok=True)
@@ -306,6 +309,7 @@ def _one_query(
         if hit:
             drows = hit[1]
             entry["reference_cached_utc"] = hit[0]["created_utc"]
+            entry["reference_warmup"] = "skipped: the answer came from the cache (Krishiv still had its untimed run)"
         else:
             with _Interrupt(duck, timeout_s):
                 drows = duck.run(duck_q)

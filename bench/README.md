@@ -500,8 +500,13 @@ fresh answer.
 
 | Command | What is reused | What stays live |
 |---|---|---|
-| `reproduce --sequential` | the answer **and** DuckDB's timed samples, CPU and peak RSS (also keyed by threads, memory and sample count); the record marks it `cached_utc` | the other engines |
+| `reproduce --sequential` | the answer **and** DuckDB's timed samples, CPU and peak RSS (also keyed by threads, memory, cgroup cap, sample count, `--cold` and the machine: CPU model, cores, RAM, host name); the record marks it `cached_utc` | the other engines |
 | `reproduce` (interleaved), `abba` | the answer (the untimed correctness run is skipped; `abba` marks `reference_cached_utc`) | DuckDB's timed runs: interleaving exists to give both engines the same machine at the same moment, which a replayed time cannot |
+
+The run record's `reference_cache` block says whether the cache was on and how many entries it read (`hits`) and wrote
+(`stores`). On an `abba` hit DuckDB's untimed warm-up run is skipped while Krishiv still has its own; the entry says so
+(`reference_warmup`). The `theirs` method of `reproduce` (best of N hot runs of each engine, DuckDB included) never
+uses the cache. A cache write that fails (a full disk) is skipped, never fatal.
 
 `--refresh-reference` runs DuckDB again and replaces the entries; `--no-reference-cache` neither reads nor writes
 them. An answer over 1,000,000 rows is not stored. A replayed time was measured on the machine and load of its

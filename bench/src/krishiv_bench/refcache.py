@@ -25,11 +25,14 @@ import datetime as dt
 import gzip
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from . import compare
 from .adapters import Dataset, Query
+from .adapters.duckdb_engine import SPARK_NULL_ORDER
 from .paths import data_root, manifest_stem
 
 FORMAT = 1  # bumped when what an entry means changes (the reference's SQL dialect settings, the row encoding)
@@ -88,6 +91,16 @@ def dataset_signature(ds: Dataset) -> str:
     return "files:" + hashlib.sha256(json.dumps(files).encode()).hexdigest()
 
 
+def machine_signature() -> str:
+    """Identifies the machine a timing was taken on: CPU model, logical cores, RAM and host name."""
+    from .runner import machine_info
+
+    m = machine_info()
+    return hashlib.sha256(
+        json.dumps([m["cpu_model"], m["cores_logical"], m["ram_bytes"], m["hostname"]]).encode()
+    ).hexdigest()[:16]
+
+
 def _digest(fields: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()[:40]
 
@@ -100,6 +113,18 @@ class RefCache:
         self.refresh = refresh
         self.engine = engine
         self.version = version
+        self.hits = self.misses = self.stores = 0
+
+    def summary(self) -> dict[str, Any]:
+        """What the run record says about the cache: its policy and how many entries were read and written."""
+        return {
+            "enabled": True,
+            "refresh": self.refresh,
+            "dir": str(self.root),
+            "hits": self.hits,
+            "misses": self.misses,
+            "stores": self.stores,
+        }
 
     def _fields(self, kind: str, suite: str, ds: Dataset, query: Query, **extra: Any) -> dict[str, Any]:
         return {
@@ -112,6 +137,7 @@ class RefCache:
             "dataset": ds.name,
             "data": dataset_signature(ds),
             "query": query.id,
+            "null_order": SPARK_NULL_ORDER,  # the reference's session settings that shape its answer
             "sql": hashlib.sha256((query.sql + "\0" + (query.check_sql or "")).encode()).hexdigest(),
             **extra,
         }
@@ -119,8 +145,29 @@ class RefCache:
     def answer_key(self, suite: str, ds: Dataset, query: Query) -> dict[str, Any]:
         return self._fields("answer", suite, ds, query)
 
-    def timing_key(self, suite: str, ds: Dataset, query: Query, threads: int, memory_gb: int, samples: int) -> dict:
-        return self._fields("timing", suite, ds, query, threads=threads, memory_gb=memory_gb, samples=samples)
+    def timing_key(
+        self,
+        suite: str,
+        ds: Dataset,
+        query: Query,
+        threads: int,
+        memory_gb: int,
+        samples: int,
+        cap_gb: int | None = None,
+        cold: bool = False,
+    ) -> dict:
+        return self._fields(
+            "timing",
+            suite,
+            ds,
+            query,
+            threads=threads,
+            memory_gb=memory_gb,
+            samples=samples,
+            cap_gb=cap_gb,
+            cold=cold,
+            machine=machine_signature(),
+        )
 
     def _paths(self, fields: dict[str, Any]) -> tuple[Path, Path]:
         stem = f"{fields['engine']}-{fields['suite']}-sf{fields['sf']}-{fields['query']}-{_digest(fields)}"
@@ -129,25 +176,51 @@ class RefCache:
     def load(self, fields: dict[str, Any]) -> tuple[dict, list[tuple]] | None:
         """``(entry, rows)`` stored under ``fields``, or ``None`` (absent, ``refresh``, or unreadable)."""
         if self.refresh:
+            self.misses += 1
             return None
         meta, rows = self._paths(fields)
         try:
             entry = json.loads(meta.read_text())
             if entry.get("fields") != fields:  # a digest collision or a hand-edited file is a miss
+                self.misses += 1
                 return None
             with gzip.open(rows, "rt") as f:
-                return entry, [tuple(_dec(c) for c in r) for r in json.load(f)]
-        except (OSError, ValueError, KeyError, EOFError):
+                raw = json.load(f)
+            if not isinstance(raw, list) or not all(isinstance(r, list) for r in raw):
+                raise ValueError("rows file is not a list of rows")
+            answer = [tuple(_dec(c) for c in r) for r in raw]
+            self.hits += 1
+            return entry, answer
+        except Exception:  # any damage (truncated gzip, bad JSON, wrong shape) is a miss, never a crash
+            self.misses += 1
             return None
 
     def store(self, fields: dict[str, Any], rows: list, payload: dict | None = None) -> bool:
-        """Writes the entry (rows beside it); ``False`` and nothing written when the answer is too large to keep."""
+        """Writes the entry (rows beside it); ``False`` when nothing was kept: the answer is too large, or the write
+        failed (a full disk must not abort a run that took hours). Both files are written to a temporary name and
+        renamed, the meta file last, so an entry that exists is complete."""
         if len(rows) > MAX_STORED_ROWS:
             return False
         meta, rows_file = self._paths(fields)
-        self.root.mkdir(parents=True, exist_ok=True)
-        with gzip.open(rows_file, "wt") as f:
-            json.dump([[_enc(c) for c in r] for r in rows], f)
         entry = {"fields": fields, "created_utc": dt.datetime.now(dt.UTC).isoformat(), **(payload or {})}
-        meta.write_text(json.dumps(entry, indent=2))  # last: an entry with a meta file always has its rows
-        return True
+        tmp: list[str] = []
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            for path, write in (
+                (rows_file, lambda f: json.dump([[_enc(c) for c in r] for r in rows], f)),
+                (meta, lambda f: json.dump(entry, f, indent=2)),
+            ):
+                fd, name = tempfile.mkstemp(dir=self.root, prefix=".tmp-")
+                tmp.append(name)
+                os.close(fd)
+                opener = gzip.open if path is rows_file else open
+                with opener(name, "wt") as f:
+                    write(f)
+                os.replace(name, path)
+            self.stores += 1
+            return True
+        except (OSError, TypeError, ValueError):
+            return False
+        finally:
+            for name in tmp:
+                Path(name).unlink(missing_ok=True)

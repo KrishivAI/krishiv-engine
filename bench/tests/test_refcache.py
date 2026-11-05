@@ -253,3 +253,78 @@ def test_cold_reproduce_and_abba_evict_before_every_timed_run(tmp_path: Path, ds
     evicted.clear()
     abba._one_query(Q, krishiv, Counting([(1,)]), 2, 10, None, None, "tpch", ds, ds.root)
     assert evicted == [ds.root] * 8  # two blocks of A B B A
+
+
+def test_timing_key_includes_cold_cap_and_machine(tmp_path: Path, ds: Dataset, monkeypatch):
+    c = cache(tmp_path)
+    k = c.timing_key("tpch", ds, Q, 12, 32, 6)
+    c.store(k, [(1,)])
+    assert c.load(c.timing_key("tpch", ds, Q, 12, 32, 6, None, False)) is not None
+    assert c.load(c.timing_key("tpch", ds, Q, 12, 32, 6, None, True)) is None  # cold samples are not warm samples
+    assert c.load(c.timing_key("tpch", ds, Q, 12, 32, 6, 24, False)) is None  # another cgroup cap
+    from krishiv_bench import refcache
+
+    monkeypatch.setattr(refcache, "machine_signature", lambda: "another-machine")
+    assert c.load(c.timing_key("tpch", ds, Q, 12, 32, 6)) is None
+
+
+def test_a_failed_write_is_skipped_and_leaves_no_partial_entry(tmp_path: Path, ds: Dataset, monkeypatch):
+    c = cache(tmp_path)
+    key = c.answer_key("tpch", ds, Q)
+    import os
+
+    def full_disk(src, dst):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "replace", full_disk)
+    assert c.store(key, [(1,)]) is False
+    monkeypatch.undo()
+    assert c.load(key) is None
+    assert list(c.root.iterdir()) == []  # no temporary files left behind
+    assert c.store(key, [(1,)]) is True
+
+
+def test_load_treats_any_damage_as_a_miss(tmp_path: Path, ds: Dataset):
+    import gzip
+
+    c = cache(tmp_path)
+    key = c.answer_key("tpch", ds, Q)
+    c.store(key, [(1,)])
+    _, rows = c._paths(key)
+    with gzip.open(rows, "wt") as f:
+        f.write('{"not": "a list of rows"}')
+    assert c.load(key) is None
+    rows.write_bytes(rows.read_bytes()[:10])  # truncated gzip
+    assert c.load(key) is None
+
+
+def test_summary_counts_hits_misses_and_stores(tmp_path: Path, ds: Dataset):
+    c = cache(tmp_path)
+    key = c.answer_key("tpch", ds, Q)
+    assert c.load(key) is None
+    c.store(key, [(1,)])
+    assert c.load(key) is not None
+    s = c.summary()
+    assert (s["hits"], s["misses"], s["stores"], s["refresh"]) == (1, 1, 1, False)
+
+
+def test_the_null_order_is_part_of_the_answer_key(tmp_path: Path, ds: Dataset, monkeypatch):
+    from krishiv_bench import refcache
+
+    c = cache(tmp_path)
+    key = c.answer_key("tpch", ds, Q)
+    c.store(key, [(1,)])
+    monkeypatch.setattr(refcache, "SPARK_NULL_ORDER", "nulls_last")
+    assert c.load(c.answer_key("tpch", ds, Q)) is None
+
+
+def test_the_cli_accepts_the_cache_and_cold_flags(monkeypatch: pytest.MonkeyPatch):
+    from krishiv_bench import cli
+    from krishiv_bench import reproduce as rep
+
+    seen: dict = {}
+    monkeypatch.setattr(rep, "run_reproduce", lambda *a, **k: seen.update(k))
+    cli.main(["reproduce", "--refresh-reference", "--cold"])
+    assert (seen["refresh_reference"], seen["reference_cache"], seen["cold"]) == (True, True, True)
+    cli.main(["reproduce", "--no-reference-cache"])
+    assert (seen["refresh_reference"], seen["reference_cache"], seen["cold"]) == (False, False, False)

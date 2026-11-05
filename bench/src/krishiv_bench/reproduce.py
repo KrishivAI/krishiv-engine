@@ -346,7 +346,7 @@ def sequential_query(
     nrows = 0
     for name in order:
         ckey = (
-            cache.timing_key(suite, ds, qm[name], threads, memory_gb, samples_n)
+            cache.timing_key(suite, ds, qm[name], threads, memory_gb, samples_n, cap_gb, cold_root is not None)
             if cache and name == REFERENCE
             else None
         )
@@ -581,6 +581,7 @@ def run_reproduce(
             names = [n for n in names if n not in record["setup_failures"]]
             _run_theirs(record, queries, ds, names, threads, memory_gb, runs, their_timeout_s, "ours" in methods)
     record["finished_utc"] = dt.datetime.now(dt.UTC).isoformat()
+    record["reference_cache"] = cache.summary() if cache is not None else {"enabled": False}
     record["summary"] = summarize(record)
     out = results_dir()
     out.mkdir(parents=True, exist_ok=True)
