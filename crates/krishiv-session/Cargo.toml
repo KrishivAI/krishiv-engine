@@ -35,6 +35,17 @@ tracing.workspace = true
 # A oneshot channel back from tasks on the session's executor; `rt` to
 # enter the I/O runtime from the thread that reads file footers.
 tokio = { workspace = true, features = ["rt", "sync"] }
+# OTLP export (`otlp.rs`, feature `telemetry-otlp`).
+http = { workspace = true, optional = true }
+opentelemetry = { workspace = true, optional = true, features = ["trace"] }
+opentelemetry-http = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true, features = ["http-proto", "trace", "reqwest-blocking-client", "reqwest-rustls"] }
+opentelemetry-proto = { workspace = true, optional = true, features = ["gen-tonic-messages", "metrics", "trace"] }
+opentelemetry_sdk = { workspace = true, optional = true, features = ["trace"] }
+tracing-opentelemetry = { workspace = true, optional = true }
+prost = { workspace = true, optional = true, features = ["std"] }
+reqwest = { workspace = true, optional = true, features = ["blocking", "rustls"] }
+tracing-subscriber = { workspace = true, optional = true, features = ["registry", "std"] }
 # The local file system as a store (`fs`); no other store features.
 object_store = { workspace = true, features = ["fs"] }
 
@@ -55,6 +66,16 @@ cloud = ["krishiv-exec/cloud", "krishiv-io/cloud"]
 # Access to the logical-plan IR (`Session::from_plan`, `DataFrame::plan`):
 # for the Python facade and tests; not covered by semver.
 unstable-ir = []
+# OTLP export of the `krishiv.query` spans and the engine metrics over http-proto (rustls, no
+# OpenSSL, no gRPC stack). Off in the default embedded build.
+telemetry-otlp = [
+  "dep:http", "dep:opentelemetry", "dep:opentelemetry-http", "dep:opentelemetry-otlp",
+  "dep:opentelemetry-proto", "dep:prost", "dep:reqwest", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry", "dep:tracing-subscriber",
+]
+
+[[test]]
+name = "otlp_collector"
+required-features = ["telemetry-otlp"]
 
 [lints]
 workspace = true

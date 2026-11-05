@@ -56,6 +56,8 @@ pub mod functions;
 mod identifier_clause;
 mod introspection;
 mod locals;
+#[cfg(feature = "telemetry-otlp")]
+pub mod otlp;
 mod partitions;
 mod profile;
 mod recursion;
