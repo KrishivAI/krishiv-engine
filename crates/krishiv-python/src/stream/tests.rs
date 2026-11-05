@@ -898,13 +898,13 @@ fn single_array_with_an_invalid_format_is_rejected() {
 
 #[test]
 fn an_exported_stream_stays_done_after_an_error() {
-    use arrow_array::ffi_stream::ArrowArrayStreamReader;
+    use arrow_array::ffi_stream::RecordBatchStreamReader;
     let reader = scripted(
         schema(),
         vec![Err(ArrowError::ComputeError("first".into())), Ok(batch())],
     );
     let stream = ffi::export_stream(reader, None);
-    let mut consumer = ArrowArrayStreamReader::try_new(stream).unwrap();
+    let mut consumer = RecordBatchStreamReader::try_new(stream).unwrap();
     assert!(consumer.next().unwrap().is_err());
     assert!(consumer.next().is_none(), "no batch after an error");
 }
@@ -937,7 +937,7 @@ impl Drop for Probe {
 /// the query) and nothing polls it afterwards.
 #[test]
 fn releasing_the_exported_query_stream_drops_the_engine_stream() {
-    use arrow_array::ffi_stream::ArrowArrayStreamReader;
+    use arrow_array::ffi_stream::RecordBatchStreamReader;
     use futures::StreamExt as _;
 
     let produced = Arc::new(AtomicUsize::new(0));
@@ -950,7 +950,7 @@ fn releasing_the_exported_query_stream_drops_the_engine_stream() {
     let first = futures::executor::block_on(stream.next()).unwrap().unwrap();
     let reader = query::QueryReader::new(first.schema(), Some(first), stream);
     let exported = ffi::export_stream(Box::new(reader), None);
-    let mut consumer = ArrowArrayStreamReader::try_new(exported).unwrap();
+    let mut consumer = RecordBatchStreamReader::try_new(exported).unwrap();
     consumer.next().unwrap().unwrap(); // the first batch
     consumer.next().unwrap().unwrap(); // one pulled from the engine
     assert_eq!(produced.load(Ordering::SeqCst), 2);
@@ -978,12 +978,12 @@ fn failing(batches: usize) -> krishiv_session::RecordBatchStream {
 /// is left, intact, in the error slot for the caller to raise.
 #[test]
 fn a_later_engine_error_is_kept_in_the_error_slot() {
-    use arrow_array::ffi_stream::ArrowArrayStreamReader;
+    use arrow_array::ffi_stream::RecordBatchStreamReader;
 
     let reader = query::QueryReader::new(schema(), Some(batch()), failing(1));
     let slot = reader.error_slot();
     let exported = ffi::export_stream(Box::new(reader), None);
-    let mut consumer = ArrowArrayStreamReader::try_new(exported).unwrap();
+    let mut consumer = RecordBatchStreamReader::try_new(exported).unwrap();
     consumer.next().unwrap().unwrap();
     consumer.next().unwrap().unwrap();
     let err = consumer.next().unwrap().unwrap_err();
@@ -1042,13 +1042,13 @@ impl Drop for PanicsOnDrop {
 /// abort the host process.
 #[test]
 fn a_panicking_destructor_does_not_unwind_into_release() {
-    use arrow_array::ffi_stream::ArrowArrayStreamReader;
+    use arrow_array::ffi_stream::RecordBatchStreamReader;
     let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let reader = Box::new(PanicsOnDrop {
         dropped: Arc::clone(&dropped),
     });
     let exported = ffi::export_stream(reader, None);
-    let mut consumer = ArrowArrayStreamReader::try_new(exported).unwrap();
+    let mut consumer = RecordBatchStreamReader::try_new(exported).unwrap();
     assert!(consumer.next().is_none());
     drop(consumer);
     assert!(dropped.load(Ordering::SeqCst), "the reader was released");
