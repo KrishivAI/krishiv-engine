@@ -553,8 +553,10 @@ fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: 
     guarded
         && matches!(
             (args, f.args.as_slice()),
-            ([left, _], [left_ir, right_ir])
-                if left.nullable()
+            ([left, right], [left_ir, right_ir])
+                // Two constants stay one constant (`is_constant`): `aes_encrypt` folds constant arguments to one IV.
+                if !(left.is_constant() && right.is_constant())
+                    && left.nullable()
                     && krishiv_plan::is_deterministic(left_ir)
                     && krishiv_plan::may_raise(right_ir, ansi)
         )

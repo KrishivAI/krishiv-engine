@@ -327,22 +327,33 @@ fn division_cases_over_a_range_table_follow_spark() {
     assert_eq!(SPARK_CASES.len(), 2 * CASES.len());
 }
 
-/// A division of constants stays constant: `aes_encrypt` folds constant arguments to one initialisation vector, so
-/// `(1 / 1) / 1` as its input gives one ciphertext over any number of rows (Spark 4.2.0: 1, ANSI on and off).
+/// Operators over constants stay constant: `aes_encrypt` folds constant arguments to one initialisation vector, so
+/// these as its input give one ciphertext over any number of rows (Spark 4.2.0: 1, ANSI on and off).
 #[test]
-fn a_division_of_constants_stays_constant() {
-    for ansi in [true, false] {
-        let s = Session::new().unwrap();
-        s.conf()
-            .set(
-                "spark.sql.ansi.enabled",
-                if ansi { "true" } else { "false" },
-            )
-            .unwrap();
-        let sql = "SELECT CAST(count(DISTINCT hex(aes_encrypt(CAST((1 / 1) / 1 AS STRING), \
-                   'abcdefghijklmnop'))) AS STRING) FROM range(10)";
-        let got = futures::executor::block_on(async { s.sql(sql).await?.collect().await }).unwrap();
-        let a = got[0].column(0).as_string_view();
-        assert_eq!(a.value(0), "1", "ansi={ansi}");
+fn operators_over_constants_stay_constant() {
+    for expr in [
+        "(1 / 1) / 1",
+        "(1 / 1) % 1",
+        "(1 + 1) + (1 / 1)",
+        "TRY_CAST('2' AS INTERVAL DAY) / (1 / 1)",
+        "(INTERVAL '1' DAY + INTERVAL '1' DAY) / 2",
+    ] {
+        for ansi in [true, false] {
+            let s = Session::new().unwrap();
+            s.conf()
+                .set(
+                    "spark.sql.ansi.enabled",
+                    if ansi { "true" } else { "false" },
+                )
+                .unwrap();
+            let sql = format!(
+                "SELECT CAST(count(DISTINCT hex(aes_encrypt(CAST({expr} AS STRING), \
+                 'abcdefghijklmnop'))) AS STRING) FROM range(10)"
+            );
+            let got =
+                futures::executor::block_on(async { s.sql(&sql).await?.collect().await }).unwrap();
+            let a = got[0].column(0).as_string_view();
+            assert_eq!(a.value(0), "1", "ansi={ansi} {expr}");
+        }
     }
 }
