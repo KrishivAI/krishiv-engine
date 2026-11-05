@@ -1674,8 +1674,6 @@ impl Session {
         env: &QueryEnv,
         detailed: bool,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
-        let decoded = round_trip(physical, &env.config)?;
-        let physical = decoded.as_ref().unwrap_or(physical);
         // The history row first: its id names the query's memory pool, so `system.memory.query_id`
         // joins `system.queries.query_id`.
         let log_id = self
@@ -1712,12 +1710,19 @@ impl Session {
             metrics_on,
             log_id,
         }));
-        match self
-            .state
-            .runner
-            .submit(physical.clone(), worker, Arc::clone(&query))
-            .await
-        {
+        // A plan the wire format cannot carry fails as a submit failure does:
+        // its row records the error.
+        let submitted = match round_trip(physical, &env.config) {
+            Ok(decoded) => {
+                let physical = decoded.as_ref().unwrap_or(physical);
+                self.state
+                    .runner
+                    .submit(physical.clone(), worker, Arc::clone(&query))
+                    .await
+            }
+            Err(error) => Err(error),
+        };
+        match submitted {
             Err(error) => {
                 if let Some(fold) = pending.0.take() {
                     fold.finish(Some(&error));

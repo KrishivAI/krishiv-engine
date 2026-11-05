@@ -229,21 +229,20 @@ impl Planner<'_> {
                     site.column.0.join("."),
                     if bloom { " (bloom)" } else { "" }
                 ));
-                out.filters.push(JoinFilterPlan {
-                    id,
-                    key,
-                    options: KeyFilterOptions {
-                        max_values: s.max_values,
-                        exact_max_values: s.exact_max_values,
-                        bloom,
-                        scan_waits: scan_waits(site.scan_rows, build_rows, reads_scan_table),
-                        bloom_max_items: s.bloom_max_items,
-                        bloom_max_bytes: s.bloom_max_bytes,
-                        bloom_bytes: (bloom && partitioned)
-                            .then(|| planned_bloom_bytes(build_rows, s.bloom_max_bytes)),
-                        ..KeyFilterOptions::default()
-                    },
+                let mut options = KeyFilterOptions {
+                    max_values: s.max_values,
+                    exact_max_values: s.exact_max_values,
+                    bloom,
+                    scan_waits: scan_waits(site.scan_rows, build_rows, reads_scan_table),
+                    bloom_max_items: s.bloom_max_items,
+                    bloom_max_bytes: s.bloom_max_bytes,
+                    ..KeyFilterOptions::default()
+                };
+                // Sized at the false-positive rate the producers build with.
+                options.bloom_bytes = (bloom && partitioned).then(|| {
+                    planned_bloom_bytes(build_rows, options.bloom_fpp, options.bloom_max_bytes)
                 });
+                out.filters.push(JoinFilterPlan { id, key, options });
             }
         }
         out
@@ -251,15 +250,15 @@ impl Planner<'_> {
 }
 
 /// The Bloom size in bytes for a build of `build_rows` estimated keys at
-/// the default false-positive rate, at most `max_bytes`.
-fn planned_bloom_bytes(build_rows: f64, max_bytes: usize) -> u32 {
+/// the false-positive rate `fpp`, at most `max_bytes`.
+fn planned_bloom_bytes(build_rows: f64, fpp: f64, max_bytes: usize) -> u32 {
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
         reason = "a non-negative estimate, capped below by the cost model's bloom_max_items"
     )]
     let keys = build_rows.max(1.0).ceil() as u64;
-    let bytes = RuntimeBloom::bytes_for(keys, KeyFilterOptions::default().bloom_fpp).min(max_bytes);
+    let bytes = RuntimeBloom::bytes_for(keys, fpp).min(max_bytes);
     u32::try_from(bytes).unwrap_or(u32::MAX)
 }
 

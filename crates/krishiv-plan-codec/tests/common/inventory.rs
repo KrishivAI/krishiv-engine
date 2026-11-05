@@ -1676,6 +1676,10 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
             .map(|(name, node)| (name.to_owned(), plan_of(node))),
     );
     out.push(("collated_output".to_owned(), collated_output()));
+    out.push((
+        "collated_exchange_source".to_owned(),
+        collated_exchange_source(),
+    ));
     out
 }
 
@@ -1699,6 +1703,24 @@ pub(crate) fn collated_output() -> PhysicalPlan {
         ExplainNode::leaf("Root", ""),
         env(),
     )
+}
+
+/// A reduce fragment whose only collated type is in the schema of the
+/// exchange it reads: a sort by column index above it names no type.
+pub(crate) fn collated_exchange_source() -> PhysicalPlan {
+    let names = collated("UNICODE_CI");
+    let schema = Schema::new(vec![
+        Field::new("id", ArrowType::Int64, false),
+        names.to_arrow_field("name", true),
+    ]);
+    plan_of(PhysNode::Sort {
+        input: boxed(PhysNode::ExchangeSource {
+            id: ExchangeId(18),
+            partitioning: Partitioning::Single,
+            schema: Arc::new(schema),
+        }),
+        keys: vec![SortKey::asc(1)],
+    })
 }
 
 /// A plan whose environment sets the map-key dedup policy to `LAST_WIN`.

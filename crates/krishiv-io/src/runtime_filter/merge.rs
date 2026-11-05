@@ -33,6 +33,16 @@ impl KeyFilter {
     /// `INTERNAL_ERROR` when the two compare in different key types, or
     /// either holds a top-N's bound (bounds tighten, never merge).
     pub fn merge(&self, other: &Self, options: &KeyFilterOptions) -> crate::Result<Self> {
+        self.clone().merge_into(other, options)
+    }
+
+    /// [`Self::merge`], taking `self` as the accumulator of a fold over many
+    /// partials: its Bloom filter takes `other`'s keys in place, so folding
+    /// `P` partials copies no Bloom of the planned size.
+    ///
+    /// # Errors
+    /// As [`Self::merge`].
+    pub fn merge_into(self, other: &Self, options: &KeyFilterOptions) -> crate::Result<Self> {
         if self.key_type != other.key_type {
             return Err(crate::error::internal(format!(
                 "runtime filters of {} and {} merged",
@@ -46,12 +56,18 @@ impl KeyFilter {
         }
         let nulls_pass = self.nulls_pass || other.nulls_pass;
         let keys = self.keys.saturating_add(other.keys);
-        if self.empty || other.empty {
-            let kept = if self.empty { other } else { self };
+        if other.empty {
             return Ok(Self {
                 nulls_pass,
                 keys,
-                ..kept.clone()
+                ..self
+            });
+        }
+        if self.empty {
+            return Ok(Self {
+                nulls_pass,
+                keys,
+                ..other.clone()
             });
         }
         let range = match (&self.range, &other.range) {
@@ -69,7 +85,8 @@ impl KeyFilter {
         };
         let class = Class::of(&self.key_type)
             .ok_or_else(|| crate::error::internal("unsupported runtime filter key".to_owned()))?;
-        let member = merge_members(&self.member, &other.member, class, options);
+        let key_type = self.key_type;
+        let member = merge_members(self.member, &other.member, class, options);
         // A merged exact set stays one even when it fills its range: as the
         // range form it would absorb the next merge's sets, and the result
         // would depend on the order of the merges.
@@ -78,7 +95,7 @@ impl KeyFilter {
             m => m,
         };
         Ok(Self {
-            key_type: self.key_type.clone(),
+            key_type,
             range,
             values,
             member,
@@ -103,27 +120,29 @@ fn planned_bytes(options: &KeyFilterOptions) -> Option<usize> {
 /// keys (no plan, or a producer that dropped it) counts as the range form.
 /// Otherwise whether a Bloom could take another side's keys would depend
 /// on the order of the merges.
-fn merge_members(a: &Member, b: &Member, class: Class, options: &KeyFilterOptions) -> Member {
+fn merge_members(a: Member, b: &Member, class: Class, options: &KeyFilterOptions) -> Member {
     let planned = planned_bytes(options);
     let unplanned = |m: &Member| matches!(m, Member::Bloom(b) if Some(b.num_bytes()) != planned);
+    if unplanned(&a) || unplanned(b) {
+        return Member::Range;
+    }
+    let add = |mut bloom: RuntimeBloom, set: &Member| {
+        for (h, _) in set.members(class).unwrap_or_default() {
+            bloom.insert_hash(h);
+        }
+        Member::Bloom(bloom)
+    };
     match (a, b) {
         (Member::Range, _) | (_, Member::Range) => Member::Range,
-        _ if unplanned(a) || unplanned(b) => Member::Range,
-        (Member::Bloom(x), Member::Bloom(y)) => {
-            let mut bloom = x.clone();
+        (Member::Bloom(mut bloom), Member::Bloom(y)) => {
             if bloom.union_with(y) {
                 Member::Bloom(bloom)
             } else {
                 Member::Range
             }
         }
-        (Member::Bloom(bloom), set) | (set, Member::Bloom(bloom)) => {
-            let mut bloom = bloom.clone();
-            for (h, _) in set.members(class).unwrap_or_default() {
-                bloom.insert_hash(h);
-            }
-            Member::Bloom(bloom)
-        }
+        (Member::Bloom(bloom), set) => add(bloom, set),
+        (set, Member::Bloom(bloom)) => add(bloom.clone(), &set),
         (x, y) => {
             let mut all = x.members(class).unwrap_or_default();
             all.extend(y.members(class).unwrap_or_default());
