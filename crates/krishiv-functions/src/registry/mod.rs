@@ -38,6 +38,7 @@ mod predicate;
 mod r#struct;
 mod text;
 mod url;
+mod variant;
 mod vector;
 mod xml;
 
@@ -49,6 +50,7 @@ pub use catalog::SparkFunction;
 pub use defs::legacy_day_count;
 pub use defs::{approx_percentile_result, exact_percentile_result};
 pub(crate) use json::parse_json_schema;
+pub use variant::variant_castable;
 
 use crate::signature::{Arity, FunctionKind, Inputs, ResultType, SparkProfile};
 

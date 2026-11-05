@@ -892,7 +892,15 @@ fn variant_paths() {
     }
     // Colons of struct types are still types.
     ok("SELECT CAST(x AS STRUCT<a: INT, b:STRING>)");
-    assert!(unsupported("SELECT v:a FROM t").contains("variant paths"));
+    // `v:a` lowers to `variant_get(v, '$.a') AS a`; a path `JsonPathParser`
+    // refuses (an identifier subscript) is a syntax error.
+    let q = ok("SELECT v:a.b[0] FROM t");
+    let plan = format!("{:?}", lower(&q, krishiv_plan::SourceId(0)).unwrap());
+    assert!(
+        plan.contains("variant_get") && plan.contains("$.a.b[0]"),
+        "{plan}"
+    );
+    assert!(unsupported("SELECT v:a[b] FROM t").contains("PARSE_SYNTAX_ERROR"));
 }
 
 fn transform_of(sql: &str) -> ast::TransformSelect {

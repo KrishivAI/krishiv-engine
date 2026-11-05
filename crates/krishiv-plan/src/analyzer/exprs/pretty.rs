@@ -156,11 +156,17 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             format!("{cast}({} AS {})", k[0], to.sql())
         }
         // An unresolved alias keeps `AS name` (a `struct` call rewritten
-        // to `named_struct` shows its children as written); a resolved
-        // one is its expression (its output names the attribute).
+        // to `named_struct` shows its children as written).
         ExprNode::Alias { name, .. } => format!("{} AS {name}", k[0]),
         ExprNode::MultiAlias { names, .. } => format!("{} AS ({})", k[0], names.join(", ")),
-        ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
+        // Spark's `Alias.sql`: an alias inside an expression shows its name.
+        ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
+            format!(
+                "{} AS {}",
+                k[0],
+                crate::analyzer::pivot::quote_if_needed(&output.name)
+            )
+        }
         ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => k.join(", "),
         ExprNode::Field { name, .. } | ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => {
             format!("{}.{}", k[0], name)

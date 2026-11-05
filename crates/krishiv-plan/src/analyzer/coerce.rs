@@ -358,17 +358,8 @@ fn common_in(
         _ if is_numeric(x) && is_numeric(y) => T::Double,
         (T::String, n) | (n, T::String) if integral_digits(n).is_some() => T::Long,
         (T::String, n) | (n, T::String) if is_numeric(n) => T::Double,
-        (
-            T::String,
-            t
-            @ (T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary | T::Time { .. }),
-        )
-        | (
-            t
-            @ (T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary | T::Time { .. }),
-            T::String,
-        )
-        | (T::Date, t @ (T::Timestamp | T::TimestampNtz))
+        (T::String, t) | (t, T::String) if super::variant::string_promotes_to(t) => t.clone(),
+        (T::Date, t @ (T::Timestamp | T::TimestampNtz))
         | (t @ (T::Timestamp | T::TimestampNtz), T::Date) => t.clone(),
         (T::Time { precision: p }, T::Time { precision: q }) => T::Time {
             precision: *p.max(q),
@@ -736,12 +727,10 @@ fn same_shape(args: &[Arg<'_>]) -> bool {
     first.is_nested() && typed.all(|t| t.equals_structurally(first, true))
 }
 
-/// Spark's `TypeUtils.isOrderable`: a map orders nowhere, and neither does
-/// an array or struct holding one; a geometry, geography or variant does not
-/// either.
+/// Spark's `TypeUtils.isOrderable`: a map orders nowhere, and neither does an array or struct holding one; a
+/// geometry, geography or variant neither orders nor compares.
 pub(super) fn orderable(t: &DataType) -> bool {
     match t {
-        // A geometry, geography or variant neither orders nor compares.
         DataType::Map(_)
         | DataType::CalendarInterval
         | DataType::Geometry { .. }
@@ -1529,6 +1518,9 @@ pub(super) fn can_cast(
     if *from == T::Null {
         return Ok(());
     }
+    if *from == T::Variant || *to == T::Variant {
+        return super::variant::can_cast(from, to);
+    }
     if from.is_nested() || to.is_nested() {
         // `TRY_CAST` of a nested type follows the legacy rules (Spark 4.2:
         // `TRY_CAST(array(true) AS array<timestamp>)` resolves), and Spark
@@ -1692,6 +1684,8 @@ pub(super) fn force_nullable(from: &DataType, to: &DataType) -> bool {
         return false;
     }
     match (from, to) {
+        // A variant null is SQL NULL, so a cast of a variant is nullable.
+        (T::Variant, _) => true,
         (T::String, T::Binary)
         | (_, T::String)
         | (T::Timestamp, T::Date)

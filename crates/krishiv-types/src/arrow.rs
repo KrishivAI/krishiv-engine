@@ -20,7 +20,7 @@
 //! | `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, any child name |
 //! | `map<k,v>` | `Map` of a non-null struct `entries` of `key` (non-null) and `value` (nullable when `valueContainsNull`), unsorted | any child names |
 //! | `struct<...>` | `Struct` of the fields | |
-//! | `variant` | `Struct<metadata: BinaryView, value: BinaryView>`, both children non-null, always tagged, with the Arrow extension name `arrow.parquet.variant` | |
+//! | `variant` | `Struct<metadata: BinaryView, value: BinaryView>`, both children non-null and marked with [`VARIANT_CHILD_METADATA_KEY`]; the field also carries the Arrow extension name `arrow.parquet.variant` | |
 //!
 //! Nested children follow Spark's `ArrowUtils` names. Each child is a field
 //! built as [`DataType::to_arrow_field`] builds a column, so it carries its
@@ -59,8 +59,9 @@
 //! - **Variants.** Each row holds its own metadata dictionary and value bytes
 //!   (Parquet Variant v1, unshredded: shredding exists only in files). A
 //!   null struct slot is SQL `NULL`; a Variant null is the one-byte value
-//!   `0x00`. The field carries the tag and the canonical Arrow extension
-//!   name ([`VARIANT_EXTENSION_NAME`]) so Arrow consumers can recognise it.
+//!   `0x00`. The field carries the canonical Arrow extension
+//!   name ([`VARIANT_EXTENSION_NAME`]) so Arrow consumers can recognise it;
+//!   the marked children make the tag unnecessary.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -95,6 +96,11 @@ pub const VARIANT_METADATA_FIELD: &str = "metadata";
 /// Name of the value child of a variant value's struct.
 pub const VARIANT_VALUE_FIELD: &str = "value";
 
+/// Arrow field-metadata key on the two children of a variant struct (value
+/// `metadata` / `value`), so the struct's Arrow type alone says `variant`
+/// and never reads as a user `struct<metadata: binary, value: binary>`.
+pub const VARIANT_CHILD_METADATA_KEY: &str = "krishiv.variant";
+
 /// The canonical Arrow extension name of a variant field.
 pub const VARIANT_EXTENSION_NAME: &str = "arrow.parquet.variant";
 
@@ -115,10 +121,22 @@ fn spatial_struct() -> ArrowType {
 
 /// The in-memory struct of a variant value: `metadata`, then `value`.
 fn variant_struct() -> ArrowType {
+    let child = |name: &str| {
+        Field::new(name, ArrowType::BinaryView, false).with_metadata(HashMap::from([(
+            VARIANT_CHILD_METADATA_KEY.to_owned(),
+            name.to_owned(),
+        )]))
+    };
     ArrowType::Struct(Fields::from(vec![
-        Field::new(VARIANT_METADATA_FIELD, ArrowType::BinaryView, false),
-        Field::new(VARIANT_VALUE_FIELD, ArrowType::BinaryView, false),
+        child(VARIANT_METADATA_FIELD),
+        child(VARIANT_VALUE_FIELD),
     ]))
+}
+
+/// Whether `arrow` is the struct of a variant value.
+#[must_use]
+pub fn is_variant_struct(arrow: &ArrowType) -> bool {
+    *arrow == variant_struct()
 }
 
 /// The Arrow type an ingested column should carry: a zoned microsecond
@@ -278,6 +296,7 @@ impl DataType {
                 .into(),
                 other => return Err(error::unsupported(format!("Arrow map entries {other}"))),
             },
+            ArrowType::Struct(_) if is_variant_struct(arrow) => Self::Variant,
             ArrowType::Struct(fields) => StructType::new(
                 fields
                     .iter()
@@ -371,20 +390,23 @@ impl DataType {
     fn tagged_field(&self, name: impl Into<String>, storage: ArrowType, nullable: bool) -> Field {
         let needs_tag = Self::from_arrow(&storage).ok().as_ref() != Some(self);
         let field = Field::new(name, storage, nullable);
+        let mut metadata = HashMap::new();
         if needs_tag {
-            let mut metadata =
-                HashMap::from([(SPARK_TYPE_METADATA_KEY.to_owned(), self.catalog_string())]);
-            if *self == Self::Variant {
-                metadata.insert(
-                    ARROW_EXTENSION_NAME_KEY.to_owned(),
-                    VARIANT_EXTENSION_NAME.to_owned(),
-                );
-            }
-            field.with_metadata(metadata)
-        } else {
+            metadata.insert(SPARK_TYPE_METADATA_KEY.to_owned(), self.catalog_string());
+        }
+        if *self == Self::Variant {
+            metadata.insert(
+                ARROW_EXTENSION_NAME_KEY.to_owned(),
+                VARIANT_EXTENSION_NAME.to_owned(),
+            );
+        }
+        if metadata.is_empty() {
             field
+        } else {
+            field.with_metadata(metadata)
         }
     }
+
     /// The Spark type of a field: the type in [`SPARK_TYPE_METADATA_KEY`] if
     /// present (which must be valid for the field's Arrow type), otherwise
     /// [`Self::from_arrow`] of the field's type.

@@ -107,7 +107,9 @@ fn schema_of_json(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 fn to_json(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let ok = matches!(
         c.data_type(0),
-        None | Some(DataType::Struct(_) | DataType::Map(_) | DataType::Array(_))
+        None | Some(
+            DataType::Struct(_) | DataType::Map(_) | DataType::Array(_) | DataType::Variant
+        )
     );
     if !ok {
         let input = c.data_type(0).cloned().unwrap_or(DataType::Null);
