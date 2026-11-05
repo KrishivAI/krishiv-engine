@@ -986,11 +986,14 @@ fn window_forms_match_spark() -> R {
     test_regression(&s)?;
     let err = block_on(async {
         let df = s
-            .sql("SELECT regr_slope(y, x) OVER () FROM testRegression")
+            .sql(
+                "SELECT regr_slope(y, x) OVER (ORDER BY k ROWS BETWEEN UNBOUNDED PRECEDING \
+                 AND CURRENT ROW) FROM testRegression",
+            )
             .await?;
         df.collect().await.map(|_| ())
     })
-    .expect_err("regr_slope has no window form");
+    .expect_err("regr_slope has no running window form");
     assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
     Ok(())
 }

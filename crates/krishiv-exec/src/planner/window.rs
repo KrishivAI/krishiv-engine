@@ -301,27 +301,17 @@ impl Planner<'_> {
         }
         let lowered =
             lower(c.f).ok_or_else(|| unsupported(&format!("the window aggregate {name}")))?;
-        // Variance and standard deviation run over a whole partition like the
-        // other frame aggregates (checked against Spark 4.2 on the float
-        // sweep); their state has no running fold and cannot drop a row, so a
-        // running or sliding frame is refused. The other moment aggregates
-        // (`skewness`, `kurtosis`, `corr`, `covar_*`, `regr_*`) have no window
-        // form yet: refused, never computed as another function. The
-        // percentile family and `approx_count_distinct` have none either: the
-        // frame evaluator only runs the aggregates it knows.
-        if is_moment(&lowered.function) {
-            let variance = matches!(
-                lowered.function,
-                AggregateFunction::VarPop
-                    | AggregateFunction::VarSamp
-                    | AggregateFunction::StddevPop
-                    | AggregateFunction::StddevSamp
-            );
-            let whole = c.frame.lower == Bound::UnboundedPreceding
-                && c.frame.upper == Bound::UnboundedFollowing;
-            if !variance || !whole {
-                return Err(unsupported(&format!("the window aggregate {name}")));
-            }
+        // The moment aggregates run over a whole partition like the other
+        // frame aggregates (checked against Spark 4.2, `moment_window_goldens`);
+        // their state has no running fold and cannot drop a row, so a running
+        // or sliding frame is refused, never computed as another function. The
+        // percentile family and `approx_count_distinct` have no window form
+        // either: the frame evaluator only runs the aggregates it knows.
+        if is_moment(&lowered.function)
+            && !(c.frame.lower == Bound::UnboundedPreceding
+                && c.frame.upper == Bound::UnboundedFollowing)
+        {
+            return Err(unsupported(&format!("the window aggregate {name}")));
         }
         if matches!(
             lowered.function,

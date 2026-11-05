@@ -214,8 +214,8 @@ fn queries_records_statements_refused_before_they_ran() {
 #[test]
 fn queries_records_an_action_that_fails_in_physical_planning() {
     let s = Session::new().unwrap();
-    // Analyzes, so `sql` succeeds; the planner has no window form of the moment aggregates yet.
-    let q = "SELECT stddev(id) OVER (PARTITION BY id % 2) FROM range(4)";
+    // Analyzes, so `sql` succeeds; the planner has no running-frame form of the moment aggregates yet.
+    let q = "SELECT stddev(id) OVER (PARTITION BY id % 2 ORDER BY id) FROM range(4)";
     let df = block_on(s.sql(q)).unwrap();
     assert!(block_on(df.collect()).is_err());
     let rows = strings_in(

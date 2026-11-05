@@ -464,14 +464,14 @@ fn variance_window_aggregates_match_spark() -> R {
     Ok(())
 }
 
-/// The other moment aggregates, and variance over a running or sliding frame,
-/// have no window form yet: refused, never computed as another function.
+/// The moment aggregates over a running or sliding frame have no window form
+/// yet: refused, never computed as another function.
 #[test]
 fn other_moment_window_aggregates_are_refused() -> R {
     let s = session()?;
     for q in [
-        "SELECT kurtosis(a) OVER (PARTITION BY b) FROM testData",
-        "SELECT skewness(a) OVER (PARTITION BY b) FROM testData",
+        "SELECT kurtosis(a) OVER (PARTITION BY b ORDER BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM testData",
+        "SELECT corr(a, b) OVER (ORDER BY a ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM testData",
         "SELECT stddev(a) OVER (PARTITION BY b ORDER BY a ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM testData",
         "SELECT var_samp(a) OVER (PARTITION BY b ORDER BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM testData",
     ] {
