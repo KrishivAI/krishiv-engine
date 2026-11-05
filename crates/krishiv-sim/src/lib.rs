@@ -158,6 +158,44 @@ where
     Ok(trace)
 }
 
+/// Helpers of the unit tests: small turmoil worlds with a fake worker.
+#[cfg(test)]
+pub(crate) mod testing {
+    use turmoil::net::TcpListener;
+
+    use super::*;
+    use crate::wire::{Reply, Request};
+
+    pub(crate) const PORT: u16 = 7071;
+
+    /// A world with a fixed seed.
+    pub(crate) fn sim() -> turmoil::Sim<'static> {
+        turmoil::Builder::new().rng_seed(1).build()
+    }
+
+    /// The workers `names`, all on [`PORT`].
+    pub(crate) fn workers(names: &[&str]) -> Workers {
+        Workers {
+            names: names.iter().map(|n| (*n).to_owned()).collect(),
+            port: PORT,
+        }
+    }
+
+    async fn answer_forever(reply: fn() -> Reply) -> HostResult {
+        let listener = TcpListener::bind(("0.0.0.0", PORT)).await?;
+        loop {
+            let (mut stream, _) = listener.accept().await?;
+            let _ = Request::read(&mut stream).await;
+            reply().write(&mut stream).await?;
+        }
+    }
+
+    /// A host `name` that answers every request with `reply()`.
+    pub(crate) fn answering(sim: &mut turmoil::Sim<'_>, name: &'static str, reply: fn() -> Reply) {
+        sim.host(name, move || answer_forever(reply));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +212,38 @@ mod tests {
         assert_eq!(config.config().seed, 42);
         assert_eq!(config.backend(), "turmoil");
         assert_eq!(SimConfig::default().seed, 0);
+    }
+
+    /// A host whose setup fails after a simulated millisecond, so every
+    /// worker and the coordinator get as far as their setup.
+    struct Failing;
+
+    impl HostSetup for Failing {
+        fn worker(
+            &self,
+        ) -> futures::future::BoxFuture<'static, Result<WorkerContext, KrishivError>> {
+            Box::pin(async {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                Err(internal("no tables here".to_owned()))
+            })
+        }
+    }
+
+    #[test]
+    fn a_host_that_cannot_set_up_fails_the_simulation() {
+        let config = ClusterConfig {
+            sim: SimConfig::with_seed(7),
+            workers: 2,
+            partitions: 2,
+            slots: 1,
+            fault: None,
+        };
+        let e = simulate(config, Arc::new(Failing), |_, _| async { Ok(()) }).unwrap_err();
+        assert!(
+            e.message().contains("simulation (seed 7)"),
+            "{}",
+            e.message()
+        );
+        assert!(e.message().contains("no tables here"), "{}", e.message());
     }
 }
