@@ -11,7 +11,10 @@ import contextlib
 import os
 import subprocess
 import threading
+from dataclasses import dataclass
 from pathlib import Path
+
+from .base import Measure
 
 
 def _status_kb(text: str, key: str) -> int:
@@ -19,6 +22,35 @@ def _status_kb(text: str, key: str) -> int:
         if line.startswith(key + ":"):
             return int(line.split()[1])
     raise RuntimeError(f"{key} not found in /proc status")
+
+
+@dataclass(frozen=True)
+class IoCounters:
+    """Cumulative ``/proc/<pid>/io`` counters: ``rchar`` bytes asked of read-like syscalls (page cache included),
+    ``read_bytes`` bytes fetched from the storage layer (a page-cache hit adds nothing), ``syscr`` read syscalls."""
+
+    rchar: int = 0
+    read_bytes: int = 0
+    syscr: int = 0
+
+    def __add__(self, o: IoCounters) -> IoCounters:
+        return IoCounters(self.rchar + o.rchar, self.read_bytes + o.read_bytes, self.syscr + o.syscr)
+
+    def __sub__(self, o: IoCounters) -> IoCounters:
+        return IoCounters(self.rchar - o.rchar, self.read_bytes - o.read_bytes, self.syscr - o.syscr)
+
+
+def parse_io(text: str) -> IoCounters:
+    """The counters in the text of ``/proc/<pid>/io`` (``key: value`` lines)."""
+    vals = {}
+    for line in text.splitlines():
+        key, _, val = line.partition(":")
+        if val.strip().isdigit():
+            vals[key.strip()] = int(val)
+    missing = {"rchar", "read_bytes", "syscr"} - vals.keys()
+    if missing:
+        raise RuntimeError(f"{sorted(missing)} not found in /proc io")
+    return IoCounters(vals["rchar"], vals["read_bytes"], vals["syscr"])
 
 
 class LocalProc:
@@ -37,6 +69,9 @@ class LocalProc:
         st = Path(f"/proc/{self.pid}/stat").read_text().rsplit(")", 1)[1].split()
         cpu = (int(st[11]) + int(st[12])) / 100.0  # utime+stime (fields 14,15)
         return _status_kb(txt, "VmRSS") * 1024, _status_kb(txt, "VmHWM") * 1024, cpu
+
+    def read_io(self) -> IoCounters:
+        return parse_io(Path(f"/proc/{self.pid}/io").read_text())
 
 
 class DockerProc:
@@ -69,9 +104,38 @@ class DockerProc:
         u, s = ticks.split()
         return int(rss) * 1024, int(hwm) * 1024, (int(u) + int(s)) / 100.0
 
+    def read_io(self) -> IoCounters:
+        return parse_io(self._sh(f"cat /proc/{self.pid}/io"))
+
 
 def descendants(root: int) -> list[int]:
     """``root`` and every live descendant pid (a JVM's helper processes, a runner child), via /proc ppid links."""
+    return list(tree_parents(root))
+
+
+def tree_parents_fast(root: int) -> dict[int, int]:
+    """``tree_parents`` without scanning every process: follows ``/proc/<pid>/task/<tid>/children`` (a few reads
+    for a harness with few threads). Falls back to the scan where the kernel lacks that file."""
+    out: dict[int, int] = {root: 0}
+    todo = [root]
+    while todo:
+        pid = todo.pop()
+        try:
+            for tid in os.listdir(f"/proc/{pid}/task"):
+                for kid in Path(f"/proc/{pid}/task/{tid}/children").read_text().split():
+                    if int(kid) not in out:
+                        out[int(kid)] = pid
+                        todo.append(int(kid))
+        except FileNotFoundError:
+            if Path(f"/proc/{pid}").exists():  # the process lives, so the kernel lacks the children file
+                return tree_parents(root)
+        except (OSError, ValueError):
+            continue  # exited while we were looking
+    return out
+
+
+def tree_parents(root: int) -> dict[int, int]:
+    """``{pid: ppid}`` of ``root`` and every live descendant (``root``'s own ppid is its real parent's)."""
     children: dict[int, list[int]] = {}
     for entry in os.scandir("/proc"):
         if not entry.name.isdigit():
@@ -82,10 +146,14 @@ def descendants(root: int) -> list[int]:
         except (OSError, IndexError, ValueError):
             continue  # exited while we were scanning
         children.setdefault(ppid, []).append(int(entry.name))
-    out, todo = [], [root]
+    parents: dict[int, int] = {}
+    for ppid, kids in children.items():
+        for k in kids:
+            parents[k] = ppid
+    out, todo = {}, [root]
     while todo:
         pid = todo.pop()
-        out.append(pid)
+        out[pid] = parents.get(pid, 0)
         todo.extend(children.get(pid, []))
     return out
 
@@ -100,30 +168,61 @@ def tree_cpu_seconds(root: int) -> float:
 
 
 class TreeProc:
-    """Peak RSS of a process and all its descendants over a window (``start`` .. ``stop``).
+    """Peak RSS, CPU time and I/O of a process and all its descendants over a window (``start`` .. ``stop``).
 
     Per-process VmHWM is reset with clear_refs=5 (``LocalProc``) at ``start``. Peak = the larger of
     (a) the highest sum of VmRSS over the whole tree seen by a sampler thread (processes peaking together add up)
     and (b) the sum of the VmHWM of the tree members alive at ``stop`` (catches spikes between samples; an upper
     bound when members peak at different moments). A descendant that exits inside the window is seen only by (a).
+
+    CPU seconds and I/O counters are cumulative per process: the window's value is, per pid, the last reading the
+    sampler (or ``stop``) took minus the reading at ``start`` (zero for a process born inside the window), summed.
+    A process that exits between its last sample and ``stop`` loses its final slice (at most ``interval_s``).
+    After ``stop``, ``cpu_seconds`` and ``io`` hold them; ``None`` where the platform gave no reading.
+
+    Linux adds a child's I/O counters to its parent's ``/proc/<pid>/io`` when the parent reaps it, so a process
+    seen by the sampler that has exited by ``stop`` is counted only if its parent is not in the tree at ``stop``
+    (otherwise the parent's own counters already hold it). A grandchild reaped by a parent that also exited is
+    still counted twice; CPU is not affected (a reaped child's CPU goes to ``cutime``, not ``utime``).
+
+    ``sample=False`` (for a tree that contains the harness itself) starts no sampler thread: a sampler would add
+    its own /proc reads and CPU to the process it measures. CPU, I/O and peak are then read only at ``start`` and
+    ``stop`` (a few dozen read syscalls, about 10 KB, are the measurement's own cost), the peak being the
+    VmHWM sum; a descendant that exits inside the window is not seen at all.
     """
 
-    def __init__(self, pid: int, interval_s: float = 0.02):
-        self.pid, self.interval_s = pid, interval_s
+    def __init__(self, pid: int, interval_s: float = 0.02, sample: bool = True):
+        self.pid, self.interval_s, self.sample = pid, interval_s, sample
+        self._ppid: dict[int, int] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._peak = 0
+        self._cpu0: dict[int, float] = {}
+        self._io0: dict[int, IoCounters] = {}
+        self._cpu: dict[int, float] = {}
+        self._io: dict[int, IoCounters] = {}
+        self.cpu_seconds: float | None = None
+        self.io: IoCounters | None = None
 
     def _sample(self) -> int:
         total = 0
-        for pid in descendants(self.pid):
+        for pid, ppid in (tree_parents_fast if not self.sample else tree_parents)(self.pid).items():
+            self._ppid[pid] = ppid
+            p = LocalProc(str(pid))
             with contextlib.suppress(OSError, RuntimeError, ValueError):
-                total += LocalProc(str(pid)).read()[0]
+                rss, _, cpu = p.read()
+                total += rss
+                self._cpu[pid] = cpu
+            with contextlib.suppress(OSError, RuntimeError, ValueError):
+                self._io[pid] = p.read_io()
         return total
+
+    def _tree_pids(self) -> list[int]:
+        return list((tree_parents_fast if not self.sample else tree_parents)(self.pid))
 
     def _hwm_sum(self) -> int:
         total = 0
-        for pid in descendants(self.pid):
+        for pid in self._tree_pids():
             with contextlib.suppress(OSError, RuntimeError, ValueError):
                 total += LocalProc(str(pid)).read()[1]
         return total
@@ -134,13 +233,17 @@ class TreeProc:
             self._stop.wait(self.interval_s)
 
     def start(self) -> None:
-        for pid in descendants(self.pid):
+        for pid in self._tree_pids():
             with contextlib.suppress(OSError):
                 LocalProc(str(pid)).reset()
+        self._cpu, self._io, self._ppid = {}, {}, {}
         self._peak = self._sample()
+        self._cpu0, self._io0 = dict(self._cpu), dict(self._io)
+        self.cpu_seconds, self.io = None, None
         self._stop.clear()
-        self._thread = threading.Thread(target=self._loop, daemon=True)
-        self._thread.start()
+        if self.sample:
+            self._thread = threading.Thread(target=self._loop, daemon=True)
+            self._thread.start()
 
     def stop(self) -> int:
         """Ends the window; returns the peak in bytes."""
@@ -148,4 +251,50 @@ class TreeProc:
         if self._thread is not None:
             self._thread.join()
             self._thread = None
-        return max(self._peak, self._sample(), self._hwm_sum())
+        peak = max(self._peak, self._sample(), self._hwm_sum())
+        alive = set(self._tree_pids())
+        if self._cpu:
+            self.cpu_seconds = max(0.0, sum(c - self._cpu0.get(pid, 0.0) for pid, c in self._cpu.items()))
+        if self._io:
+            zero = IoCounters()
+            total = IoCounters()
+            for pid, c in self._io.items():
+                if pid not in alive and self._ppid.get(pid) in alive:
+                    # reaped by a parent still in the tree: the parent's counters hold its lifetime I/O, of which
+                    # what it had done before the window is not the window's
+                    total = total - self._io0.get(pid, zero)
+                    continue
+                total = total + (c - self._io0.get(pid, zero))
+            self.io = total
+        return peak
+
+
+def tree_measure(tree: TreeProc | None) -> Measure:
+    """The ``Measure`` of a stopped window (peak RSS, CPU seconds, I/O); empty when there was no window."""
+    if tree is None:
+        return Measure()
+    peak = tree.stop()
+    io = tree.io
+    return Measure(
+        peak_rss_bytes=peak,
+        cpu_seconds=tree.cpu_seconds,
+        rchar=io.rchar if io else None,
+        read_bytes=io.read_bytes if io else None,
+        syscr=io.syscr if io else None,
+    )
+
+
+class SelfTreeMeasure:
+    """``begin_measure`` / ``end_measure`` for an engine that runs in the harness process (and its children):
+    Polars, DataFusion, Spark local mode. The numbers cover the whole harness process, Python baseline included."""
+
+    _tree: TreeProc | None = None
+
+    def begin_measure(self) -> None:
+        self.end_measure()
+        self._tree = TreeProc(os.getpid(), sample=False)
+        self._tree.start()
+
+    def end_measure(self) -> Measure:
+        tree, self._tree = self._tree, None
+        return tree_measure(tree)
