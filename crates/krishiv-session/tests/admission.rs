@@ -308,3 +308,31 @@ async fn a_refused_overwrite_leaves_the_existing_file_alone() {
         "the file survived the refusal"
     );
 }
+
+#[tokio::test]
+async fn an_ignored_write_settles_its_row_as_finished() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("exists");
+    std::fs::create_dir(&target).unwrap();
+    let gate = Gate::new();
+    gate.first.store(false, Ordering::SeqCst);
+    let s = Session::builder()
+        .admission_controller(Arc::<Gate>::clone(&gate))
+        .build()
+        .unwrap();
+    let df = s.sql("SELECT 1 AS a").await.unwrap();
+    df.write()
+        .mode("ignore")
+        .parquet(target.to_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        gate.slots.0.load(Ordering::SeqCst),
+        0,
+        "no slot is left held"
+    );
+    assert_eq!(
+        state_of(&states(&s).await, "SELECT 1 AS a").as_deref(),
+        Some("finished")
+    );
+}

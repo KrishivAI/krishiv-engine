@@ -225,8 +225,11 @@ pub(crate) struct PendingFold(pub(crate) Option<QueryFold>);
 impl Drop for PendingFold {
     fn drop(&mut self) {
         if let Some(fold) = self.0.take() {
+            // Dropped before `submit` produced a stream: the runner may not have started the
+            // query, in which case nothing would ever report it finished. No task is running
+            // yet that this permit must outlive, so it goes back at once.
             fold.query.cancel();
-            fold.finish_cancelled(None);
+            fold.finish(None);
         }
     }
 }
@@ -276,8 +279,9 @@ impl Drop for MetricStream {
 }
 
 /// A query's `system.queries` row and admission permit, taken before the query changes
-/// anything. Dropped unused (the caller failed or was cancelled before running), it closes the
-/// row `failed` and gives the slot back.
+/// anything. Settled by the run that takes it ([`Self::into_parts`]), by [`Self::finish_ok`] or
+/// [`Self::fail`]; dropped unsettled (the caller was cancelled), it closes the row `cancelled`
+/// and gives the slot back.
 pub(crate) struct Admitted {
     state: Arc<SessionState>,
     log_id: String,
@@ -303,22 +307,40 @@ impl Admitted {
             std::mem::replace(&mut self.permit, Permit::unlimited()),
         )
     }
+
+    /// Settles the row of a statement that did not run a query and succeeded (an `ignore` write
+    /// that found its path).
+    pub(crate) fn finish_ok(mut self) {
+        self.armed = false;
+        self.close("finished", None);
+    }
+
+    /// Settles the row with the error that ended the statement before its query ran.
+    pub(crate) fn fail(mut self, error: &KrishivError) {
+        self.armed = false;
+        self.state.queries.record_failed_row(&self.log_id, error);
+    }
+
+    fn close(&self, state: &'static str, error_class: Option<&str>) {
+        self.state.queries.finish(
+            &self.log_id,
+            &crate::system::Finished {
+                state,
+                wall_ns: 0,
+                peak_memory_bytes: 0,
+                error_class,
+                operators: Vec::new(),
+                totals: None,
+            },
+        );
+    }
 }
 
 impl Drop for Admitted {
+    /// Dropped without a settled outcome: the caller went away, so the row is `cancelled`.
     fn drop(&mut self) {
         if self.armed {
-            self.state.queries.finish(
-                &self.log_id,
-                &crate::system::Finished {
-                    state: "failed",
-                    wall_ns: 0,
-                    peak_memory_bytes: 0,
-                    error_class: None,
-                    operators: Vec::new(),
-                    totals: None,
-                },
-            );
+            self.close("cancelled", None);
         }
     }
 }

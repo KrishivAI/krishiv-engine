@@ -1939,7 +1939,7 @@ impl Session {
         crate::access::still_physical(self, &at)?;
         // The admission permit before anything is replaced: `DirectoryWrite::begin` deletes what
         // an overwrite replaces, which a refused or cancelled query must not have done.
-        let admitted = self.admit_query(env).await?;
+        let mut admitted = Some(self.admit_query(env).await?);
         let job = job_uuid();
         // Every name of the write is resolved relative to the directory
         // opened here, never through a link (P2-T199). The registration
@@ -1988,7 +1988,7 @@ impl Session {
             })?;
             let worker = self.worker(env);
             let (mut rows, _, row_id) = self
-                .run_on_query_logged(&plan, worker, env, false, Some(admitted))
+                .run_on_query_logged(&plan, worker, env, false, admitted.take())
                 .await?;
             let mut batches = Vec::new();
             while let Some(batch) = rows.next().await {
@@ -2043,6 +2043,14 @@ impl Session {
             Ok(dirs.into_iter().collect())
         }
         .await;
+        // A statement that ended before its query ran (an `ignore` that found its path, or an
+        // error in the preparation) settles its row with that outcome.
+        if let Some(unrun) = admitted.take() {
+            match &written {
+                Ok(_) => unrun.finish_ok(),
+                Err(error) => unrun.fail(error),
+            }
+        }
         // A store error after the anchor is open may be a link swapped into
         // the path: the audited denial is what the caller sees then.
         if written.is_err()
