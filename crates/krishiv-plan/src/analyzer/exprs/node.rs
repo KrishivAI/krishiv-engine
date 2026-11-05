@@ -4,7 +4,7 @@
 use super::*;
 
 impl Resolver<'_> {
-    pub(super) fn expr_node(
+    pub(super) fn expr_node_inner(
         &mut self,
         e: &Arc<Expr>,
         kids: &[Bound],

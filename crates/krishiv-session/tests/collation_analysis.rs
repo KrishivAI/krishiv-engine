@@ -167,3 +167,80 @@ fn collated_columns_in_tables_keep_their_type() {
         "SYSTEM.BUILTIN.UTF8_LCASE"
     );
 }
+
+/// A string function over collated strings takes their one collation (Spark's
+/// `CollationTypeCoercion`): explicit beats implicit beats default.
+#[test]
+fn string_functions_take_the_collation_of_their_arguments() {
+    assert_eq!(
+        one("SELECT typeof(concat('a' COLLATE utf8_lcase, 'b'))"),
+        "string collate UTF8_LCASE"
+    );
+    assert_eq!(
+        one("SELECT typeof(upper('a' COLLATE unicode_ci))"),
+        "string collate UNICODE_CI"
+    );
+    // The same explicit collation twice is fine; the value is untouched.
+    assert_eq!(
+        one("SELECT concat('a' COLLATE utf8_lcase, 'B' COLLATE utf8_lcase)"),
+        "aB"
+    );
+    // A function with a non-string result keeps it.
+    assert_eq!(one("SELECT typeof(length('a' COLLATE utf8_lcase))"), "int");
+    // `collation()` itself is a plain string.
+    assert_eq!(
+        one("SELECT typeof(collation('a' COLLATE utf8_lcase))"),
+        "string"
+    );
+}
+
+#[test]
+fn conflicting_collations_are_refused_like_spark() {
+    assert_eq!(
+        class("SELECT concat('a' COLLATE utf8_lcase, 'b' COLLATE unicode_ci)"),
+        ErrorClass::CollationMismatchExplicit
+    );
+    // An explicit collation outranks an implicit one (a column).
+    let s = Session::new().unwrap();
+    for sql in [
+        "create table t1(a string collate utf8_binary, b string collate utf8_lcase) using parquet",
+        "insert into t1 values('x', 'y')",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    let ok = block_on(
+        block_on(s.sql("select typeof(concat(b, 'z' collate unicode_ci)) from t1"))
+            .unwrap()
+            .collect(),
+    );
+    assert!(ok.is_ok());
+    // Two different implicit collations are indeterminate.
+    let err = block_on(s.sql("select trim(a, b) from t1")).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::IndeterminateCollationInExpression
+    );
+}
+
+/// Accent-insensitive ICU collations refuse string search; CI ones do not. Only the calls Spark
+/// lists fail on operands without one collation; others (`levenshtein`) just run.
+#[test]
+fn search_and_indeterminate_rules_follow_spark() {
+    assert_eq!(
+        class("SELECT contains('Ab' COLLATE unicode_ai, 'a')"),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert_eq!(
+        class("SELECT str_to_map('a:b' COLLATE unicode_ai)"),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(run("SELECT replace('aAb' COLLATE unicode_ci, 'a', 'x')").is_ok());
+    let s = Session::new().unwrap();
+    for sql in [
+        "create table t1(a string collate utf8_binary, b string collate utf8_lcase) using parquet",
+        "insert into t1 values('abc', 'abd')",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    assert!(block_on(s.sql("select levenshtein(a, b) from t1")).is_ok());
+}
