@@ -222,3 +222,34 @@ def test_sequential_reference_is_measured_once_then_replayed(tmp_path: Path, mon
     # another thread count is another measurement: the engine runs (and here the stub refuses)
     with pytest.raises(AssertionError, match="must not be started"):
         reproduce.sequential_query(qm, ["duckdb"], tiny, 4, 1, None, 2, 60, False, c, "tiny")
+
+
+def test_cold_reproduce_and_abba_evict_before_every_timed_run(tmp_path: Path, ds: Dataset, monkeypatch):
+    evicted: list[Path] = []
+    monkeypatch.setattr(reproduce, "evict_page_cache", lambda root: evicted.append(root))
+    monkeypatch.setattr(abba, "evict_page_cache", lambda root: evicted.append(root))
+
+    class Timed(Counting):
+        def timed_run(self, query):
+            return 1, 0.01
+
+        def result_checksum(self):
+            return None
+
+    reproduce._timed(Timed([]), Q, 1, None, None)
+    assert evicted == []  # warm
+    reproduce._timed(Timed([]), Q, 1, None, ds.root)
+    assert evicted == [ds.root]
+
+    class Krishiv:
+        def run(self, q):
+            return [(1,)]
+
+        def timed_run(self, q):
+            return 1, 0.01
+
+    krishiv: Any = Krishiv()
+    monkeypatch.setattr(abba, "_duck_timed", lambda d, q, t: 0.02)
+    evicted.clear()
+    abba._one_query(Q, krishiv, Counting([(1,)]), 2, 10, None, None, "tpch", ds, ds.root)
+    assert evicted == [ds.root] * 8  # two blocks of A B B A

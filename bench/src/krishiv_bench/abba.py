@@ -40,7 +40,8 @@ from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
 from .errors import describe_error
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
 from .refcache import RefCache
-from .runner import git_info, load_queries, machine_info
+from .resources import evict_page_cache
+from .runner import cold_record, git_info, load_queries, machine_info
 
 LOAD_INDICATIVE = 4.0
 
@@ -202,6 +203,7 @@ def run_abba(
     runner: str | None = None,
     reference_cache: bool = True,
     refresh_reference: bool = False,
+    cold: bool = False,
 ) -> Path:
     root = data_root() / dataset if suite == "clickbench" else dataset_dir(dataset, sf)
     tables = discover_tables(root)
@@ -219,11 +221,11 @@ def run_abba(
             if reference_cache
             else None
         )
-        return _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, waited, suite, runner, cache)
+        return _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, waited, suite, runner, cache, cold)
 
 
 def _run_locked(
-    ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s, suite, runner=None, cache=None
+    ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s, suite, runner=None, cache=None, cold=False
 ) -> Path:
     krishiv = KrishivEngine(threads=threads, memory_limit=memory_limit.lower(), binary=runner)
     # Krishiv sorts NULLs as Spark does; the reference must too, or an ORDER BY over a nullable key differs.
@@ -246,7 +248,10 @@ def _run_locked(
         "pattern": "ABBA (A=krishiv, B=duckdb)",
         "samples_per_engine": 2 * reps,
         "timeout_s": timeout_s,
-        "cache_policy": "warm: one untimed correctness run per engine per query, then timed runs; OS page cache "
+        "cold": cold_record(cold),
+        "cache_policy": "cold: the dataset is dropped from the OS page cache before every timed run"
+        if cold
+        else "warm: one untimed correctness run per engine per query, then timed runs; OS page cache "
         "shared, never dropped; both engines read the same Parquet files, no table is loaded or cached up front",
         "bench_lock_wait_s": lock_wait_s,
         "load_at_start": load_start,
@@ -258,7 +263,9 @@ def _run_locked(
     record["engines"]["krishiv"] = {"version": krishiv.version(), "config": krishiv.config()}
     try:
         for q, dq in queries:
-            record["queries"][q.id] = _one_query(q, krishiv, duck, reps, timeout_s, dq, cache, suite, ds)
+            record["queries"][q.id] = _one_query(
+                q, krishiv, duck, reps, timeout_s, dq, cache, suite, ds, ds.root if cold else None
+            )
     finally:
         krishiv.teardown()
         duck.teardown()
@@ -283,6 +290,7 @@ def _one_query(
     cache: RefCache | None = None,
     suite="",
     ds=None,
+    cold_root: Path | None = None,
 ) -> dict:
     """Correctness, then ABBA timing of ``q``; DuckDB runs ``duck_q`` (its own text of the query), ``q`` if None.
 
@@ -319,6 +327,8 @@ def _one_query(
     times: dict[str, list[float]] = {"krishiv": [], "duckdb": []}
     for _ in range(reps):
         for who in PATTERN:
+            if cold_root is not None:
+                evict_page_cache(cold_root)
             if who == "krishiv":
                 try:
                     rows, secs = krishiv.timed_run(q)

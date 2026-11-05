@@ -47,7 +47,8 @@ from .errors import describe_error, error_fields
 from .h2o import is_h2o
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
 from .refcache import RefCache
-from .runner import git_info, load_queries, machine_info
+from .resources import evict_page_cache
+from .runner import cold_record, git_info, load_queries, machine_info
 
 REFERENCE = "duckdb"
 DEFAULT_ENGINES = ["krishiv", "duckdb", "polars", "datafusion", "sail", "spark-local"]
@@ -237,8 +238,10 @@ def check_description(name: str, baseline: dict | None, q: Query | None = None) 
     return "row count and order-independent checksum of the timed run's own result"
 
 
-def _timed(eng: Engine, q: Query, nrows: int, baseline: dict | None) -> float:
+def _timed(eng: Engine, q: Query, nrows: int, baseline: dict | None, cold_root: Path | None = None) -> float:
     """One timed run whose full result (row count and checksum) must equal the verified one; returns the seconds."""
+    if cold_root is not None:
+        evict_page_cache(cold_root)
     n, secs = eng.timed_run(q)
     if n != nrows:
         raise EngineError(f"timed run returned {n} rows, expected {nrows}")
@@ -277,6 +280,7 @@ def ours_query(
     cache: RefCache | None = None,
     suite: str = "",
     ds: Dataset | None = None,
+    cold_root: Path | None = None,
 ) -> dict:
     load_before = loadavg()
     verdict, nrows = correctness(qm, engines, cache, suite, ds)
@@ -295,7 +299,7 @@ def ours_query(
             if name not in samples:
                 continue
             try:
-                secs = _timed(engines[name], qm[name], nrows, sums[name])
+                secs = _timed(engines[name], qm[name], nrows, sums[name], cold_root)
                 samples[name].append(secs)
                 _note_peak(peaks, name, engines[name])
                 if (cpu := engines[name].last_cpu_seconds) is not None:
@@ -320,6 +324,7 @@ def sequential_query(
     profile: bool = False,
     cache: RefCache | None = None,
     suite: str = "",
+    cold_root: Path | None = None,
 ) -> tuple[dict, dict[str, dict]]:
     """One query, one engine alive at a time (DuckDB, then Krishiv, then the rest): a fresh worker per engine inside
     its own memory cgroup runs the verified answer, one untimed run through the timed path (its checksum is the
@@ -383,7 +388,7 @@ def sequential_query(
                 verdicts[name]["result_check"] = check_description(name, baseline, qm[name])
                 samples[name], cpus[name] = [], []
                 for _ in range(samples_n):
-                    samples[name].append(_timed(eng, qm[name], nrows, baseline))
+                    samples[name].append(_timed(eng, qm[name], nrows, baseline, cold_root))
                     _note_peak(peaks, name, eng)
                     if (cpu := eng.last_cpu_seconds) is not None:
                         cpus[name].append(cpu)
@@ -483,6 +488,7 @@ def run_reproduce(
     cap_gb: int | None = None,
     reference_cache: bool = True,
     refresh_reference: bool = False,
+    cold: bool = False,
 ) -> Path:
     names = engines or DEFAULT_ENGINES
     if REFERENCE not in names:
@@ -493,6 +499,7 @@ def run_reproduce(
     pub = PUBLISHED[suite]
     runs = runs or pub["runs"]
     their_timeout_s = their_timeout_s or pub["timeout_s"]
+    cold_root = ds.root if cold else None
     cache = (
         RefCache(refresh=refresh_reference, engine=REFERENCE, version=dist_version(REFERENCE))
         if reference_cache
@@ -528,7 +535,12 @@ def run_reproduce(
                 "worker_cgroup_gb": cap_gb,
             },
             "theirs": {"runs": runs, "timeout_s": their_timeout_s, "source": pub["source"]},
-            "cache_policy": "OS page cache shared and never dropped; correctness run precedes timing",
+            "cache_policy": (
+                "cold: the dataset is dropped from the OS page cache before every timed run of the ours method"
+                if cold
+                else "OS page cache shared and never dropped; correctness run precedes timing"
+            ),
+            "cold": cold_record(cold),
             "bench_lock_wait_s": waited,
             "load_at_start": loadavg(),
             "engines": {},
@@ -540,7 +552,7 @@ def run_reproduce(
             for qm in queries:
                 qid = qm[REFERENCE].id
                 ent, infos = sequential_query(
-                    qm, names, ds, threads, memory_gb, cap_gb, 2 * reps, timeout_s, profile, cache, suite
+                    qm, names, ds, threads, memory_gb, cap_gb, 2 * reps, timeout_s, profile, cache, suite, cold_root
                 )
                 for n, info in infos.items():
                     record["engines"].setdefault(n, info)
@@ -555,7 +567,11 @@ def run_reproduce(
                     record["engines"][n] = {"version": e.version(), "config": e.config(), "build": e.build_info()}
                 for qm in queries:
                     qid = qm[REFERENCE].id
-                    ent = ours_query(qm, engs, reps, timeout_s, profile, cache, suite, ds) if "ours" in methods else {}
+                    ent = (
+                        ours_query(qm, engs, reps, timeout_s, profile, cache, suite, ds, cold_root)
+                        if "ours" in methods
+                        else {}
+                    )
                     record["queries"][qid] = ent
                     print(_line(qid, ent), flush=True)
             finally:

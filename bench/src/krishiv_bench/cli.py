@@ -113,6 +113,11 @@ def h2o_target(ap: argparse.ArgumentParser, a: argparse.Namespace) -> tuple[Path
 
 def add_reference_cache_args(p: argparse.ArgumentParser) -> None:
     p.add_argument(
+        "--cold",
+        action="store_true",
+        help="drop the dataset from the page cache before every timed run (not comparable with warm results)",
+    )
+    p.add_argument(
         "--refresh-reference",
         action="store_true",
         help="run DuckDB again and replace its cached answers and timings (refcache/ under $KRISHIV_DATA)",
@@ -439,6 +444,7 @@ def main(argv=None) -> None:
             cap_gb=a.cgroup_gb,
             reference_cache=not a.no_reference_cache,
             refresh_reference=a.refresh_reference,
+            cold=a.cold,
         )
     elif a.cmd == "ledger":
         from .ledger import run_ledger
@@ -469,6 +475,7 @@ def main(argv=None) -> None:
             a.runner,
             reference_cache=not a.no_reference_cache,
             refresh_reference=a.refresh_reference,
+            cold=a.cold,
         )
     elif a.cmd == "explain-diff":
         from .explain_diff import run_explain_diff

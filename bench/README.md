@@ -483,7 +483,8 @@ loses its last slice (at most 20 ms of sampling); `null` means "not measured", n
 `krishiv-bench run --cold` calls `posix_fadvise(POSIX_FADV_DONTNEED)` on every dataset file before each run, warm-up
 included (no root needed; only clean pages are dropped), and records `"cold": {"enabled": true, ...}` in the result.
 **Cold results are not comparable with warm ones**; SF10 and SF100 warm runs come from the page cache and hide
-I/O-bound gaps that show at SF1000. Not applied by `reproduce`, `abba` or `ab`.
+I/O-bound gaps that show at SF1000. `reproduce` (the `ours` method) and `abba` take `--cold` too and evict before every
+timed run; `ab` and the `theirs` method of `reproduce` do not.
 
 `krishiv-bench report --suite tpch --ladder [result.json ...]` takes results at two or more scale factors (newest per
 scale factor and engine) and flags each query whose engine / `duckdb` ratio grows by more than 1.5x between
