@@ -43,7 +43,9 @@ use super::bind::{addr, unsupported};
 use super::catalog::{FunctionLookup, FunctionRegistry};
 use super::exprs::{literal_type, pretty};
 use super::ops::{MAX_ID, col_expr};
-use super::{AnalysisError, SparkProfile};
+use super::subquery_shapes::{aggregates_below, check_in, positive_literal};
+pub(super) use super::subquery_shapes::{null_literal, one_row_aggregate};
+use super::{AnalysisError, ResolutionConf, SparkProfile};
 use crate::walk::{Node, visit_distinct};
 use crate::{
     AttrId, BoundColumn, Builtin, Expr, ExprNode, FrameUnits, FunctionId, FunctionKind, Grouping,
@@ -68,6 +70,7 @@ pub(super) fn rewrite(
     next_id: &mut u64,
     functions: &dyn FunctionRegistry,
     profile: SparkProfile,
+    conf: &ResolutionConf,
 ) -> R<Arc<LogicalPlan>> {
     if !has_subquery(Node::Plan(root)) && !has_outer(Node::Plan(root)) {
         return Ok(Arc::clone(root));
@@ -78,6 +81,8 @@ pub(super) fn rewrite(
         correlated: HashMap::new(),
         depth: 0,
         lateral: false,
+        legacy_exists_in_count: conf.legacy_exists_in_count,
+        legacy_scalar_count: conf.legacy_scalar_count,
         row_number: match functions.lookup(&["row_number".to_owned()], profile) {
             FunctionLookup::Found(entry) => Some((entry.id, entry.kind)),
             _ => None,
@@ -101,6 +106,10 @@ struct Rewriter {
     /// Decorrelating a lateral join's right side: a global aggregate on the
     /// way keeps its one row per domain value.
     lateral: bool,
+    /// `spark.sql.optimizer.decorrelateExistsSubqueryLegacyIncorrectCountHandling.enabled`.
+    legacy_exists_in_count: bool,
+    /// `spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled`.
+    legacy_scalar_count: bool,
 }
 
 /// A predicate subquery conjunct, as a join.
@@ -173,7 +182,7 @@ impl Renumber {
 }
 
 /// Whether `e` (subquery plans included) refers to an enclosing query.
-fn has_outer(node: Node<'_>) -> bool {
+pub(super) fn has_outer(node: Node<'_>) -> bool {
     visit_distinct(node, |n| match n {
         Node::Expr(e) if matches!(e.node, ExprNode::Resolved(ResolvedExpr::OuterColumn(_))) => {
             ControlFlow::Break(())
@@ -286,7 +295,7 @@ fn factor_or(e: &Arc<Expr>) -> Arc<Expr> {
 }
 
 /// The conjuncts of a predicate.
-fn conjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
+pub(super) fn conjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     let mut out = Vec::new();
     let mut stack = vec![Arc::clone(e)];
     while let Some(x) = stack.pop() {
@@ -327,17 +336,6 @@ fn negated_in(e: &Arc<Expr>) -> Option<&Arc<Expr>> {
     })
 }
 
-/// Whether `e` is a NULL literal or a cast of one.
-pub(super) fn null_literal(e: &Expr) -> bool {
-    match &e.node {
-        ExprNode::Literal(v) => matches!(v, Literal::Null(_)),
-        ExprNode::Cast { expr, .. } | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {
-            null_literal(expr)
-        }
-        _ => false,
-    }
-}
-
 /// `inner_column = outer_expression`, either way round.
 fn is_outer_equality(e: &Arc<Expr>) -> bool {
     let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
@@ -353,83 +351,6 @@ fn is_outer_equality(e: &Arc<Expr>) -> bool {
             && inner_columns(b).is_empty()
     };
     plain(&f.args[0], &f.args[1]) || plain(&f.args[1], &f.args[0])
-}
-
-/// Whether `e` is an integer literal above zero.
-fn positive_literal(e: &Expr) -> bool {
-    match &e.node {
-        ExprNode::Literal(v) => match v {
-            Literal::Byte(n) => *n > 0,
-            Literal::Short(n) => *n > 0,
-            Literal::Integer(n) => *n > 0,
-            Literal::Long(n) => *n > 0,
-            _ => false,
-        },
-        ExprNode::Cast { expr, .. } => positive_literal(expr),
-        _ => false,
-    }
-}
-
-/// Whether `p` reads the outer query and is one row for each outer row:
-/// a global aggregate under projections and aliases (no filter, so no
-/// `HAVING`).
-pub(super) fn one_row_aggregate(p: &Arc<LogicalPlan>) -> bool {
-    if !has_outer(Node::Plan(p)) {
-        return false;
-    }
-    fn walk(p: &LogicalPlan) -> bool {
-        match &p.node {
-            PlanNode::Aggregate {
-                grouping: Grouping::GroupBy(keys),
-                ..
-            } => keys.is_empty(),
-            PlanNode::Project { input, .. } => walk(input),
-            PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => walk(input),
-            _ => false,
-        }
-    }
-    walk(p)
-}
-
-/// Whether an aggregate sits under `p`'s projections and filters.
-fn aggregates_below(p: &LogicalPlan) -> bool {
-    match &p.node {
-        PlanNode::Aggregate { .. } => true,
-        PlanNode::Project { input, .. }
-        | PlanNode::SubqueryAlias { input, .. }
-        | PlanNode::Filter { input, .. }
-        | PlanNode::Sort { input, .. } => aggregates_below(input),
-        _ => false,
-    }
-}
-
-/// Whether `p` is one row of expressions over no relation: `SELECT 1`,
-/// `VALUES (1)`, through aliases and projections.
-fn one_row_literals(p: &LogicalPlan) -> bool {
-    match &p.node {
-        PlanNode::OneRowRelation => true,
-        PlanNode::InlineTable { rows, .. } => rows.len() == 1,
-        PlanNode::Project { input, .. } | PlanNode::SubqueryAlias { input, .. } => {
-            one_row_literals(input)
-        }
-        _ => false,
-    }
-}
-
-/// The `IN` forms Spark folds before any join (`NullPropagation`, the
-/// one-row literal rewrite): `v IN (q)` with a NULL `v`, or over a one-row
-/// literal relation. They are refused rather than answered two-valued.
-fn check_in(values: &[Arc<Expr>], plan: &Arc<LogicalPlan>, origin: Origin) -> R<()> {
-    if values.iter().any(|v| null_literal(v)) {
-        return Err(unsupported("IN (subquery) with a NULL value", origin));
-    }
-    if one_row_literals(plan) {
-        return Err(unsupported(
-            "IN (subquery) over a one-row relation of literals",
-            origin,
-        ));
-    }
-    Ok(())
 }
 
 /// The type and nullability of a resolved expression.
@@ -471,13 +392,13 @@ fn boolean(op: Builtin, args: Vec<Arc<Expr>>) -> Arc<Expr> {
 }
 
 /// The conjunction of `parts` (at least one).
-fn and_all(parts: Vec<Arc<Expr>>) -> Option<Arc<Expr>> {
+pub(super) fn and_all(parts: Vec<Arc<Expr>>) -> Option<Arc<Expr>> {
     parts
         .into_iter()
         .reduce(|a, b| boolean(Builtin::And, vec![a, b]))
 }
 
-fn node(node: PlanNode, origin: Origin) -> Arc<LogicalPlan> {
+pub(super) fn node(node: PlanNode, origin: Origin) -> Arc<LogicalPlan> {
     Arc::new(LogicalPlan::new(node).with_origin(origin))
 }
 
@@ -625,7 +546,13 @@ impl Rewriter {
         }
         e.transform_up(&mut |x: Arc<Expr>| match &x.node {
             ExprNode::Subquery { kind, plan } => {
-                let rewritten = self.plan(plan)?;
+                let mut rewritten = self.plan(plan)?;
+                if self.legacy_exists_in_count
+                    && matches!(kind, SubqueryKind::Exists | SubqueryKind::In(_))
+                {
+                    let legacy = super::subquery_legacy::pull_through_aggregate(&rewritten);
+                    rewritten = legacy.unwrap_or(rewritten);
+                }
                 if Arc::ptr_eq(&rewritten, plan) {
                     return Ok(x);
                 }
@@ -1668,8 +1595,9 @@ impl Rewriter {
             ));
         }
         // Grouped, the subquery has no row for an outer row without matches:
-        // its value is NULL, whatever the expression (a bare `count` too).
-        let empty = if keys.is_empty() {
+        // its value is NULL, whatever the expression (a bare `count` too);
+        // with Spark's legacy flag, the value over no rows as for a global one.
+        let empty = if keys.is_empty() || self.legacy_scalar_count {
             on_no_rows(expr).ok_or_else(|| {
                 unsupported(
                     "a correlated scalar subquery whose value over no rows is not NULL or a count",
@@ -2847,7 +2775,7 @@ fn plan_outer_columns(plan: &Arc<LogicalPlan>) -> Vec<BoundColumn> {
 }
 
 /// The columns (not outer references) `e` reads.
-fn inner_columns(e: &Arc<Expr>) -> Vec<BoundColumn> {
+pub(super) fn inner_columns(e: &Arc<Expr>) -> Vec<BoundColumn> {
     let mut out: Vec<BoundColumn> = Vec::new();
     let mut seen = HashSet::new();
     let mut stack = vec![Arc::clone(e)];

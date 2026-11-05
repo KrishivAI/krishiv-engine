@@ -99,6 +99,8 @@ mod resolve;
 mod setops;
 mod sqlfn;
 mod subquery;
+mod subquery_legacy;
+mod subquery_shapes;
 mod suggest;
 pub mod table_functions;
 #[cfg(any(test, feature = "testing"))]
@@ -366,6 +368,15 @@ pub struct ResolutionConf {
     /// `spark.sql.function.concatBinaryAsString`: `concat` of binaries
     /// returns a string.
     pub concat_binary_as_string: bool,
+    /// `spark.sql.optimizer.decorrelateExistsSubqueryLegacyIncorrectCountHandling.enabled`:
+    /// `EXISTS` / `IN` over a correlated global aggregate decorrelate as
+    /// Spark's legacy rule does, grouping by the correlated columns (no
+    /// row where nothing matched).
+    pub legacy_exists_in_count: bool,
+    /// `spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled`:
+    /// a correlated scalar subquery with `GROUP BY` reads its value over
+    /// no rows (a count's 0) where nothing matched, not NULL.
+    pub legacy_scalar_count: bool,
 }
 
 impl Default for ResolutionConf {
@@ -396,13 +407,15 @@ impl Default for ResolutionConf {
             legacy_interval: false,
             legacy_null_in_empty_list: false,
             concat_binary_as_string: false,
+            legacy_exists_in_count: false,
+            legacy_scalar_count: false,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 24] = [
+    pub const KEYS: [&'static str; 26] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -427,6 +440,8 @@ impl ResolutionConf {
         "spark.sql.legacy.interval.enabled",
         "spark.sql.legacy.nullInEmptyListBehavior",
         "spark.sql.function.concatBinaryAsString",
+        "spark.sql.optimizer.decorrelateExistsSubqueryLegacyIncorrectCountHandling.enabled",
+        "spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -485,6 +500,8 @@ impl ResolutionConf {
             legacy_interval: on(Self::KEYS[21]),
             legacy_null_in_empty_list: on(Self::KEYS[22]),
             concat_binary_as_string: on(Self::KEYS[23]),
+            legacy_exists_in_count: on(Self::KEYS[24]),
+            legacy_scalar_count: on(Self::KEYS[25]),
         }
     }
 }
