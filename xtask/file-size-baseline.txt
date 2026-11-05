@@ -15,7 +15,6 @@
 3337 crates/krishiv-functions/src/registry/tests.rs
 4186 crates/krishiv-io/src/avro/tests.rs
 2215 crates/krishiv-kernels/src/csv.rs
-2130 crates/krishiv-kernels/src/datetime_pattern/legacy.rs
 2429 crates/krishiv-kernels/src/map.rs
 2468 crates/krishiv-plan/src/analyzer/coerce.rs
 4582 crates/krishiv-plan/src/analyzer/ops.rs
@@ -24,7 +23,7 @@
 3004 crates/krishiv-session/src/catalog.rs
 2527 crates/krishiv-session/src/command.rs
 2692 crates/krishiv-session/src/dataframe.rs
-3022 crates/krishiv-session/src/session.rs
+2993 crates/krishiv-session/src/session.rs
 3266 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
 2774 crates/krishiv-sql/src/lower.rs

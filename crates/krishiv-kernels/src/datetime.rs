@@ -102,9 +102,9 @@ fn day_arith<B: arrow_array::ArrowPrimitiveType<Native = i32>>(
 /// session: `NullOnOverflow` (`try_add`) gives NULL where the day number
 /// leaves the `int` range; any other mode, ANSI included, wraps like Java's
 /// `int` addition, as Spark does (`date_add('2016-07-30', 2147483647)` is a
-/// date before the epoch; found by the expression differential test).
-/// Only an all-literal call differs: Spark's constant folding raises a bare
-/// `java.lang.ArithmeticException`.
+/// date before the epoch; found by the expression differential test). An
+/// all-literal call wraps too (Spark 4.2.0, ANSI on:
+/// `date_add(date'2016-07-30', 2147483647)` is `-5877594-01-18`).
 ///
 /// # Errors
 /// `ARITHMETIC_OVERFLOW` as above; `INTERNAL_ERROR` for operands of different

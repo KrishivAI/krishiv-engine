@@ -849,7 +849,7 @@ impl Converter<'_> {
                 match parsed {
                     Some(d) => Val::I64(i64::from(d)),
                     None if self.fallback && self.date.is_some() => {
-                        match crate::text::spark_string_to_date(s) {
+                        match crate::text::spark_string_to_date(&s.replace("GMT", "")) {
                             Some(d) => Val::I64(i64::from(d)),
                             None => return Err(bad()),
                         }
@@ -1336,7 +1336,7 @@ pub fn from_csv(
                         match parsed {
                             Some(m) => Val::I64(m),
                             None if o.fallback && o.timestamp_pattern.is_some() => {
-                                match parse_timestamp(s)? {
+                                match parse_timestamp(&s.replace("GMT", ""))? {
                                     Some(m) => Val::I64(m),
                                     None => {
                                         bad = true;

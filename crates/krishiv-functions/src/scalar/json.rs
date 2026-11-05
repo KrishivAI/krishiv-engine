@@ -229,8 +229,7 @@ fn from(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
     }
     let declared = read_schema(schema)?;
     let target = krishiv_types::arrow::client_arrow_type(&declared.to_arrow());
-    refuse_legacy_dates("from_json", &target, opts.legacy_time_parser)?;
-    let options = read_options(options, false)?;
+    let options = read_options(options, opts.legacy_time_parser)?;
     if matches!(
         options.mode,
         krishiv_kernels::json::ParseMode::DropMalformed
@@ -266,49 +265,12 @@ fn to(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
     ) {
         return Err(bad_types("to_json", args));
     }
-    refuse_legacy_dates("to_json", &value.data_type(), opts.legacy_time_parser)?;
-    let options = read_options(options, false)?;
+    let options = read_options(options, opts.legacy_time_parser)?;
+    options.validate_for_write()?;
     let zone = Arc::clone(&opts.time_zone);
     Ok(Binding::new(ArrowDataType::Utf8, move |x: &Inputs<'_>| {
         write_json(&x.column(0)?, &options, zone.as_ref())
     }))
-}
-
-/// Under `spark.sql.legacy.timeParserPolicy=LEGACY`, Spark's JSON, CSV and
-/// XML functions read and write `DATE` and `TIMESTAMP` fields with a lenient
-/// `FastDateFormat` (`2024-02-30` is March 1, `SSSSSS` a fraction of a
-/// second, its own default patterns), which Krishiv does not model: a type
-/// holding such a field is refused rather than answered with the corrected
-/// formatter. `TIMESTAMP_NTZ` never takes the legacy formatter.
-pub(super) fn refuse_legacy_dates(
-    func: &str,
-    ty: &ArrowDataType,
-    legacy: bool,
-) -> Result<(), KrishivError> {
-    fn has_dates(ty: &ArrowDataType) -> bool {
-        match ty {
-            ArrowDataType::Date32 | ArrowDataType::Date64 => true,
-            ArrowDataType::Timestamp(_, zone) => zone.is_some(),
-            ArrowDataType::Struct(fields) => fields.iter().any(|f| has_dates(f.data_type())),
-            ArrowDataType::List(f)
-            | ArrowDataType::LargeList(f)
-            | ArrowDataType::ListView(f)
-            | ArrowDataType::LargeListView(f)
-            | ArrowDataType::FixedSizeList(f, _)
-            | ArrowDataType::Map(f, _) => has_dates(f.data_type()),
-            _ => false,
-        }
-    }
-    if legacy && has_dates(ty) {
-        return Err(krishiv_common::error::KrishivUnsupportedFeature {
-            feature: format!(
-                "{func} of a DATE or TIMESTAMP field with \
-                 spark.sql.legacy.timeParserPolicy=LEGACY (the FastDateFormat formatter)"
-            ),
-        }
-        .into());
-    }
-    Ok(())
 }
 
 /// The schema argument's value, parsed as Spark parses a `from_json`
@@ -329,8 +291,9 @@ fn read_schema(arg: &BindArg) -> Result<DataType, KrishivError> {
 
 /// The options argument's compiled form (absent is the defaults).
 fn read_options(arg: Option<&BindArg>, legacy: bool) -> Result<JsonOptions, KrishivError> {
+    let none = || JsonOptions::from_map_with(&BTreeMap::new(), legacy);
     let Some(arg) = arg else {
-        return Ok(JsonOptions::new());
+        return none();
     };
     let BindArg::Literal(a) = arg else {
         return Err(unsupported(
@@ -356,7 +319,7 @@ fn read_options(arg: Option<&BindArg>, legacy: bool) -> Result<JsonOptions, Kris
         }
     };
     if map.is_null(0) {
-        return Ok(JsonOptions::new());
+        return none();
     }
     let mut options = BTreeMap::new();
     for row in start..end {

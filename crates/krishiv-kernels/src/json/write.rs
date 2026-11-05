@@ -182,11 +182,7 @@ fn write_value(
         }
         ArrowType::Date32 => {
             let days = col.as_primitive::<Date32Type>().value(row);
-            let rendered = ctx
-                .out
-                .date
-                .format_date(days)
-                .map_err(|e| internal(format!("a to_json date pattern: {e}")))?;
+            let rendered = ctx.out.date.format_date(days)?;
             push_quoted(&rendered, text);
         }
         ArrowType::Time64(TimeUnit::Nanosecond) => {
@@ -204,8 +200,10 @@ fn write_value(
             let rendered = if tz.is_some() {
                 let seconds = micros.div_euclid(1_000_000);
                 let offset = ctx.zone.offset_at_utc(seconds);
+                // A region zone keeps its id (the `z` and `VV` letters name it).
+                let fixed = zone_id(offset);
                 let zone = Zone {
-                    id: &zone_id(offset),
+                    id: ctx.zone.region_id().unwrap_or(&fixed),
                     rules: ctx.zone,
                 };
                 ctx.out

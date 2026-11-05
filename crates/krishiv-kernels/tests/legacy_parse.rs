@@ -175,3 +175,19 @@ fn resolution_edge_cases_match_spark() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// `DecimalFormat` hands a field over as a `Long` and `intValue()` keeps its
+/// low 32 bits, so an oversized number wraps (Spark 4.2.0 LEGACY:
+/// `to_timestamp('4294969320-01-01', 'yyyy-MM-dd')` is 2024-01-01); past
+/// the `Long` range the parse fails.
+#[test]
+fn oversized_numbers_wrap_to_an_int() {
+    let p = LegacyPattern::new("yyyy-MM-dd").unwrap();
+    let read = |s: &str| p.parse_timestamp(s, &FixedOffset(0)).unwrap();
+    let jan_1_2024 = Some(1_704_067_200_000_000);
+    assert_eq!(read("4294969320-01-01"), jan_1_2024);
+    assert_eq!(read("2024-4294967297-01"), jan_1_2024);
+    assert_eq!(read("2024-01-4294967297"), jan_1_2024);
+    assert_eq!(read("9223372036854775807-01-01"), None);
+    assert_eq!(read("99999999999999999999-01-01"), None);
+}

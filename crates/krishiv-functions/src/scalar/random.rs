@@ -38,6 +38,11 @@ use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 /// Every name this family binds (`random` is Spark's alias of `rand`).
 pub(super) const NAMES: &[&str] = &["rand", "random", "randn", "uniform", "randstr", "uuid"];
 
+/// Whether `name` is a function whose value stream is drawn per partition.
+pub fn is_stateful(name: &str) -> bool {
+    NAMES.iter().any(|n| name.eq_ignore_ascii_case(n))
+}
+
 /// Spark's `XORShiftRandom`: the seed hash (Scala's `MurmurHash3`, the only
 /// hashing in the stream) and the shift register.
 #[derive(Debug, Clone)]

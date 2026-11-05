@@ -60,6 +60,7 @@ mod vector;
 mod xml;
 
 pub use json::schema_of_json_ddl;
+pub use random::is_stateful;
 pub use regex::{FullMatch, extract_all_pieces, split_regex};
 pub use xml::schema_of_xml_ddl;
 
@@ -162,7 +163,8 @@ pub struct BindOptions {
     /// accept and do with what they cannot map.
     pub charsets: CharsetOptions,
     /// `spark.sql.legacy.timeParserPolicy = LEGACY`: the pattern functions
-    /// use the `SimpleDateFormat` parser and `FastDateFormat` printer.
+    /// use `SimpleDateFormat`, and the JSON, CSV and XML functions the
+    /// lenient `FastDateFormat` for their `DATE` and `TIMESTAMP` fields.
     pub legacy_time_parser: bool,
     /// The session's user (`current_user()`).
     pub user: Arc<str>,

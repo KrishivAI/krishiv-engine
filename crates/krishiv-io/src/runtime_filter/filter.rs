@@ -500,7 +500,9 @@ impl KeyFilter {
         self.empty
     }
 
-    /// Non-null keys the producer stored, duplicates included.
+    /// Non-null keys the producer stored, duplicates included. For a merged
+    /// filter, the sum over its partials, which counts a key once per
+    /// partition that stored it.
     #[must_use]
     pub fn key_count(&self) -> u64 {
         self.keys

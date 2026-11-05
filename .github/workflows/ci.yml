@@ -234,11 +234,18 @@ jobs:
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-nextest
+      # TPC-H SF 0.1 for the simulated two-worker cluster (krishiv-sim
+      # `tpch_sim`, design P2-T176 unit 2); without it the test reads the SF
+      # 0.01 fixture.
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: TPC-H SF 0.1 Parquet
+        run: uv run --frozen --project bench python -I tests/scripts/gen_tpch_parquet.py 0.1 "$RUNNER_TEMP/tpch-sf0.1"
       # Every GitHub-hosted x64 runner has x86-64-v3, so the kernel tests must
       # run that clone, not skip it (AVX-512 varies by runner: not required).
       - run: cargo nextest run --workspace --locked --no-tests=pass
         env:
           KRISHIV_REQUIRE_TARGETS: baseline,x86_64v3
+          KRISHIV_SIM_TPCH_DIR: ${{ runner.temp }}/tpch-sf0.1
       - run: cargo test --workspace --doc --locked
       - run: cargo nextest run -p krishiv-session --features telemetry-otlp --test otlp_collector --locked
 
