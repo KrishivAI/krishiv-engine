@@ -436,6 +436,31 @@ interleaved samples (a JVM keeps its heap, so later queries inherit it); `theirs
 plan+execute plus the executor's per-operator rows and compute time (`DataFrame::collect_with_metrics`; seconds are summed over drivers).
 ClickBench reads `$KRISHIV_DATA/clickbench` (`hits.parquet` or a `hits/` directory of parts).
 
+## Nested TPC-H (`--suite tpch-nested`)
+
+TPC-H data and questions in a nested shape, to exercise nested column pruning, struct access and array unnesting,
+which flat TPC-H does not. Each table keeps its join keys and partition columns (`p_brand`, `c_mktsegment`,
+`o_orderdate`, `l_shipdate`) at the top level and holds every other column in one `<table>_data` column of type
+`array<struct<...>>` with exactly one element, so `explode` never changes a row count and every answer equals the
+flat TPC-H answer. Layout and queries are Comet's `benchmarks/nested/` (see Query provenance); the conversion is
+`krishiv_bench/nested_tpch.py`, in DuckDB.
+
+```bash
+uv run krishiv-datasets tpch --sf 1            # the flat dataset first ($KRISHIV_DATA/tpch/sf1)
+uv run krishiv-datasets tpch-nested --sf 1     # -> $KRISHIV_DATA/tpch-nested/sf1/<table>.parquet, zstd
+uv run krishiv-bench nested-check --engine krishiv --sf 1 --runner PATH     # nested answers vs DuckDB's flat answers
+uv run krishiv-bench nested-check --engine spark-connect --sf 1 --spark-remote sc://HOST:PORT   # the reference engine
+uv run krishiv-bench run --engine krishiv --suite tpch-nested --sf 1        # timings (iterations, warm-up as other suites)
+```
+
+The conversion verifies itself before it reports done: row counts equal the source's, every array holds one element,
+and the nested table flattened back equals the flat source, uncast, as a multiset in both directions (so a cast
+that lost precision is caught). `nested-check` runs the 22 nested queries on the engine and the 22 flat TPC-H queries on DuckDB over the
+flat tables, and compares rows (in order when the flat query has a top-level `ORDER BY`).
+Only engines that run Spark SQL `explode` take part (Krishiv, Spark, Sail); the others are refused. Differences from
+Comet's conversion: one `<table>.parquet` file per table instead of Hive-partitioned directories, and DuckDB's default
+row-group size instead of 512 MiB. This is not part of the P2b exit gate.
+
 ## Result JSON (`$KRISHIV_DATA/results/<ts>_<engine>_<suite>_sf<N>.json`)
 `machine` (CPU model, cores, RAM, OS, governor), `git` (krishiv-engine commit/branch/dirty), `engine` (name, version, config (Krishiv: threads, memory limit, `build_profile`, `target_cpu`), build, and `allocator` when the engine reports it, e.g. `mimalloc`; the CLI prints it as `allocator=<name>` in `krishiv --version`, the wheel via `krishiv.build_info()`),
 `dataset` (name, SF, path, tables, generator version, manifest sha256), and per query: `iterations`, `times_s`, `p50_s`, `p99_s`, `min_s`, `max_s`, `mean_s`,
@@ -475,6 +500,10 @@ The report never prints "all agree" if any check was skipped: skipped checks are
   The harness pins `duckdb==2.0.0` (`pyproject.toml`). TPC-H `dbgen` text columns differ between DuckDB versions, and `tpch_answers()`
   matches the `dbgen` of the same version, so `tpch-dbgen` reference datasets are versioned by generator (see below); answer checks
   run only when the dataset's generator version matches the running DuckDB.
+* **Nested TPC-H** (`queries/tpch-nested/`): the 22 queries are Apache DataFusion Comet's `benchmarks/nested/queries/q01..q22.sql`
+  (apache/datafusion-comet PR #7044), **Apache-2.0**, copied unchanged with Comet's header (each states it is derived from TPC-H under
+  the TPC Fair Use Policy; TPC-H queries are (c) 1993-2022 Transaction Processing Performance Council). The table layout is that of Comet's
+  `scripts/nest_tpch.scala`, reimplemented in `src/krishiv_bench/nested_tpch.py`. Results are TPC-derived, not audited TPC results.
 * **Spark-dialect identifiers**: eight TPC-DS texts (q16, q32, q50, q62, q92, q94, q95, q99) name columns with double
   quotes (`AS "order count"`), DuckDB's identifier quote. Spark SQL reads a double-quoted token as a string literal, so
   Spark 4.2 rejects them (`PARSE_SYNTAX_ERROR`); Spark-dialect engines (Krishiv, Spark, Sail) get backticks instead

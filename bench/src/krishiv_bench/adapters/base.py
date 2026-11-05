@@ -12,6 +12,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 @dataclass
@@ -87,6 +88,23 @@ class Engine(ABC):
         t0 = time.perf_counter()
         rows = self.run(query)
         return len(rows), time.perf_counter() - t0
+
+    # The full result of the last ``timed_run`` as an Arrow table (or something ``_as_arrow`` turns into one), kept
+    # until ``result_checksum`` takes it. The conversion and the checksum happen outside the timed span.
+    _pending: Any = None
+
+    def _as_arrow(self, pending: Any) -> Any:
+        return pending
+
+    def result_checksum(self) -> dict | None:
+        """Order-independent checksum of the full result of the last ``timed_run`` (see ``result_check``); ``None`` when
+        that run kept no result. Releases the result."""
+        pending, self._pending = self._pending, None
+        if pending is None:
+            return None
+        from ..result_check import checksum
+
+        return checksum(self._as_arrow(pending))
 
     def profile(self, query: Query) -> dict:
         """Execute once and return ``{"rows": n, "seconds": s, "phases": [{"name", "seconds"}, ...]}``.

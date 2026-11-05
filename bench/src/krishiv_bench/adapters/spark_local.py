@@ -35,10 +35,13 @@ class _SparkSQLEngine(Engine):
         return [tuple(r) for r in self.spark.sql(query.sql).collect()]
 
     def timed_run(self, query: Query) -> tuple[int, float]:
-        """Count rows engine-side: the answer can be large, so it is never collected into Python objects."""
-        t0 = time.perf_counter()
-        n = self.spark.sql(query.sql).count()
-        return n, time.perf_counter() - t0
+        """The full result as Arrow record batches (``toArrow``), never Python row objects."""
+        self._pending = None  # a result nobody took (callers that do not checksum) is not kept alongside the next
+        t0 = time.perf_counter()  # parsing and analysis are part of the query, as for every other engine
+        table = self.spark.sql(query.sql).toArrow()
+        secs = time.perf_counter() - t0
+        self._pending = table
+        return table.num_rows, secs
 
     def teardown(self) -> None:
         if self.spark is not None:
