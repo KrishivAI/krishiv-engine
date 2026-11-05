@@ -150,10 +150,16 @@ impl Reorder<'_> {
 
     /// `p` with its inputs and subquery plans reordered.
     fn children(&mut self, p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
-        // CTE definitions (named by their exact columns) and the input of a
-        // renaming alias are read by position; every other input by id.
+        // CTE definitions (named by their exact columns), the input of a
+        // renaming alias and the inputs of a set operation (a union, an
+        // intersect or except, a recursive CTE's terms: their output is the
+        // first input's columns, and the others are matched to them in
+        // order) are read by position; every other input by id.
         let (by_position, ctes) = match &p.node {
             PlanNode::SubqueryAlias { columns, .. } => (!columns.is_empty(), 0),
+            PlanNode::Union { .. } | PlanNode::SetOp { .. } | PlanNode::UnionLoop { .. } => {
+                (true, 0)
+            }
             PlanNode::WithCte { ctes, .. } => (false, ctes.len()),
             _ => (false, 0),
         };
