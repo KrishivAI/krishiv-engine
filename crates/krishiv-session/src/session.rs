@@ -422,7 +422,10 @@ impl Session {
             ),
             None => runtime.memory(),
         };
-        let cache = Arc::new(RelationCache::new(&memory));
+        let cache = Arc::new(RelationCache::with_results(
+            &memory,
+            Arc::clone(&runtime.results),
+        ));
         let io = IoScheduler::with_runtime(
             IoConfig::from_config(&runtime.config),
             runtime.executor.io_handle().clone(),
@@ -456,7 +459,10 @@ impl Session {
             deadline: None,
             state: Arc::new(SessionState {
                 conf: Arc::new(ConfStore::new(config)),
-                catalog: Arc::new(SessionCatalog::default()),
+                catalog: Arc::new(SessionCatalog::over(
+                    Arc::clone(&runtime.catalog_store),
+                    Arc::clone(&runtime.warehouse),
+                )),
                 cache,
                 variables: Arc::new(SessionVariables::default()),
                 profile: parts.profile,
@@ -1333,7 +1339,7 @@ impl Session {
         // Spark's `ViewSyncSchemaToMetaStore`: once the query analyzed, evolved views store their new schema. A
         // concurrent change of the view wins (its entry is no longer the one the read found).
         for (found, changed) in synced {
-            crate::store::CatalogStore::replace_table(&self.state.catalog.store, &found, changed);
+            crate::store::CatalogStore::replace_table(&*self.state.catalog.store, &found, changed);
         }
         for view in views {
             let securable = krishiv_plan::analyzer::Securable::View(view);
@@ -2097,7 +2103,10 @@ impl Session {
             self.refresh_files();
             // A write by path into a table's directory changes what the table reads.
             if let Some(local) = at.display.strip_prefix("file:") {
-                crate::result_cache::global().invalidate_path(std::path::Path::new(local));
+                self.state
+                    .runtime
+                    .results
+                    .invalidate_path(std::path::Path::new(local));
             }
             let mut dirs = std::collections::BTreeSet::new();
             for f in &committed {

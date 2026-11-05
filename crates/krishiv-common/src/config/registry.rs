@@ -889,11 +889,12 @@ pub static RESULT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
     key: "krishiv.resultCache.maxBytes",
     value_type: ValueType::Size,
     default: Some(ConfigValue::Size(64 * MIB)),
-    doc: "Most bytes the result cache holds, for the whole process, as Arrow batches outside the \
-          query memory pool; the setting of the session that stores a result applies. A result \
+    doc: "Most bytes the result cache of an engine runtime holds (the process-wide store of \
+          sessions built alone, or a supplied runtime's own), as Arrow batches outside the query \
+          memory pool; fixed when the runtime is built. A result \
           larger than the cap is not stored; when a new result would pass the cap the oldest \
           entries go first, and entries past their ttl go whenever a result is stored. Needs `krishiv.resultCache.enabled`.",
-    scope: Scope::Session,
+    scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,
 };

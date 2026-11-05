@@ -21,7 +21,7 @@ impl DataFrame {
         async {
             // Before the query is analyzed, so an invalidation that runs while it executes keeps
             // its rows out of the result cache.
-            let generation = crate::result_cache::global().generation();
+            let generation = self.session.state.runtime.results.generation();
             let a = self.action_analysis().await?;
             // The reads were authorized by the analysis: a hit serves only what this principal's
             // own run of the query would return.
@@ -43,7 +43,7 @@ impl DataFrame {
                 });
             if let Some((settings, key)) = &result
                 && let Some((batches, _age)) =
-                    crate::result_cache::global().lookup(key, settings.ttl)
+                    self.session.state.runtime.results.lookup(key, settings.ttl)
             {
                 // A hit is a request answered, so it has its row in `system.queries` too; it is not a
                 // physical execution, so the metrics registry does not count it.
@@ -61,9 +61,13 @@ impl DataFrame {
             let stream = self.session.run(&physical, &a.env).await?;
             let stream = fill.fill(stream, &self.session.state.cache);
             let stream = match result {
-                Some((settings, key)) => {
-                    crate::result_cache::fill(stream, key, generation, settings)
-                }
+                Some((settings, key)) => crate::result_cache::fill(
+                    Arc::clone(&self.session.state.runtime.results),
+                    stream,
+                    key,
+                    generation,
+                    settings,
+                ),
                 None => stream,
             };
             Ok(crate::carrier::client_stream(stream))

@@ -142,6 +142,8 @@ pub(crate) struct RelationStats {
 /// The session relation cache: snapshots under the `relation_cache` pool.
 #[derive(Debug)]
 pub(crate) struct RelationCache {
+    /// The runtime's result cache: invalidated with this one.
+    results: Arc<crate::result_cache::ResultCache>,
     pool: Arc<dyn MemoryPool>,
     consumer: ConsumerId,
     hidden: AtomicU64,
@@ -156,11 +158,23 @@ pub(crate) struct RelationCache {
 }
 
 impl RelationCache {
-    /// An empty cache under `memory`.
+    /// An empty cache under `memory` (tests: sessions use
+    /// [`Self::with_results`]).
+    #[cfg(test)]
     pub(crate) fn new(memory: &Arc<dyn MemoryPool>) -> Self {
+        Self::with_results(memory, Arc::clone(crate::result_cache::global()))
+    }
+
+    /// As [`Self::new`], invalidating `results` (the runtime's result
+    /// cache) with this cache.
+    pub(crate) fn with_results(
+        memory: &Arc<dyn MemoryPool>,
+        results: Arc<crate::result_cache::ResultCache>,
+    ) -> Self {
         let pool = memory.child("relation_cache", None);
         let consumer = pool.register("relation_cache", None);
         Self {
+            results,
             pool,
             consumer,
             hidden: AtomicU64::new(0),
@@ -315,7 +329,7 @@ impl RelationCache {
     /// Drops every entry.
     pub(crate) fn clear(&self) {
         // The result cache shares the invalidation: what is cleared here is cleared there.
-        crate::result_cache::global().clear();
+        self.results.clear();
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
         for entry in state.entries.values() {
@@ -330,7 +344,7 @@ impl RelationCache {
     /// read may have changed. Matches the entry's tables and its pins, so
     /// versioned and temporary tables both clear.
     pub(crate) fn invalidate_table(&self, name: &str) {
-        crate::result_cache::global().invalidate_table(name);
+        self.results.invalidate_table(name);
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
         let lowered = name.to_lowercase();

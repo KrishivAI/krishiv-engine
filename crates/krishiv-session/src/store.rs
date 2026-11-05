@@ -316,6 +316,9 @@ pub(crate) trait CatalogStore: Send + Sync {
 pub(crate) struct InMemoryCatalogStore {
     state: Mutex<StoreState>,
     epoch: AtomicU64,
+    /// The result cache whose entries a table change invalidates: the
+    /// runtime's, shared with every session reading this store.
+    results: Arc<crate::result_cache::ResultCache>,
 }
 
 #[derive(Debug)]
@@ -327,7 +330,15 @@ struct StoreState {
 
 impl Default for InMemoryCatalogStore {
     fn default() -> Self {
+        Self::with_results(Arc::clone(crate::result_cache::global()))
+    }
+}
+
+impl InMemoryCatalogStore {
+    /// An empty store whose changes invalidate `results`.
+    pub(crate) fn with_results(results: Arc<crate::result_cache::ResultCache>) -> Self {
         Self {
+            results,
             state: Mutex::new(StoreState {
                 namespaces: BTreeMap::from([(
                     DEFAULT_NAMESPACE.to_owned(),
@@ -339,9 +350,7 @@ impl Default for InMemoryCatalogStore {
             epoch: AtomicU64::new(0),
         }
     }
-}
 
-impl InMemoryCatalogStore {
     /// Marks a change to a table's data (an `INSERT`, a `TRUNCATE`): cached
     /// analyses are stale though the metadata is the same.
     pub(crate) fn bump(&self) {
@@ -464,7 +473,7 @@ impl CatalogStore for InMemoryCatalogStore {
         self.epoch.fetch_add(1, Ordering::AcqRel);
         // What the result cache holds for this table is stale (it also covers the results
         // computed between a table's data being written and its partitions being registered).
-        crate::result_cache::global().invalidate_table(&changed);
+        self.results.invalidate_table(&changed);
         Ok(true)
     }
 
@@ -478,7 +487,7 @@ impl CatalogStore for InMemoryCatalogStore {
         let changed = format!("{}.{}", key.0, key.1);
         state.tables.insert(key, Arc::new(table));
         self.epoch.fetch_add(1, Ordering::AcqRel);
-        crate::result_cache::global().invalidate_table(&changed);
+        self.results.invalidate_table(&changed);
         true
     }
 
@@ -489,7 +498,8 @@ impl CatalogStore for InMemoryCatalogStore {
             .remove(&(namespace.to_owned(), name.to_owned()));
         if removed.is_some() {
             self.epoch.fetch_add(1, Ordering::AcqRel);
-            crate::result_cache::global().invalidate_table(&format!("{namespace}.{name}"));
+            self.results
+                .invalidate_table(&format!("{namespace}.{name}"));
         }
         removed
     }

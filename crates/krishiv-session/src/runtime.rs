@@ -29,6 +29,8 @@ use krishiv_memory::{MemoryConfig, MemoryPool, SpillManager, TreePool};
 use crate::QueryId;
 use crate::cancel::{self, CancelReason, Deadlines};
 use crate::history::QueryHistory;
+use crate::result_cache::ResultCache;
+use crate::store::{InMemoryCatalogStore, Warehouse};
 
 /// The process-wide part of the engine, shared by the sessions built on it
 /// (always behind an `Arc`). It ends when the last session, the last result
@@ -67,6 +69,14 @@ pub struct EngineRuntime {
     session_seq: AtomicU64,
     /// The `system.queries` rows of every session.
     pub(crate) history: Arc<QueryHistory>,
+    /// The result cache: the process-wide one for a private runtime (sessions
+    /// built alone share it, as before), a store of its own for a supplied
+    /// runtime (ADR 0037 §6 holds per runtime).
+    pub(crate) results: Arc<ResultCache>,
+    /// The permanent catalog and the managed tables' warehouse, shared by
+    /// every session of the runtime (Spark's `SharedState`).
+    pub(crate) catalog_store: Arc<InMemoryCatalogStore>,
+    pub(crate) warehouse: Arc<Warehouse>,
     /// The statement-timeout timer, started by the first query with a limit.
     deadlines: OnceLock<Deadlines>,
     /// The queries running now, and the closed sessions.
@@ -207,6 +217,11 @@ impl EngineRuntime {
             .and_then(krishiv_common::config::ConfigValue::as_int)
             .and_then(|n| usize::try_from(n).ok())
             .unwrap_or(crate::history::DEFAULT_CAPACITY);
+        let results = if private {
+            Arc::clone(crate::result_cache::global())
+        } else {
+            Arc::new(ResultCache::default())
+        };
         let runtime = Self {
             pairs,
             config: Arc::new(config),
@@ -219,6 +234,9 @@ impl EngineRuntime {
             query_index: AtomicU64::new(0),
             session_seq: AtomicU64::new(0),
             history: Arc::new(QueryHistory::new(capacity)),
+            catalog_store: Arc::new(InMemoryCatalogStore::with_results(Arc::clone(&results))),
+            warehouse: Arc::new(Warehouse::default()),
+            results,
             deadlines: OnceLock::new(),
             live: Mutex::new(LiveSet::default()),
             io: Arc::new(Mutex::new(Vec::new())),
@@ -269,6 +287,13 @@ impl EngineRuntime {
     /// The number of a new session of this runtime.
     pub(crate) fn next_session(&self) -> u64 {
         self.session_seq.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// A worker-local index outside the registry (tests that run a task
+    /// directly, with no `system.queries` row).
+    #[cfg(test)]
+    pub(crate) fn next_index(&self) -> u64 {
+        self.query_index.fetch_add(1, Ordering::Relaxed)
     }
 
     /// Reserves the worker-local index of a new query of session `session`
