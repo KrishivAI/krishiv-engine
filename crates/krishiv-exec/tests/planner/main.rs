@@ -31,6 +31,7 @@ mod runtime_filters;
 mod scan_row_drop;
 mod semantics;
 mod shared;
+mod smj_order;
 mod splits;
 mod string_encoding;
 mod sum_rewrite;

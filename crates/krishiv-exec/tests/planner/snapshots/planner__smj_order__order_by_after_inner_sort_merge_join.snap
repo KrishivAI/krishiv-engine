@@ -1,0 +1,14 @@
+---
+source: crates/krishiv-exec/tests/planner/smj_order.rs
+expression: plan
+---
+Sort [o_orderkey#0 ASC NULLS FIRST]
++- Exchange rangepartitioning(o_orderkey#0 ASC NULLS FIRST)
+   +- Project [o_orderkey#0, l_linenumber#12]
+      +- SortMergeJoin Inner, [l_orderkey#9] = [o_orderkey#0]
+         :- Sort [l_orderkey#9]
+         :  +- Exchange hashpartitioning(l_orderkey#9)
+         :     +- Scan spark_catalog.default.lineitem [l_orderkey#9, l_linenumber#12]
+         +- Sort [o_orderkey#0]
+            +- Exchange hashpartitioning(o_orderkey#0)
+               +- Scan spark_catalog.default.orders [o_orderkey#0]
