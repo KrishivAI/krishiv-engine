@@ -1734,7 +1734,6 @@ impl Accumulator {
                 self.kind,
                 Kind::SumDec { .. }
                     | Kind::AvgDec { .. }
-                    | Kind::Moments(_)
                     | Kind::Exact(_)
                     | Kind::Approx(_)
                     | Kind::Hll(_)
@@ -2245,7 +2244,7 @@ impl Accumulator {
                             .iter()
                             .all(|n| n.as_ref().is_none_or(|n| n.is_valid(i)))
                 };
-                m.update(groups, &cols, all_valid)?;
+                m.update(groups, &cols, all_valid, run)?;
             }
             (Kind::Moments(m), true) => {
                 let cols = args

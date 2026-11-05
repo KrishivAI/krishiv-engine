@@ -2,7 +2,8 @@
 """Generate the moment-aggregate window golden (queue row "Comet checks", float sweep group (c)).
 
 Every value comes from a REAL Spark 4.2 run. Each case is one moment aggregate over a whole
-partition (`fn(...) OVER (PARTITION BY g)`) on a small table of awkward doubles (NULLs, NaN,
+partition, a peer-running frame, a ROWS running frame, a sliding frame or a frame ending after the
+current row (`fn(...) OVER (PARTITION BY g ...)`) on a small table of awkward doubles (NULLs, NaN,
 infinities, -0.0, large values, one-row and all-NULL groups). Rows are `id` plus the value as
 Python's `repr` (`nan`, `inf`, `None`); the file is `{"cases": [{"sql": ..., "rows": [...]}]}`.
 
@@ -47,8 +48,18 @@ TWO = [
 ]
 
 
-def sql(fn: str, args: str) -> str:
-    return f"SELECT id, {fn}({args}) OVER (PARTITION BY g) FROM m ORDER BY id"
+FRAMES = [
+    "",
+    "ORDER BY id",
+    "ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
+    "ORDER BY id ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING",
+    "ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING",
+]
+
+
+def sql(fn: str, args: str, frame: str) -> str:
+    over = f"PARTITION BY g {frame}".strip()
+    return f"SELECT id, {fn}({args}) OVER ({over}) FROM m ORDER BY id"
 
 
 def main() -> None:
@@ -60,7 +71,8 @@ def main() -> None:
 
     spark = SparkSession.builder.remote(a.remote).create()
     spark.sql(VIEW).collect()
-    queries = [sql(f, "x") for f in ONE] + [sql(f, "y, x") for f in TWO]
+    queries = [sql(f, "x", fr) for fr in FRAMES for f in ONE]
+    queries += [sql(f, "y, x", fr) for fr in FRAMES for f in TWO]
     cases = []
     for q in queries:
         try:

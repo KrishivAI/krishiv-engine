@@ -15,7 +15,6 @@ use super::aggregate::{aggregate_expr, lower};
 use super::build::{OrderKey, Planned, Planner, internal, list, orders, unsupported};
 use super::properties::Distribution;
 use crate::aggregate::AggregateFunction;
-use crate::aggregate::is_moment;
 use crate::error::Result;
 use crate::operator::Source;
 use crate::operators::SortKey;
@@ -301,18 +300,6 @@ impl Planner<'_> {
         }
         let lowered =
             lower(c.f).ok_or_else(|| unsupported(&format!("the window aggregate {name}")))?;
-        // The moment aggregates run over a whole partition like the other
-        // frame aggregates (checked against Spark 4.2, `moment_window_goldens`);
-        // their state has no running fold and cannot drop a row, so a running
-        // or sliding frame is refused, never computed as another function. The
-        // percentile family and `approx_count_distinct` have no window form
-        // either: the frame evaluator only runs the aggregates it knows.
-        if is_moment(&lowered.function)
-            && !(c.frame.lower == Bound::UnboundedPreceding
-                && c.frame.upper == Bound::UnboundedFollowing)
-        {
-            return Err(unsupported(&format!("the window aggregate {name}")));
-        }
         if matches!(
             lowered.function,
             AggregateFunction::PercentileApprox { .. }
