@@ -120,6 +120,9 @@ pub(super) struct Rel {
     /// hidden output). Filters, sorts and limits pass them on; a
     /// projection drops them.
     pub(super) hidden: Arc<[Attr]>,
+    /// The aggregate and generator this relation is the generation of: a
+    /// `HAVING` over it filters the aggregate, below its windows.
+    pub(super) generated_from: Option<Arc<super::generate::GeneratedFrom>>,
 }
 
 /// An enclosing query's operator, as a subquery sees it.
@@ -576,6 +579,7 @@ impl Resolver<'_> {
             agg: None,
             widen: None,
             hidden: Arc::from(Vec::new()),
+            generated_from: None,
         }
     }
 
