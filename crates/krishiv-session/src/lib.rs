@@ -56,6 +56,8 @@ pub mod functions;
 mod identifier_clause;
 mod introspection;
 mod locals;
+#[cfg(feature = "telemetry-otlp")]
+pub mod otlp;
 mod partitions;
 mod profile;
 mod recursion;
@@ -67,6 +69,7 @@ mod sql_path;
 mod store;
 mod system;
 mod table_commands;
+mod telemetry;
 mod udfs;
 mod variable_substitution;
 mod variables;

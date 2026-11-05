@@ -7,7 +7,7 @@ on private duplicates of stdin/stdout (fd 1 is redirected to stderr so engine no
 both ends are this module, so pickle is a trusted format here.
 
 Requests: ``{"op": "setup", "dataset": Dataset}``, ``{"op": "run"|"time"|"profile", "query": Query}``,
-``{"op": "quit"}``.
+``{"op": "checksum"}`` (of the last ``time`` result), ``{"op": "quit"}``.
 Replies: ``{"ok": ...}`` or ``{"error": "Type: message"}``.
 """
 
@@ -72,6 +72,8 @@ def main(argv: list[str]) -> None:
                 reply = eng.run(req["query"])
             elif op == "time":
                 reply = eng.timed_run(req["query"])
+            elif op == "checksum":
+                reply = eng.result_checksum()
             elif op == "profile":
                 reply = eng.profile(req["query"])
             else:

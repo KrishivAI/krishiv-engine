@@ -58,6 +58,17 @@ class DataFusionEngine(Engine):
         return rows
 
     def timed_run(self, query: Query) -> tuple[int, float]:
+        self._pending = None  # a result nobody took (callers that do not checksum) is not kept alongside the next
         t0 = time.perf_counter()
-        n = sum(b.num_rows for b in self._ctx.sql(query.sql).collect())
-        return n, time.perf_counter() - t0
+        df = self._ctx.sql(query.sql)
+        batches = df.collect()
+        secs = time.perf_counter() - t0
+        n = sum(b.num_rows for b in batches)
+        self._pending = (batches, df.schema())  # the schema keeps an empty answer a table with its columns
+        return n, secs
+
+    def _as_arrow(self, pending):
+        import pyarrow as pa
+
+        batches, schema = pending
+        return pa.Table.from_batches(batches, schema=schema)

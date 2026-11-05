@@ -1971,7 +1971,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1985,7 +1985,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-alloc"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "krishiv-common",
  "libmimalloc-sys",
@@ -1993,7 +1993,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-bench-runner"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2012,7 +2012,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-cli"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "clap",
  "futures",
@@ -2033,7 +2033,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-common"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "codspeed-criterion-compat",
  "serde_json",
@@ -2043,7 +2043,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connect"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2059,27 +2059,27 @@ dependencies = [
 
 [[package]]
 name = "krishiv-connector-sdk"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 
 [[package]]
 name = "krishiv-connectors-cdc"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 
 [[package]]
 name = "krishiv-connectors-delta"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 
 [[package]]
 name = "krishiv-connectors-iceberg"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 
 [[package]]
 name = "krishiv-connectors-kafka"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 
 [[package]]
 name = "krishiv-exec"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2118,11 +2118,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-flight-sql"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 
 [[package]]
 name = "krishiv-functions"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2144,7 +2144,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-io"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "apache-avro",
  "arrow-array",
@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-kernels"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2205,7 +2205,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-mcp"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "futures",
  "krishiv-common",
@@ -2220,7 +2220,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-memory"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2241,7 +2241,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-optimizer"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2260,7 +2260,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-plan"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2280,7 +2280,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-plan-codec"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-ipc",
  "arrow-schema",
@@ -2300,7 +2300,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-python"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2317,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-scheduler"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2339,7 +2339,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-server"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "axum",
  "krishiv-exec",
@@ -2349,7 +2349,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-session"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2357,6 +2357,7 @@ dependencies = [
  "arrow-select",
  "bytes",
  "futures",
+ "http",
  "insta",
  "krishiv-common",
  "krishiv-exec",
@@ -2371,17 +2372,26 @@ dependencies = [
  "krishiv-types",
  "krishiv-udf-sdk",
  "object_store",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-otlp",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
  "parquet",
+ "prost",
+ "reqwest",
  "serde_json",
  "tempfile",
  "tokio",
  "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
  "twox-hash",
 ]
 
 [[package]]
 name = "krishiv-shuffle"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-ipc",
@@ -2396,11 +2406,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-sim"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 
 [[package]]
 name = "krishiv-sql"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "codspeed-criterion-compat",
  "insta",
@@ -2414,11 +2424,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-state"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 
 [[package]]
 name = "krishiv-store"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2431,11 +2441,11 @@ dependencies = [
 
 [[package]]
 name = "krishiv-stream"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 
 [[package]]
 name = "krishiv-testkit"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -2469,7 +2479,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-types"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2482,7 +2492,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-udf-sdk"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
  "krishiv-types",
@@ -2490,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "krishiv-ui-assets"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "rust-embed",
 ]
@@ -2829,6 +2839,76 @@ name = "openssl-probe"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
+
+[[package]]
+name = "opentelemetry"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c1f1a6ac9c875a4941e4c7c085b61e8f4daa326de03b4701768c3491a6ad9ee"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror",
+]
+
+[[package]]
+name = "opentelemetry-http"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "302249bd8ee804789faaa7b5b2cbf79bc61cb864714079c644e3828af5b7e811"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "http",
+ "opentelemetry",
+ "reqwest",
+]
+
+[[package]]
+name = "opentelemetry-otlp"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0756af24841e367128ef31c831999937b8b5c5197d47914590d8f4e2e88c2e1a"
+dependencies = [
+ "http",
+ "httpdate",
+ "opentelemetry",
+ "opentelemetry-http",
+ "opentelemetry-proto",
+ "opentelemetry_sdk",
+ "prost",
+ "reqwest",
+ "thiserror",
+]
+
+[[package]]
+name = "opentelemetry-proto"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d576f5dddc3299341bcd85a04be17b2564844c0c9563214f02d85f2524d1afae"
+dependencies = [
+ "opentelemetry",
+ "opentelemetry_sdk",
+ "prost",
+]
+
+[[package]]
+name = "opentelemetry_sdk"
+version = "0.33.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "372a912db2974d1990207006fd0e3aa0ef3fd4ad3be43c65cfaadf2206866061"
+dependencies = [
+ "futures-channel",
+ "futures-executor",
+ "futures-util",
+ "opentelemetry",
+ "percent-encoding",
+ "portable-atomic",
+ "rand 0.9.5",
+ "thiserror",
+]
 
 [[package]]
 name = "ordered-float"
@@ -3269,8 +3349,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e058c7de0b26af77780c769414d6257830bb240f3c38477dbc2c16e5f54d6d4c"
 dependencies = [
  "libc",
- "rand_chacha",
+ "rand_chacha 0.3.1",
  "rand_core 0.6.4",
+]
+
+[[package]]
+name = "rand"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
+dependencies = [
+ "rand_chacha 0.9.0",
+ "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -3295,12 +3385,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_chacha"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.9.5",
+]
+
+[[package]]
 name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom 0.2.17",
+]
+
+[[package]]
+name = "rand_core"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
+dependencies = [
+ "getrandom 0.3.4",
 ]
 
 [[package]]
@@ -3399,6 +3508,7 @@ checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
 dependencies = [
  "base64 0.23.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
@@ -4362,6 +4472,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-opentelemetry"
+version = "0.34.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a904802a1b902f43638b677ff2a650847e3b4404101b6c586d648e8c1e3e8fe"
+dependencies = [
+ "js-sys",
+ "opentelemetry",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+ "web-time",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4793,7 +4917,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.1.0-alpha"
+version = "0.2.0-alpha"
 dependencies = [
  "krishiv-common",
  "krishiv-exec",
