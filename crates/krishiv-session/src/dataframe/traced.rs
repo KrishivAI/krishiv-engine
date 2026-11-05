@@ -28,7 +28,10 @@ impl DataFrame {
             // Before the query is analyzed, so an invalidation that runs while it executes keeps
             // its rows out of the result cache.
             let generation = self.session.state.runtime.results.generation();
-            let a = self.action_analysis().await?;
+            let a = self
+                .action_analysis()
+                .instrument(tracing::info_span!("krishiv.analyze"))
+                .await?;
             // The reads were authorized by the analysis: a hit serves only what this principal's
             // own run of the query would return.
             // A frame that asked for a relation cache (`cache()`, `persist()`) runs the query: its
@@ -66,8 +69,15 @@ impl DataFrame {
                     replayed
                 });
             }
-            let (physical, fill) = self.physical_cached(&a).await?;
-            let stream = self.session.run(&physical, &a.env).await?;
+            let (physical, fill) = self
+                .physical_cached(&a)
+                .instrument(tracing::info_span!("krishiv.plan"))
+                .await?;
+            let stream = self
+                .session
+                .run(&physical, &a.env)
+                .instrument(tracing::info_span!("krishiv.execute"))
+                .await?;
             let stream = fill.fill(stream, &self.session.state.cache);
             let stream = match result {
                 Some((settings, key)) => crate::result_cache::fill(

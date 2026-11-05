@@ -38,6 +38,15 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for Ca
     ) {
         let mut fields = BTreeMap::new();
         attrs.record(&mut Fields(&mut fields));
+        // The parent span's name (explicit, or the span current when this one is made).
+        let parent = attrs
+            .parent()
+            .cloned()
+            .or_else(|| ctx.current_span().id().cloned())
+            .and_then(|pid| ctx.span(&pid).map(|p| p.name().to_owned()));
+        if let Some(parent) = parent {
+            fields.insert("parent".to_owned(), parent);
+        }
         if let Ok(mut spans) = self.0.lock() {
             if let Some(span) = ctx.span(id) {
                 span.extensions_mut().insert(Slot(spans.len()));
@@ -206,4 +215,23 @@ fn a_command_that_runs_eagerly_has_a_span_around_its_execution() {
     assert!(p["db.query.text"].contains("v_e"), "{p:?}");
     // The planning and eager work is not a query span of its own.
     assert!(spans_of("orders_e").is_empty());
+}
+
+/// P2-T116: analysis, planning and execution are child spans of the query's span, so a backend
+/// shows where a query's time went.
+#[test]
+fn analysis_planning_and_execution_are_child_spans() {
+    spans();
+    let s = session("orders_pipeline");
+    let df = block_on(s.sql("SELECT a FROM orders_pipeline WHERE a > 1")).expect("plans");
+    block_on(df.collect()).expect("runs");
+    let all = spans().lock().map(|s| s.clone()).unwrap_or_default();
+    for child in ["krishiv.analyze", "krishiv.plan", "krishiv.execute"] {
+        assert!(
+            all.iter()
+                .any(|(n, f)| n == child
+                    && f.get("parent").map(String::as_str) == Some("krishiv.query")),
+            "no {child} span under krishiv.query in {all:#?}"
+        );
+    }
 }
