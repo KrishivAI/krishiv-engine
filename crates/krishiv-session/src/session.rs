@@ -877,7 +877,7 @@ impl Session {
             .map(|f| {
                 Ok(TableColumn {
                     name: f.name().clone(),
-                    data_type: DataType::from_arrow_field(f)?.refuse_collations()?,
+                    data_type: DataType::from_arrow_field(f)?,
                     nullable: f.is_nullable(),
                 })
             })

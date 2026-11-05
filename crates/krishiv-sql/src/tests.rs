@@ -2481,11 +2481,16 @@ fn collate_types_and_nameless_aliases() {
     // `STRING COLLATE ...`, including in nested types.
     let t = parse_data_type("STRING COLLATE UTF8_LCASE", &d).unwrap();
     assert_eq!(t.to_string(), "string collate UTF8_LCASE");
+    // The collation resolves to the collated type (ADR 0043); an unknown name does not.
+    assert!(matches!(
+        t.to_data_type().unwrap(),
+        krishiv_types::DataType::CollatedString(_)
+    ));
+    let t = parse_data_type("STRUCT<a: STRING COLLATE x, b: INT>", &d).unwrap();
     assert_eq!(
         t.to_data_type().unwrap_err().error_class().name(),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "COLLATION_INVALID_NAME"
     );
-    let t = parse_data_type("STRUCT<a: STRING COLLATE x, b: INT>", &d).unwrap();
     assert_eq!(t.to_string(), "struct<`a`:string collate x,`b`:int>");
     // `CHAR` and `VARCHAR` take one too, with any quoting of the name.
     let t = parse_data_type("CHAR(10) COLLATE `a``b`", &d).unwrap();
@@ -2498,11 +2503,12 @@ fn collate_types_and_nameless_aliases() {
     // `COLLATE` on any other type is a syntax error.
     let e = parse_data_type("INT COLLATE x", &d).unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    // A cast to a collated type parses, then fails to lower as
-    // unsupported, as in Spark (which analyzes it).
+    // A cast to a collated type lowers; an unknown collation name does not.
     let q = ok("SELECT CAST(a AS STRING COLLATE UTF8_LCASE) FROM t");
+    assert!(crate::lower(&q, krishiv_plan::SourceId(0)).is_ok());
+    let q = ok("SELECT CAST(a AS STRING COLLATE no_such) FROM t");
     let e = crate::lower(&q, krishiv_plan::SourceId(0)).unwrap_err();
-    assert_eq!(e.error.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(e.error.error_class().name(), "COLLATION_INVALID_NAME");
     // `VALUES ... AS (columns)`: a column list without a table name.
     let q = ok("SELECT * FROM (VALUES (1), (2), (1) AS (my_col)) GROUP BY 1");
     let ast::SetExprKind::Select(s) = &q.body.kind else {

@@ -111,8 +111,9 @@ Paths are relative to this crate.
   with `Int.MIN` return the algorithm's value where the JVM raises; `initcap`/`mask` classify non-ASCII with the toolchain's Unicode
   data (pinned by `toolchain_unicode_is_pinned`). A string is always valid UTF-8 here, so the validators only fail on `binary` input.
   `format_string`/`printf` (`scalar/format.rs`) is Java's `Formatter` over string, boolean, integral, float/double and (for `%s` only, as in Spark) decimal arguments: no `%h %a %t`; Java's format exceptions are `KRISHIV_INVALID_FORMAT_STRING`. The `decode(expr, search, result, ...)` form is a CASE the analyzer builds (`decode_case`).
+  `collation(x)` is a literal the analyzer writes (like `typeof`); `collate(x, 'name')` is lowered to the `COLLATE` expression before the registry.
   Not implemented (`KnownUnsupported`): `parse_url`/`try_parse_url`, `sentences`, `split`
-  (array results), `collate`/`collation`/`collations`, `randstr` (no seeded random source).
+  (array results), `collations` (the table function), `randstr` (no seeded random source).
 
 ## AES (ADR 0042)
 `scalar/aes.rs` + `registry/crypto.rs`: `aes_encrypt`, `aes_decrypt`, `try_aes_decrypt` over the RustCrypto `aes`, `cbc` and

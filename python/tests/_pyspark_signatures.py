@@ -347,6 +347,7 @@ PYSPARK_SIGNATURES = {
     "try_url_decode": "str",
     "try_validate_utf8": "str",
     "typeof": "col",
+    "collation": "col",
     "ucase": "str",
     "unbase64": "col",
     "unhex": "col",

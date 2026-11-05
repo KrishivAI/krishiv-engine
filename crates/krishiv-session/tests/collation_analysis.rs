@@ -120,3 +120,50 @@ fn non_comparing_positions_accept_a_collated_value() {
         "1"
     );
 }
+
+#[test]
+fn collation_names_the_collation_of_its_argument() {
+    assert_eq!(
+        one("SELECT collation('a' COLLATE utf8_lcase)"),
+        "SYSTEM.BUILTIN.UTF8_LCASE"
+    );
+    assert_eq!(one("SELECT collation('a')"), "SYSTEM.BUILTIN.UTF8_BINARY");
+    assert_eq!(
+        one("SELECT collation('a' COLLATE en_ci)"),
+        "SYSTEM.BUILTIN.en_CI"
+    );
+    assert_eq!(
+        class("SELECT collation(1)"),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+}
+
+/// A table with collated columns: created, written, read back with the type kept.
+#[test]
+fn collated_columns_in_tables_keep_their_type() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create table t1(a string collate utf8_binary, b string collate utf8_lcase) using parquet",
+        "insert into t1 values('aaa', 'Bbb')",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    let first = |sql: &str| -> String {
+        let b = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+        let c = &b[0].columns()[0];
+        c.as_string_opt::<i32>().map_or_else(
+            || c.as_string_view().value(0).to_owned(),
+            |v| v.value(0).to_owned(),
+        )
+    };
+    assert_eq!(first("select typeof(a) from t1"), "string");
+    assert_eq!(
+        first("select typeof(b) from t1"),
+        "string collate UTF8_LCASE"
+    );
+    assert_eq!(first("select b from t1"), "Bbb");
+    assert_eq!(
+        first("select collation(b) from t1"),
+        "SYSTEM.BUILTIN.UTF8_LCASE"
+    );
+}

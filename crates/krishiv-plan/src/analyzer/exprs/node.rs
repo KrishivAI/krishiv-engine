@@ -1298,6 +1298,7 @@ impl Resolver<'_> {
                 // built-in: a qualified session UDF named `typeof` runs
                 // the UDF.
                 let is_typeof = is_builtin_entry(&entry) && entry.id.name() == "typeof";
+                let is_collation = is_builtin_entry(&entry) && entry.id.name() == "collation";
                 let session_value_early = if is_builtin_entry(&entry) {
                     match entry.id.name() {
                         "current_schema" | "current_database" => {
@@ -1351,6 +1352,35 @@ impl Resolver<'_> {
                     (
                         rebuilt(ExprNode::Literal(Literal::String(value))),
                         Some(expr),
+                    )
+                } else if is_collation {
+                    // `collation(x)` is the qualified name of the collation of `x`
+                    // (Spark's `RuntimeReplaceable` `Collation`); a plain string is `UTF8_BINARY`.
+                    let child = call_kids.first();
+                    let name = match child.and_then(|k| k.ty.data_type.as_ref()) {
+                        Some(DataType::String) => {
+                            krishiv_types::Collation::UTF8_BINARY.qualified_name()
+                        }
+                        Some(DataType::CollatedString(c)) => c.qualified_name(),
+                        other => {
+                            let shown = child
+                                .map(|k| pretty(&k.shown(), self.ctx.conf.session_zone))
+                                .unwrap_or_default();
+                            return Err(AnalysisError::new(
+                                krishiv_common::error::DatatypeMismatchUnexpectedInputType {
+                                    sql_expr: format!("\"collation({shown})\""),
+                                    param_index: "first".to_owned(),
+                                    required_type: "\"STRING\"".to_owned(),
+                                    input_sql: format!("\"{shown}\""),
+                                    input_type: coerce::quoted_type(other),
+                                },
+                                e.origin,
+                            ));
+                        }
+                    };
+                    (
+                        rebuilt(ExprNode::Literal(Literal::String(name))),
+                        shown.or(Some(expr)),
                     )
                 } else if is_typeof {
                     let name = call_kids

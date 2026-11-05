@@ -2949,7 +2949,8 @@ fn can_store(from: &DataType, to: &DataType) -> bool {
         )
     };
     // Anything atomic may be stored as a string.
-    let to_string = matches!(to, T::String)
+    let string = |t: &T| matches!(t, T::String | T::CollatedString(_));
+    let to_string = string(to)
         && (numeric(from)
             || matches!(
                 from,
@@ -2957,6 +2958,8 @@ fn can_store(from: &DataType, to: &DataType) -> bool {
             ));
     match (from, to) {
         (T::Null, _) => true,
+        // Any collation stores into any other (Spark's `StringType` matches every collation).
+        (a, b) if string(a) && string(b) => true,
         (a, b) if (numeric(a) && numeric(b)) || to_string => true,
         // Dates and timestamps among themselves.
         (T::Date, T::Timestamp | T::TimestampNtz)
