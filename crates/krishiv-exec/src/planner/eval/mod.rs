@@ -458,7 +458,8 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             }
             // Evaluated once, the operator then sees the two operands as the
             // columns 0 and 1 of a batch of their values.
-            let split = if guards_right_operand(f, &args, input.env.ansi) {
+            let right_first = divides_right_first(f, &args, input.env.ansi);
+            let split = if right_first || guards_right_operand(f, &args, input.env.ansi) {
                 let (right, left) = (args.pop(), args.pop());
                 left.zip(right)
             } else {
@@ -508,6 +509,9 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 _ => Err(unsupported_expr(e)),
             };
             match split {
+                Some((l, r)) if right_first => {
+                    built.map(|op| logic::right_then_left(l, r, op, input.env.ansi))
+                }
                 Some((l, r)) => built.map(|op| logic::left_then_right(l, r, op)),
                 None => built,
             }
@@ -549,6 +553,26 @@ fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: 
                 if left.nullable()
                     && krishiv_plan::is_deterministic(left_ir)
                     && krishiv_plan::may_raise(right_ir, ansi)
+        )
+}
+
+/// Spark's `DivModLike.eval` (`/`, `%`, `div`, `pmod`) evaluates the divisor first and the left operand only where
+/// the divisor is set (and, outside ANSI mode, not zero): an error in the left operand on the other rows never
+/// surfaces (see [`logic::right_then_left`]). Only worth the split when the left operand may raise.
+fn divides_right_first(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: bool) -> bool {
+    let division = match &f.id {
+        FunctionId::Builtin(b) => matches!(
+            b,
+            Builtin::Divide | Builtin::Remainder | Builtin::IntegralDivide
+        ),
+        FunctionId::Registry { name, .. } => name == "pmod",
+        _ => false,
+    };
+    division
+        && matches!(
+            (args, f.args.as_slice()),
+            ([_, _], [left_ir, _])
+                if krishiv_plan::is_deterministic(left_ir) && krishiv_plan::may_raise(left_ir, ansi)
         )
 }
 

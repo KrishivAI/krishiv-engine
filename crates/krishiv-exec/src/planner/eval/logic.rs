@@ -190,6 +190,122 @@ impl PhysExpr for LeftThenRight {
     }
 }
 
+/// A division-like operator (`/`, `%`, `div`, `pmod`) whose left operand is evaluated only on the rows Spark's
+/// `DivModLike.eval` reaches it: the divisor is evaluated first, over every row (so a failing divisor raises
+/// whatever the left value is), and the left value only where the divisor is set and, outside ANSI mode, not zero.
+/// Where the divisor is NULL, or zero without ANSI, the result is NULL and an error in the left operand never
+/// surfaces. `op` (the operator compiled over two placeholder columns, 0 and 1) combines the two columns.
+#[derive(Debug)]
+struct RightThenLeft {
+    left: Arc<dyn PhysExpr>,
+    right: Arc<dyn PhysExpr>,
+    op: Arc<dyn PhysExpr>,
+    ansi: bool,
+    schema: SchemaRef,
+}
+
+/// `op` over the values of `left` and of `right`, the former only where Spark's `DivModLike.eval` evaluates it.
+pub(super) fn right_then_left(
+    left: Arc<dyn PhysExpr>,
+    right: Arc<dyn PhysExpr>,
+    op: Arc<dyn PhysExpr>,
+    ansi: bool,
+) -> Arc<dyn PhysExpr> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("l", left.data_type().clone(), true),
+        Field::new("r", right.data_type().clone(), true),
+    ]));
+    Arc::new(RightThenLeft {
+        left,
+        right,
+        op,
+        ansi,
+        schema,
+    })
+}
+
+/// Which values of a numeric column are zero (`-0.0` too); `None` for a type with no zero to divide by here.
+fn zero_values(array: &ArrayRef) -> Option<BooleanBuffer> {
+    macro_rules! integral {
+        ($t:ty) => {
+            array
+                .as_primitive_opt::<$t>()
+                .map(|a| a.values().iter().map(|v| *v == 0).collect())
+        };
+    }
+    macro_rules! float {
+        ($t:ty) => {
+            array.as_primitive_opt::<$t>().map(|a| {
+                a.values()
+                    .iter()
+                    .map(|v| v.classify() == std::num::FpCategory::Zero)
+                    .collect()
+            })
+        };
+    }
+    match array.data_type() {
+        ArrowType::Int8 => integral!(Int8Type),
+        ArrowType::Int16 => integral!(Int16Type),
+        ArrowType::Int32 => integral!(Int32Type),
+        ArrowType::Int64 => integral!(Int64Type),
+        ArrowType::Decimal64(..) => integral!(Decimal64Type),
+        ArrowType::Decimal128(..) => integral!(Decimal128Type),
+        ArrowType::Float32 => float!(Float32Type),
+        ArrowType::Float64 => float!(Float64Type),
+        _ => None,
+    }
+}
+
+/// The rows where the divisor lets Spark go on to the left operand: it is not NULL and, outside ANSI mode, not
+/// zero. `None` when that is every row.
+fn left_is_reached(divisor: &Value, rows: usize, ansi: bool) -> Option<BooleanBuffer> {
+    let array = divisor.array();
+    let mut reached = array.logical_nulls().map_or_else(
+        || BooleanBuffer::new_set(array.len()),
+        |n| n.inner().clone(),
+    );
+    if !ansi && let Some(zero) = zero_values(array) {
+        reached = &reached & &!&zero;
+    }
+    if divisor.is_scalar() {
+        // One value stands for every row.
+        return (reached.count_set_bits() == 0).then(|| BooleanBuffer::new_unset(rows));
+    }
+    (reached.count_set_bits() < rows).then_some(reached)
+}
+
+impl PhysExpr for RightThenLeft {
+    fn data_type(&self) -> &ArrowType {
+        self.op.data_type()
+    }
+
+    fn nullable(&self) -> bool {
+        self.op.nullable()
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let rows = batch.num_rows();
+        let rv = self.right.eval(batch, partition)?;
+        let lv = match left_is_reached(&rv, rows, self.ansi) {
+            None => self.left.eval(batch, partition)?,
+            Some(reached) => Value::Array(super::eval_where(
+                self.left.as_ref(),
+                batch,
+                &reached,
+                partition,
+            )?),
+        };
+        let columns = vec![lv.into_array(rows)?, rv.into_array(rows)?];
+        let pair = RecordBatch::try_new_with_options(
+            Arc::clone(&self.schema),
+            columns,
+            &RecordBatchOptions::new().with_row_count(Some(rows)),
+        )
+        .map_err(|e| internal(&e.to_string()))?;
+        self.op.eval(&pair, partition)
+    }
+}
+
 /// `NOT`.
 #[derive(Debug)]
 struct Not(Arc<dyn PhysExpr>);
