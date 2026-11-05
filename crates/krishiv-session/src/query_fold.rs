@@ -16,6 +16,7 @@ use krishiv_io::IoCounters;
 use krishiv_memory::ArbitrationStats;
 use krishiv_types::batch::Batch;
 
+use crate::admission::Permit;
 use crate::session::SessionState;
 
 /// The process counters a query-end fold attributes, and when the query
@@ -157,6 +158,29 @@ pub(crate) struct QueryFold {
 }
 
 impl QueryFold {
+    /// As [`Self::finish`] for a query that was cancelled (its stream failed or was dropped):
+    /// cancelling only signals the drivers, which stop at their next cancellation point, and
+    /// blocking closures can still hold memory, so the admission permit is kept until the
+    /// query reports every task ended. Releasing it at once would let the next query start
+    /// beside work still using the first one's slot and memory.
+    pub(crate) fn finish_cancelled(mut self, error: Option<&KrishivError>) {
+        let permit = std::mem::replace(&mut self._permit, Permit::unlimited());
+        let query = Arc::clone(&self.query);
+        let state = Arc::clone(&self.state);
+        self.finish(error);
+        if query.is_finished() {
+            return;
+        }
+        // Detached: dropping the handle leaves the task running; it ends with the query.
+        drop(state.executor.spawn(
+            krishiv_exec::WorkloadClass::Interactive,
+            Box::pin(async move {
+                query.finished().await;
+                drop(permit);
+            }),
+        ));
+    }
+
     pub(crate) fn finish(self, error: Option<&KrishivError>) {
         self.start.fold(
             &self.state,
@@ -202,7 +226,7 @@ impl Drop for PendingFold {
     fn drop(&mut self) {
         if let Some(fold) = self.0.take() {
             fold.query.cancel();
-            fold.finish(None);
+            fold.finish_cancelled(None);
         }
     }
 }
@@ -227,10 +251,10 @@ impl Stream for MetricStream {
             }
             Poll::Ready(Some(Err(error))) => {
                 if let Some(fold) = self.fold.take() {
-                    // Stop the query's other tasks before the fold gives the admission slot
-                    // back, so the next query is not admitted beside work still holding memory.
+                    // Stop the query's other tasks, and keep the admission slot until they ended,
+                    // so the next query is not admitted beside work still holding memory.
                     fold.query.cancel();
-                    fold.finish(Some(&error));
+                    fold.finish_cancelled(Some(&error));
                 }
                 Poll::Ready(Some(Err(error)))
             }
@@ -246,7 +270,55 @@ impl Drop for MetricStream {
             // The caller went away: cancel first (a recorded error wins),
             // then fold what the drivers merged so far.
             fold.query.cancel();
-            fold.finish(None);
+            fold.finish_cancelled(None);
+        }
+    }
+}
+
+/// A query's `system.queries` row and admission permit, taken before the query changes
+/// anything. Dropped unused (the caller failed or was cancelled before running), it closes the
+/// row `failed` and gives the slot back.
+pub(crate) struct Admitted {
+    state: Arc<SessionState>,
+    log_id: String,
+    permit: Permit,
+    armed: bool,
+}
+
+impl Admitted {
+    pub(crate) fn new(state: Arc<SessionState>, log_id: String, permit: Permit) -> Self {
+        Self {
+            state,
+            log_id,
+            permit,
+            armed: true,
+        }
+    }
+
+    /// The row id and the permit, for the run that now owns them.
+    pub(crate) fn into_parts(mut self) -> (String, Permit) {
+        self.armed = false;
+        (
+            std::mem::take(&mut self.log_id),
+            std::mem::replace(&mut self.permit, Permit::unlimited()),
+        )
+    }
+}
+
+impl Drop for Admitted {
+    fn drop(&mut self) {
+        if self.armed {
+            self.state.queries.finish(
+                &self.log_id,
+                &crate::system::Finished {
+                    state: "failed",
+                    wall_ns: 0,
+                    peak_memory_bytes: 0,
+                    error_class: None,
+                    operators: Vec::new(),
+                    totals: None,
+                },
+            );
         }
     }
 }

@@ -61,10 +61,12 @@ use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_na
 use crate::column::Column;
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
-use crate::query_fold::{MetricStream, PendingFold, QueryFold, QueryStart, QueuedRow};
+use crate::query_fold::{Admitted, MetricStream, PendingFold, QueryFold, QueryStart, QueuedRow};
 use crate::sql_functions::{QueryFunctions, SqlFunctions};
 use crate::udfs::SessionFunctions;
 use crate::variables::SessionVariables;
+
+mod context;
 
 /// The store id of the local file system.
 const LOCAL_STORE: &str = "file";
@@ -138,7 +140,7 @@ pub(crate) struct SessionState {
     udfs: Arc<UdfLibrary>,
     /// The SQL-bodied functions the session defines.
     pub(crate) sql_functions: SqlFunctions,
-    executor: Arc<dyn Executor>,
+    pub(crate) executor: Arc<dyn Executor>,
     runner: QueryRunner,
     memory: Arc<dyn MemoryPool>,
     /// The concrete pool tree behind [`Self::memory`]: its arbitration
@@ -165,6 +167,9 @@ pub(crate) struct SessionState {
     query_ids: AtomicU64,
     /// The queries `system.queries` lists.
     pub(crate) queries: Arc<crate::system::QueryLog>,
+    /// The session's id on spans and logs (`telemetry.rs`), and the count of its statements.
+    pub(crate) session_id: String,
+    statements: AtomicU64,
     /// SQL source ids handed to view lowerings: every `CREATE TEMPORARY
     /// VIEW` lowers its query with an id of its own, so errors raised
     /// while expanding a view point into the view's text, not the outer
@@ -389,6 +394,8 @@ impl SessionBuilder {
                 query_ids: AtomicU64::new(0),
                 queries,
                 admission: self.admission.unwrap_or_else(|| Arc::new(Unlimited)),
+                session_id: crate::telemetry::new_session_id(),
+                statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(1),
             }),
         })
@@ -570,7 +577,17 @@ impl Session {
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         let marker = Arc::clone(&row);
         let result = self
-            .on_executor(async move { session.sql_here_marked(&text, marker).await })
+            .on_executor(async move {
+                let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
+                use tracing::Instrument as _;
+                let trace = crate::telemetry::QueryTrace::of(seq, &text);
+                let span = trace.prepare_span(&session.state.session_id);
+                session
+                    .sql_here_marked(&text, marker)
+                    .instrument(span)
+                    .await
+                    .map(|df| df.with_trace(trace))
+            })
             .await;
         // A statement refused before it ran (parse, analysis, access) is a
         // row of `system.queries` too, with the text as the session may show it.
@@ -586,97 +603,6 @@ impl Session {
             );
         }
         result
-    }
-
-    /// Makes the queries this session starts next belong to the W3C trace of
-    /// `traceparent` (`version-trace_id-parent_id-flags`): `system.queries`
-    /// shows the trace id. An inbound header from a protocol front end is
-    /// passed here.
-    ///
-    /// ```
-    /// let s = krishiv_session::Session::new()?;
-    /// s.set_trace_context("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")?;
-    /// assert_eq!(s.trace_id().as_deref(), Some("4bf92f3577b34da6a3ce929d0e0e4736"));
-    /// assert!(s.set_trace_context("not a header").is_err());
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    ///
-    /// # Errors
-    /// `INVALID_PARAMETER_VALUE.STRING` for a header that is not a valid
-    /// `traceparent`; the previous trace stays.
-    pub fn set_trace_context(&self, traceparent: &str) -> Result<(), KrishivError> {
-        let Some(trace_id) = crate::system::parse_traceparent(traceparent) else {
-            return Err(krishiv_common::error::InvalidParameterValueString {
-                parameter: "traceparent".to_owned(),
-                function_name: "Session::set_trace_context".to_owned(),
-                invalid_value: format!(
-                    "{traceparent} (expected version-trace_id-parent_id-flags as W3C Trace Context writes it)"
-                ),
-            }
-            .into());
-        };
-        self.state.queries.set_trace_id(Some(trace_id));
-        Ok(())
-    }
-
-    /// Tags the queries this session starts next (`system.queries.tags`):
-    /// a key of 1 to 128 characters, a value of up to 256, at most 32 tags.
-    /// Setting a key again replaces its value.
-    ///
-    /// ```
-    /// let s = krishiv_session::Session::new()?;
-    /// s.set_tag("team", "etl")?;
-    /// assert_eq!(s.tags(), [("team".to_owned(), "etl".to_owned())]);
-    /// s.remove_tag("team");
-    /// assert!(s.tags().is_empty());
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    ///
-    /// # Errors
-    /// `INVALID_PARAMETER_VALUE.STRING` for an empty or over-long key, an
-    /// over-long value or a 33rd tag; the tags stay as they were.
-    pub fn set_tag(&self, key: &str, value: &str) -> Result<(), KrishivError> {
-        use crate::system::{MAX_TAG_KEY, MAX_TAG_VALUE};
-        let refuse = |why: &str| {
-            Err(krishiv_common::error::InvalidParameterValueString {
-                parameter: "tag".to_owned(),
-                function_name: "Session::set_tag".to_owned(),
-                invalid_value: format!("{key} ({why})"),
-            }
-            .into())
-        };
-        if key.is_empty() || key.chars().count() > MAX_TAG_KEY {
-            return refuse("a key has 1 to 128 characters");
-        }
-        if value.chars().count() > MAX_TAG_VALUE {
-            return refuse("a value has at most 256 characters");
-        }
-        if !self.state.queries.try_set_tag(key, value) {
-            return refuse("a session carries at most 32 tags");
-        }
-        Ok(())
-    }
-
-    /// Removes the tag `key`, if the session has it.
-    pub fn remove_tag(&self, key: &str) {
-        self.state.queries.remove_tag(key);
-    }
-
-    /// The session's tags, by key.
-    #[must_use]
-    pub fn tags(&self) -> Vec<(String, String)> {
-        self.state.queries.tags()
-    }
-
-    /// Ends the trace [`Session::set_trace_context`] set.
-    pub fn clear_trace_context(&self) {
-        self.state.queries.set_trace_id(None);
-    }
-
-    /// The trace id in effect, if any.
-    #[must_use]
-    pub fn trace_id(&self) -> Option<String> {
-        self.state.queries.trace_id()
     }
 
     /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.
@@ -1697,7 +1623,7 @@ impl Session {
         detailed: bool,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
         let (stream, query, _) = self
-            .run_on_query_logged(physical, worker, env, detailed)
+            .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
         Ok((stream, query))
     }
@@ -1742,6 +1668,19 @@ impl Session {
         }
     }
 
+    /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
+    /// that is about to change something (a write replacing files) takes the permit first and
+    /// passes it on, so a refused or cancelled query has changed nothing.
+    pub(crate) async fn admit_query(&self, env: &QueryEnv) -> Result<Admitted, KrishivError> {
+        let log_id = self
+            .state
+            .queries
+            .begin(env.text.as_deref(), env.statement_class);
+        *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        let permit = self.admit(&log_id).await?;
+        Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
+    }
+
     /// As [`Self::run_on_query`], also returning the id of the `system.queries` row this execution
     /// began, so the caller keeps it for itself: the statement's slot in `env` is shared by every
     /// execution of the same analyzed frame.
@@ -1751,17 +1690,17 @@ impl Session {
         worker: WorkerContext,
         env: &QueryEnv,
         detailed: bool,
+        admitted: Option<Admitted>,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
         let decoded = round_trip(physical, &env.config)?;
         let physical = decoded.as_ref().unwrap_or(physical);
-        // The history row first: its id names the query's memory pool, so `system.memory.query_id`
-        // joins `system.queries.query_id`.
-        let log_id = self
-            .state
-            .queries
-            .begin(env.text.as_deref(), env.statement_class);
-        *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
-        let permit = self.admit(&log_id).await?;
+        // The history row and the permit first (unless the caller took them already, before it
+        // changed anything): the row's id names the query's memory pool, so
+        // `system.memory.query_id` joins `system.queries.query_id`.
+        let (log_id, permit) = match admitted {
+            Some(admitted) => admitted.into_parts(),
+            None => self.admit_query(env).await?.into_parts(),
+        };
         let id = QueryId(self.state.query_ids.fetch_add(1, Ordering::Relaxed));
         let pool = self
             .state
@@ -1998,6 +1937,9 @@ impl Session {
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.
         crate::access::still_physical(self, &at)?;
+        // The admission permit before anything is replaced: `DirectoryWrite::begin` deletes what
+        // an overwrite replaces, which a refused or cancelled query must not have done.
+        let admitted = self.admit_query(env).await?;
         let job = job_uuid();
         // Every name of the write is resolved relative to the directory
         // opened here, never through a link (P2-T199). The registration
@@ -2045,7 +1987,9 @@ impl Session {
                 column_types,
             })?;
             let worker = self.worker(env);
-            let (mut rows, _, row_id) = self.run_on_query_logged(&plan, worker, env, false).await?;
+            let (mut rows, _, row_id) = self
+                .run_on_query_logged(&plan, worker, env, false, Some(admitted))
+                .await?;
             let mut batches = Vec::new();
             while let Some(batch) = rows.next().await {
                 batches.push(batch?);

@@ -161,6 +161,14 @@ tracing = { version = "0.1.44", default-features = false }
 tracing-subscriber = { version = "0.3.23", default-features = false }
 opentelemetry = { version = "0.33.1", default-features = false }
 opentelemetry-otlp = { version = "0.33.1", default-features = false }
+# OTLP export (feature `telemetry-otlp` of krishiv-session, off by default; owner decision 2026-11-04,
+# ADR 0028 checklist in the PR): http-proto over the rustls stack, never grpc-tonic or OpenSSL.
+opentelemetry_sdk = { version = "0.33.1", default-features = false }
+opentelemetry-http = { version = "0.33.1", default-features = false }
+opentelemetry-proto = { version = "0.33.1", default-features = false }
+# The blocking client the OTLP exporter and the metrics pusher use; rustls only.
+reqwest = { version = "0.13.5", default-features = false }
+tracing-opentelemetry = { version = "0.34.0", default-features = false }
 # Benchmarks: drop-in criterion replacement that CodSpeed instruments (dev-dependency only).
 criterion = { package = "codspeed-criterion-compat", version = "5.0", default-features = false }
 insta = { version = "1.48", default-features = false }

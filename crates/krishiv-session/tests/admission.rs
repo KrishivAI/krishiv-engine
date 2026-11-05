@@ -252,3 +252,59 @@ async fn a_failed_query_gives_its_slot_back() {
         Some("failed")
     );
 }
+
+#[tokio::test]
+async fn a_dropped_stream_gives_its_slot_back_once_the_query_ended() {
+    let gate = Gate::new();
+    gate.first.store(false, Ordering::SeqCst);
+    let s = Session::builder()
+        .admission_controller(Arc::<Gate>::clone(&gate))
+        .build()
+        .unwrap();
+    let df = s.sql("SELECT id FROM range(1000000)").await.unwrap();
+    let mut stream = df.execute_stream().await.unwrap();
+    // Take one batch, then drop the stream with the query still producing.
+    let _ = futures::StreamExt::next(&mut stream).await;
+    assert_eq!(
+        gate.slots.0.load(Ordering::SeqCst),
+        1,
+        "the slot is held while it runs"
+    );
+    drop(stream);
+    for _ in 0..2000 {
+        if gate.slots.0.load(Ordering::SeqCst) == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    panic!("the slot never came back after the stream was dropped");
+}
+
+#[tokio::test]
+async fn a_refused_overwrite_leaves_the_existing_file_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("out.txt");
+    std::fs::write(&target, b"original").unwrap();
+    let gate = Gate::new();
+    gate.refuse.store(true, Ordering::SeqCst);
+    gate.first.store(false, Ordering::SeqCst);
+    let s = Session::builder()
+        .admission_controller(Arc::<Gate>::clone(&gate))
+        .build()
+        .unwrap();
+    let df = s.sql("SELECT 1 AS a").await;
+    // The refusal may surface where the query is planned or where the write runs.
+    if let Ok(df) = df {
+        let r = df
+            .write()
+            .mode("overwrite")
+            .parquet(target.to_str().unwrap())
+            .await;
+        assert!(r.is_err(), "the write must be refused");
+    }
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        b"original",
+        "the file survived the refusal"
+    );
+}
