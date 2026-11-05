@@ -185,10 +185,10 @@ fn operation_ids_are_read_as_spark_connect_reads_them() {
     }
     // A statement refused before it ran keeps the caller's id too.
     let refused = "7-7-7-7-7";
-    assert!(block_on(s.sql_with("SELEC 1", QueryOptions::new().operation_id(refused))).is_err());
+    assert!(block_on(s.sql_with("SELECT (", QueryOptions::new().operation_id(refused))).is_err());
     let ids = column(
         &s,
-        "SELECT query_id FROM system.queries WHERE query_text = 'SELEC 1'",
+        "SELECT query_id FROM system.queries WHERE query_text = 'SELECT ('",
     );
     assert_eq!(
         ids,
@@ -239,7 +239,7 @@ fn a_busy_principal_does_not_flush_another_principals_history() {
     run(&bob, "SELECT 'kept' AS marker");
     // Refused statements are cheap rows of their own.
     for _ in 0..10_000 {
-        assert!(block_on(alice.sql("SELEC 1")).is_err());
+        assert!(block_on(alice.sql("SELECT (")).is_err());
     }
     let kept = column(&bob, "SELECT query_text FROM system.queries");
     assert!(
@@ -314,7 +314,7 @@ fn at_capacity_the_heaviest_principal_loses_its_oldest_rows() {
         run(&bob, &format!("SELECT {i} AS bob_marker"));
     }
     for _ in 0..100 {
-        assert!(block_on(alice.sql("SELEC 1")).is_err());
+        assert!(block_on(alice.sql("SELECT (")).is_err());
     }
     let admin = session_of(&rt, "admin");
     let rows = column(&admin, "SELECT principal FROM system.queries");

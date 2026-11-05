@@ -1158,7 +1158,16 @@ pub(crate) fn provider(
 #[derive(Debug)]
 pub(crate) struct SystemCatalog {
     /// The query's `MONITOR` decision, made when a per-principal table loads.
-    pub(crate) monitor: Arc<Monitor>,
+    monitor: Arc<Monitor>,
+}
+
+impl SystemCatalog {
+    /// The `system` catalog of the query that reads `sources`.
+    pub(crate) fn of(sources: &Sources) -> Self {
+        Self {
+            monitor: Arc::clone(&sources.monitor),
+        }
+    }
 }
 
 impl Catalog for SystemCatalog {
