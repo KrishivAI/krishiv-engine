@@ -357,7 +357,7 @@ fn negated_in(e: &Arc<Expr>) -> Option<&Arc<Expr>> {
 }
 
 /// `inner_column = outer_expression`, either way round.
-fn is_outer_equality(e: &Arc<Expr>) -> bool {
+pub(super) fn is_outer_equality(e: &Arc<Expr>) -> bool {
     let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
         return false;
     };
@@ -570,8 +570,7 @@ impl Rewriter {
                 if self.legacy_exists_in_count
                     && matches!(kind, SubqueryKind::Exists | SubqueryKind::In(_))
                 {
-                    let legacy = super::subquery_legacy::pull_through_aggregate(&rewritten);
-                    rewritten = legacy.unwrap_or(rewritten);
+                    rewritten = super::subquery_legacy::legacy_shape(&rewritten, x.origin)?;
                 }
                 if Arc::ptr_eq(&rewritten, plan) {
                     return Ok(x);
@@ -988,6 +987,7 @@ impl Rewriter {
             ));
         }
         let before = output(&input)?;
+        split::check_grouped_reads(keys, aggregates, &before, p.origin)?;
         let (base, all) = self.existence(input, all)?;
         let (base, mut all) = self.scalars(base, all)?;
         let aggregates = all.split_off(keys.len());

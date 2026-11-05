@@ -76,6 +76,15 @@ fn subqueries_over_grouping_keys_group_by_their_existence_column() -> R {
     assert_eq!(run(&s, q)?, rows(&["0|2", "1|2"]), "{q}");
     let q = "select k, case when k in (select k from b) then 10 else -10 end from a group by k";
     assert_eq!(run(&s, q)?, rows(&["1|10", "2|-10", "NULL|-10"]), "{q}");
+    // A grouping key that holds the subquery decides the group by itself.
+    let q = "select k > 1 or k in (select k from b) as f, count(*) from a group by 1";
+    assert_eq!(run(&s, q)?, rows(&["NULL|1", "true|3"]), "{q}");
+    let q = "select not (k > 1 or k in (select k from b)) as f, count(*) from a group by 1";
+    assert_eq!(run(&s, q)?, rows(&["false|4"]), "{q}");
+    // A subquery over a column that is not grouped: Spark raises
+    // MISSING_AGGREGATION; refused here, never answered per input row.
+    let q = "select k, exists (select 1 from b where b.k = a.v) from a group by k";
+    assert!(run(&s, q).is_err(), "{q}");
     Ok(())
 }
 

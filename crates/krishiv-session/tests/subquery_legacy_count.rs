@@ -207,3 +207,27 @@ fn a_having_or_an_expression_over_correlated_calls_sees_zero_counts() -> R {
     assert_eq!(run(&s, q)?, rows(&["0|1"]), "{q}");
     Ok(())
 }
+
+/// Under the legacy flags Spark answers or raises in shapes the legacy
+/// rewrite here does not reproduce (a projection between the correlated
+/// filter and the aggregate, a `LIMIT` over the correlation, a correlation
+/// that is not an equality under an aggregate, a loosely grouped scalar
+/// subquery): they are refused, never answered the non-legacy way.
+#[test]
+fn legacy_shapes_not_reproduced_are_refused() -> R {
+    let s = session()?;
+    run(&s, &format!("set {EXISTS_FLAG} = true"))?;
+    for q in [
+        "select * from t1 where exists \
+         (select count(*) from (select * from t2 where t2.c1 = t1.c1) s)",
+        "select * from t1 where exists (select * from t2 where t2.c1 = t1.c1 limit 1)",
+        "select * from t1 where c1 in (select count(*) from t2 where t2.c1 > t1.c1)",
+    ] {
+        assert!(run(&s, q).is_err(), "{q}");
+    }
+    run(&s, &format!("set {EXISTS_FLAG} = false"))?;
+    run(&s, &format!("set {SCALAR_FLAG} = true"))?;
+    let q = "select a, (select count(*) from r where r.c > l.a group by c) from l";
+    assert!(run(&s, q).is_err(), "{q}");
+    Ok(())
+}

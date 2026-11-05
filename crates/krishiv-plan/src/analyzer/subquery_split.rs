@@ -330,6 +330,15 @@ impl Rewriter {
             .iter()
             .filter(|k| !inner_columns(k).is_empty() && !fixed(k, input))
             .collect();
+        // Spark's legacy count handling gives such a subquery its zero-row
+        // value where nothing matched, which the single join does not.
+        if self.legacy_scalar_count && !loose.is_empty() {
+            return Err(super::unsupported(
+                "a loosely grouped correlated scalar subquery under \
+                 spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled",
+                plan.origin,
+            ));
+        }
         let kind = if loose.is_empty() || self.single_join {
             JoinKind::Single
         } else if self.legacy_group_by {
@@ -411,18 +420,21 @@ impl Rewriter {
 
 /// `keys` extended by the columns the subquery joins under an aggregate
 /// added (an existence join's `exists`, a scalar subquery's value) that
-/// `aggregates` read outside an aggregate call. The analyzer lets such a
-/// subquery read only grouping expressions, so its column is fixed within
-/// a group and grouping by it too changes no group; without it the
-/// aggregate would output a column that is neither a key nor aggregated.
+/// `aggregates` read outside an aggregate call and outside a grouping key
+/// (a key that holds the column already decides it:
+/// `GROUP BY k > 1 OR k IN (..)` must not group by the `IN` alone too).
+/// [`check_grouped_reads`] made sure such a subquery reads only grouped
+/// columns, so its column is fixed within a group and grouping by it
+/// changes no group.
 pub(super) fn group_joined(
     mut keys: Vec<Arc<Expr>>,
     aggregates: &[Arc<Expr>],
     before: &[BoundColumn],
 ) -> Vec<Arc<Expr>> {
+    let given = keys.len();
     let mut stack: Vec<Arc<Expr>> = aggregates.to_vec();
     while let Some(x) = stack.pop() {
-        if is_call(&x) {
+        if is_call(&x) || keys[..given].iter().any(|k| **k == *x) {
             continue;
         }
         if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &x.node {
@@ -438,6 +450,64 @@ pub(super) fn group_joined(
         x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
     }
     keys
+}
+
+/// Spark's `MISSING_AGGREGATION` check for a subquery in an aggregate's
+/// output, outside a call and a grouping key: it may read only grouping
+/// columns of the aggregate's input (`exists(.. where b.k = a.v) .. group by
+/// a.k` is refused). Refused here rather than answered per input row.
+pub(super) fn check_grouped_reads(
+    keys: &[Arc<Expr>],
+    aggregates: &[Arc<Expr>],
+    input: &[BoundColumn],
+    origin: Origin,
+) -> R<()> {
+    // The columns the grouping keys read, inside their subqueries too (a
+    // key and an output may hold separately resolved copies of one
+    // subquery, `GROUP BY cast(exists(..) as int)`).
+    let mut key_reads: Vec<crate::AttrId> = Vec::new();
+    for k in keys {
+        let _ = crate::walk::visit_distinct(Node::Expr(k), |n| {
+            if let Node::Expr(e) = n
+                && let ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) =
+                    &e.node
+            {
+                key_reads.push(c.id);
+            }
+            std::ops::ControlFlow::Continue(())
+        });
+    }
+    let grouped = |id: crate::AttrId| key_reads.contains(&id);
+    let from_input = |id: crate::AttrId| input.iter().any(|c| c.id == id);
+    let mut stack: Vec<Arc<Expr>> = aggregates.to_vec();
+    while let Some(x) = stack.pop() {
+        if is_call(&x) || keys.iter().any(|k| **k == *x) {
+            continue;
+        }
+        if let ExprNode::Subquery { kind, plan } = &x.node {
+            let mut reads: Vec<crate::AttrId> = Vec::new();
+            let _ = crate::walk::visit_distinct(Node::Plan(plan), |n| {
+                if let Node::Expr(e) = n
+                    && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+                {
+                    reads.push(c.id);
+                }
+                std::ops::ControlFlow::Continue(())
+            });
+            if let SubqueryKind::In(values) = kind {
+                reads.extend(values.iter().flat_map(inner_columns).map(|c| c.id));
+            }
+            if reads.iter().any(|id| from_input(*id) && !grouped(*id)) {
+                return Err(super::unsupported(
+                    "a subquery in an aggregate's output that reads a column not grouped by",
+                    origin,
+                ));
+            }
+            continue;
+        }
+        x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
+    }
+    Ok(())
 }
 
 /// `e` with every `NOT` above an `AND`, an `OR` or another `NOT` that holds
