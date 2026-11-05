@@ -162,7 +162,17 @@ class ProcessEngine(Engine):
 
     def end_measure(self) -> Measure:
         tree, self._tree = self._tree, None
-        return Measure(peak_rss_bytes=tree.stop() if tree is not None else None)
+        if tree is None:
+            return Measure()
+        peak = tree.stop()
+        io = tree.io
+        return Measure(
+            peak_rss_bytes=peak,
+            cpu_seconds=tree.cpu_seconds,
+            rchar=io.rchar if io else None,
+            read_bytes=io.read_bytes if io else None,
+            syscr=io.syscr if io else None,
+        )
 
     def cancel(self) -> None:
         self.kill()

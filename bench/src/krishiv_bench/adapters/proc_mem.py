@@ -11,6 +11,7 @@ import contextlib
 import os
 import subprocess
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -19,6 +20,35 @@ def _status_kb(text: str, key: str) -> int:
         if line.startswith(key + ":"):
             return int(line.split()[1])
     raise RuntimeError(f"{key} not found in /proc status")
+
+
+@dataclass(frozen=True)
+class IoCounters:
+    """Cumulative ``/proc/<pid>/io`` counters: ``rchar`` bytes asked of read-like syscalls (page cache included),
+    ``read_bytes`` bytes fetched from the storage layer (a page-cache hit adds nothing), ``syscr`` read syscalls."""
+
+    rchar: int = 0
+    read_bytes: int = 0
+    syscr: int = 0
+
+    def __add__(self, o: IoCounters) -> IoCounters:
+        return IoCounters(self.rchar + o.rchar, self.read_bytes + o.read_bytes, self.syscr + o.syscr)
+
+    def __sub__(self, o: IoCounters) -> IoCounters:
+        return IoCounters(self.rchar - o.rchar, self.read_bytes - o.read_bytes, self.syscr - o.syscr)
+
+
+def parse_io(text: str) -> IoCounters:
+    """The counters in the text of ``/proc/<pid>/io`` (``key: value`` lines)."""
+    vals = {}
+    for line in text.splitlines():
+        key, _, val = line.partition(":")
+        if val.strip().isdigit():
+            vals[key.strip()] = int(val)
+    missing = {"rchar", "read_bytes", "syscr"} - vals.keys()
+    if missing:
+        raise RuntimeError(f"{sorted(missing)} not found in /proc io")
+    return IoCounters(vals["rchar"], vals["read_bytes"], vals["syscr"])
 
 
 class LocalProc:
@@ -37,6 +67,9 @@ class LocalProc:
         st = Path(f"/proc/{self.pid}/stat").read_text().rsplit(")", 1)[1].split()
         cpu = (int(st[11]) + int(st[12])) / 100.0  # utime+stime (fields 14,15)
         return _status_kb(txt, "VmRSS") * 1024, _status_kb(txt, "VmHWM") * 1024, cpu
+
+    def read_io(self) -> IoCounters:
+        return parse_io(Path(f"/proc/{self.pid}/io").read_text())
 
 
 class DockerProc:
@@ -69,6 +102,9 @@ class DockerProc:
         u, s = ticks.split()
         return int(rss) * 1024, int(hwm) * 1024, (int(u) + int(s)) / 100.0
 
+    def read_io(self) -> IoCounters:
+        return parse_io(self._sh(f"cat /proc/{self.pid}/io"))
+
 
 def descendants(root: int) -> list[int]:
     """``root`` and every live descendant pid (a JVM's helper processes, a runner child), via /proc ppid links."""
@@ -100,12 +136,17 @@ def tree_cpu_seconds(root: int) -> float:
 
 
 class TreeProc:
-    """Peak RSS of a process and all its descendants over a window (``start`` .. ``stop``).
+    """Peak RSS, CPU time and I/O of a process and all its descendants over a window (``start`` .. ``stop``).
 
     Per-process VmHWM is reset with clear_refs=5 (``LocalProc``) at ``start``. Peak = the larger of
     (a) the highest sum of VmRSS over the whole tree seen by a sampler thread (processes peaking together add up)
     and (b) the sum of the VmHWM of the tree members alive at ``stop`` (catches spikes between samples; an upper
     bound when members peak at different moments). A descendant that exits inside the window is seen only by (a).
+
+    CPU seconds and I/O counters are cumulative per process: the window's value is, per pid, the last reading the
+    sampler (or ``stop``) took minus the reading at ``start`` (zero for a process born inside the window), summed.
+    A process that exits between its last sample and ``stop`` loses its final slice (at most ``interval_s``).
+    After ``stop``, ``cpu_seconds`` and ``io`` hold them; ``None`` where the platform gave no reading.
     """
 
     def __init__(self, pid: int, interval_s: float = 0.02):
@@ -113,12 +154,23 @@ class TreeProc:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._peak = 0
+        self._cpu0: dict[int, float] = {}
+        self._io0: dict[int, IoCounters] = {}
+        self._cpu: dict[int, float] = {}
+        self._io: dict[int, IoCounters] = {}
+        self.cpu_seconds: float | None = None
+        self.io: IoCounters | None = None
 
     def _sample(self) -> int:
         total = 0
         for pid in descendants(self.pid):
+            p = LocalProc(str(pid))
             with contextlib.suppress(OSError, RuntimeError, ValueError):
-                total += LocalProc(str(pid)).read()[0]
+                rss, _, cpu = p.read()
+                total += rss
+                self._cpu[pid] = cpu
+            with contextlib.suppress(OSError, RuntimeError, ValueError):
+                self._io[pid] = p.read_io()
         return total
 
     def _hwm_sum(self) -> int:
@@ -137,7 +189,10 @@ class TreeProc:
         for pid in descendants(self.pid):
             with contextlib.suppress(OSError):
                 LocalProc(str(pid)).reset()
+        self._cpu, self._io = {}, {}
         self._peak = self._sample()
+        self._cpu0, self._io0 = dict(self._cpu), dict(self._io)
+        self.cpu_seconds, self.io = None, None
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
@@ -148,4 +203,13 @@ class TreeProc:
         if self._thread is not None:
             self._thread.join()
             self._thread = None
-        return max(self._peak, self._sample(), self._hwm_sum())
+        peak = max(self._peak, self._sample(), self._hwm_sum())
+        if self._cpu:
+            self.cpu_seconds = max(0.0, sum(c - self._cpu0.get(pid, 0.0) for pid, c in self._cpu.items()))
+        if self._io:
+            zero = IoCounters()
+            total = IoCounters()
+            for pid, c in self._io.items():
+                total = total + (c - self._io0.get(pid, zero))
+            self.io = total
+        return peak

@@ -83,13 +83,22 @@ class SparkConnectEngine(Engine):
         if self._p is not None:
             self._p.reset()
             self._rss0, _, self._cpu0 = self._p.read()
+            self._io0 = self._p.read_io()
 
     def end_measure(self) -> Measure:
         if not self.container:
             return Measure()
         assert self._p is not None
         _, hwm, cpu = self._p.read()
-        return Measure(peak_rss_bytes=hwm, baseline_rss_bytes=self._rss0, cpu_seconds=cpu - self._cpu0)
+        io = self._p.read_io() - self._io0
+        return Measure(
+            peak_rss_bytes=hwm,
+            baseline_rss_bytes=self._rss0,
+            cpu_seconds=cpu - self._cpu0,
+            rchar=io.rchar,
+            read_bytes=io.read_bytes,
+            syscr=io.syscr,
+        )
 
     def teardown(self) -> None:
         if self.spark:

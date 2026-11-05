@@ -123,8 +123,13 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
         "the baseline column). Spark's is the JVM: it keeps its committed heap between queries, so the value is cumulative and "
         "order-dependent, not an isolated per-query footprint. CPU-s is not strictly comparable (DuckDB includes Python row conversion).",
         "",
-        "| Engine | max peak RSS GiB | max baseline RSS GiB | mean of per-query median CPU-s | spill |",
-        "|---|---|---|---|---|",
+        "Storage read = bytes fetched from the storage layer (`/proc/<pid>/io` read_bytes; 0 when the run came from the "
+        "page cache); rchar = bytes asked of read syscalls, cache hits included. Avg cores = CPU seconds / wall seconds. "
+        "n/a = the engine's process could not be measured.",
+        "",
+        "| Engine | max peak RSS GiB | max baseline RSS GiB | mean of per-query median CPU-s | mean avg cores "
+        "| max storage read GiB | max rchar GiB | mean read size KiB | spill |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for e in engines:
         qs = [d for d in results[e]["queries"].values() if "p50_s" in d]
@@ -132,9 +137,15 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
         base = [d["baseline_rss_bytes"] for d in qs if d.get("baseline_rss_bytes")]
         cpu = [d["cpu_seconds_median"] for d in qs if d.get("cpu_seconds_median") is not None]
         sp = [d["spill_bytes"] for d in qs if d.get("spill_bytes") is not None]
+        cores = [d["avg_cores"] for d in qs if d.get("avg_cores") is not None]
+        rb = [d["read_bytes_median"] for d in qs if d.get("read_bytes_median") is not None]
+        rc = [d["rchar_median"] for d in qs if d.get("rchar_median") is not None]
+        rs = [d["read_size_mean_bytes"] for d in qs if d.get("read_size_mean_bytes") is not None]
         L.append(
             f"| {e} | {_gb(max(rss) if rss else None)} | {_gb(max(base) if base else None)} | "
-            f"{('%.2f' % (sum(cpu) / len(cpu))) if cpu else 'n/a'} | {_gb(max(sp)) if sp else 'n/a (not collected)'} |"
+            f"{('%.2f' % (sum(cpu) / len(cpu))) if cpu else 'n/a'} | {('%.1f' % (sum(cores) / len(cores))) if cores else 'n/a'} | "
+            f"{_gb(max(rb) if rb else None)} | {_gb(max(rc) if rc else None)} | "
+            f"{('%.0f' % (sum(rs) / len(rs) / 1024)) if rs else 'n/a'} | {_gb(max(sp)) if sp else 'n/a (not collected)'} |"
         )
     L.append("")
 
