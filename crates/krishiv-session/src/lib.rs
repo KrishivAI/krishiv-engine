@@ -53,6 +53,7 @@ mod execute_immediate;
 mod explain;
 mod explain_graph;
 pub mod functions;
+mod history;
 mod identifier_clause;
 mod introspection;
 mod locals;
@@ -93,6 +94,7 @@ pub use explain::Estimate;
 pub use explain_graph::{
     GraphFormat, dot_of_plan, dot_of_profile, mermaid_of_plan, mermaid_of_profile,
 };
+pub use history::{QueryId, QueryOptions};
 pub use krishiv_exec::profile::{QueryProfile, TextOptions};
 pub use krishiv_exec::{
     CounterSample, GaugeSample, HistogramBucket, HistogramSample, MetricDict, MetricsSnapshot,

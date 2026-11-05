@@ -38,6 +38,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_SPILL_SCRATCH_RESERVE,
     &MEMORY_RESIDENT_GUARD,
     &SESSION_MEMORY_LIMIT,
+    &SYSTEM_QUERIES_CAPACITY,
     &CACHE_MAX_BYTES,
     &DETERMINISTIC_ORDER,
     &RESULT_CACHE_ENABLED,
@@ -179,6 +180,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &MEMORY_SPILL_WAIT_TIMEOUT,
     ),
     ("krishiv.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
+    ("krishiv.system.queries.capacity", &SYSTEM_QUERIES_CAPACITY),
     ("spark.sql.files.maxPartitionNum", &FILES_MAX_PARTITION_NUM),
     ("spark.sql.files.minPartitionNum", &FILES_MIN_PARTITION_NUM),
     ("spark.sql.files.openCostInBytes", &FILES_OPEN_COST_IN_BYTES),
@@ -759,6 +761,19 @@ pub static SESSION_MEMORY_LIMIT: ConfigEntry = ConfigEntry {
           session's. Fixed when the session is built. When unset, a session's queries are \
           bounded by the process limit only.",
     scope: Scope::Session,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Most `system.queries` rows one engine runtime keeps (design P2-E1 §5).
+pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
+    key: "krishiv.system.queries.capacity",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(10_000)),
+    doc: "Most rows `system.queries` keeps for all the sessions of one engine runtime. Each \
+          principal keeps up to 1000 finished rows; at this capacity the oldest finished row of \
+          the principal holding the most rows goes first. Running queries are never dropped.",
+    scope: Scope::Cluster,
     version_added: "0.2.0",
     spark_alias: None,
 };

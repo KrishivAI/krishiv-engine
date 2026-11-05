@@ -1134,7 +1134,9 @@ impl CatalogResolver for QueryCatalogs {
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
         if crate::system::is_system(name) {
-            return Some(Arc::new(crate::system::SystemCatalog));
+            return Some(Arc::new(crate::system::SystemCatalog {
+                monitor: Arc::clone(&self.0.system.monitor),
+            }));
         }
         name.eq_ignore_ascii_case(CATALOG)
             .then(|| Arc::clone(&self.0) as Arc<dyn Catalog>)

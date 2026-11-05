@@ -17,7 +17,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
-use krishiv_common::config::{Config, lookup};
+use krishiv_common::config::{Config, SYSTEM_QUERIES_CAPACITY, lookup};
 use krishiv_common::error::{CannotModifyConfig, KrishivError};
 use krishiv_exec::{
     Executor, ExecutorConfig, MetricsRegistry, QueryContext, QueryRunner, TokioExecutor,
@@ -25,6 +25,8 @@ use krishiv_exec::{
 };
 use krishiv_io::{FormatRegistry, IoScheduler};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillManager, TreePool};
+
+use crate::history::QueryHistory;
 
 /// Where Spark's error messages point for documentation.
 const SPARK_DOC_ROOT: &str = "https://spark.apache.org/docs/latest";
@@ -63,6 +65,8 @@ pub struct EngineRuntime {
     query_index: AtomicU64,
     /// The number of the next session built on the runtime.
     session_seq: AtomicU64,
+    /// The `system.queries` rows of every session.
+    pub(crate) history: Arc<QueryHistory>,
     /// The queries running now, by worker-local index.
     live: Mutex<HashMap<u64, Live>>,
     /// The I/O schedulers of the runtime's sessions, read by the metadata
@@ -77,6 +81,9 @@ pub struct EngineRuntime {
 struct Live {
     /// The number of the session that runs it.
     session: u64,
+    /// Its id in `system.queries`.
+    #[expect(dead_code, reason = "read by cancellation by id (E1 unit R5)")]
+    id: String,
     query: Weak<QueryContext>,
 }
 
@@ -171,6 +178,11 @@ impl EngineRuntime {
         };
         let memory_tree = TreePool::new(&MemoryConfig::from_config(&config));
         let metrics = Arc::new(MetricsRegistry::new());
+        let capacity = config
+            .get(&SYSTEM_QUERIES_CAPACITY)
+            .and_then(krishiv_common::config::ConfigValue::as_int)
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(crate::history::DEFAULT_CAPACITY);
         let runtime = Self {
             pairs,
             config: Arc::new(config),
@@ -182,6 +194,7 @@ impl EngineRuntime {
             formats: Arc::new(FormatRegistry::with_defaults()),
             query_index: AtomicU64::new(0),
             session_seq: AtomicU64::new(0),
+            history: Arc::new(QueryHistory::new(capacity)),
             live: Mutex::new(HashMap::new()),
             io: Arc::new(Mutex::new(Vec::new())),
             private,
@@ -243,8 +256,9 @@ impl EngineRuntime {
         self.query_index.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Records `query`, run by session `session`, as running until it ends.
-    pub(crate) fn track(&self, session: u64, query: &Arc<QueryContext>) {
+    /// Records `query`, run by session `session` as `system.queries` row
+    /// `id`, as running until it ends.
+    pub(crate) fn track(&self, session: u64, id: &str, query: &Arc<QueryContext>) {
         let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
         // Entries of ended queries go as new ones arrive.
         live.retain(|_, l| l.query.upgrade().is_some_and(|q| !q.is_finished()));
@@ -252,6 +266,7 @@ impl EngineRuntime {
             query.id().0,
             Live {
                 session,
+                id: id.to_owned(),
                 query: Arc::downgrade(query),
             },
         );

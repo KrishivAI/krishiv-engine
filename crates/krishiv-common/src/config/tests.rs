@@ -855,3 +855,29 @@ fn plan_round_trip_is_off_by_default_and_parses() {
             .is_err()
     );
 }
+
+#[test]
+fn engine_runtime_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(c.get(&SESSION_MEMORY_LIMIT), None);
+    assert_eq!(
+        c.get(&SYSTEM_QUERIES_CAPACITY)
+            .and_then(ConfigValue::as_int),
+        Some(10_000)
+    );
+    c.set("krishiv.session.memoryLimit", "48m").unwrap();
+    c.set("krishiv.system.queries.capacity", "50").unwrap();
+    assert_eq!(
+        c.get(&SESSION_MEMORY_LIMIT).and_then(ConfigValue::as_size),
+        Some(48 << 20)
+    );
+    assert_eq!(
+        c.get(&SYSTEM_QUERIES_CAPACITY)
+            .and_then(ConfigValue::as_int),
+        Some(50)
+    );
+    assert!(c.set("krishiv.session.memoryLimit", "lots").is_err());
+    assert!(c.set("krishiv.system.queries.capacity", "0").is_err());
+    assert_eq!(SESSION_MEMORY_LIMIT.scope, Scope::Session);
+    assert_eq!(SYSTEM_QUERIES_CAPACITY.scope, Scope::Cluster);
+}

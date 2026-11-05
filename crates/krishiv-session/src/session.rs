@@ -69,6 +69,7 @@ use crate::udfs::SessionFunctions;
 use crate::variables::SessionVariables;
 
 mod context;
+mod lifecycle;
 
 /// The store id of the local file system.
 const LOCAL_STORE: &str = "file";
@@ -113,6 +114,9 @@ pub struct Session {
     /// session a user holds: only the handle a script's statements run on has frames, so no other
     /// query on the session ever sees them (`locals.rs`).
     pub(crate) locals: Arc<[krishiv_plan::analyzer::LocalFrame]>,
+    /// The caller's id for the queries this handle starts
+    /// ([`Session::sql_with`]); `None` for a handle a user holds.
+    pub(crate) operation: Option<crate::QueryId>,
 }
 
 impl fmt::Debug for Session {
@@ -396,7 +400,10 @@ impl Session {
         config: Config,
         parts: SessionParts,
     ) -> Result<Self, KrishivError> {
-        let queries = Arc::new(crate::system::QueryLog::new(&parts.principal.name));
+        let queries = Arc::new(crate::system::QueryLog::new(
+            Arc::clone(&runtime.history),
+            &parts.principal.name,
+        ));
         // Without a session limit the session level is skipped: queries stay
         // children of the root, so `system.memory` shows what it always did.
         let memory: Arc<dyn MemoryPool> = match config
@@ -439,6 +446,7 @@ impl Session {
         };
         Ok(Session {
             locals: Arc::from([]),
+            operation: None,
             state: Arc::new(SessionState {
                 conf: Arc::new(ConfStore::new(config)),
                 catalog: Arc::new(SessionCatalog::default()),
@@ -468,82 +476,6 @@ impl Session {
                 sql_sources: AtomicU32::new(1),
             }),
         })
-    }
-
-    /// A new session on the same runtime, run by the same principal under
-    /// the same access policy, Spark profile and function registry: fresh
-    /// temporary views, variables, UDFs, tags and configuration (the
-    /// runtime's, without this session's changes), as Spark's
-    /// `newSession()`.
-    ///
-    /// ```
-    /// let a = krishiv_session::Session::new()?;
-    /// a.conf().set("spark.sql.ansi.enabled", "false")?;
-    /// let b = a.new_session();
-    /// assert!(std::sync::Arc::ptr_eq(a.runtime(), b.runtime()));
-    /// assert_eq!(b.conf().get("spark.sql.ansi.enabled").as_deref(), Some("true"));
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn new_session(&self) -> Self {
-        let state = &self.state;
-        let runtime = Arc::clone(&state.runtime);
-        let parts = SessionParts {
-            profile: state.profile,
-            principal: Arc::clone(&state.principal),
-            policy: Arc::clone(&state.policy),
-            functions: state.base_functions.clone(),
-        };
-        // The configuration the session was built with is valid, so the
-        // runtime's starting configuration is too (a private runtime starts
-        // from the builder's).
-        let config = runtime
-            .session_config(Vec::new())
-            .unwrap_or_else(|_| Config::new());
-        match Self::on_runtime(runtime, config, parts) {
-            Ok(s) => s,
-            // Not reached: building a session on a runtime has no other
-            // failure; the parent's handle is a working session either way.
-            Err(_) => self.clone(),
-        }
-    }
-
-    /// The runtime this session runs on.
-    #[must_use]
-    pub fn runtime(&self) -> &Arc<EngineRuntime> {
-        &self.state.runtime
-    }
-
-    /// Closes the session (Spark Connect's `ReleaseSession`): its running
-    /// queries are cancelled, so their streams end with
-    /// `OPERATION_CANCELED`, and it takes no new statement
-    /// (`INVALID_HANDLE.SESSION_CLOSED`). Dropping a session's handles does
-    /// not cancel anything: an open result stream keeps its session alive.
-    /// Returns the number of queries cancelled; closing again is a no-op.
-    ///
-    /// ```
-    /// let s = krishiv_session::Session::new()?;
-    /// s.close();
-    /// let e = futures::executor::block_on(s.sql("SELECT 1")).unwrap_err();
-    /// assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_CLOSED");
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    pub fn close(&self) -> usize {
-        if self.state.closed.swap(true, Ordering::AcqRel) {
-            return 0;
-        }
-        self.state.runtime.cancel_session(self.state.number)
-    }
-
-    /// `INVALID_HANDLE.SESSION_CLOSED` once [`Self::close`] ran.
-    pub(crate) fn check_open(&self) -> Result<(), KrishivError> {
-        if self.state.closed.load(Ordering::Acquire) {
-            return Err(krishiv_common::error::InvalidHandleSessionClosed {
-                handle: self.state.queries.session_id().to_owned(),
-            }
-            .into());
-        }
-        Ok(())
     }
 
     /// A session with the defaults.
@@ -1245,6 +1177,10 @@ impl Session {
                 io: Arc::clone(&self.state.io),
                 relations: Arc::clone(&self.state.cache),
                 metrics: Arc::clone(&self.state.runtime.metrics),
+                monitor: Arc::new(crate::system::Monitor::new(
+                    Arc::clone(&self.state.principal),
+                    Arc::clone(&self.state.policy),
+                )),
             },
         ));
         let resolution = {
@@ -1654,10 +1590,11 @@ impl Session {
         self.check_open()?;
         // The history row first: its id names the query's memory pool, so `system.memory.query_id`
         // joins `system.queries.query_id`.
-        let log_id = self
-            .state
-            .queries
-            .begin(env.text.as_deref(), env.statement_class);
+        let log_id = self.state.queries.begin_as(
+            env.text.as_deref(),
+            env.statement_class,
+            self.operation.as_ref(),
+        )?;
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         let id = QueryId(self.state.runtime.next_query_index());
         let pool = self
@@ -1688,7 +1625,7 @@ impl Session {
             metrics_on,
             log_id,
         }));
-        self.state.runtime.track(self.state.number, &query);
+        self.state.runtime.track(self.state.number, &row_id, &query);
         // A plan the wire format cannot carry fails as a submit failure does:
         // its row records the error.
         let submitted = match crate::plan_round_trip::round_trip(physical, &env.config) {
