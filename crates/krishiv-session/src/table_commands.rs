@@ -48,6 +48,7 @@ use krishiv_types::DataType;
 
 use crate::dataframe::DataFrame;
 use crate::functions::{col, expr, lit_null};
+use crate::query_fold::Admitted;
 use crate::session::{QueryEnv, Session};
 use crate::store::{
     CatalogStore, CatalogTable, CreateMode, DEFAULT_NAMESPACE, DropNamespaceError, NamespaceMeta,
@@ -1619,7 +1620,8 @@ impl Session {
         )
         .map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-        self.create_table_from(table, &df, mode, layout).await
+        self.create_table_from(table, &df, mode, layout, &mut None)
+            .await
     }
 
     /// Writes `df` to the location of the new `table` (whose columns are
@@ -1631,6 +1633,7 @@ impl Session {
         df: &DataFrame,
         mode: CreateMode,
         layout: &LayoutRequest<'_>,
+        pre: &mut Option<Admitted>,
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
         let analysis = df.analyzed_in(self.query_env()).await?;
@@ -1711,7 +1714,7 @@ impl Session {
         } else {
             "errorifexists"
         };
-        let dirs = self.write_table_rows(&table, &df, write_mode).await?;
+        let dirs = self.write_table_rows(&table, &df, write_mode, pre).await?;
         if let Some(owned) = owned {
             owned.keep();
         }
@@ -2265,7 +2268,7 @@ impl Session {
         }
         let df = base.select(select);
         let mode = if overwrite { "overwrite" } else { "append" };
-        let written = self.write_table_rows(table, &df, mode).await;
+        let written = self.write_table_rows(table, &df, mode, &mut None).await;
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
         self.forget_cached(name);
@@ -2426,7 +2429,8 @@ impl Session {
                         }),
                     ))
                 }));
-                self.exec_write_v2(&by_name, spec, V2Mode::Append).await
+                self.exec_write_v2(&by_name, spec, V2Mode::Append, &mut None)
+                    .await
             }
             (SaveMode::Overwrite, true) => {
                 // Spark drops the table and creates it again. Everything that can
@@ -2467,7 +2471,7 @@ impl Session {
                     managed_location(&self.warehouse_dir()?, &name.namespace, &name.name);
                 let at =
                     self.locate_write_path(&location.display().to_string(), &spec.options, &env)?;
-                self.authorize_write_path(&at).await?;
+                self.authorize_write_path(&at, &spec.options).await?;
                 // A managed table's own directory goes with it; any other one in the way stays.
                 let own = self
                     .state
@@ -2484,11 +2488,30 @@ impl Session {
                 }
                 // What is left after this point is the write itself (query errors, I/O): as in
                 // Spark's V1 overwrite, a failure there leaves no table.
-                self.drop_named_table(&name, &env, true).await?;
-                self.exec_write_v2(df, spec, V2Mode::Create).await
+                // Admitted before the drop: a controller that refuses the write, or a caller that
+                // gives up while it queues, must not have lost the old table. The write takes
+                // this admission instead of asking again.
+                let mut pre = Some(self.admit_query(&analysis.env).await?);
+                let done = async {
+                    self.drop_named_table(&name, &env, true).await?;
+                    self.exec_write_v2(df, spec, V2Mode::Create, &mut pre).await
+                }
+                .await;
+                // Not taken by a write (the drop or the create failed first): settle its row. A
+                // statement dropped meanwhile drops `pre`, which closes its row `cancelled`.
+                if let Some(unrun) = pre.take() {
+                    match &done {
+                        Ok(()) => unrun.finish_ok(),
+                        Err(error) => unrun.fail(error),
+                    }
+                }
+                done
             }
             // `ErrorIfExists` on an existing table fails in the create.
-            _ => self.exec_write_v2(df, spec, V2Mode::Create).await,
+            _ => {
+                self.exec_write_v2(df, spec, V2Mode::Create, &mut None)
+                    .await
+            }
         }
     }
 
@@ -2544,6 +2567,7 @@ impl Session {
         df: &DataFrame,
         spec: V2WriteSpec,
         mode: V2Mode,
+        pre: &mut Option<Admitted>,
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
         let parsed = krishiv_sql::parse_multipart_identifier(&spec.table, &self.parser_options())
@@ -2621,7 +2645,7 @@ impl Session {
             partition_by: &[],
             bucket: None,
         };
-        self.create_table_from(table, df, CreateMode::ErrorIfExists, &layout)
+        self.create_table_from(table, df, CreateMode::ErrorIfExists, &layout, pre)
             .await
     }
 
@@ -2633,6 +2657,7 @@ impl Session {
         table: &CatalogTable,
         df: &DataFrame,
         mode: &str,
+        pre: &mut Option<Admitted>,
     ) -> Result<Vec<String>, KrishivError> {
         if table.layout.bucket.is_some() {
             return Err(unsupported("writes to bucketed tables"));
@@ -2645,7 +2670,7 @@ impl Session {
             writer = writer.option(k, v);
         }
         writer
-            .save_reporting(&table.location.display().to_string())
+            .save_reporting(&table.location.display().to_string(), pre.take())
             .await
     }
 }

@@ -32,11 +32,14 @@ struct Leaf {
     template: String,
     /// Spark parameter names in order of first appearance.
     params: Vec<String>,
+    /// Whether only operators may see this class's details (`for_client`).
+    operator_only: bool,
 }
 
 fn main() -> Result<(), BoxError> {
     println!("cargo::rerun-if-changed=vendored/spark-error-conditions.json");
     println!("cargo::rerun-if-changed=krishiv-error-classes.json");
+    println!("cargo::rerun-if-changed=error-audience.json");
     println!("cargo::rerun-if-changed=src/error/template.rs");
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
     let spark = std::fs::read_to_string(manifest.join("vendored/spark-error-conditions.json"))?;
@@ -45,6 +48,8 @@ fn main() -> Result<(), BoxError> {
     leaves.extend(parse(&krishiv, true)?);
     leaves.sort_by(|a, b| a.name.cmp(&b.name));
     check_unique(&leaves)?;
+    let audience = std::fs::read_to_string(manifest.join("error-audience.json"))?;
+    apply_audience(&mut leaves, &audience)?;
     let out = PathBuf::from(std::env::var("OUT_DIR")?).join("error_classes.rs");
     std::fs::write(out, generate(&leaves)?)?;
     Ok(())
@@ -77,6 +82,20 @@ fn parse(json: &str, krishiv: bool) -> Result<Vec<Leaf>, BoxError> {
             }
         };
         let main = message(name, info)?;
+        let operator_only = match info.get("audience").map(Value::as_str) {
+            Some(_) if !krishiv => {
+                return Err(format!(
+                    "{name}: Spark classes get their audience in error-audience.json"
+                )
+                .into());
+            }
+            Some(Some("operator")) => true,
+            None | Some(Some("user")) => false,
+            Some(_) => {
+                return Err(format!("{name}: audience must be \"user\" or \"operator\"").into());
+            }
+        };
+        let first = leaves.len();
         match info.get("subClass") {
             None => leaves.push(leaf(name.clone(), sql_state, main)?),
             Some(subs) => {
@@ -95,8 +114,48 @@ fn parse(json: &str, krishiv: bool) -> Result<Vec<Leaf>, BoxError> {
                 }
             }
         }
+        for l in &mut leaves[first..] {
+            l.operator_only = operator_only;
+        }
     }
     Ok(leaves)
+}
+
+/// Marks the Spark classes named in `error-audience.json` (`{"operator":
+/// [...]}`, each a top-level name covering its sub-classes, a full
+/// sub-class name, or a prefix ending in `*`) as operator-only. A name that matches no class is an
+/// error, so a Spark refresh that renames one cannot silently expose it.
+fn apply_audience(leaves: &mut [Leaf], json: &str) -> Result<(), BoxError> {
+    let root: Map<String, Value> = serde_json::from_str(json)?;
+    let names = root
+        .get("operator")
+        .and_then(Value::as_array)
+        .ok_or("error-audience.json: missing \"operator\" array")?;
+    for name in names {
+        let name = name
+            .as_str()
+            .ok_or("error-audience.json: non-string name")?;
+        if name.starts_with("KRISHIV_") {
+            return Err(format!("error-audience.json: {name} sets its own audience").into());
+        }
+        // A trailing `*` names every class with that prefix.
+        let prefix = name.strip_suffix('*');
+        let mut hit = false;
+        for l in leaves.iter_mut() {
+            let matches = match prefix {
+                Some(p) => l.name.starts_with(p),
+                None => l.name == name || l.name.split('.').next() == Some(name),
+            };
+            if matches {
+                l.operator_only = true;
+                hit = true;
+            }
+        }
+        if !hit {
+            return Err(format!("error-audience.json: no error class {name}").into());
+        }
+    }
+    Ok(())
 }
 
 fn check_unique(leaves: &[Leaf]) -> Result<(), BoxError> {
@@ -163,6 +222,7 @@ fn leaf(name: String, sql_state: Option<&str>, template: String) -> Result<Leaf,
         sql_state: sql_state.map(str::to_owned),
         template,
         params,
+        operator_only: false,
     })
 }
 
@@ -246,7 +306,7 @@ fn generate(leaves: &[Leaf]) -> Result<String, BoxError> {
         writeln!(o, "        ErrorClass::{},", l.ident)?;
     }
     writeln!(o, "    ];")?;
-    let accessors: [Accessor; 4] = [
+    let accessors: [Accessor; 5] = [
         (
             "Spark error class name, e.g. `UNRESOLVED_COLUMN.WITH_SUGGESTION`.",
             "name",
@@ -270,6 +330,18 @@ fn generate(leaves: &[Leaf]) -> Result<String, BoxError> {
             "parameters",
             "&'static [&'static str]",
             |l| format!("&{:?}", l.params),
+        ),
+        (
+            "Who may see this class's details: see [`Audience`].",
+            "audience",
+            "Audience",
+            |l| {
+                if l.operator_only {
+                    "Audience::Operator".to_owned()
+                } else {
+                    "Audience::User".to_owned()
+                }
+            },
         ),
     ];
     for (doc, fname, ty, body) in accessors {
