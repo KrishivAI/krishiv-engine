@@ -1,6 +1,6 @@
 """``krishiv-bench join-trees``: how each join enumerator plans every inner-join tree of a suite (P2-T113).
 
-Per *arm* (a set of session settings, e.g. ``krishiv.optimizer.joinEnumerator=dphyp``) one runner is started over the
+Per *arm* (a set of session settings, e.g. ``krishiv.optimizer.joinDpLimit=12``) one runner is started over the
 dataset, so the optimizer reads the dataset's real statistics. Per query:
 
 * ``EXPLAIN VERBOSE`` once: the optimizer states, per inner-join tree it planned, its inputs, edges and hyperedges, the
@@ -29,14 +29,16 @@ from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
 from .paths import dataset_dir, fmt_sf, results_dir
 from .runner import git_info, load_queries, machine_info
 
-# An arm is NAME=K=V[,K=V...]; these are the experiment brief's (T113 section 3, Fable review arm A').
+# An arm is NAME=K=V[,K=V...]; these are the experiment brief's (T113 section 3, Fable review arm A') and forced greedy.
 DEFAULT_ARMS = [
     "dpsub=krishiv.optimizer.joinEnumerator=dpsub",
-    "dphyp=krishiv.optimizer.joinEnumerator=dphyp",
     "dpsub12=krishiv.optimizer.joinEnumerator=dpsub,krishiv.optimizer.joinDpLimit=12",
     "dpsub13=krishiv.optimizer.joinEnumerator=dpsub,krishiv.optimizer.joinDpLimit=13",
+    "greedy=krishiv.optimizer.joinEnumerator=greedy",
 ]
-TREE = re.compile(r"JoinOrder: (tree inputs=\S+ .*)$")
+# A step header of EXPLAIN VERBOSE: ``== Optimizer: <batch> round <n>, <rule>[: <note>] ==``, then the step's diff.
+STEP = re.compile(r"^== Optimizer: .* ==$")
+TREE = re.compile(r"^== Optimizer: .*?, JoinOrder: (tree inputs=\S+ .*) ==$")
 INTS = ("inputs", "edges", "hyperedges", "pairs", "considered")
 
 
@@ -68,13 +70,16 @@ def parse_tree(note: str) -> dict[str, Any]:
 def trees_of(explain_text: str) -> list[dict[str, Any]]:
     """The trees the last join ordering of the plan described, in plan order.
 
-    The optimizer orders joins again after eager aggregation when that moved an aggregate; each ordering describes all
-    trees, so the last block is the plan's own.
+    Each ordering states every tree in consecutive optimizer steps (each with its own, empty, diff). The optimizer
+    orders joins again after eager aggregation when that moved an aggregate, so the last run of tree steps is the
+    plan's own.
     """
     blocks: list[list[dict[str, Any]]] = []
     previous_was_tree = False
     for line in explain_text.splitlines():
-        m = TREE.search(line)
+        if not STEP.match(line):
+            continue  # a step's diff, or another section
+        m = TREE.match(line)
         if m:
             if not previous_was_tree:
                 blocks.append([])

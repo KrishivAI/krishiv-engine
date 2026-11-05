@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Planning time: the 22 TPC-H queries, parsed and resolved once, then
 //! optimised (rule batches, join ordering, pruning); run under CodSpeed in
-//! CI. Also per join enumerator (`krishiv.optimizer.joinEnumerator`, P2-T113):
-//! the TPC-DS queries, and stars and chains of 10 and 12 inputs, which only
-//! the join order of differs between enumerators.
+//! CI. Also per join-ordering setting (P2-T113): the TPC-DS queries, and
+//! stars and chains of 10 and 12 inputs, under the default, with
+//! `krishiv.optimizer.joinDpLimit` 12, and with the `greedy` enumerator.
 
 #![expect(
     missing_docs,
@@ -163,11 +163,9 @@ fn synthetic(n: usize, star: bool) -> Plan {
     resolve(&sql, &context(tpch_catalog(), ResolutionConf::default())).expect("resolves")
 }
 
-fn enumerator(name: &str) -> Config {
+fn settings(key: &str, value: &str) -> Config {
     let mut config = Config::new();
-    config
-        .set("krishiv.optimizer.joinEnumerator", name)
-        .expect("a known enumerator");
+    config.set(key, value).expect("a valid setting");
     config
 }
 
@@ -191,13 +189,23 @@ fn enumerators(c: &mut Criterion) {
         ("star_12", synthetic(12, true)),
         ("chain_12", synthetic(12, false)),
     ];
-    for name in ["dpsub", "dphyp"] {
-        let config = enumerator(name);
+    let arms = [
+        (
+            "dpsub",
+            settings("krishiv.optimizer.joinEnumerator", "dpsub"),
+        ),
+        ("dpsub12", settings("krishiv.optimizer.joinDpLimit", "12")),
+        (
+            "greedy",
+            settings("krishiv.optimizer.joinEnumerator", "greedy"),
+        ),
+    ];
+    for (name, config) in &arms {
         c.bench_function(&format!("optimize_tpcds_{name}"), |b| {
             b.iter(|| {
                 for p in &tpcds {
                     black_box(
-                        optimize_with_udfs(black_box(p), &NoStatistics, &lib, &config)
+                        optimize_with_udfs(black_box(p), &NoStatistics, &lib, config)
                             .expect("optimises"),
                     );
                 }
@@ -207,7 +215,7 @@ fn enumerators(c: &mut Criterion) {
             c.bench_function(&format!("join_{shape}_{name}"), |b| {
                 b.iter(|| {
                     black_box(
-                        optimize_with_udfs(black_box(plan), &NoStatistics, &lib, &config)
+                        optimize_with_udfs(black_box(plan), &NoStatistics, &lib, config)
                             .expect("optimises"),
                     )
                 });

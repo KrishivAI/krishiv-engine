@@ -354,9 +354,9 @@ uv run krishiv-bench run --engine duckdb --suite dsb --sf 1 --dataset dsb@v1
 ## Join enumerators (`join-trees`, P2-T113)
 
 ```bash
-uv run krishiv-bench join-trees --suite dsb --sf 10            # arms dpsub, dphyp, dpsub12, dpsub13 (the first is the base)
+uv run krishiv-bench join-trees --suite dsb --sf 10            # arms dpsub, dpsub12, dpsub13, greedy (the first is the base)
 uv run krishiv-bench join-trees --suite tpcds --arm base=krishiv.optimizer.joinEnumerator=dpsub \
-    --arm hyp=krishiv.optimizer.joinEnumerator=dphyp --plan-reps 50
+    --arm wide=krishiv.optimizer.joinDpLimit=12 --plan-reps 50
 ```
 
 Nothing is executed. Per arm (a set of session settings) one runner plans every query over the dataset, so the

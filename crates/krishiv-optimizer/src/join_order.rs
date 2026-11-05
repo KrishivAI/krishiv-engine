@@ -6,13 +6,12 @@
 //! With up to [`DP_LIMIT`] inputs, dynamic programming over connected
 //! subsets finds the order with the fewest intermediate rows (`C_out`);
 //! above it, a greedy pass repeatedly joins the connected pair with the
-//! smallest result. That is the default enumerator, `dpsub`; session
-//! configuration `krishiv.optimizer.joinEnumerator` can choose `dphyp`
-//! (dynamic programming over connected subgraph pairs only, [`dp::dphyp`]) or
-//! `greedy`, and `krishiv.optimizer.joinDpLimit` moves the limit (P2-T113).
-//! Every enumerator plans the same tree with the same costs, so they differ
-//! only in which orders they consider; each planned tree is described in
-//! `EXPLAIN VERBOSE` ([`TreeStats`]). Only connected subsets are joined, so no cross product
+//! smallest result ([`dp::dpsub`]; P2-T113 kept it over DPhyp). Session
+//! configuration `krishiv.optimizer.joinEnumerator` can choose `greedy` for
+//! every tree, and `krishiv.optimizer.joinDpLimit` moves the limit. Both
+//! plan the same tree with the same costs, so they differ only in which
+//! orders they consider; each planned tree is described in `EXPLAIN
+//! VERBOSE` ([`TreeStats`]). Only connected subsets are joined, so no cross product
 //! is planned unless the query itself has one (then its connected parts
 //! are joined last, smallest first). Each conjunct sits at the lowest join
 //! that has its inputs; the larger input of each join is on the left, the
@@ -47,17 +46,11 @@ pub const DP_LIMIT: usize = 10;
 /// about 3^n splits.
 pub(crate) const MAX_DP_LIMIT: usize = 14;
 
-/// The csg-cmp pairs `dphyp` considers before it plans the tree greedily
-/// instead (DuckDB's budget).
-pub(crate) const PAIR_BUDGET: u64 = 10_000;
-
 /// How each inner-join tree is enumerated (`krishiv.optimizer.joinEnumerator`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Enumerator {
     /// Every split of every subset, up to the limit; greedy above it.
     DpSub,
-    /// Connected subgraph and complement pairs only, up to [`PAIR_BUDGET`].
-    DpHyp,
     /// Always greedy.
     Greedy,
 }
@@ -67,7 +60,6 @@ impl Enumerator {
     fn name(self) -> &'static str {
         match self {
             Self::DpSub => "dpsub",
-            Self::DpHyp => "dphyp",
             Self::Greedy => "greedy",
         }
     }
@@ -75,7 +67,6 @@ impl Enumerator {
     /// The enumerator a configuration value names; `dpsub` for anything else.
     pub(crate) fn parse(name: &str) -> Self {
         match name {
-            "dphyp" => Self::DpHyp,
             "greedy" => Self::Greedy,
             _ => Self::DpSub,
         }
@@ -116,7 +107,7 @@ pub(crate) struct TreeStats {
     hyperedges: usize,
     enumerator: Enumerator,
     /// Why the tree was planned greedily, if it was: `inputs` (too many for
-    /// the enumerator), `budget` (`dphyp` hit [`PAIR_BUDGET`]), `hyperedge`
+    /// the enumerator), `hyperedge`
     /// (some part is held together only by a condition over three or more
     /// inputs) or `forced` (the `greedy` enumerator).
     fallback: Option<&'static str>,
@@ -762,14 +753,7 @@ impl Graph {
                 let (table, work) = dp::dpsub(n, &masks, &rows_of);
                 (Some(table), None, work)
             }
-            Enumerator::DpHyp if n < 64 => {
-                let rows_of = |s: Set| self.rows_of(&|i| s & (1 << i) != 0);
-                match dp::dphyp(n, &masks, &rows_of, PAIR_BUDGET) {
-                    Ok((table, work)) => (Some(table), None, work),
-                    Err(work) => (None, Some("budget"), work),
-                }
-            }
-            Enumerator::DpSub | Enumerator::DpHyp => (None, Some("inputs"), dp::Work::default()),
+            Enumerator::DpSub => (None, Some("inputs"), dp::Work::default()),
         };
         let built = match table.and_then(|t| self.table_plan(&t, &masks)) {
             Some(b) => b,

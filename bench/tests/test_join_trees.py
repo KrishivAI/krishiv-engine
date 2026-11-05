@@ -36,21 +36,27 @@ def test_a_tree_note_parses() -> None:
     }
 
 
+def step(note: str, batch: str = "JoinOrder") -> str:
+    return f"== Optimizer: {batch} round 1, JoinOrder: {note} ==\n\n"
+
+
 def test_the_last_ordering_block_is_the_plans() -> None:
     first = NOTE.replace("cost=1.250000e6", "cost=9.000000e6")
-    text = "\n".join(
-        [
-            "== Optimizer ==",
-            f"JoinOrder: {first}",
-            f"JoinOrder: {first}",
-            "EagerAggregate: moved",
-            f"JoinOrder: {NOTE}",
-            f"JoinOrder: {NOTE.replace('inputs=12', 'inputs=3')}",
-            "== Physical ==",
-        ]
+    text = (
+        "== Analyzed Logical Plan ==\nJoin\n"
+        + step(first)
+        + step(first)
+        + "== Optimizer: EagerAggregate round 1, EagerAggregate: moved ==\n- a\n+ b\n"
+        + step(NOTE)
+        + step(NOTE.replace("inputs=12", "inputs=3"))
+        + "== Optimizer: Prune round 1, Prune ==\n- x\n"
+        + "== Optimized Logical Plan ==\nJoin\n"
     )
     trees = join_trees.trees_of(text)
-    assert [(t["inputs"], t["cost"]) for t in trees] == [(12, 1.25e6), (3, 1.25e6)]
+    assert [(t["inputs"], t["cost"], t["shape"]) for t in trees] == [
+        (12, 1.25e6, "((0 1) (2 3))"),
+        (3, 1.25e6, "((0 1) (2 3))"),
+    ]
     assert join_trees.trees_of("no joins") == []
 
 

@@ -1633,14 +1633,13 @@ pub static EAGER_AGGREGATION: ConfigEntry = ConfigEntry {
 /// Join enumerator (`krishiv.optimizer.joinEnumerator`).
 pub static JOIN_ENUMERATOR: ConfigEntry = ConfigEntry {
     key: "krishiv.optimizer.joinEnumerator",
-    value_type: ValueType::Enum(&["dpsub", "dphyp", "greedy"]),
+    value_type: ValueType::Enum(&["dpsub", "greedy"]),
     default: Some(ConfigValue::String(Cow::Borrowed("dpsub"))),
     doc: "How the join optimizer orders each tree of inner joins. `dpsub`: dynamic programming \
           over every split of every subset of the inputs, for trees of at most \
-          `krishiv.optimizer.joinDpLimit` inputs, greedy above. `dphyp`: dynamic programming over \
-          connected subgraph pairs only (DPhyp), for trees of any size, greedy once it has \
-          considered 10,000 pairs. `greedy`: always join the connected pair with the fewest \
-          result rows. Results are the same either way; for comparing plans and planning time.",
+          `krishiv.optimizer.joinDpLimit` inputs, greedy above. `greedy`: always join the connected \
+          pair with the fewest result rows. Results are the same either way; for comparing plans \
+          and planning time.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

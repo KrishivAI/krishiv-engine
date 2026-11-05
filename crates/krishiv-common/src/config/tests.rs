@@ -729,17 +729,17 @@ fn join_enumerator_entries_default_and_parse() {
         c.get(&JOIN_DP_LIMIT).and_then(ConfigValue::as_int),
         Some(10)
     );
-    c.set("krishiv.optimizer.joinEnumerator", "DPhyp").unwrap();
+    c.set("krishiv.optimizer.joinEnumerator", "Greedy").unwrap();
     assert_eq!(
         c.get(&JOIN_ENUMERATOR).and_then(ConfigValue::as_str),
-        Some("dphyp")
+        Some("greedy")
     );
     c.set("krishiv.optimizer.joinDpLimit", "12").unwrap();
     assert_eq!(
         c.get(&JOIN_DP_LIMIT).and_then(ConfigValue::as_int),
         Some(12)
     );
-    assert!(c.set("krishiv.optimizer.joinEnumerator", "dpccp").is_err());
+    assert!(c.set("krishiv.optimizer.joinEnumerator", "dphyp").is_err());
     assert!(c.set("krishiv.optimizer.joinDpLimit", "0").is_err());
 }
 

@@ -215,7 +215,7 @@ def main(argv=None) -> None:
         action="append",
         default=[],
         metavar="NAME=K=V[,K=V]",
-        help="session settings of one arm (repeatable; the first is the base); default dpsub, dphyp, dpsub12, dpsub13",
+        help="session settings of one arm (repeatable; the first is the base); default dpsub, dpsub12, dpsub13, greedy",
     )
     jt.add_argument("--plan-reps", type=int, default=50, help="EXPLAIN runs per query and arm (planning time)")
     jt.add_argument("--threads", type=int, default=4)
