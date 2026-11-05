@@ -33,6 +33,17 @@
       "groupName": "arrow family"
     },
     {
+      "description": "object_store releases with the Arrow crates and is pinned exactly (ADR 0044, design note P3 section 5): one version across engine and platform, never automerged",
+      "matchManagers": [
+        "cargo"
+      ],
+      "matchPackageNames": [
+        "object_store"
+      ],
+      "groupName": "arrow family",
+      "automerge": false
+    },
+    {
       "description": "tonic and prost share a prost major",
       "matchManagers": [
         "cargo"

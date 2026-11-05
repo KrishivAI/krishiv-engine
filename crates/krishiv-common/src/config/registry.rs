@@ -78,6 +78,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_MULTIPART_PART_BYTES,
     &IO_MAX_RETRIES,
     &IO_REQUEST_TIMEOUT,
+    &IO_CREDENTIALS_REFRESH_SKEW,
     &RUNTIME_FILTER_ENABLED,
     &RUNTIME_FILTER_BLOOM_ENABLED,
     &RUNTIME_FILTER_IN_LIST_MAX_VALUES,
@@ -102,6 +103,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &AVRO_DATETIME_REBASE_MODE_IN_READ,
     &AGENT_GATE_BYTES,
     &SHARE_CTE_INSTANCES,
+    &EAGER_AGGREGATION,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -229,6 +231,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_TIME_PARSER_POLICY,
     ),
     (
+        "krishiv.io.credentials.refreshSkew",
+        &IO_CREDENTIALS_REFRESH_SKEW,
+    ),
+    (
         "krishiv.memory.abortReleaseTimeout",
         &MEMORY_ABORT_RELEASE_TIMEOUT,
     ),
@@ -236,6 +242,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.memory.spillScratchReserve",
         &MEMORY_SPILL_SCRATCH_RESERVE,
     ),
+    ("krishiv.optimizer.eagerAggregation", &EAGER_AGGREGATION),
     (
         "krishiv.sql.avro.compression.codec",
         &AVRO_COMPRESSION_CODEC,
@@ -1254,6 +1261,20 @@ pub static IO_REQUEST_TIMEOUT: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// `krishiv.io.credentials.refreshSkew`.
+pub static IO_CREDENTIALS_REFRESH_SKEW: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.credentials.refreshSkew",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(300))),
+    doc: "How long before its expiry a short-lived object-store credential (vended by a catalog \
+          or a token service) is refreshed. A request that arrives inside this window fetches a \
+          new credential first; an expired credential is never used. `0s` refreshes only at \
+          expiry.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
 /// `krishiv.runtimeFilter.enabled`.
 pub static RUNTIME_FILTER_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.runtimeFilter.enabled",
@@ -1586,6 +1607,20 @@ pub static AGENT_GATE_BYTES: ConfigEntry = ConfigEntry {
           table scans reach this many bytes is not run; the answer is the estimate and the plan \
           outline, and the caller repeats it with `--allow-heavy` to run it anyway. A statement whose \
           tables report no statistics runs. 0 turns the gate off.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Eager aggregation below joins (`krishiv.optimizer.eagerAggregation`).
+pub static EAGER_AGGREGATION: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.eagerAggregation",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Run an aggregate's calls below a join and merge their states above it, when statistics \
+          show the join keeps most rows and the join keys group them well. Only calls whose \
+          result cannot depend on row order or raise on a row the join would drop are moved. \
+          Results are the same either way.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

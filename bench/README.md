@@ -461,6 +461,34 @@ Only engines that run Spark SQL `explode` take part (Krishiv, Spark, Sail); the 
 Comet's conversion: one `<table>.parquet` file per table instead of Hive-partitioned directories, and DuckDB's default
 row-group size instead of 512 MiB. This is not part of the P2b exit gate.
 
+## Resource telemetry, cold runs and the scale ladder
+
+`krishiv-bench run` records, per query, from `/proc/<pid>/io` and `/proc/<pid>/stat` deltas around each timed sample
+(medians over the samples). Measured: Krishiv (the runner process tree), DuckDB (the harness process), Polars,
+DataFusion and Spark local mode (the harness process and its children, Python baseline included), Spark Connect in a
+container and in-process ClickHouse (chDB). **Not measured (fields are `null`):** a host Spark Connect server such as
+Sail, and Krishiv's spill bytes (the runner does not report them yet).
+
+| Field | Meaning |
+|---|---|
+| `read_bytes_median` | bytes fetched from the storage layer; 0 when the run came from the page cache |
+| `rchar_median`, `syscr_median` | bytes requested of read syscalls (cache hits included) and the number of those syscalls |
+| `read_size_mean_bytes` | `rchar / syscr`: small values mean many small reads |
+| `cpu_seconds_median`, `avg_cores` | user+system CPU seconds; median of CPU / wall per sample |
+| `peak_rss_bytes`, `spill_bytes` | maximum over the samples; spill is `null` where the engine does not report it |
+
+`krishiv-bench report` shows them in its "Resource use" table. A process of the tree that exits inside a sample
+loses its last slice (at most 20 ms of sampling); `null` means "not measured", never 0.
+
+`krishiv-bench run --cold` calls `posix_fadvise(POSIX_FADV_DONTNEED)` on every dataset file before each run, warm-up
+included (no root needed; only clean pages are dropped), and records `"cold": {"enabled": true, ...}` in the result.
+**Cold results are not comparable with warm ones**; SF10 and SF100 warm runs come from the page cache and hide
+I/O-bound gaps that show at SF1000. Not applied by `reproduce`, `abba` or `ab`.
+
+`krishiv-bench report --suite tpch --ladder [result.json ...]` takes results at two or more scale factors (newest per
+scale factor and engine) and flags each query whose engine / `duckdb` ratio grows by more than 1.5x between
+consecutive scale factors; it warns when cold and warm results are mixed. It writes `ladder_<suite>.md`.
+
 ## Result JSON (`$KRISHIV_DATA/results/<ts>_<engine>_<suite>_sf<N>.json`)
 `machine` (CPU model, cores, RAM, OS, governor), `git` (krishiv-engine commit/branch/dirty), `engine` (name, version, config (Krishiv: threads, memory limit, `build_profile`, `target_cpu`), build, and `allocator` when the engine reports it, e.g. `mimalloc`; the CLI prints it as `allocator=<name>` in `krishiv --version`, the wheel via `krishiv.build_info()`),
 `dataset` (name, SF, path, tables, generator version, manifest sha256), and per query: `iterations`, `times_s`, `p50_s`, `p99_s`, `min_s`, `max_s`, `mean_s`,

@@ -140,6 +140,11 @@ def main(argv=None) -> None:
     r.add_argument("--duckdb-memory-limit", default="12GB")
     r.add_argument("--timeout", type=float, default=600, help="per-query timeout seconds (0 = none)")
     r.add_argument("--runner", help=RUNNER_HELP)
+    r.add_argument(
+        "--cold",
+        action="store_true",
+        help="evict the dataset from the page cache before every run (results are not comparable with warm runs)",
+    )
     _add_memcap_args(r)
     nc = sub.add_parser(
         "nested-check",
@@ -283,6 +288,12 @@ def main(argv=None) -> None:
     rp.add_argument("--dataset")
     rp.add_argument("--rows", default="10m", help="memcap: sales rows of the results to report")
     rp.add_argument("--baseline", default="duckdb")
+    rp.add_argument(
+        "--ladder",
+        action="store_true",
+        help="scale ladder: flag queries whose ratio to duckdb grows >1.5x between consecutive scale factors "
+        "(uses every result of --suite in the results dir, or the files given)",
+    )
     rp.add_argument("files", nargs="*", type=Path, help="explicit result JSONs (default: newest per engine)")
     mn = sub.add_parser(
         "minimize", help="shrink a query that differs from the reference engine to a minimal query and data slice"
@@ -545,6 +556,7 @@ def main(argv=None) -> None:
                 a.queries.split(",") if a.queries else None,
                 kw,
                 a.timeout or None,
+                a.cold,
             )
             print(f"result: {f}")
             if failed:
@@ -560,6 +572,7 @@ def main(argv=None) -> None:
             kw,
             a.timeout or None,
             a.dataset,
+            a.cold,
         )
         print(f"result: {f}")
     elif a.suite == "micro":
@@ -568,6 +581,10 @@ def main(argv=None) -> None:
         from .memcap import write_memcap_report
 
         print(f"report: {write_memcap_report(a.rows)}")
+    elif a.ladder:
+        from .ladder import write_ladder
+
+        print(f"ladder: {write_ladder(a.suite, a.files or None, a.dataset)}")
     else:
         if h2o.is_h2o(a.suite):
             root, _, a.sf = h2o_target(ap, a)

@@ -44,25 +44,32 @@ pub(crate) fn catalog() -> MemoryCatalog {
     cat
 }
 
-/// The text of TPC-DS query `q` (1-based) from the benchmark harness.
+/// The text of TPC-DS query `q` (1-based) from the benchmark harness, as Spark's own TPC-DS files write it: the
+/// harness copies quote column aliases with double quotes (`AS "order count"`), which Spark reads as strings, so
+/// they become backtick-quoted identifiers. (Single quotes are the literals.)
 pub(crate) fn sql(q: usize) -> String {
-    std::fs::read_to_string(support::root().join(format!("bench/queries/tpcds/q{q:02}.sql")))
-        .unwrap()
+    let text =
+        std::fs::read_to_string(support::root().join(format!("bench/queries/tpcds/q{q:02}.sql")))
+            .unwrap();
+    let mut out = String::with_capacity(text.len());
+    let mut quoted = false;
+    for c in text.chars() {
+        match c {
+            '"' => {
+                quoted = !quoted;
+                out.push('`');
+            }
+            c => out.push(c),
+        }
+    }
+    assert!(!quoted, "q{q:02}: an unclosed double quote");
+    out
 }
 
 /// TPC-DS queries that do not resolve yet (with the reason): snapshots
 /// cannot cover them until their features land.
-pub(crate) const UNSUPPORTED: &[(usize, &str)] = &[
-    (16, "double-quoted aliases do not parse"),
-    (30, "column c_last_review_date_sk missing from schemas"),
-    (32, "double-quoted aliases do not parse"),
-    (50, "double-quoted aliases do not parse"),
-    (62, "double-quoted aliases do not parse"),
-    (92, "double-quoted aliases do not parse"),
-    (94, "double-quoted aliases do not parse"),
-    (95, "double-quoted aliases do not parse"),
-    (99, "double-quoted aliases do not parse"),
-];
+pub(crate) const UNSUPPORTED: &[(usize, &str)] =
+    &[(30, "column c_last_review_date_sk missing from schemas")];
 
 #[test]
 fn tpcds_plans() {

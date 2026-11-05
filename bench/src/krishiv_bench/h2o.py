@@ -27,6 +27,7 @@ from .adapters import Dataset, Engine, Query, make_engine
 from .adapters.base import check_query
 from .errors import error_fields
 from .paths import data_root, fmt_sf, queries_dir, results_dir
+from .report import cache_mode_lines
 
 SUITES = {"h2o-groupby": "groupby", "h2o-join": "join"}
 SIZES = {"0.5gb": 10**7, "5gb": 10**8, "50gb": 10**9}  # rows; the benchmark's names for the data sizes
@@ -195,9 +196,11 @@ def run_h2o(
     only: list[str] | None = None,
     engine_kwargs: dict | None = None,
     timeout_s: float | None = 600,
+    cold: bool = False,
 ) -> tuple[Path, int]:
     """Runs the suite on one engine; returns (result JSON, number of failed questions)."""
-    from .runner import engine_record, git_info, machine_info
+    from .resources import evict_page_cache, resource_fields
+    from .runner import cold_record, engine_record, git_info, machine_info
 
     if iterations < 1 or warmup < 0:
         raise SystemExit("--iterations must be >= 1 and --warmup >= 0")
@@ -220,6 +223,7 @@ def run_h2o(
         | dataset_provenance(root),
         "suite": suite,
         "iterations": iterations,
+        "cold": cold_record(cold),
         "warmup": warmup,
         "timeout_s": timeout_s,
         "answers_available": True,
@@ -260,6 +264,8 @@ def run_h2o(
                     continue
                 n_rows, times, meas = int(row[0]), [], []
                 for i in range(warmup + iterations):
+                    if cold:
+                        evict_page_cache(ds.root)
                     eng.begin_measure()
                     try:
                         n, secs = call(eng.timed_run, q)
@@ -282,10 +288,7 @@ def run_h2o(
                 max_s=max(times),
                 mean_s=statistics.fmean(times),
                 rows_returned=n_rows,
-                peak_rss_bytes=_max([m.peak_rss_bytes for m in meas]),
-                baseline_rss_bytes=_max([m.baseline_rss_bytes for m in meas]),
-                cpu_seconds_median=_med([m.cpu_seconds for m in meas]),
-                spill_bytes=_max([m.spill_bytes for m in meas]),
+                **resource_fields(meas, times),
             )
             print(f"  {q.id}: p50={entry['p50_s'] * 1000:10.1f} ms rows={n_rows} chk=pass")
     finally:
@@ -298,16 +301,6 @@ def run_h2o(
     f = out / f"{started.strftime('%Y%m%dT%H%M%SZ')}_{engine_name}_{ds.name}_sf{fmt_sf(size_gb)}.json"
     f.write_text(json.dumps(record, indent=2))
     return f, failed
-
-
-def _max(xs):
-    xs = [x for x in xs if x is not None]
-    return max(xs) if xs else None
-
-
-def _med(xs):
-    xs = [x for x in xs if x is not None]
-    return statistics.median(xs) if xs else None
 
 
 # ---------------------------------------------------------------- report
@@ -327,6 +320,7 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
         f"`{(ds.get('content_sha256') or 'n/a')[:16]}`",
         f"- {first['iterations']} timed + {first['warmup']} warm-up runs per question; median (p50) shown. Every "
         "engine's answer checksum must equal DuckDB's before a question is timed.",
+        *cache_mode_lines(results),
         "",
         "| Engine | Version | Result file |",
         "|---|---|---|",

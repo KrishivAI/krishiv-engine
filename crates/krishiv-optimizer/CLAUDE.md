@@ -15,6 +15,7 @@ Paths are relative to this crate.
   `InferWindowGroupLimit` decision (applied by the physical planner)
 - `src/restrict.rs` subquery restriction rules
 - `src/inline_cte.rs` CTE inlining (a nondeterministic definition read twice stays a `CteRef`); `src/share_cte.rs` `ShareCte` (P2-T198): equal deterministic instances with a pipeline breaker become one `WITH` definition, only when a session configuration is given and `krishiv.sql.optimizer.shareCteInstances` is on
+- `src/eager.rs` `EagerAggregate` (P2-T167): an aggregate's calls run below a join and merge above it, gated on statistics; `krishiv.optimizer.eagerAggregation`, `Options::eager_aggregation`
 - `src/join_order.rs` inner-join ordering; `src/stats.rs` `Statistics` it reads and the estimate types (`RelStats`, `AttrStats`, `StatSource`)
 - `src/estimate.rs` the `Estimator`: what each operator leaves known of its columns; `src/narrow.rs` predicates over estimates (selectivity and narrowed ranges); `src/plan_stats.rs` `PlanStats`, one pass over an optimized plan (physical planner, `EXPLAIN COST`)
 - `tests/it/plan_stats.rs` one test per propagation rule; `tests/it/qerror.rs` the q-error report (`cargo xtask qerror`)
@@ -33,6 +34,7 @@ Paths are relative to this crate.
   rewrite batch) only where the type range proves no per-row overflow and `|x|, |c| <= 2^16`; floating point and
   decimals are never rewritten. Conditions and the one residual assumption (fewer than 2^46 rows per aggregate)
   are in the module docs; the executor differential test is `krishiv-exec` `tests/planner/sum_rewrite.rs`.
+- Eager aggregation moves only calls whose result cannot depend on row order and whose arguments cannot raise (`eager.rs` module docs); it reads statistics only, runs after join ordering, and states each decision in `EXPLAIN VERBOSE`. The executor differential is `krishiv-exec` `tests/planner/eager_aggregate.rs`.
 - Join ordering re-plans each inner-join tree (through deterministic filters and column selections) from
   `Statistics`; it never adds a cross product, places each conjunct at the lowest join that has its inputs
   (subquery conjuncts as filters), and restores column order only for positional consumers. Inputs are
