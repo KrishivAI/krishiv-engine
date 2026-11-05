@@ -418,6 +418,18 @@ impl<'a> Shape<'a> {
         {
             return Err("the aggregate holds a subquery or an outer reference".to_owned());
         }
+        // A key evaluated once per partial group, not once per joined row, groups and counts differently
+        // (`GROUP BY rand(0)`).
+        if self
+            .keys
+            .iter()
+            .chain(self.outputs)
+            .any(|e| !is_deterministic(e))
+        {
+            return Err(
+                "a grouping key or an output of the aggregate is nondeterministic".to_owned(),
+            );
+        }
         let mut read = self.read_by_aggregate();
         for node in &self.spine {
             read = read_below(node, &read, args)?;
@@ -466,6 +478,9 @@ fn read_below(node: &LogicalPlan, read: &Attrs, args: &Attrs) -> Result<Attrs, S
         for v in values {
             if has_subquery(v) || has_outer_reference(v) {
                 return Err("a projection above the join holds a subquery".to_owned());
+            }
+            if !is_deterministic(v) {
+                return Err("a projection above the join is nondeterministic".to_owned());
             }
             references_into(v, &mut below);
         }

@@ -103,6 +103,15 @@ const STAYS: [&str; 13] = [
     "SELECT f.i, f.s, sum(f.i) FROM f JOIN w ON f.k = w.wk GROUP BY f.i, f.s",
 ];
 
+/// A nondeterministic grouping key is evaluated once per joined row, not once per partial group, so the call stays
+/// above the join. (Not in `STAYS`: the on and off plans order the join differently, and a seeded `rand` draws from
+/// the rows in the order they arrive, so their answers are not comparable.)
+const NONDETERMINISTIC_KEYS: [&str; 3] = [
+    "SELECT count(*) FROM f JOIN w ON f.k = w.wk GROUP BY rand(0)",
+    "SELECT w.wk, count(*) FROM f JOIN w ON f.k = w.wk GROUP BY w.wk, rand(0)",
+    "SELECT x, wk, sum(i) FROM (SELECT w.wk, f.i, rand(0) AS x FROM f JOIN w ON f.k = w.wk) GROUP BY x, wk",
+];
+
 #[test]
 fn the_rule_fires_and_returns_the_same_rows() {
     let rt = runtime();
@@ -124,6 +133,16 @@ fn each_semantics_rule_keeps_the_call_above_the_join() {
         assert!(!fires(&t, q), "{q}");
         let (on, off) = both(&t, q);
         assert_eq!(on, off, "{q}");
+    }
+}
+
+#[test]
+fn a_nondeterministic_key_keeps_the_call_above_the_join() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let t = tables(dir.path(), &many(), &WEIGHTS, &rt);
+    for q in NONDETERMINISTIC_KEYS {
+        assert!(!fires(&t, q), "{q}");
     }
 }
 
