@@ -350,6 +350,7 @@ impl WindowFunctionPlan {
                 | DataType::Int32
                 | DataType::Int64
                 | DataType::Date32
+                | DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _)
                 | DataType::Decimal64(..)
                 | DataType::Decimal128(..)
         );
