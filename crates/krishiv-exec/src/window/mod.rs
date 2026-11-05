@@ -67,7 +67,7 @@ mod eval;
 mod frames;
 mod group_limit;
 /// UTC, the zone the tests run in unless they name another.
-#[cfg(all(test, not(loom)))]
+#[cfg(test)]
 fn utc_zone() -> krishiv_kernels::datetime::ZoneRef {
     krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0))
 }
