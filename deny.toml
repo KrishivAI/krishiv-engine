@@ -6,7 +6,11 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # pin-utils is unmaintained; it reaches us only through loom 0.7.2 (the latest), a dev-dependency for
+    # concurrency tests. Remove once loom drops it.
+    { id = "RUSTSEC-2026-0441", reason = "dev-only via loom 0.7.2; no maintained replacement upstream yet" },
+]
 
 [licenses]
 version = 2
