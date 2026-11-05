@@ -62,6 +62,8 @@ mod history;
 mod identifier_clause;
 mod introspection;
 mod locals;
+#[cfg(feature = "telemetry-logs")]
+pub mod logging;
 mod memory_table;
 mod nested_value;
 #[cfg(feature = "telemetry-otlp")]

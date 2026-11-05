@@ -92,11 +92,10 @@ impl DataFrame {
 
     /// The span of one action: the statement's, or the engine's alone.
     fn span(&self) -> tracing::Span {
-        let session_id = &self.session.state.session_id;
-        self.trace.as_ref().map_or_else(
-            || crate::telemetry::plain_span(session_id),
-            |t| t.span(session_id),
-        )
+        let who = crate::telemetry::Who::of(&self.session.state);
+        self.trace
+            .as_ref()
+            .map_or_else(|| crate::telemetry::plain_span(&who), |t| t.span(&who))
     }
 
     /// `self` with the statement's trace.

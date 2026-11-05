@@ -22,6 +22,46 @@ use tracing::Span;
 
 use crate::session::RecordBatchStream;
 
+/// Who and what a span belongs to: the session, the trace the caller set with
+/// `Session::set_trace_context`, and the principal. Every log record written
+/// inside the span carries these through the span's fields (the JSON layer
+/// lists them), so one query's records join on `krishiv.query_id` and
+/// `krishiv.trace_id`.
+#[derive(Debug, Clone)]
+pub(crate) struct Who {
+    pub(crate) session_id: String,
+    pub(crate) trace_id: Option<String>,
+    pub(crate) principal: String,
+    pub(crate) tenant: Option<String>,
+}
+
+impl Who {
+    /// The identity of `state`'s session at this moment (the trace context can change between
+    /// statements).
+    pub(crate) fn of(state: &crate::session::SessionState) -> Self {
+        Self {
+            session_id: state.session_id.clone(),
+            trace_id: state.queries.trace_id(),
+            principal: state.principal.name.clone(),
+            tenant: state.principal.tenant.clone(),
+        }
+    }
+
+    /// Records the fields on `span`, if a subscriber wants it.
+    fn record(&self, span: &Span) {
+        if span.is_disabled() {
+            return;
+        }
+        span.record("krishiv.principal", self.principal.as_str());
+        if let Some(t) = &self.tenant {
+            span.record("krishiv.tenant", t.as_str());
+        }
+        if let Some(t) = &self.trace_id {
+            span.record("krishiv.trace_id", t.as_str());
+        }
+    }
+}
+
 /// What a span says about one statement. The attributes are built when the
 /// span is, and only if a subscriber wants it: with none installed a statement
 /// costs the copy of its text and nothing else.
@@ -56,7 +96,8 @@ impl QueryTrace {
     }
 
     /// The span of one action of the statement.
-    pub(crate) fn span(&self, session_id: &str) -> Span {
+    pub(crate) fn span(&self, who: &Who) -> Span {
+        let session_id = who.session_id.as_str();
         let span = tracing::info_span!(
             "krishiv.query",
             db.system.name = "krishiv",
@@ -65,15 +106,20 @@ impl QueryTrace {
             db.query.text = tracing::field::Empty,
             krishiv.session_id = %session_id,
             krishiv.query_id = tracing::field::Empty,
+            krishiv.trace_id = tracing::field::Empty,
+            krishiv.principal = tracing::field::Empty,
+            krishiv.tenant = tracing::field::Empty,
         );
         self.fill(&span, session_id);
+        who.record(&span);
         span
     }
 
     /// The span of `Session::sql` itself: parse, analysis and, for a command
     /// that runs eagerly (`INSERT ... SELECT`, DDL), its execution. A query's
     /// rows are produced later, inside the `krishiv.query` span of its action.
-    pub(crate) fn prepare_span(&self, session_id: &str) -> Span {
+    pub(crate) fn prepare_span(&self, who: &Who) -> Span {
+        let session_id = who.session_id.as_str();
         let span = tracing::info_span!(
             "krishiv.sql",
             db.system.name = "krishiv",
@@ -82,8 +128,12 @@ impl QueryTrace {
             db.query.text = tracing::field::Empty,
             krishiv.session_id = %session_id,
             krishiv.query_id = tracing::field::Empty,
+            krishiv.trace_id = tracing::field::Empty,
+            krishiv.principal = tracing::field::Empty,
+            krishiv.tenant = tracing::field::Empty,
         );
         self.fill(&span, session_id);
+        who.record(&span);
         span
     }
 
@@ -105,12 +155,18 @@ impl QueryTrace {
 
 /// The span of an action of a frame without a statement (a DataFrame
 /// transformation chain): the session and the engine, no query text.
-pub(crate) fn plain_span(session_id: &str) -> Span {
-    tracing::info_span!(
+pub(crate) fn plain_span(who: &Who) -> Span {
+    let session_id = who.session_id.as_str();
+    let span = tracing::info_span!(
         "krishiv.query",
         db.system.name = "krishiv",
         krishiv.session_id = %session_id,
-    )
+        krishiv.trace_id = tracing::field::Empty,
+        krishiv.principal = tracing::field::Empty,
+        krishiv.tenant = tracing::field::Empty,
+    );
+    who.record(&span);
+    span
 }
 
 /// `stream` kept inside `span` until it is dropped, and polled inside it: the
@@ -123,12 +179,21 @@ pub(crate) fn in_span(stream: RecordBatchStream, span: Span) -> RecordBatchStrea
     Box::pin(SpanStream {
         inner: stream,
         span,
+        started: std::time::Instant::now(),
+        rows: 0,
+        batches: 0,
+        done: false,
     })
 }
 
 struct SpanStream {
     inner: RecordBatchStream,
     span: Span,
+    started: std::time::Instant,
+    rows: u64,
+    batches: u64,
+    /// The end (finish or failure) was logged.
+    done: bool,
 }
 
 impl Stream for SpanStream {
@@ -137,7 +202,38 @@ impl Stream for SpanStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = &mut *self;
         let _entered = this.span.enter();
-        this.inner.as_mut().poll_next(cx)
+        let polled = this.inner.as_mut().poll_next(cx);
+        match &polled {
+            Poll::Ready(Some(Ok(batch))) => {
+                this.rows += batch.num_rows() as u64;
+                this.batches += 1;
+            }
+            // One record at the end of the result, inside the query's span: the span's fields
+            // (query id, session id, trace id, principal) are on the record, and nothing of the
+            // statement's text or values is (that is the span's sanitized `db.query.text`).
+            Poll::Ready(None) if !this.done => {
+                this.done = true;
+                tracing::info!(
+                    target: "krishiv::query",
+                    rows = this.rows,
+                    batches = this.batches,
+                    elapsed_ms = u64::try_from(this.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    "query finished"
+                );
+            }
+            Poll::Ready(Some(Err(e))) if !this.done => {
+                this.done = true;
+                tracing::warn!(
+                    target: "krishiv::query",
+                    error_class = e.error_class().name(),
+                    rows = this.rows,
+                    elapsed_ms = u64::try_from(this.started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    "query failed"
+                );
+            }
+            _ => {}
+        }
+        polled
     }
 }
 
@@ -197,7 +293,12 @@ mod tests {
         let closed = Arc::new(AtomicBool::new(false));
         let subscriber = tracing_subscriber::registry().with(Closed(Arc::clone(&closed)));
         tracing::subscriber::with_default(subscriber, || {
-            let span = plain_span("s");
+            let span = plain_span(&Who {
+                session_id: "s".to_owned(),
+                trace_id: None,
+                principal: "p".to_owned(),
+                tenant: None,
+            });
             let stream: RecordBatchStream = futures::stream::empty().boxed();
             let stream = in_span(stream, span.clone());
             drop(span);
