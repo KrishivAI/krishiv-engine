@@ -8,9 +8,9 @@
 //! JSON document into exactly the bytes Spark 4.2.0's `parse_json` produces
 //! (same dictionary order, widths, number rules and error classes).
 //!
-//! Every later Variant change (the data type, Parquet I/O, `parse_json`,
-//! `variant_get`, printing) builds on this codec; nothing else in this
-//! module depends on it yet.
+//! [`VariantWriter`] builds values from typed parts (casts to `VARIANT`,
+//! `variant_get` re-encoding) with Spark's `VariantBuilder` byte choices.
+//! `DataType::Variant` stores these bytes; the kernels print and cast them.
 //!
 //! # Verified behaviour (live Spark 4.2.0 probes, 2026)
 //!
@@ -42,9 +42,11 @@
 
 mod builder;
 mod reader;
+mod writer;
 
 pub use builder::VariantBuilder;
 pub use reader::{VariantKind, VariantRef};
+pub use writer::{FieldEntry, VariantWriter, digits, strip_trailing_zeros};
 
 /// Maximum Variant value-buffer size in bytes (128 MiB).
 ///

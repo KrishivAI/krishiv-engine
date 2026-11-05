@@ -20,6 +20,7 @@
 //! | `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, any child name |
 //! | `map<k,v>` | `Map` of a non-null struct `entries` of `key` (non-null) and `value` (nullable when `valueContainsNull`), unsorted | any child names |
 //! | `struct<...>` | `Struct` of the fields | |
+//! | `variant` | `Struct<metadata: BinaryView, value: BinaryView>`, both children non-null, always tagged, with the Arrow extension name `arrow.parquet.variant` | |
 //!
 //! Nested children follow Spark's `ArrowUtils` names. Each child is a field
 //! built as [`DataType::to_arrow_field`] builds a column, so it carries its
@@ -55,6 +56,11 @@
 //!   [`crate::geo::ByteOrder::Ndr`]), so a `geometry(any)`
 //!   column can mix SRIDs. The struct alone does not say geometry or
 //!   geography, so these fields always carry the tag.
+//! - **Variants.** Each row holds its own metadata dictionary and value bytes
+//!   (Parquet Variant v1, unshredded: shredding exists only in files). A
+//!   null struct slot is SQL `NULL`; a Variant null is the one-byte value
+//!   `0x00`. The field carries the tag and the canonical Arrow extension
+//!   name ([`VARIANT_EXTENSION_NAME`]) so Arrow consumers can recognise it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -83,6 +89,18 @@ pub const SPATIAL_SRID_FIELD: &str = "srid";
 /// Name of the WKB child of a spatial value's struct.
 pub const SPATIAL_WKB_FIELD: &str = "wkb";
 
+/// Name of the metadata-dictionary child of a variant value's struct.
+pub const VARIANT_METADATA_FIELD: &str = "metadata";
+
+/// Name of the value child of a variant value's struct.
+pub const VARIANT_VALUE_FIELD: &str = "value";
+
+/// The canonical Arrow extension name of a variant field.
+pub const VARIANT_EXTENSION_NAME: &str = "arrow.parquet.variant";
+
+/// Arrow's field-metadata key for an extension type name.
+const ARROW_EXTENSION_NAME_KEY: &str = "ARROW:extension:name";
+
 /// The largest precision on the `Decimal64` carrier; above it a decimal is on
 /// `Decimal128`. Setting this to 0 puts every decimal back on `Decimal128`.
 pub const DECIMAL64_MAX_PRECISION: u8 = 18;
@@ -92,6 +110,14 @@ fn spatial_struct() -> ArrowType {
     ArrowType::Struct(Fields::from(vec![
         Field::new(SPATIAL_SRID_FIELD, ArrowType::Int32, false),
         Field::new(SPATIAL_WKB_FIELD, ArrowType::BinaryView, false),
+    ]))
+}
+
+/// The in-memory struct of a variant value: `metadata`, then `value`.
+fn variant_struct() -> ArrowType {
+    ArrowType::Struct(Fields::from(vec![
+        Field::new(VARIANT_METADATA_FIELD, ArrowType::BinaryView, false),
+        Field::new(VARIANT_VALUE_FIELD, ArrowType::BinaryView, false),
     ]))
 }
 
@@ -171,6 +197,7 @@ impl DataType {
             Self::DayTimeInterval { .. } => ArrowType::Duration(TimeUnit::Microsecond),
             Self::CalendarInterval => ArrowType::Interval(IntervalUnit::MonthDayNano),
             Self::Geometry { .. } | Self::Geography { .. } => spatial_struct(),
+            Self::Variant => variant_struct(),
             Self::Array(a) => ArrowType::List(Arc::new(
                 a.element_type()
                     .to_arrow_field("element", a.contains_null()),
@@ -282,6 +309,7 @@ impl DataType {
                 Self::Time { .. }
                 | Self::Geometry { .. }
                 | Self::Geography { .. }
+                | Self::Variant
                 | Self::YearMonthInterval { .. }
                 | Self::DayTimeInterval { .. },
                 _,
@@ -314,7 +342,7 @@ impl DataType {
     /// A field of the canonical Arrow type, tagged with the Spark type when
     /// the Arrow type alone does not determine it (`decimal(0,0)`, `time(p)`
     /// below precision 6, intervals with other than the default fields,
-    /// geometry and geography).
+    /// geometry, geography and variant).
     pub fn to_arrow_field(&self, name: impl Into<String>, nullable: bool) -> Field {
         self.tagged_field(name, self.to_arrow(), nullable)
     }
@@ -344,10 +372,15 @@ impl DataType {
         let needs_tag = Self::from_arrow(&storage).ok().as_ref() != Some(self);
         let field = Field::new(name, storage, nullable);
         if needs_tag {
-            field.with_metadata(HashMap::from([(
-                SPARK_TYPE_METADATA_KEY.to_owned(),
-                self.catalog_string(),
-            )]))
+            let mut metadata =
+                HashMap::from([(SPARK_TYPE_METADATA_KEY.to_owned(), self.catalog_string())]);
+            if *self == Self::Variant {
+                metadata.insert(
+                    ARROW_EXTENSION_NAME_KEY.to_owned(),
+                    VARIANT_EXTENSION_NAME.to_owned(),
+                );
+            }
+            field.with_metadata(metadata)
         } else {
             field
         }
@@ -366,6 +399,14 @@ impl DataType {
 
     fn from_arrow_field_at(field: &Field, depth: usize) -> Result<Self> {
         match field.metadata().get(SPARK_TYPE_METADATA_KEY) {
+            None if field
+                .metadata()
+                .get(ARROW_EXTENSION_NAME_KEY)
+                .is_some_and(|n| n == VARIANT_EXTENSION_NAME)
+                && Self::Variant.is_valid_storage(field.data_type()) =>
+            {
+                Ok(Self::Variant)
+            }
             None => Self::from_arrow_at(field.data_type(), depth),
             Some(tag) => {
                 let t = crate::parse_data_type(tag)?;

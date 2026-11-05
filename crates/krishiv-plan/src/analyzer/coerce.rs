@@ -737,14 +737,16 @@ fn same_shape(args: &[Arg<'_>]) -> bool {
 }
 
 /// Spark's `TypeUtils.isOrderable`: a map orders nowhere, and neither does
-/// an array or struct holding one; a geometry or geography does not either.
+/// an array or struct holding one; a geometry, geography or variant does not
+/// either.
 pub(super) fn orderable(t: &DataType) -> bool {
     match t {
-        // A geometry or geography neither orders nor compares.
+        // A geometry, geography or variant neither orders nor compares.
         DataType::Map(_)
         | DataType::CalendarInterval
         | DataType::Geometry { .. }
-        | DataType::Geography { .. } => false,
+        | DataType::Geography { .. }
+        | DataType::Variant => false,
         DataType::Array(a) => orderable(a.element_type()),
         DataType::Struct(s) => s.fields().iter().all(|f| orderable(f.data_type())),
         _ => true,
