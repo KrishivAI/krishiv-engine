@@ -463,9 +463,11 @@ row-group size instead of 512 MiB. This is not part of the P2b exit gate.
 
 ## Resource telemetry, cold runs and the scale ladder
 
-`krishiv-bench run` records, per query and for every engine whose process can be measured (Krishiv, DuckDB,
-ClickHouse and Spark in a container; not a host Spark Connect server such as Sail), from `/proc/<pid>/io` and
-`/proc/<pid>/stat` deltas around each timed sample (process tree for Krishiv; medians over the samples):
+`krishiv-bench run` records, per query, from `/proc/<pid>/io` and `/proc/<pid>/stat` deltas around each timed sample
+(medians over the samples). Measured: Krishiv (the runner process tree), DuckDB (the harness process), Polars,
+DataFusion and Spark local mode (the harness process and its children, Python baseline included), Spark Connect in a
+container and in-process ClickHouse (chDB). **Not measured (fields are `null`):** a host Spark Connect server such as
+Sail, and Krishiv's spill bytes (the runner does not report them yet).
 
 | Field | Meaning |
 |---|---|

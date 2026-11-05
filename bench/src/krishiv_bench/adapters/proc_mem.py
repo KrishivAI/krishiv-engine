@@ -14,6 +14,8 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
+from .base import Measure
+
 
 def _status_kb(text: str, key: str) -> int:
     for line in text.splitlines():
@@ -213,3 +215,34 @@ class TreeProc:
                 total = total + (c - self._io0.get(pid, zero))
             self.io = total
         return peak
+
+
+def tree_measure(tree: TreeProc | None) -> Measure:
+    """The ``Measure`` of a stopped window (peak RSS, CPU seconds, I/O); empty when there was no window."""
+    if tree is None:
+        return Measure()
+    peak = tree.stop()
+    io = tree.io
+    return Measure(
+        peak_rss_bytes=peak,
+        cpu_seconds=tree.cpu_seconds,
+        rchar=io.rchar if io else None,
+        read_bytes=io.read_bytes if io else None,
+        syscr=io.syscr if io else None,
+    )
+
+
+class SelfTreeMeasure:
+    """``begin_measure`` / ``end_measure`` for an engine that runs in the harness process (and its children):
+    Polars, DataFusion, Spark local mode. The numbers cover the whole harness process, Python baseline included."""
+
+    _tree: TreeProc | None = None
+
+    def begin_measure(self) -> None:
+        self.end_measure()
+        self._tree = TreeProc(os.getpid())
+        self._tree.start()
+
+    def end_measure(self) -> Measure:
+        tree, self._tree = self._tree, None
+        return tree_measure(tree)

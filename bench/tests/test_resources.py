@@ -209,3 +209,104 @@ def test_report_shows_the_resource_columns():
     md = render({"duckdb": r})
     assert "max storage read GiB" in md
     assert "| 8.0 | 1.00 | 2.00 | 256 |" in md
+
+
+# ---- wiring: run_suite, the CLI and the adapters
+
+
+@pytest.fixture
+def data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path))
+    d = tmp_path / "tpch" / "sf1"
+    d.mkdir(parents=True)
+    (d / "t.parquet").write_bytes(b"")
+    return tmp_path
+
+
+def _run_fake_suite(monkeypatch: pytest.MonkeyPatch, cold: bool) -> tuple[dict, list[Path]]:
+    from krishiv_bench import runner
+    from krishiv_bench.adapters.base import Engine, Query
+
+    class _Fake(Engine):
+        def version(self) -> str:
+            return "fake"
+
+        def setup(self, dataset) -> None:
+            pass
+
+        def run(self, query):
+            return [(1,)]
+
+        def end_measure(self) -> Measure:
+            return Measure(cpu_seconds=1.0, rchar=100, read_bytes=50, syscr=4)
+
+    evicted: list[Path] = []
+    monkeypatch.setattr(runner, "make_engine", lambda *a, **k: _Fake())
+    monkeypatch.setattr(runner, "load_queries", lambda *a, **k: [Query("q01", "select 1", "tpch")])
+    monkeypatch.setattr(runner, "evict_page_cache", lambda root: evicted.append(root))
+    out = runner.run_suite("fake", "tpch", 1, iterations=2, warmup=1, cold=cold)
+    return json.loads(out.read_text()), evicted
+
+
+def test_run_suite_cold_evicts_before_every_run_and_records_it(data: Path, monkeypatch: pytest.MonkeyPatch):
+    rec, evicted = _run_fake_suite(monkeypatch, cold=True)
+    assert evicted == [data / "tpch" / "sf1"] * 3  # warm-up included
+    assert rec["cold"]["enabled"] is True
+    q = rec["queries"]["q01"]
+    assert (q["rchar_median"], q["read_bytes_median"], q["syscr_median"]) == (100, 50, 4)
+    assert q["read_size_mean_bytes"] == 25
+    assert q["avg_cores"] > 0
+
+
+def test_run_suite_warm_never_evicts(data: Path, monkeypatch: pytest.MonkeyPatch):
+    rec, evicted = _run_fake_suite(monkeypatch, cold=False)
+    assert evicted == []
+    assert rec["cold"] == {"enabled": False}
+
+
+def test_cli_passes_cold_and_dispatches_ladder(data: Path, monkeypatch: pytest.MonkeyPatch):
+    from krishiv_bench import cli
+
+    seen: dict = {}
+    monkeypatch.setattr(cli, "run_suite", lambda *a, **k: seen.setdefault("args", a) and Path("/x"))
+    cli.main(["run", "--engine", "duckdb", "--cold"])
+    assert seen["args"][-1] is True
+    monkeypatch.setattr(ladder, "write_ladder", lambda suite, files, dataset: Path("/ladder.md"))
+    cli.main(["report", "--suite", "tpch", "--ladder"])
+
+
+def test_krishiv_adapter_measures_its_runner_process(tmp_path: Path):
+    from test_metrics import _FAKE_RUNNER
+
+    from krishiv_bench.adapters import Dataset
+    from krishiv_bench.adapters.krishiv import KrishivEngine
+
+    fake = tmp_path / "runner"
+    fake.write_text(_FAKE_RUNNER.replace("PYTHON", sys.executable))
+    fake.chmod(0o755)
+    eng = KrishivEngine(threads=1, binary=fake)
+    eng.setup(Dataset("tpch", 1, tmp_path, ["t"]))
+    try:
+        eng.begin_measure()  # starts the runner
+        m = eng.end_measure()
+        assert m.peak_rss_bytes
+        assert m.rchar is not None
+        assert m.cpu_seconds is not None
+    finally:
+        eng.teardown()
+
+
+def test_self_tree_measure_covers_the_harness_process():
+    from krishiv_bench.adapters.proc_mem import SelfTreeMeasure
+
+    class _E(SelfTreeMeasure):
+        pass
+
+    e = _E()
+    e.begin_measure()
+    sum(i * i for i in range(300_000))
+    m = e.end_measure()
+    assert m.peak_rss_bytes
+    assert m.cpu_seconds is not None
+    assert m.rchar is not None
+    assert _E().end_measure() == Measure()  # no window: nothing measured
