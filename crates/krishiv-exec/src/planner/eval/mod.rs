@@ -470,7 +470,8 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                     Arc::new(Column {
                         index: 0,
                         data_type: l.data_type().clone(),
-                        nullable: l.nullable(),
+                        // A divisor that goes first leaves NULLs in the left column where it is skipped.
+                        nullable: l.nullable() || right_first,
                     }),
                     Arc::new(Column {
                         index: 1,
@@ -530,6 +531,9 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
 /// whatever the left value is.
 fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: bool) -> bool {
     let guarded = match &f.id {
+        // `interval / number` is Spark's `DivideYMInterval`/`DivideDTInterval`, a plain `BinaryExpression`
+        // (left first), not a `DivModLike`.
+        FunctionId::Builtin(Builtin::Divide) => has_interval_left(args),
         FunctionId::Builtin(b) => matches!(
             b,
             Builtin::Eq
@@ -556,15 +560,27 @@ fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: 
         )
 }
 
+/// Whether the left operand of a binary operator is an interval (a year-month or day-time carrier).
+fn has_interval_left(args: &[Arc<dyn PhysExpr>]) -> bool {
+    matches!(
+        args.first().map(|a| a.data_type()),
+        Some(ArrowType::Interval(_) | ArrowType::Duration(_))
+    )
+}
+
 /// Spark's `DivModLike.eval` (`/`, `%`, `div`, `pmod`) evaluates the divisor first and the left operand only where
 /// the divisor is set (and, outside ANSI mode, not zero): an error in the left operand on the other rows never
 /// surfaces (see [`logic::right_then_left`]). Only worth the split when the left operand may raise.
+///
+/// Known divergence: this is the interpreted `eval`, which Spark runs only when it folds constants. Its generated
+/// code (the default) checks a zero divisor *before* the left operand when both operands are non-nullable and ANSI
+/// is on (`DivModLike.doGenCode`), so `(coalesce(a, 0L) + 1L) div coalesce(z, 0L)` raises the division by zero
+/// where this raises the left's error first. Not matched (it needs Spark's nullability in the IR); recorded in
+/// `ops/queue-sonnet.md`.
 fn divides_right_first(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: bool) -> bool {
     let division = match &f.id {
-        FunctionId::Builtin(b) => matches!(
-            b,
-            Builtin::Divide | Builtin::Remainder | Builtin::IntegralDivide
-        ),
+        FunctionId::Builtin(Builtin::Divide) => !has_interval_left(args),
+        FunctionId::Builtin(b) => matches!(b, Builtin::Remainder | Builtin::IntegralDivide),
         FunctionId::Registry { name, .. } => name == "pmod",
         _ => false,
     };

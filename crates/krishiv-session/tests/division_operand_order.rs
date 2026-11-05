@@ -146,3 +146,183 @@ fn division_follows_sparks_operand_order() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     assert_eq!(SPARK.len(), 2 * OPS.len() * ROWS.len());
 }
+
+/// The rows of the first table, from `range(6)`, so the same text runs on Spark (generated code over a range) and here.
+const RANGE_TABLE: &str = "(SELECT id AS k, CASE id WHEN 0 THEN 'x' WHEN 1 THEN 'x' WHEN 2 THEN NULL \
+    WHEN 3 THEN 'x' ELSE '7' END AS s, CASE id WHEN 0 THEN NULL WHEN 1 THEN 2 WHEN 4 THEN 0 WHEN 2 THEN 0 \
+    WHEN 3 THEN 0 ELSE 2 END AS l FROM range(6))";
+
+/// `(name, expression, rows)`: batches that mix skipped and evaluated rows, decimal, double (`-0.0`) and scalar
+/// divisors, a divisor that fails over a NULL left value, and intervals (`interval / number` is not a `DivModLike`:
+/// left first, and a zero divisor raises in both modes).
+const CASES: [(&str, &str, &str); 18] = [
+    ("mixed_batch_div", "CAST(s AS BIGINT) / l", "k IN (0, 2, 5)"),
+    (
+        "mixed_batch_pmod",
+        "pmod(CAST(s AS BIGINT), l)",
+        "k IN (0, 2, 5)",
+    ),
+    (
+        "mixed_batch_zero_and_good",
+        "CAST(s AS BIGINT) % l",
+        "k IN (2, 4, 5)",
+    ),
+    (
+        "decimal_divisor",
+        "CAST(s AS DECIMAL(10,2)) / CAST(l AS DECIMAL(10,2))",
+        "k IN (0)",
+    ),
+    (
+        "decimal_divisor_left_fails",
+        "CAST(s AS DECIMAL(10,2)) / CAST(l AS DECIMAL(10,2))",
+        "k IN (1)",
+    ),
+    (
+        "decimal_divisor_zero",
+        "CAST(s AS DECIMAL(10,2)) / CAST(l AS DECIMAL(10,2))",
+        "k IN (4)",
+    ),
+    (
+        "decimal_divisor_good",
+        "CAST(s AS DECIMAL(10,2)) / CAST(l AS DECIMAL(10,2))",
+        "k IN (5)",
+    ),
+    (
+        "negative_zero_double",
+        "CAST(s AS DOUBLE) / (CAST(l AS DOUBLE) * -1.0D)",
+        "k IN (4)",
+    ),
+    (
+        "negative_zero_double_good",
+        "CAST(s AS DOUBLE) / (CAST(l AS DOUBLE) * -1.0D)",
+        "k IN (5)",
+    ),
+    ("scalar_zero_divisor", "CAST(s AS BIGINT) / 0", "k IN (2)"),
+    (
+        "scalar_zero_divisor_left_fails",
+        "CAST(s AS BIGINT) / 0",
+        "k IN (3)",
+    ),
+    (
+        "scalar_zero_divisor_good",
+        "CAST(s AS BIGINT) / 0",
+        "k IN (4)",
+    ),
+    (
+        "scalar_null_divisor",
+        "CAST(s AS BIGINT) div CAST(NULL AS BIGINT)",
+        "k IN (0, 1, 3)",
+    ),
+    (
+        "divisor_fails_on_null_left",
+        "CAST(nullif(s, s) AS BIGINT) div CAST('y' AS BIGINT)",
+        "k IN (0)",
+    ),
+    (
+        "interval_divided_by_zero",
+        "CAST(CAST(k AS BIGINT) AS INTERVAL DAY) / l",
+        "k IN (4)",
+    ),
+    (
+        "interval_divided_by_null",
+        "CAST(CAST(k AS BIGINT) AS INTERVAL DAY) / l",
+        "k IN (0)",
+    ),
+    (
+        "interval_div_zero",
+        "CAST(CAST(k AS BIGINT) AS INTERVAL DAY) div CAST(CAST(l AS BIGINT) AS INTERVAL DAY)",
+        "k IN (4)",
+    ),
+    (
+        "interval_div_good",
+        "CAST(CAST(k AS BIGINT) AS INTERVAL DAY) div CAST(CAST(l AS BIGINT) AS INTERVAL DAY)",
+        "k IN (5)",
+    ),
+];
+
+/// `(ansi, case, Spark's answer)`: the rows joined by `|`, or `ERR:<error class>`.
+#[rustfmt::skip]
+const SPARK_CASES: &[(bool, &str, &str)] = &[
+        (true, "mixed_batch_div", "NULL|NULL|3.5"),
+        (true, "mixed_batch_pmod", "NULL|NULL|1"),
+        (true, "mixed_batch_zero_and_good", "ERR:REMAINDER_BY_ZERO"),
+        (true, "decimal_divisor", "NULL"),
+        (true, "decimal_divisor_left_fails", "ERR:CAST_INVALID_INPUT"),
+        (true, "decimal_divisor_zero", "ERR:DIVIDE_BY_ZERO"),
+        (true, "decimal_divisor_good", "3.5000000000000"),
+        (true, "negative_zero_double", "ERR:DIVIDE_BY_ZERO"),
+        (true, "negative_zero_double_good", "-3.5"),
+        (true, "scalar_zero_divisor", "NULL"),
+        (true, "scalar_zero_divisor_left_fails", "ERR:CAST_INVALID_INPUT"),
+        (true, "scalar_zero_divisor_good", "ERR:DIVIDE_BY_ZERO"),
+        (true, "scalar_null_divisor", "NULL|NULL|NULL"),
+        (true, "divisor_fails_on_null_left", "ERR:CAST_INVALID_INPUT"),
+        (true, "interval_divided_by_zero", "ERR:INTERVAL_DIVIDED_BY_ZERO"),
+        (true, "interval_divided_by_null", "NULL"),
+        (true, "interval_div_zero", "ERR:DIVIDE_BY_ZERO"),
+        (true, "interval_div_good", "2"),
+        (false, "mixed_batch_div", "NULL|NULL|3.5"),
+        (false, "mixed_batch_pmod", "NULL|NULL|1"),
+        (false, "mixed_batch_zero_and_good", "NULL|NULL|1"),
+        (false, "decimal_divisor", "NULL"),
+        (false, "decimal_divisor_left_fails", "NULL"),
+        (false, "decimal_divisor_zero", "NULL"),
+        (false, "decimal_divisor_good", "3.5000000000000"),
+        (false, "negative_zero_double", "NULL"),
+        (false, "negative_zero_double_good", "-3.5"),
+        (false, "scalar_zero_divisor", "NULL"),
+        (false, "scalar_zero_divisor_left_fails", "NULL"),
+        (false, "scalar_zero_divisor_good", "NULL"),
+        (false, "scalar_null_divisor", "NULL|NULL|NULL"),
+        (false, "divisor_fails_on_null_left", "NULL"),
+        (false, "interval_divided_by_zero", "ERR:INTERVAL_DIVIDED_BY_ZERO"),
+        (false, "interval_divided_by_null", "NULL"),
+        (false, "interval_div_zero", "NULL"),
+        (false, "interval_div_good", "2"),
+];
+
+#[test]
+fn division_cases_over_a_range_table_follow_spark() {
+    let mut wrong = Vec::new();
+    for ansi in [true, false] {
+        let s = Session::new().unwrap();
+        s.conf()
+            .set(
+                "spark.sql.ansi.enabled",
+                if ansi { "true" } else { "false" },
+            )
+            .unwrap();
+        for (name, expr, rows) in CASES {
+            let want = SPARK_CASES
+                .iter()
+                .find(|(a, n, _)| *a == ansi && *n == name)
+                .map(|r| r.2)
+                .unwrap();
+            let sql =
+                format!("SELECT CAST({expr} AS STRING) FROM {RANGE_TABLE} WHERE {rows} ORDER BY k");
+            let got =
+                match futures::executor::block_on(async { s.sql(&sql).await?.collect().await }) {
+                    Ok(batches) => {
+                        let mut out = Vec::new();
+                        for b in &batches {
+                            let a = b.column(0).as_string_view();
+                            out.extend((0..a.len()).map(|i| {
+                                if a.is_null(i) {
+                                    "NULL".to_owned()
+                                } else {
+                                    a.value(i).to_owned()
+                                }
+                            }));
+                        }
+                        out.join("|")
+                    }
+                    Err(e) => format!("ERR:{}", e.error_class().name()),
+                };
+            if got != want {
+                wrong.push(format!("ansi={ansi} {name}: Spark {want}, got {got}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    assert_eq!(SPARK_CASES.len(), 2 * CASES.len());
+}

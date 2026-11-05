@@ -5,12 +5,13 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
-    Int32Type, Int64Type, Time64NanosecondType, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, Time64NanosecondType,
+    TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow_buffer::{BooleanBuffer, NullBuffer};
-use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
+use arrow_schema::{DataType as ArrowType, Field, IntervalUnit, Schema, SchemaRef, TimeUnit};
 use krishiv_kernels::compare::{
     self, BoolOperand, CompareKind, Equal, Greater, GreaterEq, Less, LessEq, Validity,
 };
@@ -248,6 +249,8 @@ fn zero_values(array: &ArrayRef) -> Option<BooleanBuffer> {
         ArrowType::Int16 => integral!(Int16Type),
         ArrowType::Int32 => integral!(Int32Type),
         ArrowType::Int64 => integral!(Int64Type),
+        ArrowType::Interval(IntervalUnit::YearMonth) => integral!(IntervalYearMonthType),
+        ArrowType::Duration(TimeUnit::Microsecond) => integral!(DurationMicrosecondType),
         ArrowType::Decimal64(..) => integral!(Decimal64Type),
         ArrowType::Decimal128(..) => integral!(Decimal128Type),
         ArrowType::Float32 => float!(Float32Type),
