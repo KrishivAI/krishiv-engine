@@ -116,7 +116,7 @@ def main(argv=None) -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run a suite on an engine, write JSON to $KRISHIV_DATA/results")
     r.add_argument("--engine", required=True, choices=[*ENGINES, "spark"])
-    r.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "dsb", "memcap", *H2O_SUITES])
+    r.add_argument("--suite", default="tpch", choices=["tpch", "tpch-nested", "tpcds", "dsb", "memcap", *H2O_SUITES])
     add_h2o_args(r)
     r.add_argument("--sf", type=float, default=1)
     r.add_argument(
@@ -141,6 +141,18 @@ def main(argv=None) -> None:
     r.add_argument("--timeout", type=float, default=600, help="per-query timeout seconds (0 = none)")
     r.add_argument("--runner", help=RUNNER_HELP)
     _add_memcap_args(r)
+    nc = sub.add_parser(
+        "nested-check",
+        help="nested TPC-H answers of an engine against DuckDB's flat TPC-H answers (Comet's nested layout)",
+    )
+    nc.add_argument("--engine", required=True, choices=[e for e in ENGINES if e != "duckdb"])
+    nc.add_argument("--sf", type=float, default=1)
+    nc.add_argument("--flat-dataset", default="tpch", help="flat dataset name under $KRISHIV_DATA (default tpch)")
+    nc.add_argument("--queries", help="comma list, e.g. q01,q05")
+    nc.add_argument("--runner", help=RUNNER_HELP)
+    nc.add_argument("--spark-remote", default="sc://127.0.0.1:15002")
+    nc.add_argument("--spark-container", default="krishiv-bench-spark", help="empty = a host server, e.g. Sail")
+    nc.add_argument("--spark-data-root", default="/data", help="empty = same paths as the host")
     ab = sub.add_parser(
         "abba", help="interleaved ABBA Krishiv vs DuckDB (P2-T142); needs the dist-profile runner binary"
     )
@@ -219,6 +231,14 @@ def main(argv=None) -> None:
     rr.add_argument("--runs", type=int, help="hot runs per process for theirs (default: the published source's)")
     rr.add_argument("--their-timeout", type=float, help="per-run timeout for theirs (default: the source's)")
     rr.add_argument("--runner", help=RUNNER_HELP)
+    rr.add_argument(
+        "--sequential",
+        action="store_true",
+        help="ours method: one engine alive at a time per query (a fresh worker each), 2*reps samples per engine",
+    )
+    rr.add_argument(
+        "--cgroup-gb", type=int, help="with --sequential: MemoryMax (GB, no swap) of each engine worker's cgroup scope"
+    )
     rr.add_argument("--profile", action="store_true", help="also record Krishiv's per-phase wall times (ours method)")
     _add_memcap_args(rr)
     rf = sub.add_parser(
@@ -389,6 +409,8 @@ def main(argv=None) -> None:
             a.runs,
             a.their_timeout,
             a.profile,
+            sequential=a.sequential,
+            cap_gb=a.cgroup_gb,
         )
     elif a.cmd == "ledger":
         from .ledger import run_ledger
@@ -476,6 +498,24 @@ def main(argv=None) -> None:
             )
         except (ValueError, FileNotFoundError) as e:
             ap.error(str(e))
+    elif a.cmd == "nested-check":
+        from . import nested_tpch
+
+        kw = {}
+        if a.engine == "krishiv" and a.runner:
+            kw["binary"] = a.runner
+        if a.engine == "spark-connect":
+            kw = {
+                "remote": a.spark_remote,
+                "container": a.spark_container or None,
+                "container_data_root": a.spark_data_root or None,
+            }
+        bad = nested_tpch.check(
+            a.engine, a.sf, a.queries.split(",") if a.queries else None, flat_dataset=a.flat_dataset, engine_kwargs=kw
+        )
+        if bad:
+            sys.exit("nested answers differ from the flat TPC-H answers:\n" + "\n".join(bad))
+        print("every nested answer equals the flat TPC-H answer")
     elif a.cmd == "run":
         if a.engine == "spark":
             ap.error("--engine spark is a memcap engine; use spark-connect or spark-local elsewhere")
