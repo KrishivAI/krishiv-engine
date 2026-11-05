@@ -965,6 +965,42 @@ impl QueryLog {
         id
     }
 
+    /// Closes the live row `id` as the outcome of `error` (a refused
+    /// admission): `denied`, `cancelled` or `failed` by its class.
+    pub(crate) fn record_failed_row(&self, id: &str, error: &KrishivError) {
+        let class = error.error_class().name();
+        self.finish(
+            id,
+            &Finished {
+                state: outcome_state(class),
+                wall_ns: 0,
+                peak_memory_bytes: 0,
+                error_class: (outcome_state(class) != "cancelled").then_some(class),
+                operators: Vec::new(),
+                totals: None,
+            },
+        );
+    }
+
+    /// Sets the state of the live row `id` (`queued` while admission waits,
+    /// `running` once it is admitted).
+    pub(crate) fn set_state(&self, id: &str, state: &'static str) {
+        let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(row) = rows.iter_mut().find(|r| r.id == id) {
+            row.state = state;
+        }
+    }
+
+    /// The session's tags now.
+    pub(crate) fn tags_now(&self) -> Vec<(String, String)> {
+        self.tags
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
+    }
+
     /// Records a query answered from the result cache: a finished row of its own (with the
     /// session's current tags and trace id) that took no execution.
     pub(crate) fn record_replayed(

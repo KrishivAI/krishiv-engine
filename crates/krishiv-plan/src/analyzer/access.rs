@@ -5,6 +5,7 @@
 use krishiv_common::error::{
     KrishivError, KrishivInsufficientPermissions, KrishivUnsupportedFeature,
 };
+use krishiv_common::secret::{OptionValue, SecretValue};
 
 use super::catalog::{
     AccessDecision, AccessPolicy, CatalogResolver, Principal, Privilege, Securable, TableIdent,
@@ -66,6 +67,41 @@ pub async fn authorize(
         }
         Ok(AccessDecision::AllowWith(_) | AccessDecision::Deny { .. }) | Err(_) => Err(denied()),
     }
+}
+
+/// The scopes of the `secret('scope', 'key')` references among `values`, each once, in order.
+pub fn secret_scopes<'a>(values: impl IntoIterator<Item = &'a OptionValue>) -> Vec<String> {
+    let mut scopes: Vec<String> = Vec::new();
+    for v in values {
+        if let OptionValue::Secret(SecretValue::Reference { scope, .. }) = v
+            && !scopes.contains(scope)
+        {
+            scopes.push(scope.clone());
+        }
+    }
+    scopes
+}
+
+/// Asks the policy for `USAGE` on the scope of every secret reference among `values` (E12), for
+/// callers outside analysis (writes, DDL) that are about to resolve them.
+///
+/// # Errors
+/// As [`authorize`], for the first scope the principal may not use.
+pub async fn authorize_secret_refs<'a>(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    values: impl IntoIterator<Item = &'a OptionValue>,
+) -> Result<(), KrishivError> {
+    for scope in secret_scopes(values) {
+        authorize(
+            policy,
+            principal,
+            &Securable::Secret { scope },
+            Privilege::Usage,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 /// The table the name `parts` names, as analysis locates it: a first part
@@ -163,12 +199,13 @@ mod tests {
         Fixed(answers.iter().cloned().collect())
     }
 
-    const ALL: [Privilege; 5] = [
+    const ALL: [Privilege; 6] = [
         Privilege::Select,
         Privilege::Modify,
         Privilege::Create,
         Privilege::Drop,
         Privilege::Monitor,
+        Privilege::Usage,
     ];
 
     #[test]
@@ -256,11 +293,25 @@ mod tests {
             Securable::Path(OptionValue::from_user("path", "file:/a")).to_string(),
             "path 'file:/a'"
         );
+        assert_eq!(
+            Securable::Secret {
+                scope: "prod".to_owned()
+            }
+            .to_string(),
+            "secret `prod`"
+        );
+        assert_eq!(
+            Securable::Connection("lake".to_owned()).to_string(),
+            "connection `lake`"
+        );
         let names: Vec<String> = ALL.iter().map(ToString::to_string).collect();
-        assert_eq!(names, ["SELECT", "MODIFY", "CREATE", "DROP", "MONITOR"]);
+        assert_eq!(
+            names,
+            ["SELECT", "MODIFY", "CREATE", "DROP", "MONITOR", "USAGE"]
+        );
         assert_eq!(
             ALL.map(Privilege::changes),
-            [false, true, true, true, false]
+            [false, true, true, true, false, false]
         );
     }
 }
