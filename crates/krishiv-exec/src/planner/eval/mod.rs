@@ -587,8 +587,11 @@ fn divides_right_first(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: b
     division
         && matches!(
             (args, f.args.as_slice()),
-            ([_, _], [left_ir, _])
-                if krishiv_plan::is_deterministic(left_ir) && krishiv_plan::may_raise(left_ir, ansi)
+            ([left, right], [left_ir, _])
+                // Two constants stay one constant (`is_constant`): `aes_encrypt` folds constant arguments to one IV.
+                if !(left.is_constant() && right.is_constant())
+                    && krishiv_plan::is_deterministic(left_ir)
+                    && krishiv_plan::may_raise(left_ir, ansi)
         )
 }
 
