@@ -4,9 +4,7 @@
       5,
       11,
       13,
-      15,
-      18,
-      19
+      15
     ]
   },
   "file": "subquery/scalar-subquery/scalar-subquery-count-bug",

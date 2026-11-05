@@ -55,14 +55,12 @@ use krishiv_common::stack::{STEP, on_big_stack};
 
 type R<T> = Result<T, AnalysisError>;
 
-/// A subquery's input with its correlation lifted out: the plan, the keys it
-/// groups by, and the outer expressions they match.
+/// A subquery's input with its correlation lifted out: the plan, the keys it groups by, and the outer ones they match.
 type Lifted = (Arc<LogicalPlan>, Vec<Arc<Expr>>, Vec<Arc<Expr>>);
 /// The inner and the outer sides of the correlated equalities, pairwise.
 type Keys = (Vec<Arc<Expr>>, Vec<Arc<Expr>>);
 
-/// Rewrites the subqueries of `root`; `next_id` is one past every
-/// attribute id in use and is kept so.
+/// Rewrites the subqueries of `root`; `next_id` is one past every attribute id in use.
 pub(super) fn rewrite(
     root: &Arc<LogicalPlan>,
     next_id: &mut u64,
@@ -79,6 +77,7 @@ pub(super) fn rewrite(
         depth: 0,
         lateral: false,
         legacy_exists_count: ctx.conf.decorrelate_exists_legacy_count,
+        legacy_scalar_count: ctx.conf.decorrelate_scalar_legacy_count,
         row_number: match functions.lookup(&["row_number".to_owned()], profile) {
             FunctionLookup::Found(entry) => Some((entry.id, entry.kind)),
             _ => None,
@@ -101,6 +100,7 @@ struct Rewriter {
     /// A lateral join's right side: a global aggregate keeps one row per domain value.
     lateral: bool,
     legacy_exists_count: bool, // see `ResolutionConf::decorrelate_exists_legacy_count`
+    legacy_scalar_count: bool, // see `ResolutionConf::decorrelate_scalar_legacy_count`
 }
 
 /// A predicate subquery conjunct, as a join.
@@ -191,8 +191,7 @@ fn has_subquery(node: Node<'_>) -> bool {
     .is_break()
 }
 
-/// The subquery expressions directly in `e` (not inside subquery plans),
-/// each once.
+/// The subquery expressions directly in `e` (not inside subquery plans), each once.
 fn subqueries(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -1667,8 +1666,7 @@ impl Rewriter {
                 item.origin,
             ));
         }
-        // Grouped, the subquery has no row for an outer row without matches:
-        // its value is NULL, whatever the expression (a bare `count` too).
+        // Grouped, no row for an unmatched outer row: NULL (the legacy flag keeps a count's 0).
         let empty = if keys.is_empty() {
             on_no_rows(expr).ok_or_else(|| {
                 unsupported(
@@ -1676,6 +1674,8 @@ impl Rewriter {
                     plan.origin,
                 )
             })?
+        } else if self.legacy_scalar_count {
+            on_no_rows(expr).unwrap_or(None) // the old count handling: 0 for a count even when grouped
         } else {
             None
         };
