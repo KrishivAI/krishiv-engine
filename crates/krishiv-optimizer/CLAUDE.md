@@ -39,6 +39,11 @@ Paths are relative to this crate.
   `Statistics`; it never adds a cross product, places each conjunct at the lowest join that has its inputs
   (subquery conjuncts as filters), and restores column order only for positional consumers. Inputs are
   ordered canonically, so `optimize` stays a fixed point.
+- Column equalities `a = b` of one type between join-tree inputs form equivalence classes (`join_order.rs`
+  `canonical_equalities`): inputs with columns of one class can join on it even when the query relates them only
+  through a third input, and a join or an estimate takes only the equalities that connect columns of a class not
+  already equal below it (`Graph::independent`), chosen in column-id order, so the plan does not depend on how the
+  class was written.
 - Statistics propagation (`PlanStats`): a filter narrows `min`/`max` of the columns it reads and clears their null
   fraction when null-rejecting; `OR` takes the union of its branches' ranges, `NOT` and unknown predicates leave
   ranges alone, so a range only stays or widens (the proptest in `plan_stats.rs` holds it to that). An equality with

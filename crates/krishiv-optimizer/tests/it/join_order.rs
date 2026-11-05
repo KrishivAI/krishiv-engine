@@ -113,10 +113,17 @@ fn tpch_join_orders() {
     }
 }
 
-/// TPC-H statistics at scale factor `sf` as Parquet footers give them (the
-/// benchmark runner's source): row counts and column bounds, no distinct
-/// counts. Rows scale from the SF10 fixture; `nation` and `region` keep
-/// theirs.
+/// TPC-H statistics at scale factor `sf` as the benchmark runner reads
+/// them from Parquet footers (`krishiv-exec` `planner/file_table.rs`): row
+/// counts and bounds, no distinct counts; an integral column's distinct
+/// count is its range, at most its rows (`StatSource::IntegralRange`), and
+/// a decimal or string column has none. Rows and key ranges scale from the
+/// SF10 fixture; `nation` and `region` keep theirs.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "TPC-H's integral bounds are small non-negative integers"
+)]
 fn footers(sf: u64) -> Fixture {
     let Fixture(mut tables) = fixture();
     let scaled = |n: &str| !matches!(n, "nation" | "region");
@@ -126,16 +133,23 @@ fn footers(sf: u64) -> Fixture {
         .filter(|(n, _)| scaled(n))
         .map(|(_, t)| t.rows as f64)
         .collect();
+    let integral = |c: &str| c.ends_with("key") || matches!(c, "p_size" | "ps_availqty");
     for (name, t) in &mut tables {
         if scaled(name) {
             t.rows = t.rows * sf / 10;
         }
-        for c in t.columns.values_mut() {
+        for (col, c) in &mut t.columns {
             c.distinct = None;
             if let Some(Literal::Double(m)) = &mut c.max
                 && keys.contains(m)
             {
                 *m = *m * sf as f64 / 10.0;
+            }
+            if let (true, Some(Literal::Double(lo)), Some(Literal::Double(hi))) =
+                (integral(col), &c.min, &c.max)
+            {
+                c.source = StatSource::IntegralRange;
+                c.distinct = Some(((hi - lo) as u64 + 1).min(t.rows));
             }
         }
     }
