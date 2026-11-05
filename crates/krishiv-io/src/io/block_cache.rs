@@ -4,7 +4,7 @@
 //! [`CachingStore`] wraps an [`ObjectStore`] and answers bounded range reads from aligned blocks
 //! (default 1 MiB) kept in a small memory tier and on local disk. One mechanism covers data pages,
 //! footers and page indexes, which are all ordinary ranges. A block is keyed by the store (as
-//! displayed, so without credentials), the path, the object's version (the `if_match` ETag or the
+//! displayed, so without credentials), the credential scope ([`CacheScope`]), the path, the object's version (the `if_match` ETag or the
 //! `if_unmodified_since` time the scheduler sends, else none) and the block index: an overwritten
 //! object has a new version and never reaches its old blocks.
 //!
@@ -31,6 +31,7 @@ use bytes::{Bytes, BytesMut};
 use futures::future::{BoxFuture, FutureExt, Shared};
 use futures::stream::BoxStream;
 use krishiv_memory::{MemoryPool, Reservation};
+pub use krishiv_store::CacheScope;
 use object_store::path::Path;
 use object_store::{
     CopyOptions, GetOptions, GetRange, GetResult, GetResultPayload, ListResult, MultipartUpload,
@@ -640,8 +641,10 @@ pub struct ObjectSize(pub u64);
 /// A store whose bounded range reads go through a [`BlockCache`].
 pub struct CachingStore {
     inner: Arc<dyn ObjectStore>,
-    /// The store as displayed (no credentials).
+    /// The store as displayed (no credentials), then the credential scope.
     identity: String,
+    /// `identity`, a separator and the scope text: the head of every block key.
+    key_prefix: String,
     cache: Arc<BlockCache>,
 }
 
@@ -655,6 +658,12 @@ impl fmt::Display for CachingStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "CachingStore({})", self.identity)
     }
+}
+
+/// One key field, length-prefixed, so no text (a version or scope with a NUL in it) can shift into
+/// its neighbour and make two different reads share a key.
+fn field(text: &str) -> String {
+    format!("{}:{text};", text.len())
 }
 
 /// The object's version as the scheduler pins it on a read.
@@ -676,15 +685,35 @@ impl CachingStore {
         identity: impl Into<String>,
         cache: Arc<BlockCache>,
     ) -> Self {
+        Self::with_scope(inner, identity, cache, &CacheScope::Isolated)
+    }
+
+    /// As [`Self::new`], reading with the credentials of `scope`: blocks are shared only between
+    /// stores of the same identity and an equal scope.
+    #[must_use]
+    pub fn with_scope(
+        inner: Arc<dyn ObjectStore>,
+        identity: impl Into<String>,
+        cache: Arc<BlockCache>,
+        scope: &CacheScope,
+    ) -> Self {
+        // Both parts are in every key; the display text keeps only the store.
+        let identity = identity.into();
         Self {
             inner,
-            identity: identity.into(),
+            key_prefix: format!("{}{}", field(&identity), field(&scope.key_text())),
+            identity,
             cache,
         }
     }
 
-    fn block_key(&self, location: &Path, version: &str, block: u64) -> String {
-        format!("{}\0{location}\0{version}\0{block}", self.identity)
+    pub(super) fn block_key(&self, location: &Path, version: &str, block: u64) -> String {
+        format!(
+            "{}{}{}{block}",
+            self.key_prefix,
+            field(location.as_ref()),
+            field(version)
+        )
     }
 
     /// The object a read names, from what the scheduler sent: its size ([`ObjectSize`]) and the
