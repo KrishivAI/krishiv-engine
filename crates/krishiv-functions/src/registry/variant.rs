@@ -9,7 +9,7 @@
 //! type)` is the DDL type in the third argument, which must be a non-null
 //! string literal (`INVALID_SCHEMA.NON_STRING_LITERAL`, as `from_json`'s
 //! schema) naming a type a variant casts to (`VariantGet.checkDataType`:
-//! numbers, booleans, strings, binaries, datetimes and variants, arrays of
+//! numbers, booleans, strings, binaries, datetimes (`TIME` too) and variants, arrays of
 //! them, maps with string keys and structs); without it the result is a
 //! `VARIANT`. The result is always nullable.
 
@@ -40,6 +40,7 @@ pub fn variant_castable(t: &DataType, allow_structs_and_maps: bool) -> bool {
         | DataType::Date
         | DataType::Timestamp
         | DataType::TimestampNtz
+        | DataType::Time { .. }
         | DataType::Variant => true,
         DataType::Array(a) => variant_castable(a.element_type(), allow_structs_and_maps),
         DataType::Map(m) if allow_structs_and_maps => {

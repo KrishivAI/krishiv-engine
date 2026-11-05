@@ -184,7 +184,9 @@ pub enum PathSegment {
 
 /// Spark's `VariantPathParser`: `$` followed by `.key` (up to the next `.`
 /// or `[`), `['key']`, `["key"]` (no escapes) or `[digits]`; `None` when
-/// the text does not parse.
+/// the text does not parse. An index past `INT` is `None` too, so it raises
+/// `INVALID_VARIANT_GET_PATH` where Spark's `toInt` lets a
+/// `NumberFormatException` escape (a deliberate divergence).
 #[must_use]
 pub fn parse_path(path: &str) -> Option<Vec<PathSegment>> {
     let mut rest = path.strip_prefix('$')?;
@@ -315,15 +317,14 @@ pub(crate) fn uuid_string(b: [u8; 16]) -> String {
     )
 }
 
-/// The offset suffix of Java's `appendOffset("+HH:MM", "+00:00")`.
+/// The offset suffix of Java's `appendOffset("+HH:MM", "+00:00")`: hours
+/// and minutes only (an offset's seconds, as in a zone's local mean time, are
+/// not printed).
 fn push_offset(seconds: i32, out: &mut String) {
     let sign = if seconds < 0 { '-' } else { '+' };
     let abs = seconds.unsigned_abs();
     out.push(sign);
     out.push_str(&format!("{:02}:{:02}", abs / 3600, abs / 60 % 60));
-    if !abs.is_multiple_of(60) {
-        out.push_str(&format!(":{:02}", abs % 60));
-    }
 }
 
 fn unknown_type(v: &VariantRef<'_>) -> KrishivError {

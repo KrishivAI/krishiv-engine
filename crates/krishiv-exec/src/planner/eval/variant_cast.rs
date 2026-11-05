@@ -58,8 +58,9 @@ impl PhysExpr for VariantCast {
     }
 
     fn nullable(&self) -> bool {
-        // A variant null casts to SQL NULL.
-        true
+        // A variant null casts to SQL NULL; a value cast into a variant is
+        // NULL only where it was.
+        self.from == DataType::Variant || self.e.nullable()
     }
 
     fn is_constant(&self) -> bool {

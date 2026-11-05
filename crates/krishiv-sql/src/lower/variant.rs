@@ -10,6 +10,13 @@
 //! `ExtractSemiStructuredFields`), aliased to the last named key when there
 //! is one. `a:b.c` is `$.b.c`, so a backquoted key holding a dot is two
 //! keys, as in Spark.
+//!
+//! Two deliberate divergences, where Spark 4.2.0 itself fails with
+//! `INTERNAL_ERROR` (checked on the oracle): a path `JsonPathParser` refuses
+//! (`v:['a''b']`) is `PARSE_SYNTAX_ERROR` naming the path (Spark raises the
+//! class without its parameters), and `x:a` over a column that is not a
+//! variant is `variant_get`'s `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE`
+//! (Spark names `COLUMN_IS_NOT_VARIANT_TYPE`, a class its error file lacks).
 
 use std::sync::Arc;
 
@@ -121,7 +128,7 @@ mod tests {
         assert_eq!(alias("$.field.name").as_deref(), Some("name"));
         assert_eq!(alias("$[0]").as_deref(), Some(""));
         assert_eq!(alias("$.scores[0]").as_deref(), Some("scores"));
-        for bad in ["$['']", "$[x]", "$['a'b']", "$.", "$[\"a\"]"] {
+        for bad in ["$['']", "$[x]", "$['a'b']", "$.", "$[\"a\"]", "$['a''b']"] {
             assert_eq!(json_path_alias(bad), None, "{bad}");
         }
     }

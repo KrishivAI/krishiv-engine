@@ -5,9 +5,9 @@
 //!
 //! `parse_json` builds Spark's exact bytes ([`VariantBuilder::from_json`]);
 //! `try_parse_json` is NULL where it raises. `variant_get` reads the path
-//! with Spark's `VariantPathParser` (a literal path once per bind, a column
-//! per row; a bad path is `INVALID_VARIANT_GET_PATH` on the first non-NULL
-//! row), walks the encoded value by offsets, and casts what it finds with
+//! with Spark's `VariantPathParser` (a literal path once per bind, where a
+//! bad one is `INVALID_VARIANT_GET_PATH`; a column per row, raising on the
+//! first non-NULL row with a bad path), walks the encoded value by offsets, and casts what it finds with
 //! the kernels' variant cast (`INVALID_VARIANT_CAST` for `variant_get`,
 //! NULL for `try_variant_get`). Without a type, the result is a `VARIANT`
 //! re-encoded with only the keys it uses, as Spark's `VariantBuilder` does.
@@ -85,9 +85,8 @@ fn is_variant_null(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
 
 /// The path of a `variant_get` call: parsed once for a literal.
 enum Path {
-    /// A literal path (`None`: NULL, so every row is NULL; `Err`: a bad
-    /// path, raised on the first non-NULL row).
-    Literal(Option<Result<Vec<PathSegment>, KrishivError>>),
+    /// A literal path (`None`: NULL, so every row is NULL).
+    Literal(Option<Vec<PathSegment>>),
     /// A path per row.
     Column,
 }
@@ -118,8 +117,7 @@ fn variant_get(
                 found.push(None);
                 continue;
             }
-            (Path::Literal(Some(Ok(p))), _) => p,
-            (Path::Literal(Some(Err(e))), _) => return Err(e.clone()),
+            (Path::Literal(Some(p)), _) => p,
             (Path::Column, Some(paths)) => {
                 if paths.is_null(i) {
                     found.push(None);
@@ -165,8 +163,14 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 None if rest.is_empty() => Some(SparkType::Variant),
                 _ => None,
             };
+            // A literal path that does not parse fails at bind, as Spark's
+            // code generation evaluates it before any row.
             let path = match string_literal(args, 1) {
-                Some(p) => Path::Literal(p.map(|p| parse_path_or_raise(&p, name))),
+                Some(Some(p)) => match parse_path_or_raise(&p, name) {
+                    Ok(p) => Path::Literal(Some(p)),
+                    Err(e) => return Some((listed, Err(e))),
+                },
+                Some(None) => Path::Literal(None),
                 None => Path::Column,
             };
             let opts = opts.clone();

@@ -282,3 +282,59 @@ fn duplicate_struct_keys_are_refused() {
     let e = cast_to_variant(s.as_ref(), &st).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::VariantDuplicateKey);
 }
+
+#[test]
+fn a_container_cast_raises_spark_s_first_error() {
+    // Spark casts row by row: row 0's element fails before row 1's shape.
+    let arr = DataType::Array(Arc::new(ArrayType::new(DataType::Integer, true)));
+    let e = cast_rows(&[Some(r#"["x"]"#), Some("5")], &arr, true).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InvalidVariantCast);
+    assert!(
+        e.to_string().contains(r#""x""#) && e.to_string().contains("\"INT\""),
+        "{e}"
+    );
+    // Within one object, fields go in stored (key) order, not struct order.
+    let st = DataType::Struct(StructType::new(vec![
+        StructField::new("z", DataType::Integer, true),
+        StructField::new("a", DataType::Integer, true),
+    ]));
+    let e = cast_rows(&[Some(r#"{"z":"zz","a":"aa"}"#)], &st, true).unwrap_err();
+    assert!(e.to_string().contains("aa"), "{e}");
+    // Without failing, the bad element is NULL and the row stays.
+    let out = cast_rows(&[Some(r#"["x", 2]"#)], &arr, false).unwrap();
+    assert_eq!(out.as_list::<i32>().value(0).null_count(), 1);
+}
+
+#[test]
+fn timestamps_print_the_offset_without_seconds() {
+    let col = cast_to_variant(
+        &(Arc::new(
+            arrow_array::TimestampMicrosecondArray::from(vec![-2_208_988_800_000_000_i64])
+                .with_timezone("UTC"),
+        ) as ArrayRef),
+        &DataType::Timestamp,
+    )
+    .unwrap();
+    // Asia/Kolkata in 1900 is +05:21:10 (Madras time); Spark prints +05:21.
+    let zone = crate::datetime::resolve_zone("Asia/Kolkata").unwrap();
+    let out = to_json(col.as_ref(), &zone).unwrap();
+    assert_eq!(
+        out.as_string_view().value(0),
+        r#""1900-01-01 05:21:10+05:21""#
+    );
+}
+
+#[test]
+fn a_string_casts_to_time() {
+    let out = cast_rows(
+        &[Some(r#""10:00:01.5""#)],
+        &DataType::Time { precision: 6 },
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        out.as_primitive::<arrow_array::types::Time64NanosecondType>()
+            .value(0),
+        36_001_500_000_000
+    );
+}

@@ -27,7 +27,7 @@ use arrow_array::{
 };
 use arrow_buffer::{NullBuffer, OffsetBuffer};
 use arrow_schema::DataType as ArrowType;
-use krishiv_common::error::{InvalidVariantCast, KrishivError};
+use krishiv_common::error::{ErrorClass, InvalidVariantCast, KrishivError};
 use krishiv_types::DataType;
 use krishiv_types::variant::{
     VariantKind, VariantRef, VariantWriter, digits, strip_trailing_zeros,
@@ -94,7 +94,50 @@ pub fn cast_values(
         fail: fail_on_error,
         zone,
     };
-    cast_to(&ctx, values, to)
+    match cast_to(&ctx, values, to) {
+        // The batch cast groups rows and casts containers by field: the
+        // error Spark raises is the first one in its row-by-row walk.
+        Err(e) if fail_on_error && e.error_class() == ErrorClass::InvalidVariantCast => {
+            for v in values.iter().flatten() {
+                check_one(&ctx, v, to)?;
+            }
+            Err(e)
+        }
+        other => other,
+    }
+}
+
+/// `VariantGet.cast` of one value, in Spark's order (array elements in
+/// order, object fields in stored order), for the error it raises first.
+fn check_one(ctx: &Ctx<'_>, v: &VariantRef<'_>, to: &DataType) -> Result<(), KrishivError> {
+    if *to == DataType::Variant || v.kind() == VariantKind::Null {
+        return Ok(());
+    }
+    match (to, v.kind()) {
+        (DataType::Array(a), VariantKind::Array) => {
+            for i in 0..v.len()? {
+                check_one(ctx, &v.get_index(i)?, a.element_type())?;
+            }
+            Ok(())
+        }
+        (DataType::Map(m), VariantKind::Object) if is_string(m.key_type()) => {
+            for i in 0..v.len()? {
+                check_one(ctx, &v.field_at(i)?, m.value_type())?;
+            }
+            Ok(())
+        }
+        (DataType::Struct(s), VariantKind::Object) => {
+            for i in 0..v.len()? {
+                let key = v.field_key_at(i)?;
+                if let Some(f) = s.fields().iter().find(|f| f.name() == key) {
+                    check_one(ctx, &v.field_at(i)?, f.data_type())?;
+                }
+            }
+            Ok(())
+        }
+        (DataType::Array(_) | DataType::Map(_) | DataType::Struct(_), _) => ctx.invalid(v, to),
+        _ => cast_atomic(ctx, &[Some(*v)], to).map(|_| ()),
+    }
 }
 
 fn cast_to(
@@ -471,7 +514,8 @@ fn cast_atomic(
     for (row, v) in values.iter().enumerate() {
         let Some(v) = v else { continue };
         match v.kind() {
-            VariantKind::Uuid if is_string(to) => {
+            // Spark compares the target with `StringType` itself here.
+            VariantKind::Uuid if *to == DataType::String => {
                 texts.append_value(uuid_string(v.as_uuid()?));
                 slots[row] = Slot::Text(n_texts);
                 n_texts = n_texts.saturating_add(1);
