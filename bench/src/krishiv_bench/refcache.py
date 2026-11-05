@@ -14,8 +14,8 @@ Two kinds of entry, with different keys:
   memory and the sample count. Used by ``reproduce --sequential``, where the reference runs alone and a replayed time
   is as good as a live one (the machine is the same, which the record states: the entry says when it was measured).
 
-The dataset is identified by its manifest checksum (``$KRISHIV_DATA/manifests``), else by the names and sizes of its
-files; the query by the hash of the text the reference runs; the engine by its installed version. A change to any of
+The dataset is identified by its manifest checksum (``$KRISHIV_DATA/manifests``), else by the name, size, modification time
+and first and last 64 KiB of each of its files; the query by the hash of the text the reference runs; the engine by its installed version. A change to any of
 them is a different key, so a stale entry is never read, only left behind.
 """
 
@@ -83,12 +83,29 @@ def cache_dir() -> Path:
 
 
 def dataset_signature(ds: Dataset) -> str:
-    """Identifies the data: the manifest checksum when there is one, else the relative names and sizes of the files."""
+    """Identifies the data: the manifest checksum when there is one, else a fingerprint of each file."""
     man = data_root() / "manifests" / f"{manifest_stem(ds.name, ds.sf)}.sha256"
     if man.exists():
         return "manifest:" + hashlib.sha256(man.read_bytes()).hexdigest()
-    files = sorted((str(p.relative_to(ds.root)), p.stat().st_size) for p in ds.root.rglob("*") if p.is_file())
+    files = [_file_identity(str(p.relative_to(ds.root)), p) for p in sorted(ds.root.rglob("*")) if p.is_file()]
     return "files:" + hashlib.sha256(json.dumps(files).encode()).hexdigest()
+
+
+FINGERPRINT_BYTES = 64 * 1024
+
+
+def _file_identity(rel: str, path: Path) -> list:
+    """Name, size, modification time and a hash of the first and last 64 KiB of a data file. The last block holds a
+    Parquet file's footer (schema, row-group and page statistics), so a rewrite of the same size that changes the
+    data changes it too; the modification time covers the rest, at the price of a miss after a copy."""
+    st = path.stat()
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        h.update(f.read(FINGERPRINT_BYTES))
+        if st.st_size > FINGERPRINT_BYTES:
+            f.seek(max(FINGERPRINT_BYTES, st.st_size - FINGERPRINT_BYTES))
+            h.update(f.read(FINGERPRINT_BYTES))
+    return [rel, st.st_size, st.st_mtime_ns, h.hexdigest()]
 
 
 def machine_signature() -> str:

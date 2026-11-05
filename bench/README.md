@@ -494,7 +494,7 @@ consecutive scale factors; it warns when cold and warm results are mixed. It wri
 
 DuckDB's answers never change, and at SF1000 running it costs hours, so `reproduce` and `abba` keep what it produced
 in `$KRISHIV_DATA/refcache/` and reuse it. An entry is keyed by the suite, scale factor, dataset (manifest checksum,
-else file names and sizes), query id, the hash of the text DuckDB runs, and DuckDB's installed version; a change to
+else each file's name, size, modification time and first and last 64 KiB), query id, the hash of the text DuckDB runs, and DuckDB's installed version; a change to
 any of them is a miss. The engine under test is always run and checked against the cached rows exactly as against a
 fresh answer.
 

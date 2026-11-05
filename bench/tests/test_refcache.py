@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import decimal
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -328,3 +329,24 @@ def test_the_cli_accepts_the_cache_and_cold_flags(monkeypatch: pytest.MonkeyPatc
     assert (seen["refresh_reference"], seen["reference_cache"], seen["cold"]) == (True, True, True)
     cli.main(["reproduce", "--no-reference-cache"])
     assert (seen["refresh_reference"], seen["reference_cache"], seen["cold"]) == (False, False, False)
+
+
+def test_same_size_rewrite_of_a_data_file_changes_the_signature(ds: Dataset):
+    before = dataset_signature(ds)
+    f = ds.root / "t.parquet"
+    stat = f.stat()
+    f.write_bytes(b"xyz")  # same size, different contents
+    os.utime(f, ns=(stat.st_atime_ns, stat.st_mtime_ns))  # even with the old modification time
+    assert dataset_signature(ds) != before
+
+
+def test_a_change_in_the_middle_of_a_large_file_is_caught_by_the_modification_time(ds: Dataset):
+    f = ds.root / "big.parquet"
+    f.write_bytes(b"a" * 300_000)
+    before = dataset_signature(ds)
+    stat = f.stat()
+    data = bytearray(f.read_bytes())
+    data[150_000] = ord("b")  # outside the fingerprinted head and tail
+    f.write_bytes(bytes(data))
+    os.utime(f, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
+    assert dataset_signature(ds) != before
