@@ -417,7 +417,9 @@ fn merge_filters(parts: Vec<Value>, options: &KeyFilterOptions) -> Result<Filter
         };
         merged = Some(match merged {
             None => keys,
-            Some(m) => Arc::new(m.merge(&keys, options)?),
+            // The accumulator is owned once the second partial arrives, so
+            // the fold copies no Bloom filter.
+            Some(m) => Arc::new(Arc::unwrap_or_clone(m).merge_into(&keys, options)?),
         });
     }
     Ok(merged.map_or(
