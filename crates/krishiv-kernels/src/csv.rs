@@ -849,7 +849,6 @@ impl Converter<'_> {
                 match parsed {
                     Some(d) => Val::I64(i64::from(d)),
                     None if self.fallback && self.date.is_some() => {
-                        // `cleanLegacyTimestampStr`: the fallback drops `GMT`.
                         match crate::text::spark_string_to_date(&s.replace("GMT", "")) {
                             Some(d) => Val::I64(i64::from(d)),
                             None => return Err(bad()),
