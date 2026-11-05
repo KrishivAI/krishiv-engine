@@ -22,6 +22,8 @@
 
 use std::fmt::Write as _;
 
+mod fast;
+
 use krishiv_common::error::{InvalidDatetimePatternWithSuggestion, KrishivError};
 
 use super::format::{MICROS_PER_DAY, MONTHS, zone_name};
@@ -60,15 +62,49 @@ pub struct LegacyPattern {
     /// The date the two-digit year window is anchored to, read once when
     /// the pattern is compiled so every parse of it maps years alike.
     today: (i64, u32, u32),
+    /// Set for Spark's JSON, CSV and XML options: commons-lang
+    /// `FastDateFormat` prints and a lenient `FastDateParser` reads (see
+    /// [`fast`]), instead of the SQL functions' `SimpleDateFormat`.
+    fast: bool,
+    /// A fast pattern Spark fails to build while reading: its formatter is
+    /// lazy, so the failure surfaces per value and the lenient fallback
+    /// takes over. Matches nothing, prints nothing.
+    broken: bool,
 }
 
 impl LegacyPattern {
-    /// Compiles `pattern`.
+    /// Compiles `pattern` as the `SimpleDateFormat` the SQL functions use.
     ///
     /// # Errors
     /// `INVALID_DATETIME_PATTERN.WITH_SUGGESTION` for a letter the legacy
     /// formatters reject, a run of `X` over three, or an unterminated quote.
     pub fn new(pattern: &str) -> Result<Self, KrishivError> {
+        Self::compile(pattern, false)
+    }
+
+    /// Compiles `pattern` as the `FastDateFormat` Spark's JSON, CSV and XML
+    /// options use under `timeParserPolicy=LEGACY`.
+    ///
+    /// # Errors
+    /// As [`Self::new`].
+    pub fn new_fast(pattern: &str) -> Result<Self, KrishivError> {
+        Self::compile(pattern, true)
+    }
+
+    /// A fast pattern for reading that Spark would fail to build: every
+    /// parse is a miss (the caller's lenient fallback then decides).
+    #[must_use]
+    pub fn new_fast_broken(pattern: &str) -> Self {
+        Self {
+            pattern: pattern.to_owned(),
+            toks: Vec::new(),
+            today: today(),
+            fast: true,
+            broken: true,
+        }
+    }
+
+    fn compile(pattern: &str, fast: bool) -> Result<Self, KrishivError> {
         let bad = || -> KrishivError {
             InvalidDatetimePatternWithSuggestion {
                 pattern: format!("'{pattern}'"),
@@ -131,6 +167,8 @@ impl LegacyPattern {
             pattern: pattern.to_owned(),
             toks,
             today: today(),
+            fast,
+            broken: false,
         })
     }
 
@@ -188,7 +226,9 @@ impl LegacyPattern {
     /// A pattern with a zone or offset field.
     pub fn format_date(&self, days: i32) -> Result<String, KrishivError> {
         // Day counts, not microseconds: a Date32 may lie beyond the i64 microsecond range.
-        self.write(i64::from(days), 0, None)
+        // Spark's `FastDateFormat` date formatter prints zone fields in the
+        // JVM default zone, which the probes ran as UTC.
+        self.write(i64::from(days), 0, self.fast.then_some((0, "UTC")))
     }
 
     fn write(
@@ -197,6 +237,16 @@ impl LegacyPattern {
         tod: i64,
         zone: Option<(i32, &str)>,
     ) -> Result<String, KrishivError> {
+        if self.broken {
+            return Err(unsupported("a datetime pattern Spark cannot build"));
+        }
+        // The hybrid calendar has no 1582-10-05..14: the rebase of such a
+        // label lands on the first Gregorian day.
+        let days = if self.fast && (CUTOVER_DAYS - 10..CUTOVER_DAYS).contains(&days) {
+            CUTOVER_DAYS
+        } else {
+            days
+        };
         let local = days.saturating_mul(MICROS_PER_DAY).saturating_add(tod);
         let (year, month, day) = civil_from_days(days);
         let (dow, doy) = hybrid_week_fields(days, year, month, day);
@@ -222,17 +272,21 @@ impl LegacyPattern {
                     // year prints as the signed astronomical year (Spark 4.2:
                     // `-0005-06-01` with 'Y YY YYY' is `-5 -05 -005`).
                     let (wy, _, _) = civil_from_days(week_year_anchor(days, real, year, doy));
-                    if wy < 0 {
-                        out.push('-');
-                    }
-                    if n == 2 {
-                        let _ = write!(out, "{:02}", wy.unsigned_abs() % 100);
+                    if self.fast {
+                        fast::year_field(&mut out, wy, n);
                     } else {
-                        pad(
-                            &mut out,
-                            i64::try_from(wy.unsigned_abs()).unwrap_or(i64::MAX),
-                            n,
-                        );
+                        if wy < 0 {
+                            out.push('-');
+                        }
+                        if n == 2 {
+                            let _ = write!(out, "{:02}", wy.unsigned_abs() % 100);
+                        } else {
+                            pad(
+                                &mut out,
+                                i64::try_from(wy.unsigned_abs()).unwrap_or(i64::MAX),
+                                n,
+                            );
+                        }
                     }
                 }
                 'y' => {
@@ -240,7 +294,8 @@ impl LegacyPattern {
                     if n == 2 {
                         let _ = write!(out, "{:02}", era_year % 100);
                     } else {
-                        pad(&mut out, era_year, n);
+                        // `FastDatePrinter` pads a year to four digits.
+                        pad(&mut out, era_year, if self.fast { n.max(4) } else { n });
                     }
                 }
                 'M' | 'L' => match n {
@@ -265,6 +320,7 @@ impl LegacyPattern {
                 'h' => pad(&mut out, if hour % 12 == 0 { 12 } else { hour % 12 }, n),
                 'm' => pad(&mut out, minute, n),
                 's' => pad(&mut out, second, n),
+                'S' if self.fast => pad_wide(&mut out, self.fraction(tod % MICROS_PER_SECOND), n),
                 'S' => pad(&mut out, millis, n),
                 'z' | 'Z' | 'X' => {
                     let Some((offset, id)) = zone else {
@@ -309,6 +365,12 @@ impl LegacyPattern {
                                 )?);
                             }
                         }
+                        'Z' if self.fast && n == 2 => {
+                            write_offset(&mut out, offset, true, true, true);
+                        }
+                        'Z' if self.fast && n >= 3 => {
+                            write_offset(&mut out, offset, true, true, false);
+                        }
                         'Z' => write_offset(&mut out, offset, false, true, false),
                         _ => write_offset(&mut out, offset, n == 3, n >= 2, true),
                     }
@@ -330,6 +392,9 @@ impl LegacyPattern {
         s: &str,
         session: &dyn TimeZoneRules,
     ) -> Result<Option<i64>, KrishivError> {
+        if self.fast {
+            return Ok(self.fast_instant(s, session));
+        }
         Ok(self.instant(s, session).ok())
     }
 
@@ -373,6 +438,12 @@ impl LegacyPattern {
     /// # Errors
     /// Never.
     pub fn parse_local(&self, s: &str, allow_zone: bool) -> Result<Option<i64>, KrishivError> {
+        if self.fast {
+            return Ok(self
+                .fast_fields(s, true)
+                .filter(|(_, zone)| allow_zone || zone.is_none())
+                .and_then(|(local, _)| local));
+        }
         Ok(self
             .parse_fields(s, None)
             .filter(|(_, zone)| allow_zone || zone.is_none())
@@ -384,6 +455,9 @@ impl LegacyPattern {
     /// # Errors
     /// Never.
     pub fn parse_date(&self, s: &str) -> Result<Option<i32>, KrishivError> {
+        if self.fast {
+            return Ok(self.fast_date(s));
+        }
         Ok(self
             .parse_fields(s, None)
             .and_then(|(local, _)| local)
@@ -463,6 +537,10 @@ fn is_numeric(c: char, n: usize) -> bool {
 }
 
 fn pad(out: &mut String, v: i64, n: usize) {
+    let _ = write!(out, "{v:0n$}");
+}
+
+fn pad_wide(out: &mut String, v: i128, n: usize) {
     let _ = write!(out, "{v:0n$}");
 }
 

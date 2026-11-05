@@ -233,6 +233,27 @@ impl DateTimePattern {
         })
     }
 
+    /// The `FastDateFormat` pattern Spark's JSON, CSV and XML options use
+    /// under `timeParserPolicy=LEGACY` (lenient parsing, scaled `S` runs).
+    /// When reading, a pattern Spark cannot build matches nothing instead of
+    /// failing, as Spark's formatter is built lazily inside the parse that
+    /// the lenient fallback then rescues.
+    ///
+    /// # Errors
+    /// Spark's pattern error, when formatting.
+    pub fn new_fast(pattern: &str, purpose: Purpose) -> Result<Self, KrishivError> {
+        let legacy = match purpose {
+            Purpose::Format => legacy::LegacyPattern::new_fast(pattern)?,
+            Purpose::Parse => legacy::LegacyPattern::new_fast(pattern)
+                .unwrap_or_else(|_| legacy::LegacyPattern::new_fast_broken(pattern)),
+        };
+        Ok(Self {
+            pattern: pattern.to_owned(),
+            items: Vec::new(),
+            legacy: Some(Box::new(legacy)),
+        })
+    }
+
     /// The pattern text.
     #[must_use]
     pub fn pattern(&self) -> &str {
