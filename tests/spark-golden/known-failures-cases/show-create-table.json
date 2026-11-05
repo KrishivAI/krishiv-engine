@@ -1,12 +1,8 @@
 {
   "cases": {
     "sql-commands": [
-      44,
       45,
-      46,
-      47,
-      48,
-      49
+      48
     ]
   },
   "file": "show-create-table",
