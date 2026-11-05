@@ -113,6 +113,70 @@ fn tpch_join_orders() {
     }
 }
 
+/// TPC-H statistics at scale factor `sf` as Parquet footers give them (the
+/// benchmark runner's source): row counts and column bounds, no distinct
+/// counts. Rows scale from the SF10 fixture; `nation` and `region` keep
+/// theirs.
+fn footers(sf: u64) -> Fixture {
+    let Fixture(mut tables) = fixture();
+    let scaled = |n: &str| !matches!(n, "nation" | "region");
+    // A key's range is its table's rows (keys run from 1).
+    let keys: Vec<f64> = tables
+        .iter()
+        .filter(|(n, _)| scaled(n))
+        .map(|(_, t)| t.rows as f64)
+        .collect();
+    for (name, t) in &mut tables {
+        if scaled(name) {
+            t.rows = t.rows * sf / 10;
+        }
+        for c in t.columns.values_mut() {
+            c.distinct = None;
+            if let Some(Literal::Double(m)) = &mut c.max
+                && keys.contains(m)
+            {
+                *m = *m * sf as f64 / 10.0;
+            }
+        }
+    }
+    Fixture(tables)
+}
+
+/// The `Join Inner` lines of `text` whose condition reads `needle`.
+fn joins_on<'a>(text: &'a str, needle: &str) -> Vec<&'a str> {
+    text.lines()
+        .filter(|l| l.contains("Join Inner") && l.contains(needle))
+        .collect()
+}
+
+/// TPC-H q02 at SF1000 statistics (`research/bench/sf1000-2026-11-05.md`
+/// section 5). `p_partkey`, `ps_partkey` and the decorrelated aggregate's
+/// `ps_partkey` are one equivalence class, so partsupp and the aggregate
+/// share a partkey equality even though the query writes it only through
+/// part. The join on the minimum cost must carry it: on `ps_supplycost`
+/// alone (about 100K values for 800M rows) that join is close to many to
+/// many and filled a 40 GB spill cap. No join repeats a key of one class.
+#[test]
+fn q02_keeps_the_composite_key_at_sf1000() {
+    let ctx = support::ctx();
+    let plan = support::resolve(&support::tpch_sql(2), &ctx);
+    let optimized = optimize_with(&plan, &footers(1000)).unwrap();
+    let text = optimized.root().to_string();
+    let cost = joins_on(&text, "min(ps_supplycost)");
+    assert_eq!(cost.len(), 1, "{text}");
+    assert!(cost[0].contains("ps_partkey"), "{text}");
+    for l in text.lines().filter(|l| l.contains("Join Inner")) {
+        let keys = l.split(" and ").filter(|c| c.contains("partkey")).count();
+        assert!(keys <= 1, "a join repeats the partkey class: {l}\n{text}");
+    }
+    let db = data::tpch(7, 150);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root())
+    );
+    insta::assert_snapshot!(text);
+}
+
 /// Statistics propagation steers estimates only: with it off, every TPC-H
 /// query returns the rows it returns with it on, and both the rows of the
 /// unoptimised plan, whatever order the joins take.

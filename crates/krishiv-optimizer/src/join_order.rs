@@ -13,18 +13,28 @@
 //! smaller (the build side of a hash join) on the right. Where the
 //! consumer reads columns by position, a projection on top restores the
 //! original columns.
+//!
+//! Column equalities (`a = b`) between inputs form equivalence classes:
+//! inputs with columns of one class are joined on it even where the query
+//! relates them only through a third input (TPC-H q02's partsupp and its
+//! decorrelated minimum share a partkey only through part), and a join
+//! takes one equality per class it connects, never one that the joins
+//! below already imply. Estimates count each class's equalities the same
+//! way, so a cycle of them is not counted twice.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use krishiv_plan::{
-    AttrId, Expr, ExprNode, JoinCondition, JoinKind, LogicalPlan, PlanNode, ResolvedExpr,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, JoinCondition, JoinKind, LogicalPlan, PlanNode,
+    ResolvedExpr,
 };
+use krishiv_types::DataType;
 
 use crate::estimate::Estimator;
 use crate::expr::{
-    Attrs, and_all, column, common_equalities, conjuncts, has_subquery, implied, is_deterministic,
-    references,
+    Attrs, and_all, builtin, call, column, common_equalities, conjuncts, has_subquery, implied,
+    is_deterministic, references,
 };
 use crate::narrow::{equi_columns, selectivity};
 use crate::stats::{RelStats, Statistics, cse_definitions, reads_cse, resolve_cse};
@@ -362,12 +372,61 @@ struct Best {
 
 /// A conjunct of the tree: the inputs it reads, its selectivity, and
 /// whether it can be a join condition (one with a subquery stays a filter
-/// and does not connect inputs).
+/// and does not connect inputs). A column equality between two inputs also
+/// names its columns (`class`): it belongs to their equivalence class.
 struct Pred {
     expr: Arc<Expr>,
     on: Vec<usize>,
     sel: f64,
     edge: bool,
+    class: Option<[AttrId; 2]>,
+}
+
+/// The columns of `a = b` over two plain columns of the same type, which
+/// is transitive (`=`, not `<=>`: a null never matches, so with `a = b`
+/// and `b = c`, `a = c` holds of every row that passes both).
+fn equality(e: &Expr) -> Option<[&BoundColumn; 2]> {
+    let Some((Builtin::Eq, [a, b], _)) = builtin(e) else {
+        return None;
+    };
+    fn col(e: &Expr) -> Option<&BoundColumn> {
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+            _ => None,
+        }
+    }
+    let (a, b) = (col(a)?, col(b)?);
+    (a.id != b.id && a.data_type == b.data_type).then_some([a, b])
+}
+
+/// Union-find over attributes, for the equalities that a set of joined
+/// inputs already holds.
+#[derive(Default)]
+struct Classes(HashMap<AttrId, AttrId>);
+
+impl Classes {
+    fn find(&mut self, mut x: AttrId) -> AttrId {
+        while let Some(&p) = self.0.get(&x) {
+            if p == x {
+                break;
+            }
+            let gp = self.0.get(&p).copied().unwrap_or(p);
+            self.0.insert(x, gp);
+            x = gp;
+        }
+        x
+    }
+
+    /// Joins the classes of `a` and `b`; false when they were one already.
+    fn union(&mut self, [a, b]: [AttrId; 2]) -> bool {
+        let (ra, rb) = (self.find(a), self.find(b));
+        if ra == rb {
+            return false;
+        }
+        self.0.insert(ra, rb);
+        self.0.entry(rb).or_insert(rb);
+        true
+    }
 }
 
 struct Graph {
@@ -390,6 +449,7 @@ impl Graph {
                 owner.insert(c.id, i);
             }
         }
+        let preds = canonical_equalities(preds, &owner);
         let refs: Vec<_> = preds.iter().map(|p| references(p)).collect();
         // Estimates see through common-subexpression projections: a `cse_*`
         // column holds its definition's values, so the same rows are
@@ -517,11 +577,13 @@ impl Graph {
                 narrow,
             );
             let edge = !has_subquery(&p);
+            let class = equality(&p).map(|[a, b]| [a.id, b.id]);
             kept.push(Pred {
                 expr: p,
                 on,
                 sel,
                 edge,
+                class,
             });
         }
         composite_keys(&mut kept, &all, &owner, &at, &rows);
@@ -575,15 +637,20 @@ impl Graph {
 
     /// The conjuncts that join `a` and `b`: they read both and nothing
     /// outside `a ∪ b`.
+    /// A column equality the joins of `a` and of `b` already imply is left
+    /// out, as is a second equality of one class.
     fn joining(&self, a: &dyn Fn(usize) -> bool, b: &dyn Fn(usize) -> bool) -> Vec<usize> {
-        (0..self.preds.len())
+        let crossing: Vec<usize> = (0..self.preds.len())
             .filter(|&i| {
                 let on = &self.preds[i].on;
                 on.iter().all(|&x| a(x) || b(x))
                     && on.iter().any(|&x| a(x))
                     && on.iter().any(|&x| b(x))
             })
-            .collect()
+            .collect();
+        let mut held = self.held(a);
+        held.extend(self.held(b));
+        self.independent(&held, &crossing)
     }
 
     /// The rows of the join of the inputs in `set`.
@@ -592,13 +659,53 @@ impl Graph {
             .filter(|&i| set(i))
             .map(|i| self.rows[i])
             .product();
+        let inside: Vec<usize> = (0..self.preds.len())
+            .filter(|&i| self.preds[i].on.iter().all(|&x| set(x)))
+            .collect();
         let sel: f64 = self
-            .preds
-            .iter()
-            .filter(|p| p.on.iter().all(|&x| set(x)))
-            .map(|p| p.sel)
+            .independent(&[], &inside)
+            .into_iter()
+            .map(|i| self.preds[i].sel)
             .product();
         rows(base * sel)
+    }
+
+    /// Of the conjuncts `cands` (in order), those not implied by the
+    /// equalities `held` and the ones kept before them: every conjunct but
+    /// a column equality whose columns are already one class.
+    fn independent(&self, held: &[usize], cands: &[usize]) -> Vec<usize> {
+        let mut classes = Classes::default();
+        for c in held.iter().filter_map(|&i| self.preds[i].class) {
+            classes.union(c);
+        }
+        // Equalities are chosen in the order of their columns, not of the
+        // conjuncts, so the choice does not depend on how the query (or a
+        // previous planning) wrote them.
+        let mut eqs: Vec<(AttrId, AttrId, usize)> = cands
+            .iter()
+            .filter_map(|&i| self.preds[i].class.map(|[a, b]| (a.min(b), a.max(b), i)))
+            .collect();
+        if eqs.is_empty() {
+            return cands.to_vec();
+        }
+        eqs.sort_unstable();
+        let kept: Vec<usize> = eqs
+            .into_iter()
+            .filter(|&(a, b, _)| classes.union([a, b]))
+            .map(|(_, _, i)| i)
+            .collect();
+        cands
+            .iter()
+            .copied()
+            .filter(|i| self.preds[*i].class.is_none() || kept.contains(i))
+            .collect()
+    }
+
+    /// The column equalities over the inputs `set` alone.
+    fn held(&self, set: &dyn Fn(usize) -> bool) -> Vec<usize> {
+        (0..self.preds.len())
+            .filter(|&i| self.preds[i].class.is_some() && self.preds[i].on.iter().all(|&x| set(x)))
+            .collect()
     }
 
     fn plan(&self) -> Arc<LogicalPlan> {
@@ -728,6 +835,17 @@ impl Graph {
                     e.2.push(k);
                 }
             }
+            // Each pair counts and joins on the equalities its parts do
+            // not already hold.
+            for (&(a, b), (sel, _, on)) in &mut pairs {
+                if !on.iter().any(|&k| self.preds[k].class.is_some()) {
+                    continue;
+                }
+                let mut held = self.held(&|x| part_of[x] == a);
+                held.extend(self.held(&|x| part_of[x] == b));
+                *on = self.independent(&held, on);
+                *sel = on.iter().map(|&k| self.preds[k].sel).product();
+            }
             let mut pick: Option<((usize, usize), f64)> = None;
             for (&(a, b), (sel, edge, _)) in &pairs {
                 let (Some((_, ra)), Some((_, rb))) = (&parts[a], &parts[b]) else {
@@ -813,4 +931,98 @@ impl Graph {
             None => join,
         }
     }
+}
+
+/// `preds` with the column equalities between inputs of the tree replaced
+/// by their equivalence classes' canonical equalities. Each class's
+/// representative on an input is its smallest column there; the class
+/// becomes one equality of the representatives of each pair of its inputs
+/// (an input pair the query relates only through a third input included),
+/// and one of the representative with each other column of the class on
+/// the same input (a filter of that input). Which of them a join takes is
+/// [`Graph::independent`]'s choice. The result does not depend on how the
+/// query wrote the class, so re-planning a planned tree gives the same
+/// plan. Other conjuncts come first, in their order; the equalities follow
+/// in the order of their columns.
+fn canonical_equalities(preds: Vec<Arc<Expr>>, owner: &HashMap<AttrId, usize>) -> Vec<Arc<Expr>> {
+    let mut classes = Classes::default();
+    let mut cols: BTreeMap<AttrId, BoundColumn> = BTreeMap::new();
+    // The equalities as written, by their columns (smaller id first).
+    let mut written: HashMap<(AttrId, AttrId), Arc<Expr>> = HashMap::new();
+    // The conjuncts in order; an equality as its columns.
+    let mut order: Vec<Result<Arc<Expr>, (AttrId, AttrId)>> = Vec::new();
+    for p in preds {
+        match equality(&p) {
+            Some([a, b]) if owner.contains_key(&a.id) && owner.contains_key(&b.id) => {
+                classes.union([a.id, b.id]);
+                cols.insert(a.id, a.clone());
+                cols.insert(b.id, b.clone());
+                let key = (a.id.min(b.id), a.id.max(b.id));
+                if let std::collections::hash_map::Entry::Vacant(e) = written.entry(key) {
+                    e.insert(Arc::clone(&p));
+                    order.push(Err(key));
+                }
+            }
+            _ => order.push(Ok(p)),
+        }
+    }
+    if written.is_empty() {
+        return order.into_iter().filter_map(Result::ok).collect();
+    }
+    // Per class (by its smallest column), its columns per input, smallest
+    // first. `cols` is in id order, so each list is too.
+    let mut members: BTreeMap<AttrId, BTreeMap<usize, Vec<&BoundColumn>>> = BTreeMap::new();
+    let mut first: HashMap<AttrId, AttrId> = HashMap::new();
+    for (id, c) in &cols {
+        let root = classes.find(*id);
+        let key = *first.entry(root).or_insert(*id);
+        if let Some(&leaf) = owner.get(id) {
+            members
+                .entry(key)
+                .or_default()
+                .entry(leaf)
+                .or_default()
+                .push(c);
+        }
+    }
+    // The canonical equalities, by their columns (smaller id first).
+    let mut canonical: Vec<(AttrId, AttrId)> = Vec::new();
+    for inputs in members.values() {
+        let mut reps: Vec<&BoundColumn> = Vec::new();
+        for list in inputs.values() {
+            if let [rep, others @ ..] = list.as_slice() {
+                canonical.extend(others.iter().map(|o| (rep.id, o.id)));
+                reps.push(rep);
+            }
+        }
+        reps.sort_by_key(|c| c.id);
+        for (k, a) in reps.iter().enumerate() {
+            canonical.extend(reps[k + 1..].iter().map(|b| (a.id, b.id)));
+        }
+    }
+    // Written ones stay where and as the query wrote them; the others
+    // follow.
+    let keep: std::collections::HashSet<(AttrId, AttrId)> = canonical.iter().copied().collect();
+    let mut out: Vec<Arc<Expr>> = order
+        .into_iter()
+        .filter_map(|p| match p {
+            Ok(p) => Some(p),
+            Err(key) => keep
+                .contains(&key)
+                .then(|| written.get(&key).map(Arc::clone))
+                .flatten(),
+        })
+        .collect();
+    for (a, b) in canonical {
+        if !written.contains_key(&(a, b))
+            && let (Some(a), Some(b)) = (cols.get(&a), cols.get(&b))
+        {
+            out.push(call(
+                Builtin::Eq,
+                vec![column(a), column(b)],
+                DataType::Boolean,
+            ));
+        }
+    }
+    out
 }
