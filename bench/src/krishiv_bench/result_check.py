@@ -9,6 +9,10 @@ Per column (by position; names and row order are ignored): the non-NULL count, a
 Plus the row count and a row hash: the sum of ``hash`` of the non-float columns of each row, which ties values in
 different columns to the same row. Two runs of one engine on one query must agree; the checksum is not comparable
 across engines (their Arrow types differ), so each engine is held to its own first, DuckDB-verified answer.
+
+Blind spots, by design (it is a guard against a timed run that computes something else, not a proof of equality):
+floating-point values are only summed, so two floats swapped between rows leave the checksum unchanged, and a change
+below about ``REL_TOL`` of a column's sum goes unseen; the DECIMAL(38) sum can overflow HUGEINT on a huge result.
 """
 
 from __future__ import annotations

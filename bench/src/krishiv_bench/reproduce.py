@@ -200,6 +200,19 @@ def _baselines(qm, engines, live, nrows, entry, samples) -> dict[str, dict | Non
     return sums
 
 
+def check_description(name: str, baseline: dict | None) -> str:
+    """How the timed runs of ``name`` were checked against the verified answer, recorded with its timings.
+
+    Only an adapter that returns a result checksum compares more than the row count; Krishiv's ``RUN`` returns only
+    rows and seconds, so its checksum is that of a separate, untimed ``DUMP`` of the query.
+    """
+    if baseline is None:
+        return "row count only: the adapter returns no result checksum"
+    if name == "krishiv":
+        return "row count of the timed run; checksum of a separate untimed DUMP run (RUN returns only rows and seconds)"
+    return "row count and order-independent checksum of the timed run's own result"
+
+
 def _timed(eng: Engine, q: Query, nrows: int, baseline: dict | None) -> float:
     """One timed run whose full result (row count and checksum) must equal the verified one; returns the seconds."""
     n, secs = eng.timed_run(q)
@@ -244,6 +257,8 @@ def ours_query(
     peaks: dict[str, int] = {}
     cpus: dict[str, list[float]] = {n: [] for n in live}
     sums = _baselines(qm, engines, live, nrows, entry, samples)
+    for name in sums:
+        entry["engines"][name]["result_check"] = check_description(name, sums[name])
     for _ in range(reps):
         for name in [*live, *reversed(live)]:
             if name not in samples:
@@ -312,6 +327,7 @@ def sequential_query(
                 if base_n != nrows:
                     raise EngineError(f"result run returned {base_n} rows, expected {nrows}")
                 baseline = eng.result_checksum()
+                verdicts[name]["result_check"] = check_description(name, baseline)
                 samples[name], cpus[name] = [], []
                 for _ in range(samples_n):
                     samples[name].append(_timed(eng, qm[name], nrows, baseline))
@@ -369,6 +385,7 @@ def theirs_query(
                 raise EngineError("a later run's result checksum differs from the first run's")
             times.append(secs)
         res: dict[str, Any] = {"status": "ok", "runs_s": times, "first_s": times[0], "best_s": min(times)}
+        res["result_check"] = check_description(name, first_sum)
         if name in peaks:
             res["peak_rss_bytes"] = peaks[name]
         return res

@@ -454,8 +454,8 @@ uv run krishiv-bench run --engine krishiv --suite tpch-nested --sf 1        # ti
 ```
 
 The conversion verifies itself before it reports done: row counts equal the source's, every array holds one element,
-and the nested table flattened back equals the flat source (cast to the nested types) as a multiset in both
-directions. `nested-check` runs the 22 nested queries on the engine and the 22 flat TPC-H queries on DuckDB over the
+and the nested table flattened back equals the flat source, uncast, as a multiset in both directions (so a cast
+that lost precision is caught). `nested-check` runs the 22 nested queries on the engine and the 22 flat TPC-H queries on DuckDB over the
 flat tables, and compares rows (in order when the flat query has a top-level `ORDER BY`).
 Only engines that run Spark SQL `explode` take part (Krishiv, Spark, Sail); the others are refused. Differences from
 Comet's conversion: one `<table>.parquet` file per table instead of Hive-partitioned directories, and DuckDB's default

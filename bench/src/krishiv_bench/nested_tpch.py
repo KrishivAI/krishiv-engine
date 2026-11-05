@@ -159,8 +159,11 @@ def flatten_select(t: Table, src: str) -> str:
 
 
 def flat_select(t: Table, src: str) -> str:
-    """The flat table at ``src`` cast to the nested types, in the column order of ``flatten_select``."""
-    cols = ", ".join(_cast(c, ty) + f" AS {c}" for c, ty in (*t.top, *t.nested))
+    """The flat table at ``src`` as it is, uncast, in the column order of ``flatten_select``.
+
+    Uncast on purpose: ``verify`` compares it with the flattened nested table, and DuckDB coerces the two sides to a
+    common type, so a conversion that lost precision (a double rounded to a decimal) shows as a difference."""
+    cols = ", ".join(c for c, _ in (*t.top, *t.nested))
     return f"SELECT {cols} FROM read_parquet('{src}')"
 
 

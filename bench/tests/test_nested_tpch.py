@@ -202,3 +202,20 @@ def test_engines_that_cannot_run_explode_are_refused_for_the_suite():
     for engine in ("duckdb", "polars", "datafusion", "clickhouse"):
         with pytest.raises(SystemExit, match="Spark SQL"):
             load_queries("tpch-nested", engine)
+
+
+def test_verify_catches_a_cast_that_lost_precision(flat: Path, tmp_path: Path):
+    """A DOUBLE 1.239 cast to DECIMAL(12,2) is 1.24: a comparison made after the same cast on both sides would agree."""
+    con = duckdb.connect()
+    src = flat / "supplier.parquet"
+    lossy = tmp_path / "lossy"
+    lossy.mkdir()
+    for t in n.TABLES:
+        (lossy / f"{t.name}.parquet").write_bytes((flat / f"{t.name}.parquet").read_bytes())
+    con.execute(
+        f"COPY (SELECT * REPLACE (CAST(1.239 AS DOUBLE) AS s_acctbal) FROM read_parquet('{src}')) "
+        f"TO '{lossy / 'supplier.parquet'}' (FORMAT parquet)"
+    )
+    out = tmp_path / "nested"
+    n.nest(lossy, out)
+    assert n.verify(lossy, out)  # the nested s_acctbal is 1.24, the source says 1.239

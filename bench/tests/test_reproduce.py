@@ -13,6 +13,7 @@ import threading
 import time
 from decimal import Decimal
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -478,3 +479,148 @@ def test_polars_streaming_engine_gives_the_same_rows(tmp_path):
         assert e.result_checksum() is not None
         assert e.config()["engine"] == ("streaming" if name.endswith("streaming") else "default")
     assert out["polars"] == out["polars-streaming"] == [("y", 1), ("z", 2), ("x", 3)]
+
+
+def test_check_description_says_what_was_compared():
+    assert reproduce.check_description("spark-connect", None).startswith("row count only")
+    assert "separate untimed DUMP run" in reproduce.check_description("krishiv", {"kinds": [], "values": []})
+    assert "timed run's own result" in reproduce.check_description("duckdb", {"kinds": [], "values": []})
+
+
+class Scripted(Fake):
+    """A stand-in for ``ProcessEngine`` in ``sequential_query``: canned rows, optional failures, a teardown count."""
+
+    instances: ClassVar[list[Scripted]] = []
+
+    def __init__(self, name, rows=None, timed_exc=None, setup_exc=None, checksum=False):
+        super().__init__(rows)
+        self.canned: list[tuple] = rows or []
+        self.name, self.timed_exc, self.setup_exc, self.checksum = name, timed_exc, setup_exc, checksum
+        self.torn_down = 0
+        Scripted.instances.append(self)
+
+    def setup(self, dataset):
+        if self.setup_exc:
+            raise self.setup_exc
+
+    def config(self):
+        return {}
+
+    def build_info(self):
+        return {}
+
+    def timed_run(self, query):
+        if self.timed_exc:
+            raise self.timed_exc
+        if self.checksum:
+            import pyarrow as pa
+
+            self._pending = pa.table({"a": [r[0] for r in self.canned]})
+        return len(self.canned), 0.1
+
+    def teardown(self):
+        self.torn_down += 1
+
+
+def _sequential(monkeypatch, tiny, engines, names):
+    """Runs ``sequential_query`` with ``ProcessEngine`` replaced by ``engines[run_name]``."""
+    Scripted.instances = []
+    monkeypatch.setattr(reproduce, "ProcessEngine", lambda run_name, *a, **k: engines[run_name]())
+    qm = {n: q("SELECT a FROM t") for n in names}
+    return reproduce.sequential_query(qm, names, tiny, 1, 1, None, 2, 60)
+
+
+def test_sequential_query_records_how_each_engine_was_checked(monkeypatch, tiny):
+    rows = [(1,), (2,)]
+    entry, infos = _sequential(
+        monkeypatch,
+        tiny,
+        {
+            "duckdb": lambda: Scripted("duckdb", rows, checksum=True),
+            "krishiv": lambda: Scripted("krishiv", rows, checksum=True),
+            "spark-connect": lambda: Scripted("spark-connect", rows),
+        },
+        ["duckdb", "krishiv", "spark-connect"],
+    )
+    got = entry["engines"]
+    assert entry["rows"] == 2
+    assert got["duckdb"]["result_check"].startswith("row count and order-independent checksum")
+    assert "separate untimed DUMP run" in got["krishiv"]["result_check"]
+    assert got["spark-connect"]["result_check"].startswith("row count only")
+    assert all(len(got[n]["samples_s"]) == 2 for n in got)
+    assert set(infos) == {"duckdb", "krishiv", "spark-connect"}
+    assert all(i.torn_down == 1 for i in Scripted.instances)
+
+
+def test_sequential_query_without_a_reference_answer_fails_the_others_and_times_nothing(monkeypatch, tiny):
+    entry, _ = _sequential(
+        monkeypatch,
+        tiny,
+        {
+            "duckdb": lambda: Scripted("duckdb", setup_exc=EngineError("no tables")),
+            "krishiv": lambda: Scripted("krishiv", [(1,)]),
+        },
+        ["duckdb", "krishiv"],
+    )
+    assert entry["engines"]["duckdb"]["status"] == "error"
+    assert entry["engines"]["krishiv"]["reason"].endswith("no DuckDB reference result")
+    assert all("median_s" not in e for e in entry["engines"].values())
+
+
+def test_sequential_query_runs_polars_again_with_the_streaming_engine_after_a_crash(monkeypatch, tiny):
+    rows = [(1,), (2,)]
+    entry, _ = _sequential(
+        monkeypatch,
+        tiny,
+        {
+            "duckdb": lambda: Scripted("duckdb", rows, checksum=True),
+            "polars": lambda: Scripted("polars", setup_exc=EngineCrashed("worker died")),
+            "polars-streaming": lambda: Scripted("polars-streaming", rows, checksum=True),
+        },
+        ["duckdb", "polars"],
+    )
+    polars = entry["engines"]["polars"]
+    assert polars["status"] == "ok"
+    assert polars["engine_mode"].startswith("streaming")
+    assert len(polars["samples_s"]) == 2
+    assert all(i.torn_down == 1 for i in Scripted.instances)  # the crashed attempt was torn down too
+
+
+def test_sequential_query_tears_down_after_a_timeout_and_keeps_the_other_engines(monkeypatch, tiny):
+    rows = [(1,)]
+    entry, _ = _sequential(
+        monkeypatch,
+        tiny,
+        {
+            "duckdb": lambda: Scripted("duckdb", rows, checksum=True),
+            "krishiv": lambda: Scripted("krishiv", rows, timed_exc=EngineTimeout("too slow")),
+        },
+        ["duckdb", "krishiv"],
+    )
+    assert entry["engines"]["krishiv"]["status"] == "timeout"
+    assert entry["engines"]["duckdb"]["median_s"] == pytest.approx(0.1)
+    assert [i.torn_down for i in Scripted.instances] == [1, 1]
+
+
+def test_a_capped_worker_starts_inside_a_systemd_scope_with_no_swap(monkeypatch, tiny):
+    started = []
+
+    class Stop(Exception):
+        pass
+
+    def popen(argv, **kw):
+        started.append(argv)
+        raise Stop
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    for cap, scoped in ((8, True), (None, False)):
+        eng = ProcessEngine("duckdb", 2, 4, 5.0, cap_gb=cap)
+        eng._dataset = tiny
+        with pytest.raises(Stop):
+            eng._start()
+        argv = started[-1]
+        assert (argv[:3] == ["systemd-run", "--user", "--scope"]) is scoped
+        if scoped:
+            assert "MemoryMax=8G" in argv
+            assert "MemorySwapMax=0" in argv
+        assert argv[argv.index("-m") + 1] == "krishiv_bench.worker"
