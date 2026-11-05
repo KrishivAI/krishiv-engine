@@ -929,6 +929,23 @@ impl Parsed {
     /// (`GregorianCalendar.computeTime`, `Locale.US`: weeks start on Sunday,
     /// a week 1 may hold one day).
     fn week_real(&self, year: i64, mode: Mode) -> Option<i64> {
+        // A lenient `GregorianCalendar` resolves week fields on the Gregorian
+        // side first and falls back to the Julian anchors only when that
+        // lands before the cutover.
+        // The week of the year counts from the year's first day, which is
+        // Julian in the cutover year (as the day of the year does).
+        if matches!(mode, Mode::Woy) {
+            return self.week_real_on(year, mode, false);
+        }
+        match self.week_real_on(year, mode, true)? {
+            real if real >= CUTOVER_DAYS => Some(real),
+            _ => self.week_real_on(year, mode, false),
+        }
+    }
+
+    /// [`Self::week_real`] with the month and year anchors on the Gregorian
+    /// calendar (`gregorian`) or the Julian one before the cutover.
+    fn week_real_on(&self, year: i64, mode: Mode, gregorian: bool) -> Option<i64> {
         let on_or_before = |d: i64, dow: i64| d - (dow_sun1(d) - dow).rem_euclid(7);
         // Real epoch days: the Julian calendar's before the cutover.
         // A lenient calendar carries a month past December into the year.
@@ -936,7 +953,13 @@ impl Parsed {
         let year_m = year.checked_add(month0.div_euclid(12))?;
         let month_m = u32::try_from(month0.rem_euclid(12) + 1).ok()?;
         let first_of = |month: u32, year: i64| {
-            days_from_civil(year, month, 1).map(|label| real_day(label, year, month, 1))
+            days_from_civil(year, month, 1).map(|label| {
+                if gregorian {
+                    label
+                } else {
+                    real_day(label, year, month, 1)
+                }
+            })
         };
         let week_start = |first: i64| {
             let mut start = on_or_before(first + 6, 1);
@@ -965,7 +988,11 @@ impl Parsed {
                 if n >= 0 {
                     Some(on_or_before(first + 7 * n - 1, dow))
                 } else {
-                    let len = hybrid_month_len(year, m);
+                    let len = if gregorian {
+                        i64::from(days_in_month(year, m))
+                    } else {
+                        hybrid_month_len(year, m)
+                    };
                     Some(on_or_before(first + len + 7 * (n + 1) - 1, dow))
                 }
             }
