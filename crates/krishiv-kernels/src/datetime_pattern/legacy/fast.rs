@@ -31,12 +31,14 @@
 //! as the instant's day in UTC (the JVM default zone is the host's, not the
 //! query's; the probes ran in UTC).
 
+use super::super::unsupported;
 use super::{
     LONG_DAYS, LegacyPattern, MICROS_PER_DAY, MICROS_PER_SECOND, MONTHS, Mode, Parsed, SHORT_DAYS,
     Tok, Unmatched, ZONE_STRINGS, Zone_, days_from_civil, java_digit, label_of_real, name_at,
     prefix, real_day, zone, zone_iso,
 };
 use crate::cast::{FixedOffset, TimeZoneRules};
+use krishiv_common::error::KrishivError;
 
 /// A field as `FastDatePrinter` writes a year (`y` is the year of the era,
 /// `Y` the astronomical week year): four digits at least, and a negative
@@ -78,9 +80,18 @@ fn java_whitespace(c: char) -> bool {
 impl LegacyPattern {
     /// The `MILLISECOND` field a `MicrosCalendar` holds for `micros` of the
     /// second: scaled by the pattern's whole count of `S` letters.
-    pub(super) fn fraction(&self, micros: i64) -> i128 {
+    ///
+    /// # Errors
+    /// More than 18 `S` letters (`Decimal.POW_10` has no such power).
+    pub(super) fn fraction(&self, micros: i64) -> Result<i64, KrishivError> {
         let digits = self.s_count();
-        i128::from(micros) * 10_i128.pow(digits) / i128::from(MICROS_PER_SECOND)
+        if digits > 18 {
+            return Err(unsupported("a fraction pattern of more than 18 S letters"));
+        }
+        // Scala: `(micros * POW_10(d) / 1000000).toInt` in `long` arithmetic.
+        let scaled = micros.wrapping_mul(10_i64.pow(digits)) / MICROS_PER_SECOND;
+        let low = u32::try_from(scaled & 0xFFFF_FFFF).unwrap_or(0);
+        Ok(i64::from(i32::from_le_bytes(low.to_le_bytes())))
     }
 
     fn s_count(&self) -> u32 {
@@ -319,8 +330,12 @@ fn names_owned<V: Copy>(
 /// name, which sets the zone's raw offset plus (for a daylight name) its
 /// saving.
 fn fast_zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
-    if matches!(text.get(pos), Some('+' | '-')) || prefix(text, pos, &["GMT"]).is_some() {
+    if matches!(text.get(pos), Some('+' | '-')) {
         return zone(text, pos, None);
+    }
+    if let Some(end) = prefix(text, pos, &["GMT"]) {
+        // `GMT+05` is no `GMT+h:mm`: the zone name `GMT` is read alone.
+        return zone(text, pos, None).or(Some((end, Zone_::Offset(0))));
     }
     let mut best: Option<(usize, i32)> = None;
     for row in ZONE_STRINGS.iter() {
@@ -351,13 +366,19 @@ fn zone_instant(
     };
     match zone {
         None => {
-            // A lenient calendar puts a time in a gap on the offset before
-            // it and one in an overlap on the later instant: the smaller of
-            // the offsets around.
+            // A lenient calendar puts a time in an overlap on the later
+            // instant (the smaller valid offset) and one in a gap on the
+            // offset before the change.
             let secs = local.div_euclid(MICROS_PER_SECOND);
             let before = session.offset_at_utc(secs.saturating_sub(86_400));
             let after = session.offset_at_utc(secs.saturating_add(86_400));
-            shift(before.min(after))
+            let valid = |o: i32| session.offset_at_utc(secs.saturating_sub(i64::from(o))) == o;
+            let offset = [before, after]
+                .into_iter()
+                .filter(|&o| valid(o))
+                .min()
+                .unwrap_or(before);
+            shift(offset)
         }
         Some(Zone_::Offset(o)) => shift(o),
         Some(Zone_::Region(id)) => match crate::datetime::resolve_zone(&id) {
@@ -415,17 +436,13 @@ fn resolve(
     let hour = match best {
         None => 0,
         Some(b) if Some(b) == hod => st.hour_of_day.map_or(0, |(h, _)| h),
-        Some(b) => {
-            st.hour12.map_or(0, |(h, _)| h)
-                + if pm == Some(b) && st.pm.is_some_and(|(p, _)| p) {
-                    12
-                } else {
-                    0
-                }
+        Some(_) => {
+            st.hour12.map_or(0, |(h, _)| h) + if st.pm.is_some_and(|(p, _)| p) { 12 } else { 0 }
         }
     };
     let ms = st.millis.unwrap_or(0);
     let fraction = match fraction_digits {
+        Some(d) if d > 18 => return None,
         Some(d) => i64::try_from(i128::from(ms) * 1_000_000 / 10_i128.checked_pow(d)?).ok()?,
         None => ms.checked_mul(1000)?,
     };

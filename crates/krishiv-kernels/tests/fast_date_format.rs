@@ -104,3 +104,39 @@ fn fast_date_prints_match_spark() {
         wrong.join("\n")
     );
 }
+
+/// Cases from the diff review, each checked on the Spark 4.2.0 oracle.
+#[test]
+fn fast_parse_review_regressions() {
+    let read = |zone: &str, text: &str, pattern: &str| {
+        let rules = resolve_zone(zone).unwrap();
+        DateTimePattern::new_fast(pattern)
+            .parse_timestamp(text, &rules)
+            .unwrap()
+    };
+    // A wall time a few hours after a spring-forward change keeps the new offset.
+    assert_eq!(
+        read(
+            "America/Los_Angeles",
+            "2024-03-10 05:00:00",
+            "yyyy-MM-dd HH:mm:ss"
+        ),
+        Some(1_710_072_000_000_000)
+    );
+    // `a` before `hh` still adds the afternoon.
+    assert_eq!(read("UTC", "PM 05", "a hh"), Some(61_200_000_000));
+    // `GMT+05` is not `GMT+h:mm`: `GMT` alone is read.
+    assert_eq!(
+        read("UTC", "2024-01-01 00:00:00 GMT+05", "yyyy-MM-dd HH:mm:ss z"),
+        Some(1_704_067_200_000_000)
+    );
+    // More than 18 `S` letters cannot be built.
+    assert_eq!(
+        read(
+            "UTC",
+            "2024-01-01 00:00:00.5",
+            "yyyy-MM-dd HH:mm:ss.SSSSSSSSSSSSSSSSSSS"
+        ),
+        None
+    );
+}

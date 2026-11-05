@@ -182,11 +182,7 @@ fn write_value(
         }
         ArrowType::Date32 => {
             let days = col.as_primitive::<Date32Type>().value(row);
-            let rendered = ctx
-                .out
-                .date
-                .format_date(days)
-                .map_err(|e| internal(format!("a to_json date pattern: {e}")))?;
+            let rendered = ctx.out.date.format_date(days)?;
             push_quoted(&rendered, text);
         }
         ArrowType::Time64(TimeUnit::Nanosecond) => {

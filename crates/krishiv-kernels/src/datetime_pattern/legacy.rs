@@ -336,7 +336,7 @@ impl LegacyPattern {
                 'h' => pad(&mut out, if hour % 12 == 0 { 12 } else { hour % 12 }, n),
                 'm' => pad(&mut out, minute, n),
                 's' => pad(&mut out, second, n),
-                'S' if self.fast => pad_wide(&mut out, self.fraction(tod % MICROS_PER_SECOND), n),
+                'S' if self.fast => pad(&mut out, self.fraction(tod % MICROS_PER_SECOND)?, n),
                 'S' => pad(&mut out, millis, n),
                 'z' | 'Z' | 'X' => {
                     let Some((offset, id)) = zone else {
@@ -553,10 +553,6 @@ fn is_numeric(c: char, n: usize) -> bool {
 }
 
 fn pad(out: &mut String, v: i64, n: usize) {
-    let _ = write!(out, "{v:0n$}");
-}
-
-fn pad_wide(out: &mut String, v: i128, n: usize) {
     let _ = write!(out, "{v:0n$}");
 }
 
