@@ -22,7 +22,7 @@ const MAX_TEXT: usize = 4096;
 /// Quoted identifiers stay (they are names). A double-quoted string may be
 /// either a literal or, with `spark.sql.ansi.doubleQuotedIdentifiers`, an
 /// identifier; the text does not know the setting, so it is treated as a
-/// literal. The result is cut at [`MAX_TEXT`] bytes with a trailing `...`.
+/// literal. The result is cut at 4 KiB (`MAX_TEXT`) with a trailing `...`.
 #[must_use]
 pub fn sanitize_query_text(sql: &str) -> String {
     let mut out = String::with_capacity(sql.len().min(MAX_TEXT));
@@ -61,7 +61,7 @@ pub fn sanitize_query_text(sql: &str) -> String {
 /// The operation is the statement's first word, upper-cased (`WITH` looks
 /// through to the statement it introduces). The tables are the names after
 /// `FROM`, `JOIN`, `INTO`, `UPDATE` and `TABLE`, in order of appearance
-/// without repeats, at most [`MAX_TARGETS`]; a subquery's own tables count,
+/// without repeats, at most five (`MAX_TARGETS`); a subquery's own tables count,
 /// and a name keeps its qualifier (`db.t`).
 #[must_use]
 pub fn query_summary(sql: &str) -> String {

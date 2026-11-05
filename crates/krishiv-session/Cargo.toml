@@ -69,8 +69,16 @@ unstable-ir = []
 # OTLP export of the `krishiv.query` spans and the engine metrics over http-proto (rustls, no
 # OpenSSL, no gRPC stack). Off in the default embedded build.
 telemetry-otlp = [
-  "dep:http", "dep:opentelemetry", "dep:opentelemetry-http", "dep:opentelemetry-otlp",
-  "dep:opentelemetry-proto", "dep:prost", "dep:reqwest", "dep:opentelemetry_sdk", "dep:tracing-opentelemetry", "dep:tracing-subscriber",
+    "dep:http",
+    "dep:opentelemetry",
+    "dep:opentelemetry-http",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-proto",
+    "dep:prost",
+    "dep:reqwest",
+    "dep:opentelemetry_sdk",
+    "dep:tracing-opentelemetry",
+    "dep:tracing-subscriber",
 ]
 
 [[test]]

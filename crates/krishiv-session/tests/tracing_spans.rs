@@ -33,16 +33,41 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for Ca
     fn on_new_span(
         &self,
         attrs: &tracing::span::Attributes<'_>,
-        _id: &tracing::span::Id,
-        _ctx: Context<'_, S>,
+        id: &tracing::span::Id,
+        ctx: Context<'_, S>,
     ) {
         let mut fields = BTreeMap::new();
         attrs.record(&mut Fields(&mut fields));
         if let Ok(mut spans) = self.0.lock() {
+            if let Some(span) = ctx.span(id) {
+                span.extensions_mut().insert(Slot(spans.len()));
+            }
             spans.push((attrs.metadata().name().to_owned(), fields));
         }
     }
+
+    /// Fields recorded after the span was created (the query attributes are).
+    fn on_record(
+        &self,
+        id: &tracing::span::Id,
+        values: &tracing::span::Record<'_>,
+        ctx: Context<'_, S>,
+    ) {
+        let Some(span) = ctx.span(id) else { return };
+        let Some(Slot(slot)) = span.extensions().get::<Slot>().copied() else {
+            return;
+        };
+        if let Ok(mut spans) = self.0.lock()
+            && let Some((_, fields)) = spans.get_mut(slot)
+        {
+            values.record(&mut Fields(fields));
+        }
+    }
 }
+
+/// Where the span's fields are in `Spans`.
+#[derive(Clone, Copy)]
+struct Slot(usize);
 
 /// One subscriber for the test binary: actions run on the session's executor
 /// threads, where a thread-local default is not set. Each test reads only the

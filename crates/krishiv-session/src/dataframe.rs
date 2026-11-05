@@ -1330,8 +1330,9 @@ impl DataFrame {
             };
             Ok(crate::carrier::client_stream(stream))
         }
-        .instrument(span)
+        .instrument(span.clone())
         .await
+        .map(|stream| crate::telemetry::in_span(stream, span))
     }
 
     /// The analyzed plan with cached subplans replaced by scans of their

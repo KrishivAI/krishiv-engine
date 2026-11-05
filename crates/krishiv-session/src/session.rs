@@ -559,7 +559,7 @@ impl Session {
         let result = self
             .on_executor(async move {
                 let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
-                let trace = crate::telemetry::QueryTrace::of(&session.state.session_id, seq, &text);
+                let trace = crate::telemetry::QueryTrace::of(seq, &text);
                 session
                     .sql_here_marked(&text, marker)
                     .await
