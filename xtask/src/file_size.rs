@@ -253,4 +253,36 @@ mod tests {
         let got = scan(dir.path()).unwrap();
         assert_eq!(got.keys().collect::<Vec<_>>(), ["crates/c/src/hand.rs"]);
     }
+
+    #[test]
+    fn run_writes_the_baseline_then_fails_on_growth_and_new_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("crates/c/src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(dir.path().join("xtask")).unwrap();
+        let lines = |n: usize| "fn f() {}\n".repeat(n);
+        std::fs::write(src.join("big.rs"), lines(2100)).unwrap();
+        std::fs::write(src.join("small.rs"), lines(10)).unwrap();
+        assert!(run(dir.path(), &["--bogus"]).is_err());
+        // No baseline yet: the big file is new.
+        assert!(run(dir.path(), &[]).is_err());
+        run(dir.path(), &["--write-baseline"]).unwrap();
+        let text = std::fs::read_to_string(dir.path().join(BASELINE)).unwrap();
+        assert!(text.contains("2100 crates/c/src/big.rs") && !text.contains("small.rs"));
+        run(dir.path(), &[]).unwrap();
+        // A shrink and a stale entry pass (they are only reported).
+        std::fs::write(src.join("big.rs"), lines(2050)).unwrap();
+        run(dir.path(), &[]).unwrap();
+        std::fs::write(src.join("big.rs"), lines(100)).unwrap();
+        run(dir.path(), &[]).unwrap();
+        // Growth and a new file over the limit fail.
+        std::fs::write(src.join("big.rs"), lines(2200)).unwrap();
+        assert!(run(dir.path(), &[]).is_err());
+        std::fs::write(src.join("big.rs"), lines(2100)).unwrap();
+        std::fs::write(src.join("new.rs"), lines(2001)).unwrap();
+        assert!(run(dir.path(), &[]).is_err());
+        // A malformed baseline is an error.
+        std::fs::write(dir.path().join(BASELINE), "oops").unwrap();
+        assert!(run(dir.path(), &[]).is_err());
+    }
 }
