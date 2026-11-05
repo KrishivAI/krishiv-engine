@@ -626,6 +626,7 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
         vec![
             x(&["spdx"]),
             x(&["source-guard"]),
+            x(&["file-size"]),
             x(&["check-format-neutral"]),
             x(&["registry-coverage"]),
             // Report only until P2-T193 turns it into a gate.
