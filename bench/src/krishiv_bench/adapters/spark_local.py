@@ -19,9 +19,10 @@ from typing import Any
 
 from ..paths import data_root
 from .base import Dataset, Engine, Query, table_path
+from .proc_mem import SelfTreeMeasure
 
 
-class _SparkSQLEngine(Engine):
+class _SparkSQLEngine(SelfTreeMeasure, Engine):
     def __init__(self, threads: int | None = None, memory_limit: str = "32g"):
         self.threads = threads or os.cpu_count() or 1
         self.memory_limit = memory_limit
