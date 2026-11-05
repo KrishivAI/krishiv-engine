@@ -363,6 +363,11 @@ pub struct ResolutionConf {
     /// `spark.sql.function.concatBinaryAsString`: `concat` of binaries
     /// returns a string.
     pub concat_binary_as_string: bool,
+    /// `spark.sql.optimizer.decorrelateExistsSubqueryLegacyIncorrectCountHandling.enabled`: an `EXISTS` over a
+    /// correlated global aggregate (`exists (select count(*) ... where t2.c1 = t1.c1)`) is decorrelated as the
+    /// old, incorrect Spark did, as a semi join on the correlation, so an outer row without a match fails it
+    /// instead of meeting the aggregate's one row.
+    pub decorrelate_exists_legacy_count: bool,
 }
 
 impl Default for ResolutionConf {
@@ -393,13 +398,14 @@ impl Default for ResolutionConf {
             legacy_interval: false,
             legacy_null_in_empty_list: false,
             concat_binary_as_string: false,
+            decorrelate_exists_legacy_count: false,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 24] = [
+    pub const KEYS: [&'static str; 25] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -424,6 +430,7 @@ impl ResolutionConf {
         "spark.sql.legacy.interval.enabled",
         "spark.sql.legacy.nullInEmptyListBehavior",
         "spark.sql.function.concatBinaryAsString",
+        "spark.sql.optimizer.decorrelateExistsSubqueryLegacyIncorrectCountHandling.enabled",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -482,6 +489,7 @@ impl ResolutionConf {
             legacy_interval: on(Self::KEYS[21]),
             legacy_null_in_empty_list: on(Self::KEYS[22]),
             concat_binary_as_string: on(Self::KEYS[23]),
+            decorrelate_exists_legacy_count: on(Self::KEYS[24]),
         }
     }
 }
@@ -582,6 +590,7 @@ impl ContextFingerprint {
             c.legacy_interval,
             c.legacy_null_in_empty_list,
             c.concat_binary_as_string,
+            c.decorrelate_exists_legacy_count,
         ];
         num(
             &mut b,

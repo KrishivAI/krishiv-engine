@@ -40,10 +40,10 @@ use krishiv_common::error::{
 use krishiv_types::DataType;
 
 use super::bind::{addr, unsupported};
-use super::catalog::{FunctionLookup, FunctionRegistry};
+use super::catalog::FunctionLookup;
 use super::exprs::{literal_type, pretty};
 use super::ops::{MAX_ID, col_expr};
-use super::{AnalysisError, SparkProfile};
+use super::{AnalysisContext, AnalysisError};
 use crate::walk::{Node, visit_distinct};
 use crate::{
     AttrId, BoundColumn, Builtin, Expr, ExprNode, FrameUnits, FunctionId, FunctionKind, Grouping,
@@ -66,18 +66,19 @@ type Keys = (Vec<Arc<Expr>>, Vec<Arc<Expr>>);
 pub(super) fn rewrite(
     root: &Arc<LogicalPlan>,
     next_id: &mut u64,
-    functions: &dyn FunctionRegistry,
-    profile: SparkProfile,
+    ctx: &AnalysisContext,
 ) -> R<Arc<LogicalPlan>> {
     if !has_subquery(Node::Plan(root)) && !has_outer(Node::Plan(root)) {
         return Ok(Arc::clone(root));
     }
+    let (functions, profile) = (&*ctx.functions, ctx.profile);
     let mut r = Rewriter {
         next_id: *next_id,
         done: HashMap::new(),
         correlated: HashMap::new(),
         depth: 0,
         lateral: false,
+        legacy_exists_count: ctx.conf.decorrelate_exists_legacy_count,
         row_number: match functions.lookup(&["row_number".to_owned()], profile) {
             FunctionLookup::Found(entry) => Some((entry.id, entry.kind)),
             _ => None,
@@ -90,17 +91,16 @@ pub(super) fn rewrite(
 
 struct Rewriter {
     next_id: u64,
-    /// Each relation rewritten, by address (the original kept alive), so a
-    /// relation shared by several parents or subqueries is rewritten once.
+    /// Each relation rewritten, by address (original kept alive): a shared relation is rewritten once.
     done: HashMap<usize, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
     /// Whether a subquery plan refers to its enclosing query, by address.
     correlated: HashMap<usize, (Arc<LogicalPlan>, bool)>,
     depth: usize,
     /// The registry's `row_number`, for a subquery's per-row `LIMIT`.
     row_number: Option<(FunctionId, FunctionKind)>,
-    /// Decorrelating a lateral join's right side: a global aggregate on the
-    /// way keeps its one row per domain value.
+    /// A lateral join's right side: a global aggregate keeps one row per domain value.
     lateral: bool,
+    legacy_exists_count: bool, // see `ResolutionConf::decorrelate_exists_legacy_count`
 }
 
 /// A predicate subquery conjunct, as a join.
@@ -1320,7 +1320,7 @@ impl Rewriter {
                 grouping: Grouping::GroupBy(keys),
                 ..
             } if !keep && !keys.iter().any(|k| has_outer(Node::Expr(k))) => {
-                if keys.is_empty() {
+                if keys.is_empty() && !self.legacy_exists_count {
                     // The input's rows do not matter, but what Spark rejects
                     // in it is still rejected.
                     if let Err(e) = self.pull(input, false)
