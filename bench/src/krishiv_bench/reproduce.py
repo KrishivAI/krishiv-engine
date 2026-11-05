@@ -46,6 +46,7 @@ from .dialect import dialect_reason
 from .errors import describe_error, error_fields
 from .h2o import is_h2o
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
+from .refcache import RefCache
 from .runner import git_info, load_queries, machine_info
 
 REFERENCE = "duckdb"
@@ -136,14 +137,29 @@ def setup_engines(engines: MutableMapping[str, Any], ds: Dataset) -> dict[str, d
     return failed
 
 
-def correctness(qm: Mapping[str, Query], engines: Mapping[str, Engine]) -> tuple[dict[str, dict], int]:
+def correctness(
+    qm: Mapping[str, Query],
+    engines: Mapping[str, Engine],
+    cache: RefCache | None = None,
+    suite: str = "",
+    ds: Dataset | None = None,
+) -> tuple[dict[str, dict], int]:
     """One untimed run per engine (``qm``: the query as each engine runs it); verdict per engine against DuckDB
-    (and Krishiv). Returns (verdicts, row count)."""
+    (and Krishiv). Returns (verdicts, row count).
+
+    With a ``cache`` DuckDB's answer is read from it, not run, when the same query over the same data was answered
+    before by this version (its timed runs stay live: the engines are interleaved); a fresh answer is stored."""
     rows: dict[str, list] = {}
     verdict: dict[str, dict] = {}
+    akey = cache.answer_key(suite, ds, check_query(qm[REFERENCE])) if cache and ds is not None else None
     for name, eng in engines.items():
+        if cache and akey and name == REFERENCE and (hit := cache.load(akey)):
+            rows[name] = hit[1]
+            continue
         try:
             rows[name] = eng.run(check_query(qm[name]))
+            if cache and akey and name == REFERENCE:
+                cache.store(akey, rows[name])
         except (EngineError, EngineTimeout, EngineCrashed) as e:
             verdict[name] = _fail(_answer_status(name, e), e)
     ref = rows.get(REFERENCE)
@@ -253,10 +269,17 @@ def _finish(entry, samples, peaks, cpus, qm, engines, profile) -> None:
 
 
 def ours_query(
-    qm: Mapping[str, Query], engines: Mapping[str, Engine], reps: int, timeout_s: float, profile: bool = False
+    qm: Mapping[str, Query],
+    engines: Mapping[str, Engine],
+    reps: int,
+    timeout_s: float,
+    profile: bool = False,
+    cache: RefCache | None = None,
+    suite: str = "",
+    ds: Dataset | None = None,
 ) -> dict:
     load_before = loadavg()
-    verdict, nrows = correctness(qm, engines)
+    verdict, nrows = correctness(qm, engines, cache, suite, ds)
     entry: dict[str, Any] = {"rows": nrows, "engines": {n: dict(v) for n, v in verdict.items()}}
     live = [n for n in engines if verdict.get(n, {}).get("status") == "ok"]
     if REFERENCE not in live:
@@ -295,11 +318,17 @@ def sequential_query(
     samples_n: int,
     timeout_s: float,
     profile: bool = False,
+    cache: RefCache | None = None,
+    suite: str = "",
 ) -> tuple[dict, dict[str, dict]]:
     """One query, one engine alive at a time (DuckDB, then Krishiv, then the rest): a fresh worker per engine inside
     its own memory cgroup runs the verified answer, one untimed run through the timed path (its checksum is the
     baseline) and ``samples_n`` timed runs, each of which must give the same full result. Returns the entry and the
-    engines' ``info`` (version, config, build)."""
+    engines' ``info`` (version, config, build).
+
+    With a ``cache`` the reference engine's answer, samples, CPU and peak are read from it when the same query over the
+    same data was measured before with this version, threads, memory and sample count, and stored after a fresh run;
+    the other engines are always run and checked against the cached rows."""
     load_before = loadavg()
     order = [REFERENCE] + [n for n in ("krishiv",) if n in names and n != REFERENCE]
     order += [n for n in names if n not in order]
@@ -311,6 +340,21 @@ def sequential_query(
     cpus: dict[str, list[float]] = {}
     nrows = 0
     for name in order:
+        ckey = (
+            cache.timing_key(suite, ds, qm[name], threads, memory_gb, samples_n)
+            if cache and name == REFERENCE
+            else None
+        )
+        hit = cache.load(ckey) if cache and ckey else None
+        if hit:
+            meta, rows[name] = hit
+            infos[name] = meta["info"]
+            nrows = result_rows(qm[REFERENCE], rows[name])
+            verdicts[name] = {"status": "ok", "result_check": meta["result_check"], "cached_utc": meta["created_utc"]}
+            samples[name], cpus[name] = meta["samples_s"], meta["cpu_seconds"]
+            if meta.get("peak_rss_bytes") is not None:
+                peaks[name] = meta["peak_rss_bytes"]
+            continue
         # Polars' default engine runs first; if its worker is killed (out of memory), the engine is run again with
         # Polars' streaming engine ("polars-streaming") and the result says so.
         attempts = [name, "polars-streaming"] if name == "polars" else [name]
@@ -359,6 +403,18 @@ def sequential_query(
                 eng.teardown()
             if not (crashed and attempt + 1 < len(attempts)):
                 break
+        if cache and ckey and verdicts.get(name, {}).get("status") == "ok" and name in samples:
+            cache.store(
+                ckey,
+                rows[name],
+                {
+                    "info": infos[name],
+                    "result_check": verdicts[name]["result_check"],
+                    "samples_s": samples[name],
+                    "cpu_seconds": cpus[name],
+                    "peak_rss_bytes": peaks.get(name),
+                },
+            )
         if name not in (REFERENCE, "krishiv"):
             rows.pop(name, None)  # only DuckDB's and Krishiv's rows are compared against later engines
     entry: dict[str, Any] = {"rows": nrows, "engines": {n: dict(v) for n, v in verdicts.items()}}
@@ -425,6 +481,8 @@ def run_reproduce(
     record_extra: Mapping[str, Any] | None = None,
     sequential: bool = False,
     cap_gb: int | None = None,
+    reference_cache: bool = True,
+    refresh_reference: bool = False,
 ) -> Path:
     names = engines or DEFAULT_ENGINES
     if REFERENCE not in names:
@@ -435,6 +493,11 @@ def run_reproduce(
     pub = PUBLISHED[suite]
     runs = runs or pub["runs"]
     their_timeout_s = their_timeout_s or pub["timeout_s"]
+    cache = (
+        RefCache(refresh=refresh_reference, engine=REFERENCE, version=dist_version(REFERENCE))
+        if reference_cache
+        else None
+    )
     per_engine = {n: {q.id: q for q in suite_queries(suite, ds, n, only)} for n in names}
     queries = [{n: per_engine[n][qid] for n in names} for qid in per_engine[REFERENCE]]
     lock_path = data_root() / ".bench.lock"
@@ -476,7 +539,9 @@ def run_reproduce(
             record["setup_failures"] = {}
             for qm in queries:
                 qid = qm[REFERENCE].id
-                ent, infos = sequential_query(qm, names, ds, threads, memory_gb, cap_gb, 2 * reps, timeout_s, profile)
+                ent, infos = sequential_query(
+                    qm, names, ds, threads, memory_gb, cap_gb, 2 * reps, timeout_s, profile, cache, suite
+                )
                 for n, info in infos.items():
                     record["engines"].setdefault(n, info)
                 record["queries"][qid] = ent
@@ -490,7 +555,7 @@ def run_reproduce(
                     record["engines"][n] = {"version": e.version(), "config": e.config(), "build": e.build_info()}
                 for qm in queries:
                     qid = qm[REFERENCE].id
-                    ent = ours_query(qm, engs, reps, timeout_s, profile) if "ours" in methods else {}
+                    ent = ours_query(qm, engs, reps, timeout_s, profile, cache, suite, ds) if "ours" in methods else {}
                     record["queries"][qid] = ent
                     print(_line(qid, ent), flush=True)
             finally:

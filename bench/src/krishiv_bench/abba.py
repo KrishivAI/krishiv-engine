@@ -29,6 +29,7 @@ import threading
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
+from importlib.metadata import version as dist_version
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,7 @@ from .adapters.duckdb_engine import SPARK_NULL_ORDER, DuckDBEngine
 from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
 from .errors import describe_error
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
+from .refcache import RefCache
 from .runner import git_info, load_queries, machine_info
 
 LOAD_INDICATIVE = 4.0
@@ -198,6 +200,8 @@ def run_abba(
     timeout_s: float = 600,
     suite: str = "tpch",
     runner: str | None = None,
+    reference_cache: bool = True,
+    refresh_reference: bool = False,
 ) -> Path:
     root = data_root() / dataset if suite == "clickbench" else dataset_dir(dataset, sf)
     tables = discover_tables(root)
@@ -210,10 +214,17 @@ def run_abba(
     ds = Dataset(dataset, sf, root, tables)
     with bench_lock() as waited:
         wait_idle()
-        return _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, waited, suite, runner)
+        cache = (
+            RefCache(refresh=refresh_reference, engine="duckdb", version=dist_version("duckdb"))
+            if reference_cache
+            else None
+        )
+        return _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, waited, suite, runner, cache)
 
 
-def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s, suite, runner=None) -> Path:
+def _run_locked(
+    ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s, suite, runner=None, cache=None
+) -> Path:
     krishiv = KrishivEngine(threads=threads, memory_limit=memory_limit.lower(), binary=runner)
     # Krishiv sorts NULLs as Spark does; the reference must too, or an ORDER BY over a nullable key differs.
     duck = DuckDBEngine(threads=threads, memory_limit=memory_limit.upper(), null_order=SPARK_NULL_ORDER)
@@ -247,7 +258,7 @@ def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s
     record["engines"]["krishiv"] = {"version": krishiv.version(), "config": krishiv.config()}
     try:
         for q, dq in queries:
-            record["queries"][q.id] = _one_query(q, krishiv, duck, reps, timeout_s, dq)
+            record["queries"][q.id] = _one_query(q, krishiv, duck, reps, timeout_s, dq, cache, suite, ds)
     finally:
         krishiv.teardown()
         duck.teardown()
@@ -262,14 +273,36 @@ def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s
     return f
 
 
-def _one_query(q, krishiv: KrishivEngine, duck: Engine, reps: int, timeout_s: float, duck_q=None) -> dict:
-    """Correctness, then ABBA timing of ``q``; DuckDB runs ``duck_q`` (its own text of the query), ``q`` if None."""
+def _one_query(
+    q,
+    krishiv: KrishivEngine,
+    duck: Engine,
+    reps: int,
+    timeout_s: float,
+    duck_q=None,
+    cache: RefCache | None = None,
+    suite="",
+    ds=None,
+) -> dict:
+    """Correctness, then ABBA timing of ``q``; DuckDB runs ``duck_q`` (its own text of the query), ``q`` if None.
+
+    With a ``cache`` DuckDB's rows come from it when the same query over the same data was answered before by this
+    version (the untimed run is skipped; the timed ABBA runs stay live, since interleaving needs both engines on
+    the same machine at the same time), and a fresh answer is stored."""
     duck_q = duck_q or q
     entry: dict = {}
     load_before = loadavg()
+    akey = cache.answer_key(suite, ds, duck_q) if cache is not None and ds is not None else None
+    hit = cache.load(akey) if cache is not None and akey else None
     try:
-        with _Interrupt(duck, timeout_s):
-            drows = duck.run(duck_q)
+        if hit:
+            drows = hit[1]
+            entry["reference_cached_utc"] = hit[0]["created_utc"]
+        else:
+            with _Interrupt(duck, timeout_s):
+                drows = duck.run(duck_q)
+            if cache is not None and akey:
+                cache.store(akey, drows)
     except Exception as e:
         return {"status": "failed", "reason": f"duckdb {describe_error(e)}"}
     try:

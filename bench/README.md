@@ -489,6 +489,23 @@ I/O-bound gaps that show at SF1000. Not applied by `reproduce`, `abba` or `ab`.
 scale factor and engine) and flags each query whose engine / `duckdb` ratio grows by more than 1.5x between
 consecutive scale factors; it warns when cold and warm results are mixed. It writes `ladder_<suite>.md`.
 
+## Reference cache (`reproduce`, `abba`)
+
+DuckDB's answers never change, and at SF1000 running it costs hours, so `reproduce` and `abba` keep what it produced
+in `$KRISHIV_DATA/refcache/` and reuse it. An entry is keyed by the suite, scale factor, dataset (manifest checksum,
+else file names and sizes), query id, the hash of the text DuckDB runs, and DuckDB's installed version; a change to
+any of them is a miss. The engine under test is always run and checked against the cached rows exactly as against a
+fresh answer.
+
+| Command | What is reused | What stays live |
+|---|---|---|
+| `reproduce --sequential` | the answer **and** DuckDB's timed samples, CPU and peak RSS (also keyed by threads, memory and sample count); the record marks it `cached_utc` | the other engines |
+| `reproduce` (interleaved), `abba` | the answer (the untimed correctness run is skipped; `abba` marks `reference_cached_utc`) | DuckDB's timed runs: interleaving exists to give both engines the same machine at the same moment, which a replayed time cannot |
+
+`--refresh-reference` runs DuckDB again and replaces the entries; `--no-reference-cache` neither reads nor writes
+them. An answer over 1,000,000 rows is not stored. A replayed time was measured on the machine and load of its
+`created_utc`, so refresh after a hardware or OS change.
+
 ## Result JSON (`$KRISHIV_DATA/results/<ts>_<engine>_<suite>_sf<N>.json`)
 `machine` (CPU model, cores, RAM, OS, governor), `git` (krishiv-engine commit/branch/dirty), `engine` (name, version, config (Krishiv: threads, memory limit, `build_profile`, `target_cpu`), build, and `allocator` when the engine reports it, e.g. `mimalloc`; the CLI prints it as `allocator=<name>` in `krishiv --version`, the wheel via `krishiv.build_info()`),
 `dataset` (name, SF, path, tables, generator version, manifest sha256), and per query: `iterations`, `times_s`, `p50_s`, `p99_s`, `min_s`, `max_s`, `mean_s`,
