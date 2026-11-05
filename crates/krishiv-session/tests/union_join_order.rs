@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
-//! A `UNION ALL` reads its branches by position: a branch whose joins the
-//! optimizer reorders must still give its columns in the order it wrote
-//! them. The views and statements are Spark's `join-lateral.sql` ("lateral
-//! join under union"); the expected rows are what Spark 4.2.0 returns.
+//! A `UNION ALL` and a recursive CTE read their branches by position: a
+//! branch whose joins the optimizer reorders, or whose filter common
+//! subexpression elimination widens, must still give its columns in the
+//! order it wrote them. The views and the first statement are Spark's
+//! `join-lateral.sql` ("lateral join under union"); every expected answer
+//! is what a Spark 4.2.0 run returned.
 #![forbid(unsafe_code)]
 
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
-use arrow_array::types::Int32Type;
+use arrow_array::types::{Int32Type, Int64Type};
+use arrow_schema::DataType;
 use futures::executor::block_on;
 use krishiv_session::Session;
 
@@ -25,6 +28,8 @@ fn run(s: &Session, sql: &str) -> R<Vec<String>> {
                         .map(|c| {
                             if c.is_null(r) {
                                 "NULL".to_owned()
+                            } else if c.data_type() == &DataType::Int64 {
+                                c.as_primitive::<Int64Type>().value(r).to_string()
                             } else {
                                 c.as_primitive::<Int32Type>().value(r).to_string()
                             }
@@ -110,5 +115,55 @@ fn set_operations_read_reordered_branches_by_position() -> R {
         except,
         sorted(&["0|1|0|1", "0|1|1|1", "1|2|0|1", "1|2|1|1"])
     );
+    Ok(())
+}
+
+#[test]
+fn a_recursive_cte_reads_a_reordered_anchor_by_position() -> R {
+    let s = session()?;
+    let got = run(
+        &s,
+        "WITH RECURSIVE r(a, b, c, d) AS (SELECT * FROM t1 JOIN t4 \
+         UNION ALL SELECT a, b, c, d + 10 FROM r WHERE d < 10) SELECT * FROM r",
+    )?;
+    let mut want: Vec<String> = T1_T4.iter().map(|r| (*r).to_owned()).collect();
+    for r in T1_T4 {
+        let (head, d) = r.rsplit_once('|').ok_or("row")?;
+        want.push(format!("{head}|{}", d.parse::<i32>()? + 10));
+    }
+    want.sort();
+    assert_eq!(got, want);
+    Ok(())
+}
+
+/// The re-planned tree outputs more columns than the branch (a column
+/// selection it looks through): the branch keeps its own.
+#[test]
+fn a_reordered_branch_with_more_columns_keeps_its_own() -> R {
+    let s = session()?;
+    let got = run(
+        &s,
+        "SELECT * FROM (SELECT c1 FROM t1) a JOIN t4 ON a.c1 = t4.c1 \
+         UNION ALL SELECT c1, c1, c2 FROM t4",
+    )?;
+    let want = [
+        "0|0|1", "0|0|1", "0|0|2", "0|0|2", "1|1|1", "1|1|1", "1|1|3", "1|1|3",
+    ];
+    assert_eq!(got, sorted(&want));
+    Ok(())
+}
+
+/// A repeated subexpression in a recursive CTE's anchor filter: the
+/// extracted column must not widen the anchor.
+#[test]
+fn a_recursive_cte_anchor_keeps_its_width_after_common_subexpressions() -> R {
+    let s = session()?;
+    let got = run(
+        &s,
+        "WITH RECURSIVE r(a) AS (SELECT id FROM range(4) \
+         WHERE abs(id * 3) >= 0 AND abs(id * 3) < 10 \
+         UNION ALL SELECT a + 1 FROM r WHERE a < 2) SELECT * FROM r",
+    )?;
+    assert_eq!(got, sorted(&["0", "1", "1", "2", "2", "2", "3"]));
     Ok(())
 }
