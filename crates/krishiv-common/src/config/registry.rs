@@ -103,6 +103,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &AVRO_DATETIME_REBASE_MODE_IN_READ,
     &AGENT_GATE_BYTES,
     &SHARE_CTE_INSTANCES,
+    &EAGER_AGGREGATION,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -241,6 +242,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.memory.spillScratchReserve",
         &MEMORY_SPILL_SCRATCH_RESERVE,
     ),
+    ("krishiv.optimizer.eagerAggregation", &EAGER_AGGREGATION),
     (
         "krishiv.sql.avro.compression.codec",
         &AVRO_COMPRESSION_CODEC,
@@ -1698,6 +1700,20 @@ pub static AGENT_GATE_BYTES: ConfigEntry = ConfigEntry {
           tables report no statistics runs. 0 turns the gate off.",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Eager aggregation below joins (`krishiv.optimizer.eagerAggregation`).
+pub static EAGER_AGGREGATION: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.eagerAggregation",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Run an aggregate's calls below a join and merge their states above it, when statistics \
+          show the join keeps most rows and the join keys group them well. Only calls whose \
+          result cannot depend on row order or raise on a row the join would drop are moved. \
+          Results are the same either way.",
+    scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,
 };

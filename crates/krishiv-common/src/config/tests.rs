@@ -723,6 +723,25 @@ fn agent_gate_defaults_to_one_gib_and_parses_sizes() {
 }
 
 #[test]
+fn eager_aggregation_defaults_on_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&EAGER_AGGREGATION).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    c.set("krishiv.optimizer.eagerAggregation", "false")
+        .unwrap();
+    assert_eq!(
+        c.get(&EAGER_AGGREGATION).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(
+        c.set("krishiv.optimizer.eagerAggregation", "maybe")
+            .is_err()
+    );
+}
+
+#[test]
 fn share_cte_instances_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(

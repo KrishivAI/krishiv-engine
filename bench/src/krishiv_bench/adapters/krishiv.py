@@ -32,7 +32,8 @@ import tempfile
 import urllib.parse
 from pathlib import Path
 
-from .base import Dataset, Engine, Query
+from .base import Dataset, Engine, Measure, Query
+from .proc_mem import TreeProc, tree_measure
 
 
 def _enc(path: Path) -> str:
@@ -87,9 +88,23 @@ class KrishivEngine(Engine):
         self._starts = 0
         self._build: dict[str, str] | None = None
         self._stderr_log: Path | None = None
+        self._tree: TreeProc | None = None
 
     def version(self) -> str:
         return self._version
+
+    def begin_measure(self) -> None:
+        """Opens a resource window (peak RSS, CPU, I/O) over the runner process, starting it first if need be."""
+        self.end_measure()
+        if self._proc is None and self._dataset is not None:
+            self._start()
+        if self._proc is not None:
+            self._tree = TreeProc(self._proc.pid)
+            self._tree.start()
+
+    def end_measure(self) -> Measure:
+        tree, self._tree = self._tree, None
+        return tree_measure(tree)
 
     def config(self) -> dict:
         return {

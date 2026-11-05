@@ -458,7 +458,8 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             }
             // Evaluated once, the operator then sees the two operands as the
             // columns 0 and 1 of a batch of their values.
-            let split = if guards_right_operand(f, &args, input.env.ansi) {
+            let right_first = divides_right_first(f, &args, input.env.ansi);
+            let split = if right_first || guards_right_operand(f, &args, input.env.ansi) {
                 let (right, left) = (args.pop(), args.pop());
                 left.zip(right)
             } else {
@@ -469,7 +470,8 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                     Arc::new(Column {
                         index: 0,
                         data_type: l.data_type().clone(),
-                        nullable: l.nullable(),
+                        // A divisor that goes first leaves NULLs in the left column where it is skipped.
+                        nullable: l.nullable() || right_first,
                     }),
                     Arc::new(Column {
                         index: 1,
@@ -508,6 +510,9 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 _ => Err(unsupported_expr(e)),
             };
             match split {
+                Some((l, r)) if right_first => {
+                    built.map(|op| logic::right_then_left(l, r, op, input.env.ansi))
+                }
                 Some((l, r)) => built.map(|op| logic::left_then_right(l, r, op)),
                 None => built,
             }
@@ -526,6 +531,9 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
 /// whatever the left value is.
 fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: bool) -> bool {
     let guarded = match &f.id {
+        // `interval / number` is Spark's `DivideYMInterval`/`DivideDTInterval`, a plain `BinaryExpression`
+        // (left first), not a `DivModLike`.
+        FunctionId::Builtin(Builtin::Divide) => has_interval_left(args),
         FunctionId::Builtin(b) => matches!(
             b,
             Builtin::Eq
@@ -545,10 +553,47 @@ fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: 
     guarded
         && matches!(
             (args, f.args.as_slice()),
-            ([left, _], [left_ir, right_ir])
-                if left.nullable()
+            ([left, right], [left_ir, right_ir])
+                // Two constants stay one constant (`is_constant`): `aes_encrypt` folds constant arguments to one IV.
+                if !(left.is_constant() && right.is_constant())
+                    && left.nullable()
                     && krishiv_plan::is_deterministic(left_ir)
                     && krishiv_plan::may_raise(right_ir, ansi)
+        )
+}
+
+/// Whether the left operand of a binary operator is an interval (a year-month or day-time carrier).
+fn has_interval_left(args: &[Arc<dyn PhysExpr>]) -> bool {
+    matches!(
+        args.first().map(|a| a.data_type()),
+        Some(ArrowType::Interval(_) | ArrowType::Duration(_))
+    )
+}
+
+/// Spark's `DivModLike.eval` (`/`, `%`, `div`, `pmod`) evaluates the divisor first and the left operand only where
+/// the divisor is set (and, outside ANSI mode, not zero): an error in the left operand on the other rows never
+/// surfaces (see [`logic::right_then_left`]). Only worth the split when the left operand may raise.
+///
+/// Known divergence: this is the interpreted `eval`, which Spark runs only when it folds constants. Its generated
+/// code (the default) checks a zero divisor *before* the left operand when both operands are non-nullable and ANSI
+/// is on (`DivModLike.doGenCode`), so `(coalesce(a, 0L) + 1L) div coalesce(z, 0L)` raises the division by zero
+/// where this raises the left's error first. Not matched (it needs Spark's nullability in the IR); recorded in
+/// `ops/queue-sonnet.md`.
+fn divides_right_first(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: bool) -> bool {
+    let division = match &f.id {
+        FunctionId::Builtin(Builtin::Divide) => !has_interval_left(args),
+        FunctionId::Builtin(b) => matches!(b, Builtin::Remainder | Builtin::IntegralDivide),
+        FunctionId::Registry { name, .. } => name == "pmod",
+        _ => false,
+    };
+    division
+        && matches!(
+            (args, f.args.as_slice()),
+            ([left, right], [left_ir, _])
+                // Two constants stay one constant (`is_constant`): `aes_encrypt` folds constant arguments to one IV.
+                if !(left.is_constant() && right.is_constant())
+                    && krishiv_plan::is_deterministic(left_ir)
+                    && krishiv_plan::may_raise(left_ir, ansi)
         )
 }
 
