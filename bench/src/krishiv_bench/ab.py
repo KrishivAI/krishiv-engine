@@ -170,7 +170,7 @@ def run_ab(
     tables = discover_tables(root)
     if not tables:
         raise SystemExit(f"no dataset at {root}")
-    queries = load_queries(suite, "krishiv", only)
+    queries = load_queries(suite, "krishiv", only, dataset_root=root)
     ds = Dataset(dataset, sf, root, tables)
     a = KrishivEngine(threads=threads, memory_limit=memory_limit.lower(), binary=a_runner, conf=a_conf)
     b = KrishivEngine(threads=threads, memory_limit=memory_limit.lower(), binary=b_runner, conf=b_conf)

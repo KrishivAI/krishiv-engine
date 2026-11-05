@@ -13,7 +13,7 @@ from .paths import data_root
 from .report import write_report
 from .runner import run_suite
 
-ABBA_DATASET = {"tpch": "tpch-duckdb", "tpcds": "tpcds", "clickbench": "clickbench"}
+ABBA_DATASET = {"tpch": "tpch-duckdb", "tpcds": "tpcds", "clickbench": "clickbench", "dsb": "dsb@v1"}
 
 
 def _add_memcap_args(p: argparse.ArgumentParser) -> None:
@@ -187,7 +187,7 @@ def main(argv=None) -> None:
         "ab",
         help="build-vs-build A/B: two runner binaries, or one binary with two --conf sets, interleaved ABBA",
     )
-    xb.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench", *H2O_SUITES])
+    xb.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench", "dsb", *H2O_SUITES])
     add_h2o_args(xb)
     xb.add_argument("--sf", type=float, default=10)
     xb.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
@@ -202,6 +202,26 @@ def main(argv=None) -> None:
     xb.add_argument("--threads", type=int, default=8, help="threads for both sides")
     xb.add_argument("--memory-limit", default="12g", help="memory limit for both sides")
     xb.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
+    jt = sub.add_parser(
+        "join-trees",
+        help="how each join enumerator plans every inner-join tree (EXPLAIN VERBOSE notes, planning time); P2-T113",
+    )
+    jt.add_argument("--suite", default="tpcds", choices=["tpch", "tpcds", "dsb"])
+    jt.add_argument("--sf", type=float, default=10)
+    jt.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
+    jt.add_argument("--queries", help="comma list, e.g. q01,q05")
+    jt.add_argument(
+        "--arm",
+        action="append",
+        default=[],
+        metavar="NAME=K=V[,K=V]",
+        help="session settings of one arm (repeatable; the first is the base); default dpsub, dphyp, dpsub12, dpsub13",
+    )
+    jt.add_argument("--plan-reps", type=int, default=50, help="EXPLAIN runs per query and arm (planning time)")
+    jt.add_argument("--threads", type=int, default=4)
+    jt.add_argument("--memory-limit", default="8g")
+    jt.add_argument("--out", default=None, help="result directory (default $KRISHIV_DATA/results)")
+    jt.add_argument("--runner", help=RUNNER_HELP)
     lg = sub.add_parser(
         "ledger",
         help="gap ledger: Krishiv vs DuckDB wall time split into operator buckets (perf + DuckDB profile)",
@@ -464,6 +484,21 @@ def main(argv=None) -> None:
             a.runner,
             Path(a.out) if a.out else None,
             a.timeout,
+        )
+    elif a.cmd == "join-trees":
+        from .join_trees import DEFAULT_ARMS, run_join_trees
+
+        run_join_trees(
+            a.suite,
+            a.sf,
+            a.dataset or ABBA_DATASET[a.suite],
+            a.arm or DEFAULT_ARMS,
+            a.runner,
+            a.queries.split(",") if a.queries else None,
+            a.plan_reps,
+            a.threads,
+            a.memory_limit,
+            Path(a.out) if a.out else None,
         )
     elif a.cmd == "ab":
         from .ab import parse_conf, run_ab
