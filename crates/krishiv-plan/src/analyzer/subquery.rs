@@ -39,6 +39,7 @@ use krishiv_common::error::{
 };
 use krishiv_types::DataType;
 
+use self::having::having_over_global;
 use self::no_rows::on_no_rows;
 use super::bind::{addr, unsupported};
 use super::catalog::FunctionLookup;
@@ -90,6 +91,7 @@ pub(super) fn rewrite(
 }
 
 mod global_in;
+mod having;
 mod no_rows;
 
 struct Rewriter {
@@ -1733,47 +1735,6 @@ impl Rewriter {
         )
     }
 
-    /// `(SELECT agg FROM .. WHERE <correlation> HAVING pred(agg))`: the
-    /// aggregate's value per outer row, NULL where the `HAVING` rejects it
-    /// (a global aggregate has one row, so a rejected row is no row). A
-    /// count over no matches is 0 and meets the `HAVING` as such.
-    fn scalar_having(
-        &mut self,
-        base: Arc<LogicalPlan>,
-        agg: &Arc<LogicalPlan>,
-        predicate: &Arc<Expr>,
-        value: &BoundColumn,
-    ) -> R<(Arc<LogicalPlan>, Arc<Expr>)> {
-        let (base, v) = self.scalar(base, agg)?;
-        let id = value.id;
-        let mut other = false;
-        let pred = Arc::clone(predicate).transform_up(&mut |x: Arc<Expr>| {
-            Ok::<_, std::convert::Infallible>(match &x.node {
-                ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == id => Arc::clone(&v),
-                ExprNode::Resolved(ResolvedExpr::Column(_)) => {
-                    other = true;
-                    x
-                }
-                _ => x,
-            })
-        });
-        let pred = pred.unwrap_or_else(|never| match never {});
-        if other || has_outer(Node::Expr(&pred)) || has_subquery(Node::Expr(&pred)) {
-            return Err(unsupported(
-                "a correlated scalar subquery of this shape",
-                predicate.origin,
-            ));
-        }
-        let null = Arc::new(Expr::literal(Literal::Null(Some(value.data_type.clone()))));
-        let guarded = call(
-            Builtin::When,
-            vec![pred, v, null],
-            value.data_type.clone(),
-            true,
-        );
-        Ok((base, guarded))
-    }
-
     /// The left outer join of `base` with the aggregate of `inner` (the
     /// subquery's input, its correlation lifted out) grouped by
     /// `inner_keys`, matched to `outer_keys`; and the value it reads.
@@ -2896,59 +2857,6 @@ fn equality_keys(corr: &[Arc<Expr>], origin: Origin) -> R<Keys> {
         outer_keys.push(Arc::clone(o));
     }
     Ok((inner_keys, outer_keys))
-}
-
-/// `plan` as a global aggregate of one value under a `HAVING` (a filter on
-/// its value, possibly under a projection of that value): the aggregate, the
-/// predicate and the value's column.
-fn having_over_global(
-    plan: &Arc<LogicalPlan>,
-) -> Option<(Arc<LogicalPlan>, Arc<Expr>, BoundColumn)> {
-    let filter = match &plan.node {
-        PlanNode::Project { input, exprs } if exprs.len() == 1 => {
-            // The projection must be the aggregate's value itself.
-            let ExprNode::Resolved(ResolvedExpr::Column(c)) = &exprs[0].node else {
-                return None;
-            };
-            let PlanNode::Filter { input: agg, .. } = &input.node else {
-                return None;
-            };
-            let PlanNode::Aggregate { aggregates, .. } = &agg.node else {
-                return None;
-            };
-            let [item] = &aggregates[..] else {
-                return None;
-            };
-            let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &item.node else {
-                return None;
-            };
-            if output.id != c.id {
-                return None;
-            }
-            input
-        }
-        PlanNode::Filter { .. } => plan,
-        _ => return None,
-    };
-    let PlanNode::Filter { input, predicate } = &filter.node else {
-        return None;
-    };
-    let PlanNode::Aggregate {
-        grouping: Grouping::GroupBy(keys),
-        aggregates,
-        ..
-    } = &input.node
-    else {
-        return None;
-    };
-    let [item] = &aggregates[..] else {
-        return None;
-    };
-    let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &item.node else {
-        return None;
-    };
-    keys.is_empty()
-        .then(|| (Arc::clone(input), Arc::clone(predicate), output.clone()))
 }
 
 /// Spark's refusal of a correlated reference where it cannot be lifted, naming
