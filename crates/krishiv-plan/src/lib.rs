@@ -143,7 +143,7 @@ pub use expr::{
     FunctionCall, NullOrdering, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star,
     SubqueryKind, TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec, WindowSpecRef,
 };
-pub use function::{Builtin, FunctionId, FunctionKind, QuantifiedLike};
+pub use function::{Builtin, FunctionId, FunctionKind, PythonEvalType, QuantifiedLike};
 pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;

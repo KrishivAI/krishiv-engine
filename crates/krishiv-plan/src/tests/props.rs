@@ -902,6 +902,17 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                         name: name.clone(),
                         version: version.wrapping_add(1),
                     },
+                    FunctionId::PythonUdf {
+                        name,
+                        version,
+                        eval_type,
+                        thread_safe,
+                    } => FunctionId::PythonUdf {
+                        name: name.clone(),
+                        version: version.wrapping_add(1),
+                        eval_type: *eval_type,
+                        thread_safe: *thread_safe,
+                    },
                 };
                 site!(w, *id = other);
                 site!(w, flip(kind, FunctionKind::Scalar, FunctionKind::Window));

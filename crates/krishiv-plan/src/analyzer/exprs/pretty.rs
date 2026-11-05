@@ -314,7 +314,7 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             let op = match &f.id {
                 FunctionId::Builtin(b) => Some(*b),
                 FunctionId::Registry { name, .. } => builtin_op(name, f.args.len()),
-                FunctionId::Udf { .. } => None,
+                FunctionId::Udf { .. } | FunctionId::PythonUdf { .. } => None,
             };
             // As above: the argument children come first, then the
             // filter child, then any ordering keys.

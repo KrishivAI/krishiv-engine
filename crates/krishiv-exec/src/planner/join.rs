@@ -58,6 +58,11 @@ impl Planner<'_> {
             JoinCondition::None => None,
             _ => return Err(unsupported("JOIN ... USING in physical plans")),
         };
+        if let Some(on) = on
+            && super::python_udf::has_python_udf(on)
+        {
+            return self.join_with_python_udfs(left, right, kind, on);
+        }
         let hints = (self.side_hint(left), self.side_hint(right));
         let logical = (Arc::clone(left), Arc::clone(right));
         let left = self.plan(left)?;
@@ -840,6 +845,17 @@ fn builtin(e: &Expr) -> Option<(Builtin, &[Arc<Expr>])> {
             ..
         })) => Some((*b, args.as_slice())),
         _ => None,
+    }
+}
+
+/// The conjuncts of `e`, shared.
+pub(super) fn conjuncts_of(e: &Arc<Expr>, out: &mut Vec<Arc<Expr>>) {
+    match builtin(e) {
+        Some((Builtin::And, [l, r])) => {
+            conjuncts_of(l, out);
+            conjuncts_of(r, out);
+        }
+        _ => out.push(Arc::clone(e)),
     }
 }
 

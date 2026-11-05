@@ -79,6 +79,9 @@ impl Planner<'_> {
                 at
             }));
         }
+        // Python UDFs in keys and arguments run below (Spark's
+        // `ExtractGroupingPythonUDFFromAggregate`).
+        let (input, wanted) = self.extract_python(input, &wanted)?;
         let (input, columns) = self.with_columns(input, &wanted)?;
         let k = keys.len();
         let mut aggregates = Vec::with_capacity(calls.len());
@@ -230,6 +233,8 @@ impl Planner<'_> {
             .iter()
             .map(|e| replace(e, &key_ids, &call_ids))
             .collect::<Result<Vec<_>>>()?;
+        // Python UDFs over keys and results run above the aggregate.
+        let (agg, rewritten) = self.extract_python(agg, &rewritten)?;
         self.project(agg, &rewritten)
     }
 

@@ -337,6 +337,60 @@ pub enum FunctionId {
         /// The implementation version: part of the identity.
         version: u32,
     },
+    /// A session-registered Python UDF (design P2-T059): a plan reference
+    /// by name and registration version, never the callable (I1, I13). The
+    /// worker resolves it through its UDF runtime; one without a runtime, or
+    /// without that version, refuses the call (`KRISHIV_UDF_NOT_AVAILABLE`).
+    /// The return type and determinism are the call's
+    /// ([`ResolvedFunction`](crate::ResolvedFunction)).
+    PythonUdf {
+        /// The canonical (lower-case) name: the identity, with `version`.
+        name: String,
+        /// The registration version: re-registering a name bumps it.
+        version: u32,
+        /// How the worker converts and calls it (Spark's `PythonEvalType`).
+        eval_type: PythonEvalType,
+        /// Whether calls may run concurrently; `false` serialises them.
+        thread_safe: bool,
+    },
+}
+
+/// The Python UDF kinds the engine evaluates, with Spark's
+/// `PythonEvalType` codes (`pyspark/util.py`, Spark 4.2.0). Grouped,
+/// iterator, table and aggregate kinds are later tasks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum PythonEvalType {
+    /// `@udf`, Arrow-batched (`SQL_ARROW_BATCHED_UDF`, 101): rows are
+    /// converted to Python values and back per batch.
+    ArrowBatched,
+    /// A scalar `pandas_udf` (`SQL_SCALAR_PANDAS_UDF`, 200): pandas Series in
+    /// and out.
+    ScalarPandas,
+    /// A scalar `arrow_udf` (`SQL_SCALAR_ARROW_UDF`, 250): `pyarrow.Array`
+    /// in and out, no conversion.
+    ScalarArrow,
+}
+
+impl PythonEvalType {
+    /// Every kind, in code order.
+    pub const ALL: [Self; 3] = [Self::ArrowBatched, Self::ScalarPandas, Self::ScalarArrow];
+
+    /// Spark's `PythonEvalType` code.
+    #[must_use]
+    pub const fn code(self) -> i32 {
+        match self {
+            Self::ArrowBatched => 101,
+            Self::ScalarPandas => 200,
+            Self::ScalarArrow => 250,
+        }
+    }
+
+    /// The kind with Spark's code `code`, if the engine evaluates it.
+    #[must_use]
+    pub fn from_code(code: i32) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.code() == code)
+    }
 }
 
 impl FunctionId {
@@ -345,7 +399,9 @@ impl FunctionId {
     pub fn name(&self) -> &str {
         match self {
             Self::Builtin(b) => b.name(),
-            Self::Registry { name, .. } | Self::Udf { name, .. } => name,
+            Self::Registry { name, .. } | Self::Udf { name, .. } | Self::PythonUdf { name, .. } => {
+                name
+            }
         }
     }
 }

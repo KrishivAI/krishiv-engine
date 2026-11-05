@@ -1595,6 +1595,47 @@ pub(crate) fn udf_call() -> PhysNode {
     }
 }
 
+/// A Python UDF call (`python_udf`): a `PythonEval` appending the call's
+/// column, read by the projection above it. The call references the UDF by
+/// name and registration version only.
+pub(crate) fn python_eval() -> PhysNode {
+    let call = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+        ResolvedFunction {
+            within_group: Vec::new(),
+            id: FunctionId::PythonUdf {
+                name: "py_udf".to_owned(),
+                version: 3,
+                eval_type: krishiv_plan::PythonEvalType::ScalarPandas,
+                thread_safe: false,
+            },
+            kind: FunctionKind::Scalar,
+            args: vec![col(1, "a", DataType::Integer)],
+            distinct: false,
+            filter: None,
+            data_type: DataType::Long,
+            nullable: true,
+            deterministic: false,
+        },
+    ))));
+    PhysNode::Project {
+        input: boxed(PhysNode::PythonEval {
+            input: boxed(scan()),
+            layout: vec![AttrId(1), AttrId(2)],
+            calls: vec![krishiv_exec::physical::PythonCallPlan {
+                call,
+                output: AttrId(9),
+            }],
+        }),
+        layout: vec![AttrId(1), AttrId(2), AttrId(9)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "p".to_owned(),
+            expr: col(9, "pythonUDF0", DataType::Long),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
+
 /// Lambda expressions and variables: a `transform` over an array column
 /// (`transform(xs, x -> x * 2)`). The array type needs `nested_types` too.
 pub(crate) fn lambda_functions() -> PhysNode {
@@ -1703,6 +1744,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         .collect();
     out.push(("expressions".to_owned(), plan_of(expressions())));
     out.push(("rust_udf".to_owned(), plan_of(udf_call())));
+    out.push(("python_udf".to_owned(), plan_of(python_eval())));
     // The expression environment flag the `legacy_statistical_aggregate`
     // feature is about: the same root as `one_row`, under a session with
     // `spark.sql.legacy.statisticalAggregate` set. With no moment aggregate

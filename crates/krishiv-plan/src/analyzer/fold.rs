@@ -493,6 +493,8 @@ fn call(
             registry(name, f, kids, conf)
         }
         FunctionId::Udf { name, version } => udf(name, *version, f, conf, memo, functions),
+        // Python code never runs at analysis, as in Spark (design P2-T059 §2.2).
+        FunctionId::PythonUdf { .. } => None,
     }
 }
 

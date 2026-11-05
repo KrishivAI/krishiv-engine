@@ -352,6 +352,29 @@ impl SharedSink {
     pub(crate) fn new(schema: SchemaRef, scope: Option<SpillScope>) -> Arc<Self> {
         Arc::new(Self { schema, scope })
     }
+
+    /// Adds `batches`, charged to `reservation`, after the parts combined so
+    /// far: what a `PythonEval` finishes once its drivers have combined.
+    /// Call before `finalize`.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a state of another sink.
+    pub(crate) fn add_part(
+        &self,
+        global: &GlobalState,
+        batches: Vec<Batch>,
+        reservation: Reservation,
+    ) -> Result<()> {
+        if batches.is_empty() {
+            return Ok(());
+        }
+        let g = global_ref::<SinkGlobal>(global, "SharedSink")?;
+        lock(&g.parts).push(Segment::Memory {
+            batches,
+            reservation,
+        });
+        Ok(())
+    }
 }
 
 impl Sink for SharedSink {
@@ -585,9 +608,13 @@ impl Source for SharedSource {
             if let Some(fixed) = &self.fixed {
                 Arc::clone(fixed)
             } else {
-                let state = ctx.dependency().cloned().ok_or_else(|| {
+                let mut state = ctx.dependency().cloned().ok_or_else(|| {
                     internal("a shared plan was read before it was built".to_owned())
                 })?;
+                if !state.is::<SinkGlobal>() {
+                    // A `PythonEval` keeps its rows in a shared plan's list.
+                    state = crate::python_eval::store_state(&state)?;
+                }
                 let sink = global_ref::<SinkGlobal>(&state, "SharedSource")?;
                 sink.done.get().cloned().ok_or_else(|| {
                     internal("a shared plan was read before it finalized".to_owned())

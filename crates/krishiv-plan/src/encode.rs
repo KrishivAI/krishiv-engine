@@ -555,8 +555,21 @@ impl<'k, 'a> Encoder<'k, 'a> {
     #[inline(never)]
     fn function_id(&mut self, id: &crate::FunctionId) {
         self.str(id.name());
-        if let crate::FunctionId::Udf { version, .. } = id {
-            self.u32(*version);
+        match id {
+            crate::FunctionId::Udf { version, .. } => self.u32(*version),
+            crate::FunctionId::PythonUdf {
+                version,
+                eval_type,
+                thread_safe,
+                ..
+            } => {
+                // A tag no Rust UDF key has, so the two never share a key.
+                self.u32(u32::MAX);
+                self.u32(*version);
+                self.u32(eval_type.code().unsigned_abs());
+                self.u32(u32::from(*thread_safe));
+            }
+            _ => {}
         }
     }
 

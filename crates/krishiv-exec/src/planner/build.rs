@@ -34,6 +34,7 @@ use krishiv_plan::{
 use super::eval::{self, EvalEnv, PhysExpr};
 use super::explain::ExplainNode;
 use super::properties::{Distribution, Placement, range_keys};
+use super::python_udf::has_python_udf;
 use super::runtime_filter::{Settings, Site, column_type, kept, key_source, renamed};
 use super::subquery::SubqueryValue;
 use super::{PhysicalPlanner, PlanningContext};
@@ -390,6 +391,14 @@ impl<'a> Planner<'a> {
     pub(crate) fn plan(&mut self, p: &Arc<LogicalPlan>) -> Result<Planned> {
         match &p.node {
             PlanNode::Scan(scan) => self.scan(p, scan, None),
+            PlanNode::Filter { input, predicate } if has_python_udf(predicate) => {
+                let input = self.plan(input)?;
+                let (input, exprs) = self.extract_python(input, std::slice::from_ref(predicate))?;
+                let predicate = exprs
+                    .first()
+                    .ok_or_else(|| internal("a filter without a predicate"))?;
+                self.filter(input, predicate)
+            }
             PlanNode::Filter { input, predicate } => {
                 if let PlanNode::Scan(scan) = &input.node
                     && !has_subquery(predicate)
@@ -423,7 +432,8 @@ impl<'a> Planner<'a> {
             }
             PlanNode::Project { input, exprs } => {
                 let input = self.plan(input)?;
-                self.project(input, exprs)
+                let (input, exprs) = self.extract_python(input, exprs)?;
+                self.project(input, &exprs)
             }
             PlanNode::Aggregate {
                 input,
@@ -1209,7 +1219,7 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn filter(&mut self, input: Planned, predicate: &Expr) -> Result<Planned> {
+    pub(crate) fn filter(&mut self, input: Planned, predicate: &Expr) -> Result<Planned> {
         let prepared = self.prepare(&[predicate])?;
         let e = prepared
             .exprs

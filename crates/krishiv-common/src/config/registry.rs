@@ -104,6 +104,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &AGENT_GATE_BYTES,
     &SHARE_CTE_INSTANCES,
     &EAGER_AGGREGATION,
+    &ARROW_MAX_RECORDS_PER_BATCH,
+    &PYTHON_UDF_ARROW_ENABLED,
+    &PYTHON_UDF_THREADS,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -146,6 +149,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.cache.diskBytes", &IO_CACHE_DISK_BYTES),
     ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
     ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
+    ("krishiv.python.udf.threads", &PYTHON_UDF_THREADS),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
@@ -380,8 +384,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &PARTITION_OVERWRITE_MODE,
     ),
     (
+        "spark.sql.execution.pythonUDF.arrow.enabled",
+        &PYTHON_UDF_ARROW_ENABLED,
+    ),
+    (
+        "spark.sql.execution.arrow.maxRecordsPerBatch",
+        &ARROW_MAX_RECORDS_PER_BATCH,
+    ),
+    (
         "krishiv.runtimeFilter.adaptive.maxPassPercent",
         &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
+    ),
+    (
+        "krishiv.sql.execution.pythonUDF.arrow.enabled",
+        &PYTHON_UDF_ARROW_ENABLED,
     ),
     (
         "spark.sql.optimizer.windowGroupLimitThreshold",
@@ -390,6 +406,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.runtimeFilter.bloom.minApplicationRows",
         &RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
+    ),
+    (
+        "krishiv.sql.execution.arrow.maxRecordsPerBatch",
+        &ARROW_MAX_RECORDS_PER_BATCH,
     ),
     (
         "krishiv.sql.optimizer.windowGroupLimitThreshold",
@@ -1638,6 +1658,47 @@ pub static SHARE_CTE_INSTANCES: ConfigEntry = ConfigEntry {
           are the same either way. Nondeterministic CTE bodies referenced twice or more are \
           always computed once, as Spark does: this switch does not affect them.",
     scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.sql.execution.arrow.maxRecordsPerBatch` (Spark's
+/// `spark.sql.execution.arrow.maxRecordsPerBatch`).
+pub static ARROW_MAX_RECORDS_PER_BATCH: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.execution.arrow.maxRecordsPerBatch",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(10_000)),
+    doc: "Most rows in one Arrow batch handed to a Python UDF; zero or a negative value means \
+          no limit (the input batches are passed as they are).",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.execution.arrow.maxRecordsPerBatch"),
+};
+
+/// `krishiv.sql.execution.pythonUDF.arrow.enabled` (Spark's
+/// `spark.sql.execution.pythonUDF.arrow.enabled`).
+pub static PYTHON_UDF_ARROW_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.execution.pythonUDF.arrow.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether `@udf` Python UDFs run Arrow-batched. Only the Arrow path is implemented: \
+          `false` is accepted with a warning and still runs Arrow-batched, whose return-type \
+          coercion differs from Spark's pickled-row path in some cases (a documented \
+          divergence).",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.execution.pythonUDF.arrow.enabled"),
+};
+
+/// `krishiv.python.udf.threads`.
+pub static PYTHON_UDF_THREADS: ConfigEntry = ConfigEntry {
+    key: "krishiv.python.udf.threads",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(0)),
+    doc: "Threads of the embedded Python UDF pool, fixed when the pool starts (the first query \
+          calling a Python UDF). 0 picks one: the executor's thread count on a free-threaded \
+          Python, else 1 (with the GIL more threads only contend).",
+    scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,
 };

@@ -160,7 +160,7 @@ fn function_never_raises(id: &FunctionId, args: &[std::sync::Arc<Expr>], ansi: b
             _ => false,
         },
         // User code may raise (or fail its contract): never assumed pure.
-        FunctionId::Udf { .. } => false,
+        FunctionId::Udf { .. } | FunctionId::PythonUdf { .. } => false,
     }
 }
 

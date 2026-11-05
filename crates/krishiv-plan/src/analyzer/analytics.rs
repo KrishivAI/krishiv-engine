@@ -713,7 +713,7 @@ impl Resolver<'_> {
                 // `SELECT session.upper(s) ... GROUP BY ROLLUP(s)` would
                 // silently run the built-in `upper` over the copy.
                 let (name, qualifier) = match &f.id {
-                    FunctionId::Udf { name, .. } => (
+                    FunctionId::Udf { name, .. } | FunctionId::PythonUdf { name, .. } => (
                         name.clone(),
                         vec!["system".to_owned(), "session".to_owned()],
                     ),

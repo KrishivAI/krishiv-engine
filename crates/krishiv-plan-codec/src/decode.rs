@@ -13,8 +13,8 @@ use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, Aggreg
 use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId,
-    SubqueryPlan, SubqueryValueKind, WritePlan,
+    PythonCallPlan, Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan,
+    SubqueryId, SubqueryPlan, SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::physical::{SharedId, SharedPlan};
 use krishiv_exec::planner::ExplainNode;
@@ -26,8 +26,8 @@ use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, CastMode, DayTimeField, Expr, ExprNode, FunctionId, FunctionKind,
-    Literal, Origin, PlanId, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SourceId, Span,
-    TableVersion, YearMonthField,
+    Literal, Origin, PlanId, PythonEvalType, ReadSource, ResolvedExpr, ResolvedFunction, Scan,
+    SourceId, Span, TableVersion, YearMonthField,
 };
 use krishiv_types::{Collation, DataType, DecimalType, Srid};
 
@@ -525,6 +525,20 @@ impl Decoder {
                 count: self.expr_ref(r.count)?,
                 subqueries: self.subqueries(&r.subqueries)?,
             },
+            Kind::PythonEval(p) => PhysNode::PythonEval {
+                input: self.boxed(p.input)?,
+                layout: layout(&p.layout),
+                calls: p
+                    .calls
+                    .iter()
+                    .map(|c| {
+                        Ok(PythonCallPlan {
+                            call: self.expr_ref(c.call)?,
+                            output: AttrId(c.output),
+                        })
+                    })
+                    .collect::<Result<_>>()?,
+            },
             Kind::Generate(g) => PhysNode::Generate {
                 input: self.boxed(g.input)?,
                 layout: layout(&g.layout),
@@ -822,6 +836,14 @@ impl Decoder {
                 name: u.name.clone(),
                 version: u32::try_from(u.version)
                     .map_err(|_| corrupt("a UDF version out of range"))?,
+            },
+            pb::function::Id::PythonUdf(u) => FunctionId::PythonUdf {
+                name: u.name.clone(),
+                version: u32::try_from(u.version)
+                    .map_err(|_| corrupt("a Python UDF version out of range"))?,
+                eval_type: PythonEvalType::from_code(u.eval_type)
+                    .ok_or_else(|| corrupt("an unknown Python UDF eval type"))?,
+                thread_safe: u.thread_safe,
             },
         };
         Ok(ResolvedFunction {

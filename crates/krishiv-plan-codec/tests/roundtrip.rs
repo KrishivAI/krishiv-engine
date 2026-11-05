@@ -44,6 +44,7 @@ variants!(
     Limit,
     ReplicateRows,
     Generate,
+    PythonEval,
     Expand,
     Sort,
     TopN,
@@ -73,6 +74,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Limit { .. } => Variant::Limit,
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
         PhysNode::Generate { .. } => Variant::Generate,
+        PhysNode::PythonEval { .. } => Variant::PythonEval,
         PhysNode::UnionLoop { .. } => Variant::UnionLoop,
         PhysNode::LoopRef { .. } => Variant::LoopRef,
         PhysNode::Expand { .. } => Variant::Expand,
@@ -533,6 +535,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "shared_subplan"
             | "exchange_source"
             | "rust_udf"
+            | "python_udf"
             | "nested_types"
             | "struct_field"
             | "lambda_functions"
