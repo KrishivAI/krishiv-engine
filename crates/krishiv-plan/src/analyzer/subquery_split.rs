@@ -14,16 +14,33 @@
 //! END` (a rejected row is no row: NULL), and for `v IN`, `CASE WHEN having
 //! THEN v = value ELSE false END` (no row is not a match; `NOT IN` is its
 //! negation, true over no row).
+//!
+//! It also holds the grouped correlated scalar subqueries whose grouping
+//! the correlation does not fix to one group per outer row (Spark's
+//! `nonEquivalentGroupbyCols`): Spark 4.x runs them as a single join, which
+//! fails with `SCALAR_SUBQUERY_TOO_MANY_ROWS` at run time on a second row;
+//! with `spark.sql.optimizer.scalarSubqueryUseSingleJoin` off (and on Spark
+//! 3.5) analysis refuses them with `NON_CORRELATED_COLUMNS_IN_GROUP_BY`,
+//! unless the legacy flag
+//! `spark.sql.legacy.scalarSubqueryAllowGroupByNonEqualityCorrelatedPredicate`
+//! lets them run as an outer join.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::{R, Rewriter, boolean, call, has_outer, node, on_no_rows, typed};
+use super::{
+    R, Rewriter, boolean, call, conjuncts, has_outer, inner_columns, node, on_no_rows, typed,
+};
+use crate::analyzer::AnalysisError;
 use crate::analyzer::exprs::pretty;
 use crate::walk::Node;
 use crate::{
-    BoundColumn, Builtin, Expr, ExprNode, FunctionKind, Grouping, Literal, LogicalPlan, Origin,
-    PlanNode, ResolvedExpr, SubqueryKind,
+    BoundColumn, Builtin, Expr, ExprNode, FunctionKind, Grouping, JoinKind, Literal, LogicalPlan,
+    Origin, PlanNode, ResolvedExpr, SubqueryKind,
+};
+use krishiv_common::error::{
+    UnsupportedSubqueryExpressionCategoryMustAggregateCorrelatedScalarSubquery,
+    UnsupportedSubqueryExpressionCategoryNonCorrelatedColumnsInGroupBy,
 };
 use krishiv_types::DataType;
 
@@ -260,6 +277,133 @@ impl Rewriter {
             vec![h, eq, no],
             DataType::Boolean,
             nullable,
+        ))
+    }
+}
+
+/// Whether grouping expression `k` of an aggregate over `input` is fixed per
+/// outer row: equal, in a filter on the way down, to an expression of outer
+/// columns or constants (Spark's `getCorrelatedEquivalentInnerExpressions`,
+/// with `scalarSubqueryAllowGroupByColumnEqualToConstant` at its default).
+pub(super) fn fixed(k: &Arc<Expr>, input: &LogicalPlan) -> bool {
+    match &input.node {
+        PlanNode::Filter { input, predicate } => {
+            conjuncts(predicate).iter().any(|c| {
+                let ExprNode::Resolved(ResolvedExpr::Function(f)) = &c.node else {
+                    return false;
+                };
+                let [a, b] = &f.args[..] else { return false };
+                f.id == crate::FunctionId::Builtin(Builtin::Eq)
+                    && ((**a == **k && inner_columns(b).is_empty())
+                        || (**b == **k && inner_columns(a).is_empty()))
+            }) || fixed(k, input)
+        }
+        PlanNode::Project { input, .. }
+        | PlanNode::SubqueryAlias { input, .. }
+        | PlanNode::Sort { input, .. } => fixed(k, input),
+        PlanNode::Join {
+            left, right, kind, ..
+        } => match kind {
+            JoinKind::Inner | JoinKind::Cross => fixed(k, left) || fixed(k, right),
+            JoinKind::LeftOuter | JoinKind::LeftSemi | JoinKind::LeftAnti => fixed(k, left),
+            JoinKind::RightOuter => fixed(k, right),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+impl Rewriter {
+    /// A correlated scalar subquery grouped by `keys` over `input`, where
+    /// the correlation may leave several groups for an outer row: a single
+    /// join through the domain of the outer columns (an outer join under
+    /// the legacy flag), or Spark's refusal with the single join off.
+    pub(super) fn scalar_grouped(
+        &mut self,
+        base: Arc<LogicalPlan>,
+        plan: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+        keys: &[Arc<Expr>],
+    ) -> R<(Arc<LogicalPlan>, Arc<Expr>)> {
+        let loose: Vec<&Arc<Expr>> = keys
+            .iter()
+            .filter(|k| !inner_columns(k).is_empty() && !fixed(k, input))
+            .collect();
+        let kind = if loose.is_empty() || self.single_join {
+            JoinKind::Single
+        } else if self.legacy_group_by {
+            JoinKind::LeftOuter
+        } else {
+            let names: Vec<String> = loose
+                .iter()
+                .map(|k| match &k.node {
+                    ExprNode::Resolved(ResolvedExpr::Column(c)) => c.name.clone(),
+                    _ => pretty(k, None),
+                })
+                .collect();
+            return Err(AnalysisError::new(
+                UnsupportedSubqueryExpressionCategoryNonCorrelatedColumnsInGroupBy {
+                    value: names.join(","),
+                },
+                plan.origin,
+            ));
+        };
+        // The domain goes through a grouped aggregate over a correlation
+        // that is not an equality (as for a lateral join's right side),
+        // grouping by the domain columns too.
+        let lateral = std::mem::replace(&mut self.lateral, true);
+        let out = self.scalar_single(base, plan, Some(kind));
+        self.lateral = lateral;
+        out
+    }
+}
+
+/// Whether `p` has at most one row whatever its input (Spark's
+/// `maxRows <= 1`): a global aggregate, `LIMIT 0` or `1`, one row of
+/// literals, through the operators that never add rows.
+fn at_most_one_row(p: &LogicalPlan) -> bool {
+    match &p.node {
+        PlanNode::OneRowRelation => true,
+        PlanNode::Aggregate {
+            grouping: Grouping::GroupBy(keys),
+            ..
+        } => keys.is_empty(),
+        PlanNode::Limit { input, limit } => {
+            matches!(limit.node, ExprNode::Literal(Literal::Integer(0 | 1)))
+                || at_most_one_row(input)
+        }
+        PlanNode::Project { input, .. }
+        | PlanNode::SubqueryAlias { input, .. }
+        | PlanNode::Filter { input, .. }
+        | PlanNode::Sort { input, .. } => at_most_one_row(input),
+        _ => false,
+    }
+}
+
+impl Rewriter {
+    /// Spark's check of a correlated scalar subquery that is not an
+    /// aggregate when the single join is off (and on Spark 3.5, which has
+    /// none): it must have at most one row.
+    pub(super) fn check_single(&self, plan: &Arc<LogicalPlan>) -> R<()> {
+        // Spark strips projections and aliases first; an aggregate (or a
+        // `HAVING` over one) gets the aggregate's checks instead.
+        let mut clean = &**plan;
+        while let PlanNode::Project { input, .. } | PlanNode::SubqueryAlias { input, .. } =
+            &clean.node
+        {
+            clean = input;
+        }
+        let aggregate = match &clean.node {
+            PlanNode::Aggregate { .. } => true,
+            PlanNode::Filter { input, .. } => matches!(input.node, PlanNode::Aggregate { .. }),
+            _ => false,
+        };
+        if self.single_join || aggregate || at_most_one_row(plan) {
+            return Ok(());
+        }
+        Err(AnalysisError::new(
+            UnsupportedSubqueryExpressionCategoryMustAggregateCorrelatedScalarSubquery {},
+            plan.origin,
         ))
     }
 }

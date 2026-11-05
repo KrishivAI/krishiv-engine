@@ -86,6 +86,8 @@ pub(super) fn rewrite(
         lateral: false,
         legacy_exists_in_count: conf.legacy_exists_in_count,
         legacy_scalar_count: conf.legacy_scalar_count,
+        single_join: conf.scalar_single_join && profile != SparkProfile::V3_5,
+        legacy_group_by: conf.legacy_group_by_non_equality,
         row_number: match functions.lookup(&["row_number".to_owned()], profile) {
             FunctionLookup::Found(entry) => Some((entry.id, entry.kind)),
             _ => None,
@@ -113,6 +115,10 @@ struct Rewriter {
     legacy_exists_in_count: bool,
     /// `spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled`.
     legacy_scalar_count: bool,
+    /// `spark.sql.optimizer.scalarSubqueryUseSingleJoin` (always off for 3.5).
+    single_join: bool,
+    /// `spark.sql.legacy.scalarSubqueryAllowGroupByNonEqualityCorrelatedPredicate`.
+    legacy_group_by: bool,
 }
 
 /// A predicate subquery conjunct, as a join.
@@ -1577,7 +1583,8 @@ impl Rewriter {
             aggregates,
         } = &plan.node
         else {
-            return self.scalar_single(base, plan);
+            self.check_single(plan)?;
+            return self.scalar_single(base, plan, None);
         };
         if keys.iter().any(|k| has_outer(Node::Expr(k))) {
             return Err(correlated_reference(keys, plan.origin));
@@ -1624,10 +1631,7 @@ impl Rewriter {
             || (non_equality_correlation(input) && deterministic_filters(input))
         {
             if !keys.is_empty() {
-                return Err(unsupported(
-                    "correlated scalar subqueries with GROUP BY",
-                    plan.origin,
-                ));
+                return self.scalar_grouped(base, plan, input, keys);
             }
             let (inner, inner_keys, outer_keys) = self.domain(&base, input)?;
             return self.scalar_join(
@@ -1654,10 +1658,7 @@ impl Rewriter {
             _ => false,
         };
         if !keys.iter().all(determined) {
-            return Err(unsupported(
-                "correlated scalar subqueries with GROUP BY",
-                plan.origin,
-            ));
+            return self.scalar_grouped(base, plan, input, keys);
         }
         self.scalar_join(
             base,
@@ -1829,6 +1830,7 @@ impl Rewriter {
         &mut self,
         base: Arc<LogicalPlan>,
         plan: &Arc<LogicalPlan>,
+        forced: Option<JoinKind>,
     ) -> R<(Arc<LogicalPlan>, Arc<Expr>)> {
         let out = output(plan)?;
         let [value] = &out[..] else {
@@ -1853,7 +1855,7 @@ impl Rewriter {
             };
             return Ok((base, read));
         }
-        let through_domain = on_path(plan, needs_domain);
+        let through_domain = forced.is_some() || on_path(plan, needs_domain);
         if !through_domain && aggregates_below(plan) {
             return Err(unsupported(
                 "a correlated scalar subquery of this shape",
@@ -1897,7 +1899,7 @@ impl Rewriter {
         let join = PlanNode::Join {
             left: base,
             right,
-            kind: JoinKind::Single,
+            kind: forced.unwrap_or(JoinKind::Single),
             condition: and_all(cond).map_or(JoinCondition::None, JoinCondition::On),
         };
         // NULL where no row matched (an outer join's right side).
