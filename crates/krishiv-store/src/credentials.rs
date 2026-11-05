@@ -518,11 +518,10 @@ impl<C> fmt::Debug for RefreshingProvider<C> {
     }
 }
 
-/// The error a provider hands object_store: `Unauthenticated`, which the scheduler does not
-/// retry; [`RefreshingStore`](crate::RefreshingStore) recognizes its source and does not retry
-/// it either.
-#[cfg(feature = "cloud")]
-fn provider_error(e: CredentialRefreshError) -> object_store::Error {
+/// The error a refresh failure becomes in object_store: `Unauthenticated`, which the scheduler
+/// does not retry; [`RefreshingStore`](crate::RefreshingStore) recognizes its source and does
+/// not retry it either.
+pub(crate) fn provider_error(e: CredentialRefreshError) -> object_store::Error {
     object_store::Error::Unauthenticated {
         path: e.scope.clone(),
         source: Box::new(e),

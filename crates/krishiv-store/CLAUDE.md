@@ -1,7 +1,7 @@
 # krishiv-store
 
 **Layer:** L1 (may depend only on crates in L1 or lower; `cargo xtask layering`). Depends on `krishiv-common` and
-`object_store` only (ADR 0044). Units S1-S4 of `design/P3-shared-storage-layer.md` are in.
+`object_store` (plus the workspace's `async-trait`, `bytes`, `futures` and `tokio` with `sync` only; ADR 0044). Units S1-S4 of `design/P3-shared-storage-layer.md` are in.
 
 ## Purpose
 The object-store layer the engine, the platform and the Iceberg bridge share: URL parsing, store building from `fs.*`

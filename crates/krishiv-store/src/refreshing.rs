@@ -23,7 +23,9 @@ use object_store::{
     PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
 };
 
-use crate::credentials::{CredentialCache, CredentialRefreshError, RefreshingProvider};
+use crate::credentials::{
+    CredentialCache, CredentialRefreshError, RefreshingProvider, provider_error,
+};
 
 /// Words in a store's answer that mean "the credential is no longer good", not "this
 /// credential may not do that". S3 answers `ExpiredToken` (400 or 403); Azure answers
@@ -71,9 +73,11 @@ fn chain_has_refresh_failure(e: &object_store::Error) -> bool {
 /// A store whose requests are retried once, after a forced credential refresh, when the
 /// store refuses the credential as stale.
 ///
-/// Replayable requests retry: `put`, `get`, `head`, `delete`, `copy`, `rename`, ranges, a
-/// delimited listing and the start of a multipart upload. Streams (`list`, `delete_stream`)
-/// and the parts of an upload already started do not: they fail as the store reports.
+/// Replayable requests retry: `put`, `get` (and `head`), `copy`, `rename`, ranges, a delimited
+/// listing and the start of a multipart upload. Streams (`list`, `delete_stream`, and so
+/// `delete`, which object_store routes through `delete_stream`) and the parts of an upload
+/// already started do not: they fail as the store reports, and the next request signs with a
+/// fresh credential.
 pub struct RefreshingStore {
     inner: Arc<dyn ObjectStore>,
     cache: Arc<CredentialCache>,
@@ -96,9 +100,9 @@ impl RefreshingStore {
         F: Fn() -> Fut + Send,
         Fut: std::future::Future<Output = Result<T>> + Send,
     {
-        // Make sure a credential exists, so `generation` names the one the request signs with
-        // (a failure here fails the request below with the same error).
-        let _ = self.cache.credential().await;
+        // Make sure a credential exists, so `generation` names the one the request signs with.
+        // A failed refresh fails the request here, without asking the source a second time.
+        self.cache.credential().await.map_err(provider_error)?;
         let generation = self.cache.generation();
         match call().await {
             Err(e) if is_stale_credential(&e) => {

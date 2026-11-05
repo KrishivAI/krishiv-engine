@@ -70,7 +70,7 @@ pub fn query_registry(
     let sched = Arc::downgrade(sched);
     registry.on_release(move |id| {
         if let Some(sched) = sched.upgrade() {
-            sched.unregister_store(&StoreId::new(id.key()));
+            sched.unregister_store(id);
         }
     });
     registry
