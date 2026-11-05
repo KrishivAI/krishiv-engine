@@ -513,3 +513,143 @@ pub(super) fn push_not(e: &Arc<Expr>) -> Arc<Expr> {
     });
     out.unwrap_or_else(|never| match never {})
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AttrId;
+
+    fn col(id: u64, name: &str) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+            BoundColumn {
+                id: AttrId(id),
+                name: name.to_owned(),
+                data_type: DataType::Integer,
+                nullable: true,
+            },
+        ))))
+    }
+
+    fn outer(id: u64, name: &str) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::OuterColumn(
+            BoundColumn {
+                id: AttrId(id),
+                name: name.to_owned(),
+                data_type: DataType::Integer,
+                nullable: true,
+            },
+        ))))
+    }
+
+    fn lit(v: i32) -> Arc<Expr> {
+        Arc::new(Expr::literal(Literal::Integer(v)))
+    }
+
+    fn in_sub(v: Arc<Expr>) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Subquery {
+            kind: SubqueryKind::In(vec![v]),
+            plan: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+        }))
+    }
+
+    fn op(b: Builtin, args: Vec<Arc<Expr>>) -> Arc<Expr> {
+        boolean(b, args)
+    }
+
+    fn shape(e: &Expr) -> String {
+        match &e.node {
+            ExprNode::Subquery { .. } => "IN".to_owned(),
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => c.name.clone(),
+            ExprNode::Literal(_) => "lit".to_owned(),
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+                let args: Vec<String> = f.args.iter().map(|a| shape(a)).collect();
+                format!("{:?}({})", f.id, args.join(", "))
+            }
+            _ => "?".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_not_moves_down_to_the_subquery() {
+        let a = col(1, "a");
+        let gt = op(Builtin::Gt, vec![Arc::clone(&a), lit(5)]);
+        let e = op(
+            Builtin::Not,
+            vec![op(
+                Builtin::Or,
+                vec![Arc::clone(&gt), in_sub(Arc::clone(&a))],
+            )],
+        );
+        let pushed = push_not(&e);
+        let want = op(
+            Builtin::And,
+            vec![
+                op(Builtin::Not, vec![gt]),
+                op(Builtin::Not, vec![in_sub(Arc::clone(&a))]),
+            ],
+        );
+        assert_eq!(shape(&pushed), shape(&want));
+        // `NOT NOT x` is `x`.
+        let twice = op(
+            Builtin::Not,
+            vec![op(Builtin::Not, vec![in_sub(Arc::clone(&a))])],
+        );
+        assert_eq!(shape(&push_not(&twice)), "IN");
+        // Without a subquery nothing changes.
+        let plain = op(
+            Builtin::Not,
+            vec![op(Builtin::Or, vec![Arc::clone(&a), lit(1)])],
+        );
+        assert!(Arc::ptr_eq(&push_not(&plain), &plain));
+    }
+
+    #[test]
+    fn keys_equal_to_constants_or_outer_expressions_are_fixed() {
+        let y1 = col(1, "y1");
+        let y2 = col(2, "y2");
+        let scan = Arc::new(LogicalPlan::new(PlanNode::OneRowRelation));
+        let filter = |predicate: Arc<Expr>| {
+            LogicalPlan::new(PlanNode::Filter {
+                input: Arc::clone(&scan),
+                predicate,
+            })
+        };
+        let by_constant = filter(op(Builtin::Eq, vec![Arc::clone(&y2), lit(1)]));
+        assert!(fixed(&y2, &by_constant));
+        assert!(!fixed(&y1, &by_constant));
+        let by_outer = filter(op(Builtin::Eq, vec![outer(9, "x1"), Arc::clone(&y1)]));
+        assert!(fixed(&y1, &by_outer));
+        let greater = filter(op(Builtin::Gt, vec![Arc::clone(&y1), outer(9, "x1")]));
+        assert!(!fixed(&y1, &greater));
+    }
+
+    #[test]
+    fn joined_columns_read_outside_a_call_are_grouped() {
+        let k = col(1, "k");
+        let joined = col(7, "exists");
+        let before = vec![BoundColumn {
+            id: AttrId(1),
+            name: "k".to_owned(),
+            data_type: DataType::Integer,
+            nullable: true,
+        }];
+        let keys = group_joined(vec![Arc::clone(&k)], &[Arc::clone(&joined)], &before);
+        assert_eq!(keys.len(), 2);
+        // Inside an aggregate call it is aggregated, not grouped.
+        let count = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            crate::ResolvedFunction {
+                id: crate::FunctionId::Builtin(Builtin::Not),
+                kind: FunctionKind::Aggregate,
+                args: vec![joined],
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+                data_type: DataType::Long,
+                nullable: false,
+                deterministic: true,
+            },
+        ))));
+        let keys = group_joined(vec![k], &[count], &before);
+        assert_eq!(keys.len(), 1);
+    }
+}
