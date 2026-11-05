@@ -142,25 +142,13 @@ impl Values {
     /// (`max`) or before the new one, so a tie takes the new row (the last
     /// of equal keys; `-0.0` equals `0.0`, NaN equals NaN).
     fn beats(&self, g: usize, src: &Col<'_>, i: usize, max: bool) -> Result<bool> {
+        let takes = |o: std::cmp::Ordering| if max { o.is_ge() } else { o.is_le() };
         Ok(match (self, src) {
-            (Self::Int(v), Col::Int(c)) => {
-                if max {
-                    c[i] >= v[g]
-                } else {
-                    c[i] <= v[g]
-                }
-            }
+            (Self::Int(v), Col::Int(c)) => takes(c[i].cmp(&v[g])),
             (Self::Float(v), Col::Float(c)) => {
-                if max {
-                    !float_lt(c[i], v[g])
-                } else {
-                    !float_lt(v[g], c[i])
-                }
+                !float_lt(if max { c[i] } else { v[g] }, if max { v[g] } else { c[i] })
             }
-            (Self::Bytes(v), Col::Bytes(c)) => {
-                let cur: &[u8] = &v[g];
-                if max { c[i] >= cur } else { c[i] <= cur }
-            }
+            (Self::Bytes(v), Col::Bytes(c)) => takes(c[i].cmp(&v[g][..])),
             _ => {
                 return Err(internal(
                     "an ordering key of another kind than its state".to_owned(),
