@@ -79,7 +79,7 @@ fn collated_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
         && f.kind != crate::FunctionKind::Aggregate
         && matches!(
             f.id.name(),
-            "=" | "<=>"
+            "==" | "<=>"
                 | "<"
                 | "<="
                 | ">"

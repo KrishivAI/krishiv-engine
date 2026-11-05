@@ -177,8 +177,8 @@ fn string_functions_take_the_collation_of_their_arguments() {
         "string collate UTF8_LCASE"
     );
     assert_eq!(
-        one("SELECT typeof(upper('a' COLLATE unicode_ci))"),
-        "string collate UNICODE_CI"
+        one("SELECT typeof(upper('a' COLLATE utf8_lcase))"),
+        "string collate UTF8_LCASE"
     );
     // The same explicit collation twice is fine; the value is untouched.
     assert_eq!(
@@ -234,7 +234,6 @@ fn search_and_indeterminate_rules_follow_spark() {
         class("SELECT str_to_map('a:b' COLLATE unicode_ai)"),
         ErrorClass::DatatypeMismatchUnexpectedInputType
     );
-    assert!(run("SELECT replace('aAb' COLLATE unicode_ci, 'a', 'x')").is_ok());
     let s = Session::new().unwrap();
     for sql in [
         "create table t1(a string collate utf8_binary, b string collate utf8_lcase) using parquet",
@@ -243,4 +242,78 @@ fn search_and_indeterminate_rules_follow_spark() {
         block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
     }
     assert!(block_on(s.sql("select levenshtein(a, b) from t1")).is_ok());
+}
+
+/// Calls whose answer depends on the collation refuse a non-binary one instead of matching
+/// bytes (unit 5 brings the collation-aware kernels); binary strings are untouched.
+#[test]
+fn collation_dependent_calls_refuse_instead_of_matching_bytes() {
+    let l = "('Ab' COLLATE utf8_lcase)";
+    for sql in [
+        format!("SELECT contains({l}, 'a')"),
+        format!("SELECT startswith({l}, 'a')"),
+        format!("SELECT instr({l}, 'a')"),
+        format!("SELECT replace({l}, 'a', 'x')"),
+        format!("SELECT translate({l}, 'a', 'x')"),
+        format!("SELECT trim('a' FROM {l})"),
+        format!("SELECT split_part({l}, 'x', 1)"),
+        format!("SELECT {l} LIKE 'a%'"),
+        format!("SELECT {l} RLIKE '^a'"),
+        format!("SELECT regexp_replace({l}, 'a', 'x')"),
+        "SELECT replace('aAb' COLLATE unicode_ci, 'a', 'x')".to_owned(),
+        "SELECT 'a ' COLLATE utf8_binary_rtrim LIKE 'a'".to_owned(),
+        "SELECT upper('a' COLLATE unicode_ci)".to_owned(),
+    ] {
+        assert_eq!(
+            class(&sql),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql} must be refused, not matched as bytes"
+        );
+    }
+    // Plain strings, an explicit UTF8_BINARY and UTF8_LCASE case mapping are unchanged.
+    assert_eq!(one("SELECT CAST(contains('Ab', 'a') AS STRING)"), "false");
+    assert_eq!(
+        one("SELECT CAST(contains('Ab' COLLATE utf8_binary, 'a') AS STRING)"),
+        "false"
+    );
+    assert_eq!(one("SELECT upper('ab' COLLATE utf8_lcase)"), "AB");
+}
+
+/// A collated string inside an array, map or struct would lose its collation (or be compared
+/// as bytes), so building or reading one is refused for now; counting and picking are fine.
+#[test]
+fn nested_values_of_collated_strings_are_refused() {
+    for sql in [
+        "SELECT array('a' COLLATE utf8_lcase)",
+        "SELECT map('a' COLLATE utf8_lcase, 1)",
+        "SELECT named_struct('f', 'a' COLLATE utf8_lcase)",
+        "SELECT array('a' COLLATE utf8_lcase) = array('A')",
+    ] {
+        assert_eq!(class(sql), ErrorClass::KrishivUnsupportedFeature, "{sql}");
+    }
+}
+
+/// Indeterminate input gives no string result here; a non-string result is still produced.
+#[test]
+fn indeterminate_string_results_are_refused() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create table t1(a string collate utf8_binary, b string collate utf8_lcase) using parquet",
+        "insert into t1 values('abc', 'abcd')",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    let e = block_on(s.sql("select concat(a, b) from t1")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(block_on(s.sql("select length(concat(a, b)) from t1")).is_err());
+    assert!(block_on(s.sql("select levenshtein(a, b) from t1")).is_ok());
+}
+
+/// A written `CAST(.. AS STRING COLLATE c)` is an explicit collation like `COLLATE`.
+#[test]
+fn an_explicit_cast_is_an_explicit_collation() {
+    assert_eq!(
+        class("SELECT concat(CAST('a' AS STRING COLLATE utf8_lcase), 'b' COLLATE unicode_ci)"),
+        ErrorClass::CollationMismatchExplicit
+    );
 }

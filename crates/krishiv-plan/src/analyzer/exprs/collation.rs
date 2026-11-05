@@ -81,6 +81,51 @@ const FAILS_INDETERMINATE: &[&str] = &[
     "initcap",
 ];
 
+/// Calls whose result depends on the collation (Spark's `CollationSupport` and the pattern
+/// matchers). Their collation-aware kernels belong to unit 5, so until then they refuse a
+/// non-binary collation instead of matching bytes.
+const DEPENDS: &[&str] = &[
+    "contains",
+    "startswith",
+    "endswith",
+    "instr",
+    "locate",
+    "position",
+    "replace",
+    "split_part",
+    "find_in_set",
+    "translate",
+    "substring_index",
+    "trim",
+    "ltrim",
+    "rtrim",
+    "btrim",
+    "like",
+    "ilike",
+    "rlike",
+    "like_any",
+    "like_all",
+    "not_like_any",
+    "not_like_all",
+    "ilike_any",
+    "ilike_all",
+    "not_ilike_any",
+    "not_ilike_all",
+    "regexp",
+    "regexp_like",
+    "regexp_replace",
+    "regexp_extract",
+    "regexp_extract_all",
+    "regexp_count",
+    "regexp_instr",
+    "regexp_substr",
+    "str_to_map",
+    "split",
+];
+
+/// Case mapping uses the collator's locale under ICU (unit 6).
+const ICU_CASE: &[&str] = &["upper", "ucase", "lower", "lcase", "initcap"];
+
 /// Calls that search a string and so refuse an accent-insensitive ICU collation.
 const SEARCHES: &[&str] = &[
     "contains",
@@ -94,6 +139,19 @@ const SEARCHES: &[&str] = &[
     "str_to_map",
     "substring_index",
     "translate",
+];
+
+/// Calls that may take a nested value holding a collated string: they only count or pick.
+const NESTED_OK: &[&str] = &[
+    "size",
+    "cardinality",
+    "array_size",
+    "isnull",
+    "isnotnull",
+    "__subscript",
+    "element_at",
+    "try_element_at",
+    "get",
 ];
 
 /// Calls that read the type of their argument: it stays collated.
@@ -116,6 +174,14 @@ fn strength_of(e: &Expr) -> Option<(Collation, Strength)> {
         }
         ExprNode::Literal(Literal::String(_)) => Some((Collation::UTF8_BINARY, Strength::Default)),
         ExprNode::Alias { expr, .. } => strength_of(expr),
+        // A written `CAST(x AS STRING COLLATE c)` (bound, so never in `Default` mode) is
+        // explicit; the analyzer's own implicit cast, shown in `Default` mode, takes its
+        // child's strength.
+        ExprNode::Cast {
+            to: DataType::CollatedString(c),
+            mode,
+            ..
+        } if *mode != CastMode::Default => Some((*c, Strength::Explicit)),
         ExprNode::Cast { expr, to, .. } if is_string(Some(to)) => strength_of(expr),
         ExprNode::Function(_) | ExprNode::Resolved(ResolvedExpr::Function(_)) => {
             let mut kids = Vec::new();
@@ -174,17 +240,34 @@ impl Resolver<'_> {
         if f.distinct
             || COMPARING.contains(&name.as_str())
             || INSPECTS.contains(&name.as_str())
-            || !kids[..n]
-                .iter()
-                .any(|k| matches!(k.ty.data_type, Some(DataType::CollatedString(_))))
+            || !kids[..n].iter().any(|k| {
+                k.ty.data_type
+                    .as_ref()
+                    .is_some_and(DataType::contains_collation)
+            })
         {
             return self.expr_node_inner(e, kids, in_agg, window_fn, cx);
+        }
+        // A collated string inside an array, map or struct is read by field or element only:
+        // the nested compare, key and array functions are not collation-aware yet.
+        if !NESTED_OK.contains(&name.as_str())
+            && kids[..n].iter().any(|k| {
+                k.ty.data_type.as_ref().is_some_and(|t| {
+                    !matches!(t, DataType::CollatedString(_)) && t.contains_collation()
+                })
+            })
+        {
+            return Err(unsupported(
+                "a collated string inside a nested value",
+                e.origin,
+            ));
         }
         let items: Vec<(Collation, Strength)> = kids[..n]
             .iter()
             .filter(|k| is_string(k.ty.data_type.as_ref()))
             .filter_map(|k| strength_of(&k.shown()))
             .collect();
+        let mut indeterminate = false;
         let chosen = match merge(&items) {
             Ok(c) => c.map(|(c, _)| c),
             Err(Conflict::Explicit(list)) => {
@@ -199,7 +282,10 @@ impl Resolver<'_> {
                     e.origin,
                 ));
             }
-            Err(Conflict::Indeterminate) if !FAILS_INDETERMINATE.contains(&name.as_str()) => None,
+            Err(Conflict::Indeterminate) if !FAILS_INDETERMINATE.contains(&name.as_str()) => {
+                indeterminate = true;
+                None
+            }
             Err(Conflict::Indeterminate) => {
                 let shown = with_children(e, kids[..n].iter().map(Bound::shown).collect());
                 return Err(AnalysisError::new(
@@ -232,6 +318,17 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
+        if let Some(c) = chosen
+            && !c.is_utf8_binary()
+            && (DEPENDS.contains(&name.as_str())
+                || (ICU_CASE.contains(&name.as_str())
+                    && matches!(c.family(), CollationFamily::Icu { .. })))
+        {
+            return Err(unsupported(
+                format!("{name} over a collated string"),
+                e.origin,
+            ));
+        }
         // The call runs on plain strings: the carrier is one.
         let plain: Vec<Bound> = kids
             .iter()
@@ -257,7 +354,7 @@ impl Resolver<'_> {
                     let shown = Expr::new(ExprNode::Cast {
                         expr: k.shown(),
                         to: DataType::collated_string(want),
-                        mode: CastMode::Legacy,
+                        mode: CastMode::Default,
                     })
                     .with_origin(e.origin);
                     k.shown = Some(Arc::new(shown));
@@ -269,6 +366,19 @@ impl Resolver<'_> {
             })
             .collect();
         let mut bound = self.expr_node_inner(e, &plain, in_agg, window_fn, cx)?;
+        if let Some(t) = bound.ty.data_type.as_ref() {
+            // A nested result would drop the collation of its strings; an indeterminate string
+            // result has no type here (Spark carries an indeterminate type).
+            let nested = chosen.is_some_and(|c| !c.is_utf8_binary())
+                && !matches!(t, DataType::String)
+                && t.any_type(&|x| matches!(x, DataType::String));
+            if nested || (indeterminate && *t == DataType::String) {
+                return Err(unsupported(
+                    "a collated or indeterminate string inside a result",
+                    e.origin,
+                ));
+            }
+        }
         if let Some(c) = chosen
             && !c.is_utf8_binary()
             && bound.ty.data_type == Some(DataType::String)

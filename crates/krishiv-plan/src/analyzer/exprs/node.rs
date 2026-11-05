@@ -1472,6 +1472,10 @@ impl Resolver<'_> {
             ExprNode::Collate {
                 collation, name, ..
             } => {
+                // Collations are the 4.2 profile's (ADR 0043 Decision 9).
+                if self.ctx.profile < crate::analyzer::SparkProfile::V4_2 {
+                    return Err(unsupported("COLLATE under this Spark profile", e.origin));
+                }
                 let child = &kids[0].ty;
                 if !matches!(
                     child.data_type.as_ref(),
