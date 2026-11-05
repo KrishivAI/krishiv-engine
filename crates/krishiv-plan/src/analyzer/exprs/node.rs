@@ -492,10 +492,29 @@ impl Resolver<'_> {
                         }
                     }
                 };
+                // A session aggregate UDF (ADR 0045): `DISTINCT` only when it
+                // allows it, and not over a window yet.
+                if !is_builtin_entry(&entry) && entry.kind == FunctionKind::Aggregate {
+                    if f.distinct && self.ctx.functions.rejects_distinct(entry.id.name()) {
+                        return Err(AnalysisError::new(
+                            InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                                pretty_name: format!("`{lookup_name}`"),
+                                syntax: "DISTINCT".to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    if window_fn {
+                        return Err(unsupported(
+                            format!("aggregate UDF {lookup_name} over a window"),
+                            e.origin,
+                        ));
+                    }
+                }
                 // `array_agg` is Spark's spelling of `collect_list` (its
                 // result column is named `collect_list(...)`): resolve it
                 // as `collect_list` throughout.
-                if entry.id.name() == "array_agg" {
+                if is_builtin_entry(&entry) && entry.id.name() == "array_agg" {
                     entry = match self
                         .ctx
                         .functions
@@ -510,7 +529,7 @@ impl Resolver<'_> {
                 // `string_agg` is Spark's alias of `listagg` (its result
                 // column is named `listagg(...)`): resolve it as `listagg`
                 // throughout.
-                if entry.id.name() == "string_agg" {
+                if is_builtin_entry(&entry) && entry.id.name() == "string_agg" {
                     entry = match self
                         .ctx
                         .functions
@@ -527,10 +546,11 @@ impl Resolver<'_> {
                 // `listagg_call`); any other function keeps Spark's
                 // `FUNCTION_WITH_UNSUPPORTED_SYNTAX` error.
                 if !f.within_group.is_empty()
-                    && !matches!(
-                        entry.id.name(),
-                        "mode" | "listagg" | "percentile_cont" | "percentile_disc"
-                    )
+                    && !(is_builtin_entry(&entry)
+                        && matches!(
+                            entry.id.name(),
+                            "mode" | "listagg" | "percentile_cont" | "percentile_disc"
+                        ))
                 {
                     return Err(AnalysisError::new(
                         InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
@@ -543,22 +563,24 @@ impl Resolver<'_> {
                 if !window_fn && entry.kind == FunctionKind::Aggregate {
                     self.nondeterministic_arguments(e, &kids[..n]);
                 }
-                if entry.id.name() == "mode" {
+                if is_builtin_entry(&entry) && entry.id.name() == "mode" {
                     return self.mode_call(&entry, e, f, &kids, window_fn);
                 }
-                if entry.id.name() == "listagg" {
+                if is_builtin_entry(&entry) && entry.id.name() == "listagg" {
                     return self.listagg_call(&entry, e, f, &kids, window_fn);
                 }
-                if matches!(
-                    entry.id.name(),
-                    "percentile"
-                        | "percentile_approx"
-                        | "approx_percentile"
-                        | "median"
-                        | "percentile_cont"
-                        | "percentile_disc"
-                        | "approx_count_distinct"
-                ) {
+                if is_builtin_entry(&entry)
+                    && matches!(
+                        entry.id.name(),
+                        "percentile"
+                            | "percentile_approx"
+                            | "approx_percentile"
+                            | "median"
+                            | "percentile_cont"
+                            | "percentile_disc"
+                            | "approx_count_distinct"
+                    )
+                {
                     return self.quantile_call(&entry, e, f, &kids, n, window_fn);
                 }
                 if !window_fn {

@@ -978,6 +978,38 @@ impl Session {
         Ok(())
     }
 
+    /// Registers a native Rust aggregate UDF (ADR 0045) under its name
+    /// (case-insensitive), replacing any UDF of that name, scalar or
+    /// aggregate. Resolution, qualification and the analysis fingerprint
+    /// follow [`register_udf`](Self::register_udf); the hash aggregate
+    /// drives its [`GroupsAccumulator`](krishiv_udf_sdk::GroupsAccumulator)
+    /// as it drives the built-in aggregates (partial and final phases,
+    /// spilling).
+    ///
+    /// # Errors
+    /// `FAILED_EXECUTE_UDF` when the UDF's `name` panics, is empty, or
+    /// contains a `.` or a backtick.
+    pub fn register_udaf(
+        &self,
+        udaf: impl krishiv_udf_sdk::AggregateUdf,
+    ) -> Result<(), krishiv_common::error::KrishivError> {
+        let udaf: Arc<dyn krishiv_udf_sdk::AggregateUdf> = Arc::new(udaf);
+        if let Err(e) = self.state.udfs.register_aggregate(Arc::clone(&udaf)) {
+            let name = guard_call("unknown", "name", || udaf.name().to_owned())
+                .map(|name| name.to_lowercase())
+                .ok()
+                .filter(|name| !name.is_empty())
+                .unwrap_or_else(|| "unknown".to_owned());
+            return Err(krishiv_functions::scalar::failed_execute(
+                &name,
+                "unknown",
+                "unknown",
+                e.message(),
+            ));
+        }
+        Ok(())
+    }
+
     /// The temporary tables and views, by name as registered.
     ///
     /// ```
