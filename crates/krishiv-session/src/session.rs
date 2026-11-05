@@ -58,6 +58,7 @@ use object_store::ObjectStore;
 #[cfg(not(unix))]
 use object_store::local::LocalFileSystem;
 
+use crate::admission::{AdmissionController, QueryRequest, Unlimited};
 use crate::cache::RelationCache;
 use crate::catalog::{FileScans, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
 use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
@@ -131,6 +132,8 @@ pub(crate) struct SessionState {
     /// Fixed for the session's life: caches and fingerprints never mix
     /// identities (a new identity gets a new session).
     pub(crate) principal: Arc<Principal>,
+    /// Decides when each query may start (E5); the default admits at once.
+    pub(crate) admission: Arc<dyn AdmissionController>,
     pub(crate) policy: Arc<dyn AccessPolicy>,
     pub(crate) functions: Arc<dyn FunctionRegistry>,
     /// The session's registered UDFs, shared with the registry above and
@@ -192,6 +195,7 @@ pub struct SessionBuilder {
     policy: Option<Arc<dyn AccessPolicy>>,
     executor: Option<Arc<dyn Executor>>,
     functions: Option<Arc<dyn FunctionRegistry>>,
+    admission: Option<Arc<dyn AdmissionController>>,
 }
 
 impl fmt::Debug for SessionBuilder {
@@ -239,6 +243,21 @@ impl SessionBuilder {
     /// ```
     pub fn principal(mut self, principal: Principal) -> Self {
         self.principal = Some(principal);
+        self
+    }
+
+    /// The admission controller every query asks for a permit before it
+    /// runs (default: [`Unlimited`], which admits at once). While it
+    /// waits the query's `system.queries` state is `queued`.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use krishiv_session::{Session, Unlimited};
+    /// let s = Session::builder().admission_controller(Arc::new(Unlimited)).build()?;
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn admission_controller(mut self, controller: Arc<dyn AdmissionController>) -> Self {
+        self.admission = Some(controller);
         self
     }
 
@@ -372,6 +391,7 @@ impl SessionBuilder {
                 plan_ids: AtomicI64::new(0),
                 query_ids: AtomicU64::new(0),
                 queries,
+                admission: self.admission.unwrap_or_else(|| Arc::new(Unlimited)),
                 sql_sources: AtomicU32::new(1),
             }),
         })
@@ -493,6 +513,7 @@ impl Session {
             policy: None,
             executor: None,
             functions: None,
+            admission: None,
         }
     }
 
@@ -1237,6 +1258,19 @@ impl Session {
         krishiv_io::CredentialScope::Principal(self.state.principal.id())
     }
 
+    /// The I/O context of this session's principal (E15, E12).
+    fn scoped_io(&self) -> krishiv_io::IoContext {
+        self.state
+            .io
+            .context()
+            .with_principal((*self.state.principal).clone())
+    }
+
+    /// A store registry reading with this session's credential scope (E15).
+    fn scoped_stores(&self, config: &Arc<Config>) -> Arc<StoreRegistry> {
+        Arc::new(StoreRegistry::new(Arc::clone(config)).with_scope(self.credential_scope()))
+    }
+
     /// The analysis inputs of one query.
     pub(crate) fn query_env(&self) -> QueryEnv {
         // Before any analysis loads a table: a fill is refused if an
@@ -1246,13 +1280,9 @@ impl Session {
         // Cloud stores are built from this snapshot, lazily per query:
         // plans carry only path strings, and the worker resolves the store
         // at listing from the read's option values (P2-T084).
-        let stores =
-            Arc::new(StoreRegistry::new(Arc::clone(&config)).with_scope(self.credential_scope()));
+        let stores = self.scoped_stores(&config);
         let files = Arc::new(FileReads::new(
-            self.state
-                .io
-                .context()
-                .with_principal((*self.state.principal).clone()),
+            self.scoped_io(),
             Arc::clone(&self.state.formats),
             Arc::new(ObjectPaths::new(
                 StoreId::new(LOCAL_STORE),
@@ -1263,11 +1293,7 @@ impl Session {
             Arc::clone(&config),
         ));
         let scans = FileScans {
-            io: self
-                .state
-                .io
-                .context()
-                .with_principal((*self.state.principal).clone()),
+            io: self.scoped_io(),
             config: Arc::clone(&config),
             slots: u64::try_from(self.state.executor.parallelism().max(1)).unwrap_or(1),
             runtime: self.state.executor.io_handle().clone(),
@@ -1679,6 +1705,46 @@ impl Session {
         Ok((stream, query))
     }
 
+    /// Asks the admission controller for a permit for the query whose
+    /// `system.queries` row is `log_id`. A controller that answers at once
+    /// leaves the row `running`; one that waits shows it `queued`. A refusal
+    /// closes the row as failed with the controller's error class, and a
+    /// caller that drops the query while it is queued closes it `cancelled`.
+    async fn admit(&self, log_id: &str) -> Result<crate::admission::Permit, KrishivError> {
+        let request = QueryRequest {
+            principal: Arc::clone(&self.state.principal),
+            tags: self.state.queries.tags_now(),
+            class: WorkloadClass::Interactive,
+            estimate: None,
+        };
+        let controller = Arc::clone(&self.state.admission);
+        let mut admit = std::pin::pin!(controller.admit(&request));
+        let mut queued = QueuedRow {
+            state: Arc::clone(&self.state),
+            id: log_id,
+            open: true,
+        };
+        let admitted = match std::future::poll_fn(|cx| Poll::Ready(admit.as_mut().poll(cx))).await {
+            Poll::Ready(done) => done,
+            Poll::Pending => {
+                self.state.queries.set_state(log_id, "queued");
+                let done = admit.await;
+                if done.is_ok() {
+                    self.state.queries.set_state(log_id, "running");
+                }
+                done
+            }
+        };
+        queued.open = false;
+        match admitted {
+            Ok(permit) => Ok(permit),
+            Err(error) => {
+                self.state.queries.record_failed_row(log_id, &error);
+                Err(error)
+            }
+        }
+    }
+
     /// As [`Self::run_on_query`], also returning the id of the `system.queries` row this execution
     /// began, so the caller keeps it for itself: the statement's slot in `env` is shared by every
     /// execution of the same analyzed frame.
@@ -1698,11 +1764,12 @@ impl Session {
             .queries
             .begin(env.text.as_deref(), env.statement_class);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        let permit = self.admit(&log_id).await?;
         let id = QueryId(self.state.query_ids.fetch_add(1, Ordering::Relaxed));
         let pool = self
             .state
             .memory
-            .child(&crate::system::pool_name(&log_id), None);
+            .child(&crate::system::pool_name(&log_id), permit.memory_budget());
         let query = QueryContext::new(
             id,
             WorkloadClass::Interactive,
@@ -1726,6 +1793,7 @@ impl Session {
             start: QueryStart::capture(&self.state),
             metrics_on,
             log_id,
+            _permit: permit,
         }));
         match self
             .state
@@ -1904,6 +1972,9 @@ struct QueryFold {
     metrics_on: bool,
     /// The query's id in `system.queries`.
     log_id: String,
+    /// The admission slot, given back when the fold is consumed (the
+    /// stream ended, failed or was dropped).
+    _permit: crate::admission::Permit,
 }
 
 impl QueryFold {
@@ -1915,6 +1986,32 @@ impl QueryFold {
             self.metrics_on,
             &self.log_id,
         );
+    }
+}
+
+/// A query's history row while it waits for admission: dropped before the
+/// controller answered (the caller gave up), it closes the row `cancelled`.
+struct QueuedRow<'a> {
+    state: Arc<SessionState>,
+    id: &'a str,
+    open: bool,
+}
+
+impl Drop for QueuedRow<'_> {
+    fn drop(&mut self) {
+        if self.open {
+            self.state.queries.finish(
+                self.id,
+                &crate::system::Finished {
+                    state: "cancelled",
+                    wall_ns: 0,
+                    peak_memory_bytes: 0,
+                    error_class: None,
+                    operators: Vec::new(),
+                    totals: None,
+                },
+            );
+        }
     }
 }
 
@@ -1985,9 +2082,7 @@ impl Session {
         options: &BTreeMap<String, OptionValue>,
         env: &QueryEnv,
     ) -> Result<krishiv_exec::files::LocatedPath, KrishivError> {
-        let stores = Arc::new(
-            StoreRegistry::new(Arc::clone(&env.config)).with_scope(self.credential_scope()),
-        );
+        let stores = self.scoped_stores(&env.config);
         let at = ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
             self.state.cwd.clone(),
@@ -2130,11 +2225,7 @@ impl Session {
             !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
         let max_records = max_records_per_file(&options, format.name())?;
         let at = self.locate_write_path(text, &options, env)?;
-        let io = self
-            .state
-            .io
-            .context()
-            .with_principal((*self.state.principal).clone());
+        let io = self.scoped_io();
         self.authorize_write_path(&at, &options).await?;
         // A link swapped into the checked path since fails the write
         // before anything is replaced, and again before the commit deletes
@@ -2627,12 +2718,7 @@ impl Session {
             state: Arc::clone(&self.state),
             config: Arc::clone(&env.config),
         }))
-        .with_io(
-            self.state
-                .io
-                .context()
-                .with_principal((*self.state.principal).clone()),
-        )
+        .with_io(self.scoped_io())
         .with_formats(Arc::clone(&self.state.formats))
         .with_config(Arc::clone(&env.config))
     }

@@ -454,8 +454,25 @@ pub fn krishiv_session::PathPrefixPolicy::clone(&self) -> krishiv_session::PathP
 impl core::fmt::Debug for krishiv_session::PathPrefixPolicy
 pub fn krishiv_session::PathPrefixPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::PathPrefixPolicy
-pub fn krishiv_session::PathPrefixPolicy::check<'a>(&'a self, &'a krishiv_plan::analyzer::catalog::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::PathPrefixPolicy::check<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::PathPrefixPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
+pub struct krishiv_session::Permit
+impl krishiv_session::Permit
+pub fn krishiv_session::Permit::memory_budget(&self) -> core::option::Option<usize>
+pub fn krishiv_session::Permit::unlimited() -> Self
+pub fn krishiv_session::Permit::with_memory_budget(self, usize) -> Self
+pub fn krishiv_session::Permit::with_slot(impl core::marker::Send + core::marker::Sync + 'static) -> Self
+impl core::fmt::Debug for krishiv_session::Permit
+pub fn krishiv_session::Permit::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct krishiv_session::QueryRequest
+pub krishiv_session::QueryRequest::class: krishiv_exec::executor::WorkloadClass
+pub krishiv_session::QueryRequest::estimate: core::option::Option<krishiv_session::Estimate>
+pub krishiv_session::QueryRequest::principal: alloc::sync::Arc<krishiv_common::principal::Principal>
+pub krishiv_session::QueryRequest::tags: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+impl core::clone::Clone for krishiv_session::QueryRequest
+pub fn krishiv_session::QueryRequest::clone(&self) -> krishiv_session::QueryRequest
+impl core::fmt::Debug for krishiv_session::QueryRequest
+pub fn krishiv_session::QueryRequest::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::ReadOnlyPolicy
 impl krishiv_session::ReadOnlyPolicy
 pub fn krishiv_session::ReadOnlyPolicy::new(alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>) -> Self
@@ -464,7 +481,7 @@ pub fn krishiv_session::ReadOnlyPolicy::clone(&self) -> krishiv_session::ReadOnl
 impl core::fmt::Debug for krishiv_session::ReadOnlyPolicy
 pub fn krishiv_session::ReadOnlyPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::ReadOnlyPolicy
-pub fn krishiv_session::ReadOnlyPolicy::check<'a>(&'a self, &'a krishiv_plan::analyzer::catalog::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::ReadOnlyPolicy::check<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::ReadOnlyPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
 pub struct krishiv_session::RuntimeConf
 impl krishiv_session::RuntimeConf
@@ -514,11 +531,12 @@ pub fn krishiv_session::Session::fmt(&self, &mut core::fmt::Formatter<'_>) -> co
 pub struct krishiv_session::SessionBuilder
 impl krishiv_session::SessionBuilder
 pub fn krishiv_session::SessionBuilder::access_policy(self, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>) -> Self
+pub fn krishiv_session::SessionBuilder::admission_controller(self, alloc::sync::Arc<dyn krishiv_session::AdmissionController>) -> Self
 pub fn krishiv_session::SessionBuilder::build(self) -> core::result::Result<krishiv_session::Session, krishiv_common::error::KrishivError>
 pub fn krishiv_session::SessionBuilder::config(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 pub fn krishiv_session::SessionBuilder::executor(self, alloc::sync::Arc<dyn krishiv_exec::executor::Executor>) -> Self
 pub fn krishiv_session::SessionBuilder::functions(self, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::FunctionRegistry>) -> Self
-pub fn krishiv_session::SessionBuilder::principal(self, krishiv_plan::analyzer::catalog::Principal) -> Self
+pub fn krishiv_session::SessionBuilder::principal(self, krishiv_common::principal::Principal) -> Self
 pub fn krishiv_session::SessionBuilder::profile(self, krishiv_functions::signature::SparkProfile) -> Self
 impl core::fmt::Debug for krishiv_session::SessionBuilder
 pub fn krishiv_session::SessionBuilder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -571,6 +589,16 @@ impl core::fmt::Debug for krishiv_session::StorageLevel
 pub fn krishiv_session::StorageLevel::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::StorageLevel
 impl core::marker::StructuralPartialEq for krishiv_session::StorageLevel
+pub struct krishiv_session::Unlimited
+impl core::clone::Clone for krishiv_session::Unlimited
+pub fn krishiv_session::Unlimited::clone(&self) -> krishiv_session::Unlimited
+impl core::default::Default for krishiv_session::Unlimited
+pub fn krishiv_session::Unlimited::default() -> krishiv_session::Unlimited
+impl core::fmt::Debug for krishiv_session::Unlimited
+pub fn krishiv_session::Unlimited::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::Unlimited
+impl krishiv_session::AdmissionController for krishiv_session::Unlimited
+pub fn krishiv_session::Unlimited::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
 pub struct krishiv_session::WindowSpec
 impl krishiv_session::WindowSpec
 pub fn krishiv_session::WindowSpec::new() -> Self
@@ -590,6 +618,10 @@ pub fn krishiv_session::WindowSpec::fmt(&self, &mut core::fmt::Formatter<'_>) ->
 impl core::marker::StructuralPartialEq for krishiv_session::WindowSpec
 pub const krishiv_session::VERBOSE_FORMAT: &str
 pub const krishiv_session::VERBOSE_VERSION: u64
+pub trait krishiv_session::AdmissionController: core::marker::Send + core::marker::Sync + core::fmt::Debug
+pub fn krishiv_session::AdmissionController::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
+impl krishiv_session::AdmissionController for krishiv_session::Unlimited
+pub fn krishiv_session::Unlimited::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::dot_of_plan(&krishiv_exec::planner::explain::ExplainNode) -> alloc::string::String
 pub fn krishiv_session::dot_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
 pub fn krishiv_session::mermaid_of_plan(&krishiv_exec::planner::explain::ExplainNode) -> alloc::string::String
