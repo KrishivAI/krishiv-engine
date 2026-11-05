@@ -506,12 +506,12 @@ impl Session {
             .analyzed
             .output
             .iter()
-            .map(|c| StoreColumn {
-                name: c.name.clone(),
-                data_type: krishiv_plan::without_generated_marker(&c.data_type),
-                nullable: c.nullable,
-                default: None,
-                comment: None,
+            .map(|c| {
+                StoreColumn::plain(
+                    c.name.clone(),
+                    krishiv_plan::without_generated_marker(&c.data_type),
+                    c.nullable,
+                )
             })
             .collect();
         if !v.columns.is_empty() {
@@ -906,12 +906,12 @@ impl Session {
                     .analyzed
                     .output
                     .iter()
-                    .map(|c| StoreColumn {
-                        name: c.name.clone(),
-                        data_type: krishiv_plan::without_generated_marker(&c.data_type),
-                        nullable: c.nullable,
-                        default: None,
-                        comment: None,
+                    .map(|c| {
+                        StoreColumn::plain(
+                            c.name.clone(),
+                            krishiv_plan::without_generated_marker(&c.data_type),
+                            c.nullable,
+                        )
                     })
                     .collect();
                 let query_columns = analysis
@@ -1008,17 +1008,14 @@ impl Session {
                     }
                     // Spark alters the data schema: new columns go before the partition columns.
                     let at = changed.data_columns().count();
-                    changed.columns.insert(
-                        at,
-                        StoreColumn {
-                            name: ident.value.clone(),
-                            data_type: def.data_type.to_data_type()?,
-                            // Existing files have no such column: it reads as NULL.
-                            nullable: true,
-                            default: None,
-                            comment: def.comment.clone(),
-                        },
-                    );
+                    // Existing files have no such column: it reads as NULL.
+                    let column = StoreColumn::declared(
+                        ident.value.clone(),
+                        &def.data_type,
+                        None,
+                        def.comment.clone(),
+                    )?;
+                    changed.columns.insert(at, column);
                 }
             }
             AlterTableAction::ChangeColumn {
@@ -1378,13 +1375,12 @@ impl Session {
                         }
                         .into());
                     }
-                    table.columns.push(StoreColumn {
-                        name: ident.value.clone(),
-                        data_type: c.data_type.to_data_type()?,
-                        nullable: true,
-                        default: None,
-                        comment: c.comment.clone(),
-                    });
+                    table.columns.push(StoreColumn::declared(
+                        ident.value.clone(),
+                        &c.data_type,
+                        None,
+                        c.comment.clone(),
+                    )?);
                 }
                 if table.columns.is_empty() {
                     return Err(unsupported("CREATE TABLE without columns"));
@@ -1463,20 +1459,20 @@ impl Session {
             if def.generated.is_some() {
                 return Err(unsupported("generated columns"));
             }
-            columns.push(StoreColumn {
-                name: ident.value.clone(),
-                data_type: def.data_type.to_data_type()?,
-                // File-source tables are nullable whatever the DDL says (Spark 4.2 verified: NOT NULL is dropped
-                // and NULLs are stored), so nothing is enforced on insert.
-                nullable: true,
-                default: def.default.as_ref().map(|e| {
-                    original
-                        .get(e.span.start..e.span.end)
-                        .unwrap_or_default()
-                        .to_owned()
-                }),
-                comment: def.comment.clone(),
+            // File-source tables are nullable whatever the DDL says (Spark 4.2 verified: NOT NULL is dropped and
+            // NULLs are stored), so nothing is enforced on insert.
+            let default = def.default.as_ref().map(|e| {
+                original
+                    .get(e.span.start..e.span.end)
+                    .unwrap_or_default()
+                    .to_owned()
             });
+            columns.push(StoreColumn::declared(
+                ident.value.clone(),
+                &def.data_type,
+                default,
+                def.comment.clone(),
+            )?);
         }
         Ok(columns)
     }
@@ -1642,12 +1638,12 @@ impl Session {
             .analyzed
             .output
             .iter()
-            .map(|c| StoreColumn {
-                name: c.name.clone(),
-                data_type: krishiv_plan::without_generated_marker(&c.data_type),
-                nullable: true,
-                default: None,
-                comment: None,
+            .map(|c| {
+                StoreColumn::plain(
+                    c.name.clone(),
+                    krishiv_plan::without_generated_marker(&c.data_type),
+                    true,
+                )
             })
             .collect();
         let name = TableName {
@@ -1774,12 +1770,12 @@ impl Session {
             (
                 columns
                     .iter()
-                    .map(|c| StoreColumn {
-                        name: c.name.clone(),
-                        data_type: krishiv_plan::without_generated_marker(&c.data_type),
-                        nullable: c.nullable,
-                        default: None,
-                        comment: None,
+                    .map(|c| {
+                        StoreColumn::plain(
+                            c.name.clone(),
+                            krishiv_plan::without_generated_marker(&c.data_type),
+                            c.nullable,
+                        )
                     })
                     .collect(),
                 "parquet".to_owned(),

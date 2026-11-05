@@ -43,6 +43,42 @@ pub(crate) struct StoreColumn {
     /// `INSERT` (Spark keeps column defaults as text).
     pub(crate) default: Option<String>,
     pub(crate) comment: Option<String>,
+    /// The Spark catalog string of a `CHAR(n)` / `VARCHAR(n)` column (`char(5)`, `array<varchar(2)>`; Spark's
+    /// `__CHAR_VARCHAR_TYPE_STRING` field metadata). The column's type is `string`: the length lives here only,
+    /// and the analyzer reads it for the write check and the padding rule (design P2-T001b).
+    pub(crate) char_varchar: Option<String>,
+}
+
+impl StoreColumn {
+    /// A nullable column as DDL declares it: `CHAR`/`VARCHAR` read as `STRING`, the length kept in `char_varchar`.
+    pub(crate) fn declared(
+        name: String,
+        spec: &krishiv_sql::ast::DataTypeSpec,
+        default: Option<String>,
+        comment: Option<String>,
+    ) -> Result<Self, KrishivError> {
+        let (data_type, char_varchar) = spec.to_column_type()?;
+        Ok(Self {
+            name,
+            data_type,
+            nullable: true,
+            default,
+            comment,
+            char_varchar,
+        })
+    }
+
+    /// A column with no default, comment or `CHAR`/`VARCHAR` length: what a query's output gives a table.
+    pub(crate) fn plain(name: String, data_type: DataType, nullable: bool) -> Self {
+        Self {
+            name,
+            data_type,
+            nullable,
+            default: None,
+            comment: None,
+            char_varchar: None,
+        }
+    }
 }
 
 /// A permanent view: its query as SQL text, parsed again at each read (so it follows the tables it reads), and the
@@ -598,6 +634,7 @@ mod tests {
                 nullable: true,
                 default: None,
                 comment: None,
+                char_varchar: None,
             }],
             options: BTreeMap::new(),
             properties: BTreeMap::new(),
