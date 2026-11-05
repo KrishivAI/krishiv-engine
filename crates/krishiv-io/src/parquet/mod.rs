@@ -54,6 +54,7 @@ mod meta;
 mod page_stage;
 mod row_filter;
 mod thrift_guard;
+mod variant;
 mod write;
 
 use std::sync::Arc;

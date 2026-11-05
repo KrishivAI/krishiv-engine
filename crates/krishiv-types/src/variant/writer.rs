@@ -183,6 +183,12 @@ impl VariantWriter {
         self.buf.extend_from_slice(&micros.to_le_bytes());
     }
 
+    /// Appends a UUID (16 bytes, big-endian, as stored in Parquet).
+    pub fn uuid(&mut self, b: [u8; 16]) {
+        self.buf.push(primitive(20));
+        self.buf.extend_from_slice(&b);
+    }
+
     /// Appends binary bytes.
     ///
     /// # Errors
