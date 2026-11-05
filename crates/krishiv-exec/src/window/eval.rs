@@ -147,6 +147,7 @@ pub(super) fn evaluate(
     plan: &WindowPlan,
     slices: &[Slice<'_>],
     ansi: bool,
+    zone: &krishiv_kernels::datetime::ZoneRef,
 ) -> Result<Vec<ArrayRef>> {
     let mut unit = Unit::new(slices)?;
     if has_range_offsets(plan)
@@ -158,6 +159,7 @@ pub(super) fn evaluate(
             key.descending,
             key.nulls_first,
             ansi,
+            zone,
         )?;
     }
     plan.functions

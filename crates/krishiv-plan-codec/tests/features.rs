@@ -52,6 +52,14 @@ fn the_header_lists_exactly_the_features_in_use() {
         ["window", "window_range_bounds"]
     );
     assert_eq!(
+        message("window_range_months").features,
+        ["window", "window_range_month_bounds"]
+    );
+    assert_eq!(
+        message("window_range_day_time").features,
+        ["window", "window_range_day_time_bounds"]
+    );
+    assert_eq!(
         message("aggregate_mode_regr_bit_listagg").features,
         ["mode_regr_bit_listagg_aggs"]
     );
@@ -487,7 +495,29 @@ fn constructs_map_to_one_feature_or_the_baseline() {
             Some(Feature::WindowRangeBounds)
         );
     }
+    assert_eq!(
+        feature_of(Construct::Frame(&frame(
+            FrameBound::RangeMonths(-1),
+            FrameBound::CurrentRow
+        ))),
+        Some(Feature::WindowRangeMonthBounds)
+    );
+    assert_eq!(
+        feature_of(Construct::Frame(&frame(
+            FrameBound::RangeDayTime(-1),
+            FrameBound::CurrentRow
+        ))),
+        Some(Feature::WindowRangeDayTimeBounds)
+    );
+    assert_eq!(
+        Feature::WindowRangeDayTimeBounds.kind(),
+        FeatureKind::Semantic
+    );
     assert_eq!(Feature::WindowRangeBounds.kind(), FeatureKind::Semantic);
+    assert_eq!(
+        Feature::WindowRangeMonthBounds.kind(),
+        FeatureKind::Semantic
+    );
     assert_eq!(Feature::Window.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowFrameOffsets.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowOffsetFunctions.kind(), FeatureKind::Semantic);

@@ -231,12 +231,7 @@ impl Planner<'_> {
             }
             None => sorted,
         };
-        let op = Window::new(
-            Arc::clone(&sorted.schema),
-            window.clone(),
-            self.env.ansi,
-            None,
-        )?;
+        let op = Window::with_env(Arc::clone(&sorted.schema), window.clone(), &self.env, None)?;
         let mut layout = sorted.layout.clone();
         layout.extend(calls.iter().map(|c| c.output.id));
         let names: Vec<String> = calls.iter().map(|c| c.output.name.clone()).collect();
@@ -395,6 +390,9 @@ fn call(e: &Expr) -> Result<Call<'_>> {
                     L::Decimal { unscaled, .. } => Ok(Bound::RangeInt(*unscaled)),
                     L::Float(v) => Ok(Bound::RangeFloat(f64::from(*v).to_bits())),
                     L::Double(v) => Ok(Bound::RangeFloat(v.to_bits())),
+                    L::YearMonthInterval { months, .. } => Ok(Bound::RangeMonths(*months)),
+                    // Only a timestamp key keeps its interval: a date key's bound is whole days in an integer.
+                    L::DayTimeInterval { micros, .. } => Ok(Bound::RangeDayTime(*micros)),
                     _ => Err(unsupported("this RANGE window frame bound")),
                 }
             }
