@@ -324,7 +324,7 @@ pub(super) fn atan2(y: f64, x: f64) -> f64 {
         return x + y;
     }
     let (hx, hy) = (hi(x), hi(y));
-    let (ix, iy) = (hx & 0x7fff_ffff, hy & 0x7fff_ffff);
+    let (ax, ay) = (hx & 0x7fff_ffff, hy & 0x7fff_ffff);
     let (lx, ly) = (lo(x), lo(y));
     // x = 1.0
     if hx.wrapping_sub(0x3ff0_0000) == 0 && lx == 0 {
@@ -333,7 +333,7 @@ pub(super) fn atan2(y: f64, x: f64) -> f64 {
     // 2 * sign(x) + sign(y)
     let m = ((hy >> 31) & 1) | ((hx >> 30) & 2);
     // y = 0
-    if iy == 0 && ly == 0 {
+    if ay == 0 && ly == 0 {
         return match m {
             0 | 1 => y,
             2 => PI + TINY,
@@ -341,7 +341,7 @@ pub(super) fn atan2(y: f64, x: f64) -> f64 {
         };
     }
     // x = 0
-    if ix == 0 && lx == 0 {
+    if ax == 0 && lx == 0 {
         return if hy < 0 {
             -PI_O_2 - TINY
         } else {
@@ -349,8 +349,8 @@ pub(super) fn atan2(y: f64, x: f64) -> f64 {
         };
     }
     // x is infinite
-    if ix == 0x7ff0_0000 {
-        return if iy == 0x7ff0_0000 {
+    if ax == 0x7ff0_0000 {
+        return if ay == 0x7ff0_0000 {
             match m {
                 0 => PI_O_4 + TINY,
                 1 => -PI_O_4 - TINY,
@@ -367,7 +367,7 @@ pub(super) fn atan2(y: f64, x: f64) -> f64 {
         };
     }
     // y is infinite
-    if iy == 0x7ff0_0000 {
+    if ay == 0x7ff0_0000 {
         return if hy < 0 {
             -PI_O_2 - TINY
         } else {
@@ -375,7 +375,7 @@ pub(super) fn atan2(y: f64, x: f64) -> f64 {
         };
     }
     // y / x
-    let k = iy.wrapping_sub(ix) >> 20;
+    let k = ay.wrapping_sub(ax) >> 20;
     let z = if k > 60 {
         PI_O_2 + 0.5 * PI_LO
     } else if hx < 0 && k < -60 {

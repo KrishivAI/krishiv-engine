@@ -4,6 +4,9 @@
 //! zeros, infinities and NaN to ratios beyond 2**60, with the exact doubles
 //! Spark's `Math.atan2` (fdlibm) gave. A result must match in every bit; two
 //! NaNs match.
+//!
+//! Not run under Miri: it reads the fixture file, which Miri's isolation forbids.
+#![cfg(not(miri))]
 
 use std::path::Path;
 
