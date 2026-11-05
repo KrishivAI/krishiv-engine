@@ -31,13 +31,13 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     GroupingColumnMismatch, GroupingIdColumnMismatch, GroupingSizeLimitExceeded,
-    UnsupportedGroupingExpression, WrongNumArgsWithoutSuggestion,
+    UnresolvedAllInGroupBy, UnsupportedGroupingExpression, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_types::DataType;
 
-use super::bind::unsupported;
+use super::bind::{same, unsupported};
 use super::exprs::{Bound, Cx, pretty, semantic_key};
-use super::ops::{col_expr, has_generator};
+use super::ops::{col_expr, contains_aggregate, contains_bare, has_generator, out_attr};
 use super::resolve::{Attr, Env, Rel, Resolver};
 use super::{AnalysisError, ArgType};
 use crate::{
@@ -900,5 +900,48 @@ impl Resolver<'_> {
                     .expr)
             }
         }
+    }
+
+    /// Whether the input has a column, or (with `group_by_aliases`) the
+    /// select list an output, named `all`: then `GROUP BY ALL` names it.
+    pub(super) fn names_all(&self, c: &Rel, items: &[Bound]) -> bool {
+        let cs = self.ctx.conf.case_sensitive;
+        c.out.iter().any(|a| same(&a.col.name, "all", cs))
+            || (self.ctx.conf.group_by_aliases
+                && items
+                    .iter()
+                    .any(|b| same(&out_attr(b, &c.out).col.name, "all", cs)))
+    }
+
+    /// `GROUP BY ALL` over the select list `items`, as Spark's
+    /// `ResolveReferencesInAggregate` infers it: every item without an
+    /// aggregate function groups (scalar subqueries count as groupable:
+    /// Spark's check does not look inside them); when nothing groups, an
+    /// item naming a column outside any aggregate cannot be inferred:
+    /// `UNRESOLVED_ALL_IN_GROUP_BY`. Select items stay named; grouping
+    /// uses the expression computing them. `origin` is the `GROUP BY ALL`
+    /// clause's, as lowering stamps it on the key.
+    pub(super) fn group_by_all(
+        &mut self,
+        items: &[Bound],
+        origin: Origin,
+    ) -> Result<Vec<Bound>, AnalysisError> {
+        let mut group = Vec::new();
+        let mut bare = false;
+        for b in items {
+            let expr = match &b.expr.node {
+                ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => Arc::clone(expr),
+                _ => Arc::clone(&b.expr),
+            };
+            if contains_aggregate(&expr) {
+                bare = bare || contains_bare(&expr);
+            } else {
+                group.push(Bound { expr, ..b.clone() });
+            }
+        }
+        if group.is_empty() && bare {
+            return Err(AnalysisError::new(UnresolvedAllInGroupBy {}, origin));
+        }
+        Ok(group)
     }
 }

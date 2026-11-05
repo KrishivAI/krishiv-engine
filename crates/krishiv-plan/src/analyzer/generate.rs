@@ -643,3 +643,30 @@ impl Resolver<'_> {
         Ok(out)
     }
 }
+
+impl Resolver<'_> {
+    /// A `HAVING` over an aggregate with a generator in the select list and
+    /// windows: the generator runs above the windows, and the `HAVING`
+    /// still filters below them (Spark 4.3; 4.2 filtered the generated rows
+    /// after the windows). `None` when `c` is not such a relation.
+    pub(super) fn having_below_generated(
+        &mut self,
+        p: &crate::LogicalPlan,
+        c: &Rel,
+        predicate: &Arc<Expr>,
+        env: &Arc<super::resolve::Env>,
+    ) -> Result<Option<Rel>, AnalysisError> {
+        if p.origin.sql.is_some()
+            && let Some(from) = c.generated_from.clone()
+            && let Some(info) = from.agg.agg.clone()
+            && info.has_windows()
+            && info.having.is_none()
+        {
+            let below = self.having_below_windows(p, &info, predicate, env)?;
+            return self
+                .generate_over_aggregate(p.origin, &below, &from.generator)
+                .map(Some);
+        }
+        Ok(None)
+    }
+}
