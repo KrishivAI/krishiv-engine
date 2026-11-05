@@ -106,7 +106,8 @@ use crate::credentials::{CredentialCache, two_credential_sources};
 use crate::error::store_failed;
 use crate::error::{Result, unsupported};
 use crate::{
-    CredentialScope, CredentialSource, DEFAULT_REFRESH_SKEW, StoreId, StorePolicy, StoreSettings,
+    CacheScope, CredentialScope, CredentialSource, DEFAULT_REFRESH_SKEW, StoreId, StorePolicy,
+    StoreSettings,
 };
 #[cfg(feature = "cloud")]
 use crate::{RefreshingProvider, RefreshingStore};
@@ -367,6 +368,8 @@ fn parse_hf(scheme: &str, rest: &str) -> Result<ParsedUrl> {
 pub struct StoreRegistry {
     config: Arc<dyn StoreSettings>,
     stores: Mutex<HashMap<StoreId, Arc<dyn ObjectStore>>>,
+    /// Whose credentials the stores read with; the block-cache scope they register under (E15).
+    cache_scope: CacheScope,
     /// Locations with credentials of their own (see [`Self::with_source`]).
     scopes: Vec<ScopeEntry>,
     /// Refresh skew of the sources added next.
@@ -420,7 +423,17 @@ impl StoreRegistry {
             skew: DEFAULT_REFRESH_SKEW,
             scoped_ids: Mutex::new(HashSet::new()),
             release: Mutex::new(Vec::new()),
+            cache_scope: CacheScope::Isolated,
         }
+    }
+
+    /// This registry registering its stores under `scope`, so blocks are reused across the
+    /// queries of one scope (a session passes its principal's) and never across scopes. A
+    /// registry built by [`Self {:new`] is isolated: it shares nothing.
+    #[must_use]
+    pub fn with_cache_scope(mut self, scope: CacheScope) -> Self {
+        self.cache_scope = scope;
+        self
     }
 
     /// Sets how long before their expiry the credentials of the sources added *after* this
@@ -585,6 +598,7 @@ impl StoreRegistry {
             key: url.key,
             display: url.display,
             policy: policy_for(url.scheme),
+            scope: self.cache_scope.clone(),
         })
     }
 }
@@ -653,6 +667,8 @@ pub struct OpenedStore {
     pub display: String,
     /// The pacing policy of the URL's scheme.
     pub policy: StorePolicy,
+    /// Whose credentials the store reads with: the block-cache scope to register it under (E15).
+    pub scope: CacheScope,
 }
 
 impl fmt::Debug for OpenedStore {

@@ -44,6 +44,34 @@ impl Scope {
     }
 }
 
+/// Who may set a config entry once the engine runs (E25). The platform's
+/// policy layer enforces it (a per-group `locked` flag or `min`/`max` bounds
+/// sit on top); the registry records the widest layer that may ever set the
+/// key, so a locked key cannot be moved by a lower layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SettableBy {
+    /// Only at process start (startup file or environment): the key is
+    /// cluster scope and fixed for the life of the compute.
+    Startup,
+    /// By an administrator (a policy per group, class or principal, or a
+    /// session default the admin sets); a user's `SET` is refused. Session
+    /// scope.
+    Admin,
+    /// By the user with `SET`, within the bounds the policy gives.
+    User,
+}
+
+impl SettableBy {
+    /// The name used in docs.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SettableBy::Startup => "startup",
+            SettableBy::Admin => "admin",
+            SettableBy::User => "user",
+        }
+    }
+}
+
 /// The type of a config value and how its string form is parsed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueType {
@@ -379,6 +407,9 @@ pub struct ConfigEntry {
     pub doc: &'static str,
     /// Session or cluster scope.
     pub scope: Scope,
+    /// The widest layer that may set the key: [`SettableBy::Startup`] for
+    /// cluster scope, else [`SettableBy::Admin`] or [`SettableBy::User`].
+    pub settable_by: SettableBy,
     /// Krishiv version that added the entry.
     pub version_added: &'static str,
     /// Spark key accepted as an alias, if any.
@@ -570,8 +601,8 @@ pub fn docs_markdown() -> String {
          Keys under `krishiv.experimental.` are experimental and off by default. \
          Spark aliases are accepted in place of the Krishiv key; other unknown \
          `spark.*` keys produce a warning, unknown `krishiv.*` keys an error.\n\n\
-         | Key | Type | Default | Scope | Since | Spark alias | Description |\n\
-         |---|---|---|---|---|---|---|\n",
+         | Key | Type | Default | Scope | Settable by | Since | Spark alias | Description |\n\
+         |---|---|---|---|---|---|---|---|\n",
     );
     for e in entries {
         let default = e
@@ -580,11 +611,12 @@ pub fn docs_markdown() -> String {
             .map_or_else(|| "(none)".to_owned(), |d| format!("`{d}`"));
         let alias = e.spark_alias.map(|a| format!("`{a}`")).unwrap_or_default();
         out.push_str(&format!(
-            "| `{}` | {} | {} | {} | {} | {} | {} |\n",
+            "| `{}` | {} | {} | {} | {} | {} | {} | {} |\n",
             e.key,
             e.value_type,
             default,
             e.scope.as_str(),
+            e.settable_by.as_str(),
             e.version_added,
             alias,
             e.doc.replace('|', "\\|"),
