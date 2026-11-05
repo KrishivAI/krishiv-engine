@@ -31,6 +31,8 @@ KV = f"csv.`{RES}/kv1.txt` WITH ('delimiter'='\\u0001')"
 KV_SQL = "csv.`{kv}` WITH ('delimiter'='\\u0001')"
 PEOPLE = "csv.`{people}` WITH ('delimiter'=';','header'='{h}')"
 
+P_HDR = PEOPLE.format(h="true", people="{people}")
+P_RAW = PEOPLE.format(h="false", people="{people}")
 VIEW_D = "create temporary view d as select * from values (1,10),(2,20),(3,30) as t(k,v)"
 
 CASES: list[tuple[str, list[str], str]] = [
@@ -40,15 +42,35 @@ CASES: list[tuple[str, list[str], str]] = [
     ("nd_before_det", [], f"select count(*) from {KV_SQL} where rand(7) < 0.3 and cast(_c0 as int) % 2 = 0"),
     ("nd_subquery", [], f"select sum(cast(_c0 as int)) from (select _c0 from {KV_SQL} where rand(11) < 0.2)"),
     ("nd_two_seeds", [], f"select count(*) from {KV_SQL} where rand(1) < 0.5 and rand(2) < 0.5"),
-    ("nd_in_select", [], f"select count(*), sum(cast(_c0 as int)) from (select _c0, rand(5) r from {KV_SQL}) where r < 0.25"),
+    (
+        "nd_in_select",
+        [],
+        f"select count(*), sum(cast(_c0 as int)) from (select _c0, rand(5) r from {KV_SQL}) where r < 0.25",
+    ),
     # (2) HAVING before window functions beside a generator.
     ("gen_window_sum", [VIEW_D], "select k, explode(array(1,2)) x, sum(v) over () s from d group by k, v having k > 1"),
-    ("gen_window_count", [VIEW_D], "select k, explode(array(1,2)) x, count(*) over () c from d group by k having k > 1"),
+    (
+        "gen_window_count",
+        [VIEW_D],
+        "select k, explode(array(1,2)) x, count(*) over () c from d group by k having k > 1",
+    ),
     ("nogen_window_sum", [VIEW_D], "select k, sum(v) over (order by k) s from d group by k, v having k > 1 order by k"),
     # (4) each reference keeps its own options.
-    ("opts_self_join_header_first", [], f"select a.name, b._c0 from {PEOPLE.format(h='true', people='{people}')} a join {PEOPLE.format(h='false', people='{people}')} b on true order by 1, 2"),
-    ("opts_self_join_header_second", [], f"select a._c0, b.name from {PEOPLE.format(h='false', people='{people}')} a join {PEOPLE.format(h='true', people='{people}')} b on true order by 1, 2"),
-    ("opts_union", [], f"select name from {PEOPLE.format(h='true', people='{people}')} union all select _c0 from {PEOPLE.format(h='false', people='{people}')} order by 1"),
+    (
+        "opts_self_join_header_first",
+        [],
+        f"select a.name, b._c0 from {P_HDR} a join {P_RAW} b on true order by 1, 2",
+    ),
+    (
+        "opts_self_join_header_second",
+        [],
+        f"select a._c0, b.name from {P_RAW} a join {P_HDR} b on true order by 1, 2",
+    ),
+    (
+        "opts_union",
+        [],
+        f"select name from {P_HDR} union all select _c0 from {P_RAW} order by 1",
+    ),
 ]
 
 
@@ -67,8 +89,10 @@ def run(remote: str) -> list[dict]:
             case = {"id": cid, "setup": setup, "sql": sql}
             try:
                 rows = [[None if v is None else str(v) for v in r] for r in spark.sql(real).collect()]
-                case["rows"] = rows if cid.endswith(("_first", "_second", "union")) or "order by" in sql else sorted(rows)
-            except Exception as e:  # noqa: BLE001
+                case["rows"] = (
+                    rows if cid.endswith(("_first", "_second", "union")) or "order by" in sql else sorted(rows)
+                )
+            except Exception as e:
                 msg = str(e)
                 m = re.search(r"\[([A-Z_.]+)\]", msg)
                 case["error_class"] = m.group(1) if m else "UNKNOWN"
