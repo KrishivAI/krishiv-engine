@@ -2,12 +2,7 @@
   "cases": {
     "subqueries": [
       8,
-      9,
-      13,
-      14,
-      15,
-      16,
-      17
+      9
     ]
   },
   "file": "subquery/in-subquery/in-count-bug",

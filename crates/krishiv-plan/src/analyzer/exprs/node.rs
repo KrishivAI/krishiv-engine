@@ -1548,8 +1548,12 @@ impl Resolver<'_> {
     /// `v IN (correlated global aggregate)`: the aggregate has exactly one
     /// row for each outer row (a count of nothing is 0), so the `IN` is
     /// `v = (scalar subquery)`, which the scalar path decorrelates with
-    /// its count-bug handling. Any other `IN` is returned as it came.
+    /// its count-bug handling. Any other `IN` is returned as it came, and so is every `IN` under
+    /// `decorrelateExistsSubqueryLegacyIncorrectCountHandling`, which groups the aggregate by the correlation.
     fn in_global_aggregate(&self, e: Arc<Expr>) -> Arc<Expr> {
+        if self.ctx.conf.decorrelate_exists_legacy_count {
+            return e;
+        }
         let ExprNode::Subquery {
             kind: SubqueryKind::In(values),
             plan,

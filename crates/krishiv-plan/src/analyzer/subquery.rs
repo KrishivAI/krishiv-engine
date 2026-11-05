@@ -135,8 +135,7 @@ impl Renumber {
         }
     }
 
-    /// `e`, a predicate of a branch's attributes and of outer references,
-    /// reading the outer references as the renumbered domain columns.
+    /// `e`, a predicate of a branch's attributes and outer references, the latter read as the renumbered domain columns.
     fn outer(self, e: &Arc<Expr>) -> Arc<Expr> {
         let out = Arc::clone(e).transform_up(&mut |x: Arc<Expr>| {
             Ok::<_, std::convert::Infallible>(match &x.node {
@@ -150,9 +149,8 @@ impl Renumber {
         out.unwrap_or_else(|never| match never {})
     }
 
-    /// `e`, an expression of the right side's attributes and of the outer
-    /// query's (the left side): right ones renumbered, outer references
-    /// read as plain columns of the left side.
+    /// `e`, over the right side's attributes and the outer query's (the left side): right ones renumbered, outer
+    /// references read as plain columns of the left side.
     fn inner(self, e: &Arc<Expr>) -> Arc<Expr> {
         let out = Arc::clone(e).transform_up(&mut |x: Arc<Expr>| {
             Ok::<_, std::convert::Infallible>(match &x.node {
@@ -208,8 +206,7 @@ fn subqueries(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     out
 }
 
-/// `e` without the origins of its nodes, so equal expressions written in
-/// two places compare equal.
+/// `e` without the origins of its nodes, so equal expressions written in two places compare equal.
 fn without_origins(e: &Arc<Expr>) -> Arc<Expr> {
     let out = Arc::clone(e).transform_up(&mut |x: Arc<Expr>| {
         Ok::<_, std::convert::Infallible>(Arc::new(Expr::new(x.node.clone())))
@@ -234,12 +231,10 @@ fn disjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     out
 }
 
-/// `e` with the conjuncts every disjunct of a top-level `OR` holds taken
-/// out: `(a AND b) OR (a AND c)` is `a AND (b OR c)`, which is three-valued
-/// exact. `e` itself when it is no disjunction or the disjuncts share no
-/// conjunct. A nondeterministic predicate is left whole: factoring moves
-/// part of it below the join, where it would run once per inner row instead
-/// of once per joined pair.
+/// `e` with the conjuncts every disjunct of a top-level `OR` holds taken out: `(a AND b) OR (a AND c)` is
+/// `a AND (b OR c)`, which is three-valued exact. `e` itself when it is no disjunction or the disjuncts share no
+/// conjunct. A nondeterministic predicate is left whole: factoring moves part of it below the join, where it
+/// would run once per inner row instead of once per joined pair.
 fn factor_or(e: &Arc<Expr>) -> Arc<Expr> {
     let parts = disjuncts(e);
     if parts.len() < 2 || !super::sqlfn::is_deterministic(e) {
@@ -673,6 +668,9 @@ impl Rewriter {
     /// the subquery has exactly one row for every outer row, so it is
     /// `v = (scalar subquery)` (negated: `NOT (v = ...)`, the same NULLs).
     fn single_row_in(&mut self, c: &Arc<Expr>) -> Option<Arc<Expr>> {
+        if self.legacy_exists_count {
+            return None; // the legacy count handling groups it by the correlation (`pull`)
+        }
         let (negated, inner) = match not_arg(c) {
             Some(x) => (true, x),
             None => (false, c),
@@ -1332,15 +1330,17 @@ impl Rewriter {
                     self.pull(input, false)
                 }
             }
-            // `IN (SELECT agg ... WHERE k = o GROUP BY g)`: the aggregate
-            // runs per `(g, k)`, so each outer row meets the groups of its
-            // own `k`. Only equalities keep that reading, and a global
-            // aggregate (one row even for no input) would not.
+            // `IN (SELECT agg ... WHERE k = o GROUP BY g)`: the aggregate runs per `(g, k)`, so each outer row
+            // meets the groups of its own `k`. Only equalities keep that reading, and a global aggregate (one
+            // row even for no input) would not, except as the legacy count handling reads it.
             PlanNode::Aggregate {
                 input,
                 grouping: Grouping::GroupBy(keys),
                 aggregates,
-            } if keep && !keys.is_empty() && !keys.iter().any(|k| has_outer(Node::Expr(k))) => {
+            } if keep
+                && (!keys.is_empty() || self.legacy_exists_count)
+                && !keys.iter().any(|k| has_outer(Node::Expr(k))) =>
+            {
                 let (inner, corr) = self.pull(input, true)?;
                 if !corr.iter().all(is_outer_equality) {
                     return Err(unsupported(
