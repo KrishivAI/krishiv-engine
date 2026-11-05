@@ -140,3 +140,43 @@ fn fast_parse_review_regressions() {
         None
     );
 }
+
+/// The second review round, each value read from the Spark 4.2.0 oracle
+/// (`enableDateTimeParsingFallback=false`).
+#[test]
+fn fast_parse_second_review_regressions() {
+    let ts = |zone: &str, text: &str, pattern: &str| {
+        let rules = resolve_zone(zone).unwrap();
+        DateTimePattern::new_fast(pattern)
+            .parse_timestamp(text, &rules)
+            .unwrap()
+    };
+    let day =
+        |text: &str, pattern: &str| DateTimePattern::new_fast(pattern).parse_date(text).unwrap();
+    let la = "America/Los_Angeles";
+    // A lenient fraction is added after the wall time picks its offset.
+    assert_eq!(
+        ts(la, "2024-11-03 00:59:59.2000", "yyyy-MM-dd HH:mm:ss.SSS"),
+        Some(1_730_620_801_000_000)
+    );
+    assert_eq!(
+        ts(la, "2024-11-03 00:59:59.0000", "yyyy-MM-dd HH:mm:ss.SSS"),
+        Some(1_730_620_799_000_000)
+    );
+    // Month 13 carries into the next year for week-based patterns too.
+    assert_eq!(
+        ts(la, "2024-13-1-1", "yyyy-MM-W-u"),
+        Some(1_735_545_600_000_000)
+    );
+    // A date past the microsecond range still reads as a day.
+    assert_eq!(day("999999-01-01", "yyyy-MM-dd"), Some(364_522_607));
+    // The cutover calendar follows the requested day.
+    assert_eq!(day("1582-10-15", "yyyy-MM-dd"), Some(-141_427));
+    assert_eq!(day("1582-10-05", "yyyy-MM-dd"), Some(-141_427));
+    assert_eq!(day("1582-10-31", "yyyy-MM-dd"), Some(-141_411));
+    assert_eq!(day("1582-300", "yyyy-DDD"), Some(-141_405));
+    assert_eq!(
+        ts(la, "1582-10-15 01:02:03", "yyyy-MM-dd HH:mm:ss"),
+        Some(-12_219_260_699_000_000)
+    );
+}

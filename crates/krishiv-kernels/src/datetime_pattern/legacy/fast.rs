@@ -33,9 +33,9 @@
 
 use super::super::unsupported;
 use super::{
-    LONG_DAYS, LegacyPattern, MICROS_PER_DAY, MICROS_PER_SECOND, MONTHS, Mode, Parsed, SHORT_DAYS,
-    Tok, Unmatched, ZONE_STRINGS, Zone_, days_from_civil, java_digit, label_of_real, name_at,
-    prefix, real_day, zone, zone_iso,
+    LONG_DAYS, LegacyPattern, MICROS_PER_SECOND, MONTHS, Mode, Parsed, SHORT_DAYS, Tok, Unmatched,
+    ZONE_STRINGS, Zone_, days_from_civil, java_digit, label_of_real, name_at, prefix, real_day,
+    zone, zone_iso,
 };
 use crate::cast::{FixedOffset, TimeZoneRules};
 use krishiv_common::error::KrishivError;
@@ -100,18 +100,32 @@ impl LegacyPattern {
         u32::try_from(n.min(30)).unwrap_or(30)
     }
 
-    /// `s` as an instant (`LegacyFastTimestampFormatter.parse`).
+    /// `s` as an instant (`LegacyFastTimestampFormatter.parse`): the
+    /// fraction is added after the calendar instant is resolved
+    /// (`extractMicros`), so it never moves a wall time across a DST change.
     pub(super) fn fast_instant(&self, s: &str, session: &dyn TimeZoneRules) -> Option<i64> {
         let (local, zone) = self.fast_fields(s, true)?;
-        zone_instant(local?, zone, session).ok()
+        let local = local?;
+        let offset = zone_offset(local.secs, zone, session).ok()?;
+        local
+            .secs
+            .checked_sub(i64::from(offset))?
+            .checked_mul(MICROS_PER_SECOND)?
+            .checked_add(local.fraction)
     }
 
     /// `s` as a day (`LegacyFastDateFormatter.parse`): the day of the instant
-    /// in UTC.
+    /// in UTC, kept in seconds so that a day outside the microsecond range
+    /// still reads.
     pub(super) fn fast_date(&self, s: &str) -> Option<i32> {
         let (local, zone) = self.fast_fields(s, false)?;
-        let instant = zone_instant(local?, zone, &FixedOffset(0)).ok()?;
-        i32::try_from(instant.div_euclid(MICROS_PER_DAY)).ok()
+        let local = local?;
+        let offset = zone_offset(local.secs, zone, &FixedOffset(0)).ok()?;
+        let secs = local
+            .secs
+            .checked_sub(i64::from(offset))?
+            .checked_add(local.fraction.div_euclid(MICROS_PER_SECOND))?;
+        i32::try_from(secs.div_euclid(86_400)).ok()
     }
 
     /// The local label time and the zone `s` names; `scaled` reads `S` as a
@@ -120,7 +134,7 @@ impl LegacyPattern {
         &self,
         s: &str,
         scaled: bool,
-    ) -> Option<(Option<i64>, Option<Zone_>)> {
+    ) -> Option<(Option<Local>, Option<Zone_>)> {
         if self.broken {
             return None;
         }
@@ -353,39 +367,52 @@ fn fast_zone(text: &[char], pos: usize) -> Option<(usize, Zone_)> {
     best.map(|(end, offset)| (end, Zone_::Offset(offset)))
 }
 
-/// The instant of a local label time in `zone`, or the session's.
-fn zone_instant(
-    local: i64,
+/// The UTC offset, in seconds, that a local label time of `local_secs` has
+/// in `zone`, or in the session's.
+fn zone_offset(
+    local_secs: i64,
     zone: Option<Zone_>,
     session: &dyn TimeZoneRules,
-) -> Result<i64, Unmatched> {
-    let shift = |offset: i32| {
-        local
-            .checked_sub(i64::from(offset) * MICROS_PER_SECOND)
-            .ok_or(Unmatched::Overflow)
-    };
+) -> Result<i32, Unmatched> {
     match zone {
         None => {
             // A lenient calendar puts a time in an overlap on the later
             // instant (the smaller valid offset) and one in a gap on the
             // offset before the change.
-            let secs = local.div_euclid(MICROS_PER_SECOND);
-            let before = session.offset_at_utc(secs.saturating_sub(86_400));
-            let after = session.offset_at_utc(secs.saturating_add(86_400));
-            let valid = |o: i32| session.offset_at_utc(secs.saturating_sub(i64::from(o))) == o;
-            let offset = [before, after]
+            let before = session.offset_at_utc(local_secs.saturating_sub(86_400));
+            let after = session.offset_at_utc(local_secs.saturating_add(86_400));
+            let valid =
+                |o: i32| session.offset_at_utc(local_secs.saturating_sub(i64::from(o))) == o;
+            Ok([before, after]
                 .into_iter()
                 .filter(|&o| valid(o))
                 .min()
-                .unwrap_or(before);
-            shift(offset)
+                .unwrap_or(before))
         }
-        Some(Zone_::Offset(o)) => shift(o),
+        Some(Zone_::Offset(o)) => Ok(o),
         Some(Zone_::Region(id)) => match crate::datetime::resolve_zone(&id) {
-            Ok(z) => zone_instant(local, None, &z),
+            Ok(z) => zone_offset(local_secs, None, &z),
             Err(_) => Err(Unmatched::Text),
         },
-        Some(Zone_::Standard { raw, dst, .. }) => shift(raw + dst),
+        Some(Zone_::Standard { raw, dst, .. }) => Ok(raw + dst),
+    }
+}
+
+/// A resolved local label time: whole seconds, and the fraction (in
+/// microseconds) that is added once the zone is applied.
+pub(super) struct Local {
+    /// Seconds since the epoch of the label time, fraction left out.
+    pub(super) secs: i64,
+    /// The fractional part, in microseconds.
+    pub(super) fraction: i64,
+}
+
+impl Local {
+    /// The label time in microseconds, or `None` past the `i64` range.
+    pub(super) fn micros(&self) -> Option<i64> {
+        self.secs
+            .checked_mul(MICROS_PER_SECOND)?
+            .checked_add(self.fraction)
     }
 }
 
@@ -394,7 +421,7 @@ fn resolve(
     st: &Parsed,
     fraction_digits: Option<u32>,
     this_year: i64,
-) -> Option<(Option<i64>, Option<Zone_>)> {
+) -> Option<(Option<Local>, Option<Zone_>)> {
     let _ = this_year;
     let raw_year = st.year.map_or(1970, |(y, _)| y);
     let year = if st.era_bc { 1 - raw_year } else { raw_year };
@@ -422,7 +449,7 @@ fn resolve(
             let y = year.checked_add(month0.div_euclid(12))?;
             let month = u32::try_from(month0.rem_euclid(12) + 1).ok()?;
             let first = days_from_civil(y, month, 1)?;
-            real_day(first, y, month, 1).checked_add(st.dom.map_or(1, |(d, _)| d) - 1)?
+            cutover_day(first, y, month, st.dom.map_or(1, |(d, _)| d) - 1)?
         }
     };
     // `HOUR_OF_DAY`, or `HOUR` with `AM_PM` when `AM_PM` was set last.
@@ -448,13 +475,24 @@ fn resolve(
     };
     let seconds = ((hour.checked_mul(60)?.checked_add(st.minute.unwrap_or(0))?).checked_mul(60)?)
         .checked_add(st.second.unwrap_or(0))?;
-    let tod = seconds
-        .checked_mul(MICROS_PER_SECOND)?
-        .checked_add(fraction)?;
-    let total = real.checked_mul(MICROS_PER_DAY)?.checked_add(tod)?;
-    let days = label_of_real(total.div_euclid(MICROS_PER_DAY));
+    let total = real.checked_mul(86_400)?.checked_add(seconds)?;
+    let days = label_of_real(total.div_euclid(86_400));
     let local = days
-        .checked_mul(MICROS_PER_DAY)
-        .and_then(|d| d.checked_add(total.rem_euclid(MICROS_PER_DAY)));
+        .checked_mul(86_400)
+        .and_then(|d| d.checked_add(total.rem_euclid(86_400)))
+        .map(|secs| Local { secs, fraction });
     Some((local, st.zone.clone()))
+}
+
+/// The real epoch day of `first` (the label day of the month's or year's
+/// first) plus `offset` days. A lenient `GregorianCalendar` adds the offset
+/// on the Gregorian side first and falls back to the Julian one only when
+/// that lands before the cutover (`1582-10-15` is the 15th, not the 25th).
+/// Day of year does not do this: the oracle reads `1582-300` as Nov 6.
+fn cutover_day(first: i64, year: i64, month: u32, offset: i64) -> Option<i64> {
+    let gregorian = first.checked_add(offset)?;
+    if gregorian >= super::CUTOVER_DAYS {
+        return Some(gregorian);
+    }
+    real_day(first, year, month, 1).checked_add(offset)
 }

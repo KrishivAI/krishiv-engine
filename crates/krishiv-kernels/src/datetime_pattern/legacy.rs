@@ -5,7 +5,7 @@
 //! (a month 13 or a February 30 is no timestamp). Spark's JSON, CSV and XML
 //! options use commons-lang's `FastDateFormat` instead, a lenient parser and
 //! its own printer letters: that is the `fast` flag of [`LegacyPattern`],
-//! modelled in the [`fast`] submodule.
+//! modelled in the `fast` submodule.
 //!
 //! Spark rebases the proleptic value to the hybrid calendar keeping the
 //! date-time labels, so a field that is the label itself (year, month, day,
@@ -67,7 +67,7 @@ pub struct LegacyPattern {
     today: (i64, u32, u32),
     /// Set for Spark's JSON, CSV and XML options: commons-lang
     /// `FastDateFormat` prints and a lenient `FastDateParser` reads (see
-    /// [`fast`]), instead of the SQL functions' `SimpleDateFormat`.
+    /// `fast`), instead of the SQL functions' `SimpleDateFormat`.
     fast: bool,
     /// A fast pattern Spark fails to build while reading: its formatter is
     /// lazy, so the failure surfaces per value and the lenient fallback
@@ -458,7 +458,7 @@ impl LegacyPattern {
             return Ok(self
                 .fast_fields(s, true)
                 .filter(|(_, zone)| allow_zone || zone.is_none())
-                .and_then(|(local, _)| local));
+                .and_then(|(local, _)| local.and_then(|l| l.micros())));
         }
         Ok(self
             .parse_fields(s, None)
@@ -931,7 +931,11 @@ impl Parsed {
     fn week_real(&self, year: i64, mode: Mode) -> Option<i64> {
         let on_or_before = |d: i64, dow: i64| d - (dow_sun1(d) - dow).rem_euclid(7);
         // Real epoch days: the Julian calendar's before the cutover.
-        let first_of = |month: u32| {
+        // A lenient calendar carries a month past December into the year.
+        let month0 = self.month0.map_or(0, |(v, _)| v);
+        let year_m = year.checked_add(month0.div_euclid(12))?;
+        let month_m = u32::try_from(month0.rem_euclid(12) + 1).ok()?;
+        let first_of = |month: u32, year: i64| {
             days_from_civil(year, month, 1).map(|label| real_day(label, year, month, 1))
         };
         let week_start = |first: i64| {
@@ -946,17 +950,16 @@ impl Parsed {
         };
         match mode {
             Mode::Wom => {
-                let m = u32::try_from(self.month0.map_or(0, |(v, _)| v) + 1).ok()?;
-                let first = first_of(m)?;
+                let first = first_of(month_m, year_m)?;
                 Some(week_start(first) + 7 * (self.wom?.0 - 1))
             }
             Mode::Woy => {
-                let first = first_of(1)?;
+                let first = first_of(1, year)?;
                 Some(week_start(first) + 7 * (self.woy.map_or(1, |w| w.0) - 1))
             }
             _ => {
-                let m = u32::try_from(self.month0.map_or(0, |(v, _)| v) + 1).ok()?;
-                let first = first_of(m)?;
+                let (m, year) = (month_m, year_m);
+                let first = first_of(m, year)?;
                 let dow = self.dow.map_or(1, |(d, _)| d);
                 let n = self.dowim.map_or(1, |(v, _)| v);
                 if n >= 0 {
