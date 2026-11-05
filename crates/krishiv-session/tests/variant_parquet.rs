@@ -121,3 +121,37 @@ fn written_variants_read_back_unchanged() {
         assert_eq!(read(&s, &out), expected(name), "{name}");
     }
 }
+
+/// Spark 4.2.0 reads the file Krishiv writes from `shredded-nested.parquet`
+/// (`krishiv-written.parquet`) to the values it reads from the original:
+/// `krishiv-written.json` is Spark's answers for it
+/// (`tests/scripts/variant_parquet_read.scala`). With
+/// `KRISHIV_WRITE_FIXTURES=1` the file is written again first (then rerun
+/// the Spark script).
+#[test]
+fn spark_reads_what_krishiv_writes() {
+    let dir = fixtures();
+    if std::env::var_os("KRISHIV_WRITE_FIXTURES").is_some() {
+        let s = session();
+        let df = s.read().parquet([dir
+            .join("shredded-nested.parquet")
+            .to_str()
+            .unwrap()
+            .to_owned()]);
+        let tmp = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("out");
+        block_on(df.write().parquet(out.to_str().unwrap())).unwrap();
+        let part = std::fs::read_dir(&out)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.extension().is_some_and(|x| x == "parquet"))
+            .unwrap();
+        std::fs::copy(part, dir.join("krishiv-written.parquet")).unwrap();
+    }
+    assert_eq!(expected("krishiv-written"), expected("shredded-nested"));
+    // And Krishiv reads its own file the same way.
+    assert_eq!(
+        read(&session(), &dir.join("krishiv-written.parquet")),
+        expected("shredded-nested")
+    );
+}
