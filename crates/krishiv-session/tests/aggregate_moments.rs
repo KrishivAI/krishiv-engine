@@ -444,14 +444,44 @@ fn corr_of_a_constant_column_follows_ansi() -> R {
     Ok(())
 }
 
-/// The window form is not implemented: it is refused, never computed
-/// as another function.
+/// Variance and standard deviation as window aggregates over the whole
+/// partition: Spark 4.2 values (`testData` rows with neither column NULL).
 #[test]
-fn moment_window_aggregates_are_refused() -> R {
+fn variance_window_aggregates_match_spark() -> R {
     let s = session()?;
-    let e = run(&s, "SELECT stddev(a) OVER (PARTITION BY b) FROM testData")
-        .expect_err("not implemented");
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    let (_, batches) = run(
+        &s,
+        "SELECT stddev(a) OVER (PARTITION BY b), var_pop(a) OVER (PARTITION BY b), \
+         var_samp(a) OVER (PARTITION BY b), stddev_pop(a) OVER (PARTITION BY b) \
+         FROM testData WHERE a IS NOT NULL AND b IS NOT NULL",
+    )?;
+    let (schema, rows) = render(&batches[0].schema(), &batches);
+    assert!(schema.starts_with("struct<stddev(a) OVER"), "{schema}");
+    assert_eq!(rows.len(), 6);
+    for row in &rows {
+        assert_eq!(row, "1.0\t0.6666666666666666\t1.0\t0.816496580927726");
+    }
+    Ok(())
+}
+
+/// The other moment aggregates, and variance over a running or sliding frame,
+/// have no window form yet: refused, never computed as another function.
+#[test]
+fn other_moment_window_aggregates_are_refused() -> R {
+    let s = session()?;
+    for q in [
+        "SELECT kurtosis(a) OVER (PARTITION BY b) FROM testData",
+        "SELECT skewness(a) OVER (PARTITION BY b) FROM testData",
+        "SELECT stddev(a) OVER (PARTITION BY b ORDER BY a ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM testData",
+        "SELECT var_samp(a) OVER (PARTITION BY b ORDER BY a ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM testData",
+    ] {
+        let e = run(&s, q).expect_err("not implemented");
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{q}"
+        );
+    }
     Ok(())
 }
 
