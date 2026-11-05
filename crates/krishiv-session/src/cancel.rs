@@ -142,18 +142,23 @@ impl Ord for Deadline {
 }
 
 /// The deadlines of one runtime's queries and the one task that fires them:
-/// a min-heap of `(instant, query)` held weakly, so a deadline never keeps a
-/// query (or the runtime) alive. A new deadline earlier than the heap's head
-/// wakes the task; a query that ended is skipped when its deadline comes.
-/// The task is aborted when the runtime drops.
+/// a min-heap of `(instant, query)` with the queries held weakly, so a
+/// deadline never keeps a query alive. A new deadline earlier than the
+/// heap's head wakes the task; a query that ended is skipped when its
+/// deadline comes, and every [`SWEEP_EVERY`] additions drop the entries of
+/// ended queries, so a long limit does not let them pile up. The task holds
+/// the heap weakly and is aborted when the runtime drops.
 pub(crate) struct Deadlines {
     shared: Arc<Shared>,
+    wake: Arc<Notify>,
     task: TaskHandle,
 }
 
+/// Additions between two sweeps of ended queries' deadlines.
+const SWEEP_EVERY: u64 = 1024;
+
 struct Shared {
     heap: Mutex<BinaryHeap<Reverse<Deadline>>>,
-    wake: Notify,
     seq: AtomicU64,
     history: Arc<QueryHistory>,
 }
@@ -177,24 +182,25 @@ impl Deadlines {
     pub(crate) fn start(executor: &dyn Executor, history: Arc<QueryHistory>) -> Self {
         let shared = Arc::new(Shared {
             heap: Mutex::new(BinaryHeap::new()),
-            wake: Notify::new(),
             seq: AtomicU64::new(0),
             history,
         });
+        let wake = Arc::new(Notify::new());
         let task = executor.spawn(
             WorkloadClass::Background,
-            Box::pin(run(Arc::downgrade(&shared))),
+            Box::pin(run(Arc::downgrade(&shared), Arc::clone(&wake))),
         );
-        Self { shared, task }
+        Self { shared, wake, task }
     }
 
     /// Cancels `query` with `KRISHIV_QUERY_TIMEOUT` once `limit` has passed
     /// from now, unless it ended first.
     pub(crate) fn add(&self, query: &Arc<QueryContext>, limit: Duration, session: &str, id: &str) {
         let at = TokioClock.now() + limit;
+        let seq = self.shared.seq.fetch_add(1, Ordering::Relaxed);
         let deadline = Deadline {
             at,
-            seq: self.shared.seq.fetch_add(1, Ordering::Relaxed),
+            seq,
             query: Arc::downgrade(query),
             limit,
             session: Arc::from(session),
@@ -205,13 +211,16 @@ impl Deadlines {
             .heap
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        if seq % SWEEP_EVERY == SWEEP_EVERY - 1 {
+            heap.retain(|Reverse(d)| d.query.strong_count() > 0);
+        }
         let earliest = heap.peek().is_none_or(|Reverse(head)| at < head.at);
         heap.push(Reverse(deadline));
         drop(heap);
         if earliest {
             // A stored permit if the task is not waiting yet: it re-reads
             // the heap before it sleeps again.
-            self.shared.wake.notify_one();
+            self.wake.notify_one();
         }
     }
 }
@@ -222,9 +231,10 @@ impl Drop for Deadlines {
     }
 }
 
-/// The timer task: holds only a weak handle, so it never keeps the runtime's
-/// deadlines alive.
-async fn run(shared: Weak<Shared>) {
+/// The timer task: holds the heap weakly (the runtime's [`Deadlines`] owns
+/// it) and the wake-up strongly; it ends when the heap is gone or when it is
+/// aborted.
+async fn run(shared: Weak<Shared>, wake: Arc<Notify>) {
     loop {
         let Some(s) = shared.upgrade() else {
             return;
@@ -252,9 +262,9 @@ async fn run(shared: Weak<Shared>) {
                 );
             }
         }
-        let wake = Arc::clone(&s);
+        // Not held while waiting: only the runtime keeps the heap alive.
         drop(s);
-        let notified = wake.wake.notified();
+        let notified = wake.notified();
         match next.map(|at| TokioClock.sleep_until(at)) {
             Some(Ok(sleep)) => {
                 futures::future::select(Box::pin(notified), sleep).await;
@@ -262,6 +272,32 @@ async fn run(shared: Weak<Shared>) {
             // No deadline (or no timer to sleep on): wait for one to arrive.
             Some(Err(_)) | None => notified.await,
         }
-        drop(wake);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use krishiv_exec::{ExecutorConfig, TokioExecutor};
+
+    use super::*;
+
+    /// Dropping the runtime's deadlines ends the timer task: nothing it
+    /// holds keeps the heap alive, and the task is aborted.
+    #[test]
+    fn dropping_the_deadlines_stops_the_timer() {
+        let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+        let deadlines = Deadlines::start(&*executor, Arc::new(QueryHistory::default()));
+        let heap = Arc::downgrade(&deadlines.shared);
+        let wake = Arc::downgrade(&deadlines.wake);
+        drop(deadlines);
+        let until = Instant::now() + Duration::from_secs(10);
+        while wake.upgrade().is_some() {
+            assert!(
+                Instant::now() < until,
+                "the timer task outlived its deadlines"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(heap.upgrade().is_none());
     }
 }

@@ -73,7 +73,7 @@ impl Session {
             return 0;
         }
         // Under the runtime's registry lock: a query that registers after
-        // this is refused there (`EngineRuntime::track`), so none slips
+        // this is refused there (`EngineRuntime::attach`), so none slips
         // between the flag and the cancellation.
         self.state.runtime.cancel_session(self.state.number)
     }
@@ -186,7 +186,8 @@ impl Session {
 
     /// Cancels the running query `id` of this session (Spark Connect's
     /// `Interrupt` by operation id): its stream ends with
-    /// `OPERATION_CANCELED` at its next batch boundary, and
+    /// `OPERATION_CANCELED` at its next batch boundary (a query whose
+    /// execution has not begun fails as it begins), and
     /// `system.queries.cancel_reason` shows `user`. Whether a running query
     /// was cancelled: `false` for an unknown id, a query that ended or one
     /// of another session.
@@ -215,5 +216,56 @@ impl Session {
         self.state
             .runtime
             .cancel_where(crate::CancelReason::User, |s, _| s == number)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use krishiv_exec::{ExecConfig, QueryContext, QueryId, WorkloadClass};
+
+    use super::*;
+
+    /// A cancel that arrives after a query's row exists and before its
+    /// context does is applied as the context attaches: the query fails at
+    /// once with the reason's error, and its row names the reason.
+    #[test]
+    fn a_cancel_before_the_context_fails_the_query_at_once() {
+        let s = Session::new().unwrap();
+        let id = s.state.queries.begin_as(Some("q"), None, None);
+        let runtime = &s.state.runtime;
+        let index = runtime.reserve(s.state.number, s.state.queries.session_id(), &id);
+        let ids = runtime.cancel_where(crate::CancelReason::User, |_, q| q == id);
+        assert_eq!(ids.len(), 1);
+        let query = QueryContext::new(
+            QueryId(index),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            s.state.memory.child("q", None),
+        );
+        s.attach(&query, &id, &Config::new()).unwrap();
+        assert_eq!(
+            query.check_cancelled().unwrap_err().error_class().name(),
+            "OPERATION_CANCELED"
+        );
+        let row = s
+            .state
+            .queries
+            .snapshot(false)
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert_eq!(row.cancel_reason, Some("user"));
+        // Attaching on a closed session is refused.
+        let late = s.state.queries.begin_as(Some("late"), None, None);
+        let index = runtime.reserve(s.state.number, s.state.queries.session_id(), &late);
+        s.close();
+        let query = QueryContext::new(
+            QueryId(index),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            s.state.memory.child("late", None),
+        );
+        let e = s.attach(&query, &late, &Config::new()).unwrap_err();
+        assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_CLOSED");
     }
 }

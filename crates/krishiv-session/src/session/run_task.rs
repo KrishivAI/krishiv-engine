@@ -29,7 +29,7 @@ impl Session {
         let state = Arc::clone(&self.state);
         let config = Arc::clone(&env.config);
         self.on_executor(async move {
-            let id = QueryId(state.runtime.reserve(state.number, "", "task"));
+            let id = QueryId(state.runtime.next_index());
             let pool = state.memory.child(&format!("query-task-{}", id.0), None);
             let query = QueryContext::new(
                 id,

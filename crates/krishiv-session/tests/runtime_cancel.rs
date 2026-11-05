@@ -95,8 +95,6 @@ fn a_statement_timeout_ends_the_stream_with_krishiv_query_timeout() {
         started.elapsed()
     );
     assert_eq!(settled(&s, LONG), ["cancelled|timeout"]);
-    // The class is in the cancel family.
-    s.conf().unset("krishiv.query.maxExecutionTime").unwrap();
 }
 
 #[test]
@@ -279,4 +277,70 @@ fn a_cancel_feeds_the_cancel_latency_histogram() {
         assert!(Instant::now() < deadline, "no cancel latency observed");
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// No part file of a write that a timeout or an operator stopped.
+fn part_files(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir).map_or(0, |entries| {
+        entries
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().starts_with("part-"))
+            .count()
+    })
+}
+
+#[test]
+fn a_write_cancelled_for_any_reason_leaves_no_files() {
+    let out = tempfile::tempdir().unwrap();
+    // Timeout.
+    let s = Session::new().unwrap();
+    let path = out.path().join("timeout");
+    let df = block_on(s.sql_with(
+        LONG,
+        QueryOptions::new().deadline(Duration::from_millis(300)),
+    ))
+    .unwrap();
+    let e = block_on(df.write().format("parquet").save(path.to_str().unwrap())).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_QUERY_TIMEOUT");
+    assert_eq!(part_files(&path), 0);
+    // An operator's kill, from another thread while the write runs.
+    let rt = EngineRuntime::builder().build().unwrap();
+    let s = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let path = out.path().join("admin");
+    let writer = {
+        let path = path.clone();
+        std::thread::spawn(move || {
+            let df = block_on(s.sql_with(LONG, QueryOptions::new().operation_id(OP))).unwrap();
+            block_on(df.write().format("parquet").save(path.to_str().unwrap()))
+        })
+    };
+    let id = QueryId::parse(OP).unwrap();
+    let until = Instant::now() + Duration::from_secs(30);
+    while !rt.cancel(&id, CancelReason::Admin) {
+        assert!(Instant::now() < until, "the write never started");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let e = writer.join().unwrap().unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_QUERY_KILLED");
+    assert_eq!(part_files(&path), 0);
+}
+
+#[test]
+fn a_dropped_stream_is_not_a_timed_cancellation() {
+    let s = Session::builder()
+        .config("krishiv.metrics.enabled", "true")
+        .build()
+        .unwrap();
+    let stream = running(&s, QueryOptions::new());
+    drop(stream);
+    // The query's fold has run once its row settled.
+    assert_eq!(settled(&s, LONG), ["cancelled|-"]);
+    let samples: u64 = s
+        .metrics()
+        .histograms
+        .iter()
+        .filter(|h| h.name == "krishiv.query.cancel.latency")
+        .map(|h| h.count)
+        .sum();
+    assert_eq!(samples, 0);
 }

@@ -168,7 +168,8 @@ pub struct QueryContext {
     /// set only when it was the query's first error: drivers end with it
     /// instead of a plain `OPERATION_CANCELED`.
     cancel_error: OnceLock<KrishivError>,
-    /// When the query was first cancelled or failed.
+    /// When the query was cancelled with a reason ([`Self::cancel_with`]):
+    /// a dropped stream or a failure is not a cancellation to time.
     cancelled_at: OnceLock<Instant>,
     metrics: Mutex<QueryMetrics>,
     /// When execution started (the runner sets it): pipeline times are
@@ -279,12 +280,14 @@ impl QueryContext {
                 false
             }
         };
-        self.cancelled_at.get_or_init(Instant::now);
+        if first {
+            self.cancelled_at.get_or_init(Instant::now);
+        }
         self.cancel.cancel();
         first
     }
 
-    /// When the query was first cancelled or failed, if it was.
+    /// When the query was cancelled with a reason, if it was.
     pub fn cancelled_at(&self) -> Option<Instant> {
         self.cancelled_at.get().copied()
     }
@@ -298,7 +301,6 @@ impl QueryContext {
                 *slot = Some(error);
             }
         }
-        self.cancelled_at.get_or_init(Instant::now);
         self.cancel.cancel();
     }
 
