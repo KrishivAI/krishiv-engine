@@ -44,6 +44,7 @@ use krishiv_exec::physical::{HashScheme, Partitioning, PhysNode, PhysicalPlan, P
 use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
 use krishiv_plan::{Expr, ExprNode, FunctionId, Literal, ResolvedExpr};
 use krishiv_types::DataType;
+use krishiv_types::arrow::SPARK_TYPE_METADATA_KEY;
 
 /// The `min_reader_version` of a plan that uses no feature (the epoch-1
 /// baseline): the format of version 2.
@@ -118,6 +119,8 @@ macro_rules! registry {
 // (id, variant, legacy level, kind, meaning)
 registry! {
     (aggregate_filter, AggregateFilter, POST_MIGRATION_READER_VERSION, Semantic, "An aggregate's `FILTER (WHERE ...)` mask column."),
+    (any_value_by_aggregates, AnyValueByAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The `any_value`, `max_by` and `min_by` aggregates."),
+    (collated_strings, CollatedStrings, POST_MIGRATION_READER_VERSION, Semantic, "STRING types with a collation other than UTF8_BINARY, by canonical name."),
     (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
@@ -137,7 +140,9 @@ registry! {
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (mode_regr_bit_listagg_aggs, ModeRegrBitListaggAggs, POST_MIGRATION_READER_VERSION, Semantic, "The `mode`, regression (`regr_*`), bitwise (`bit_and`, `bit_or`, `bit_xor`), `listagg`/`string_agg` and `try_sum`/`try_avg` aggregates."),
+    (moment_aggregates, MomentAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The moment aggregates (`stddev_samp`, `stddev_pop`, `var_samp`, `var_pop`, `skewness`, `kurtosis`, `corr`, `covar_samp`, `covar_pop`)."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (options_map_literals, OptionsMapLiterals, POST_MIGRATION_READER_VERSION, Semantic, "A `MAP<STRING, STRING>` literal: the options of one call (`from_json`, `from_csv`, `from_xml`)."),
     (partial_aggregate, PartialAggregate, POST_MIGRATION_READER_VERSION, Optimization, "Partial aggregates below a join, whose states a later aggregate merges (eager aggregation)."),
     (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout)."),
     (percentile_aggregates, PercentileAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The percentile family and `approx_count_distinct` aggregates (`percentile`, `percentile_approx`, `percentile_disc`, `approx_count_distinct` with their folded parameters)."),
@@ -206,6 +211,10 @@ pub enum Construct<'a> {
     /// a subquery's value, a runtime filter's key, a window offset function's
     /// value, the plan's output schema).
     ArrowType(&'a arrow_schema::DataType),
+    /// An Arrow field the plan carries as IPC bytes (a field of the plan's
+    /// output schema or of an aggregate's result element, or a child field
+    /// of an Arrow type): its metadata can name the Spark type.
+    ArrowField(&'a arrow_schema::Field),
     /// A lambda expression or variable: the bound body of a higher-order
     /// function's argument.
     Lambda,
@@ -226,8 +235,38 @@ fn type_feature(t: &DataType) -> Option<Feature> {
         DataType::YearMonthInterval { .. }
         | DataType::DayTimeInterval { .. }
         | DataType::CalendarInterval => Some(Feature::IntervalTypes),
+        DataType::CollatedString(_) => Some(Feature::CollatedStrings),
         _ => t.is_nested().then_some(Feature::NestedTypes),
     }
+}
+
+/// Whether `t` is or holds a collated string.
+fn collated(t: &DataType) -> bool {
+    match t {
+        DataType::CollatedString(_) => true,
+        DataType::Array(a) => collated(a.element_type()),
+        DataType::Map(m) => collated(m.key_type()) || collated(m.value_type()),
+        DataType::Struct(s) => s.fields().iter().any(|x| collated(x.data_type())),
+        _ => false,
+    }
+}
+
+/// Whether an Arrow field's [`SPARK_TYPE_METADATA_KEY`] tag names a type
+/// that is or holds a collated string: the carrier (`Utf8View`) alone says
+/// `string`. A malformed tag is the reader's to refuse, not a feature.
+fn collated_field(field: &arrow_schema::Field) -> bool {
+    field
+        .metadata()
+        .get(SPARK_TYPE_METADATA_KEY)
+        .and_then(|tag| krishiv_types::parse_data_type(tag).ok())
+        .is_some_and(|t| collated(&t))
+}
+
+/// `field`, its type and every field and type inside it as constructs: the
+/// tag of a field at any depth can name a collated type.
+fn visit_arrow_field<'a>(field: &'a arrow_schema::Field, f: &mut impl FnMut(Construct<'a>)) {
+    f(Construct::ArrowField(field));
+    visit_arrow(field.data_type(), f);
 }
 
 /// `t` and every type inside it (array elements, map keys and values, struct
@@ -255,10 +294,10 @@ fn visit_arrow<'a>(t: &'a arrow_schema::DataType, f: &mut impl FnMut(Construct<'
         | A::FixedSizeList(x, _)
         | A::ListView(x)
         | A::LargeListView(x)
-        | A::Map(x, _) => visit_arrow(x.data_type(), f),
-        A::Struct(fields) => fields.iter().for_each(|x| visit_arrow(x.data_type(), f)),
+        | A::Map(x, _) => visit_arrow_field(x, f),
+        A::Struct(fields) => fields.iter().for_each(|x| visit_arrow_field(x, f)),
         A::Dictionary(_, v) => visit_arrow(v, f),
-        A::RunEndEncoded(_, v) => visit_arrow(v.data_type(), f),
+        A::RunEndEncoded(_, v) => visit_arrow_field(v, f),
         _ => {}
     }
 }
@@ -402,6 +441,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // arm walks the element, key, value and field types, so that
         // `array<variant>` needs it too.
         Construct::Type(t) => type_feature(t),
+        Construct::ArrowField(field) => collated_field(field).then_some(Feature::CollatedStrings),
         Construct::ArrowType(t) => {
             if arrow_time(t) {
                 Some(Feature::TimeType)
@@ -414,6 +454,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         Construct::Expr(e) => match &e.node {
             ExprNode::Resolved(ResolvedExpr::Field { .. }) => Some(Feature::StructField),
             ExprNode::Literal(Literal::CalendarInterval { .. }) => Some(Feature::IntervalTypes),
+            ExprNode::Literal(Literal::Map(_)) => Some(Feature::OptionsMapLiterals),
             // The year-month and day-time literal kinds predate the feature,
             // so a bare one stays baseline: whatever reads its column names
             // the interval type. As an argument nothing else may name it, and
@@ -454,10 +495,8 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::Min
             | AggregateFunction::Max
             | AggregateFunction::First { .. }
-            | AggregateFunction::Last { .. }
-            // These are not encodable yet: the encoder refuses them, so
-            // none reaches a worker.
-            | AggregateFunction::StddevSamp
+            | AggregateFunction::Last { .. } => None,
+            AggregateFunction::StddevSamp
             | AggregateFunction::StddevPop
             | AggregateFunction::VarSamp
             | AggregateFunction::VarPop
@@ -465,10 +504,10 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::Kurtosis
             | AggregateFunction::Corr
             | AggregateFunction::CovarSamp
-            | AggregateFunction::CovarPop
-            | AggregateFunction::AnyValue { .. }
+            | AggregateFunction::CovarPop => Some(Feature::MomentAggregates),
+            AggregateFunction::AnyValue { .. }
             | AggregateFunction::MaxBy
-            | AggregateFunction::MinBy => None,
+            | AggregateFunction::MinBy => Some(Feature::AnyValueByAggregates),
             AggregateFunction::CollectList
             | AggregateFunction::CollectSet
             | AggregateFunction::VectorSum
@@ -513,6 +552,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
 fn aggregate_constructs<'a>(a: &'a AggregateExpr, f: &mut impl FnMut(Construct<'a>)) {
     f(Construct::Aggregate(a));
     f(Construct::AggregateFunction(&a.function));
+    if let Some(element) = &a.element {
+        visit_arrow_field(element, f);
+    }
 }
 
 /// Calls `f` with `node` and each construct inside it (not its children).
@@ -757,7 +799,7 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
         stack.extend(node.children());
     }
     for field in plan.schema().fields() {
-        visit_arrow(field.data_type(), &mut |c| out.extend(feature_of(c)));
+        visit_arrow_field(field, &mut |c| out.extend(feature_of(c)));
     }
     if has_moment && plan.env().legacy_statistical_aggregate {
         out.insert(Feature::LegacyStatisticalAggregate);

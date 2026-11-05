@@ -837,3 +837,21 @@ fn deterministic_order_is_off_by_default_and_parses() {
     );
     assert!(c.set("krishiv.deterministicOrder", "sometimes").is_err());
 }
+
+#[test]
+fn plan_round_trip_is_off_by_default_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&EXEC_DEBUG_PLAN_ROUND_TRIP),
+        Some(&ConfigValue::Bool(false))
+    );
+    c.set("krishiv.exec.debug.planRoundTrip", "true").unwrap();
+    assert_eq!(
+        c.get(&EXEC_DEBUG_PLAN_ROUND_TRIP),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert!(
+        c.set("krishiv.exec.debug.planRoundTrip", "sometimes")
+            .is_err()
+    );
+}

@@ -922,6 +922,9 @@ impl HashJoin {
                 )));
             }
         }
+        for f in &filters {
+            values.filter_options(f.filter.id(), f.options)?;
+        }
         shared.runtime = filters;
         shared.publisher = Some(FilterPublisher { values, producer });
         Ok(self)

@@ -5,7 +5,8 @@
 //! directories). A statement that newly fails is a
 //! regression; a listed statement that passes must leave the list (it only shrinks). Refresh
 //! the list with `cargo run -p krishiv-testkit --bin golden-report -- --engine session
-//! --ratchet update`.
+//! --ratchet update`. The nightly serialize-through job runs the same ratchet with every plan
+//! encoded to `krishiv.plan.v1` and decoded before it runs (P2-T173).
 #![forbid(unsafe_code)]
 
 use krishiv_testkit::golden::known_failures::KnownFailures;
@@ -18,6 +19,22 @@ type R = Result<(), Box<dyn std::error::Error>>;
 
 #[test]
 fn session_engine_matches_the_frozen_baseline() -> R {
+    matches_the_frozen_baseline(SessionEngine::new().map_err(|e| e.message)?)
+}
+
+/// The same baseline with `krishiv.exec.debug.planRoundTrip` on: the wire format carries every
+/// plan the goldens run, and the results are those of the plan as planned.
+#[test]
+#[ignore = "nightly serialize-through job (P2-T173); run with --ignored"]
+fn serialize_through_matches_the_frozen_baseline() -> R {
+    matches_the_frozen_baseline(
+        SessionEngine::new()
+            .map_err(|e| e.message)?
+            .with_plan_round_trip(),
+    )
+}
+
+fn matches_the_frozen_baseline(mut engine: SessionEngine) -> R {
     let known = KnownFailures::load(&KnownFailures::default_path())?;
     assert_eq!(known.spark_tag, DEFAULT_TAG);
     let unused = known.unused_categories();
@@ -25,7 +42,6 @@ fn session_engine_matches_the_frozen_baseline() -> R {
     let manifest = ExclusionManifest::load(&ExclusionManifest::default_path())?;
     assert!(manifest.frozen, "the exclusion manifest is frozen");
     let set = GoldenSet::scan(&GoldenSet::tag_dir(DEFAULT_TAG))?;
-    let mut engine = SessionEngine::new().map_err(|e| e.message)?;
     let result = run(&mut engine, &set, &manifest)?;
     assert!(result.failed_files.is_empty(), "{:?}", result.failed_files);
     let timeouts: Vec<String> = result

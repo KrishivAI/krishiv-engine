@@ -72,15 +72,25 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("legacy_time_parser").features,
         ["legacy_time_parser"]
     );
-    // Every registered feature occurs in some inventory case, except
-    // `legacy_statistical_aggregate`: it fires only around a moment
-    // aggregate, and the encoder refuses every moment aggregate (pinned by
-    // the TPC-DS ratchet), so no encodable case can use it. The test below
-    // pins its `plan_features` rule on plans that are never encoded.
+    assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
+    assert_eq!(
+        message("options_map_literal").features,
+        ["options_map_literals"]
+    );
+    assert_eq!(
+        message("aggregate_any_value").features,
+        ["any_value_by_aggregates"]
+    );
+    assert_eq!(
+        message("aggregate_max_min_by").features,
+        ["any_value_by_aggregates", "nested_types"]
+    );
+    assert_eq!(
+        message("aggregate_moments_legacy_statistical").features,
+        ["legacy_statistical_aggregate", "moment_aggregates"]
+    );
+    // Every registered feature occurs in some inventory case.
     for f in Feature::ALL {
-        if *f == Feature::LegacyStatisticalAggregate {
-            continue;
-        }
         assert!(
             cases().iter().any(|(_, p)| plan_features(p).contains(f)),
             "{f}: no inventory case uses it"
@@ -111,10 +121,9 @@ fn a_feature_in_a_subquery_plan_counts() {
 }
 
 /// `legacy_statistical_aggregate` fires only for a plan that sets the flag
-/// around a moment aggregate. The flag alone changes nothing the encoder
-/// can write (it refuses every moment aggregate), so such plans list no
-/// feature: a reader without it keeps reading them, and the flag itself
-/// still round-trips.
+/// around a moment aggregate. The flag alone changes nothing a worker
+/// computes, so such plans list no feature: a reader without it keeps
+/// reading them, and the flag itself still round-trips.
 #[test]
 fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
     use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
@@ -160,14 +169,33 @@ fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
         decode_with(&bytes, &Limits::default(), &without).unwrap(),
         flag_only
     );
-    // A moment aggregate without the flag lists none either.
-    assert!(plan_features(&plan_of(aggregate_node())).is_empty());
+    // A moment aggregate without the flag lists only its own feature.
+    assert_eq!(
+        plan_features(&plan_of(aggregate_node()))
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [Feature::MomentAggregates]
+    );
     // Both together list the feature: in an aggregate node, ...
     let with_both = plan_of_env(aggregate_node(), legacy());
     assert_eq!(
         plan_features(&with_both).into_iter().collect::<Vec<_>>(),
-        [Feature::LegacyStatisticalAggregate]
+        [
+            Feature::LegacyStatisticalAggregate,
+            Feature::MomentAggregates
+        ]
     );
+    // A reader with the moments but without the flag refuses it naming
+    // the flag: it would give NULL where the plan asks for NaN.
+    let bytes = encode(&with_both).unwrap();
+    let moments_only = ReaderFeatures::only([Feature::MomentAggregates]);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &moments_only).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["legacy_statistical_aggregate".to_owned()]
+        }
+    );
+    assert_eq!(decode(&bytes).unwrap(), with_both);
     // ... in a window function, ...
     let window = plan_of_env(
         PhysNode::Window {
@@ -187,7 +215,11 @@ fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
     );
     assert_eq!(
         plan_features(&window).into_iter().collect::<Vec<_>>(),
-        [Feature::LegacyStatisticalAggregate, Feature::Window]
+        [
+            Feature::LegacyStatisticalAggregate,
+            Feature::MomentAggregates,
+            Feature::Window
+        ]
     );
     // ... and in a subquery plan ...
     let subquery = plan_of_env(
@@ -204,7 +236,10 @@ fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
     );
     assert_eq!(
         plan_features(&subquery).into_iter().collect::<Vec<_>>(),
-        [Feature::LegacyStatisticalAggregate]
+        [
+            Feature::LegacyStatisticalAggregate,
+            Feature::MomentAggregates
+        ]
     );
     // ... but never for another aggregate under the flag.
     let plain = plan_of_env(
@@ -378,6 +413,24 @@ fn constructs_map_to_one_feature_or_the_baseline() {
             &krishiv_exec::aggregate::AggregateFunction::ApproxCountDistinct { p: 14 }
         )),
         Some(Feature::PercentileAggregates)
+    );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::CovarPop
+        )),
+        Some(Feature::MomentAggregates)
+    );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::AnyValue { ignore_nulls: true }
+        )),
+        Some(Feature::AnyValueByAggregates)
+    );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::First { ignore_nulls: true }
+        )),
+        None
     );
     // A frame needs a feature only for an offset bound: the `Window`
     // node's format carries the others, `CURRENT ROW` at both ends included.
@@ -731,6 +784,21 @@ fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
             missing: vec!["percentile_aggregates".to_owned()]
         }
     );
+    // Likewise the moment and the `any_value`/`max_by`/`min_by` plans.
+    for (case, feature) in [
+        ("aggregate_moments", "moment_aggregates"),
+        ("aggregate_any_value", "any_value_by_aggregates"),
+        ("aggregate_max_min_by", "any_value_by_aggregates"),
+    ] {
+        let bytes = encode(&cases().into_iter().find(|(n, _)| n == case).unwrap().1).unwrap();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &reader).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec![feature.to_owned()]
+            },
+            "{case}"
+        );
+    }
 }
 
 #[test]
@@ -1520,4 +1588,122 @@ fn a_shared_plans_constructs_are_in_the_header() {
     assert!(features.contains(&Feature::Window), "{features:?}");
     assert!(features.contains(&Feature::SharedSubplan), "{features:?}");
     assert_eq!(decode(&encode(&plan).unwrap()).unwrap(), plan);
+}
+
+/// A collated string needs `collated_strings` wherever the plan names it:
+/// a Spark type, a nested type's JSON, or the tag of an Arrow field at any
+/// depth (the carrier, `Utf8View`, alone says `string`).
+#[test]
+fn collated_strings_need_their_feature_wherever_they_appear() {
+    use krishiv_types::arrow::SPARK_TYPE_METADATA_KEY;
+    use krishiv_types::{Collation, DataType};
+    assert_eq!(message("collated_scan").features, ["collated_strings"]);
+    assert_eq!(
+        message("collated_nested").features,
+        ["collated_strings", "nested_types"]
+    );
+    assert_eq!(
+        message("collated_output").features,
+        ["collated_strings", "nested_types"]
+    );
+    let lcase = inventory::collated("UTF8_LCASE");
+    assert_eq!(
+        feature_of(Construct::Type(&lcase)),
+        Some(Feature::CollatedStrings)
+    );
+    assert_eq!(feature_of(Construct::Type(&DataType::String)), None);
+    let tagged = |tag: &str| {
+        arrow_schema::Field::new("s", arrow_schema::DataType::Utf8View, true).with_metadata(
+            std::collections::HashMap::from([(SPARK_TYPE_METADATA_KEY.to_owned(), tag.to_owned())]),
+        )
+    };
+    let field = lcase.to_arrow_field("s", true);
+    assert_eq!(field, tagged("string collate UTF8_LCASE"));
+    assert_eq!(
+        feature_of(Construct::ArrowField(&field)),
+        Some(Feature::CollatedStrings)
+    );
+    for plain in [
+        DataType::String.to_arrow_field("s", true),
+        tagged("string"),
+        tagged("not a type"),
+    ] {
+        assert_eq!(feature_of(Construct::ArrowField(&plain)), None, "{plain:?}");
+    }
+    assert_eq!(Feature::CollatedStrings.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::CollatedStrings.legacy_level(), 6);
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::CollatedStrings),
+    );
+    for case in ["collated_scan", "collated_nested", "collated_output"] {
+        let bytes = message(case).encode_to_vec();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["collated_strings".to_owned()]
+            },
+            "{case}"
+        );
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == case).unwrap();
+        assert_eq!(decode(&bytes).unwrap(), plan, "{case}");
+    }
+    // A header that hides the type is corrupt.
+    let mut m = message("collated_scan");
+    m.features.clear();
+    m.min_reader_version = 2;
+    corrupt(
+        &m,
+        "the feature header does not match the plan's constructs",
+    );
+    // The indeterminate collation of a mixed expression is the analyzer's,
+    // never a plan's.
+    let indeterminate = DataType::CollatedString(Collation::INDETERMINATE);
+    let mut plan = inventory::file_scan();
+    plan.scan.output[0].data_type = indeterminate;
+    assert!(matches!(
+        encode(&plan_of(PhysNode::Scan(plan))),
+        Err(CodecError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn a_decoded_collation_is_checked() {
+    use pb::data_type::Kind;
+    // `collated_scan`'s first output column is `string collate UTF8_LCASE`.
+    let edit = |change: &dyn Fn(&mut pb::DataType)| {
+        let mut m = message("collated_scan");
+        let Some(pb::node::Kind::Scan(scan)) = m.nodes[0].kind.as_mut() else {
+            panic!("not a scan");
+        };
+        change(scan.output[0].data_type.as_mut().unwrap());
+        m
+    };
+    let named =
+        |name: &'static str| edit(&move |t: &mut pb::DataType| t.collation = name.to_owned());
+    assert_eq!(
+        message("collated_scan").nodes[0].kind,
+        named("UTF8_LCASE").nodes[0].kind
+    );
+    assert!(decode(&named("UNICODE_CI").encode_to_vec()).is_ok());
+    // Only the canonical name the encoder writes: the bytes re-encode the
+    // same.
+    for name in [
+        "utf8_lcase",
+        "SYSTEM.BUILTIN.UTF8_LCASE",
+        "UNICODE_CS",
+        "UTF8_BINARY",
+        "null",
+        "",
+        "NOPE",
+    ] {
+        corrupt(&named(name), "an invalid collation");
+    }
+    let on_string = edit(&|t: &mut pb::DataType| t.kind = Kind::String as i32);
+    corrupt(
+        &on_string,
+        "a collation on a type that is not a collated string",
+    );
 }

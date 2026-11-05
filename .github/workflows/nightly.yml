@@ -326,6 +326,32 @@ jobs:
           KRISHIV_YIELD_TPCH_SF: "1"
         run: "cargo test -p krishiv-exec --release --locked --test yield_discipline tpch_suite_counts_no_stalls -- --nocapture"
 
+  # The serialize-through mode (`krishiv.exec.debug.planRoundTrip`, P2-T173):
+  # the Spark golden ratchet with every plan encoded to `krishiv.plan.v1` and
+  # decoded before it runs. PR CI runs the TPC-H 22 the same way
+  # (`krishiv-session` test `plan_round_trip`) and round-trips the TPC-H and
+  # TPC-DS plans (`krishiv-plan-codec` test `ratchet`).
+  serialize-through:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: Pinned tools (sccache)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: sccache@0.18.0
+      - name: Golden ratchet through the wire format
+        run: "cargo test -p krishiv-testkit --release --locked --test golden_ratchet serialize_through_matches_the_frozen_baseline -- --ignored"
+
   # cargo-fuzz targets (`fuzz/`), one hour each: the reusable `fuzz.yml`
   # (regression replay, cached corpus, crash triage). The weekly long run is
   # `fuzz-weekly.yml`.
