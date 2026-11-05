@@ -56,6 +56,13 @@ def _ratios(by_engine: dict[str, dict], engine: str, reference: str) -> dict[str
     return out
 
 
+def compared(ladder: dict[float, dict[str, dict]], engine: str, reference: str = REFERENCE) -> int:
+    """How many (query, consecutive scale pair) ratios could be compared for ``engine``."""
+    sfs = sorted(ladder)
+    per = {sf: _ratios(ladder[sf], engine, reference) for sf in sfs}
+    return sum(len(per[lo].keys() & per[hi].keys()) for lo, hi in itertools.pairwise(sfs))
+
+
 def flagged(ladder: dict[float, dict[str, dict]], engine: str, reference: str = REFERENCE) -> list[dict]:
     """Queries whose ``engine``/``reference`` ratio grew by more than ``GROWTH_FLAG`` between consecutive scale
     factors, each as ``{"query", "from_sf", "to_sf", "from_ratio", "to_ratio", "growth"}``."""
@@ -96,8 +103,16 @@ def render_ladder(ladder: dict[float, dict[str, dict]], reference: str = REFEREN
     for e in engines:
         rows = flagged(ladder, e, reference)
         L += [f"## {e}", ""]
+        n = compared(ladder, e, reference)
+        if n == 0:
+            L += [
+                f"**No comparison was possible:** no query has a successful `{e}` and `{reference}` result at two "
+                "consecutive scale factors.",
+                "",
+            ]
+            continue
         if not rows:
-            L += ["No query is flagged.", ""]
+            L += [f"No query is flagged ({n} comparisons).", ""]
             continue
         L += ["| Query | From SF | To SF | Ratio before | Ratio after | Growth |", "|---|---|---|---|---|---|"]
         L += [

@@ -379,3 +379,65 @@ def test_ladder_refuses_results_of_different_datasets(tmp_path: Path):
 def test_ladder_refuses_h2o_suites():
     with pytest.raises(SystemExit, match="no scale factor"):
         ladder.load_ladder("h2o-groupby")
+
+
+def test_a_child_that_already_existed_is_reaped_without_charging_its_old_reads(tmp_path: Path):
+    """What a child read before ``start()`` is not the window's, though the parent absorbs it when it reaps it."""
+    data = tmp_path / "blob"
+    data.write_bytes(os.urandom(4 * 2**20))
+    child = f"d = open({str(data)!r}, 'rb').read(); print('read', flush=True); input()"
+    code = (
+        "import subprocess, sys\n"
+        f"p = subprocess.Popen([sys.executable, '-c', {child!r}],\n"
+        "    stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)\n"
+        "p.stdout.readline()\n"
+        "print('ready', flush=True); sys.stdin.readline()\n"
+        "p.stdin.write('\\n'); p.stdin.flush(); p.wait()\n"
+        "print('done', flush=True); sys.stdin.readline()\n"
+    )
+    p = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    assert p.stdin is not None
+    assert p.stdout is not None
+    try:
+        assert p.stdout.readline().strip() == "ready"
+        tree = TreeProc(p.pid, interval_s=0.01)
+        tree.start()
+        p.stdin.write("\n")
+        p.stdin.flush()
+        assert p.stdout.readline().strip() == "done"
+        tree.stop()
+        assert tree.io is not None
+        assert tree.io.rchar < 2**20  # not the child's 4 MiB
+    finally:
+        p.stdin.write("\n")
+        p.stdin.close()
+        p.wait(timeout=10)
+
+
+def test_ladder_says_when_nothing_could_be_compared():
+    lad = _ladder(_result("krishiv", 1, {"q": 1.0}), _result("krishiv", 10, {"q": 9.0}))
+    md = ladder.render_ladder(lad)
+    assert "No comparison was possible" in md
+    assert "No query is flagged" not in md
+
+
+def test_ladder_counts_the_comparisons_behind_an_empty_result():
+    lad = _ladder(
+        _result("duckdb", 1, {"q": 1.0}),
+        _result("krishiv", 1, {"q": 1.0}),
+        _result("duckdb", 10, {"q": 1.0}),
+        _result("krishiv", 10, {"q": 1.1}),
+    )
+    assert "No query is flagged (1 comparisons)" in ladder.render_ladder(lad)
+
+
+def test_report_shows_the_cache_mode_and_warns_on_a_mix():
+    from krishiv_bench.report import cache_mode_lines
+
+    warm = {"cold": {"enabled": False}}
+    cold = {"cold": {"enabled": True}}
+    assert cache_mode_lines({"duckdb": warm, "krishiv": warm}) == ["- Page cache: duckdb warm, krishiv warm"]
+    mixed = cache_mode_lines({"duckdb": warm, "krishiv": cold})
+    assert mixed[0] == "- Page cache: duckdb warm, krishiv cold"
+    assert any("not comparable" in line for line in mixed)
+    assert cache_mode_lines({"old": {}}) == ["- Page cache: old warm"]  # results from before --cold

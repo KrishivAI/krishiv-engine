@@ -260,7 +260,10 @@ class TreeProc:
             total = IoCounters()
             for pid, c in self._io.items():
                 if pid not in alive and self._ppid.get(pid) in alive:
-                    continue  # reaped by a parent still in the tree: that parent's counters hold it
+                    # reaped by a parent still in the tree: the parent's counters hold its lifetime I/O, of which
+                    # what it had done before the window is not the window's
+                    total = total - self._io0.get(pid, zero)
+                    continue
                 total = total + (c - self._io0.get(pid, zero))
             self.io = total
         return peak

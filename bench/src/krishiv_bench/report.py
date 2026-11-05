@@ -34,6 +34,15 @@ def _gb(x):
     return "n/a" if x is None else f"{x / 2**30:.2f}"
 
 
+def cache_mode_lines(results: dict[str, dict]) -> list[str]:
+    """The cache mode of each result, with a warning when cold (``--cold``) and warm results are mixed."""
+    modes = {e: ("cold" if r.get("cold", {}).get("enabled") else "warm") for e, r in results.items()}
+    lines = ["- Page cache: " + ", ".join(f"{e} {m}" for e, m in modes.items())]
+    if len(set(modes.values())) > 1:
+        lines += ["", "**Warning: cold and warm results are mixed; their ratios are not comparable.**", ""]
+    return lines
+
+
 def render(results: dict[str, dict], baseline: str | None = None) -> str:
     engines = list(results)
     if not engines:
@@ -50,6 +59,7 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
         f"- Dataset: {first['dataset']['name']} SF{fmt_sf(first['dataset']['scale_factor'])}, generator `{first['dataset'].get('generator')}`, manifest sha256 `{(first['dataset'].get('manifest_sha256') or 'n/a')[:16]}`",
         f"- Iterations: {first['iterations']} timed + {first['warmup']} discarded warm-up runs per query; p99 is nearest-rank (== max for < 100 samples)",
         "- Absolute numbers from a shared laptop are for relative A/B only (see krishiv-benchmark skill).",
+        *cache_mode_lines(results),
         "",
     ]
     L += ["| Engine | Version | Commit (dirty) | Result file | Config |", "|---|---|---|---|---|"]

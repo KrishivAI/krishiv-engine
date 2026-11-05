@@ -27,6 +27,7 @@ from .adapters import Dataset, Engine, Query, make_engine
 from .adapters.base import check_query
 from .errors import error_fields
 from .paths import data_root, fmt_sf, queries_dir, results_dir
+from .report import cache_mode_lines
 
 SUITES = {"h2o-groupby": "groupby", "h2o-join": "join"}
 SIZES = {"0.5gb": 10**7, "5gb": 10**8, "50gb": 10**9}  # rows; the benchmark's names for the data sizes
@@ -319,6 +320,7 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
         f"`{(ds.get('content_sha256') or 'n/a')[:16]}`",
         f"- {first['iterations']} timed + {first['warmup']} warm-up runs per question; median (p50) shown. Every "
         "engine's answer checksum must equal DuckDB's before a question is timed.",
+        *cache_mode_lines(results),
         "",
         "| Engine | Version | Result file |",
         "|---|---|---|",
