@@ -18,7 +18,7 @@ The dataset is identified by its manifest checksum (``$KRISHIV_DATA/manifests``)
 modification time and first and last 64 KiB of each of its files; the query by the hash of the text the reference
 runs; the engine by its installed version. A change to any of them is a different key, so a stale entry is never
 read, only left behind.
-
+"""
 
 from __future__ import annotations
 
