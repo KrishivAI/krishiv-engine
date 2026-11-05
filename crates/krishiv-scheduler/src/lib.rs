@@ -11,7 +11,7 @@ mod fragment;
 mod stages;
 
 pub use fragment::{Stage, StageInput, fragment};
-pub use stages::{StageRunner, StageSplits};
+pub use stages::{StageRunner, StageSplits, stage_tasks};
 
 #[cfg(test)]
 mod tests;

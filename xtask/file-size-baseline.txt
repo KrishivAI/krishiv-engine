@@ -23,7 +23,7 @@
 3004 crates/krishiv-session/src/catalog.rs
 2527 crates/krishiv-session/src/command.rs
 2692 crates/krishiv-session/src/dataframe.rs
-3022 crates/krishiv-session/src/session.rs
+2993 crates/krishiv-session/src/session.rs
 3266 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
 2774 crates/krishiv-sql/src/lower.rs

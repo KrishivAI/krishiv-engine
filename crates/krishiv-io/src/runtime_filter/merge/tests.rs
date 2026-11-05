@@ -39,13 +39,14 @@ fn round_trip(f: &KeyFilter) {
     assert_eq!(&back, f, "decode(encode(f)) == f");
 }
 
-/// Options that reach every form: small caps, a Bloom of a planned size.
-fn options(max_values: usize, exact: usize, planned: Option<u32>) -> KeyFilterOptions {
+/// Options that reach every form: small caps, a Bloom of a planned size,
+/// and a pass-rate cap that may send a merged Bloom back to the range.
+fn options(max_values: usize, exact: usize, planned: Option<u32>, fpp: f64) -> KeyFilterOptions {
     KeyFilterOptions {
         max_values,
         exact_max_values: exact,
         bloom_bytes: planned,
-        bloom_max_fpp: 1.0,
+        bloom_max_fpp: fpp,
         ..KeyFilterOptions::default()
     }
 }
@@ -59,8 +60,9 @@ fn opts() -> impl Strategy<Value = KeyFilterOptions> {
         0usize..20,
         0usize..40,
         prop::option::of(prop::sample::select(vec![32u32, 64, 256])),
+        prop::sample::select(vec![0.05, 0.5, 1.0]),
     )
-        .prop_map(|(v, e, p)| options(v, e, p))
+        .prop_map(|(v, e, p, fpp)| options(v, e, p, fpp))
 }
 
 proptest! {
@@ -123,7 +125,7 @@ proptest! {
 
 #[test]
 fn blooms_of_different_sizes_fall_back_to_the_range() {
-    let wide = |planned| options(0, 0, Some(planned));
+    let wide = |planned| options(0, 0, Some(planned), 1.0);
     let a = ints(&(0..100).map(Some).collect::<Vec<_>>(), wide(64));
     let b = ints(&(200..300).map(Some).collect::<Vec<_>>(), wide(128));
     assert_eq!(a.form(), FilterForm::Bloom(64));
@@ -131,7 +133,7 @@ fn blooms_of_different_sizes_fall_back_to_the_range() {
     let m = merge(&a, &b, &wide(64));
     assert_eq!(m.form(), FilterForm::Range);
     // Unplanned, a Bloom sized for its own keys takes no other keys.
-    let own = options(0, 0, None);
+    let own = options(0, 0, None, 1.0);
     let c = ints(&(0..100).map(Some).collect::<Vec<_>>(), own);
     assert!(matches!(c.form(), FilterForm::Bloom(_)));
     assert_eq!(merge(&c, &c, &own).form(), FilterForm::Range);
@@ -142,7 +144,7 @@ fn blooms_of_different_sizes_fall_back_to_the_range() {
 fn a_bloom_past_its_false_positive_cap_falls_back_to_the_range() {
     let o = KeyFilterOptions {
         bloom_max_fpp: 0.05,
-        ..options(0, 0, Some(32))
+        ..options(0, 0, Some(32), 1.0)
     };
     let lo = ints(&(0..20).map(Some).collect::<Vec<_>>(), o);
     let hi = ints(&(1_000..1_020).map(Some).collect::<Vec<_>>(), o);
@@ -155,18 +157,18 @@ fn a_bloom_past_its_false_positive_cap_falls_back_to_the_range() {
 fn exact_sets_past_the_cap_become_a_bloom_of_the_planned_size_or_the_range() {
     let a = ints(
         &(0..30).map(|k| Some(k * 7)).collect::<Vec<_>>(),
-        options(0, 40, None),
+        options(0, 40, None, 1.0),
     );
     let b = ints(
         &(0..30).map(|k| Some(k * 11 + 1)).collect::<Vec<_>>(),
-        options(0, 40, None),
+        options(0, 40, None, 1.0),
     );
     assert!(matches!(a.form(), FilterForm::HashSet(30)));
     assert_eq!(
-        merge(&a, &b, &options(0, 40, None)).form(),
+        merge(&a, &b, &options(0, 40, None, 1.0)).form(),
         FilterForm::Range
     );
-    let planned = options(0, 40, Some(1_024));
+    let planned = options(0, 40, Some(1_024), 1.0);
     let m = merge(&a, &b, &planned);
     assert_eq!(m.form(), FilterForm::Bloom(1_024));
     let probe: Vec<Option<i64>> = (0..30)
@@ -174,18 +176,18 @@ fn exact_sets_past_the_cap_become_a_bloom_of_the_planned_size_or_the_range() {
         .collect();
     assert!(pass(&m, &Int64Array::from(probe)).iter().all(|p| *p));
     // Within the cap, the union stays exact.
-    let u = merge(&a, &b, &options(0, 100, None));
+    let u = merge(&a, &b, &options(0, 100, None, 1.0));
     assert!(matches!(u.form(), FilterForm::HashSet(_)));
     assert_eq!(pass(&u, &Int64Array::from(vec![3])), vec![false]);
 }
 
 #[test]
 fn the_in_list_unites_while_it_fits() {
-    let a = ints(&[Some(1), Some(5)], options(3, 0, None));
-    let b = ints(&[Some(5), Some(9)], options(3, 0, None));
-    let m = merge(&a, &b, &options(3, 0, None));
+    let a = ints(&[Some(1), Some(5)], options(3, 0, None, 1.0));
+    let b = ints(&[Some(5), Some(9)], options(3, 0, None, 1.0));
+    let m = merge(&a, &b, &options(3, 0, None, 1.0));
     assert_eq!(m.value_count(), Some(3));
-    assert_eq!(merge(&a, &b, &options(2, 0, None)).value_count(), None);
+    assert_eq!(merge(&a, &b, &options(2, 0, None, 1.0)).value_count(), None);
 }
 
 #[test]

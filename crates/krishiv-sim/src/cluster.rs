@@ -1,0 +1,305 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The simulated coordinator (design P2-T176 §2.5, unit 2): a [`Scheduler`]
+//! that fragments a plan, ships each map stage's fragment as
+//! `krishiv.plan.v1` bytes with a task descriptor per task to worker
+//! `partition mod W` over simulated TCP, runs the stages bottom-up (blocking
+//! exchanges), and runs the root stage itself, reading every map output from
+//! the workers. A failed task runs again as its next attempt, up to
+//! [`Coordinator::MAX_ATTEMPTS`]; the first committed attempt of each map
+//! partition is what readers read (I10).
+//!
+//! The coordinator records a trace of what it shipped and what came back
+//! ([`Coordinator::trace`]): the same seed must give the same trace. A
+//! submitted query must carry an execution seed (`ExecConfig::seed`): its
+//! root stage runs on the caller's context with it, and map tasks derive
+//! theirs from it.
+
+use std::collections::HashMap;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::task::{Context, Poll};
+
+use futures::Stream;
+use futures::StreamExt as _;
+use futures::future::BoxFuture;
+use futures::stream::{BoxStream, FuturesUnordered};
+use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_exec::physical::{
+    PhysicalPlan, TaskSpec, WorkerContext, exchange_schemas, instantiate_task,
+};
+use krishiv_exec::{ExecConfig, Executor, QueryContext, QueryId, QueryRunner, Scheduler};
+use krishiv_scheduler::{fragment, stage_tasks};
+use krishiv_types::batch::Batch;
+use turmoil::net::TcpStream;
+
+use crate::exchange::{HostExchange, Workers};
+use crate::task::encode_task;
+use crate::wire::{Reply, Request};
+
+type Result<T> = std::result::Result<T, KrishivError>;
+
+fn internal(message: String) -> KrishivError {
+    InternalError { message }.into()
+}
+
+/// The coordinator of a simulated cluster (see the module docs). It runs on
+/// the coordinator host's runtime.
+#[derive(Clone)]
+pub struct Coordinator {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
+    workers: Workers,
+    partitions: u32,
+    roots: QueryRunner,
+    trace: Mutex<Vec<String>>,
+    next_job: AtomicU64,
+    /// The queries whose submission runs, so a cancel reaches their map
+    /// stages too (checked between stages; a running stage's tasks finish).
+    running: Mutex<HashMap<QueryId, Weak<QueryContext>>>,
+}
+
+impl std::fmt::Debug for Coordinator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Coordinator")
+            .field("workers", &self.inner.workers)
+            .field("partitions", &self.inner.partitions)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Coordinator {
+    /// The most attempts of one task.
+    pub const MAX_ATTEMPTS: u32 = 3;
+
+    /// A coordinator over `workers`, with `partitions` reduce partitions per
+    /// hash exchange, running root stages on `executor`.
+    #[must_use]
+    pub fn new(executor: Arc<dyn Executor>, workers: Workers, partitions: u32) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                workers,
+                partitions,
+                roots: QueryRunner::new(executor),
+                trace: Mutex::default(),
+                next_job: AtomicU64::new(0),
+                running: Mutex::default(),
+            }),
+        }
+    }
+
+    /// The events so far: each task shipped and its outcome, in order.
+    #[must_use]
+    pub fn trace(&self) -> Vec<String> {
+        self.inner
+            .trace
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl Inner {
+    fn record(&self, event: String) {
+        self.trace
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(event);
+    }
+
+    /// Runs `task` of a stage on its worker until an attempt succeeds.
+    async fn run_task(
+        &self,
+        job: u64,
+        fragment: Arc<[u8]>,
+        mut task: TaskSpec,
+        settings: &ExecConfig,
+    ) -> Result<()> {
+        let owner = self.workers.owner(task.partition)?;
+        let host = self
+            .workers
+            .names
+            .get(owner)
+            .cloned()
+            .ok_or_else(|| internal(format!("no worker {owner}")))?;
+        loop {
+            let event = format!(
+                "job {job} stage {} task {} attempt {} on {host}",
+                task.stage, task.partition, task.attempt
+            );
+            let reply = async {
+                let mut stream = TcpStream::connect((host.as_str(), self.workers.port))
+                    .await
+                    .map_err(|e| internal(format!("connect to {host}: {e}")))?;
+                Request::Run {
+                    job,
+                    fragment: fragment.to_vec(),
+                    task: encode_task(&task, settings)?,
+                }
+                .write(&mut stream)
+                .await?;
+                Reply::read(&mut stream).await
+            }
+            .await;
+            match reply {
+                Ok(Reply::Done) => {
+                    self.record(format!("{event}: done"));
+                    return Ok(());
+                }
+                Ok(Reply::Failed(message)) => {
+                    self.record(format!("{event}: failed: {message}"));
+                    if task.attempt + 1 >= Coordinator::MAX_ATTEMPTS {
+                        return Err(internal(format!("{event}: {message}")));
+                    }
+                    task.attempt += 1;
+                }
+                Ok(other) => return Err(internal(format!("{event}: answered {other:?}"))),
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    async fn submit(
+        &self,
+        plan: PhysicalPlan,
+        worker: WorkerContext,
+        query: Arc<QueryContext>,
+    ) -> Result<BoxStream<'static, Result<Batch>>> {
+        // The root stage runs on the caller's query context, so its seed is
+        // the query's: an unseeded query would run its root stage's tables
+        // on OS-random seeds, and the run would not replay.
+        if query.config().seed.is_none() {
+            return Err(internal(
+                "a simulated query needs an execution seed (ExecConfig::seed) to replay".to_owned(),
+            ));
+        }
+        let job = self.next_job.fetch_add(1, Ordering::Relaxed);
+        let release = Release {
+            job,
+            workers: self.workers.clone(),
+        };
+        let schemas = exchange_schemas(&plan, &worker)?;
+        let stages = fragment(&plan, &schemas)?;
+        let tasks = stage_tasks(&stages, self.partitions, None)?;
+        let (root, maps) = stages
+            .split_last()
+            .ok_or_else(|| internal("a plan without stages".to_owned()))?;
+        for stage in maps {
+            let bytes: Arc<[u8]> = krishiv_plan_codec::encode(&stage.plan)
+                .map_err(|e| internal(format!("stage {}: {e}", stage.id)))?
+                .into();
+            let specs = tasks.get(stage.id).cloned().unwrap_or_default();
+            let mut runs: FuturesUnordered<_> = specs
+                .into_iter()
+                .map(|spec| self.run_task(job, Arc::clone(&bytes), spec, query.config()))
+                .collect();
+            let mut failed = None;
+            while let Some(outcome) = runs.next().await {
+                if let Err(e) = outcome {
+                    failed.get_or_insert(e);
+                }
+            }
+            if let Some(e) = failed {
+                return Err(e);
+            }
+            query.check_cancelled()?;
+        }
+        let spec = tasks
+            .get(root.id)
+            .and_then(|t| t.first())
+            .cloned()
+            .ok_or_else(|| internal("a root stage without a task".to_owned()))?;
+        let worker = worker.with_exchange(Arc::new(HostExchange::coordinator(
+            job,
+            self.workers.clone(),
+        )));
+        let node = instantiate_task(&root.plan, &worker, &spec)?;
+        let inner = self.roots.execute(node, query).await?;
+        Ok(Box::pin(Releasing {
+            inner,
+            _release: release,
+        }))
+    }
+}
+
+impl Scheduler for Coordinator {
+    fn submit(
+        &self,
+        plan: PhysicalPlan,
+        worker: WorkerContext,
+        query: Arc<QueryContext>,
+    ) -> BoxFuture<'static, Result<BoxStream<'static, Result<Batch>>>> {
+        let inner = Arc::clone(&self.inner);
+        Box::pin(async move {
+            let id = query.id();
+            inner
+                .running
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(id, Arc::downgrade(&query));
+            let out = inner.submit(plan, worker, query).await;
+            inner
+                .running
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&id);
+            out
+        })
+    }
+
+    fn cancel(&self, query: QueryId) {
+        let running = self
+            .inner
+            .running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&query)
+            .and_then(Weak::upgrade);
+        if let Some(q) = running {
+            q.cancel();
+        }
+        self.inner.roots.cancel(query);
+    }
+}
+
+/// Releases a job's map outputs on every worker when dropped: when its
+/// result stream ends or is dropped, or its submission fails.
+struct Release {
+    job: u64,
+    workers: Workers,
+}
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        let (job, workers) = (self.job, self.workers.clone());
+        // On the coordinator host's runtime; outside one (a test dropping a
+        // stream after the simulation) the workers are gone anyway.
+        if let Ok(rt) = tokio::runtime::Handle::try_current() {
+            rt.spawn(async move {
+                for host in workers.names.iter() {
+                    if let Ok(mut s) = TcpStream::connect((host.as_str(), workers.port)).await
+                        && (Request::Release { job }).write(&mut s).await.is_ok()
+                    {
+                        let _ = Reply::read(&mut s).await;
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// The root stage's rows, releasing the job once dropped.
+struct Releasing {
+    inner: BoxStream<'static, Result<Batch>>,
+    _release: Release,
+}
+
+impl Stream for Releasing {
+    type Item = Result<Batch>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}

@@ -59,6 +59,7 @@ mod locals;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
 mod partitions;
+mod plan_round_trip;
 mod profile;
 mod recursion;
 mod result_cache;
