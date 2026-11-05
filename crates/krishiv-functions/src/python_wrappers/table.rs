@@ -616,6 +616,8 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("parse_json", "col: ColumnOrName"),
         Row::new("try_parse_json", "col: ColumnOrName"),
         Row::new("is_variant_null", "v: ColumnOrName"),
+        Row::new("schema_of_variant", "v: ColumnOrName"),
+        Row::new("to_variant_object", "col: ColumnOrName"),
         Row::new(
             "variant_get",
             "v: ColumnOrName, path: Column | str, targetType: str",

@@ -142,6 +142,8 @@ PYSPARK_SIGNATURES = {
     "get_json_object": "col, path",
     "is_variant_null": "v",
     "parse_json": "col",
+    "schema_of_variant": "v",
+    "to_variant_object": "col",
     "try_parse_json": "col",
     "try_variant_get": "v, path, targetType",
     "variant_get": "v, path, targetType",

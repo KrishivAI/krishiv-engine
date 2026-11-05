@@ -17,5 +17,4 @@ val lines = back.map { r =>
   s"""  {"id": ${r.getLong(0)}, "json": ${q(r.get(1))}, "a": ${if (r.isNullAt(2)) "null" else r.getLong(2)}, "b": ${q(r.get(3))}, "s": ${q(r.get(4))}, "schema": ${q(r.get(5))}}"""
 }
 Files.write(Paths.get("/out/krishiv-written.json"), ("[\n" + lines.mkString(",\n") + "\n]\n").getBytes("UTF-8"))
-Files.write(Paths.get("/out/krishiv-written.schema"), spark.read.parquet("/out/krishiv-written.parquet").schema.simpleString.getBytes("UTF-8"))
 System.exit(0)

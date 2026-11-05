@@ -338,3 +338,37 @@ fn a_string_casts_to_time() {
         36_001_500_000_000
     );
 }
+
+fn schema_of(json: &str) -> String {
+    let (m, v) = VariantBuilder::from_json(json).unwrap();
+    Schema::of(&VariantRef::new(&m, &v).unwrap()).unwrap().sql()
+}
+
+#[test]
+fn schemas_print_as_spark() {
+    // Spark 4.2.0 (design P2-T001c section 6, the fixtures' `schema` column
+    // and the function's own examples).
+    assert_eq!(schema_of("1.0"), "DECIMAL(1,0)");
+    assert_eq!(schema_of("1.50"), "DECIMAL(2,1)");
+    assert_eq!(schema_of("100.0"), "DECIMAL(3,0)");
+    assert_eq!(schema_of("1e2"), "DOUBLE");
+    assert_eq!(schema_of("1"), "BIGINT");
+    assert_eq!(schema_of("null"), "VOID");
+    assert_eq!(
+        schema_of(r#"{"a":"x1","b":"s1","c":[1,2,{"d":1}]}"#),
+        "OBJECT<a: STRING, b: STRING, c: ARRAY<VARIANT>>"
+    );
+    assert_eq!(schema_of(r#"[5, 1.50, "q", null]"#), "ARRAY<VARIANT>");
+    assert_eq!(schema_of("[1, 2.5]"), "ARRAY<DECIMAL(21,1)>");
+    assert_eq!(schema_of("[1.5, 1e2]"), "ARRAY<DOUBLE>");
+    assert_eq!(schema_of("[[1], [null], []]"), "ARRAY<ARRAY<BIGINT>>");
+    assert_eq!(
+        schema_of(r#"[{"b":1}, {"a":true, "b":null}]"#),
+        "ARRAY<OBJECT<a: BOOLEAN, b: BIGINT>>"
+    );
+    assert_eq!(schema_of(r#"{"a-b":1}"#), "OBJECT<`a-b`: BIGINT>");
+    let merged = Schema::Long
+        .merge(Schema::Boolean)
+        .merge(Schema::Decimal(3, 2));
+    assert_eq!(merged.sql(), "VARIANT");
+}

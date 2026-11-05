@@ -155,3 +155,70 @@ fn spark_reads_what_krishiv_writes() {
         expected("shredded-nested")
     );
 }
+
+/// `schema_of_variant` of every row equals Spark's.
+#[test]
+fn schemas_of_variants_are_spark_s() {
+    let s = session();
+    for name in FILES {
+        let path = fixtures().join(format!("{name}.parquet"));
+        let df = s.read().parquet([path.to_str().unwrap().to_owned()]);
+        block_on(df.create_or_replace_temp_view("t")).unwrap();
+        let out = block_on(async {
+            s.sql("SELECT schema_of_variant(v) FROM t ORDER BY id")
+                .await?
+                .collect()
+                .await
+        })
+        .unwrap();
+        let got: Vec<Option<String>> = out
+            .iter()
+            .flat_map(|b| {
+                let a = b.column(0).as_string_view();
+                (0..b.num_rows())
+                    .map(|i| (!a.is_null(i)).then(|| a.value(i).to_owned()))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let text = std::fs::read_to_string(fixtures().join(format!("{name}.json"))).unwrap();
+        let rows: Vec<Value> = serde_json::from_str(&text).unwrap();
+        let want: Vec<Option<String>> = rows
+            .iter()
+            .map(|r| r["schema"].as_str().map(str::to_owned))
+            .collect();
+        assert_eq!(got, want, "{name}");
+    }
+}
+
+/// `to_variant_object` of a struct, map and array (Spark 4.2.0's examples).
+#[test]
+fn to_variant_object_builds_objects() {
+    let s = session();
+    let out = block_on(async {
+        s.sql(
+            "SELECT to_json(to_variant_object(named_struct('a', 1, 'b', 2))), \
+             to_json(to_variant_object(array(1, 2, 3))), \
+             to_json(to_variant_object(array(named_struct('a', 1)))), \
+             to_json(to_variant_object(array(map('a', 2))))",
+        )
+        .await?
+        .collect()
+        .await
+    })
+    .unwrap();
+    let got: Vec<&str> = (0..4)
+        .map(|c| out[0].column(c).as_string_view().value(0))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            r#"{"a":1,"b":2}"#,
+            "[1,2,3]",
+            r#"[{"a":1}]"#,
+            r#"[{"a":2}]"#
+        ]
+    );
+    let e = block_on(async { s.sql("SELECT to_variant_object(1)").await?.collect().await })
+        .unwrap_err();
+    assert!(e.to_string().contains("CAST_WITHOUT_SUGGESTION"), "{e}");
+}

@@ -272,6 +272,7 @@ __all__ = [
     "rpad",
     "rtrim",
     "schema_of_json",
+    "schema_of_variant",
     "sec",
     "second",
     "sequence",
@@ -327,6 +328,7 @@ __all__ = [
     "to_unix_timestamp",
     "to_utc_timestamp",
     "to_varchar",
+    "to_variant_object",
     "translate",
     "trim",
     "trunc",
@@ -1718,6 +1720,11 @@ def schema_of_json(json: Column | str, options: dict[str, str] | None = None) ->
     return _call("schema_of_json", _lit(json, "json"), *_opt(_opts, options, "options"))
 
 
+def schema_of_variant(v: ColumnOrName) -> Column:
+    """Calls the registry function ``schema_of_variant``."""
+    return _call("schema_of_variant", _named(v, "v"))
+
+
 def sec(col: ColumnOrName) -> Column:
     """Calls the registry function ``sec``."""
     return _call("sec", _named(col, "col"))
@@ -2006,6 +2013,11 @@ def to_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column:
 def to_varchar(col: ColumnOrName, format: ColumnOrName) -> Column:
     """Calls the registry function ``to_varchar``."""
     return _call("to_varchar", _named(col, "col"), _named(format, "format"))
+
+
+def to_variant_object(col: ColumnOrName) -> Column:
+    """Calls the registry function ``to_variant_object``."""
+    return _call("to_variant_object", _named(col, "col"))
 
 
 def translate(srcCol: ColumnOrName, matching: str, replace: str) -> Column:
