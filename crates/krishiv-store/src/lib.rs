@@ -47,7 +47,7 @@ pub use credentials::{
 };
 pub use error::Result;
 pub use id::StoreId;
-pub use policy::StorePolicy;
+pub use policy::{RetryPolicy, StorePolicy};
 pub use refreshing::RefreshingStore;
 pub use settings::{SettingValue, StoreSettings};
 pub use stores::{

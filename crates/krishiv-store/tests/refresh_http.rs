@@ -161,3 +161,53 @@ async fn a_failing_source_fails_the_request_naming_the_scope() {
     let shown = e.to_string();
     assert!(shown.contains("s3://b/warehouse"), "{shown}");
 }
+
+/// Answers every request with `503` and counts them.
+async fn serve_unavailable() -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let count = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&count);
+    let task = tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf).await;
+            seen.fetch_add(1, Ordering::SeqCst);
+            let _ = socket
+                .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    (endpoint, count, task)
+}
+
+async fn attempts_under(policy: krishiv_store::RetryPolicy) -> usize {
+    let (endpoint, count, server) = serve_unavailable().await;
+    let source = Arc::new(Counting::default());
+    let registry = registry(&endpoint, source).with_retry_policy(policy);
+    let opened = registry.open("s3://b/warehouse/f.txt").unwrap();
+    assert!(opened.store.get(&opened.key).await.is_err());
+    server.abort();
+    count.load(Ordering::SeqCst)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_retry_policy_bounds_the_attempts_of_the_client() {
+    use krishiv_store::RetryPolicy;
+    assert_eq!(attempts_under(RetryPolicy::NONE).await, 1);
+    let two = RetryPolicy {
+        max_retries: 2,
+        initial_backoff: Duration::from_millis(1),
+        max_backoff: Duration::from_millis(2),
+        ..RetryPolicy::DEFAULT
+    };
+    assert_eq!(
+        attempts_under(two).await,
+        3,
+        "the first try and two retries"
+    );
+}

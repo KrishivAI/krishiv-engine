@@ -79,8 +79,8 @@
 //! Each cloud scheme paces with its own [`StorePolicy`] (`S3`, `GCS`,
 //! `AZURE`); the GCS and Azure budgets are conservative starting points
 //! until per-service rates are calibrated. Multipart
-//! uploads rely on the cloud clients' own per-part retries (their default
-//! `RetryConfig` is left enabled).
+//! uploads rely on the cloud clients' own per-part retries, set by [`RetryPolicy`]
+//! ([`StoreRegistry::with_retry_policy`]; default: `object_store`'s own).
 //!
 //! Cloud builders live behind this crate's `cloud` feature (the `aws`,
 //! `azure` and `gcp` features of `object_store`): without it, building a
@@ -106,7 +106,8 @@ use crate::credentials::{CredentialCache, two_credential_sources};
 use crate::error::store_failed;
 use crate::error::{Result, unsupported};
 use crate::{
-    CredentialScope, CredentialSource, DEFAULT_REFRESH_SKEW, StoreId, StorePolicy, StoreSettings,
+    CredentialScope, CredentialSource, DEFAULT_REFRESH_SKEW, RetryPolicy, StoreId, StorePolicy,
+    StoreSettings,
 };
 #[cfg(feature = "cloud")]
 use crate::{RefreshingProvider, RefreshingStore};
@@ -368,9 +369,11 @@ pub struct StoreRegistry {
     config: Arc<dyn StoreSettings>,
     stores: Mutex<HashMap<StoreId, Arc<dyn ObjectStore>>>,
     /// Locations with credentials of their own (see [`Self::with_source`]).
-    scopes: Vec<ScopeEntry>,
+    scopes: Mutex<Vec<Arc<ScopeEntry>>>,
     /// Refresh skew of the sources added next.
     skew: Duration,
+    /// Retry and backoff of the cloud clients (see [`Self::with_retry_policy`]).
+    retry: RetryPolicy,
     /// Every scoped store id this registry handed out, for [`Self::on_release`].
     scoped_ids: Mutex<HashSet<StoreId>>,
     release: Mutex<Vec<ReleaseHook>>,
@@ -416,8 +419,9 @@ impl StoreRegistry {
         Self {
             config: settings,
             stores: Mutex::new(HashMap::new()),
-            scopes: Vec::new(),
+            scopes: Mutex::new(Vec::new()),
             skew: DEFAULT_REFRESH_SKEW,
+            retry: RetryPolicy::DEFAULT,
             scoped_ids: Mutex::new(HashSet::new()),
             release: Mutex::new(Vec::new()),
         }
@@ -429,6 +433,15 @@ impl StoreRegistry {
     #[must_use]
     pub fn with_refresh_skew(mut self, skew: Duration) -> Self {
         self.skew = skew;
+        self
+    }
+
+    /// Sets the retry and backoff of the cloud clients of the stores built *after* this call
+    /// (default [`RetryPolicy::DEFAULT`], `object_store`'s own). The engine sets fewer retries
+    /// when its request scheduler retries as well, so the two layers do not multiply.
+    #[must_use]
+    pub fn with_retry_policy(mut self, retry: RetryPolicy) -> Self {
+        self.retry = retry;
         self
     }
 
@@ -445,18 +458,26 @@ impl StoreRegistry {
     ///   credential sources for one read). Outside every scope static configuration works as
     ///   before.
     #[must_use]
-    pub fn with_source(
-        mut self,
-        scope: CredentialScope,
-        source: Arc<dyn CredentialSource>,
-    ) -> Self {
-        let cache = CredentialCache::system(scope.clone(), source, self.skew);
-        self.scopes.push(ScopeEntry {
-            scope,
-            nonce: scope_nonce(),
-            cache,
-        });
+    pub fn with_source(self, scope: CredentialScope, source: Arc<dyn CredentialSource>) -> Self {
+        self.add_source(scope, source);
         self
+    }
+
+    /// As [`Self::with_source`], on a registry that is already shared (behind an `Arc`, in use
+    /// by a running query): an Iceberg `loadTable` vends credentials mid-query. The scope
+    /// applies to stores opened after this call; a store already handed out keeps the
+    /// credentials it was built with (it has a different store id, so it is never reused for the
+    /// new scope). Adding a scope for a location already scoped replaces it for later opens.
+    pub fn add_source(&self, scope: CredentialScope, source: Arc<dyn CredentialSource>) {
+        let cache = CredentialCache::system(scope.clone(), source, self.skew);
+        self.scopes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Arc::new(ScopeEntry {
+                scope,
+                nonce: scope_nonce(),
+                cache,
+            }));
     }
 
     /// Registers `hook` to be called with each scoped store id this registry handed out when
@@ -481,11 +502,15 @@ impl StoreRegistry {
     }
 
     /// The scope covering `url`, the most specific first.
-    fn scope_for(&self, url: &ParsedUrl) -> Option<&ScopeEntry> {
+    fn scope_for(&self, url: &ParsedUrl) -> Option<Arc<ScopeEntry>> {
         self.scopes
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .filter(|e| e.scope.store_id() == &url.store_id && e.scope.covers(&url.key))
+            // On equal depth the newest wins (`max_by_key` keeps the last maximum).
             .max_by_key(|e| e.scope.depth())
+            .cloned()
     }
 
     /// The store of `url`'s bucket or container, cached by store id within
@@ -514,10 +539,10 @@ impl StoreRegistry {
         options: &BTreeMap<String, OptionValue>,
     ) -> Result<Arc<dyn ObjectStore>> {
         let scoped = self.scope_for(url);
-        if let Some(entry) = scoped {
+        if let Some(entry) = &scoped {
             reject_credential_options(options, &entry.scope)?;
         }
-        let id = self.id_of(url, scoped, options);
+        let id = self.id_of(url, scoped.as_deref(), options);
         if let Some(store) = self
             .stores
             .lock()
@@ -527,7 +552,13 @@ impl StoreRegistry {
         {
             return Ok(store);
         }
-        let store = build(self.config.as_ref(), options, url, scoped.map(|e| &e.cache))?;
+        let store = build(
+            self.config.as_ref(),
+            options,
+            url,
+            scoped.as_ref().map(|e| &e.cache),
+            &self.retry,
+        )?;
         if scoped.is_some() {
             self.scoped_ids
                 .lock()
@@ -580,7 +611,7 @@ impl StoreRegistry {
         let url = parse_object_url(text)?;
         let store = self.store_with_options(&url, options)?;
         Ok(OpenedStore {
-            id: self.id_of(&url, self.scope_for(&url), options),
+            id: self.id_of(&url, self.scope_for(&url).as_deref(), options),
             store,
             key: url.key,
             display: url.display,
@@ -698,6 +729,7 @@ fn build(
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
     scope: Option<&Arc<CredentialCache>>,
+    retry: &RetryPolicy,
 ) -> Result<Arc<dyn ObjectStore>> {
     // Configuration errors keep their class; only builder failures become
     // `KRISHIV_OBJECT_STORE_REQUEST_FAILED` (converted in each scheme
@@ -707,11 +739,11 @@ fn build(
         _ => None,
     };
     match url.scheme {
-        ObjectScheme::S3 => s3_store(config, options, url, path_style, scope),
-        ObjectScheme::Gcs => gcs_store(config, options, url, scope),
-        ObjectScheme::Azure => azure_store(config, options, url, scope),
-        ObjectScheme::Http => http_store(url),
-        ObjectScheme::HuggingFace => hf_store(config, options, url),
+        ObjectScheme::S3 => s3_store(config, options, url, path_style, scope, retry),
+        ObjectScheme::Gcs => gcs_store(config, options, url, scope, retry),
+        ObjectScheme::Azure => azure_store(config, options, url, scope, retry),
+        ObjectScheme::Http => http_store(url, retry),
+        ObjectScheme::HuggingFace => hf_store(config, options, url, retry),
     }
 }
 
@@ -726,6 +758,7 @@ fn hf_store(
     config: &dyn StoreSettings,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
+    retry: &RetryPolicy,
 ) -> Result<Arc<dyn ObjectStore>> {
     use object_store::http::HttpBuilder;
     let endpoint =
@@ -778,6 +811,7 @@ fn hf_store(
     HttpBuilder::new()
         .with_url(base)
         .with_client_options(client)
+        .with_retry(retry.to_config())
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
         .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
@@ -805,7 +839,7 @@ fn loopback_endpoint(endpoint: &str) -> bool {
 /// is sent but the request itself: no credentials, and redirects are not
 /// followed to another host with a header (the client sends none).
 #[cfg(feature = "cloud")]
-fn http_store(url: &ParsedUrl) -> Result<Arc<dyn ObjectStore>> {
+fn http_store(url: &ParsedUrl, retry: &RetryPolicy) -> Result<Arc<dyn ObjectStore>> {
     use object_store::http::HttpBuilder;
     let plain = url.store_id.key().starts_with("http://");
     let host = url
@@ -821,6 +855,7 @@ fn http_store(url: &ParsedUrl) -> Result<Arc<dyn ObjectStore>> {
     HttpBuilder::new()
         .with_url(url.store_id.key())
         .with_client_options(object_store::ClientOptions::new().with_allow_http(plain))
+        .with_retry(retry.to_config())
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
         .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
@@ -834,6 +869,7 @@ fn build(
     _options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
     _scope: Option<&Arc<CredentialCache>>,
+    _retry: &RetryPolicy,
 ) -> Result<Arc<dyn ObjectStore>> {
     Err(unsupported(format!(
         "cloud object stores are not enabled in this build (enable the `cloud` feature): {}",
@@ -1152,6 +1188,7 @@ fn s3_store(
     url: &ParsedUrl,
     path_style: Option<bool>,
     scope: Option<&Arc<CredentialCache>>,
+    retry: &RetryPolicy,
 ) -> Result<Arc<dyn ObjectStore>> {
     use object_store::aws::{AmazonS3Builder, AwsCredential};
     let mut builder = AmazonS3Builder::from_env().with_bucket_name(&url.bucket);
@@ -1183,6 +1220,7 @@ fn s3_store(
         builder = builder.with_virtual_hosted_style_request(!path_style);
     }
     let store = builder
+        .with_retry(retry.to_config())
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
         .map_err(|e| store_failed(&url.display, 1, &e.to_string()))?;
@@ -1214,6 +1252,7 @@ fn gcs_store(
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
     scope: Option<&Arc<CredentialCache>>,
+    retry: &RetryPolicy,
 ) -> Result<Arc<dyn ObjectStore>> {
     use object_store::gcp::{GcpCredential, GoogleCloudStorageBuilder};
     let mut builder = GoogleCloudStorageBuilder::from_env().with_bucket_name(url.bucket.clone());
@@ -1234,6 +1273,7 @@ fn gcs_store(
         builder = builder.with_base_url(&base);
     }
     let store = builder
+        .with_retry(retry.to_config())
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
         .map_err(|e| store_failed(&url.display, 1, &e.to_string()))?;
@@ -1252,6 +1292,7 @@ fn azure_store(
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
     scope: Option<&Arc<CredentialCache>>,
+    retry: &RetryPolicy,
 ) -> Result<Arc<dyn ObjectStore>> {
     use object_store::azure::{AzureCredential, MicrosoftAzureBuilder};
     let mut builder = MicrosoftAzureBuilder::from_env().with_container_name(url.bucket.clone());
@@ -1279,6 +1320,7 @@ fn azure_store(
         builder = builder.with_endpoint(endpoint);
     }
     let store = builder
+        .with_retry(retry.to_config())
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
         .map_err(|e| store_failed(&url.display, 1, &e.to_string()))?;

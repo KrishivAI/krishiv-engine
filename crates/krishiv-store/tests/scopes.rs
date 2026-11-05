@@ -177,3 +177,25 @@ fn nothing_scoped_prints_a_secret_or_a_key_id() {
     );
     assert!(!shown.contains(CANARY), "{shown}");
 }
+
+#[test]
+fn a_scope_added_to_a_shared_registry_applies_to_later_opens_only() {
+    let r = Arc::new(registry());
+    let before = r.open("s3://b/warehouse/t/f").unwrap();
+    assert_eq!(before.id.key(), "s3://b", "no scope yet");
+    let shared = Arc::clone(&r);
+    shared.add_source(scope("s3://b/warehouse/t/"), Arc::new(Fixed("late")));
+    let after = r.open("s3://b/warehouse/t/f").unwrap();
+    assert_ne!(after.id, before.id);
+    assert!(after.id.key().contains("#scope:"));
+    // The store handed out before keeps its (unscoped) identity and is still cached.
+    assert!(Arc::ptr_eq(
+        &before.store,
+        &r.open("s3://b/elsewhere/f").unwrap().store
+    ));
+    // A second source for the same location replaces the first for later opens.
+    r.add_source(scope("s3://b/warehouse/t/"), Arc::new(Fixed("newer")));
+    let newer = r.open("s3://b/warehouse/t/f").unwrap();
+    assert_ne!(newer.id, after.id);
+    assert_eq!(r.scoped_ids().len(), 2);
+}
