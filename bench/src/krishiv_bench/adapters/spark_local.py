@@ -36,6 +36,7 @@ class _SparkSQLEngine(Engine):
 
     def timed_run(self, query: Query) -> tuple[int, float]:
         """The full result as Arrow record batches (``toArrow``), never Python row objects."""
+        self._pending = None  # a result nobody took (callers that do not checksum) is not kept alongside the next
         t0 = time.perf_counter()  # parsing and analysis are part of the query, as for every other engine
         table = self.spark.sql(query.sql).toArrow()
         secs = time.perf_counter() - t0

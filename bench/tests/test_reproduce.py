@@ -624,3 +624,158 @@ def test_a_capped_worker_starts_inside_a_systemd_scope_with_no_swap(monkeypatch,
             assert "MemoryMax=8G" in argv
             assert "MemorySwapMax=0" in argv
         assert argv[argv.index("-m") + 1] == "krishiv_bench.worker"
+
+
+def test_a_limit_that_may_cut_a_tie_is_checked_by_row_count_only():
+    from krishiv_bench.adapters.base import Query
+
+    limited = Query("q10", "SELECT a FROM t ORDER BY b LIMIT 20", "tpch")
+    plain = Query("q01", "SELECT a FROM t ORDER BY b", "tpch")
+    assert not reproduce._checksummed(limited)
+    assert reproduce._checksummed(plain)
+    assert reproduce.check_description("duckdb", {"kinds": [], "values": []}, limited).startswith("row count only")
+    assert "own result" in reproduce.check_description("duckdb", {"kinds": [], "values": []}, plain)
+
+    class Eng(Fake):
+        def timed_run(self, query):
+            return 3, 0.5
+
+        def result_checksum(self):
+            return {"kinds": ["rows"], "values": [4]}
+
+    # A different checksum is accepted for the limited query and refused for the plain one.
+    base = {"kinds": ["rows"], "values": [3]}
+    assert reproduce._timed(Eng(), limited, 3, base) == 0.5
+    with pytest.raises(EngineError, match="checksum differs"):
+        reproduce._timed(Eng(), plain, 3, base)
+
+
+def test_sequential_query_keeps_the_other_engines_timings_when_duckdb_fails_in_timing(monkeypatch, tiny):
+    rows = [(1,)]
+    entry, _ = _sequential(
+        monkeypatch,
+        tiny,
+        {
+            "duckdb": lambda: Scripted("duckdb", rows, timed_exc=EngineTimeout("too slow")),
+            "krishiv": lambda: Scripted("krishiv", rows, checksum=True),
+        },
+        ["duckdb", "krishiv"],
+    )
+    assert entry["engines"]["duckdb"]["status"] == "timeout"
+    krishiv = entry["engines"]["krishiv"]
+    assert krishiv["median_s"] == pytest.approx(0.1)
+    assert "ratio" not in krishiv  # no reference timing to divide by
+
+
+def test_sequential_query_profiles_krishiv_when_asked(monkeypatch, tiny):
+    rows = [(1,)]
+
+    class Profiled(Scripted):
+        def profile(self, query):
+            return {"rows": 1, "seconds": 0.2, "phases": []}
+
+    def run(profile):
+        Scripted.instances = []
+        engines = {
+            "duckdb": lambda: Scripted("duckdb", rows, checksum=True),
+            "krishiv": lambda: Profiled("krishiv", rows),
+        }
+        monkeypatch.setattr(reproduce, "ProcessEngine", lambda run_name, *a, **k: engines[run_name]())
+        qm = {n: q("SELECT a FROM t") for n in engines}
+        return reproduce.sequential_query(qm, list(engines), tiny, 1, 1, None, 1, 60, profile)[0]
+
+    assert run(True)["engines"]["krishiv"]["profile"] == {"rows": 1, "seconds": 0.2, "phases": []}
+    assert "profile" not in run(False)["engines"]["krishiv"]
+    # An engine without a profile mode reports why instead of failing the query.
+    monkeypatch.setattr(reproduce, "ProcessEngine", lambda run_name, *a, **k: Scripted(run_name, rows, checksum=True))
+    qm = {n: q("SELECT a FROM t") for n in ("duckdb", "krishiv")}
+    got = reproduce.sequential_query(qm, ["duckdb", "krishiv"], tiny, 1, 1, None, 1, 60, True)[0]
+    assert "no profile mode" in got["engines"]["krishiv"]["profile_error"]
+
+
+def test_an_adapter_does_not_keep_a_result_nobody_took(tiny):
+    from krishiv_bench.adapters.duckdb_engine import DuckDBEngine
+
+    eng = DuckDBEngine(threads=1)
+    eng.setup(tiny)
+    try:
+        eng.timed_run(q("SELECT a FROM t"))
+        assert eng._pending is not None
+        with pytest.raises(Exception, match="nope"):
+            eng.timed_run(q("SELECT nope FROM t"))
+        assert eng._pending is None  # the first result was released before the second run started
+    finally:
+        eng.teardown()
+
+
+def test_datafusion_keeps_the_schema_of_an_empty_answer():
+    pytest.importorskip("datafusion")
+    import pyarrow as pa
+
+    from krishiv_bench.adapters.datafusion_engine import DataFusionEngine
+    from krishiv_bench.result_check import checksum
+
+    schema = pa.schema([("a", pa.int64()), ("s", pa.string())])
+    table = DataFusionEngine()._as_arrow(([], schema))
+    assert table.schema == schema
+    assert checksum(table)["values"][0] == 0
+
+
+def test_a_failing_result_run_drops_the_engine_from_the_samples(tiny):
+    class Boom(Fake):
+        def timed_run(self, query):
+            raise EngineError("result run exploded")
+
+    engines = {"duckdb": CountingEngine([2]), "polars": Boom()}
+    entry: dict = {"engines": {}}
+    samples = {"duckdb": [], "polars": []}
+    sums = reproduce._baselines({n: q("SELECT 1") for n in engines}, engines, list(engines), 2, entry, samples)
+    assert list(samples) == ["duckdb"]
+    assert entry["engines"]["polars"]["status"] == "error"
+    assert "result run: result run exploded" in entry["engines"]["polars"]["reason"]
+    assert sums == {"duckdb": None}  # a stub that kept no result has no checksum
+
+
+def test_the_worker_serves_checksum_and_profile(tiny):
+    eng = ProcessEngine("duckdb", 1, 1, 60)
+    eng.setup(tiny)
+    try:
+        n, _ = eng.timed_run(q("SELECT a, g FROM t"))
+        assert n == 1000
+        sums = eng.result_checksum()
+        assert sums is not None
+        assert sums["values"][0] == 1000
+        assert eng.result_checksum() is None  # taken once
+        with pytest.raises(EngineError, match="no profile mode"):
+            eng.profile(q("SELECT 1"))
+    finally:
+        eng.teardown()
+
+
+def test_krishiv_checksums_a_separate_dump_of_the_query(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from krishiv_bench.adapters.krishiv import KrishivEngine
+    from krishiv_bench.result_check import checksum, same
+
+    eng = object.__new__(KrishivEngine)
+    eng._tmp = tmp_path / "work"
+    eng._tmp.mkdir()
+    eng._pending = None
+    assert eng.result_checksum() is None  # nothing ran
+
+    table = pa.table({"a": [1, 2, 3], "s": ["x", "y", "z"]})
+
+    def dump(query, out):  # the runner writes a directory of part files
+        out.mkdir()
+        pq.write_table(table.slice(0, 2), out / "part-0.parquet")
+        pq.write_table(table.slice(2), out / "part-1.parquet")
+
+    monkeypatch.setattr(eng, "dump", dump)
+    eng._pending = q("SELECT a, s FROM t")
+    got = eng.result_checksum()
+    assert got is not None
+    assert same(got, checksum(table))
+    assert eng._pending is None
+    assert not list(eng._tmp.glob("*.chk"))  # the dump is removed

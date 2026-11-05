@@ -118,6 +118,7 @@ class ClickHouseEngine(Engine):
         return list(zip(*cols, strict=True)) if cols else []
 
     def timed_run(self, query: Query) -> tuple[int, float]:
+        self._pending = None  # a result nobody took (callers that do not checksum) is not kept alongside the next
         t0 = time.perf_counter()
         table = self._table(query)
         secs = time.perf_counter() - t0

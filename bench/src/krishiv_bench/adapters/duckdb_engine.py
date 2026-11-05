@@ -80,6 +80,7 @@ class DuckDBEngine(Engine):
         """Questions with a checksum query have answers too large to fetch into Python (``h2o-*``): the timed call
         materialises the answer in a temporary table, the benchmark's own method, and counts its rows."""
         assert self.con is not None, "setup() not called"
+        self._pending = None  # a result nobody took (callers that do not checksum) is not kept alongside the next
         if not query.check_sql:
             # The full result as an Arrow table, no Python row objects in the timed span.
             t0 = time.perf_counter()

@@ -60,6 +60,7 @@ class PolarsEngine(Engine):
         return self._collect(query).rows()
 
     def timed_run(self, query: Query) -> tuple[int, float]:
+        self._pending = None  # a result nobody took (callers that do not checksum) is not kept alongside the next
         import time
 
         t0 = time.perf_counter()

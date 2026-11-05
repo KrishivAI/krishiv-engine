@@ -219,3 +219,67 @@ def test_verify_catches_a_cast_that_lost_precision(flat: Path, tmp_path: Path):
     out = tmp_path / "nested"
     n.nest(lossy, out)
     assert n.verify(lossy, out)  # the nested s_acctbal is 1.24, the source says 1.239
+
+
+def test_generate_builds_from_the_flat_dataset_verifies_and_skips_an_existing_one(
+    flat: Path, tmp_path, monkeypatch, capsys
+):
+    import shutil
+
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path / "data"))
+    with pytest.raises(SystemExit, match="no flat dataset"):
+        n.generate(1)
+    shutil.copytree(flat, n.dataset_dir("tpch", 1))
+    out = n.generate(1)
+    assert out == n.dataset_dir("tpch-nested", 1)
+    assert n.verify(n.dataset_dir("tpch", 1), out) == []
+    assert "verified" in capsys.readouterr().out
+    n.generate(1)  # exists: skipped
+    assert "skipping" in capsys.readouterr().out
+    monkeypatch.setattr(n, "verify", lambda *a: ["region: 1 rows nested but not flat"])
+    with pytest.raises(SystemExit, match="does not match its source"):
+        n.generate(1, force=True)
+
+
+def test_verify_reports_a_missing_nested_table(flat: Path, tmp_path: Path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    problems = n.verify(flat, empty)
+    assert len(problems) == len(n.TABLES)
+    assert all("is missing" in p for p in problems)
+
+
+def test_the_cli_commands_for_the_suite(tmp_path, monkeypatch, capsys):
+    from krishiv_bench import cli, datasets
+
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path))
+    out = tmp_path / "tpch-nested" / "sf1"
+    out.mkdir(parents=True)
+    (out / "region.parquet").write_bytes(b"x")
+    monkeypatch.setattr(n, "generate", lambda sf, source, force: out)
+    datasets.main(["tpch-nested", "--sf", "1"])
+    assert (tmp_path / "manifests" / "tpch-nested-sf1.sha256").is_file()
+
+    seen = {}
+
+    def fake_check(engine, sf, only, *, flat_dataset, engine_kwargs):
+        seen.update(engine=engine, sf=sf, only=only, flat=flat_dataset, kw=engine_kwargs)
+        return []
+
+    monkeypatch.setattr(n, "check", fake_check)
+    cli.main(["nested-check", "--engine", "krishiv", "--sf", "1", "--queries", "q01,q02", "--runner", "/bin/runner"])
+    assert seen["only"] == ["q01", "q02"]
+    assert seen["kw"] == {"binary": "/bin/runner"}
+    assert "every nested answer equals" in capsys.readouterr().out
+    cli.main(["nested-check", "--engine", "spark-connect", "--spark-remote", "sc://h:1", "--spark-container", ""])
+    assert seen["kw"] == {"remote": "sc://h:1", "container": None, "container_data_root": "/data"}
+    monkeypatch.setattr(n, "check", lambda *a, **k: ["q03: rows differ"])
+    with pytest.raises(SystemExit, match="q03: rows differ"):
+        cli.main(["nested-check", "--engine", "krishiv"])
+
+
+def test_the_provenance_of_the_nested_dataset_names_its_generator(tmp_path, monkeypatch):
+    from krishiv_bench.runner import dataset_provenance
+
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path))
+    assert "nested_tpch" in dataset_provenance("tpch-nested", 1)["generator"]

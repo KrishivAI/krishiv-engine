@@ -10,9 +10,11 @@ Plus the row count and a row hash: the sum of ``hash`` of the non-float columns 
 different columns to the same row. Two runs of one engine on one query must agree; the checksum is not comparable
 across engines (their Arrow types differ), so each engine is held to its own first, DuckDB-verified answer.
 
-Blind spots, by design (it is a guard against a timed run that computes something else, not a proof of equality):
-floating-point values are only summed, so two floats swapped between rows leave the checksum unchanged, and a change
-below about ``REL_TOL`` of a column's sum goes unseen; the DECIMAL(38) sum can overflow HUGEINT on a huge result.
+Floating-point columns are summed, and also summed weighted by a hash of the row's non-float columns, so a measure
+moved to another row changes the checksum (when the row has any non-float column). Blind spots, by design (it is a
+guard against a timed run that computes something else, not a proof of equality): a change below about ``REL_TOL``
+of a column's sum goes unseen, floats in rows with no non-float column are only summed, and the DECIMAL(38) sum can
+overflow HUGEINT on a huge result.
 """
 
 from __future__ import annotations
@@ -53,8 +55,16 @@ def checksum(table: pa.Table) -> dict[str, Any]:
             kinds.append("exact")
             row_cols.append(f"c{i} := {c}")
     if row_cols:
-        exprs.append(f"CAST(sum(CAST(hash(struct_pack({', '.join(row_cols)})) AS HUGEINT)) AS VARCHAR)")
+        row_hash = f"hash(struct_pack({', '.join(row_cols)}))"
+        exprs.append(f"CAST(sum(CAST({row_hash} AS HUGEINT)) AS VARCHAR)")
         kinds.append("exact")
+        # Ties each float to its row: the float times a weight in (0, 1] drawn from the row's other columns, summed
+        # (compared with a tolerance like the plain sum). Two floats swapped between rows change it.
+        weight = f"(CAST({row_hash} % 1000003 AS DOUBLE) + 1) / 1000003"
+        for i, f in enumerate(table.schema):
+            if pt.is_floating(f.type):
+                exprs.append(f"sum(CAST({_quote(i)} AS DOUBLE) * {weight})")
+                kinds.append("float")
     con = duckdb.connect()
     try:
         con.register("t", table)

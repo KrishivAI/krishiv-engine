@@ -200,12 +200,20 @@ def _baselines(qm, engines, live, nrows, entry, samples) -> dict[str, dict | Non
     return sums
 
 
-def check_description(name: str, baseline: dict | None) -> str:
+def _checksummed(q: Query) -> bool:
+    """Whether timed runs of ``q`` must reproduce the verified result checksum. Not when a ``LIMIT`` may cut a tie:
+    ``compare`` accepts the other tied rows (``tie-at-limit``), so a correct engine may return another set."""
+    return compare.derive_limit(q.sql)[0] is None
+
+
+def check_description(name: str, baseline: dict | None, q: Query | None = None) -> str:
     """How the timed runs of ``name`` were checked against the verified answer, recorded with its timings.
 
     Only an adapter that returns a result checksum compares more than the row count; Krishiv's ``RUN`` returns only
     rows and seconds, so its checksum is that of a separate, untimed ``DUMP`` of the query.
     """
+    if q is not None and not _checksummed(q):
+        return "row count only: the query's LIMIT may cut a tie differently from run to run"
     if baseline is None:
         return "row count only: the adapter returns no result checksum"
     if name == "krishiv":
@@ -219,7 +227,7 @@ def _timed(eng: Engine, q: Query, nrows: int, baseline: dict | None) -> float:
     if n != nrows:
         raise EngineError(f"timed run returned {n} rows, expected {nrows}")
     got = eng.result_checksum()
-    if baseline is not None and (got is None or not result_check.same(got, baseline)):
+    if baseline is not None and _checksummed(q) and (got is None or not result_check.same(got, baseline)):
         raise EngineError("the timed run's result checksum differs from the verified run's")
     return secs
 
@@ -258,7 +266,7 @@ def ours_query(
     cpus: dict[str, list[float]] = {n: [] for n in live}
     sums = _baselines(qm, engines, live, nrows, entry, samples)
     for name in sums:
-        entry["engines"][name]["result_check"] = check_description(name, sums[name])
+        entry["engines"][name]["result_check"] = check_description(name, sums[name], qm[name])
     for _ in range(reps):
         for name in [*live, *reversed(live)]:
             if name not in samples:
@@ -286,6 +294,7 @@ def sequential_query(
     cap_gb: int | None,
     samples_n: int,
     timeout_s: float,
+    profile: bool = False,
 ) -> tuple[dict, dict[str, dict]]:
     """One query, one engine alive at a time (DuckDB, then Krishiv, then the rest): a fresh worker per engine inside
     its own memory cgroup runs the verified answer, one untimed run through the timed path (its checksum is the
@@ -327,13 +336,18 @@ def sequential_query(
                 if base_n != nrows:
                     raise EngineError(f"result run returned {base_n} rows, expected {nrows}")
                 baseline = eng.result_checksum()
-                verdicts[name]["result_check"] = check_description(name, baseline)
+                verdicts[name]["result_check"] = check_description(name, baseline, qm[name])
                 samples[name], cpus[name] = [], []
                 for _ in range(samples_n):
                     samples[name].append(_timed(eng, qm[name], nrows, baseline))
                     _note_peak(peaks, name, eng)
                     if (cpu := eng.last_cpu_seconds) is not None:
                         cpus[name].append(cpu)
+                if profile and name == "krishiv":  # one more run, after the samples, in the worker that took them
+                    try:
+                        verdicts[name]["profile"] = eng.profile(qm[name])
+                    except (EngineError, EngineTimeout, EngineCrashed, NotImplementedError) as e:
+                        verdicts[name]["profile_error"] = str(e)[:300]
                 if attempt:
                     verdicts[name]["engine_mode"] = "streaming (the default engine ran out of memory)"
             except (EngineError, EngineTimeout, EngineCrashed) as e:
@@ -348,8 +362,7 @@ def sequential_query(
         if name not in (REFERENCE, "krishiv"):
             rows.pop(name, None)  # only DuckDB's and Krishiv's rows are compared against later engines
     entry: dict[str, Any] = {"rows": nrows, "engines": {n: dict(v) for n, v in verdicts.items()}}
-    if REFERENCE in samples:
-        _finish(entry, samples, peaks, cpus, qm, {}, False)
+    _finish(entry, samples, peaks, cpus, qm, {}, False)  # without DuckDB samples: medians and peaks, no ratios
     entry["load_before"], entry["load_after"] = load_before, loadavg()
     return entry, infos
 
@@ -381,11 +394,11 @@ def theirs_query(
             got = eng.result_checksum()  # outside the measured window; every run must give the first run's result
             if i == 0:
                 first_sum = got
-            elif first_sum is not None and (got is None or not result_check.same(got, first_sum)):
+            elif first_sum is not None and _checksummed(q) and (got is None or not result_check.same(got, first_sum)):
                 raise EngineError("a later run's result checksum differs from the first run's")
             times.append(secs)
         res: dict[str, Any] = {"status": "ok", "runs_s": times, "first_s": times[0], "best_s": min(times)}
-        res["result_check"] = check_description(name, first_sum)
+        res["result_check"] = check_description(name, first_sum, q)
         if name in peaks:
             res["peak_rss_bytes"] = peaks[name]
         return res
@@ -463,7 +476,7 @@ def run_reproduce(
             record["setup_failures"] = {}
             for qm in queries:
                 qid = qm[REFERENCE].id
-                ent, infos = sequential_query(qm, names, ds, threads, memory_gb, cap_gb, 2 * reps, timeout_s)
+                ent, infos = sequential_query(qm, names, ds, threads, memory_gb, cap_gb, 2 * reps, timeout_s, profile)
                 for n, info in infos.items():
                     record["engines"].setdefault(n, info)
                 record["queries"][qid] = ent
