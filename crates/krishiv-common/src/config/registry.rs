@@ -1714,6 +1714,7 @@ pub static EAGER_AGGREGATION: ConfigEntry = ConfigEntry {
           result cannot depend on row order or raise on a row the join would drop are moved. \
           Results are the same either way.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
