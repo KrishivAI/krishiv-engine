@@ -353,3 +353,41 @@ fn a_killed_map_task_reruns_with_the_same_rows() {
             .any(|e| e.contains("attempt 1") && e.ends_with("done"))
     );
 }
+
+#[test]
+fn an_unseeded_query_is_refused() {
+    let store = store();
+    let config = ClusterConfig {
+        sim: SimConfig::with_seed(5),
+        workers: 2,
+        partitions: 2,
+        slots: 1,
+        fault: None,
+    };
+    let client_store = Arc::clone(&store);
+    let refused = simulate(
+        config,
+        Arc::new(Setup(store)),
+        move |coordinator: Coordinator, worker: WorkerContext| async move {
+            let tpch = open(client_store).await?;
+            let plan = tpch.plan(6).await?;
+            let pool: Arc<dyn MemoryPool> =
+                TreePool::with_clock(&MemoryConfig::default(), Arc::new(TokioClock));
+            let query = QueryContext::new(
+                QueryId(0),
+                WorkloadClass::Interactive,
+                ExecConfig::default(),
+                pool.child("q", None),
+            );
+            let err = coordinator
+                .submit(plan, worker, query)
+                .await
+                .err()
+                .map(|e| e.message().to_owned())
+                .unwrap_or_default();
+            assert!(err.contains("execution seed"), "{err}");
+            Ok(())
+        },
+    );
+    assert!(refused.is_ok(), "{refused:?}");
+}

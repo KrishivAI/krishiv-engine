@@ -9,7 +9,10 @@
 //! partition is what readers read (I10).
 //!
 //! The coordinator records a trace of what it shipped and what came back
-//! ([`Coordinator::trace`]): the same seed must give the same trace.
+//! ([`Coordinator::trace`]): the same seed must give the same trace. A
+//! submitted query must carry an execution seed (`ExecConfig::seed`): its
+//! root stage runs on the caller's context with it, and map tasks derive
+//! theirs from it.
 
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -164,6 +167,14 @@ impl Inner {
         worker: WorkerContext,
         query: Arc<QueryContext>,
     ) -> Result<BoxStream<'static, Result<Batch>>> {
+        // The root stage runs on the caller's query context, so its seed is
+        // the query's: an unseeded query would run its root stage's tables
+        // on OS-random seeds, and the run would not replay.
+        if query.config().seed.is_none() {
+            return Err(internal(
+                "a simulated query needs an execution seed (ExecConfig::seed) to replay".to_owned(),
+            ));
+        }
         let job = self.next_job.fetch_add(1, Ordering::Relaxed);
         let release = Release {
             job,
