@@ -123,6 +123,59 @@
    ]
   },
   {
+   "id": "pipe_where_after_gen_window",
+   "setup": [
+    "create temporary view d as select * from values (1,10),(2,20),(3,30) as t(k,v)"
+   ],
+   "sql": "(select k, explode(array(1,2)) x, sum(v) over () s from d group by k, v) |> where k > 1",
+   "rows": [
+    [
+     "2",
+     "1",
+     "60"
+    ],
+    [
+     "2",
+     "2",
+     "60"
+    ],
+    [
+     "3",
+     "1",
+     "60"
+    ],
+    [
+     "3",
+     "2",
+     "60"
+    ]
+   ]
+  },
+  {
+   "id": "pipe_where_on_generated",
+   "setup": [
+    "create temporary view d as select * from values (1,10),(2,20),(3,30) as t(k,v)"
+   ],
+   "sql": "(select k, explode(array(1,2)) x, sum(v) over () s from d group by k, v) |> where x > 1",
+   "rows": [
+    [
+     "1",
+     "2",
+     "60"
+    ],
+    [
+     "2",
+     "2",
+     "60"
+    ],
+    [
+     "3",
+     "2",
+     "60"
+    ]
+   ]
+  },
+  {
    "id": "nogen_window_sum",
    "setup": [
     "create temporary view d as select * from values (1,10),(2,20),(3,30) as t(k,v)"

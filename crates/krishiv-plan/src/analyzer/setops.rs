@@ -845,6 +845,7 @@ impl Resolver<'_> {
             c.widen = None;
         }
         c.agg = None;
+        c.generated_from = None;
         Ok(c)
     }
 }

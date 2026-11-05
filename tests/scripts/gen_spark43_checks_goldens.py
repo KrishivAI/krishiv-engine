@@ -54,6 +54,16 @@ CASES: list[tuple[str, list[str], str]] = [
         [VIEW_D],
         "select k, explode(array(1,2)) x, count(*) over () c from d group by k having k > 1",
     ),
+    (
+        "pipe_where_after_gen_window",
+        [VIEW_D],
+        "(select k, explode(array(1,2)) x, sum(v) over () s from d group by k, v) |> where k > 1",
+    ),
+    (
+        "pipe_where_on_generated",
+        [VIEW_D],
+        "(select k, explode(array(1,2)) x, sum(v) over () s from d group by k, v) |> where x > 1",
+    ),
     ("nogen_window_sum", [VIEW_D], "select k, sum(v) over (order by k) s from d group by k, v having k > 1 order by k"),
     # (4) each reference keeps its own options.
     (
