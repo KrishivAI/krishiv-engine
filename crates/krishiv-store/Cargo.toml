@@ -18,9 +18,18 @@ krishiv-common = { path = "../krishiv-common" }
 # Bearer header of `hf://` reads; only with `cloud`.
 http = { workspace = true, optional = true }
 object_store.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+futures = { workspace = true, features = ["alloc", "std"] }
+# Single-flight credential fetches (`Mutex`).
+tokio = { workspace = true, features = ["sync"] }
 
 [features]
 # The S3, GCS, Azure and web builders (reqwest over rustls). Opt-in so the default build stays inside the
 # dependency and binary-size budgets; `krishiv-io/cloud` turns it on. Without it, cloud URLs parse but no
 # store is built (`KRISHIV_UNSUPPORTED_FEATURE`).
 cloud = ["object_store/aws", "object_store/azure", "object_store/gcp", "object_store/http", "dep:http"]
+
+[dev-dependencies]
+async-trait.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
