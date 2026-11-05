@@ -14,6 +14,10 @@ def make_engine(name: str, **kw) -> Engine:
         from .spark_connect import SparkConnectEngine
 
         return SparkConnectEngine(**kw)
+    if name == "polars-streaming":
+        from .polars_engine import PolarsEngine
+
+        return PolarsEngine(streaming=True, **kw)
     if name == "krishiv":
         from .krishiv import KrishivEngine
 

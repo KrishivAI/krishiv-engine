@@ -318,7 +318,7 @@ def test_a_checksum_mismatch_fails_the_case_and_is_never_timed(kd: Path):
             {n: qm["scan_int"] for n in ("krishiv", "duckdb")}, {"krishiv": spy, "duckdb": ref}, 1, 60
         )
         assert good["engines"]["krishiv"]["status"] == "ok"
-        assert spy.timed == ["scan_int", "scan_int"]  # A B B A: two samples with one rep
+        assert spy.timed == ["scan_int"] * 3  # one untimed result run, then A B B A: two samples with one rep
     finally:
         spy.teardown()
         ref.teardown()

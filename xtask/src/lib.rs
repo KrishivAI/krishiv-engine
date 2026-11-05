@@ -10,6 +10,7 @@ pub mod console;
 pub mod coverage;
 pub mod dev;
 pub mod docs;
+pub mod file_size;
 pub mod format_neutral;
 pub mod layering;
 pub mod lint;

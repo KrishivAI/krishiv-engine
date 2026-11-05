@@ -28,8 +28,11 @@ class EngineCrashed(RuntimeError):
 
 
 class ProcessEngine(Engine):
-    def __init__(self, name: str, threads: int, memory_gb: int, timeout_s: float | None = None):
+    def __init__(
+        self, name: str, threads: int, memory_gb: int, timeout_s: float | None = None, cap_gb: int | None = None
+    ):
         self.name = name
+        self.cap_gb = cap_gb  # cgroup MemoryMax of the worker's scope (no swap); None = no cgroup
         self.threads = threads
         self.memory_gb = memory_gb
         self.timeout_s = timeout_s
@@ -42,8 +45,22 @@ class ProcessEngine(Engine):
     def _start(self) -> None:
         assert self._dataset is not None, "setup() not called"
         # -I: ignore PYTHONPATH and the cwd; krishiv_bench is importable because it is installed in the venv.
+        scope = (
+            ["systemd-run", "--user", "--scope", "-q", "-p", f"MemoryMax={self.cap_gb}G", "-p", "MemorySwapMax=0", "--"]
+            if self.cap_gb
+            else []
+        )
         self._proc = subprocess.Popen(
-            [sys.executable, "-I", "-m", "krishiv_bench.worker", self.name, str(self.threads), str(self.memory_gb)],
+            [
+                *scope,
+                sys.executable,
+                "-I",
+                "-m",
+                "krishiv_bench.worker",
+                self.name,
+                str(self.threads),
+                str(self.memory_gb),
+            ],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             start_new_session=True,
@@ -129,6 +146,10 @@ class ProcessEngine(Engine):
             self.last_peak_rss_bytes = self.end_measure().peak_rss_bytes
             if self._proc is not None:  # a killed worker has no meaningful CPU reading
                 self.last_cpu_seconds = max(0.0, tree_cpu_seconds(pid) - cpu0)
+
+    def result_checksum(self) -> dict | None:
+        """Checksum of the full result of the last ``timed_run``, taken in the worker after the measured window."""
+        return self._request({"op": "checksum"})
 
     def profile(self, query: Query) -> dict:
         return self._request({"op": "profile", "query": query})
