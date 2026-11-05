@@ -1210,9 +1210,9 @@ impl Resolver<'_> {
             .enumerate()
         {
             let FrameBound::Offset(x) = b else { continue };
-            // `n PRECEDING` over an ascending key negates the interval (Spark's `UnaryMinus`), which
-            // raises for the most negative year-month interval (a descending key negates it in the
-            // executor, for `FOLLOWING`).
+            // Spark's parser negates every `n PRECEDING` bound (`UnaryMinus`), which raises for the most negative
+            // year-month interval whatever the key's direction (a descending key negates `FOLLOWING` bounds in the
+            // executor).
             if let Some(inner) = crate::expr::negated(x)
                 && matches!(
                     &inner.node,
@@ -1221,10 +1221,6 @@ impl Resolver<'_> {
                         ..
                     })
                 )
-                && spec
-                    .order_by
-                    .first()
-                    .is_some_and(|o| o.direction == crate::SortDirection::Ascending)
             {
                 return Err(AnalysisError::new(
                     krishiv_common::error::IntervalArithmeticOverflowWithoutSuggestion {},

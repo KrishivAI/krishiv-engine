@@ -359,3 +359,28 @@ fn range_month_windows_match_spark() {
         skipped.join("\n")
     );
 }
+
+/// A `DAY` interval bound over a `DATE` key is Spark 4.0 and later; 3.5.7 raises `RANGE_FRAME_INVALID_TYPE` (the
+/// fixture case `d_dt_day_bound` holds both results; the golden test above compares 4.2.0 only).
+///
+/// Known differences of 3.5.7 not modelled (the engine has one message per class): its most-negative-interval error is
+/// the base class `INTERVAL_ARITHMETIC_OVERFLOW` (4.x: `.WITHOUT_SUGGESTION`), and `RANGE_FRAME_INVALID_TYPE` says
+/// "does not match" where 4.x says "does not support".
+#[test]
+fn a_day_bound_on_a_date_key_needs_spark_4_0() {
+    use krishiv_plan::analyzer::SparkProfile;
+    let sql = "SELECT count(*) OVER (ORDER BY d RANGE BETWEEN INTERVAL '30' DAY PRECEDING AND CURRENT ROW) \
+               FROM (VALUES (DATE'2024-01-31'), (DATE'2024-02-29')) t(d)";
+    let run = |profile| {
+        let s = Session::builder().profile(profile).build().unwrap();
+        block_on(async { s.sql(sql).await?.collect().await })
+    };
+    let e = run(SparkProfile::V3_5).unwrap_err();
+    assert_eq!(
+        e.error_class().name(),
+        "DATATYPE_MISMATCH.RANGE_FRAME_INVALID_TYPE"
+    );
+    for profile in [SparkProfile::V4_0, SparkProfile::V4_1, SparkProfile::V4_2] {
+        assert!(run(profile).is_ok(), "{profile:?}");
+    }
+}

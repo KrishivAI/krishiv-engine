@@ -15385,6 +15385,259 @@
      ]
     }
    }
+  },
+  {
+   "id": "ansi_true_ymi_min_desc_preceding",
+   "conf": {
+    "spark.sql.ansi.enabled": "true"
+   },
+   "sql": "SELECT id, d, collect_list(id) OVER (ORDER BY d DESC RANGE BETWEEN INTERVAL '-178956970-8' YEAR TO MONTH PRECEDING AND CURRENT ROW) AS c FROM (VALUES (1,DATE'2024-01-31'),(2,DATE'2024-02-29'),(3,DATE'2024-02-28'),(4,DATE'2024-03-31'),(5,DATE'2024-04-30'),(6,DATE'2024-04-30'),(7,CAST(NULL AS DATE)),(8,CAST(NULL AS DATE)),(9,DATE'2025-02-28')) t(id,d)  ORDER BY d DESC, id",
+   "results": {
+    "4.2.0": {
+     "error": {
+      "class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION",
+      "sqlstate": "22015",
+      "message": "[INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION] Integer overflow while operating with intervals. Try devising appropriate values for the interval parameters. SQLSTATE: 22015"
+     }
+    },
+    "4.1.0": {
+     "error": {
+      "class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION",
+      "sqlstate": "22015",
+      "message": "[INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION] Integer overflow while operating with intervals. Try devising appropriate values for the interval parameters. SQLSTATE: 22015"
+     }
+    },
+    "4.0.0": {
+     "error": {
+      "class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION",
+      "sqlstate": "22015",
+      "message": "[INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION] Integer overflow while operating with intervals. Try devising appropriate values for the interval parameters. SQLSTATE: 22015"
+     }
+    },
+    "3.5.7": {
+     "error": {
+      "class": "INTERVAL_ARITHMETIC_OVERFLOW",
+      "sqlstate": "22015",
+      "message": "[INTERVAL_ARITHMETIC_OVERFLOW] integer overflow."
+     }
+    }
+   }
+  },
+  {
+   "id": "ansi_true_ymi_min_asc_following",
+   "conf": {
+    "spark.sql.ansi.enabled": "true"
+   },
+   "sql": "SELECT id, d, collect_list(id) OVER (ORDER BY d ASC RANGE BETWEEN CURRENT ROW AND INTERVAL '-178956970-8' YEAR TO MONTH FOLLOWING) AS c FROM (VALUES (1,DATE'2024-01-31'),(2,DATE'2024-02-29'),(3,DATE'2024-02-28'),(4,DATE'2024-03-31'),(5,DATE'2024-04-30'),(6,DATE'2024-04-30'),(7,CAST(NULL AS DATE)),(8,CAST(NULL AS DATE)),(9,DATE'2025-02-28')) t(id,d)  ORDER BY d ASC, id",
+   "results": {
+    "4.2.0": {
+     "error": {
+      "class": "ARITHMETIC_OVERFLOW",
+      "sqlstate": "22003",
+      "message": "[ARITHMETIC_OVERFLOW] overflow. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22003"
+     }
+    },
+    "4.1.0": {
+     "error": {
+      "class": "ARITHMETIC_OVERFLOW",
+      "sqlstate": "22003",
+      "message": "[ARITHMETIC_OVERFLOW] integer overflow. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22003"
+     }
+    },
+    "4.0.0": {
+     "error": {
+      "class": "ARITHMETIC_OVERFLOW",
+      "sqlstate": "22003",
+      "message": "[ARITHMETIC_OVERFLOW] integer overflow. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22003"
+     }
+    },
+    "3.5.7": {
+     "error": {
+      "class": null,
+      "sqlstate": null,
+      "message": "An error occurred while calling z:org.apache.spark.api.python.PythonRDD.collectAndServe.\n: org.apache.spark.SparkException: Job aborted due to stage failure: Task 0 in stage 2.0 failed 1 times, most recent failure: Lost task 0.0 in stage 2.0 (TID 2) (5f626e7597cc executor driver): org.apache.spark.SparkArithmeticException: [ARITHMETIC_OVERFLOW] integer overflow. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error.\n\tat org.apache.spark.sql.errors.ExecutionErrors.arithmeticOverflowError(ExecutionErrors.scala:127)\n\tat org.apache.spark.sql.errors.ExecutionErrors.arithmeticOve"
+     }
+    }
+   }
+  },
+  {
+   "id": "ansi_false_ymi_min_desc_preceding",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "sql": "SELECT id, d, collect_list(id) OVER (ORDER BY d DESC RANGE BETWEEN INTERVAL '-178956970-8' YEAR TO MONTH PRECEDING AND CURRENT ROW) AS c FROM (VALUES (1,DATE'2024-01-31'),(2,DATE'2024-02-29'),(3,DATE'2024-02-28'),(4,DATE'2024-03-31'),(5,DATE'2024-04-30'),(6,DATE'2024-04-30'),(7,CAST(NULL AS DATE)),(8,CAST(NULL AS DATE)),(9,DATE'2025-02-28')) t(id,d)  ORDER BY d DESC, id",
+   "results": {
+    "4.2.0": {
+     "error": {
+      "class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION",
+      "sqlstate": "22015",
+      "message": "[INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION] Integer overflow while operating with intervals. Try devising appropriate values for the interval parameters. SQLSTATE: 22015"
+     }
+    },
+    "4.1.0": {
+     "error": {
+      "class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION",
+      "sqlstate": "22015",
+      "message": "[INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION] Integer overflow while operating with intervals. Try devising appropriate values for the interval parameters. SQLSTATE: 22015"
+     }
+    },
+    "4.0.0": {
+     "error": {
+      "class": "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION",
+      "sqlstate": "22015",
+      "message": "[INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION] Integer overflow while operating with intervals. Try devising appropriate values for the interval parameters. SQLSTATE: 22015"
+     }
+    },
+    "3.5.7": {
+     "error": {
+      "class": "INTERVAL_ARITHMETIC_OVERFLOW",
+      "sqlstate": "22015",
+      "message": "[INTERVAL_ARITHMETIC_OVERFLOW] integer overflow."
+     }
+    }
+   }
+  },
+  {
+   "id": "ansi_false_ymi_min_asc_following",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "sql": "SELECT id, d, collect_list(id) OVER (ORDER BY d ASC RANGE BETWEEN CURRENT ROW AND INTERVAL '-178956970-8' YEAR TO MONTH FOLLOWING) AS c FROM (VALUES (1,DATE'2024-01-31'),(2,DATE'2024-02-29'),(3,DATE'2024-02-28'),(4,DATE'2024-03-31'),(5,DATE'2024-04-30'),(6,DATE'2024-04-30'),(7,CAST(NULL AS DATE)),(8,CAST(NULL AS DATE)),(9,DATE'2025-02-28')) t(id,d)  ORDER BY d ASC, id",
+   "results": {
+    "4.2.0": {
+     "error": {
+      "class": "ARITHMETIC_OVERFLOW",
+      "sqlstate": "22003",
+      "message": "[ARITHMETIC_OVERFLOW] overflow. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22003"
+     }
+    },
+    "4.1.0": {
+     "error": {
+      "class": "ARITHMETIC_OVERFLOW",
+      "sqlstate": "22003",
+      "message": "[ARITHMETIC_OVERFLOW] integer overflow. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22003"
+     }
+    },
+    "4.0.0": {
+     "error": {
+      "class": "ARITHMETIC_OVERFLOW",
+      "sqlstate": "22003",
+      "message": "[ARITHMETIC_OVERFLOW] integer overflow. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22003"
+     }
+    },
+    "3.5.7": {
+     "error": {
+      "class": null,
+      "sqlstate": null,
+      "message": "An error occurred while calling z:org.apache.spark.api.python.PythonRDD.collectAndServe.\n: org.apache.spark.SparkException: Job aborted due to stage failure: Task 0 in stage 5.0 failed 1 times, most recent failure: Lost task 0.0 in stage 5.0 (TID 5) (5f626e7597cc executor driver): org.apache.spark.SparkArithmeticException: [ARITHMETIC_OVERFLOW] integer overflow. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error.\n\tat org.apache.spark.sql.errors.ExecutionErrors.arithmeticOverflowError(ExecutionErrors.scala:127)\n\tat org.apache.spark.sql.errors.ExecutionErrors.arithmeticOve"
+     }
+    }
+   }
+  },
+  {
+   "id": "ts_diff_types_int_month",
+   "conf": {},
+   "sql": "SELECT id, ts, count(*) OVER (ORDER BY ts ASC RANGE BETWEEN 1 PRECEDING AND INTERVAL '1' MONTH FOLLOWING) AS c FROM (VALUES (1,TIMESTAMP'2024-01-31 10:00:00'),(2,TIMESTAMP'2024-02-29 10:00:00'),(3,TIMESTAMP'2024-03-31 10:00:00'),(4,TIMESTAMP'2024-04-30 23:59:59.999999'),(5,CAST(NULL AS TIMESTAMP))) t(id,ts)  ORDER BY ts ASC, id",
+   "results": {
+    "4.2.0": {
+     "error": {
+      "class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
+      "sqlstate": "42K09",
+      "message": "[DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES] Cannot resolve \"RANGE BETWEEN 1 PRECEDING AND INTERVAL '1' MONTH FOLLOWING\" due to data type mismatch: Window frame bounds \"(- 1)\" and \"INTERVAL '1' MONTH\" do not have the same type: \"INT\" <> \"INTERVAL MONTH\". SQLSTATE: 42K09; line 1 pos 29;"
+     }
+    },
+    "4.1.0": {
+     "error": {
+      "class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
+      "sqlstate": "42K09",
+      "message": "[DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES] Cannot resolve \"RANGE BETWEEN 1 PRECEDING AND INTERVAL '1' MONTH FOLLOWING\" due to data type mismatch: Window frame bounds \"(- 1)\" and \"INTERVAL '1' MONTH\" do not have the same type: \"INT\" <> \"INTERVAL MONTH\". SQLSTATE: 42K09; line 1 pos 29;"
+     }
+    },
+    "4.0.0": {
+     "error": {
+      "class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
+      "sqlstate": "42K09",
+      "message": "[DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES] Cannot resolve \"RANGE BETWEEN 1 PRECEDING AND INTERVAL '1' MONTH FOLLOWING\" due to data type mismatch: Window frame bounds \"(- 1)\" and \"INTERVAL '1' MONTH\" do not have the same type: \"INT\" <> \"INTERVAL MONTH\". SQLSTATE: 42K09; line 1 pos 29;"
+     }
+    },
+    "3.5.7": {
+     "error": {
+      "class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
+      "sqlstate": "42K09",
+      "message": "[DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES] Cannot resolve \"RANGE BETWEEN 1 PRECEDING AND INTERVAL '1' MONTH FOLLOWING\" due to data type mismatch: Window frame bounds \"(- 1)\" and \"INTERVAL '1' MONTH\" do not have the same type: \"INT\" <> \"INTERVAL MONTH\".; line 1 pos 29;"
+     }
+    }
+   }
+  },
+  {
+   "id": "ntz_diff_types_int_month",
+   "conf": {},
+   "sql": "SELECT id, ts, count(*) OVER (ORDER BY ts ASC RANGE BETWEEN 1 PRECEDING AND INTERVAL '1' MONTH FOLLOWING) AS c FROM (VALUES (1,TIMESTAMP_NTZ'2024-01-31 10:00:00'),(2,TIMESTAMP_NTZ'2024-02-29 10:00:00'),(3,TIMESTAMP_NTZ'2024-03-31 10:00:00'),(4,TIMESTAMP_NTZ'2024-04-30 23:59:59.999999'),(5,CAST(NULL AS TIMESTAMP_NTZ))) t(id,ts)  ORDER BY ts ASC, id",
+   "results": {
+    "4.2.0": {
+     "error": {
+      "class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
+      "sqlstate": "42K09",
+      "message": "[DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES] Cannot resolve \"RANGE BETWEEN 1 PRECEDING AND INTERVAL '1' MONTH FOLLOWING\" due to data type mismatch: Window frame bounds \"(- 1)\" and \"INTERVAL '1' MONTH\" do not have the same type: \"INT\" <> \"INTERVAL MONTH\". SQLSTATE: 42K09; line 1 pos 29;"
+     }
+    },
+    "4.1.0": {
+     "error": {
+      "class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
+      "sqlstate": "42K09",
+      "message": "[DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES] Cannot resolve \"RANGE BETWEEN 1 PRECEDING AND INTERVAL '1' MONTH FOLLOWING\" due to data type mismatch: Window frame bounds \"(- 1)\" and \"INTERVAL '1' MONTH\" do not have the same type: \"INT\" <> \"INTERVAL MONTH\". SQLSTATE: 42K09; line 1 pos 29;"
+     }
+    },
+    "4.0.0": {
+     "error": {
+      "class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
+      "sqlstate": "42K09",
+      "message": "[DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES] Cannot resolve \"RANGE BETWEEN 1 PRECEDING AND INTERVAL '1' MONTH FOLLOWING\" due to data type mismatch: Window frame bounds \"(- 1)\" and \"INTERVAL '1' MONTH\" do not have the same type: \"INT\" <> \"INTERVAL MONTH\". SQLSTATE: 42K09; line 1 pos 29;"
+     }
+    },
+    "3.5.7": {
+     "error": {
+      "class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
+      "sqlstate": "42K09",
+      "message": "[DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES] Cannot resolve \"RANGE BETWEEN 1 PRECEDING AND INTERVAL '1' MONTH FOLLOWING\" due to data type mismatch: Window frame bounds \"(- 1)\" and \"INTERVAL '1' MONTH\" do not have the same type: \"INT\" <> \"INTERVAL MONTH\".; line 1 pos 29;"
+     }
+    }
+   }
+  },
+  {
+   "id": "d_diff_types_month_hour",
+   "conf": {},
+   "sql": "SELECT id, d, count(*) OVER (ORDER BY d ASC RANGE BETWEEN INTERVAL '1' MONTH PRECEDING AND INTERVAL '1' HOUR FOLLOWING) AS c FROM (VALUES (1,DATE'2024-01-31'),(2,DATE'2024-02-29'),(3,DATE'2024-02-28'),(4,DATE'2024-03-31'),(5,DATE'2024-04-30'),(6,DATE'2024-04-30'),(7,CAST(NULL AS DATE)),(8,CAST(NULL AS DATE)),(9,DATE'2025-02-28')) t(id,d)  ORDER BY d ASC, id",
+   "results": {
+    "4.2.0": {
+     "error": {
+      "class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
+      "sqlstate": "42K09",
+      "message": "[DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES] Cannot resolve \"RANGE BETWEEN INTERVAL '1' MONTH PRECEDING AND INTERVAL '01' HOUR FOLLOWING\" due to data type mismatch: Window frame bounds \"(- INTERVAL '1' MONTH)\" and \"INTERVAL '01' HOUR\" do not have the same type: \"INTERVAL MONTH\" <> \"INTERVAL HOUR\". SQLSTATE: 42K09; line 1 pos 28;"
+     }
+    },
+    "4.1.0": {
+     "error": {
+      "class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
+      "sqlstate": "42K09",
+      "message": "[DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES] Cannot resolve \"RANGE BETWEEN INTERVAL '1' MONTH PRECEDING AND INTERVAL '01' HOUR FOLLOWING\" due to data type mismatch: Window frame bounds \"(- INTERVAL '1' MONTH)\" and \"INTERVAL '01' HOUR\" do not have the same type: \"INTERVAL MONTH\" <> \"INTERVAL HOUR\". SQLSTATE: 42K09; line 1 pos 28;"
+     }
+    },
+    "4.0.0": {
+     "error": {
+      "class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
+      "sqlstate": "42K09",
+      "message": "[DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES] Cannot resolve \"RANGE BETWEEN INTERVAL '1' MONTH PRECEDING AND INTERVAL '01' HOUR FOLLOWING\" due to data type mismatch: Window frame bounds \"(- INTERVAL '1' MONTH)\" and \"INTERVAL '01' HOUR\" do not have the same type: \"INTERVAL MONTH\" <> \"INTERVAL HOUR\". SQLSTATE: 42K09; line 1 pos 28;"
+     }
+    },
+    "3.5.7": {
+     "error": {
+      "class": "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
+      "sqlstate": "42K09",
+      "message": "[DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES] Cannot resolve \"RANGE BETWEEN INTERVAL '1' MONTH PRECEDING AND INTERVAL '01' HOUR FOLLOWING\" due to data type mismatch: Window frame bounds \"(- INTERVAL '1' MONTH)\" and \"INTERVAL '01' HOUR\" do not have the same type: \"INTERVAL MONTH\" <> \"INTERVAL HOUR\".; line 1 pos 28;"
+     }
+    }
+   }
   }
  ]
 }
