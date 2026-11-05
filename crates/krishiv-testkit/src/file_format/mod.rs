@@ -1624,7 +1624,7 @@ pub fn options(fx: &dyn FormatFixture) -> SuiteResult {
             &opts,
         )?;
         let fp = env
-            .block_on(o.metadata_fingerprint(env.io.secrets()))
+            .block_on(o.metadata_fingerprint(env.io.principal(), env.io.secrets()))
             .map_err(|e| e.to_string())?;
         let key = CacheKey::new(format.name(), &file, fp);
         ensure!(

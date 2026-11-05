@@ -498,3 +498,86 @@ fn the_policy_sees_the_path_the_scan_reads() {
     assert_eq!(class(&r), ErrorClass::UnableToInferSchema);
     assert_eq!(audit.0.lock().unwrap().len(), 2);
 }
+
+/// Decides `USAGE` on secrets and allows everything else; records what it was asked.
+struct Usage {
+    allow: bool,
+    asked: Mutex<Vec<String>>,
+}
+
+impl AccessPolicy for Usage {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        s: &'a Securable,
+        p: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        let decision = if let Securable::Secret { scope } = s {
+            assert_eq!(p, Privilege::Usage, "secrets are asked for USAGE only");
+            self.asked.lock().unwrap().push(scope.clone());
+            if self.allow {
+                AccessDecision::Allow
+            } else {
+                AccessDecision::Deny {
+                    reason: String::new(),
+                }
+            }
+        } else {
+            AccessDecision::Allow
+        };
+        Box::pin(std::future::ready(Ok(decision)))
+    }
+}
+
+fn read_with_secret(table: bool) -> LogicalPlan {
+    let options = BTreeMap::from([("token".to_owned(), OptionValue::reference("prod", "k"))]);
+    if table {
+        LogicalPlan::new(PlanNode::Read(ReadSource::Table {
+            name: vec!["t".to_owned()],
+            options,
+        }))
+    } else {
+        LogicalPlan::new(PlanNode::Read(ReadSource::Files {
+            format: "parquet".to_owned(),
+            paths: vec![OptionValue::from_user("path", "/data/one")],
+            options,
+        }))
+    }
+}
+
+/// E12: a `secret('scope', 'key')` reference in a read's options needs `USAGE` on its scope,
+/// and a denial fails closed before any file is listed or inferred.
+#[test]
+fn secret_references_need_usage_on_their_scope() {
+    for table in [false, true] {
+        let files = Arc::new(Files::default());
+        let mut denied = ctx(&files);
+        let policy = Arc::new(Usage {
+            allow: false,
+            asked: Mutex::new(Vec::new()),
+        });
+        denied.policy = Arc::clone(&policy) as Arc<dyn AccessPolicy>;
+        let r = run(read_with_secret(table), &denied);
+        assert_eq!(
+            class(&r),
+            ErrorClass::KrishivInsufficientPermissions,
+            "{table}"
+        );
+        assert_eq!(*policy.asked.lock().unwrap(), ["prod"]);
+        assert!(files.calls.lock().unwrap().is_empty(), "nothing is listed");
+    }
+    // Allowed: the files read goes on, and the scope was asked once.
+    let files = Arc::new(Files::default());
+    let mut allowed = ctx(&files);
+    let policy = Arc::new(Usage {
+        allow: true,
+        asked: Mutex::new(Vec::new()),
+    });
+    allowed.policy = Arc::clone(&policy) as Arc<dyn AccessPolicy>;
+    run(read_with_secret(false), &allowed).unwrap();
+    assert_eq!(*policy.asked.lock().unwrap(), ["prod"]);
+}
