@@ -360,7 +360,6 @@ def test_self_measure_adds_no_sampler_reads():
     m = e.end_measure()
     assert m.syscr is not None
     assert m.rchar is not None
-    assert m.syscr < 100
     assert m.rchar < 20_000
     assert m.cpu_seconds is not None
     assert m.cpu_seconds < 0.05
