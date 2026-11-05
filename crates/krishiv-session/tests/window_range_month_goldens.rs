@@ -384,3 +384,33 @@ fn a_day_bound_on_a_date_key_needs_spark_4_0() {
         assert!(run(profile).is_ok(), "{profile:?}");
     }
 }
+
+/// Bounds of two types over a date or timestamp key raise `SPECIFIED_WINDOW_FRAME_DIFF_TYPES`, before either type is
+/// checked against the key (the fixture's `d_diff_types_*` and `ts_diff_types_*` cases compare the message text).
+#[test]
+fn bounds_of_two_types_are_refused_before_the_key_is_checked() {
+    let s = Session::new().unwrap();
+    for (key, rows) in [
+        ("d", "(DATE'2024-01-31'), (DATE'2024-02-29')"),
+        (
+            "ts",
+            "(TIMESTAMP'2024-01-31 10:00:00'), (TIMESTAMP'2024-02-29 10:00:00')",
+        ),
+    ] {
+        for frame in [
+            "1 PRECEDING AND INTERVAL '1' MONTH FOLLOWING",
+            "INTERVAL '1' MONTH PRECEDING AND INTERVAL '1' DAY FOLLOWING",
+            "INTERVAL '1' YEAR PRECEDING AND INTERVAL '1' MONTH FOLLOWING",
+        ] {
+            let sql = format!(
+                "SELECT count(*) OVER (ORDER BY {key} RANGE BETWEEN {frame}) FROM (VALUES {rows}) t({key})"
+            );
+            let e = block_on(async { s.sql(&sql).await?.collect().await }).unwrap_err();
+            assert_eq!(
+                e.error_class().name(),
+                "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
+                "{sql}"
+            );
+        }
+    }
+}
