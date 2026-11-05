@@ -39,6 +39,7 @@ use krishiv_common::error::{
 };
 use krishiv_types::DataType;
 
+use self::no_rows::on_no_rows;
 use super::bind::{addr, unsupported};
 use super::catalog::FunctionLookup;
 use super::exprs::{literal_type, pretty};
@@ -89,6 +90,7 @@ pub(super) fn rewrite(
 }
 
 mod global_in;
+mod no_rows;
 
 struct Rewriter {
     next_id: u64,
@@ -2863,102 +2865,6 @@ fn inner_columns(e: &Arc<Expr>) -> Vec<BoundColumn> {
         x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
     }
     out
-}
-
-/// What a scalar subquery's value `e` is over no rows: `None` when NULL,
-/// `Some(0)` for a bare `count`; `None` of the outer option when unknown
-/// (Spark evaluates other forms; Krishiv does not yet).
-fn on_no_rows(e: &Arc<Expr>) -> Option<Option<Literal>> {
-    // A bare count is 0 over no rows.
-    if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
-        && f.kind == FunctionKind::Aggregate
-        && f.id.name() == "count"
-    {
-        return Some(Some(Literal::Long(0)));
-    }
-    if let Some(v) = integer_on_no_rows(e) {
-        return Some(v.map(Literal::Long));
-    }
-    // Otherwise NULL when every path to a leaf meets an aggregate that is
-    // NULL over no rows through operators that keep a NULL.
-    let mut stack = vec![Arc::clone(e)];
-    let mut any_aggregate = false;
-    while let Some(x) = stack.pop() {
-        match &x.node {
-            ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
-                if !matches!(f.id.name(), "sum" | "avg" | "min" | "max" | "any_value") {
-                    return None;
-                }
-                any_aggregate = true;
-            }
-            ExprNode::Resolved(ResolvedExpr::Function(f))
-                if matches!(
-                    f.id,
-                    FunctionId::Builtin(
-                        Builtin::Add
-                            | Builtin::Subtract
-                            | Builtin::Multiply
-                            | Builtin::Divide
-                            | Builtin::Remainder
-                            | Builtin::IntegralDivide
-                            | Builtin::Negative
-                    )
-                ) =>
-            {
-                // NULL if either side is: one aggregate side suffices.
-                let mut nulls = false;
-                for a in &f.args {
-                    if on_no_rows(a) == Some(None) {
-                        nulls = true;
-                    }
-                }
-                if nulls {
-                    any_aggregate = true;
-                } else {
-                    return None;
-                }
-            }
-            ExprNode::Cast { expr, .. } => stack.push(Arc::clone(expr)),
-            _ => return None,
-        }
-    }
-    any_aggregate.then_some(None)
-}
-
-/// `e` over no rows when it is integer arithmetic over `count`s (0), other
-/// aggregates (NULL) and integer literals: `Some(None)` is NULL.
-fn integer_on_no_rows(e: &Arc<Expr>) -> Option<Option<i64>> {
-    match &e.node {
-        ExprNode::Literal(Literal::Long(v)) => Some(Some(*v)),
-        ExprNode::Literal(Literal::Integer(v)) => Some(Some(i64::from(*v))),
-        ExprNode::Cast {
-            expr,
-            to: DataType::Long,
-            ..
-        } => integer_on_no_rows(expr),
-        ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
-            match f.id.name() {
-                "count" => Some(Some(0)),
-                "sum" | "avg" | "min" | "max" | "any_value" => Some(None),
-                _ => None,
-            }
-        }
-        ExprNode::Resolved(ResolvedExpr::Function(f)) if f.args.len() == 2 => {
-            let op: fn(i64, i64) -> Option<i64> = match f.id {
-                FunctionId::Builtin(Builtin::Add) => i64::checked_add,
-                FunctionId::Builtin(Builtin::Subtract) => i64::checked_sub,
-                FunctionId::Builtin(Builtin::Multiply) => i64::checked_mul,
-                _ => return None,
-            };
-            let a = integer_on_no_rows(&f.args[0])?;
-            let b = integer_on_no_rows(&f.args[1])?;
-            match (a, b) {
-                (Some(a), Some(b)) => op(a, b).map(Some),
-                _ => Some(None),
-            }
-        }
-        _ => None,
-    }
 }
 
 /// Each correlated predicate is `inner = outer`: the inner and the outer
