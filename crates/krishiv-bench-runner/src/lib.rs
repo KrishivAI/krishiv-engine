@@ -784,3 +784,14 @@ fn read_sql(file: &str) -> Result<String, RunnerError> {
 fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::json_opt;
+
+    #[test]
+    fn json_opt_writes_null_for_none() {
+        assert_eq!(json_opt(None), "null");
+        assert_eq!(json_opt(Some(7)), "7");
+    }
+}
