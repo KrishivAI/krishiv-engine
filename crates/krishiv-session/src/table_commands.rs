@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 use krishiv_common::error::{
     CastOverflowInTableInsert, DataSourceNotFound, ErrorClass,
@@ -2488,8 +2488,26 @@ impl Session {
                 }
                 // What is left after this point is the write itself (query errors, I/O): as in
                 // Spark's V1 overwrite, a failure there leaves no table.
-                self.drop_named_table(&name, &env, true).await?;
-                self.exec_write_v2(df, spec, V2Mode::Create).await
+                // Admitted before the drop: a controller that refuses the write, or a caller that
+                // gives up while it queues, must not have lost the old table. The write takes
+                // this admission instead of asking again.
+                let slot = Arc::clone(&analysis.env.admitted);
+                let taken = self.admit_query(&analysis.env).await?;
+                *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(taken);
+                let done = async {
+                    self.drop_named_table(&name, &env, true).await?;
+                    self.exec_write_v2(df, spec, V2Mode::Create).await
+                }
+                .await;
+                // Not taken by a write (the drop or the create failed first): settle its row.
+                let unrun = slot.lock().unwrap_or_else(PoisonError::into_inner).take();
+                if let Some(unrun) = unrun {
+                    match &done {
+                        Ok(()) => unrun.finish_ok(),
+                        Err(error) => unrun.fail(error),
+                    }
+                }
+                done
             }
             // `ErrorIfExists` on an existing table fails in the create.
             _ => self.exec_write_v2(df, spec, V2Mode::Create).await,

@@ -1269,6 +1269,7 @@ impl Session {
             text: None,
             statement_class: None,
             row: Arc::default(),
+            admitted: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1910,7 +1911,15 @@ impl Session {
         crate::access::still_physical(self, &at)?;
         // The admission permit before anything is replaced: `DirectoryWrite::begin` deletes what
         // an overwrite replaces, which a refused or cancelled query must not have done.
-        let mut admitted = Some(self.admit_query(env).await?);
+        let preadmitted = env
+            .admitted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        let mut admitted = Some(match preadmitted {
+            Some(admitted) => admitted,
+            None => self.admit_query(env).await?,
+        });
         let written = async {
             let job = job_uuid();
             // Every name of the write is resolved relative to the directory
@@ -2639,6 +2648,10 @@ pub(crate) struct QueryEnv {
     /// when a step after its run fails. Statement-local, so another statement of the same
     /// session cannot set or clear it.
     pub(crate) row: Arc<std::sync::Mutex<Option<String>>>,
+    /// The admission a statement took before it changed anything the run that follows would
+    /// otherwise be admitted for (`saveAsTable` overwrite drops the old table first); the write
+    /// takes it instead of asking again. Shared like `row`.
+    pub(crate) admitted: Arc<std::sync::Mutex<Option<Admitted>>>,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a

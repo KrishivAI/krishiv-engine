@@ -1126,6 +1126,7 @@ impl DataFrame {
             env.text.clone_from(&a.env.text);
             env.statement_class = a.env.statement_class;
             env.row = Arc::clone(&a.env.row);
+            env.admitted = Arc::clone(&a.env.admitted);
         }
         if let Some(a) = cached
             && !a.analyzed.reads_files
@@ -1186,6 +1187,16 @@ impl DataFrame {
         }
         let analyzed = self.session.analyze_in(&self.plan, &env, text).await?;
         let mut env = env;
+        // The statement's pre-admission (see `QueryEnv::admitted`) follows the frame through its
+        // re-analyses, as its `system.queries` row does.
+        if let Some(prev) = self
+            .analysis
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            env.admitted = Arc::clone(&prev.env.admitted);
+        }
         if let Some(t) = text {
             env.text = Some(Arc::from(t.as_str()));
         }

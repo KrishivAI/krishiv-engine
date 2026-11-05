@@ -336,3 +336,63 @@ async fn an_ignored_write_settles_its_row_as_finished() {
         Some("finished")
     );
 }
+
+#[tokio::test]
+async fn a_refused_table_overwrite_keeps_the_old_table() {
+    let gate = Gate::new();
+    gate.first.store(false, Ordering::SeqCst);
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .admission_controller(Arc::<Gate>::clone(&gate))
+        .build()
+        .unwrap();
+    s.sql("CREATE TABLE kept USING parquet AS SELECT 41 AS v")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    gate.requests.lock().unwrap().clear();
+    // One admission for a successful overwrite: the write takes the one made before the drop.
+    s.sql("SELECT 42 AS v")
+        .await
+        .unwrap()
+        .write()
+        .mode("overwrite")
+        .save_as_table("kept")
+        .await
+        .unwrap();
+    assert_eq!(gate.requests.lock().unwrap().len(), 1, "asked exactly once");
+    assert_eq!(
+        gate.slots.0.load(Ordering::SeqCst),
+        0,
+        "no slot is left held"
+    );
+    // A refused overwrite leaves the table as it was.
+    gate.refuse.store(true, Ordering::SeqCst);
+    let r = s
+        .sql("SELECT 43 AS v")
+        .await
+        .unwrap()
+        .write()
+        .mode("overwrite")
+        .save_as_table("kept")
+        .await;
+    assert!(r.is_err(), "the overwrite must be refused");
+    gate.refuse.store(false, Ordering::SeqCst);
+    let rows = s
+        .sql("SELECT v FROM kept")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        1,
+        "the table survived"
+    );
+}

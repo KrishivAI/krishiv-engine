@@ -289,6 +289,14 @@ pub(crate) struct Admitted {
     armed: bool,
 }
 
+impl std::fmt::Debug for Admitted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Admitted")
+            .field("log_id", &self.log_id)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Admitted {
     pub(crate) fn new(state: Arc<SessionState>, log_id: String, permit: Permit) -> Self {
         Self {
