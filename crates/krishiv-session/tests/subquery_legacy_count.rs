@@ -70,6 +70,7 @@ fn session() -> R<Session> {
          (1, 2.0), (1, 2.0), (2, 1.0), (2, 1.0), (3, 3.0), (null, null), (null, 5.0), (6, null)",
         "create temporary view r(c, d) as values \
          (2, 3.0), (2, 3.0), (3, 2.0), (4, 1.0), (null, null), (null, 5.0), (6, null)",
+        "create temporary view null_view(a, b) as select cast(null as int), cast(null as int)",
     ] {
         run(&s, v)?;
     }
@@ -162,5 +163,47 @@ fn a_grouped_correlated_count_reads_zero_where_nothing_matched_under_the_legacy_
     // A global count reads 0 either way.
     let q = "select a, (select count(*) from r where l.a = r.c) from l";
     both(&s, SCALAR_FLAG, q, &legacy, &legacy)?;
+    Ok(())
+}
+
+/// A correlated global aggregate whose value is an expression of a call, or
+/// whose `HAVING` reads another call than the value: each call takes its
+/// value over no rows (a count's 0) where nothing matched, as Spark 4.2.0
+/// answers (`scalar-subquery-count-bug.sql` #5, #11, #13, #15 and
+/// `in-count-bug.sql` #8, #9, with the legacy flags off).
+#[test]
+fn a_having_or_an_expression_over_correlated_calls_sees_zero_counts() -> R {
+    let s = session()?;
+    let q = "select a, (select (count(*)) is null from r where l.a = r.c) from l";
+    let want = [
+        "1|false",
+        "1|false",
+        "2|false",
+        "2|false",
+        "3|false",
+        "6|false",
+        "NULL|false",
+        "NULL|false",
+    ];
+    assert_eq!(run(&s, q)?, rows(&want), "{q}");
+    let zeros = ["0", "0", "0", "0", "0", "0", "0", "0"];
+    for q in [
+        "select (select count(null_view.a) as result from null_view \
+         where null_view.a = l.a having count(*) > -1) from l",
+        "select (select count(null_view.a) as result from null_view \
+         inner join r on r.c = null_view.a and r.c is not null \
+         where null_view.a = l.a having count(*) > -1) from l",
+        "select (select count(f.a) as result from \
+         (select a, b from null_view intersect select c, d from r where c is not null) as f \
+         where f.a = l.a having count(*) > -1) from l",
+    ] {
+        assert_eq!(run(&s, q)?, rows(&zeros), "{q}");
+    }
+    let q = "select * from t1 where c1 in \
+             (select 1 from t2 where t2.c1 = t1.c1 having count(*) = 0)";
+    assert_eq!(run(&s, q)?, rows(&["1|2"]), "{q}");
+    let q = "select * from t1 where c1 not in \
+             (select 1 from t2 where t2.c1 = t1.c1 having count(*) = 0)";
+    assert_eq!(run(&s, q)?, rows(&["0|1"]), "{q}");
     Ok(())
 }

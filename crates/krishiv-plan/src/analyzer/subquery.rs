@@ -57,6 +57,9 @@ use krishiv_common::stack::{STEP, on_big_stack};
 
 type R<T> = Result<T, AnalysisError>;
 
+#[path = "subquery_split.rs"]
+mod split;
+
 /// A subquery's input with its correlation lifted out: the plan, the keys it
 /// groups by, and the outer expressions they match.
 type Lifted = (Arc<LogicalPlan>, Vec<Arc<Expr>>, Vec<Arc<Expr>>);
@@ -615,6 +618,13 @@ impl Rewriter {
         let [value] = &values[..] else { return None };
         if !self.correlated(inner) || self.reads_correlated(value) || has_outer(Node::Expr(value)) {
             return None;
+        }
+        if let Some(e) = self.in_composite(value, plan) {
+            return Some(if negated {
+                boolean(Builtin::Not, vec![e])
+            } else {
+                e
+            });
         }
         let PlanNode::Aggregate {
             grouping: Grouping::GroupBy(keys),
@@ -1557,6 +1567,9 @@ impl Rewriter {
     ) -> R<(Arc<LogicalPlan>, Arc<Expr>)> {
         if let Some((agg, predicate, value)) = having_over_global(plan) {
             return self.scalar_having(base, &agg, &predicate, &value);
+        }
+        if let Some(c) = split::composite(plan) {
+            return self.scalar_composite(base, &c);
         }
         let PlanNode::Aggregate {
             input,
