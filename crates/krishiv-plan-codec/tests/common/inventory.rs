@@ -1370,6 +1370,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     keys: vec![0, 1],
                     scheme: HashScheme::Unpinned,
                 },
+                filters: Vec::new(),
             }),
         ),
         (
@@ -1381,6 +1382,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     keys: vec![1, 0],
                     scheme: HashScheme::KeyGroupV1,
                 },
+                filters: Vec::new(),
             }),
         ),
         (
@@ -1389,6 +1391,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 id: ExchangeId(12),
                 input: boxed(scan()),
                 partitioning: Partitioning::Single,
+                filters: Vec::new(),
             }),
         ),
         (
@@ -1397,6 +1400,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 id: ExchangeId(13),
                 input: boxed(scan()),
                 partitioning: Partitioning::Broadcast,
+                filters: Vec::new(),
             }),
         ),
         (
@@ -1405,6 +1409,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 id: ExchangeId(14),
                 input: boxed(scan()),
                 partitioning: Partitioning::RoundRobin,
+                filters: Vec::new(),
             }),
         ),
         (
@@ -1415,6 +1420,25 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 partitioning: Partitioning::Range {
                     keys: vec![SortKey::asc(0), SortKey::desc(1)],
                 },
+                filters: Vec::new(),
+            }),
+        ),
+        (
+            "exchange_filters",
+            PhysNode::Exchange(ExchangePlan {
+                id: ExchangeId(18),
+                input: boxed(scan()),
+                partitioning: Partitioning::Single,
+                filters: vec![krishiv_exec::physical::ExchangeFilterPlan {
+                    id: krishiv_io::FilterId(3),
+                    column: 0,
+                    key_type: arrow_schema::DataType::Int64,
+                    options: krishiv_io::KeyFilterOptions {
+                        bloom_bytes: Some(4096),
+                        ..krishiv_io::KeyFilterOptions::default()
+                    },
+                    null_safe: true,
+                }],
             }),
         ),
         (

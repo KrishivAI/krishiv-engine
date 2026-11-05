@@ -224,7 +224,7 @@ impl ExchangeReader for Remote {
                     Ok(ExchangeFrame::End)
                 }
                 Reply::Failed(message) => Err(internal(format!("{}: {message}", self.host))),
-                Reply::Done => Err(internal(format!("{}: a fetch answered Done", self.host))),
+                Reply::Done(_) => Err(internal(format!("{}: a fetch answered Done", self.host))),
             }
         })
     }

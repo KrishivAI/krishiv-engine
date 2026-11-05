@@ -47,6 +47,7 @@ fn exchange(id: u64, input: PhysNode, partitioning: Partitioning) -> PhysNode {
         id: ExchangeId(id),
         input: Box::new(input),
         partitioning,
+        filters: Vec::new(),
     })
 }
 
@@ -255,4 +256,80 @@ fn fragments_round_trip_through_the_plan_codec() {
         let back = krishiv_plan_codec::decode(&bytes).unwrap();
         assert_eq!(back.root(), s.plan.root());
     }
+}
+
+fn scan(id: u64) -> PhysNode {
+    PhysNode::Scan(krishiv_exec::physical::ScanNode {
+        id: krishiv_exec::physical::ScanId(id),
+        scan: krishiv_plan::Scan {
+            source: krishiv_plan::ReadSource::Table {
+                name: vec!["t".to_owned()],
+                options: BTreeMap::new(),
+            },
+            output: vec![krishiv_plan::BoundColumn {
+                id: AttrId(id),
+                name: "id".to_owned(),
+                data_type: krishiv_types::DataType::Long,
+                nullable: false,
+            }],
+            version: None,
+        },
+        projection: vec![krishiv_io::ColumnPath::new("id")],
+        filter: None,
+        runtime_filters: Vec::new(),
+        row_stage: krishiv_exec::RowStageSettings::default(),
+        row_id: false,
+    })
+}
+
+/// Review m3 of T176 unit 1: a stage lists the scans its tasks may split
+/// (the streaming side), and dealt splits for any other scan are refused,
+/// since a dealt build side would lose rows.
+#[test]
+fn only_streaming_scans_are_dealt() {
+    use krishiv_exec::physical::{
+        HashJoinPlan, JoinDistribution, PhysicalPlan as Fragment, ScanId, ScanSplits,
+    };
+
+    let join = PhysNode::HashJoin(HashJoinPlan {
+        probe: Box::new(scan(1)),
+        build: Box::new(scan(2)),
+        join_type: krishiv_exec::JoinType::Inner,
+        probe_keys: vec![0],
+        build_keys: vec![0],
+        null_safe: vec![false],
+        residual: None,
+        single_match: false,
+        distinct_build: false,
+        runtime_filters: Vec::new(),
+        distribution: JoinDistribution::Broadcast,
+    });
+    let stages = fragment(&plan(exchange(1, join, hash())), &schemas(&[1])).unwrap();
+    let map = &stages[0];
+    assert_eq!(
+        map.dealable.iter().copied().collect::<Vec<_>>(),
+        vec![ScanId(1)]
+    );
+
+    #[derive(Debug)]
+    struct Deal(u64);
+    impl crate::StageSplits for Deal {
+        fn splits(
+            &self,
+            _fragment: &Fragment,
+            _tasks: u32,
+        ) -> Result<Option<Vec<BTreeMap<ScanId, ScanSplits>>>, krishiv_common::error::KrishivError>
+        {
+            let none = ScanSplits::Files {
+                files: Arc::from(Vec::new()),
+                partitions: Vec::new(),
+            };
+            Ok(Some(vec![BTreeMap::from([(ScanId(self.0), none)]); 2]))
+        }
+    }
+    let tasks = crate::stage_tasks(&stages, 4, Some(&Deal(1))).unwrap();
+    assert_eq!(tasks[0].len(), 2);
+    let e = crate::stage_tasks(&stages, 4, Some(&Deal(2))).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.message().contains("scan 2"), "{e}");
 }

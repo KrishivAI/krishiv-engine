@@ -118,9 +118,9 @@ pub use executor::{
     Executor, ExecutorConfig, TaskHandle, TokioClock, TokioExecutor, WorkloadClass,
 };
 pub use join::{
-    HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, JoinType, NestedLoopJoin,
-    NestedLoopJoinNode, NestedLoopSpec, SkewSplit, SortMergeJoin, SortMergeJoinNode,
-    merge_join_supported, skew_split_sides,
+    BroadcastKey, BroadcastTables, HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, JoinType,
+    NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec, SharedBuildJoinNode, SkewSplit,
+    SortMergeJoin, SortMergeJoinNode, merge_join_supported, skew_split_sides,
 };
 pub use metrics::prometheus;
 pub use metrics::registry::{

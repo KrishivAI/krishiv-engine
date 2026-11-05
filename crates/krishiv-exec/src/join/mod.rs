@@ -154,6 +154,7 @@
 //! the tables: two clock reads per batch, for
 //! [`QueryMetrics::hash_probe_share`](crate::QueryMetrics::hash_probe_share)).
 
+mod broadcast;
 mod build;
 mod fallback;
 mod grace;
@@ -175,6 +176,8 @@ use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_memory::SpillScope;
 use krishiv_types::batch::{Batch, Weights};
 
+pub use broadcast::{BroadcastKey, BroadcastTables, SharedBuildJoinNode};
+pub(crate) use broadcast::{BuildJob, PrebuiltSink};
 pub(crate) use merge::MergeEnv;
 pub use merge::{SortMergeJoin, SortMergeJoinNode, merge_join_supported};
 pub use nested::{NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec};
