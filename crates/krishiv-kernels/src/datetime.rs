@@ -404,6 +404,37 @@ pub(crate) fn local_to_utc_keeping(
     }
 }
 
+/// One date moved by `months` calendar months (the day clamped to the
+/// target month); `None` past the `DATE` range.
+#[must_use]
+pub fn add_months_to_date(days: i32, months: i64) -> Option<i32> {
+    add_months(i64::from(days), months).and_then(|r| i32::try_from(r).ok())
+}
+
+/// One timestamp (microseconds since the epoch) moved by `months` calendar
+/// months: calendar arithmetic on the local date-time in `zone` (`None` for
+/// `TIMESTAMP_NTZ`), a local time in a DST gap moving forward and an
+/// ambiguous one keeping the start's offset. `None` past the timestamp range.
+#[must_use]
+pub fn add_months_to_timestamp(
+    t: i64,
+    months: i64,
+    zone: Option<&dyn TimeZoneRules>,
+) -> Option<i64> {
+    let local = match zone {
+        Some(tz) => utc_to_local(t, tz)?,
+        None => t,
+    };
+    let days = add_months(local.div_euclid(MICROS_PER_DAY), months)?;
+    let local = days
+        .checked_mul(MICROS_PER_DAY)?
+        .checked_add(local.rem_euclid(MICROS_PER_DAY))?;
+    match zone {
+        Some(tz) => local_to_utc_keeping(local, tz, tz.offset_at_utc(t.div_euclid(1_000_000))),
+        None => Some(local),
+    }
+}
+
 /// `date + months` / `date - months` for a year-month interval (`negate`
 /// subtracts). A result outside the `DATE` range is `ARITHMETIC_OVERFLOW`
 /// (with the context's Spark-version message), or NULL if `null_on_overflow`
@@ -429,7 +460,7 @@ pub fn date_add_months(
             } else {
                 i64::from(m)
             };
-            add_months(i64::from(d), m).and_then(|r| i32::try_from(r).ok())
+            add_months_to_date(d, m)
         },
         null_on_overflow,
         |row| KernelError::arithmetic_overflow(row, message, None),
@@ -462,20 +493,7 @@ pub fn timestamp_add_months(
             } else {
                 i64::from(m)
             };
-            let local = match zone {
-                Some(tz) => utc_to_local(t, tz)?,
-                None => t,
-            };
-            let days = add_months(local.div_euclid(MICROS_PER_DAY), m)?;
-            let local = days
-                .checked_mul(MICROS_PER_DAY)?
-                .checked_add(local.rem_euclid(MICROS_PER_DAY))?;
-            match zone {
-                Some(tz) => {
-                    local_to_utc_keeping(local, tz, tz.offset_at_utc(t.div_euclid(1_000_000)))
-                }
-                None => Some(local),
-            }
+            add_months_to_timestamp(t, m, zone)
         },
         null_on_overflow,
         |row| KernelError::datetime_overflow(row, "timestamp + interval"),

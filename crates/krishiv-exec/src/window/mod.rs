@@ -173,6 +173,11 @@ pub enum FrameBound {
     RangeInt(i128),
     /// `RANGE` only: as `RangeInt`, for a float key (the bits of the `f64`).
     RangeFloat(u64),
+    /// `RANGE` only: a year-month interval bound over a date or timestamp
+    /// key: the key moved by this many calendar months (negative: before it;
+    /// a descending order moves the other way), in the session zone for a
+    /// `TIMESTAMP`.
+    RangeMonths(i32),
 }
 
 /// A window frame (Spark's `SpecifiedWindowFrame`).
@@ -261,6 +266,7 @@ crate::physical::data::plan_data!(
         Offset(offset),
         RangeInt(distance),
         RangeFloat(bits),
+        RangeMonths(months),
     }
 );
 crate::physical::data::plan_data!(struct WindowFrame { units, lower, upper });
@@ -358,6 +364,10 @@ impl WindowFunctionPlan {
             let fits = match b {
                 FrameBound::RangeInt(_) => int,
                 FrameBound::RangeFloat(_) => float,
+                FrameBound::RangeMonths(_) => matches!(
+                    input.field(key.column).data_type(),
+                    DataType::Date32 | DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _)
+                ),
                 _ => true,
             };
             if !fits {
@@ -384,8 +394,16 @@ impl WindowFunctionPlan {
             (FrameUnits::Range, B::CurrentRow, B::UnboundedFollowing) => Ok(Shape::Frame),
             (
                 FrameUnits::Range,
-                B::UnboundedPreceding | B::CurrentRow | B::RangeInt(_) | B::RangeFloat(_),
-                B::CurrentRow | B::UnboundedFollowing | B::RangeInt(_) | B::RangeFloat(_),
+                B::UnboundedPreceding
+                | B::CurrentRow
+                | B::RangeInt(_)
+                | B::RangeFloat(_)
+                | B::RangeMonths(_),
+                B::CurrentRow
+                | B::UnboundedFollowing
+                | B::RangeInt(_)
+                | B::RangeFloat(_)
+                | B::RangeMonths(_),
             ) if frames::is_range_offset(self.frame.lower)
                 || frames::is_range_offset(self.frame.upper) =>
             {
@@ -420,6 +438,8 @@ struct Env {
     /// `spark.sql.ansi.enabled`: overflow raises instead of wrapping or
     /// becoming NULL.
     ansi: bool,
+    /// The session time zone, for a year-month `RANGE` bound over a `TIMESTAMP` key.
+    zone: krishiv_kernels::datetime::ZoneRef,
 }
 
 impl std::fmt::Debug for Window {
@@ -522,6 +542,7 @@ impl Window {
         input: SchemaRef,
         plan: WindowPlan,
         ansi: bool,
+        zone: krishiv_kernels::datetime::ZoneRef,
         spill: Option<SpillScope>,
     ) -> Result<Self> {
         let width = input.fields().len();
@@ -596,6 +617,7 @@ impl Window {
                 input,
                 plan,
                 ansi,
+                zone,
             }),
             spill,
             partitions: AtomicU64::new(0),
@@ -731,7 +753,7 @@ impl Window {
                     peer_start: &l.pending[i].peer_start[offset..offset + len],
                 })
                 .collect();
-            eval::evaluate(&self.env.plan, &unit, self.env.ansi)?
+            eval::evaluate(&self.env.plan, &unit, self.env.ansi, &self.env.zone)?
         };
         // One output batch per slice: its input columns, then the slice of
         // each window column.

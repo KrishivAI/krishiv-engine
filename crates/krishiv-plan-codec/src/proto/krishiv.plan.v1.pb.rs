@@ -1581,6 +1581,8 @@ pub enum FrameBound {
     RangeInt = 5,
     /// feature: window_range_bounds
     RangeFloat = 6,
+    /// feature: window_range_month_bounds
+    RangeMonths = 7,
 }
 impl FrameBound {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1596,6 +1598,7 @@ impl FrameBound {
             Self::Offset => "FRAME_BOUND_OFFSET",
             Self::RangeInt => "FRAME_BOUND_RANGE_INT",
             Self::RangeFloat => "FRAME_BOUND_RANGE_FLOAT",
+            Self::RangeMonths => "FRAME_BOUND_RANGE_MONTHS",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1608,6 +1611,7 @@ impl FrameBound {
             "FRAME_BOUND_OFFSET" => Some(Self::Offset),
             "FRAME_BOUND_RANGE_INT" => Some(Self::RangeInt),
             "FRAME_BOUND_RANGE_FLOAT" => Some(Self::RangeFloat),
+            "FRAME_BOUND_RANGE_MONTHS" => Some(Self::RangeMonths),
             _ => None,
         }
     }

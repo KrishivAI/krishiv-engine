@@ -235,6 +235,7 @@ impl Planner<'_> {
             Arc::clone(&sorted.schema),
             window.clone(),
             self.env.ansi,
+            self.env.zone_rules()?,
             None,
         )?;
         let mut layout = sorted.layout.clone();
@@ -395,6 +396,7 @@ fn call(e: &Expr) -> Result<Call<'_>> {
                     L::Decimal { unscaled, .. } => Ok(Bound::RangeInt(*unscaled)),
                     L::Float(v) => Ok(Bound::RangeFloat(f64::from(*v).to_bits())),
                     L::Double(v) => Ok(Bound::RangeFloat(v.to_bits())),
+                    L::YearMonthInterval { months, .. } => Ok(Bound::RangeMonths(*months)),
                     _ => Err(unsupported("this RANGE window frame bound")),
                 }
             }

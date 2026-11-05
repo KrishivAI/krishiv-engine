@@ -5,11 +5,6 @@
     ],
     "fn-aggregate": [
       26
-    ],
-    "nested-interval-types": [
-      13,
-      14,
-      17
     ]
   },
   "file": "window",

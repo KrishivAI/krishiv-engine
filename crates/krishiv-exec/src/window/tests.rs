@@ -231,7 +231,13 @@ async fn run_keys_ansi(
     keys.extend(window.order_by.iter().copied());
     keys.push(SortKey::asc(2));
     let sort = Arc::new(Sort::new(Arc::clone(&s), &keys, None)?);
-    let op = Arc::new(Window::new(Arc::clone(&s), window.clone(), ansi, None)?);
+    let op = Arc::new(Window::new(
+        Arc::clone(&s),
+        window.clone(),
+        ansi,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        None,
+    )?);
     let plan: Arc<dyn ExecNode> = Arc::new(OperatorNode {
         input: Arc::new(BreakerNode {
             input: Arc::new(SourceNode(Batches::new(s, batches))),
@@ -872,7 +878,14 @@ fn decimal_window(function: AggregateFunction, frame: WindowFrame, p: u8, ansi: 
             name: "s".to_owned(),
         }],
     };
-    Window::new(s, plan, ansi, None).unwrap()
+    Window::new(
+        s,
+        plan,
+        ansi,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        None,
+    )
+    .unwrap()
 }
 
 fn column_text(out: &[Batch], column: usize) -> Vec<String> {
@@ -1020,7 +1033,14 @@ async fn filters_and_ignore_nulls() {
             ),
         ],
     };
-    let op = Window::new(Arc::clone(&s), plan, true, None).unwrap();
+    let op = Window::new(
+        Arc::clone(&s),
+        plan,
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        None,
+    )
+    .unwrap();
     let (_root, ctx) = task(1 << 30);
     let out = drive(&op, &ctx, &[Batch::new(b)]).unwrap();
     assert_eq!(column_text(&out, 3), ["null", "null", "20", "20"]);
@@ -1041,7 +1061,14 @@ async fn memory_is_reserved_before_a_batch_is_taken() {
         .map(|i| (Some(i % 7), Some(i), i, Some(i)))
         .collect();
     let window = plan(functions(), true);
-    let op = Window::new(schema(), window.clone(), true, None).unwrap();
+    let op = Window::new(
+        schema(),
+        window.clone(),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        None,
+    )
+    .unwrap();
     let (root, ctx) = task(64 << 10);
     let mut local = op.local_state(&ctx).unwrap();
     match op.execute(&batch(&rows), &mut local).unwrap() {
@@ -1060,7 +1087,14 @@ async fn memory_is_reserved_before_a_batch_is_taken() {
 
 #[tokio::test]
 async fn weights_other_than_one_are_refused() {
-    let op = Window::new(schema(), plan(functions(), true), true, None).unwrap();
+    let op = Window::new(
+        schema(),
+        plan(functions(), true),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        None,
+    )
+    .unwrap();
     let (_root, ctx) = task(1 << 30);
     let mut local = op.local_state(&ctx).unwrap();
     let rows: Vec<Row> = vec![(Some(1), Some(1), 0, Some(1))];
@@ -1072,7 +1106,14 @@ async fn weights_other_than_one_are_refused() {
 
 #[tokio::test]
 async fn empty_input_gives_no_rows() {
-    let op = Window::new(schema(), plan(functions(), false), true, None).unwrap();
+    let op = Window::new(
+        schema(),
+        plan(functions(), false),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        None,
+    )
+    .unwrap();
     let (_root, ctx) = task(1 << 30);
     let out = drive(&op, &ctx, &[batch(&[])]).unwrap();
     assert!(out.is_empty());
@@ -1094,9 +1135,15 @@ fn invalid_plans_are_rejected() {
     };
     let rows = WindowFrame::running(FrameUnits::Rows);
     let class = |p: WindowPlan| {
-        Window::new(schema(), p, true, None)
-            .unwrap_err()
-            .error_class()
+        Window::new(
+            schema(),
+            p,
+            true,
+            krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+            None,
+        )
+        .unwrap_err()
+        .error_class()
     };
     let internal = ErrorClass::InternalError;
     assert_eq!(
@@ -1131,7 +1178,14 @@ fn invalid_plans_are_rejected() {
         )),
         ErrorClass::KrishivUnsupportedFeature
     );
-    let op = Window::new(schema(), plan(functions(), true), true, None).unwrap();
+    let op = Window::new(
+        schema(),
+        plan(functions(), true),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        None,
+    )
+    .unwrap();
     assert!(format!("{op:?}").contains("Window"));
 }
 
@@ -1172,7 +1226,15 @@ fn reserved_cost_matches_what_evaluation_holds() {
                 part_start: &part,
                 peer_start: &peer,
             };
-            let out = super::eval::evaluate(&window, &[slice], true).unwrap();
+            let out = super::eval::evaluate(
+                &window,
+                &[slice],
+                true,
+                &krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(
+                    0,
+                )),
+            )
+            .unwrap();
             let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
             // Outputs, row maps (`part_of`, `peer_of`) and the partition and
             // peer-group vectors.
@@ -1218,7 +1280,14 @@ async fn partitioned_windows_run_at_a_tight_limit() {
     // The flat estimate this replaces reserved 2 + 16 + 64 + 16 bytes per
     // row besides the input.
     assert!(batches.len() * per_batch * 98 > limit);
-    let op = Window::new(schema(), window, true, None).unwrap();
+    let op = Window::new(
+        schema(),
+        window,
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        None,
+    )
+    .unwrap();
     let (root, ctx) = task(limit);
     let out = drive(&op, &ctx, &batches).unwrap();
     assert_eq!(out.iter().map(Batch::num_rows).sum::<usize>(), 40_000);
@@ -1266,7 +1335,14 @@ async fn string_results_share_the_input_buffers() {
             name: "m".to_owned(),
         }],
     };
-    let op = Window::new(Arc::clone(&s), plan, true, None).unwrap();
+    let op = Window::new(
+        Arc::clone(&s),
+        plan,
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        None,
+    )
+    .unwrap();
     // A copy per row would need 10 MB more than the input.
     let (root, ctx) = task(input_bytes + input_bytes / 2);
     let out = drive(&op, &ctx, &[Batch::new(b)]).unwrap();
@@ -1463,14 +1539,28 @@ async fn compared_spilling(
     };
     sorted.clear();
     sorted.extend(all.chunks(split.max(1)).map(batch));
-    let plain = Window::new(schema(), window.clone(), true, None).unwrap();
+    let plain = Window::new(
+        schema(),
+        window.clone(),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        None,
+    )
+    .unwrap();
     let (_r, ctx) = task(1 << 30);
     let want = outputs(
         &drive(&plain, &ctx, &sorted).unwrap(),
         window.functions.len(),
     );
     let (_manager, scope) = spill_scope();
-    let op = Window::new(schema(), window.clone(), true, Some(scope)).unwrap();
+    let op = Window::new(
+        schema(),
+        window.clone(),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        Some(scope),
+    )
+    .unwrap();
     let limit = 1 << 30;
     // Batches of 4 rows: complete rows reach a batch while rows wait after
     // a spill, and in the flush phase.
@@ -1600,11 +1690,25 @@ async fn exact_and_string_frames_from_disk() {
         .step_by(100)
         .map(|i| Batch::new(b.data().slice(i, 100.min(b.num_rows() - i))))
         .collect();
-    let plain = Window::new(Arc::clone(&s), plan.clone(), true, None).unwrap();
+    let plain = Window::new(
+        Arc::clone(&s),
+        plan.clone(),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        None,
+    )
+    .unwrap();
     let (_r, ctx) = task(1 << 30);
     let want = drive(&plain, &ctx, &batches).unwrap();
     let (_manager, scope) = spill_scope();
-    let op = Window::new(s, plan.clone(), true, Some(scope)).unwrap();
+    let op = Window::new(
+        s,
+        plan.clone(),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        Some(scope),
+    )
+    .unwrap();
     let limit = 1 << 30;
     let (root, ctx) = task(limit);
     let spills = Spills {
@@ -1636,7 +1740,14 @@ async fn a_failed_spill_fails_every_later_call() {
         .map(|i| (Some(i / 300), Some(i), i, Some(i)))
         .collect();
     let (_manager, scope) = spill_scope();
-    let op = Window::new(schema(), plan(functions(), true), true, Some(scope.clone())).unwrap();
+    let op = Window::new(
+        schema(),
+        plan(functions(), true),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        Some(scope.clone()),
+    )
+    .unwrap();
     let (_root, ctx) = task(1 << 30);
     let mut local = op.local_state(&ctx).unwrap();
     assert!(matches!(
@@ -1673,7 +1784,14 @@ async fn a_dropped_spill_leaves_the_window_cancelled() {
         .map(|i| (Some(i / 300), Some(i), i, Some(i)))
         .collect();
     let (_manager, scope) = spill_scope();
-    let op = Window::new(schema(), plan(functions(), true), true, Some(scope)).unwrap();
+    let op = Window::new(
+        schema(),
+        plan(functions(), true),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        Some(scope),
+    )
+    .unwrap();
     let (_root, ctx) = task(1 << 30);
     let mut local = op.local_state(&ctx).unwrap();
     op.execute(&batch(&rows), &mut local).unwrap();
@@ -1684,7 +1802,14 @@ async fn a_dropped_spill_leaves_the_window_cancelled() {
 
     // A pool without room for the writer's scratch: the spill declines.
     let (_manager, scope) = spill_scope();
-    let op = Window::new(schema(), plan(functions(), true), true, Some(scope)).unwrap();
+    let op = Window::new(
+        schema(),
+        plan(functions(), true),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        Some(scope),
+    )
+    .unwrap();
     let limit = 256 << 10;
     let (root, ctx) = task(limit);
     let mut local = op.local_state(&ctx).unwrap();
@@ -1710,7 +1835,14 @@ async fn a_failed_read_back_fails_the_flush_phase() {
         .map(|i| (Some(i / 300), Some(i), i, Some(i)))
         .collect();
     let (_manager, scope) = spill_scope();
-    let op = Window::new(schema(), plan(functions(), true), true, Some(scope.clone())).unwrap();
+    let op = Window::new(
+        schema(),
+        plan(functions(), true),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        Some(scope.clone()),
+    )
+    .unwrap();
     let (_root, ctx) = task(1 << 30);
     let mut local = op.local_state(&ctx).unwrap();
     op.execute(&batch(&rows), &mut local).unwrap();
@@ -1866,7 +1998,16 @@ async fn one_large_partition_spills_through_the_runner() {
     let (_manager, scope) = spill_scope();
     let keys = [SortKey::asc(0), SortKey::asc(1), SortKey::asc(2)];
     let sort = Arc::new(Sort::new(Arc::clone(&s), &keys, Some(scope.clone())).unwrap());
-    let op = Arc::new(Window::new(Arc::clone(&s), window, true, Some(scope)).unwrap());
+    let op = Arc::new(
+        Window::new(
+            Arc::clone(&s),
+            window,
+            true,
+            krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+            Some(scope),
+        )
+        .unwrap(),
+    );
     let node: Arc<dyn ExecNode> = Arc::new(OperatorNode {
         input: Arc::new(BreakerNode {
             input: Arc::new(SourceNode(source)),
@@ -1949,7 +2090,14 @@ async fn a_refused_flush_headroom_fails_the_window() {
         .map(|i| (Some(i / 300), Some(i), i, Some(i)))
         .collect();
     let (_manager, scope) = spill_scope();
-    let op = Window::new(schema(), plan(functions(), true), true, Some(scope)).unwrap();
+    let op = Window::new(
+        schema(),
+        plan(functions(), true),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        Some(scope),
+    )
+    .unwrap();
     let limit = 1 << 20;
     let (root, ctx) = task(limit);
     let mut local = op.local_state(&ctx).unwrap();
@@ -1982,7 +2130,15 @@ fn frame_costs_cover_their_outputs() {
                 part_start: &part,
                 peer_start: &peer,
             };
-            let out = super::eval::evaluate(&window, &[slice], false).unwrap();
+            let out = super::eval::evaluate(
+                &window,
+                &[slice],
+                false,
+                &krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(
+                    0,
+                )),
+            )
+            .unwrap();
             let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
             let held: usize = out
                 .iter()
@@ -2045,7 +2201,13 @@ fn offset_function_costs_cover_their_scratch() {
             part_start: &part,
             peer_start: &peer,
         };
-        let out = super::eval::evaluate(&window, &[slice], false).unwrap();
+        let out = super::eval::evaluate(
+            &window,
+            &[slice],
+            false,
+            &krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        )
+        .unwrap();
         // What an array holds of its own: views share the input's value
         // buffers.
         let own = |a: &ArrayRef| {
@@ -2106,7 +2268,13 @@ fn trees_larger_than_a_chunk_match_the_reference() {
         part_start: &part,
         peer_start: &peer,
     };
-    let out = super::eval::evaluate(&window, &[slice], false).unwrap();
+    let out = super::eval::evaluate(
+        &window,
+        &[slice],
+        false,
+        &krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+    )
+    .unwrap();
     let got: Vec<String> = data
         .iter()
         .enumerate()
@@ -2154,7 +2322,14 @@ async fn refused_on_disk(function: WindowFunction, frame: WindowFrame) {
         .collect();
     let window = plan(vec![(function, frame)], true);
     let (_dir, scope) = spill_scope();
-    let op = Window::new(schema(), window, true, Some(scope)).unwrap();
+    let op = Window::new(
+        schema(),
+        window,
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        Some(scope),
+    )
+    .unwrap();
     let limit = 1 << 30;
     let (root, ctx) = task(limit);
     let batches: Vec<Batch> = rows.chunks(100).map(batch).collect();
@@ -2192,7 +2367,14 @@ async fn spilled_rows_are_counted_once() {
         .collect();
     let window = plan(functions(), true);
     let (_dir, scope) = spill_scope();
-    let op = Window::new(schema(), window, true, Some(scope)).unwrap();
+    let op = Window::new(
+        schema(),
+        window,
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        Some(scope),
+    )
+    .unwrap();
     let limit = 1 << 30;
     let (root, ctx) = task(limit);
     let mut sorted = rows.clone();
@@ -2251,7 +2433,14 @@ async fn bytes_of_rows_waiting_in_the_output_stay_reserved_through_a_spill() {
         )],
         true,
     );
-    let op = Window::new(schema(), window, true, Some(scope)).unwrap();
+    let op = Window::new(
+        schema(),
+        window,
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        Some(scope),
+    )
+    .unwrap();
     let limit = 64 << 20;
     let config = ExecConfig {
         batch_size: 4,
@@ -2315,7 +2504,13 @@ async fn run_bucketed(
     keys.push(SortKey::asc(2));
     let sort = Sort::new(Arc::clone(&s), &keys, None)?.with_hash_buckets(&window.partition_by)?;
     let sort = Arc::new(sort);
-    let op = Arc::new(Window::new(Arc::clone(&s), window.clone(), true, None)?);
+    let op = Arc::new(Window::new(
+        Arc::clone(&s),
+        window.clone(),
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        None,
+    )?);
     let plan: Arc<dyn ExecNode> = Arc::new(OperatorNode {
         input: Arc::new(BreakerNode {
             input: Arc::new(SourceNode(Batches::new(s, batches))),
@@ -2502,7 +2697,14 @@ async fn a_running_collect_list_over_a_big_partition_fails_under_a_tight_limit()
         .map(|i| (Some(0), Some(i), i, Some(i % 7)))
         .collect();
     let batches: Vec<Batch> = rows.chunks(500).map(batch).collect();
-    let op = Window::new(schema(), window, true, None).unwrap();
+    let op = Window::new(
+        schema(),
+        window,
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        None,
+    )
+    .unwrap();
     let limit = 16 << 20;
     let (root, ctx) = task(limit);
     let e = drive(&op, &ctx, &batches).unwrap_err();
@@ -2717,7 +2919,14 @@ async fn a_refused_charge_takes_batches_back_from_a_frame() {
     let window = plan(vec![(agg(AggregateFunction::Sum, Some(3)), wide)], false);
     let rows: Vec<Row> = (0..1_000).map(|i| (None, Some(i), i, Some(i))).collect();
     let (_dir, scope) = spill_scope();
-    let op = Window::new(schema(), window, true, Some(scope.clone())).unwrap();
+    let op = Window::new(
+        schema(),
+        window,
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        Some(scope.clone()),
+    )
+    .unwrap();
     let limit = 1 << 20;
     let (root, ctx) = task(limit);
     let consumer = Arc::clone(ctx.consumer().consumer());
@@ -2781,7 +2990,14 @@ async fn a_refused_charge_takes_batches_from_as_few_frames_as_it_needs() {
     let window = plan(vec![sum.clone(), sum], false);
     let rows: Vec<Row> = (0..1_000).map(|i| (None, Some(i), i, Some(i))).collect();
     let (_dir, scope) = spill_scope();
-    let op = Window::new(schema(), window, true, Some(scope.clone())).unwrap();
+    let op = Window::new(
+        schema(),
+        window,
+        true,
+        krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+        Some(scope.clone()),
+    )
+    .unwrap();
     let limit = 1 << 20;
     let (_root, ctx) = task(limit);
     let consumer = Arc::clone(ctx.consumer().consumer());
@@ -2856,7 +3072,14 @@ async fn an_exact_percentile_on_disk_is_charged() {
             .map(|i| (Some(0), Some(i), i, Some(i)))
             .collect();
         let (_dir, scope) = spill_scope();
-        let op = Window::new(schema(), window, true, Some(scope)).unwrap();
+        let op = Window::new(
+            schema(),
+            window,
+            true,
+            krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+            Some(scope),
+        )
+        .unwrap();
         let limit = 1 << 30;
         let (root, ctx) = task(limit);
         let batches: Vec<Batch> = distinct.chunks(500).map(batch).collect();
@@ -2968,11 +3191,25 @@ async fn float_and_decimal_keys_and_filters_on_disk_match_memory() {
             arrow_select::concat::concat_batches(&data[0].schema(), &data).unwrap()
         };
         let input = sorted_batches();
-        let plain = Window::new(Arc::clone(&schema), window.clone(), true, None).unwrap();
+        let plain = Window::new(
+            Arc::clone(&schema),
+            window.clone(),
+            true,
+            krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+            None,
+        )
+        .unwrap();
         let (_r, ctx) = task(1 << 30);
         let want = concat(&drive(&plain, &ctx, &input).unwrap());
         let (_manager, scope) = spill_scope();
-        let op = Window::new(Arc::clone(&schema), window, true, Some(scope)).unwrap();
+        let op = Window::new(
+            Arc::clone(&schema),
+            window,
+            true,
+            krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+            Some(scope),
+        )
+        .unwrap();
         let limit = 1 << 30;
         let (root, ctx) = task(limit);
         let spills = Spills {
@@ -3034,7 +3271,14 @@ async fn rows_a_filter_drops_do_not_overflow_on_disk() {
             }],
         };
         let (_manager, scope) = spill_scope();
-        let op = Window::new(Arc::clone(&schema), window, true, Some(scope)).unwrap();
+        let op = Window::new(
+            Arc::clone(&schema),
+            window,
+            true,
+            krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
+            Some(scope),
+        )
+        .unwrap();
         let limit = 1 << 30;
         let (root, ctx) = task(limit);
         let spills = Spills {

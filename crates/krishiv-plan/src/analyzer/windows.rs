@@ -38,6 +38,7 @@ use std::sync::Arc;
 use krishiv_common::error::{
     DatatypeMismatchNonFoldableInput, DatatypeMismatchRangeFrameInvalidType,
     DatatypeMismatchRangeFrameMultiOrder, DatatypeMismatchRangeFrameWithoutOrder,
+    DatatypeMismatchSpecifiedWindowFrameDiffTypes,
     DatatypeMismatchSpecifiedWindowFrameInvalidBound,
     DatatypeMismatchSpecifiedWindowFrameUnacceptedType,
     DatatypeMismatchSpecifiedWindowFrameWrongComparison, DistinctWindowFunctionUnsupported,
@@ -206,6 +207,13 @@ const MICROS_PER_DAY: i64 = 86_400_000_000;
 enum RangeValue {
     Int(i128),
     Float(f64),
+    /// A year-month interval over a date or timestamp key: calendar months, with the interval type's fields
+    /// (the bound stays an interval literal; the executor moves the key by months).
+    Months(
+        i32,
+        krishiv_types::YearMonthField,
+        krishiv_types::YearMonthField,
+    ),
 }
 
 impl RangeValue {
@@ -213,6 +221,7 @@ impl RangeValue {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a > b,
             (Self::Float(a), Self::Float(b)) => a > b,
+            (Self::Months(a, ..), Self::Months(b, ..)) => a > b,
             _ => false,
         }
     }
@@ -235,6 +244,11 @@ impl RangeValue {
                 data_type: *d,
             },
             (Self::Int(v), _) => Literal::Integer(i32::try_from(*v).ok()?),
+            (Self::Months(months, start, end), _) => Literal::YearMonthInterval {
+                months: *months,
+                start: *start,
+                end: *end,
+            },
             (Self::Float(v), T::Float) => Literal::Float(*v as f32),
             (Self::Float(v), _) => Literal::Double(*v),
         })
@@ -281,6 +295,16 @@ fn range_value_signed(
             T::Timestamp | T::TimestampNtz => Some(RangeValue::Int(i128::from(micros))),
             _ => None,
         };
+    }
+    // A year-month interval bound moves a date or timestamp key by calendar months (`PRECEDING` negates it).
+    if let Literal::YearMonthInterval { months, start, end } = l {
+        let months = if negate {
+            months.checked_neg()?
+        } else {
+            *months
+        };
+        return matches!(key, T::Date | T::Timestamp | T::TimestampNtz)
+            .then_some(RangeValue::Months(months, *start, *end));
     }
     // The literal as an exact decimal `(unscaled, scale)` or a double.
     enum Lit {
@@ -1149,6 +1173,7 @@ impl Resolver<'_> {
         };
         let mut kids = keys.iter().skip(spec.order_by.len());
         let mut values: [Option<RangeValue>; 2] = [None, None];
+        let mut bound_types: [Option<T>; 2] = [None, None];
         for (k, (b, location)) in [(&frame.lower, "lower"), (&frame.upper, "upper")]
             .into_iter()
             .enumerate()
@@ -1158,6 +1183,7 @@ impl Resolver<'_> {
             let Some(bt) = bt else {
                 return Err(unsupported("a NULL window frame bound", origin));
             };
+            bound_types[k] = Some(bt.clone());
             let numeric = |t: &T| {
                 matches!(
                     t,
@@ -1208,7 +1234,8 @@ impl Resolver<'_> {
                             },
                         ) | (T::Timestamp | T::TimestampNtz, T::DayTimeInterval { .. })
                     );
-                    if day_time_ok {
+                    let year_month_ok = matches!(bt, T::YearMonthInterval { .. });
+                    if day_time_ok || year_month_ok {
                         values[k] = Some(range_value(x, &key).ok_or_else(|| {
                             unsupported("RANGE window frame bounds other than literals", origin)
                         })?);
@@ -1241,6 +1268,27 @@ impl Resolver<'_> {
             values[k] = Some(range_value(x, &key).ok_or_else(|| {
                 unsupported("RANGE window frame bounds other than literals", origin)
             })?);
+        }
+        // Both bounds are values of one type (`INTERVAL YEAR` and `INTERVAL MONTH` are two types).
+        // (Numeric keys cast both bounds to the key's type first, so only date and timestamp keys can differ.)
+        if let [Some(lt), Some(ut)] = &bound_types
+            && matches!(key, T::Date | T::Timestamp | T::TimestampNtz)
+            && lt != ut
+            && let (Some(FrameBound::Offset(l)), Some(FrameBound::Offset(u))) = (
+                shown.frame.as_ref().map(|f| &f.lower),
+                shown.frame.as_ref().map(|f| &f.upper),
+            )
+        {
+            return Err(AnalysisError::new(
+                DatatypeMismatchSpecifiedWindowFrameDiffTypes {
+                    sql_expr: frame_sql(shown),
+                    lower: format!("\"{}\"", pretty(l, None)),
+                    upper: format!("\"{}\"", pretty(u, None)),
+                    lower_type: quoted(lt),
+                    upper_type: quoted(ut),
+                },
+                origin,
+            ));
         }
         // A bound cast to the key's type loses its `PRECEDING` in Spark's
         // text: `(- n) FOLLOWING`.

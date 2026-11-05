@@ -73,6 +73,16 @@ pub(super) struct RangeKeys {
     ansi: bool,
     /// The keys are `FLOAT`: the sum is rounded to a single.
     single: bool,
+    /// What a year-month interval bound moves the key by (calendar months).
+    calendar: Calendar,
+}
+
+/// How a key moves by a number of calendar months: days of a `DATE`, or microseconds of a timestamp in the
+/// session zone (`None`: `TIMESTAMP_NTZ`). Other keys take no month bound.
+enum Calendar {
+    None,
+    Date,
+    Timestamp(Option<krishiv_kernels::datetime::ZoneRef>),
 }
 
 enum Keys {
@@ -92,6 +102,7 @@ impl RangeKeys {
         descending: bool,
         nulls_first: bool,
         ansi: bool,
+        zone: &krishiv_kernels::datetime::ZoneRef,
     ) -> Result<Option<Self>> {
         use arrow_array::types::{
             Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
@@ -169,7 +180,15 @@ impl RangeKeys {
                 other => return Err(internal(format!("a window order column of type {other}"))),
             }
         }
+        let calendar = match &ty {
+            DataType::Date32 => Calendar::Date,
+            // A `TIMESTAMP` carries a zone marker; its zone is the session's.
+            DataType::Timestamp(_, Some(_)) => Calendar::Timestamp(Some(zone.clone())),
+            DataType::Timestamp(_, None) => Calendar::Timestamp(None),
+            _ => Calendar::None,
+        };
         Ok(Some(Self {
+            calendar,
             keys: if float {
                 Keys::Float(floats)
             } else {
@@ -285,6 +304,44 @@ impl RangeKeys {
                 let span = max - min + 1;
                 Ok(Some(Target::Int((sum - min).rem_euclid(span) + min)))
             }
+            (Keys::Int(k), FrameBound::RangeMonths(months)) => {
+                // `PRECEDING` is a negative count; a descending order negates the bound (Spark's
+                // `UnaryMinus`, checked in the interval's own type).
+                let months = if self.descending {
+                    months.checked_neg().ok_or_else(|| {
+                        internal(
+                            "a year-month RANGE bound of the most negative interval".to_owned(),
+                        )
+                    })?
+                } else {
+                    months
+                };
+                let months = i64::from(months);
+                let moved = match &self.calendar {
+                    Calendar::Date => i32::try_from(k[i])
+                        .ok()
+                        .and_then(|d| krishiv_kernels::datetime::add_months_to_date(d, months))
+                        .map(i128::from)
+                        .ok_or_else(month_overflow),
+                    Calendar::Timestamp(zone) => i64::try_from(k[i])
+                        .ok()
+                        .and_then(|t| {
+                            krishiv_kernels::datetime::add_months_to_timestamp(
+                                t,
+                                months,
+                                zone.as_ref()
+                                    .map(|z| z as &dyn krishiv_kernels::datetime::TimeZoneRules),
+                            )
+                        })
+                        .map(i128::from)
+                        .ok_or_else(month_overflow),
+                    Calendar::None => Err(internal(
+                        "a year-month RANGE bound over a key that is not a date or timestamp"
+                            .to_owned(),
+                    )),
+                }?;
+                Ok(Some(Target::Int(moved)))
+            }
             (Keys::Float(k), FrameBound::RangeFloat(bits)) => {
                 let off = f64::from_bits(bits);
                 let off = if self.descending { -off } else { off };
@@ -301,6 +358,17 @@ impl RangeKeys {
             )),
         }
     }
+}
+
+/// A key moved past its type by a month bound: `ARITHMETIC_OVERFLOW` (Spark has no ANSI switch here; a timestamp
+/// raises a bare `ArithmeticException` there, which has no error class to match).
+fn month_overflow() -> krishiv_common::error::KrishivError {
+    ArithmeticOverflow {
+        message: "overflow".to_owned(),
+        alternative: String::new(),
+        config: "\"spark.sql.ansi.enabled\"".to_owned(),
+    }
+    .into()
 }
 
 #[derive(Clone)]
@@ -321,7 +389,10 @@ fn float_cmp(a: f64, b: f64) -> std::cmp::Ordering {
 
 /// Whether `b` is a value bound of a `RANGE` frame.
 pub(super) fn is_range_offset(b: FrameBound) -> bool {
-    matches!(b, FrameBound::RangeInt(_) | FrameBound::RangeFloat(_))
+    matches!(
+        b,
+        FrameBound::RangeInt(_) | FrameBound::RangeFloat(_) | FrameBound::RangeMonths(_)
+    )
 }
 
 /// One edge of a `RANGE` frame with a value bound, as Spark's frames with

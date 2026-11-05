@@ -588,6 +588,35 @@ pub(crate) fn window_offset_values() -> WindowPlan {
     }
 }
 
+/// `RANGE` frames over a date or timestamp key with year-month interval bounds (calendar months).
+pub(crate) fn window_range_months() -> WindowPlan {
+    let aggs = aggregate_exprs();
+    let range = |lower, upper| WindowFrame {
+        units: FrameUnits::Range,
+        lower,
+        upper,
+    };
+    WindowPlan {
+        partition_by: vec![1],
+        order_by: vec![SortKey::asc(0)],
+        functions: vec![
+            window_function(
+                WindowFunction::Aggregate(aggs[0].clone()),
+                range(FrameBound::RangeMonths(-1), FrameBound::CurrentRow),
+                "preceding",
+            ),
+            window_function(
+                WindowFunction::Aggregate(aggs[0].clone()),
+                range(
+                    FrameBound::RangeMonths(i32::MIN),
+                    FrameBound::RangeMonths(i32::MAX),
+                ),
+                "extremes",
+            ),
+        ],
+    }
+}
+
 pub(crate) fn window_range_values() -> WindowPlan {
     let aggs = aggregate_exprs();
     let range = |lower, upper| WindowFrame {
@@ -971,6 +1000,13 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::Window {
                 input: boxed(scan()),
                 window: window_range_values(),
+            },
+        ),
+        (
+            "window_range_months",
+            PhysNode::Window {
+                input: boxed(scan()),
+                window: window_range_months(),
             },
         ),
         (

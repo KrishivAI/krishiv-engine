@@ -1103,6 +1103,7 @@ impl Instantiation<'_> {
                     Arc::clone(&input.schema),
                     window.clone(),
                     self.env.ansi,
+                    self.env.zone_rules()?,
                     self.spill.clone(),
                 )?;
                 Ok(operator(input, Arc::new(op)))
