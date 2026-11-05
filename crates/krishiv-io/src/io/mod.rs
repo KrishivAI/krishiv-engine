@@ -544,7 +544,7 @@ impl IoScheduler {
             sched: Arc::clone(self),
             counters: Arc::new(IoCounters::default()),
             secrets: Arc::new(CachedSecrets::new(Arc::new(NoSecrets))),
-            principal: Principal::local_user(),
+            principal: Arc::new(Principal::local_user()),
             memory: None,
         }
     }
@@ -718,7 +718,7 @@ pub struct IoContext {
     pub(crate) counters: Arc<IoCounters>,
     secrets: Arc<CachedSecrets>,
     /// Who runs the query: told to the secret resolver (E12).
-    principal: Principal,
+    principal: Arc<Principal>,
     /// The query's consumer for metadata reads ([`Held`] bytes).
     memory: Option<Arc<ConsumerHandle>>,
 }
@@ -821,7 +821,7 @@ impl IoContext {
     /// This context acting for `principal`, the one secret references are
     /// resolved for. The default is the local user (the embedded session).
     #[must_use]
-    pub fn with_principal(mut self, principal: Principal) -> Self {
+    pub fn with_principal(mut self, principal: Arc<Principal>) -> Self {
         self.principal = principal;
         self
     }

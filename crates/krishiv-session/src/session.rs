@@ -1263,7 +1263,7 @@ impl Session {
         self.state
             .io
             .context()
-            .with_principal((*self.state.principal).clone())
+            .with_principal(Arc::clone(&self.state.principal))
     }
 
     /// A store registry reading with this session's credential scope (E15).
