@@ -23,7 +23,7 @@ import statistics
 from pathlib import Path
 from typing import Any
 
-from .abba import discover_tables
+from .abba import discover_tables, table_paths
 from .adapters.base import Dataset, Query
 from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
 from .paths import dataset_dir, fmt_sf, results_dir
@@ -217,7 +217,9 @@ def run_join_trees(
     }
     for text in arms:
         name, conf = parse_arm(text)
-        eng = KrishivEngine(threads=threads, memory_limit=memory_limit, binary=runner, conf=conf)
+        eng = KrishivEngine(
+            threads=threads, memory_limit=memory_limit, binary=runner, conf=conf, tables=table_paths(root, tables)
+        )
         try:
             eng.setup(ds)
             record["arms"][name] = {
