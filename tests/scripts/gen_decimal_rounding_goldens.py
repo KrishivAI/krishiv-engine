@@ -23,6 +23,7 @@ import argparse
 import json
 import random
 import re
+from collections.abc import Sequence
 from decimal import Decimal
 from pathlib import Path
 
@@ -86,7 +87,7 @@ HUGE = [("0", M38), ("0", M38), ("0", "1"), ("1", "-" + M38), ("1", "-" + M38), 
 WIDE = [(str(i % 2), dec(rng.randrange(-(10**27), 10**27), 10)) for i in range(25)]  # decimal(38,10)
 
 # Division operands: (id, a, b), a decimal(12,2), b decimal(9,3); many do not divide exactly.
-DIVIDE = []
+DIVIDE: list[tuple[str | None, ...]] = []
 for i in range(60):
     a = dec(rng.randrange(-(10**9), 10**9), 2)
     b = dec(rng.choice([1, -1]) * rng.randrange(1, 10**6), 3)
@@ -108,7 +109,7 @@ DIVIDE += [
 # TPC-DS q83 shape: three return quantities per item; value = qty / (a + b + c) / 3 * 100.
 Q83 = [("a", 7, 5, 4), ("b", 1, 1, 1), ("c", 2, 5, 11), ("d", 3, 3, 3), ("e", 10, 1, 3), ("f", 13, 2, 7)]
 
-TABLES: dict[str, tuple[str, list[tuple[str | None, ...]]]] = {
+TABLES: dict[str, tuple[str, Sequence[Sequence[str | None]]]] = {
     "li": ("k INT, disc DECIMAL(15,2), price DECIMAL(15,2), qty DECIMAL(15,2)", LINEITEM),
     "ties": ("k STRING, x DECIMAL(5,0)", TIES),
     "half": ("k STRING, x DECIMAL(10,2)", HALF),
@@ -175,7 +176,7 @@ CASES: list[tuple[str, str, dict[str, str]]] = [
 ]
 
 
-def view_sql(name: str, columns: str, rows: list[tuple[str | None, ...]]) -> str:
+def view_sql(name: str, columns: str, rows: Sequence[Sequence[str | None]]) -> str:
     cols = [c.strip().split(" ", 1) for c in columns.split(", ")]
 
     def lit(text: str | None, ty: str) -> str:
