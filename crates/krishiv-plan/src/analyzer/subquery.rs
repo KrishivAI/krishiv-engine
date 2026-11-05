@@ -88,6 +88,8 @@ pub(super) fn rewrite(
     Ok(out)
 }
 
+mod global_in;
+
 struct Rewriter {
     next_id: u64,
     /// Each relation rewritten, by address (original kept alive): a shared relation is rewritten once.
@@ -397,8 +399,7 @@ fn aggregates_below(p: &LogicalPlan) -> bool {
     }
 }
 
-/// Whether `p` is one row of expressions over no relation: `SELECT 1`,
-/// `VALUES (1)`, through aliases and projections.
+/// Whether `p` is one row of expressions over no relation: `SELECT 1`, `VALUES (1)`, through aliases and projections.
 fn one_row_literals(p: &LogicalPlan) -> bool {
     match &p.node {
         PlanNode::OneRowRelation => true,
@@ -535,8 +536,7 @@ fn hull(p: &Arc<LogicalPlan>) -> Option<(u64, u64)> {
 }
 
 impl Rewriter {
-    /// `root` rewritten, children first, once per distinct relation; every
-    /// `STEP` levels on a fresh stack.
+    /// `root` rewritten, children first, once per distinct relation; every `STEP` levels on a fresh stack.
     fn plan(&mut self, root: &Arc<LogicalPlan>) -> R<Arc<LogicalPlan>> {
         if let Some((_, out)) = self.done.get(&addr(&**root)) {
             return Ok(Arc::clone(out));
@@ -1167,8 +1167,8 @@ impl Rewriter {
     /// A predicate subquery as a semi or anti join of `left` with it.
     fn semi(&mut self, left: Arc<LogicalPlan>, pred: &Pred) -> R<Arc<LogicalPlan>> {
         let keep = !pred.values.is_empty();
-        let (inner, corr) = if on_path(&pred.plan, needs_domain) {
-            let (inner, inner_keys, outer_keys) = self.domain(&left, &pred.plan)?;
+        let (inner, corr) = if on_path(&pred.plan, needs_domain) || self.global_in(pred) {
+            let (inner, inner_keys, outer_keys) = self.domain_for_in(&left, &pred.plan)?;
             let corr = inner_keys
                 .into_iter()
                 .zip(outer_keys)
