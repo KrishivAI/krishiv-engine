@@ -99,6 +99,13 @@ UNSUPPORTED_SUITES: dict[tuple[str, str], str] = {
         "TPC-DS is not run for ClickHouse: the reference is a ClickHouse benchmark reference (ClickBench and TPC-H "
         "only), and no ClickHouse-published TPC-DS query set is vendored"
     ),
+    **{
+        (engine, "tpch-nested"): (
+            f"the nested TPC-H queries are Spark SQL (`explode` of array<struct> columns): {engine} does not run them; "
+            "DuckDB is the flat-TPC-H reference of `krishiv-bench nested-check`"
+        )
+        for engine in ("duckdb", "polars", "datafusion", "clickhouse")
+    },
 }
 
 

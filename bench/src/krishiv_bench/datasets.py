@@ -1,4 +1,5 @@
-"""Dataset generators (P0-T18). CLI: `uv run krishiv-datasets <tpch|tpcds|clickbench|nexmark|zipf|h2o-*|dsb|manifest>`.
+"""Dataset generators (P0-T18). CLI: `uv run krishiv-datasets <tpch|tpch-nested|tpcds|clickbench|nexmark|zipf|h2o-*|dsb|
+manifest>`.
 
 All output goes to $KRISHIV_DATA/<dataset>/sf<N>/ as Parquet, plus a sha256 manifest in
 $KRISHIV_DATA/manifests/. Nothing here is ever written inside the repo.
@@ -344,6 +345,13 @@ def main(argv=None) -> None:
     p = sub.add_parser("remote-filter", help="download the FineWeb-Edu sample/10BT mirror (~28 GB)")
     p.add_argument("--yes", action="store_true", help="confirm the ~28 GB download")
     p.add_argument("--out", type=Path, default=None, help="mirror directory")
+    p = sub.add_parser(
+        "tpch-nested",
+        help="nested TPC-H (Comet's layout) from the flat tpch dataset: $KRISHIV_DATA/tpch-nested/sf<N>, verified",
+    )
+    p.add_argument("--sf", type=float, default=1)
+    p.add_argument("--source", default="tpch", help="flat dataset name under $KRISHIV_DATA (default tpch)")
+    p.add_argument("--force", action="store_true")
     p = sub.add_parser("manifest", help="(re)write sha256 manifest for a dataset dir")
     p.add_argument("name", choices=["tpch", "tpch-dbgen", "tpcds"])
     p.add_argument("--sf", type=float, default=1)
@@ -380,6 +388,11 @@ def main(argv=None) -> None:
         if problems:
             sys.exit("\n".join(problems))
         print(f"{a.directory}: verified")
+    elif a.cmd == "tpch-nested":
+        from . import nested_tpch
+
+        d = nested_tpch.generate(a.sf, a.source, a.force)
+        print("manifest:", write_manifest(d, f"{d.parent.name}-{d.name}"))
     elif a.cmd in ("tpch", "tpch-dbgen", "tpcds"):
         d = {"tpch": gen_tpch, "tpch-dbgen": gen_tpch_dbgen, "tpcds": gen_tpcds}[a.cmd](a.sf, a.force)
         if not a.no_manifest:

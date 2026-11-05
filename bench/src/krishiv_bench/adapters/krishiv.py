@@ -246,7 +246,28 @@ class KrishivEngine(Engine):
     def timed_run(self, query: Query) -> tuple[int, float]:
         """Executes to completion; returns the row count and the runner-measured seconds."""
         rows, secs = self._command(f"RUN {_enc(self._sql_file(query))}").split()
+        self._pending = query
         return int(rows), float(secs)
+
+    def result_checksum(self) -> dict | None:
+        """The runner hands no rows back from ``RUN``: the checksum comes from an untimed ``DUMP`` of the query."""
+        import pyarrow.parquet as pq
+
+        from ..result_check import checksum
+
+        query, self._pending = self._pending, None
+        if query is None:
+            return None
+        out = self._tmp / f"{query.id}.chk"
+        shutil.rmtree(out, ignore_errors=True)
+        try:
+            self.dump(query, out)
+            parts = sorted(out.glob("*.parquet")) if out.is_dir() else [out]
+            import pyarrow as pa
+
+            return checksum(pa.concat_tables([pq.read_table(p) for p in parts]))
+        finally:
+            shutil.rmtree(out, ignore_errors=True)
 
     def profile(self, query: Query) -> dict:
         """One ``PROFILE`` run: row count, total seconds and the runner's per-phase wall times."""

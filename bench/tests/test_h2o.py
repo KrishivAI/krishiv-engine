@@ -361,15 +361,20 @@ def test_run_input_validation(tiny: dict[str, Path], tmp_path: Path):
         h2o.run_h2o("duckdb", "h2o-groupby", tiny["h2o-groupby"], 0.5, only=["q99"])
 
 
-def test_spark_timed_run_counts_engine_side_without_collecting():
+def test_spark_timed_run_collects_arrow_without_python_rows():
+    import pyarrow as pa
+
     from krishiv_bench.adapters import spark_local
 
     class _DF:
         def collect(self):  # pragma: no cover - must never be called here
             raise AssertionError("timed_run must not materialise rows in Python")
 
-        def count(self):
-            return 7
+        def count(self):  # pragma: no cover - the full result is fetched, not counted
+            raise AssertionError("timed_run must fetch the full result")
+
+        def toArrow(self):
+            return pa.table({"a": list(range(7))})
 
     class _Spark:
         def __init__(self, seen: list[str]):
@@ -386,6 +391,8 @@ def test_spark_timed_run_counts_engine_side_without_collecting():
         n, secs = eng.timed_run(Query("q01", "SELECT 1", "h2o-groupby"))
         assert (n, seen) == (7, ["SELECT 1"])
         assert secs >= 0
+        assert eng.result_checksum() is not None
+        assert eng.result_checksum() is None  # taken once
 
 
 def test_duckdb_timed_run_materialises_only_checked_questions(tiny: dict[str, Path]):
@@ -395,7 +402,7 @@ def test_duckdb_timed_run_materialises_only_checked_questions(tiny: dict[str, Pa
     assert n == 10
     assert secs > 0
     assert eng.con is not None
-    assert eng.con.execute("SELECT count(*) FROM duckdb_tables() WHERE table_name = 'h2o_ans'").fetchone() == (0,)
+    assert eng.con.execute("SELECT count(*) FROM duckdb_tables() WHERE table_name = 'h2o_ans'").fetchall() == [(0,)]
     plain = Query("p", "SELECT 1 UNION ALL SELECT 2", "tpch")
     assert eng.timed_run(plain)[0] == 2
 
