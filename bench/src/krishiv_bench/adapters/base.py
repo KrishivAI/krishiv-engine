@@ -38,6 +38,10 @@ class Measure:
     baseline_rss_bytes: int | None = None  # process RSS just before the run
     cpu_seconds: float | None = None
     spill_bytes: int | None = None
+    # I/O of the engine process (tree) during the run, from /proc/<pid>/io deltas; None when not measured
+    rchar: int | None = None  # bytes requested by read syscalls, page-cache hits included
+    read_bytes: int | None = None  # bytes fetched from the storage layer (0 for a fully cached run)
+    syscr: int | None = None  # read syscalls
 
 
 def check_query(query: Query) -> Query:

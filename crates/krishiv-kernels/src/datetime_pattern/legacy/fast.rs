@@ -202,24 +202,21 @@ impl LegacyPattern {
                 return Some(end);
             }
             'E' => {
-                let mut list = Vec::new();
-                for (i, d) in LONG_DAYS.iter().enumerate() {
-                    list.push((d.to_lowercase(), i));
-                }
-                for (i, d) in SHORT_DAYS.iter().enumerate() {
-                    list.push((d.to_lowercase(), i));
-                }
-                let (end, i) = names_owned(text, pos, list)?;
+                let days = LONG_DAYS
+                    .iter()
+                    .chain(SHORT_DAYS.iter())
+                    .enumerate()
+                    .map(|(i, d)| (*d, i % 7));
+                let (end, i) = best_name(text, pos, days)?;
                 st.dow = Some((if i == 6 { 1 } else { i as i64 + 2 }, stamp));
                 return Some(end);
             }
             'M' | 'L' if n >= 3 => {
-                let mut list = Vec::new();
-                for (i, m) in MONTHS.iter().enumerate() {
-                    list.push((m.to_lowercase(), i));
-                    list.push((m[..3].to_lowercase(), i));
-                }
-                let (end, i) = names_owned(text, pos, list)?;
+                let months = MONTHS
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, m)| [(*m, i), (m.get(..3).unwrap_or(m), i)]);
+                let (end, i) = best_name(text, pos, months)?;
                 st.month0 = Some((i as i64, stamp));
                 return Some(end);
             }
@@ -323,23 +320,32 @@ fn adjust_year(two: i64, this_year: i64) -> i64 {
 /// The first of `options` (longest first, as the reverse-sorted regex tries
 /// them) that starts `text` at `pos`, ignoring case.
 fn names(text: &[char], pos: usize, options: &[(&str, bool)]) -> Option<(usize, bool)> {
-    names_owned(
-        text,
-        pos,
-        options.iter().map(|&(n, v)| (n.to_owned(), v)).collect(),
-    )
+    best_name(text, pos, options.iter().copied())
 }
 
-fn names_owned<V: Copy>(
+/// The greatest name (case-folded, so the longest of those sharing a prefix)
+/// of `options` that starts `text` at `pos`; of equal names the first wins.
+/// One scan, no table built per row.
+fn best_name<'a, V: Copy>(
     text: &[char],
     pos: usize,
-    mut options: Vec<(String, V)>,
+    options: impl IntoIterator<Item = (&'a str, V)>,
 ) -> Option<(usize, V)> {
-    options.sort_by(|a, b| b.0.cmp(&a.0));
-    options.dedup_by(|a, b| a.0 == b.0);
-    options
-        .into_iter()
-        .find_map(|(name, v)| prefix(text, pos, &[&name]).map(|end| (end, v)))
+    let fold_cmp = |a: &str, b: &str| {
+        a.bytes()
+            .map(|c| c.to_ascii_lowercase())
+            .cmp(b.bytes().map(|c| c.to_ascii_lowercase()))
+    };
+    let mut best: Option<(&str, usize, V)> = None;
+    for (name, v) in options {
+        let Some(end) = prefix(text, pos, &[name]) else {
+            continue;
+        };
+        if best.is_none_or(|(b, _, _)| fold_cmp(name, b).is_gt()) {
+            best = Some((name, end, v));
+        }
+    }
+    best.map(|(_, end, v)| (end, v))
 }
 
 /// `FastDateParser`'s `TimeZoneStrategy`: `+hhmm`, `GMT+h:mm`, or a zone
