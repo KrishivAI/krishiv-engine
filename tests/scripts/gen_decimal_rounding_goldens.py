@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
 """Generate decimal AVG / division rounding goldens (queue item "Decimal goldens that catch truncation").
 
 Sail returned wrong rows by truncating instead of rounding HALF_UP at the result scale (TPC-H q01 `avg(l_discount)`
@@ -10,7 +11,8 @@ Cases cover: AVG whose exact value needs rounding at the result scale (exact .5 
 ties), negatives (HALF_UP rounds away from zero), GROUP BY, large precision (the 38-digit cap and
 `spark.sql.decimalOperations.allowPrecisionLoss` off), division in projections and over aggregates (`sum/count`,
 `sum/sum`), and the TPC-H q01 / TPC-DS q83 shapes. Row order never matters: every row carries a key.
-Output is deterministic and contains no local paths.
+Output is deterministic and contains no local paths. Only Spark 4.2.0 is recorded: rounding of decimal AVG and
+division has not changed across 3.5-4.2 in the cases here, but a 3.5/4.0/4.1 fixture needs its own oracle run (ADR 0010).
 
     SPARK_HOME=<empty dir> uv run --no-project --python 3.12 --with 'pyspark-client==4.2.0' \\
       python tests/scripts/gen_decimal_rounding_goldens.py --remote sc://127.0.0.1:15012 \\
@@ -61,27 +63,34 @@ TIES += [("d", dec(-1, 0)), ("d", dec(-2, 0)), ("d", dec(-2, 0))]  # -1.6667
 TIES += [("e", dec(5, 0)), ("e", dec(5, 0)), ("e", dec(6, 0))]  # 5.3333
 TIES += [("f", dec(1, 0)), ("f", dec(1, 0)), ("f", dec(1, 0)), ("f", dec(2, 0))]  # 1.25 exactly
 
-# decimal(10,2) values with a 7th-digit tie: sum 0.01 over 16 rows / 32 -> use 2 rows: (0.01+0.00)/2 = 0.005 (scale 6).
-HALF = [
-    ("a", "0.01"),
-    ("a", "0.00"),
-    ("b", "-0.01"),
-    ("b", "0.00"),
-    ("c", "0.03"),
-    ("c", "0.00"),
-    ("c", "0.00"),
-    ("d", "0.02"),
-    ("d", "0.00"),
-    ("d", "0.00"),
-    ("d", "0.00"),
-    ("e", "0.01"),
-    ("e", "0.02"),
-    ("e", "0.02"),
-]
+# decimal(10,2) values: group e is inexact (5/3 = 1.666667); groups g and h are exact ties at the result scale 6
+# (0.01 / 32 = 0.0003125 -> 0.000313 and its negative -> -0.000313); the rest divide exactly.
+HALF = (
+    [
+        ("a", "0.01"),
+        ("a", "0.00"),
+        ("b", "-0.01"),
+        ("b", "0.00"),
+        ("c", "0.03"),
+        ("c", "0.00"),
+        ("c", "0.00"),
+        ("d", "0.02"),
+        ("d", "0.00"),
+        ("d", "0.00"),
+        ("d", "0.00"),
+        ("e", "0.01"),
+        ("e", "0.02"),
+        ("e", "0.02"),
+    ]
+    + [("g", "0.01")]
+    + [("g", "0.00")] * 31
+    + [("h", "-0.01")]
+    + [("h", "0.00")] * 31
+)
 
 BIG = [
     (str(i % 2), str(rng.randrange(-(10**19), 10**19)) + "." + str(rng.randrange(10**9)).rjust(9, "0"))
-    for i in range(40)
+    for i in range(42)
 ]
 HUGE = [("0", M38), ("0", M38), ("0", "1"), ("1", "-" + M38), ("1", "-" + M38), ("1", "-1"), ("1", "7")]
 WIDE = [(str(i % 2), dec(rng.randrange(-(10**27), 10**27), 10)) for i in range(25)]  # decimal(38,10)
@@ -105,6 +114,8 @@ DIVIDE += [
     ("109", "0.00", "7.000"),
     ("110", "1.00", "0.000"),
     ("111", None, "3.000"),
+    ("112", "0.01", "16.384"),
+    ("113", "-0.01", "16.384"),  # 0.0006103515625: an exact tie at scale 12
 ]
 # TPC-DS q83 shape: three return quantities per item; value = qty / (a + b + c) / 3 * 100.
 Q83 = [("a", 7, 5, 4), ("b", 1, 1, 1), ("c", 2, 5, 11), ("d", 3, 3, 3), ("e", 10, 1, 3), ("f", 13, 2, 7)]

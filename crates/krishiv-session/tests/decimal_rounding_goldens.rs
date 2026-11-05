@@ -19,9 +19,6 @@ use futures::executor::block_on;
 use krishiv_session::Session;
 use serde_json::Value;
 
-/// Known gaps: case id and what the engine does until fixed (each is a queue item).
-const GAPS: [(&str, &str); 0] = [];
-
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/spark-4.2.0/decimal-rounding-goldens.json");
@@ -109,13 +106,13 @@ fn text(a: &ArrayRef, i: usize) -> Value {
             plain(i128::from(a.as_primitive::<Decimal64Type>().value(i)), *s)
         }
         DataType::Decimal128(_, s) => plain(a.as_primitive::<Decimal128Type>().value(i), *s),
-        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => arrow_cast_string(a, i),
+        DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => string_at(a, i),
         t => panic!("result type {t}"),
     };
     Value::String(s)
 }
 
-fn arrow_cast_string(a: &ArrayRef, i: usize) -> String {
+fn string_at(a: &ArrayRef, i: usize) -> String {
     match a.data_type() {
         DataType::Utf8View => a.as_string_view().value(i).to_owned(),
         DataType::LargeUtf8 => a.as_string::<i64>().value(i).to_owned(),
@@ -136,7 +133,7 @@ fn plain(v: i128, scale: i8) -> String {
 }
 
 /// The mismatches of one case, as text (empty when it matches).
-fn check(s: &Session, tables: &[&str], case: &Value) -> String {
+fn check(s: &Session, case: &Value) -> String {
     let mut out = String::new();
     let conf = s.conf();
     let settings = case["conf"].as_object().unwrap();
@@ -154,15 +151,6 @@ fn check(s: &Session, tables: &[&str], case: &Value) -> String {
         conf.unset(k).unwrap();
     }
     let id = case["id"].as_str().unwrap();
-    if let Some((_, class)) = GAPS.iter().find(|(g, _)| *g == id) {
-        match result {
-            Err(e) if e.error_class().name() == *class => {}
-            other => {
-                let _ = writeln!(out, "{id}: known gap changed (update GAPS): {other:?}");
-            }
-        }
-        return out;
-    }
     match (case["ok"].as_bool().unwrap(), result) {
         (true, Ok((schema, batches))) => {
             let want = case["output"].as_array().unwrap();
@@ -219,19 +207,13 @@ fn check(s: &Session, tables: &[&str], case: &Value) -> String {
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), Value::String(v.clone())))
                 .collect();
-            // The fixture's tables are temporary views in Spark, whose
-            // suggestions qualify columns by the view's name; here they are
-            // catalog tables, which Spark's suggestions do not qualify.
-            let mut want_params = case["message_parameters"].as_object().unwrap().clone();
-            if let Some(Value::String(p)) = want_params.get_mut("proposal") {
-                for name in tables {
-                    *p = p.replace(&format!("`{name}`."), "");
-                }
-            }
-            if class != want || params != want_params {
+            let want_params = case["message_parameters"].as_object().unwrap();
+            let want_state = case["sql_state"].as_str();
+            if class != want || &params != want_params || e.sql_state() != want_state {
                 let _ = writeln!(
                     out,
-                    "{id}: error {class} {params:?}\n  Spark {want} {want_params:?}"
+                    "{id}: error {class} {:?} {params:?}\n  Spark {want} {want_state:?} {want_params:?}",
+                    e.sql_state()
                 );
             }
         }
@@ -250,16 +232,25 @@ fn decimal_rounding_matches_spark() {
     let g = fixture();
     let s = session(&g);
     let cases = g["cases"].as_array().unwrap();
-    let tables: Vec<&str> = g["tables"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect();
     let mut report = String::new();
     for case in cases {
-        report.push_str(&check(&s, &tables, case));
+        report.push_str(&check(&s, case));
     }
-    assert!(cases.len() >= 39, "the fixture lost cases");
+    // The cases that pin the rounding: exact ties, negatives, TPC-H q01 and TPC-DS q83 shapes.
+    let ids: Vec<&str> = cases.iter().map(|c| c["id"].as_str().unwrap()).collect();
+    for id in [
+        "q01_avg_disc",
+        "ties_avg_group",
+        "ties_avg_negated",
+        "half_avg_group",
+        "half_avg_negated",
+        "divide_rows",
+        "divide_rows_no_loss",
+        "huge_avg_group",
+        "divide_by_zero",
+        "q83_value",
+    ] {
+        assert!(ids.contains(&id), "case {id} is missing from the fixture");
+    }
     assert!(report.is_empty(), "mismatches against Spark:\n{report}");
 }
