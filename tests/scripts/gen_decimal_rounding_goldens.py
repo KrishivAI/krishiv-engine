@@ -11,8 +11,8 @@ Cases cover: AVG whose exact value needs rounding at the result scale (exact .5 
 ties), negatives (HALF_UP rounds away from zero), GROUP BY, large precision (the 38-digit cap and
 `spark.sql.decimalOperations.allowPrecisionLoss` off), division in projections and over aggregates (`sum/count`,
 `sum/sum`), and the TPC-H q01 / TPC-DS q83 shapes. Row order never matters: every row carries a key.
-Output is deterministic and contains no local paths. Only Spark 4.2.0 is recorded: rounding of decimal AVG and
-division has not changed across 3.5-4.2 in the cases here, but a 3.5/4.0/4.1 fixture needs its own oracle run (ADR 0010).
+Output is deterministic and contains no local paths. Only Spark 4.2.0 is recorded; fixtures for
+3.5, 4.0 and 4.1 need their own oracle runs (ADR 0010).
 
     SPARK_HOME=<empty dir> uv run --no-project --python 3.12 --with 'pyspark-client==4.2.0' \\
       python tests/scripts/gen_decimal_rounding_goldens.py --remote sc://127.0.0.1:15012 \\
