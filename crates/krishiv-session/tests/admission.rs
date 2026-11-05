@@ -99,6 +99,18 @@ fn state_of(rows: &[(String, String)], text: &str) -> Option<String> {
     rows.iter().find(|(t, _)| t == text).map(|(_, s)| s.clone())
 }
 
+/// Waits until the gate has seen its first request, so the observer queries that follow can
+/// never be the one it holds back.
+async fn first_request_seen(gate: &Gate) {
+    for _ in 0..2000 {
+        if !gate.requests.lock().unwrap().is_empty() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    panic!("the gated query never asked for admission");
+}
+
 async fn wait_for(s: &Session, text: &str, state: &str) {
     for _ in 0..500 {
         if state_of(&states(s).await, text).as_deref() == Some(state) {
@@ -142,6 +154,7 @@ async fn a_waiting_query_is_queued_then_runs_and_gives_its_slot_back() {
             .unwrap()
             .len()
     });
+    first_request_seen(&gate).await;
     wait_for(&s, "SELECT 7 AS seven", "queued").await;
     assert_eq!(
         gate.slots.0.load(Ordering::SeqCst),
@@ -204,9 +217,38 @@ async fn dropping_a_queued_query_cancels_it() {
             .collect()
             .await;
     });
+    first_request_seen(&gate).await;
     wait_for(&s, "SELECT 3 AS three", "queued").await;
     query.abort();
     let _ = query.await;
     wait_for(&s, "SELECT 3 AS three", "cancelled").await;
     assert_eq!(gate.slots.0.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_failed_query_gives_its_slot_back() {
+    let gate = Gate::new();
+    gate.first.store(false, Ordering::SeqCst);
+    let s = Session::builder()
+        .config("spark.sql.ansi.enabled", "true")
+        .admission_controller(Arc::<Gate>::clone(&gate))
+        .build()
+        .unwrap();
+    let e = s
+        .sql("SELECT 1 / 0 AS boom")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::DivideByZero);
+    assert_eq!(
+        gate.slots.0.load(Ordering::SeqCst),
+        0,
+        "the slot is back after the failure"
+    );
+    assert_eq!(
+        state_of(&states(&s).await, "SELECT 1 / 0 AS boom").as_deref(),
+        Some("failed")
+    );
 }

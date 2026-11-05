@@ -2048,6 +2048,9 @@ impl Stream for MetricStream {
             }
             Poll::Ready(Some(Err(error))) => {
                 if let Some(fold) = self.fold.take() {
+                    // Stop the query's other tasks before the fold gives the admission slot
+                    // back, so the next query is not admitted beside work still holding memory.
+                    fold.query.cancel();
                     fold.finish(Some(&error));
                 }
                 Poll::Ready(Some(Err(error)))
