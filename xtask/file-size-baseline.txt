@@ -22,10 +22,10 @@
 5392 crates/krishiv-plan/src/tests/analyzer.rs
 3004 crates/krishiv-session/src/catalog.rs
 2527 crates/krishiv-session/src/command.rs
-2692 crates/krishiv-session/src/dataframe.rs
-2863 crates/krishiv-session/src/session.rs
-# +9 lines: saveAsTable overwrite takes its admission before the old table is dropped (E5, PR #479)
-3275 crates/krishiv-session/src/table_commands.rs
+2630 crates/krishiv-session/src/dataframe.rs
+2867 crates/krishiv-session/src/session.rs
+# +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
+3291 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
 2774 crates/krishiv-sql/src/lower.rs
 5263 crates/krishiv-sql/src/parser.rs

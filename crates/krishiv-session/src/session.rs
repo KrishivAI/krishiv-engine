@@ -1272,7 +1272,6 @@ impl Session {
             text: None,
             statement_class: None,
             row: Arc::default(),
-            admitted: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -1651,20 +1650,6 @@ impl Session {
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 
-    /// [`Self::admit_query`] for a statement that changes something before its write runs
-    /// (`saveAsTable` overwrite drops the old table): the admission waits in the statement's
-    /// slot until the write takes it, and a statement dropped meanwhile gives it back.
-    pub(crate) async fn pre_admit(
-        &self,
-        env: &QueryEnv,
-    ) -> Result<crate::query_fold::PreAdmission, KrishivError> {
-        let admitted = self.admit_query(env).await?;
-        Ok(crate::query_fold::PreAdmission::new(
-            Arc::clone(&env.admitted),
-            admitted,
-        ))
-    }
-
     /// As [`Self::run_on_query`], also returning the id of the `system.queries` row this execution
     /// began, so the caller keeps it for itself: the statement's slot in `env` is shared by every
     /// execution of the same analyzed frame.
@@ -1705,23 +1690,49 @@ impl Session {
             self.state.metrics.query_begin(query.class());
         }
         let row_id = log_id.clone();
-        let mut pending = PendingFold(Some(QueryFold {
-            query: Arc::clone(&query),
-            state: Arc::clone(&self.state),
-            start: QueryStart::capture(&self.state),
-            metrics_on,
-            log_id,
-            _permit: permit,
-        }));
+        let mut pending = PendingFold(
+            Some(QueryFold {
+                query: Arc::clone(&query),
+                state: Arc::clone(&self.state),
+                start: QueryStart::capture(&self.state),
+                metrics_on,
+                log_id,
+                _permit: permit,
+            }),
+            None,
+        );
         // A plan the wire format cannot carry fails as a submit failure does:
         // its row records the error.
         let submitted = match crate::plan_round_trip::round_trip(physical, &env.config) {
             Ok(decoded) => {
                 let physical = decoded.as_ref().unwrap_or(physical);
-                self.state
+                // Submitted from a task of its own: instantiation runs on the blocking pool and
+                // goes on when the caller gives up, so the admission permit must outlive it
+                // (see `PendingFold`). The task hands the stream over, or cancels it if the
+                // caller is gone.
+                let submit = self
+                    .state
                     .runner
-                    .submit(physical.clone(), worker, Arc::clone(&query))
+                    .submit(physical.clone(), worker, Arc::clone(&query));
+                let (stream_tx, stream_rx) = tokio::sync::oneshot::channel();
+                let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
+                pending.1 = Some(done_rx);
+                let abandoned = Arc::clone(&query);
+                drop(self.state.executor.spawn(
+                    WorkloadClass::Interactive,
+                    Box::pin(async move {
+                        let result = submit.await;
+                        let started = result.is_ok();
+                        if let Err(Ok(stream)) = stream_tx.send(result) {
+                            abandoned.cancel();
+                            drop(stream);
+                        }
+                        let _ = done_tx.send(started);
+                    }),
+                ));
+                stream_rx
                     .await
+                    .unwrap_or_else(|_| Err(internal("a query ended during its setup".to_owned())))
             }
             Err(error) => Err(error),
         };
@@ -1880,6 +1891,7 @@ impl Session {
         env: &QueryEnv,
         target: WriteTarget,
         types: &[DataType],
+        pre: &mut Option<Admitted>,
     ) -> Result<Vec<String>, KrishivError> {
         let WriteTarget {
             format,
@@ -1928,12 +1940,8 @@ impl Session {
         crate::access::still_physical(self, &at)?;
         // The admission permit before anything is replaced: `DirectoryWrite::begin` deletes what
         // an overwrite replaces, which a refused or cancelled query must not have done.
-        let preadmitted = env
-            .admitted
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        let mut admitted = Some(match preadmitted {
+        // Admitted by the caller already (it changed something before this write), else here.
+        let mut admitted = Some(match pre.take() {
             Some(admitted) => admitted,
             None => self.admit_query(env).await?,
         });
@@ -2665,10 +2673,6 @@ pub(crate) struct QueryEnv {
     /// when a step after its run fails. Statement-local, so another statement of the same
     /// session cannot set or clear it.
     pub(crate) row: Arc<std::sync::Mutex<Option<String>>>,
-    /// The admission a statement took before it changed anything the run that follows would
-    /// otherwise be admitted for (`saveAsTable` overwrite drops the old table first); the write
-    /// takes it instead of asking again. Shared like `row`.
-    pub(crate) admitted: Arc<std::sync::Mutex<Option<Admitted>>>,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a

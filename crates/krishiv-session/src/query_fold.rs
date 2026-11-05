@@ -181,6 +181,24 @@ impl QueryFold {
         ));
     }
 
+    /// As [`Self::finish_cancelled`] for a query dropped while `submit` was still running:
+    /// `setup` reports when the submit task is done and whether it started the query.
+    pub(crate) fn finish_after_setup(mut self, setup: tokio::sync::oneshot::Receiver<bool>) {
+        let permit = std::mem::replace(&mut self._permit, Permit::unlimited());
+        let query = Arc::clone(&self.query);
+        let state = Arc::clone(&self.state);
+        self.finish(None);
+        drop(state.executor.spawn(
+            krishiv_exec::WorkloadClass::Interactive,
+            Box::pin(async move {
+                if setup.await.unwrap_or(false) {
+                    query.finished().await;
+                }
+                drop(permit);
+            }),
+        ));
+    }
+
     pub(crate) fn finish(self, error: Option<&KrishivError>) {
         self.start.fold(
             &self.state,
@@ -220,16 +238,27 @@ impl Drop for QueuedRow<'_> {
 
 /// The fold of a query whose stream does not exist yet: dropped while still
 /// holding it (the caller cancelled), it cancels the query and folds it.
-pub(crate) struct PendingFold(pub(crate) Option<QueryFold>);
+///
+/// The second field is set once the run hands `submit` to a task of its own: it reports when that
+/// task is done (and whether the query was started), because instantiation keeps running on the
+/// blocking pool after the caller is gone.
+pub(crate) struct PendingFold(
+    pub(crate) Option<QueryFold>,
+    pub(crate) Option<tokio::sync::oneshot::Receiver<bool>>,
+);
 
 impl Drop for PendingFold {
     fn drop(&mut self) {
         if let Some(fold) = self.0.take() {
-            // Dropped before `submit` produced a stream: the runner may not have started the
-            // query, in which case nothing would ever report it finished. No task is running
-            // yet that this permit must outlive, so it goes back at once.
+            // Dropped before `submit` produced a stream. Instantiation may still be running
+            // on the blocking pool (it is not cancelled by dropping the caller), so the
+            // permit stays until the submit task is done and, if it started the query, until
+            // the query's tasks have ended.
             fold.query.cancel();
-            fold.finish(None);
+            match self.1.take() {
+                Some(done) => fold.finish_after_setup(done),
+                None => fold.finish(None),
+            }
         }
     }
 }
@@ -350,45 +379,5 @@ impl Drop for Admitted {
         if self.armed {
             self.close("cancelled", None);
         }
-    }
-}
-
-/// The statement-wide slot a pre-admission waits in until the write takes it
-/// (`QueryEnv::admitted`). The slot outlives the statement (it sits in the frame's cached
-/// analysis), so a statement that is dropped before its write took the admission must not leave
-/// it there: this guard empties the slot, and the `Admitted` dropped with it closes its row
-/// `cancelled` and gives the permit back.
-pub(crate) struct PreAdmission(Arc<std::sync::Mutex<Option<Admitted>>>);
-
-impl PreAdmission {
-    pub(crate) fn new(slot: Arc<std::sync::Mutex<Option<Admitted>>>, admitted: Admitted) -> Self {
-        *slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(admitted);
-        Self(slot)
-    }
-
-    /// Settles what the write did not take (the drop or the create failed first) with the
-    /// statement's outcome.
-    pub(crate) fn settle(&self, outcome: &Result<(), KrishivError>) {
-        if let Some(unrun) = self.unrun() {
-            match outcome {
-                Ok(()) => unrun.finish_ok(),
-                Err(error) => unrun.fail(error),
-            }
-        }
-    }
-
-    fn unrun(&self) -> Option<Admitted> {
-        self.0
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-    }
-}
-
-impl Drop for PreAdmission {
-    fn drop(&mut self) {
-        drop(self.unrun());
     }
 }
