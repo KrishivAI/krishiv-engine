@@ -33,6 +33,7 @@ fn full_registry() -> Arc<MetricsRegistry> {
         arbitration_aborts: 1,
         cache_hits: 3,
         cache_misses: 1,
+        cancel_latency_secs: None,
     });
     registry.fold(&QueryOutcome {
         class: WorkloadClass::Batch,
@@ -44,6 +45,7 @@ fn full_registry() -> Arc<MetricsRegistry> {
         arbitration_aborts: 0,
         cache_hits: 0,
         cache_misses: 0,
+        cancel_latency_secs: None,
     });
     for class in ["interactive", "batch", "background", "agent"] {
         registry
@@ -420,6 +422,7 @@ async fn label_values_escape() {
         arbitration_aborts: 0,
         cache_hits: 0,
         cache_misses: 0,
+        cancel_latency_secs: None,
     });
     let addr = serve(router_with_metrics(true, provider(&registry))).await;
     let response = get(addr, "/metrics").await;

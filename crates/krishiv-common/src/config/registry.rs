@@ -39,6 +39,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_RESIDENT_GUARD,
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
+    &QUERY_MAX_EXECUTION_TIME,
+    &QUERY_MAX_QUEUED_TIME,
     &CACHE_MAX_BYTES,
     &DETERMINISTIC_ORDER,
     &RESULT_CACHE_ENABLED,
@@ -152,6 +154,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
     ("krishiv.io.cache.blockBytes", &IO_CACHE_BLOCK_BYTES),
+    ("krishiv.query.maxQueuedTime", &QUERY_MAX_QUEUED_TIME),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
     ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
@@ -170,6 +173,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
+    ("krishiv.query.maxExecutionTime", &QUERY_MAX_EXECUTION_TIME),
     ("spark.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     (
         "krishiv.io.coalesceWasteDivisor",
@@ -775,6 +779,31 @@ pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
           oldest finished row of the principal holding the most finished rows goes. Running \
           queries are never dropped.",
     scope: Scope::Cluster,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// The longest a query may run before it is cancelled (design P2-E1 §4).
+pub static QUERY_MAX_EXECUTION_TIME: ConfigEntry = ConfigEntry {
+    key: "krishiv.query.maxExecutionTime",
+    value_type: ValueType::Duration,
+    default: None,
+    doc: "The longest a query may run from the start of its execution: past it the query is \
+          cancelled and fails with `KRISHIV_QUERY_TIMEOUT`. The limit is read when the query \
+          starts. When unset, queries run without a time limit.",
+    scope: Scope::Session,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Reserved for admission (design P2-E1 §4, contract E5).
+pub static QUERY_MAX_QUEUED_TIME: ConfigEntry = ConfigEntry {
+    key: "krishiv.query.maxQueuedTime",
+    value_type: ValueType::Duration,
+    default: None,
+    doc: "Reserved: the longest a query may wait for admission before it starts. No admission \
+          queue exists yet, so the value is accepted and has no effect.",
+    scope: Scope::Session,
     version_added: "0.2.0",
     spark_alias: None,
 };

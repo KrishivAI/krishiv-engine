@@ -239,6 +239,7 @@ mod tests {
             arbitration_aborts: 1,
             cache_hits: 3,
             cache_misses: 1,
+            cancel_latency_secs: None,
         });
         for class in ["interactive", "batch", "background", "agent"] {
             registry.add_gauge(
@@ -595,6 +596,7 @@ mod tests {
             arbitration_aborts: 0,
             cache_hits: 0,
             cache_misses: 0,
+            cancel_latency_secs: None,
         });
         registry
             .add_gauge(

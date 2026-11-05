@@ -70,6 +70,8 @@ use crate::variables::SessionVariables;
 
 mod context;
 mod lifecycle;
+#[cfg(test)]
+mod run_task;
 
 /// The store id of the local file system.
 const LOCAL_STORE: &str = "file";
@@ -117,6 +119,8 @@ pub struct Session {
     /// The operation the queries this handle starts belong to
     /// ([`Session::sql_with`]); `None` for a handle a user holds.
     pub(crate) operation: Option<Arc<crate::history::Operation>>,
+    /// The statement's own time limit ([`crate::QueryOptions::deadline`]).
+    pub(crate) deadline: Option<std::time::Duration>,
 }
 
 impl fmt::Debug for Session {
@@ -449,6 +453,7 @@ impl Session {
         Session {
             locals: Arc::from([]),
             operation: None,
+            deadline: None,
             state: Arc::new(SessionState {
                 conf: Arc::new(ConfStore::new(config)),
                 catalog: Arc::new(SessionCatalog::default()),
@@ -1520,45 +1525,6 @@ impl Session {
             .await
     }
 
-    /// Runs `physical` as `task` in this process (tests): the worker of
-    /// [`Self::worker`] instantiating with the task's scan splits, executed
-    /// on the session's executor (I/O needs its runtime).
-    #[cfg(test)]
-    pub(crate) async fn run_task(
-        &self,
-        physical: &PhysicalPlan,
-        env: &QueryEnv,
-        task: &krishiv_exec::physical::TaskSpec,
-    ) -> Result<Vec<RecordBatch>, KrishivError> {
-        use krishiv_exec::physical::instantiate_task;
-        let worker = self.worker(env);
-        let node = instantiate_task(physical, &worker, task)?;
-        let state = Arc::clone(&self.state);
-        let config = Arc::clone(&env.config);
-        self.on_executor(async move {
-            let id = QueryId(state.runtime.next_query_index());
-            let pool = state.memory.child(&format!("query-task-{}", id.0), None);
-            let query = QueryContext::new(
-                id,
-                WorkloadClass::Interactive,
-                ExecConfig::from_config(&config),
-                pool,
-            );
-            let mut stream = state
-                .runtime
-                .runner
-                .execute(node, Arc::clone(&query))
-                .await?;
-            let mut out = Vec::new();
-            while let Some(batch) = stream.next().await {
-                out.push(batch?.into_parts().0);
-            }
-            query.finished().await;
-            Ok(out)
-        })
-        .await
-    }
-
     /// The session's relation store (tests): every registered memory
     /// table's batches as content-addressed IPC.
     #[cfg(test)]
@@ -1599,7 +1565,11 @@ impl Session {
             self.operation_id(),
         );
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
-        let id = QueryId(self.state.runtime.next_query_index());
+        let id = QueryId(self.state.runtime.reserve(
+            self.state.number,
+            self.state.queries.session_id(),
+            &log_id,
+        ));
         let pool = self
             .state
             .memory
@@ -1628,11 +1598,9 @@ impl Session {
             metrics_on,
             log_id,
         }));
-        if !self.state.runtime.track(self.state.number, &row_id, &query) {
-            // Closed after `check_open`: the pending fold cancels the query
-            // and records it as it drops.
-            return Err(self.closed_error());
-        }
+        // Closed after `check_open`: the pending fold cancels the query
+        // and records it as it drops.
+        self.attach(&query, &row_id, &env.config)?;
         // A plan the wire format cannot carry fails as a submit failure does:
         // its row records the error.
         let submitted = match crate::plan_round_trip::round_trip(physical, &env.config) {
@@ -1805,6 +1773,10 @@ impl QueryStart {
             arbitration_aborts: arbitration.aborts.saturating_sub(self.arbitration.aborts),
             cache_hits: IoCounters::get(&totals.cache_hits).saturating_sub(self.cache_hits),
             cache_misses: IoCounters::get(&totals.cache_misses).saturating_sub(self.cache_misses),
+            cancel_latency_secs: query
+                .cancelled_at()
+                .filter(|_| status == Status::Cancelled)
+                .map(|at| at.elapsed().as_secs_f64()),
         });
     }
 }

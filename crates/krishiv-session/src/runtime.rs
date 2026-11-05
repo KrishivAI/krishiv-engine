@@ -15,7 +15,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use krishiv_common::config::{Config, SYSTEM_QUERIES_CAPACITY, lookup};
 use krishiv_common::error::{CannotModifyStaticConfig, KrishivError};
@@ -26,6 +26,8 @@ use krishiv_exec::{
 use krishiv_io::{FormatRegistry, IoScheduler};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillManager, TreePool};
 
+use crate::QueryId;
+use crate::cancel::{self, CancelReason, Deadlines};
 use crate::history::QueryHistory;
 
 /// The process-wide part of the engine, shared by the sessions built on it
@@ -65,6 +67,8 @@ pub struct EngineRuntime {
     session_seq: AtomicU64,
     /// The `system.queries` rows of every session.
     pub(crate) history: Arc<QueryHistory>,
+    /// The statement-timeout timer, started by the first query with a limit.
+    deadlines: OnceLock<Deadlines>,
     /// The queries running now, and the closed sessions.
     live: Mutex<LiveSet>,
     /// The I/O schedulers of the runtime's sessions, read by the metadata
@@ -83,14 +87,28 @@ struct LiveSet {
     closed: HashSet<u64>,
 }
 
-/// A query running on the runtime.
+/// A query running on the runtime, from its `system.queries` row on.
 struct Live {
-    /// The number of the session that runs it.
+    /// The number of the session that runs it, and its id.
     session: u64,
+    session_id: Arc<str>,
     /// Its id in `system.queries`.
-    #[expect(dead_code, reason = "read by cancellation by id (E1 unit R5)")]
-    id: String,
-    query: Weak<QueryContext>,
+    id: Arc<str>,
+    /// `None` until the query's context exists ([`EngineRuntime::attach`]).
+    query: Option<Weak<QueryContext>>,
+    /// A cancellation that came before the context: adopted at `attach`.
+    pending: Option<CancelReason>,
+}
+
+/// How a reserved query goes on ([`EngineRuntime::attach`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Attached {
+    /// It runs.
+    Run,
+    /// It was cancelled before its context existed: it ends at once.
+    Cancelled(CancelReason),
+    /// Its session closed meanwhile.
+    Closed,
 }
 
 impl fmt::Debug for EngineRuntime {
@@ -201,6 +219,7 @@ impl EngineRuntime {
             query_index: AtomicU64::new(0),
             session_seq: AtomicU64::new(0),
             history: Arc::new(QueryHistory::new(capacity)),
+            deadlines: OnceLock::new(),
             live: Mutex::new(LiveSet::default()),
             io: Arc::new(Mutex::new(Vec::new())),
             private,
@@ -252,59 +271,140 @@ impl EngineRuntime {
         self.session_seq.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// The worker-local index of a new query.
-    pub(crate) fn next_query_index(&self) -> u64 {
-        self.query_index.fetch_add(1, Ordering::Relaxed)
-    }
-
-    /// Records `query`, run by session `session` as `system.queries` row
-    /// `id`, as running until it ends; `false` (nothing recorded) when the
-    /// session was closed, decided under the lock [`Self::cancel_session`]
-    /// takes.
-    #[must_use]
-    pub(crate) fn track(&self, session: u64, id: &str, query: &Arc<QueryContext>) -> bool {
+    /// Reserves the worker-local index of a new query of session `session`
+    /// (`session_id`), `system.queries` row `id`, before its context
+    /// exists: from here a cancellation of `id` is never lost.
+    pub(crate) fn reserve(&self, session: u64, session_id: &str, id: &str) -> u64 {
+        let index = self.query_index.fetch_add(1, Ordering::Relaxed);
         let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
-        if live.closed.contains(&session) {
-            return false;
-        }
         // Entries of ended queries go as new ones arrive.
-        live.queries
-            .retain(|_, l| l.query.upgrade().is_some_and(|q| !q.is_finished()));
+        live.queries.retain(|_, l| {
+            l.query
+                .as_ref()
+                .is_none_or(|q| q.upgrade().is_some_and(|q| !q.is_finished()))
+        });
         live.queries.insert(
-            query.id().0,
+            index,
             Live {
                 session,
-                id: id.to_owned(),
-                query: Arc::downgrade(query),
+                session_id: Arc::from(session_id),
+                id: Arc::from(id),
+                query: None,
+                pending: None,
             },
         );
-        true
+        index
     }
 
-    /// Closes session `session`: cancels its running queries and refuses
-    /// any it registers later; the number cancelled.
-    pub(crate) fn cancel_session(&self, session: u64) -> usize {
-        let queries: Vec<Arc<QueryContext>> = {
-            let mut guard = self.live.lock().unwrap_or_else(PoisonError::into_inner);
-            let live = &mut *guard;
-            live.closed.insert(session);
-            let mine: Vec<u64> = live
-                .queries
-                .iter()
-                .filter(|(_, l)| l.session == session)
-                .map(|(k, _)| *k)
-                .collect();
-            mine.into_iter()
-                .filter_map(|k| live.queries.remove(&k))
-                .filter_map(|l| l.query.upgrade())
-                .collect()
+    /// Attaches `query`, reserved as `index`, decided under the lock
+    /// [`Self::cancel_where`] and [`Self::cancel_session`] take. A deadline
+    /// of `limit` from now applies when given.
+    pub(crate) fn attach(
+        &self,
+        index: u64,
+        query: &Arc<QueryContext>,
+        limit: Option<std::time::Duration>,
+    ) -> Attached {
+        let attached = {
+            let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+            let LiveSet { queries, closed } = &mut *live;
+            match queries.get_mut(&index) {
+                None => Attached::Closed,
+                Some(l) if closed.contains(&l.session) => {
+                    queries.remove(&index);
+                    Attached::Closed
+                }
+                Some(l) => {
+                    l.query = Some(Arc::downgrade(query));
+                    l.pending.map_or(Attached::Run, Attached::Cancelled)
+                }
+            }
+        };
+        if attached == Attached::Run
+            && let Some(limit) = limit
+            && let Some((session_id, id)) = self.ids_of(index)
+        {
+            self.deadlines
+                .get_or_init(|| Deadlines::start(&*self.executor, Arc::clone(&self.history)))
+                .add(query, limit, &session_id, &id);
+        }
+        attached
+    }
+
+    /// The session id and row id of the query reserved as `index`.
+    fn ids_of(&self, index: u64) -> Option<(Arc<str>, Arc<str>)> {
+        let live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        live.queries
+            .get(&index)
+            .map(|l| (Arc::clone(&l.session_id), Arc::clone(&l.id)))
+    }
+
+    /// Cancels, with `reason`, every running query `pick` selects (by
+    /// session number and row id); the ids of those it cancelled. A query
+    /// whose context does not exist yet keeps the reason for `attach`.
+    pub(crate) fn cancel_where(
+        &self,
+        reason: CancelReason,
+        pick: impl Fn(u64, &str) -> bool,
+    ) -> Vec<QueryId> {
+        let mut pending = Vec::new();
+        let picked: Vec<(Arc<QueryContext>, Arc<str>, Arc<str>)> = {
+            let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut out = Vec::new();
+            for l in live.queries.values_mut() {
+                if !pick(l.session, &l.id) {
+                    continue;
+                }
+                match l.query.as_ref() {
+                    None => {
+                        if l.pending.is_none() {
+                            l.pending = Some(reason);
+                            pending.push(QueryId::minted(l.id.to_string()));
+                        }
+                    }
+                    Some(q) => {
+                        if let Some(q) = q.upgrade() {
+                            out.push((q, Arc::clone(&l.session_id), Arc::clone(&l.id)));
+                        }
+                    }
+                }
+            }
+            out
         };
         // Cancelled outside the lock: a cancel wakes the query's tasks.
-        let n = queries.iter().filter(|q| !q.is_finished()).count();
-        for q in &queries {
-            q.cancel();
+        let mut ids = pending;
+        for (query, session_id, id) in picked {
+            if cancel::apply(&query, reason, None, &self.history, &session_id, &id) {
+                ids.push(QueryId::minted(id.to_string()));
+            }
         }
-        n
+        ids
+    }
+
+    /// Cancels the query `id` of any session of the runtime with `reason`
+    /// (an operator's kill, a drain): `KRISHIV_QUERY_KILLED` for `Admin`,
+    /// `Drain` and `Quota`, `OPERATION_CANCELED` for `User` and `ClientGone`,
+    /// `KRISHIV_QUERY_TIMEOUT` for `Timeout`. Not reachable from SQL (an
+    /// admin check belongs in front of it). Whether a running query was
+    /// cancelled: `false` for an unknown or ended id. Equal caller ids in
+    /// several sessions are all cancelled.
+    pub fn cancel(&self, id: &crate::QueryId, reason: CancelReason) -> bool {
+        !self
+            .cancel_where(reason, |_, q| q == id.as_str())
+            .is_empty()
+    }
+
+    /// Closes session `session`: cancels its running queries (reason
+    /// `ClientGone`) and refuses any it attaches later; the number
+    /// cancelled.
+    pub(crate) fn cancel_session(&self, session: u64) -> usize {
+        self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .closed
+            .insert(session);
+        self.cancel_where(CancelReason::ClientGone, |s, _| s == session)
+            .len()
     }
 
     /// Forgets session `session` once it is gone (its closed mark).
@@ -414,10 +514,11 @@ mod tests {
 
     use super::*;
 
-    /// A query that registers after its session closed is refused and never
-    /// tracked: `close` cannot miss a query starting at the same moment.
+    /// A query attached after its session closed is refused, and a
+    /// cancellation that arrives between a query's row and its context is
+    /// kept and applied when the context attaches.
     #[test]
-    fn a_closed_session_registers_no_query() {
+    fn closing_and_cancelling_are_never_lost_in_the_start_window() {
         let rt = EngineRuntime::builder().build().unwrap();
         let query = |n: u64| {
             QueryContext::new(
@@ -427,15 +528,42 @@ mod tests {
                 rt.memory().child("q", None),
             )
         };
-        let (a, b) = (query(1), query(2));
-        assert!(rt.track(7, "a", &a));
-        assert_eq!(rt.cancel_session(7), 1);
+        let i = rt.reserve(7, "s7", "a");
+        let a = query(i);
+        assert_eq!(rt.attach(i, &a, None), Attached::Run);
+        // Reserved, context not attached yet: the cancel waits for it.
+        let j = rt.reserve(7, "s7", "b");
+        let ids = rt.cancel_where(CancelReason::User, |s, q| s == 7 && q == "b");
+        assert_eq!(ids.len(), 1);
+        let b = query(j);
+        assert_eq!(
+            rt.attach(j, &b, None),
+            Attached::Cancelled(CancelReason::User)
+        );
+        // The caller applies it (`Session::attach`).
+        assert!(b.cancel_with(CancelReason::User.error("b", None)));
+        // Closing cancels the attached query and refuses a later attach.
+        let k = rt.reserve(7, "s7", "c");
+        // `a`, and `c` (reserved: its reason waits); `b` already ended.
+        assert_eq!(rt.cancel_session(7), 2);
         assert!(a.is_cancelled());
-        assert!(!rt.track(7, "b", &b), "registered on a closed session");
-        assert!(!b.is_cancelled(), "the caller cancels it");
+        assert_eq!(
+            a.check_cancelled().unwrap_err().error_class().name(),
+            "OPERATION_CANCELED"
+        );
+        assert_eq!(rt.attach(k, &query(k), None), Attached::Closed);
         // Other sessions are unaffected; a forgotten session's number is free.
-        assert!(rt.track(8, "c", &query(3)));
+        let m = rt.reserve(8, "s8", "d");
+        let d = query(m);
+        assert_eq!(rt.attach(m, &d, None), Attached::Run);
         rt.forget_session(7);
-        assert!(rt.track(7, "d", &query(4)));
+        let n = rt.reserve(7, "s7", "e");
+        assert_eq!(rt.attach(n, &query(n), None), Attached::Run);
+        // A kill by id reaches any session, with its own class.
+        assert!(rt.cancel(&crate::QueryId::minted("d".to_owned()), CancelReason::Admin));
+        assert!(!rt.cancel(
+            &crate::QueryId::minted("zz".to_owned()),
+            CancelReason::Admin
+        ));
     }
 }

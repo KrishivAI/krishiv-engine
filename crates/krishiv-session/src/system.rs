@@ -227,6 +227,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("spill_files", Long, true),
             ("pipelines", Long, true),
             ("workers", Long, true),
+            ("cancel_reason", Text, true),
         ],
         _ => return None,
     })
@@ -581,6 +582,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             long(rows.iter().map(|r| r.spill_files)),
             long(rows.iter().map(|r| r.pipelines)),
             long(rows.iter().map(|r| r.workers)),
+            text(rows.iter().map(|r| r.cancel_reason)),
         ];
     }
     let rows = capability_rows();
@@ -748,6 +750,9 @@ pub(crate) struct QueryRow {
     pub(crate) spill_files: Option<i64>,
     pub(crate) pipelines: Option<i64>,
     pub(crate) workers: Option<i64>,
+    /// Why the query was cancelled ([`crate::CancelReason::as_str`]), for a
+    /// query cancelled with a reason; `state` stays `cancelled`.
+    pub(crate) cancel_reason: Option<&'static str>,
 }
 
 /// One operator of a finished query, as `system.operators` lists it.
@@ -987,6 +992,7 @@ impl QueryLog {
             spill_files: None,
             pipelines: None,
             workers: None,
+            cancel_reason: None,
         }
     }
 
@@ -1108,7 +1114,7 @@ impl QueryLog {
 fn outcome_state(class: &str) -> &'static str {
     match class {
         "KRISHIV_INSUFFICIENT_PERMISSIONS" => "denied",
-        "OPERATION_CANCELED" => "cancelled",
+        "OPERATION_CANCELED" | "KRISHIV_QUERY_TIMEOUT" | "KRISHIV_QUERY_KILLED" => "cancelled",
         _ => "failed",
     }
 }

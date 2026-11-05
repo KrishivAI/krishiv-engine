@@ -12,7 +12,7 @@ use krishiv_common::error::KrishivError;
 
 use super::{Session, SessionParts};
 use crate::dataframe::DataFrame;
-use crate::runtime::EngineRuntime;
+use crate::runtime::{Attached, EngineRuntime};
 
 impl Session {
     /// A new session on the same runtime, run by the same principal under
@@ -135,6 +135,7 @@ impl Session {
             state: Arc::clone(&self.state),
             locals: Arc::clone(&self.locals),
             operation,
+            deadline: options.deadline.or(self.deadline),
         };
         handle.sql(query).await
     }
@@ -143,5 +144,76 @@ impl Session {
     /// gave one.
     pub(crate) fn operation_id(&self) -> Option<&crate::QueryId> {
         self.operation.as_deref().map(crate::history::Operation::id)
+    }
+
+    /// Attaches the query reserved for row `id` to the runtime's registry,
+    /// with its time limit: the shorter of `krishiv.query.maxExecutionTime`
+    /// and the statement's [`crate::QueryOptions::deadline`]. A cancellation
+    /// that arrived before the query's context existed is applied now.
+    ///
+    /// # Errors
+    /// `INVALID_HANDLE.SESSION_CLOSED` when the session closed meanwhile.
+    pub(crate) fn attach(
+        &self,
+        query: &Arc<krishiv_exec::QueryContext>,
+        id: &str,
+        config: &Config,
+    ) -> Result<(), KrishivError> {
+        let configured = config
+            .get(&krishiv_common::config::QUERY_MAX_EXECUTION_TIME)
+            .and_then(krishiv_common::config::ConfigValue::as_duration);
+        let limit = match (configured, self.deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let runtime = &self.state.runtime;
+        match runtime.attach(query.id().0, query, limit) {
+            Attached::Run => Ok(()),
+            Attached::Closed => Err(self.closed_error()),
+            Attached::Cancelled(reason) => {
+                crate::cancel::apply(
+                    query,
+                    reason,
+                    None,
+                    &runtime.history,
+                    self.state.queries.session_id(),
+                    id,
+                );
+                Ok(())
+            }
+        }
+    }
+
+    /// Cancels the running query `id` of this session (Spark Connect's
+    /// `Interrupt` by operation id): its stream ends with
+    /// `OPERATION_CANCELED` at its next batch boundary, and
+    /// `system.queries.cancel_reason` shows `user`. Whether a running query
+    /// was cancelled: `false` for an unknown id, a query that ended or one
+    /// of another session.
+    ///
+    /// ```
+    /// let s = krishiv_session::Session::new()?;
+    /// let id = krishiv_session::QueryId::parse("00112233-4455-6677-8899-aabbccddeeff")?;
+    /// assert!(!s.cancel(&id));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn cancel(&self, id: &crate::QueryId) -> bool {
+        let number = self.state.number;
+        !self
+            .state
+            .runtime
+            .cancel_where(crate::CancelReason::User, |s, q| {
+                s == number && q == id.as_str()
+            })
+            .is_empty()
+    }
+
+    /// Cancels every running query of this session (Spark Connect's
+    /// `Interrupt` of type `ALL`) and returns their ids.
+    pub fn interrupt_all(&self) -> Vec<crate::QueryId> {
+        let number = self.state.number;
+        self.state
+            .runtime
+            .cancel_where(crate::CancelReason::User, |s, _| s == number)
     }
 }

@@ -164,6 +164,12 @@ pub struct QueryContext {
     cancel: CancellationToken,
     /// The first error; later ones (mostly "cancelled") are dropped.
     error: Mutex<Option<KrishivError>>,
+    /// The error of a cancellation with a reason ([`Self::cancel_with`]),
+    /// set only when it was the query's first error: drivers end with it
+    /// instead of a plain `OPERATION_CANCELED`.
+    cancel_error: OnceLock<KrishivError>,
+    /// When the query was first cancelled or failed.
+    cancelled_at: OnceLock<Instant>,
     metrics: Mutex<QueryMetrics>,
     /// When execution started (the runner sets it): pipeline times are
     /// offsets from it.
@@ -210,6 +216,8 @@ impl QueryContext {
             pool,
             cancel: CancellationToken::new(),
             error: Mutex::new(None),
+            cancel_error: OnceLock::new(),
+            cancelled_at: OnceLock::new(),
             metrics: Mutex::new(QueryMetrics::default()),
             epoch: OnceLock::new(),
             threads: Mutex::new(BTreeMap::new()),
@@ -250,6 +258,37 @@ impl QueryContext {
         }
     }
 
+    /// Cancels the query with `error`, a cancellation's own error (a
+    /// timeout, an operator's kill): unless the query already finished or
+    /// failed, it becomes the query's error and every driver's, so the
+    /// result stream ends with it. Returns whether this call cancelled it
+    /// (the first cancellation wins; later ones are no-ops).
+    pub fn cancel_with(&self, error: KrishivError) -> bool {
+        if self.is_finished() {
+            return false;
+        }
+        let first = {
+            let mut slot = lock(&self.error);
+            if slot.is_none() {
+                // Before the error is visible: a driver that sees the
+                // cancellation finds the reason.
+                let _ = self.cancel_error.set(error.clone());
+                *slot = Some(error);
+                true
+            } else {
+                false
+            }
+        };
+        self.cancelled_at.get_or_init(Instant::now);
+        self.cancel.cancel();
+        first
+    }
+
+    /// When the query was first cancelled or failed, if it was.
+    pub fn cancelled_at(&self) -> Option<Instant> {
+        self.cancelled_at.get().copied()
+    }
+
     /// Fails the query with `error` unless an earlier error won, then
     /// cancels every task.
     pub fn fail(&self, error: KrishivError) {
@@ -259,6 +298,7 @@ impl QueryContext {
                 *slot = Some(error);
             }
         }
+        self.cancelled_at.get_or_init(Instant::now);
         self.cancel.cancel();
     }
 
@@ -272,15 +312,23 @@ impl QueryContext {
         self.cancel.is_cancelled()
     }
 
-    /// `Err(OPERATION_CANCELED)` once cancelled or failed.
+    /// `Err` once cancelled or failed: the reason's error of a
+    /// [`Self::cancel_with`] cancellation, else `OPERATION_CANCELED`.
     ///
     /// # Errors
-    /// `OPERATION_CANCELED` once the query was cancelled or failed.
+    /// As above, once the query was cancelled or failed.
     pub fn check_cancelled(&self) -> Result<()> {
         if self.is_cancelled() {
-            return Err(cancelled());
+            return Err(self.cancellation());
         }
         Ok(())
+    }
+
+    /// The error a driver stopped by cancellation ends with: the reason's
+    /// error of a [`Self::cancel_with`] cancellation, else
+    /// `OPERATION_CANCELED`.
+    pub(crate) fn cancellation(&self) -> KrishivError {
+        self.cancel_error.get().cloned().unwrap_or_else(cancelled)
     }
 
     /// Completes once the query is cancelled or failed.
