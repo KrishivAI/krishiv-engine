@@ -13,7 +13,7 @@ use krishiv_common::error::{
     MissingAggregation, MissingGroupBy, NumTableValueAliasesMismatch, OrderByPosOutOfRange,
     QualifyAggregateNotAllowed, QualifyRequiresWindowFunction, StarGroupByPos,
     SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound, UdtfAliasNumberMismatch,
-    UnresolvedAllInGroupBy, UnresolvedUsingColumnForJoin, UnsupportedExprForOperator,
+    UnresolvedUsingColumnForJoin, UnsupportedExprForOperator,
     UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy, UnsupportedGeneratorNestedInExpressions,
     UnsupportedSubqueryExpressionCategoryLateralJoinConditionNonDeterministic,
@@ -282,6 +282,7 @@ impl Resolver<'_> {
             agg: None,
             widen,
             hidden: c.hidden.iter().map(sh).collect::<Vec<_>>().into(),
+            generated_from: None,
         })
     }
 
@@ -894,6 +895,9 @@ impl Resolver<'_> {
             && p.origin.sql.is_some()
         {
             return self.having_below_windows(p, &info, predicate, env);
+        }
+        if let Some(r) = self.having_below_generated(p, &c, predicate, env)? {
+            return Ok(r);
         }
         if c.agg.as_ref().is_some_and(|i| !i.has_windows()) {
             let (bounds, agg, extended) =
@@ -1948,49 +1952,6 @@ impl Resolver<'_> {
                 self.generate_over_aggregate(p.origin, &agg, &g)
             }
         }
-    }
-
-    /// Whether the input has a column, or (with `group_by_aliases`) the
-    /// select list an output, named `all`: then `GROUP BY ALL` names it.
-    fn names_all(&self, c: &Rel, items: &[Bound]) -> bool {
-        let cs = self.ctx.conf.case_sensitive;
-        c.out.iter().any(|a| same(&a.col.name, "all", cs))
-            || (self.ctx.conf.group_by_aliases
-                && items
-                    .iter()
-                    .any(|b| same(&out_attr(b, &c.out).col.name, "all", cs)))
-    }
-
-    /// `GROUP BY ALL` over the select list `items`, as Spark's
-    /// `ResolveReferencesInAggregate` infers it: every item without an
-    /// aggregate function groups (scalar subqueries count as groupable:
-    /// Spark's check does not look inside them); when nothing groups, an
-    /// item naming a column outside any aggregate cannot be inferred:
-    /// `UNRESOLVED_ALL_IN_GROUP_BY`. Select items stay named; grouping
-    /// uses the expression computing them. `origin` is the `GROUP BY ALL`
-    /// clause's, as lowering stamps it on the key.
-    fn group_by_all(
-        &mut self,
-        items: &[Bound],
-        origin: Origin,
-    ) -> Result<Vec<Bound>, AnalysisError> {
-        let mut group = Vec::new();
-        let mut bare = false;
-        for b in items {
-            let expr = match &b.expr.node {
-                ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => Arc::clone(expr),
-                _ => Arc::clone(&b.expr),
-            };
-            if contains_aggregate(&expr) {
-                bare = bare || contains_bare(&expr);
-            } else {
-                group.push(Bound { expr, ..b.clone() });
-            }
-        }
-        if group.is_empty() && bare {
-            return Err(AnalysisError::new(UnresolvedAllInGroupBy {}, origin));
-        }
-        Ok(group)
     }
 
     /// `SELECT *` with `GROUP BY n` is an error (Spark's
@@ -4156,7 +4117,7 @@ fn subst_distinct(
     Arc::clone(x)
 }
 
-fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
+pub(super) fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
     match &b.expr.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => {
             match scope.iter().find(|a| a.col.id == c.id) {
@@ -4332,7 +4293,7 @@ fn is_all(e: &Expr) -> bool {
 /// Whether `e` calls an aggregate function outside any subquery: a scalar
 /// subquery groups like any other value (checked against Spark 4.2.0),
 /// whatever it computes inside.
-fn contains_aggregate(e: &Arc<Expr>) -> bool {
+pub(super) fn contains_aggregate(e: &Arc<Expr>) -> bool {
     let mut found = false;
     contains_walk(e, false, &mut found, &mut |x, _| {
         if matches!(&x.node, ExprNode::Subquery { .. }) {
@@ -4350,7 +4311,7 @@ fn contains_aggregate(e: &Arc<Expr>) -> bool {
 /// Whether `e` names a column outside any aggregate call's arguments: an
 /// attribute, or a correlated (`OuterColumn`) reference inside a subquery
 /// (columns a subquery reads from its own scope do not count).
-fn contains_bare(e: &Arc<Expr>) -> bool {
+pub(super) fn contains_bare(e: &Arc<Expr>) -> bool {
     let mut found = false;
     contains_walk(e, false, &mut found, &mut |x, in_subquery| match &x.node {
         ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {

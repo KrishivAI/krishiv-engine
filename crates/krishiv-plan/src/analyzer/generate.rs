@@ -396,6 +396,7 @@ impl Resolver<'_> {
 /// argument (named `_gen_input_N`) while the aggregate is built, and a
 /// [`PlanNode::Generate`] over the aggregate's output generates the
 /// columns in the item's place.
+#[derive(Clone)]
 pub(super) struct ExtractedGenerator {
     /// The select item the generator stood at.
     index: usize,
@@ -405,6 +406,12 @@ pub(super) struct ExtractedGenerator {
     input: BoundColumn,
     /// The item's alias, when it had one.
     name: Vec<String>,
+}
+
+/// An aggregate and the generator that runs over it.
+pub(super) struct GeneratedFrom {
+    pub(super) agg: Rel,
+    pub(super) generator: ExtractedGenerator,
 }
 
 /// Whether `name` (as written) is one of the explode-family generators.
@@ -628,6 +635,38 @@ impl Resolver<'_> {
                 order.push(a.clone());
             }
         }
-        Ok(self.projection(origin, &generate, exprs, order))
+        let mut out = self.projection(origin, &generate, exprs, order);
+        out.generated_from = Some(Arc::new(GeneratedFrom {
+            agg: agg.clone(),
+            generator: g.clone(),
+        }));
+        Ok(out)
+    }
+}
+
+impl Resolver<'_> {
+    /// A `HAVING` over an aggregate with a generator in the select list and
+    /// windows: the generator runs above the windows, and the `HAVING`
+    /// still filters below them (Spark 4.3; 4.2 filtered the generated rows
+    /// after the windows). `None` when `c` is not such a relation.
+    pub(super) fn having_below_generated(
+        &mut self,
+        p: &crate::LogicalPlan,
+        c: &Rel,
+        predicate: &Arc<Expr>,
+        env: &Arc<super::resolve::Env>,
+    ) -> Result<Option<Rel>, AnalysisError> {
+        if p.origin.sql.is_some()
+            && let Some(from) = c.generated_from.clone()
+            && let Some(info) = from.agg.agg.clone()
+            && info.has_windows()
+            && info.having.is_none()
+        {
+            let below = self.having_below_windows(p, &info, predicate, env)?;
+            return self
+                .generate_over_aggregate(p.origin, &below, &from.generator)
+                .map(Some);
+        }
+        Ok(None)
     }
 }
