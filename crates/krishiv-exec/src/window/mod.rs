@@ -66,6 +66,13 @@ mod disk;
 mod eval;
 mod frames;
 mod group_limit;
+/// UTC, the zone the tests run in unless they name another.
+#[cfg(all(test, not(loom)))]
+fn utc_zone() -> krishiv_kernels::datetime::ZoneRef {
+    krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0))
+}
+#[cfg(all(test, not(loom)))]
+mod month_tests;
 mod spill;
 mod stream;
 #[cfg(all(test, not(loom)))]
@@ -538,7 +545,7 @@ impl Window {
     /// not boolean; `KRISHIV_UNSUPPORTED_FEATURE` for a key type the sort
     /// cannot order, a frame not evaluated yet, or an aggregate of a type
     /// it does not take.
-    pub fn new(
+    pub fn with_zone(
         input: SchemaRef,
         plan: WindowPlan,
         ansi: bool,
@@ -624,6 +631,33 @@ impl Window {
             rows: AtomicU64::new(0),
             counters: Arc::default(),
         })
+    }
+
+    /// [`Self::with_zone`] with the ANSI flag and the session zone of `env`.
+    ///
+    /// # Errors
+    /// `INVALID_TIMEZONE` for a session zone that names none, else as [`Self::with_zone`].
+    pub(crate) fn with_env(
+        input: SchemaRef,
+        plan: WindowPlan,
+        env: &crate::planner::eval::EvalEnv,
+        spill: Option<SpillScope>,
+    ) -> Result<Self> {
+        Self::with_zone(input, plan, env.ansi, env.zone_rules()?, spill)
+    }
+
+    /// [`Self::with_zone`] in UTC: the tests' constructor (production code names the session zone).
+    ///
+    /// # Errors
+    /// As [`Self::with_zone`].
+    #[cfg(test)]
+    pub fn new(
+        input: SchemaRef,
+        plan: WindowPlan,
+        ansi: bool,
+        spill: Option<SpillScope>,
+    ) -> Result<Self> {
+        Self::with_zone(input, plan, ansi, utc_zone(), spill)
     }
 
     /// Takes `batch` if the bytes it holds while buffered can be reserved

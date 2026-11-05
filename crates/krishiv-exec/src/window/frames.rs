@@ -309,8 +309,9 @@ impl RangeKeys {
                 // `UnaryMinus`, checked in the interval's own type).
                 let months = if self.descending {
                     months.checked_neg().ok_or_else(|| {
-                        internal(
-                            "a year-month RANGE bound of the most negative interval".to_owned(),
+                        // Spark's `UnaryMinus` on the most negative year-month interval.
+                        krishiv_common::error::KrishivError::from(
+                            krishiv_common::error::IntervalArithmeticOverflowWithoutSuggestion {},
                         )
                     })?
                 } else {
@@ -361,7 +362,9 @@ impl RangeKeys {
 }
 
 /// A key moved past its type by a month bound: `ARITHMETIC_OVERFLOW` (Spark has no ANSI switch here; a timestamp
-/// raises a bare `ArithmeticException` there, which has no error class to match).
+/// raises a bare `ArithmeticException` there, which has no error class to match). The text is Spark 4.2's
+/// ("overflow"); 3.5, 4.0 and 4.1 say "integer overflow" for a date, which the executor cannot tell apart yet
+/// (it holds no Spark profile).
 fn month_overflow() -> krishiv_common::error::KrishivError {
     ArithmeticOverflow {
         message: "overflow".to_owned(),

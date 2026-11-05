@@ -83,13 +83,7 @@ async fn run_limited_on(
     }
     let plan: Arc<dyn ExecNode> = Arc::new(OperatorNode {
         input,
-        op: Arc::new(Window::new(
-            Arc::clone(&s),
-            window,
-            true,
-            krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
-            None,
-        )?),
+        op: Arc::new(Window::new(Arc::clone(&s), window, true, None)?),
     });
     let runner = QueryRunner::new(TokioExecutor::deterministic(if bucketed { 4 } else { 2 })?);
     let root = pool(1 << 30);

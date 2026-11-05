@@ -199,10 +199,10 @@ fn is_null_literal(e: &Expr) -> bool {
 const RANGE_BOUND_TYPES: &str =
     "(\"NUMERIC\" or \"INTERVAL DAY TO SECOND\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL\")";
 
-/// A `RANGE` frame bound's value in the units of its ordering key: whole
-/// numbers (integers, dates, and decimals unscaled) or floating point.
 const MICROS_PER_DAY: i64 = 86_400_000_000;
 
+/// A `RANGE` frame bound's value in the units of its ordering key: whole
+/// numbers (integers, dates, and decimals unscaled) or floating point.
 #[derive(Clone, Debug)]
 enum RangeValue {
     Int(i128),
@@ -1171,19 +1171,70 @@ impl Resolver<'_> {
         let Some(key) = keys.first().and_then(|k| k.ty.data_type.clone()) else {
             return Err(unsupported("a RANGE frame over an untyped key", origin));
         };
+        // A bound as Spark prints it: `n PRECEDING` is the negation `(- n)`.
+        let bound_sql = |e: &Arc<Expr>| match crate::expr::negated(e) {
+            Some(n) => format!("\"(- {})\"", pretty(n, None)),
+            None => format!("\"{}\"", pretty(e, None)),
+        };
+        let bound_types: Vec<Option<T>> = keys
+            .iter()
+            .skip(spec.order_by.len())
+            .map(|kid| kid.ty.data_type.clone())
+            .collect();
+        // Both bounds are values of one type (`INTERVAL YEAR` and `INTERVAL MONTH` are two types); Spark checks
+        // this before whether either type is valid for the key.
+        // (Numeric keys cast both bounds to the key's type first, so only date and timestamp keys can differ.)
+        if let [Some(lt), Some(ut)] = &bound_types[..]
+            && matches!(key, T::Date | T::Timestamp | T::TimestampNtz)
+            && lt != ut
+            && let (Some(FrameBound::Offset(l)), Some(FrameBound::Offset(u))) = (
+                shown.frame.as_ref().map(|f| &f.lower),
+                shown.frame.as_ref().map(|f| &f.upper),
+            )
+        {
+            return Err(AnalysisError::new(
+                DatatypeMismatchSpecifiedWindowFrameDiffTypes {
+                    sql_expr: frame_sql(shown),
+                    lower: bound_sql(l),
+                    upper: bound_sql(u),
+                    lower_type: quoted(lt),
+                    upper_type: quoted(ut),
+                },
+                origin,
+            ));
+        }
         let mut kids = keys.iter().skip(spec.order_by.len());
         let mut values: [Option<RangeValue>; 2] = [None, None];
-        let mut bound_types: [Option<T>; 2] = [None, None];
         for (k, (b, location)) in [(&frame.lower, "lower"), (&frame.upper, "upper")]
             .into_iter()
             .enumerate()
         {
             let FrameBound::Offset(x) = b else { continue };
+            // `n PRECEDING` over an ascending key negates the interval (Spark's `UnaryMinus`), which
+            // raises for the most negative year-month interval (a descending key negates it in the
+            // executor, for `FOLLOWING`).
+            if let Some(inner) = crate::expr::negated(x)
+                && matches!(
+                    &inner.node,
+                    ExprNode::Literal(Literal::YearMonthInterval {
+                        months: i32::MIN,
+                        ..
+                    })
+                )
+                && spec
+                    .order_by
+                    .first()
+                    .is_some_and(|o| o.direction == crate::SortDirection::Ascending)
+            {
+                return Err(AnalysisError::new(
+                    krishiv_common::error::IntervalArithmeticOverflowWithoutSuggestion {},
+                    origin,
+                ));
+            }
             let bt = kids.next().and_then(|kid| kid.ty.data_type.clone());
             let Some(bt) = bt else {
                 return Err(unsupported("a NULL window frame bound", origin));
             };
-            bound_types[k] = Some(bt.clone());
             let numeric = |t: &T| {
                 matches!(
                     t,
@@ -1222,7 +1273,8 @@ impl Resolver<'_> {
                     if !matches!(bt, T::Integer) || key != T::Date =>
                 {
                     // A day-time interval bound is added to a timestamp key as microseconds, and to a
-                    // date key as days when it ends in DAY (`DateAddInterval`); any other pairing is
+                    // date key as days when it ends in DAY (`DateAddInterval`, Spark 4.0 and later: 3.5 raises
+                    // for a date key); any other pairing is
                     // `RANGE_FRAME_INVALID_TYPE`. A year-month bound moves the key by calendar months.
                     let day_time_ok = matches!(
                         (&key, &bt),
@@ -1232,7 +1284,10 @@ impl Resolver<'_> {
                                 start: krishiv_types::DayTimeField::Day,
                                 end: krishiv_types::DayTimeField::Day,
                             },
-                        ) | (T::Timestamp | T::TimestampNtz, T::DayTimeInterval { .. })
+                        ) if self.ctx.profile >= super::SparkProfile::V4_0
+                    ) || matches!(
+                        (&key, &bt),
+                        (T::Timestamp | T::TimestampNtz, T::DayTimeInterval { .. })
                     );
                     let year_month_ok = matches!(bt, T::YearMonthInterval { .. });
                     if day_time_ok || year_month_ok {
@@ -1268,27 +1323,6 @@ impl Resolver<'_> {
             values[k] = Some(range_value(x, &key).ok_or_else(|| {
                 unsupported("RANGE window frame bounds other than literals", origin)
             })?);
-        }
-        // Both bounds are values of one type (`INTERVAL YEAR` and `INTERVAL MONTH` are two types).
-        // (Numeric keys cast both bounds to the key's type first, so only date and timestamp keys can differ.)
-        if let [Some(lt), Some(ut)] = &bound_types
-            && matches!(key, T::Date | T::Timestamp | T::TimestampNtz)
-            && lt != ut
-            && let (Some(FrameBound::Offset(l)), Some(FrameBound::Offset(u))) = (
-                shown.frame.as_ref().map(|f| &f.lower),
-                shown.frame.as_ref().map(|f| &f.upper),
-            )
-        {
-            return Err(AnalysisError::new(
-                DatatypeMismatchSpecifiedWindowFrameDiffTypes {
-                    sql_expr: frame_sql(shown),
-                    lower: format!("\"{}\"", pretty(l, None)),
-                    upper: format!("\"{}\"", pretty(u, None)),
-                    lower_type: quoted(lt),
-                    upper_type: quoted(ut),
-                },
-                origin,
-            ));
         }
         // A bound cast to the key's type loses its `PRECEDING` in Spark's
         // text: `(- n) FOLLOWING`.

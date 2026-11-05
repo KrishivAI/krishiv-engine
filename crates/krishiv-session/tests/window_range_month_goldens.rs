@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `RANGE` window frames with a year-month interval bound against Spark 4.2: each window case of
+//! `RANGE` window frames with a year-month interval bound against Spark 4.2.0 (the fixture also holds the 3.5.7, 4.0.0
+//! and 4.1.0 results, which this test does not compare): each window case of
 //! `tests/fixtures/spark-4.2.0/window-range-month-goldens.json` (from real Spark runs, see
 //! `krishiv-internal/research/spark-notes/range-month-bounds.md`) runs through a session and must give Spark's
 //! rows (compared as sets) or error class. Cases that are not `RANGE` windows (plain timestamp arithmetic) and
@@ -153,6 +154,19 @@ fn check(s: &Session, case: &Value, report: &mut String) -> Outcome {
         let class = err["class"].as_str();
         return match (result, class) {
             (Err(e), Some(class)) => {
+                // The message text of the mixed-bound-type error: Spark's, without its position suffix.
+                let spark = err["message"].as_str().unwrap_or_default();
+                let head = |m: &str| m.split(" SQLSTATE").next().unwrap_or(m).to_owned();
+                if class.ends_with("SPECIFIED_WINDOW_FRAME_DIFF_TYPES")
+                    && head(&e.to_string()) != head(spark)
+                {
+                    let _ = writeln!(
+                        report,
+                        "{id}: message\n  got  {}\n  want {}",
+                        head(&e.to_string()),
+                        head(spark)
+                    );
+                }
                 if e.error_class().name() != class {
                     let _ = writeln!(
                         report,
@@ -229,6 +243,9 @@ fn check(s: &Session, case: &Value, report: &mut String) -> Outcome {
     Outcome::Checked
 }
 
+/// Cases the test does not run: plain timestamp arithmetic, and Spark's errors that carry no class.
+const EXPECTED_SKIPPED: usize = 11;
+
 /// Cases Krishiv does not match yet, with the reason. Each must still mismatch: a fix removes its line.
 const KNOWN_GAPS: &[(&str, &str)] = &[
     (
@@ -285,19 +302,6 @@ const KNOWN_GAPS: &[(&str, &str)] = &[
         "d_cast_bound",
         "a NULL or CAST(.. AS INTERVAL) bound is not a literal to the analyzer",
     ),
-    (
-        "ansi_true_ymi_min_negate",
-        "INTERVAL_ARITHMETIC_OVERFLOW.WITHOUT_SUGGESTION when negating the most negative interval",
-    ),
-    ("ansi_false_ymi_min_negate", "as ansi_true_ymi_min_negate"),
-    (
-        "ansi_true_ymi_min_asc_preceding",
-        "as ansi_true_ymi_min_negate",
-    ),
-    (
-        "ansi_false_ymi_min_asc_preceding",
-        "as ansi_true_ymi_min_negate",
-    ),
 ];
 
 #[test]
@@ -310,7 +314,16 @@ fn range_month_windows_match_spark() {
         let id = case["id"].as_str().unwrap();
         let mut one = String::new();
         match check(&s, case, &mut one) {
-            Outcome::Skipped(why) => skipped.push(why),
+            Outcome::Skipped(why) => {
+                // A known gap must stay checkable: one that is skipped could never be seen fixed.
+                if KNOWN_GAPS.iter().any(|(g, _)| *g == id) {
+                    let _ = writeln!(
+                        report,
+                        "{id}: a known gap that can no longer be checked ({why})"
+                    );
+                }
+                skipped.push(why);
+            }
             Outcome::Checked => {
                 checked += 1;
                 match (KNOWN_GAPS.iter().find(|(g, _)| *g == id), one.is_empty()) {
@@ -326,11 +339,14 @@ fn range_month_windows_match_spark() {
             }
         }
     }
-    assert!(
-        checked >= 40,
-        "only {checked} cases checked; skipped:\n{}",
+    // Every skipped case is named in the failure text, and their number is pinned: a new skip is a decision.
+    assert_eq!(
+        skipped.len(),
+        EXPECTED_SKIPPED,
+        "skipped cases:\n{}",
         skipped.join("\n")
     );
+    assert!(checked >= 100, "only {checked} cases checked");
     assert_eq!(
         gaps,
         KNOWN_GAPS.len(),
@@ -338,7 +354,8 @@ fn range_month_windows_match_spark() {
     );
     assert!(
         report.is_empty(),
-        "mismatches against Spark:\n{report}\n({checked} checked, {gaps} known gaps, {} skipped)",
-        skipped.len()
+        "mismatches against Spark 4.2.0:\n{report}\n({checked} checked, {gaps} known gaps, {} skipped:\n{})",
+        skipped.len(),
+        skipped.join("\n")
     );
 }

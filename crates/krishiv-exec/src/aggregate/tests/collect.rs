@@ -893,16 +893,7 @@ async fn collect_and_vector_over_window_frames() {
     };
     let keys: Vec<SortKey> = vec![SortKey::asc(0), SortKey::asc(1)];
     let sort = Arc::new(Sort::new(Arc::clone(&s), &keys, None).unwrap());
-    let op = Arc::new(
-        Window::new(
-            Arc::clone(&s),
-            plan,
-            true,
-            krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
-            None,
-        )
-        .unwrap(),
-    );
+    let op = Arc::new(Window::new(Arc::clone(&s), plan, true, None).unwrap());
     let plan: Arc<dyn ExecNode> = Arc::new(OperatorNode {
         input: Arc::new(BreakerNode {
             input: Arc::new(SourceNode(crate::testing::Batches::new(
@@ -988,16 +979,7 @@ async fn vector_sum_over_a_window_partition() {
     };
     let keys: Vec<SortKey> = vec![SortKey::asc(0), SortKey::asc(1)];
     let sort = Arc::new(Sort::new(Arc::clone(&s), &keys, None).unwrap());
-    let op = Arc::new(
-        Window::new(
-            Arc::clone(&s),
-            plan,
-            true,
-            krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0)),
-            None,
-        )
-        .unwrap(),
-    );
+    let op = Arc::new(Window::new(Arc::clone(&s), plan, true, None).unwrap());
     let plan: Arc<dyn ExecNode> = Arc::new(OperatorNode {
         input: Arc::new(BreakerNode {
             input: Arc::new(SourceNode(crate::testing::Batches::new(
