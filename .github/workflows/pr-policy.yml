@@ -52,6 +52,7 @@ jobs:
       - run: cargo xtask workflow-lint
       - run: cargo xtask spdx
       - run: cargo xtask source-guard
+      - run: cargo xtask file-size
       - run: cargo xtask registry-coverage
       - name: Large-file guard (new files over 1 MiB need .github/large-files-allow.txt)
         if: github.event_name == 'pull_request'
