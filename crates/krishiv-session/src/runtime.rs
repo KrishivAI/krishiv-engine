@@ -12,13 +12,13 @@
 //! always did. A host serving many sessions builds one runtime and hands it
 //! to each session ([`SessionBuilder::runtime`](crate::SessionBuilder::runtime)).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use krishiv_common::config::{Config, SYSTEM_QUERIES_CAPACITY, lookup};
-use krishiv_common::error::{CannotModifyConfig, KrishivError};
+use krishiv_common::error::{CannotModifyStaticConfig, KrishivError};
 use krishiv_exec::{
     Executor, ExecutorConfig, MetricsRegistry, QueryContext, QueryRunner, TokioExecutor,
     WorkloadClass,
@@ -27,9 +27,6 @@ use krishiv_io::{FormatRegistry, IoScheduler};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillManager, TreePool};
 
 use crate::history::QueryHistory;
-
-/// Where Spark's error messages point for documentation.
-const SPARK_DOC_ROOT: &str = "https://spark.apache.org/docs/latest";
 
 /// The process-wide part of the engine, shared by the sessions built on it
 /// (always behind an `Arc`). It ends when the last session, the last result
@@ -49,7 +46,8 @@ pub struct EngineRuntime {
     /// The configuration the runtime was built with, as given: every session
     /// of the runtime starts from it, and its runtime-owned keys are fixed.
     pairs: Vec<(String, String)>,
-    /// `pairs`, validated: what the runtime's own components are built from.
+    /// `pairs`, validated: what the runtime's own components are built from,
+    /// and the configuration a child session starts from.
     pub(crate) config: Arc<Config>,
     pub(crate) executor: Arc<dyn Executor>,
     pub(crate) runner: QueryRunner,
@@ -67,14 +65,22 @@ pub struct EngineRuntime {
     session_seq: AtomicU64,
     /// The `system.queries` rows of every session.
     pub(crate) history: Arc<QueryHistory>,
-    /// The queries running now, by worker-local index.
-    live: Mutex<HashMap<u64, Live>>,
+    /// The queries running now, and the closed sessions.
+    live: Mutex<LiveSet>,
     /// The I/O schedulers of the runtime's sessions, read by the metadata
     /// cache gauge (weak: a scheduler ends with its session).
     io: Arc<Mutex<Vec<Weak<IoScheduler>>>>,
     /// Whether the runtime was built for one session that owns it (the
     /// default builder), or supplied by the host.
     private: bool,
+}
+
+/// The running queries by worker-local index, and the sessions closed
+/// meanwhile (one lock: a query never registers on a closed session).
+#[derive(Default)]
+struct LiveSet {
+    queries: HashMap<u64, Live>,
+    closed: HashSet<u64>,
 }
 
 /// A query running on the runtime.
@@ -195,7 +201,7 @@ impl EngineRuntime {
             query_index: AtomicU64::new(0),
             session_seq: AtomicU64::new(0),
             history: Arc::new(QueryHistory::new(capacity)),
-            live: Mutex::new(HashMap::new()),
+            live: Mutex::new(LiveSet::default()),
             io: Arc::new(Mutex::new(Vec::new())),
             private,
         };
@@ -224,25 +230,20 @@ impl EngineRuntime {
 
     /// The configuration a session of this runtime starts from: the
     /// runtime's pairs, then the session's. A runtime-owned key among the
-    /// session's pairs of a supplied runtime fails, as `SET` of one does.
+    /// session's pairs fails with `CANNOT_MODIFY_STATIC_CONFIG`, as `SET` of
+    /// one does (a private runtime's session passes none: its builder's
+    /// pairs are the runtime's).
     pub(crate) fn session_config(
         &self,
         session_pairs: Vec<(String, String)>,
     ) -> Result<Config, KrishivError> {
-        if !self.private
-            && let Some((key, _)) = session_pairs.iter().find(|(k, _)| runtime_owned(k))
-        {
-            return Err(CannotModifyConfig {
+        if let Some((key, _)) = session_pairs.iter().find(|(k, _)| runtime_owned(k)) {
+            return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),
-                docroot: SPARK_DOC_ROOT.to_owned(),
             }
             .into());
         }
-        let pairs = if self.private {
-            session_pairs
-        } else {
-            self.pairs.iter().cloned().chain(session_pairs).collect()
-        };
+        let pairs = self.pairs.iter().cloned().chain(session_pairs);
         Ok(Config::from_pairs(pairs)?.0)
     }
 
@@ -257,12 +258,19 @@ impl EngineRuntime {
     }
 
     /// Records `query`, run by session `session` as `system.queries` row
-    /// `id`, as running until it ends.
-    pub(crate) fn track(&self, session: u64, id: &str, query: &Arc<QueryContext>) {
+    /// `id`, as running until it ends; `false` (nothing recorded) when the
+    /// session was closed, decided under the lock [`Self::cancel_session`]
+    /// takes.
+    #[must_use]
+    pub(crate) fn track(&self, session: u64, id: &str, query: &Arc<QueryContext>) -> bool {
         let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+        if live.closed.contains(&session) {
+            return false;
+        }
         // Entries of ended queries go as new ones arrive.
-        live.retain(|_, l| l.query.upgrade().is_some_and(|q| !q.is_finished()));
-        live.insert(
+        live.queries
+            .retain(|_, l| l.query.upgrade().is_some_and(|q| !q.is_finished()));
+        live.queries.insert(
             query.id().0,
             Live {
                 session,
@@ -270,20 +278,24 @@ impl EngineRuntime {
                 query: Arc::downgrade(query),
             },
         );
+        true
     }
 
-    /// Cancels every running query of session `session`; the number
-    /// cancelled.
+    /// Closes session `session`: cancels its running queries and refuses
+    /// any it registers later; the number cancelled.
     pub(crate) fn cancel_session(&self, session: u64) -> usize {
         let queries: Vec<Arc<QueryContext>> = {
-            let mut live = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut guard = self.live.lock().unwrap_or_else(PoisonError::into_inner);
+            let live = &mut *guard;
+            live.closed.insert(session);
             let mine: Vec<u64> = live
+                .queries
                 .iter()
                 .filter(|(_, l)| l.session == session)
                 .map(|(k, _)| *k)
                 .collect();
             mine.into_iter()
-                .filter_map(|k| live.remove(&k))
+                .filter_map(|k| live.queries.remove(&k))
                 .filter_map(|l| l.query.upgrade())
                 .collect()
         };
@@ -293,6 +305,15 @@ impl EngineRuntime {
             q.cancel();
         }
         n
+    }
+
+    /// Forgets session `session` once it is gone (its closed mark).
+    pub(crate) fn forget_session(&self, session: u64) {
+        self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .closed
+            .remove(&session);
     }
 
     /// Makes the metadata cache gauge count `io`'s cache too.
@@ -385,4 +406,36 @@ pub(crate) fn runtime_owned(key: &str) -> bool {
                 .iter()
                 .any(|p| entry.key.starts_with(p))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use krishiv_exec::{ExecConfig, QueryContext, QueryId, WorkloadClass};
+
+    use super::*;
+
+    /// A query that registers after its session closed is refused and never
+    /// tracked: `close` cannot miss a query starting at the same moment.
+    #[test]
+    fn a_closed_session_registers_no_query() {
+        let rt = EngineRuntime::builder().build().unwrap();
+        let query = |n: u64| {
+            QueryContext::new(
+                QueryId(n),
+                WorkloadClass::Interactive,
+                ExecConfig::default(),
+                rt.memory().child("q", None),
+            )
+        };
+        let (a, b) = (query(1), query(2));
+        assert!(rt.track(7, "a", &a));
+        assert_eq!(rt.cancel_session(7), 1);
+        assert!(a.is_cancelled());
+        assert!(!rt.track(7, "b", &b), "registered on a closed session");
+        assert!(!b.is_cancelled(), "the caller cancels it");
+        // Other sessions are unaffected; a forgotten session's number is free.
+        assert!(rt.track(8, "c", &query(3)));
+        rt.forget_session(7);
+        assert!(rt.track(7, "d", &query(4)));
+    }
 }

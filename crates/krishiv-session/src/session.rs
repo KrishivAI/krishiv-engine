@@ -114,9 +114,9 @@ pub struct Session {
     /// session a user holds: only the handle a script's statements run on has frames, so no other
     /// query on the session ever sees them (`locals.rs`).
     pub(crate) locals: Arc<[krishiv_plan::analyzer::LocalFrame]>,
-    /// The caller's id for the queries this handle starts
+    /// The operation the queries this handle starts belong to
     /// ([`Session::sql_with`]); `None` for a handle a user holds.
-    pub(crate) operation: Option<crate::QueryId>,
+    pub(crate) operation: Option<Arc<crate::history::Operation>>,
 }
 
 impl fmt::Debug for Session {
@@ -176,6 +176,12 @@ pub(crate) struct SessionState {
     /// while expanding a view point into the view's text, not the outer
     /// statement's (`SourceId(0)` stays the outer statement's).
     sql_sources: AtomicU32,
+}
+
+impl Drop for SessionState {
+    fn drop(&mut self) {
+        self.runtime.forget_session(self.number);
+    }
 }
 
 /// Builds a [`Session`].
@@ -270,7 +276,7 @@ impl SessionBuilder {
     }
 
     /// Runs queries on `executor`, shared with other sessions (default: a
-    /// [`TokioExecutor`] of the session's own).
+    /// [`TokioExecutor`](krishiv_exec::TokioExecutor) of the session's own).
     ///
     /// ```
     /// use krishiv_exec::{ExecutorConfig, TokioExecutor};
@@ -292,7 +298,8 @@ impl SessionBuilder {
     /// The session starts from the runtime's configuration. Runtime-owned
     /// keys (cluster scope, `krishiv.memory.*`, `krishiv.spill.*`,
     /// `krishiv.io.*`) are the runtime's: setting one here fails with
-    /// `CANNOT_MODIFY_CONFIG`, and so does [`Self::executor`].
+    /// `CANNOT_MODIFY_STATIC_CONFIG`, as `SET` of one does, and so does
+    /// [`Self::executor`].
     ///
     /// ```
     /// use std::sync::Arc;
@@ -300,7 +307,7 @@ impl SessionBuilder {
     /// let rt = EngineRuntime::builder().build()?;
     /// let s = Session::builder().runtime(Arc::clone(&rt)).build()?;
     /// let e = Session::builder().runtime(rt).config("krishiv.memory.limit", "1g").build().unwrap_err();
-    /// assert_eq!(e.error_class().name(), "CANNOT_MODIFY_CONFIG");
+    /// assert_eq!(e.error_class().name(), "CANNOT_MODIFY_STATIC_CONFIG");
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     pub fn runtime(mut self, runtime: Arc<EngineRuntime>) -> Self {
@@ -332,9 +339,8 @@ impl SessionBuilder {
         let (runtime, config) = match self.runtime {
             Some(runtime) => {
                 if self.executor.is_some() {
-                    return Err(krishiv_common::error::CannotModifyConfig {
+                    return Err(krishiv_common::error::CannotModifyStaticConfig {
                         key: "\"executor\"".to_owned(),
-                        docroot: "https://spark.apache.org/docs/latest".to_owned(),
                     }
                     .into());
                 }
@@ -342,8 +348,8 @@ impl SessionBuilder {
                 (runtime, config)
             }
             None => {
-                let runtime = EngineRuntime::private(self.pairs.clone(), self.executor)?;
-                let config = runtime.session_config(self.pairs)?;
+                let runtime = EngineRuntime::private(self.pairs, self.executor)?;
+                let config = runtime.session_config(Vec::new())?;
                 (runtime, config)
             }
         };
@@ -353,7 +359,7 @@ impl SessionBuilder {
             policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
             functions: self.functions,
         };
-        Session::on_runtime(runtime, config, parts)
+        Ok(Session::on_runtime(runtime, config, parts))
     }
 }
 
@@ -395,11 +401,7 @@ impl Session {
     }
 
     /// A session on `runtime` with configuration `config`.
-    fn on_runtime(
-        runtime: Arc<EngineRuntime>,
-        config: Config,
-        parts: SessionParts,
-    ) -> Result<Self, KrishivError> {
+    fn on_runtime(runtime: Arc<EngineRuntime>, config: Config, parts: SessionParts) -> Self {
         let queries = Arc::new(crate::system::QueryLog::new(
             Arc::clone(&runtime.history),
             &parts.principal.name,
@@ -444,7 +446,7 @@ impl Session {
                 as Arc<dyn FunctionRegistry>,
             None => Arc::new(SessionFunctions::new(Arc::clone(&udfs))) as Arc<dyn FunctionRegistry>,
         };
-        Ok(Session {
+        Session {
             locals: Arc::from([]),
             operation: None,
             state: Arc::new(SessionState {
@@ -475,7 +477,7 @@ impl Session {
                 statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(1),
             }),
-        })
+        }
     }
 
     /// A session with the defaults.
@@ -558,6 +560,7 @@ impl Session {
                 Some(krishiv_sql::redact_sql(query).as_str()),
                 None,
                 error,
+                self.operation_id(),
             );
         }
         result
@@ -1593,8 +1596,8 @@ impl Session {
         let log_id = self.state.queries.begin_as(
             env.text.as_deref(),
             env.statement_class,
-            self.operation.as_ref(),
-        )?;
+            self.operation_id(),
+        );
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         let id = QueryId(self.state.runtime.next_query_index());
         let pool = self
@@ -1625,7 +1628,11 @@ impl Session {
             metrics_on,
             log_id,
         }));
-        self.state.runtime.track(self.state.number, &row_id, &query);
+        if !self.state.runtime.track(self.state.number, &row_id, &query) {
+            // Closed after `check_open`: the pending fold cancels the query
+            // and records it as it drops.
+            return Err(self.closed_error());
+        }
         // A plan the wire format cannot carry fails as a submit failure does:
         // its row records the error.
         let submitted = match crate::plan_round_trip::round_trip(physical, &env.config) {

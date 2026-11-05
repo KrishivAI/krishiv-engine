@@ -770,9 +770,10 @@ pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
     key: "krishiv.system.queries.capacity",
     value_type: ValueType::PositiveInt,
     default: Some(ConfigValue::Int(10_000)),
-    doc: "Most rows `system.queries` keeps for all the sessions of one engine runtime. Each \
-          principal keeps up to 1000 finished rows; at this capacity the oldest finished row of \
-          the principal holding the most rows goes first. Running queries are never dropped.",
+    doc: "Most rows `system.queries` keeps for all the sessions of one engine runtime. A \
+          principal holding 1000 rows loses its oldest finished row first; at this capacity the \
+          oldest finished row of the principal holding the most finished rows goes. Running \
+          queries are never dropped.",
     scope: Scope::Cluster,
     version_added: "0.2.0",
     spark_alias: None,

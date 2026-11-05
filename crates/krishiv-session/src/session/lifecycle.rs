@@ -22,11 +22,14 @@ impl Session {
     /// `newSession()`.
     ///
     /// ```
-    /// let a = krishiv_session::Session::new()?;
+    /// let a = krishiv_session::Session::builder()
+    ///     .config("spark.sql.caseSensitive", "true")
+    ///     .build()?;
     /// a.conf().set("spark.sql.ansi.enabled", "false")?;
     /// let b = a.new_session();
     /// assert!(std::sync::Arc::ptr_eq(a.runtime(), b.runtime()));
     /// assert_eq!(b.conf().get("spark.sql.ansi.enabled").as_deref(), Some("true"));
+    /// assert_eq!(b.conf().get("spark.sql.caseSensitive").as_deref(), Some("true"));
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     #[must_use]
@@ -39,18 +42,10 @@ impl Session {
             policy: Arc::clone(&state.policy),
             functions: state.base_functions.clone(),
         };
-        // The configuration the session was built with is valid, so the
-        // runtime's starting configuration is too (a private runtime starts
-        // from the builder's).
-        let config = runtime
-            .session_config(Vec::new())
-            .unwrap_or_else(|_| Config::new());
-        match Self::on_runtime(runtime, config, parts) {
-            Ok(s) => s,
-            // Not reached: building a session on a runtime has no other
-            // failure; the parent's handle is a working session either way.
-            Err(_) => self.clone(),
-        }
+        // The runtime's starting configuration, validated when it was built
+        // (for a private runtime, the builder's configuration).
+        let config = Config::clone(&runtime.config);
+        Self::on_runtime(runtime, config, parts)
     }
 
     /// The runtime this session runs on.
@@ -77,16 +72,24 @@ impl Session {
         if self.state.closed.swap(true, Ordering::AcqRel) {
             return 0;
         }
+        // Under the runtime's registry lock: a query that registers after
+        // this is refused there (`EngineRuntime::track`), so none slips
+        // between the flag and the cancellation.
         self.state.runtime.cancel_session(self.state.number)
+    }
+
+    /// The error a closed session answers with.
+    pub(crate) fn closed_error(&self) -> KrishivError {
+        krishiv_common::error::InvalidHandleSessionClosed {
+            handle: self.state.queries.session_id().to_owned(),
+        }
+        .into()
     }
 
     /// `INVALID_HANDLE.SESSION_CLOSED` once [`Self::close`] ran.
     pub(crate) fn check_open(&self) -> Result<(), KrishivError> {
         if self.state.closed.load(Ordering::Acquire) {
-            return Err(krishiv_common::error::InvalidHandleSessionClosed {
-                handle: self.state.queries.session_id().to_owned(),
-            }
-            .into());
+            return Err(self.closed_error());
         }
         Ok(())
     }
@@ -106,23 +109,39 @@ impl Session {
     ///
     /// # Errors
     /// As [`Self::sql`]; `INVALID_HANDLE.FORMAT` for an operation id that is
-    /// not a UUID. A query started while another of this session runs under
-    /// the same id fails with `INVALID_HANDLE.OPERATION_ALREADY_EXISTS`.
+    /// not a UUID; `INVALID_HANDLE.OPERATION_ALREADY_EXISTS` while another
+    /// statement of this session holds the id (its DataFrame or a result
+    /// stream of it is alive); `INVALID_HANDLE.OPERATION_ABANDONED` within
+    /// 30 minutes of the id's last use ([`crate::QueryOptions::operation_id`]).
     pub async fn sql_with(
         &self,
         query: &str,
         options: crate::QueryOptions,
     ) -> Result<DataFrame, KrishivError> {
-        let operation = options
-            .operation_id
-            .as_deref()
-            .map(crate::QueryId::parse)
-            .transpose()?;
+        self.check_open()?;
+        let operation = match options.operation_id.as_deref() {
+            None => None,
+            Some(text) => {
+                let id = crate::QueryId::parse(text)?;
+                let taken = self
+                    .state
+                    .queries
+                    .operations()
+                    .take(id, crate::system::now_ms())?;
+                Some(Arc::new(taken))
+            }
+        };
         let handle = Session {
             state: Arc::clone(&self.state),
             locals: Arc::clone(&self.locals),
             operation,
         };
         handle.sql(query).await
+    }
+
+    /// The operation id of the statement this handle runs, if the caller
+    /// gave one.
+    pub(crate) fn operation_id(&self) -> Option<&crate::QueryId> {
+        self.operation.as_deref().map(crate::history::Operation::id)
     }
 }

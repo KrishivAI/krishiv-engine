@@ -142,6 +142,8 @@ fn a_session_pool_is_a_child_of_the_runtime_root() {
 /// Two sessions with 6 MiB each under a 13 MiB root run spilling queries at
 /// once: neither session ever holds more than its limit, the root never
 /// more than its own, and both queries finish with the full result.
+/// The limits are enforced by the pool tree (unit tests in `krishiv-memory`);
+/// the peaks here are sampled, as evidence that the session level is wired.
 #[test]
 fn two_limited_sessions_spill_side_by_side_within_their_limits() {
     let dir = tempfile::tempdir().unwrap();

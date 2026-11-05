@@ -14,7 +14,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use krishiv_common::error::{
-    InvalidHandleFormat, InvalidHandleOperationAlreadyExists, KrishivError,
+    InvalidHandleFormat, InvalidHandleOperationAbandoned, InvalidHandleOperationAlreadyExists,
+    KrishivError,
 };
 
 use crate::system::{Finished, OperatorRow, QueryRow};
@@ -24,11 +25,13 @@ pub(crate) const PRINCIPAL_ROWS: usize = 1000;
 
 /// The id of a query in `system.queries`, profiles and cancellation: a
 /// UUIDv7 the runtime mints, or the operation id a caller gave
-/// ([`QueryOptions::operation_id`]), as given.
+/// ([`QueryOptions::operation_id`]) in its normal form.
 ///
 /// ```
-/// let id = krishiv_session::QueryId::parse("00112233-4455-6677-8899-aabbccddeeff")?;
+/// let id = krishiv_session::QueryId::parse("00112233-4455-6677-8899-AABBCCDDEEFF")?;
 /// assert_eq!(id.as_str(), "00112233-4455-6677-8899-aabbccddeeff");
+/// let short = krishiv_session::QueryId::parse("1-2-3-4-5")?;
+/// assert_eq!(short.as_str(), "00000001-0002-0003-0004-000000000005");
 /// let e = krishiv_session::QueryId::parse("not-a-uuid").unwrap_err();
 /// assert_eq!(e.error_class().name(), "INVALID_HANDLE.FORMAT");
 /// # Ok::<(), krishiv_common::error::KrishivError>(())
@@ -37,21 +40,27 @@ pub(crate) const PRINCIPAL_ROWS: usize = 1000;
 pub struct QueryId(Arc<str>);
 
 impl QueryId {
-    /// `text` as a query id: a UUID in its canonical form
-    /// (`00112233-4455-6677-8899-aabbccddeeff`, either case), as Spark
-    /// Connect checks an operation id.
+    /// `text` as a query id, read as Spark Connect reads an operation id
+    /// (`UUID.fromString(id).toString`, Spark 4.2.0
+    /// `SparkConnectExecutionManager.ExecuteKey`): at most 36 characters,
+    /// five groups of hex digits split by `-`, each as Java's
+    /// `Long.parseLong(group, 16)` takes it (an optional `+`, at least one
+    /// digit, at most `i64::MAX`), keeping the low 32, 16, 16, 16 and 48 bits.
+    /// The id is the canonical lower-case form of the result:
+    /// `1-2-3-4-5` is `00000001-0002-0003-0004-000000000005`.
+    ///
+    /// One divergence: Java also takes non-ASCII decimal digits (such as
+    /// full-width ones); only ASCII hex digits are taken here.
     ///
     /// # Errors
     /// `INVALID_HANDLE.FORMAT` for anything else.
     pub fn parse(text: &str) -> Result<Self, KrishivError> {
-        if is_uuid(text) {
-            Ok(Self(Arc::from(text)))
-        } else {
-            Err(InvalidHandleFormat {
+        java_uuid(text).map(Self).ok_or_else(|| {
+            InvalidHandleFormat {
                 handle: text.to_owned(),
             }
-            .into())
-        }
+            .into()
+        })
     }
 
     /// The id as text.
@@ -73,15 +82,36 @@ impl fmt::Debug for QueryId {
     }
 }
 
-/// Whether `text` is a UUID as Java's `UUID.fromString` takes it from
-/// Spark Connect clients: five groups of 8, 4, 4, 4 and 12 hex digits.
-fn is_uuid(text: &str) -> bool {
+/// `UUID.fromString(text).toString()` (JDK 21, the JVM of Spark 4.2.0), or
+/// `None` where it throws.
+fn java_uuid(text: &str) -> Option<Arc<str>> {
+    if !text.is_ascii() || text.len() > 36 {
+        return None;
+    }
     let groups: Vec<&str> = text.split('-').collect();
-    groups.len() == 5
-        && groups
-            .iter()
-            .zip([8, 4, 4, 4, 12])
-            .all(|(g, n)| g.len() == n && g.bytes().all(|b| b.is_ascii_hexdigit()))
+    if groups.len() != 5 {
+        return None;
+    }
+    let mut v = [0u64; 5];
+    for (slot, group) in v.iter_mut().zip(&groups) {
+        let digits = group.strip_prefix('+').unwrap_or(group);
+        if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let n = u64::from_str_radix(digits, 16).ok()?;
+        if n > i64::MAX.unsigned_abs() {
+            return None;
+        }
+        *slot = n;
+    }
+    Some(Arc::from(format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
+        v[0] & 0xFFFF_FFFF,
+        v[1] & 0xFFFF,
+        v[2] & 0xFFFF,
+        v[3] & 0xFFFF,
+        v[4] & 0xFFFF_FFFF_FFFF
+    )))
 }
 
 /// Options of one statement ([`Session::sql_with`](crate::Session::sql_with)).
@@ -105,12 +135,93 @@ impl QueryOptions {
     }
 
     /// Names the statement's queries `id` (Spark Connect's operation id), a
-    /// UUID. While one of them runs, another statement of the same session
-    /// with the same id fails (`INVALID_HANDLE.OPERATION_ALREADY_EXISTS`);
-    /// once it ended, the id may be used again. Sessions never collide.
+    /// UUID. The operation is active while the statement's DataFrame or a
+    /// result stream of it is alive: another statement of the same session
+    /// with the same id then fails with
+    /// `INVALID_HANDLE.OPERATION_ALREADY_EXISTS`. For 30 minutes after its
+    /// last use the id stays taken (`INVALID_HANDLE.OPERATION_ABANDONED`), as
+    /// Spark Connect keeps a session's finished operations. Sessions never
+    /// collide.
     pub fn operation_id(mut self, id: impl Into<String>) -> Self {
         self.operation_id = Some(id.into());
         self
+    }
+}
+
+/// How long a finished operation id stays taken after its last use: Spark
+/// 4.2.0's `spark.connect.session.inactiveOperations.cacheExpiration`
+/// default (30 minutes, an internal static conf; `expireAfterAccess`).
+pub(crate) const INACTIVE_OPERATION_MS: i64 = 30 * 60 * 1000;
+
+/// The operation ids of one session: active ones, and finished ones with
+/// the time of their last use (Spark Connect's `SessionHolder`
+/// `activeOperationIds` and `inactiveOperations`).
+#[derive(Debug, Default)]
+pub(crate) struct Operations {
+    ids: Mutex<HashMap<Arc<str>, Option<i64>>>,
+}
+
+impl Operations {
+    /// Takes `id` for a new statement at `now` (milliseconds).
+    ///
+    /// # Errors
+    /// `INVALID_HANDLE.OPERATION_ALREADY_EXISTS` while a statement holds it;
+    /// `INVALID_HANDLE.OPERATION_ABANDONED` within
+    /// [`INACTIVE_OPERATION_MS`] of its last use (which counts as a use).
+    pub(crate) fn take(self: &Arc<Self>, id: QueryId, now: i64) -> Result<Operation, KrishivError> {
+        let mut ids = self.ids.lock().unwrap_or_else(PoisonError::into_inner);
+        ids.retain(|_, last| last.is_none_or(|t| now.saturating_sub(t) < INACTIVE_OPERATION_MS));
+        match ids.get_mut(&id.0) {
+            Some(None) => {
+                return Err(InvalidHandleOperationAlreadyExists {
+                    handle: id.as_str().to_owned(),
+                }
+                .into());
+            }
+            Some(Some(last)) => {
+                *last = now;
+                return Err(InvalidHandleOperationAbandoned {
+                    handle: id.as_str().to_owned(),
+                }
+                .into());
+            }
+            None => {}
+        }
+        ids.insert(Arc::clone(&id.0), None);
+        Ok(Operation {
+            id,
+            owner: Arc::clone(self),
+        })
+    }
+
+    /// Marks `id` finished at `now`.
+    fn release(&self, id: &QueryId, now: i64) {
+        let mut ids = self.ids.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(slot) = ids.get_mut(&id.0) {
+            *slot = Some(now);
+        }
+    }
+}
+
+/// A statement's hold on its operation id: dropped with the last handle of
+/// the statement (its DataFrame, result streams and their queries), which
+/// finishes the operation.
+#[derive(Debug)]
+pub(crate) struct Operation {
+    id: QueryId,
+    owner: Arc<Operations>,
+}
+
+impl Operation {
+    /// The id the statement's queries carry.
+    pub(crate) fn id(&self) -> &QueryId {
+        &self.id
+    }
+}
+
+impl Drop for Operation {
+    fn drop(&mut self) {
+        self.owner.release(&self.id, crate::system::now_ms());
     }
 }
 
@@ -118,11 +229,26 @@ impl QueryOptions {
 /// update or copy.
 #[derive(Debug)]
 pub(crate) struct QueryHistory {
-    rows: Mutex<VecDeque<QueryRow>>,
+    rows: Mutex<Rows>,
     counter: AtomicU64,
     /// Most rows of all principals together
     /// (`krishiv.system.queries.capacity`).
     capacity: usize,
+}
+
+/// The rows, oldest first, and how many each principal holds (kept beside
+/// them so making room never counts the whole history).
+#[derive(Debug, Default)]
+struct Rows {
+    rows: VecDeque<QueryRow>,
+    held: HashMap<String, Held>,
+}
+
+/// One principal's rows: all of them, and the finished ones among them.
+#[derive(Debug, Default, Clone, Copy)]
+struct Held {
+    total: usize,
+    finished: usize,
 }
 
 impl Default for QueryHistory {
@@ -138,7 +264,7 @@ impl QueryHistory {
     /// A history keeping at most `capacity` rows in all.
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
-            rows: Mutex::new(VecDeque::new()),
+            rows: Mutex::new(Rows::default()),
             counter: AtomicU64::new(0),
             capacity: capacity.max(1),
         }
@@ -168,66 +294,49 @@ impl QueryHistory {
         )
     }
 
-    /// Adds `row`, a query that starts now, under an id the runtime minted.
+    /// Adds `row`, a query that starts now. Room is made first: the
+    /// principal's oldest finished row once it holds [`PRINCIPAL_ROWS`]
+    /// rows, then, at the runtime's capacity, the oldest finished row of the
+    /// principal holding the most finished rows. Running rows are never
+    /// evicted.
     pub(crate) fn push(&self, row: QueryRow) {
         let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
-        self.make_room(&mut rows, &row.principal);
-        rows.push_back(row);
-    }
-
-    /// Adds `row` under an id a caller gave: refused
-    /// (`INVALID_HANDLE.OPERATION_ALREADY_EXISTS`) while a query of the same
-    /// session with that id runs. The check and the insertion happen under
-    /// one lock, so two statements racing for one id cannot both run.
-    pub(crate) fn push_given(&self, row: QueryRow) -> Result<(), KrishivError> {
-        let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
-        if rows
-            .iter()
-            .any(|r| r.ended_ms.is_none() && r.id == row.id && r.session_id == row.session_id)
-        {
-            return Err(InvalidHandleOperationAlreadyExists { handle: row.id }.into());
+        let own = rows.held.get(&row.principal).copied().unwrap_or_default();
+        if own.total >= PRINCIPAL_ROWS && own.finished > 0 {
+            rows.evict_oldest_finished(&row.principal);
         }
-        self.make_room(&mut rows, &row.principal);
-        rows.push_back(row);
-        Ok(())
-    }
-
-    /// Makes room for a row of `principal`: its oldest finished row once it
-    /// keeps [`PRINCIPAL_ROWS`], then, at the runtime's capacity, the oldest
-    /// finished row of the principal holding the most finished rows. Running
-    /// rows are never evicted.
-    fn make_room(&self, rows: &mut VecDeque<QueryRow>, principal: &str) {
-        let own = rows.iter().filter(|r| r.principal == principal).count();
-        if own >= PRINCIPAL_ROWS {
-            evict_oldest_finished(rows, principal);
-        }
-        if rows.len() >= self.capacity {
-            let mut held: HashMap<&str, usize> = HashMap::new();
-            for r in rows.iter().filter(|r| r.ended_ms.is_some()) {
-                *held.entry(r.principal.as_str()).or_default() += 1;
-            }
+        if rows.rows.len() >= self.capacity {
             // Ties go to the principal named first, so the choice is stable.
-            let heaviest = held
-                .into_iter()
-                .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(a.0)))
-                .map(|(p, _)| p.to_owned());
+            let heaviest = rows
+                .held
+                .iter()
+                .filter(|(_, h)| h.finished > 0)
+                .max_by(|a, b| a.1.finished.cmp(&b.1.finished).then_with(|| b.0.cmp(a.0)))
+                .map(|(p, _)| p.clone());
             if let Some(p) = heaviest {
-                evict_oldest_finished(rows, &p);
+                rows.evict_oldest_finished(&p);
             }
         }
+        rows.held.entry(row.principal.clone()).or_default().total += 1;
+        rows.rows.push_back(row);
     }
 
     /// Applies `f` to the row `id` of session `session`, if it is still
     /// remembered.
     pub(crate) fn update(&self, session: &str, id: &str, f: impl FnOnce(&mut QueryRow)) {
         let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
+        let Rows { rows, held } = &mut *rows;
         // The newest first: a reused id names its latest query.
         if let Some(row) = rows
             .iter_mut()
             .rev()
             .find(|r| r.id == id && r.session_id == session)
         {
+            let was_running = row.ended_ms.is_none();
             f(row);
+            if was_running && row.ended_ms.is_some() {
+                held.entry(row.principal.clone()).or_default().finished += 1;
+            }
         }
     }
 
@@ -260,6 +369,7 @@ impl QueryHistory {
         self.rows
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+            .rows
             .iter()
             .filter(|r| principal.is_none_or(|p| r.principal == p))
             .cloned()
@@ -273,6 +383,7 @@ impl QueryHistory {
             .rows
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+            .rows
             .iter()
             .filter(|r| principal.is_none_or(|p| r.principal == p))
             .map(|r| Arc::clone(&r.operators))
@@ -281,12 +392,141 @@ impl QueryHistory {
     }
 }
 
-/// Removes the oldest finished row of `principal`, if it has one.
-fn evict_oldest_finished(rows: &mut VecDeque<QueryRow>, principal: &str) {
-    if let Some(at) = rows
-        .iter()
-        .position(|r| r.ended_ms.is_some() && r.principal == principal)
-    {
-        rows.remove(at);
+impl Rows {
+    /// Removes the oldest finished row of `principal`, if it has one.
+    fn evict_oldest_finished(&mut self, principal: &str) {
+        if let Some(at) = self
+            .rows
+            .iter()
+            .position(|r| r.ended_ms.is_some() && r.principal == principal)
+        {
+            self.rows.remove(at);
+            if let Some(h) = self.held.get_mut(principal) {
+                h.total = h.total.saturating_sub(1);
+                h.finished = h.finished.saturating_sub(1);
+                if h.total == 0 {
+                    self.held.remove(principal);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The ids and outcomes `java.util.UUID.fromString` gave on the JDK 21
+    /// of the Spark 4.2.0 image (probe run 2026-11-05).
+    #[test]
+    fn operation_ids_parse_as_java_does() {
+        for (text, normal) in [
+            (
+                "00112233-4455-6677-8899-aabbccddeeff",
+                "00112233-4455-6677-8899-aabbccddeeff",
+            ),
+            (
+                "00112233-4455-6677-8899-AABBCCDDEEFF",
+                "00112233-4455-6677-8899-aabbccddeeff",
+            ),
+            ("1-2-3-4-5", "00000001-0002-0003-0004-000000000005"),
+            ("+1-2-3-4-5", "00000001-0002-0003-0004-000000000005"),
+            ("1-2-3-4-+5", "00000001-0002-0003-0004-000000000005"),
+            (
+                "00112233-4455-6677-8899-aabbccddeef",
+                "00112233-4455-6677-8899-0aabbccddeef",
+            ),
+            ("123456789-1-1-1-1", "23456789-0001-0001-0001-000000000001"),
+            ("1-12345-1-1-1", "00000001-2345-0001-0001-000000000001"),
+            (
+                "1-1-1-1-1234567890123",
+                "00000001-0001-0001-0001-234567890123",
+            ),
+            (
+                "1234567890123456-1-1-1-1",
+                "90123456-0001-0001-0001-000000000001",
+            ),
+            (
+                "7fffffffffffffff-1-1-1-1",
+                "ffffffff-0001-0001-0001-000000000001",
+            ),
+        ] {
+            assert_eq!(QueryId::parse(text).unwrap().as_str(), normal, "{text}");
+        }
+        for bad in [
+            "",
+            "-1-2-3-4-5",
+            "00112233-4455-6677-8899-aabbccddeeff0",
+            "g-1-2-3-4",
+            "1-2-3-4",
+            "1-2-3-4-5-6",
+            "12345678901234567-1-1-1-1",
+            "8000000000000000-1-1-1-1",
+            "1-1-1-1-ffffffffffffffff",
+            "1-2-3-4-++5",
+            "0x1-2-3-4-5",
+            " 1-2-3-4-5",
+            "00112233-4455-6677-8899-aabbccddeefg",
+        ] {
+            let e = QueryId::parse(bad).unwrap_err();
+            assert_eq!(e.error_class().name(), "INVALID_HANDLE.FORMAT", "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_finished_operation_id_stays_taken_for_thirty_minutes_after_its_last_use() {
+        let ops = Arc::new(Operations::default());
+        let id = || QueryId::parse("1-2-3-4-5").unwrap();
+        let held = ops.take(id(), 0).unwrap();
+        let e = ops.take(id(), 1).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "INVALID_HANDLE.OPERATION_ALREADY_EXISTS"
+        );
+        let key = Arc::clone(&held.id().0);
+        drop(held);
+        // Finished at time 10 (the drop used the wall clock).
+        ops.ids.lock().unwrap().insert(key, Some(10));
+        let e = ops.take(id(), 10 + INACTIVE_OPERATION_MS - 1).unwrap_err();
+        assert_eq!(e.error_class().name(), "INVALID_HANDLE.OPERATION_ABANDONED");
+        // That refusal was a use: the window starts again from it.
+        let again = 10 + 2 * INACTIVE_OPERATION_MS - 2;
+        assert!(ops.take(id(), again).is_err());
+        let later = again + INACTIVE_OPERATION_MS;
+        let taken = ops.take(id(), later).unwrap();
+        assert_eq!(taken.id().as_str(), "00000001-0002-0003-0004-000000000005");
+        // Another id is independent.
+        assert!(
+            ops.take(QueryId::parse("1-2-3-4-6").unwrap(), later)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn eviction_counts_stay_exact() {
+        let history = QueryHistory::new(3);
+        let row = |id: &str, who: &str| {
+            let log = crate::system::QueryLog::default();
+            let mut r = log.snapshot_row_for_tests(id);
+            r.principal = who.to_owned();
+            r.session_id = "s".to_owned();
+            r
+        };
+        for (i, who) in ["a", "a", "b"].iter().enumerate() {
+            history.push(row(&i.to_string(), who));
+        }
+        // All running: nothing can go, so the history grows past capacity.
+        history.push(row("3", "a"));
+        assert_eq!(history.snapshot(None).len(), 4);
+        for id in ["0", "1", "2"] {
+            history.update("s", id, |r| r.ended_ms = Some(1));
+        }
+        // At capacity: `a` holds the most finished rows and loses its oldest.
+        history.push(row("4", "b"));
+        let ids: Vec<String> = history.snapshot(None).into_iter().map(|r| r.id).collect();
+        assert_eq!(ids, ["1", "2", "3", "4"]);
+        let held = history.rows.lock().unwrap().held.clone();
+        assert_eq!((held["a"].total, held["a"].finished), (2, 1));
+        assert_eq!((held["b"].total, held["b"].finished), (2, 1));
     }
 }

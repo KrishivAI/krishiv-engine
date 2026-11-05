@@ -1162,6 +1162,7 @@ impl DataFrame {
                 a.env.text.as_deref(),
                 a.env.statement_class,
                 &error,
+                self.session.operation_id(),
             );
             // Shared with the statement's marker, so `sql` adds no second row.
             *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
@@ -1326,6 +1327,7 @@ impl DataFrame {
                     a.env.text.as_deref(),
                     a.env.statement_class,
                     &error,
+                    self.session.operation_id(),
                 );
                 *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
                 return Err(error);

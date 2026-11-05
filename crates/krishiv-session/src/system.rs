@@ -866,6 +866,8 @@ pub(crate) struct Totals {
 #[derive(Debug, Default)]
 pub(crate) struct QueryLog {
     history: Arc<QueryHistory>,
+    /// The session's operation ids ([`crate::QueryOptions::operation_id`]).
+    operations: Arc<crate::history::Operations>,
     /// The session this log belongs to, and its principal (fixed for life).
     session_id: String,
     principal: String,
@@ -988,33 +990,36 @@ impl QueryLog {
         }
     }
 
+    /// A running row named `id` (tests of the history).
+    #[cfg(test)]
+    pub(crate) fn snapshot_row_for_tests(&self, id: &str) -> QueryRow {
+        self.row(id.to_owned(), 0, None, None)
+    }
+
+    /// The session's operation ids.
+    pub(crate) fn operations(&self) -> &Arc<crate::history::Operations> {
+        &self.operations
+    }
+
     /// Records a query that started now under a minted id and returns it.
+    #[cfg(test)]
     pub(crate) fn begin(&self, text: Option<&str>, class: Option<&'static str>) -> String {
-        let ms = now_ms();
-        let id = self.history.mint(ms);
-        self.history.push(self.row(id.clone(), ms, text, class));
-        id
+        self.begin_as(text, class, None)
     }
 
     /// Records a query that started now, named `operation` when the caller
-    /// gave an id ([`crate::QueryOptions::operation_id`]), else a minted id.
-    ///
-    /// # Errors
-    /// `INVALID_HANDLE.OPERATION_ALREADY_EXISTS` while a query of this
-    /// session with that id runs.
+    /// gave the statement an id ([`crate::QueryOptions::operation_id`]), else
+    /// a minted id, and returns the id.
     pub(crate) fn begin_as(
         &self,
         text: Option<&str>,
         class: Option<&'static str>,
         operation: Option<&crate::QueryId>,
-    ) -> Result<String, KrishivError> {
-        let Some(operation) = operation else {
-            return Ok(self.begin(text, class));
-        };
-        let id = operation.as_str().to_owned();
-        self.history
-            .push_given(self.row(id.clone(), now_ms(), text, class))?;
-        Ok(id)
+    ) -> String {
+        let ms = now_ms();
+        let id = operation.map_or_else(|| self.history.mint(ms), |o| o.as_str().to_owned());
+        self.history.push(self.row(id.clone(), ms, text, class));
+        id
     }
 
     /// Records a query answered from the result cache: a finished row of its own (with the
@@ -1023,8 +1028,9 @@ impl QueryLog {
         &self,
         text: Option<&str>,
         class: Option<&'static str>,
+        operation: Option<&crate::QueryId>,
     ) -> String {
-        let id = self.begin(text, class);
+        let id = self.begin_as(text, class, operation);
         self.finish(
             &id,
             &Finished {
@@ -1047,8 +1053,9 @@ impl QueryLog {
         text: Option<&str>,
         class: Option<&'static str>,
         error: &KrishivError,
+        operation: Option<&crate::QueryId>,
     ) -> String {
-        let id = self.begin(text, class);
+        let id = self.begin_as(text, class, operation);
         let class = error.error_class().name();
         let state = outcome_state(class);
         self.finish(
@@ -1284,7 +1291,7 @@ mod tests {
         let log = QueryLog::default();
         log.set_trace_id(Some("trace".to_owned()));
         assert!(log.try_set_tag("team", "etl"));
-        let id = log.record_replayed(Some("SELECT 1"), Some("READ"));
+        let id = log.record_replayed(Some("SELECT 1"), Some("READ"), None);
         let row = &log.snapshot(false)[0];
         assert_eq!(row.id, id);
         assert_eq!(row.state, "finished");

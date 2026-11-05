@@ -7,9 +7,9 @@
 //! `db.query.summary` and the sanitized `db.query.text` (every literal
 //! replaced by `?`, comments dropped; [`krishiv_sql::sanitize_query_text`]),
 //! computed over the text with its secrets already redacted (`redact_sql`),
-//! plus `krishiv.session_id` (the session's `system.queries` id) and `krishiv.query_id`. Ids are minted here
-//! until the session context (T136) brings principal, tags and the caller's
-//! trace context. Without a subscriber `tracing` makes the span a no-op and
+//! plus `krishiv.session_id` (the session's `system.queries` id) and
+//! `krishiv.query_id`, minted here until the session context (T136) brings
+//! principal, tags and the caller's trace context. Without a subscriber `tracing` makes the span a no-op and
 //! the attributes are not built, so an embedded engine pays a disabled-callsite
 //! check and the copy of the statement text. The span stays open while the
 //! result stream is read (`in_span`), so its duration is the query's.

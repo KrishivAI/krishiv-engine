@@ -90,87 +90,110 @@ fn two_sessions_may_run_one_operation_id_at_once() {
     let rt = EngineRuntime::builder().build().unwrap();
     let a = session_of(&rt, "alice");
     let b = a.new_session();
-    let options = QueryOptions::new().operation_id(OP);
-    let df_a = block_on(a.sql_with(LONG, options.clone())).unwrap();
-    let df_b = block_on(b.sql_with(LONG, options)).unwrap();
-    let mut sa = block_on(df_a.execute_stream()).unwrap();
-    let mut sb = block_on(df_b.execute_stream()).unwrap();
-    assert!(block_on(sa.next()).unwrap().is_ok());
-    assert!(block_on(sb.next()).unwrap().is_ok());
+    // Both statements take the id at the same moment.
+    let barrier = std::sync::Barrier::new(2);
+    let streams: Vec<_> = std::thread::scope(|scope| {
+        let handles: Vec<_> = [&a, &b]
+            .into_iter()
+            .map(|s| {
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    let df =
+                        block_on(s.sql_with(LONG, QueryOptions::new().operation_id(OP))).unwrap();
+                    let mut stream = block_on(df.execute_stream()).unwrap();
+                    assert!(block_on(stream.next()).unwrap().is_ok());
+                    stream
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
     let ids = column(
         &a,
         "SELECT query_id FROM system.queries WHERE state = 'running' ORDER BY session_id",
     );
     assert_eq!(ids.iter().filter(|i| i.as_deref() == Some(OP)).count(), 2);
+    drop(streams);
 }
 
 #[test]
-fn a_session_may_not_reuse_a_running_operation_id_but_may_reuse_a_finished_one() {
+fn an_operation_id_is_taken_while_its_statement_lives_and_for_a_while_after() {
     let rt = EngineRuntime::builder().build().unwrap();
     let a = session_of(&rt, "alice");
     let options = QueryOptions::new().operation_id(OP);
-    let mut running = block_on(
-        block_on(a.sql_with(LONG, options.clone()))
-            .unwrap()
-            .execute_stream(),
-    )
-    .unwrap();
+    let df = block_on(a.sql_with(LONG, options.clone())).unwrap();
+    let mut running = block_on(df.execute_stream()).unwrap();
     assert!(block_on(running.next()).unwrap().is_ok());
-    let e = block_on(
-        block_on(a.sql_with("SELECT 1", options.clone()))
-            .unwrap()
-            .collect(),
-    )
-    .unwrap_err();
+    let e = block_on(a.sql_with("SELECT 1", options.clone())).unwrap_err();
     assert_eq!(
         e.error_class().name(),
         "INVALID_HANDLE.OPERATION_ALREADY_EXISTS"
     );
     assert_eq!(e.sql_state(), Some("HY000"));
+    // Another session may use it.
+    let b = a.new_session();
+    block_on(
+        block_on(b.sql_with("SELECT 1", options.clone()))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    // The statement's DataFrame and stream gone, the operation finished:
+    // Spark Connect keeps the id taken as a recently finished operation.
+    drop(df);
     drop(running);
-    // Ended (cancelled by the drop): the id is free again.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        match block_on(
-            block_on(a.sql_with("SELECT 1", options.clone()))
-                .unwrap()
-                .collect(),
-        ) {
-            Ok(_) => break,
-            Err(e) => {
-                assert_eq!(
-                    e.error_class().name(),
-                    "INVALID_HANDLE.OPERATION_ALREADY_EXISTS"
-                );
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-        }
-    }
+    let e = block_on(a.sql_with("SELECT 1", options)).unwrap_err();
+    assert_eq!(e.error_class().name(), "INVALID_HANDLE.OPERATION_ABANDONED");
     let ids = column(
         &a,
-        "SELECT query_id FROM system.queries WHERE query_text = 'SELECT 1' AND state = 'finished'",
+        "SELECT DISTINCT query_id FROM system.queries WHERE query_text LIKE 'SELECT id FROM range%'",
     );
     assert_eq!(ids, [Some(OP.to_owned())]);
 }
 
 #[test]
-fn a_malformed_operation_id_is_refused() {
+fn operation_ids_are_read_as_spark_connect_reads_them() {
     let s = Session::new().unwrap();
     for bad in [
         "",
         "abc",
-        "00112233-4455-6677-8899-aabbccddeef",
-        "0011223344556677-8899-aabbccddeeff-",
+        "1-2-3-4",
+        "-1-2-3-4-5",
+        "00112233-4455-6677-8899-aabbccddeeff0",
     ] {
         let e =
             block_on(s.sql_with("SELECT 1", QueryOptions::new().operation_id(bad))).unwrap_err();
         assert_eq!(e.error_class().name(), "INVALID_HANDLE.FORMAT", "{bad:?}");
     }
-    // Either case is a UUID.
-    let upper = OP.to_uppercase();
-    let df = block_on(s.sql_with("SELECT 1", QueryOptions::new().operation_id(&upper))).unwrap();
-    block_on(df.collect()).unwrap();
+    // Java's `UUID.fromString(id).toString`: either case, short groups.
+    for (given, shown) in [
+        (OP.to_uppercase(), OP.to_owned()),
+        (
+            "1-2-3-4-5".to_owned(),
+            "00000001-0002-0003-0004-000000000005".to_owned(),
+        ),
+    ] {
+        let df = block_on(s.sql_with("SELECT 'x' AS op", QueryOptions::new().operation_id(given)))
+            .unwrap();
+        block_on(df.collect()).unwrap();
+        let ids = column(
+            &s,
+            "SELECT query_id FROM system.queries WHERE query_text = 'SELECT ''x'' AS op'",
+        );
+        assert_eq!(ids.last(), Some(&Some(shown)));
+    }
+    // A statement refused before it ran keeps the caller's id too.
+    let refused = "7-7-7-7-7";
+    assert!(block_on(s.sql_with("SELEC 1", QueryOptions::new().operation_id(refused))).is_err());
+    let ids = column(
+        &s,
+        "SELECT query_id FROM system.queries WHERE query_text = 'SELEC 1'",
+    );
+    assert_eq!(
+        ids,
+        [Some("00000007-0007-0007-0007-000000000007".to_owned())]
+    );
 }
 
 #[test]

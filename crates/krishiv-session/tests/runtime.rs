@@ -77,7 +77,11 @@ fn runtime_keys_on_a_session_of_a_supplied_runtime_are_refused() {
             .config(key, "64m")
             .build()
             .unwrap_err();
-        assert_eq!(e.error_class().name(), "CANNOT_MODIFY_CONFIG", "{key}");
+        assert_eq!(
+            e.error_class().name(),
+            "CANNOT_MODIFY_STATIC_CONFIG",
+            "{key}"
+        );
         assert_eq!(e.sql_state(), Some("46110"));
     }
     let e = Session::builder()
@@ -85,7 +89,7 @@ fn runtime_keys_on_a_session_of_a_supplied_runtime_are_refused() {
         .executor(Arc::clone(rt.executor()))
         .build()
         .unwrap_err();
-    assert_eq!(e.error_class().name(), "CANNOT_MODIFY_CONFIG");
+    assert_eq!(e.error_class().name(), "CANNOT_MODIFY_STATIC_CONFIG");
     // Session keys are fine, and start from the runtime's.
     let s = Session::builder()
         .runtime(Arc::clone(&rt))
