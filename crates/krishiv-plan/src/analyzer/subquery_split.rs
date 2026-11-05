@@ -514,6 +514,42 @@ pub(super) fn push_not(e: &Arc<Expr>) -> Arc<Expr> {
     out.unwrap_or_else(|never| match never {})
 }
 
+/// [`super::needs_domain`], or a positive `LIMIT` over a correlation that
+/// is not an equality (`WHERE t2b <= t1d LIMIT 2`): its rows are ranked
+/// within each value of the outer columns, which only the domain gives (an
+/// equality's keys partition the ranking without it).
+///
+/// A conjunct that reads only outer columns (`WHERE x1 < x2 ... LIMIT 1`)
+/// is left out: Spark 4.2.0 answers it with the first row in input order,
+/// ignoring the subquery's `ORDER BY`, which this does not reproduce, so it
+/// stays refused rather than answered differently.
+pub(super) fn limit_hit(p: &LogicalPlan) -> bool {
+    super::needs_domain(p)
+        || matches!(&p.node, PlanNode::Limit { input, limit }
+            if super::non_equality_correlation(input)
+                && reads_inner(input)
+                && super::positive_literal(limit)
+                && !has_outer(Node::Expr(limit)))
+}
+
+/// Whether every correlated conjunct of the filters on `p`'s path down
+/// (through projections, sorts and aliases) reads an inner column too.
+fn reads_inner(p: &LogicalPlan) -> bool {
+    match &p.node {
+        PlanNode::Filter { input, predicate } => {
+            conjuncts(predicate)
+                .iter()
+                .filter(|c| has_outer(Node::Expr(c)))
+                .all(|c| !inner_columns(c).is_empty())
+                && reads_inner(input)
+        }
+        PlanNode::Project { input, .. }
+        | PlanNode::Sort { input, .. }
+        | PlanNode::SubqueryAlias { input, .. } => reads_inner(input),
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

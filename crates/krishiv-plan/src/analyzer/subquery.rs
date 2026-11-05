@@ -1126,7 +1126,10 @@ impl Rewriter {
     /// A predicate subquery as a semi or anti join of `left` with it.
     fn semi(&mut self, left: Arc<LogicalPlan>, pred: &Pred) -> R<Arc<LogicalPlan>> {
         let keep = !pred.values.is_empty();
-        let (inner, corr) = if on_path(&pred.plan, needs_domain) {
+        // EXISTS asks only whether a row exists: a positive LIMIT is pulled
+        // away, not ranked through the domain.
+        let hit: fn(&LogicalPlan) -> bool = if keep { split::limit_hit } else { needs_domain };
+        let (inner, corr) = if on_path(&pred.plan, hit) {
             let (inner, inner_keys, outer_keys) = self.domain(&left, &pred.plan)?;
             let corr = inner_keys
                 .into_iter()
@@ -1868,7 +1871,7 @@ impl Rewriter {
             };
             return Ok((base, read));
         }
-        let through_domain = forced.is_some() || on_path(plan, needs_domain);
+        let through_domain = forced.is_some() || on_path(plan, split::limit_hit);
         if !through_domain && aggregates_below(plan) {
             return Err(unsupported(
                 "a correlated scalar subquery of this shape",
@@ -1993,7 +1996,7 @@ impl Rewriter {
         let hit: fn(&LogicalPlan) -> bool = if self.lateral {
             lateral_hit
         } else {
-            needs_domain
+            split::limit_hit
         };
         if !on_path_through(plan, hit, self.lateral) {
             let (inner, corr) = self.pull(plan, true)?;
@@ -2138,7 +2141,9 @@ impl Rewriter {
                 Ok((node(generate, plan.origin), renumber))
             }
             PlanNode::Limit { input, limit }
-                if self.lateral && positive_literal(limit) && !has_outer(Node::Expr(limit)) =>
+                if (self.lateral || non_equality_correlation(input))
+                    && positive_literal(limit)
+                    && !has_outer(Node::Expr(limit)) =>
             {
                 self.limited_domain(plan, input, limit, distinct, domain)
             }
@@ -2489,7 +2494,7 @@ fn set_op_or_join(p: &LogicalPlan) -> bool {
 
 /// [`set_op_or_join`], or a select list that reads the outer query: below a
 /// domain it reads the domain's columns, and `pull` cannot lift it.
-fn needs_domain(p: &LogicalPlan) -> bool {
+pub(super) fn needs_domain(p: &LogicalPlan) -> bool {
     set_op_or_join(p)
         || matches!(&p.node, PlanNode::Project { exprs, .. }
             if exprs.iter().any(|e| has_outer(Node::Expr(e))))
@@ -2508,7 +2513,7 @@ fn lateral_hit(p: &LogicalPlan) -> bool {
 
 /// Whether a filter on the correlation path from `p` down holds an outer
 /// reference outside an equality of an inner column and an outer expression.
-fn non_equality_correlation(p: &LogicalPlan) -> bool {
+pub(super) fn non_equality_correlation(p: &LogicalPlan) -> bool {
     match &p.node {
         PlanNode::Filter { input, predicate } => {
             // As `pull` reads it: the common conjuncts of a disjunction first.

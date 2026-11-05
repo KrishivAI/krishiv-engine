@@ -116,3 +116,24 @@ fn a_not_over_and_or_or_keeps_the_null_of_an_in() -> R {
     }
     Ok(())
 }
+
+/// A `LIMIT` over a correlation that is not an equality: the rows are ranked
+/// within each value of the outer columns (through the domain), in the
+/// subquery's order.
+#[test]
+fn a_limit_over_a_non_equality_correlation_ranks_per_outer_row() -> R {
+    let s = Session::new()?;
+    run(
+        &s,
+        "create temporary view x(x1, x2) as values (1, 2), (3, 1), (2, 5)",
+    )?;
+    run(
+        &s,
+        "create temporary view y(y1, y2) as values (1, 5), (2, 2), (3, null)",
+    )?;
+    let q = "select x1, (select y2 from y where y1 <= x1 order by y2 desc limit 1) from x";
+    assert_eq!(run(&s, q)?, rows(&["1|5", "2|5", "3|5"]), "{q}");
+    let q = "select x1 from x where x2 in (select y2 from y where y1 <= x1 order by y1 limit 1)";
+    assert_eq!(run(&s, q)?, rows(&["2"]), "{q}");
+    Ok(())
+}
