@@ -57,6 +57,7 @@ mod identifier_clause;
 mod introspection;
 mod locals;
 mod partitions;
+mod plan_round_trip;
 mod profile;
 mod recursion;
 mod result_cache;
