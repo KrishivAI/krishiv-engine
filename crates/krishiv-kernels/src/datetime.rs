@@ -523,20 +523,32 @@ pub fn timestamp_add_day_time(
         micros,
         |t, m| {
             let m = if negate { m.checked_neg()? } else { m };
-            let (days, rest) = (m / MICROS_PER_DAY, m % MICROS_PER_DAY);
-            let moved = days.checked_mul(MICROS_PER_DAY)?;
-            let base = match zone {
-                Some(tz) => {
-                    let local = utc_to_local(t, tz)?.checked_add(moved)?;
-                    local_to_utc_keeping(local, tz, tz.offset_at_utc(t.div_euclid(1_000_000)))?
-                }
-                None => t.checked_add(moved)?,
-            };
-            base.checked_add(rest)
+            add_day_time_to_timestamp(t, m, zone)
         },
         null_on_overflow,
         |row| KernelError::datetime_overflow(row, "timestamp + interval"),
     )
+}
+
+/// One timestamp (microseconds since the epoch) moved by `micros` of a day-time interval: whole days on the local
+/// clock of `zone` (`None` for `TIMESTAMP_NTZ`, where a day is 24 hours), the remainder below a day as elapsed
+/// time, as [`timestamp_add_day_time`]. `None` past the `i64` microsecond range.
+#[must_use]
+pub fn add_day_time_to_timestamp(
+    t: i64,
+    micros: i64,
+    zone: Option<&dyn TimeZoneRules>,
+) -> Option<i64> {
+    let (days, rest) = (micros / MICROS_PER_DAY, micros % MICROS_PER_DAY);
+    let moved = days.checked_mul(MICROS_PER_DAY)?;
+    let base = match zone {
+        Some(tz) => {
+            let local = utc_to_local(t, tz)?.checked_add(moved)?;
+            local_to_utc_keeping(local, tz, tz.offset_at_utc(t.div_euclid(1_000_000)))?
+        }
+        None => t.checked_add(moved)?,
+    };
+    base.checked_add(rest)
 }
 
 /// The value of an operand at row `i`; `None` is NULL.

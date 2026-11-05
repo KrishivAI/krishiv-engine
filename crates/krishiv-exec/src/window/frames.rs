@@ -335,13 +335,36 @@ impl RangeKeys {
                             )
                         })
                         .map(i128::from)
-                        .ok_or_else(month_overflow),
+                        .ok_or_else(timestamp_overflow),
                     Calendar::None => Err(internal(
                         "a year-month RANGE bound over a key that is not a date or timestamp"
                             .to_owned(),
                     )),
                 }?;
                 Ok(Some(Target::Int(moved)))
+            }
+            (Keys::Int(k), FrameBound::RangeDayTime(micros)) => {
+                let micros = if self.descending {
+                    micros.checked_neg().ok_or_else(timestamp_overflow)?
+                } else {
+                    micros
+                };
+                let Calendar::Timestamp(zone) = &self.calendar else {
+                    return Err(internal(
+                        "a day-time RANGE bound over a key that is not a timestamp".to_owned(),
+                    ));
+                };
+                let moved = i64::try_from(k[i]).ok().and_then(|t| {
+                    krishiv_kernels::datetime::add_day_time_to_timestamp(
+                        t,
+                        micros,
+                        zone.as_ref()
+                            .map(|z| z as &dyn krishiv_kernels::datetime::TimeZoneRules),
+                    )
+                });
+                Ok(Some(Target::Int(
+                    moved.map(i128::from).ok_or_else(timestamp_overflow)?,
+                )))
             }
             (Keys::Float(k), FrameBound::RangeFloat(bits)) => {
                 let off = f64::from_bits(bits);
@@ -361,10 +384,18 @@ impl RangeKeys {
     }
 }
 
-/// A key moved past its type by a month bound: `ARITHMETIC_OVERFLOW` (Spark has no ANSI switch here; a timestamp
-/// raises a bare `ArithmeticException` there, which has no error class to match). The text is Spark 4.2's
-/// ("overflow"); 3.5, 4.0 and 4.1 say "integer overflow" for a date, which the executor cannot tell apart yet
-/// (it holds no Spark profile).
+/// A timestamp key moved past the microsecond range by an interval bound: `DATETIME_OVERFLOW`, the registry class the
+/// kernels raise for Spark's unclassified `ArithmeticException("long overflow")` (not ANSI-gated there).
+fn timestamp_overflow() -> krishiv_common::error::KrishivError {
+    krishiv_common::error::DatetimeOverflow {
+        operation: "timestamp + interval".to_owned(),
+    }
+    .into()
+}
+
+/// A date key moved past the `DATE` range by a month bound: `ARITHMETIC_OVERFLOW` (not ANSI-gated). The text is
+/// Spark 4.2's ("overflow"); 3.5, 4.0 and 4.1 say "integer overflow", which the executor cannot tell apart yet (it
+/// holds no Spark profile).
 fn month_overflow() -> krishiv_common::error::KrishivError {
     ArithmeticOverflow {
         message: "overflow".to_owned(),
@@ -394,7 +425,10 @@ fn float_cmp(a: f64, b: f64) -> std::cmp::Ordering {
 pub(super) fn is_range_offset(b: FrameBound) -> bool {
     matches!(
         b,
-        FrameBound::RangeInt(_) | FrameBound::RangeFloat(_) | FrameBound::RangeMonths(_)
+        FrameBound::RangeInt(_)
+            | FrameBound::RangeFloat(_)
+            | FrameBound::RangeMonths(_)
+            | FrameBound::RangeDayTime(_)
     )
 }
 

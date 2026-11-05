@@ -391,6 +391,8 @@ fn call(e: &Expr) -> Result<Call<'_>> {
                     L::Float(v) => Ok(Bound::RangeFloat(f64::from(*v).to_bits())),
                     L::Double(v) => Ok(Bound::RangeFloat(v.to_bits())),
                     L::YearMonthInterval { months, .. } => Ok(Bound::RangeMonths(*months)),
+                    // Only a timestamp key keeps its interval: a date key's bound is whole days in an integer.
+                    L::DayTimeInterval { micros, .. } => Ok(Bound::RangeDayTime(*micros)),
                     _ => Err(unsupported("this RANGE window frame bound")),
                 }
             }

@@ -214,6 +214,13 @@ enum RangeValue {
         krishiv_types::YearMonthField,
         krishiv_types::YearMonthField,
     ),
+    /// A day-time interval over a timestamp key: microseconds, with the interval type's fields (the bound stays an
+    /// interval literal, so a stored plan analyzes again; the executor adds whole days on the zone's clock).
+    DayTime(
+        i64,
+        krishiv_types::DayTimeField,
+        krishiv_types::DayTimeField,
+    ),
 }
 
 impl RangeValue {
@@ -222,6 +229,7 @@ impl RangeValue {
             (Self::Int(a), Self::Int(b)) => a > b,
             (Self::Float(a), Self::Float(b)) => a > b,
             (Self::Months(a, ..), Self::Months(b, ..)) => a > b,
+            (Self::DayTime(a, ..), Self::DayTime(b, ..)) => a > b,
             _ => false,
         }
     }
@@ -236,14 +244,17 @@ impl RangeValue {
         Some(match (self, key) {
             (Self::Int(v), T::Byte) => Literal::Byte(i8::try_from(*v).ok()?),
             (Self::Int(v), T::Short) => Literal::Short(i16::try_from(*v).ok()?),
-            (Self::Int(v), T::Long | T::Timestamp | T::TimestampNtz) => {
-                Literal::Long(i64::try_from(*v).ok()?)
-            }
+            (Self::Int(v), T::Long) => Literal::Long(i64::try_from(*v).ok()?),
             (Self::Int(v), T::Decimal(d)) => Literal::Decimal {
                 unscaled: *v,
                 data_type: *d,
             },
             (Self::Int(v), _) => Literal::Integer(i32::try_from(*v).ok()?),
+            (Self::DayTime(micros, start, end), _) => Literal::DayTimeInterval {
+                micros: *micros,
+                start: *start,
+                end: *end,
+            },
             (Self::Months(months, start, end), _) => Literal::YearMonthInterval {
                 months: *months,
                 start: *start,
@@ -282,7 +293,7 @@ fn range_value_signed(
     };
     // A day-time interval bound over a date (ending in DAY, so whole days) or a timestamp key
     // (microseconds).
-    if let Literal::DayTimeInterval { micros, .. } = l {
+    if let Literal::DayTimeInterval { micros, start, end } = l {
         let micros = if negate {
             micros.checked_neg()?
         } else {
@@ -292,7 +303,7 @@ fn range_value_signed(
             T::Date => i32::try_from(micros / MICROS_PER_DAY)
                 .ok()
                 .map(|d| RangeValue::Int(i128::from(d))),
-            T::Timestamp | T::TimestampNtz => Some(RangeValue::Int(i128::from(micros))),
+            T::Timestamp | T::TimestampNtz => Some(RangeValue::DayTime(micros, *start, *end)),
             _ => None,
         };
     }

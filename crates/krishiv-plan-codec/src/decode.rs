@@ -982,6 +982,9 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
             RangeMonths => FrameBound::RangeMonths(i32::from_be_bytes(
                 range.try_into().map_err(|_| bad())?,
             )),
+            RangeDayTime => FrameBound::RangeDayTime(i64::from_be_bytes(
+                range.try_into().map_err(|_| bad())?,
+            )),
         })
     };
     Ok(WindowFunctionPlan {

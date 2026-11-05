@@ -185,6 +185,11 @@ pub enum FrameBound {
     /// a descending order moves the other way), in the session zone for a
     /// `TIMESTAMP`.
     RangeMonths(i32),
+    /// `RANGE` only: a day-time interval bound over a `TIMESTAMP` or `TIMESTAMP_NTZ` key, in microseconds
+    /// (negative: before it; a descending order moves the other way): whole days on the session zone's clock for a
+    /// `TIMESTAMP`, the remainder below a day as elapsed time. (A `DATE` key takes the interval as whole days in a
+    /// `RangeInt`.)
+    RangeDayTime(i64),
 }
 
 /// A window frame (Spark's `SpecifiedWindowFrame`).
@@ -274,6 +279,7 @@ crate::physical::data::plan_data!(
         RangeInt(distance),
         RangeFloat(bits),
         RangeMonths(months),
+        RangeDayTime(micros),
     }
 );
 crate::physical::data::plan_data!(struct WindowFrame { units, lower, upper });
@@ -375,6 +381,10 @@ impl WindowFunctionPlan {
                     input.field(key.column).data_type(),
                     DataType::Date32 | DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _)
                 ),
+                FrameBound::RangeDayTime(_) => matches!(
+                    input.field(key.column).data_type(),
+                    DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _)
+                ),
                 _ => true,
             };
             if !fits {
@@ -405,12 +415,14 @@ impl WindowFunctionPlan {
                 | B::CurrentRow
                 | B::RangeInt(_)
                 | B::RangeFloat(_)
-                | B::RangeMonths(_),
+                | B::RangeMonths(_)
+                | B::RangeDayTime(_),
                 B::CurrentRow
                 | B::UnboundedFollowing
                 | B::RangeInt(_)
                 | B::RangeFloat(_)
-                | B::RangeMonths(_),
+                | B::RangeMonths(_)
+                | B::RangeDayTime(_),
             ) if frames::is_range_offset(self.frame.lower)
                 || frames::is_range_offset(self.frame.upper) =>
             {

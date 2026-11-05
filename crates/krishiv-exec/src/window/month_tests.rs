@@ -49,6 +49,28 @@ fn rows(schema: &SchemaRef) -> Vec<Batch> {
         .collect()
 }
 
+/// 600 rows an hour apart from 2024-03-01T00:00Z (the first ten NULL): they cross Los Angeles' spring-forward
+/// (March 10, 10:00Z), where a calendar day is 23 hours long.
+fn hourly_rows(schema: &SchemaRef) -> Vec<Batch> {
+    let base = START_US + 60 * 24 * HOUR_US;
+    let ids: Vec<i64> = (0..600).collect();
+    ids.chunks(100)
+        .map(|c| {
+            let at = |i: i64| base + i * HOUR_US;
+            let ts =
+                TimestampMicrosecondArray::from_iter(c.iter().map(|&i| (i >= 10).then(|| at(i))))
+                    .with_timezone("UTC");
+            let d =
+                Date32Array::from_iter(c.iter().map(|&i| {
+                    (i >= 10).then(|| i32::try_from(at(i) / (24 * HOUR_US)).unwrap_or(0))
+                }));
+            let v = Int64Array::from_iter(c.iter().map(|&i| Some(i % 17 + 1)));
+            let columns: Vec<ArrayRef> = vec![Arc::new(ts), Arc::new(d), Arc::new(v)];
+            Batch::new(RecordBatch::try_new(Arc::clone(schema), columns).unwrap())
+        })
+        .collect()
+}
+
 fn concat(batches: &[Batch]) -> RecordBatch {
     let data: Vec<RecordBatch> = batches.iter().map(|b| b.data().clone()).collect();
     arrow_select::concat::concat_batches(&data[0].schema(), &data).unwrap()
@@ -132,4 +154,99 @@ async fn month_bounds_from_disk_match_memory_in_a_dst_zone() {
         zone_mattered,
         "no month bound over the TIMESTAMP key differed between Los Angeles and UTC"
     );
+}
+
+const DAY_US: i64 = 24 * HOUR_US;
+
+/// A day-time bound over a `TIMESTAMP` key adds whole days on the session zone's clock, from disk as in memory: a
+/// day across a daylight saving transition is 23 or 25 hours, so Los Angeles and UTC frame the rows differently; a
+/// `TIMESTAMP_NTZ` key has no zone and a day is 24 hours.
+#[tokio::test]
+async fn day_time_bounds_follow_the_zone_clock_from_disk_and_memory() {
+    use FrameBound::{CurrentRow, RangeDayTime};
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            true,
+        ),
+        Field::new("d", DataType::Date32, true),
+        Field::new("v", DataType::Int64, true),
+    ]));
+    let input = hourly_rows(&schema);
+    let la = || resolve_zone("America/Los_Angeles").unwrap();
+    let utc = || ZoneRef::Fixed(FixedOffset(0));
+    let mut zone_mattered = false;
+    for frame in [
+        between(FrameUnits::Range, RangeDayTime(-DAY_US), CurrentRow),
+        between(
+            FrameUnits::Range,
+            RangeDayTime(-DAY_US),
+            RangeDayTime(DAY_US + 5 * HOUR_US),
+        ),
+        between(FrameUnits::Range, CurrentRow, RangeDayTime(2 * DAY_US)),
+    ] {
+        let plan = window(0, frame);
+        let want = in_memory(&schema, &plan, la(), &input);
+        let (_manager, scope) = spill_scope();
+        let op =
+            Window::with_zone(Arc::clone(&schema), plan.clone(), true, la(), Some(scope)).unwrap();
+        let limit = 1 << 30;
+        let (root, ctx) = task(limit);
+        let spills = Spills {
+            every: 1,
+            slack: Some(256 << 10),
+        };
+        let got = drive_spilling(&op, &ctx, limit, &root, &input, spills)
+            .await
+            .unwrap();
+        assert_eq!(concat(&got), want, "{frame:?}");
+        assert!(
+            op.counters
+                .external
+                .load(std::sync::atomic::Ordering::Relaxed)
+                >= 1,
+            "{frame:?}: nothing was evaluated from disk"
+        );
+        drop((got, ctx));
+        zone_mattered |= in_memory(&schema, &plan, utc(), &input) != want;
+    }
+    assert!(
+        zone_mattered,
+        "no day bound differed between Los Angeles and UTC"
+    );
+}
+
+/// A timestamp moved past the microsecond range by a day-time bound raises `DATETIME_OVERFLOW` (Spark: an
+/// unclassified `ArithmeticException`), in both ANSI modes.
+#[tokio::test]
+async fn a_day_time_bound_past_the_microsecond_range_raises() {
+    use FrameBound::{CurrentRow, RangeDayTime};
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            true,
+        ),
+        Field::new("d", DataType::Date32, true),
+        Field::new("v", DataType::Int64, true),
+    ]));
+    let input = rows(&schema);
+    for ansi in [true, false] {
+        let plan = window(
+            0,
+            between(FrameUnits::Range, CurrentRow, RangeDayTime(i64::MAX)),
+        );
+        let op = Window::with_zone(
+            Arc::clone(&schema),
+            plan,
+            ansi,
+            ZoneRef::Fixed(FixedOffset(0)),
+            None,
+        )
+        .unwrap();
+        let (_root, ctx) = task(1 << 30);
+        let err = drive(&op, &ctx, &input).unwrap_err();
+        assert_eq!(err.error_class().name(), "DATETIME_OVERFLOW", "ansi {ansi}");
+    }
 }

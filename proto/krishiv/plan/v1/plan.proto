@@ -489,6 +489,8 @@ enum FrameBound {
   FRAME_BOUND_RANGE_FLOAT = 6;
   // feature: window_range_month_bounds
   FRAME_BOUND_RANGE_MONTHS = 7;
+  // feature: window_range_day_time_bounds
+  FRAME_BOUND_RANGE_DAY_TIME = 8;
 }
 
 message AggregateNode {

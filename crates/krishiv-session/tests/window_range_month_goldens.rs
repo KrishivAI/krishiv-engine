@@ -63,11 +63,11 @@ fn micros_of(text: &str) -> Option<i64> {
         let at = rest.rfind(['+', '-'])?;
         let (c, o) = rest.split_at(at);
         let sign = if o.starts_with('-') { -1 } else { 1 };
-        let (oh, om) = o[1..].split_once(':')?;
-        (
-            c,
-            sign * (oh.parse::<i64>().ok()? * 3600 + om.parse::<i64>().ok()? * 60),
-        )
+        // `hh:mm`, or `hh:mm:ss` (year 0001 in Los Angeles is -07:52:58).
+        let mut parts = o[1..].split(':');
+        let mut next = || parts.next().map_or(Some(0), |p| p.parse::<i64>().ok());
+        let (oh, om, os) = (next()?, next()?, next()?);
+        (c, sign * (oh * 3600 + om * 60 + os))
     };
     let (hms, frac) = clock.split_once('.').unwrap_or((clock, "0"));
     let mut t = hms.split(':');
@@ -180,7 +180,22 @@ fn check(s: &Session, case: &Value, report: &mut String) -> Outcome {
                 let _ = writeln!(report, "{id}: ran; Spark raised {class}");
                 Outcome::Checked
             }
-            (_, None) => Outcome::Skipped(format!("{id}: Spark's error has no class")),
+            // Spark raises a bare `ArithmeticException("long overflow")`, in both ANSI modes: the engine raises the
+            // registry class that describes it, as its datetime kernels do.
+            (Err(e), None) => {
+                if e.error_class().name() != "DATETIME_OVERFLOW" {
+                    let _ = writeln!(
+                        report,
+                        "{id}: Spark's unclassified error; got {}",
+                        e.error_class().name()
+                    );
+                }
+                Outcome::Checked
+            }
+            (Ok(_), None) => {
+                let _ = writeln!(report, "{id}: ran; Spark raised an unclassified error");
+                Outcome::Checked
+            }
         };
     }
     let (schema, batches) = match result {
@@ -243,8 +258,9 @@ fn check(s: &Session, case: &Value, report: &mut String) -> Outcome {
     Outcome::Checked
 }
 
-/// Cases the test does not run: plain timestamp arithmetic, and Spark's errors that carry no class.
-const EXPECTED_SKIPPED: usize = 11;
+/// Cases the test does not run: plain timestamp arithmetic that is not a `RANGE` window (the kernels' own tests
+/// cover it).
+const EXPECTED_SKIPPED: usize = 7;
 
 /// Cases Krishiv does not match yet, with the reason. Each must still mismatch: a fix removes its line.
 const KNOWN_GAPS: &[(&str, &str)] = &[
@@ -411,6 +427,57 @@ fn bounds_of_two_types_are_refused_before_the_key_is_checked() {
                 "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_DIFF_TYPES",
                 "{sql}"
             );
+        }
+    }
+}
+
+/// A DataFrame registered as a temporary view is analyzed again when the view is read: a day-time bound over a
+/// timestamp key (kept as its interval, not as a bare integer) and a month bound must analyze a second time.
+#[test]
+fn a_window_with_interval_bounds_survives_a_dataframe_temp_view() {
+    let s = Session::new().unwrap();
+    for (name, bound) in [
+        ("v_day_time", "INTERVAL '1' DAY PRECEDING AND CURRENT ROW"),
+        ("v_months", "INTERVAL '1' MONTH PRECEDING AND CURRENT ROW"),
+    ] {
+        for (key, rows) in [
+            (
+                "ts",
+                "(TIMESTAMP'2024-01-31 10:00:00'), (TIMESTAMP'2024-02-01 09:00:00'), (TIMESTAMP'2024-02-29 10:00:00')",
+            ),
+            (
+                "d",
+                "(DATE'2024-01-31'), (DATE'2024-02-01'), (DATE'2024-02-29')",
+            ),
+        ] {
+            if key == "d" && name == "v_day_time" {
+                continue; // a DATE key takes its day-time bound as whole days in an integer, which re-analyzes as before
+            }
+            let view = format!("{name}_{key}");
+            let q = format!(
+                "SELECT {key}, count(*) OVER (ORDER BY {key} RANGE BETWEEN {bound}) AS c FROM (VALUES {rows}) t({key})"
+            );
+            let direct = block_on(async { s.sql(&q).await?.collect().await }).unwrap();
+            block_on(async { s.sql(&q).await?.create_or_replace_temp_view(&view).await }).unwrap();
+            let again = block_on(async {
+                s.sql(&format!("SELECT * FROM {view}"))
+                    .await?
+                    .collect()
+                    .await
+            });
+            let again = again.unwrap_or_else(|e| panic!("{view}: {e}"));
+            assert_eq!(
+                direct
+                    .iter()
+                    .map(arrow_array::RecordBatch::num_rows)
+                    .sum::<usize>(),
+                again
+                    .iter()
+                    .map(arrow_array::RecordBatch::num_rows)
+                    .sum::<usize>(),
+                "{view}"
+            );
+            assert_eq!(format!("{direct:?}"), format!("{again:?}"), "{view}");
         }
     }
 }
