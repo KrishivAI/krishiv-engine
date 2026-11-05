@@ -352,3 +352,43 @@ impl Drop for Admitted {
         }
     }
 }
+
+/// The statement-wide slot a pre-admission waits in until the write takes it
+/// (`QueryEnv::admitted`). The slot outlives the statement (it sits in the frame's cached
+/// analysis), so a statement that is dropped before its write took the admission must not leave
+/// it there: this guard empties the slot, and the `Admitted` dropped with it closes its row
+/// `cancelled` and gives the permit back.
+pub(crate) struct PreAdmission(Arc<std::sync::Mutex<Option<Admitted>>>);
+
+impl PreAdmission {
+    pub(crate) fn new(slot: Arc<std::sync::Mutex<Option<Admitted>>>, admitted: Admitted) -> Self {
+        *slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(admitted);
+        Self(slot)
+    }
+
+    /// Settles what the write did not take (the drop or the create failed first) with the
+    /// statement's outcome.
+    pub(crate) fn settle(&self, outcome: &Result<(), KrishivError>) {
+        if let Some(unrun) = self.unrun() {
+            match outcome {
+                Ok(()) => unrun.finish_ok(),
+                Err(error) => unrun.fail(error),
+            }
+        }
+    }
+
+    fn unrun(&self) -> Option<Admitted> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+}
+
+impl Drop for PreAdmission {
+    fn drop(&mut self) {
+        drop(self.unrun());
+    }
+}

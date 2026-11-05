@@ -155,7 +155,7 @@ fn batch_of(keys: Keys, rows: &[Row]) -> Batch {
     Batch::new(RecordBatch::try_new(schema_of(keys), columns).unwrap())
 }
 
-fn agg(function: AggregateFunction, arg: Option<usize>) -> WindowFunction {
+pub(super) fn agg(function: AggregateFunction, arg: Option<usize>) -> WindowFunction {
     WindowFunction::Aggregate(AggregateExpr {
         function,
         args: arg.into_iter().collect(),
@@ -811,7 +811,7 @@ fn decimal_rows(values: &[i128], p: u8) -> (SchemaRef, Batch) {
     (s, Batch::new(b))
 }
 
-fn task(limit: usize) -> (Arc<TreePool>, TaskContext) {
+pub(super) fn task(limit: usize) -> (Arc<TreePool>, TaskContext) {
     task_with(limit, ExecConfig::default())
 }
 
@@ -829,7 +829,7 @@ fn task_with(limit: usize, config: ExecConfig) -> (Arc<TreePool>, TaskContext) {
 }
 
 /// Runs `op` over `input` directly (one driver), collecting its output.
-fn drive(op: &Window, ctx: &TaskContext, input: &[Batch]) -> crate::Result<Vec<Batch>> {
+pub(super) fn drive(op: &Window, ctx: &TaskContext, input: &[Batch]) -> crate::Result<Vec<Batch>> {
     let mut local = op.local_state(ctx)?;
     let mut out = Vec::new();
     for b in input {
@@ -1172,7 +1172,7 @@ fn reserved_cost_matches_what_evaluation_holds() {
                 part_start: &part,
                 peer_start: &peer,
             };
-            let out = super::eval::evaluate(&window, &[slice], true).unwrap();
+            let out = super::eval::evaluate(&window, &[slice], true, &super::utc_zone()).unwrap();
             let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
             // Outputs, row maps (`part_of`, `peer_of`) and the partition and
             // peer-group vectors.
@@ -1293,7 +1293,7 @@ fn windows_require_their_partitioning() {
 
 /// A spill directory of its own: the manager deletes what it wrote, and
 /// the guard the directory itself.
-struct SpillDir {
+pub(super) struct SpillDir {
     manager: Option<krishiv_memory::SpillManager>,
     dir: std::path::PathBuf,
 }
@@ -1305,7 +1305,7 @@ impl Drop for SpillDir {
     }
 }
 
-fn spill_scope() -> (SpillDir, krishiv_memory::SpillScope) {
+pub(super) fn spill_scope() -> (SpillDir, krishiv_memory::SpillScope) {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1328,19 +1328,19 @@ fn spill_scope() -> (SpillDir, krishiv_memory::SpillScope) {
 
 /// How [`drive_spilling`] spills.
 #[derive(Clone, Copy, Debug)]
-struct Spills {
+pub(super) struct Spills {
     /// The buffered rows spill after every this many batches (0: only when
     /// the operator needs memory).
-    every: usize,
+    pub(super) every: usize,
     /// After the input, all but this many free bytes of the pool are taken,
     /// so partitions that do not fit are evaluated from disk.
-    slack: Option<usize>,
+    pub(super) slack: Option<usize>,
 }
 
 /// Runs `op` over `input` directly as a driver does, with spills (see
 /// [`Spills`]); a request for memory in the flush phase is granted while
 /// the pool has it. Collects the output.
-async fn drive_spilling(
+pub(super) async fn drive_spilling(
     op: &Window,
     ctx: &TaskContext,
     limit: usize,
@@ -1982,7 +1982,7 @@ fn frame_costs_cover_their_outputs() {
                 part_start: &part,
                 peer_start: &peer,
             };
-            let out = super::eval::evaluate(&window, &[slice], false).unwrap();
+            let out = super::eval::evaluate(&window, &[slice], false, &super::utc_zone()).unwrap();
             let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
             let held: usize = out
                 .iter()
@@ -2045,7 +2045,7 @@ fn offset_function_costs_cover_their_scratch() {
             part_start: &part,
             peer_start: &peer,
         };
-        let out = super::eval::evaluate(&window, &[slice], false).unwrap();
+        let out = super::eval::evaluate(&window, &[slice], false, &super::utc_zone()).unwrap();
         // What an array holds of its own: views share the input's value
         // buffers.
         let own = |a: &ArrayRef| {
@@ -2106,7 +2106,7 @@ fn trees_larger_than_a_chunk_match_the_reference() {
         part_start: &part,
         peer_start: &peer,
     };
-    let out = super::eval::evaluate(&window, &[slice], false).unwrap();
+    let out = super::eval::evaluate(&window, &[slice], false, &super::utc_zone()).unwrap();
     let got: Vec<String> = data
         .iter()
         .enumerate()
@@ -2514,7 +2514,7 @@ async fn a_running_collect_list_over_a_big_partition_fails_under_a_tight_limit()
 }
 
 /// A frame from `lower` to `upper`.
-fn between(units: FrameUnits, lower: FrameBound, upper: FrameBound) -> WindowFrame {
+pub(super) fn between(units: FrameUnits, lower: FrameBound, upper: FrameBound) -> WindowFrame {
     WindowFrame {
         units,
         lower,

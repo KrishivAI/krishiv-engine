@@ -73,6 +73,16 @@ pub(super) struct RangeKeys {
     ansi: bool,
     /// The keys are `FLOAT`: the sum is rounded to a single.
     single: bool,
+    /// What a year-month interval bound moves the key by (calendar months).
+    calendar: Calendar,
+}
+
+/// How a key moves by a number of calendar months: days of a `DATE`, or microseconds of a timestamp in the
+/// session zone (`None`: `TIMESTAMP_NTZ`). Other keys take no month bound.
+enum Calendar {
+    None,
+    Date,
+    Timestamp(Option<krishiv_kernels::datetime::ZoneRef>),
 }
 
 enum Keys {
@@ -92,10 +102,11 @@ impl RangeKeys {
         descending: bool,
         nulls_first: bool,
         ansi: bool,
+        zone: &krishiv_kernels::datetime::ZoneRef,
     ) -> Result<Option<Self>> {
         use arrow_array::types::{
             Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
-            Int16Type, Int32Type, Int64Type,
+            Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
         };
         let Some(first) = slices.first() else {
             return Ok(None);
@@ -116,6 +127,7 @@ impl RangeKeys {
                     | DataType::Int32
                     | DataType::Int64
                     | DataType::Date32
+                    | DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _)
                     | DataType::Decimal64(..)
                     | DataType::Decimal128(..)
             )
@@ -148,6 +160,7 @@ impl RangeKeys {
                 DataType::Int32 => ints!(Int32Type),
                 DataType::Int64 => ints!(Int64Type),
                 DataType::Date32 => ints!(Date32Type),
+                DataType::Timestamp(..) => ints!(TimestampMicrosecondType),
                 DataType::Decimal64(..) => {
                     let a = col.as_primitive::<Decimal64Type>();
                     ints.extend((0..a.len()).map(|i| i128::from(a.value(i))));
@@ -167,7 +180,15 @@ impl RangeKeys {
                 other => return Err(internal(format!("a window order column of type {other}"))),
             }
         }
+        let calendar = match &ty {
+            DataType::Date32 => Calendar::Date,
+            // A `TIMESTAMP` carries a zone marker; its zone is the session's.
+            DataType::Timestamp(_, Some(_)) => Calendar::Timestamp(Some(zone.clone())),
+            DataType::Timestamp(_, None) => Calendar::Timestamp(None),
+            _ => Calendar::None,
+        };
         Ok(Some(Self {
+            calendar,
             keys: if float {
                 Keys::Float(floats)
             } else {
@@ -283,6 +304,68 @@ impl RangeKeys {
                 let span = max - min + 1;
                 Ok(Some(Target::Int((sum - min).rem_euclid(span) + min)))
             }
+            (Keys::Int(k), FrameBound::RangeMonths(months)) => {
+                // `PRECEDING` is a negative count; a descending order negates the bound (Spark's
+                // `UnaryMinus`, checked in the interval's own type).
+                let months = if self.descending {
+                    months.checked_neg().ok_or_else(|| {
+                        // Spark's `UnaryMinus` on the most negative year-month interval.
+                        krishiv_common::error::KrishivError::from(
+                            krishiv_common::error::IntervalArithmeticOverflowWithoutSuggestion {},
+                        )
+                    })?
+                } else {
+                    months
+                };
+                let months = i64::from(months);
+                let moved = match &self.calendar {
+                    Calendar::Date => i32::try_from(k[i])
+                        .ok()
+                        .and_then(|d| krishiv_kernels::datetime::add_months_to_date(d, months))
+                        .map(i128::from)
+                        .ok_or_else(month_overflow),
+                    Calendar::Timestamp(zone) => i64::try_from(k[i])
+                        .ok()
+                        .and_then(|t| {
+                            krishiv_kernels::datetime::add_months_to_timestamp(
+                                t,
+                                months,
+                                zone.as_ref()
+                                    .map(|z| z as &dyn krishiv_kernels::datetime::TimeZoneRules),
+                            )
+                        })
+                        .map(i128::from)
+                        .ok_or_else(timestamp_overflow),
+                    Calendar::None => Err(internal(
+                        "a year-month RANGE bound over a key that is not a date or timestamp"
+                            .to_owned(),
+                    )),
+                }?;
+                Ok(Some(Target::Int(moved)))
+            }
+            (Keys::Int(k), FrameBound::RangeDayTime(micros)) => {
+                let micros = if self.descending {
+                    micros.checked_neg().ok_or_else(timestamp_overflow)?
+                } else {
+                    micros
+                };
+                let Calendar::Timestamp(zone) = &self.calendar else {
+                    return Err(internal(
+                        "a day-time RANGE bound over a key that is not a timestamp".to_owned(),
+                    ));
+                };
+                let moved = i64::try_from(k[i]).ok().and_then(|t| {
+                    krishiv_kernels::datetime::add_day_time_to_timestamp(
+                        t,
+                        micros,
+                        zone.as_ref()
+                            .map(|z| z as &dyn krishiv_kernels::datetime::TimeZoneRules),
+                    )
+                });
+                Ok(Some(Target::Int(
+                    moved.map(i128::from).ok_or_else(timestamp_overflow)?,
+                )))
+            }
             (Keys::Float(k), FrameBound::RangeFloat(bits)) => {
                 let off = f64::from_bits(bits);
                 let off = if self.descending { -off } else { off };
@@ -299,6 +382,27 @@ impl RangeKeys {
             )),
         }
     }
+}
+
+/// A timestamp key moved past the microsecond range by an interval bound: `DATETIME_OVERFLOW`, the registry class the
+/// kernels raise for Spark's unclassified `ArithmeticException("long overflow")` (not ANSI-gated there).
+fn timestamp_overflow() -> krishiv_common::error::KrishivError {
+    krishiv_common::error::DatetimeOverflow {
+        operation: "timestamp + interval".to_owned(),
+    }
+    .into()
+}
+
+/// A date key moved past the `DATE` range by a month bound: `ARITHMETIC_OVERFLOW` (not ANSI-gated). The text is
+/// Spark 4.2's ("overflow"); 3.5, 4.0 and 4.1 say "integer overflow", which the executor cannot tell apart yet (it
+/// holds no Spark profile).
+fn month_overflow() -> krishiv_common::error::KrishivError {
+    ArithmeticOverflow {
+        message: "overflow".to_owned(),
+        alternative: String::new(),
+        config: "\"spark.sql.ansi.enabled\"".to_owned(),
+    }
+    .into()
 }
 
 #[derive(Clone)]
@@ -319,7 +423,13 @@ fn float_cmp(a: f64, b: f64) -> std::cmp::Ordering {
 
 /// Whether `b` is a value bound of a `RANGE` frame.
 pub(super) fn is_range_offset(b: FrameBound) -> bool {
-    matches!(b, FrameBound::RangeInt(_) | FrameBound::RangeFloat(_))
+    matches!(
+        b,
+        FrameBound::RangeInt(_)
+            | FrameBound::RangeFloat(_)
+            | FrameBound::RangeMonths(_)
+            | FrameBound::RangeDayTime(_)
+    )
 }
 
 /// One edge of a `RANGE` frame with a value bound, as Spark's frames with

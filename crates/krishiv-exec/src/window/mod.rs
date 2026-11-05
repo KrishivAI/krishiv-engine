@@ -66,6 +66,13 @@ mod disk;
 mod eval;
 mod frames;
 mod group_limit;
+/// UTC, the zone the tests run in unless they name another.
+#[cfg(all(test, not(loom)))]
+fn utc_zone() -> krishiv_kernels::datetime::ZoneRef {
+    krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0))
+}
+#[cfg(all(test, not(loom)))]
+mod month_tests;
 mod spill;
 mod stream;
 #[cfg(all(test, not(loom)))]
@@ -173,6 +180,16 @@ pub enum FrameBound {
     RangeInt(i128),
     /// `RANGE` only: as `RangeInt`, for a float key (the bits of the `f64`).
     RangeFloat(u64),
+    /// `RANGE` only: a year-month interval bound over a date or timestamp
+    /// key: the key moved by this many calendar months (negative: before it;
+    /// a descending order moves the other way), in the session zone for a
+    /// `TIMESTAMP`.
+    RangeMonths(i32),
+    /// `RANGE` only: a day-time interval bound over a `TIMESTAMP` or `TIMESTAMP_NTZ` key, in microseconds
+    /// (negative: before it; a descending order moves the other way): whole days on the session zone's clock for a
+    /// `TIMESTAMP`, the remainder below a day as elapsed time. (A `DATE` key takes the interval as whole days in a
+    /// `RangeInt`.)
+    RangeDayTime(i64),
 }
 
 /// A window frame (Spark's `SpecifiedWindowFrame`).
@@ -261,6 +278,8 @@ crate::physical::data::plan_data!(
         Offset(offset),
         RangeInt(distance),
         RangeFloat(bits),
+        RangeMonths(months),
+        RangeDayTime(micros),
     }
 );
 crate::physical::data::plan_data!(struct WindowFrame { units, lower, upper });
@@ -350,6 +369,7 @@ impl WindowFunctionPlan {
                 | DataType::Int32
                 | DataType::Int64
                 | DataType::Date32
+                | DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _)
                 | DataType::Decimal64(..)
                 | DataType::Decimal128(..)
         );
@@ -357,6 +377,14 @@ impl WindowFunctionPlan {
             let fits = match b {
                 FrameBound::RangeInt(_) => int,
                 FrameBound::RangeFloat(_) => float,
+                FrameBound::RangeMonths(_) => matches!(
+                    input.field(key.column).data_type(),
+                    DataType::Date32 | DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _)
+                ),
+                FrameBound::RangeDayTime(_) => matches!(
+                    input.field(key.column).data_type(),
+                    DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, _)
+                ),
                 _ => true,
             };
             if !fits {
@@ -383,8 +411,18 @@ impl WindowFunctionPlan {
             (FrameUnits::Range, B::CurrentRow, B::UnboundedFollowing) => Ok(Shape::Frame),
             (
                 FrameUnits::Range,
-                B::UnboundedPreceding | B::CurrentRow | B::RangeInt(_) | B::RangeFloat(_),
-                B::CurrentRow | B::UnboundedFollowing | B::RangeInt(_) | B::RangeFloat(_),
+                B::UnboundedPreceding
+                | B::CurrentRow
+                | B::RangeInt(_)
+                | B::RangeFloat(_)
+                | B::RangeMonths(_)
+                | B::RangeDayTime(_),
+                B::CurrentRow
+                | B::UnboundedFollowing
+                | B::RangeInt(_)
+                | B::RangeFloat(_)
+                | B::RangeMonths(_)
+                | B::RangeDayTime(_),
             ) if frames::is_range_offset(self.frame.lower)
                 || frames::is_range_offset(self.frame.upper) =>
             {
@@ -419,6 +457,8 @@ struct Env {
     /// `spark.sql.ansi.enabled`: overflow raises instead of wrapping or
     /// becoming NULL.
     ansi: bool,
+    /// The session time zone, for a year-month `RANGE` bound over a `TIMESTAMP` key.
+    zone: krishiv_kernels::datetime::ZoneRef,
 }
 
 impl std::fmt::Debug for Window {
@@ -517,10 +557,11 @@ impl Window {
     /// not boolean; `KRISHIV_UNSUPPORTED_FEATURE` for a key type the sort
     /// cannot order, a frame not evaluated yet, or an aggregate of a type
     /// it does not take.
-    pub fn new(
+    pub fn with_zone(
         input: SchemaRef,
         plan: WindowPlan,
         ansi: bool,
+        zone: krishiv_kernels::datetime::ZoneRef,
         spill: Option<SpillScope>,
     ) -> Result<Self> {
         let width = input.fields().len();
@@ -595,12 +636,40 @@ impl Window {
                 input,
                 plan,
                 ansi,
+                zone,
             }),
             spill,
             partitions: AtomicU64::new(0),
             rows: AtomicU64::new(0),
             counters: Arc::default(),
         })
+    }
+
+    /// [`Self::with_zone`] with the ANSI flag and the session zone of `env`.
+    ///
+    /// # Errors
+    /// `INVALID_TIMEZONE` for a session zone that names none, else as [`Self::with_zone`].
+    pub(crate) fn with_env(
+        input: SchemaRef,
+        plan: WindowPlan,
+        env: &crate::planner::eval::EvalEnv,
+        spill: Option<SpillScope>,
+    ) -> Result<Self> {
+        Self::with_zone(input, plan, env.ansi, env.zone_rules()?, spill)
+    }
+
+    /// [`Self::with_zone`] in UTC: the tests' constructor (production code names the session zone).
+    ///
+    /// # Errors
+    /// As [`Self::with_zone`].
+    #[cfg(test)]
+    pub fn new(
+        input: SchemaRef,
+        plan: WindowPlan,
+        ansi: bool,
+        spill: Option<SpillScope>,
+    ) -> Result<Self> {
+        Self::with_zone(input, plan, ansi, utc_zone(), spill)
     }
 
     /// Takes `batch` if the bytes it holds while buffered can be reserved
@@ -730,7 +799,7 @@ impl Window {
                     peer_start: &l.pending[i].peer_start[offset..offset + len],
                 })
                 .collect();
-            eval::evaluate(&self.env.plan, &unit, self.env.ansi)?
+            eval::evaluate(&self.env.plan, &unit, self.env.ansi, &self.env.zone)?
         };
         // One output batch per slice: its input columns, then the slice of
         // each window column.

@@ -87,9 +87,11 @@
 //! cloud store fails with `KRISHIV_UNSUPPORTED_FEATURE`, while parsing URLs
 //! and pacing policies keep working so plans still qualify paths.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 #[cfg(feature = "cloud")]
 use krishiv_common::error::KrishivInvalidConfigValue;
@@ -99,10 +101,16 @@ use krishiv_common::secret::{REDACTED, SecretString};
 use object_store::ObjectStore;
 use object_store::path::Path;
 
+use crate::credentials::{CredentialCache, two_credential_sources};
 #[cfg(feature = "cloud")]
 use crate::error::store_failed;
 use crate::error::{Result, unsupported};
-use crate::{CredentialScope, StoreId, StorePolicy, StoreSettings};
+use crate::{
+    CacheScope, CredentialScope, CredentialSource, DEFAULT_REFRESH_SKEW, StoreId, StorePolicy,
+    StoreSettings,
+};
+#[cfg(feature = "cloud")]
+use crate::{RefreshingProvider, RefreshingStore};
 
 /// `fs.s3a.endpoint`: custom endpoint (MinIO, LocalStack).
 pub const S3_ENDPOINT: &str = "fs.s3a.endpoint";
@@ -361,7 +369,38 @@ pub struct StoreRegistry {
     config: Arc<dyn StoreSettings>,
     stores: Mutex<HashMap<StoreId, Arc<dyn ObjectStore>>>,
     /// Whose credentials the stores read with; the block-cache scope they register under (E15).
+    cache_scope: CacheScope,
+    /// Locations with credentials of their own (see [`Self::with_source`]).
+    scopes: Vec<ScopeEntry>,
+    /// Refresh skew of the sources added next.
+    skew: Duration,
+    /// Every scoped store id this registry handed out, for [`Self::on_release`].
+    scoped_ids: Mutex<HashSet<StoreId>>,
+    release: Mutex<Vec<ReleaseHook>>,
+}
+
+/// Called with each scoped store id when the registry is dropped.
+type ReleaseHook = Arc<dyn Fn(&StoreId) + Send + Sync>;
+
+/// One credential scope of a registry: the location, its process-unique id suffix and the
+/// credential cache every store of the scope signs with.
+struct ScopeEntry {
     scope: CredentialScope,
+    nonce: String,
+    cache: Arc<CredentialCache>,
+}
+
+/// A process-unique, unguessable-enough suffix for a scoped store id: the `IoScheduler` is
+/// process-wide and registering an id again replaces its entry, so two registries (queries)
+/// must never share a scoped id. A process-wide counter makes it unique; the random part keeps
+/// ids apart across restarts that share a log.
+fn scope_nonce() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let random = std::collections::hash_map::RandomState::new()
+        .build_hasher()
+        .finish();
+    format!("{random:016x}{:x}", COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
 impl StoreRegistry {
@@ -380,17 +419,86 @@ impl StoreRegistry {
         Self {
             config: settings,
             stores: Mutex::new(HashMap::new()),
-            scope: CredentialScope::Isolated,
+            scopes: Vec::new(),
+            skew: DEFAULT_REFRESH_SKEW,
+            scoped_ids: Mutex::new(HashSet::new()),
+            release: Mutex::new(Vec::new()),
+            cache_scope: CacheScope::Isolated,
         }
     }
 
     /// This registry registering its stores under `scope`, so blocks are reused across the
     /// queries of one scope (a session passes its principal's) and never across scopes. A
-    /// registry built by [`Self::new`] is isolated: it shares nothing.
+    /// registry built by [`Self {:new`] is isolated: it shares nothing.
     #[must_use]
-    pub fn with_scope(mut self, scope: CredentialScope) -> Self {
-        self.scope = scope;
+    pub fn with_cache_scope(mut self, scope: CacheScope) -> Self {
+        self.cache_scope = scope;
         self
+    }
+
+    /// Sets how long before their expiry the credentials of the sources added *after* this
+    /// call are refreshed (default [`DEFAULT_REFRESH_SKEW`]; the engine's config
+    /// `krishiv.io.credentials.refreshSkew`).
+    #[must_use]
+    pub fn with_refresh_skew(mut self, skew: Duration) -> Self {
+        self.skew = skew;
+        self
+    }
+
+    /// Gives the locations under `scope` credentials from `source`: their stores sign with a
+    /// refreshing provider instead of static keys.
+    ///
+    /// - The longest matching prefix wins, on path segments (`warehouse/t1/` does not match
+    ///   `warehouse/t10/`).
+    /// - A scope is registered under a store id with a random nonce, so two registries (two
+    ///   queries on one scheduler) never share a store, and neither reads with the other's
+    ///   credentials.
+    /// - Session-level static keys do not apply under a scope, and an explicit per-read `fs.*`
+    ///   credential on a scoped location fails (`KRISHIV_INVALID_CONFIG_VALUE`: two
+    ///   credential sources for one read). Outside every scope static configuration works as
+    ///   before.
+    #[must_use]
+    pub fn with_source(
+        mut self,
+        scope: CredentialScope,
+        source: Arc<dyn CredentialSource>,
+    ) -> Self {
+        let cache = CredentialCache::system(scope.clone(), source, self.skew);
+        self.scopes.push(ScopeEntry {
+            scope,
+            nonce: scope_nonce(),
+            cache,
+        });
+        self
+    }
+
+    /// Registers `hook` to be called with each scoped store id this registry handed out when
+    /// the registry is dropped (at query end), so the owner of a process-wide scheduler can
+    /// unregister them. Plain, unscoped ids are not reported.
+    pub fn on_release(&self, hook: impl Fn(&StoreId) + Send + Sync + 'static) {
+        self.release
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Arc::new(hook));
+    }
+
+    /// The scoped store ids handed out so far.
+    #[must_use]
+    pub fn scoped_ids(&self) -> Vec<StoreId> {
+        self.scoped_ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    /// The scope covering `url`, the most specific first.
+    fn scope_for(&self, url: &ParsedUrl) -> Option<&ScopeEntry> {
+        self.scopes
+            .iter()
+            .filter(|e| e.scope.store_id() == &url.store_id && e.scope.covers(&url.key))
+            .max_by_key(|e| e.scope.depth())
     }
 
     /// The store of `url`'s bucket or container, cached by store id within
@@ -418,7 +526,11 @@ impl StoreRegistry {
         url: &ParsedUrl,
         options: &BTreeMap<String, OptionValue>,
     ) -> Result<Arc<dyn ObjectStore>> {
-        let id = effective_store_id(&url.store_id, options);
+        let scoped = self.scope_for(url);
+        if let Some(entry) = scoped {
+            reject_credential_options(options, &entry.scope)?;
+        }
+        let id = self.id_of(url, scoped, options);
         if let Some(store) = self
             .stores
             .lock()
@@ -428,12 +540,35 @@ impl StoreRegistry {
         {
             return Ok(store);
         }
-        let store = build(self.config.as_ref(), options, url)?;
+        let store = build(self.config.as_ref(), options, url, scoped.map(|e| &e.cache))?;
+        if scoped.is_some() {
+            self.scoped_ids
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(id.clone());
+        }
         self.stores
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(id, Arc::clone(&store));
         Ok(store)
+    }
+
+    /// The id of `url`'s store under `options`: the URL's store id (with the `#scope:` nonce
+    /// of its credential scope, if any) plus the non-secret hash of the per-read options.
+    fn id_of(
+        &self,
+        url: &ParsedUrl,
+        scoped: Option<&ScopeEntry>,
+        options: &BTreeMap<String, OptionValue>,
+    ) -> StoreId {
+        match scoped {
+            Some(entry) => effective_store_id(
+                &StoreId::new(format!("{}#scope:{}", url.store_id.key(), entry.nonce)),
+                options,
+            ),
+            None => effective_store_id(&url.store_id, options),
+        }
     }
 
     /// Parses `text` and builds its store: the id to register it under, the store, the key within
@@ -458,13 +593,61 @@ impl StoreRegistry {
         let url = parse_object_url(text)?;
         let store = self.store_with_options(&url, options)?;
         Ok(OpenedStore {
-            id: effective_store_id(&url.store_id, options),
+            id: self.id_of(&url, self.scope_for(&url), options),
             store,
             key: url.key,
             display: url.display,
             policy: policy_for(url.scheme),
-            scope: self.scope.clone(),
+            scope: self.cache_scope.clone(),
         })
+    }
+}
+
+impl Drop for StoreRegistry {
+    fn drop(&mut self) {
+        let hooks =
+            std::mem::take(&mut *self.release.lock().unwrap_or_else(PoisonError::into_inner));
+        let ids = std::mem::take(
+            &mut *self
+                .scoped_ids
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        for id in &ids {
+            for hook in &hooks {
+                hook(id);
+            }
+        }
+    }
+}
+
+/// Whether `key` carries a credential (`fs.*`, ASCII case-insensitive): static keys, tokens,
+/// key files and the dotted Azure forms.
+fn is_credential_key(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    [
+        S3_ACCESS_KEY,
+        S3_SECRET_KEY,
+        S3_SESSION_TOKEN,
+        GCS_KEYFILE,
+        GCS_KEY,
+        AZURE_ACCOUNT_KEY,
+        AZURE_SAS,
+    ]
+    .contains(&lower.as_str())
+        || lower.starts_with("fs.azure.account.key.")
+        || lower.starts_with("fs.azure.sas.")
+}
+
+/// A per-read credential on a scoped location would be a second credential source for the
+/// read: it fails, naming the key and never the value.
+fn reject_credential_options(
+    options: &BTreeMap<String, OptionValue>,
+    scope: &CredentialScope,
+) -> Result<()> {
+    match options.keys().find(|k| is_credential_key(k)) {
+        Some(key) => Err(two_credential_sources(key, scope)),
+        None => Ok(()),
     }
 }
 
@@ -485,7 +668,7 @@ pub struct OpenedStore {
     /// The pacing policy of the URL's scheme.
     pub policy: StorePolicy,
     /// Whose credentials the store reads with: the block-cache scope to register it under (E15).
-    pub scope: CredentialScope,
+    pub scope: CacheScope,
 }
 
 impl fmt::Debug for OpenedStore {
@@ -530,6 +713,7 @@ fn build(
     config: &dyn StoreSettings,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
+    scope: Option<&Arc<CredentialCache>>,
 ) -> Result<Arc<dyn ObjectStore>> {
     // Configuration errors keep their class; only builder failures become
     // `KRISHIV_OBJECT_STORE_REQUEST_FAILED` (converted in each scheme
@@ -539,9 +723,9 @@ fn build(
         _ => None,
     };
     match url.scheme {
-        ObjectScheme::S3 => s3_store(config, options, url, path_style),
-        ObjectScheme::Gcs => gcs_store(config, options, url),
-        ObjectScheme::Azure => azure_store(config, options, url),
+        ObjectScheme::S3 => s3_store(config, options, url, path_style, scope),
+        ObjectScheme::Gcs => gcs_store(config, options, url, scope),
+        ObjectScheme::Azure => azure_store(config, options, url, scope),
         ObjectScheme::Http => http_store(url),
         ObjectScheme::HuggingFace => hf_store(config, options, url),
     }
@@ -665,6 +849,7 @@ fn build(
     _config: &dyn StoreSettings,
     _options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
+    _scope: Option<&Arc<CredentialCache>>,
 ) -> Result<Arc<dyn ObjectStore>> {
     Err(unsupported(format!(
         "cloud object stores are not enabled in this build (enable the `cloud` feature): {}",
@@ -982,21 +1167,28 @@ fn s3_store(
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
     path_style: Option<bool>,
+    scope: Option<&Arc<CredentialCache>>,
 ) -> Result<Arc<dyn ObjectStore>> {
-    use object_store::aws::AmazonS3Builder;
+    use object_store::aws::{AmazonS3Builder, AwsCredential};
     let mut builder = AmazonS3Builder::from_env().with_bucket_name(&url.bucket);
     if let Some(endpoint) = text(config, options, S3_ENDPOINT)? {
         builder = builder.with_allow_http(allows_http(Some(&endpoint)));
         builder = builder.with_endpoint(endpoint);
     }
-    if let Some(key) = cred(config, options, S3_ACCESS_KEY)? {
-        builder = builder.with_access_key_id(key.expose_secret());
-    }
-    if let Some(secret) = cred(config, options, S3_SECRET_KEY)? {
-        builder = builder.with_secret_access_key(secret.expose_secret());
-    }
-    if let Some(token) = cred(config, options, S3_SESSION_TOKEN)? {
-        builder = builder.with_token(token.expose_secret());
+    // Under a credential scope the source is the only credential: session keys do not apply.
+    let provider = scope.map(|c| RefreshingProvider::<AwsCredential>::from_cache(Arc::clone(c)));
+    if let Some(provider) = &provider {
+        builder = builder.with_credentials(Arc::new(provider.clone()));
+    } else {
+        if let Some(key) = cred(config, options, S3_ACCESS_KEY)? {
+            builder = builder.with_access_key_id(key.expose_secret());
+        }
+        if let Some(secret) = cred(config, options, S3_SECRET_KEY)? {
+            builder = builder.with_secret_access_key(secret.expose_secret());
+        }
+        if let Some(token) = cred(config, options, S3_SESSION_TOKEN)? {
+            builder = builder.with_token(token.expose_secret());
+        }
     }
     if let Some(region) =
         text(config, options, S3_ENDPOINT_REGION)?.or(text(config, options, S3_REGION)?)
@@ -1006,10 +1198,24 @@ fn s3_store(
     if let Some(path_style) = path_style {
         builder = builder.with_virtual_hosted_style_request(!path_style);
     }
-    builder
+    let store = builder
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
+        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))?;
+    Ok(refreshing(store, provider.as_ref()))
+}
+
+/// Wraps `store` so a stale credential gets one forced refresh and one retry, when it signs
+/// with a refreshing `provider`.
+#[cfg(feature = "cloud")]
+fn refreshing<C>(
+    store: Arc<dyn ObjectStore>,
+    provider: Option<&RefreshingProvider<C>>,
+) -> Arc<dyn ObjectStore> {
+    match provider {
+        Some(provider) => Arc::new(RefreshingStore::new(store, provider)),
+        None => store,
+    }
 }
 
 /// A GCS store for `url`'s bucket.
@@ -1023,24 +1229,31 @@ fn gcs_store(
     config: &dyn StoreSettings,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
+    scope: Option<&Arc<CredentialCache>>,
 ) -> Result<Arc<dyn ObjectStore>> {
-    use object_store::gcp::GoogleCloudStorageBuilder;
+    use object_store::gcp::{GcpCredential, GoogleCloudStorageBuilder};
     let mut builder = GoogleCloudStorageBuilder::from_env().with_bucket_name(url.bucket.clone());
-    if let Some(path) = cred(config, options, GCS_KEYFILE)? {
-        builder = builder.with_service_account_path(path.expose_secret());
-    }
-    if let Some(key) = cred(config, options, GCS_KEY)? {
-        builder = builder.with_service_account_key(key.expose_secret());
+    let provider = scope.map(|c| RefreshingProvider::<GcpCredential>::from_cache(Arc::clone(c)));
+    if let Some(provider) = &provider {
+        builder = builder.with_credentials(Arc::new(provider.clone()));
+    } else {
+        if let Some(path) = cred(config, options, GCS_KEYFILE)? {
+            builder = builder.with_service_account_path(path.expose_secret());
+        }
+        if let Some(key) = cred(config, options, GCS_KEY)? {
+            builder = builder.with_service_account_key(key.expose_secret());
+        }
     }
     if let Some(base) =
         text(config, options, GCS_STORAGE_ROOT_URL)?.or(text(config, options, GCS_ENDPOINT)?)
     {
         builder = builder.with_base_url(&base);
     }
-    builder
+    let store = builder
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
+        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))?;
+    Ok(refreshing(store, provider.as_ref()))
 }
 
 /// An Azure Blob store for `url`'s container.
@@ -1054,8 +1267,9 @@ fn azure_store(
     config: &dyn StoreSettings,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
+    scope: Option<&Arc<CredentialCache>>,
 ) -> Result<Arc<dyn ObjectStore>> {
-    use object_store::azure::MicrosoftAzureBuilder;
+    use object_store::azure::{AzureCredential, MicrosoftAzureBuilder};
     let mut builder = MicrosoftAzureBuilder::from_env().with_container_name(url.bucket.clone());
     let account = url
         .account
@@ -1064,21 +1278,27 @@ fn azure_store(
     if let Some(account) = &account {
         builder = builder.with_account(account);
     }
-    if let Some(key) = azure_key(config, options, url, account.as_deref())? {
-        builder = builder.with_access_key(key.expose_secret());
-    }
-    if let Some(sas) = azure_sas(config, options, url, account.as_deref())? {
-        let pairs = sas_pairs(&sas).map_err(|reason| store_failed(&url.display, 1, &reason))?;
-        builder = builder.with_sas_authorization(pairs);
+    let provider = scope.map(|c| RefreshingProvider::<AzureCredential>::from_cache(Arc::clone(c)));
+    if let Some(provider) = &provider {
+        builder = builder.with_credentials(Arc::new(provider.clone()));
+    } else {
+        if let Some(key) = azure_key(config, options, url, account.as_deref())? {
+            builder = builder.with_access_key(key.expose_secret());
+        }
+        if let Some(sas) = azure_sas(config, options, url, account.as_deref())? {
+            let pairs = sas_pairs(&sas).map_err(|reason| store_failed(&url.display, 1, &reason))?;
+            builder = builder.with_sas_authorization(pairs);
+        }
     }
     if let Some(endpoint) = text(config, options, AZURE_ENDPOINT)? {
         builder = builder.with_allow_http(allows_http(Some(&endpoint)));
         builder = builder.with_endpoint(endpoint);
     }
-    builder
+    let store = builder
         .build()
         .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
-        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
+        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))?;
+    Ok(refreshing(store, provider.as_ref()))
 }
 
 /// The Azure account key: the dotted `fs.azure.account.key.<account>.*`
@@ -1179,741 +1399,4 @@ fn sas_pairs(secret: &SecretString) -> Result<Vec<(String, String)>, String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use krishiv_common::config::Config;
-    use krishiv_common::error::ErrorClass;
-
-    #[cfg(feature = "cloud")]
-    const CANARY: &str = "Canary-7f3a9c";
-
-    fn config(pairs: &[(&str, &str)]) -> Arc<Config> {
-        let (c, _) = Config::from_pairs(pairs.to_vec()).unwrap();
-        Arc::new(c)
-    }
-
-    #[cfg(feature = "cloud")]
-    fn shown(value: &OptionValue) -> String {
-        format!("{value} {value:?} {value:#?}")
-    }
-
-    #[test]
-    fn urls_parse_for_every_scheme() {
-        for (input, scheme, scheme_text, bucket, account, key, store, display) in [
-            (
-                "s3://bucket/k/d.parquet",
-                ObjectScheme::S3,
-                "s3",
-                "bucket",
-                None,
-                "k/d.parquet",
-                "s3://bucket",
-                "s3://bucket/k/d.parquet",
-            ),
-            (
-                "s3a://bucket/k",
-                ObjectScheme::S3,
-                "s3a",
-                "bucket",
-                None,
-                "k",
-                "s3://bucket",
-                "s3a://bucket/k",
-            ),
-            (
-                "s3://bucket",
-                ObjectScheme::S3,
-                "s3",
-                "bucket",
-                None,
-                "",
-                "s3://bucket",
-                "s3://bucket",
-            ),
-            (
-                "s3://bucket/",
-                ObjectScheme::S3,
-                "s3",
-                "bucket",
-                None,
-                "",
-                "s3://bucket",
-                "s3://bucket",
-            ),
-            (
-                "gs://bucket/k",
-                ObjectScheme::Gcs,
-                "gs",
-                "bucket",
-                None,
-                "k",
-                "gs://bucket",
-                "gs://bucket/k",
-            ),
-            (
-                "abfss://cont@acct.dfs.core.windows.net/k",
-                ObjectScheme::Azure,
-                "abfss",
-                "cont",
-                Some("acct"),
-                "k",
-                "abfss://cont@acct",
-                "abfss://cont@acct.dfs.core.windows.net/k",
-            ),
-            (
-                "abfs://cont@acct.blob.core.windows.net/",
-                ObjectScheme::Azure,
-                "abfs",
-                "cont",
-                Some("acct"),
-                "",
-                "abfss://cont@acct",
-                "abfs://cont@acct.blob.core.windows.net",
-            ),
-            (
-                "abfss://cont/k",
-                ObjectScheme::Azure,
-                "abfss",
-                "cont",
-                None,
-                "k",
-                "abfss://cont",
-                "abfss://cont/k",
-            ),
-            (
-                "az://cont/k",
-                ObjectScheme::Azure,
-                "az",
-                "cont",
-                None,
-                "k",
-                "abfss://cont",
-                "az://cont/k",
-            ),
-        ] {
-            let url = parse_object_url(input).unwrap();
-            assert_eq!(url.scheme, scheme, "{input}");
-            assert_eq!(url.scheme_text, scheme_text, "{input}");
-            assert_eq!(url.bucket, bucket, "{input}");
-            assert_eq!(url.account.as_deref(), account, "{input}");
-            assert_eq!(url.key.as_ref(), key, "{input}");
-            assert_eq!(url.store_id, StoreId::new(store), "{input}");
-            assert_eq!(url.display, display, "{input}");
-            // The display re-parses to the same store and key.
-            assert_eq!(parse_object_url(&url.display).unwrap(), url, "{input}");
-        }
-        // Normalization (Hadoop-style) and scheme case.
-        let url = parse_object_url("s3://b/a/./c/../d").unwrap();
-        assert_eq!(url.key.as_ref(), "a/d");
-        assert_eq!(url.display, "s3://b/a/d");
-        assert_eq!(parse_object_url(&url.display).unwrap(), url);
-        let url = parse_object_url("S3://b/k").unwrap();
-        assert_eq!(url.scheme, ObjectScheme::S3);
-        assert_eq!(url.display, "S3://b/k");
-        assert_eq!(
-            (
-                ObjectScheme::S3.to_string(),
-                ObjectScheme::Gcs.to_string(),
-                ObjectScheme::Azure.to_string()
-            ),
-            ("s3".to_owned(), "gs".to_owned(), "abfss".to_owned())
-        );
-    }
-
-    #[test]
-    fn unknown_schemes_and_bad_urls_are_unsupported() {
-        for input in [
-            "ftp://x/y",
-            "hdfs://namenode/k",
-            "file:///a",
-            "s3:bucket/k",
-            "s3:///k",
-            "s3://",
-            "gs://",
-            "abfss://",
-            "no-scheme/k",
-            "s3a://AKIA:secret@bucket/k",
-            "gs://user@bucket/k",
-            "abfss://user:pass@cont/k",
-        ] {
-            let error = parse_object_url(input).unwrap_err();
-            assert_eq!(
-                error.error_class(),
-                ErrorClass::KrishivUnsupportedFeature,
-                "{input}"
-            );
-        }
-    }
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    fn config_keys_are_typed_secrets() {
-        // Keys the shared classifier marks sensitive classify as secrets
-        // that never print (the redaction tests' style).
-        for key in [
-            S3_ACCESS_KEY,
-            S3_SECRET_KEY,
-            S3_SESSION_TOKEN,
-            "fs.azure.account.key.acct.dfs.core.windows.net",
-            "fs.azure.sas.cont.acct",
-            AZURE_ACCOUNT_KEY,
-            AZURE_SAS,
-        ] {
-            let value = OptionValue::from_user(key, CANARY);
-            assert!(value.as_plain().is_none(), "{key}");
-            assert!(!shown(&value).contains(CANARY), "{key}");
-        }
-        // Endpoints, regions and account names stay plain.
-        for key in [S3_ENDPOINT, S3_REGION, AZURE_ENDPOINT, AZURE_ACCOUNT_NAME] {
-            assert_eq!(
-                OptionValue::from_user(key, CANARY).as_plain(),
-                Some(CANARY),
-                "{key}"
-            );
-        }
-        // Every credential value the registry reads is a `SecretString`
-        // that only exposes at the builder call, including the GCS ones
-        // the shared classifier leaves plain.
-        let cfg = config(&[
-            (GCS_KEYFILE, CANARY),
-            (GCS_KEY, CANARY),
-            (S3_ACCESS_KEY, CANARY),
-        ]);
-        for key in [GCS_KEYFILE, GCS_KEY, S3_ACCESS_KEY] {
-            let held = cred(&cfg, &BTreeMap::new(), key).unwrap().unwrap();
-            assert_eq!(held.expose_secret(), CANARY);
-            assert!(!format!("{held:?}").contains(CANARY), "{key}");
-        }
-    }
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    fn stores_build_offline_without_touching_the_network() {
-        let s3 = StoreRegistry::new(config(&[
-            (S3_ENDPOINT, "http://127.0.0.1:9000"),
-            (S3_ACCESS_KEY, CANARY),
-            (S3_SECRET_KEY, CANARY),
-            (S3_SESSION_TOKEN, CANARY),
-            (S3_ENDPOINT_REGION, "us-east-1"),
-            (S3_PATH_STYLE_ACCESS, "true"),
-        ]));
-        let url = parse_object_url("s3a://bucket/k").unwrap();
-        s3.store(&url).unwrap();
-        assert_eq!(url.store_id, StoreId::new("s3://bucket"));
-
-        let gcs = StoreRegistry::new(config(&[
-            (
-                GCS_KEY,
-                r#"{"private_key": "key", "private_key_id": "id", "client_email": "mail", "disable_oauth": true}"#,
-            ),
-            (GCS_STORAGE_ROOT_URL, "http://127.0.0.1:4443"),
-        ]));
-        gcs.store(&parse_object_url("gs://bucket/k").unwrap())
-            .unwrap();
-
-        let azure = StoreRegistry::new(config(&[
-            (AZURE_ACCOUNT_NAME, "devstoreaccount1"),
-            (
-                "fs.azure.account.key.devstoreaccount1",
-                "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
-            ),
-            (AZURE_ENDPOINT, "http://127.0.0.1:10000/devstoreaccount1"),
-        ]));
-        azure
-            .store(&parse_object_url("abfss://cont/k").unwrap())
-            .unwrap();
-    }
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    fn failures_name_keys_and_buckets_but_never_secrets() {
-        // A store that cannot be built names what is missing, never a
-        // secret: no account here, however the key is set. The process
-        // environment can supply the missing account through the builders'
-        // `from_env` fallback, turning the expected failure into a success;
-        // either way nothing secret prints (no skipped case).
-        let registry = StoreRegistry::new(config(&[(AZURE_ACCOUNT_KEY, CANARY)]));
-        let url = parse_object_url("abfss://cont/k").unwrap();
-        match registry.store(&url) {
-            Ok(_) => assert!(!format!("{registry:?}").contains(CANARY)),
-            Err(error) => {
-                assert_eq!(
-                    error.error_class(),
-                    ErrorClass::KrishivObjectStoreRequestFailed
-                );
-                assert!(!error.to_string().contains(CANARY));
-                assert!(!format!("{error:?}").contains(CANARY));
-                assert!(!format!("{registry:?}").contains(CANARY));
-            }
-        }
-
-        // An invalid flag names the key; the value is only the marker.
-        let registry = StoreRegistry::new(config(&[(S3_PATH_STYLE_ACCESS, CANARY)]));
-        let error = registry
-            .store(&parse_object_url("s3://bucket/k").unwrap())
-            .unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-        assert!(error.to_string().contains(S3_PATH_STYLE_ACCESS));
-        assert!(!error.to_string().contains(CANARY));
-
-        // A malformed SAS token never reaches an error either.
-        let registry = StoreRegistry::new(config(&[
-            (AZURE_ACCOUNT_NAME, "acct"),
-            ("fs.azure.sas.cont.acct", CANARY),
-        ]));
-        let error = registry
-            .store(&parse_object_url("abfss://cont@acct.dfs.core.windows.net/k").unwrap())
-            .unwrap_err();
-        assert_eq!(
-            error.error_class(),
-            ErrorClass::KrishivObjectStoreRequestFailed
-        );
-        assert!(!error.to_string().contains(CANARY));
-
-        // Both GCS credential forms at once is refused without echo.
-        let registry = StoreRegistry::new(config(&[(GCS_KEYFILE, CANARY), (GCS_KEY, CANARY)]));
-        let error = registry
-            .store(&parse_object_url("gs://bucket/k").unwrap())
-            .unwrap_err();
-        assert!(!error.to_string().contains(CANARY));
-
-        // Half a key pair is refused without echo. The environment can
-        // complete the pair (`AWS_ACCESS_KEY_ID` through `from_env`),
-        // turning the failure into a success; either way nothing secret
-        // prints (no skipped case).
-        let registry = StoreRegistry::new(config(&[(S3_SECRET_KEY, CANARY)]));
-        match registry.store(&parse_object_url("s3://bucket/k").unwrap()) {
-            Ok(_) => assert!(!format!("{registry:?}").contains(CANARY)),
-            Err(error) => assert!(!error.to_string().contains(CANARY)),
-        }
-    }
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    fn stores_are_cached_per_bucket() {
-        let registry = StoreRegistry::new(config(&[]));
-        let first = parse_object_url("s3://b1/k").unwrap();
-        let one = registry.store(&first).unwrap();
-        assert!(Arc::ptr_eq(&one, &registry.store(&first).unwrap()));
-        let other = registry
-            .store(&parse_object_url("s3://b2/k").unwrap())
-            .unwrap();
-        assert!(!Arc::ptr_eq(&one, &other));
-        assert!(format!("{registry:?}").contains("cached"));
-    }
-
-    fn read_options(pairs: &[(&str, &str)]) -> BTreeMap<String, OptionValue> {
-        pairs
-            .iter()
-            .map(|&(k, v)| (k.to_owned(), OptionValue::from_user(k, v)))
-            .collect()
-    }
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    fn per_read_options_override_session_config() {
-        use super::ObjectScheme;
-        // An invalid session flag fails on its own ...
-        let registry = StoreRegistry::new(config(&[(S3_PATH_STYLE_ACCESS, "banana")]));
-        let url = parse_object_url("s3://bucket/k").unwrap();
-        let error = registry.store(&url).unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-        // ... but a valid per-read option overrides it (keys match ASCII
-        // case-insensitively, as Spark's `CaseInsensitiveStringMap`).
-        let options = read_options(&[("FS.S3A.PATH.STYLE.ACCESS", "true")]);
-        registry.store_with_options(&url, &options).unwrap();
-        // And an invalid per-read option beats a valid session value.
-        let registry = StoreRegistry::new(config(&[(S3_PATH_STYLE_ACCESS, "true")]));
-        let error = registry
-            .store_with_options(&url, &read_options(&[(S3_PATH_STYLE_ACCESS, "banana")]))
-            .unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-        assert!(error.to_string().contains(S3_PATH_STYLE_ACCESS));
-        assert!(!error.to_string().contains("banana"));
-        // An empty per-read value is a present value, so it fails rather
-        // than falling back to the session value (Hadoop keeps `""` too).
-        let error = registry
-            .store_with_options(&url, &read_options(&[(S3_PATH_STYLE_ACCESS, "")]))
-            .unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-        assert!(error.to_string().contains(S3_PATH_STYLE_ACCESS));
-        assert_eq!(url.scheme, ObjectScheme::S3);
-    }
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    fn session_keys_match_case_insensitively_like_per_read_keys() {
-        // The session side resolves the same case-insensitive way the
-        // per-read side does: one spelling means the same thing in both.
-        let registry = StoreRegistry::new(config(&[("FS.S3A.PATH.STYLE.ACCESS", "true")]));
-        let url = parse_object_url("s3://bucket/k").unwrap();
-        registry.store(&url).unwrap();
-        let registry = StoreRegistry::new(config(&[("fs.s3a.path.style.access", "true")]));
-        registry
-            .store_with_options(
-                &url,
-                &read_options(&[("FS.S3A.PATH.STYLE.ACCESS", "false")]),
-            )
-            .unwrap();
-        // An invalid value under another spelling still fails, naming the key.
-        let error = registry
-            .store_with_options(
-                &url,
-                &read_options(&[("FS.S3A.PATH.STYLE.ACCESS", "banana")]),
-            )
-            .unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-    }
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    fn mistyped_per_read_values_fail_naming_the_key() {
-        // Every per-read value below would have fallen back to the valid
-        // session value before: now each fails with a typed invalid-option
-        // error that names the key but never the value.
-        let session = config(&[
-            (S3_ACCESS_KEY, "session-key"),
-            (S3_ENDPOINT, "http://127.0.0.1:9000"),
-            (S3_PATH_STYLE_ACCESS, "true"),
-        ]);
-        // A reference where a credential is required: this layer cannot
-        // resolve it, so it fails rather than using the session value.
-        let mut options = BTreeMap::new();
-        options.insert(
-            S3_ACCESS_KEY.to_owned(),
-            OptionValue::reference("scope", CANARY),
-        );
-        let error = cred(&session, &options, S3_ACCESS_KEY).unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-        assert!(error.to_string().contains(S3_ACCESS_KEY));
-        assert!(!error.to_string().contains(CANARY));
-        // A URL value is never a credential for these keys.
-        let mut options = BTreeMap::new();
-        options.insert(
-            S3_ACCESS_KEY.to_owned(),
-            OptionValue::from_user(S3_ENDPOINT, "https://user:pw@host"),
-        );
-        let error = cred(&session, &options, S3_ACCESS_KEY).unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-        assert!(error.to_string().contains(S3_ACCESS_KEY));
-        assert!(!error.to_string().contains("pw"));
-        // A secret where a plain endpoint is required.
-        let mut options = BTreeMap::new();
-        options.insert(
-            S3_ENDPOINT.to_owned(),
-            OptionValue::from_user(S3_SECRET_KEY, CANARY),
-        );
-        let error = text(&session, &options, S3_ENDPOINT).unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-        assert!(error.to_string().contains(S3_ENDPOINT));
-        assert!(!error.to_string().contains(CANARY));
-        // A secret where a flag is required.
-        let mut options = BTreeMap::new();
-        options.insert(
-            S3_PATH_STYLE_ACCESS.to_owned(),
-            OptionValue::from_user(S3_SECRET_KEY, CANARY),
-        );
-        let error = flag(&session, &options, S3_PATH_STYLE_ACCESS).unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-        assert!(error.to_string().contains(S3_PATH_STYLE_ACCESS));
-        assert!(!error.to_string().contains(CANARY));
-    }
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    fn empty_per_read_values_are_present_values() {
-        // Hadoop keeps `""` as a value: an empty per-read value is invalid
-        // for these keys, so it fails rather than falling back to the
-        // valid session value.
-        let session = config(&[
-            (S3_ACCESS_KEY, "session-key"),
-            (S3_ENDPOINT, "http://127.0.0.1:9000"),
-            (S3_PATH_STYLE_ACCESS, "true"),
-        ]);
-        let error = cred(
-            &session,
-            &read_options(&[(S3_ACCESS_KEY, "")]),
-            S3_ACCESS_KEY,
-        )
-        .unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-        assert!(error.to_string().contains(S3_ACCESS_KEY));
-        let error = text(&session, &read_options(&[(S3_ENDPOINT, "")]), S3_ENDPOINT).unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-        assert!(error.to_string().contains(S3_ENDPOINT));
-        // Whitespace-only endpoints trim to empty, so they fail too.
-        let error = text(&session, &read_options(&[(S3_ENDPOINT, "  ")]), S3_ENDPOINT).unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-    }
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    fn per_read_options_get_their_own_store_id() {
-        let registry = StoreRegistry::new(config(&[]));
-        let url = parse_object_url("s3://bucket/k").unwrap();
-        let base = registry.store(&url).unwrap();
-        let one = registry
-            .store_with_options(
-                &url,
-                &read_options(&[(S3_ENDPOINT, "http://127.0.0.1:9001")]),
-            )
-            .unwrap();
-        let same = registry
-            .store_with_options(
-                &url,
-                &read_options(&[(S3_ENDPOINT, "http://127.0.0.1:9001")]),
-            )
-            .unwrap();
-        let other = registry
-            .store_with_options(
-                &url,
-                &read_options(&[(S3_ENDPOINT, "http://127.0.0.1:9002")]),
-            )
-            .unwrap();
-        // Same effective options share the store; different ones do not,
-        // and neither shares the session-configured store.
-        assert!(Arc::ptr_eq(&one, &same));
-        assert!(!Arc::ptr_eq(&base, &one));
-        assert!(!Arc::ptr_eq(&one, &other));
-        // Non-`fs.*` options never split the store.
-        let plain = registry
-            .store_with_options(&url, &read_options(&[("compression", "zstd")]))
-            .unwrap();
-        assert!(Arc::ptr_eq(&base, &plain));
-    }
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    fn per_read_secrets_never_print() {
-        // A per-read secret overrides the session value without ever
-        // printing: not in the error, not in the registry's Debug, not in
-        // the option value's Display (what EXPLAIN prints for the plan's
-        // option map), and not in the suffixed store id.
-        let registry = StoreRegistry::new(config(&[]));
-        let url = parse_object_url("s3://bucket/k").unwrap();
-        let options = read_options(&[(S3_SECRET_KEY, CANARY), (S3_PATH_STYLE_ACCESS, "banana")]);
-        let error = registry.store_with_options(&url, &options).unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
-        assert!(!error.to_string().contains(CANARY));
-        assert!(!format!("{error:?}").contains(CANARY));
-        assert!(!format!("{registry:?}").contains(CANARY));
-        let held = OptionValue::from_user(S3_SECRET_KEY, CANARY);
-        assert!(held.as_plain().is_none());
-        assert!(!held.to_string().contains(CANARY));
-        assert!(!format!("{held:?}").contains(CANARY));
-        // `open_with_options` returns a suffixed id whose text is also free of the secret.
-        let opened = registry
-            .open_with_options(
-                "s3://bucket/k",
-                &read_options(&[
-                    (S3_ENDPOINT, "http://127.0.0.1:9001"),
-                    (S3_ACCESS_KEY, CANARY),
-                    (S3_SECRET_KEY, CANARY),
-                ]),
-            )
-            .unwrap();
-        assert!(!opened.id.to_string().contains(CANARY));
-        assert!(!format!("{:?}", opened.id).contains(CANARY));
-        assert!(!format!("{opened:?}").contains(CANARY));
-        assert_eq!(opened.policy, StorePolicy::S3);
-    }
-
-    #[test]
-    fn unknown_schemes_still_fail_with_options() {
-        let registry = StoreRegistry::new(config(&[]));
-        let options = read_options(&[(S3_ENDPOINT, "http://127.0.0.1:9001")]);
-        for input in ["ftp://x/y", "s3:bucket/k", "s3a://AKIA:secret@bucket/k"] {
-            let error = parse_object_url(input).unwrap_err();
-            assert_eq!(
-                error.error_class(),
-                ErrorClass::KrishivUnsupportedFeature,
-                "{input}"
-            );
-            let error = registry.open_with_options(input, &options).unwrap_err();
-            assert_eq!(
-                error.error_class(),
-                ErrorClass::KrishivUnsupportedFeature,
-                "{input}"
-            );
-        }
-    }
-
-    #[test]
-    fn store_option_keys_never_slice_mid_char() {
-        // `is_store_option` compares bytes, so keys with a multi-byte
-        // character at byte 3 never panic (e.g. `"ééx"`).
-        assert!(!is_store_option("ééx"));
-        assert!(!is_store_option("é"));
-        assert!(!is_store_option(""));
-        assert!(!is_store_option("fs"));
-        assert!(!is_store_option("fs."));
-        assert!(is_store_option("fs.a"));
-        assert!(is_store_option("FS.S3A.ENDPOINT"));
-        // `relevant_options` (which calls it) skips non-`fs.*` keys without
-        // panicking, whatever their bytes.
-        let options = read_options(&[("ééx", "1"), ("compression", "zstd")]);
-        assert!(relevant_options(&options).is_empty());
-        let options = read_options(&[("FS.S3A.ENDPOINT", "http://127.0.0.1:9000")]);
-        assert_eq!(relevant_options(&options).len(), 1);
-    }
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    fn sas_tokens_allow_a_leading_question_mark() {
-        let with_mark = SecretString::new("?sv=2024-01-01&sig=abc".to_owned());
-        assert_eq!(
-            sas_pairs(&with_mark).unwrap(),
-            vec![
-                ("sv".to_owned(), "2024-01-01".to_owned()),
-                ("sig".to_owned(), "abc".to_owned())
-            ]
-        );
-        let without_mark = SecretString::new("sv=2024-01-01&sig=abc".to_owned());
-        assert_eq!(
-            sas_pairs(&without_mark).unwrap(),
-            vec![
-                ("sv".to_owned(), "2024-01-01".to_owned()),
-                ("sig".to_owned(), "abc".to_owned())
-            ]
-        );
-        // Empty names or values are not pairs.
-        for bad in ["", "?", "?&", "sv=&sig=abc", "sv=2024-01-01&sig="] {
-            assert!(
-                sas_pairs(&SecretString::new(bad.to_owned())).is_err(),
-                "{bad}"
-            );
-        }
-    }
-
-    #[cfg(feature = "cloud")]
-    #[test]
-    fn http_scheme_matches_ascii_case_insensitively() {
-        assert!(allows_http(Some("http://127.0.0.1:9000")));
-        assert!(allows_http(Some("HTTP://127.0.0.1:9000")));
-        assert!(!allows_http(Some("https://example.com")));
-        assert!(!allows_http(None));
-    }
-
-    #[test]
-    fn cloud_schemes_pace_with_their_own_policy() {
-        assert_eq!(policy_for(ObjectScheme::S3), StorePolicy::S3);
-        assert_eq!(policy_for(ObjectScheme::Gcs), StorePolicy::GCS);
-        assert_eq!(policy_for(ObjectScheme::Azure), StorePolicy::AZURE);
-    }
-
-    /// Per-read `fs.*` options isolate the store id by a hash of their
-    /// values: the same options always give the same id, any change gives
-    /// another, keys match case-insensitively, other options are ignored,
-    /// and no value (plain, inline secret, reference or credentialed URL)
-    /// reaches the id's text.
-    #[test]
-    fn per_read_options_isolate_store_ids_without_leaking_values() {
-        let base = StoreId::new("s3://bucket");
-        assert_eq!(effective_store_id(&base, &BTreeMap::new()), base);
-        assert_eq!(
-            effective_store_id(&base, &read_options(&[("header", "true")])),
-            base
-        );
-        let id = |pairs: &[(&str, &str)]| effective_store_id(&base, &read_options(pairs));
-        let plain = id(&[(S3_ENDPOINT, "http://a:9000")]);
-        assert!(plain.to_string().starts_with("s3://bucket#"));
-        assert_eq!(plain, id(&[(S3_ENDPOINT, "http://a:9000")]));
-        assert_ne!(plain, id(&[(S3_ENDPOINT, "http://b:9000")]));
-        assert_eq!(
-            plain,
-            id(&[("FS.S3A.ENDPOINT", "http://a:9000"), ("header", "true")])
-        );
-        let secret = id(&[(S3_SECRET_KEY, "Canary-1")]);
-        assert_ne!(secret, id(&[(S3_SECRET_KEY, "Canary-2")]));
-        assert_ne!(secret, plain);
-        let mut by_reference = read_options(&[]);
-        by_reference.insert(
-            S3_SECRET_KEY.to_owned(),
-            OptionValue::reference("scope", "k"),
-        );
-        let referenced = effective_store_id(&base, &by_reference);
-        assert_ne!(referenced, secret);
-        let mut other = read_options(&[]);
-        other.insert(
-            S3_SECRET_KEY.to_owned(),
-            OptionValue::reference("scope", "k2"),
-        );
-        assert_ne!(effective_store_id(&base, &other), referenced);
-        let url = id(&[(S3_ENDPOINT, "https://user:Canary-3@host:9000/x")]);
-        assert_ne!(url, plain);
-        for shown in [&secret, &referenced, &url] {
-            assert!(
-                !shown.to_string().contains("Canary"),
-                "a store id carries a credential value"
-            );
-        }
-    }
-
-    /// Per-read options reach the same configuration gate as session
-    /// config: without the `cloud` feature nothing builds, and a failed
-    /// build registers nothing.
-    #[cfg(not(feature = "cloud"))]
-    #[test]
-    fn per_read_options_without_the_cloud_feature_fail_to_build() {
-        let registry = StoreRegistry::new(config(&[]));
-        let url = parse_object_url("s3://bucket/k").unwrap();
-        let options = read_options(&[(S3_ENDPOINT, "http://127.0.0.1:9000")]);
-        let error = registry.store_with_options(&url, &options).unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivUnsupportedFeature);
-        let error = registry
-            .open_with_options("s3://bucket/k", &options)
-            .unwrap_err();
-        assert_eq!(error.error_class(), ErrorClass::KrishivUnsupportedFeature);
-        assert!(format!("{registry:?}").contains("cached: 0"));
-    }
-
-    #[cfg(not(feature = "cloud"))]
-    #[test]
-    fn cloud_stores_need_the_cloud_feature() {
-        // Without the feature, cloud URLs still parse (so plans qualify
-        // paths) but no store is built: the exact unsupported error names
-        // the missing feature, never a secret.
-        let registry = StoreRegistry::new(config(&[]));
-        for input in ["s3://bucket/k", "gs://bucket/k", "abfss://cont/k"] {
-            let url = parse_object_url(input).unwrap();
-            let error = registry.store(&url).unwrap_err();
-            assert_eq!(
-                error.error_class(),
-                ErrorClass::KrishivUnsupportedFeature,
-                "{input}"
-            );
-            assert!(error.to_string().contains("`cloud`"), "{input}");
-        }
-    }
-    /// The web schemes' error paths and names, in the default build (parsing is not behind `cloud`).
-    #[test]
-    fn web_urls_and_hf_names_are_checked_when_parsed() {
-        for bad in [
-            "https://example.com/a?token=1",
-            "http://example.com/a#frag",
-            "hf://models/acme/tiny/x",
-            "hf://datasets/../tiny/x",
-            "hf://datasets/acme/bad name/x",
-            "hf://datasets/acme/tiny@/x",
-        ] {
-            let e = parse_object_url(bad).unwrap_err();
-            assert_eq!(
-                e.error_class(),
-                ErrorClass::KrishivUnsupportedFeature,
-                "{bad}"
-            );
-        }
-        let hf = parse_object_url("hf://datasets/acme/tiny@v2/data/t.parquet").unwrap();
-        assert_eq!(hf.scheme.to_string(), "hf");
-        assert_eq!(hf.revision.as_deref(), Some("v2"));
-        let web = parse_object_url("https://example.com/a/b.parquet").unwrap();
-        assert_eq!(web.scheme.to_string(), "https");
-        // Neither web scheme is paced like a cloud service.
-        for scheme in [ObjectScheme::Http, ObjectScheme::HuggingFace] {
-            assert_eq!(
-                format!("{:?}", policy_for(scheme)),
-                format!("{:?}", StorePolicy::UNPACED)
-            );
-        }
-    }
-}
+mod tests;

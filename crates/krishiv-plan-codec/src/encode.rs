@@ -873,12 +873,15 @@ fn window_function(f: &WindowFunctionPlan, nested: &Cell<bool>) -> Result<pb::Wi
     })
 }
 
-/// A `RANGE` value bound's distance: 16 big-endian bytes for an integer, 8 for a float's bits; empty
+/// A `RANGE` value bound's distance: 16 big-endian bytes for an integer, 8 for a float's bits, 4 for a month count, 8 for a day-time
+/// interval's microseconds; empty
 /// for any other bound.
 fn range_payload(b: FrameBound) -> Vec<u8> {
     match b {
         FrameBound::RangeInt(v) => v.to_be_bytes().to_vec(),
         FrameBound::RangeFloat(bits) => bits.to_be_bytes().to_vec(),
+        FrameBound::RangeMonths(m) => m.to_be_bytes().to_vec(),
+        FrameBound::RangeDayTime(us) => us.to_be_bytes().to_vec(),
         _ => Vec::new(),
     }
 }
@@ -891,6 +894,8 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
         FrameBound::Offset(_) => Ok(pb::FrameBound::Offset),
         FrameBound::RangeInt(_) => Ok(pb::FrameBound::RangeInt),
         FrameBound::RangeFloat(_) => Ok(pb::FrameBound::RangeFloat),
+        FrameBound::RangeMonths(_) => Ok(pb::FrameBound::RangeMonths),
+        FrameBound::RangeDayTime(_) => Ok(pb::FrameBound::RangeDayTime),
         // `FrameBound` is `#[non_exhaustive]`: a bound added later needs a
         // codec change, not a silently wrong frame.
         _ => Err(CodecError::Unsupported(

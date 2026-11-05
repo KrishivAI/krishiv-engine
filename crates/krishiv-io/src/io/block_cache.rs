@@ -4,7 +4,7 @@
 //! [`CachingStore`] wraps an [`ObjectStore`] and answers bounded range reads from aligned blocks
 //! (default 1 MiB) kept in a small memory tier and on local disk. One mechanism covers data pages,
 //! footers and page indexes, which are all ordinary ranges. A block is keyed by the store (as
-//! displayed, so without credentials), the credential scope ([`CredentialScope`]), the path, the object's version (the `if_match` ETag or the
+//! displayed, so without credentials), the credential scope ([`CacheScope`]), the path, the object's version (the `if_match` ETag or the
 //! `if_unmodified_since` time the scheduler sends, else none) and the block index: an overwritten
 //! object has a new version and never reaches its old blocks.
 //!
@@ -31,7 +31,7 @@ use bytes::{Bytes, BytesMut};
 use futures::future::{BoxFuture, FutureExt, Shared};
 use futures::stream::BoxStream;
 use krishiv_memory::{MemoryPool, Reservation};
-pub use krishiv_store::CredentialScope;
+pub use krishiv_store::CacheScope;
 use object_store::path::Path;
 use object_store::{
     CopyOptions, GetOptions, GetRange, GetResult, GetResultPayload, ListResult, MultipartUpload,
@@ -685,7 +685,7 @@ impl CachingStore {
         identity: impl Into<String>,
         cache: Arc<BlockCache>,
     ) -> Self {
-        Self::with_scope(inner, identity, cache, &CredentialScope::Isolated)
+        Self::with_scope(inner, identity, cache, &CacheScope::Isolated)
     }
 
     /// As [`Self::new`], reading with the credentials of `scope`: blocks are shared only between
@@ -695,7 +695,7 @@ impl CachingStore {
         inner: Arc<dyn ObjectStore>,
         identity: impl Into<String>,
         cache: Arc<BlockCache>,
-        scope: &CredentialScope,
+        scope: &CacheScope,
     ) -> Self {
         // Both parts are in every key; the display text keeps only the store.
         let identity = identity.into();

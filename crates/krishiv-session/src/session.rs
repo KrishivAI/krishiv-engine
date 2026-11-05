@@ -1143,8 +1143,8 @@ impl Session {
     /// The block-cache scope of this session's stores: its principal. The session's storage
     /// credentials come from its own configuration, so one principal's queries may share blocks
     /// and no other principal's may (E15).
-    pub(crate) fn credential_scope(&self) -> krishiv_io::CredentialScope {
-        krishiv_io::CredentialScope::Principal(self.state.principal.id())
+    pub(crate) fn credential_scope(&self) -> krishiv_io::CacheScope {
+        krishiv_io::CacheScope::Principal(self.state.principal.id())
     }
 
     /// The I/O context of this session's principal (E15, E12).
@@ -1157,7 +1157,10 @@ impl Session {
 
     /// A store registry reading with this session's credential scope (E15).
     fn scoped_stores(&self, config: &Arc<Config>) -> Arc<StoreRegistry> {
-        Arc::new(StoreRegistry::new(Arc::clone(config)).with_scope(self.credential_scope()))
+        Arc::new(
+            krishiv_io::query_registry(Arc::clone(config), &self.state.io)
+                .with_cache_scope(self.credential_scope()),
+        )
     }
 
     /// The analysis inputs of one query.
@@ -1646,6 +1649,20 @@ impl Session {
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         let permit = self.admit(&log_id).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
+    }
+
+    /// [`Self::admit_query`] for a statement that changes something before its write runs
+    /// (`saveAsTable` overwrite drops the old table): the admission waits in the statement's
+    /// slot until the write takes it, and a statement dropped meanwhile gives it back.
+    pub(crate) async fn pre_admit(
+        &self,
+        env: &QueryEnv,
+    ) -> Result<crate::query_fold::PreAdmission, KrishivError> {
+        let admitted = self.admit_query(env).await?;
+        Ok(crate::query_fold::PreAdmission::new(
+            Arc::clone(&env.admitted),
+            admitted,
+        ))
     }
 
     /// As [`Self::run_on_query`], also returning the id of the `system.queries` row this execution

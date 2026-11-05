@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Whose credentials a store reads with (E15).
+//! Whose credentials a store's cached blocks belong to (E15).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -7,10 +7,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// being served to a query whose credentials could not have read it (E15): a cache hit skips the
 /// store's own access check.
 ///
-/// The default is [`CredentialScope::Isolated`]: sharing across principals is something a caller
+/// The default is [`CacheScope::Isolated`]: sharing across principals is something a caller
 /// asks for, never something it gets by omission.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CredentialScope {
+pub enum CacheScope {
     /// One engine identity reads for every principal (a single-tenant compute): blocks are shared.
     /// The caller vouches that a store's credentials grant every principal the same reads.
     Shared,
@@ -21,7 +21,7 @@ pub enum CredentialScope {
     Isolated,
 }
 
-impl CredentialScope {
+impl CacheScope {
     /// The text joined to every block key. An isolated scope draws a fresh process-unique nonce.
     #[must_use]
     pub fn key_text(&self) -> String {

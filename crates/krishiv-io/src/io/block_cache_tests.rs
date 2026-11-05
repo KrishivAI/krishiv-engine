@@ -778,7 +778,7 @@ async fn blocks_are_shared_only_within_a_credential_scope() {
         .put(&a, Bytes::from_static(b"0123456789").into())
         .await
         .unwrap();
-    let store = |scope: Option<&CredentialScope>| {
+    let store = |scope: Option<&CacheScope>| {
         let inner = Arc::clone(&inner) as Arc<dyn ObjectStore>;
         match scope {
             Some(s) => CachingStore::with_scope(inner, "s3://direct", Arc::clone(&cache), s),
@@ -803,15 +803,15 @@ async fn blocks_are_shared_only_within_a_credential_scope() {
         assert_eq!(&got[..], b"12");
         cache.stats().misses - before
     };
-    let p = |n: &str| CredentialScope::Principal(n.to_owned());
+    let p = |n: &str| CacheScope::Principal(n.to_owned());
     // The same principal's second store hits the first one's block.
     assert_eq!(read(&store(Some(&p("alice")))).await, 1);
     assert_eq!(read(&store(Some(&p("alice")))).await, 0);
     // Another principal misses and goes to the store.
     assert_eq!(read(&store(Some(&p("bob")))).await, 1);
     // An explicit shared scope is its own scope, not a wildcard over the others.
-    assert_eq!(read(&store(Some(&CredentialScope::Shared))).await, 1);
-    assert_eq!(read(&store(Some(&CredentialScope::Shared))).await, 0);
+    assert_eq!(read(&store(Some(&CacheScope::Shared))).await, 1);
+    assert_eq!(read(&store(Some(&CacheScope::Shared))).await, 0);
     // No scope given: every store is isolated, even over the same identity.
     assert_eq!(read(&store(None)).await, 1);
     assert_eq!(read(&store(None)).await, 1);
@@ -827,7 +827,7 @@ fn key_fields_cannot_shift_into_each_other() {
             Arc::clone(&inner) as Arc<dyn ObjectStore>,
             identity,
             Arc::clone(&cache),
-            &CredentialScope::Principal(scope.to_owned()),
+            &CacheScope::Principal(scope.to_owned()),
         )
     };
     let p = Path::from("d/a");

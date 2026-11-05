@@ -60,7 +60,7 @@ use object_store::{
 use tokio::sync::Semaphore;
 
 pub use self::block_cache::{
-    BlockCache, BlockCacheConfig, CacheStats as BlockCacheStats, CachingStore, CredentialScope,
+    BlockCache, BlockCacheConfig, CacheScope, CacheStats as BlockCacheStats, CachingStore,
     ObjectSize,
 };
 pub use self::cache::{CacheKey, CacheStats, MetadataCache};
@@ -71,7 +71,7 @@ pub use self::stores::{
     AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,
     GCS_KEYFILE, GCS_STORAGE_ROOT_URL, ObjectScheme, OpenedStore, ParsedUrl, S3_ACCESS_KEY,
     S3_ENDPOINT, S3_ENDPOINT_REGION, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_KEY,
-    S3_SESSION_TOKEN, StoreRegistry, StoreSettings, parse_object_url, register,
+    S3_SESSION_TOKEN, StoreRegistry, StoreSettings, parse_object_url, query_registry, register,
     register_with_options,
 };
 pub use self::upload::Upload;
@@ -467,14 +467,14 @@ impl IoScheduler {
 
     /// Registers (or replaces) the store `id` whose credentials belong to `scope`: its blocks in
     /// the block cache are shared only with stores of the same identity and scope (E15). The
-    /// other `register_*` methods use [`CredentialScope::Isolated`], so nothing is shared across
+    /// other `register_*` methods use [`CacheScope::Isolated`], so nothing is shared across
     /// registrations unless the caller says so.
     pub fn register_store_scoped(
         &self,
         id: StoreId,
         store: Arc<dyn ObjectStore>,
         policy: StorePolicy,
-        scope: &CredentialScope,
+        scope: &CacheScope,
     ) {
         self.register_in(id, store, policy, false, scope);
     }
@@ -486,7 +486,7 @@ impl IoScheduler {
         policy: StorePolicy,
         whole_listing: bool,
     ) {
-        self.register_in(id, store, policy, whole_listing, &CredentialScope::Isolated);
+        self.register_in(id, store, policy, whole_listing, &CacheScope::Isolated);
     }
 
     fn register_in(
@@ -495,7 +495,7 @@ impl IoScheduler {
         store: Arc<dyn ObjectStore>,
         policy: StorePolicy,
         whole_listing: bool,
-        scope: &CredentialScope,
+        scope: &CacheScope,
     ) {
         // Remote reads go through the block cache (local files never do).
         let store: Arc<dyn ObjectStore> = match &self.block_cache {

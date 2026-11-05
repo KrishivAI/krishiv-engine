@@ -160,6 +160,7 @@ struct KeyStream {
     descending: bool,
     nulls_first: bool,
     ansi: bool,
+    zone: krishiv_kernels::datetime::ZoneRef,
 }
 
 impl KeyStream {
@@ -173,6 +174,7 @@ impl KeyStream {
                 self.descending,
                 self.nulls_first,
                 self.ansi,
+                &self.zone,
             )?;
             self.keys = Some((start, keys));
         }
@@ -189,9 +191,17 @@ fn range_keys(
     descending: bool,
     nulls_first: bool,
     ansi: bool,
+    zone: &krishiv_kernels::datetime::ZoneRef,
 ) -> Result<RangeKeys> {
-    RangeKeys::new(&[whole_batch(b)], column, descending, nulls_first, ansi)?
-        .ok_or_else(|| internal("a RANGE frame over a key without value bounds".to_owned()))
+    RangeKeys::new(
+        &[whole_batch(b)],
+        column,
+        descending,
+        nulls_first,
+        ansi,
+        zone,
+    )?
+    .ok_or_else(|| internal("a RANGE frame over a key without value bounds".to_owned()))
 }
 
 /// The keys of the current batch, as [`RangeKeys`] are for one edge.
@@ -202,7 +212,15 @@ pub(super) fn current_keys(env: &Env, b: &RecordBatch) -> Result<Option<RangeKey
     let [key] = env.plan.order_by.as_slice() else {
         return Ok(None);
     };
-    range_keys(b, key.column, key.descending, key.nulls_first, env.ansi).map(Some)
+    range_keys(
+        b,
+        key.column,
+        key.descending,
+        key.nulls_first,
+        env.ansi,
+        &env.zone,
+    )
+    .map(Some)
 }
 
 /// What a batch's function needs of the rows being emitted.
@@ -295,6 +313,7 @@ impl Edges {
                 descending: key.descending,
                 nulls_first: key.nulls_first,
                 ansi: env.ansi,
+                zone: env.zone.clone(),
             }))
         };
         let (lower, upper) = key_readers(f);
