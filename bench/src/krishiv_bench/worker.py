@@ -13,6 +13,7 @@ Replies: ``{"ok": ...}`` or ``{"error": "Type: message"}``.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import pickle
 import struct
@@ -79,12 +80,18 @@ def main(argv: list[str]) -> None:
             else:
                 raise ValueError(f"unknown op {op!r}")
             send(out, {"ok": reply})
+        except BrokenPipeError:
+            break  # the parent is gone (killed or timed out): nobody reads a reply, stop without a traceback
         except Exception as e:
-            send(out, {"error": describe_error(e)})
+            try:
+                send(out, {"error": describe_error(e)})
+            except BrokenPipeError:
+                break
     try:
         eng.teardown()
     finally:
-        out.close()
+        with contextlib.suppress(BrokenPipeError):
+            out.close()
 
 
 if __name__ == "__main__":

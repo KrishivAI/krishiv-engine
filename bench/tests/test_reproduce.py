@@ -478,3 +478,29 @@ def test_polars_streaming_engine_gives_the_same_rows(tmp_path):
         assert e.result_checksum() is not None
         assert e.config()["engine"] == ("streaming" if name.endswith("streaming") else "default")
     assert out["polars"] == out["polars-streaming"] == [("y", 1), ("z", 2), ("x", 3)]
+
+
+def test_save_partial_writes_the_record_so_far_and_replaces_it_atomically(tmp_path: Path):
+    import json
+
+    final = tmp_path / "r.json"
+    reproduce._save_partial({"queries": {"q01": {"rows": 1}}}, final)
+    reproduce._save_partial({"queries": {"q01": {"rows": 1}, "q02": {"rows": 2}}}, final)
+    partial = tmp_path / "r.json.partial"
+    assert sorted(json.loads(partial.read_text())["queries"]) == ["q01", "q02"]
+    assert not (tmp_path / "r.json.partial.tmp").exists()
+    assert not final.exists()
+
+
+def test_worker_stops_quietly_when_the_parent_closed_the_pipe(tmp_path: Path):
+    """The 2026-11-04 SF1000 run ended with BrokenPipeError tracebacks from workers whose parent had been killed."""
+    code = "import os, sys\nfrom krishiv_bench import worker\nworker.main(['duckdb', '1', '1'])\n"
+    r, w = os.pipe()
+    proc = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE, stdout=w, stderr=subprocess.PIPE)
+    os.close(r)  # nobody reads the replies
+    os.close(w)
+    assert proc.stdin is not None
+    worker.send(proc.stdin, {"op": "setup", "dataset": Dataset("x", 1, tmp_path, [])})
+    proc.stdin.flush()
+    _, err = proc.communicate(timeout=60)
+    assert b"BrokenPipeError" not in err

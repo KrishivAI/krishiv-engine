@@ -338,6 +338,16 @@ def sequential_query(
     return entry, infos
 
 
+def _save_partial(record: dict, final: Path) -> None:
+    """Writes the record so far next to the final result file (``<final>.partial``), atomically.
+
+    A run that is killed (a scope's RuntimeMaxSec, an OOM kill, a crash of the harness itself) otherwise loses every
+    per-query verdict and error text: the 2026-11-04 SF1000 run lost its q01 and q02 errors that way."""
+    tmp = final.with_name(final.name + ".partial.tmp")
+    tmp.write_text(json.dumps(record, indent=2, default=str))
+    tmp.replace(final.with_name(final.name + ".partial"))
+
+
 def theirs_query(
     name: str,
     q: Query,
@@ -416,6 +426,9 @@ def run_reproduce(
         print(f"bench lock acquired (waited {waited:.0f}s)")
         wait_idle()
         started = dt.datetime.now(dt.UTC)
+        out = results_dir()
+        out.mkdir(parents=True, exist_ok=True)
+        f = out / f"{started.strftime('%Y%m%dT%H%M%SZ')}_reproduce_{suite}_sf{fmt_sf(sf)}.json"
         record: dict[str, Any] = {
             "schema": 1,
             "kind": "reproduce",
@@ -451,6 +464,7 @@ def run_reproduce(
                     record["engines"].setdefault(n, info)
                 record["queries"][qid] = ent
                 print(_line(qid, ent), flush=True)
+                _save_partial(record, f)
             names = list(record["engines"])
         else:
             engs: dict[str, Engine] = {n: ProcessEngine(n, threads, memory_gb, timeout_s) for n in names}
@@ -463,6 +477,7 @@ def run_reproduce(
                     ent = ours_query(qm, engs, reps, timeout_s, profile) if "ours" in methods else {}
                     record["queries"][qid] = ent
                     print(_line(qid, ent), flush=True)
+                    _save_partial(record, f)
             finally:
                 for e in engs.values():
                     e.teardown()
@@ -471,10 +486,8 @@ def run_reproduce(
             _run_theirs(record, queries, ds, names, threads, memory_gb, runs, their_timeout_s, "ours" in methods)
     record["finished_utc"] = dt.datetime.now(dt.UTC).isoformat()
     record["summary"] = summarize(record)
-    out = results_dir()
-    out.mkdir(parents=True, exist_ok=True)
-    f = out / f"{started.strftime('%Y%m%dT%H%M%SZ')}_reproduce_{suite}_sf{fmt_sf(sf)}.json"
     f.write_text(json.dumps(record, indent=2))
+    f.with_name(f.name + ".partial").unlink(missing_ok=True)
     print(markdown(record))
     print(f"result: {f}")
     return f
