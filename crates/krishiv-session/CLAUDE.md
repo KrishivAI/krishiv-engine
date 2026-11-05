@@ -12,6 +12,7 @@ re-exports it; the Python facade and the Connect and Flight SQL servers (L6) wra
 Paths are relative to this crate.
 - `src/lib.rs` public entry and re-exports; `public-api.txt` the reviewed public surface
 - `src/session.rs` `Session` and the query pipeline entry
+- `src/runtime.rs` `EngineRuntime` (design P2-E1): what one process shares — executor, memory root, spill directory, metrics and format registries, query runner, running-query registry (`track`/`cancel_session`). Sessions are light children (`SessionBuilder::runtime`, `Session::new_session`, `Session::close`); a session built alone gets a private runtime, so embedded use is unchanged. Runtime-owned keys (`runtime_owned`: cluster scope, `krishiv.memory.*`, `krishiv.spill.*`, `krishiv.io.*`) on a session of a supplied runtime are `CANNOT_MODIFY_CONFIG`. `krishiv.session.memoryLimit` gives a session its own pool under the root (`TreePool::tenant`); `tests/runtime.rs`, `tests/runtime_memory.rs`
 - `src/conf.rs` configuration snapshot taken per query (`query_snapshot`, where an unset session time zone is the local zone;
   `snapshot` is the stored configuration, which `SET` lists); `local_zone` reads the machine's zone as Java does
 - `src/catalog.rs` session catalog (temporary tables and views)
@@ -39,6 +40,7 @@ Paths are relative to this crate.
 
 ## Invariants
 - One pipeline: no API surface plans or runs queries any other way.
+- Nothing a config doc calls process-wide is built per session: it lives on `EngineRuntime` (the 50-session test in `tests/runtime.rs` checks it).
 - Each query reads a snapshot of the configuration; a concurrent `conf().set` never changes a running query.
 - Transformations only build IR; actions are `async` and run on the session's executor, so they work from
   any runtime. Dropping an action's future or result stream cancels its query.

@@ -374,13 +374,18 @@ pub(crate) fn pool_name(query_id: &str) -> String {
     format!("query-{query_id}")
 }
 
-/// The query a memory path belongs to: `process/query-<id>/...` names the pool of query `<id>`, or a
-/// consumer below it.
+/// The query a memory path belongs to: `process/query-<id>/...` (or
+/// `process/session:<s>/query-<id>/...` under a session limit) names the pool of query `<id>`,
+/// or a consumer below it.
 fn query_of_path(path: &str) -> Option<String> {
-    path.split('/')
-        .nth(1)
-        .and_then(|p| p.strip_prefix("query-"))
-        .map(str::to_owned)
+    let mut parts = path.split('/').skip(1);
+    let first = parts.next()?;
+    let pool = if first.starts_with("session:") {
+        parts.next()?
+    } else {
+        first
+    };
+    pool.strip_prefix("query-").map(str::to_owned)
 }
 
 /// The columns' values for `table` now.
@@ -838,6 +843,11 @@ impl QueryLog {
         Self { session_id, ..log }
     }
 
+    /// The session's id (UUIDv7).
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
     /// Removes the tag `key`, if there is one.
     pub(crate) fn remove_tag(&self, key: &str) {
         self.tags
@@ -1267,6 +1277,11 @@ mod tests {
             query_of_path(&format!("process/{pool}/hash-join")),
             Some(id)
         );
+        assert_eq!(
+            query_of_path(&format!("process/session:abc/{pool}/sort")),
+            query_of_path(&format!("process/{pool}"))
+        );
+        assert_eq!(query_of_path("process/session:abc"), None);
         assert_eq!(query_of_path("process/shuffle"), None);
         assert_eq!(query_of_path("process"), None);
     }

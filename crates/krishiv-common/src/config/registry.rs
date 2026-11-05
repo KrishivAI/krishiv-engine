@@ -37,6 +37,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_ABORT_RELEASE_TIMEOUT,
     &MEMORY_SPILL_SCRATCH_RESERVE,
     &MEMORY_RESIDENT_GUARD,
+    &SESSION_MEMORY_LIMIT,
     &CACHE_MAX_BYTES,
     &DETERMINISTIC_ORDER,
     &RESULT_CACHE_ENABLED,
@@ -151,6 +152,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
     ("krishiv.io.cache.blockBytes", &IO_CACHE_BLOCK_BYTES),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
+    ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
@@ -742,6 +744,22 @@ pub static MEMORY_RESIDENT_GUARD: ConfigEntry = ConfigEntry {
           rounds whose spills are exhausted are exempt from it.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// The memory one session's queries may hold together, under the process
+/// limit (design P2-E1).
+pub static SESSION_MEMORY_LIMIT: ConfigEntry = ConfigEntry {
+    key: "krishiv.session.memoryLimit",
+    value_type: ValueType::Size,
+    default: None,
+    doc: "Memory the queries of one session may hold together: the limit of the session's own \
+          pool under the process root (`krishiv.memory.limit` still bounds the process). A \
+          request over it spills, then cancels one of the session's own queries, never another \
+          session's. Fixed when the session is built. When unset, a session's queries are \
+          bounded by the process limit only.",
+    scope: Scope::Session,
+    version_added: "0.2.0",
     spark_alias: None,
 };
 

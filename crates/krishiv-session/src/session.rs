@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 use std::time::Instant;
@@ -16,7 +16,9 @@ use arrow_schema::SchemaRef;
 use futures::Stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use krishiv_common::config::{Config, ConfigValue, METRICS_ENABLED, PARTITION_OVERWRITE_MODE};
+use krishiv_common::config::{
+    Config, ConfigValue, METRICS_ENABLED, PARTITION_OVERWRITE_MODE, SESSION_MEMORY_LIMIT,
+};
 use krishiv_common::error::{
     AllPartitionColumnsNotAllowed, ColumnAlreadyExists, ErrorQueryContext, InternalError,
     KrishivError, KrishivUnsupportedFeature, PartitionColumnNotFoundInSchema,
@@ -29,16 +31,15 @@ use krishiv_exec::planner::{
     DefaultPlanner, PhysicalPlan, PhysicalPlanner, PlanningContext, ProviderStatistics,
 };
 use krishiv_exec::{
-    ExecConfig, Executor, ExecutorConfig, MetricsRegistry, MetricsSnapshot, QueryContext, QueryId,
-    QueryOutcome, QueryRunner, Scheduler, Status, TokioExecutor, WorkloadClass,
+    ExecConfig, Executor, MetricsSnapshot, QueryContext, QueryId, QueryOutcome, Scheduler, Status,
+    WorkloadClass,
 };
 use krishiv_io::{
-    DirectoryWrite, FormatRegistry, IoConfig, IoCounters, IoScheduler, SaveMode, StoreId,
-    is_spark_file_source, parse_object_url,
+    DirectoryWrite, IoConfig, IoCounters, IoScheduler, SaveMode, StoreId, is_spark_file_source,
+    parse_object_url,
 };
 use krishiv_memory::{
-    ArbitrationStats, MemoryConfig, MemoryPool, RelationStore, SpillConfig, SpillManager,
-    SpillScope, TreePool,
+    ArbitrationStats, MemoryPool, RelationStore, SpillConfig, SpillManager, SpillScope,
 };
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
@@ -62,6 +63,7 @@ use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_na
 use crate::column::Column;
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
+use crate::runtime::EngineRuntime;
 use crate::sql_functions::{QueryFunctions, SqlFunctions};
 use crate::udfs::SessionFunctions;
 use crate::variables::SessionVariables;
@@ -133,28 +135,26 @@ pub(crate) struct SessionState {
     pub(crate) principal: Arc<Principal>,
     pub(crate) policy: Arc<dyn AccessPolicy>,
     pub(crate) functions: Arc<dyn FunctionRegistry>,
+    /// The registry the builder supplied, if any (child sessions use it too).
+    base_functions: Option<Arc<dyn FunctionRegistry>>,
     /// The session's registered UDFs, shared with the registry above and
     /// the workers running its plans.
     udfs: Arc<UdfLibrary>,
     /// The SQL-bodied functions the session defines.
     pub(crate) sql_functions: SqlFunctions,
-    executor: Arc<dyn Executor>,
-    runner: QueryRunner,
+    /// The process-wide part of the engine this session runs on.
+    pub(crate) runtime: Arc<EngineRuntime>,
+    /// The session's number on its runtime.
+    pub(crate) number: u64,
+    /// Set by [`Session::close`]: the session takes no new statement.
+    closed: AtomicBool,
+    /// The session's memory pool: the runtime's root, or a pool of its own
+    /// under the root (`krishiv.session.memoryLimit`).
     memory: Arc<dyn MemoryPool>,
-    /// The concrete pool tree behind [`Self::memory`]: its arbitration
-    /// counters feed the metrics fold.
-    memory_tree: Arc<TreePool>,
-    /// The engine's metrics registry: every query that reaches execution
-    /// folds into it once at query end (when `krishiv.metrics.enabled`).
-    metrics: Arc<MetricsRegistry>,
-    /// The spill directory, opened by the first query that plans for
-    /// execution (`krishiv.spill.*` are build-time keys).
-    spill: Arc<Mutex<Option<SpillManager>>>,
     /// Whether a store creates objects only if absent (the commit log's
     /// probe), by store id; per session, never process-wide.
     commit_log_probes: Mutex<HashMap<String, bool>>,
     io: Arc<IoScheduler>,
-    formats: Arc<FormatRegistry>,
     /// The session's content-addressed relations: every memory table's
     /// batches as Arrow IPC, so workers resolve a batch range through it
     /// instead of reading rows from the plan.
@@ -162,7 +162,6 @@ pub(crate) struct SessionState {
     cwd: String,
     planner: Arc<dyn PhysicalPlanner>,
     plan_ids: AtomicI64,
-    query_ids: AtomicU64,
     /// The queries `system.queries` lists.
     pub(crate) queries: Arc<crate::system::QueryLog>,
     /// The session's id on spans and logs (`telemetry.rs`), and the count of its statements.
@@ -195,6 +194,7 @@ pub struct SessionBuilder {
     policy: Option<Arc<dyn AccessPolicy>>,
     executor: Option<Arc<dyn Executor>>,
     functions: Option<Arc<dyn FunctionRegistry>>,
+    runtime: Option<Arc<EngineRuntime>>,
 }
 
 impl fmt::Debug for SessionBuilder {
@@ -280,6 +280,30 @@ impl SessionBuilder {
         self
     }
 
+    /// Builds the session on `runtime`, shared with its other sessions:
+    /// one executor, memory root, spill directory and metrics registry for
+    /// all of them. Without it the session builds a private runtime of its
+    /// own from its configuration.
+    ///
+    /// The session starts from the runtime's configuration. Runtime-owned
+    /// keys (cluster scope, `krishiv.memory.*`, `krishiv.spill.*`,
+    /// `krishiv.io.*`) are the runtime's: setting one here fails with
+    /// `CANNOT_MODIFY_CONFIG`, and so does [`Self::executor`].
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use krishiv_session::{EngineRuntime, Session};
+    /// let rt = EngineRuntime::builder().build()?;
+    /// let s = Session::builder().runtime(Arc::clone(&rt)).build()?;
+    /// let e = Session::builder().runtime(rt).config("krishiv.memory.limit", "1g").build().unwrap_err();
+    /// assert_eq!(e.error_class().name(), "CANNOT_MODIFY_CONFIG");
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn runtime(mut self, runtime: Arc<EngineRuntime>) -> Self {
+        self.runtime = Some(runtime);
+        self
+    }
+
     /// Resolves functions with `functions` instead of the built-in
     /// registry.
     ///
@@ -301,145 +325,41 @@ impl SessionBuilder {
     /// Configuration errors; `INTERNAL_ERROR` if the executor's runtimes
     /// cannot start.
     pub fn build(self) -> Result<Session, KrishivError> {
-        // Diagnostics first: installs the tokio-console subscriber when the
-        // feature is on and `KRISHIV_TOKIO_CONSOLE=1`, a no-op otherwise.
-        krishiv_exec::maybe_init_tokio_console();
-        let (config, _) = Config::from_pairs(self.pairs)?;
-        let executor: Arc<dyn Executor> = match self.executor {
-            Some(e) => e,
-            None => TokioExecutor::new(&ExecutorConfig::default().with_config(&config))?,
+        let (runtime, config) = match self.runtime {
+            Some(runtime) => {
+                if self.executor.is_some() {
+                    return Err(krishiv_common::error::CannotModifyConfig {
+                        key: "\"executor\"".to_owned(),
+                        docroot: "https://spark.apache.org/docs/latest".to_owned(),
+                    }
+                    .into());
+                }
+                let config = runtime.session_config(self.pairs)?;
+                (runtime, config)
+            }
+            None => {
+                let runtime = EngineRuntime::private(self.pairs.clone(), self.executor)?;
+                let config = runtime.session_config(self.pairs)?;
+                (runtime, config)
+            }
         };
-        let memory_tree = TreePool::new(&MemoryConfig::from_config(&config));
-        let memory: Arc<dyn MemoryPool> = Arc::<TreePool>::clone(&memory_tree);
-        let cache = Arc::new(RelationCache::new(&memory));
-        let io =
-            IoScheduler::with_runtime(IoConfig::from_config(&config), executor.io_handle().clone());
-        io.attach_memory(&memory);
-        #[cfg(unix)]
-        io.register_whole_listing_store(
-            StoreId::new(LOCAL_STORE),
-            Arc::new(krishiv_io::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
-        );
-        #[cfg(not(unix))]
-        io.register_store(
-            StoreId::new(LOCAL_STORE),
-            Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
-        );
-        let metrics = Arc::new(MetricsRegistry::new());
-        register_gauges(&metrics, &memory, &io)?;
-        let cwd = std::env::current_dir()
-            .ok()
-            .and_then(|d| d.to_str().map(str::to_owned))
-            .unwrap_or_else(|| "/".to_owned());
-        let spill = Arc::new(Mutex::new(None));
-        {
-            let spill = Arc::clone(&spill);
-            metrics.add_gauge("krishiv.spill.disk.used", Vec::new(), move || {
-                let slot = spill.lock().unwrap_or_else(PoisonError::into_inner);
-                Some(slot.as_ref().map_or(0, SpillManager::used_bytes))
-            })?;
-        }
-        let udfs = Arc::new(UdfLibrary::new());
-        let functions = match self.functions {
-            Some(f) => Arc::new(SessionFunctions::with_registry(f, Arc::clone(&udfs)))
-                as Arc<dyn FunctionRegistry>,
-            None => Arc::new(SessionFunctions::new(Arc::clone(&udfs))) as Arc<dyn FunctionRegistry>,
+        let parts = SessionParts {
+            profile: self.profile,
+            principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
+            policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
+            functions: self.functions,
         };
-        let principal = Arc::new(self.principal.unwrap_or_else(Principal::local_user));
-        let queries = Arc::new(crate::system::QueryLog::new(&principal.name));
-        Ok(Session {
-            locals: Arc::from([]),
-            state: Arc::new(SessionState {
-                conf: Arc::new(ConfStore::new(config)),
-                catalog: Arc::new(SessionCatalog::default()),
-                cache,
-                variables: Arc::new(SessionVariables::default()),
-                profile: self.profile,
-                principal,
-                policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
-                functions,
-                udfs,
-                sql_functions: SqlFunctions::default(),
-                commit_log_probes: Mutex::new(HashMap::new()),
-                runner: QueryRunner::new(Arc::clone(&executor)),
-                executor,
-                memory,
-                memory_tree,
-                metrics,
-                relations: RelationStore::new(),
-                spill,
-                io,
-                formats: Arc::new(FormatRegistry::with_defaults()),
-                cwd,
-                planner: Arc::new(DefaultPlanner),
-                plan_ids: AtomicI64::new(0),
-                query_ids: AtomicU64::new(0),
-                queries,
-                session_id: crate::telemetry::new_session_id(),
-                statements: AtomicU64::new(0),
-                sql_sources: AtomicU32::new(1),
-            }),
-        })
+        Session::on_runtime(runtime, config, parts)
     }
 }
 
-/// Registers the engine gauges on `metrics`: closures over the owning
-/// components, evaluated at scrape time, never pushed.
-fn register_gauges(
-    metrics: &Arc<MetricsRegistry>,
-    memory: &Arc<dyn MemoryPool>,
-    io: &Arc<IoScheduler>,
-) -> Result<(), KrishivError> {
-    {
-        let memory = Arc::clone(memory);
-        metrics.add_gauge("krishiv.memory.reserved", Vec::new(), move || {
-            u64::try_from(memory.reserved()).ok()
-        })?;
-    }
-    {
-        let memory = Arc::clone(memory);
-        metrics.add_gauge("krishiv.memory.limit", Vec::new(), move || {
-            memory.effective_limit().and_then(|l| u64::try_from(l).ok())
-        })?;
-    }
-    {
-        let io = Arc::clone(io);
-        metrics.add_gauge(
-            "krishiv.cache.size",
-            vec![("cache".to_owned(), "metadata".to_owned())],
-            move || Some(io.cache().bytes()),
-        )?;
-    }
-    metrics.add_gauge(
-        "krishiv.build.info",
-        vec![
-            ("version".to_owned(), env!("CARGO_PKG_VERSION").to_owned()),
-            (
-                "git_sha".to_owned(),
-                option_env!("KRISHIV_GIT_SHA")
-                    .unwrap_or("unknown")
-                    .to_owned(),
-            ),
-        ],
-        || Some(1),
-    )?;
-    for class in [
-        WorkloadClass::Interactive,
-        WorkloadClass::Batch,
-        WorkloadClass::Background,
-        WorkloadClass::Agent,
-    ] {
-        // A weak handle: a strong one would cycle the registry through its
-        // own gauges and leak every session's registry (and its spill
-        // manager) forever.
-        let registry = Arc::downgrade(metrics);
-        metrics.add_gauge(
-            "krishiv.query.active",
-            vec![("class".to_owned(), class.as_str().to_owned())],
-            move || registry.upgrade().map(|r| r.active_queries(class)),
-        )?;
-    }
-    Ok(())
+/// What a session keeps from its builder, and a child session from its
+/// parent ([`Session::new_session`]).
+struct SessionParts {
+    profile: SparkProfile,
+    principal: Arc<Principal>,
+    policy: Arc<dyn AccessPolicy>,
+    functions: Option<Arc<dyn FunctionRegistry>>,
 }
 
 /// Whether queries fold into the metrics registry: `krishiv.metrics.enabled`
@@ -466,7 +386,164 @@ impl Session {
             policy: None,
             executor: None,
             functions: None,
+            runtime: None,
         }
+    }
+
+    /// A session on `runtime` with configuration `config`.
+    fn on_runtime(
+        runtime: Arc<EngineRuntime>,
+        config: Config,
+        parts: SessionParts,
+    ) -> Result<Self, KrishivError> {
+        let queries = Arc::new(crate::system::QueryLog::new(&parts.principal.name));
+        // Without a session limit the session level is skipped: queries stay
+        // children of the root, so `system.memory` shows what it always did.
+        let memory: Arc<dyn MemoryPool> = match config
+            .get(&SESSION_MEMORY_LIMIT)
+            .and_then(ConfigValue::as_size)
+        {
+            Some(limit) => runtime.memory_tree.tenant(
+                &format!("session:{}", queries.session_id()),
+                Some(usize::try_from(limit).unwrap_or(usize::MAX)),
+            ),
+            None => runtime.memory(),
+        };
+        let cache = Arc::new(RelationCache::new(&memory));
+        let io = IoScheduler::with_runtime(
+            IoConfig::from_config(&runtime.config),
+            runtime.executor.io_handle().clone(),
+        );
+        io.attach_memory(&memory);
+        #[cfg(unix)]
+        io.register_whole_listing_store(
+            StoreId::new(LOCAL_STORE),
+            Arc::new(krishiv_io::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        );
+        #[cfg(not(unix))]
+        io.register_store(
+            StoreId::new(LOCAL_STORE),
+            Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        );
+        runtime.add_io(&io);
+        let cwd = std::env::current_dir()
+            .ok()
+            .and_then(|d| d.to_str().map(str::to_owned))
+            .unwrap_or_else(|| "/".to_owned());
+        let udfs = Arc::new(UdfLibrary::new());
+        let base_functions = parts.functions;
+        let functions = match base_functions.clone() {
+            Some(f) => Arc::new(SessionFunctions::with_registry(f, Arc::clone(&udfs)))
+                as Arc<dyn FunctionRegistry>,
+            None => Arc::new(SessionFunctions::new(Arc::clone(&udfs))) as Arc<dyn FunctionRegistry>,
+        };
+        Ok(Session {
+            locals: Arc::from([]),
+            state: Arc::new(SessionState {
+                conf: Arc::new(ConfStore::new(config)),
+                catalog: Arc::new(SessionCatalog::default()),
+                cache,
+                variables: Arc::new(SessionVariables::default()),
+                profile: parts.profile,
+                principal: parts.principal,
+                policy: parts.policy,
+                functions,
+                base_functions,
+                udfs,
+                sql_functions: SqlFunctions::default(),
+                commit_log_probes: Mutex::new(HashMap::new()),
+                number: runtime.next_session(),
+                closed: AtomicBool::new(false),
+                runtime,
+                memory,
+                relations: RelationStore::new(),
+                io,
+                cwd,
+                planner: Arc::new(DefaultPlanner),
+                plan_ids: AtomicI64::new(0),
+                // One session id for traces and `system.queries`.
+                session_id: queries.session_id().to_owned(),
+                queries,
+                statements: AtomicU64::new(0),
+                sql_sources: AtomicU32::new(1),
+            }),
+        })
+    }
+
+    /// A new session on the same runtime, run by the same principal under
+    /// the same access policy, Spark profile and function registry: fresh
+    /// temporary views, variables, UDFs, tags and configuration (the
+    /// runtime's, without this session's changes), as Spark's
+    /// `newSession()`.
+    ///
+    /// ```
+    /// let a = krishiv_session::Session::new()?;
+    /// a.conf().set("spark.sql.ansi.enabled", "false")?;
+    /// let b = a.new_session();
+    /// assert!(std::sync::Arc::ptr_eq(a.runtime(), b.runtime()));
+    /// assert_eq!(b.conf().get("spark.sql.ansi.enabled").as_deref(), Some("true"));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn new_session(&self) -> Self {
+        let state = &self.state;
+        let runtime = Arc::clone(&state.runtime);
+        let parts = SessionParts {
+            profile: state.profile,
+            principal: Arc::clone(&state.principal),
+            policy: Arc::clone(&state.policy),
+            functions: state.base_functions.clone(),
+        };
+        // The configuration the session was built with is valid, so the
+        // runtime's starting configuration is too (a private runtime starts
+        // from the builder's).
+        let config = runtime
+            .session_config(Vec::new())
+            .unwrap_or_else(|_| Config::new());
+        match Self::on_runtime(runtime, config, parts) {
+            Ok(s) => s,
+            // Not reached: building a session on a runtime has no other
+            // failure; the parent's handle is a working session either way.
+            Err(_) => self.clone(),
+        }
+    }
+
+    /// The runtime this session runs on.
+    #[must_use]
+    pub fn runtime(&self) -> &Arc<EngineRuntime> {
+        &self.state.runtime
+    }
+
+    /// Closes the session (Spark Connect's `ReleaseSession`): its running
+    /// queries are cancelled, so their streams end with
+    /// `OPERATION_CANCELED`, and it takes no new statement
+    /// (`INVALID_HANDLE.SESSION_CLOSED`). Dropping a session's handles does
+    /// not cancel anything: an open result stream keeps its session alive.
+    /// Returns the number of queries cancelled; closing again is a no-op.
+    ///
+    /// ```
+    /// let s = krishiv_session::Session::new()?;
+    /// s.close();
+    /// let e = futures::executor::block_on(s.sql("SELECT 1")).unwrap_err();
+    /// assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_CLOSED");
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn close(&self) -> usize {
+        if self.state.closed.swap(true, Ordering::AcqRel) {
+            return 0;
+        }
+        self.state.runtime.cancel_session(self.state.number)
+    }
+
+    /// `INVALID_HANDLE.SESSION_CLOSED` once [`Self::close`] ran.
+    pub(crate) fn check_open(&self) -> Result<(), KrishivError> {
+        if self.state.closed.load(Ordering::Acquire) {
+            return Err(krishiv_common::error::InvalidHandleSessionClosed {
+                handle: self.state.queries.session_id().to_owned(),
+            }
+            .into());
+        }
+        Ok(())
     }
 
     /// A session with the defaults.
@@ -521,6 +598,7 @@ impl Session {
     /// Spark's parse and analysis errors; `KRISHIV_UNSUPPORTED_FEATURE`
     /// for statements other than queries and commands.
     pub async fn sql(&self, query: &str) -> Result<DataFrame, KrishivError> {
+        self.check_open()?;
         let (session, text) = (self.clone(), query.to_owned());
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         let marker = Arc::clone(&row);
@@ -1100,7 +1178,7 @@ impl Session {
         work: impl Future<Output = Result<T, KrishivError>> + Send + 'static,
     ) -> Result<T, KrishivError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let task = self.state.executor.spawn(
+        let task = self.state.runtime.executor.spawn(
             WorkloadClass::Interactive,
             Box::pin(async move {
                 // The caller may be gone; its result is then not needed.
@@ -1137,7 +1215,7 @@ impl Session {
         ));
         let files = Arc::new(FileReads::new(
             self.state.io.context(),
-            Arc::clone(&self.state.formats),
+            Arc::clone(&self.state.runtime.formats),
             Arc::new(ObjectPaths::new(
                 StoreId::new(LOCAL_STORE),
                 self.state.cwd.clone(),
@@ -1149,8 +1227,8 @@ impl Session {
         let scans = FileScans {
             io: self.state.io.context(),
             config: Arc::clone(&config),
-            slots: u64::try_from(self.state.executor.parallelism().max(1)).unwrap_or(1),
-            runtime: self.state.executor.io_handle().clone(),
+            slots: u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1),
+            runtime: self.state.runtime.executor.io_handle().clone(),
         };
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
@@ -1166,7 +1244,7 @@ impl Session {
                 queries: Arc::clone(&self.state.queries),
                 io: Arc::clone(&self.state.io),
                 relations: Arc::clone(&self.state.cache),
-                metrics: Arc::clone(&self.state.metrics),
+                metrics: Arc::clone(&self.state.runtime.metrics),
             },
         ));
         let resolution = {
@@ -1519,7 +1597,7 @@ impl Session {
         let state = Arc::clone(&self.state);
         let config = Arc::clone(&env.config);
         self.on_executor(async move {
-            let id = QueryId(state.query_ids.fetch_add(1, Ordering::Relaxed));
+            let id = QueryId(state.runtime.next_query_index());
             let pool = state.memory.child(&format!("query-task-{}", id.0), None);
             let query = QueryContext::new(
                 id,
@@ -1527,7 +1605,11 @@ impl Session {
                 ExecConfig::from_config(&config),
                 pool,
             );
-            let mut stream = state.runner.execute(node, Arc::clone(&query)).await?;
+            let mut stream = state
+                .runtime
+                .runner
+                .execute(node, Arc::clone(&query))
+                .await?;
             let mut out = Vec::new();
             while let Some(batch) = stream.next().await {
                 out.push(batch?.into_parts().0);
@@ -1569,6 +1651,7 @@ impl Session {
         env: &QueryEnv,
         detailed: bool,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
+        self.check_open()?;
         // The history row first: its id names the query's memory pool, so `system.memory.query_id`
         // joins `system.queries.query_id`.
         let log_id = self
@@ -1576,7 +1659,7 @@ impl Session {
             .queries
             .begin(env.text.as_deref(), env.statement_class);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
-        let id = QueryId(self.state.query_ids.fetch_add(1, Ordering::Relaxed));
+        let id = QueryId(self.state.runtime.next_query_index());
         let pool = self
             .state
             .memory
@@ -1595,7 +1678,7 @@ impl Session {
         // fails or is dropped.
         let metrics_on = metrics_enabled(&env.config);
         if metrics_on {
-            self.state.metrics.query_begin(query.class());
+            self.state.runtime.metrics.query_begin(query.class());
         }
         let row_id = log_id.clone();
         let mut pending = PendingFold(Some(QueryFold {
@@ -1605,12 +1688,14 @@ impl Session {
             metrics_on,
             log_id,
         }));
+        self.state.runtime.track(self.state.number, &query);
         // A plan the wire format cannot carry fails as a submit failure does:
         // its row records the error.
         let submitted = match crate::plan_round_trip::round_trip(physical, &env.config) {
             Ok(decoded) => {
                 let physical = decoded.as_ref().unwrap_or(physical);
                 self.state
+                    .runtime
                     .runner
                     .submit(physical.clone(), worker, Arc::clone(&query))
                     .await
@@ -1652,7 +1737,7 @@ impl Session {
     /// ```
     #[must_use]
     pub fn metrics(&self) -> MetricsSnapshot {
-        self.state.metrics.snapshot()
+        self.state.runtime.metrics.snapshot()
     }
 }
 
@@ -1672,7 +1757,7 @@ impl QueryStart {
         let totals = state.io.totals();
         Self {
             started: Instant::now(),
-            arbitration: state.memory_tree.stats(),
+            arbitration: state.runtime.memory_tree.stats(),
             cache_hits: IoCounters::get(&totals.cache_hits),
             cache_misses: IoCounters::get(&totals.cache_misses),
             bytes_read: IoCounters::get(&totals.bytes_read),
@@ -1763,8 +1848,8 @@ impl QueryStart {
             return;
         }
         let totals = state.io.totals();
-        let arbitration = state.memory_tree.stats();
-        state.metrics.fold(&QueryOutcome {
+        let arbitration = state.runtime.memory_tree.stats();
+        state.runtime.metrics.fold(&QueryOutcome {
             class: query.class(),
             status,
             error_class: error_class.as_deref(),
@@ -1912,7 +1997,7 @@ impl Session {
         &self,
         format: &str,
     ) -> Result<Arc<dyn krishiv_io::FileFormat>, KrishivError> {
-        match self.state.formats.get(format) {
+        match self.state.runtime.formats.get(format) {
             Ok(found) => Ok(found),
             Err(e) => {
                 if is_spark_file_source(format) {
@@ -2498,21 +2583,20 @@ impl Session {
         .with_relations(Arc::clone(&self.state.relations))
         .with_spill_scopes(Arc::new(QuerySpill {
             state: Arc::clone(&self.state),
-            config: Arc::clone(&env.config),
         }))
         .with_io(self.state.io.context())
-        .with_formats(Arc::clone(&self.state.formats))
+        .with_formats(Arc::clone(&self.state.runtime.formats))
         .with_config(Arc::clone(&env.config))
     }
 }
 
-/// The spill scope of one query: its own directory under the session's
-/// spill directory (opened by the first query that runs; `krishiv.spill.*`
-/// are build-time keys), removed when the query's operators and streams
-/// are dropped (cancellation included).
+/// The spill scope of one query: its own directory under the runtime's
+/// spill directory (opened from the runtime's configuration by the first
+/// query that spills; `krishiv.spill.*` are runtime keys, so every session
+/// shares one directory and one `krishiv.spill.maxBytes`), removed when the
+/// query's operators and streams are dropped (cancellation included).
 struct QuerySpill {
     state: Arc<SessionState>,
-    config: Arc<Config>,
 }
 
 impl fmt::Debug for QuerySpill {
@@ -2525,11 +2609,12 @@ impl SpillScopes for QuerySpill {
     fn scope(&self) -> krishiv_exec::Result<SpillScope> {
         let mut slot = self
             .state
+            .runtime
             .spill
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if slot.is_none() {
-            let manager = SpillManager::open(&SpillConfig::from_config(&self.config))
+            let manager = SpillManager::open(&SpillConfig::from_config(&self.state.runtime.config))
                 .map_err(|e| internal(format!("cannot set up the spill directory: {e}")))?;
             *slot = Some(manager);
         }

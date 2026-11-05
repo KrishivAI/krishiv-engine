@@ -31,13 +31,13 @@
 
 pub use krishiv_common::error::KrishivError as Error;
 pub use krishiv_session::{
-    ArgField, Column, CounterSample, DataFrame, DataFrameReader, DataFrameWriter, Estimate,
-    ExplainMode, ExplainVerbose, GaugeSample, GraphFormat, GroupedData, HistogramBucket,
-    HistogramSample, InvokeContext, JoinType, MetricDict, MetricsSnapshot, NullHandling,
-    OptimizerStep, QueryProfile, RecordBatchStream, ReturnField, RuntimeConf, ScalarUdf, Session,
-    SessionBuilder, Signature, StorageLevel, TextOptions, UdfArg, UdfError, UdfInputType,
-    UdfLibrary, UdfProperties, agent, dot_of_profile, functions, mermaid_of_profile,
-    register_build_features,
+    ArgField, Column, CounterSample, DataFrame, DataFrameReader, DataFrameWriter, EngineRuntime,
+    EngineRuntimeBuilder, Estimate, ExplainMode, ExplainVerbose, GaugeSample, GraphFormat,
+    GroupedData, HistogramBucket, HistogramSample, InvokeContext, JoinType, MetricDict,
+    MetricsSnapshot, NullHandling, OptimizerStep, QueryProfile, RecordBatchStream, ReturnField,
+    RuntimeConf, ScalarUdf, Session, SessionBuilder, Signature, StorageLevel, TextOptions, UdfArg,
+    UdfError, UdfInputType, UdfLibrary, UdfProperties, agent, dot_of_profile, functions,
+    mermaid_of_profile, register_build_features,
 };
 /// Spark SQL data types, for [`Column::cast`].
 pub use krishiv_types::DataType;
