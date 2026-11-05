@@ -206,3 +206,21 @@ fn closing_a_session_cancels_its_open_stream_and_refuses_new_statements() {
     assert!(block_on(stream_b.next()).unwrap().is_ok());
     assert!(block_on(block_on(b.sql("SELECT 1")).unwrap().collect()).is_ok());
 }
+
+/// A closed session answers nothing, not even a result the cache holds.
+#[test]
+fn a_closed_session_is_not_served_from_the_result_cache() {
+    let s = Session::new().unwrap();
+    s.conf().set("krishiv.resultCache.enabled", "true").unwrap();
+    block_on(
+        block_on(s.sql("CREATE TABLE rc_closed USING parquet AS SELECT 1 AS a"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    let df = block_on(s.sql("SELECT a FROM rc_closed")).unwrap();
+    assert_eq!(block_on(df.collect()).unwrap()[0].num_rows(), 1);
+    s.close();
+    let e = block_on(df.collect()).unwrap_err();
+    assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_CLOSED");
+}

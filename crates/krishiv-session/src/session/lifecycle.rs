@@ -7,14 +7,118 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use krishiv_common::config::Config;
-use krishiv_common::error::KrishivError;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64};
 
-use super::{Session, SessionParts};
+use krishiv_common::config::{Config, ConfigValue, SESSION_MEMORY_LIMIT};
+use krishiv_common::error::KrishivError;
+use krishiv_exec::planner::DefaultPlanner;
+use krishiv_io::{IoConfig, IoScheduler, StoreId};
+use krishiv_memory::{MemoryPool, RelationStore};
+use krishiv_plan::analyzer::FunctionRegistry;
+use krishiv_udf_sdk::UdfLibrary;
+use object_store::ObjectStore;
+#[cfg(not(unix))]
+use object_store::local::LocalFileSystem;
+
+use super::{LOCAL_STORE, Session, SessionParts, SessionState};
+use crate::admission::Unlimited;
+use crate::cache::RelationCache;
+use crate::catalog::SessionCatalog;
+use crate::conf::ConfStore;
 use crate::dataframe::DataFrame;
 use crate::runtime::EngineRuntime;
+use crate::sql_functions::SqlFunctions;
+use crate::udfs::SessionFunctions;
+use crate::variables::SessionVariables;
 
 impl Session {
+    /// A session on `runtime` with configuration `config`.
+    pub(super) fn on_runtime(
+        runtime: Arc<EngineRuntime>,
+        config: Config,
+        parts: SessionParts,
+    ) -> Self {
+        let queries = Arc::new(crate::system::QueryLog::new(
+            Arc::clone(&runtime.history),
+            &parts.principal.name,
+        ));
+        // Without a session limit the session level is skipped: queries stay
+        // children of the root, so `system.memory` shows what it always did.
+        let memory: Arc<dyn MemoryPool> = match config
+            .get(&SESSION_MEMORY_LIMIT)
+            .and_then(ConfigValue::as_size)
+        {
+            Some(limit) => runtime.memory_tree.tenant(
+                &format!("session:{}", queries.session_id()),
+                Some(usize::try_from(limit).unwrap_or(usize::MAX)),
+            ),
+            None => runtime.memory(),
+        };
+        let cache = Arc::new(RelationCache::new(&memory));
+        let io = IoScheduler::with_runtime(
+            IoConfig::from_config(&runtime.config),
+            runtime.executor.io_handle().clone(),
+        );
+        io.attach_memory(&memory);
+        #[cfg(unix)]
+        io.register_whole_listing_store(
+            StoreId::new(LOCAL_STORE),
+            Arc::new(krishiv_io::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        );
+        #[cfg(not(unix))]
+        io.register_store(
+            StoreId::new(LOCAL_STORE),
+            Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        );
+        runtime.add_io(&io);
+        let cwd = std::env::current_dir()
+            .ok()
+            .and_then(|d| d.to_str().map(str::to_owned))
+            .unwrap_or_else(|| "/".to_owned());
+        let udfs = Arc::new(UdfLibrary::new());
+        let base_functions = parts.functions;
+        let functions = match base_functions.clone() {
+            Some(f) => Arc::new(SessionFunctions::with_registry(f, Arc::clone(&udfs)))
+                as Arc<dyn FunctionRegistry>,
+            None => Arc::new(SessionFunctions::new(Arc::clone(&udfs))) as Arc<dyn FunctionRegistry>,
+        };
+        Session {
+            locals: Arc::from([]),
+            operation: None,
+            state: Arc::new(SessionState {
+                conf: Arc::new(ConfStore::new(config)),
+                catalog: Arc::new(SessionCatalog::default()),
+                cache,
+                variables: Arc::new(SessionVariables::default()),
+                profile: parts.profile,
+                principal: parts.principal,
+                policy: parts.policy,
+                functions,
+                base_functions,
+                udfs,
+                sql_functions: SqlFunctions::default(),
+                commit_log_probes: Mutex::new(HashMap::new()),
+                number: runtime.next_session(),
+                closed: AtomicBool::new(false),
+                runtime,
+                memory,
+                relations: RelationStore::new(),
+                io,
+                cwd,
+                planner: Arc::new(DefaultPlanner),
+                plan_ids: AtomicI64::new(0),
+                // One session id for traces and `system.queries`.
+                session_id: queries.session_id().to_owned(),
+                queries,
+                admission: parts.admission.unwrap_or_else(|| Arc::new(Unlimited)),
+                statements: AtomicU64::new(0),
+                sql_sources: AtomicU32::new(1),
+            }),
+        }
+    }
+
     /// A new session on the same runtime, run by the same principal under
     /// the same access policy, Spark profile and function registry: fresh
     /// temporary views, variables, UDFs, tags and configuration (the
@@ -41,6 +145,7 @@ impl Session {
             principal: Arc::clone(&state.principal),
             policy: Arc::clone(&state.policy),
             functions: state.base_functions.clone(),
+            admission: Some(Arc::clone(&state.admission)),
         };
         // The runtime's starting configuration, validated when it was built
         // (for a private runtime, the builder's configuration).
@@ -143,5 +248,20 @@ impl Session {
     /// gave one.
     pub(crate) fn operation_id(&self) -> Option<&crate::QueryId> {
         self.operation.as_deref().map(crate::history::Operation::id)
+    }
+}
+
+impl Session {
+    /// Records a statement refused before it ran (`system.queries`), under
+    /// the statement's operation id when the caller gave one.
+    pub(crate) fn record_refused(
+        &self,
+        text: Option<&str>,
+        class: Option<&'static str>,
+        error: &KrishivError,
+    ) -> String {
+        self.state
+            .queries
+            .record_refused(text, class, error, self.operation_id())
     }
 }

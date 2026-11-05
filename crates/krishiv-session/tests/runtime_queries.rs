@@ -322,3 +322,27 @@ fn at_capacity_the_heaviest_principal_loses_its_oldest_rows() {
     let bobs = rows.iter().filter(|p| p.as_deref() == Some("bob")).count();
     assert_eq!(bobs, 5, "bob's rows stay while alice holds the most");
 }
+
+/// A running query keeps its operation id taken even after the statement's
+/// DataFrame drops, and one DataFrame cannot run twice at once under it.
+#[test]
+fn a_running_stream_holds_its_operation_id() {
+    let s = Session::new().unwrap();
+    let options = QueryOptions::new().operation_id(OP);
+    let df = block_on(s.sql_with(LONG, options.clone())).unwrap();
+    let mut first = block_on(df.execute_stream()).unwrap();
+    assert!(block_on(first.next()).unwrap().is_ok());
+    // The same action again while the first runs: one execution per id.
+    let e = block_on(df.execute_stream()).err().unwrap();
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_HANDLE.OPERATION_ALREADY_EXISTS"
+    );
+    drop(df);
+    let e = block_on(s.sql_with("SELECT 1", options)).unwrap_err();
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_HANDLE.OPERATION_ALREADY_EXISTS"
+    );
+    assert!(block_on(first.next()).unwrap().is_ok());
+}

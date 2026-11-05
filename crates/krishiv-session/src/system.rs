@@ -1004,13 +1004,34 @@ impl QueryLog {
     /// Records a query that started now under a minted id and returns it.
     #[cfg(test)]
     pub(crate) fn begin(&self, text: Option<&str>, class: Option<&'static str>) -> String {
-        self.begin_as(text, class, None)
+        self.record(text, class, None)
     }
 
     /// Records a query that started now, named `operation` when the caller
     /// gave the statement an id ([`crate::QueryOptions::operation_id`]), else
     /// a minted id, and returns the id.
+    ///
+    /// # Errors
+    /// `INVALID_HANDLE.OPERATION_ALREADY_EXISTS` while another execution of
+    /// this session runs under the same operation id.
     pub(crate) fn begin_as(
+        &self,
+        text: Option<&str>,
+        class: Option<&'static str>,
+        operation: Option<&crate::QueryId>,
+    ) -> Result<String, KrishivError> {
+        let Some(operation) = operation else {
+            return Ok(self.record(text, class, None));
+        };
+        let id = operation.as_str().to_owned();
+        self.history
+            .push_given(self.row(id.clone(), now_ms(), text, class))?;
+        Ok(id)
+    }
+
+    /// Records a row without the live-id check (a statement that never runs:
+    /// refused, or answered from the result cache).
+    fn record(
         &self,
         text: Option<&str>,
         class: Option<&'static str>,
@@ -1022,6 +1043,35 @@ impl QueryLog {
         id
     }
 
+    /// Closes the live row `id` as the outcome of `error` (a refused
+    /// admission): `denied`, `cancelled` or `failed` by its class.
+    pub(crate) fn record_failed_row(&self, id: &str, error: &KrishivError) {
+        let class = error.error_class().name();
+        self.finish(
+            id,
+            &Finished {
+                state: outcome_state(class),
+                wall_ns: 0,
+                peak_memory_bytes: 0,
+                error_class: (outcome_state(class) != "cancelled").then_some(class),
+                operators: Vec::new(),
+                totals: None,
+            },
+        );
+    }
+
+    /// Sets the state of the live row `id` (`queued` while admission waits,
+    /// `running` once it is admitted).
+    pub(crate) fn set_state(&self, id: &str, state: &'static str) {
+        self.history
+            .update(&self.session_id, id, |row| row.state = state);
+    }
+
+    /// The session's tags now.
+    pub(crate) fn tags_now(&self) -> Vec<(String, String)> {
+        self.tags()
+    }
+
     /// Records a query answered from the result cache: a finished row of its own (with the
     /// session's current tags and trace id) that took no execution.
     pub(crate) fn record_replayed(
@@ -1030,7 +1080,7 @@ impl QueryLog {
         class: Option<&'static str>,
         operation: Option<&crate::QueryId>,
     ) -> String {
-        let id = self.begin_as(text, class, operation);
+        let id = self.record(text, class, operation);
         self.finish(
             &id,
             &Finished {
@@ -1055,7 +1105,7 @@ impl QueryLog {
         error: &KrishivError,
         operation: Option<&crate::QueryId>,
     ) -> String {
-        let id = self.begin_as(text, class, operation);
+        let id = self.record(text, class, operation);
         let class = error.error_class().name();
         let state = outcome_state(class);
         self.finish(
