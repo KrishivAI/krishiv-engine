@@ -1172,6 +1172,24 @@ fn write_plan(write: &WritePlan, nested: &Cell<bool>) -> Result<pb::WritePlan> {
     })
 }
 
+/// One entry of an options map literal. Its entries are a call's options,
+/// classified as a source's are: an inline secret or a URL with credentials
+/// is refused (ADR 0038), and a literal cannot hold a secret reference.
+fn map_entry(key: &str, value: &str) -> Result<pb::MapLiteralEntry> {
+    match OptionValue::from_user(key, value) {
+        OptionValue::Plain(value) => Ok(pb::MapLiteralEntry {
+            key: key.to_owned(),
+            value,
+        }),
+        OptionValue::Secret(_) => Err(CodecError::Unsupported(format!(
+            "the option `{key}` is an inline secret (use a secret reference)"
+        ))),
+        OptionValue::Url(_) => Err(CodecError::Unsupported(format!(
+            "the option `{key}` is a URL with credentials (use a secret reference)"
+        ))),
+    }
+}
+
 /// A plan carries plain text and `secret(scope, key)` references only.
 fn option(key: &str, value: &OptionValue) -> Result<pb::OptionValue> {
     use pb::option_value::Kind;
@@ -1340,11 +1358,8 @@ fn literal(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
         Literal::Map(entries) => Kind::Map(pb::MapLiteral {
             entries: entries
                 .iter()
-                .map(|(key, value)| pb::MapLiteralEntry {
-                    key: key.clone(),
-                    value: value.clone(),
-                })
-                .collect(),
+                .map(|(key, value)| map_entry(key, value))
+                .collect::<Result<_>>()?,
         }),
         _ => {
             return Err(CodecError::Unsupported(

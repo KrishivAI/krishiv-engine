@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use krishiv_common::secret::OptionValue;
-use krishiv_exec::physical::{PhysNode, PhysicalPlan};
-use krishiv_plan::{Expr, ReadSource};
+use krishiv_exec::physical::{PhysNode, PhysicalPlan, ProjectItemPlan};
+use krishiv_plan::{AttrId, Expr, Literal, ReadSource};
 use krishiv_plan_codec::proto as pb;
 use krishiv_plan_codec::{
     CodecError, FORMAT_VERSION, Feature, FeatureKind, Limits, MIN_READER_VERSION,
@@ -217,6 +217,35 @@ fn write_with(options: BTreeMap<String, OptionValue>) -> PhysicalPlan {
         input: Box::new(inventory::scan()),
         write: Some(write),
     })
+}
+
+#[test]
+fn an_options_map_with_a_secret_is_refused_without_naming_it() {
+    let map = |key: &str, value: &str| {
+        plan_of(PhysNode::Project {
+            input: Box::new(inventory::scan()),
+            layout: vec![AttrId(1), AttrId(2)],
+            items: vec![ProjectItemPlan::Expr {
+                name: "options".to_owned(),
+                expr: inventory::lit(Literal::Map(vec![
+                    ("mode".to_owned(), "PERMISSIVE".to_owned()),
+                    (key.to_owned(), value.to_owned()),
+                ])),
+            }],
+            nullable: None,
+            subqueries: Vec::new(),
+        })
+    };
+    let plain = map("dateFormat", "yyyy-MM-dd");
+    assert_eq!(decode(&encode(&plain).unwrap()).unwrap(), plain);
+    for (key, value) in [
+        ("password", "canary-map-1c7e-hunter2"),
+        ("path", "s3://user:canary-map-1c7e-hunter2@bucket/x"),
+    ] {
+        let err = encode(&map(key, value)).unwrap_err().to_string();
+        assert!(err.contains(&format!("`{key}`")), "{err}");
+        assert!(!err.contains("canary-map-1c7e-hunter2"), "{err}");
+    }
 }
 
 #[test]
