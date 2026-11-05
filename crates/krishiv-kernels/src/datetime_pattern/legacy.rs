@@ -575,11 +575,40 @@ fn week_of_year(real: i64, year: i64, doy: i64) -> i64 {
 /// `days` is the written date's label and `real` its real epoch day (they
 /// differ before the cutover); `doy` is the hybrid ordinal.
 fn week_year_anchor(days: i64, real: i64, year: i64, doy: i64) -> i64 {
+    if year <= 0 {
+        // A BC date takes `GregorianCalendar.getWeekYear`'s slow path, which
+        // sets the *astronomical* year as an era year: the "next year" it
+        // inspects is the mirrored year `-year`.
+        return days_from_civil(bc_week_year(real, year, doy), 1, 1).unwrap_or(days);
+    }
     if week_of_year(real, year, doy) == 1 && doy > 300 {
         // Late December in next year's week 1.
         days + 31
     } else {
         days
+    }
+}
+
+/// The week year of a BC date (`year <= 0`, Julian), as the JDK computes it.
+fn bc_week_year(real: i64, year: i64, doy: i64) -> i64 {
+    let max_doy = hybrid_year_len(year);
+    if doy > 1 && doy < max_doy - 6 {
+        return year;
+    }
+    // Days from the year's first day to its first Sunday.
+    let to_sunday = |jan1: i64| (7 - (jan1 + 4).rem_euclid(7)) % 7;
+    let min_doy = 1 + to_sunday(real - (doy - 1));
+    if doy < min_doy {
+        return year;
+    }
+    let mirror = -year;
+    let first = days_from_civil(mirror, 1, 1).map_or(0, |d| real_day(d, mirror, 1, 1));
+    let del = to_sunday(first);
+    let min_next = if del == 0 { 7 } else { del };
+    if max_doy - doy < 7 - min_next {
+        year + 1
+    } else {
+        year
     }
 }
 
