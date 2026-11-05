@@ -563,7 +563,7 @@ impl Session {
                 let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
                 use tracing::Instrument as _;
                 let trace = crate::telemetry::QueryTrace::of(seq, &text);
-                let span = trace.prepare_span(&session.state.session_id);
+                let span = trace.prepare_span(&crate::telemetry::Who::of(&session.state));
                 session
                     .sql_here_marked(&text, marker)
                     .instrument(span)
