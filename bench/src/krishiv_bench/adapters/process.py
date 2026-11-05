@@ -12,7 +12,7 @@ from typing import Any
 
 from .. import worker
 from .base import Dataset, Engine, Measure, Query
-from .proc_mem import TreeProc, tree_cpu_seconds
+from .proc_mem import TreeProc, tree_cpu_seconds, tree_measure
 
 
 class EngineError(RuntimeError):
@@ -162,7 +162,7 @@ class ProcessEngine(Engine):
 
     def end_measure(self) -> Measure:
         tree, self._tree = self._tree, None
-        return Measure(peak_rss_bytes=tree.stop() if tree is not None else None)
+        return tree_measure(tree)
 
     def cancel(self) -> None:
         self.kill()

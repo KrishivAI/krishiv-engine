@@ -15,6 +15,7 @@ mod conditionals;
 mod correlated_or;
 mod cse;
 mod date_arith;
+mod eager_aggregate;
 mod exchanges;
 mod existence;
 mod folding;

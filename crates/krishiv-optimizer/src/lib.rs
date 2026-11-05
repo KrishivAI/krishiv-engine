@@ -48,6 +48,7 @@
 
 mod cse;
 mod dag;
+mod eager;
 mod estimate;
 mod expr;
 mod fold;
@@ -68,7 +69,7 @@ mod sum_rewrite;
 use std::sync::Arc;
 
 use krishiv_common::config::{
-    ANSI_ENABLED, Config, ConfigValue, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
+    ANSI_ENABLED, Config, ConfigValue, EAGER_AGGREGATION, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -118,6 +119,9 @@ pub struct RuleStep {
     pub rule: &'static str,
     /// The plan after it.
     pub plan: Arc<LogicalPlan>,
+    /// What the rule decided and why, when it says (a rule that declines
+    /// leaves the plan as it was); else empty.
+    pub note: String,
 }
 
 /// A test-only switch per optimizer rule: which rewrites run. All are on
@@ -132,6 +136,10 @@ pub struct Options {
     /// projections and unions. Off, only row counts scale (the estimates
     /// that order joins and choose restrictions).
     pub stats_propagation: bool,
+    /// Eager aggregation (`eager`): aggregates run below joins where the
+    /// statistics say it pays. Needs statistics; a session configuration,
+    /// when given, can switch it off.
+    pub eager_aggregation: bool,
 }
 
 impl Default for Options {
@@ -139,6 +147,7 @@ impl Default for Options {
         Self {
             cse: true,
             stats_propagation: true,
+            eager_aggregation: true,
         }
     }
 }
@@ -283,7 +292,21 @@ impl Trace {
                 round,
                 rule,
                 plan: Arc::clone(after),
+                note: String::new(),
             });
+        }
+    }
+
+    /// Records what a rule decided, one step per note, on the plan it left.
+    fn notes(&mut self, rule: &'static str, after: &Arc<LogicalPlan>, notes: Vec<String>) {
+        if self.on {
+            self.steps.extend(notes.into_iter().map(|note| RuleStep {
+                batch: rule,
+                round: 1,
+                rule,
+                plan: Arc::clone(after),
+                note,
+            }));
         }
     }
 
@@ -359,19 +382,32 @@ fn run(
             restrict::restrict(Arc::clone(r), estimates, options.stats_propagation)
         })?;
         if let Some(stats) = stats {
-            for round in 1..=MAX_ITERATIONS {
-                let ordered = join_order::reorder(&root, stats, options.stats_propagation);
-                t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
-                let restricted =
-                    restrict::restrict(Arc::clone(&ordered), estimates, options.stats_propagation)?;
-                t.step("JoinOrder", round, "Restrict", &ordered, &restricted);
-                let done = Arc::ptr_eq(&restricted, &ordered);
-                root = restricted;
-                if done {
-                    break;
+            root = order_and_restrict(root, stats, options.stats_propagation, &mut t)?;
+        }
+        // After the plan's joins are final, so the rule reads the join it
+        // moves below; before pruning, which drops what it leaves unread.
+        let eager = options.eager_aggregation
+            && udfs.is_none_or(|(_, config)| {
+                config
+                    .get(&EAGER_AGGREGATION)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(true)
+            });
+        let root = match stats {
+            Some(stats) if eager => {
+                let (after, notes) =
+                    eager::rewrite(Arc::clone(&root), stats, options.stats_propagation)?;
+                t.notes("EagerAggregate", &after, notes);
+                // The moved aggregate changes what its join's inputs estimate,
+                // and so their canonical order.
+                if Arc::ptr_eq(&after, &root) {
+                    after
+                } else {
+                    order_and_restrict(after, stats, options.stats_propagation, &mut t)?
                 }
             }
-        }
+            _ => root,
+        };
         let pruned = t.once("Prune", &root, |r| Ok(prune::prune(r)))?;
         let mut root = batch(Arc::clone(&pruned), "Tidy", &mut t)?;
         // Tidying can fold a filter to a constant `false` and leave columns
@@ -444,6 +480,27 @@ fn run(
         Ok(p) => Ok((p, steps)),
         Err(_) => Ok((plan.clone(), Vec::new())),
     }
+}
+
+/// Join ordering alternating with restriction, until neither changes the plan.
+fn order_and_restrict(
+    mut root: Arc<LogicalPlan>,
+    stats: &dyn Statistics,
+    propagate: bool,
+    t: &mut Trace,
+) -> Result<Arc<LogicalPlan>, KrishivError> {
+    for round in 1..=MAX_ITERATIONS {
+        let ordered = join_order::reorder(&root, stats, propagate);
+        t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
+        let restricted = restrict::restrict(Arc::clone(&ordered), stats, propagate)?;
+        t.step("JoinOrder", round, "Restrict", &ordered, &restricted);
+        let done = Arc::ptr_eq(&restricted, &ordered);
+        root = restricted;
+        if done {
+            break;
+        }
+    }
+    Ok(root)
 }
 
 /// Whether a `Filter` whose predicate is the literal `false` is anywhere in

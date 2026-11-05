@@ -21,6 +21,7 @@ from .adapters import Dataset, Engine, Query, make_engine
 from .dialect import unsupported_reason
 from .errors import error_fields
 from .paths import bench_root, data_root, dataset_dir, fmt_sf, manifest_stem, queries_dir, results_dir, split_dataset
+from .resources import evict_page_cache, resource_fields
 
 SUITE_DATASET = {
     "tpch": "tpch",
@@ -192,6 +193,16 @@ def backtick_identifiers(sql: str) -> str:
     return "".join(out)
 
 
+def cold_record(cold: bool) -> dict:
+    """The ``cold`` block of the run metadata: results of a cold run are not comparable with warm ones."""
+    if not cold:
+        return {"enabled": False}
+    return {
+        "enabled": True,
+        "method": "posix_fadvise(POSIX_FADV_DONTNEED) on every dataset file before each run, warm-up included",
+    }
+
+
 def percentile(xs: list[float], p: float) -> float:
     """Nearest-rank percentile. With few iterations p99 == max (documented in the README)."""
     s = sorted(xs)
@@ -226,6 +237,7 @@ def run_suite(
     engine_kwargs: dict | None = None,
     timeout_s: float | None = 600,
     dataset: str | None = None,
+    cold: bool = False,
 ) -> Path:
     ds_name = dataset or SUITE_DATASET[suite]
     root = dataset_dir(ds_name, sf)
@@ -280,6 +292,7 @@ def run_suite(
         "iterations": iterations,
         "warmup": warmup,
         "timeout_s": timeout_s,
+        "cold": cold_record(cold),
         "answers_available": bool(answers or oracle_rows),
         "queries": {},
     }
@@ -294,6 +307,8 @@ def run_suite(
             rows: list[tuple] = []
             try:
                 for i in range(warmup + iterations):
+                    if cold:
+                        evict_page_cache(root)
                     eng.begin_measure()
                     m = None
                     try:
@@ -332,10 +347,7 @@ def run_suite(
                 rows_returned=len(rows),
                 expected_rows=expected.get(q.id),
                 rows_match_expected=(len(rows) == expected[q.id]) if q.id in expected else None,
-                peak_rss_bytes=_max([m.peak_rss_bytes for m in meas]),
-                baseline_rss_bytes=_max([m.baseline_rss_bytes for m in meas]),
-                cpu_seconds_median=_med([m.cpu_seconds for m in meas]),
-                spill_bytes=_max([m.spill_bytes for m in meas]),
+                **resource_fields(meas, times),
             )
             if q.id in oracle_rows:
                 ok, msg = compare.rows_match(rows, oracle_rows[q.id], ordered, sql=q.sql)
@@ -372,13 +384,3 @@ def run_suite(
     f = out / f"{stem}.json"
     f.write_text(json.dumps(record, indent=2))
     return f
-
-
-def _max(xs):
-    xs = [x for x in xs if x is not None]
-    return max(xs) if xs else None
-
-
-def _med(xs):
-    xs = [x for x in xs if x is not None]
-    return statistics.median(xs) if xs else None

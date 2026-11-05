@@ -164,7 +164,7 @@ fn eager(plan: &Plan, states_of: &dyn Fn(Vec<BoundColumn>) -> Vec<BoundColumn>) 
     Plan::try_new(LogicalPlan::clone(&top)).unwrap()
 }
 
-fn physical(t: &Tpch, plan: &Plan) -> Result<Runnable, KrishivError> {
+pub(super) fn physical(t: &Tpch, plan: &Plan) -> Result<Runnable, KrishivError> {
     let cx = PlanningContext::new(Arc::clone(&t.tables) as _, Arc::clone(&t.config));
     Ok(Runnable::new(
         DefaultPlanner.plan(plan, &cx)?,
@@ -185,7 +185,7 @@ fn write(dir: &Path, name: &str, batch: &RecordBatch) {
 }
 
 /// `(key, int, decimal, string)` rows; `None` is NULL.
-type Row = (i64, Option<i32>, Option<i128>, Option<u8>);
+pub(super) type Row = (i64, Option<i32>, Option<i128>, Option<u8>);
 
 fn facts(rows: &[Row]) -> RecordBatch {
     let schema = Schema::new(vec![
@@ -227,7 +227,7 @@ const QUERY: &str = "SELECT f.k, count(f.i), count(*), sum(f.i), avg(f.i), sum(f
                      min(f.i), max(f.d), min(f.s), max(f.s) \
                      FROM f JOIN w ON f.k = w.wk GROUP BY f.k";
 
-fn tables(dir: &Path, rows: &[Row], keys: &[i64], rt: &tokio::runtime::Runtime) -> Tpch {
+pub(super) fn tables(dir: &Path, rows: &[Row], keys: &[i64], rt: &tokio::runtime::Runtime) -> Tpch {
     write(dir, "f.parquet", &facts(rows));
     write(dir, "w.parquet", &weights(keys));
     let sources = [
@@ -237,13 +237,13 @@ fn tables(dir: &Path, rows: &[Row], keys: &[i64], rt: &tokio::runtime::Runtime) 
     parquet_files(dir, &sources, true, rt)
 }
 
-fn sorted(batches: &[RecordBatch]) -> Vec<String> {
+pub(super) fn sorted(batches: &[RecordBatch]) -> Vec<String> {
     let mut r = rows(batches);
     r.sort_unstable();
     r
 }
 
-fn runtime() -> tokio::runtime::Runtime {
+pub(super) fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -271,7 +271,7 @@ proptest! {
         let dir = tempfile::tempdir().unwrap();
         let t = tables(dir.path(), &rows, &keys, &rt);
         for q in [QUERY, OUTER] {
-            let plan = t.optimized(q, Order::Statistics).unwrap();
+            let plan = t.optimized(q, Order::Defaults).unwrap();
             let single = sorted(&run(&physical(&t, &plan).unwrap()).unwrap());
             let split = physical(&t, &eager(&plan, &|s| s)).unwrap();
             prop_assert!(split.to_string().contains("PartialHashAggregate"), "{}", split);
@@ -307,7 +307,7 @@ fn join_matches_weigh_the_states() {
     );
     let q = "SELECT f.k, count(f.i), count(*), sum(f.i), avg(f.i), sum(f.d) \
              FROM f JOIN w ON f.k = w.wk GROUP BY f.k ORDER BY f.k";
-    let plan = t.optimized(q, Order::Statistics).unwrap();
+    let plan = t.optimized(q, Order::Defaults).unwrap();
     let got = sorted(&run(&physical(&t, &eager(&plan, &|s| s)).unwrap()).unwrap());
     let single = sorted(&run(&physical(&t, &plan).unwrap()).unwrap());
     assert_eq!(got, single);
@@ -333,7 +333,7 @@ fn null_states_of_an_outer_join_are_empty() {
     );
     let q = "SELECT w.wk, count(f.i), sum(f.i), avg(f.i), sum(f.d), avg(f.d), min(f.s) \
              FROM w LEFT JOIN f ON w.wk = f.k GROUP BY w.wk";
-    let plan = t.optimized(q, Order::Statistics).unwrap();
+    let plan = t.optimized(q, Order::Defaults).unwrap();
     let got = sorted(&run(&physical(&t, &eager(&plan, &|s| s)).unwrap()).unwrap());
     assert_eq!(got, sorted(&run(&physical(&t, &plan).unwrap()).unwrap()));
     assert!(
@@ -379,7 +379,7 @@ fn a_malformed_partial_aggregate_is_refused() {
     let rt = runtime();
     let dir = tempfile::tempdir().unwrap();
     let t = sample(&rt, dir.path());
-    let plan = t.optimized(QUERY, Order::Statistics).unwrap();
+    let plan = t.optimized(QUERY, Order::Defaults).unwrap();
     let split = eager(&plan, &|s| s);
     let literal = || {
         Arc::new(Expr::new(ExprNode::Literal(
@@ -429,7 +429,7 @@ fn the_optimizer_keeps_a_split_plan() {
         &rt,
     );
     for q in [QUERY, OUTER] {
-        let plan = t.optimized(q, Order::Statistics).unwrap();
+        let plan = t.optimized(q, Order::Defaults).unwrap();
         let again = krishiv_optimizer::optimize(&eager(&plan, &|s| s)).unwrap();
         let runnable = physical(&t, &again).unwrap();
         assert!(
@@ -468,7 +468,7 @@ fn the_estimate_covers_keys_and_states() {
     let dir = tempfile::tempdir().unwrap();
     let rows: Vec<Row> = (0..200).map(|i| (i % 4, Some(1), None, None)).collect();
     let t = tables(dir.path(), &rows, &[0, 1], &rt);
-    let plan = t.optimized(QUERY, Order::Statistics).unwrap();
+    let plan = t.optimized(QUERY, Order::Defaults).unwrap();
     let split = eager(&plan, &|s| s);
     let stats = ProviderStatistics(Arc::clone(&t.tables) as _);
     let computed = PlanStats::compute(split.root(), &stats);
@@ -493,7 +493,7 @@ fn a_filter_on_a_merge_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let t = sample(&rt, dir.path());
     let q = "SELECT f.k, sum(f.i) FROM f JOIN w ON f.k = w.wk GROUP BY f.k";
-    let plan = t.optimized(q, Order::Statistics).unwrap();
+    let plan = t.optimized(q, Order::Defaults).unwrap();
     let split = eager(&plan, &|s| s);
     let filtered = Arc::clone(split.root())
         .transform_down(&mut |p: Arc<LogicalPlan>| {
@@ -533,7 +533,7 @@ fn the_plan_prints_the_split() {
     let rt = runtime();
     let dir = tempfile::tempdir().unwrap();
     let t = sample(&rt, dir.path());
-    let plan = t.optimized(QUERY, Order::Statistics).unwrap();
+    let plan = t.optimized(QUERY, Order::Defaults).unwrap();
     let split = eager(&plan, &|s| s);
     let text = split.root().to_string();
     assert!(text.contains("PartialAggregate ["), "{text}");
@@ -549,7 +549,7 @@ fn states_the_executor_does_not_produce_are_refused() {
     let rt = runtime();
     let dir = tempfile::tempdir().unwrap();
     let t = sample(&rt, dir.path());
-    let plan = t.optimized(QUERY, Order::Statistics).unwrap();
+    let plan = t.optimized(QUERY, Order::Defaults).unwrap();
     let wrong_type = eager(&plan, &|mut s| {
         s[0].data_type = krishiv_types::DataType::String;
         s
@@ -572,7 +572,7 @@ fn a_merge_of_the_wrong_columns_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let t = sample(&rt, dir.path());
     let q = "SELECT f.k, avg(f.i) FROM f JOIN w ON f.k = w.wk GROUP BY f.k";
-    let plan = t.optimized(q, Order::Statistics).unwrap();
+    let plan = t.optimized(q, Order::Defaults).unwrap();
     let split = eager(&plan, &|s| s);
     // Reads the `sum` column twice instead of `sum` and `count`.
     let wrong = Arc::clone(split.root())
