@@ -33,7 +33,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_exec::{Executor, ExecutorConfig, TokioExecutor};
 use krishiv_session::Session;
 use krishiv_sql::ParserOptions;
-use krishiv_sql::ast::{DescribeKind, Statement};
+use krishiv_sql::ast::{DescribeKind, ShowKind, Statement};
 use krishiv_types::DataType;
 
 use super::cell::{Cell, CellFormat};
@@ -66,6 +66,8 @@ pub struct SessionEngine {
     /// next session starts or the engine drops), and its text for masking.
     warehouse: Option<std::path::PathBuf>,
     warehouse_text: String,
+    /// Sessions run every plan through `krishiv.plan.v1` first (`krishiv.exec.debug.planRoundTrip`).
+    plan_round_trip: bool,
 }
 
 impl Drop for SessionEngine {
@@ -126,6 +128,7 @@ impl SessionEngine {
             conf: Vec::new(),
             warehouse: None,
             warehouse_text: String::new(),
+            plan_round_trip: false,
         })
     }
 
@@ -133,6 +136,15 @@ impl SessionEngine {
     #[must_use]
     pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// The same engine with the serialize-through mode on in every session
+    /// (`krishiv.exec.debug.planRoundTrip`, P2-T173): each plan is encoded
+    /// to `krishiv.plan.v1` and decoded before it runs.
+    #[must_use]
+    pub const fn with_plan_round_trip(mut self) -> Self {
+        self.plan_round_trip = true;
         self
     }
 
@@ -277,6 +289,9 @@ impl Engine for SessionEngine {
             // statement's verdict does not change from run to run.
             .config("krishiv.exec.seed", "1")
             .config("spark.sql.warehouse.dir", self.warehouse_text.clone());
+        if self.plan_round_trip {
+            builder = builder.config("krishiv.exec.debug.planRoundTrip", "true");
+        }
         for (k, v) in &setup.configs {
             if k == "spark.sql.warehouse.dir" {
                 v.clone_into(&mut self.warehouse_text);
@@ -331,6 +346,12 @@ impl Engine for SessionEngine {
             Ok(Statement::Describe(d))
                 if matches!(d.kind, DescribeKind::Table { .. } | DescribeKind::Query { .. })
         );
+        // `HiveResult` prints only the name column (the second) of SHOW TABLES and SHOW VIEWS, the
+        // schema line still lists all three.
+        let names_only = matches!(
+            krishiv_sql::parse_statement(sql, &self.options()),
+            Ok(Statement::Show(s)) if matches!(s.kind, ShowKind::Tables { .. } | ShowKind::Views { .. })
+        );
         let output = &analyzed.output;
         let schema = format!(
             "struct<{}>",
@@ -342,12 +363,20 @@ impl Engine for SessionEngine {
         );
         let mut rows = Vec::new();
         for batch in &batches {
-            // Each column's Spark type, from the batch's own field.
+            // Each column's Spark type, from the batch's own field. A
+            // geometry or geography column keeps its type in the analysed
+            // output only (the batch holds a plain struct).
             let types = batch
                 .schema()
                 .fields()
                 .iter()
-                .map(|f| DataType::from_arrow_field(f).map_err(|e| engine_error(&e)))
+                .enumerate()
+                .map(|(i, f)| match output.get(i).map(|c| &c.data_type) {
+                    Some(t @ (DataType::Geometry { .. } | DataType::Geography { .. })) => {
+                        Ok(t.clone())
+                    }
+                    _ => DataType::from_arrow_field(f).map_err(|e| engine_error(&e)),
+                })
                 .collect::<Result<Vec<_>, _>>()?;
             for row in 0..batch.num_rows() {
                 let cells = batch
@@ -356,7 +385,9 @@ impl Engine for SessionEngine {
                     .zip(&types)
                     .map(|(col, ty)| arrow_cell(col, row, ty))
                     .collect::<Result<Vec<_>, _>>()?;
-                let cells = if padded && cells.len() == 3 {
+                let cells = if names_only && cells.len() == 3 {
+                    cells.into_iter().skip(1).take(1).collect()
+                } else if padded && cells.len() == 3 {
                     cells.into_iter().map(describe_cell).collect()
                 } else {
                     cells
@@ -418,18 +449,18 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
             col.as_primitive::<Decimal128Type>().value(row),
             u32::from(d.scale()),
         ),
-        (DataType::String, ArrowType::Utf8View) => {
+        (DataType::String | DataType::CollatedString(_), ArrowType::Utf8View) => {
             Cell::Str(col.as_string_view().value(row).to_owned())
         }
-        (DataType::String, ArrowType::Utf8) => {
+        (DataType::String | DataType::CollatedString(_), ArrowType::Utf8) => {
             Cell::Str(col.as_string::<i32>().value(row).to_owned())
         }
-        (DataType::String, ArrowType::LargeUtf8) => {
+        (DataType::String | DataType::CollatedString(_), ArrowType::LargeUtf8) => {
             Cell::Str(col.as_string::<i64>().value(row).to_owned())
         }
         // A binary-safe STRING holding bytes that are not UTF-8: Spark's `UTF8String.toString`
         // replaces the malformed sequences.
-        (DataType::String, _) => Cell::Str(
+        (DataType::String | DataType::CollatedString(_), _) => Cell::Str(
             String::from_utf8_lossy(&binary_value(col, row).ok_or_else(unexpected)?).into_owned(),
         ),
         (DataType::Binary, _) => Cell::Binary(binary_value(col, row).ok_or_else(unexpected)?),
@@ -442,11 +473,32 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
         (DataType::TimestampNtz, ArrowType::Timestamp(..)) => {
             Cell::TimestampNtz(col.as_primitive::<TimestampMicrosecondType>().value(row))
         }
+        (DataType::YearMonthInterval { .. }, ArrowType::Interval(_)) => Cell::YearMonth(
+            col.as_primitive::<arrow_array::types::IntervalYearMonthType>()
+                .value(row),
+        ),
+        (DataType::DayTimeInterval { .. }, ArrowType::Duration(_)) => Cell::DayTime(
+            col.as_primitive::<arrow_array::types::DurationMicrosecondType>()
+                .value(row),
+        ),
+        (DataType::CalendarInterval, ArrowType::Interval(_)) => {
+            let v = col
+                .as_primitive::<arrow_array::types::IntervalMonthDayNanoType>()
+                .value(row);
+            Cell::Calendar {
+                months: v.months,
+                days: v.days,
+                micros: v.nanoseconds / 1000,
+            }
+        }
+        (DataType::Geometry { .. } | DataType::Geography { .. }, ArrowType::Struct(_)) => {
+            spatial_cell(col, row).ok_or_else(unexpected)?
+        }
         (DataType::Time { .. }, ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond)) => {
-            Cell::Str(krishiv_kernels::cast::format_time(
+            Cell::Time(
                 col.as_primitive::<arrow_array::types::Time64NanosecondType>()
                     .value(row),
-            ))
+            )
         }
         (DataType::Array(element), ArrowType::List(_) | ArrowType::LargeList(_)) => {
             Cell::Array(list_cells(col, row, element)?)
@@ -455,6 +507,14 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
         (DataType::Struct(struct_), ArrowType::Struct(_)) => struct_cell(col, row, struct_)?,
         _ => return Err(unexpected()),
     })
+}
+
+/// The text Spark prints the spatial value at `row` of `col` as.
+fn spatial_cell(col: &ArrayRef, row: usize) -> Option<Cell> {
+    let s = col.as_struct_opt()?;
+    let srid = s.column(0).as_primitive_opt::<Int32Type>()?.value(row);
+    let wkb = binary_value(s.column(1), row)?;
+    krishiv_types::geo::to_ewkt(srid, &wkb).ok().map(Cell::Str)
 }
 
 /// The elements of the list at `row` of `col` (a `List` or `LargeList`) as
@@ -601,13 +661,13 @@ fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, Engine
             col.as_primitive::<Decimal128Type>().value(row),
             u32::from(d.scale()),
         ),
-        (DataType::String, ArrowType::Utf8View) => {
+        (DataType::String | DataType::CollatedString(_), ArrowType::Utf8View) => {
             Cell::Str(col.as_string_view().value(row).to_owned())
         }
-        (DataType::String, ArrowType::Utf8) => {
+        (DataType::String | DataType::CollatedString(_), ArrowType::Utf8) => {
             Cell::Str(col.as_string::<i32>().value(row).to_owned())
         }
-        (DataType::String, ArrowType::LargeUtf8) => {
+        (DataType::String | DataType::CollatedString(_), ArrowType::LargeUtf8) => {
             Cell::Str(col.as_string::<i64>().value(row).to_owned())
         }
         (DataType::Date, ArrowType::Date32) => {
@@ -618,6 +678,33 @@ fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, Engine
         }
         (DataType::TimestampNtz, ArrowType::Timestamp(..)) => {
             Cell::TimestampNtz(col.as_primitive::<TimestampMicrosecondType>().value(row))
+        }
+        (DataType::Geometry { .. } | DataType::Geography { .. }, ArrowType::Struct(_)) => {
+            spatial_cell(col, row).ok_or_else(unexpected)?
+        }
+        (DataType::Time { .. }, ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond)) => {
+            Cell::Time(
+                col.as_primitive::<arrow_array::types::Time64NanosecondType>()
+                    .value(row),
+            )
+        }
+        (DataType::YearMonthInterval { .. }, ArrowType::Interval(_)) => Cell::YearMonth(
+            col.as_primitive::<arrow_array::types::IntervalYearMonthType>()
+                .value(row),
+        ),
+        (DataType::DayTimeInterval { .. }, ArrowType::Duration(_)) => Cell::DayTime(
+            col.as_primitive::<arrow_array::types::DurationMicrosecondType>()
+                .value(row),
+        ),
+        (DataType::CalendarInterval, ArrowType::Interval(_)) => {
+            let v = col
+                .as_primitive::<arrow_array::types::IntervalMonthDayNanoType>()
+                .value(row);
+            Cell::Calendar {
+                months: v.months,
+                days: v.days,
+                micros: v.nanoseconds / 1000,
+            }
         }
         (DataType::Array(element), ArrowType::List(_) | ArrowType::LargeList(_)) => {
             Cell::Array(list_cells(col, row, element)?)
@@ -650,7 +737,10 @@ fn fixture_batch(table: &Table) -> Result<Option<(Arc<Schema>, RecordBatch)>, En
         if ty.is_nested() {
             return Ok(None);
         }
-        fields.push(ty.to_arrow_field(&c.name, c.nullable));
+        // Decimals are handed in on `Decimal128`, as a client's are.
+        let field = ty.to_arrow_field(&c.name, c.nullable);
+        let wide = krishiv_types::arrow::client_arrow_type(field.data_type());
+        fields.push(field.with_data_type(wide));
         types.push(ty);
     }
     let schema = Arc::new(Schema::new(fields));
@@ -738,7 +828,7 @@ fn fixture_column(table: &Table, i: usize, ty: &DataType) -> Result<ArrayRef, En
                     other => return Err(bad(other)),
                 }
             }
-            let ArrowType::Decimal128(p, s) = ty.to_arrow() else {
+            let (ArrowType::Decimal64(p, s) | ArrowType::Decimal128(p, s)) = ty.to_arrow() else {
                 return Err(bad(&Cell::Null));
             };
             let _ = d;
@@ -748,7 +838,7 @@ fn fixture_column(table: &Table, i: usize, ty: &DataType) -> Result<ArrayRef, En
                     .map_err(|e| harness_error(e.to_string()))?,
             )
         }
-        DataType::String => {
+        DataType::String | DataType::CollatedString(_) => {
             let mut b = StringViewBuilder::new();
             for c in cells {
                 match c {

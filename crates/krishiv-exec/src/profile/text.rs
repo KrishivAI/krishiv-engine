@@ -76,6 +76,14 @@ impl QueryProfile {
                 mem.limit.map_or_else(|| "none".to_owned(), |l| p.bytes(l))
             );
         }
+        if let Some(share) = m.hash_probe_share() {
+            let _ = writeln!(
+                out,
+                "hash probe: {} of {} driver busy time",
+                p.percent(share),
+                p.time(m.drivers.busy)
+            );
+        }
         if !self.detailed {
             out.push_str("(probe lengths not collected)\n");
         }
@@ -140,6 +148,8 @@ fn by_node(p: &QueryProfile) -> BTreeMap<u32, Vec<(OperatorId, &OperatorEntry)>>
 /// Extra metrics that depend on the query's hash seed (how keys spread
 /// over partitions and collide) or on how morsels split over drivers (how
 /// often a table grew), masked with the other volatile values.
+/// Also masked: every `exchange_` counter (a fused aggregation's exchange
+/// statistics), which depend on how many drivers ran and what they met.
 const VOLATILE: [&str; 6] = [
     "hash_buckets",
     "hash_resizes",
@@ -259,7 +269,9 @@ impl Printer<'_> {
     fn extra(&self, e: &OperatorEntry) -> String {
         let mut out = Vec::new();
         for (name, v) in &e.extra {
-            if self.opts.mask_volatile && VOLATILE.contains(&name.as_ref()) {
+            if self.opts.mask_volatile
+                && (VOLATILE.contains(&name.as_ref()) || name.starts_with("exchange_"))
+            {
                 out.push(format!("{name}=<n>"));
                 continue;
             }
@@ -325,6 +337,13 @@ impl Printer<'_> {
         } else {
             n.to_string()
         }
+    }
+
+    fn percent(&self, share: f64) -> String {
+        if self.opts.mask_volatile {
+            return "<n>%".to_owned();
+        }
+        format!("{:.1}%", share * 100.0)
     }
 
     fn bytes(&self, n: u64) -> String {

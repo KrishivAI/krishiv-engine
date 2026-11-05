@@ -119,6 +119,12 @@ pub struct ExprEnv {
     /// feature: legacy_charset_switches
     #[prost(bool, optional, tag = "9")]
     pub legacy_coding_error_action: ::core::option::Option<bool>,
+    /// `spark.sql.legacy.timeParserPolicy = LEGACY`: the datetime pattern
+    /// functions use the SimpleDateFormat parser; a worker without the feature
+    /// would read the patterns as DateTimeFormatter ones.
+    /// feature: legacy_time_parser
+    #[prost(bool, optional, tag = "10")]
+    pub legacy_time_parser: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {
@@ -133,7 +139,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -187,6 +193,68 @@ pub mod node {
         /// feature: generate
         #[prost(message, tag = "20")]
         Generate(super::GenerateNode),
+        /// feature: union_loop
+        #[prost(message, tag = "22")]
+        UnionLoop(super::UnionLoopNode),
+        /// feature: union_loop
+        #[prost(message, tag = "23")]
+        LoopRef(super::LoopRefNode),
+        /// feature: sort_merge_join
+        #[prost(message, tag = "21")]
+        SortMergeJoin(super::SortMergeJoinNode),
+        /// feature: late_fetch
+        #[prost(message, tag = "24")]
+        LateFetch(super::LateFetchNode),
+        /// feature: exchange_source
+        #[prost(message, tag = "25")]
+        ExchangeSource(super::ExchangeSourceNode),
+    }
+}
+/// feature: exchange_source
+/// The rows a task reads from an exchange another stage wrote: a leaf of a
+/// plan fragment. Which partitions it reads is task data.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExchangeSourceNode {
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    /// How the exchange placed its rows.
+    #[prost(message, optional, tag = "2")]
+    pub partitioning: ::core::option::Option<Partitioning>,
+    /// Its columns (Arrow IPC `Schema` flatbuffer).
+    #[prost(bytes = "vec", tag = "3")]
+    pub schema: ::prost::alloc::vec::Vec<u8>,
+}
+/// feature: late_fetch
+/// The rows of `input` with columns read from their files by row id.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct LateFetchNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    /// The table and the columns to read.
+    #[prost(message, optional, tag = "2")]
+    pub scan: ::core::option::Option<ScanNode>,
+    #[prost(uint64, tag = "3")]
+    pub file_col: u64,
+    #[prost(uint64, tag = "4")]
+    pub row_col: u64,
+    #[prost(message, repeated, tag = "5")]
+    pub output: ::prost::alloc::vec::Vec<FetchSlot>,
+}
+/// feature: late_fetch
+/// Where a column of a `LateFetchNode`'s output comes from.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FetchSlot {
+    #[prost(oneof = "fetch_slot::Kind", tags = "1, 2")]
+    pub kind: ::core::option::Option<fetch_slot::Kind>,
+}
+/// Nested message and enum types in `FetchSlot`.
+pub mod fetch_slot {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Kind {
+        #[prost(uint64, tag = "1")]
+        Input(u64),
+        #[prost(uint64, tag = "2")]
+        Fetched(u64),
     }
 }
 /// feature: shared_subplan
@@ -320,6 +388,45 @@ pub struct ReplicateRowsNode {
     #[prost(message, repeated, tag = "4")]
     pub subqueries: ::prost::alloc::vec::Vec<SubqueryPlan>,
 }
+/// feature: union_loop
+/// A recursive common table expression: the anchor runs once, then the
+/// recursive term runs round after round, reading the previous round through
+/// its LoopRefNode, until a round is empty or a limit is reached.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UnionLoopNode {
+    #[prost(uint32, tag = "1")]
+    pub id: u32,
+    #[prost(uint32, tag = "2")]
+    pub anchor: u32,
+    #[prost(uint32, tag = "3")]
+    pub recursive: u32,
+    #[prost(uint64, repeated, tag = "4")]
+    pub layout: ::prost::alloc::vec::Vec<u64>,
+    #[prost(message, optional, tag = "5")]
+    pub limits: ::core::option::Option<LoopLimits>,
+    #[prost(bool, repeated, tag = "6")]
+    pub nullable: ::prost::alloc::vec::Vec<bool>,
+}
+/// feature: union_loop
+/// The bounds on a loop, decided at planning.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LoopLimits {
+    #[prost(uint32, tag = "1")]
+    pub level: u32,
+    #[prost(uint64, tag = "2")]
+    pub rows: u64,
+    #[prost(uint64, optional, tag = "3")]
+    pub pushed_limit: ::core::option::Option<u64>,
+}
+/// feature: union_loop
+/// The previous round of the enclosing loop with the same id.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LoopRefNode {
+    #[prost(uint32, tag = "1")]
+    pub id: u32,
+    #[prost(uint64, repeated, tag = "2")]
+    pub layout: ::prost::alloc::vec::Vec<u64>,
+}
 /// feature: generate
 /// Each input row once per element of an array or map (explode, posexplode,
 /// inline): the input's columns, then the generated ones.
@@ -386,6 +493,9 @@ pub struct TopNNode {
     pub keys: ::prost::alloc::vec::Vec<SortKey>,
     #[prost(uint64, tag = "3")]
     pub limit: u64,
+    /// ignorable: a reader that skips it offers no bound, and scans only prune less.
+    #[prost(uint64, optional, tag = "4")]
+    pub bound: ::core::option::Option<u64>,
 }
 /// feature: window
 /// Window functions over an input sorted by the partitioning columns, then
@@ -491,7 +601,7 @@ pub struct NthValueFunction {
     #[prost(bytes = "vec", tag = "4")]
     pub data_type: ::prost::alloc::vec::Vec<u8>,
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WindowFrame {
     #[prost(enumeration = "FrameUnits", tag = "1")]
     pub units: i32,
@@ -507,6 +617,15 @@ pub struct WindowFrame {
     /// feature: window_frame_offsets
     #[prost(sint64, tag = "5")]
     pub upper_offset: i64,
+    /// `FRAME_BOUND_RANGE_INT` (16 bytes, big-endian two's complement `i128`) and
+    /// `FRAME_BOUND_RANGE_FLOAT` (8 bytes, big-endian IEEE bits): a `RANGE`
+    /// value bound's distance from the current row's key (negative: before it).
+    /// feature: window_range_bounds
+    #[prost(bytes = "vec", tag = "6")]
+    pub lower_range: ::prost::alloc::vec::Vec<u8>,
+    /// feature: window_range_bounds
+    #[prost(bytes = "vec", tag = "7")]
+    pub upper_range: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AggregateNode {
@@ -525,7 +644,7 @@ pub struct AggregateNode {
 pub struct AggregateExpr {
     #[prost(enumeration = "AggregateFunction", tag = "1")]
     pub function: i32,
-    /// `first` / `last` only.
+    /// `first`, `last` and `any_value` only.
     #[prost(bool, tag = "2")]
     pub ignore_nulls: bool,
     #[prost(uint64, repeated, tag = "3")]
@@ -578,6 +697,11 @@ pub struct AggregateExpr {
     /// folded HyperLogLog++ addressing bits).
     #[prost(uint32, tag = "16")]
     pub hll_precision: u32,
+    /// feature: interval_types (an array result of ANSI intervals only: the Arrow
+    /// IPC `Schema` flatbuffer of its element field, whose metadata holds the
+    /// interval's fields; empty otherwise).
+    #[prost(bytes = "vec", tag = "17")]
+    pub result_element: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Residual {
@@ -620,6 +744,27 @@ pub struct HashJoinNode {
     #[prost(bool, tag = "11")]
     pub distinct_build: bool,
 }
+/// feature: sort_merge_join
+/// A join of its inputs sorted on the keys; the sorts are the join's own.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SortMergeJoinNode {
+    #[prost(uint32, tag = "1")]
+    pub probe: u32,
+    #[prost(uint32, tag = "2")]
+    pub build: u32,
+    #[prost(enumeration = "JoinType", tag = "3")]
+    pub join_type: i32,
+    #[prost(uint64, repeated, tag = "4")]
+    pub probe_keys: ::prost::alloc::vec::Vec<u64>,
+    #[prost(uint64, repeated, tag = "5")]
+    pub build_keys: ::prost::alloc::vec::Vec<u64>,
+    #[prost(bool, repeated, tag = "6")]
+    pub null_safe: ::prost::alloc::vec::Vec<bool>,
+    #[prost(message, optional, tag = "7")]
+    pub residual: ::core::option::Option<Residual>,
+    #[prost(bool, tag = "8")]
+    pub single_match: bool,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NestedLoopJoinNode {
     #[prost(uint32, tag = "1")]
@@ -659,6 +804,10 @@ pub struct KeyFilterOptions {
     /// ignorable
     #[prost(bool, tag = "8")]
     pub scan_waits: bool,
+    /// ignorable: a reader that skips it sizes each Bloom for its keys; filters
+    /// of several build partitions then merge to their range, and pass more rows.
+    #[prost(uint32, optional, tag = "9")]
+    pub bloom_bytes: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnionNode {
@@ -700,6 +849,20 @@ pub struct WritePlan {
     /// Input column indices the files are partitioned by (Spark directory layout).
     #[prost(uint64, repeated, tag = "8")]
     pub partition_by: ::prost::alloc::vec::Vec<u64>,
+    /// feature: write_column_types
+    /// Input columns whose Spark type their Arrow type doesn't say.
+    #[prost(message, repeated, tag = "9")]
+    pub column_types: ::prost::alloc::vec::Vec<WriteColumnType>,
+}
+/// feature: write_column_types
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WriteColumnType {
+    /// feature: write_column_types
+    #[prost(uint64, tag = "1")]
+    pub column: u64,
+    /// feature: write_column_types
+    #[prost(message, optional, tag = "2")]
+    pub data_type: ::core::option::Option<DataType>,
 }
 /// v2: moves rows between partitions.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -764,6 +927,9 @@ pub struct ScanNode {
     pub runtime_filters: ::prost::alloc::vec::Vec<ScanRuntimeFilter>,
     #[prost(message, optional, tag = "8")]
     pub row_stage: ::core::option::Option<RowStageSettings>,
+    /// feature: late_fetch
+    #[prost(bool, tag = "9")]
+    pub row_id: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ColumnPath {
@@ -1035,6 +1201,28 @@ pub struct DataType {
     /// `KIND_GEOMETRY` and `KIND_GEOGRAPHY` only: the SRID, -1 for `ANY`.
     #[prost(int32, tag = "5")]
     pub srid: i32,
+    /// feature: interval_types
+    /// `KIND_YEAR_MONTH_INTERVAL` only: the leading field.
+    #[prost(enumeration = "YearMonthField", tag = "6")]
+    pub ym_start: i32,
+    /// feature: interval_types
+    /// `KIND_YEAR_MONTH_INTERVAL` only: the trailing field.
+    #[prost(enumeration = "YearMonthField", tag = "7")]
+    pub ym_end: i32,
+    /// feature: interval_types
+    /// `KIND_DAY_TIME_INTERVAL` only: the leading field.
+    #[prost(enumeration = "DayTimeField", tag = "8")]
+    pub dt_start: i32,
+    /// feature: interval_types
+    /// `KIND_DAY_TIME_INTERVAL` only: the trailing field.
+    #[prost(enumeration = "DayTimeField", tag = "9")]
+    pub dt_end: i32,
+    /// feature: collated_strings
+    /// `KIND_COLLATED_STRING` only: the collation's canonical name (never
+    /// `UTF8_BINARY`, which is `KIND_STRING`). Ids index an ICU build's
+    /// table, so they never travel.
+    #[prost(string, tag = "10")]
+    pub collation: ::prost::alloc::string::String,
 }
 /// Nested message and enum types in `DataType`.
 pub mod data_type {
@@ -1074,6 +1262,14 @@ pub mod data_type {
         Geometry = 17,
         /// feature: geo_types
         Geography = 18,
+        /// feature: interval_types
+        YearMonthInterval = 19,
+        /// feature: interval_types
+        DayTimeInterval = 20,
+        /// feature: interval_types
+        CalendarInterval = 21,
+        /// feature: collated_strings
+        CollatedString = 22,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -1101,6 +1297,10 @@ pub mod data_type {
                 Self::Time => "KIND_TIME",
                 Self::Geometry => "KIND_GEOMETRY",
                 Self::Geography => "KIND_GEOGRAPHY",
+                Self::YearMonthInterval => "KIND_YEAR_MONTH_INTERVAL",
+                Self::DayTimeInterval => "KIND_DAY_TIME_INTERVAL",
+                Self::CalendarInterval => "KIND_CALENDAR_INTERVAL",
+                Self::CollatedString => "KIND_COLLATED_STRING",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1125,6 +1325,10 @@ pub mod data_type {
                 "KIND_TIME" => Some(Self::Time),
                 "KIND_GEOMETRY" => Some(Self::Geometry),
                 "KIND_GEOGRAPHY" => Some(Self::Geography),
+                "KIND_YEAR_MONTH_INTERVAL" => Some(Self::YearMonthInterval),
+                "KIND_DAY_TIME_INTERVAL" => Some(Self::DayTimeInterval),
+                "KIND_CALENDAR_INTERVAL" => Some(Self::CalendarInterval),
+                "KIND_COLLATED_STRING" => Some(Self::CollatedString),
                 _ => None,
             }
         }
@@ -1134,7 +1338,7 @@ pub mod data_type {
 pub struct Literal {
     #[prost(
         oneof = "literal::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
     )]
     pub kind: ::core::option::Option<literal::Kind>,
 }
@@ -1174,7 +1378,29 @@ pub mod literal {
         YearMonth(super::YearMonthLiteral),
         #[prost(message, tag = "16")]
         DayTime(super::DayTimeLiteral),
+        /// feature: interval_types
+        #[prost(message, tag = "17")]
+        Calendar(super::CalendarLiteral),
+        /// feature: options_map_literals
+        #[prost(message, tag = "18")]
+        Map(super::MapLiteral),
     }
+}
+/// feature: options_map_literals
+/// A `MAP<STRING, STRING>` literal: one call's options (`from_json`,
+/// `from_csv`, `from_xml` and the like), entries in their given order.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MapLiteral {
+    #[prost(message, repeated, tag = "1")]
+    pub entries: ::prost::alloc::vec::Vec<MapLiteralEntry>,
+}
+/// feature: options_map_literals
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MapLiteralEntry {
+    #[prost(string, tag = "1")]
+    pub key: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub value: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NullLiteral {
@@ -1206,6 +1432,17 @@ pub struct DayTimeLiteral {
     pub start: i32,
     #[prost(enumeration = "DayTimeField", tag = "3")]
     pub end: i32,
+}
+/// feature: interval_types
+/// A calendar interval: each part counted on its own.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CalendarLiteral {
+    #[prost(sint32, tag = "1")]
+    pub months: i32,
+    #[prost(sint32, tag = "2")]
+    pub days: i32,
+    #[prost(sint64, tag = "3")]
+    pub micros: i64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1340,6 +1577,10 @@ pub enum FrameBound {
     UnboundedFollowing = 3,
     /// feature: window_frame_offsets
     Offset = 4,
+    /// feature: window_range_bounds
+    RangeInt = 5,
+    /// feature: window_range_bounds
+    RangeFloat = 6,
 }
 impl FrameBound {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1353,6 +1594,8 @@ impl FrameBound {
             Self::CurrentRow => "FRAME_BOUND_CURRENT_ROW",
             Self::UnboundedFollowing => "FRAME_BOUND_UNBOUNDED_FOLLOWING",
             Self::Offset => "FRAME_BOUND_OFFSET",
+            Self::RangeInt => "FRAME_BOUND_RANGE_INT",
+            Self::RangeFloat => "FRAME_BOUND_RANGE_FLOAT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1363,6 +1606,8 @@ impl FrameBound {
             "FRAME_BOUND_CURRENT_ROW" => Some(Self::CurrentRow),
             "FRAME_BOUND_UNBOUNDED_FOLLOWING" => Some(Self::UnboundedFollowing),
             "FRAME_BOUND_OFFSET" => Some(Self::Offset),
+            "FRAME_BOUND_RANGE_INT" => Some(Self::RangeInt),
+            "FRAME_BOUND_RANGE_FLOAT" => Some(Self::RangeFloat),
             _ => None,
         }
     }
@@ -1459,6 +1704,30 @@ pub enum AggregateFunction {
     PercentileDisc = 32,
     /// feature: percentile_aggregates
     ApproxCountDistinct = 33,
+    /// feature: moment_aggregates
+    StddevSamp = 34,
+    /// feature: moment_aggregates
+    StddevPop = 35,
+    /// feature: moment_aggregates
+    VarSamp = 36,
+    /// feature: moment_aggregates
+    VarPop = 37,
+    /// feature: moment_aggregates
+    Skewness = 38,
+    /// feature: moment_aggregates
+    Kurtosis = 39,
+    /// feature: moment_aggregates
+    Corr = 40,
+    /// feature: moment_aggregates
+    CovarSamp = 41,
+    /// feature: moment_aggregates
+    CovarPop = 42,
+    /// feature: any_value_by_aggregates
+    AnyValue = 43,
+    /// feature: any_value_by_aggregates
+    MaxBy = 44,
+    /// feature: any_value_by_aggregates
+    MinBy = 45,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1501,6 +1770,18 @@ impl AggregateFunction {
             Self::PercentileApprox => "AGGREGATE_FUNCTION_PERCENTILE_APPROX",
             Self::PercentileDisc => "AGGREGATE_FUNCTION_PERCENTILE_DISC",
             Self::ApproxCountDistinct => "AGGREGATE_FUNCTION_APPROX_COUNT_DISTINCT",
+            Self::StddevSamp => "AGGREGATE_FUNCTION_STDDEV_SAMP",
+            Self::StddevPop => "AGGREGATE_FUNCTION_STDDEV_POP",
+            Self::VarSamp => "AGGREGATE_FUNCTION_VAR_SAMP",
+            Self::VarPop => "AGGREGATE_FUNCTION_VAR_POP",
+            Self::Skewness => "AGGREGATE_FUNCTION_SKEWNESS",
+            Self::Kurtosis => "AGGREGATE_FUNCTION_KURTOSIS",
+            Self::Corr => "AGGREGATE_FUNCTION_CORR",
+            Self::CovarSamp => "AGGREGATE_FUNCTION_COVAR_SAMP",
+            Self::CovarPop => "AGGREGATE_FUNCTION_COVAR_POP",
+            Self::AnyValue => "AGGREGATE_FUNCTION_ANY_VALUE",
+            Self::MaxBy => "AGGREGATE_FUNCTION_MAX_BY",
+            Self::MinBy => "AGGREGATE_FUNCTION_MIN_BY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1540,6 +1821,18 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_PERCENTILE_APPROX" => Some(Self::PercentileApprox),
             "AGGREGATE_FUNCTION_PERCENTILE_DISC" => Some(Self::PercentileDisc),
             "AGGREGATE_FUNCTION_APPROX_COUNT_DISTINCT" => Some(Self::ApproxCountDistinct),
+            "AGGREGATE_FUNCTION_STDDEV_SAMP" => Some(Self::StddevSamp),
+            "AGGREGATE_FUNCTION_STDDEV_POP" => Some(Self::StddevPop),
+            "AGGREGATE_FUNCTION_VAR_SAMP" => Some(Self::VarSamp),
+            "AGGREGATE_FUNCTION_VAR_POP" => Some(Self::VarPop),
+            "AGGREGATE_FUNCTION_SKEWNESS" => Some(Self::Skewness),
+            "AGGREGATE_FUNCTION_KURTOSIS" => Some(Self::Kurtosis),
+            "AGGREGATE_FUNCTION_CORR" => Some(Self::Corr),
+            "AGGREGATE_FUNCTION_COVAR_SAMP" => Some(Self::CovarSamp),
+            "AGGREGATE_FUNCTION_COVAR_POP" => Some(Self::CovarPop),
+            "AGGREGATE_FUNCTION_ANY_VALUE" => Some(Self::AnyValue),
+            "AGGREGATE_FUNCTION_MAX_BY" => Some(Self::MaxBy),
+            "AGGREGATE_FUNCTION_MIN_BY" => Some(Self::MinBy),
             _ => None,
         }
     }

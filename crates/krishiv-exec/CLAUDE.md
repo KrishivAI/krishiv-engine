@@ -29,15 +29,24 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
 `probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join.
+`join/merge.rs` sort-merge join (P2-T056): `SortMergeJoin` is the source over two `Sort`s in hash buckets of the keys
+(`Sort::bucket_reader`, `PipelineBuilder::set_merge_source`), `Merge` the merge of one bucket pair; a key's right rows
+are the group, spilled past `krishiv.exec.join.smj.bufferBytes`; `join/fallback.rs` runs a grace partition that will not
+split through the same `Merge`.
 `values/` (P2-T177) `ValueService` + `LocalValues`: runtime filters, subquery results and broadcast builds as
 versioned values (`ValueId`, `Version` are plan data), published as one partial per producer partition and visible
 once every producer partition published (count 1 unless the task says otherwise; a retried partition's partial is
-ignored); `WorkerContext` holds the service, a fresh `LocalValues` per instantiation by default.
+ignored); `WorkerContext` holds the service, a fresh `LocalValues` per instantiation by default. A runtime filter's
+partials merge with `KeyFilter::merge` under the publishing join's options (`ValueService::filter_options`); a
+partitioned join's Bloom size is planned (`KeyFilterOptions::bloom_bytes`, P2-T177 unit 2) and dropped at
+instantiation when the filter has one producer partition.
 Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
 (adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model. A scan's pipeline
 starts after the pipelines publishing the filters worth the wait (`scan_waits`: not when the build reads the scan's
 own table, unless it is far smaller) unless they run with or after it (`runner.rs`, `with_filter_order`); no driver
-ever waits on a filter's value.
+ever waits on a filter's value. A `TopN` offers the first key of its last row the same way (`PhysNode::TopN::bound`, `ValueService::tighten`, design P2-T063): never where a filter below may raise or a nondeterministic plan sits below.
+`operators/late_fetch.rs` (design P2-T063) `LateFetch`: a breaker above a `TopN` over a narrow scan (`ScanNode::row_id` appends `_krishiv_row_file`, `_krishiv_row_index`) that reads the deferred columns of its rows through `ScanPushdown::take`, in the rows' order. Planned by `Planner::late_fetch` under the rules of the note's §4, up to `krishiv.exec.lateFetch.maxRows`; a partition column stays in the narrow scan, and an expression projection above the scan disables it.
+A filter on a partition column skips the files of partitions it drops (dynamic partition pruning, `file_scan.rs`).
 `window/` (P2-T055) the `Window` operator over input sorted by partition then order keys (the planner puts a
 `Sort` below it; `planner/window.rs`; over a hash exchange that sort splits its rows into hash buckets merged and read
 by several drivers, `operators/sort/sort.rs`): `mod.rs` plan types (`WindowPlan`, plan data) + the operator (buffers one
@@ -47,10 +56,17 @@ evaluated), `frames.rs` (ROWS frames with offsets and frames to the partition's 
 cumulative, in-order fold for float/ANSI sums), `spill.rs` (buffered rows spill under pressure; after a spill rows wait for the flush phase, which reads
 them back in order; a partition that does not fit is copied to its own file; failed/cancelled steps leave the state
 failed, never a short result), `stream.rs` (a partition evaluated from disk: lead and trailing readers, bounded
-memory), `group_limit.rs` (Spark's `WindowGroupLimit`: the exact limit operator below the window, the `Ranker`
+memory), `disk.rs` (frames and `lag`/`lead`/`nth_value` of a partition on disk: forward readers, a frame's batches held or folded from the file), `group_limit.rs` (Spark's `WindowGroupLimit`: the exact limit operator below the window, the `Ranker`
 the sort also uses to prune each sorted batch while that pays; the planner infers it for a filter over the window,
 `planner/window.rs`), `tests.rs` (property test against a naive reference; spilled vs in-memory equality).
 Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.
+`loops.rs` (T180 unit 5b) `UnionLoopSource`: a recursive CTE (`PhysNode::UnionLoop`/`LoopRef`) as one source. The anchor and each
+round of the recursive term run as queries of their own over a child `QueryContext` (child memory pool, cancelled with the
+outer query); every batch goes downstream at once and into the round's working table (`shared.rs` `Output::open/append`,
+spilled to the query's scope under pressure), which the next round's `LoopRef` reads (`SharedSource::over`). `Detached`
+(`instantiate.rs`) re-instantiates the recursive term per round with the loop tables bound; shared plans are built again each
+round. Limits (`LoopLimits`) are plan data. Seeded random functions draw round `k`'s stream at partition `k - 1` (`EvalEnv::partition_shift`, as Spark does); a working table of at most 100 rows is read by one driver in order (`Output::read_by_one_driver`), as Spark reads its `LocalRelation`. Not matched: Spark round-robins a larger working table into the shuffle partitions, which Krishiv's drivers do not reproduce. Not done: a
+nondeterministic enclosing CTE is evaluated once per round. `EXPLAIN ANALYZE` reports the rounds, their rows and the folded compute time and spill bytes of every round, a LIMIT-stopped one included (`add_run_metrics`).
 `physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
 `PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the
 worker that runs it; the planner validates nodes with the same builders). `PhysicalPlan::shared` (P2-T198): subplans
@@ -63,19 +79,34 @@ plan, and a deterministic one (the optimizer's `ShareCte`) only in a second pass
 `PhysicalPlan`; `QueryRunner::execute` runs an already instantiated `ExecNode` graph.
 `planner/aggregate.rs` also lowers `PlanNode::PartialAggregate` (P2-T167) onto a partial hash aggregate, and a call over
 `ResolvedExpr::StateInput` onto one merging its states; it refuses states the optimizer typed differently.
+`exchange/` (P2-T176 unit 1) the spec 13 §6 traits `Exchange`/`ExchangeWriter`/`ExchangeReader` (blocking mode,
+commit before read, first committed attempt wins), `route` (hash by the plan's `HashScheme`, round-robin by the routing
+hash of the whole row, gathers/broadcasts/ranges to partition 0), `ExchangeSink` (a map task's root: rows routed and
+buffered per reduce partition under the driver's consumer, a spill hands them to the writer as frames, commit at
+finalize) and `ExchangeRead` (a reduce task's `PhysNode::ExchangeSource`: `(map, reduce)` pairs as morsels, one driver
+in map order for a gather). `instantiate_task` writes a root exchange when `TaskSpec::output` is set and reads each
+source as `TaskSpec::exchanges` says; `exchange_schemas` gives a fragmenter each exchange's columns. Storage is
+`krishiv-shuffle`'s, fragments and stages are `krishiv-scheduler`'s.
 `planner/properties.rs` (P2-T174) the ADR 0012 property pass: required distributions and provided placements (by
 attribute id); `Exchange` nodes (`Hash` on the routing hash, `Single`, `Broadcast`, `RoundRobin`, `Range`) are inserted
 only where a requirement is unmet; on one worker instantiation lowers each exchange into the operators around it.
+An aggregate over rows that must move is planned in two phases, `Aggregate{Partial}` -> exchange -> `Aggregate{Final}`
+over states (`planner/aggregate.rs`, design P2-T174 unit 2; `DISTINCT`: partial over keys and argument, exchange,
+partial merge, final, `physical::distinct_phases`, fused back by `fused_distinct`); `physical::fused_aggregate`
+runs the three as one `HashAggregate::fused` breaker on one worker (`WorkerContext::with_fused_aggregates(false)` runs
+them as written, for tests), whose drivers record the `ExchangeStats` (`exchange_stats.rs`: rows and bytes per
+partition, `Hll(10)` of the keys) that `EXPLAIN ANALYZE` prints as `exchange_*`.
 
 ## Key files
 Paths are relative to this crate.
+- `src/carrier.rs` moves a value between decimal carriers (nested ones too); `planner/eval/func.rs` `Recarried` keeps registry functions and UDFs on `Decimal128`
 - `src/operator.rs` Source, Operator and Sink traits; `src/pipeline.rs` `ExecNode` and `PipelineBuilder`
 - `src/driver.rs` the pipeline driver: yields, memory waits, spill servicing, cancellation
 - `src/runner.rs` `QueryRunner` and the scheduler (first error wins)
 - `src/physical/mod.rs` `PhysNode` and `PhysicalPlan` as serializable data; `src/physical/instantiate.rs` builds operators on the worker
 - `src/planner/mod.rs` physical planner (IR to physical plan); `src/planner/runtime_filter.rs` runtime-filter sites
 - `src/operators/mod.rs` stateless operators (scan, filter, project, limit, union)
-- `src/aggregate/mod.rs` hash aggregate; `src/join/mod.rs` hash join (build, probe, grace spill)
+- `src/aggregate/mod.rs` hash aggregate (`rowtable.rs` the row tables, `merge_index.rs` the salted index of a large final-phase merge); `src/join/mod.rs` hash join (build, probe, grace spill)
 - `src/rows/mod.rs` row-table layout and pages shared by aggregate and join; the stored row hash `h` is a fast seedless
   table hash, never the routing hash `H_kg` (kernels `hash::routing`, used only by exchanges and key groups);
   tables place rows by the seeded `g = finalize(h, seed)`; `rows/flooding_tests.rs` bounds probe runs under crafted and forged `h` collisions

@@ -2,6 +2,7 @@
 //! Literal values.
 
 use krishiv_types::{DataType, DecimalType};
+pub use krishiv_types::{DayTimeField, YearMonthField};
 
 /// A literal value, in Spark's physical representation for its type.
 ///
@@ -68,6 +69,15 @@ pub enum Literal {
         /// The trailing field; equal to `start` for a single-field type.
         end: DayTimeField,
     },
+    /// A calendar `INTERVAL`, which only casts and calendar arithmetic make.
+    CalendarInterval {
+        /// Months.
+        months: i32,
+        /// Days.
+        days: i32,
+        /// Microseconds.
+        micros: i64,
+    },
 }
 
 impl std::fmt::Debug for Literal {
@@ -110,30 +120,18 @@ impl std::fmt::Debug for Literal {
                 .field("start", start)
                 .field("end", end)
                 .finish(),
+            Self::CalendarInterval {
+                months,
+                days,
+                micros,
+            } => f
+                .debug_struct("CalendarInterval")
+                .field("months", months)
+                .field("days", days)
+                .field("micros", micros)
+                .finish(),
         }
     }
-}
-
-/// A field of a year-month interval type (Spark's `YearMonthIntervalType`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum YearMonthField {
-    /// `YEAR`.
-    Year,
-    /// `MONTH`.
-    Month,
-}
-
-/// A field of a day-time interval type (Spark's `DayTimeIntervalType`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum DayTimeField {
-    /// `DAY`.
-    Day,
-    /// `HOUR`.
-    Hour,
-    /// `MINUTE`.
-    Minute,
-    /// `SECOND`.
-    Second,
 }
 
 /// The value of a [`Literal`] with floats as bits, so it derives `Eq`.
@@ -156,6 +154,7 @@ enum Key<'a> {
     TimestampNtz(i64),
     YearMonth(i32, YearMonthField, YearMonthField),
     DayTime(i64, DayTimeField, DayTimeField),
+    Calendar(i32, i32, i64),
 }
 
 impl Literal {
@@ -181,6 +180,11 @@ impl Literal {
             Self::TimestampNtz(v) => Key::TimestampNtz(*v),
             Self::YearMonthInterval { months, start, end } => Key::YearMonth(*months, *start, *end),
             Self::DayTimeInterval { micros, start, end } => Key::DayTime(*micros, *start, *end),
+            Self::CalendarInterval {
+                months,
+                days,
+                micros,
+            } => Key::Calendar(*months, *days, *micros),
         }
     }
 }

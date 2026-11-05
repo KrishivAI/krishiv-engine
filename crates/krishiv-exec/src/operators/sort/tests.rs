@@ -11,8 +11,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::Int32Type;
-use arrow_array::{ArrayRef, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch};
+use arrow_array::types::{Int32Type, Int64Type};
+use arrow_array::{
+    ArrayRef, Float32Array, Float64Array, Int32Array, Int64Array, RecordBatch, StringViewArray,
+};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use krishiv_common::error::ErrorClass;
 use krishiv_memory::{
@@ -24,7 +26,7 @@ use super::Sort;
 use super::keys::{KeyEncoder, SortKey};
 use super::merge::{
     Bucketing, Merger, Slice, SortedBatch, interleave_batches, merge_part, merge_splitters,
-    parallel_merge, sort_parts, sort_slices,
+    owned_rows, parallel_merge, sort_parts, sort_slices,
 };
 use crate::context::{ExecConfig, OperatorId, QueryContext, QueryId, TaskContext};
 use crate::executor::{Executor, TokioExecutor, WorkloadClass};
@@ -270,6 +272,165 @@ async fn spill_global_spills_the_combined_buffers() {
     assert_eq!(root.reserved(), 0);
     drop(manager);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A spilled run of view columns is sized as written (compacted), not by the
+/// input buffers its merged batches still share: sized by those, a merge of
+/// 60M `lineitem` rows asked for 1.4 GB at fan-in 2 under a 1 GB limit.
+#[tokio::test(start_paused = true)]
+async fn a_spilled_run_of_views_is_sized_as_written() {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("s", DataType::Utf8View, false),
+    ]));
+    let n = 200usize;
+    let k = Int64Array::from_iter_values((0..n as i64).rev());
+    let s = StringViewArray::from_iter_values((0..n).map(|i| format!("{i:0>1000}")));
+    let whole = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(s)])
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let shared = whole.get_array_memory_size();
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let root = TreePool::new(&MemoryConfig::default());
+    let config = ExecConfig {
+        batch_size: 20,
+        ..ExecConfig::default()
+    };
+    let query = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        config,
+        root.child("q", None),
+    );
+    let ctx = |op| {
+        TaskContext::new(
+            Arc::clone(&query),
+            Arc::clone(&executor),
+            SpillOwner::new(),
+            OperatorId(op),
+            "Sort",
+        )
+    };
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!("sort-unit-views-{}", std::process::id()));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: dir.clone(),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let sort = Sort::new(schema, &[SortKey::asc(0)], Some(manager.scope().unwrap())).unwrap();
+    let sink_ctx = ctx(0);
+    let global = Sink::global_state(&sort, &sink_ctx).unwrap();
+    for half in [0, n / 2] {
+        let mut local = Sink::local_state(&sort, &sink_ctx, &global).unwrap();
+        for at in (half..half + n / 2).step_by(20) {
+            sort.sink(Batch::new(whole.slice(at, 20)), &mut local, &global)
+                .unwrap();
+        }
+        sort.combine(local, &global).unwrap();
+    }
+    assert!(sort.spill_global(&global, 1, &sink_ctx).await.unwrap() > 0);
+    sort.finalize(&global, &sink_ctx).await.unwrap();
+    assert!(sort.metrics().runs_spilled >= 1);
+
+    let source_ctx = ctx(1).with_dependency(Arc::clone(&global));
+    let source_global = Source::global_state(&sort, &source_ctx).unwrap();
+    let mut local = Source::local_state(&sort, &source_ctx, &source_global).unwrap();
+    let mut keys = Vec::new();
+    while let Some(b) = sort.get_data(&mut local, &source_global).await.unwrap() {
+        keys.extend(
+            b.data()
+                .column(0)
+                .as_primitive::<Int64Type>()
+                .values()
+                .iter()
+                .copied(),
+        );
+    }
+    assert_eq!(keys, (0..n as i64).collect::<Vec<_>>());
+    // About 20 KB a frame; sized by the shared buffers (over 200 KB) the
+    // merge reserved three of those per run.
+    let peak = source_ctx.consumer().consumer().peak();
+    assert!(
+        peak < shared,
+        "merge peak {peak} B, shared buffers {shared} B"
+    );
+    drop((local, source_global, source_ctx, global, sink_ctx));
+    assert_eq!(manager.used_bytes(), 0);
+    assert_eq!(root.reserved(), 0);
+    drop(manager);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Batches of views into shared buffers (an exchange's output) are kept as
+/// compacted copies and charged by their rows: charged by the buffers, ten
+/// slices of one page charged (and held) the page ten times, and a sort
+/// under a limit spilled a run per batch (51K spill files on a partitioned
+/// window over 60M `lineitem` rows at 1 GB).
+/// A small slice of a large batch is copied down to its rows, values and
+/// weights kept; a batch that is all its buffers hold is returned as is.
+#[test]
+fn owned_rows_copies_only_sparse_slices() {
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, true)]));
+    let n = 150_000i64;
+    let k = Int64Array::from_iter((0..n).map(|i| (i % 7 != 3).then_some(i)));
+    let whole = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k)])
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let shared = whole.get_array_memory_size();
+    let weights = Weights::Column(Int64Array::from_iter_values(1..=8_192));
+    let slice = Batch::with_weights(whole.slice(1_000, 8_192), weights.clone())
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let owned = owned_rows(slice.clone()).unwrap_or_else(|e| unreachable!("{e}"));
+    assert!(owned.data().get_array_memory_size() * 10 < shared);
+    assert_eq!(owned.data(), slice.data());
+    assert_eq!(owned.weights(), &weights);
+    let full = Batch::new(whole.clone());
+    let kept = owned_rows(full).unwrap_or_else(|e| unreachable!("{e}"));
+    assert_eq!(
+        kept.data().column(0).to_data().buffers()[0].as_ptr(),
+        whole.column(0).to_data().buffers()[0].as_ptr()
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn sunk_views_into_shared_buffers_are_charged_by_their_rows() {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("s", DataType::Utf8View, false),
+    ]));
+    let n = 200usize;
+    let k = Int64Array::from_iter_values((0..n as i64).rev());
+    let s = StringViewArray::from_iter_values((0..n).map(|i| format!("{i:0>1000}")));
+    let whole = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(k), Arc::new(s)])
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let shared = whole.get_array_memory_size();
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let root = TreePool::new(&MemoryConfig::default());
+    let query = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        ExecConfig::default(),
+        root.child("q", None),
+    );
+    let ctx = TaskContext::new(
+        Arc::clone(&query),
+        executor,
+        SpillOwner::new(),
+        OperatorId(0),
+        "Sort",
+    );
+    let sort = Sort::new(schema, &[SortKey::asc(0)], None).unwrap();
+    let global = Sink::global_state(&sort, &ctx).unwrap();
+    let mut local = Sink::local_state(&sort, &ctx, &global).unwrap();
+    for at in (0..n).step_by(20) {
+        let slice = Batch::new(whole.slice(at, 20));
+        assert!(slice.data().get_array_memory_size() > shared / 2);
+        sort.sink(slice, &mut local, &global).unwrap();
+    }
+    let held = ctx.consumer().consumer().peak();
+    assert!(held < 2 * shared, "held {held} B, one page {shared} B");
+    drop((local, global, ctx, query));
+    assert_eq!(root.reserved(), 0);
 }
 
 /// Intermediate merges rewrite only as many runs as it takes to get down to
@@ -1023,6 +1184,45 @@ fn a_part_with_a_shared_prefix_sorts_past_it() {
     assert_eq!(order.len(), 1000);
     let row = |&(s, r): &(u32, u32)| memory[s as usize].0.rows.row(r as usize);
     assert!(order.windows(2).all(|w| row(&w[0]) <= row(&w[1])));
+}
+
+/// Slices of very different lengths, some empty, with many equal keys: the
+/// merge gives the order of a sort by `(key, slice, row)`, whichever run of a
+/// pair is the shorter.
+#[test]
+fn merging_the_slices_gives_the_order_of_sorting_them() {
+    let schema = int_schema();
+    let keys = KeyEncoder::new(&schema, &[SortKey::asc(0)]).unwrap();
+    for (sizes, distinct) in [
+        (vec![1000, 1, 1, 1, 1], 7),
+        (vec![1, 1, 1, 1, 1000], 7),
+        (vec![300, 0, 5, 0, 700, 40, 40, 0], 13),
+        (vec![64; 33], 1000),
+        (vec![10; 3], 1),
+    ] {
+        let memory: Vec<Slice> = sizes
+            .iter()
+            .enumerate()
+            .map(|(b, &rows)| {
+                let at = move |r: i64| (r * 31 + b as i64 * 17) % distinct;
+                let column: ArrayRef = Arc::new(Int64Array::from_iter_values((0..rows).map(at)));
+                let batch = RecordBatch::try_new(Arc::clone(&schema), vec![column]).unwrap();
+                let s = Arc::new(SortedBatch::new(Batch::new(batch), &keys, None).unwrap());
+                let all = 0..s.order.len();
+                (s, all)
+            })
+            .collect();
+        let mut want: Vec<(u32, u32)> = memory
+            .iter()
+            .zip(0_u32..)
+            .flat_map(|((s, _), i)| (0_u32..).take(s.order.len()).map(move |r| (i, r)))
+            .collect();
+        want.sort_unstable_by(|&a, &b| {
+            let row = |(s, r): (u32, u32)| memory[s as usize].0.rows.row(r as usize);
+            row(a).cmp(&row(b)).then(a.cmp(&b))
+        });
+        assert_eq!(sort_slices(&memory).unwrap(), want, "{sizes:?}");
+    }
 }
 
 #[test]

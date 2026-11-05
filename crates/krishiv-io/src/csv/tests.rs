@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    TimestampMicrosecondType,
+    Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+    Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
@@ -96,7 +96,10 @@ fn ddl_type(t: &str) -> DataType {
             let (p, s) = d["decimal(".len()..d.len() - 1]
                 .split_once(',')
                 .expect("decimal(p,s)");
-            DataType::Decimal128(p.trim().parse().expect("p"), s.trim().parse().expect("s"))
+            krishiv_types::arrow::canonical_arrow_type(&DataType::Decimal128(
+                p.trim().parse().expect("p"),
+                s.trim().parse().expect("s"),
+            ))
         }
         other => panic!("unknown type {other}"),
     }
@@ -136,7 +139,7 @@ fn type_name(dt: &DataType) -> String {
         DataType::Boolean => "boolean".into(),
         DataType::Date32 => "date".into(),
         DataType::Timestamp(_, Some(_)) => "timestamp".into(),
-        DataType::Decimal128(p, s) => format!("decimal({p},{s})"),
+        DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => format!("decimal({p},{s})"),
         other => panic!("{other}"),
     }
 }
@@ -187,6 +190,9 @@ fn render(a: &dyn Array, i: usize) -> Option<String> {
         DataType::Int64 => a.as_primitive::<Int64Type>().value(i).to_string(),
         DataType::Float32 => java_float_string32(a.as_primitive::<Float32Type>().value(i)),
         DataType::Float64 => java_double_string(a.as_primitive::<Float64Type>().value(i)),
+        DataType::Decimal64(_, s) => {
+            plain_decimal(i128::from(a.as_primitive::<Decimal64Type>().value(i)), *s)
+        }
         DataType::Decimal128(_, s) => {
             plain_decimal(a.as_primitive::<Decimal128Type>().value(i), *s)
         }
@@ -220,6 +226,7 @@ fn read_split(
 ) -> Result<Vec<RecordBatch>, KrishivError> {
     let m: Arc<dyn FileMetadata> = Arc::new(TextMetadata {
         size: bytes.len() as u64,
+        codec: None,
     });
     let units = CsvFormat
         .plan_units(m.as_ref(), &split, req)
@@ -881,7 +888,7 @@ fn multi_line_files_belong_to_the_first_split() {
 }
 
 #[test]
-fn written_files_read_back_and_codecs_are_refused() {
+fn written_files_read_back_and_unknown_codecs_are_refused() {
     let w = options(&serde_json::json!({"header": "true", "compression": "none"}));
     assert_eq!(CsvFormat.file_suffix(&w), ".csv");
     let bytes = encode(&strings_batch(), &w).expect("encode");
@@ -894,17 +901,21 @@ fn written_files_read_back_and_codecs_are_refused() {
     // A multi-line reader turns every line end inside quotes into `\n`.
     assert_eq!(rows[10][1].as_deref(), Some("a\nb"));
     assert_eq!(rows[1][1].as_deref(), Some("a,b"));
-    // Compression needs codecs this build lacks: a typed error, not a wrong file.
-    let unsupported = krishiv_common::error::ErrorClass::KrishivUnsupportedFeature;
-    for name in ["gzip", "deflate", "snappy", "zstd", "bzip2", "lz4"] {
-        let w = options(&serde_json::json!({"compression": name}));
-        let e = encode(&strings_batch(), &w).expect_err("unsupported codec");
-        assert_eq!(e.error_class(), unsupported, "{name}");
-    }
-    for name in ["a.csv.gz", "a.csv.deflate", "a.csv.bz2", "a.csv.zst"] {
-        let e = infer_named(b"a,b\n", name, &options(&serde_json::json!({}))).expect_err(name);
-        assert_eq!(e.error_class(), unsupported, "{name}");
-    }
+    // Spark has no zstd text codec; the others are covered in `text::format_codec_tests`.
+    let e = encode(
+        &strings_batch(),
+        &options(&serde_json::json!({"compression": "zstd"})),
+    )
+    .expect_err("unknown codec");
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::CodecNotAvailableWithAvailableCodecsSuggestion
+    );
+    let e = infer_named(b"a,b\n", "a.csv.zst", &options(&serde_json::json!({}))).expect_err("zst");
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+    );
 }
 
 #[test]
@@ -1162,25 +1173,33 @@ fn every_arrow_representation_reads_and_nested_types_are_refused() {
 }
 
 #[test]
-fn a_region_time_zone_fails_only_timestamp_conversions() {
+fn a_region_time_zone_shifts_by_its_rules_and_unknown_ones_fail() {
     let o = options(&serde_json::json!({"timeZone": "America/New_York"}));
+    let ts = ddl("a int, t timestamp");
+    let got = read(b"1,2020-01-01 10:00:00\n", &o, &ScanRequest::all(ts)).expect("region zone");
+    let micros = got[0]
+        .column(1)
+        .as_primitive::<arrow_array::types::TimestampMicrosecondType>()
+        .value(0);
+    // 10:00 in New York (UTC-5) is 15:00 UTC.
+    assert_eq!(micros, (18_262 * 86_400 + 15 * 3_600) * 1_000_000);
+    assert!(encode(&types_batch(), &o).is_ok());
+    let o = options(&serde_json::json!({"timeZone": "Foo/Bar"}));
     let ints = ScanRequest::all(int_schema());
     assert_eq!(
         rows_of(&read(b"1,x\n", &o, &ints).expect("no timestamps")).len(),
         1
     );
-    let ts = ddl("a int, t timestamp");
-    let e = read(b"1,2020-01-01 10:00:00\n", &o, &ScanRequest::all(ts)).expect_err("zone");
+    let e = read(
+        b"1,2020-01-01 10:00:00\n",
+        &o,
+        &ScanRequest::all(ddl("a int, t timestamp")),
+    )
+    .expect_err("zone");
     assert_eq!(
         e.error_class(),
-        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+        krishiv_common::error::ErrorClass::InvalidTimezone
     );
-    let e = encode(&types_batch(), &o).expect_err("zone");
-    assert_eq!(
-        e.error_class(),
-        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
-    );
-    assert!(encode(&strings_batch(), &o).is_ok());
 }
 
 #[test]

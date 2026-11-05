@@ -33,7 +33,8 @@ mod xxh64;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
-    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalMonthDayNano, IntervalMonthDayNanoType,
+    IntervalYearMonthType, Time64NanosecondType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrowPrimitiveType, Int32Array, Int64Array};
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
@@ -130,6 +131,8 @@ enum Col<'a> {
     Int16(Prim<'a, i16>),
     Int32(Prim<'a, i32>),
     Int64(Prim<'a, i64>),
+    /// A calendar interval: months, days and nanoseconds.
+    Calendar(Prim<'a, IntervalMonthDayNano>),
     Float32(Prim<'a, f32>),
     Float64(Prim<'a, f64>),
     /// `decimal(p <= 18, s)`: the unscaled value as a `long`.
@@ -189,6 +192,13 @@ impl<'a> Col<'a> {
             }
             DataType::Duration(TimeUnit::Microsecond) => {
                 Self::Int64(Prim::of::<DurationMicrosecondType>(a))
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                Self::Calendar(Prim::of::<IntervalMonthDayNanoType>(a))
+            }
+            // TIME: Spark hashes the nanoseconds since midnight as a long.
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                Self::Int64(Prim::of::<Time64NanosecondType>(a))
             }
             DataType::Float32 => Self::Float32(Prim::of::<Float32Type>(a)),
             DataType::Float64 => Self::Float64(Prim::of::<Float64Type>(a)),
@@ -259,6 +269,13 @@ impl<'a> Col<'a> {
             Self::Int16(p) => p.fold(i, s, |v, s| H::hash_int(v.into(), s)),
             Self::Int32(p) => p.fold(i, s, H::hash_int),
             Self::Int64(p) => p.fold(i, s, H::hash_long),
+            // Spark's generated code, which any query over a scan runs: the
+            // microseconds, then the months; the days are not hashed (design
+            // P2-T001b Q3). Spark's interpreted path, which it uses for a
+            // folded or `VALUES` input, hashes them too.
+            Self::Calendar(p) => p.fold(i, s, |v, s| {
+                H::hash_int(v.months, H::hash_long(v.nanoseconds / 1_000, s))
+            }),
             Self::Float32(p) => p.fold(i, s, |v, s| H::hash_int(float_bits(v), s)),
             Self::Float64(p) => p.fold(i, s, |v, s| H::hash_long(double_bits(v), s)),
             // At most 18 digits fit a long; the fallback is never taken.

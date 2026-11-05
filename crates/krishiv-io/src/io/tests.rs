@@ -210,6 +210,47 @@ fn timeouts_are_retried_then_fail() {
 }
 
 #[test]
+fn a_store_that_lists_whole_has_no_listing_timeout() {
+    rt().block_on(async {
+        let config = IoConfig {
+            request_timeout: Duration::from_millis(10),
+            max_retries: 0,
+            ..IoConfig::default()
+        };
+        let s = setup(config);
+        put(&s, "d/a", 1).await;
+        s.fault.set_list_latency(Duration::from_millis(50));
+        let dir = Path::from("d");
+        let e = s.io.list(&s.id, &dir).await.unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivObjectStoreRequestFailed);
+        s.sched.register_whole_listing_store(
+            s.id.clone(),
+            Arc::clone(&s.fault) as Arc<dyn ObjectStore>,
+        );
+        assert_eq!(s.io.list(&s.id, &dir).await.unwrap().len(), 1);
+    });
+}
+
+#[test]
+fn a_slow_listing_still_fails_when_told_to() {
+    rt().block_on(async {
+        let s = setup(IoConfig::default());
+        put(&s, "d/a", 1).await;
+        put(&s, "d/b", 1).await;
+        s.fault.set_list_latency(Duration::from_millis(1));
+        s.fault.fail_next_lists(1);
+        let dir = Path::from("d");
+        let failed: Vec<_> = s.fault.list(Some(&dir)).collect().await;
+        assert_eq!(failed.len(), 2);
+        assert!(failed[0].is_ok());
+        assert!(failed[1].is_err());
+        let next: Vec<_> = s.fault.list(Some(&dir)).collect().await;
+        assert!(next.iter().all(Result::is_ok));
+        assert_eq!(next.len(), 2);
+    });
+}
+
+#[test]
 fn versions_are_checked_on_every_read() {
     rt().block_on(async {
         let s = setup(IoConfig::default());
@@ -758,4 +799,42 @@ fn reservations_cover_the_whole_coalesced_read() {
         drop(held);
         assert_eq!(pool.reserved(), 0);
     });
+}
+
+#[test]
+fn the_block_cache_settings_come_from_the_config() {
+    let off = IoConfig::from_config(&Config::new());
+    assert!(off.block_cache.is_none());
+    let (c, _) = Config::from_pairs([
+        ("krishiv.io.cache.enabled", "true"),
+        ("krishiv.io.cache.path", "/cache/krishiv"),
+        ("krishiv.io.cache.diskBytes", "2g"),
+        ("krishiv.io.cache.memoryBytes", "8m"),
+        ("krishiv.io.cache.blockBytes", "256k"),
+    ])
+    .unwrap();
+    let on = IoConfig::from_config(&c).block_cache.unwrap();
+    assert_eq!(on.dir, std::path::PathBuf::from("/cache/krishiv"));
+    assert_eq!(on.disk_bytes, 2 << 30);
+    assert_eq!(on.memory_bytes, 8 << 20);
+    assert_eq!(on.block_bytes, 256 << 10);
+}
+
+#[test]
+fn the_block_cache_directory_defaults_to_a_per_user_temp_directory() {
+    let (c, _) = Config::from_pairs([("krishiv.io.cache.enabled", "true")]).unwrap();
+    let dir = IoConfig::from_config(&c).block_cache.unwrap().dir;
+    let name = dir.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.starts_with("krishiv-block-cache-"), "{name}");
+    assert_eq!(dir.parent().unwrap(), std::env::temp_dir());
+}
+
+#[test]
+fn if_unmodified_since_allows_the_rest_of_the_microsecond_or_of_a_whole_second() {
+    use super::unmodified_since_limit;
+    let ns = |d: Option<chrono::DateTime<chrono::Utc>>| d.unwrap().timestamp_nanos_opt().unwrap();
+    assert_eq!(ns(unmodified_since_limit(1_500_001)), 1_500_001_999);
+    // A whole-second token is an HTTP date: the store may hold a later fraction of that second.
+    assert_eq!(ns(unmodified_since_limit(2_000_000)), 3_000_000_000);
+    assert!(unmodified_since_limit(i64::MAX).is_none());
 }

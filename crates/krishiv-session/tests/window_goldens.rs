@@ -24,9 +24,8 @@ use futures::executor::block_on;
 use krishiv_session::Session;
 use serde_json::Value;
 
-/// Cases of a later part of P2-T055 (`RANGE` frames with value bounds):
-/// they fail with `KRISHIV_UNSUPPORTED_FEATURE` until then.
-const PENDING: [&str; 1] = ["range_offset"];
+/// Cases that fail with `KRISHIV_UNSUPPORTED_FEATURE` until implemented.
+const PENDING: [&str; 0] = [];
 
 /// Known gaps outside window functions, with the error they give until
 /// fixed. The fixture's tables are temporary views in Spark, which

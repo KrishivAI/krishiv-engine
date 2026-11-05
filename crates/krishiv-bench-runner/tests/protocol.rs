@@ -21,6 +21,7 @@ fn runner(dir: &tempfile::TempDir) -> Runner {
         threads: 2,
         io_threads: None,
         memory_limit: "1g".to_owned(),
+        tables: Vec::new(),
         conf: Vec::new(),
     })
     .unwrap()
@@ -89,6 +90,7 @@ fn a_directory_of_parts_is_one_table_and_an_empty_directory_is_refused() {
         threads: 1,
         io_threads: None,
         memory_limit: "1g".to_owned(),
+        tables: Vec::new(),
         conf: Vec::new(),
     })
     .unwrap_err();
@@ -98,6 +100,7 @@ fn a_directory_of_parts_is_one_table_and_an_empty_directory_is_refused() {
         threads: 1,
         io_threads: None,
         memory_limit: "1g".to_owned(),
+        tables: Vec::new(),
         conf: Vec::new(),
     });
     assert!(missing.unwrap_err().to_string().contains("cannot read"));
@@ -114,6 +117,7 @@ fn conf_settings_reach_the_session() {
             threads: 1,
             io_threads: None,
             memory_limit: "1g".to_owned(),
+            tables: Vec::new(),
             conf,
         })
         .unwrap()
@@ -248,6 +252,7 @@ fn dump_runs_the_query_once_and_leaves_no_view() {
         threads: 1,
         io_threads: None,
         memory_limit: "1g".to_owned(),
+        tables: Vec::new(),
         conf: Vec::new(),
     })
     .unwrap();
@@ -509,6 +514,7 @@ fn conf_is_applied_after_the_memory_limit_and_unknown_keys_are_rejected() {
             threads: 1,
             io_threads: None,
             memory_limit: "1g".to_owned(),
+            tables: Vec::new(),
             conf: conf
                 .into_iter()
                 .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -523,4 +529,308 @@ fn conf_is_applied_after_the_memory_limit_and_unknown_keys_are_rejected() {
     assert!(unknown.to_string().contains("no.such.setting"), "{unknown}");
     assert!(unknown.to_string().contains("not applied"), "{unknown}");
     assert!(new(vec![("krishiv.memory.limit", "2g")]).is_ok());
+}
+
+#[test]
+fn table_arguments_register_views_over_urls() {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/tpch/q1-lineitem.parquet");
+    let args = |extra: &[&str]| {
+        RunnerConfig::from_args(
+            ["--table", &format!("lineitem=file://{}", fixture.display())]
+                .into_iter()
+                .chain(extra.iter().copied())
+                .map(str::to_owned),
+        )
+    };
+    // No `--data` needed; the table reads through its URL.
+    let config = args(&[
+        "--threads",
+        "2",
+        "--conf",
+        "fs.s3a.endpoint=http://127.0.0.1:9",
+    ])
+    .unwrap();
+    assert!(config.data.is_empty());
+    let r = Runner::new(&config).unwrap();
+    assert_eq!(r.tables(), ["lineitem"]);
+    let reply = r.handle_line(&format!(
+        "RUN {}",
+        encode_path(&{
+            let sql = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(sql.path(), "SELECT count(*) FROM lineitem").unwrap();
+            sql.into_temp_path()
+                .keep()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned()
+        })
+    ));
+    assert!(reply.unwrap().starts_with("OK 1 "), "one count row");
+    // A bad spec, and neither source, are refused.
+    assert!(RunnerConfig::from_args(["--table", "x"].map(str::to_owned)).is_err());
+    assert!(RunnerConfig::from_args(["--threads", "2"].map(str::to_owned)).is_err());
+}
+
+#[test]
+fn remote_table_urls_get_their_own_errors_not_a_credentials_error() {
+    for url in [
+        "hf://datasets/cornell-movie-review-data/rotten_tomatoes/validation.parquet",
+        "http://127.0.0.1:1/datasets/a/b/resolve/main/c.parquet",
+        "s3://fw/p.parquet",
+    ] {
+        // Loopback endpoints and no retries keep every case off the network and fast.
+        let config = RunnerConfig::from_args(
+            [
+                "--conf",
+                "fs.hf.endpoint=http://127.0.0.1:1",
+                "--conf",
+                "fs.s3a.endpoint=http://127.0.0.1:1",
+                "--conf",
+                "fs.s3a.access.key=k",
+                "--conf",
+                "fs.s3a.secret.key=s",
+                "--conf",
+                "fs.s3a.path.style.access=true",
+                "--conf",
+                "krishiv.io.maxRetries=0",
+                "--table",
+                &format!("fw={url}"),
+            ]
+            .map(str::to_owned),
+        )
+        .unwrap();
+        let err = Runner::new(&config)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        // The path classifier's own message, not a store's "lacked valid authentication credentials".
+        assert!(!err.contains("paths with credentials"), "{url}: {err}");
+    }
+}
+
+/// `--table` repeated with one name lists several files of one table.
+#[test]
+fn a_repeated_table_flag_collects_its_urls() {
+    let config = RunnerConfig::from_args(
+        [
+            "--table",
+            "fw=https://example.com/a.parquet",
+            "--table",
+            "fw=https://example.com/b.parquet",
+            "--table",
+            "other=https://example.com/c.parquet",
+        ]
+        .map(str::to_owned),
+    )
+    .unwrap();
+    assert_eq!(config.tables.len(), 2);
+    assert_eq!(config.tables[0].0, "fw");
+    assert_eq!(config.tables[0].1.len(), 2);
+}
+
+/// A `.parquet` file under `--data` that is not Parquet fails the runner's start with the read error,
+/// not a missing-table message.
+#[test]
+fn a_corrupt_table_file_fails_the_start() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("broken.parquet"), "not parquet").unwrap();
+    let err = Runner::new(&RunnerConfig {
+        data: dir.path().to_str().unwrap().to_owned(),
+        threads: 1,
+        io_threads: None,
+        memory_limit: "1g".to_owned(),
+        tables: Vec::new(),
+        conf: Vec::new(),
+    })
+    .err()
+    .map(|e| e.to_string())
+    .unwrap_or_default();
+    assert!(!err.is_empty(), "a corrupt table must not start the runner");
+    assert!(!err.contains("no <table>.parquet"), "{err}");
+}
+
+/// A writer that fails on the first write, as a closed pipe does.
+struct BrokenPipe;
+
+impl std::io::Write for BrokenPipe {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "closed",
+        ))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// The READY line is the first write: a harness that went away ends `serve` with the I/O error.
+#[test]
+fn serve_reports_a_closed_output() {
+    let dir = data_dir();
+    let r = runner(&dir);
+    let err = serve(&r, std::io::Cursor::new(b"QUIT\n"), &mut BrokenPipe).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+}
+
+/// `--build-info` exits non-zero when stdout cannot be written (`/dev/full` fails every write).
+#[cfg(target_os = "linux")]
+#[test]
+fn build_info_fails_when_stdout_is_full() {
+    use std::process::{Command, Stdio};
+
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let status = Command::new(env!("CARGO_BIN_EXE_krishiv-bench-runner"))
+        .arg("--build-info")
+        .stdout(Stdio::from(full))
+        .status()
+        .unwrap();
+    assert!(!status.success());
+}
+
+/// Every flag that takes a value refuses to end the command line, and a bad number is a config error.
+#[test]
+fn flags_without_values_and_bad_numbers_are_config_errors() {
+    for flag in [
+        "--data",
+        "--table",
+        "--threads",
+        "--memory-limit",
+        "--io-threads",
+        "--conf",
+    ] {
+        let err = RunnerConfig::from_args([flag.to_owned()]).unwrap_err();
+        assert!(err.to_string().contains(flag), "{flag}: {err}");
+    }
+    for args in [
+        ["--data", "d", "--threads", "x"],
+        ["--data", "d", "--io-threads", "x"],
+        ["--data", "d", "--conf", "no-equals"],
+        ["--data", "d", "--bogus", "1"],
+    ] {
+        assert!(
+            RunnerConfig::from_args(args.map(str::to_owned)).is_err(),
+            "{args:?}"
+        );
+    }
+}
+
+/// A memory limit that does not parse stops the start before any table is read.
+#[test]
+fn an_invalid_memory_limit_fails_the_start() {
+    let dir = data_dir();
+    let config = |limit: &str| RunnerConfig {
+        data: dir.path().to_str().unwrap().to_owned(),
+        threads: 1,
+        io_threads: None,
+        memory_limit: limit.to_owned(),
+        tables: Vec::new(),
+        conf: Vec::new(),
+    };
+    assert!(Runner::new(&config("lots")).is_err());
+}
+
+/// A writer that accepts bytes and fails to flush, or fails once `ok_writes` writes have gone through.
+struct Flaky {
+    ok_writes: usize,
+    flush_fails: bool,
+}
+
+impl std::io::Write for Flaky {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.ok_writes == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "closed",
+            ));
+        }
+        self.ok_writes -= 1;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.flush_fails {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "closed",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// A reader whose first read fails.
+struct BadInput;
+
+impl std::io::Read for BadInput {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("read failed"))
+    }
+}
+
+/// `serve` ends with the I/O error of the flush after READY, of an unreadable input, and of a reply write.
+#[test]
+fn serve_reports_flush_input_and_reply_failures() {
+    let dir = data_dir();
+    let r = runner(&dir);
+    // READY is written (one write per `writeln!` piece is at most a few), but the flush fails.
+    let mut flush = Flaky {
+        ok_writes: usize::MAX,
+        flush_fails: true,
+    };
+    assert!(serve(&r, std::io::Cursor::new(b"QUIT\n"), &mut flush).is_err());
+    // READY and its flush succeed; reading the next line fails.
+    let mut ok = Flaky {
+        ok_writes: usize::MAX,
+        flush_fails: false,
+    };
+    let err = serve(&r, std::io::BufReader::new(BadInput), &mut ok).unwrap_err();
+    assert_eq!(err.to_string(), "read failed");
+    // READY goes through; the reply to a command cannot be written.
+    let mut few = Flaky {
+        ok_writes: 4,
+        flush_fails: false,
+    };
+    assert!(serve(&r, std::io::Cursor::new(b"BOGUS\nQUIT\n"), &mut few).is_err());
+}
+
+/// The binary reports a startup failure of the runner (a data directory that is not there) on stderr
+/// and exits non-zero.
+#[test]
+fn the_binary_reports_a_runner_that_cannot_start() {
+    use std::process::Command;
+
+    let out = Command::new(env!("CARGO_BIN_EXE_krishiv-bench-runner"))
+        .args(["--data", "/nonexistent/krishiv-bench-data"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read"));
+}
+
+/// The binary reports a closed stdout (`/dev/full`) when it serves, and exits non-zero.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_binary_reports_a_stdout_that_cannot_be_written() {
+    use std::process::{Command, Stdio};
+
+    let dir = data_dir();
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_krishiv-bench-runner"))
+        .args(["--data", dir.path().to_str().unwrap(), "--threads", "1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(full))
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
 }

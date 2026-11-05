@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, Time64NanosecondType, TimestampMicrosecondType,
 };
-use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
+use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, RecordBatchOptions};
 use arrow_buffer::{BooleanBuffer, NullBuffer};
-use arrow_schema::DataType as ArrowType;
+use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
 use krishiv_kernels::compare::{
     self, BoolOperand, CompareKind, Equal, Greater, GreaterEq, Less, LessEq, Validity,
 };
@@ -113,6 +113,80 @@ impl PhysExpr for AndOr {
         } else {
             Value::Array(out)
         })
+    }
+}
+
+/// A null-intolerant binary operator whose right operand is evaluated only on
+/// the rows where the left one is not NULL. Spark's `BinaryExpression.eval`
+/// returns NULL as soon as the left value is NULL, so an error in the right
+/// operand (`CAST_INVALID_INPUT`, `DIVIDE_BY_ZERO`, overflow) on such a row
+/// never surfaces. The left operand is evaluated once, then the right one over
+/// the rows it leaves, and `op` (the operator compiled over two placeholder
+/// columns, 0 and 1) combines the two columns.
+#[derive(Debug)]
+struct LeftThenRight {
+    left: Arc<dyn PhysExpr>,
+    right: Arc<dyn PhysExpr>,
+    op: Arc<dyn PhysExpr>,
+    schema: SchemaRef,
+}
+
+/// `op` over the values of `left` and of `right`, the latter only where the
+/// former is not NULL.
+pub(super) fn left_then_right(
+    left: Arc<dyn PhysExpr>,
+    right: Arc<dyn PhysExpr>,
+    op: Arc<dyn PhysExpr>,
+) -> Arc<dyn PhysExpr> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("l", left.data_type().clone(), true),
+        Field::new("r", right.data_type().clone(), true),
+    ]));
+    Arc::new(LeftThenRight {
+        left,
+        right,
+        op,
+        schema,
+    })
+}
+
+impl PhysExpr for LeftThenRight {
+    fn data_type(&self) -> &ArrowType {
+        self.op.data_type()
+    }
+
+    fn nullable(&self) -> bool {
+        self.op.nullable()
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let rows = batch.num_rows();
+        let lv = self.left.eval(batch, partition)?;
+        let rv = match lv.array().logical_nulls().filter(|n| n.null_count() > 0) {
+            None => self.right.eval(batch, partition)?,
+            Some(nulls) => {
+                // A NULL literal on the left: no row evaluates the right side.
+                let set = if lv.is_scalar() {
+                    BooleanBuffer::new_unset(rows)
+                } else {
+                    nulls.inner().clone()
+                };
+                Value::Array(super::eval_where(
+                    self.right.as_ref(),
+                    batch,
+                    &set,
+                    partition,
+                )?)
+            }
+        };
+        let columns = vec![lv.into_array(rows)?, rv.into_array(rows)?];
+        let pair = RecordBatch::try_new_with_options(
+            Arc::clone(&self.schema),
+            columns,
+            &RecordBatchOptions::new().with_row_count(Some(rows)),
+        )
+        .map_err(|e| internal(&e.to_string()))?;
+        self.op.eval(&pair, partition)
     }
 }
 
@@ -229,7 +303,12 @@ pub(super) fn compare(
             (lt, rt),
             (ArrowType::Timestamp(lu, _), ArrowType::Timestamp(ru, _)) if lu == ru
         )
-        || matches!((lt, rt), (ArrowType::Struct(_), ArrowType::Struct(_)));
+        || matches!((lt, rt), (ArrowType::Struct(_), ArrowType::Struct(_)))
+        || matches!(
+            (lt, rt),
+            (ArrowType::List(a), ArrowType::List(b))
+                if krishiv_kernels::order::same_modulo_carrier(a.data_type(), b.data_type())
+        );
     if !comparable {
         return Err(internal(&format!("comparison of {lt} with {rt}")));
     }
@@ -363,9 +442,17 @@ pub(crate) fn cmp(
         ArrowType::Int64 => prim!(Int64Type),
         ArrowType::Float32 => prim!(Float32Type),
         ArrowType::Float64 => prim!(Float64Type),
+        ArrowType::Decimal64(..) => prim!(Decimal64Type),
         ArrowType::Decimal128(..) => prim!(Decimal128Type),
         ArrowType::Date32 => prim!(Date32Type),
         ArrowType::Timestamp(..) => prim!(TimestampMicrosecondType),
+        ArrowType::Time64(_) => prim!(Time64NanosecondType),
+        ArrowType::Interval(arrow_schema::IntervalUnit::YearMonth) => {
+            prim!(arrow_array::types::IntervalYearMonthType)
+        }
+        ArrowType::Duration(arrow_schema::TimeUnit::Microsecond) => {
+            prim!(arrow_array::types::DurationMicrosecondType)
+        }
         ArrowType::Boolean => {
             let (a, b) = (bool_operand(l), bool_operand(r));
             match kind {
@@ -390,12 +477,41 @@ pub(crate) fn cmp(
             bytes(kind, l, r, rows, bin_value)?
         }
         ArrowType::Struct(fields) => struct_cmp(kind, l, r, rows, fields.len(), ctx)?,
+        ArrowType::List(_) | ArrowType::LargeList(_) => list_cmp(kind, l, r, rows)?,
         other => {
             return Err(crate::planner::build::unsupported(&format!(
                 "comparison of {other} values"
             )));
         }
     })
+}
+
+/// Lists compare element by element in Spark's order (NULL elements are the
+/// smallest and equal one another, a shorter prefix is smaller); a NULL list
+/// makes the answer NULL.
+fn list_cmp(kind: CompareKind, l: &Value, r: &Value, rows: usize) -> Result<BooleanArray> {
+    let (l, r) = (l.clone().into_array(rows)?, r.clone().into_array(rows)?);
+    if l.len() != rows || r.len() != rows {
+        return Err(internal("list comparison operands differ in length"));
+    }
+    let mut values = Vec::with_capacity(rows);
+    for i in 0..rows {
+        if l.is_null(i) || r.is_null(i) {
+            values.push(None);
+            continue;
+        }
+        let ord = krishiv_kernels::order::cmp_rows(l.as_ref(), i, r.as_ref(), i)
+            .map_err(|e| internal(&e.to_string()))?;
+        values.push(Some(match kind {
+            CompareKind::Equal => ord.is_eq(),
+            CompareKind::NotEqual => ord.is_ne(),
+            CompareKind::Less => ord.is_lt(),
+            CompareKind::LessEq => ord.is_le(),
+            CompareKind::Greater => ord.is_gt(),
+            CompareKind::GreaterEq => ord.is_ge(),
+        }));
+    }
+    Ok(BooleanArray::from(values))
 }
 
 /// Whether struct Arrow types compare field-wise: the same fields of
@@ -549,7 +665,7 @@ pub(super) fn bin_value(a: &dyn Array, i: usize) -> &[u8] {
 }
 
 /// The views and data buffers of a string or binary view array.
-fn view_parts(a: &dyn Array) -> (&[u128], &[arrow_buffer::Buffer]) {
+pub(super) fn view_parts(a: &dyn Array) -> (&[u128], &[arrow_buffer::Buffer]) {
     match a.data_type() {
         ArrowType::Utf8View => {
             let v = a.as_string_view();
@@ -588,7 +704,7 @@ fn views_equal(a: u128, ab: &[arrow_buffer::Buffer], b: u128, bb: &[arrow_buffer
 /// The bytes of a view of a value longer than 12 bytes, in its data buffer.
 #[inline]
 #[expect(clippy::cast_possible_truncation, reason = "a view's 32-bit fields")]
-fn long_bytes(v: u128, bufs: &[arrow_buffer::Buffer]) -> Option<&[u8]> {
+pub(super) fn long_bytes(v: u128, bufs: &[arrow_buffer::Buffer]) -> Option<&[u8]> {
     let (len, buffer, offset) = (
         v as u32 as usize,
         (v >> 64) as u32 as usize,
@@ -604,17 +720,20 @@ fn view_eq(equal: bool, l: &Value, r: &Value, rows: usize) -> BooleanArray {
     let (la, ra) = (l.array(), r.array());
     let ((lv, lb), (rv, rb)) = (view_parts(la.as_ref()), view_parts(ra.as_ref()));
     let (ls, rs) = (l.is_scalar(), r.is_scalar());
-    let at = |scalar: bool, i: usize| if scalar { 0 } else { i };
-    let values: BooleanBuffer = (0..rows)
-        .map(|i| {
-            let (x, y) = (at(ls, i), at(rs, i));
-            let same = match (lv.get(x), rv.get(y)) {
-                (Some(&a), Some(&b)) => views_equal(a, lb, b, rb),
-                _ => false,
-            };
-            same == equal
-        })
-        .collect();
+    let values = match (ls, rs, lv.first(), rv.first()) {
+        (false, true, _, Some(&b)) => view_eq_literal(equal, lv, lb, b, rb, rows),
+        (true, false, Some(&a), _) => view_eq_literal(equal, rv, rb, a, lb, rows),
+        _ => {
+            let at = |scalar: bool, i: usize| if scalar { 0 } else { i };
+            BooleanBuffer::collect_bool(rows, |i| {
+                let same = match (lv.get(at(ls, i)), rv.get(at(rs, i))) {
+                    (Some(&a), Some(&b)) => views_equal(a, lb, b, rb),
+                    _ => false,
+                };
+                same == equal
+            })
+        }
+    };
     let null_of = |a: &ArrayRef, scalar: bool| -> Option<NullBuffer> {
         if scalar {
             // A NULL scalar makes every row NULL.
@@ -625,6 +744,31 @@ fn view_eq(equal: bool, l: &Value, r: &Value, rows: usize) -> BooleanArray {
     };
     let nulls = NullBuffer::union(null_of(la, ls).as_ref(), null_of(ra, rs).as_ref());
     BooleanArray::new(values, nulls)
+}
+
+/// [`view_eq`] of a column and one value: a value of 12 bytes or fewer is
+/// decided by the whole view alone.
+#[expect(clippy::cast_possible_truncation, reason = "a view's 32-bit fields")]
+fn view_eq_literal(
+    equal: bool,
+    views: &[u128],
+    bufs: &[arrow_buffer::Buffer],
+    lit: u128,
+    lit_bufs: &[arrow_buffer::Buffer],
+    rows: usize,
+) -> BooleanBuffer {
+    let views = views.get(..rows).unwrap_or(views);
+    if lit as u32 <= 12 {
+        return BooleanBuffer::collect_bool(views.len(), |i| {
+            views.get(i).is_some_and(|&v| v == lit) == equal
+        });
+    }
+    BooleanBuffer::collect_bool(views.len(), |i| {
+        views
+            .get(i)
+            .is_some_and(|&v| views_equal(v, bufs, lit, lit_bufs))
+            == equal
+    })
 }
 
 /// Byte-wise comparison (Spark's `UTF8_BINARY` order for strings).

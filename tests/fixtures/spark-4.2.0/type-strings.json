@@ -1,7 +1,7 @@
 {
  "format_version": 1,
  "spark_version": "4.2.0",
- "image": "apache/spark:4.2.0",
+ "image": "local spark-shell",
  "generator": "tests/scripts/gen_type_strings.py",
  "notes": "DDL strings parsed by CatalystSqlParser.parseDataType; decimal_constructor builds DecimalType(precision, scale) directly. Errors carry Spark's condition, SQLSTATE and message parameters.",
  "ddl": [
@@ -782,6 +782,419 @@
    "type_name": "string collate UTF8_LCASE",
    "json": "\"string collate UTF8_LCASE\"",
    "simple_string_reparses": true
+  },
+  {
+   "ddl": "TIME",
+   "simple_string": "time(6)",
+   "catalog_string": "time(6)",
+   "sql": "TIME(6)",
+   "type_name": "time(6)",
+   "json": "\"time(6)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time(0)",
+   "simple_string": "time(0)",
+   "catalog_string": "time(0)",
+   "sql": "TIME(0)",
+   "type_name": "time(0)",
+   "json": "\"time(0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time(3)",
+   "simple_string": "time(3)",
+   "catalog_string": "time(3)",
+   "sql": "TIME(3)",
+   "type_name": "time(3)",
+   "json": "\"time(3)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "TIME(6)",
+   "simple_string": "time(6)",
+   "catalog_string": "time(6)",
+   "sql": "TIME(6)",
+   "type_name": "time(6)",
+   "json": "\"time(6)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time(06)",
+   "simple_string": "time(6)",
+   "catalog_string": "time(6)",
+   "sql": "TIME(6)",
+   "type_name": "time(6)",
+   "json": "\"time(6)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time(7)",
+   "error_class": "UNSUPPORTED_TIME_PRECISION",
+   "sql_state": "0A001",
+   "message_parameters": {
+    "precision": "7"
+   }
+  },
+  {
+   "ddl": "time(-1)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'-'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time()",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time(1,2)",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"TIME(1,2)\""
+   }
+  },
+  {
+   "ddl": "time(99999999999)",
+   "error_class": "UNCLASSIFIED",
+   "exception": "java.lang.NumberFormatException"
+  },
+  {
+   "ddl": "time without time zone",
+   "simple_string": "time(6)",
+   "catalog_string": "time(6)",
+   "sql": "TIME(6)",
+   "type_name": "time(6)",
+   "json": "\"time(6)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "TIME(3) WITHOUT TIME ZONE",
+   "simple_string": "time(3)",
+   "catalog_string": "time(3)",
+   "sql": "TIME(3)",
+   "type_name": "time(3)",
+   "json": "\"time(3)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time with time zone",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time with local time zone",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time(3) with time zone",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time_ntz",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"TIME_NTZ\""
+   }
+  },
+  {
+   "ddl": "time without",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'without'",
+    "hint": ": extra input 'without'"
+   }
+  },
+  {
+   "ddl": "time(3) without time",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ": missing 'ZONE'"
+   }
+  },
+  {
+   "ddl": "geometry(0)",
+   "simple_string": "geometry(0)",
+   "catalog_string": "geometry(0)",
+   "sql": "GEOMETRY(0)",
+   "type_name": "geometry(0)",
+   "json": "\"geometry(SRID:0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "GEOMETRY(4326)",
+   "simple_string": "geometry(4326)",
+   "catalog_string": "geometry(4326)",
+   "sql": "GEOMETRY(4326)",
+   "type_name": "geometry(4326)",
+   "json": "\"geometry(OGC:CRS84)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(3857)",
+   "simple_string": "geometry(3857)",
+   "catalog_string": "geometry(3857)",
+   "sql": "GEOMETRY(3857)",
+   "type_name": "geometry(3857)",
+   "json": "\"geometry(EPSG:3857)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry( 3857 )",
+   "simple_string": "geometry(3857)",
+   "catalog_string": "geometry(3857)",
+   "sql": "GEOMETRY(3857)",
+   "type_name": "geometry(3857)",
+   "json": "\"geometry(EPSG:3857)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(04326)",
+   "simple_string": "geometry(4326)",
+   "catalog_string": "geometry(4326)",
+   "sql": "GEOMETRY(4326)",
+   "type_name": "geometry(4326)",
+   "json": "\"geometry(OGC:CRS84)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(any)",
+   "simple_string": "geometry(any)",
+   "catalog_string": "geometry(any)",
+   "sql": "GEOMETRY(ANY)",
+   "type_name": "geometry(any)",
+   "json": "\"geometry(SRID:ANY)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "GEOMETRY(ANY)",
+   "simple_string": "geometry(any)",
+   "catalog_string": "geometry(any)",
+   "sql": "GEOMETRY(ANY)",
+   "type_name": "geometry(any)",
+   "json": "\"geometry(SRID:ANY)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(Any)",
+   "simple_string": "geometry(any)",
+   "catalog_string": "geometry(any)",
+   "sql": "GEOMETRY(ANY)",
+   "type_name": "geometry(any)",
+   "json": "\"geometry(SRID:ANY)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(`any`)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(anything)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"GEOMETRY\""
+   }
+  },
+  {
+   "ddl": "geometry()",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(9999)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "9999"
+   }
+  },
+  {
+   "ddl": "geometry(-1)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(1)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "1"
+   }
+  },
+  {
+   "ddl": "geometry(99999999999)",
+   "error_class": "UNCLASSIFIED",
+   "exception": "java.lang.NumberFormatException"
+  },
+  {
+   "ddl": "geometry(4326,0)",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"GEOMETRY(4326,0)\""
+   }
+  },
+  {
+   "ddl": "geometry(srid:0)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(any",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(any,1)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geography(any) int",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ": extra input 'int'"
+   }
+  },
+  {
+   "ddl": "geography(4326)",
+   "simple_string": "geography(4326)",
+   "catalog_string": "geography(4326)",
+   "sql": "GEOGRAPHY(4326)",
+   "type_name": "geography(4326)",
+   "json": "\"geography(OGC:CRS84, SPHERICAL)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "GEOGRAPHY(ANY)",
+   "simple_string": "geography(any)",
+   "catalog_string": "geography(any)",
+   "sql": "GEOGRAPHY(ANY)",
+   "type_name": "geography(any)",
+   "json": "\"geography(SRID:ANY, SPHERICAL)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geography(any)",
+   "simple_string": "geography(any)",
+   "catalog_string": "geography(any)",
+   "sql": "GEOGRAPHY(ANY)",
+   "type_name": "geography(any)",
+   "json": "\"geography(SRID:ANY, SPHERICAL)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geography",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"GEOGRAPHY\""
+   }
+  },
+  {
+   "ddl": "geography(0)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "0"
+   }
+  },
+  {
+   "ddl": "geography(3857)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "3857"
+   }
+  },
+  {
+   "ddl": "geography(9999)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "9999"
+   }
+  },
+  {
+   "ddl": "geography(-1)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geography(4326, spherical)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'spherical'",
+    "hint": ""
+   }
   },
   {
    "ddl": "",
@@ -2149,6 +2562,559 @@
    "simple_string_reparses": true
   },
   {
+   "ddl": "interval",
+   "simple_string": "interval",
+   "catalog_string": "interval",
+   "sql": "INTERVAL",
+   "type_name": "interval",
+   "json": "\"interval\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "INTERVAL",
+   "simple_string": "interval",
+   "catalog_string": "interval",
+   "sql": "INTERVAL",
+   "type_name": "interval",
+   "json": "\"interval\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "Interval",
+   "simple_string": "interval",
+   "catalog_string": "interval",
+   "sql": "INTERVAL",
+   "type_name": "interval",
+   "json": "\"interval\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval year",
+   "simple_string": "interval year",
+   "catalog_string": "interval year",
+   "sql": "INTERVAL YEAR",
+   "type_name": "interval year",
+   "json": "\"interval year\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval month",
+   "simple_string": "interval month",
+   "catalog_string": "interval month",
+   "sql": "INTERVAL MONTH",
+   "type_name": "interval month",
+   "json": "\"interval month\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "INTERVAL YEAR TO MONTH",
+   "simple_string": "interval year to month",
+   "catalog_string": "interval year to month",
+   "sql": "INTERVAL YEAR TO MONTH",
+   "type_name": "interval year to month",
+   "json": "\"interval year to month\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval day",
+   "simple_string": "interval day",
+   "catalog_string": "interval day",
+   "sql": "INTERVAL DAY",
+   "type_name": "interval day",
+   "json": "\"interval day\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval hour",
+   "simple_string": "interval hour",
+   "catalog_string": "interval hour",
+   "sql": "INTERVAL HOUR",
+   "type_name": "interval hour",
+   "json": "\"interval hour\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval minute",
+   "simple_string": "interval minute",
+   "catalog_string": "interval minute",
+   "sql": "INTERVAL MINUTE",
+   "type_name": "interval minute",
+   "json": "\"interval minute\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval second",
+   "simple_string": "interval second",
+   "catalog_string": "interval second",
+   "sql": "INTERVAL SECOND",
+   "type_name": "interval second",
+   "json": "\"interval second\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval day to hour",
+   "simple_string": "interval day to hour",
+   "catalog_string": "interval day to hour",
+   "sql": "INTERVAL DAY TO HOUR",
+   "type_name": "interval day to hour",
+   "json": "\"interval day to hour\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval day to minute",
+   "simple_string": "interval day to minute",
+   "catalog_string": "interval day to minute",
+   "sql": "INTERVAL DAY TO MINUTE",
+   "type_name": "interval day to minute",
+   "json": "\"interval day to minute\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval hour to minute",
+   "simple_string": "interval hour to minute",
+   "catalog_string": "interval hour to minute",
+   "sql": "INTERVAL HOUR TO MINUTE",
+   "type_name": "interval hour to minute",
+   "json": "\"interval hour to minute\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval hour to second",
+   "simple_string": "interval hour to second",
+   "catalog_string": "interval hour to second",
+   "sql": "INTERVAL HOUR TO SECOND",
+   "type_name": "interval hour to second",
+   "json": "\"interval hour to second\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval minute to second",
+   "simple_string": "interval minute to second",
+   "catalog_string": "interval minute to second",
+   "sql": "INTERVAL MINUTE TO SECOND",
+   "type_name": "interval minute to second",
+   "json": "\"interval minute to second\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "interval month to month",
+   "error_class": "INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION",
+   "sql_state": "22006",
+   "message_parameters": {
+    "from": "month",
+    "input": "",
+    "to": "month"
+   }
+  },
+  {
+   "ddl": "interval hour to hour",
+   "error_class": "INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION",
+   "sql_state": "22006",
+   "message_parameters": {
+    "from": "hour",
+    "input": "",
+    "to": "hour"
+   }
+  },
+  {
+   "ddl": "interval minute to minute",
+   "error_class": "INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION",
+   "sql_state": "22006",
+   "message_parameters": {
+    "from": "minute",
+    "input": "",
+    "to": "minute"
+   }
+  },
+  {
+   "ddl": "interval second to second",
+   "error_class": "INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION",
+   "sql_state": "22006",
+   "message_parameters": {
+    "from": "second",
+    "input": "",
+    "to": "second"
+   }
+  },
+  {
+   "ddl": "interval second to minute",
+   "error_class": "INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION",
+   "sql_state": "22006",
+   "message_parameters": {
+    "from": "second",
+    "input": "",
+    "to": "minute"
+   }
+  },
+  {
+   "ddl": "interval minute to hour",
+   "error_class": "INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION",
+   "sql_state": "22006",
+   "message_parameters": {
+    "from": "minute",
+    "input": "",
+    "to": "hour"
+   }
+  },
+  {
+   "ddl": "interval month to year",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval hour to day",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval year to second",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval day to day",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval year to year",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval day to month",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval years",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'years'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval days",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'days'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval week",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'week'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval abc",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'abc'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval year to",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ": extra input 'to'"
+   }
+  },
+  {
+   "ddl": "interval day to",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ": extra input 'to'"
+   }
+  },
+  {
+   "ddl": "interval day second",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'second'",
+    "hint": ": extra input 'second'"
+   }
+  },
+  {
+   "ddl": "interval(3)",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INTERVAL(3)\""
+   }
+  },
+  {
+   "ddl": "interval year(3)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval year extra",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'extra'",
+    "hint": ": extra input 'extra'"
+   }
+  },
+  {
+   "ddl": "`interval`",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INTERVAL\""
+   }
+  },
+  {
+   "ddl": "`interval` year",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'year'",
+    "hint": ": extra input 'year'"
+   }
+  },
+  {
+   "ddl": "array<interval>",
+   "simple_string": "array<interval>",
+   "catalog_string": "array<interval>",
+   "sql": "ARRAY<INTERVAL>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"interval\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "array<interval day to second>",
+   "simple_string": "array<interval day to second>",
+   "catalog_string": "array<interval day to second>",
+   "sql": "ARRAY<INTERVAL DAY TO SECOND>",
+   "type_name": "array",
+   "json": "{\"type\":\"array\",\"elementType\":\"interval day to second\",\"containsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "map<interval month,interval hour to minute>",
+   "simple_string": "map<interval month,interval hour to minute>",
+   "catalog_string": "map<interval month,interval hour to minute>",
+   "sql": "MAP<INTERVAL MONTH, INTERVAL HOUR TO MINUTE>",
+   "type_name": "map",
+   "json": "{\"type\":\"map\",\"keyType\":\"interval month\",\"valueType\":\"interval hour to minute\",\"valueContainsNull\":true}",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "struct<a:interval year to month not null comment 'c',b:interval>",
+   "simple_string": "struct<a:interval year to month,b:interval>",
+   "catalog_string": "struct<a:interval year to month,b:interval>",
+   "sql": "STRUCT<a: INTERVAL YEAR TO MONTH NOT NULL COMMENT 'c', b: INTERVAL>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"interval year to month\",\"nullable\":false,\"metadata\":{\"comment\":\"c\"}},{\"name\":\"b\",\"type\":\"interval\",\"nullable\":true,\"metadata\":{}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:interval month to year>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:interval second to minute>",
+   "error_class": "INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION",
+   "sql_state": "22006",
+   "message_parameters": {
+    "from": "second",
+    "input": "",
+    "to": "minute"
+   }
+  },
+  {
+   "ddl": "array<interval abc>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array<interval day to month>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "array<interval year to>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ": extra input 'to'"
+   }
+  },
+  {
+   "ddl": "array<interval year(3)>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:interval year to month x>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   }
+  },
+  {
+   "ddl": "map<interval day to,int>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ": extra input 'to'"
+   }
+  },
+  {
+   "ddl": "array<interval to>",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'<'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval to",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'to'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval 3",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'3'",
+    "hint": ": extra input '3'"
+   }
+  },
+  {
+   "ddl": "interval year to month x",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ": extra input 'x'"
+   }
+  },
+  {
+   "ddl": "interval year x y",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval x y",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'x'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "interval day to second(3)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "struct<a:interval comment 'c'>",
+   "simple_string": "struct<a:interval>",
+   "catalog_string": "struct<a:interval>",
+   "sql": "STRUCT<a: INTERVAL COMMENT 'c'>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"interval\",\"nullable\":true,\"metadata\":{\"comment\":\"c\"}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "struct<a:interval not null>",
+   "simple_string": "struct<a:interval>",
+   "catalog_string": "struct<a:interval>",
+   "sql": "STRUCT<a: INTERVAL NOT NULL>",
+   "type_name": "struct",
+   "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"interval\",\"nullable\":false,\"metadata\":{}}]}",
+   "simple_string_reparses": false
+  },
+  {
+   "ddl": "array<interval(3)>",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"INTERVAL(3)\""
+   }
+  },
+  {
    "ddl": "array<char(3)>",
    "simple_string": "array<char(3)>",
    "catalog_string": "array<char(3)>",
@@ -2210,419 +3176,6 @@
    "type_name": "struct",
    "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"AA\"}}]}",
    "simple_string_reparses": false
-  },
-  {
-   "ddl": "TIME",
-   "simple_string": "time(6)",
-   "catalog_string": "time(6)",
-   "sql": "TIME(6)",
-   "type_name": "time(6)",
-   "json": "\"time(6)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "time(0)",
-   "simple_string": "time(0)",
-   "catalog_string": "time(0)",
-   "sql": "TIME(0)",
-   "type_name": "time(0)",
-   "json": "\"time(0)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "time(3)",
-   "simple_string": "time(3)",
-   "catalog_string": "time(3)",
-   "sql": "TIME(3)",
-   "type_name": "time(3)",
-   "json": "\"time(3)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "TIME(6)",
-   "simple_string": "time(6)",
-   "catalog_string": "time(6)",
-   "sql": "TIME(6)",
-   "type_name": "time(6)",
-   "json": "\"time(6)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "time(06)",
-   "simple_string": "time(6)",
-   "catalog_string": "time(6)",
-   "sql": "TIME(6)",
-   "type_name": "time(6)",
-   "json": "\"time(6)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "time(7)",
-   "error_class": "UNSUPPORTED_TIME_PRECISION",
-   "sql_state": "0A001",
-   "message_parameters": {
-    "precision": "7"
-   }
-  },
-  {
-   "ddl": "time(-1)",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'-'",
-    "hint": ""
-   }
-  },
-  {
-   "ddl": "time()",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "')'",
-    "hint": ""
-   }
-  },
-  {
-   "ddl": "time(1,2)",
-   "error_class": "UNSUPPORTED_DATATYPE",
-   "sql_state": "0A000",
-   "message_parameters": {
-    "typeName": "\"TIME(1,2)\""
-   }
-  },
-  {
-   "ddl": "time(99999999999)",
-   "error_class": "UNCLASSIFIED",
-   "exception": "java.lang.NumberFormatException"
-  },
-  {
-   "ddl": "time without time zone",
-   "simple_string": "time(6)",
-   "catalog_string": "time(6)",
-   "sql": "TIME(6)",
-   "type_name": "time(6)",
-   "json": "\"time(6)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "TIME(3) WITHOUT TIME ZONE",
-   "simple_string": "time(3)",
-   "catalog_string": "time(3)",
-   "sql": "TIME(3)",
-   "type_name": "time(3)",
-   "json": "\"time(3)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "time with time zone",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'with'",
-    "hint": ""
-   }
-  },
-  {
-   "ddl": "time with local time zone",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'with'",
-    "hint": ""
-   }
-  },
-  {
-   "ddl": "time(3) with time zone",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'with'",
-    "hint": ""
-   }
-  },
-  {
-   "ddl": "time_ntz",
-   "error_class": "UNSUPPORTED_DATATYPE",
-   "sql_state": "0A000",
-   "message_parameters": {
-    "typeName": "\"TIME_NTZ\""
-   }
-  },
-  {
-   "ddl": "time without",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'without'",
-    "hint": ": extra input 'without'"
-   }
-  },
-  {
-   "ddl": "time(3) without time",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "end of input",
-    "hint": ": missing 'ZONE'"
-   }
-  },
-  {
-   "ddl": "geometry(0)",
-   "simple_string": "geometry(0)",
-   "catalog_string": "geometry(0)",
-   "sql": "GEOMETRY(0)",
-   "type_name": "geometry(0)",
-   "json": "\"geometry(SRID:0)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "GEOMETRY(4326)",
-   "simple_string": "geometry(4326)",
-   "catalog_string": "geometry(4326)",
-   "sql": "GEOMETRY(4326)",
-   "type_name": "geometry(4326)",
-   "json": "\"geometry(OGC:CRS84)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "geometry(3857)",
-   "simple_string": "geometry(3857)",
-   "catalog_string": "geometry(3857)",
-   "sql": "GEOMETRY(3857)",
-   "type_name": "geometry(3857)",
-   "json": "\"geometry(EPSG:3857)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "geometry( 3857 )",
-   "simple_string": "geometry(3857)",
-   "catalog_string": "geometry(3857)",
-   "sql": "GEOMETRY(3857)",
-   "type_name": "geometry(3857)",
-   "json": "\"geometry(EPSG:3857)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "geometry(04326)",
-   "simple_string": "geometry(4326)",
-   "catalog_string": "geometry(4326)",
-   "sql": "GEOMETRY(4326)",
-   "type_name": "geometry(4326)",
-   "json": "\"geometry(OGC:CRS84)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "geometry(any)",
-   "simple_string": "geometry(any)",
-   "catalog_string": "geometry(any)",
-   "sql": "GEOMETRY(ANY)",
-   "type_name": "geometry(any)",
-   "json": "\"geometry(SRID:ANY)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "GEOMETRY(ANY)",
-   "simple_string": "geometry(any)",
-   "catalog_string": "geometry(any)",
-   "sql": "GEOMETRY(ANY)",
-   "type_name": "geometry(any)",
-   "json": "\"geometry(SRID:ANY)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "geometry(Any)",
-   "simple_string": "geometry(any)",
-   "catalog_string": "geometry(any)",
-   "sql": "GEOMETRY(ANY)",
-   "type_name": "geometry(any)",
-   "json": "\"geometry(SRID:ANY)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "geometry(`any`)",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'('",
-    "hint": ""
-   }
-  },
-  {
-   "ddl": "geometry(anything)",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'('",
-    "hint": ""
-   }
-  },
-  {
-   "ddl": "geometry",
-   "error_class": "UNSUPPORTED_DATATYPE",
-   "sql_state": "0A000",
-   "message_parameters": {
-    "typeName": "\"GEOMETRY\""
-   }
-  },
-  {
-   "ddl": "geometry()",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'('",
-    "hint": ""
-   }
-  },
-  {
-   "ddl": "geometry(9999)",
-   "error_class": "ST_INVALID_SRID_VALUE",
-   "sql_state": "22023",
-   "message_parameters": {
-    "srid": "9999"
-   }
-  },
-  {
-   "ddl": "geometry(-1)",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'('",
-    "hint": ""
-   }
-  },
-  {
-   "ddl": "geometry(1)",
-   "error_class": "ST_INVALID_SRID_VALUE",
-   "sql_state": "22023",
-   "message_parameters": {
-    "srid": "1"
-   }
-  },
-  {
-   "ddl": "geometry(99999999999)",
-   "error_class": "UNCLASSIFIED",
-   "exception": "java.lang.NumberFormatException"
-  },
-  {
-   "ddl": "geometry(4326,0)",
-   "error_class": "UNSUPPORTED_DATATYPE",
-   "sql_state": "0A000",
-   "message_parameters": {
-    "typeName": "\"GEOMETRY(4326,0)\""
-   }
-  },
-  {
-   "ddl": "geometry(srid:0)",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'('",
-    "hint": ""
-   }
-  },
-  {
-   "ddl": "geometry(any",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'('",
-    "hint": ""
-   }
-  },
-  {
-   "ddl": "geometry(any,1)",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'('",
-    "hint": ""
-   }
-  },
-  {
-   "ddl": "geography(any) int",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'int'",
-    "hint": ": extra input 'int'"
-   }
-  },
-  {
-   "ddl": "geography(4326)",
-   "simple_string": "geography(4326)",
-   "catalog_string": "geography(4326)",
-   "sql": "GEOGRAPHY(4326)",
-   "type_name": "geography(4326)",
-   "json": "\"geography(OGC:CRS84, SPHERICAL)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "GEOGRAPHY(ANY)",
-   "simple_string": "geography(any)",
-   "catalog_string": "geography(any)",
-   "sql": "GEOGRAPHY(ANY)",
-   "type_name": "geography(any)",
-   "json": "\"geography(SRID:ANY, SPHERICAL)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "geography(any)",
-   "simple_string": "geography(any)",
-   "catalog_string": "geography(any)",
-   "sql": "GEOGRAPHY(ANY)",
-   "type_name": "geography(any)",
-   "json": "\"geography(SRID:ANY, SPHERICAL)\"",
-   "simple_string_reparses": true
-  },
-  {
-   "ddl": "geography",
-   "error_class": "UNSUPPORTED_DATATYPE",
-   "sql_state": "0A000",
-   "message_parameters": {
-    "typeName": "\"GEOGRAPHY\""
-   }
-  },
-  {
-   "ddl": "geography(0)",
-   "error_class": "ST_INVALID_SRID_VALUE",
-   "sql_state": "22023",
-   "message_parameters": {
-    "srid": "0"
-   }
-  },
-  {
-   "ddl": "geography(3857)",
-   "error_class": "ST_INVALID_SRID_VALUE",
-   "sql_state": "22023",
-   "message_parameters": {
-    "srid": "3857"
-   }
-  },
-  {
-   "ddl": "geography(9999)",
-   "error_class": "ST_INVALID_SRID_VALUE",
-   "sql_state": "22023",
-   "message_parameters": {
-    "srid": "9999"
-   }
-  },
-  {
-   "ddl": "geography(-1)",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'('",
-    "hint": ""
-   }
-  },
-  {
-   "ddl": "geography(4326, spherical)",
-   "error_class": "PARSE_SYNTAX_ERROR",
-   "sql_state": "42601",
-   "message_parameters": {
-    "error": "'spherical'",
-    "hint": ""
-   }
   }
  ],
  "decimal_constructor": [
@@ -2756,6 +3309,109 @@
    ],
    "sqlState": "42602"
   },
+  "INVALID_INTERVAL_FORMAT": {
+   "message": [
+    "Error parsing '<input>' to interval. Please ensure that the value provided is in a valid format for defining an interval. You can reference the documentation for the correct format."
+   ],
+   "subClass": {
+    "ARITHMETIC_EXCEPTION": {
+     "message": [
+      "Uncaught arithmetic exception while parsing '<input>'."
+     ]
+    },
+    "DAY_TIME_PARSING": {
+     "message": [
+      "Error parsing interval day-time string: <msg>."
+     ]
+    },
+    "INPUT_IS_EMPTY": {
+     "message": [
+      "Interval string cannot be empty."
+     ]
+    },
+    "INPUT_IS_NULL": {
+     "message": [
+      "Interval string cannot be null."
+     ]
+    },
+    "INTERVAL_PARSING": {
+     "message": [
+      "Error parsing interval <interval> string."
+     ]
+    },
+    "INVALID_FRACTION": {
+     "message": [
+      "<unit> cannot have fractional part."
+     ]
+    },
+    "INVALID_PRECISION": {
+     "message": [
+      "Interval can only support nanosecond precision, <value> is out of range."
+     ]
+    },
+    "INVALID_PREFIX": {
+     "message": [
+      "Invalid interval prefix <prefix>."
+     ]
+    },
+    "INVALID_UNIT": {
+     "message": [
+      "Invalid unit <unit>."
+     ]
+    },
+    "INVALID_VALUE": {
+     "message": [
+      "Invalid value <value>."
+     ]
+    },
+    "MISSING_NUMBER": {
+     "message": [
+      "Expect a number after <word> but hit EOL."
+     ]
+    },
+    "MISSING_UNIT": {
+     "message": [
+      "Expect a unit name after <word> but hit EOL."
+     ]
+    },
+    "SECOND_NANO_FORMAT": {
+     "message": [
+      "Interval string does not match second-nano format of ss.nnnnnnnnn."
+     ]
+    },
+    "TIMEZONE_INTERVAL_OUT_OF_RANGE": {
+     "message": [
+      "The interval value must be in the range of [-18, +18] hours with second precision."
+     ]
+    },
+    "UNKNOWN_PARSING_ERROR": {
+     "message": [
+      "Unknown error when parsing <word>."
+     ]
+    },
+    "UNMATCHED_FORMAT_STRING": {
+     "message": [
+      "Interval string does not match <intervalStr> format of <supportedFormat> when cast to <typeName>: <input>."
+     ]
+    },
+    "UNMATCHED_FORMAT_STRING_WITH_NOTICE": {
+     "message": [
+      "Interval string does not match <intervalStr> format of <supportedFormat> when cast to <typeName>: <input>. Set \"spark.sql.legacy.fromDayTimeString.enabled\" to \"true\" to restore the behavior before Spark 3.0."
+     ]
+    },
+    "UNRECOGNIZED_NUMBER": {
+     "message": [
+      "Unrecognized number <number>."
+     ]
+    },
+    "UNSUPPORTED_FROM_TO_EXPRESSION": {
+     "message": [
+      "Cannot support (interval '<input>' <from> to <to>) expression."
+     ]
+    }
+   },
+   "sqlState": "22006"
+  },
   "NEGATIVE_SCALE_DISALLOWED": {
    "message": [
     "Negative scale is not allowed: '<scale>'. Set the config <sqlConf> to \"true\" to allow it."
@@ -2774,6 +3430,12 @@
    ],
    "sqlState": "42601"
   },
+  "ST_INVALID_SRID_VALUE": {
+   "message": [
+    "Invalid or unsupported SRID (spatial reference identifier) value: <srid>."
+   ],
+   "sqlState": "22023"
+  },
   "UNCLOSED_BRACKETED_COMMENT": {
    "message": [
     "Found an unclosed bracketed comment. Please, append */ at the end of the comment."
@@ -2786,22 +3448,16 @@
    ],
    "sqlState": "0A000"
   },
-  "_LEGACY_ERROR_TEMP_1228": {
-   "message": [
-    "Decimal scale (<scale>) cannot be greater than precision (<precision>)."
-   ]
-  },
-  "ST_INVALID_SRID_VALUE": {
-   "message": [
-    "Invalid or unsupported SRID (spatial reference identifier) value: <srid>."
-   ],
-   "sqlState": "22023"
-  },
   "UNSUPPORTED_TIME_PRECISION": {
    "message": [
     "The seconds precision <precision> of the TIME data type is out of the supported range [0, 6]."
    ],
    "sqlState": "0A001"
+  },
+  "_LEGACY_ERROR_TEMP_1228": {
+   "message": [
+    "Decimal scale (<scale>) cannot be greater than precision (<precision>)."
+   ]
   }
  }
 }

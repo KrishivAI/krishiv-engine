@@ -58,6 +58,10 @@ pub(super) struct AggInfo {
     pub(super) analytics: Option<Arc<super::analytics::Analytics>>,
     /// With windows: the `HAVING` filtering the aggregate below them.
     pub(super) having: Option<Arc<Expr>>,
+    /// The second aggregate of `RewriteDistinctAggregates`: its input is the first aggregate's
+    /// output, one row per distinct set, so an aggregate added to it later (a `HAVING` or `ORDER BY`
+    /// call the select list does not hold) would run over those rows, not the query's.
+    pub(super) distinct_rewritten: bool,
 }
 
 impl AggInfo {
@@ -80,6 +84,21 @@ pub(super) enum Widen {
     /// An aggregate (under the projections of its lateral aliases): it
     /// adds grouping attributes to its output.
     Aggregate(Arc<AggInfo>),
+    /// A file scan: it adds its hidden `_metadata` column to its output.
+    Scan,
+    /// `inner` with every attribute id shifted by `offset` (the second
+    /// side of a self-join): widening shifts what `inner` widens to.
+    Shift { inner: Rel, offset: u64 },
+    /// A join of `left` and `right` (their `hidden` kept): the hidden
+    /// `_metadata` columns of either input come from widening it.
+    Join {
+        left: Rel,
+        right: Rel,
+        kind: crate::JoinKind,
+        condition: crate::JoinCondition,
+        /// Whether the left and right outputs turn nullable.
+        nullable: (bool, bool),
+    },
 }
 
 /// A resolved relation and its output scope.
@@ -96,12 +115,28 @@ pub(super) struct Rel {
     pub(super) agg: Option<Arc<AggInfo>>,
     /// Where dropped columns come back from, if anywhere.
     pub(super) widen: Option<Arc<Widen>>,
+    /// Attributes the output hides but a qualified name (`t.k`, `t.*`)
+    /// still reaches: the key columns a `USING` join merges (Spark's
+    /// hidden output). Filters, sorts and limits pass them on; a
+    /// projection drops them.
+    pub(super) hidden: Arc<[Attr]>,
 }
 
 /// An enclosing query's operator, as a subquery sees it.
 #[derive(Clone)]
 pub(super) struct Level {
     pub(super) scope: Arc<[Attr]>,
+    /// The left side of a `JOIN LATERAL`: unlike a subquery's enclosing
+    /// query, it stays in reach from further in.
+    pub(super) lateral: bool,
+    /// The columns a `USING` join of that query merged away: not
+    /// resolvable by name (a lateral right side reaches them by a qualified
+    /// name), but a qualified star still lists them.
+    pub(super) hidden: Arc<[Attr]>,
+    /// The input columns of the aggregate a `HAVING` subquery sits in that its
+    /// output does not carry, searched first: Spark binds an outer name to the
+    /// aggregate input before an output alias of the same name.
+    pub(super) fallback: Arc<[Attr]>,
 }
 
 /// A scope environment: the CTEs visible and the enclosing queries.
@@ -118,9 +153,16 @@ pub(super) struct Env {
 
 pub(super) struct Resolver<'a> {
     pub(super) ctx: &'a AnalysisContext,
+    /// The context with `spark.sql.ansi.enabled` inverted, swapped in with
+    /// `ctx` while the body of a function captured under the other mode
+    /// resolves.
+    pub(super) flipped: &'a AnalysisContext,
     pub(super) b: &'a Bindings,
     pub(super) next_id: u64,
     next_env: usize,
+    /// The recursive CTEs being resolved, innermost last: each loop's id
+    /// and the attributes its recursive term reads (see `recursive`).
+    pub(super) loops: Vec<(u32, Vec<Attr>)>,
     memo: HashMap<(usize, usize), Rel>,
     /// Relations without outer references, by (relation, CTE scope): they
     /// resolve alike in every environment with that CTE scope, so a plan
@@ -139,6 +181,13 @@ pub(super) struct Resolver<'a> {
     /// `exprs::expr_in`): every [`RESOLVE_STEP`] levels run on a fresh
     /// stack.
     pub(super) expr_depth: usize,
+    /// Nodes under the key argument of an AES call (ADR 0042), shared by
+    /// every nested `expr_in` (lambda bodies, subqueries) so the secret
+    /// context is inherited on all analysis paths; cleared when the
+    /// outermost expression finishes. `secret_scope` is set while a secret
+    /// node's children are bound, so a nested pass marks its root.
+    pub(super) secret: std::collections::HashSet<usize>,
+    pub(super) secret_scope: bool,
     op_outer: Option<usize>,
     root_env: Option<Arc<Env>>,
     /// Constant folding's values over this pass (see `fold::Memo`).
@@ -150,6 +199,9 @@ pub(super) struct Resolver<'a> {
     pub(super) fn_path: Vec<String>,
     /// SQL function calls inlined so far in this analysis (a budget).
     pub(super) sql_calls: usize,
+    /// The first aggregate over a nondeterministic argument: Spark checks
+    /// it after the operators' other rules, so any other error wins.
+    pub(super) pending_nondeterministic: Option<AnalysisError>,
 }
 
 type Resolved = (
@@ -164,17 +216,23 @@ pub(super) fn resolve(
     ctx: &AnalysisContext,
     b: &Bindings,
 ) -> Result<Resolved, AnalysisError> {
+    let mut other = ctx.clone();
+    other.conf.ansi = !ctx.conf.ansi;
     let mut r = Resolver {
         ctx,
+        flipped: &other,
         b,
         next_id: 0,
         next_env: 0,
+        loops: Vec::new(),
         memo: HashMap::new(),
         closed: HashMap::new(),
         canon: HashMap::new(),
         columns: vec![BTreeSet::new(); b.securables.len()],
         depth: 0,
         expr_depth: 0,
+        secret: std::collections::HashSet::new(),
+        secret_scope: false,
         op_outer: None,
         root_env: None,
         folds: std::cell::RefCell::default(),
@@ -182,6 +240,7 @@ pub(super) fn resolve(
         frame: None,
         fn_path: Vec::new(),
         sql_calls: 0,
+        pending_nondeterministic: None,
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
@@ -189,6 +248,9 @@ pub(super) fn resolve(
     let env = r.env(Vec::new(), 0, Vec::new());
     r.root_env = Some(Arc::clone(&env));
     let rel = r.rel(plan.root(), &env)?;
+    if let Some(error) = r.pending_nondeterministic.take() {
+        return Err(error);
+    }
     // Hints name relations of their resolved subtree.
     let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
     // Subqueries to joins, after everything resolved (P2-T071c).
@@ -387,7 +449,17 @@ impl Resolver<'_> {
                     continue;
                 }
                 stack.push((Arc::clone(&p), true));
-                if !matches!(p.node, PlanNode::WithCte { .. }) {
+                // A lateral join resolves its right side in its own
+                // environment (the left side in scope), so it starts both.
+                if !matches!(
+                    p.node,
+                    PlanNode::WithCte { .. }
+                        | PlanNode::UnionLoop { .. }
+                        | PlanNode::Join {
+                            kind: crate::JoinKind::LateralInner | crate::JoinKind::LateralLeft,
+                            ..
+                        }
+                ) {
                     let mut kids = Vec::new();
                     p.for_each_child(&mut |c| kids.push(self.rep(c)));
                     if matches!(p.node, PlanNode::Shift { .. }) {
@@ -453,8 +525,19 @@ impl Resolver<'_> {
         out: Vec<Attr>,
         kids: &[&Rel],
     ) -> Rel {
+        let passes = matches!(
+            node,
+            PlanNode::Filter { .. }
+                | PlanNode::Sort { .. }
+                | PlanNode::Limit { .. }
+                | PlanNode::Offset { .. }
+        );
         let plan = Arc::new(LogicalPlan::new(node).with_origin(origin));
-        self.wrap(plan, origin.plan_id, out, kids)
+        let mut r = self.wrap(plan, origin.plan_id, out, kids);
+        if let ([k], true) = (kids, passes) {
+            r.hidden = Arc::clone(&k.hidden);
+        }
+        r
     }
 
     pub(super) fn wrap(
@@ -492,6 +575,7 @@ impl Resolver<'_> {
             carriers,
             agg: None,
             widen: None,
+            hidden: Arc::from(Vec::new()),
         }
     }
 
@@ -677,6 +761,15 @@ impl Resolver<'_> {
             PlanNode::Limit { input, limit } => self.limit_node(p, input, limit, false, env),
             PlanNode::Offset { input, offset } => self.limit_node(p, input, offset, true, env),
             PlanNode::WithCte { input, ctes } => self.with_cte(p, input, ctes, env),
+            PlanNode::UnionLoop {
+                id,
+                anchor,
+                recursive,
+                max_level,
+                limit,
+                ..
+            } => self.union_loop(p, *id, anchor, recursive, *max_level, *limit, env),
+            PlanNode::UnionLoopRef { id, .. } => self.loop_ref(p, *id),
             PlanNode::Distinct { input } => self.distinct(p, input, env),
             PlanNode::Pivot {
                 input,
@@ -876,6 +969,8 @@ impl Resolver<'_> {
             | PlanNode::TableFunction { .. }
             | PlanNode::InlineTable { .. }
             | PlanNode::Generate { .. }
+            | PlanNode::UnionLoop { .. }
+            | PlanNode::UnionLoopRef { .. }
             | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
         }
     }

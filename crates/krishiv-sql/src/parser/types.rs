@@ -583,12 +583,10 @@ impl Parser<'_> {
             {
                 let unit = UNITS[from];
                 push(self, &[unit]);
-                // A range runs to a smaller unit of the same family.
-                let to = if from < 2 {
-                    &UNITS[from + 1..2]
-                } else {
-                    &UNITS[from + 1..]
-                };
+                // The grammar's `TO`: `MONTH` for the year-month family and
+                // `HOUR`, `MINUTE` or `SECOND` for day-time. A pair that does
+                // not increase is an error of the type, not of the syntax.
+                let to = if from < 2 { &UNITS[1..2] } else { &UNITS[3..] };
                 if self.kw_at(0, "TO")
                     && let Some(end) = to.iter().find(|u| self.kw_at(1, u))
                 {

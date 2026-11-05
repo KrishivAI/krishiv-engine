@@ -6,7 +6,13 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+ignore = [
+    # pin-utils is unmaintained (repository archived 2026-10-01) and has no
+    # successor release. It comes only from loom 0.7.2, a dev-dependency of
+    # krishiv-exec for its `--cfg loom` concurrency models, never in a
+    # shipped binary. Drop this when loom releases without it.
+    { id = "RUSTSEC-2026-0441", reason = "unmaintained; dev-only, through loom 0.7.2; no safe upgrade" },
+]
 
 [licenses]
 version = 2
@@ -21,6 +27,8 @@ allow = [
     "Unicode-3.0",
     "MPL-2.0",
     "0BSD",
+    # libbz2-rs-sys (pure-Rust bzip2 for .bz2 text files); BSD-style
+    "bzip2-1.0.6",
 ]
 # CC0-1.0 is deliberately absent: it carries no patent grant, so it is allowed only for
 # Python dependencies (dependency-review in security.yml), not Rust crates in the binary.
@@ -34,6 +42,7 @@ confidence-threshold = 0.9
 exceptions = [
     { crate = "tiny-keccak", allow = ["CC0-1.0"] },
     { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
+    { crate = "libbz2-rs-sys", allow = ["bzip2-1.0.6"] },
 ]
 
 [bans]

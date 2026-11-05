@@ -5,7 +5,7 @@
 //! - `aggregate/grouped_sum_{64,262144}_keys`: `select k, sum(v), count(*)
 //!   group by k` over 1 Mi rows (`Int64` keys and values), low and high
 //!   cardinality: probe-bound vs insert-bound.
-//! - `aggregate/grouped_sum_string_keys`: the same over a 12-byte `Utf8` key,
+//! - `aggregate/grouped_sum_string_keys`: the same over a 12-byte `Utf8View` key,
 //!   `grouped_sum_two_keys` over two `Int64` keys (about 262,144 groups) and
 //!   `grouped_multi_agg` computing `sum`, `min`, `max`, `avg` and `count(*)`.
 //! - `aggregate/grouped_sum_spill`: the high-cardinality query under a
@@ -34,7 +34,7 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, Decimal128Array, Int64Array, RecordBatch, StringArray};
+use arrow_array::{ArrayRef, Decimal128Array, Int64Array, RecordBatch, StringViewArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use futures::StreamExt;
@@ -129,7 +129,7 @@ fn wide_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
         Field::new("k1", DataType::Int64, false),
         Field::new("k2", DataType::Int64, false),
-        Field::new("s", DataType::Utf8, false),
+        Field::new("s", DataType::Utf8View, false),
         Field::new("v", DataType::Int64, false),
     ]))
 }
@@ -145,7 +145,7 @@ fn wide_input() -> Vec<Batch> {
             };
             let k1 = Int64Array::from_iter_values(r.clone().map(|i| pair(i).0 as i64));
             let k2 = Int64Array::from_iter_values(r.clone().map(|i| pair(i).1 as i64));
-            let s = StringArray::from_iter_values(r.clone().map(|i| {
+            let s = StringViewArray::from_iter_values(r.clone().map(|i| {
                 let (a, b) = pair(i);
                 format!("key-{a:03}-{b:03}")
             }));

@@ -120,6 +120,14 @@ pub enum ExprNode {
         /// The output name.
         name: String,
     },
+    /// An unresolved `expr AS (a, b, ..)`: several output names, valid
+    /// only over a generator (`MULTI_ALIAS_WITHOUT_GENERATOR` otherwise).
+    MultiAlias {
+        /// The aliased expression.
+        expr: Arc<Expr>,
+        /// The output names, in order.
+        names: Vec<String>,
+    },
     /// A subquery used as an expression.
     Subquery {
         /// Scalar, `EXISTS` or `IN`.
@@ -181,6 +189,17 @@ pub struct Star {
     /// top-level column like `id`, or qualified like `t.id`; longer paths
     /// name nested struct fields and are rejected by the analyzer).
     pub except: Vec<Vec<String>>,
+    /// `|> SET name = expr`: the column called `name` is replaced in its
+    /// position by `expr` (the expansion of the star, in order); the
+    /// replacements are applied one after the other.
+    pub replace: Vec<(String, Arc<Expr>)>,
+    /// `|> AGGREGATE ... GROUP BY n`: the star stands for the `n`-th
+    /// column (from 1) of the input only.
+    pub position: Option<usize>,
+    /// `spark.sql.parser.quotedRegexColumnNames`: the star stands for the columns (of the
+    /// qualifier, if any) whose names the regular expression matches in full, as Spark's
+    /// `UnresolvedRegex`.
+    pub regex: Option<String>,
     /// The DataFrame the star expands, for PySpark's `df["*"]`; resolved
     /// as for [`ColumnRef::plan_id`].
     pub plan_id: Option<PlanId>,
@@ -500,6 +519,55 @@ pub enum ResolvedExpr {
 }
 
 impl Expr {
+    /// The Spark interval type of a resolved expression, when its node says
+    /// it. Arrow carries no fields, so a kernel that prints or converts an
+    /// interval asks here.
+    #[must_use]
+    pub fn interval_type(&self) -> Option<DataType> {
+        let t = match &self.node {
+            ExprNode::Literal(Literal::YearMonthInterval { start, end, .. }) => {
+                DataType::YearMonthInterval {
+                    start: *start,
+                    end: *end,
+                }
+            }
+            ExprNode::Literal(Literal::DayTimeInterval { start, end, .. }) => {
+                DataType::DayTimeInterval {
+                    start: *start,
+                    end: *end,
+                }
+            }
+            ExprNode::Literal(Literal::CalendarInterval { .. }) => DataType::CalendarInterval,
+            _ => crate::raises::type_of(self)?,
+        };
+        matches!(
+            t,
+            DataType::YearMonthInterval { .. }
+                | DataType::DayTimeInterval { .. }
+                | DataType::CalendarInterval
+        )
+        .then_some(t)
+    }
+
+    /// This array, map or struct's type, if an interval sits anywhere inside:
+    /// the Arrow carrier has no fields, so rendering one needs this type.
+    #[must_use]
+    pub fn nested_interval_type(&self) -> Option<DataType> {
+        fn holds_interval(t: &DataType) -> bool {
+            match t {
+                DataType::YearMonthInterval { .. }
+                | DataType::DayTimeInterval { .. }
+                | DataType::CalendarInterval => true,
+                DataType::Array(a) => holds_interval(a.element_type()),
+                DataType::Map(m) => holds_interval(m.key_type()) || holds_interval(m.value_type()),
+                DataType::Struct(s) => s.fields().iter().any(|f| holds_interval(f.data_type())),
+                _ => false,
+            }
+        }
+        let t = crate::raises::type_of(self)?;
+        (t.is_nested() && holds_interval(&t)).then_some(t)
+    }
+
     /// An expression of unknown origin.
     #[must_use]
     pub const fn new(node: ExprNode) -> Self {
@@ -612,7 +680,6 @@ impl Expr {
             ExprNode::Column(_)
             | ExprNode::Literal(_)
             | ExprNode::TypedLiteral { .. }
-            | ExprNode::Star(_)
             | ExprNode::Resolved(
                 ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
             ) => {}
@@ -634,11 +701,13 @@ impl Expr {
                 }
                 within_group.iter().for_each(|o| f(&o.expr));
             }
+            ExprNode::Star(s) => s.replace.iter().for_each(|(_, e)| f(e)),
             ExprNode::Resolved(ResolvedExpr::StateInput { columns, .. }) => {
                 columns.iter().for_each(&mut *f);
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(
@@ -673,7 +742,6 @@ impl Expr {
             ExprNode::Column(_)
             | ExprNode::Literal(_)
             | ExprNode::TypedLiteral { .. }
-            | ExprNode::Star(_)
             | ExprNode::Resolved(
                 ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
             ) => {}
@@ -695,11 +763,13 @@ impl Expr {
                 }
                 within_group.iter_mut().for_each(|o| f(&mut o.expr));
             }
+            ExprNode::Star(s) => s.replace.iter_mut().for_each(|(_, e)| f(e)),
             ExprNode::Resolved(ResolvedExpr::StateInput { columns, .. }) => {
                 columns.iter_mut().for_each(&mut *f);
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(

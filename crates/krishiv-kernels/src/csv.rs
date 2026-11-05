@@ -12,12 +12,15 @@ use std::sync::Arc;
 
 use arrow_array::builder::{
     BinaryBuilder, BinaryViewBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
-    Float32Builder, Float64Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder,
+    DurationMicrosecondBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
+    Int32Builder, Int64Builder, IntervalMonthDayNanoBuilder, IntervalYearMonthBuilder,
     LargeBinaryBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder,
-    TimestampMicrosecondBuilder,
+    Time64NanosecondBuilder, TimestampMicrosecondBuilder,
 };
+use arrow_array::types::IntervalMonthDayNano;
 use arrow_array::{Array, ArrayRef, StringArray, StructArray, new_null_array};
-use arrow_schema::{DataType, Fields, TimeUnit};
+use arrow_schema::{DataType, Fields, IntervalUnit, TimeUnit};
+use krishiv_types::{DayTimeField, YearMonthField};
 
 use crate::datetime_pattern::DateTimePattern;
 use crate::error::KernelError;
@@ -25,6 +28,9 @@ use crate::text::{
     java_decimal_string, java_double_string, java_float_string32, java_parse_decimal,
     java_parse_double, java_parse_float, java_parse_integral,
 };
+
+/// Microseconds in a day.
+const MICROS_PER_DAY: i64 = 86_400_000_000;
 
 // ---------------------------------------------------------------------------
 // Syntax and tokenizer (shared with the CSV file format).
@@ -644,12 +650,20 @@ pub enum FieldKind {
     Bin,
     /// `DATE`.
     Date,
+    /// `TIME`.
+    Time,
     /// `TIMESTAMP`.
     Timestamp,
     /// `TIMESTAMP_NTZ`.
     TimestampNtz,
     /// `VOID`.
     Null,
+    /// An ANSI year-month interval, with the fields its text names.
+    YearMonth(YearMonthField, YearMonthField),
+    /// An ANSI day-time interval, with the fields its text names.
+    DayTime(DayTimeField, DayTimeField),
+    /// A calendar interval.
+    Calendar,
     /// An array, map or struct (written only: `to_csv` shows it the way
     /// Spark prints a nested value; `from_csv` has no such column).
     Nested,
@@ -671,6 +685,22 @@ impl FieldKind {
         }
     }
 
+    /// The kind for a column `from_csv` reads: as [`Self::of`] of its Arrow
+    /// type `dt`, and the intervals too, whose fields only `spark` holds.
+    ///
+    /// # Errors
+    /// `KernelError` for a type CSV cannot hold.
+    pub fn of_read(spark: &krishiv_types::DataType, dt: &DataType) -> Result<Self, KernelError> {
+        Ok(match spark {
+            krishiv_types::DataType::YearMonthInterval { start, end } => {
+                Self::YearMonth(*start, *end)
+            }
+            krishiv_types::DataType::DayTimeInterval { start, end } => Self::DayTime(*start, *end),
+            krishiv_types::DataType::CalendarInterval => Self::Calendar,
+            _ => return Self::of(dt),
+        })
+    }
+
     /// The kind for an Arrow type.
     ///
     /// # Errors
@@ -688,6 +718,7 @@ impl FieldKind {
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => Self::Str,
             DataType::Binary | DataType::BinaryView | DataType::LargeBinary => Self::Bin,
             DataType::Date32 => Self::Date,
+            DataType::Time64(TimeUnit::Nanosecond) => Self::Time,
             DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => Self::Timestamp,
             DataType::Timestamp(TimeUnit::Microsecond, None) => Self::TimestampNtz,
             DataType::Null => Self::Null,
@@ -719,6 +750,8 @@ pub enum Val {
     Text(String),
     /// Binary bytes.
     Bytes(Vec<u8>),
+    /// A calendar interval.
+    Calendar(IntervalMonthDayNano),
 }
 
 /// Why a value did not convert.
@@ -749,6 +782,8 @@ pub struct Converter<'a> {
     pub neg_inf: &'a str,
     /// Strict date pattern.
     pub date: Option<&'a DateTimePattern>,
+    /// Strict time pattern.
+    pub time: Option<&'a DateTimePattern>,
     /// Whether to fall back to the lenient grammar.
     pub fallback: bool,
 }
@@ -822,11 +857,57 @@ impl Converter<'_> {
                     None => return Err(bad()),
                 }
             }
+            FieldKind::Time => {
+                let parsed = match self.time {
+                    Some(p) => p
+                        .parse_local(s, false)
+                        .map_err(|e| ConvError::Fatal(KernelError::with_row(None, e)))?
+                        .map(|m| m.rem_euclid(MICROS_PER_DAY).wrapping_mul(1_000)),
+                    None => crate::cast::time::parse_time(s),
+                };
+                match parsed {
+                    Some(n) => Val::I64(n),
+                    None if self.fallback && self.time.is_some() => {
+                        Val::I64(crate::cast::time::parse_time(s).ok_or_else(bad)?)
+                    }
+                    None => return Err(bad()),
+                }
+            }
+            FieldKind::YearMonth(start, end) => Val::I64(i64::from(
+                krishiv_types::interval_parse::cast_to_year_month(s, *start, *end)
+                    .map_err(|_| bad())?,
+            )),
+            FieldKind::DayTime(start, end) => Val::I64(
+                krishiv_types::interval_parse::cast_to_day_time(s, *start, *end)
+                    .map_err(|_| bad())?,
+            ),
+            // Spark's `safeStringToInterval`: text that is no interval is NULL,
+            // not a malformed record, even with `FAILFAST`.
+            FieldKind::Calendar => match krishiv_types::interval_parse::parse_string(s) {
+                Ok((c, _)) => Val::Calendar(calendar_value(c)?),
+                Err(_) => Val::Null,
+            },
             FieldKind::Timestamp | FieldKind::TimestampNtz | FieldKind::Nested => {
                 return Err(bad());
             }
         })
     }
+}
+
+/// `c` on the Arrow carrier, which holds about 292 years of microseconds where
+/// Spark holds a `long`.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a value past that.
+pub(crate) fn calendar_value(
+    c: krishiv_types::interval_parse::Calendar,
+) -> Result<IntervalMonthDayNano, KernelError> {
+    let nanos = c.micros.checked_mul(1_000).ok_or_else(|| {
+        KernelError::unsupported(
+            "a calendar interval whose microseconds overflow the nanosecond field of its Arrow type",
+        )
+    })?;
+    Ok(IntervalMonthDayNano::new(c.months, c.days, nanos))
 }
 
 // ---------------------------------------------------------------------------
@@ -945,8 +1026,16 @@ enum Column {
     Bin(BinBuilder),
     /// Date.
     Date(Date32Builder),
+    /// Time.
+    Time(Time64NanosecondBuilder),
     /// Timestamp.
     Timestamp(TimestampMicrosecondBuilder),
+    /// Year-month interval.
+    YearMonth(IntervalYearMonthBuilder),
+    /// Day-time interval.
+    DayTime(DurationMicrosecondBuilder),
+    /// Calendar interval.
+    Calendar(IntervalMonthDayNanoBuilder),
     /// Null.
     Null(usize, DataType),
 }
@@ -957,6 +1046,18 @@ impl Column {
     /// # Errors
     /// `KernelError` for a type CSV cannot hold.
     fn new(dt: &DataType) -> Result<Self, KernelError> {
+        match dt {
+            DataType::Interval(IntervalUnit::YearMonth) => {
+                return Ok(Self::YearMonth(IntervalYearMonthBuilder::new()));
+            }
+            DataType::Duration(TimeUnit::Microsecond) => {
+                return Ok(Self::DayTime(DurationMicrosecondBuilder::new()));
+            }
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                return Ok(Self::Calendar(IntervalMonthDayNanoBuilder::new()));
+            }
+            _ => {}
+        }
         FieldKind::of(dt)?;
         Ok(match dt {
             DataType::Boolean => Self::Bool(BooleanBuilder::new()),
@@ -972,6 +1073,7 @@ impl Column {
                     .map_err(|e| KernelError::internal(e.to_string()))?,
             ),
             DataType::Date32 => Self::Date(Date32Builder::new()),
+            DataType::Time64(TimeUnit::Nanosecond) => Self::Time(Time64NanosecondBuilder::new()),
             DataType::Timestamp(_, tz) => {
                 let b = TimestampMicrosecondBuilder::new();
                 Self::Timestamp(match tz {
@@ -1008,7 +1110,11 @@ impl Column {
             (Self::Str(b), Val::Text(x)) => b.append(Some(x)),
             (Self::Bin(b), Val::Bytes(x)) => b.append(Some(x)),
             (Self::Date(b), Val::I64(x)) => b.append_option(i32::try_from(*x).ok()),
+            (Self::Time(b), Val::I64(x)) => b.append_value(*x),
             (Self::Timestamp(b), Val::I64(x)) => b.append_value(*x),
+            (Self::YearMonth(b), Val::I64(x)) => b.append_option(i32::try_from(*x).ok()),
+            (Self::DayTime(b), Val::I64(x)) => b.append_value(*x),
+            (Self::Calendar(b), Val::Calendar(x)) => b.append_value(*x),
             (Self::Null(n, _), _) => *n = n.saturating_add(1),
             (c, _) => c.append_null(),
         }
@@ -1028,7 +1134,11 @@ impl Column {
             Self::Str(b) => b.append(None),
             Self::Bin(b) => b.append(None),
             Self::Date(b) => b.append_null(),
+            Self::Time(b) => b.append_null(),
             Self::Timestamp(b) => b.append_null(),
+            Self::YearMonth(b) => b.append_null(),
+            Self::DayTime(b) => b.append_null(),
+            Self::Calendar(b) => b.append_null(),
             Self::Null(n, _) => *n = n.saturating_add(1),
         }
     }
@@ -1047,7 +1157,11 @@ impl Column {
             Self::Str(b) => b.finish(),
             Self::Bin(b) => b.finish(),
             Self::Date(b) => Arc::new(b.finish()),
+            Self::Time(b) => Arc::new(b.finish()),
             Self::Timestamp(b) => Arc::new(b.finish()),
+            Self::YearMonth(b) => Arc::new(b.finish()),
+            Self::DayTime(b) => Arc::new(b.finish()),
+            Self::Calendar(b) => Arc::new(b.finish()),
             Self::Null(n, dt) => {
                 let rows = std::mem::take(n);
                 new_null_array(dt, rows)
@@ -1077,6 +1191,8 @@ pub struct FromCsvOptions {
     pub neg_inf: String,
     /// Strict date pattern.
     pub date_pattern: Option<DateTimePattern>,
+    /// Strict time pattern.
+    pub time_pattern: Option<DateTimePattern>,
     /// Strict timestamp pattern.
     pub timestamp_pattern: Option<DateTimePattern>,
     /// Strict timestamp_ntz pattern.
@@ -1106,6 +1222,11 @@ fn row_text(vals: &[Val], kinds: &[FieldKind]) -> String {
             Val::F64(f) => out.push_str(&java_double_string(*f)),
             Val::Text(t) => out.push_str(t),
             Val::Bytes(b) => binary_text(b, &mut out),
+            Val::Calendar(c) => out.push_str(&krishiv_types::interval::calendar_string(
+                c.months,
+                c.days,
+                c.nanoseconds / 1_000,
+            )),
         }
     }
     out.push(']');
@@ -1142,6 +1263,7 @@ pub fn from_csv(
         pos_inf: &o.pos_inf,
         neg_inf: &o.neg_inf,
         date: o.date_pattern.as_ref(),
+        time: o.time_pattern.as_ref(),
         fallback: o.fallback,
     };
     let mut cols: Vec<Column> = fields
@@ -1312,6 +1434,8 @@ pub struct ToCsvOptions {
     pub null_value: String,
     /// Date pattern.
     pub date_pattern: Option<DateTimePattern>,
+    /// Time pattern (`None`: the default `HH:mm:ss[.fraction]`).
+    pub time_pattern: Option<DateTimePattern>,
     /// Timestamp pattern.
     pub timestamp_pattern: Option<DateTimePattern>,
     /// Timestamp_ntz pattern.
@@ -1451,6 +1575,10 @@ fn nested_text(
         DataType::Utf8 => out.push_str(a.as_string::<i32>().value(row)),
         DataType::LargeUtf8 => out.push_str(a.as_string::<i64>().value(row)),
         DataType::Date32 => out.push_str(&format_date(a.as_primitive::<Date32Type>().value(row))?),
+        DataType::Time64(TimeUnit::Nanosecond) => out.push_str(&crate::cast::time::format_time(
+            a.as_primitive::<arrow_array::types::Time64NanosecondType>()
+                .value(row),
+        )),
         DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => out.push_str(&format_timestamp(
             a.as_primitive::<TimestampMicrosecondType>().value(row),
         )?),
@@ -1632,6 +1760,19 @@ pub fn struct_to_csv(
                         cell.push_str(&format_date(a.as_primitive::<Date32Type>().value(row))?);
                         true
                     }
+                    (FieldKind::Time, _) => {
+                        let nanos = a
+                            .as_primitive::<arrow_array::types::Time64NanosecondType>()
+                            .value(row);
+                        match &o.time_pattern {
+                            Some(p) => cell.push_str(
+                                &p.format_local(nanos.div_euclid(1_000))
+                                    .map_err(|e| KernelError::with_row(Some(row), e))?,
+                            ),
+                            None => cell.push_str(&crate::cast::time::format_time(nanos)),
+                        }
+                        true
+                    }
                     (FieldKind::Timestamp, _) => {
                         cell.push_str(&format_timestamp(
                             a.as_primitive::<TimestampMicrosecondType>().value(row),
@@ -1649,6 +1790,14 @@ pub fn struct_to_csv(
                         true
                     }
                     (FieldKind::Null, _) => false,
+                    // `eval` hands `to_csv` an interval as its text, and only
+                    // `from_csv` makes these kinds.
+                    (
+                        FieldKind::YearMonth(..) | FieldKind::DayTime(..) | FieldKind::Calendar,
+                        _,
+                    ) => {
+                        return Err(KernelError::internal("an interval kind in to_csv"));
+                    }
                 }
             };
             push_quoted(&mut line, present.then_some(cell.as_str()), o);
@@ -1732,6 +1881,7 @@ mod tests {
             pos_inf: "Inf".to_owned(),
             neg_inf: "-Inf".to_owned(),
             date_pattern: None,
+            time_pattern: None,
             timestamp_pattern: None,
             ntz_pattern: None,
             fallback: false,
@@ -1775,6 +1925,7 @@ mod tests {
             line_sep: None,
             null_value: String::new(),
             date_pattern: None,
+            time_pattern: None,
             timestamp_pattern: None,
             ntz_pattern: None,
         };
@@ -1894,6 +2045,7 @@ mod tests {
             line_sep: None,
             null_value: "NULL".to_owned(),
             date_pattern: None,
+            time_pattern: None,
             timestamp_pattern: None,
             ntz_pattern: None,
         };
@@ -1933,6 +2085,7 @@ mod tests {
             line_sep: None,
             null_value: String::new(),
             date_pattern: None,
+            time_pattern: None,
             timestamp_pattern: None,
             ntz_pattern: None,
         };
@@ -1988,6 +2141,7 @@ mod tests {
             pos_inf: "Inf".to_owned(),
             neg_inf: "-Inf".to_owned(),
             date_pattern: None,
+            time_pattern: None,
             timestamp_pattern: None,
             ntz_pattern: None,
             fallback: false,

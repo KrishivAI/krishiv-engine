@@ -232,3 +232,27 @@ fn positions_that_take_no_clause_are_refused_as_spark_refuses_them() {
     // A one-part alias still resolves.
     assert_eq!(first(&s, "SELECT 1 AS IDENTIFIER('one')"), "1");
 }
+
+#[test]
+fn braces_substitute_configuration_values_before_parsing() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "SET hivevar:colname = 'c'");
+    assert_eq!(
+        first(
+            &s,
+            "SELECT IDENTIFIER(${colname} || '_1') FROM VALUES(1) AS T(c_1)"
+        ),
+        "1"
+    );
+    assert_eq!(first(&s, "SELECT ${hivevar:colname}"), "c");
+    // An unknown name stays as written; switching the feature off leaves everything as written.
+    assert_eq!(first(&s, "SELECT '${nothing}'"), "${nothing}");
+    run(&s, "SET spark.sql.variable.substitute = false");
+    assert_eq!(first(&s, "SELECT '${colname}'"), "${colname}");
+    // The switch is a case-insensitive boolean.
+    run(&s, "SET spark.sql.variable.substitute = true");
+    assert_eq!(first(&s, "SELECT ${colname}"), "c");
+    run(&s, "SET spark.sql.variable.substitute = FALSE");
+    assert_eq!(first(&s, "SELECT '${colname}'"), "${colname}");
+}

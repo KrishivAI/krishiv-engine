@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::{DataType, TimeUnit};
@@ -44,6 +44,7 @@ fn canonical(a: &ArrayRef, i: usize, out: &mut Vec<u8>) {
             DataType::Int32 => a.as_primitive::<Int32Type>().value(i).to_string(),
             DataType::Int64 => a.as_primitive::<Int64Type>().value(i).to_string(),
             DataType::Date32 => a.as_primitive::<Date32Type>().value(i).to_string(),
+            DataType::Decimal64(..) => a.as_primitive::<Decimal64Type>().value(i).to_string(),
             DataType::Decimal128(..) => a.as_primitive::<Decimal128Type>().value(i).to_string(),
             DataType::Timestamp(TimeUnit::Microsecond, _) => a
                 .as_primitive::<TimestampMicrosecondType>()

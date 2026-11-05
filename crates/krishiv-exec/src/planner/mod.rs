@@ -31,6 +31,7 @@ pub(crate) mod eval;
 mod explain;
 mod file_table;
 mod join;
+mod late_fetch;
 pub(crate) mod nodes;
 mod orient;
 mod properties;
@@ -87,6 +88,10 @@ pub struct PlanningContext {
     /// implementation a plan runs is resolved from the worker at
     /// instantiation, never stored in the plan.
     pub udfs: Option<Arc<UdfLibrary>>,
+    /// The query's start instant in microseconds since the epoch, when the
+    /// caller fixes it (a query planned in several pieces reads one
+    /// `current_timestamp()`); `None`: planning takes it.
+    pub query_start_micros: Option<i64>,
 }
 
 impl PlanningContext {
@@ -97,6 +102,7 @@ impl PlanningContext {
             config,
             user: Arc::from(krishiv_plan::analyzer::Principal::local_user().name),
             udfs: None,
+            query_start_micros: None,
         }
     }
 
@@ -104,6 +110,14 @@ impl PlanningContext {
     #[must_use]
     pub fn with_user(mut self, user: impl Into<Arc<str>>) -> Self {
         self.user = user.into();
+        self
+    }
+
+    /// The same context planning with the query start `micros` (microseconds
+    /// since the epoch).
+    #[must_use]
+    pub fn with_query_start(mut self, micros: i64) -> Self {
+        self.query_start_micros = Some(micros);
         self
     }
 

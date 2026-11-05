@@ -69,11 +69,15 @@ class KrishivEngine(Engine):
         binary: Path | str | None = None,
         conf: list[tuple[str, str]] | None = None,
         launcher: list[str] | None = None,
+        tables: dict[str, list[str]] | None = None,
     ):
         self.threads = threads or os.cpu_count() or 1
         self.memory_limit = memory_limit
         self.binary = runner_binary(binary)
         self.conf = list(conf or [])
+        # Tables read from URLs (``--table NAME=URL``: s3://, https://, hf://); when given, the dataset
+        # directory is not read (the runner is started without ``--data``).
+        self.tables = {name: list(urls) for name, urls in (tables or {}).items()}
         self.launcher = list(launcher or [])  # command prefix (e.g. `perf record ... --`)
         self._proc: subprocess.Popen[str] | None = None
         self._dataset: Dataset | None = None
@@ -136,8 +140,8 @@ class KrishivEngine(Engine):
         cmd = [
             *self.launcher,
             str(self.binary),
-            "--data",
-            str(self._dataset.root),
+            *(["--data", str(self._dataset.root)] if not self.tables else []),
+            *[arg for name, urls in self.tables.items() for url in urls for arg in ("--table", f"{name}={url}")],
             "--threads",
             str(self.threads),
             "--memory-limit",

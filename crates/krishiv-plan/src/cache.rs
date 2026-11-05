@@ -87,6 +87,10 @@ struct Encoder {
     /// instance reads as its own attributes, so the bias is part of the key.
     ids: HashMap<(u64, u64), u64>,
     next: u64,
+    /// The normalized id per recursive-CTE loop id, in first-use order: the
+    /// raw ids come from a process-wide counter, so two lowerings of one
+    /// query differ in them.
+    loops: HashMap<u32, u64>,
     /// The digest of each plan and expression node already encoded, by
     /// address and shift bias. A shared (`Arc`) subtree is reached once per
     /// path; the digest makes that one encoding of its body, and a node
@@ -113,6 +117,11 @@ impl Encoder {
         self.next += 1;
         self.ids.insert(key, n);
         n
+    }
+
+    fn loop_id(&mut self, raw: u32) -> u64 {
+        let next = self.loops.len() as u64;
+        *self.loops.entry(raw).or_insert(next)
     }
 
     fn num(&mut self, v: u64) {
@@ -251,6 +260,16 @@ impl Encoder {
         self.out.extend_from_slice(&digest.to_le_bytes());
     }
 
+    /// A star's `|> SET` assignments (out of line: `expr_body` recurses,
+    /// and its frame must stay small).
+    #[inline(never)]
+    fn replacements(&mut self, replace: &[(String, Arc<Expr>)], bias: u64) {
+        for (name, expr) in replace {
+            self.text(name);
+            self.expr(expr, bias);
+        }
+    }
+
     fn expr_body(&mut self, e: &Expr, bias: u64) {
         match &e.node {
             ExprNode::Column(c) => {
@@ -287,6 +306,8 @@ impl Encoder {
                     }
                 }
                 self.flag(s.plan_id.is_some());
+                self.replacements(&s.replace, bias);
+                self.num(s.position.map_or(0, |n| n as u64));
             }
             ExprNode::Function(f) => {
                 self.tag("function");
@@ -351,6 +372,11 @@ impl Encoder {
                 self.tag("alias");
                 self.expr(expr, bias);
                 self.text(name);
+            }
+            ExprNode::MultiAlias { expr, names } => {
+                self.tag("multi-alias");
+                self.expr(expr, bias);
+                names.iter().for_each(|n| self.text(n));
             }
             ExprNode::Subquery { kind, plan } => {
                 self.tag("subquery");
@@ -801,6 +827,41 @@ impl Encoder {
                 }
                 self.plan(input, bias);
             }
+            PlanNode::UnionLoop {
+                id,
+                anchor,
+                recursive,
+                max_level,
+                limit,
+                output,
+            } => {
+                self.tag("UnionLoop");
+                let id = self.loop_id(*id);
+                self.num(id);
+                self.flag(max_level.is_some());
+                if let Some(n) = max_level {
+                    self.num(u64::from(*n));
+                }
+                self.flag(limit.is_some());
+                if let Some(n) = limit {
+                    self.num(*n);
+                }
+                self.num(output.len() as u64);
+                for c in output {
+                    self.bound(c, bias);
+                }
+                self.plan(anchor, bias);
+                self.plan(recursive, bias);
+            }
+            PlanNode::UnionLoopRef { id, output } => {
+                self.tag("UnionLoopRef");
+                let id = self.loop_id(*id);
+                self.num(id);
+                self.num(output.len() as u64);
+                for c in output {
+                    self.bound(c, bias);
+                }
+            }
             PlanNode::Expand {
                 input,
                 projections,
@@ -1176,6 +1237,9 @@ mod tests {
             (
                 "star",
                 unresolved(ExprNode::Star(Star {
+                    regex: None,
+                    replace: Vec::new(),
+                    position: None,
                     qualifier: vec!["t".into()],
                     except: vec![vec!["a".into()]],
                     plan_id: Some(PlanId(1)),

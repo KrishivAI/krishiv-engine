@@ -18,6 +18,12 @@ arrow-buffer.workspace = true
 arrow-schema.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
+bzip2.workspace = true
+flate2.workspace = true
+# Not the `safe-encode`/`safe-decode` features: cargo unifies them workspace-wide and they switch arrow-ipc's LZ4 spill
+# writer to the slow safe path (CodSpeed: `spill_1m_rows::write_lz4` -10.55% on #401).
+lz4_flex = { workspace = true, features = ["std"] }
+snap.workspace = true
 chrono.workspace = true
 # Avro field defaults (`RecordField::default`) are JSON values.
 serde_json = { workspace = true, features = ["std"] }
@@ -28,9 +34,12 @@ krishiv-common = { path = "../krishiv-common" }
 # Spark value text conversions and datetime patterns (CSV, JSON, text).
 krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-memory = { path = "../krishiv-memory" }
+# URL parsing, store building and pacing budgets (ADR 0044); `cloud` turns on its builders.
+krishiv-store = { path = "../krishiv-store" }
 krishiv-types = { path = "../krishiv-types" }
 memchr.workspace = true
-object_store.workspace = true
+# `fs`: the local store reads use wraps `LocalFileSystem` (`io/local_listing.rs`).
+object_store = { workspace = true, features = ["fs"] }
 # The Parquet reader (P2-T080a): arrow-rs's push decoder and the codecs files
 # are written with. Never the `object_store` feature (ADR 0014, deny.toml).
 parquet = { workspace = true, features = [
@@ -54,8 +63,6 @@ rustix.workspace = true
 [dev-dependencies]
 arrow-buffer.workspace = true
 arrow-select.workspace = true
-# The local file system (directories, files in the way) in commit tests.
-object_store = { workspace = true, features = ["fs"] }
 criterion.workspace = true
 tempfile.workspace = true
 proptest = { workspace = true, features = ["std"] }
@@ -66,11 +73,11 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync
 loom.workspace = true
 
 [features]
-# Cloud object stores (S3, GCS, Azure): the `aws`/`azure`/`gcp` features of
-# `object_store` (reqwest over rustls). Opt-in so the default build stays
+# Cloud object stores (S3, GCS, Azure, read-only https): `krishiv-store/cloud`, i.e. the `aws`/`azure`/`gcp`/`http`
+# features of `object_store` (reqwest over rustls). Opt-in so the default build stays
 # inside the dependency and binary-size budgets. Without it, cloud URLs fail
 # with `KRISHIV_UNSUPPORTED_FEATURE`.
-cloud = ["object_store/aws", "object_store/azure", "object_store/gcp"]
+cloud = ["krishiv-store/cloud"]
 
 # The emulator round-trips need the cloud builders.
 [[test]]

@@ -107,17 +107,17 @@ def test_rows_between_doc_example(docs: DataFrame) -> None:
     ]
 
 
-def test_range_between_doc_example_fails_as_sql_does(docs: DataFrame) -> None:
-    # The engine has no window frames with value bounds yet: the SQL form
-    # `RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING` fails the same way.
+def test_range_between_doc_example(docs: DataFrame) -> None:
     window = Window.partitionBy("category").orderBy("id").rangeBetween(Window.currentRow, 1)
-    with pytest.raises(errors.UnsupportedOperationException) as excinfo:
-        docs.withColumn("sum", F.sum("id").over(window)).collect()
-    assert excinfo.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-    # When the engine supports them, the PySpark docs expect:
-    # [{"id": 1, "category": "a", "sum": 4}, {"id": 1, "category": "a", "sum": 4},
-    #  {"id": 1, "category": "b", "sum": 3}, {"id": 2, "category": "a", "sum": 2},
-    #  {"id": 2, "category": "b", "sum": 5}, {"id": 3, "category": "b", "sum": 3}].
+    got = dicts(docs.withColumn("sum", F.sum("id").over(window)), "id", "category", "sum")
+    assert got == [
+        {"id": 1, "category": "a", "sum": 4},
+        {"id": 1, "category": "a", "sum": 4},
+        {"id": 1, "category": "b", "sum": 3},
+        {"id": 2, "category": "a", "sum": 2},
+        {"id": 2, "category": "b", "sum": 5},
+        {"id": 3, "category": "b", "sum": 3},
+    ]
 
 
 def test_lag_doc_examples(spark: SparkSession) -> None:

@@ -38,10 +38,11 @@ use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{Privilege, Securable, TableColumn, authorize};
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
-    AlterColumnAction, AlterTable, AlterTableAction, AlterView, AlterViewAction, Analyze,
-    AnalyzeColumns, ChangeColumnAction, ColumnName, CreateNamespace, CreatePermanentView,
-    CreateTable, CreateTableLike, DdlName, DropBehavior, DropNamespace, DropPermanentView,
-    DropTable, Insert, InsertClause, Query, TableElement, TableOption, Truncate, Use,
+    AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable, AlterTableAction,
+    AlterView, AlterViewAction, Analyze, AnalyzeColumns, ChangeColumnAction, ColumnName,
+    CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, CreateView, DdlName,
+    DropBehavior, DropNamespace, DropPermanentView, DropTable, Ident, Insert, InsertClause, Query,
+    TableElement, TableOption, Truncate, Use, ViewColumn,
 };
 use krishiv_types::DataType;
 
@@ -54,7 +55,28 @@ use crate::store::{
 };
 
 /// The file formats a table can have.
-const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc"];
+const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
+
+/// The short name of a data source written fully qualified, as Spark maps its built-in classes
+/// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
+fn short_provider(written: &str) -> String {
+    let lower = written.to_lowercase();
+    for prefix in [
+        "org.apache.spark.sql.execution.datasources.",
+        "org.apache.spark.sql.",
+    ] {
+        if let Some(rest) = lower.strip_prefix(prefix) {
+            let name = rest.split('.').next().unwrap_or(rest);
+            if PROVIDERS.contains(&name) {
+                return name.to_owned();
+            }
+        }
+    }
+    if lower == "com.databricks.spark.csv" {
+        return "csv".to_owned();
+    }
+    lower
+}
 
 /// Whether `name` is a name Spark accepts for a new table or namespace: letters, digits and `_`.
 fn valid_name(name: &str) -> bool {
@@ -138,7 +160,11 @@ pub(crate) struct TableName {
 }
 
 impl TableName {
-    fn resolve(parts: &[String], current: &str, env: &QueryEnv) -> Result<Self, KrishivError> {
+    pub(crate) fn resolve(
+        parts: &[String],
+        current: &str,
+        env: &QueryEnv,
+    ) -> Result<Self, KrishivError> {
         let fold = |s: &str| {
             if env.analysis.conf.case_sensitive {
                 s.to_owned()
@@ -152,9 +178,8 @@ impl TableName {
             [catalog, ns, name] if catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
                 (fold(ns), fold(name), false)
             }
-            [catalog, _, _] => {
-                return Err(unsupported(&format!("tables in the catalog `{catalog}`")));
-            }
+            // No other catalog is registered, so a longer name is a namespace of several parts in
+            // the session catalog, which takes one.
             _ => {
                 return Err(KrishivError::from(RequiresSinglePartNamespace {
                     session_catalog: crate::catalog::CATALOG.to_owned(),
@@ -210,6 +235,7 @@ impl Session {
     /// resolves to before any permanent table.
     pub(crate) fn temp_entry_of(&self, name: &TableName, env: &QueryEnv) -> bool {
         name.bare
+            && !crate::catalog::is_global_key(&name.name)
             && self
                 .state
                 .catalog
@@ -253,6 +279,16 @@ impl Session {
         let env = self.query_env();
         let name = self.namespace_name(&n.name, &env)?;
         check_new_name(&name)?;
+        // `global_temp` is the reserved home of global temporary views: it always exists.
+        if name.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE) {
+            if n.if_not_exists {
+                return self.empty_frame().await;
+            }
+            return Err(SchemaAlreadyExists {
+                schema_name: format!("`{name}`"),
+            }
+            .into());
+        }
         let meta = NamespaceMeta {
             comment: n.comment.clone(),
             location: n.location.clone(),
@@ -260,6 +296,40 @@ impl Session {
         };
         if !self.state.catalog.store.create_namespace(&name, meta) && !n.if_not_exists {
             return Err(SchemaAlreadyExists {
+                schema_name: format!("`{name}`"),
+            }
+            .into());
+        }
+        self.empty_frame().await
+    }
+
+    /// `ALTER DATABASE|SCHEMA|NAMESPACE name SET PROPERTIES | SET LOCATION`, and `COMMENT ON SCHEMA`.
+    pub(crate) async fn exec_alter_namespace(
+        &self,
+        a: &AlterNamespace,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
+        let env = self.query_env();
+        let name = self.namespace_name(&a.name, &env)?;
+        let change: Box<dyn Fn(&mut NamespaceMeta)> = match &a.action {
+            AlterNamespaceAction::SetProperties(properties) => {
+                let properties = options_of(properties, original);
+                Box::new(move |m| m.properties.extend(properties.clone()))
+            }
+            AlterNamespaceAction::SetLocation(l) => {
+                let l = l.clone();
+                Box::new(move |m| m.location = Some(l.clone()))
+            }
+            AlterNamespaceAction::SetComment(c) => {
+                let c = c.clone();
+                Box::new(move |m| m.comment.clone_from(&c))
+            }
+            _ => return Err(unsupported("this ALTER SCHEMA action")),
+        };
+        let found = self.state.catalog.store.alter_namespace(&name, &*change);
+        drop(change);
+        if !found {
+            return Err(SchemaNotFound {
                 schema_name: format!("`{name}`"),
             }
             .into());
@@ -349,8 +419,21 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        if v.global && v.using.is_none() {
+            return self.create_global_temp_view(v, &env).await;
+        }
+        let frozen_path = env.catalog.sql_path_snapshot();
+        let frozen_namespace = env
+            .catalog
+            .namespace()
+            .first()
+            .cloned()
+            .unwrap_or_else(|| self.state.catalog.current_namespace());
+        if v.temporary && !v.global && v.using.is_some() && v.query.is_none() {
+            return self.create_datasource_temp_view(v, &env, original).await;
+        }
         if v.temporary || v.global {
-            return Err(unsupported("global and qualified temporary views"));
+            return Err(unsupported("qualified and datasource temporary views"));
         }
         let (None, Some(query)) = (&v.using, &v.query) else {
             return Err(unsupported("datasource views"));
@@ -391,7 +474,12 @@ impl Session {
             .get(query.span.start..query.span.end)
             .unwrap_or_default()
             .to_owned();
-        let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_with(
+            query,
+            self.next_source_id(),
+            self.parser_options().case_sensitive,
+        )
+        .map_err(|e| e.error)?;
         if let Some(temp) = crate::catalog::reads_temporary(
             &self.state.catalog,
             plan.root(),
@@ -420,7 +508,7 @@ impl Session {
             .iter()
             .map(|c| StoreColumn {
                 name: c.name.clone(),
-                data_type: c.data_type.clone(),
+                data_type: krishiv_plan::without_generated_marker(&c.data_type),
                 nullable: c.nullable,
                 default: None,
                 comment: None,
@@ -503,7 +591,8 @@ impl Session {
             root: PathBuf::new(),
             view: Some(ViewDef {
                 sql,
-                namespace: self.state.catalog.current_namespace(),
+                namespace: frozen_namespace,
+                path: frozen_path,
                 query_columns,
                 schema_mode,
             }),
@@ -519,9 +608,196 @@ impl Session {
         d: &DropPermanentView,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        if let Some(done) =
+            self.drop_global_temp_view(&crate::access::ddl_parts(&d.name, &env)?, d.if_exists)
+        {
+            done?;
+            return self.empty_frame().await;
+        }
         let name = self.table_name(&d.name, &env)?;
         self.drop_stored_view(&name, d.if_exists)?;
         self.empty_frame().await
+    }
+
+    /// `CREATE [OR REPLACE] GLOBAL TEMPORARY VIEW name [(columns)] AS query`, kept in `global_temp`.
+    async fn create_global_temp_view(
+        &self,
+        v: &CreatePermanentView,
+        env: &QueryEnv,
+    ) -> Result<DataFrame, KrishivError> {
+        let parts = crate::access::ddl_parts(&v.name, env)?;
+        let (Some(query), [name]) = (&v.query, parts.as_slice()) else {
+            return Err(unsupported("qualified global temporary views"));
+        };
+        let columns = v
+            .columns
+            .iter()
+            .map(|c| match &c.name {
+                ColumnName::Ident(name) => Ok(ViewColumn {
+                    name: name.clone(),
+                    comment: c.comment.clone(),
+                    span: c.span,
+                }),
+                _ => Err(unsupported("IDENTIFIER() column names in views")),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let view = CreateView {
+            or_replace: v.or_replace,
+            if_not_exists: v.if_not_exists,
+            name: Ident {
+                value: name.clone(),
+                quoted: false,
+                span: v.span,
+            },
+            columns,
+            collation: None,
+            query: query.clone(),
+            span: v.span,
+        };
+        self.create_temp_view(&view, true).await
+    }
+
+    /// `CREATE TEMPORARY VIEW name (col type, ...) USING format [OPTIONS (...)]`: a read of the
+    /// format's files (the `path` option), typed by the declared columns. Nothing is read until a
+    /// query uses the view.
+    async fn create_datasource_temp_view(
+        &self,
+        v: &CreatePermanentView,
+        env: &QueryEnv,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
+        let parts = crate::access::ddl_parts(&v.name, env)?;
+        let [name] = parts.as_slice() else {
+            return Err(unsupported("qualified datasource temporary views"));
+        };
+        if crate::catalog::is_reserved_view_name(name) {
+            return Err(crate::catalog::reserved_temp_view_name(name));
+        }
+        // The parser rejects IF NOT EXISTS on temporary views, as Spark does.
+        let exists = self
+            .state
+            .catalog
+            .exists(name, env.analysis.conf.case_sensitive);
+        if exists && !v.or_replace {
+            return Err(krishiv_common::error::TempTableOrViewAlreadyExists {
+                relation_name: format!("`{name}`"),
+            }
+            .into());
+        }
+        let columns = v
+            .columns
+            .iter()
+            .map(|c| {
+                let (ColumnName::Ident(ident), Some(spec)) = (&c.name, &c.data_type) else {
+                    return Err(unsupported(
+                        "datasource views without declared column types",
+                    ));
+                };
+                Ok(TableColumn {
+                    name: ident.value.clone(),
+                    data_type: spec.to_data_type()?,
+                    nullable: !c.not_null,
+                })
+            })
+            .collect::<Result<Vec<_>, KrishivError>>()?;
+        if columns.is_empty() {
+            return Err(unsupported(
+                "datasource views without declared column types",
+            ));
+        }
+        let mut options = options_of(&v.options, original);
+        let path_key = options
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case("path"))
+            .cloned();
+        let paths = path_key
+            .and_then(|k| options.remove(&k))
+            .map(|p| vec![OptionValue::from_user("path", p)])
+            .unwrap_or_default();
+        // Spark resolves the data source when the view is created.
+        let written = v
+            .using
+            .as_ref()
+            .map(|u| {
+                u.parts
+                    .iter()
+                    .map(|p| p.value.clone())
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
+            .unwrap_or_default();
+        let provider = self.provider_of(Some(short_provider(&written)))?;
+        // The policy is asked before the path is looked at, so a denial never tells whether it exists.
+        for path in paths.iter().filter_map(OptionValue::as_plain) {
+            let qualified = self.qualify_path(path)?;
+            self.authorize_path(
+                Path::new(&qualified),
+                &[Privilege::Select],
+                StatementClass::Ddl,
+            )
+            .await?;
+        }
+        if let Some(path) = paths.first().and_then(OptionValue::as_plain) {
+            let local = path.strip_prefix("file:").unwrap_or(path);
+            if !path.contains("://") && !std::path::Path::new(local).exists() {
+                return Err(krishiv_common::error::PathNotFound {
+                    path: format!("file:{local}"),
+                }
+                .into());
+            }
+        }
+        let source = krishiv_plan::ReadSource::Files {
+            format: provider,
+            paths,
+            options: options
+                .into_iter()
+                .map(|(k, val)| {
+                    let val = OptionValue::from_user(&k, val);
+                    (k, val)
+                })
+                .collect(),
+        };
+        self.state.catalog.put(
+            name,
+            crate::catalog::TempTable::Files {
+                source,
+                columns,
+                known: true,
+            },
+        );
+        // A replaced view must not keep serving the rows of the old one.
+        self.state.cache.invalidate_table(name);
+        self.empty_frame().await
+    }
+
+    /// `DROP VIEW global_temp.name`: the global temporary view, when the name is one.
+    fn drop_global_temp_view(
+        &self,
+        parts: &[String],
+        if_exists: bool,
+    ) -> Option<Result<(), KrishivError>> {
+        let [namespace, name] = parts else {
+            return None;
+        };
+        if !namespace.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE) {
+            return None;
+        }
+        let key = crate::catalog::global_key(name);
+        let cs = self.query_env().analysis.conf.case_sensitive;
+        if self.state.catalog.exists(&key, cs) {
+            self.state.catalog.drop_table(&key);
+            self.state.cache.invalidate_table(name);
+            return Some(Ok(()));
+        }
+        Some(if if_exists {
+            Ok(())
+        } else {
+            Err(TableOrViewNotFound {
+                relation_name: format!("`{}`.`{name}`", crate::catalog::GLOBAL_NAMESPACE),
+                search_path: crate::catalog::search_path(),
+            }
+            .into())
+        })
     }
 
     /// `DROP VIEW name` after no temporary view of that bare name was found: the stored view in the current
@@ -572,6 +848,13 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        let frozen_path = env.catalog.sql_path_snapshot();
+        let frozen_namespace = env
+            .catalog
+            .namespace()
+            .first()
+            .cloned()
+            .unwrap_or_else(|| self.state.catalog.current_namespace());
         let name = self.table_name(&a.name, &env)?;
         if matches!(a.action, AlterViewAction::SetSchemaBinding(_))
             && self.temp_entry_of(&name, &env)
@@ -598,7 +881,12 @@ impl Session {
                 schema_binding: None,
                 ..
             } => {
-                let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+                let plan = krishiv_sql::lower_with(
+                    query,
+                    self.next_source_id(),
+                    self.parser_options().case_sensitive,
+                )
+                .map_err(|e| e.error)?;
                 if let Some(temp) = crate::catalog::reads_temporary(
                     &self.state.catalog,
                     plan.root(),
@@ -620,7 +908,7 @@ impl Session {
                     .iter()
                     .map(|c| StoreColumn {
                         name: c.name.clone(),
-                        data_type: c.data_type.clone(),
+                        data_type: krishiv_plan::without_generated_marker(&c.data_type),
                         nullable: c.nullable,
                         default: None,
                         comment: None,
@@ -639,7 +927,8 @@ impl Session {
                         .get(query.span.start..query.span.end)
                         .unwrap_or_default()
                         .to_owned(),
-                    namespace: self.state.catalog.current_namespace(),
+                    namespace: frozen_namespace,
+                    path: frozen_path,
                     query_columns,
                     schema_mode,
                 });
@@ -684,13 +973,22 @@ impl Session {
             .table(&name.namespace, &name.name)
             .is_some_and(|t| t.view.is_some())
         {
+            if matches!(a.action, AlterTableAction::SetComment(_)) {
+                // Spark's error for a view here is not recorded in the goldens yet.
+                return Err(unsupported("COMMENT ON TABLE of a view"));
+            }
             return Err(krishiv_common::error::ExpectTableNotViewUseAlterView {
                 operation: "`ALTER TABLE`".to_owned(),
                 view_name: name.quoted(),
             }
             .into());
         }
-        let table = self.table_for_write(&name, "ALTER TABLE", &env)?;
+        let operation = if matches!(a.action, AlterTableAction::SetComment(_)) {
+            "COMMENT ON TABLE"
+        } else {
+            "ALTER TABLE"
+        };
+        let table = self.table_for_write(&name, operation, &env)?;
         let mut changed = (*table).clone();
         match &a.action {
             AlterTableAction::AddColumns(defs) => {
@@ -786,6 +1084,9 @@ impl Session {
                         changed.properties.insert(k, v);
                     }
                 }
+            }
+            AlterTableAction::SetComment(comment) => {
+                changed.comment = comment.clone();
             }
             AlterTableAction::UnsetTblProperties { keys, .. } => {
                 for key in options_of(keys, original).keys() {
@@ -1019,8 +1320,18 @@ impl Session {
         }
         let mut options = options_of(&t.options, original);
         let properties = options_of(&t.tblproperties, original);
-        let external = t.external || t.location.is_some();
-        let location = match &t.location {
+        // A `path` option is the table's location, as in Spark.
+        let path_key = options
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case("path"))
+            .cloned();
+        let location_text = match (&t.location, path_key) {
+            (Some(l), _) => Some(l.clone()),
+            (None, Some(k)) => options.remove(&k),
+            (None, None) => None,
+        };
+        let external = t.external || location_text.is_some();
+        let location = match &location_text {
             Some(l) if l.is_empty() => {
                 return Err(krishiv_common::error::InvalidEmptyLocation {
                     location: l.clone(),
@@ -1030,11 +1341,6 @@ impl Session {
             Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
             None => managed_location(&warehouse, &name.namespace, &name.name),
         };
-        if provider == "csv" {
-            options
-                .entry("header".to_owned())
-                .or_insert_with(|| "true".to_owned());
-        }
         let mut table = CatalogTable {
             namespace: name.namespace.clone(),
             name: name.name.clone(),
@@ -1083,6 +1389,16 @@ impl Session {
                 if table.columns.is_empty() {
                     return Err(unsupported("CREATE TABLE without columns"));
                 }
+                krishiv_io::check_declared_schema(
+                    &table.provider,
+                    &arrow_schema::Schema::new(
+                        table
+                            .columns
+                            .iter()
+                            .map(|c| c.data_type.to_arrow_field(&c.name, true))
+                            .collect::<Vec<_>>(),
+                    ),
+                )?;
                 table.layout = crate::partitions::table_layout(
                     &name,
                     &mut table.columns,
@@ -1202,8 +1518,12 @@ impl Session {
         let location = table.location.clone();
         self.authorize_path(&location, &[Privilege::Create], StatementClass::Ddl)
             .await?;
-        std::fs::create_dir_all(&location)
-            .map_err(|e| internal(format!("cannot create {}: {e}", location.display())))?;
+        // Spark creates the directory of a managed table only; an external table's location is
+        // made by its first write.
+        if table.managed {
+            std::fs::create_dir_all(&location)
+                .map_err(|e| internal(format!("cannot create {}: {e}", location.display())))?;
+        }
         // Tables are never replaced, so nothing comes back from the store to clean up.
         self.state.catalog.store.create_table(table, mode)?;
         Ok(())
@@ -1296,7 +1616,12 @@ impl Session {
         mode: CreateMode,
         layout: &LayoutRequest<'_>,
     ) -> Result<(), KrishivError> {
-        let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_with(
+            query,
+            self.next_source_id(),
+            self.parser_options().case_sensitive,
+        )
+        .map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         self.create_table_from(table, &df, mode, layout).await
     }
@@ -1319,7 +1644,7 @@ impl Session {
             .iter()
             .map(|c| StoreColumn {
                 name: c.name.clone(),
-                data_type: c.data_type.clone(),
+                data_type: krishiv_plan::without_generated_marker(&c.data_type),
                 nullable: true,
                 default: None,
                 comment: None,
@@ -1356,8 +1681,44 @@ impl Session {
         } else {
             df.clone()
         };
-        // `errorifexists`: a CTAS never replaces files that are already there (an external LOCATION with data).
-        let dirs = self.write_table_rows(&table, &df, "errorifexists").await?;
+        // A managed table's directory is made here, exclusively: that creation is the proof that this
+        // statement owns it (a concurrent CTAS of the same table loses it and fails with
+        // `LOCATION_ALREADY_EXISTS`), and the guard removes it again if the statement fails or is
+        // cancelled, so a failed first write (and the commit log it started) leaves nothing and the
+        // statement can be retried. The write goes into that empty directory (`append`).
+        // An external location keeps `errorifexists`: a CTAS never replaces files already there.
+        // The policy is asked about the destination first: a denied CTAS must not create the warehouse or
+        // the table directory on the way to being refused (the writer asks again for the files it writes).
+        if table.managed {
+            self.authorize_path(
+                &table.location,
+                &[Privilege::Modify, Privilege::Create],
+                StatementClass::Write,
+            )
+            .await?;
+        }
+        let owned = if table.managed {
+            Some(
+                OwnedDirectory::create(table.location.clone()).map_err(|e| match e {
+                    OwnedDirectoryError::Exists => KrishivError::from(LocationAlreadyExists {
+                        identifier: quoted(&table.namespace, &table.name),
+                        location: table.location.display().to_string(),
+                    }),
+                    OwnedDirectoryError::Io(message) => internal(message),
+                })?,
+            )
+        } else {
+            None
+        };
+        let write_mode = if owned.is_some() {
+            "append"
+        } else {
+            "errorifexists"
+        };
+        let dirs = self.write_table_rows(&table, &df, write_mode).await?;
+        if let Some(owned) = owned {
+            owned.keep();
+        }
         self.add_table(table, mode, true).await?;
         // `RepairTableCommand`: the partitions written, with their file statistics.
         self.register_partitions(&name, &dirs, true);
@@ -1383,8 +1744,10 @@ impl Session {
         check_new_name(&name.name)?;
         self.check_namespace(&name)?;
         let source = self.table_name(&t.source, &env)?;
-        // Spark's `CreateTableLikeCommand` copies the partition columns and the bucket specification.
+        // Spark's `CreateTableLikeCommand` copies the partition columns, the bucket specification and the
+        // storage options, under any provider.
         let mut layout = TableLayout::default();
+        let mut options = BTreeMap::new();
         let (columns, source_provider) = if let Some(s) = self
             .state
             .catalog
@@ -1395,6 +1758,7 @@ impl Session {
                 .partition_columns
                 .clone_from(&s.layout.partition_columns);
             layout.bucket.clone_from(&s.layout.bucket);
+            options.clone_from(&s.options);
             (s.columns.clone(), s.provider.clone())
         } else if self.temp_entry_of(&source, &env)
             && let Some(entry) = self
@@ -1412,7 +1776,7 @@ impl Session {
                     .iter()
                     .map(|c| StoreColumn {
                         name: c.name.clone(),
-                        data_type: c.data_type.clone(),
+                        data_type: krishiv_plan::without_generated_marker(&c.data_type),
                         nullable: c.nullable,
                         default: None,
                         comment: None,
@@ -1438,10 +1802,6 @@ impl Session {
             Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
             None => managed_location(&warehouse, &name.namespace, &name.name),
         };
-        let mut options = BTreeMap::new();
-        if provider == "csv" {
-            options.insert("header".to_owned(), "true".to_owned());
-        }
         let table = CatalogTable {
             namespace: name.namespace.clone(),
             name: name.name.clone(),
@@ -1470,8 +1830,20 @@ impl Session {
     pub(crate) async fn exec_drop_table(&self, d: &DropTable) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let name = self.table_name(&d.name, &env)?;
+        self.drop_named_table(&name, &env, d.if_exists).await?;
+        self.empty_frame().await
+    }
+
+    /// `DROP TABLE` for a resolved name; also what `saveAsTable` in overwrite
+    /// mode runs before it creates the table again.
+    async fn drop_named_table(
+        &self,
+        name: &TableName,
+        env: &QueryEnv,
+        if_exists: bool,
+    ) -> Result<(), KrishivError> {
         // `DROP TABLE` on a permanent view is refused as Spark's `DropTableCommand` does.
-        if self.temp_entry_of(&name, &env) {
+        if self.temp_entry_of(name, env) {
             // A temporary view shadows a table of the same bare name, and `DROP TABLE` drops it, as in Spark.
             self.state.catalog.drop_table(&name.name);
             self.state.cache.invalidate_table(&name.name);
@@ -1488,7 +1860,7 @@ impl Session {
             }
             // Checked before the metadata goes: a refused delete must not orphan the files.
             let dir = self.deletable_dir(&table).await?;
-            self.forget_cached(&name);
+            self.forget_cached(name);
             self.state
                 .catalog
                 .store
@@ -1496,10 +1868,10 @@ impl Session {
             if let Some(dir) = dir {
                 remove_dir(&dir)?;
             }
-        } else if !d.if_exists {
+        } else if !if_exists {
             return Err(name.not_found());
         }
-        self.empty_frame().await
+        Ok(())
     }
 
     /// `TRUNCATE TABLE name`: removes the table's files and keeps its
@@ -1698,7 +2070,14 @@ impl Session {
             }
             .into());
         }
-        if self.temp_entry_of(name, env) {
+        let global = name
+            .namespace
+            .eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
+            && self.state.catalog.exists(
+                &crate::catalog::global_key(&name.name),
+                env.analysis.conf.case_sensitive,
+            );
+        if self.temp_entry_of(name, env) || global {
             return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
                 operation: format!("`{operation}`"),
                 view_name: name.quoted(),
@@ -1749,7 +2128,12 @@ impl Session {
                 .iter()
                 .for_each(|r| scalar_subqueries(r, &mut subqueries));
             for query in &subqueries {
-                let plan = krishiv_sql::lower(query, self.next_source_id()).map_err(|e| e.error)?;
+                let plan = krishiv_sql::lower_with(
+                    query,
+                    self.next_source_id(),
+                    self.parser_options().case_sensitive,
+                )
+                .map_err(|e| e.error)?;
                 DataFrame::new(self.clone(), Arc::clone(plan.root()))
                     .analyzed_in(self.query_env())
                     .await?;
@@ -1761,7 +2145,12 @@ impl Session {
                 );
             }
         }
-        let plan = krishiv_sql::lower(&c.query, self.next_source_id()).map_err(|e| e.error)?;
+        let plan = krishiv_sql::lower_with(
+            &c.query,
+            self.next_source_id(),
+            self.parser_options().case_sensitive,
+        )
+        .map_err(|e| e.error)?;
         let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
         let listed: Vec<String> = c
             .columns
@@ -1822,7 +2211,7 @@ impl Session {
             .iter()
             .map(|c| TableColumn {
                 name: c.name.clone(),
-                data_type: c.data_type.clone(),
+                data_type: krishiv_plan::without_generated_marker(&c.data_type),
                 nullable: c.nullable,
             })
             .collect();
@@ -1891,6 +2280,263 @@ impl Session {
         Ok(())
     }
 
+    /// The access check the SQL path makes for the statement a table write
+    /// stands for: `CREATE TABLE ... AS SELECT` (`Create` in the namespace) or
+    /// `INSERT INTO` (`Modify` on the table). The DataFrame writers reach
+    /// the command path without a statement, so the equivalent one is parsed
+    /// and asked about through the same `authorize_statement`; the table name
+    /// is quoted part by part, so it cannot add to the statement. The reads of
+    /// the DataFrame are checked by its own analysis.
+    async fn authorize_table_write(
+        &self,
+        name: &TableName,
+        create: bool,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        let text = if create {
+            "CREATE TABLE {} AS SELECT 1"
+        } else {
+            "INSERT INTO {} SELECT 1"
+        };
+        self.authorize_equivalent(name, text, env).await
+    }
+
+    /// [`Self::authorize_table_write`] for any statement `text` (with `{}`
+    /// standing for the quoted table name) the call stands for.
+    async fn authorize_equivalent(
+        &self,
+        name: &TableName,
+        text: &str,
+        env: &QueryEnv,
+    ) -> Result<(), KrishivError> {
+        let quoted = format!(
+            "`{}`.`{}`",
+            name.namespace.replace('`', "``"),
+            name.name.replace('`', "``")
+        );
+        let text = text.replace("{}", &quoted);
+        let statement = krishiv_sql::parse_statement(&text, &env.parser).map_err(|e| e.error)?;
+        let class = krishiv_sql::classify(&statement);
+        self.authorize_statement(&statement, class, env).await
+    }
+
+    /// What a `create` of a new table checks before it changes anything,
+    /// so an overwrite can check it before it drops the old one.
+    fn validate_new_table(&self, name: &TableName, spec: &V2WriteSpec) -> Result<(), KrishivError> {
+        if !spec.partitioned_by.is_empty() || !spec.cluster_by.is_empty() {
+            return Err(unsupported("partitioned tables"));
+        }
+        self.warehouse_dir()?;
+        self.provider_of(spec.provider.clone())?;
+        check_new_name(&name.namespace)?;
+        check_new_name(&name.name)?;
+        self.check_namespace(name)?;
+        if spec.options.values().any(|v| v.as_plain().is_none()) {
+            return Err(unsupported("secret table options"));
+        }
+        Ok(())
+    }
+
+    /// The table a `DataFrameWriter` call names.
+    fn writer_table_name(&self, table: &str, env: &QueryEnv) -> Result<TableName, KrishivError> {
+        let parsed = krishiv_sql::parse_multipart_identifier(table, &self.parser_options())
+            .map_err(|e| e.error)?;
+        let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
+        TableName::resolve(&parts, &self.state.catalog.current_namespace(), env)
+    }
+
+    /// `DataFrameWriter.saveAsTable`: Spark's V1 save modes over a table. The
+    /// table is created from the DataFrame's schema (an existing one in
+    /// `errorifexists` mode fails with `TABLE_OR_VIEW_ALREADY_EXISTS`),
+    /// `ignore` leaves an existing table alone, `append` adds the rows by
+    /// column name (names that do not match the table's, a format other than
+    /// its, or a `partition_by` fail with `KRISHIV_UNSUPPORTED_FEATURE`), and
+    /// `overwrite` drops the table and creates it again, after the checks that
+    /// can refuse the new table and the `UNSUPPORTED_OVERWRITE.TABLE` check
+    /// (a query that reads the table it replaces); a temporary view of the
+    /// same name makes it `KRISHIV_UNSUPPORTED_FEATURE`.
+    pub(crate) async fn exec_save_as_table(
+        &self,
+        df: &DataFrame,
+        spec: V2WriteSpec,
+        mode: krishiv_io::SaveMode,
+    ) -> Result<(), KrishivError> {
+        use krishiv_io::SaveMode;
+        let env = self.query_env();
+        let name = self.writer_table_name(&spec.table, &env)?;
+        let exists = self
+            .state
+            .catalog
+            .store
+            .table(&name.namespace, &name.name)
+            .is_some();
+        match (mode, exists) {
+            (SaveMode::Ignore, true) => {
+                // A no-op create is still authorized, as the SQL path does, so a denial
+                // cannot tell an existing table from a missing one.
+                self.authorize_table_write(&name, true, &env).await
+            }
+            (SaveMode::Append, true) => {
+                // Asked first, as `insertInto` does: what is reported about a table the caller
+                // may not write must not depend on its metadata.
+                self.authorize_table_write(&name, false, &env).await?;
+                let table = self.table_for_write(&name, "INSERT", &env)?;
+                // Spark refuses an append whose format or partitioning differs
+                // from the table's.
+                if !spec.partitioned_by.is_empty() {
+                    return Err(unsupported("partitioned tables"));
+                }
+                if spec
+                    .provider
+                    .as_deref()
+                    .is_some_and(|p| !p.eq_ignore_ascii_case(&table.provider))
+                {
+                    return Err(unsupported(
+                        "saveAsTable append with a format other than the table's",
+                    ));
+                }
+                let schema = df.schema().await?;
+                let case_sensitive = env.analysis.conf.case_sensitive;
+                let same = |a: &str, b: &str| {
+                    if case_sensitive {
+                        a == b
+                    } else {
+                        a.eq_ignore_ascii_case(b)
+                    }
+                };
+                let mut order = Vec::with_capacity(table.columns.len());
+                for c in &table.columns {
+                    let mut hits = schema
+                        .fields()
+                        .iter()
+                        .map(|f| f.name().as_str())
+                        .filter(|h| same(h, &c.name));
+                    match (hits.next(), hits.next()) {
+                        (Some(h), None) => order.push(h.to_owned()),
+                        _ => break,
+                    }
+                }
+                if order.len() != table.columns.len() || order.len() != schema.fields().len() {
+                    return Err(unsupported(
+                        "saveAsTable append with column names that differ from the table's",
+                    ));
+                }
+                // Built directly: a name with dots or a star is one plain column.
+                let by_name = df.select(order.iter().map(|h| {
+                    crate::column::Column::new(krishiv_plan::Expr::new(
+                        krishiv_plan::ExprNode::Column(krishiv_plan::ColumnRef {
+                            name: vec![h.clone()],
+                            plan_id: None,
+                        }),
+                    ))
+                }));
+                self.exec_write_v2(&by_name, spec, V2Mode::Append).await
+            }
+            (SaveMode::Overwrite, true) => {
+                // Spark drops the table and creates it again. Everything that can
+                // refuse the new table is checked before the old one goes.
+                if self.temp_entry_of(&name, &env) {
+                    return Err(unsupported(
+                        "saveAsTable overwrite of a name a temporary view shadows",
+                    ));
+                }
+                self.authorize_equivalent(&name, "DROP TABLE {}", &env)
+                    .await?;
+                self.authorize_table_write(&name, true, &env).await?;
+                // `UNSUPPORTED_OVERWRITE.TABLE`: the query reads the table it replaces.
+                let analysis = df.analysis().await?;
+                if crate::catalog::reads_stored_table(
+                    analysis.analyzed.plan.root(),
+                    &name.namespace,
+                    &name.name,
+                    &self.state.catalog.current_namespace(),
+                ) {
+                    return Err(krishiv_common::error::UnsupportedOverwriteTable {
+                        table: name.quoted(),
+                    }
+                    .into());
+                }
+                self.validate_new_table(&name, &spec)?;
+                // What the write itself would refuse (a format the engine does not
+                // write, duplicate output columns, options the format rejects) must
+                // not come after the drop.
+                let provider = self.provider_of(spec.provider.clone())?;
+                let schema = df.schema().await?;
+                self.check_write_ready(&provider, &spec.options, &schema, &env)?;
+                // The write asks the policy about the table's directory, in the form
+                // `write_files` asks it (`locate_write_path`), and the create refuses
+                // a directory that is already there other than the old table's own;
+                // both before the drop.
+                let location =
+                    managed_location(&self.warehouse_dir()?, &name.namespace, &name.name);
+                let at =
+                    self.locate_write_path(&location.display().to_string(), &spec.options, &env)?;
+                self.authorize_write_path(&at).await?;
+                // A managed table's own directory goes with it; any other one in the way stays.
+                let own = self
+                    .state
+                    .catalog
+                    .store
+                    .table(&name.namespace, &name.name)
+                    .is_some_and(|t| t.managed && t.location == location);
+                if location.exists() && !own {
+                    return Err(LocationAlreadyExists {
+                        identifier: name.quoted(),
+                        location: location.display().to_string(),
+                    }
+                    .into());
+                }
+                // What is left after this point is the write itself (query errors, I/O): as in
+                // Spark's V1 overwrite, a failure there leaves no table.
+                self.drop_named_table(&name, &env, true).await?;
+                self.exec_write_v2(df, spec, V2Mode::Create).await
+            }
+            // `ErrorIfExists` on an existing table fails in the create.
+            _ => self.exec_write_v2(df, spec, V2Mode::Create).await,
+        }
+    }
+
+    /// `DataFrameWriter.insertInto`: `errorifexists`, `ignore` and `append`
+    /// are all `INSERT INTO` by position (Spark's `insertInto` ignores the
+    /// first two); `overwrite` is `INSERT OVERWRITE` by position, as the SQL
+    /// statement runs it.
+    pub(crate) async fn exec_insert_into(
+        &self,
+        df: &DataFrame,
+        table: &str,
+        mode: krishiv_io::SaveMode,
+    ) -> Result<(), KrishivError> {
+        let overwrite = mode == krishiv_io::SaveMode::Overwrite;
+        let env = self.query_env();
+        let name = self.writer_table_name(table, &env)?;
+        self.authorize_equivalent(
+            &name,
+            if overwrite {
+                "INSERT OVERWRITE TABLE {} SELECT 1"
+            } else {
+                "INSERT INTO {} SELECT 1"
+            },
+            &env,
+        )
+        .await?;
+        let found = self.table_for_write(
+            &name,
+            if overwrite {
+                "INSERT OVERWRITE"
+            } else {
+                "INSERT"
+            },
+            &env,
+        )?;
+        let target = InsertTarget {
+            listed: &[],
+            by_name: false,
+            overwrite,
+            statics: &[],
+        };
+        self.insert_rows(&name, &found, df, &target).await
+    }
+
     /// Runs a [`DataFrameWriterV2`](crate::DataFrameWriterV2) request: `Create`
     /// is `CREATE TABLE name AS SELECT` over `df` (one code path, a failed
     /// write leaves no table), `Append` is `INSERT INTO name` by position.
@@ -1908,6 +2554,8 @@ impl Session {
             .map_err(|e| e.error)?;
         let parts: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
         let name = TableName::resolve(&parts, &self.state.catalog.current_namespace(), &env)?;
+        self.authorize_table_write(&name, mode != V2Mode::Append, &env)
+            .await?;
         match mode {
             // An append ignores the layout the builder was given: the
             // existing table's layout rules.
@@ -1957,11 +2605,6 @@ impl Session {
                 return Err(unsupported("secret table options"));
             };
             options.insert(k.clone(), text.to_owned());
-        }
-        if provider == "csv" {
-            options
-                .entry("header".to_owned())
-                .or_insert_with(|| "true".to_owned());
         }
         let table = CatalogTable {
             namespace: name.namespace.clone(),
@@ -2457,6 +3100,32 @@ mod tests {
     use krishiv_types::{ArrayType, DecimalType};
 
     #[test]
+    fn an_owned_directory_is_exclusive_and_reports_why_it_cannot_be_made() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("a").join("t");
+        let owned = OwnedDirectory::create(path.clone()).unwrap();
+        assert!(matches!(
+            OwnedDirectory::create(path.clone()),
+            Err(OwnedDirectoryError::Exists)
+        ));
+        drop(owned);
+        assert!(!path.exists(), "a directory not kept is removed again");
+        // A file where the parent should be.
+        let file = tmp.path().join("f");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(matches!(
+            OwnedDirectory::create(file.join("t")),
+            Err(OwnedDirectoryError::Io(m)) if m.contains("cannot create")
+        ));
+        // A parent that exists but takes no new entries.
+        #[cfg(target_os = "linux")]
+        assert!(matches!(
+            OwnedDirectory::create(PathBuf::from("/proc/krishiv-owned-directory")),
+            Err(OwnedDirectoryError::Io(_))
+        ));
+    }
+
+    #[test]
     fn ansi_store_assignment() {
         use DataType as T;
         assert!(can_store(&T::Integer, &T::Integer));
@@ -2485,5 +3154,113 @@ mod tests {
         assert_eq!(literal_text("\"x\""), "x");
         assert_eq!(literal_text(" true "), "true");
         assert_eq!(literal_text("'"), "'");
+    }
+}
+
+/// Why an [`OwnedDirectory`] could not be made.
+#[derive(Debug)]
+enum OwnedDirectoryError {
+    /// Something is already at the path (not ours to touch).
+    Exists,
+    Io(String),
+}
+
+/// A directory this statement created exclusively. Dropped without [`Self::keep`] (the statement
+/// failed, or its future was dropped), it removes what is in it, provided the path still names the
+/// directory that was created (same device and inode): a path swapped for another directory in the
+/// meantime is left alone.
+struct OwnedDirectory {
+    path: PathBuf,
+    identity: Option<(u64, u64)>,
+    kept: bool,
+}
+
+impl OwnedDirectory {
+    fn create(path: PathBuf) -> Result<Self, OwnedDirectoryError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                OwnedDirectoryError::Io(format!("cannot create {}: {e}", parent.display()))
+            })?;
+        }
+        match std::fs::create_dir(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(OwnedDirectoryError::Exists);
+            }
+            Err(e) => {
+                return Err(OwnedDirectoryError::Io(format!(
+                    "cannot create {}: {e}",
+                    path.display()
+                )));
+            }
+        }
+        let identity = Self::identity_of(&path);
+        Ok(Self {
+            path,
+            identity,
+            kept: false,
+        })
+    }
+
+    fn identity_of(path: &Path) -> Option<(u64, u64)> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let meta = std::fs::symlink_metadata(path).ok()?;
+            meta.is_dir().then(|| (meta.dev(), meta.ino()))
+        }
+        #[cfg(not(unix))]
+        {
+            let meta = std::fs::symlink_metadata(path).ok()?;
+            meta.is_dir().then_some((0, 0))
+        }
+    }
+
+    /// The statement succeeded: the directory stays.
+    fn keep(mut self) {
+        self.kept = true;
+    }
+}
+
+impl Drop for OwnedDirectory {
+    fn drop(&mut self) {
+        if !self.kept && self.identity.is_some() && Self::identity_of(&self.path) == self.identity {
+            drop(std::fs::remove_dir_all(&self.path));
+        }
+    }
+}
+
+#[cfg(test)]
+mod owned_directory_tests {
+    use super::{OwnedDirectory, OwnedDirectoryError};
+
+    #[test]
+    fn a_dropped_guard_removes_only_the_directory_it_made() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Dropped without `keep` (a failed or cancelled statement): gone, with what was written.
+        let a = tmp.path().join("a");
+        let guard = OwnedDirectory::create(a.clone()).unwrap();
+        std::fs::write(a.join("f"), b"x").unwrap();
+        drop(guard);
+        assert!(!a.exists());
+        // Kept: stays.
+        let b = tmp.path().join("b");
+        OwnedDirectory::create(b.clone()).unwrap().keep();
+        assert!(b.exists());
+        // A path that already exists is not ours.
+        assert!(matches!(
+            OwnedDirectory::create(b.clone()),
+            Err(OwnedDirectoryError::Exists)
+        ));
+        assert!(b.exists());
+        // The path now names another directory (swapped meanwhile): left alone.
+        let c = tmp.path().join("c");
+        let guard = OwnedDirectory::create(c.clone()).unwrap();
+        // Renamed aside, not removed: a removed directory's inode number may be reused by the new one.
+        std::fs::rename(&c, tmp.path().join("c-moved")).unwrap();
+        std::fs::create_dir(&c).unwrap();
+        std::fs::write(c.join("theirs"), b"y").unwrap();
+        drop(guard);
+        assert!(c.join("theirs").exists());
     }
 }

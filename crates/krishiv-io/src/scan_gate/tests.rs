@@ -113,6 +113,18 @@ impl Env {
         pool: &Arc<dyn MemoryPool>,
         gate: &Arc<ScanGate>,
     ) -> ScanStream {
+        self.stream_with(file, req, pool, gate, 0).await
+    }
+
+    /// As [`Self::stream`], prefetching up to `prefetch_bytes`.
+    async fn stream_with(
+        &self,
+        file: &FileRef,
+        req: &ScanRequest,
+        pool: &Arc<dyn MemoryPool>,
+        gate: &Arc<ScanGate>,
+        prefetch_bytes: u64,
+    ) -> ScanStream {
         let id = pool.register("FileScan", None);
         ScanStream::open(
             &self.io,
@@ -123,7 +135,7 @@ impl Env {
             &options(),
             Reservation::new(Arc::clone(pool), id),
             ScanOptions {
-                prefetch_bytes: 0,
+                prefetch_bytes,
                 ..ScanOptions::default()
             },
         )
@@ -399,5 +411,49 @@ fn a_cancelled_request_withdraws_its_claim() {
         .await;
         assert!(waited.is_err(), "the request was still waiting");
         assert_eq!((gate.active(), gate.bytes()), (0, 0));
+    });
+}
+
+/// Prefetch is charged to the query's pool and bounded by `krishiv.io.prefetchBytes` (P2-T086): a
+/// scan of multi-megabyte row groups holds at most the budget beyond the working set of the unit
+/// it decodes, however large the row groups are, and returns every byte at the end. (E08 saw 16-17
+/// GB held by a wide scan before the budget.)
+#[test]
+fn prefetch_is_held_within_its_byte_budget() {
+    let env = Env::new();
+    // Three row groups of about 4 MB each.
+    let (file, shares) = env.file("wide.parquet", 3_000_000, 1_000_000);
+    let req = env.request(&file);
+    let budget = 1_usize << 20;
+    env.rt.block_on(async {
+        let mut peaks = Vec::new();
+        for prefetch in [0_u64, budget as u64, 256 << 20] {
+            let (_root, pool) = query_pool(None);
+            let gate = Arc::new(ScanGate::new(&pool, usize::MAX));
+            let mut s = env.stream_with(&file, &req, &pool, &gate, prefetch).await;
+            let mut rows = 0;
+            while let Some(b) = s.next_batch().await.unwrap() {
+                rows += b.num_rows();
+            }
+            assert_eq!(rows, 3_000_000);
+            assert_eq!(
+                pool.reserved(),
+                0,
+                "prefetch {prefetch}: bytes left reserved"
+            );
+            peaks.push(pool.peak_reserved());
+        }
+        eprintln!(
+            "T086 peaks (no prefetch, 1 MiB, 256 MiB): {peaks:?}, unit share {:?}",
+            shares
+        );
+        let unit = *shares.iter().max().unwrap();
+        // Without prefetch the pool never holds more than a unit's share.
+        assert!(peaks[0] <= unit);
+        // A 1 MiB budget adds at most the budget (the fetch of a range reserves its coalescing gaps
+        // too, which `request_bytes` counts inside the budget).
+        assert!(peaks[1] <= peaks[0] + budget, "{peaks:?}");
+        // A large budget prefetches more than the small one did.
+        assert!(peaks[2] >= peaks[1], "{peaks:?}");
     });
 }

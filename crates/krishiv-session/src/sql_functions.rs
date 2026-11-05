@@ -242,8 +242,13 @@ impl QueryFunctions {
                     // A body reads a view as written; schema binding modes
                     // apply to the views a query reads itself.
                     binding_enabled: false,
-                    path: self.path.clone(),
+                    path: if def.path.is_empty() {
+                        self.path.clone()
+                    } else {
+                        def.path.clone()
+                    },
                     next_source: &|| next_source(views),
+                    qualify: None,
                     namespace: stored_in
                         .clone()
                         .unwrap_or_else(|| self.catalog.current_namespace()),
@@ -254,9 +259,17 @@ impl QueryFunctions {
                     self.case_sensitive,
                     Some(&stored),
                     stored_in,
+                    (!def.path.is_empty()).then(|| def.path.clone()),
                 )
             }
-            None => expand_views_in(&self.catalog, &wrapper, self.case_sensitive, None, None),
+            None => expand_views_in(
+                &self.catalog,
+                &wrapper,
+                self.case_sensitive,
+                None,
+                None,
+                None,
+            ),
         };
         // A body no view expansion can read (a snapshot name, a cycle)
         // stays as written: the analyzer then reports the table missing.
@@ -295,7 +308,7 @@ impl QueryFunctions {
         let Some(namespace) = def.qualifier.last() else {
             return Arc::clone(def);
         };
-        match self.qualify_calls(&def.body, namespace, profile) {
+        match self.qualify_calls(&def.body, namespace, &def.path, profile, false) {
             Some(body) => Arc::new(SqlFunction {
                 body,
                 ..(**def).clone()
@@ -306,14 +319,19 @@ impl QueryFunctions {
 }
 
 impl QueryFunctions {
-    /// `body` with each bare call that is not a built-in qualified by
-    /// `namespace`; `None` when nothing changed. Calls inside subquery
-    /// plans are not entered.
-    fn qualify_calls(
+    /// `body` with each bare call that is not a built-in qualified: by the
+    /// first schema of the function's frozen `path` holding a stored function
+    /// of that name, else by `namespace`; `None` when nothing changed.
+    /// `temporary_visible` (a view's body, not a stored function's) leaves a
+    /// call a session UDF or temporary function answers bare. Calls
+    /// inside subquery plans are not entered.
+    pub(crate) fn qualify_calls(
         &self,
         body: &Arc<Expr>,
         namespace: &str,
+        path: &[Vec<String>],
         profile: SparkProfile,
+        temporary_visible: bool,
     ) -> Option<Arc<Expr>> {
         let out = Arc::clone(body)
             .transform_up(
@@ -324,7 +342,9 @@ impl QueryFunctions {
                     // Canonical operators and built-ins stay bare; anything
                     // else, session UDFs included, is a user function.
                     let builtin = ["system".to_owned(), "builtin".to_owned(), call.name.clone()];
+                    // `qualify` is lowering's QUALIFY marker, which the analyzer strips.
                     if !call.qualifier.is_empty()
+                        || call.name == "qualify"
                         || Builtin::from_name(&call.name).is_some()
                         || !matches!(
                             self.base.lookup(&builtin, profile),
@@ -334,7 +354,65 @@ impl QueryFunctions {
                         return Ok(e);
                     }
                     let mut call = call.clone();
-                    call.qualifier = vec![namespace.to_owned()];
+                    let name = fold(&call.name, self.case_sensitive);
+                    let from_path = path.iter().find_map(|entry| match entry.as_slice() {
+                        [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
+                            let n = fold(n, self.case_sensitive);
+                            self.stored.get(&n, &name).map(|_| vec![c.clone(), n])
+                        }
+                        _ => None,
+                    });
+                    // The resolver asks the registered functions first, so in a
+                    // view a session UDF answers bare whatever the path holds;
+                    // a stored function's body names its stored routines.
+                    if temporary_visible
+                        && !matches!(
+                            self.base.lookup(std::slice::from_ref(&call.name), profile),
+                            FunctionLookup::NotFound
+                        )
+                    {
+                        return Ok(e);
+                    }
+                    // A temporary function answers bare when the path reaches
+                    // `system.session` before any stored routine of that name.
+                    if temporary_visible && self.map.get(&name).is_some() {
+                        let session_at = path.iter().position(|entry| {
+                            matches!(entry.as_slice(), [s, q]
+                                if s.eq_ignore_ascii_case("system") && q.eq_ignore_ascii_case("session"))
+                        });
+                        let stored_at = path.iter().position(|entry| match entry.as_slice() {
+                            [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
+                                self.stored.get(&fold(n, self.case_sensitive), &name).is_some()
+                            }
+                            _ => false,
+                        });
+                        let session_first = match (session_at, stored_at) {
+                            (Some(s), Some(t)) => s < t,
+                            (Some(_), None) => true,
+                            (None, _) => path.is_empty(),
+                        };
+                        if session_first {
+                            return Ok(e);
+                        }
+                    }
+                    // A routine gone from the frozen path stays unresolved: it
+                    // is looked up in the path's first schema, never the
+                    // namespace outside the path.
+                    let first = path.iter().find_map(|entry| match entry.as_slice() {
+                        [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG) => {
+                            Some(vec![c.clone(), fold(n, self.case_sensitive)])
+                        }
+                        _ => None,
+                    });
+                    // Only a view is held to the path's first schema; a stored
+                    // function's body falls back to its own namespace.
+                    call.qualifier = match from_path.or(first.filter(|_| temporary_visible)) {
+                        Some(q) => q,
+                        // A view whose path holds no catalog schema keeps the
+                        // call bare, unresolved, not the view's namespace.
+                        None if temporary_visible => return Ok(e),
+                        None => vec![namespace.to_owned()],
+                    };
                     let mut next = (*e).clone();
                     next.node = ExprNode::Function(call);
                     Ok(Arc::new(next))
@@ -502,6 +580,7 @@ mod tests {
             def: Arc::new(SqlFunction {
                 name: name.to_owned(),
                 qualifier: Vec::new(),
+                path: Vec::new(),
                 returns_table: None,
                 params: Vec::new(),
                 returns: None,
@@ -510,6 +589,7 @@ mod tests {
                 source: SourceId(7),
                 deterministic: true,
                 reads_data: false,
+                ansi: None,
             }),
             text: krishiv_sql::redact_sql("CREATE FUNCTION f() RETURN 1"),
         }

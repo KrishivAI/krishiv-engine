@@ -7,6 +7,10 @@ extend-exclude = [
     "tests/fixtures/**",
     "crates/*/tests/fixtures/**",
     "crates/krishiv-common/vendored/spark-error-conditions.json",
+    "crates/krishiv-types/vendored/collations.tsv",
+    # generated Java zone-name table (PONT, TAHT)
+    "crates/krishiv-kernels/src/datetime_pattern/zone_names.rs",
+    "crates/krishiv-kernels/vendored/legacy_zones.rs",
     "proto/spark-connect/**",
     "crates/krishiv-connect/src/proto/**",
     "tests/sqllogictest/**",
@@ -22,6 +26,8 @@ extend-ignore-re = [
     '"(ECT|IST)"',         # Java's short time-zone IDs (Europe/Paris, Asia/Kolkata)
     'spark\.implicits\._', # Spark's implicit-conversions import
     '"Bash\([^"]*\)"',     # command patterns in agent permission rules (bundled git options like -nam)
+    # the zone name in LEGACY parser docs and tests
+    '(`IST`|\d\d:\d\d (IST|ist)")',
 ]
 
 [default.extend-identifiers]

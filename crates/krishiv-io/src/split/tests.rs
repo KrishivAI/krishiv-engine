@@ -6,8 +6,8 @@ use krishiv_common::config::Config;
 use serde_json::Value;
 
 use super::{
-    FilePartition, FileSplit, MORSELS_PER_DRIVER, MorselSplit, SplitConfig, SplitFile,
-    max_split_bytes, morsel_bytes, morsels, plan,
+    FilePartition, FileSplit, KeptUnit, MORSELS_PER_DRIVER, MorselSplit, SplitConfig, SplitFile,
+    max_split_bytes, morsel_bytes, morsels, plan, pruned_morsels,
 };
 use crate::format::{Capabilities, Splittable};
 use crate::io::ByteRange;
@@ -31,6 +31,7 @@ fn text_source() -> Capabilities {
         page_pruning: false,
         page_checksums: false,
         write: false,
+        random_access: None,
     }
 }
 
@@ -273,5 +274,137 @@ fn morsels_tile_every_split_exactly() {
             }
         }
         assert_eq!(at, pieces.len());
+    }
+}
+
+fn kept(units: &[(u64, u64)]) -> Vec<KeptUnit> {
+    units
+        .iter()
+        .map(|&(start, rows)| KeptUnit { start, rows })
+        .collect()
+}
+
+#[test]
+fn pruned_morsels_share_the_kept_rows() {
+    // Two 100-byte splits of one file and one split of another; units of 10
+    // bytes, of which pruning keeps those listed.
+    let parts = [
+        part(0, &[(0, 0, 100), (0, 100, 200)]),
+        part(1, &[(1, 0, 100)]),
+    ];
+    let k = vec![
+        vec![kept(&[(30, 5), (40, 5), (50, 5)]), kept(&[(100, 5)])],
+        vec![kept(&[])],
+    ];
+    let m = pruned_morsels(&parts, &k, 10);
+    let ranges: Vec<Vec<(usize, u64, u64, u64)>> = m
+        .iter()
+        .map(|m| {
+            m.iter()
+                .map(|p| (p.file, p.range.start, p.range.end, p.split.start))
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        ranges,
+        vec![
+            // Units at 30 and 40; the pruned ones before them ride along.
+            vec![(0, 0, 50, 0)],
+            // The unit at 50, then the next split's first unit.
+            vec![(0, 50, 100, 0), (0, 100, 200, 100)],
+            // A partition that keeps nothing still reads its split.
+            vec![(1, 0, 100, 0)],
+        ]
+    );
+    // A unit larger than the target is a morsel of its own; a unit
+    // straddling the split's start is cut at the split's start.
+    let parts = [part(0, &[(0, 95, 200)])];
+    let k = vec![vec![kept(&[(90, 50), (120, 50), (150, 1)])]];
+    let m = pruned_morsels(&parts, &k, 10);
+    let ranges: Vec<Vec<(u64, u64)>> = m
+        .iter()
+        .map(|m| m.iter().map(|p| (p.range.start, p.range.end)).collect())
+        .collect();
+    assert_eq!(
+        ranges,
+        vec![vec![(95, 120)], vec![(120, 150)], vec![(150, 200)]]
+    );
+    // Splits and partitions missing from `kept` keep nothing but are read.
+    let parts = [part(0, &[(0, 0, 100), (1, 0, 50)]), part(1, &[(2, 0, 10)])];
+    let k = vec![vec![kept(&[(10, 5)])]];
+    let m = pruned_morsels(&parts, &k, 10);
+    let files: Vec<Vec<usize>> = m
+        .iter()
+        .map(|m| m.iter().map(|p| p.file).collect())
+        .collect();
+    assert_eq!(files, vec![vec![0, 1], vec![2]]);
+}
+
+#[test]
+fn pruned_morsels_tile_the_splits_and_keep_each_unit_once() {
+    // Files of 10-byte units, planned into splits; pruning keeps every
+    // third unit of the first files and none of the others.
+    let files: Vec<SplitFile> = (0..40_u64)
+        .map(|i| SplitFile {
+            size: (i * 7919) % 3000 + 10,
+            splittable: true,
+        })
+        .collect();
+    let mut cfg = SplitConfig::from_config(&Config::new(), 4);
+    cfg.max_partition_bytes = 700;
+    cfg.open_cost_in_bytes = 10;
+    let parts = plan(&cfg, &files);
+    let units = |f: usize| (0..files[f].size / 10).map(|u| (u * 10, u * 10 + 10));
+    let mut k = Vec::new();
+    for p in &parts {
+        let mut per_split = Vec::new();
+        for s in &p.splits {
+            let range = s.range;
+            per_split.push(
+                units(s.file)
+                    .filter(|&(a, b)| range.owns(&(a..b)) && s.file < 20 && a % 30 == 0)
+                    .map(|(a, _)| KeptUnit { start: a, rows: 7 })
+                    .collect::<Vec<_>>(),
+            );
+        }
+        k.push(per_split);
+    }
+    let m = pruned_morsels(&parts, &k, 50);
+    let pieces: Vec<MorselSplit> = m.iter().flatten().copied().collect();
+    let mut at = 0;
+    for p in &parts {
+        for s in &p.splits {
+            let mut start = s.range.start;
+            while start < s.range.end {
+                let piece = pieces[at];
+                assert_eq!((piece.file, piece.split), (s.file, s.range));
+                assert_eq!(piece.range.start, start);
+                assert!(piece.range.end > start);
+                start = piece.range.end;
+                at += 1;
+            }
+            assert_eq!(start, s.range.end);
+            // Every unit the split owns is owned by exactly one piece.
+            for (a, b) in units(s.file).filter(|&(a, b)| s.range.owns(&(a..b))) {
+                let owners = pieces
+                    .iter()
+                    .filter(|q| q.file == s.file && q.range.owns(&(a..b)));
+                assert_eq!(owners.count(), 1, "unit {a} of file {}", s.file);
+            }
+        }
+    }
+    assert_eq!(at, pieces.len());
+    // No morsel holds more than the target unless it holds one kept unit.
+    for morsel in &m {
+        let rows: u64 = morsel
+            .iter()
+            .map(|q| {
+                units(q.file)
+                    .filter(|&(a, b)| q.range.owns(&(a..b)) && q.file < 20 && a % 30 == 0)
+                    .count() as u64
+                    * 7
+            })
+            .sum();
+        assert!(rows <= 50 || rows == 7, "{rows}");
     }
 }

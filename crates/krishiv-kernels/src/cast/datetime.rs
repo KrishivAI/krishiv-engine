@@ -24,6 +24,26 @@ pub trait TimeZoneRules: Send + Sync + std::fmt::Debug {
     /// overlap, the offset before the transition in a gap (which moves the
     /// time forward by the gap's length).
     fn offset_for_local(&self, local_seconds: i64) -> i32;
+    /// The offset `java.util.TimeZone` gives at `utc_seconds`, which the
+    /// legacy (`SimpleDateFormat`) formatters print. It drops the
+    /// transitions before 1900, so earlier instants have the zone's raw
+    /// offset; the default is [`Self::offset_at_utc`] (zones without such
+    /// history).
+    fn legacy_offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        self.offset_at_utc(utc_seconds)
+    }
+    /// The zone's region id (`Asia/Kolkata`), whose own zone names the
+    /// legacy parser tries first; `None` (the default) for a fixed offset.
+    fn region_id(&self) -> Option<&str> {
+        None
+    }
+    /// The query start instant, in microseconds since the epoch, when the
+    /// caller has one: a time of day without a date (`CAST('10:11:12' AS
+    /// TIMESTAMP)`) is on that instant's date in this zone. Without it such a
+    /// string is `KRISHIV_UNSUPPORTED_FEATURE`.
+    fn query_start_micros(&self) -> Option<i64> {
+        None
+    }
 }
 
 /// A zone with one fixed offset (`UTC` is `FixedOffset(0)`).
@@ -117,7 +137,7 @@ pub(crate) fn civil_from_days(days: i64) -> (i64, u32, u32) {
     )
 }
 
-fn days_in_month(year: i64, month: u32) -> u32 {
+pub(crate) fn days_in_month(year: i64, month: u32) -> u32 {
     match month {
         2 if year.rem_euclid(4) == 0
             && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0) =>
@@ -145,10 +165,29 @@ pub(crate) fn format_date(days: i64, out: &mut String) {
 /// A timestamp rendering of local `micros`: the date, `HH:mm:ss`, and the
 /// fraction without trailing zeros.
 pub(crate) fn format_timestamp(micros: i64, out: &mut String) {
+    format_wide(i128::from(micros), out);
+}
+
+/// Appends the UTC instant `utc` as local text in `tz` (or as is when `tz`
+/// is `None`). The local value is computed in `i128`: a zone offset can
+/// carry the instant past the `i64` range (`Long.MIN_VALUE` micros in
+/// `America/Los_Angeles` is `-290308-12-21 12:06:07.224192`), which Spark
+/// renders from a `LocalDateTime`.
+pub(crate) fn format_timestamp_in_zone(utc: i64, tz: Option<&dyn TimeZoneRules>, out: &mut String) {
+    let offset = tz.map_or(0, |tz| tz.offset_at_utc(utc.div_euclid(MICROS_PER_SECOND)));
+    format_wide(
+        i128::from(utc) + i128::from(offset) * i128::from(MICROS_PER_SECOND),
+        out,
+    );
+}
+
+fn format_wide(micros: i128, out: &mut String) {
     use std::fmt::Write as _;
-    let days = micros.div_euclid(MICROS_PER_DAY);
-    let rest = micros.rem_euclid(MICROS_PER_DAY);
-    format_date(days, out);
+    let per_day = i128::from(MICROS_PER_DAY);
+    let days = micros.div_euclid(per_day);
+    // The remainder is below one day, the day count below 2^40: both fit.
+    let rest = i64::try_from(micros.rem_euclid(per_day)).unwrap_or(0);
+    format_date(i64::try_from(days).unwrap_or(0), out);
     let secs = rest / MICROS_PER_SECOND;
     let frac = rest % MICROS_PER_SECOND;
     let _ = write!(

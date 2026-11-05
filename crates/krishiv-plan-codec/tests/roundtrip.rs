@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use krishiv_common::secret::OptionValue;
-use krishiv_exec::physical::{PhysNode, PhysicalPlan};
-use krishiv_plan::{Expr, ReadSource};
+use krishiv_exec::physical::{PhysNode, PhysicalPlan, ProjectItemPlan};
+use krishiv_plan::{AttrId, Expr, Literal, ReadSource};
 use krishiv_plan_codec::proto as pb;
 use krishiv_plan_codec::{
     CodecError, FORMAT_VERSION, Feature, FeatureKind, Limits, MIN_READER_VERSION,
@@ -51,11 +51,16 @@ variants!(
     WindowGroupLimit,
     Aggregate,
     HashJoin,
+    SortMergeJoin,
     NestedLoopJoin,
     Union,
     WriteFiles,
     Exchange,
+    ExchangeSource,
     SharedRead,
+    LateFetch,
+    UnionLoop,
+    LoopRef,
 );
 
 fn variant_of(node: &PhysNode) -> Variant {
@@ -68,6 +73,8 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Limit { .. } => Variant::Limit,
         PhysNode::ReplicateRows { .. } => Variant::ReplicateRows,
         PhysNode::Generate { .. } => Variant::Generate,
+        PhysNode::UnionLoop { .. } => Variant::UnionLoop,
+        PhysNode::LoopRef { .. } => Variant::LoopRef,
         PhysNode::Expand { .. } => Variant::Expand,
         PhysNode::Sort { .. } => Variant::Sort,
         PhysNode::TopN { .. } => Variant::TopN,
@@ -75,11 +82,14 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::WindowGroupLimit { .. } => Variant::WindowGroupLimit,
         PhysNode::Aggregate { .. } => Variant::Aggregate,
         PhysNode::HashJoin(_) => Variant::HashJoin,
+        PhysNode::SortMergeJoin(_) => Variant::SortMergeJoin,
         PhysNode::NestedLoopJoin(_) => Variant::NestedLoopJoin,
         PhysNode::Union { .. } => Variant::Union,
         PhysNode::WriteFiles { .. } => Variant::WriteFiles,
         PhysNode::Exchange(_) => Variant::Exchange,
+        PhysNode::ExchangeSource { .. } => Variant::ExchangeSource,
         PhysNode::SharedRead { .. } => Variant::SharedRead,
+        PhysNode::LateFetch { .. } => Variant::LateFetch,
     }
 }
 
@@ -132,6 +142,32 @@ fn a_filters_scan_wait_round_trips() {
     assert_eq!(round_trip(&plan), plan);
 }
 
+/// A top-N's bound survives the wire and needs no feature: a plan without it
+/// is the same plan with scans that prune less. The field is ignorable, so
+/// the goldens only ever hold it unset.
+#[test]
+fn a_top_n_bound_round_trips_and_is_ignorable() {
+    let (_, plain) = cases().into_iter().find(|(n, _)| n == "top_n").unwrap();
+    let PhysNode::TopN {
+        input,
+        keys,
+        limit,
+        bound: None,
+    } = plain.root().clone()
+    else {
+        panic!("not a top-N without a bound");
+    };
+    let bound = plan_of(PhysNode::TopN {
+        input,
+        keys,
+        limit,
+        bound: Some(krishiv_io::FilterId(3)),
+    });
+    assert_eq!(round_trip(&bound), bound);
+    assert_eq!(plan_features(&bound), plan_features(&plain));
+    assert_ne!(encode(&bound).unwrap(), encode(&plain).unwrap());
+}
+
 #[test]
 fn a_shared_subexpression_is_stored_once() {
     // `a > 10 AND a IS NOT NULL`: the column, the literal and three calls.
@@ -181,6 +217,35 @@ fn write_with(options: BTreeMap<String, OptionValue>) -> PhysicalPlan {
         input: Box::new(inventory::scan()),
         write: Some(write),
     })
+}
+
+#[test]
+fn an_options_map_with_a_secret_is_refused_without_naming_it() {
+    let map = |key: &str, value: &str| {
+        plan_of(PhysNode::Project {
+            input: Box::new(inventory::scan()),
+            layout: vec![AttrId(1), AttrId(2)],
+            items: vec![ProjectItemPlan::Expr {
+                name: "options".to_owned(),
+                expr: inventory::lit(Literal::Map(vec![
+                    ("mode".to_owned(), "PERMISSIVE".to_owned()),
+                    (key.to_owned(), value.to_owned()),
+                ])),
+            }],
+            nullable: None,
+            subqueries: Vec::new(),
+        })
+    };
+    let plain = map("dateFormat", "yyyy-MM-dd");
+    assert_eq!(decode(&encode(&plain).unwrap()).unwrap(), plain);
+    for (key, value) in [
+        ("password", "canary-map-1c7e-hunter2"),
+        ("path", "s3://user:canary-map-1c7e-hunter2@bucket/x"),
+    ] {
+        let err = encode(&map(key, value)).unwrap_err().to_string();
+        assert!(err.contains(&format!("`{key}`")), "{err}");
+        assert!(!err.contains("canary-map-1c7e-hunter2"), "{err}");
+    }
 }
 
 #[test]
@@ -462,14 +527,18 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
             "window_group_limit"
+            | "late_fetch"
+            | "sort_merge_join"
             | "partial_aggregate"
             | "shared_subplan"
+            | "exchange_source"
             | "rust_udf"
             | "nested_types"
             | "struct_field"
             | "lambda_functions"
             | "map_key_dedup_policy"
             | "legacy_charset_switches"
+            | "legacy_time_parser"
             | "session_zone_name"
             | "aggregate_filter"
             | "range"
@@ -477,11 +546,23 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "aggregate_vectors"
             | "aggregate_mode_regr_bit_listagg"
             | "aggregate_listagg"
+            | "aggregate_moments"
+            | "aggregate_any_value"
+            | "aggregate_max_min_by"
+            | "aggregate_moments_legacy_statistical"
             | "write_files_partitioned"
-            | "aggregate_percentiles" => 6,
+            | "write_files_column_types"
+            | "aggregate_percentiles"
+            | "options_map_literal" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.
-            n if n.starts_with("time_") || n.starts_with("geo_") => 6,
+            n if n.starts_with("time_")
+                || n.starts_with("geo_")
+                || n.starts_with("interval_")
+                || n.starts_with("collated_") =>
+            {
+                6
+            }
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
             "hash_join_existence"
             | "hash_join_full_outer"
@@ -490,8 +571,9 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "exchange_hash_key_group"
             | "window_frames"
             | "window_offset_values"
+            | "window_range_values"
             | "write_files_with_plan" => POST_MIGRATION_READER_VERSION,
-            n if n.starts_with("generate_") => 6,
+            n if n.starts_with("generate_") || n.starts_with("union_loop") => 6,
             _ => MIN_READER_VERSION,
         };
         assert_eq!(m.min_reader_version, expected, "{name}");
@@ -523,6 +605,7 @@ fn a_window_plan_survives_the_wire_with_every_field() {
         "window_aggregates",
         "window_frames",
         "window_offset_values",
+        "window_range_values",
     ] {
         let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
         assert_eq!(round_trip(&plan), plan, "{name}");
@@ -941,6 +1024,15 @@ fn counts_and_enums_are_validated() {
     };
     a.distinct.pop();
     corrupt(&m, "distinct flags");
+
+    // `ignore_nulls` belongs to `first`, `last` and `any_value` only.
+    let mut m = message("aggregate_max_min_by");
+    let last = m.nodes.len() - 1;
+    let pb::node::Kind::Aggregate(a) = node_mut(&mut m, last) else {
+        panic!("not an aggregate")
+    };
+    a.aggregates[0].ignore_nulls = true;
+    corrupt(&m, "`ignore_nulls` on a function without it");
 }
 
 #[test]
@@ -1161,11 +1253,11 @@ fn an_exchange_without_a_partitioning_kind_is_corrupt() {
     corrupt(&m, "partitioning kind is missing");
 }
 
-/// `any_value`, `max_by` and `min_by` have no ids in the format yet: a plan
-/// holding one is refused with the typed error (not encoded as another
-/// function), in an aggregate node and as a window function.
+/// `any_value`, `max_by` and `min_by` round-trip as themselves (not as
+/// another function) and list their feature, in an aggregate node and as
+/// a window function.
 #[test]
-fn aggregates_the_format_does_not_know_are_refused() {
+fn any_value_max_by_and_min_by_round_trip_in_aggregates_and_windows() {
     use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
     use krishiv_exec::physical::AggregatePlan;
     use krishiv_exec::window::{WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan};
@@ -1196,14 +1288,11 @@ fn aggregates_the_format_does_not_know_are_refused() {
         ),
     ];
     for e in exprs {
-        let refused = |plan: &PhysicalPlan| {
-            let err = encode(plan).unwrap_err();
-            assert!(
-                matches!(&err, CodecError::Unsupported(m) if m.contains("aggregate function")),
-                "{err:?}"
-            );
+        let round_trips = |plan: &PhysicalPlan| {
+            assert_eq!(round_trip(plan), *plan);
+            assert!(plan_features(plan).contains(&Feature::AnyValueByAggregates));
         };
-        refused(&plan_of(PhysNode::Aggregate {
+        round_trips(&plan_of(PhysNode::Aggregate {
             input: Box::new(inventory::scan()),
             aggregate: AggregatePlan {
                 group_by: vec![0],
@@ -1212,7 +1301,7 @@ fn aggregates_the_format_does_not_know_are_refused() {
                 output: AggregateOutput::Final,
             },
         }));
-        refused(&plan_of(PhysNode::Window {
+        round_trips(&plan_of(PhysNode::Window {
             input: Box::new(inventory::scan()),
             window: WindowPlan {
                 partition_by: Vec::new(),
@@ -1226,4 +1315,34 @@ fn aggregates_the_format_does_not_know_are_refused() {
             },
         }));
     }
+}
+
+#[test]
+fn a_reader_without_union_loop_refuses_a_recursive_plan_naming_it() {
+    for name in ["union_loop", "union_loop_unbounded"] {
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        let bytes = encode(&plan).unwrap();
+        let reader = ReaderFeatures::only([Feature::LimitOffset]);
+        let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+        assert_eq!(
+            err,
+            CodecError::UnsupportedFeatures {
+                missing: vec!["union_loop".to_owned()]
+            },
+            "{name}"
+        );
+        assert_eq!(round_trip(&plan), plan, "{name}");
+    }
+}
+
+#[test]
+fn a_loop_without_limits_is_corrupt() {
+    use pb::node::Kind;
+    let mut m = message("union_loop");
+    for node in &mut m.nodes {
+        if let Some(Kind::UnionLoop(u)) = &mut node.kind {
+            u.limits = None;
+        }
+    }
+    corrupt(&m, "a recursive loop without limits");
 }

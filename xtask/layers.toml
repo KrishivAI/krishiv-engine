@@ -12,6 +12,7 @@ krishiv-types = 1
 krishiv-memory = 1
 krishiv-udf-sdk = 1
 krishiv-connector-sdk = 1
+krishiv-store = 1
 krishiv-kernels = 2
 krishiv-functions = 2
 krishiv-io = 2

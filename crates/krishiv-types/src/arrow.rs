@@ -8,11 +8,14 @@
 //! | `float` / `double` | `Float32` / `Float64` | |
 //! | `string` | `Utf8View` | `Utf8`, `LargeUtf8`; `BinaryView`, `Binary`, `LargeBinary` for bytes that are not UTF-8 |
 //! | `binary` | `BinaryView` | `Binary`, `LargeBinary` |
-//! | `decimal(p,s)` | `Decimal128(p, s)`; `Decimal128(1, 0)` for `decimal(0,0)` | |
+//! | `decimal(p,s)` | `Decimal64(p, s)` for `p <= 18`, else `Decimal128(p, s)`; `Decimal64(1, 0)` for `decimal(0,0)` | `Decimal32`, `Decimal128` |
 //! | `date` | `Date32` | |
 //! | `timestamp` | `Timestamp(Microsecond, "UTC")` | |
 //! | `timestamp_ntz` | `Timestamp(Microsecond, None)` | |
 //! | `time(p)` | `Time64(Nanosecond)`, tagged when `p < 6` | |
+//! | `interval year to month` | `Interval(YearMonth)`, tagged for other fields | |
+//! | `interval day to second` | `Duration(Microsecond)`, tagged for other fields | |
+//! | `interval` | `Interval(MonthDayNano)` | |
 //! | `geometry(s)` / `geography(s)` | `Struct<srid: Int32, wkb: BinaryView>`, both children non-null, always tagged | |
 //! | `array<e>` | `List` of a field `element` (nullable when `containsNull`) | `LargeList`, any child name |
 //! | `map<k,v>` | `Map` of a non-null struct `entries` of `key` (non-null) and `value` (nullable when `valueContainsNull`), unsorted | any child names |
@@ -31,13 +34,12 @@
 //! - **Binary-safe strings.** A string column whose bytes are not valid UTF-8
 //!   is stored as a binary Arrow type, and its field carries the Spark type
 //!   under [`SPARK_TYPE_METADATA_KEY`] so it reads back as `string`.
-//! - **Decimals.** Only `Decimal128` crosses an edge (Connect/Flight, IPC,
-//!   spill, shuffle). The i64 representation for precision ≤ 18
-//!   ([`crate::DecimalStorage::I64`]) is internal to kernels; Arrow `Decimal64`
-//!   is not a canonical type yet (the decimal kernels and aggregates accept
-//!   it, design P2-T160 step 2; making it canonical for `p <= 18` is step 3). Arrow rejects
-//!   precision 0, so `decimal(0,0)` (whose only value is 0) is stored as
-//!   `Decimal128(1, 0)` with the field tag; use the field form for it.
+//! - **Decimals.** The carrier follows the declared precision alone
+//!   ([`DECIMAL64_MAX_PRECISION`], design P2-T160), so one Spark type has one
+//!   carrier between operators, in spill files and in shuffle. Client edges
+//!   (Connect/Flight, Python, UDFs) widen to `Decimal128`, what Spark sends.
+//!   Arrow rejects precision 0, so `decimal(0,0)` (whose only value is 0) is
+//!   stored with precision 1 and the field tag; use the field form for it.
 //! - **Timestamps.** `timestamp` values are UTC instants. An input Arrow
 //!   timestamp with any zone label is a `timestamp`; re-label it to `"UTC"` at
 //!   ingest ([`normalize_ingest_type`]). Client egress re-labels to the session
@@ -45,6 +47,9 @@
 //! - **Times.** A `time` value is nanoseconds since midnight, the long Spark
 //!   hashes and sends over Spark Connect; the precision lives in the field
 //!   tag only.
+//! - **Intervals.** The fields of an ANSI interval live in the field tag only,
+//!   as Spark's `ArrowUtils` loses them too. A calendar interval's nanoseconds
+//!   are always a whole number of microseconds.
 //! - **Spatial values.** Each row holds its SRID and its WKB bytes
 //!   (little-endian, as [`crate::geo::rewrite`] writes it for
 //!   [`crate::geo::ByteOrder::Ndr`]), so a `geometry(any)`
@@ -54,7 +59,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_schema::{DataType as ArrowType, Field, Fields, TimeUnit};
+use arrow_schema::{DataType as ArrowType, Field, Fields, IntervalUnit, TimeUnit};
 
 use crate::error::{self, Result};
 use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType};
@@ -78,6 +83,10 @@ pub const SPATIAL_SRID_FIELD: &str = "srid";
 /// Name of the WKB child of a spatial value's struct.
 pub const SPATIAL_WKB_FIELD: &str = "wkb";
 
+/// The largest precision on the `Decimal64` carrier; above it a decimal is on
+/// `Decimal128`. Setting this to 0 puts every decimal back on `Decimal128`.
+pub const DECIMAL64_MAX_PRECISION: u8 = 18;
+
 /// The in-memory struct of a geometry or geography value.
 fn spatial_struct() -> ArrowType {
     ArrowType::Struct(Fields::from(vec![
@@ -96,6 +105,43 @@ pub fn normalize_ingest_type(arrow: &ArrowType) -> ArrowType {
     }
 }
 
+/// `arrow` with each decimal, nested ones included, mapped by `to`.
+fn map_decimals(arrow: &ArrowType, to: fn(u8, i8) -> ArrowType) -> ArrowType {
+    let field = |f: &Field| f.clone().with_data_type(map_decimals(f.data_type(), to));
+    match arrow {
+        ArrowType::Decimal32(p, s) | ArrowType::Decimal64(p, s) | ArrowType::Decimal128(p, s) => {
+            to(*p, *s)
+        }
+        ArrowType::List(f) => ArrowType::List(Arc::new(field(f))),
+        ArrowType::LargeList(f) => ArrowType::LargeList(Arc::new(field(f))),
+        ArrowType::FixedSizeList(f, n) => ArrowType::FixedSizeList(Arc::new(field(f)), *n),
+        ArrowType::Map(f, sorted) => ArrowType::Map(Arc::new(field(f)), *sorted),
+        ArrowType::Struct(fields) => {
+            ArrowType::Struct(fields.iter().map(|f| field(f)).collect::<Fields>())
+        }
+        other => other.clone(),
+    }
+}
+
+/// `arrow` with each decimal on the canonical carrier of its precision: what an
+/// Arrow value of any carrier becomes when it enters a query.
+#[must_use]
+pub fn canonical_arrow_type(arrow: &ArrowType) -> ArrowType {
+    map_decimals(arrow, |p, s| {
+        if p <= DECIMAL64_MAX_PRECISION {
+            ArrowType::Decimal64(p, s)
+        } else {
+            ArrowType::Decimal128(p, s)
+        }
+    })
+}
+
+/// `arrow` with each decimal on `Decimal128`: what a client reads.
+#[must_use]
+pub fn client_arrow_type(arrow: &ArrowType) -> ArrowType {
+    map_decimals(arrow, ArrowType::Decimal128)
+}
+
 impl DataType {
     /// The canonical Arrow type for this Spark type.
     pub fn to_arrow(&self) -> ArrowType {
@@ -108,8 +154,11 @@ impl DataType {
             Self::Long => ArrowType::Int64,
             Self::Float => ArrowType::Float32,
             Self::Double => ArrowType::Float64,
-            Self::String => ArrowType::Utf8View,
+            Self::String | Self::CollatedString(_) => ArrowType::Utf8View,
             Self::Binary => ArrowType::BinaryView,
+            Self::Decimal(d) if d.precision().max(1) <= DECIMAL64_MAX_PRECISION => {
+                ArrowType::Decimal64(d.precision().max(1), arrow_scale(*d))
+            }
             Self::Decimal(d) => ArrowType::Decimal128(d.precision().max(1), arrow_scale(*d)),
             Self::Date => ArrowType::Date32,
             Self::Timestamp => ArrowType::Timestamp(
@@ -118,6 +167,9 @@ impl DataType {
             ),
             Self::TimestampNtz => ArrowType::Timestamp(TimeUnit::Microsecond, None),
             Self::Time { .. } => ArrowType::Time64(TimeUnit::Nanosecond),
+            Self::YearMonthInterval { .. } => ArrowType::Interval(IntervalUnit::YearMonth),
+            Self::DayTimeInterval { .. } => ArrowType::Duration(TimeUnit::Microsecond),
+            Self::CalendarInterval => ArrowType::Interval(IntervalUnit::MonthDayNano),
             Self::Geometry { .. } | Self::Geography { .. } => spatial_struct(),
             Self::Array(a) => ArrowType::List(Arc::new(
                 a.element_type()
@@ -146,7 +198,7 @@ impl DataType {
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for an Arrow type with no Spark type
-    /// here (including non-microsecond timestamps and `Decimal64`), and the
+    /// here (including non-microsecond timestamps and `Decimal256`), and the
     /// Spark decimal bound errors for an out-of-range decimal.
     pub fn from_arrow(arrow: &ArrowType) -> Result<Self> {
         Self::from_arrow_at(arrow, 0)
@@ -175,13 +227,18 @@ impl DataType {
             ArrowType::Float64 => Self::Double,
             ArrowType::Utf8View | ArrowType::Utf8 | ArrowType::LargeUtf8 => Self::String,
             ArrowType::BinaryView | ArrowType::Binary | ArrowType::LargeBinary => Self::Binary,
-            ArrowType::Decimal128(p, s) => Self::Decimal(decimal_from_arrow(*p, *s)?),
+            ArrowType::Decimal32(p, s)
+            | ArrowType::Decimal64(p, s)
+            | ArrowType::Decimal128(p, s) => Self::Decimal(decimal_from_arrow(*p, *s)?),
             ArrowType::Date32 => Self::Date,
             ArrowType::Timestamp(TimeUnit::Microsecond, Some(_)) => Self::Timestamp,
             ArrowType::Timestamp(TimeUnit::Microsecond, None) => Self::TimestampNtz,
             ArrowType::Time64(TimeUnit::Nanosecond) => Self::Time {
                 precision: Self::TIME_DEFAULT_PRECISION,
             },
+            ArrowType::Interval(IntervalUnit::YearMonth) => Self::DEFAULT_YEAR_MONTH_INTERVAL,
+            ArrowType::Duration(TimeUnit::Microsecond) => Self::DEFAULT_DAY_TIME_INTERVAL,
+            ArrowType::Interval(IntervalUnit::MonthDayNano) => Self::CalendarInterval,
             ArrowType::List(f) | ArrowType::LargeList(f) => {
                 ArrayType::new(Self::from_arrow_field_at(f, depth + 1)?, f.is_nullable()).into()
             }
@@ -209,13 +266,46 @@ impl DataType {
     /// (the canonical type or one of the alternatives in the module docs).
     pub(crate) fn is_valid_storage(&self, arrow: &ArrowType) -> bool {
         match (self, arrow) {
-            (Self::String, ArrowType::BinaryView | ArrowType::Binary | ArrowType::LargeBinary) => {
-                true
+            (Self::String, ArrowType::BinaryView | ArrowType::Binary | ArrowType::LargeBinary)
+            | (
+                Self::CollatedString(_),
+                ArrowType::Utf8View | ArrowType::Utf8 | ArrowType::LargeUtf8,
+            ) => true,
+            (
+                Self::Decimal(d),
+                ArrowType::Decimal32(p, s)
+                | ArrowType::Decimal64(p, s)
+                | ArrowType::Decimal128(p, s),
+            ) => (*p, *s) == (d.precision().max(1), arrow_scale(*d)),
+            (Self::Timestamp, ArrowType::Timestamp(..))
+            | (
+                Self::Time { .. }
+                | Self::Geometry { .. }
+                | Self::Geography { .. }
+                | Self::YearMonthInterval { .. }
+                | Self::DayTimeInterval { .. },
+                _,
+            ) => *arrow == self.to_arrow(),
+            // The element, key, value or field types decide, so a tag on the
+            // top-level field can say what plain nested fields don't.
+            (Self::Array(a), ArrowType::List(e) | ArrowType::LargeList(e)) => {
+                a.element_type().is_valid_storage(e.data_type())
             }
-            (Self::Decimal(_), ArrowType::Decimal128(..))
-            | (Self::Timestamp, ArrowType::Timestamp(..))
-            | (Self::Time { .. } | Self::Geometry { .. } | Self::Geography { .. }, _) => {
-                *arrow == self.to_arrow()
+            (Self::Map(m), ArrowType::Map(entries, _)) => match entries.data_type() {
+                ArrowType::Struct(kv) => match (kv.first(), kv.get(1)) {
+                    (Some(k), Some(v)) => {
+                        m.key_type().is_valid_storage(k.data_type())
+                            && m.value_type().is_valid_storage(v.data_type())
+                    }
+                    _ => false,
+                },
+                _ => false,
+            },
+            (Self::Struct(s), ArrowType::Struct(fields)) => {
+                s.fields().len() == fields.len()
+                    && s.fields().iter().zip(fields.iter()).all(|(a, b)| {
+                        a.name() == b.name() && a.data_type().is_valid_storage(b.data_type())
+                    })
             }
             _ => Self::from_arrow(arrow).is_ok_and(|t| t == *self),
         }
@@ -223,7 +313,8 @@ impl DataType {
 
     /// A field of the canonical Arrow type, tagged with the Spark type when
     /// the Arrow type alone does not determine it (`decimal(0,0)`, `time(p)`
-    /// below precision 6, geometry and geography).
+    /// below precision 6, intervals with other than the default fields,
+    /// geometry and geography).
     pub fn to_arrow_field(&self, name: impl Into<String>, nullable: bool) -> Field {
         self.tagged_field(name, self.to_arrow(), nullable)
     }

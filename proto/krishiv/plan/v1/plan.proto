@@ -114,6 +114,11 @@ message ExprEnv {
   // malformed input U+FFFD; a worker without the feature would raise.
   // feature: legacy_charset_switches
   optional bool legacy_coding_error_action = 9;
+  // `spark.sql.legacy.timeParserPolicy = LEGACY`: the datetime pattern
+  // functions use the SimpleDateFormat parser; a worker without the feature
+  // would read the patterns as DateTimeFormatter ones.
+  // feature: legacy_time_parser
+  optional bool legacy_time_parser = 10;
 }
 
 message ExplainNode {
@@ -150,6 +155,47 @@ message Node {
     SharedReadNode shared_read = 19;
     // feature: generate
     GenerateNode generate = 20;
+    // feature: union_loop
+    UnionLoopNode union_loop = 22;
+    // feature: union_loop
+    LoopRefNode loop_ref = 23;
+    // feature: sort_merge_join
+    SortMergeJoinNode sort_merge_join = 21;
+    // feature: late_fetch
+    LateFetchNode late_fetch = 24;
+    // feature: exchange_source
+    ExchangeSourceNode exchange_source = 25;
+  }
+}
+
+// feature: exchange_source
+// The rows a task reads from an exchange another stage wrote: a leaf of a
+// plan fragment. Which partitions it reads is task data.
+message ExchangeSourceNode {
+  uint64 id = 1;
+  // How the exchange placed its rows.
+  Partitioning partitioning = 2;
+  // Its columns (Arrow IPC `Schema` flatbuffer).
+  bytes schema = 3;
+}
+
+// feature: late_fetch
+// The rows of `input` with columns read from their files by row id.
+message LateFetchNode {
+  uint32 input = 1;
+  // The table and the columns to read.
+  ScanNode scan = 2;
+  uint64 file_col = 3;
+  uint64 row_col = 4;
+  repeated FetchSlot output = 5;
+}
+
+// feature: late_fetch
+// Where a column of a `LateFetchNode`'s output comes from.
+message FetchSlot {
+  oneof kind {
+    uint64 input = 1;
+    uint64 fetched = 2;
   }
 }
 
@@ -247,6 +293,34 @@ message ReplicateRowsNode {
   repeated SubqueryPlan subqueries = 4;
 }
 
+// feature: union_loop
+// A recursive common table expression: the anchor runs once, then the
+// recursive term runs round after round, reading the previous round through
+// its LoopRefNode, until a round is empty or a limit is reached.
+message UnionLoopNode {
+  uint32 id = 1;
+  uint32 anchor = 2;
+  uint32 recursive = 3;
+  repeated uint64 layout = 4;
+  LoopLimits limits = 5;
+  repeated bool nullable = 6;
+}
+
+// feature: union_loop
+// The bounds on a loop, decided at planning.
+message LoopLimits {
+  uint32 level = 1;
+  uint64 rows = 2;
+  optional uint64 pushed_limit = 3;
+}
+
+// feature: union_loop
+// The previous round of the enclosing loop with the same id.
+message LoopRefNode {
+  uint32 id = 1;
+  repeated uint64 layout = 2;
+}
+
 // feature: generate
 // Each input row once per element of an array or map (explode, posexplode,
 // inline): the input's columns, then the generated ones.
@@ -300,6 +374,8 @@ message TopNNode {
   uint32 input = 1;
   repeated SortKey keys = 2;
   uint64 limit = 3;
+  // ignorable: a reader that skips it offers no bound, and scans only prune less.
+  optional uint64 bound = 4;
 }
 
 // feature: window
@@ -385,6 +461,13 @@ message WindowFrame {
   sint64 lower_offset = 4;
   // feature: window_frame_offsets
   sint64 upper_offset = 5;
+  // `FRAME_BOUND_RANGE_INT` (16 bytes, big-endian two's complement `i128`) and
+  // `FRAME_BOUND_RANGE_FLOAT` (8 bytes, big-endian IEEE bits): a `RANGE`
+  // value bound's distance from the current row's key (negative: before it).
+  // feature: window_range_bounds
+  bytes lower_range = 6;
+  // feature: window_range_bounds
+  bytes upper_range = 7;
 }
 
 enum FrameUnits {
@@ -400,6 +483,10 @@ enum FrameBound {
   FRAME_BOUND_UNBOUNDED_FOLLOWING = 3;
   // feature: window_frame_offsets
   FRAME_BOUND_OFFSET = 4;
+  // feature: window_range_bounds
+  FRAME_BOUND_RANGE_INT = 5;
+  // feature: window_range_bounds
+  FRAME_BOUND_RANGE_FLOAT = 6;
 }
 
 message AggregateNode {
@@ -477,6 +564,30 @@ enum AggregateFunction {
   AGGREGATE_FUNCTION_PERCENTILE_DISC = 32;
   // feature: percentile_aggregates
   AGGREGATE_FUNCTION_APPROX_COUNT_DISTINCT = 33;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_STDDEV_SAMP = 34;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_STDDEV_POP = 35;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_VAR_SAMP = 36;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_VAR_POP = 37;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_SKEWNESS = 38;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_KURTOSIS = 39;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_CORR = 40;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_COVAR_SAMP = 41;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_COVAR_POP = 42;
+  // feature: any_value_by_aggregates
+  AGGREGATE_FUNCTION_ANY_VALUE = 43;
+  // feature: any_value_by_aggregates
+  AGGREGATE_FUNCTION_MAX_BY = 44;
+  // feature: any_value_by_aggregates
+  AGGREGATE_FUNCTION_MIN_BY = 45;
 }
 
 enum AggregateInput {
@@ -487,7 +598,7 @@ enum AggregateInput {
 
 message AggregateExpr {
   AggregateFunction function = 1;
-  // `first` / `last` only.
+  // `first`, `last` and `any_value` only.
   bool ignore_nulls = 2;
   repeated uint64 args = 3;
   AggregateInput input = 4;
@@ -525,6 +636,10 @@ message AggregateExpr {
   // feature: percentile_aggregates (`approx_count_distinct` only: the
   // folded HyperLogLog++ addressing bits).
   uint32 hll_precision = 16;
+  // feature: interval_types (an array result of ANSI intervals only: the Arrow
+  // IPC `Schema` flatbuffer of its element field, whose metadata holds the
+  // interval's fields; empty otherwise).
+  bytes result_element = 17;
 }
 
 enum JoinType {
@@ -579,6 +694,19 @@ message HashJoinNode {
   bool distinct_build = 11;
 }
 
+// feature: sort_merge_join
+// A join of its inputs sorted on the keys; the sorts are the join's own.
+message SortMergeJoinNode {
+  uint32 probe = 1;
+  uint32 build = 2;
+  JoinType join_type = 3;
+  repeated uint64 probe_keys = 4;
+  repeated uint64 build_keys = 5;
+  repeated bool null_safe = 6;
+  optional Residual residual = 7;
+  bool single_match = 8;
+}
+
 enum JoinDistribution {
   JOIN_DISTRIBUTION_UNSPECIFIED = 0;
   JOIN_DISTRIBUTION_BROADCAST = 1;
@@ -608,6 +736,9 @@ message KeyFilterOptions {
   double bloom_max_fpp = 7;
   // ignorable
   bool scan_waits = 8;
+  // ignorable: a reader that skips it sizes each Bloom for its keys; filters
+  // of several build partitions then merge to their range, and pass more rows.
+  optional uint32 bloom_bytes = 9;
 }
 
 message UnionNode {
@@ -635,6 +766,17 @@ message WritePlan {
   // feature: partitioned_writes
   // Input column indices the files are partitioned by (Spark directory layout).
   repeated uint64 partition_by = 8;
+  // feature: write_column_types
+  // Input columns whose Spark type their Arrow type doesn't say.
+  repeated WriteColumnType column_types = 9;
+}
+
+// feature: write_column_types
+message WriteColumnType {
+  // feature: write_column_types
+  uint64 column = 1;
+  // feature: write_column_types
+  DataType data_type = 2;
 }
 
 // v2: moves rows between partitions.
@@ -685,6 +827,8 @@ message ScanNode {
   optional ScanFilter filter = 6;
   repeated ScanRuntimeFilter runtime_filters = 7;
   RowStageSettings row_stage = 8;
+  // feature: late_fetch
+  bool row_id = 9;
 }
 
 message ColumnPath {
@@ -881,6 +1025,14 @@ message DataType {
     KIND_GEOMETRY = 17;
     // feature: geo_types
     KIND_GEOGRAPHY = 18;
+    // feature: interval_types
+    KIND_YEAR_MONTH_INTERVAL = 19;
+    // feature: interval_types
+    KIND_DAY_TIME_INTERVAL = 20;
+    // feature: interval_types
+    KIND_CALENDAR_INTERVAL = 21;
+    // feature: collated_strings
+    KIND_COLLATED_STRING = 22;
   }
   Kind kind = 1;
   // `KIND_DECIMAL` and `KIND_TIME` only.
@@ -894,6 +1046,23 @@ message DataType {
   // feature: geo_types
   // `KIND_GEOMETRY` and `KIND_GEOGRAPHY` only: the SRID, -1 for `ANY`.
   int32 srid = 5;
+  // feature: interval_types
+  // `KIND_YEAR_MONTH_INTERVAL` only: the leading field.
+  YearMonthField ym_start = 6;
+  // feature: interval_types
+  // `KIND_YEAR_MONTH_INTERVAL` only: the trailing field.
+  YearMonthField ym_end = 7;
+  // feature: interval_types
+  // `KIND_DAY_TIME_INTERVAL` only: the leading field.
+  DayTimeField dt_start = 8;
+  // feature: interval_types
+  // `KIND_DAY_TIME_INTERVAL` only: the trailing field.
+  DayTimeField dt_end = 9;
+  // feature: collated_strings
+  // `KIND_COLLATED_STRING` only: the collation's canonical name (never
+  // `UTF8_BINARY`, which is `KIND_STRING`). Ids index an ICU build's
+  // table, so they never travel.
+  string collation = 10;
 }
 
 enum YearMonthField {
@@ -928,7 +1097,24 @@ message Literal {
     sint64 timestamp_ntz = 14;
     YearMonthLiteral year_month = 15;
     DayTimeLiteral day_time = 16;
+    // feature: interval_types
+    CalendarLiteral calendar = 17;
+    // feature: options_map_literals
+    MapLiteral map = 18;
   }
+}
+
+// feature: options_map_literals
+// A `MAP<STRING, STRING>` literal: one call's options (`from_json`,
+// `from_csv`, `from_xml` and the like), entries in their given order.
+message MapLiteral {
+  repeated MapLiteralEntry entries = 1;
+}
+
+// feature: options_map_literals
+message MapLiteralEntry {
+  string key = 1;
+  string value = 2;
 }
 
 message NullLiteral {
@@ -951,4 +1137,12 @@ message DayTimeLiteral {
   sint64 micros = 1;
   DayTimeField start = 2;
   DayTimeField end = 3;
+}
+
+// feature: interval_types
+// A calendar interval: each part counted on its own.
+message CalendarLiteral {
+  sint32 months = 1;
+  sint32 days = 2;
+  sint64 micros = 3;
 }

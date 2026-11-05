@@ -30,6 +30,8 @@ __all__ = [
     "acos",
     "acosh",
     "add_months",
+    "aes_decrypt",
+    "aes_encrypt",
     "approx_count_distinct",
     "approx_percentile",
     "array",
@@ -37,10 +39,19 @@ __all__ = [
     "array_compact",
     "array_contains",
     "array_distinct",
+    "array_except",
     "array_insert",
+    "array_intersect",
+    "array_join",
+    "array_max",
+    "array_min",
+    "array_position",
     "array_prepend",
+    "array_remove",
+    "array_repeat",
     "array_size",
     "array_union",
+    "arrays_overlap",
     "arrays_zip",
     "ascii",
     "asin",
@@ -64,6 +75,7 @@ __all__ = [
     "bool_or",
     "bround",
     "btrim",
+    "cardinality",
     "cbrt",
     "ceil",
     "ceiling",
@@ -105,6 +117,7 @@ __all__ = [
     "date_trunc",
     "dateadd",
     "datediff",
+    "datepart",
     "day",
     "dayname",
     "dayofmonth",
@@ -122,9 +135,11 @@ __all__ = [
     "exp",
     "expm1",
     "extract",
+    "factorial",
     "find_in_set",
     "first",
     "first_value",
+    "flatten",
     "floor",
     "format_number",
     "format_string",
@@ -257,6 +272,7 @@ __all__ = [
     "schema_of_json",
     "sec",
     "second",
+    "sequence",
     "session_user",
     "sha",
     "sha1",
@@ -273,6 +289,7 @@ __all__ = [
     "sinh",
     "size",
     "skewness",
+    "slice",
     "sort_array",
     "soundex",
     "spark_partition_id",
@@ -312,6 +329,7 @@ __all__ = [
     "trim",
     "trunc",
     "try_add",
+    "try_aes_decrypt",
     "try_avg",
     "try_divide",
     "try_element_at",
@@ -377,6 +395,52 @@ def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column:
     return _call("add_months", _named(start, "start"), _int_or_col(months, "months"))
 
 
+def aes_decrypt(
+    input: ColumnOrName,
+    key: ColumnOrName,
+    mode: ColumnOrName | None = None,
+    padding: ColumnOrName | None = None,
+    aad: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``aes_decrypt``."""
+    _mode = (
+        (_lit("GCM", "mode"),)
+        if mode is None and (padding is not None or aad is not None)
+        else _opt(_named, mode, "mode")
+    )
+    _padding = (
+        (_lit("DEFAULT", "padding"),) if padding is None and (aad is not None) else _opt(_named, padding, "padding")
+    )
+    return _call(
+        "aes_decrypt", _named(input, "input"), _named(key, "key"), *_mode, *_padding, *_opt(_named, aad, "aad")
+    )
+
+
+def aes_encrypt(
+    input: ColumnOrName,
+    key: ColumnOrName,
+    mode: ColumnOrName | None = None,
+    padding: ColumnOrName | None = None,
+    iv: ColumnOrName | None = None,
+    aad: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``aes_encrypt``."""
+    _mode = (
+        (_lit("GCM", "mode"),)
+        if mode is None and (padding is not None or iv is not None or aad is not None)
+        else _opt(_named, mode, "mode")
+    )
+    _padding = (
+        (_lit("DEFAULT", "padding"),)
+        if padding is None and (iv is not None or aad is not None)
+        else _opt(_named, padding, "padding")
+    )
+    _iv = (_lit("", "iv"),) if iv is None and (aad is not None) else _opt(_named, iv, "iv")
+    return _call(
+        "aes_encrypt", _named(input, "input"), _named(key, "key"), *_mode, *_padding, *_iv, *_opt(_named, aad, "aad")
+    )
+
+
 def approx_count_distinct(col: ColumnOrName, rsd: Column | float | None = None) -> Column:
     """Calls the registry function ``approx_count_distinct``."""
     return _call("approx_count_distinct", _named(col, "col"), *_opt(_lit, rsd, "rsd"))
@@ -412,14 +476,59 @@ def array_distinct(col: ColumnOrName) -> Column:
     return _call("array_distinct", _named(col, "col"))
 
 
+def array_except(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``array_except``."""
+    return _call("array_except", _named(col1, "col1"), _named(col2, "col2"))
+
+
 def array_insert(arr: ColumnOrName, pos: ColumnOrName | int, value: Any) -> Column:
     """Calls the registry function ``array_insert``."""
     return _call("array_insert", _named(arr, "arr"), _int_or_col(pos, "pos"), _lit(value, "value"))
 
 
+def array_intersect(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``array_intersect``."""
+    return _call("array_intersect", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def array_join(col: ColumnOrName, delimiter: str, null_replacement: str | None = None) -> Column:
+    """Calls the registry function ``array_join``."""
+    return _call(
+        "array_join",
+        _named(col, "col"),
+        _lit(delimiter, "delimiter"),
+        *_opt(_lit, null_replacement, "null_replacement"),
+    )
+
+
+def array_max(col: ColumnOrName) -> Column:
+    """Calls the registry function ``array_max``."""
+    return _call("array_max", _named(col, "col"))
+
+
+def array_min(col: ColumnOrName) -> Column:
+    """Calls the registry function ``array_min``."""
+    return _call("array_min", _named(col, "col"))
+
+
+def array_position(col: ColumnOrName, value: Any) -> Column:
+    """Calls the registry function ``array_position``."""
+    return _call("array_position", _named(col, "col"), _lit(value, "value"))
+
+
 def array_prepend(col: ColumnOrName, value: Any) -> Column:
     """Calls the registry function ``array_prepend``."""
     return _call("array_prepend", _named(col, "col"), _lit(value, "value"))
+
+
+def array_remove(col: ColumnOrName, element: Any) -> Column:
+    """Calls the registry function ``array_remove``."""
+    return _call("array_remove", _named(col, "col"), _lit(element, "element"))
+
+
+def array_repeat(col: ColumnOrName, count: ColumnOrName | int) -> Column:
+    """Calls the registry function ``array_repeat``."""
+    return _call("array_repeat", _named(col, "col"), _int_or_col(count, "count"))
 
 
 def array_size(col: ColumnOrName) -> Column:
@@ -430,6 +539,11 @@ def array_size(col: ColumnOrName) -> Column:
 def array_union(col1: ColumnOrName, col2: ColumnOrName) -> Column:
     """Calls the registry function ``array_union``."""
     return _call("array_union", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def arrays_overlap(a1: ColumnOrName, a2: ColumnOrName) -> Column:
+    """Calls the registry function ``arrays_overlap``."""
+    return _call("arrays_overlap", _named(a1, "a1"), _named(a2, "a2"))
 
 
 def arrays_zip(*cols: ColumnOrName) -> Column:
@@ -546,6 +660,11 @@ def bround(col: ColumnOrName, scale: Column | int | None = None) -> Column:
 def btrim(str: ColumnOrName, trim: ColumnOrName | None = None) -> Column:
     """Calls the registry function ``btrim``."""
     return _call("btrim", _named(str, "str"), *_opt(_named, trim, "trim"))
+
+
+def cardinality(col: ColumnOrName) -> Column:
+    """Calls the registry function ``cardinality``."""
+    return _call("cardinality", _named(col, "col"))
 
 
 def cbrt(col: ColumnOrName) -> Column:
@@ -753,6 +872,11 @@ def datediff(end: ColumnOrName, start: ColumnOrName) -> Column:
     return _call("datediff", _named(end, "end"), _named(start, "start"))
 
 
+def datepart(field: Column, source: ColumnOrName) -> Column:
+    """Calls the registry function ``datepart``."""
+    return _call("datepart", _named(field, "field"), _named(source, "source"))
+
+
 def day(col: ColumnOrName) -> Column:
     """Calls the registry function ``day``."""
     return _call("day", _named(col, "col"))
@@ -838,6 +962,11 @@ def extract(field: Column, source: ColumnOrName) -> Column:
     return _call("extract", _named(field, "field"), _named(source, "source"))
 
 
+def factorial(col: ColumnOrName) -> Column:
+    """Calls the registry function ``factorial``."""
+    return _call("factorial", _named(col, "col"))
+
+
 def find_in_set(str: ColumnOrName, str_array: ColumnOrName) -> Column:
     """Calls the registry function ``find_in_set``."""
     return _call("find_in_set", _named(str, "str"), _named(str_array, "str_array"))
@@ -851,6 +980,11 @@ def first(col: ColumnOrName, ignorenulls: bool = False) -> Column:
 def first_value(col: ColumnOrName, ignoreNulls: bool | Column | None = None) -> Column:
     """Calls the registry function ``first_value``."""
     return _call("first_value", _named(col, "col"), *_opt(_lit, ignoreNulls, "ignoreNulls"))
+
+
+def flatten(col: ColumnOrName) -> Column:
+    """Calls the registry function ``flatten``."""
+    return _call("flatten", _named(col, "col"))
 
 
 def floor(col: ColumnOrName, scale: Column | int | None = None) -> Column:
@@ -1579,6 +1713,11 @@ def second(col: ColumnOrName) -> Column:
     return _call("second", _named(col, "col"))
 
 
+def sequence(start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``sequence``."""
+    return _call("sequence", _named(start, "start"), _named(stop, "stop"), *_opt(_named, step, "step"))
+
+
 def session_user() -> Column:
     """Calls the registry function ``session_user``."""
     return _call("session_user")
@@ -1661,6 +1800,11 @@ def size(col: ColumnOrName) -> Column:
 def skewness(col: ColumnOrName) -> Column:
     """Calls the registry function ``skewness``."""
     return _call("skewness", _named(col, "col"))
+
+
+def slice(x: ColumnOrName, start: ColumnOrName | int, length: ColumnOrName | int) -> Column:
+    """Calls the registry function ``slice``."""
+    return _call("slice", _named(x, "x"), _int_or_col(start, "start"), _int_or_col(length, "length"))
 
 
 def sort_array(col: ColumnOrName, asc: bool = True) -> Column:
@@ -1867,6 +2011,27 @@ def trunc(date: ColumnOrName, format: str) -> Column:
 def try_add(left: ColumnOrName, right: ColumnOrName) -> Column:
     """Calls the registry function ``try_add``."""
     return _call("try_add", _named(left, "left"), _named(right, "right"))
+
+
+def try_aes_decrypt(
+    input: ColumnOrName,
+    key: ColumnOrName,
+    mode: ColumnOrName | None = None,
+    padding: ColumnOrName | None = None,
+    aad: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``try_aes_decrypt``."""
+    _mode = (
+        (_lit("GCM", "mode"),)
+        if mode is None and (padding is not None or aad is not None)
+        else _opt(_named, mode, "mode")
+    )
+    _padding = (
+        (_lit("DEFAULT", "padding"),) if padding is None and (aad is not None) else _opt(_named, padding, "padding")
+    )
+    return _call(
+        "try_aes_decrypt", _named(input, "input"), _named(key, "key"), *_mode, *_padding, *_opt(_named, aad, "aad")
+    )
 
 
 def try_avg(col: ColumnOrName) -> Column:

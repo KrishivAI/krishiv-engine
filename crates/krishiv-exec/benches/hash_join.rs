@@ -7,10 +7,13 @@
 //! - `hash_join/build_1m_rows_runtime_filter`: the same build publishing a
 //!   runtime filter (min/max, value set, Bloom filter of 1 M keys): the
 //!   producer's overhead (design P2-T163 targets at most 5%).
-//! - `hash_join/probe_1m_rows`: build 64 Ki keys, probe 1 M rows of which
-//!   half match (inner join, build columns decoded).
-//! - `hash_join/probe_string_keys_1m_rows`: the same join on 12-byte `Utf8`
-//!   keys.
+//! - `hash_join/probe_1m_rows`: build 64 Ki keys (`2 * i`), probe 1 M rows
+//!   (keys `0..1 Mi`) of which 64 Ki, 6.25 %, match (inner join, build
+//!   columns decoded). The data is unchanged since the first baselines, so
+//!   its history stays comparable; only its description was wrong ("half").
+//! - `hash_join/probe_string_keys_1m_rows`: the same join on 12-byte `Utf8View`
+//!   keys (the engine's string type), with half the probe rows matching: the probe keys cycle through
+//!   `0..128 Ki`, of which the 64 Ki even ones are the build keys.
 //! - `hash_join/probe_zipf_1m_rows`: the same on `Int64` keys where the probe
 //!   side is Zipf-skewed (exponent 1: a few build keys take most probes).
 //! - `hash_join/grace_spill_256k_rows`: 256 Ki ⋈ 256 Ki rows under a 4 MiB
@@ -30,7 +33,7 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringViewArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use futures::StreamExt;
@@ -66,7 +69,7 @@ fn data(rows: i64, stride: i64) -> Vec<Batch> {
 
 fn string_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
-        Field::new("k", DataType::Utf8, false),
+        Field::new("k", DataType::Utf8View, false),
         Field::new("v", DataType::Int64, false),
     ]))
 }
@@ -78,8 +81,9 @@ fn string_data(rows: i64, key: impl Fn(i64) -> i64) -> Vec<Batch> {
         .step_by(DEFAULT_BATCH_SIZE)
         .map(|start| {
             let end = (start + step).min(rows);
-            let k =
-                StringArray::from_iter_values((start..end).map(|i| format!("key-{:08}", key(i))));
+            let k = StringViewArray::from_iter_values(
+                (start..end).map(|i| format!("key-{:08}", key(i))),
+            );
             let v = Int64Array::from_iter_values(start..end);
             let cols: Vec<ArrayRef> = vec![Arc::new(k), Arc::new(v)];
             Batch::new(RecordBatch::try_new(string_schema(), cols).expect("batch"))
@@ -206,10 +210,12 @@ fn bench(c: &mut Criterion) {
     let (big, one) = (data(1 << 20, 1), data(1, 1));
     let (small, probe) = (data(1 << 16, 2), data(1 << 20, 1));
     let side = data(1 << 18, 1);
-    // Build 64 Ki unique keys; the probe keys are `2 * key` (half match) in
-    // the string case, and Zipf-drawn build keys in the skewed one.
+    // Build 64 Ki unique keys (the even numbers below 128 Ki). The string
+    // probe keys cycle through `0..128 Ki`, so exactly half match; the
+    // `Int64` probe above runs `0..1 Mi` and matches 6.25 %. The skewed case
+    // draws Zipf build keys.
     let small_str = string_data(1 << 16, |i| i * 2);
-    let probe_str = string_data(1 << 20, |i| i);
+    let probe_str = string_data(1 << 20, |i| i % (1 << 17));
     let zipf_build = data(1 << 16, 1);
     let zipf_probe = {
         let step = DEFAULT_BATCH_SIZE as i64;

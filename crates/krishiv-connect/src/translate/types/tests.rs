@@ -104,9 +104,6 @@ fn unsupported_and_unset_kinds() {
         Kind::Char(dt::Char::default()),
         Kind::VarChar(dt::VarChar::default()),
         Kind::Variant(dt::Variant::default()),
-        Kind::CalendarInterval(dt::CalendarInterval::default()),
-        Kind::YearMonthInterval(dt::YearMonthInterval::default()),
-        Kind::DayTimeInterval(dt::DayTimeInterval::default()),
     ] {
         let e = data_type(&proto_type(kind)).expect_err("unsupported");
         assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
@@ -115,6 +112,59 @@ fn unsupported_and_unset_kinds() {
             "{}",
             e.message()
         );
+    }
+}
+
+#[test]
+fn interval_types_keep_their_fields() {
+    use krishiv_types::{DayTimeField as D, YearMonthField as Y};
+    let ty = |kind| data_type(&proto_type(kind));
+    let ym = |start_field, end_field| {
+        Kind::YearMonthInterval(dt::YearMonthInterval {
+            start_field,
+            end_field,
+            ..dt::YearMonthInterval::default()
+        })
+    };
+    let day_time = |start_field, end_field| {
+        Kind::DayTimeInterval(dt::DayTimeInterval {
+            start_field,
+            end_field,
+            ..dt::DayTimeInterval::default()
+        })
+    };
+    assert_eq!(
+        ty(Kind::CalendarInterval(dt::CalendarInterval::default())),
+        Ok(DataType::CalendarInterval)
+    );
+    assert_eq!(
+        ty(ym(None, None)),
+        Ok(DataType::DEFAULT_YEAR_MONTH_INTERVAL)
+    );
+    assert_eq!(
+        ty(ym(Some(1), None)),
+        Ok(DataType::YearMonthInterval {
+            start: Y::Month,
+            end: Y::Month
+        })
+    );
+    assert_eq!(
+        ty(day_time(None, None)),
+        Ok(DataType::DEFAULT_DAY_TIME_INTERVAL)
+    );
+    assert_eq!(
+        ty(day_time(Some(1), Some(3))),
+        Ok(DataType::DayTimeInterval {
+            start: D::Hour,
+            end: D::Second
+        })
+    );
+    for bad in [
+        ym(Some(1), Some(0)),
+        ym(Some(7), None),
+        day_time(Some(3), Some(1)),
+    ] {
+        assert!(ty(bad).is_err());
     }
 }
 

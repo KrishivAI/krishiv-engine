@@ -1,9 +1,7 @@
 {
   "cases": {
     "query-features": [
-      12,
-      34,
-      38
+      12
     ]
   },
   "file": "table-valued-functions",

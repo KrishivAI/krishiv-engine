@@ -71,7 +71,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 9;
+pub const ENCODING_VERSION: u16 = 10;
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
@@ -508,6 +508,16 @@ impl<'k, 'a> Encoder<'k, 'a> {
         self.dig.extend_from_slice(&digest.to_le_bytes());
     }
 
+    /// A star's `|> SET` assignments (out of line: `expr_fields` recurses,
+    /// and its frame must stay small).
+    #[inline(never)]
+    fn replacements(&mut self, replace: &'a [(String, Arc<Expr>)]) {
+        for (name, expr) in replace {
+            self.str(name);
+            self.expr(expr);
+        }
+    }
+
     /// A child expression, as a reference to its record.
     fn expr(&mut self, e: &'a Expr) {
         let key = self.keys.expr(e, self.op);
@@ -754,6 +764,8 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     JoinKind::Cross => 7,
                     JoinKind::Existence(_) => 8,
                     JoinKind::Single => 9,
+                    JoinKind::LateralInner => 10,
+                    JoinKind::LateralLeft => 11,
                 };
                 self.u8(tag);
                 if let JoinKind::Existence(id) = kind {
@@ -909,6 +921,38 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     }
                 }
                 self.u8(u8::from(*include_nulls));
+            }
+            PlanNode::UnionLoop {
+                id,
+                max_level,
+                limit,
+                output,
+                ..
+            } => {
+                self.u8(31);
+                self.put(&id.to_le_bytes());
+                match limit {
+                    None => self.u8(0),
+                    Some(n) => {
+                        self.u8(1);
+                        self.put(&n.to_le_bytes());
+                    }
+                }
+                match max_level {
+                    None => self.u8(0),
+                    Some(n) => {
+                        self.u8(1);
+                        self.put(&n.to_le_bytes());
+                    }
+                }
+                self.len(output.len());
+                output.iter().for_each(|c| self.bound(c));
+            }
+            PlanNode::UnionLoopRef { id, output } => {
+                self.u8(32);
+                self.put(&id.to_le_bytes());
+                self.len(output.len());
+                output.iter().for_each(|c| self.bound(c));
             }
             PlanNode::Generate {
                 kind,
@@ -1101,6 +1145,9 @@ impl<'k, 'a> Encoder<'k, 'a> {
             ExprNode::Star(Star {
                 qualifier,
                 except,
+                replace,
+                position,
+                regex,
                 plan_id,
             }) => {
                 self.u8(3);
@@ -1108,6 +1155,18 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.len(except.len());
                 except.iter().for_each(|path| self.strs(path));
                 self.plan_ref(*plan_id);
+                // Only a replacing star writes more, so the encoding of
+                // every other plan is unchanged.
+                if !replace.is_empty() {
+                    self.len(replace.len());
+                    self.replacements(replace);
+                }
+                if let Some(n) = position {
+                    self.len(*n);
+                }
+                if let Some(r) = regex {
+                    self.str(r);
+                }
             }
             ExprNode::Function(FunctionCall {
                 name,
@@ -1148,6 +1207,12 @@ impl<'k, 'a> Encoder<'k, 'a> {
             ExprNode::Alias { expr, name } => {
                 self.u8(6);
                 self.str(name);
+                self.expr(expr);
+            }
+            ExprNode::MultiAlias { expr, names } => {
+                self.u8(33);
+                self.len(names.len());
+                names.iter().for_each(|n| self.str(n));
                 self.expr(expr);
             }
             ExprNode::Subquery { kind, plan } => {
@@ -1383,6 +1448,16 @@ impl<'k, 'a> Encoder<'k, 'a> {
                         DayTimeField::Second => 4,
                     });
                 }
+            }
+            Literal::CalendarInterval {
+                months,
+                days,
+                micros,
+            } => {
+                self.u8(19);
+                self.put(&months.to_le_bytes());
+                self.put(&days.to_le_bytes());
+                self.i64(*micros);
             }
         }
     }

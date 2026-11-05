@@ -38,9 +38,10 @@ use arrow_array::builder::{
     Float32Builder, Float64Builder, Int32Builder, Int64Builder, StringViewBuilder,
     TimestampMicrosecondBuilder,
 };
+use arrow_array::types::{DurationMicrosecondType, IntervalYearMonthType};
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, RecordBatchOptions, StructArray};
 use arrow_buffer::{NullBufferBuilder, OffsetBuffer};
-use arrow_schema::{DataType, Field, SchemaRef, TimeUnit};
+use arrow_schema::{DataType, Field, IntervalUnit, SchemaRef, TimeUnit};
 use bytes::Bytes;
 
 use super::AvroMetadata;
@@ -526,6 +527,8 @@ enum Node {
     Decimal {
         builder: Decimal128Builder,
         precision: u8,
+        /// The type of the finished column.
+        data_type: DataType,
     },
     Date(Date32Builder),
     Timestamp(TimestampMicrosecondBuilder),
@@ -562,8 +565,13 @@ fn node_of(field: &Field, schema: &AvroSchema) -> FormatResult<Node> {
     Ok(match field.data_type() {
         DataType::Null => Node::Null { len: 0 },
         DataType::Boolean => Node::Bool(BooleanBuilder::new()),
-        DataType::Int8 | DataType::Int16 | DataType::Int32 => Node::Int32(Int32Builder::new()),
-        DataType::Int64 => Node::Int64(Int64Builder::new()),
+        DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Interval(IntervalUnit::YearMonth) => Node::Int32(Int32Builder::new()),
+        DataType::Int64 | DataType::Duration(TimeUnit::Microsecond) => {
+            Node::Int64(Int64Builder::new())
+        }
         DataType::Float32 => Node::Float32(Float32Builder::new()),
         DataType::Float64 => Node::Float64(Float64Builder::new()),
         DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8 => {
@@ -572,13 +580,14 @@ fn node_of(field: &Field, schema: &AvroSchema) -> FormatResult<Node> {
         DataType::BinaryView | DataType::Binary | DataType::LargeBinary => {
             Node::Binary(BinaryViewBuilder::new())
         }
-        DataType::Decimal128(p, s) => {
+        t @ (DataType::Decimal64(p, s) | DataType::Decimal128(p, s)) => {
             let builder = Decimal128Builder::new()
                 .with_precision_and_scale(*p, *s)
                 .map_err(|e| corrupt(format!("an invalid decimal type: {e}")))?;
             Node::Decimal {
                 builder,
                 precision: *p,
+                data_type: t.clone(),
             }
         }
         DataType::Date32 => Node::Date(Date32Builder::new()),
@@ -851,7 +860,12 @@ fn append(node: &mut Node, reader: &AvroSchema, value: &AvroValue, dry: bool) ->
                 b.append_value(v.as_bytes().as_slice());
             }
         }
-        (Node::Decimal { builder, precision }, AvroValue::Decimal(v)) => {
+        (
+            Node::Decimal {
+                builder, precision, ..
+            },
+            AvroValue::Decimal(v),
+        ) => {
             let bytes = Vec::<u8>::try_from(v)
                 .map_err(|e| corrupt(format!("an undecodable decimal: {e}")))?;
             let unscaled = decimal_i128(&bytes)?;
@@ -1030,13 +1044,23 @@ fn finish_node(node: Node, field: &Field) -> FormatResult<ArrayRef> {
     Ok(match node {
         Node::Null { len } => Arc::new(arrow_array::NullArray::new(len)),
         Node::Bool(mut b) => Arc::new(b.finish()),
+        Node::Int32(mut b) if matches!(field.data_type(), DataType::Interval(_)) => {
+            Arc::new(b.finish().reinterpret_cast::<IntervalYearMonthType>())
+        }
         Node::Int32(mut b) => Arc::new(b.finish()),
+        Node::Int64(mut b) if matches!(field.data_type(), DataType::Duration(_)) => {
+            Arc::new(b.finish().reinterpret_cast::<DurationMicrosecondType>())
+        }
         Node::Int64(mut b) => Arc::new(b.finish()),
         Node::Float32(mut b) => Arc::new(b.finish()),
         Node::Float64(mut b) => Arc::new(b.finish()),
         Node::String(mut b) => Arc::new(b.finish()),
         Node::Binary(mut b) => Arc::new(b.finish()),
-        Node::Decimal { mut builder, .. } => Arc::new(builder.finish()),
+        Node::Decimal {
+            mut builder,
+            data_type,
+            ..
+        } => crate::csv::convert::finish_decimal(&mut builder, &data_type),
         Node::Date(mut b) => Arc::new(b.finish()),
         Node::Timestamp(mut b) => Arc::new(b.finish()),
         Node::Struct {
@@ -1758,6 +1782,7 @@ mod tests {
         assert_eq!(
             node_len(&Node::Decimal {
                 builder: Decimal128Builder::new(),
+                data_type: DataType::Decimal128(38, 0),
                 precision: 10,
             }),
             0

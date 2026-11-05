@@ -22,7 +22,11 @@
 //!   The attempt never enters the value.
 //! - A runtime filter never makes its consumers wait: until the value is
 //!   complete its cell stays [`FilterSnapshot::Pending`] and applies
-//!   nothing.
+//!   nothing. A partial alone is never applied: one build partition's
+//!   filter would drop the probe rows of the other partitions' keys.
+//! - A runtime filter's value is the [`KeyFilter::merge`] of its partials,
+//!   within the options of the join that publishes it
+//!   ([`ValueService::filter_options`]); one disabled partial disables it.
 //!
 //! [`LocalValues`] is the implementation for operators that run in one
 //! process; its cells are the delivery of values, never the contract.
@@ -33,7 +37,10 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use arrow_array::ArrayRef;
 use arrow_schema::DataType;
-use krishiv_io::{ColumnPath, DisabledReason, FilterId, FilterSnapshot, RuntimeFilter};
+use krishiv_io::{
+    ColumnPath, DisabledReason, FilterId, FilterSnapshot, KeyFilter, KeyFilterOptions,
+    RuntimeFilter,
+};
 
 use crate::error::{Result, internal};
 pub use crate::physical::{ValueId, Version};
@@ -155,6 +162,17 @@ pub trait ValueService: Send + Sync + fmt::Debug {
     /// `INTERNAL_ERROR` when `id` is not declared.
     fn filter(&self, id: FilterId) -> Result<Arc<RuntimeFilter>>;
 
+    /// The number of producer partitions of `id` this service waits for.
+    fn producers(&self, id: ValueId) -> u32;
+
+    /// Records the options of the join that publishes the runtime filter
+    /// `id`: its partials merge within their caps and planned Bloom size.
+    /// The first options recorded hold; until then the defaults do.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` when `id` is not declared.
+    fn filter_options(&self, id: FilterId, options: KeyFilterOptions) -> Result<()>;
+
     /// Takes one producer partition's partial.
     ///
     /// # Errors
@@ -162,6 +180,15 @@ pub trait ValueService: Send + Sync + fmt::Debug {
     /// than its value, a pending filter, a producer partition out of range
     /// or a second version of a value.
     fn publish(&self, partial: Partial) -> Result<Publication>;
+
+    /// Offers what a producer knows so far about the runtime filter `id` (a
+    /// top-N's bound). The partials merge to the tightest, and any one alone
+    /// is valid, so this neither waits for other producer partitions nor
+    /// completes the value.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for an undeclared filter.
+    fn tighten(&self, id: FilterId, keys: Arc<KeyFilter>) -> Result<()>;
 
     /// The view of `id` its consumers read.
     ///
@@ -183,6 +210,8 @@ struct Entry {
     producers: u32,
     /// A runtime filter's cell.
     cell: Option<Arc<RuntimeFilter>>,
+    /// What a runtime filter's partials merge within.
+    options: OnceLock<KeyFilterOptions>,
     arrived: Mutex<Arrived>,
     complete: OnceLock<(Version, Arc<Value>)>,
 }
@@ -250,6 +279,7 @@ impl LocalValues {
         Entry {
             producers: self.producers.get(&id).copied().unwrap_or(1),
             cell,
+            options: OnceLock::new(),
             arrived: Mutex::default(),
             complete: OnceLock::new(),
         }
@@ -282,6 +312,20 @@ impl ValueService for LocalValues {
             .cell
             .clone()
             .ok_or_else(|| internal(format!("runtime filter {id} without a cell")))
+    }
+
+    fn producers(&self, id: ValueId) -> u32 {
+        self.producers.get(&id).copied().unwrap_or(1)
+    }
+
+    fn filter_options(&self, id: FilterId, options: KeyFilterOptions) -> Result<()> {
+        let _ = self.get(ValueId::Filter(id))?.options.set(options);
+        Ok(())
+    }
+
+    fn tighten(&self, id: FilterId, keys: Arc<KeyFilter>) -> Result<()> {
+        self.filter(id)?.tighten(keys);
+        Ok(())
     }
 
     fn publish(&self, partial: Partial) -> Result<Publication> {
@@ -322,7 +366,8 @@ impl ValueService for LocalValues {
             return Ok(Publication::Waiting);
         }
         let parts = std::mem::take(&mut arrived.parts).into_values().collect();
-        let value = merge(id, parts)?;
+        let options = entry.options.get().copied().unwrap_or_default();
+        let value = merge(id, parts, &options)?;
         if let (Some(cell), Value::Filter(snapshot)) = (&entry.cell, &value) {
             cell.publish(snapshot.clone());
         }
@@ -337,26 +382,15 @@ impl ValueService for LocalValues {
 }
 
 /// The value of `parts`, one per producer partition in partition order
-/// (all of `id`'s kind).
-fn merge(id: ValueId, mut parts: Vec<Value>) -> Result<Value> {
+/// (all of `id`'s kind); a runtime filter's merge within `options`.
+fn merge(id: ValueId, mut parts: Vec<Value>, options: &KeyFilterOptions) -> Result<Value> {
     if parts.len() == 1
         && let Some(only) = parts.pop()
     {
         return Ok(only);
     }
     match id {
-        // A disabled partial disables the value. Filters of several
-        // producer partitions do not merge yet: their value applies
-        // nothing, which keeps every partial's keys.
-        ValueId::Filter(_) => Ok(Value::Filter(FilterSnapshot::Disabled(
-            parts
-                .iter()
-                .find_map(|p| match p {
-                    Value::Filter(FilterSnapshot::Disabled(r)) => Some(*r),
-                    _ => None,
-                })
-                .unwrap_or(DisabledReason::Off),
-        ))),
+        ValueId::Filter(_) => merge_filters(parts, options).map(Value::Filter),
         ValueId::Subquery(_) => Err(internal(format!("{id}: a subquery has one producer"))),
         ValueId::Broadcast(_) => Ok(Value::Broadcast(BroadcastBuild {
             inputs: parts
@@ -368,6 +402,28 @@ fn merge(id: ValueId, mut parts: Vec<Value>) -> Result<Value> {
                 .collect(),
         })),
     }
+}
+
+/// The filter of the union of the partials' keys: a disabled partial (a
+/// failed producer) disables it, else the partials' filters merge.
+fn merge_filters(parts: Vec<Value>, options: &KeyFilterOptions) -> Result<FilterSnapshot> {
+    let mut merged: Option<Arc<KeyFilter>> = None;
+    for p in parts {
+        let keys = match p {
+            Value::Filter(FilterSnapshot::Final(keys)) => keys,
+            Value::Filter(FilterSnapshot::Disabled(r)) => return Ok(FilterSnapshot::Disabled(r)),
+            // A top-N's bound is offered with `tighten`, never published.
+            other => return Err(internal(format!("a runtime filter partial of {other:?}"))),
+        };
+        merged = Some(match merged {
+            None => keys,
+            Some(m) => Arc::new(m.merge(&keys, options)?),
+        });
+    }
+    Ok(merged.map_or(
+        FilterSnapshot::Disabled(DisabledReason::Off),
+        FilterSnapshot::Final,
+    ))
 }
 
 #[cfg(test)]

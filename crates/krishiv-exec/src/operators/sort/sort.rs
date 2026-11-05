@@ -26,13 +26,15 @@ use arrow_schema::SchemaRef;
 use futures::StreamExt as _;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
-use krishiv_memory::{ConsumerHandle, MemoryError, Reservation, SpillScope, SpillSignal};
+use krishiv_memory::{
+    ConsumerHandle, MemoryError, Reservation, SpillScope, SpillSignal, SpillWriter,
+};
 use krishiv_types::batch::Batch;
 
 use super::keys::{KeyEncoder, SortKey};
 use super::merge::{
     Bucketing, Merger, ParallelMerge, SortedBatch, SpillRun, data_bytes, interleave_batches,
-    merge_part, merge_splitters, parallel_merge, sort_slices, write_run,
+    merge_part, merge_splitters, owned_rows, parallel_merge, sort_slices, write_run,
 };
 use super::{BATCH_SLACK_BYTES, SPILL_BATCH_BYTES, SPILL_BUFFER_BYTES, blocking, finalized};
 use crate::context::{QueryContext, TaskContext};
@@ -165,6 +167,8 @@ pub struct Sort {
     /// The keys to bucket by ([`Sort::with_hash_buckets`]).
     bucket_keys: Option<Arc<KeyEncoder>>,
     prune: Option<Prune>,
+    /// Read bucket by bucket ([`Sort::bucket_reader`]), not claimed.
+    read_by_bucket: bool,
 }
 
 impl Sort {
@@ -186,6 +190,53 @@ impl Sort {
             counters: Arc::default(),
             bucket_keys: None,
             prune: None,
+            read_by_bucket: false,
+        })
+    }
+
+    /// Keeps a spilled result's runs by bucket, for
+    /// [`Sort::bucket_reader`] (a merge join reads the same bucket of two
+    /// sorts); the source side's claims then find nothing spilled.
+    #[must_use]
+    pub(crate) fn read_by_bucket(mut self) -> Self {
+        self.read_by_bucket = true;
+        self
+    }
+
+    /// The buckets of a finalized sort's `global` state.
+    pub(crate) fn bucket_count(global: &GlobalState) -> Result<usize> {
+        Ok(global_ref::<SortGlobal>(global, "Sort")?.buckets)
+    }
+
+    /// The memory merging bucket `b` of a finalized sort takes up front (no
+    /// more than its output batch when nothing spilled).
+    pub(crate) fn bucket_need(global: &GlobalState, b: usize, batch_rows: usize) -> Result<usize> {
+        let g = global_ref::<SortGlobal>(global, "Sort")?;
+        let s = lock(&g.readers.state);
+        Ok(s.by_bucket.get(b).map_or(0, |runs| {
+            if runs.is_empty() {
+                0
+            } else {
+                merge_need(runs, runs.len(), batch_rows, false)
+            }
+        }))
+    }
+
+    /// A reader of bucket `b` alone, for [`Source::get_data`]: no claim, and
+    /// its merge waits for its memory with arbitration.
+    pub(crate) fn bucket_reader(
+        &self,
+        env: &crate::join::MergeEnv,
+        handle: &Arc<ConsumerHandle>,
+        b: usize,
+    ) -> LocalState {
+        Box::new(SortSource {
+            state: SourceState::Start,
+            bucket: Some(b),
+            query: Arc::clone(&env.query),
+            executor: Arc::clone(&env.executor),
+            handle: Arc::clone(handle),
+            batch_rows: env.query.config().batch_size.max(1),
         })
     }
 
@@ -412,10 +463,6 @@ async fn lending_for_write<T>(
     let _ = res.try_grow(target.saturating_sub(res.size()));
     out
 }
-
-/// Buffer slack a sunk batch may carry over its data before it is
-/// compacted.
-const SLICE_SLACK_BYTES: usize = 16 << 10;
 
 /// Rows per spilled batch: about [`SPILL_BATCH_BYTES`], at most a batch.
 fn spill_rows(row_bytes: usize, batch_rows: usize) -> usize {
@@ -858,6 +905,8 @@ struct Readers {
 struct ReadersState {
     /// Each bucket's runs, claimed from the end.
     spilled: Vec<Vec<SpillRun>>,
+    /// Each bucket's runs by bucket number (`Sort::read_by_bucket`).
+    by_bucket: Vec<Vec<SpillRun>>,
     /// Readers holding a bucket (reserving or merging it).
     active: usize,
     /// Readers merging a bucket.
@@ -1140,8 +1189,22 @@ impl Sort {
             return Ok(());
         }
         let handle = Arc::clone(ctx.consumer().consumer());
+        let mut max_fan_in = self.max_fan_in;
+        // A merge join reads two final merges at once: each keeps to a quarter
+        // of the pool, so the two and the join's group fit together.
+        if let Some(limit) = handle
+            .pool()
+            .effective_limit()
+            .filter(|_| self.read_by_bucket)
+        {
+            while max_fan_in > 2
+                && merge_need(runs, max_fan_in.min(runs.len()), batch_rows, false) > limit / 4
+            {
+                max_fan_in /= 2;
+            }
+        }
         let (mut budget, fan_in) =
-            merge_budget(runs, self.max_fan_in, batch_rows, &handle, true).await?;
+            merge_budget(runs, max_fan_in, batch_rows, &handle, true).await?;
         let target = budget.size();
         while runs.len() > fan_in {
             self.counters.passes.fetch_add(1, Ordering::Relaxed);
@@ -1270,14 +1333,9 @@ impl Sink for Sort {
         }
         let data = data_bytes(&input);
         let row_bytes = l.buffer.row_bytes.max(data.div_ceil(rows));
-        // A small slice of a large batch would keep (and account) the whole
-        // batch: keep a copy of its rows instead.
-        let input = if input.data().get_array_memory_size() > 2 * data + SLICE_SLACK_BYTES {
-            let rows: Vec<(usize, usize)> = (0..rows).map(|r| (0, r)).collect();
-            interleave_batches(&input.schema(), &[input], &rows)?
-        } else {
-            input
-        };
+        // A small slice of a large batch, or views into an exchange's shared
+        // pages, would keep (and account) the whole buffers.
+        let input = owned_rows(input)?;
         let (sorted, looked_at, dropped) = self.prune(
             SortedBatch::new(input, &self.encoder, l.bucketing.as_deref())?,
             &l.prune,
@@ -1394,6 +1452,10 @@ impl Sink for Sort {
             for runs in &mut spilled {
                 self.reduce(runs, batch_rows, ctx).await?;
             }
+            if self.read_by_bucket {
+                lock(&g.readers.state).by_bucket = spilled;
+                return Ok(());
+            }
             spilled.retain(|runs| !runs.is_empty());
             // Readers claim from the end: the first bucket first.
             spilled.reverse();
@@ -1488,6 +1550,8 @@ fn buffered(parts: &[Part]) -> usize {
 /// The source side's per-driver state.
 struct SortSource {
     state: SourceState,
+    /// The one bucket this reader reads ([`Sort::bucket_reader`]).
+    bucket: Option<usize>,
     query: Arc<QueryContext>,
     executor: Arc<dyn Executor>,
     handle: Arc<ConsumerHandle>,
@@ -1550,6 +1614,7 @@ impl Source for Sort {
     fn local_state(&self, ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
         Ok(Box::new(SortSource {
             state: SourceState::Start,
+            bucket: None,
             query: Arc::clone(ctx.query()),
             executor: Arc::clone(ctx.executor()),
             handle: Arc::clone(ctx.consumer().consumer()),
@@ -1569,15 +1634,32 @@ impl Source for Sort {
                 match mem::replace(&mut l.state, SourceState::Done) {
                     SourceState::Start => {
                         let held = lock(&g.shared).held.clone();
-                        l.state = match held {
-                            Some(held) => SourceState::Held(held, None),
-                            None => SourceState::Spilled,
+                        l.state = match (held, l.bucket) {
+                            (Some(held), b) => SourceState::Held(held, b),
+                            (None, None) => SourceState::Spilled,
+                            (None, Some(b)) => {
+                                let runs = lock(&g.readers.state)
+                                    .by_bucket
+                                    .get_mut(b)
+                                    .map(mem::take)
+                                    .unwrap_or_default();
+                                if runs.is_empty() {
+                                    return Ok(None);
+                                }
+                                let merging = self.open_runs(l, runs, None).await?;
+                                let merging = merging.map_err(|_| {
+                                    internal("a waiting merge was refused memory".to_owned())
+                                })?;
+                                SourceState::Merging(merging, After::Spilled)
+                            }
                         };
                     }
                     SourceState::Held(held, bucket) => {
-                        let next = match bucket {
-                            Some(b) => Some(b),
-                            None => held.claim()?,
+                        let next = match (bucket, l.bucket) {
+                            (Some(b), _) => Some(b),
+                            // Its one bucket is read.
+                            (None, Some(_)) => return Ok(None),
+                            (None, None) => held.claim()?,
                         };
                         let Some(b) = next else {
                             continue;
@@ -1597,6 +1679,8 @@ impl Source for Sort {
                             }
                         }
                     }
+                    // Its one bucket is read.
+                    SourceState::Spilled if l.bucket.is_some() => return Ok(None),
                     SourceState::Spilled => {
                         // Listen before claiming, so a merge ending in
                         // between is not missed.
@@ -1687,10 +1771,11 @@ impl Sort {
                 let need = merge_need(&runs, runs.len(), l.batch_rows, false);
                 // Only memory to spare: half the pool stays for the
                 // operators above, whose memory is not reclaimed from a
-                // merge in progress.
+                // merge in progress. The limit may be a pool's above the
+                // query's (a session's query pool has none of its own).
                 let pool = handle.pool();
                 let spare = pool
-                    .limit()
+                    .effective_limit()
                     .is_none_or(|limit| pool.reserved().saturating_add(need) <= limit / 2);
                 if !spare || budget.try_grow(need).is_err() {
                     return Ok(Err((runs, slot)));
@@ -1902,8 +1987,11 @@ fn write_rest(
     let (mut max_batch_bytes, mut row_bytes) = (0, 1);
     while let Some(batch) = merger.next(rows)? {
         query.check_cancelled()?;
-        max_batch_bytes = max_batch_bytes.max(batch.data().get_array_memory_size());
-        row_bytes = row_bytes.max(data_bytes(&batch).div_ceil(batch.num_rows().max(1)));
+        // What reading the frame back costs: the writer compacts view
+        // columns, whose batch here still shares its inputs' buffers.
+        let bytes = SpillWriter::frame_bytes(&batch);
+        max_batch_bytes = max_batch_bytes.max(bytes);
+        row_bytes = row_bytes.max(bytes.div_ceil(batch.num_rows().max(1)));
         writer.write(&batch).map_err(KrishivError::from)?;
     }
     let file = writer.finish().map_err(KrishivError::from)?;

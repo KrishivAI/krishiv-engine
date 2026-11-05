@@ -23,6 +23,7 @@
 //! last reading pipeline ended (or the query failed), which drops the list,
 //! its memory and its files.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use arrow_schema::SchemaRef;
@@ -37,7 +38,7 @@ use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::executor::{Executor, run_blocking};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
-use crate::operators::{global_ref, local_mut};
+use crate::operators::{global_ref, local_mut, owned_rows};
 use crate::output_spill::{OutputSpill, SpillUnread, refused};
 use crate::sync::{Mutex, lock};
 
@@ -81,7 +82,7 @@ pub(crate) struct SinkGlobal {
 }
 
 /// The list of a finalized shared plan.
-struct Output {
+pub(crate) struct Output {
     state: Mutex<Vec<Segment>>,
     schema: SchemaRef,
     /// The hook and consumer of the list, and where a spill writes (with a
@@ -89,9 +90,107 @@ struct Output {
     spill: Option<(Arc<OutputSpill>, Arc<ConsumerHandle>, SpillScope)>,
     executor: Arc<dyn Executor>,
     query: Arc<QueryContext>,
+    /// Where an [`append`](Output::append) takes its memory (a list that is
+    /// written after it was made; none for a finalized shared plan).
+    owner: Option<Arc<ConsumerHandle>>,
+    /// Read by one driver, in order: a recursive CTE's small working table,
+    /// which Spark makes a `LocalRelation` (one partition).
+    one_reader: AtomicBool,
 }
 
 impl Output {
+    /// An empty list whose batches are appended one run at a time, in
+    /// memory under a consumer of its own and spilled to `scope` under
+    /// pressure (without a scope the list stays in memory and a full pool
+    /// is an error). Used for the rounds of a recursive CTE.
+    pub(crate) fn open(
+        query: &Arc<QueryContext>,
+        executor: &Arc<dyn Executor>,
+        op: crate::context::OperatorId,
+        schema: SchemaRef,
+        scope: Option<SpillScope>,
+        name: &str,
+    ) -> Arc<Self> {
+        let (spill, owner) = match scope {
+            Some(scope) => {
+                let (hook, consumer) = OutputSpill::register_for(query, executor, op, name);
+                (Some((hook, Arc::clone(&consumer), scope)), consumer)
+            }
+            None => (
+                None,
+                ConsumerHandle::register_counted(
+                    Arc::clone(query.pool()),
+                    name,
+                    None,
+                    query.spill_stats(op),
+                ),
+            ),
+        };
+        let out = Arc::new(Self {
+            state: Mutex::new(Vec::new()),
+            schema,
+            spill,
+            executor: Arc::clone(executor),
+            query: Arc::clone(query),
+            owner: Some(owner),
+            one_reader: AtomicBool::new(false),
+        });
+        if let Some((hook, _, _)) = &out.spill {
+            let weak: Weak<dyn SpillUnread> = Arc::downgrade(&out) as Weak<Output>;
+            hook.attach(weak);
+        }
+        out
+    }
+
+    /// Appends `batches` as one run (spilled to one file together). A full
+    /// pool first spills this list's own memory.
+    ///
+    /// # Errors
+    /// The pool refuses the memory and nothing in memory can be spilled; a
+    /// failed spill write.
+    pub(crate) async fn append(self: &Arc<Self>, batches: Vec<Batch>) -> Result<()> {
+        if batches.is_empty() {
+            return Ok(());
+        }
+        let owner = self
+            .owner
+            .as_ref()
+            .ok_or_else(|| internal("a finalized list was appended to".to_owned()))?;
+        let bytes: usize = batches
+            .iter()
+            .map(|b| b.data().get_array_memory_size())
+            .sum();
+        let mut reservation = owner.reservation();
+        while let Err(e) = reservation.try_grow(bytes) {
+            let freed = if self.spill.is_some() {
+                Arc::clone(self).spill_unread().await?
+            } else {
+                0
+            };
+            if freed == 0 {
+                // Nothing of this list is left to spill: arbitrate, so
+                // other consumers (the previous round's list, still read
+                // by the loop) release memory before the append fails.
+                drop(e);
+                reservation.grow(bytes).await.map_err(KrishivError::from)?;
+                break;
+            }
+        }
+        lock(&self.state).push(Segment::Memory {
+            batches,
+            reservation,
+        });
+        if let Some((hook, _, _)) = &self.spill {
+            hook.set_spillable_bytes(self.memory_bytes());
+        }
+        Ok(())
+    }
+
+    /// Has every reader read the list on one driver, in order.
+    pub(crate) fn read_by_one_driver(&self) {
+        self.one_reader.store(true, Ordering::Relaxed);
+    }
+
     fn batches(&self) -> u64 {
         lock(&self.state).iter().map(Segment::len).sum()
     }
@@ -213,7 +312,11 @@ impl Output {
     ) -> Result<Option<Vec<(usize, Arc<SpillFile>)>>> {
         let mut written = Vec::with_capacity(work.len());
         for (i, batches) in work {
-            let scratch = consumer.reservation().for_spill_scratch();
+            // Back to credit when dropped, so a refused write can return what was lent.
+            let scratch = consumer
+                .reservation()
+                .for_spill_scratch()
+                .releasing_to_credit();
             let writer = match scope.writer(Arc::clone(&self.schema), scratch) {
                 Ok(w) => w,
                 Err(e) => return refused(KrishivError::from(e)).map(|_| None),
@@ -276,6 +379,9 @@ impl Sink for SharedSink {
         _global: &GlobalState,
     ) -> Result<SinkStatus> {
         let l = local_mut::<SinkLocal>(local, "SharedSink")?;
+        // A scan's morsel can be a slice of a much larger batch: kept as is,
+        // every segment would hold and be charged the whole buffers.
+        let input = owned_rows(input)?;
         let bytes = input.data().get_array_memory_size();
         if l.reservation.try_grow(bytes).is_err() {
             return Ok(SinkStatus::NeedMemory { bytes });
@@ -340,6 +446,8 @@ impl Sink for SharedSink {
                 spill,
                 executor: Arc::clone(ctx.executor()),
                 query: Arc::clone(ctx.query()),
+                owner: None,
+                one_reader: AtomicBool::new(false),
             });
             if let Some((hook, _, _)) = &out.spill {
                 let weak: Weak<dyn SpillUnread> = Arc::downgrade(&out) as Weak<Output>;
@@ -370,7 +478,12 @@ impl Sink for SharedSink {
             // other consumer takes it meanwhile): a full pool cannot grant it afresh.
             let lent = l.reservation.size().min(SCRATCH_BYTES);
             l.reservation.shrink_to_credit(lent);
-            let scratch = ctx.consumer().reservation().for_spill_scratch();
+            // Back to credit when dropped, so a refused write can return what was lent.
+            let scratch = ctx
+                .consumer()
+                .reservation()
+                .for_spill_scratch()
+                .releasing_to_credit();
             let restore = |l: &mut SinkLocal| {
                 // Nothing was written: the lent bytes go back to the batches' reservation.
                 let _ = l.reservation.try_grow(lent);
@@ -420,12 +533,26 @@ impl Sink for SharedSink {
 /// One `SharedRead`: reads every batch of the list.
 pub(crate) struct SharedSource {
     schema: SchemaRef,
+    /// The list read when it is not a finalized shared plan's.
+    fixed: Option<Arc<Output>>,
 }
 
 impl SharedSource {
+    /// A reader of the list `output` (the previous round of a recursive
+    /// CTE), which must not be appended to any more.
+    pub(crate) fn over(output: Arc<Output>) -> Arc<Self> {
+        Arc::new(Self {
+            schema: Arc::clone(&output.schema),
+            fixed: Some(output),
+        })
+    }
+
     /// A reader of rows of `schema` (the shared plan's, in its own order).
     pub(crate) fn new(schema: SchemaRef) -> Arc<Self> {
-        Arc::new(Self { schema })
+        Arc::new(Self {
+            schema,
+            fixed: None,
+        })
     }
 }
 
@@ -454,16 +581,18 @@ impl Source for SharedSource {
     }
 
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
-        let state = ctx
-            .dependency()
-            .cloned()
-            .ok_or_else(|| internal("a shared plan was read before it was built".to_owned()))?;
-        let sink = global_ref::<SinkGlobal>(&state, "SharedSource")?;
-        let output = sink
-            .done
-            .get()
-            .cloned()
-            .ok_or_else(|| internal("a shared plan was read before it finalized".to_owned()))?;
+        let output =
+            if let Some(fixed) = &self.fixed {
+                Arc::clone(fixed)
+            } else {
+                let state = ctx.dependency().cloned().ok_or_else(|| {
+                    internal("a shared plan was read before it was built".to_owned())
+                })?;
+                let sink = global_ref::<SinkGlobal>(&state, "SharedSource")?;
+                sink.done.get().cloned().ok_or_else(|| {
+                    internal("a shared plan was read before it finalized".to_owned())
+                })?
+            };
         let batches = output.batches();
         Ok(Arc::new(ReaderGlobal {
             output,
@@ -478,6 +607,9 @@ impl Source for SharedSource {
 
     fn max_parallelism(&self, global: &GlobalState) -> usize {
         global_ref::<ReaderGlobal>(global, "SharedSource").map_or(1, |g| {
+            if g.output.one_reader.load(Ordering::Relaxed) {
+                return 1;
+            }
             usize::try_from(g.batches).unwrap_or(usize::MAX).max(1)
         })
     }
@@ -636,6 +768,56 @@ mod tests {
         sink.combine(local, &global).unwrap();
         sink.finalize(&global, &ctx).await.unwrap();
         (sink, global, query, ctx, dir)
+    }
+
+    /// A driver's spill whose writer is refused (here a cancelled scope)
+    /// gives back the scratch it lent: the batches stay in memory, charged
+    /// as much as before, and the pool holds what it held. (That nobody else
+    /// takes the lent bytes meanwhile, which the scratch's return to credit
+    /// ensures, needs a concurrent claimant; this test has none.)
+    #[tokio::test]
+    async fn a_refused_spill_write_restores_the_batches_reservation() {
+        let pool = TreePool::new(&MemoryConfig::default());
+        let query = QueryContext::new(
+            QueryId(1),
+            WorkloadClass::Batch,
+            ExecConfig::default(),
+            pool.child("q", None),
+        );
+        let ctx = TaskContext::new(
+            Arc::clone(&query),
+            TokioExecutor::deterministic(1).unwrap(),
+            SpillOwner::new(),
+            OperatorId(1),
+            "shared",
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let scope = SpillManager::open(&SpillConfig {
+            dir: dir.path().join("spill"),
+            ..SpillConfig::default()
+        })
+        .unwrap()
+        .scope()
+        .unwrap();
+        let sink = SharedSink::new(schema(), Some(scope.clone()));
+        let global = sink.global_state(&ctx).unwrap();
+        let mut local = sink.local_state(&ctx, &global).unwrap();
+        for start in [0, 3, 6] {
+            sink.sink(batch(start, 3), &mut local, &global).unwrap();
+        }
+        let held = local_mut::<SinkLocal>(&mut local, "test")
+            .unwrap()
+            .reservation
+            .size();
+        assert!(held > 0);
+        let reserved = pool.reserved();
+        scope.cancel().unwrap();
+        assert!(sink.spill(&mut local, 1, &ctx).await.is_err());
+        let l = local_mut::<SinkLocal>(&mut local, "test").unwrap();
+        assert_eq!(l.reservation.size(), held);
+        assert_eq!(l.batches.len(), 3);
+        assert!(l.segments.is_empty());
+        assert_eq!(pool.reserved(), reserved);
     }
 
     /// A reader's context: the finalized sink state as its dependency.

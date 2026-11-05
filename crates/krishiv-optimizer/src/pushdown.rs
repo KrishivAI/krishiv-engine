@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_plan::{
-    AttrId, Builtin, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan,
+    AttrId, Builtin, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Plan,
     PlanNode, ResolvedExpr,
 };
 
@@ -128,8 +128,29 @@ pub(crate) fn imply_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     if l.is_empty() && r.is_empty() {
         return node;
     }
-    let (left, right) = (into(left, l), into(right, r));
-    join(&node, left, right, *kind, conjuncts(cond))
+    // A side that already holds what is implied stays the same relation:
+    // rebuilt, it would no longer be shared with its other readers, and pruning
+    // could then narrow the copies apart.
+    let (new_left, new_right) = (
+        unless_equal(left, into(left, l)),
+        unless_equal(right, into(right, r)),
+    );
+    if Arc::ptr_eq(&new_left, left) && Arc::ptr_eq(&new_right, right) {
+        return node;
+    }
+    join(&node, new_left, new_right, *kind, conjuncts(cond))
+}
+
+/// `after`, or `before` when the two are structurally equal.
+fn unless_equal(before: &Arc<LogicalPlan>, after: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    if Arc::ptr_eq(before, &after) {
+        return after;
+    }
+    let plan = |p: &Arc<LogicalPlan>| Plan::try_new(LogicalPlan::clone(p)).ok();
+    match (plan(before), plan(&after)) {
+        (Some(a), Some(b)) if a.structurally_eq(&b) => Arc::clone(before),
+        _ => after,
+    }
 }
 
 /// Pushes `preds` (over `plan`'s output) into `plan` as far as legal.

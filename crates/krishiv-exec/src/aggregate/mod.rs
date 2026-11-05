@@ -56,7 +56,8 @@
 //! Rows carry Z-set weights ([`Weights`](krishiv_types::batch::Weights)):
 //! `count` adds the weight, `sum` adds `value × weight`, `avg` divides the
 //! weighted sum by the weighted count. `min`/`max`, `first`, `last`,
-//! `any_value`, `max_by`, `min_by` and the moment aggregates need
+//! `any_value`, `max_by`, `min_by`, the moment aggregates and `sum`/`avg` of an
+//! interval need
 //! retractions to be maintained incrementally (P4 IVM), so they and
 //! `DISTINCT` reject any weight other than 1 with
 //! `KRISHIV_UNSUPPORTED_FEATURE`. Output rows have weight 1; a group exists
@@ -66,6 +67,7 @@ mod accumulator;
 mod collect;
 mod hll;
 mod listagg;
+mod merge_index;
 mod mode;
 mod moments;
 mod node;
@@ -80,10 +82,10 @@ mod tests;
 
 use std::sync::Arc;
 
-use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow_schema::{DataType, Field, FieldRef, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit};
 use krishiv_common::error::{
-    ArithmeticOverflow, KrishivError, KrishivUnsupportedFeature,
-    NumericValueOutOfRangeWithSuggestion,
+    ArithmeticOverflow, IntervalArithmeticOverflowWithSuggestion, KrishivError,
+    KrishivUnsupportedFeature, NumericValueOutOfRangeWithSuggestion,
 };
 use krishiv_memory::SpillScope;
 
@@ -346,6 +348,10 @@ pub struct AggregateExpr {
     /// raw input: partial states are already filtered, so [`merging`](Self::merging)
     /// clears it. A NULL is not true.
     pub mask: Option<usize>,
+    /// The element of an array result of ANSI intervals, as the analyzer typed
+    /// it: an Arrow type holds no interval fields, so the field's metadata
+    /// carries them ([`with_array_result`](Self::with_array_result)).
+    pub element: Option<FieldRef>,
 }
 
 impl AggregateExpr {
@@ -363,6 +369,7 @@ impl AggregateExpr {
             arg_type,
             name: name.into(),
             mask: None,
+            element: None,
         }
     }
 
@@ -385,6 +392,7 @@ impl AggregateExpr {
             ])),
             name: name.into(),
             mask: None,
+            element: None,
         }
     }
 
@@ -416,6 +424,7 @@ impl AggregateExpr {
             arg_type: DataType::Struct(Fields::from(fields)),
             name: name.into(),
             mask: None,
+            element: None,
         }
     }
 
@@ -443,6 +452,7 @@ impl AggregateExpr {
             arg_type: DataType::Null,
             name: name.into(),
             mask: None,
+            element: None,
         }
     }
 
@@ -459,16 +469,39 @@ impl AggregateExpr {
         }
     }
 
+    /// This aggregate, answering with the analyzer's element field if its
+    /// result `want` is an array of ANSI intervals.
+    #[must_use]
+    pub fn with_array_result(mut self, want: &DataType) -> Self {
+        if let DataType::List(f) = want
+            && is_ansi_interval(f.data_type())
+        {
+            self.element = Some(Arc::clone(f));
+        }
+        self
+    }
+
     /// The Spark 4.2 result type.
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for an argument type the function does
     /// not take here.
     pub fn result_type(&self) -> Result<DataType> {
+        Ok(match (self.computed_type()?, &self.element) {
+            (DataType::List(_), Some(f)) => DataType::List(Arc::clone(f)),
+            (t, _) => t,
+        })
+    }
+
+    /// The result type from the function and the argument type alone.
+    fn computed_type(&self) -> Result<DataType> {
         use AggregateFunction as F;
         let t = &self.arg_type;
         Ok(match (&self.function, t) {
             (F::Count, _) => DataType::Int64,
+            // The Arrow type holds no fields, so `sum` and `avg` agree here;
+            // the analyzer gives `avg` the family's default fields.
+            (F::Sum | F::TrySum | F::Avg | F::TryAvg, t) if is_ansi_interval(t) => t.clone(),
             (F::Sum | F::TrySum, t) if is_integral(t) => DataType::Int64,
             (F::Sum | F::TrySum | F::Avg | F::TryAvg, DataType::Float32 | DataType::Float64) => {
                 DataType::Float64
@@ -526,11 +559,13 @@ impl AggregateExpr {
             // The exact percentiles (`percentile`, `median`,
             // `percentile_cont`) and `percentile_disc` are `double`
             // (or `array<double>` for an array percentage) over
-            // Spark's numeric input.
+            // Spark's numeric input, and keep an ANSI interval's type.
             (F::Percentile { array, .. } | F::PercentileDisc { array, .. }, t)
                 if accumulator::quantile_supported(t, false) =>
             {
-                if *array {
+                if is_ansi_interval(t) {
+                    quantile_approx_result(t, *array)?
+                } else if *array {
                     quantile_array_of()
                 } else {
                     DataType::Float64
@@ -572,6 +607,10 @@ impl AggregateExpr {
             (F::Count, _) => vec![Field::new(n("count"), DataType::Int64, false)],
             // `try_sum` of integers sticks overflow in its state, like a
             // decimal `sum` does.
+            (F::Sum | F::TrySum, t) if is_ansi_interval(t) => vec![
+                Field::new(n("sum"), DataType::Int64, true),
+                Field::new(n("count"), DataType::Int64, false),
+            ],
             (F::Sum | F::TrySum, DataType::Decimal64(..) | DataType::Decimal128(..))
             | (F::TrySum, DataType::Int64) => vec![
                 Field::new(n("sum"), out.clone(), true),
@@ -700,15 +739,25 @@ impl AggregateExpr {
         }
     }
 
-    /// The type `avg` sums in: `double`, or `sum`'s decimal type.
+    /// The type `avg` sums in: `double`, `sum`'s decimal type, or `bigint`
+    /// for an interval's months or microseconds.
     fn avg_sum_type(&self) -> DataType {
         match self.arg_type {
+            DataType::Interval(_) | DataType::Duration(_) => DataType::Int64,
             DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => {
                 sum_decimal(&self.arg_type, p, s)
             }
             _ => DataType::Float64,
         }
     }
+}
+
+/// Whether `t` is the Arrow type of an ANSI interval.
+pub(crate) const fn is_ansi_interval(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::Interval(IntervalUnit::YearMonth) | DataType::Duration(TimeUnit::Microsecond)
+    )
 }
 
 fn sum_decimal(like: &DataType, p: u8, s: i8) -> DataType {
@@ -873,6 +922,14 @@ const ANSI_CONF: &str = "\"spark.sql.ansi.enabled\"";
 /// `KRISHIV_UNSUPPORTED_FEATURE`.
 pub(crate) fn unsupported(feature: String) -> KrishivError {
     KrishivUnsupportedFeature { feature }.into()
+}
+
+/// `sum` or `avg` of an interval past its family's range, ANSI on or off.
+pub(crate) fn interval_sum_overflow() -> KrishivError {
+    IntervalArithmeticOverflowWithSuggestion {
+        function_name: "`try_add`".to_owned(),
+    }
+    .into()
 }
 
 /// Spark's ANSI `ARITHMETIC_OVERFLOW` of a `long` addition in `sum`.

@@ -20,8 +20,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    FailedToParseTooComplex, KrishivError, KrishivUnsupportedFeature, MissingWindowSpecification,
-    WrongNumArgsWithoutSuggestion,
+    FailedToParseTooComplex, InvalidRecursiveCte, KrishivError, KrishivUnsupportedFeature,
+    MissingWindowSpecification, UnionNotSupportedInRecursiveCte, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_common::stack::{STEP, on_big_stack};
@@ -60,7 +60,8 @@ const MAX_GROUPING_SETS: usize = 1 << 16;
 /// # Errors
 /// A [`ParseError`]: the parser's, or a lowering error with its span.
 pub fn parse_and_lower(sql: &str, options: &ParserOptions, source: SourceId) -> R<Plan> {
-    lower(&parse_query(sql, options)?, source).map_err(|e| e.redacted_in(sql))
+    lower_with(&parse_query(sql, options)?, source, options.case_sensitive)
+        .map_err(|e| e.redacted_in(sql))
 }
 
 /// Lowers `query` into an unresolved plan whose spans index `source`.
@@ -71,11 +72,21 @@ pub fn parse_and_lower(sql: &str, options: &ParserOptions, source: SourceId) -> 
 /// decimal bounds, unsupported cast types) and `FAILED_TO_PARSE_TOO_COMPLEX`
 /// for plans deeper than `MAX_DEPTH`.
 pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
+    lower_with(query, source, false)
+}
+
+/// [`lower`] with `spark.sql.caseSensitive`: CTE names match exactly.
+///
+/// # Errors
+/// As for [`lower`].
+pub fn lower_with(query: &Query, source: SourceId, case_sensitive: bool) -> R<Plan> {
     let mut l = Lowerer {
         source,
         depth: 0,
         root: query.span,
         windows: Vec::new(),
+        recursive: 0,
+        case_sensitive,
     };
     let plan = l.query(query)?;
     Plan::try_new(plan).map_err(|e| err(e, query.span))
@@ -95,6 +106,8 @@ pub fn lower_expression(expr: &Expr, source: SourceId) -> R<IrExpr> {
         depth: 0,
         root: expr.span,
         windows: Vec::new(),
+        recursive: 0,
+        case_sensitive: false,
     };
     l.expr(expr)
 }
@@ -110,6 +123,8 @@ pub fn lower_select_item(item: &SelectItem, source: SourceId) -> R<Arc<IrExpr>> 
         depth: 0,
         root: item.span,
         windows: Vec::new(),
+        recursive: 0,
+        case_sensitive: false,
     };
     l.select_item(item)
 }
@@ -169,6 +184,66 @@ fn unsupported(feature: &str, span: Span) -> ParseError {
     )
 }
 
+/// Whether `plan` (subquery plans included) reads the table `name`, the
+/// way an unresolved CTE reference is spelled.
+fn reads_table(plan: &LogicalPlan, name: &str, exact: bool) -> bool {
+    let same = |a: &str| {
+        if exact {
+            a == name
+        } else {
+            a.eq_ignore_ascii_case(name)
+        }
+    };
+    enum Step<'a> {
+        Plan(&'a LogicalPlan),
+        Expr(&'a IrExpr),
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![Step::Plan(plan)];
+    while let Some(step) = stack.pop() {
+        match step {
+            Step::Plan(p) => {
+                if !seen.insert(std::ptr::from_ref(p) as usize) {
+                    continue;
+                }
+                if let PlanNode::Read(ReadSource::Table { name: n, .. }) = &p.node
+                    && let [n] = n.as_slice()
+                    && same(n)
+                {
+                    return true;
+                }
+                if let PlanNode::WithCte { input, ctes } = &p.node {
+                    // A definition of `name` hides the outer one from what
+                    // follows it: the later definitions and the body.
+                    let mut hidden = false;
+                    for c in ctes {
+                        if !hidden {
+                            stack.push(Step::Plan(&c.plan));
+                        }
+                        hidden |= same(&c.name);
+                    }
+                    if !hidden {
+                        stack.push(Step::Plan(input));
+                    }
+                } else {
+                    p.for_each_child(&mut |c| stack.push(Step::Plan(c)));
+                }
+                p.for_each_expr(&mut |e| stack.push(Step::Expr(e)));
+            }
+            Step::Expr(e) => {
+                if !seen.insert(std::ptr::from_ref(e) as usize) {
+                    continue;
+                }
+                if let ExprNode::Subquery { plan, .. } = &e.node {
+                    stack.push(Step::Plan(plan));
+                }
+                e.for_each_child(&mut |c| stack.push(Step::Expr(c)));
+            }
+        }
+    }
+    false
+}
+
 struct Lowerer {
     source: SourceId,
     depth: usize,
@@ -178,6 +253,12 @@ struct Lowerer {
     /// last; `None` stands for a subquery expression's boundary (Spark's
     /// `WindowsSubstitution` does not enter subquery plans).
     windows: Vec<Option<Arc<WindowDefs>>>,
+    /// How many `WITH RECURSIVE` queries enclose the body being lowered:
+    /// there `LIMIT ALL` stays a limit (of `i32::MAX` rows), because it
+    /// lifts the recursion row limit of the CTE it reads.
+    recursive: usize,
+    /// `spark.sql.caseSensitive`: a CTE name matches its references exactly.
+    case_sensitive: bool,
 }
 
 /// A `WINDOW` clause: each name's specification, references to other
@@ -367,26 +448,42 @@ impl Lowerer {
 
     fn query_inner(&mut self, q: &Query) -> R<LogicalPlan> {
         reject_organization(q)?;
+        // Kept for the definitions as well as the body: a later definition
+        // may read a recursive one under `LIMIT ALL`.
+        let recursive = q.with.as_ref().is_some_and(|w| w.recursive);
+        self.recursive += usize::from(recursive);
+        let planned = self.query_with(q);
+        self.recursive -= usize::from(recursive);
+        planned
+    }
+
+    fn query_with(&mut self, q: &Query) -> R<LogicalPlan> {
         let mut plan = self.with_windows(&q.windows, |l| {
             let plan = l.body(&q.body)?;
             l.organize(plan, q)
         })?;
         if let Some(with) = &q.with {
-            if with.recursive {
-                return Err(unsupported("recursive CTEs", with.span));
-            }
             let mut ctes = Vec::new();
             for c in &with.ctes {
-                if c.max_recursion_level.is_some() {
-                    return Err(unsupported("MAX RECURSION LEVEL", c.span));
-                }
+                let max_level = match &c.max_recursion_level {
+                    None => None,
+                    Some(n) if with.recursive => Some(
+                        n.parse::<u32>()
+                            .map_err(|_| unsupported("MAX RECURSION LEVEL", c.span))?,
+                    ),
+                    Some(_) => return Err(unsupported("MAX RECURSION LEVEL", c.span)),
+                };
                 let mut body = self.query(&c.query)?;
-                if !c.columns.is_empty() {
+                let columns: Vec<String> = c.columns.iter().map(|i| i.value.clone()).collect();
+                if with.recursive && reads_table(&body, &c.name.value, self.case_sensitive) {
+                    body = self.recursive_cte(&body, c, &columns, max_level)?;
+                }
+                if !columns.is_empty() {
                     body = self.node(
                         PlanNode::SubqueryAlias {
                             input: arc(body),
                             alias: c.name.value.clone(),
-                            columns: c.columns.iter().map(|i| i.value.clone()).collect(),
+                            columns,
                         },
                         c.span,
                     );
@@ -405,6 +502,112 @@ impl Lowerer {
             );
         }
         Ok(plan)
+    }
+
+    /// `WITH RECURSIVE name AS (anchor UNION ALL recursive)`, `body` being
+    /// the lowered query: Spark's `UnionLoop`. The recursive term is
+    /// wrapped in a `WithCte` that defines `name` as the loop's reference,
+    /// so the name resolves there as any CTE does. A definition that reads
+    /// its own name in any other shape is `INVALID_RECURSIVE_CTE`; `UNION`
+    /// without `ALL` is `UNION_NOT_SUPPORTED_IN_RECURSIVE_CTE`.
+    fn recursive_cte(
+        &mut self,
+        body: &LogicalPlan,
+        c: &crate::ast::Cte,
+        columns: &[String],
+        max_level: Option<u32>,
+    ) -> R<LogicalPlan> {
+        let name = &c.name.value;
+        // `WITH x AS (..) anchor UNION ALL recursive`: the local definitions
+        // are in scope of both terms and may not read the name themselves.
+        let (mut locals, mut inner) = (Vec::new(), body);
+        while let PlanNode::WithCte { input, ctes } = &inner.node {
+            locals.extend(ctes.iter().cloned());
+            inner = input;
+        }
+        if locals
+            .iter()
+            .any(|l| reads_table(&l.plan, name, self.case_sensitive))
+        {
+            return Err(err(InvalidRecursiveCte {}, c.span));
+        }
+        let (anchor, recursive) = match &inner.node {
+            PlanNode::Union {
+                inputs,
+                by_name: false,
+                ..
+            } if inputs.len() == 2
+                && !reads_table(&inputs[0], name, self.case_sensitive)
+                && reads_table(&inputs[1], name, self.case_sensitive) =>
+            {
+                (Arc::clone(&inputs[0]), Arc::clone(&inputs[1]))
+            }
+            PlanNode::Distinct { input }
+                if matches!(&input.node, PlanNode::Union { inputs, .. }
+                    if inputs.len() == 2
+                        && !reads_table(&inputs[0], name, self.case_sensitive)
+                        && reads_table(&inputs[1], name, self.case_sensitive)) =>
+            {
+                return Err(err(UnionNotSupportedInRecursiveCte {}, c.span));
+            }
+            _ => return Err(err(InvalidRecursiveCte {}, c.span)),
+        };
+        let (anchor, recursive) = if locals.is_empty() {
+            (anchor, recursive)
+        } else {
+            let scoped = |input| {
+                arc(self.node(
+                    PlanNode::WithCte {
+                        input,
+                        ctes: locals.clone(),
+                    },
+                    c.span,
+                ))
+            };
+            (scoped(anchor), scoped(recursive))
+        };
+        // Unique per process: loops of separately lowered plans (views,
+        // SQL functions, DataFrames) meet in one analysis.
+        static NEXT_LOOP: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let id = NEXT_LOOP.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let mut reference = self.node(
+            PlanNode::UnionLoopRef {
+                id,
+                output: Vec::new(),
+            },
+            c.span,
+        );
+        if !columns.is_empty() {
+            reference = self.node(
+                PlanNode::SubqueryAlias {
+                    input: arc(reference),
+                    alias: name.clone(),
+                    columns: columns.to_vec(),
+                },
+                c.span,
+            );
+        }
+        let recursive = self.node(
+            PlanNode::WithCte {
+                input: recursive,
+                ctes: vec![Cte {
+                    name: name.clone(),
+                    plan: arc(reference),
+                }],
+            },
+            c.span,
+        );
+        Ok(self.node(
+            PlanNode::UnionLoop {
+                id,
+                anchor,
+                recursive: arc(recursive),
+                max_level,
+                limit: None,
+                output: Vec::new(),
+            },
+            c.span,
+        ))
     }
 
     /// `FROM ... SELECT ... [SELECT ...]`: the shared `FROM` lowered
@@ -540,10 +743,31 @@ impl Lowerer {
         Ok(plan)
     }
 
+    /// A `HAVING` condition as Spark's `AstBuilder` reads it: a predicate, or else cast to boolean.
+    fn having_predicate(&mut self, h: &Expr) -> R<Arc<IrExpr>> {
+        let predicate = self.expr(h)?;
+        Ok(arc(if is_predicate(&predicate) {
+            predicate
+        } else {
+            let span = h.span;
+            self.ex(
+                ExprNode::Cast {
+                    expr: arc(predicate),
+                    to: krishiv_types::DataType::Boolean,
+                    mode: CastMode::Default,
+                },
+                span,
+            )
+        }))
+    }
+
     fn pipe_op(&mut self, plan: LogicalPlan, op: &PipeOp) -> R<LogicalPlan> {
         let star = |l: &Self, except: Vec<Vec<String>>| {
             arc(l.ex(
                 ExprNode::Star(Star {
+                    regex: None,
+                    replace: Vec::new(),
+                    position: None,
                     qualifier: Vec::new(),
                     except,
                     plan_id: None,
@@ -553,22 +777,34 @@ impl Lowerer {
         };
         Ok(match &op.kind {
             PipeOpKind::Select(s) => {
-                if let Some(g) = &s.group_by {
-                    return Err(unsupported("GROUP BY in a pipe SELECT", g.span));
-                }
                 let exprs = self.with_windows(&s.windows, |l| {
                     s.projection
                         .iter()
                         .map(|i| l.select_item(i))
                         .collect::<R<Vec<_>>>()
                 })?;
-                let plan = self.node(
-                    PlanNode::Project {
-                        input: arc(plan),
-                        exprs,
-                    },
-                    s.span,
-                );
+                // `|> SELECT items GROUP BY keys` is an aggregate whose
+                // select list is the items.
+                let plan = match &s.group_by {
+                    Some(g) => {
+                        let grouping = self.grouping(g)?;
+                        self.node(
+                            PlanNode::Aggregate {
+                                input: arc(plan),
+                                grouping,
+                                aggregates: exprs,
+                            },
+                            s.span,
+                        )
+                    }
+                    None => self.node(
+                        PlanNode::Project {
+                            input: arc(plan),
+                            exprs,
+                        },
+                        s.span,
+                    ),
+                };
                 self.wrap_distinct_hints(plan, s.quantifier, &s.hints, s.span)?
             }
             PipeOpKind::Extend(items) => {
@@ -647,12 +883,54 @@ impl Lowerer {
                 )?
             }
             PipeOpKind::Aggregate(a) => self.pipe_aggregate(plan, a)?,
-            PipeOpKind::Set(_) => return Err(unsupported("pipe SET", op.span)),
+            PipeOpKind::Set(assignments) => {
+                // One projection per assignment, so a later one reads the
+                // value an earlier one set (`SET z = 1, zz = z + 1`).
+                let mut plan = plan;
+                for a in assignments {
+                    // Validation rejects multi-part keys.
+                    let Some(name) = a.key.last() else { continue };
+                    let value = arc(self.expr(&a.value)?);
+                    let star = self.ex(
+                        ExprNode::Star(Star {
+                            regex: None,
+                            qualifier: Vec::new(),
+                            except: Vec::new(),
+                            replace: vec![(name.value.clone(), value)],
+                            position: None,
+                            plan_id: None,
+                        }),
+                        a.span,
+                    );
+                    plan = self.node(
+                        PlanNode::Project {
+                            input: arc(plan),
+                            exprs: vec![arc(star)],
+                        },
+                        a.span,
+                    );
+                }
+                plan
+            }
             PipeOpKind::Sample(t) => return Err(unsupported("TABLESAMPLE", t.span)),
             PipeOpKind::Pivot(_, Some(_)) | PipeOpKind::Unpivot(_, Some(_)) => {
                 return Err(unsupported("PIVOT with UNPIVOT", op.span));
             }
         })
+    }
+
+    /// The input column a pipe `GROUP BY` number names.
+    fn position(&self, e: &Expr) -> Option<usize> {
+        match &e.kind {
+            ExprKind::Literal(Literal::Number {
+                text,
+                kind: NumKind::Int,
+            }) => text
+                .parse::<i32>()
+                .ok()
+                .and_then(|n| usize::try_from(n).ok()),
+            _ => None,
+        }
     }
 
     /// `AGGREGATE [aggregates] [GROUP BY keys]`: the result is the keys,
@@ -663,13 +941,22 @@ impl Lowerer {
         for g in a.group_by.iter().flat_map(|g| &g.items) {
             match &g.kind {
                 GroupItemKind::Expr(e) => {
-                    if matches!(e.kind, ExprKind::Literal(Literal::Number { .. })) {
-                        return Err(unsupported(
-                            "a position in a pipe AGGREGATE GROUP BY",
-                            g.span,
-                        ));
-                    }
-                    let key = arc(self.expr(e)?);
+                    // A number names an input column, unlike `GROUP BY n`
+                    // of a query, which names a select item.
+                    let key = match self.position(e) {
+                        Some(position) => arc(self.ex(
+                            ExprNode::Star(Star {
+                                regex: None,
+                                qualifier: Vec::new(),
+                                except: Vec::new(),
+                                replace: Vec::new(),
+                                position: Some(position),
+                                plan_id: None,
+                            }),
+                            e.span,
+                        )),
+                        None => arc(self.expr(e)?),
+                    };
                     items.push(Arc::clone(&key));
                     keys.push(key);
                 }
@@ -738,9 +1025,12 @@ impl Lowerer {
             );
         }
         if let Some(limit) = q.limit
-            && let Some(v) = &limit.value
+            && (limit.value.is_some() || self.recursive > 0)
         {
-            let limit_expr = arc(self.expr(v)?);
+            let limit_expr = match &limit.value {
+                Some(v) => arc(self.expr(v)?),
+                None => arc(IrExpr::literal(IrLiteral::Integer(i32::MAX))),
+            };
             plan = self.node(
                 PlanNode::Limit {
                     input: arc(plan),
@@ -836,7 +1126,13 @@ impl Lowerer {
                 },
                 item.span,
             ),
-            Some(_) => return Err(unsupported("multi-name aliases", item.span)),
+            Some(Alias::List(l)) => self.ex(
+                ExprNode::MultiAlias {
+                    expr: arc(e),
+                    names: l.iter().map(|n| n.value.clone()).collect(),
+                },
+                item.span,
+            ),
         }))
     }
 
@@ -1021,6 +1317,9 @@ impl Lowerer {
         );
         let star = self.ex(
             ExprNode::Star(Star {
+                regex: None,
+                replace: Vec::new(),
+                position: None,
                 qualifier: vec![qualifier],
                 except: Vec::new(),
                 plan_id: None,
@@ -1070,7 +1369,18 @@ impl Lowerer {
             }
             items.push(self.select_item(item)?);
         }
-        if s.group_by.is_none() && s.having.is_none() && !(aggregates && has_generator) {
+        // `spark.sql.legacy.parser.havingWithoutGroupByAsWhere`: a `HAVING` with no `GROUP BY` over
+        // a select list with no aggregate call filters the rows (as `WHERE` does; aggregates in
+        // it are `INVALID_WHERE_CONDITION`) instead of making the query one global group.
+        let having_filter = s.having_as_where
+            && s.group_by.is_none()
+            && s.having.is_some()
+            && !aggregates
+            && !has_generator;
+        if s.group_by.is_none()
+            && (s.having.is_none() || having_filter)
+            && !(aggregates && has_generator)
+        {
             plan = self.node(
                 PlanNode::Project {
                     input: arc(plan),
@@ -1078,6 +1388,16 @@ impl Lowerer {
                 },
                 s.span,
             );
+            if let Some(h) = s.having.as_ref().filter(|_| having_filter) {
+                let predicate = self.having_predicate(h)?;
+                plan = self.node(
+                    PlanNode::Filter {
+                        input: arc(plan),
+                        predicate,
+                    },
+                    s.span,
+                );
+            }
         } else {
             let grouping = match &s.group_by {
                 Some(g) => self.grouping(g)?,
@@ -1092,22 +1412,7 @@ impl Lowerer {
                 s.span,
             );
             if let Some(h) = &s.having {
-                let predicate = self.expr(h)?;
-                // As Spark's AstBuilder: a `HAVING` that is not a predicate is
-                // cast to boolean.
-                let predicate = arc(if is_predicate(&predicate) {
-                    predicate
-                } else {
-                    let span = h.span;
-                    self.ex(
-                        ExprNode::Cast {
-                            expr: arc(predicate),
-                            to: krishiv_types::DataType::Boolean,
-                            mode: CastMode::Default,
-                        },
-                        span,
-                    )
-                });
+                let predicate = self.having_predicate(h)?;
                 plan = self.node(
                     PlanNode::Filter {
                         input: arc(plan),
@@ -1312,7 +1617,11 @@ impl Lowerer {
                     PlanNode::Join {
                         left: arc(left),
                         right: arc(right),
-                        kind: IrJoin::Inner,
+                        kind: if r.lateral {
+                            IrJoin::LateralInner
+                        } else {
+                            IrJoin::Inner
+                        },
                         condition: JoinCondition::None,
                     },
                     r.span,
@@ -1337,9 +1646,6 @@ impl Lowerer {
     }
 
     fn relation(&mut self, r: &Relation) -> R<LogicalPlan> {
-        if r.lateral {
-            return Err(unsupported("LATERAL subqueries", r.span));
-        }
         // Spark rejects a relation carrying both clauses
         // (`NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT`, also raised for the
         // pipe-operator chain in the goldens): a `PIVOT ... UNPIVOT ...`
@@ -1375,10 +1681,23 @@ impl Lowerer {
 
     /// `[INNER] JOIN right constraint` onto `plan`.
     fn join(&mut self, plan: LogicalPlan, j: &Join) -> R<LogicalPlan> {
-        if j.lateral {
-            return Err(unsupported("LATERAL joins", j.span));
-        }
         let kind = match j.kind {
+            JoinKind::Inner | JoinKind::Cross if j.lateral => IrJoin::LateralInner,
+            JoinKind::Left if j.lateral => IrJoin::LateralLeft,
+            kind if j.lateral => {
+                let join_type = match kind {
+                    JoinKind::Right => "RIGHT OUTER",
+                    JoinKind::Full => "FULL OUTER",
+                    JoinKind::LeftSemi => "LEFT SEMI",
+                    _ => "LEFT ANTI",
+                };
+                return Err(err(
+                    krishiv_common::error::InvalidLateralJoinType {
+                        join_type: join_type.to_owned(),
+                    },
+                    j.span,
+                ));
+            }
             JoinKind::Inner => IrJoin::Inner,
             JoinKind::Cross => IrJoin::Cross,
             JoinKind::Left => IrJoin::LeftOuter,
@@ -1620,19 +1939,10 @@ impl Lowerer {
                     "stack" if !outer => Some(krishiv_plan::GeneratorKind::Inline),
                     _ => None,
                 };
-                if name.parts.len() == 1 && lname == "json_tuple" {
-                    // `FROM json_tuple(json, k1, ...)` is the select list
-                    // `SELECT json_tuple(json, k1, ...)` over one row.
-                    let one_row = self.node(PlanNode::OneRowRelation, tf.span);
-                    let call = arc(self.call("json_tuple", lowered, tf.span));
-                    self.node(
-                        PlanNode::Project {
-                            input: arc(one_row),
-                            exprs: vec![call],
-                        },
-                        tf.span,
-                    )
-                } else if let (Some(kind), 1) = (kind, name.parts.len()) {
+                // `FROM json_tuple(..)` stays a table function: the analyzer
+                // runs it as the select list `SELECT json_tuple(..)` over one
+                // row, and its alias-count error differs from a subquery's.
+                if let (Some(kind), 1) = (kind, name.parts.len()) {
                     if let Some(a) = args.iter().find(|a| a.name.is_some()) {
                         return Err(unsupported("table-valued functions", a.span));
                     }
@@ -1783,13 +2093,20 @@ impl Lowerer {
                     base
                 }
             }
-            ExprKind::Wildcard { qualifier, except } => self.ex(
+            ExprKind::Wildcard {
+                qualifier,
+                except,
+                regex,
+            } => self.ex(
                 ExprNode::Star(Star {
+                    replace: Vec::new(),
+                    position: None,
                     qualifier: qualifier.iter().map(|p| p.value.clone()).collect(),
                     except: except
                         .iter()
                         .map(|n| n.parts.iter().map(|p| p.value.clone()).collect())
                         .collect(),
+                    regex: regex.as_deref().map(str::to_owned),
                     plan_id: None,
                 }),
                 sp,
@@ -2028,6 +2345,24 @@ impl Lowerer {
                     }
                     [] => return Err(unsupported("a function name", f.name.span)),
                 };
+                // With `spark.sql.legacy.identifierClause` on, `IDENTIFIER('a.b')`
+                // is an ordinary call (the parser builds `dynamic_name` only
+                // otherwise): Spark resolves a constant string argument to the
+                // column it names.
+                if qualifier.is_empty()
+                    && !name.quoted
+                    && name.value.eq_ignore_ascii_case("identifier")
+                    && f.args.len() == 1
+                    && f.quantifier.is_none()
+                    && f.within_group.is_empty()
+                    && f.filter.is_none()
+                    && f.null_treatment.is_none()
+                    && f.over.is_none()
+                    && let ExprKind::Literal(Literal::String(text)) = &f.args[0].expr.kind
+                    && let Some(parts) = multipart_identifier(text)
+                {
+                    return Ok(self.column(parts, sp));
+                }
                 // `WITHIN GROUP (ORDER BY ...)` rides along for the analyzer:
                 // the ordered-set aggregates lower it into their arguments,
                 // any other function keeps Spark's
@@ -2117,7 +2452,7 @@ impl Lowerer {
                     && matches!(f.args[0].expr.kind, ExprKind::Keyword(_));
                 let function_name = match (unit_form, lname.as_str()) {
                     (true, "timestampadd" | "dateadd" | "date_add") => "timestampadd".to_owned(),
-                    (true, "timestampdiff" | "datediff" | "date_diff") => {
+                    (true, "timestampdiff" | "datediff" | "date_diff" | "timediff") => {
                         "timestampdiff".to_owned()
                     }
                     _ => name.value.clone(),
@@ -2346,13 +2681,14 @@ fn literal(v: &Literal, sp: Span) -> R<ExprNode> {
                 TypedKind::Binary => ExprNode::Literal(IrLiteral::Binary(
                     literal::hex(value).ok_or_else(|| err(kind.invalid(value), sp))?,
                 )),
-                _ => {
-                    let t = type_name.value.to_ascii_uppercase();
-                    return Err(unsupported(&format!("{t} literals"), sp));
-                }
+                TypedKind::Interval => ExprNode::Literal(
+                    crate::validate::interval::lowered_typed(value).map_err(|e| err(e, sp))?,
+                ),
             }
         }
-        _ => return Err(unsupported("INTERVAL literals", sp)),
+        Literal::Interval(iv) => {
+            ExprNode::Literal(crate::validate::interval::lowered(iv).map_err(|e| err(e, sp))?)
+        }
     })
 }
 
@@ -2374,4 +2710,65 @@ fn number(text: &str, kind: NumKind, sp: Span) -> R<IrLiteral> {
             data_type: DecimalType::try_new(precision, scale).map_err(|e| err(e, sp))?,
         },
     })
+}
+
+/// Spark's `parseMultipartIdentifier`: dot-separated parts, each bare or in
+/// backticks (a doubled backtick is one). `None` for an empty or malformed
+/// string, which stays an unresolved call.
+fn multipart_identifier(text: &str) -> Option<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut chars = text.chars().peekable();
+    loop {
+        let mut part = String::new();
+        if chars.peek() == Some(&'`') {
+            chars.next();
+            loop {
+                match chars.next()? {
+                    '`' if chars.peek() == Some(&'`') => {
+                        chars.next();
+                        part.push('`');
+                    }
+                    '`' => break,
+                    c => part.push(c),
+                }
+            }
+        } else {
+            while let Some(&c) = chars.peek() {
+                if !(c.is_ascii_alphanumeric() || c == '_') {
+                    break;
+                }
+                part.push(c);
+                chars.next();
+            }
+            if part.is_empty() {
+                return None;
+            }
+        }
+        parts.push(part);
+        match chars.next() {
+            None => return Some(parts),
+            Some('.') => {}
+            Some(_) => return None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod identifier_tests {
+    use super::multipart_identifier;
+
+    #[test]
+    fn multipart_identifiers_split_like_spark() {
+        let parts = |t| multipart_identifier(t);
+        assert_eq!(parts("a"), Some(vec!["a".to_owned()]));
+        assert_eq!(parts("t.c1"), Some(vec!["t".to_owned(), "c1".to_owned()]));
+        assert_eq!(
+            parts("`a.b`.c"),
+            Some(vec!["a.b".to_owned(), "c".to_owned()])
+        );
+        assert_eq!(parts("`a``b`"), Some(vec!["a`b".to_owned()]));
+        for bad in ["", ".a", "a.", "a..b", "`a", "`a`b", "c 1", "a-b"] {
+            assert_eq!(parts(bad), None, "{bad}");
+        }
+    }
 }

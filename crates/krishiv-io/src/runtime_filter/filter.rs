@@ -14,6 +14,7 @@ use hashbrown::HashTable;
 
 use super::FilterId;
 use super::bloom::RuntimeBloom;
+use super::bound::TopNBound;
 use super::hash::{RowHash, row_hashes};
 use super::key::{
     KeyRange, KeyValue, Norm, NormalizedKeys, float_bits, for_each_bytes, normalize_key_bytes,
@@ -46,6 +47,11 @@ pub struct KeyFilterOptions {
     pub bloom_fpp: f64,
     /// A Bloom filter expected to pass more false positives is not built.
     pub bloom_max_fpp: f64,
+    /// The Bloom filter's size in bytes, fixed by the planner for a
+    /// producer of several partitions (design P2-T177 §2.4): every partial
+    /// is then that size, so the partials' filters OR into the value's.
+    /// `None` sizes it for the keys seen.
+    pub bloom_bytes: Option<u32>,
 }
 
 impl Default for KeyFilterOptions {
@@ -59,6 +65,7 @@ impl Default for KeyFilterOptions {
             bloom_max_bytes: 8 << 20,
             bloom_fpp: 0.01,
             bloom_max_fpp: 0.05,
+            bloom_bytes: None,
         }
     }
 }
@@ -414,6 +421,7 @@ impl KeyFilterBuilder {
             empty: self.rows == 0,
             keys: self.rows,
             key_type: self.key_type,
+            bound: None,
         }
     }
 }
@@ -440,14 +448,18 @@ fn dense(range: Option<&KeyRange>, count: usize) -> bool {
     }
 }
 
-/// A Bloom filter sized exactly for `hashes`, unless empty or expected to
-/// pass too many false positives.
+/// A Bloom filter sized exactly for `hashes` (or of the planned size),
+/// unless empty or expected to pass too many false positives.
 fn bloom(hashes: &[u64], options: &KeyFilterOptions) -> Option<RuntimeBloom> {
     if hashes.is_empty() {
         return None;
     }
     let items = hashes.len() as u64;
-    let bytes = RuntimeBloom::bytes_for(items, options.bloom_fpp).min(options.bloom_max_bytes);
+    let bytes = match options.bloom_bytes {
+        Some(planned) => usize::try_from(planned).unwrap_or(usize::MAX),
+        None => RuntimeBloom::bytes_for(items, options.bloom_fpp),
+    }
+    .min(options.bloom_max_bytes);
     let mut bloom = RuntimeBloom::with_bytes(bytes);
     for &h in hashes {
         bloom.insert_hash(h);
@@ -470,6 +482,8 @@ pub struct KeyFilter {
     pub(crate) empty: bool,
     /// Non-null keys the producer stored (with duplicates).
     pub(crate) keys: u64,
+    /// A top-N's bound, on the non-null keys.
+    pub(crate) bound: Option<TopNBound>,
 }
 
 impl KeyFilter {
@@ -596,7 +610,13 @@ impl KeyFilter {
                 _ => BooleanBuffer::new_unset(n),
             };
         }
-        let pass = evaluate(self.range.as_ref(), &self.member, keys, valid);
+        let pass = match &self.bound {
+            Some(b) => {
+                let pass = b.pass(keys);
+                valid.map_or_else(|| pass.clone(), |v| &pass & v)
+            }
+            None => evaluate(self.range.as_ref(), &self.member, keys, valid),
+        };
         match valid {
             Some(v) if self.nulls_pass => &pass | &!v,
             _ => pass,
@@ -634,6 +654,20 @@ impl KeyFilter {
             });
         }
         let mut conj = Vec::new();
+        if let Some((value, op)) = self
+            .bound
+            .as_ref()
+            .and_then(|b| b.comparison(&self.key_type))
+            && let Some(v) = value_scalar(&value, &self.key_type)
+        {
+            match retype(&v, &self.key_type, column_type, op) {
+                Some(Retyped::Exact(value)) => {
+                    conj.push(PushdownExpr::cmp(column.clone(), op, value));
+                }
+                Some(Retyped::Never) => conj.push(PushdownExpr::Constant(false)),
+                Some(Retyped::Always) | None => {}
+            }
+        }
         if let Some((lo, hi)) = self.range_scalars() {
             for (v, op) in [(lo, CmpOp::GtEq), (hi, CmpOp::LtEq)] {
                 match retype(&v, &self.key_type, column_type, op) {

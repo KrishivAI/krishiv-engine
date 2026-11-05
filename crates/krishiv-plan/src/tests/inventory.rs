@@ -52,6 +52,8 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Window { .. } => "PlanNode::Window",
         PlanNode::TableFunction { .. } => "PlanNode::TableFunction",
         PlanNode::Range { .. } => "PlanNode::Range",
+        PlanNode::UnionLoop { .. } => "PlanNode::UnionLoop",
+        PlanNode::UnionLoopRef { .. } => "PlanNode::UnionLoopRef",
     });
     plan.for_each_expr(&mut |e| expr_kinds(e, out));
     plan.for_each_child(&mut |c| kinds(c, out));
@@ -68,6 +70,7 @@ fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
         ExprNode::UpdateFields { .. } => "ExprNode::UpdateFields",
         ExprNode::Cast { .. } => "ExprNode::Cast",
         ExprNode::Alias { .. } => "ExprNode::Alias",
+        ExprNode::MultiAlias { .. } => "ExprNode::MultiAlias",
         ExprNode::Subquery { .. } => "ExprNode::Subquery",
         ExprNode::Window(_) => "ExprNode::Window",
         ExprNode::Lambda { .. } => "ExprNode::Lambda",
@@ -149,6 +152,9 @@ fn df(id: i64) -> LogicalPlan {
 /// Each DataFrame-slice operation, as the API builds it.
 fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
     let star = Expr::new(ExprNode::Star(Star {
+        regex: None,
+        replace: Vec::new(),
+        position: None,
         qualifier: Vec::new(),
         except: Vec::new(),
         plan_id: None,

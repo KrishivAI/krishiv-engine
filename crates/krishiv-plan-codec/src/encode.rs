@@ -13,11 +13,12 @@ use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, Aggreg
 use krishiv_exec::physical::{
     AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SubqueryPlan, SubqueryValueKind, WritePlan,
+    Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryPlan,
+    SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
-use krishiv_exec::{RowStageSettings, SortKey};
+use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, KeyFilterOptions};
 use krishiv_plan::{
     AttrId, BoundColumn, CastMode, DayTimeField, Expr, ExprNode, FunctionId, FunctionKind, Literal,
@@ -157,6 +158,7 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         map_key_dedup_last_win: env.map_key_dedup_last_win.then_some(true),
         legacy_java_charsets: env.legacy_java_charsets.then_some(true),
         legacy_coding_error_action: env.legacy_coding_error_action.then_some(true),
+        legacy_time_parser: env.legacy_time_parser.then_some(true),
     }
 }
 
@@ -220,9 +222,41 @@ impl Encoder {
             }
             PhysNode::Scan(scan) => Kind::Scan(self.scan(scan)?),
             PhysNode::OneRow => Kind::OneRow(pb::Empty {}),
+            PhysNode::ExchangeSource {
+                id,
+                partitioning: p,
+                schema,
+            } => Kind::ExchangeSource(pb::ExchangeSourceNode {
+                id: id.0,
+                partitioning: Some(partitioning(p)),
+                schema: schema_bytes(schema),
+            }),
             PhysNode::SharedRead { id, layout } => Kind::SharedRead(pb::SharedReadNode {
                 id: id.0,
                 layout: layout.iter().map(|a| a.0).collect(),
+            }),
+            PhysNode::UnionLoop {
+                id,
+                anchor,
+                recursive,
+                layout: l,
+                nullable,
+                limits,
+            } => Kind::UnionLoop(pb::UnionLoopNode {
+                nullable: nullable.clone(),
+                id: *id,
+                anchor: self.node_index(anchor)?,
+                recursive: self.node_index(recursive)?,
+                layout: layout(l),
+                limits: Some(pb::LoopLimits {
+                    level: limits.level,
+                    rows: limits.rows,
+                    pushed_limit: limits.pushed_limit,
+                }),
+            }),
+            PhysNode::LoopRef { id, layout: l } => Kind::LoopRef(pb::LoopRefNode {
+                id: *id,
+                layout: layout(l),
             }),
             PhysNode::Range(r) => Kind::Range(pb::RangeNode {
                 start: r.start,
@@ -304,15 +338,35 @@ impl Encoder {
                 input: self.node_index(input)?,
                 keys: keys.iter().map(sort_key).collect(),
             }),
-            PhysNode::TopN { input, keys, limit } => Kind::TopN(pb::TopNNode {
+            PhysNode::LateFetch {
+                input,
+                scan,
+                file_col,
+                row_col,
+                output,
+            } => Kind::LateFetch(pb::LateFetchNode {
+                input: self.node_index(input)?,
+                scan: Some(self.scan(scan)?),
+                file_col: *file_col as u64,
+                row_col: *row_col as u64,
+                output: output.iter().map(fetch_slot).collect(),
+            }),
+            PhysNode::TopN {
+                input,
+                keys,
+                limit,
+                bound,
+            } => Kind::TopN(pb::TopNNode {
                 input: self.node_index(input)?,
                 keys: keys.iter().map(sort_key).collect(),
                 limit: *limit,
+                bound: bound.map(|b| b.0),
             }),
             PhysNode::Aggregate { input, aggregate } => {
                 Kind::Aggregate(self.aggregate(input, aggregate)?)
             }
             PhysNode::HashJoin(join) => Kind::HashJoin(self.hash_join(join)?),
+            PhysNode::SortMergeJoin(join) => Kind::SortMergeJoin(self.merge_join(join)?),
             PhysNode::NestedLoopJoin(join) => Kind::NestedLoopJoin(self.nested_loop(join)?),
             PhysNode::Union { inputs } => Kind::Union(pb::UnionNode {
                 inputs: inputs
@@ -322,7 +376,10 @@ impl Encoder {
             }),
             PhysNode::WriteFiles { input, write } => Kind::WriteFiles(pb::WriteFilesNode {
                 input: self.node_index(input)?,
-                write: write.as_ref().map(write_plan).transpose()?,
+                write: write
+                    .as_ref()
+                    .map(|w| write_plan(w, &self.nested))
+                    .transpose()?,
             }),
             PhysNode::Exchange(exchange) => Kind::Exchange(self.exchange(exchange)?),
             PhysNode::Expand {
@@ -434,6 +491,19 @@ impl Encoder {
         })
     }
 
+    fn merge_join(&mut self, join: &SortMergeJoinPlan) -> Result<pb::SortMergeJoinNode> {
+        Ok(pb::SortMergeJoinNode {
+            probe: self.node_index(&join.probe)?,
+            build: self.node_index(&join.build)?,
+            join_type: join_type(join.join_type) as i32,
+            probe_keys: indexes(&join.probe_keys),
+            build_keys: indexes(&join.build_keys),
+            null_safe: join.null_safe.clone(),
+            residual: self.residual(join.residual.as_ref())?,
+            single_match: join.single_match,
+        })
+    }
+
     fn nested_loop(&mut self, join: &NestedLoopPlan) -> Result<pb::NestedLoopJoinNode> {
         Ok(pb::NestedLoopJoinNode {
             probe: self.node_index(&join.probe)?,
@@ -484,6 +554,7 @@ impl Encoder {
                 .map(|f| scan_filter(f, &self.nested))
                 .collect(),
             row_stage: Some(row_stage(&node.row_stage)),
+            row_id: node.row_id,
         })
     }
 
@@ -638,6 +709,16 @@ fn column_path(p: &ColumnPath) -> pb::ColumnPath {
     pb::ColumnPath { parts: p.0.clone() }
 }
 
+fn fetch_slot(s: &FetchSlot) -> pb::FetchSlot {
+    use pb::fetch_slot::Kind;
+    pb::FetchSlot {
+        kind: Some(match *s {
+            FetchSlot::Input(i) => Kind::Input(i as u64),
+            FetchSlot::Fetched(i) => Kind::Fetched(i as u64),
+        }),
+    }
+}
+
 fn sort_key(k: &SortKey) -> pb::SortKey {
     pb::SortKey {
         column: k.column as u64,
@@ -700,6 +781,7 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
         bloom_max_bytes,
         bloom_fpp,
         bloom_max_fpp,
+        bloom_bytes,
     } = f.options;
     pb::JoinFilter {
         id: f.id.0,
@@ -713,6 +795,7 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
             bloom_max_bytes: bloom_max_bytes as u64,
             bloom_fpp,
             bloom_max_fpp,
+            bloom_bytes,
         }),
     }
 }
@@ -782,10 +865,22 @@ fn window_function(f: &WindowFunctionPlan, nested: &Cell<bool>) -> Result<pb::Wi
             upper: frame_bound(f.frame.upper)? as i32,
             lower_offset: offset(f.frame.lower),
             upper_offset: offset(f.frame.upper),
+            lower_range: range_payload(f.frame.lower),
+            upper_range: range_payload(f.frame.upper),
         }),
         filter: f.filter.map(|c| c as u64),
         name: f.name.clone(),
     })
+}
+
+/// A `RANGE` value bound's distance: 16 big-endian bytes for an integer, 8 for a float's bits; empty
+/// for any other bound.
+fn range_payload(b: FrameBound) -> Vec<u8> {
+    match b {
+        FrameBound::RangeInt(v) => v.to_be_bytes().to_vec(),
+        FrameBound::RangeFloat(bits) => bits.to_be_bytes().to_vec(),
+        _ => Vec::new(),
+    }
 }
 
 fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
@@ -794,6 +889,8 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
         FrameBound::CurrentRow => Ok(pb::FrameBound::CurrentRow),
         FrameBound::UnboundedFollowing => Ok(pb::FrameBound::UnboundedFollowing),
         FrameBound::Offset(_) => Ok(pb::FrameBound::Offset),
+        FrameBound::RangeInt(_) => Ok(pb::FrameBound::RangeInt),
+        FrameBound::RangeFloat(_) => Ok(pb::FrameBound::RangeFloat),
         // `FrameBound` is `#[non_exhaustive]`: a bound added later needs a
         // codec change, not a silently wrong frame.
         _ => Err(CodecError::Unsupported(
@@ -803,6 +900,14 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
 }
 
 fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
+    let mut expr = aggregate_function(a, nested)?;
+    if let Some(f) = &a.element {
+        expr.result_element = schema_bytes(&arrow_schema::Schema::new(vec![Arc::clone(f)]));
+    }
+    Ok(expr)
+}
+
+fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
     // The decoder refuses what the analyzer and planner never produce, so the
     // encoder refuses it too instead of writing a plan that cannot be read.
     let bad_percentages = |ps: &[f64]| {
@@ -937,23 +1042,20 @@ fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggregat
                 nested,
             ));
         }
-        // The format has no code for these yet.
-        f @ (AggregateFunction::StddevSamp
-        | AggregateFunction::StddevPop
-        | AggregateFunction::VarSamp
-        | AggregateFunction::VarPop
-        | AggregateFunction::Skewness
-        | AggregateFunction::Kurtosis
-        | AggregateFunction::Corr
-        | AggregateFunction::CovarSamp
-        | AggregateFunction::CovarPop
-        | AggregateFunction::AnyValue { .. }
-        | AggregateFunction::MaxBy
-        | AggregateFunction::MinBy) => {
-            return Err(CodecError::Unsupported(format!(
-                "the aggregate function {f:?}"
-            )));
+        AggregateFunction::StddevSamp => (pb::AggregateFunction::StddevSamp, false),
+        AggregateFunction::StddevPop => (pb::AggregateFunction::StddevPop, false),
+        AggregateFunction::VarSamp => (pb::AggregateFunction::VarSamp, false),
+        AggregateFunction::VarPop => (pb::AggregateFunction::VarPop, false),
+        AggregateFunction::Skewness => (pb::AggregateFunction::Skewness, false),
+        AggregateFunction::Kurtosis => (pb::AggregateFunction::Kurtosis, false),
+        AggregateFunction::Corr => (pb::AggregateFunction::Corr, false),
+        AggregateFunction::CovarSamp => (pb::AggregateFunction::CovarSamp, false),
+        AggregateFunction::CovarPop => (pb::AggregateFunction::CovarPop, false),
+        AggregateFunction::AnyValue { ignore_nulls } => {
+            (pb::AggregateFunction::AnyValue, *ignore_nulls)
         }
+        AggregateFunction::MaxBy => (pb::AggregateFunction::MaxBy, false),
+        AggregateFunction::MinBy => (pb::AggregateFunction::MinBy, false),
     };
     Ok(pb::AggregateExpr {
         function: function as i32,
@@ -1043,7 +1145,7 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
 }
 
 /// A file write as plan data.
-fn write_plan(write: &WritePlan) -> Result<pb::WritePlan> {
+fn write_plan(write: &WritePlan, nested: &Cell<bool>) -> Result<pb::WritePlan> {
     Ok(pb::WritePlan {
         format: write.format.clone(),
         options: write
@@ -1057,7 +1159,35 @@ fn write_plan(write: &WritePlan) -> Result<pb::WritePlan> {
         max_records_per_file: write.max_records_per_file,
         target_file_bytes: write.target_file_bytes,
         partition_by: indexes(&write.partition_by),
+        column_types: write
+            .column_types
+            .iter()
+            .map(|(column, t)| {
+                Ok(pb::WriteColumnType {
+                    column: *column as u64,
+                    data_type: Some(spark_type(t, nested)?),
+                })
+            })
+            .collect::<Result<_>>()?,
     })
+}
+
+/// One entry of an options map literal. Its entries are a call's options,
+/// classified as a source's are: an inline secret or a URL with credentials
+/// is refused (ADR 0038), and a literal cannot hold a secret reference.
+fn map_entry(key: &str, value: &str) -> Result<pb::MapLiteralEntry> {
+    match OptionValue::from_user(key, value) {
+        OptionValue::Plain(value) => Ok(pb::MapLiteralEntry {
+            key: key.to_owned(),
+            value,
+        }),
+        OptionValue::Secret(_) => Err(CodecError::Unsupported(format!(
+            "the option `{key}` is an inline secret (use a secret reference)"
+        ))),
+        OptionValue::Url(_) => Err(CodecError::Unsupported(format!(
+            "the option `{key}` is a URL with credentials (use a secret reference)"
+        ))),
+    }
 }
 
 /// A plan carries plain text and `secret(scope, key)` references only.
@@ -1134,6 +1264,36 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         DataType::Time { precision } => (Kind::Time, u32::from(*precision), 0, 0),
         DataType::Geometry { srid } => (Kind::Geometry, 0, 0, srid.to_i32()),
         DataType::Geography { srid } => (Kind::Geography, 0, 0, srid.to_i32()),
+        DataType::YearMonthInterval { start, end } => {
+            return Ok(pb::DataType {
+                kind: Kind::YearMonthInterval as i32,
+                ym_start: year_month_field(*start) as i32,
+                ym_end: year_month_field(*end) as i32,
+                ..pb::DataType::default()
+            });
+        }
+        DataType::DayTimeInterval { start, end } => {
+            return Ok(pb::DataType {
+                kind: Kind::DayTimeInterval as i32,
+                dt_start: day_time_field(*start) as i32,
+                dt_end: day_time_field(*end) as i32,
+                ..pb::DataType::default()
+            });
+        }
+        DataType::CalendarInterval => (Kind::CalendarInterval, 0, 0, 0),
+        DataType::CollatedString(c) => {
+            // By canonical name: ids index an ICU build's table.
+            if c.is_indeterminate() || c.is_utf8_binary() {
+                return Err(CodecError::Unsupported(format!(
+                    "a string type of collation {c}"
+                )));
+            }
+            return Ok(pb::DataType {
+                kind: Kind::CollatedString as i32,
+                collation: c.name(),
+                ..pb::DataType::default()
+            });
+        }
         _ => {
             return Err(CodecError::Unsupported(
                 "a Spark type this version does not know".to_owned(),
@@ -1145,7 +1305,7 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         precision,
         scale,
         srid,
-        json: String::new(),
+        ..pb::DataType::default()
     })
 }
 
@@ -1185,6 +1345,21 @@ fn literal(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
             micros: *micros,
             start: day_time_field(*start) as i32,
             end: day_time_field(*end) as i32,
+        }),
+        Literal::CalendarInterval {
+            months,
+            days,
+            micros,
+        } => Kind::Calendar(pb::CalendarLiteral {
+            months: *months,
+            days: *days,
+            micros: *micros,
+        }),
+        Literal::Map(entries) => Kind::Map(pb::MapLiteral {
+            entries: entries
+                .iter()
+                .map(|(key, value)| map_entry(key, value))
+                .collect::<Result<_>>()?,
         }),
         _ => {
             return Err(CodecError::Unsupported(

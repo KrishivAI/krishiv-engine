@@ -84,6 +84,6 @@ impl DataTypeSpec {
     /// bound errors, and `KRISHIV_UNSUPPORTED_FEATURE` for Spark types not
     /// supported yet.
     pub fn to_data_type(&self) -> Result<DataType, krishiv_common::error::KrishivError> {
-        parse_data_type(&self.to_string())
+        parse_data_type(&self.to_string())?.refuse_collations()
     }
 }

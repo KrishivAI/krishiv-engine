@@ -155,3 +155,15 @@ fn from_json_reads_a_malformed_record_as_a_struct_of_nulls() {
     let a: Vec<Option<i32>> = st.column(0).as_primitive::<Int32Type>().iter().collect();
     assert_eq!(a, [None, None, None, Some(2)]);
 }
+
+/// A map schema names the column `entries` whatever the spacing around
+/// `map` and `<`.
+#[test]
+fn from_json_with_a_map_schema_is_named_entries_with_spaces() {
+    let s = session();
+    for schema in ["map<string,int>", "MAP <string,int>", "map  <string,int>"] {
+        let df = block_on(s.sql(&format!("SELECT from_json(j, '{schema}') FROM v"))).unwrap();
+        let name = block_on(df.schema()).unwrap().field(0).name().clone();
+        assert_eq!(name, "entries", "{schema}");
+    }
+}

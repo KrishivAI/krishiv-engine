@@ -119,7 +119,7 @@ class _Schema:
         """This DataFrame with the columns at the positions in ``changes`` replaced, in the same order."""
         if not changes:
             return self.df
-        columns = []
+        columns: list[Column | str] = []
         for i, name in enumerate(self.names):
             column = changes.get(i, self.ref(i))
             columns.append(column.alias(name) if i not in changes and self.renamed else column)

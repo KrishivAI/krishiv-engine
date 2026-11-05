@@ -59,7 +59,7 @@ impl Class {
             D::Int64 | D::Timestamp(..) => Self::Int { width: 8 },
             D::Float32 => Self::Float { single: true },
             D::Float64 => Self::Float { single: false },
-            D::Decimal128(..) => Self::Decimal,
+            D::Decimal64(..) | D::Decimal128(..) => Self::Decimal,
             D::Utf8 | D::LargeUtf8 | D::Utf8View | D::Binary | D::LargeBinary | D::BinaryView => {
                 Self::Bytes
             }
@@ -250,6 +250,23 @@ impl Member {
                 Exact::Bytes(t)
             }
         }))
+    }
+
+    /// The members of an exact form of a key of `class`, with their row
+    /// hashes; `None` for the range and the Bloom forms.
+    pub(crate) fn members(&self, class: Class) -> Option<Vec<(u64, KeyValue)>> {
+        let int = |v: i64| (class.hash64(v), KeyValue::Fixed(i128::from(v)));
+        let wide = |v: i128| (decimal_hash(v), KeyValue::Fixed(v));
+        let bytes = |b: &[u8]| (xxh64(b), KeyValue::Bytes(Box::from(b)));
+        Some(match self {
+            Self::Range | Self::Bloom(_) => return None,
+            Self::Small(Small::Int(v)) => v.iter().map(|&x| int(x)).collect(),
+            Self::Small(Small::Wide(v)) => v.iter().map(|&x| wide(x)).collect(),
+            Self::Small(Small::Bytes(v)) => v.iter().map(|b| bytes(b)).collect(),
+            Self::Exact(Exact::Int(t)) => t.iter().map(|&x| int(x)).collect(),
+            Self::Exact(Exact::Wide(t)) => t.iter().map(|&x| wide(x)).collect(),
+            Self::Exact(Exact::Bytes(t)) => t.iter().map(|b| bytes(b)).collect(),
+        })
     }
 
     pub(crate) fn form(&self) -> FilterForm {

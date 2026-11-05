@@ -356,8 +356,11 @@ fn resolution_corpus_matches_spark() {
     // resolved four correlated `EXISTS` / `IN` under `OR` and `NOT`; 120
     // since `date + int`, `int + date` and `date - int` became `date_add`
     // and `date_sub`; 118 since P2-T115 unit 3 resolved two more correlated
-    // subqueries; 117 since unit 4 resolved one under a join).
-    assert_eq!(gaps, 117, "statements in documented gaps");
+    // subqueries; 117 since unit 4 resolved one under a join; 13 since
+    // interval literals and date and timestamp arithmetic, P2-T001b; 12
+    // since a correlated `EXISTS` in an aggregate's key or `FILTER`; 11 since
+    // a scalar subquery over no relation reads the outer query's columns).
+    assert_eq!(gaps, 11, "statements in documented gaps");
     assert_eq!(by_design, NULLABLE_BY_DESIGN.len());
     // Classes of lateral aliases, ordinals and type coercion, each matched
     // against Spark above.
@@ -867,8 +870,8 @@ fn window_goldens_resolve_to_a_fixed_point() {
             failures.push(format!("{sql}: not a fixed point\n{}", again.plan.root()));
         }
     }
-    assert_eq!(pending, ["range_offset"]);
-    assert_eq!(resolved, 97);
+    assert!(pending.is_empty(), "{pending:?}");
+    assert_eq!(resolved, 98);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
@@ -982,12 +985,11 @@ fn typed_timestamp_literals_resolve_like_spark() {
             "{sql}"
         );
     }
-    // Clock-dependent spellings need the query clock.
-    for sql in [
-        "SELECT TIMESTAMP 'now'",
-        "SELECT TIMESTAMP_LTZ '10:00'",
-        "SELECT TIMESTAMP '10:00'",
-    ] {
+    // `now` reads the query clock.
+    let a = analyze_with("SELECT TIMESTAMP 'now'", false, utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    // A time of day alone still needs the query clock's date.
+    for sql in ["SELECT TIMESTAMP_LTZ '10:00'", "SELECT TIMESTAMP '10:00'"] {
         let e = analyze_with(sql, false, utc).unwrap_err();
         assert_eq!(
             e.error.error_class(),

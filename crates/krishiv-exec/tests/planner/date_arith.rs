@@ -52,23 +52,37 @@ fn a_date_and_a_day_count_are_date_add_and_date_sub() {
 fn other_mixes_of_dates_and_numbers_stay_refused() {
     let env = env();
     for sql in [
-        // Spark: DATATYPE_MISMATCH (date_add takes an int); here refused.
+        // `date_add` takes an int; these fail its input check.
         "SELECT DATE'2020-01-30' + CAST(5 AS BIGINT)",
         "SELECT DATE'2020-01-30' + 5.5",
-        // `int - date` is not a date_sub.
-        "SELECT 5 - DATE'2020-01-30'",
-        // Two dates subtract to an interval.
-        "SELECT DATE'2020-01-30' - DATE'2020-01-01'",
         "SELECT TIMESTAMP'2020-01-30 10:00:00' + 5",
     ] {
         let plan =
             krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
                 .unwrap();
         let e = block_on(DefaultAnalyzer.analyze(&plan, &env.ctx)).unwrap_err();
-        assert_eq!(
-            e.error.error_class().name(),
-            "KRISHIV_UNSUPPORTED_FEATURE",
-            "{sql}: {e}"
-        );
+        let want = if sql.contains("TIMESTAMP") {
+            "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+        } else {
+            "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+        };
+        assert_eq!(e.error.error_class().name(), want, "{sql}: {e}");
     }
+}
+
+#[test]
+fn a_date_plus_a_decimal_is_spark_s_type_mismatch() {
+    let env = env();
+    let plan = krishiv_sql::parse_and_lower(
+        "SELECT DATE'2020-01-30' + 5.5",
+        &krishiv_sql::ParserOptions::default(),
+        SourceId(0),
+    )
+    .unwrap();
+    let e = block_on(DefaultAnalyzer.analyze(&plan, &env.ctx)).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+        "{e}"
+    );
 }

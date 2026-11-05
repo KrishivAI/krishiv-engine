@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use arrow_array::{
-    Array, Date32Array, Decimal128Array, Int32Array, Int64Array, RecordBatch, StringViewArray,
+    Array, Date32Array, Decimal64Array, Int32Array, Int64Array, RecordBatch, StringViewArray,
 };
 use arrow_ipc::reader::FileReader;
 use arrow_ipc::writer::FileWriter;
@@ -367,7 +367,7 @@ struct TpchTable {
 }
 
 fn tpch_tables() -> Vec<TpchTable> {
-    let decimal = || DataType::Decimal128(15, 2);
+    let decimal = || DataType::Decimal64(15, 2);
     let string = || DataType::Utf8View;
     vec![
         TpchTable {
@@ -513,9 +513,9 @@ fn tpch_column(field: &Field, rows: usize) -> Result<Arc<dyn Array>> {
         DataType::Date32 => Arc::new(Date32Array::from_iter_values(
             (0..rows).map(|i| 8_766 + i32::try_from(i % 2_500).unwrap()),
         )),
-        DataType::Decimal128(_, _) => Arc::new(
-            Decimal128Array::from_iter_values(
-                (0..rows).map(|i| i128::try_from(i % 7 + 1).unwrap() * 100),
+        DataType::Decimal64(_, _) => Arc::new(
+            Decimal64Array::from_iter_values(
+                (0..rows).map(|i| i64::try_from(i % 7 + 1).unwrap() * 100),
             )
             .with_precision_and_scale(15, 2)
             .map_err(|e| internal(&e.to_string()))?,
@@ -525,19 +525,61 @@ fn tpch_column(field: &Field, rows: usize) -> Result<Arc<dyn Array>> {
     Ok(array)
 }
 
-/// Rows per table of the in-process TPC-H data set; `KRISHIV_YIELD_TPCH_ROWS`
-/// scales it up for nightly runs.
-fn tpch_rows() -> usize {
-    std::env::var("KRISHIV_YIELD_TPCH_ROWS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(100)
+/// Rows of `table` in the in-process TPC-H data set. `KRISHIV_YIELD_TPCH_SF`
+/// sizes every table as TPC-H does at that scale factor (lineitem 6M rows at
+/// SF1, the nightly run); otherwise each table holds `KRISHIV_YIELD_TPCH_ROWS`
+/// rows (default 100).
+fn tpch_rows(table: &str) -> usize {
+    tpch_rows_for(
+        table,
+        std::env::var("KRISHIV_YIELD_TPCH_SF").ok().as_deref(),
+        std::env::var("KRISHIV_YIELD_TPCH_ROWS").ok().as_deref(),
+    )
 }
 
-fn tpch_session(rows: usize) -> Result<(MemoryCatalog, Arc<MemoryTables>)> {
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a row count of a few million, rounded from a positive product"
+)]
+fn tpch_rows_for(table: &str, sf: Option<&str>, rows: Option<&str>) -> usize {
+    let Some(sf) = sf.and_then(|v| v.parse::<f64>().ok()) else {
+        return rows.and_then(|v| v.parse().ok()).unwrap_or(100);
+    };
+    let per_sf: u32 = match table {
+        "region" => return 5,
+        "nation" => return 25,
+        "supplier" => 10_000,
+        "part" => 200_000,
+        "partsupp" => 800_000,
+        "customer" => 150_000,
+        "orders" => 1_500_000,
+        _ => 6_000_000,
+    };
+    // Rounded to whole rows; at least one, so every table has data.
+    ((f64::from(per_sf) * sf).round() as usize).max(1)
+}
+
+#[test]
+fn tpch_tables_scale_by_the_tpch_cardinalities() {
+    assert_eq!(tpch_rows_for("lineitem", None, None), 100);
+    assert_eq!(tpch_rows_for("region", None, Some("7")), 7);
+    assert_eq!(tpch_rows_for("lineitem", Some("1"), Some("7")), 6_000_000);
+    assert_eq!(tpch_rows_for("orders", Some("0.1"), None), 150_000);
+    assert_eq!(tpch_rows_for("nation", Some("10"), None), 25);
+    assert_eq!(tpch_rows_for("supplier", Some("0.00001"), None), 1);
+}
+
+/// Rows per batch of the in-process tables: about a scan's output batch, so
+/// a large table reaches the operators as many batches, as a file scan's
+/// would.
+const TPCH_BATCH_ROWS: usize = 8_192;
+
+fn tpch_session() -> Result<(MemoryCatalog, Arc<MemoryTables>)> {
     let mut catalog = MemoryCatalog::new("spark_catalog");
     let mut tables = MemoryTables::new();
     for table in tpch_tables() {
+        let rows = tpch_rows(table.name);
         let schema: SchemaRef = Arc::new(Schema::new(
             table
                 .fields
@@ -567,7 +609,13 @@ fn tpch_session(rows: usize) -> Result<(MemoryCatalog, Arc<MemoryTables>)> {
         catalog = catalog.with_table(&["default"], table.name, table_columns, None);
         tables = tables.with_table(
             &["spark_catalog", "default", table.name],
-            Arc::new(MemoryTable::new(schema, vec![Batch::new(data)])),
+            Arc::new(MemoryTable::new(
+                schema,
+                (0..rows)
+                    .step_by(TPCH_BATCH_ROWS)
+                    .map(|at| Batch::new(data.slice(at, TPCH_BATCH_ROWS.min(rows - at))))
+                    .collect(),
+            )),
         );
     }
     Ok((catalog, Arc::new(tables)))
@@ -603,8 +651,7 @@ const TPCH_QUERIES: [&str; 22] = [
 /// threshold is already a query error, and the counters must stay at zero.
 #[test]
 fn tpch_suite_counts_no_stalls() {
-    let rows = tpch_rows();
-    let (catalog, tables) = tpch_session(rows).unwrap();
+    let (catalog, tables) = tpch_session().unwrap();
     let ctx = context(
         catalog,
         ResolutionConf {
@@ -778,6 +825,49 @@ async fn a_very_large_batch_is_processed_in_chunks() {
         yields >= 20,
         "the driver yielded between slices: {yields} yields"
     );
+    assert_released(&pool);
+}
+
+/// Blocks its thread in every `execute` call.
+struct BlockingSleep;
+
+impl Operator for BlockingSleep {
+    fn schema(&self) -> SchemaRef {
+        int_schema()
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(()))
+    }
+
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the operator exists to block a worker, which the detector must catch"
+    )]
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        std::thread::sleep(stall_threshold() * 3);
+        Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
+    }
+}
+
+/// Time off a CPU counts when it isn't paging: a poll that blocks trips the
+/// detector with almost no CPU time. The first polls may also page code in,
+/// which can excuse them, so it blocks on several.
+#[tokio::test]
+async fn a_blocking_operator_trips_the_stall_detector() {
+    let runner = QueryRunner::new(executor(1));
+    let pool = root(1 << 30);
+    let q = query(&pool, 1);
+    let (schema, batch) = big_batch(10);
+    let scan = Arc::new(Scan(krishiv_exec::testing::Batches::new(
+        schema,
+        vec![batch; 16],
+    )));
+    let plan = Arc::new(krishiv_exec::testing::Pipe(scan, Arc::new(BlockingSleep)));
+    let e = run(&runner, plan, &q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("without yielding"), "{e}");
+    assert!(q.metrics().drivers.stalls >= 1);
     assert_released(&pool);
 }
 

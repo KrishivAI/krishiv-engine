@@ -261,6 +261,18 @@ fn is_try(e: &Expr) -> bool {
     }
 }
 
+/// The key argument (the second) of an `aes_encrypt`, `aes_decrypt` or
+/// `try_aes_decrypt` call.
+fn aes_key(e: &Expr) -> Option<Arc<Expr>> {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        return None;
+    };
+    ["aes_encrypt", "aes_decrypt", "try_aes_decrypt"]
+        .contains(&f.id.name())
+        .then(|| f.args.get(1).cloned())
+        .flatten()
+}
+
 /// Whether `e` holds a lambda variable.
 #[cfg(test)]
 fn has_lambda_var(e: &Expr) -> bool {
@@ -604,9 +616,17 @@ fn graph(roots: &[Arc<Expr>]) -> Option<Graph> {
     }
     // Nodes under a `try_*` ancestor (the `try_*` node included).
     let mut tainted: HashSet<*const Expr> = HashSet::new();
+    // The key argument of an AES call is tainted too: hoisting it into a
+    // lower projection would move an error that must never show the key
+    // (ADR 0042) out of the evaluator that masks it.
     for e in &order {
-        if is_try(e) {
-            let mut stack = vec![Arc::clone(e)];
+        let seed = if is_try(e) {
+            Some(Arc::clone(e))
+        } else {
+            aes_key(e)
+        };
+        if let Some(seed) = seed {
+            let mut stack = vec![seed];
             let mut seen: HashSet<*const Expr> = HashSet::new();
             while let Some(x) = stack.pop() {
                 let ptr = Arc::as_ptr(&x);

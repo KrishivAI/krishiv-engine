@@ -2,22 +2,17 @@
   "cases": {
     "files": [
       2,
-      4,
       7,
       9,
       12,
-      14,
-      17,
-      19
+      17
     ],
     "object-stores": [
       22
     ],
     "sql-commands": [
       6,
-      10,
-      16,
-      20
+      10
     ]
   },
   "file": "sql-on-files",

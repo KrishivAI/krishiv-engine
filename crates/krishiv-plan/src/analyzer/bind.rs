@@ -314,7 +314,7 @@ fn sql_function_roots(
 /// Whether a call of `name` is for the function registry to answer: not a
 /// canonical operator or a grouping function.
 fn is_registry_call(name: &str) -> bool {
-    crate::Builtin::from_name(name).is_none()
+    crate::Builtin::from_name(name).is_none_or(crate::Builtin::is_analyzer_internal)
         && super::analytics::GroupingFn::from_name(name).is_none()
 }
 
@@ -382,7 +382,7 @@ fn check_function(
     let named = f.arg_names.iter().any(Option::is_some);
     // The canonical operators exist in every profile; the analyzer types
     // them itself.
-    let builtin_op = crate::Builtin::from_name(name).is_some();
+    let builtin_op = crate::Builtin::from_name(name).is_some_and(|b| !b.is_analyzer_internal());
     // `grouping` and `grouping_id` are the analyzer's too (grouping sets).
     // `qualify` is lowering's marker for a `QUALIFY` predicate, resolved
     // (and stripped) by the analyzer's filter path, never a routine.
@@ -556,10 +556,11 @@ fn locate(ctx: &AnalysisContext, parts: &[String]) -> Option<(Arc<dyn Catalog>, 
 }
 
 /// How the name `parts` was written, for the catalog that loads it.
-fn form(parts: &[String], case_sensitive: bool) -> NameForm {
+fn form(parts: &[String], case_sensitive: bool, temporary_only: bool) -> NameForm {
     NameForm {
         case_sensitive,
         qualified: parts.len() > 1,
+        temporary_only,
     }
 }
 
@@ -695,6 +696,7 @@ async fn load(
                 }
             }
         }
+        let mut temporary_only = false;
         if candidates.is_empty() {
             // A path with no schema of this catalog finds a bare name only
             // among the session's temporary views.
@@ -703,6 +705,7 @@ async fn load(
                     if s.eq_ignore_ascii_case("system") && q.eq_ignore_ascii_case("session"))
             };
             if name.len() > 1 || scan || ctx.catalogs.sql_path().iter().any(session) {
+                temporary_only = name.len() == 1 && !scan;
                 candidates.push(ident.clone());
             }
         }
@@ -729,7 +732,7 @@ async fn load(
             };
             b.epochs.insert(catalog.name().to_owned(), catalog.epoch());
             meta = catalog
-                .load_table(&ident, version, form(name, cs))
+                .load_table(&ident, version, form(name, cs, temporary_only))
                 .await
                 .map_err(failed)?;
             if let Some(m) = &meta
@@ -741,7 +744,7 @@ async fn load(
                 }
                 // Another spelling of a table already pinned: read the pin.
                 meta = catalog
-                    .load_table(&ident, Some(pinned), form(name, cs))
+                    .load_table(&ident, Some(pinned), form(name, cs, temporary_only))
                     .await
                     .map_err(failed)?;
             }

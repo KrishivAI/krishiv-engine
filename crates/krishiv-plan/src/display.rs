@@ -21,10 +21,10 @@ use krishiv_common::secret::SecretUrl;
 
 use crate::walk::{self, Node};
 use crate::{
-    Builtin, CastMode, DayTimeField, Expr, ExprNode, FrameBound, FrameUnits, FunctionCall,
-    FunctionId, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, NullOrdering, Plan,
-    PlanNode, ReadSource, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, SqlArgs,
-    SubqueryKind, WindowSpec, WindowSpecRef, YearMonthField,
+    Builtin, CastMode, Expr, ExprNode, FrameBound, FrameUnits, FunctionCall, FunctionId, Grouping,
+    JoinCondition, JoinKind, Literal, LogicalPlan, NullOrdering, Plan, PlanNode, ReadSource,
+    ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, SqlArgs, SubqueryKind, WindowSpec,
+    WindowSpecRef,
 };
 
 /// Printed instead of a node deeper than [`crate::MAX_DEPTH`].
@@ -80,6 +80,27 @@ impl LogicalPlan {
     pub fn display_with<'a>(&'a self, note: Note<'a>) -> Annotated<'a> {
         Annotated { plan: self, note }
     }
+}
+
+thread_local! {
+    /// Set while [`identity_string`] prints: secrets stay in the text.
+    static IDENTITY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `e` as text for comparing expressions inside the engine (an aggregate's
+/// identity, a grouping key's): the display without redaction, so two calls
+/// that differ only in an AES key stay different. Never show or log it.
+#[doc(hidden)]
+#[must_use]
+pub fn identity_string(e: &Expr) -> String {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            IDENTITY.with(|c| c.set(self.0));
+        }
+    }
+    let _reset = Reset(IDENTITY.with(|c| c.replace(true)));
+    e.to_string()
 }
 
 impl Display for Expr {
@@ -308,7 +329,11 @@ impl Display for NodeLine<'_> {
             PlanNode::Limit { limit, .. } => write!(f, "Limit {}", Text(limit)),
             PlanNode::Offset { offset, .. } => write!(f, "Offset {}", Text(offset)),
             PlanNode::SubqueryAlias { alias, columns, .. } => {
-                write!(f, "SubqueryAlias {}", Name(std::slice::from_ref(alias)))?;
+                let parts: Vec<String> = alias
+                    .split(crate::plan::ALIAS_PART_SEP)
+                    .map(str::to_owned)
+                    .collect();
+                write!(f, "SubqueryAlias {}", Name(&parts))?;
                 if columns.is_empty() {
                     return Ok(());
                 }
@@ -357,6 +382,21 @@ impl Display for NodeLine<'_> {
             },
             PlanNode::ReplicateRows { count, .. } => {
                 write!(f, "Generate replicaterows({})", Text(count))
+            }
+            // Spark's `UnionLoop 0, [n#1]`.
+            PlanNode::UnionLoop { id, output, .. } => {
+                write!(f, "UnionLoop {id}, [")?;
+                for (i, c) in output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")
+            }
+            PlanNode::UnionLoopRef { id, output } => {
+                write!(f, "UnionLoopRef {id}, [")?;
+                for (i, c) in output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")
             }
             // Spark's `Generate explode(a), false, [col#3]`.
             PlanNode::Generate {
@@ -706,6 +746,13 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                     s.except.iter().map(|path| Name(path).to_string()).collect();
                 text.push_str(&format!(" EXCEPT ({})", cols.join(", ")));
             }
+            if let Some(n) = s.position {
+                text.push_str(&format!(" @{n}"));
+            }
+            if !s.replace.is_empty() {
+                let cols: Vec<&str> = s.replace.iter().map(|(n, _)| n.as_str()).collect();
+                text.push_str(&format!(" REPLACE ({})", cols.join(", ")));
+            }
             out.push(Piece::Owned(text));
         }
         ExprNode::Function(FunctionCall {
@@ -791,6 +838,10 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 " AS {}",
                 Name(std::slice::from_ref(name))
             )));
+        }
+        ExprNode::MultiAlias { expr, names } => {
+            out.push(Piece::Expr(expr));
+            out.push(Piece::Owned(format!(" AS ({})", names.join(", "))));
         }
         ExprNode::Field { base, name } => {
             out.push(Piece::Expr(base));
@@ -968,6 +1019,22 @@ fn call<'a>(
     };
     // `a [NOT] LIKE|ILIKE ANY|SOME|ALL (p, ...)`, as Spark writes the form.
     match (op, args.len()) {
+        // The key of `aes_encrypt`/`aes_decrypt` never reaches a plan, an
+        // error message or a log (ADR 0042).
+        _ if crate::analyzer::is_aes_function(name)
+            && args.len() >= 2
+            && !IDENTITY.with(std::cell::Cell::get) =>
+        {
+            out.push(Piece::Owned(format!("{name}(")));
+            if distinct {
+                out.push(Piece::Str("DISTINCT "));
+            }
+            out.extend([arg(0), Piece::Str(", ***")]);
+            for a in &args[2..] {
+                out.extend([Piece::Str(", "), Piece::Expr(a)]);
+            }
+            out.push(Piece::Str(")"));
+        }
         (Some(op), n) if n >= 1 && op.quantified_like().is_some() => {
             let q = op.quantified_like().unwrap_or_default();
             out.extend([arg(0), Piece::Str(if q.negated { " NOT " } else { " " })]);
@@ -1119,9 +1186,6 @@ const fn is_infix(op: Builtin) -> bool {
     )
 }
 
-/// Microseconds per second.
-const MICROS_PER_SECOND: i64 = 1_000_000;
-
 impl Display for Literal {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
@@ -1165,31 +1229,21 @@ impl Display for Literal {
             Self::Date(days) => f.write_str(crate::spark_fmt::date(*days).as_str()),
             Self::Timestamp(us) => write!(f, "TIMESTAMP_MICROS({us})"),
             Self::TimestampNtz(us) => write!(f, "TIMESTAMP_NTZ_MICROS({us})"),
-            Self::YearMonthInterval { months, start, end } => {
-                let sign = if *months < 0 { "-" } else { "" };
-                let m = months.unsigned_abs();
-                let value = match (start, end) {
-                    (YearMonthField::Year, YearMonthField::Month) => {
-                        format!("{}-{}", m / 12, m % 12)
-                    }
-                    (YearMonthField::Year, YearMonthField::Year) => (m / 12).to_string(),
-                    (YearMonthField::Month, _) => m.to_string(),
-                };
-                write!(
-                    f,
-                    "INTERVAL '{sign}{value}' {}",
-                    fields(ym_name(*start), ym_name(*end))
-                )
-            }
-            Self::DayTimeInterval { micros, start, end } => {
-                let sign = if *micros < 0 { "-" } else { "" };
-                write!(
-                    f,
-                    "INTERVAL '{sign}{}' {}",
-                    day_time_value(micros.unsigned_abs(), *start, *end),
-                    fields(dt_name(*start), dt_name(*end))
-                )
-            }
+            Self::YearMonthInterval { months, start, end } => f.write_str(
+                &krishiv_types::interval::year_month_string(*months, *start, *end),
+            ),
+            Self::DayTimeInterval { micros, start, end } => f.write_str(
+                &krishiv_types::interval::day_time_string(*micros, *start, *end),
+            ),
+            Self::CalendarInterval {
+                months,
+                days,
+                micros,
+            } => write!(
+                f,
+                "INTERVAL '{}'",
+                krishiv_types::interval::calendar_string(*months, *days, *micros)
+            ),
         }
     }
 }
@@ -1203,55 +1257,4 @@ fn special(v: f64) -> &'static str {
     } else {
         "-Infinity"
     }
-}
-
-const fn ym_name(f: YearMonthField) -> &'static str {
-    match f {
-        YearMonthField::Year => "YEAR",
-        YearMonthField::Month => "MONTH",
-    }
-}
-
-const fn dt_name(f: DayTimeField) -> &'static str {
-    match f {
-        DayTimeField::Day => "DAY",
-        DayTimeField::Hour => "HOUR",
-        DayTimeField::Minute => "MINUTE",
-        DayTimeField::Second => "SECOND",
-    }
-}
-
-/// `START` or `START TO END`.
-fn fields(start: &str, end: &str) -> String {
-    if start == end {
-        start.to_owned()
-    } else {
-        format!("{start} TO {end}")
-    }
-}
-
-/// The ANSI interval string of `micros` for fields `start..=end`: the
-/// leading field unbounded, the others in their range, e.g. `1 02:03:04.5`.
-fn day_time_value(micros: u64, start: DayTimeField, end: DayTimeField) -> String {
-    let units = [86_400, 3_600, 60, 1].map(|s: u64| s * MICROS_PER_SECOND.unsigned_abs());
-    let (first, last) = (start as usize, end as usize);
-    let mut rest = micros;
-    let mut out = String::new();
-    for (i, unit) in units.iter().enumerate().take(last + 1).skip(first) {
-        let whole = rest / unit;
-        rest %= unit;
-        match i {
-            _ if i == first => write!(out, "{whole}"),
-            1 => write!(out, " {whole:02}"),
-            _ => write!(out, ":{whole:02}"),
-        }
-        .ok();
-    }
-    let fraction = if end == DayTimeField::Second { rest } else { 0 };
-    if fraction > 0 {
-        let digits = format!("{fraction:06}");
-        out.push('.');
-        out.push_str(digits.trim_end_matches('0'));
-    }
-    out
 }

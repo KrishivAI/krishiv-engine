@@ -15,7 +15,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
 - `Dispatch` (sealed): `KernelCtx` picks the CPU target at run time (three clones of each loop, plus scalar-operand
   loops); `Baseline` runs the build-baseline loop only, a scalar repeated into an array (one loop per kernel), for
   one-row/constant evaluation such as plan-time folding. Dispatching entry points take `ctx: &impl Dispatch`.
-- `unsafe_dispatch`: the only `unsafe` (calling `#[target_feature]` clones); `xtask source-guard` rejects `unsafe`
+- `unsafe_dispatch`: the only `unsafe` (calling `#[target_feature]` clones; `prefetch_read`, the hash tables' software prefetch); `xtask source-guard` rejects `unsafe`
   in any other file here and `xtask budgets` counts unsafe sites.
 - `version`: the Spark version profile (`KernelCtx::with_spark_version`); error classes/messages differ by version.
 - Kernels: `integer` (tinyint..bigint `+ - * %`, bigint `div`, unary `-`/`abs`), `decimal` (`+ - * / % div`, unary; Spark result types
@@ -61,7 +61,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   `map_from_entries` and `str_to_map`. Keys compare with Spark's equality and hash with the observable Murmur3
   (NaN equals NaN, `-0.0` equals `0.0`); a null key is `NULL_MAP_KEY`, a repeat `DUPLICATED_MAP_KEY` under
   `EXCEPTION` and last-wins under `LAST_WIN`.
-- `datetime` (P2-T025a): `date_add`/`date_sub`/`date_diff` (ANSI: `ARITHMETIC_OVERFLOW` past the `int` range, a documented divergence from Spark; legacy: Java `int` wrap; `try_*`: NULL),
+- `datetime` (P2-T025a): `date_add`/`date_sub` (Java `int` wrap, ANSI or not, as Spark; `try_*`: NULL) and `date_diff` (ANSI: `ARITHMETIC_OVERFLOW` past the `int` range; legacy: wrap; `try_*`: NULL),
   field extraction (`DatePart`: `year`, `month`, `day`, `extract`/`date_part` incl. ISO week and `SECOND` as
   `decimal(8,6)`), `date`/`timestamp` ± interval (`date_add_months` clamps the day; `timestamp_add_day_time` adds whole
   days as calendar days in the zone and keeps the start's offset in a DST overlap, like `ZonedDateTime.plusDays`), and
@@ -130,4 +130,4 @@ Paths are relative to this crate.
 `(cd crates/krishiv-kernels/fuzz && cargo +nightly fuzz run differential -- -max_total_time=60)`
 
 ## Time zones and datetime patterns
-`datetime::resolve_zone` resolves fixed offsets without a database and region ids against `jiff-tzdb` 0.1.9 (pinned in `Cargo.lock`; the crate does not record its IANA release), caching each id per thread. A region *session* zone is still refused by the CLI; only function arguments and pattern zone fields use regions. Known gaps: the `z` pattern letter does not parse daylight-saving short names (`PDT`, `EDT`, `CEST`, ...), and `spark.sql.legacy.timeParserPolicy=LEGACY` is unsupported (the pattern functions refuse it).
+`datetime::resolve_zone` resolves fixed offsets without a database and region ids against `jiff-tzdb` 0.1.9 (pinned in `Cargo.lock`; the crate does not record its IANA release), caching each id per thread. A region *session* zone is still refused by the CLI; only function arguments and pattern zone fields use regions. In the legacy parser `z` and `Z` read what `SimpleDateFormat` does: `+hhmm`, `GMT[+h:mm]`, or the first name of the JVM's zone strings (`vendored/legacy_zones.rs`, included by `datetime_pattern/legacy_zones.rs`, generated from Spark 4.2.0's JVM by `tests/scripts/gen_legacy_zone_strings.py` + `gen_legacy_zone_table.py`; `tests/legacy_parse.rs` checks every name against Spark) that starts the text, ignoring case, trying the session zone's own row first (`TimeZoneRules::region_id`); no region ids. Numeric fields read any BMP decimal digit. `spark.sql.legacy.timeParserPolicy=LEGACY` is `datetime_pattern/legacy.rs` (`LegacyPattern`, reached through `datetime::TimePattern`): `FastDateFormat` printing, non-lenient `SimpleDateFormat` parsing that ignores trailing text, and offset fields from `TimeZoneRules::legacy_offset_at_utc` (`java.util.TimeZone`: a region's raw offset before 1900, read in 2400 as the smaller of the January and July offsets); `DateTimePattern::new_with(.., legacy)` can wrap it for the JSON/CSV options, but the SQL functions pass `false`: Spark's JSON/CSV/XML functions use a lenient `FastDateFormat` that is not modelled, so they refuse a `DATE` or `TIMESTAMP` field under LEGACY (`refuse_legacy_dates`); file readers do not use it.

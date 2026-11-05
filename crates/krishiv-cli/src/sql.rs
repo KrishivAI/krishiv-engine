@@ -10,7 +10,7 @@ use crate::deadline::Deadline;
 use crate::format::{OutputMode, render_mode};
 use clap::{Args, ValueEnum};
 use krishiv::DataFrame;
-use krishiv::agent::{cell, session_zone};
+use krishiv::agent::{field_cell, session_zone};
 use krishiv::arrow::array::Array;
 use krishiv::arrow::datatypes::DataType;
 
@@ -148,6 +148,10 @@ pub(crate) struct SqlArgs {
     /// `text`/`json` only).
     #[arg(long = "explain-format", value_enum, requires = "explain")]
     explain_format: Option<ExplainFormat>,
+    /// With --explain-analyze and JSON output: add the plan at every planning
+    /// stage (as --explain-verbose shows it) to the profile's `planning` member.
+    #[arg(long, requires = "explain_analyze")]
+    planning: bool,
 }
 
 impl SqlArgs {
@@ -180,6 +184,13 @@ pub(crate) fn run(args: &SqlArgs) -> i32 {
             io::stderr(),
             "error: the argument '--json' cannot be used with '--explain-format {}'\n\nFor more information, try '--help'.",
             format.name(),
+        );
+        return 2;
+    }
+    if args.planning && explain_format(args) != ExplainFormat::Json {
+        let _ = writeln!(
+            io::stderr(),
+            "error: '--planning' needs JSON output: add '--json' or '--explain-format json'\n\nFor more information, try '--help'."
         );
         return 2;
     }
@@ -347,7 +358,11 @@ fn print_explain(out: &mut dyn Write, df: &DataFrame, args: &SqlArgs) -> Result<
     // `explain_*_with`, so there is a single route to each document and no
     // second rendering that can drift.
     let format = explain_format(args);
-    let text = if args.explain_analyze {
+    let text = if args.explain_analyze && args.planning {
+        futures::executor::block_on(df.explain_analyze_verbose())
+            .map_err(|e| e.to_string())?
+            .to_json()
+    } else if args.explain_analyze {
         match format.graph_format() {
             None => {
                 let p =
@@ -651,7 +666,8 @@ fn collect_rows(
             rows.push(
                 b.columns()
                     .iter()
-                    .map(|c| cell(c.as_ref(), r, "NULL", &zone))
+                    .zip(schema.fields())
+                    .map(|(c, f)| field_cell(f, c.as_ref(), r, "NULL", &zone))
                     .collect(),
             );
             nulls.push(b.columns().iter().map(|c| c.is_null(r)).collect());
@@ -687,12 +703,35 @@ mod tests {
     use std::sync::Arc;
 
     use futures::StreamExt as _;
+    use krishiv::agent::cell;
     use krishiv::arrow::array::{
         ArrayRef, BooleanArray, Float64Array, Int32Array, RecordBatch, StringArray,
     };
     use krishiv::arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
+
+    #[test]
+    fn intervals_print_in_their_fields() {
+        let session = krishiv::Session::new().expect("session");
+        let df = futures::executor::block_on(session.sql(
+            "SELECT interval '1 02' day to hour a, interval '3' month b, \
+             cast('1 day' as interval) c, interval '1-2' year to month d, \
+             cast(null as interval day) e",
+        ))
+        .expect("query");
+        let got = collect_rows(&df, &session, 10).expect("rows");
+        assert_eq!(
+            got.rows,
+            [[
+                "INTERVAL '1 02' DAY TO HOUR",
+                "INTERVAL '3' MONTH",
+                "1 days",
+                "INTERVAL '1-2' YEAR TO MONTH",
+                "NULL",
+            ]]
+        );
+    }
 
     fn int_batch(rows: i32) -> RecordBatch {
         let col = Int32Array::from_iter_values(0..rows);

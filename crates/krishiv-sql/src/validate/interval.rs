@@ -7,16 +7,16 @@
 //! is an error unless `spark.sql.legacy.interval.enabled` is on.
 
 use krishiv_common::error::{
-    IntervalArithmeticOverflowWithoutSuggestion, InvalidIntervalFormatArithmeticException,
-    InvalidIntervalFormatInputIsEmpty, InvalidIntervalFormatIntervalParsing,
-    InvalidIntervalFormatInvalidFraction, InvalidIntervalFormatInvalidPrecision,
-    InvalidIntervalFormatInvalidPrefix, InvalidIntervalFormatInvalidUnit,
-    InvalidIntervalFormatInvalidValue, InvalidIntervalFormatMissingNumber,
-    InvalidIntervalFormatMissingUnit, InvalidIntervalFormatUnmatchedFormatString,
-    InvalidIntervalFormatUnmatchedFormatStringWithNotice, InvalidIntervalFormatUnrecognizedNumber,
-    InvalidIntervalFormatUnsupportedFromToExpression, KrishivError, LegacyErrorTemp0024,
-    LegacyErrorTemp0026, LegacyErrorTemp0027, LegacyErrorTemp0029, LegacyErrorTemp0063,
+    IntervalArithmeticOverflowWithoutSuggestion, InvalidIntervalFormatIntervalParsing,
+    InvalidIntervalFormatTimezoneIntervalOutOfRange, InvalidIntervalFormatUnmatchedFormatString,
+    InvalidIntervalFormatUnmatchedFormatStringWithNotice,
+    InvalidIntervalFormatUnsupportedFromToExpression, KrishivError, KrishivUnsupportedFeature,
+    LegacyErrorTemp0024, LegacyErrorTemp0026, LegacyErrorTemp0027, LegacyErrorTemp0029,
+    LegacyErrorTemp0063,
 };
+
+use krishiv_plan::Literal as IrLiteral;
+use krishiv_types::interval_parse::{Calendar, Named, parse_string, trim_all};
 
 use super::literal::TypedKind;
 use crate::ast::{Interval, IntervalValue, Span};
@@ -27,12 +27,61 @@ const MICROS_PER_MINUTE: i64 = 60 * MICROS_PER_SECOND;
 const MICROS_PER_HOUR: i64 = 60 * MICROS_PER_MINUTE;
 const MICROS_PER_DAY: i64 = 24 * MICROS_PER_HOUR;
 
-/// Spark's `CalendarInterval`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct Calendar {
-    months: i32,
-    days: i32,
-    micros: i64,
+/// `IntervalUtils.getDuration`: a value's days and microseconds as microseconds.
+fn duration(c: Calendar) -> Result<i64, KrishivError> {
+    i64::from(c.days)
+        .checked_mul(MICROS_PER_DAY)
+        .and_then(|d| d.checked_add(c.micros))
+        .ok_or_else(|| IntervalArithmeticOverflowWithoutSuggestion {}.into())
+}
+
+/// The plan literal of a value of the fields `named`.
+fn plan_literal(c: Calendar, named: Named) -> Result<IrLiteral, KrishivError> {
+    match (named.year_month, named.day_time) {
+        (Some((start, end)), None) => Ok(IrLiteral::YearMonthInterval {
+            months: c.months,
+            start,
+            end,
+        }),
+        (None, Some((start, end))) => Ok(IrLiteral::DayTimeInterval {
+            micros: duration(c)?,
+            start,
+            end,
+        }),
+        // Only `spark.sql.legacy.interval.enabled` lets these through the
+        // checks, and its calendar literals are not supported.
+        _ => Err(KrishivUnsupportedFeature {
+            feature: "an interval literal mixing year-month and day-time fields".to_owned(),
+        }
+        .into()),
+    }
+}
+
+/// The value and fields of `INTERVAL value unit ...` or `INTERVAL value from TO to`.
+fn evaluate(iv: &Interval) -> Result<(Calendar, Named), KrishivError> {
+    match &iv.range {
+        Some((value, from, to)) => Ok((range(value, from, to)?, Named::of_range(from, to))),
+        None => multi_units(&iv.units),
+    }
+}
+
+/// The plan literal of a checked `INTERVAL value unit ...` or `INTERVAL value
+/// from TO to`.
+///
+/// # Errors
+/// As for [`literal`].
+pub(crate) fn lowered(iv: &Interval) -> Result<IrLiteral, KrishivError> {
+    let (c, named) = evaluate(iv)?;
+    plan_literal(c, named)
+}
+
+/// The plan literal of a checked `INTERVAL 'text'`.
+///
+/// # Errors
+/// As for [`typed`].
+pub(crate) fn lowered_typed(value: &str) -> Result<IrLiteral, KrishivError> {
+    let (c, named) = parse_string(value).map_err(|_| TypedKind::Interval.invalid(value))?;
+    plan_literal(c, named)
 }
 
 fn at(error: impl Into<KrishivError>, span: Span) -> ParseError {
@@ -61,11 +110,77 @@ pub(crate) fn literal(iv: &Interval, sql: &str, legacy: bool) -> Result<(), Pars
             .unwrap_or(iv.span.start),
         iv.span.end,
     );
-    let calendar = match &iv.range {
-        Some((value, from, to)) => range(value, from, to).map_err(|e| at(e, body))?,
-        None => multi_units(&iv.units).map_err(|e| at(e, body))?,
+    let (calendar, named) = evaluate(iv).map_err(|e| at(e, body))?;
+    typed_check(calendar, named, iv.span, sql, legacy)
+}
+
+/// The zone `SET TIME ZONE INTERVAL ...` names (`ZoneOffset.toString` of
+/// the interval's whole seconds), as `SparkSqlParser.visitSetTimeZone`
+/// reads it: no months or days, at most 18 hours, whole seconds.
+///
+/// # Errors
+/// `INVALID_INTERVAL_FORMAT.TIMEZONE_INTERVAL_OUT_OF_RANGE` (the first
+/// offending part, as Spark shows it), or the literal's own error, at
+/// `span`.
+pub(crate) fn time_zone_offset(iv: &Interval, span: Span) -> Result<String, ParseError> {
+    // The same visit reads the literal first: a captured second range or
+    // trailing part is its error, whatever the zone would be.
+    if let Some(trailing) = &iv.trailing {
+        return Err(at(
+            LegacyErrorTemp0024 {},
+            Span::new(iv.span.start, iv.span.end.max(trailing.span.end)),
+        ));
+    }
+    let (c, _) = evaluate(iv).map_err(|e| at(e, span))?;
+    time_zone_of(c, span)
+}
+
+/// [`time_zone_offset`] of the typed literal `INTERVAL 'text'`.
+///
+/// # Errors
+/// As [`time_zone_offset`].
+pub(crate) fn time_zone_offset_typed(value: &str, span: Span) -> Result<String, ParseError> {
+    let (c, _) = parse_string(value).map_err(|_| at(TypedKind::Interval.invalid(value), span))?;
+    time_zone_of(c, span)
+}
+
+fn time_zone_of(c: Calendar, span: Span) -> Result<String, ParseError> {
+    let out_of_range = |n: i64| {
+        at(
+            InvalidIntervalFormatTimezoneIntervalOutOfRange {
+                input: n.to_string(),
+            },
+            span,
+        )
     };
-    typed_check(calendar, iv.span, sql, legacy)
+    if c.months != 0 {
+        return Err(out_of_range(i64::from(c.months)));
+    }
+    if c.days != 0 {
+        return Err(out_of_range(i64::from(c.days)));
+    }
+    // `unsigned_abs`: `i64::MIN` has no signed magnitude.
+    let magnitude = c.micros.unsigned_abs();
+    if magnitude > 18 * MICROS_PER_HOUR.unsigned_abs() {
+        return Err(out_of_range(
+            i64::try_from(magnitude / MICROS_PER_HOUR.unsigned_abs()).unwrap_or(i64::MAX),
+        ));
+    }
+    if c.micros % MICROS_PER_SECOND != 0 {
+        return Err(out_of_range(c.micros / MICROS_PER_SECOND));
+    }
+    let total = c.micros / MICROS_PER_SECOND;
+    if total == 0 {
+        return Ok("Z".to_owned());
+    }
+    let abs = total.abs();
+    let sign = if total < 0 { '-' } else { '+' };
+    let (h, m, sec) = (abs / 3600, abs / 60 % 60, abs % 60);
+    Ok(if sec == 0 {
+        format!("{sign}{h:02}:{m:02}")
+    } else {
+        format!("{sign}{h:02}:{m:02}:{sec:02}")
+    })
 }
 
 /// Checks the typed literal `INTERVAL 'text'` at `span`.
@@ -74,30 +189,34 @@ pub(crate) fn literal(iv: &Interval, sql: &str, legacy: bool) -> Result<(), Pars
 /// `INVALID_TYPED_LITERAL` when `text` is not an interval, and the mixed
 /// fields and overflow errors of [`literal`].
 pub(crate) fn typed(value: &str, span: Span, sql: &str, legacy: bool) -> Result<(), ParseError> {
-    let calendar =
-        string_to_interval(value).map_err(|_| at(TypedKind::Interval.invalid(value), span))?;
-    typed_check(calendar, span, sql, legacy)
+    let (calendar, named) =
+        parse_string(value).map_err(|_| at(TypedKind::Interval.invalid(value), span))?;
+    typed_check(calendar, named, span, sql, legacy)
 }
 
 /// Spark's `visitInterval` after parsing: a year-month or a day-time
-/// interval, never both (unless legacy).
-fn typed_check(c: Calendar, span: Span, sql: &str, legacy: bool) -> Result<(), ParseError> {
+/// interval, never both (unless legacy), and a day-time value within a long.
+fn typed_check(
+    c: Calendar,
+    named: Named,
+    span: Span,
+    sql: &str,
+    legacy: bool,
+) -> Result<(), ParseError> {
     if legacy {
         return Ok(());
     }
-    if c.months != 0 {
-        if c.days != 0 || c.micros != 0 {
-            return Err(at(
-                LegacyErrorTemp0029 {
-                    literal: span.text(sql).to_owned(),
-                },
-                span,
-            ));
-        }
-        return Ok(());
+    if named.mixed() {
+        return Err(at(
+            LegacyErrorTemp0029 {
+                literal: span.text(sql).to_owned(),
+            },
+            span,
+        ));
     }
-    // A day-time interval that does not fit in microseconds fails when it
-    // is evaluated, not here.
+    if named.day_time.is_some() {
+        duration(c).map_err(|e| at(e, span))?;
+    }
     Ok(())
 }
 
@@ -113,7 +232,7 @@ fn signed(v: &IntervalValue) -> String {
 
 /// `value unit [value unit ...]`: Spark joins ` value unit` pairs and
 /// parses them as one interval string.
-fn multi_units(units: &[(IntervalValue, String)]) -> Result<Calendar, KrishivError> {
+fn multi_units(units: &[(IntervalValue, String)]) -> Result<(Calendar, Named), KrishivError> {
     let mut text = String::new();
     for (value, unit) in units {
         // A string value holding a unit would read as one once joined.
@@ -128,7 +247,7 @@ fn multi_units(units: &[(IntervalValue, String)]) -> Result<Calendar, KrishivErr
         text.push(' ');
         text.push_str(unit);
     }
-    string_to_interval(&text)
+    parse_string(&text)
 }
 
 /// `value from TO to`.
@@ -339,304 +458,13 @@ fn all_digits(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// Spark's `UTF8String.trimAll`: whitespace and control characters.
-fn trim_all(s: &str) -> &str {
-    s.trim_matches(|c: char| {
-        c.is_control() || (c.is_whitespace() && !matches!(c, '\u{A0}' | '\u{2007}' | '\u{202F}'))
-    })
-}
-
-/// A state of [`string_to_interval`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum State {
-    Prefix,
-    TrimBeforeSign,
-    Sign,
-    TrimBeforeValue,
-    Value,
-    Fraction,
-    TrimBeforeUnit,
-    UnitBegin,
-    UnitSuffix,
-    UnitEnd,
-}
-
-/// Spark's `IntervalUtils.stringToInterval`: `[interval] [+|-]value unit
-/// ...`, units `year`, `month`, `week`, `day`, `hour`, `minute`, `second`,
-/// `millisecond`, `microsecond`, `nanosecond` (each optionally plural); only seconds take
-/// a fraction (up to nanoseconds).
-fn string_to_interval(input: &str) -> Result<Calendar, KrishivError> {
-    let s = trim_all(input).to_lowercase();
-    let b = s.as_bytes();
-    if b.is_empty() {
-        return Err(InvalidIntervalFormatInputIsEmpty {
-            input: input.to_owned(),
-        }
-        .into());
-    }
-    // The whitespace-separated word at byte `i`, as Spark's errors cite it.
-    let word = |i: usize| -> String {
-        // `i` is always on a character boundary; `get` keeps a slip from
-        // panicking.
-        let start = s
-            .get(..i.min(s.len()))
-            .and_then(|head| head.rfind(char::is_whitespace))
-            .map_or(0, |p| p + 1);
-        s.get(start..)
-            .unwrap_or_default()
-            .split(char::is_whitespace)
-            .next()
-            .unwrap_or_default()
-            .to_owned()
-    };
-    let input_owned = || input.to_owned();
-    let arithmetic = || -> KrishivError {
-        InvalidIntervalFormatArithmeticException {
-            input: input.to_owned(),
-        }
-        .into()
-    };
-    let initial_scale: i64 = 100_000_000;
-    let (mut state, mut i) = (State::Prefix, 0_usize);
-    let (mut value, mut negative, mut fraction, mut scale) = (0_i64, false, 0_i64, -1_i64);
-    let mut point_prefixed = false;
-    let mut c = Calendar::default();
-    while i < b.len() {
-        let ch = b[i];
-        let space = ch.is_ascii_whitespace();
-        match state {
-            State::Prefix => {
-                if s.starts_with("interval") {
-                    match b.get(8) {
-                        None => {
-                            return Err(InvalidIntervalFormatInvalidPrefix {
-                                input: input_owned(),
-                                prefix: word(0),
-                            }
-                            .into());
-                        }
-                        Some(n) if !n.is_ascii_whitespace() => {
-                            return Err(InvalidIntervalFormatInvalidPrefix {
-                                input: input_owned(),
-                                prefix: word(0),
-                            }
-                            .into());
-                        }
-                        Some(_) => i += 9,
-                    }
-                }
-                state = State::TrimBeforeSign;
-            }
-            State::TrimBeforeSign | State::TrimBeforeValue | State::TrimBeforeUnit => {
-                if space {
-                    i += 1;
-                } else {
-                    state = match state {
-                        State::TrimBeforeSign => State::Sign,
-                        State::TrimBeforeValue => State::Value,
-                        _ => State::UnitBegin,
-                    };
-                }
-            }
-            State::Sign => {
-                value = 0;
-                fraction = 0;
-                scale = -1;
-                point_prefixed = false;
-                state = State::TrimBeforeValue;
-                match ch {
-                    b'-' => {
-                        negative = true;
-                        i += 1;
-                    }
-                    b'+' => {
-                        negative = false;
-                        i += 1;
-                    }
-                    b'0'..=b'9' => negative = false,
-                    b'.' => {
-                        negative = false;
-                        scale = initial_scale;
-                        point_prefixed = true;
-                        i += 1;
-                        state = State::Fraction;
-                    }
-                    _ => {
-                        return Err(InvalidIntervalFormatUnrecognizedNumber {
-                            input: input_owned(),
-                            number: word(i),
-                        }
-                        .into());
-                    }
-                }
-            }
-            State::Value => {
-                match ch {
-                    b'0'..=b'9' => {
-                        value = value
-                            .checked_mul(10)
-                            .and_then(|v| v.checked_add(i64::from(ch - b'0')))
-                            .ok_or_else(arithmetic)?;
-                    }
-                    _ if space => state = State::TrimBeforeUnit,
-                    b'.' => {
-                        scale = initial_scale;
-                        state = State::Fraction;
-                    }
-                    _ => {
-                        return Err(InvalidIntervalFormatInvalidValue {
-                            input: input_owned(),
-                            value: word(i),
-                        }
-                        .into());
-                    }
-                }
-                i += 1;
-            }
-            State::Fraction => {
-                if ch.is_ascii_digit() && scale > 0 {
-                    fraction += i64::from(ch - b'0') * scale;
-                    scale /= 10;
-                } else if space && (!point_prefixed || scale < initial_scale) {
-                    fraction /= 1000;
-                    state = State::TrimBeforeUnit;
-                } else if ch.is_ascii_digit() {
-                    return Err(InvalidIntervalFormatInvalidPrecision {
-                        input: input_owned(),
-                        value: word(i),
-                    }
-                    .into());
-                } else {
-                    return Err(InvalidIntervalFormatInvalidValue {
-                        input: input_owned(),
-                        value: word(i),
-                    }
-                    .into());
-                }
-                i += 1;
-            }
-            State::UnitBegin => {
-                if ch != b's' && scale >= 0 {
-                    return Err(InvalidIntervalFormatInvalidFraction {
-                        input: input_owned(),
-                        unit: word(i),
-                    }
-                    .into());
-                }
-                if negative {
-                    value = -value;
-                    fraction = -fraction;
-                }
-                let rest = s.get(i..).unwrap_or_default();
-                let invalid_unit = || -> KrishivError {
-                    InvalidIntervalFormatInvalidUnit {
-                        input: input.to_owned(),
-                        unit: word(i),
-                    }
-                    .into()
-                };
-                let add_months = |c: &mut Calendar, m: i64| -> Result<(), KrishivError> {
-                    let total = i64::from(c.months).checked_add(m).ok_or_else(arithmetic)?;
-                    c.months = i32::try_from(total).map_err(|_| arithmetic())?;
-                    Ok(())
-                };
-                let add_days = |c: &mut Calendar, d: i64| -> Result<(), KrishivError> {
-                    let total = i64::from(c.days).checked_add(d).ok_or_else(arithmetic)?;
-                    c.days = i32::try_from(total).map_err(|_| arithmetic())?;
-                    Ok(())
-                };
-                let add_micros = |c: &mut Calendar, v: i64, per: i64| -> Result<(), KrishivError> {
-                    let us = v.checked_mul(per).ok_or_else(arithmetic)?;
-                    c.micros = c.micros.checked_add(us).ok_or_else(arithmetic)?;
-                    Ok(())
-                };
-                let units: [(&str, i64); 10] = [
-                    ("year", 0),
-                    ("month", 1),
-                    ("week", 2),
-                    ("day", 3),
-                    ("hour", MICROS_PER_HOUR),
-                    ("minute", MICROS_PER_MINUTE),
-                    ("second", MICROS_PER_SECOND),
-                    ("millisecond", 1000),
-                    ("microsecond", 1),
-                    ("nanosecond", 0),
-                ];
-                let Some((unit, per)) = units.iter().find(|(u, _)| rest.starts_with(u)) else {
-                    return Err(invalid_unit());
-                };
-                match *unit {
-                    "year" => add_months(&mut c, value.checked_mul(12).ok_or_else(arithmetic)?)?,
-                    "month" => {
-                        // `month` is added as an `int`.
-                        let v = i32::try_from(value).map_err(|_| arithmetic())?;
-                        add_months(&mut c, i64::from(v))?;
-                    }
-                    "week" => add_days(&mut c, value.checked_mul(7).ok_or_else(arithmetic)?)?,
-                    "day" => {
-                        let v = i32::try_from(value).map_err(|_| arithmetic())?;
-                        add_days(&mut c, i64::from(v))?;
-                    }
-                    "second" => {
-                        add_micros(&mut c, value, *per)?;
-                        c.micros = c.micros.checked_add(fraction).ok_or_else(arithmetic)?;
-                    }
-                    "nanosecond" => {
-                        c.micros = c.micros.checked_add(value / 1000).ok_or_else(arithmetic)?;
-                    }
-                    _ => add_micros(&mut c, value, *per)?,
-                }
-                i += unit.len();
-                state = State::UnitSuffix;
-            }
-            State::UnitSuffix => {
-                match ch {
-                    b's' => state = State::UnitEnd,
-                    _ if space => state = State::TrimBeforeSign,
-                    _ => {
-                        return Err(InvalidIntervalFormatInvalidUnit {
-                            input: input_owned(),
-                            unit: word(i),
-                        }
-                        .into());
-                    }
-                }
-                i += 1;
-            }
-            State::UnitEnd => {
-                if space {
-                    i += 1;
-                    state = State::TrimBeforeSign;
-                } else {
-                    return Err(InvalidIntervalFormatInvalidUnit {
-                        input: input_owned(),
-                        unit: word(i),
-                    }
-                    .into());
-                }
-            }
-        }
-    }
-    match state {
-        State::UnitSuffix | State::UnitEnd | State::TrimBeforeSign => Ok(c),
-        State::TrimBeforeValue => Err(InvalidIntervalFormatMissingNumber {
-            input: input_owned(),
-            word: word(i.saturating_sub(1)),
-        }
-        .into()),
-        // The other states never end a trimmed input (Spark's catch-all
-        // `UNKNOWN_PARSING_ERROR` cannot happen).
-        _ => Err(InvalidIntervalFormatMissingUnit {
-            input: input_owned(),
-            word: word(i.saturating_sub(1)),
-        }
-        .into()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn string_to_interval(input: &str) -> Result<Calendar, KrishivError> {
+        parse_string(input).map(|(c, _)| c)
+    }
 
     fn class(r: Result<Calendar, KrishivError>) -> String {
         r.map_or_else(|e| e.error_class().name().to_owned(), |c| format!("{c:?}"))

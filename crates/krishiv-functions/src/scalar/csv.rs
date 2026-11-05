@@ -63,6 +63,20 @@ pub(super) fn literal_string(arg: &BindArg) -> Result<String, KrishivError> {
 
 /// Parses a DDL schema string into struct fields (Spark's `DataType.fromDDL`).
 pub(super) fn struct_fields(ddl: &str) -> Result<Fields, KrishivError> {
+    let s = struct_type(ddl)?;
+    let fields: Vec<Field> = s
+        .fields()
+        .iter()
+        .map(|f| {
+            let arrow = krishiv_types::arrow::client_arrow_type(&f.data_type().to_arrow());
+            Field::new(f.name().to_owned(), arrow, f.nullable())
+        })
+        .collect();
+    Ok(Fields::from(fields))
+}
+
+/// The struct type a schema string names.
+fn struct_type(ddl: &str) -> Result<krishiv_types::StructType, KrishivError> {
     let parsed: krishiv_types::DataType = ddl.parse().or_else(|_: KrishivError| {
         let wrapped = format!("STRUCT<{ddl}>");
         wrapped.parse()
@@ -76,15 +90,7 @@ pub(super) fn struct_fields(ddl: &str) -> Result<Fields, KrishivError> {
         }
         .into());
     };
-    let fields: Vec<Field> = s
-        .fields()
-        .iter()
-        .map(|f| {
-            let arrow = f.data_type().to_arrow();
-            Field::new(f.name().to_owned(), arrow, f.nullable())
-        })
-        .collect();
-    Ok(Fields::from(fields))
+    Ok(s)
 }
 
 /// One `sep`/`delimiter` value with Spark's backslash escapes.
@@ -231,6 +237,8 @@ struct Parsed {
     neg_inf: String,
     /// Date pattern.
     date_pattern: Option<DateTimePattern>,
+    /// Time pattern.
+    time_pattern: Option<DateTimePattern>,
     /// Timestamp pattern.
     timestamp_pattern: Option<DateTimePattern>,
     /// Timestamp_ntz pattern.
@@ -253,13 +261,14 @@ pub(super) fn datetime_option(
     pattern: &str,
     func: &str,
     option: &str,
+    legacy: bool,
 ) -> Result<DateTimePattern, KrishivError> {
     let purpose = if func == "to_csv" {
         Purpose::Format
     } else {
         Purpose::Parse
     };
-    datetime_option_as(pattern, func, option, purpose)
+    datetime_option_as(pattern, func, option, purpose, legacy)
 }
 
 /// [`datetime_option`] for an explicit `purpose` (the XML functions).
@@ -268,8 +277,9 @@ pub(super) fn datetime_option_as(
     func: &str,
     option: &str,
     purpose: Purpose,
+    legacy: bool,
 ) -> Result<DateTimePattern, KrishivError> {
-    DateTimePattern::new(pattern, purpose).map_err(|e| {
+    DateTimePattern::new_with(pattern, purpose, legacy).map_err(|e| {
         if e.error_class() == ErrorClass::KrishivUnsupportedFeature {
             KrishivUnsupportedFeature {
                 feature: format!("{func} with option {option}"),
@@ -293,6 +303,7 @@ impl Parsed {
             pos_inf: "Inf".to_owned(),
             neg_inf: "-Inf".to_owned(),
             date_pattern: None,
+            time_pattern: None,
             timestamp_pattern: None,
             ntz_pattern: None,
             fallback: false,
@@ -347,22 +358,24 @@ impl Parsed {
                 }
                 "columnnameofcorruptrecord" => self.corrupt_column = v.clone(),
                 "dateformat" => {
-                    self.date_pattern = Some(datetime_option(v, func, "dateFormat")?);
+                    // LEGACY dates are refused before options apply
+                    // (`refuse_legacy_dates`).
+                    self.date_pattern = Some(datetime_option(v, func, "dateFormat", false)?);
                 }
                 "timestampformat" => {
-                    self.timestamp_pattern = Some(datetime_option(v, func, "timestampFormat")?);
+                    self.timestamp_pattern =
+                        Some(datetime_option(v, func, "timestampFormat", false)?);
                 }
+                // Spark's NTZ formatter (`forTimestampNTZ`) is never the
+                // legacy one.
                 "timestampntzformat" => {
-                    self.ntz_pattern = Some(datetime_option(v, func, "timestampNTZFormat")?);
+                    self.ntz_pattern = Some(datetime_option(v, func, "timestampNTZFormat", false)?);
                 }
                 "enabledatetimeparsingfallback" => {
                     self.fallback = v.eq_ignore_ascii_case("true");
                 }
                 "timeformat" => {
-                    return Err(KrishivUnsupportedFeature {
-                        feature: format!("{func} with option timeFormat"),
-                    }
-                    .into());
+                    self.time_pattern = Some(datetime_option(v, func, "timeFormat", false)?);
                 }
                 "header" => {
                     // Ignored for `from_csv` (Spark ignores it); `to_csv`
@@ -429,15 +442,24 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
     }
     let ddl = literal_string(&args[1])?;
     let fields = struct_fields(&ddl)?;
-    let kinds: Vec<FieldKind> = fields
+    let kinds: Vec<FieldKind> = struct_type(&ddl)?
+        .fields()
         .iter()
-        .map(|f| {
-            FieldKind::of(f.data_type()).map_err(|_| KrishivUnsupportedFeature {
-                feature: "from_csv with a nested field type".to_owned(),
+        .zip(fields.iter())
+        .map(|(spark, f)| {
+            FieldKind::of_read(spark.data_type(), f.data_type()).map_err(|_| {
+                KrishivUnsupportedFeature {
+                    feature: "from_csv with a nested field type".to_owned(),
+                }
             })
         })
         .collect::<Result<_, _>>()?;
     let mut parsed = Parsed::defaults();
+    super::json::refuse_legacy_dates(
+        "from_csv",
+        &DataType::Struct(fields.clone()),
+        opts.legacy_time_parser,
+    )?;
     if args.len() == 3 {
         // Options are a `MAP<STRING, STRING>` literal (analysis checked the
         // types); anything else was refused during analysis.
@@ -462,6 +484,7 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
     let return_type = DataType::Struct(fields.clone());
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
     let date_pattern = parsed.date_pattern.clone();
+    let time_pattern = parsed.time_pattern.clone();
     let timestamp_pattern = parsed.timestamp_pattern.clone();
     let ntz_pattern = parsed.ntz_pattern.clone();
     let from_opts = FromCsvOptions {
@@ -472,6 +495,7 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
         pos_inf: parsed.pos_inf,
         neg_inf: parsed.neg_inf,
         date_pattern,
+        time_pattern,
         timestamp_pattern,
         ntz_pattern,
         fallback: parsed.fallback,
@@ -525,6 +549,7 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         })
         .collect::<Result<_, _>>()?;
     let mut parsed = Parsed::defaults();
+    super::json::refuse_legacy_dates("to_csv", &DataType::Struct(fields), opts.legacy_time_parser)?;
     // Writing defaults (Spark's CSV writer): an empty string is written as
     // two quotes, and the whitespace around a value is dropped.
     parsed.syntax.empty_value = "\"\"".to_owned();
@@ -557,6 +582,7 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         line_sep: parsed.line_sep,
         null_value: parsed.null_value,
         date_pattern: date_pattern.clone(),
+        time_pattern: parsed.time_pattern.clone(),
         timestamp_pattern: timestamp_pattern.clone(),
         ntz_pattern: ntz_pattern.clone(),
     };

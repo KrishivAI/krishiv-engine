@@ -42,19 +42,19 @@
     },
     {
       "id": "ntile#68ca2244acba/ansi_on",
-      "reason": "SELECT a, b, ntile(INTERVAL '1 02:03:04' DAY TO SECOND) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT a, b, ntile(INTERVAL '1 02:03:04' DAY TO SECOND) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "ntile#68ca2244acba/ansi_off",
-      "reason": "SELECT a, b, ntile(INTERVAL '1 02:03:04' DAY TO SECOND) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT a, b, ntile(INTERVAL '1 02:03:04' DAY TO SECOND) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "ntile#71997e38d3c3/ansi_on",
-      "reason": "SELECT a, b, ntile(INTERVAL '1-2' YEAR TO MONTH) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT a, b, ntile(INTERVAL '1-2' YEAR TO MONTH) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "ntile#71997e38d3c3/ansi_off",
-      "reason": "SELECT a, b, ntile(INTERVAL '1-2' YEAR TO MONTH) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT a, b, ntile(INTERVAL '1-2' YEAR TO MONTH) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "ntile#ce82b1801005/ansi_on",

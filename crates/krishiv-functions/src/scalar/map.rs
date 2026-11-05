@@ -36,6 +36,13 @@ pub(super) const NAMES: &[&str] = &[
     "str_to_map",
 ];
 
+/// `t`'s field, with decimals on `Decimal128` as functions read and return them.
+fn wide_field(t: &SparkType, name: &str, nullable: bool) -> Field {
+    let field = t.to_arrow_field(name, nullable);
+    let wide = krishiv_types::arrow::client_arrow_type(field.data_type());
+    field.with_data_type(wide)
+}
+
 /// The Spark type of an Arrow carrier (what the analyzer typed).
 fn spark_type(name: &str, args: &[BindArg], t: &DataType) -> Result<SparkType, KrishivError> {
     SparkType::from_arrow(t).map_err(|_| bad_types(name, args))
@@ -46,8 +53,8 @@ fn spark_type(name: &str, args: &[BindArg], t: &DataType) -> Result<SparkType, K
 fn entries_field(key: &SparkType, value: &SparkType, value_nullable: bool) -> FieldRef {
     let entries = DataType::Struct(
         vec![
-            key.to_arrow_field("key", false),
-            value.to_arrow_field("value", value_nullable),
+            wide_field(key, "key", false),
+            wide_field(value, "value", value_nullable),
         ]
         .into(),
     );
@@ -89,9 +96,8 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             projection_bind(listed, entries)
         }
         ("map_from_arrays", [k, v])
-            if matches!(k, DataType::List(_) | DataType::LargeList(_))
-                && matches!(v, DataType::List(_) | DataType::LargeList(_))
-                && kh::supports_key(k)
+            if matches!(v, DataType::List(_) | DataType::LargeList(_))
+                && matches!(k, DataType::List(f) | DataType::LargeList(f) if kh::supports_map_key(f.data_type()))
                 && kh::supports_value(v) =>
         {
             from_arrays_bind(args, k, v, policy)
@@ -114,7 +120,7 @@ fn map_bind(
     let mut value = SparkType::Null;
     let mut first = true;
     for (k, v) in types.iter().step_by(2).zip(types.iter().skip(1).step_by(2)) {
-        if !kh::supports_key(k) || !kh::supports_value(v) {
+        if !kh::supports_map_key(k) || !kh::supports_value(v) {
             return Err(bad_types(listed, args));
         }
         let (ks, vs) = (spark_type(listed, args, k)?, spark_type(listed, args, v)?);
@@ -164,7 +170,7 @@ fn map_concat_bind(
         SparkType::String,
         true,
     ))));
-    let out = merged.to_arrow();
+    let out = krishiv_types::arrow::client_arrow_type(&merged.to_arrow());
     let entries = map_entries_of(&out).ok_or_else(|| bad_types(listed, args))?;
     let n = args.len();
     Ok(Binding::new(out, move |x: &Inputs<'_>| {
@@ -178,18 +184,22 @@ fn projection_bind(listed: &'static str, entries: &FieldRef) -> Result<Binding, 
     let out = match listed {
         "map_keys" => {
             let key = spark_map_key(entries)?;
-            list_type(&key.to_arrow_field("element", true), true)
+            list_type(&wide_field(&key, "element", true), true)
         }
         "map_values" => {
             let value = spark_map_value(entries)?;
-            list_type(&value.to_arrow_field("element", true), true)
+            list_type(&wide_field(&value, "element", true), true)
         }
         _ => DataType::List(Arc::new(Field::new(
             "element",
             DataType::Struct(
                 vec![
-                    spark_map_key(entries)?.to_arrow_field("key", false),
-                    spark_map_value(entries)?.to_arrow_field("value", map_value_nullable(entries)?),
+                    wide_field(&spark_map_key(entries)?, "key", false),
+                    wide_field(
+                        &spark_map_value(entries)?,
+                        "value",
+                        map_value_nullable(entries)?,
+                    ),
                 ]
                 .into(),
             ),

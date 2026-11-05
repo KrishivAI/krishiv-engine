@@ -182,11 +182,10 @@ fn a_default_estimate_needs_a_larger_ratio() {
 }
 
 /// A deterministic `WITH` definition is inlined (Spark's `InlineCTE`), so
-/// its reference reads the statistics of what it scans; a nondeterministic
-/// one read twice stays a reference, a default-sized relation (the
-/// estimator does not look through it), not taken as resting on statistics.
+/// its reference reads the statistics of what it scans, and so does a
+/// nondeterministic one read twice, which stays a reference.
 #[test]
-fn an_inlined_cte_reads_statistics_and_a_kept_one_is_a_default_estimate() {
+fn inlined_and_kept_ctes_read_statistics() {
     let env = env();
     let sql = "WITH c AS (SELECT a FROM big) \
                SELECT a FROM t WHERE EXISTS (SELECT 1 FROM c WHERE c.a = t.a)";
@@ -205,7 +204,36 @@ fn an_inlined_cte_reads_statistics_and_a_kept_one_is_a_default_estimate() {
                AND EXISTS (SELECT 1 FROM c WHERE c.a + 1 = t.a)";
     let js = joins(&env, sql);
     assert_eq!(js.len(), 2, "{js:?}");
-    assert!(js.iter().all(|j| j.contains("default)")), "{js:?}");
+    assert!(
+        js.iter()
+            .all(|j| j.contains("statistics") && !j.contains("default)")),
+        "{js:?}"
+    );
+}
+
+/// A shared `WITH` reference is sized by its definition: the semi join builds
+/// its smaller side, so a runtime filter reaches the copy and the group keeps
+/// its copies (TPC-DS q95). Read as the default size, the reference looked
+/// smaller than `mid` and the query ran with no filter into the body.
+#[test]
+fn a_shared_reference_sizes_the_join_that_decides_sharing() {
+    let env = env();
+    let sql = "WITH w AS (SELECT a, count(*) AS n FROM big GROUP BY a) \
+               SELECT a FROM mid WHERE a IN (SELECT a FROM w) \
+               UNION ALL SELECT a FROM w";
+    let (shared, rows) = super::shared::sharing(&env, sql, &[]);
+    assert_eq!(shared, 0, "a filter from the semi join reaches a copy");
+    let (copies, same) = super::shared::sharing(
+        &env,
+        sql,
+        &[("krishiv.sql.optimizer.shareCteInstances", "false")],
+    );
+    assert_eq!(copies, 0);
+    assert_eq!(rows, same);
+    // The body not reached by any filter stays shared under the same sizes.
+    let sql = "WITH w AS (SELECT a, count(*) AS n FROM big GROUP BY a) \
+               SELECT a FROM w UNION ALL SELECT a FROM w";
+    assert_eq!(super::shared::sharing(&env, sql, &[]).0, 1);
 }
 
 /// `krishiv.exec.join.buildSide=false` keeps Spark's build side (the right

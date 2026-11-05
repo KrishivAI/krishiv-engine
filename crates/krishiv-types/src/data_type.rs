@@ -8,13 +8,14 @@ use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
 
+use crate::collation::Collation;
 use crate::error::{self, Result};
 use crate::nested::{ArrayType, MapType, StructType};
 
 /// A Spark SQL data type.
 ///
 /// Covers void (the type of a bare `NULL`), boolean, integral, floating-point, string, binary, decimal, date,
-/// timestamp, time, geometry and geography types and the nested array, map and struct types. Interval, char/varchar
+/// timestamp, time, interval, geometry and geography types and the nested array, map and struct types. Char/varchar
 /// and variant types are not represented yet; parsing them yields `KRISHIV_UNSUPPORTED_FEATURE`.
 ///
 /// Build `Time`, `Geometry` and `Geography` with [`Self::time`],
@@ -40,6 +41,10 @@ pub enum DataType {
     Double,
     /// `STRING`: binary-safe, may hold bytes that are not valid UTF-8.
     String,
+    /// `STRING COLLATE x`: a string compared under a collation other than
+    /// `UTF8_BINARY` (which is plain [`Self::String`]). The values are the
+    /// same UTF-8 text; the collation is part of the type (ADR 0043).
+    CollatedString(Collation),
     /// `BINARY`.
     Binary,
     /// `DECIMAL(p, s)`.
@@ -68,12 +73,84 @@ pub enum DataType {
         /// The spatial reference of every value, or [`Srid::Any`].
         srid: Srid,
     },
+    /// `INTERVAL YEAR`, `INTERVAL MONTH` or `INTERVAL YEAR TO MONTH`: a count
+    /// of months. Build it with [`Self::year_month_interval`].
+    YearMonthInterval {
+        /// The leading field.
+        start: YearMonthField,
+        /// The trailing field; equal to `start` for a single-field type.
+        end: YearMonthField,
+    },
+    /// `INTERVAL DAY`, `INTERVAL HOUR TO SECOND`, ...: a count of microseconds.
+    /// Build it with [`Self::day_time_interval`].
+    DayTimeInterval {
+        /// The leading field.
+        start: DayTimeField,
+        /// The trailing field; equal to `start` for a single-field type.
+        end: DayTimeField,
+    },
+    /// `INTERVAL`: Spark's `CalendarIntervalType`, months, days and
+    /// microseconds, each counted on its own.
+    CalendarInterval,
     /// `ARRAY<element>`.
     Array(Arc<ArrayType>),
     /// `MAP<key, value>`.
     Map(Arc<MapType>),
     /// `STRUCT<name: type, ...>`.
     Struct(StructType),
+}
+
+/// A field of a year-month interval type (Spark's `YearMonthIntervalType`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum YearMonthField {
+    /// `YEAR`.
+    Year,
+    /// `MONTH`.
+    Month,
+}
+
+impl YearMonthField {
+    /// The field's name in a `simpleString`.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Year => "year",
+            Self::Month => "month",
+        }
+    }
+}
+
+/// A field of a day-time interval type (Spark's `DayTimeIntervalType`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DayTimeField {
+    /// `DAY`.
+    Day,
+    /// `HOUR`.
+    Hour,
+    /// `MINUTE`.
+    Minute,
+    /// `SECOND`.
+    Second,
+}
+
+impl DayTimeField {
+    /// The field's name in a `simpleString`.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Hour => "hour",
+            Self::Minute => "minute",
+            Self::Second => "second",
+        }
+    }
+}
+
+/// `interval start` or `interval start to end`.
+fn interval_string(start: &str, end: &str) -> String {
+    if start == end {
+        format!("interval {start}")
+    } else {
+        format!("interval {start} to {end}")
+    }
 }
 
 /// The spatial reference of a geometry or geography type: one SRID for
@@ -153,6 +230,86 @@ impl DataType {
     /// Spark's default precision of `TIME` (`TimeType.DEFAULT_PRECISION`).
     pub const TIME_DEFAULT_PRECISION: u8 = 6;
 
+    /// Spark's `YearMonthIntervalType()`, `INTERVAL YEAR TO MONTH`.
+    pub const DEFAULT_YEAR_MONTH_INTERVAL: Self = Self::YearMonthInterval {
+        start: YearMonthField::Year,
+        end: YearMonthField::Month,
+    };
+    /// Spark's `DayTimeIntervalType()`, `INTERVAL DAY TO SECOND`.
+    pub const DEFAULT_DAY_TIME_INTERVAL: Self = Self::DayTimeInterval {
+        start: DayTimeField::Day,
+        end: DayTimeField::Second,
+    };
+
+    /// `INTERVAL start [TO end]` of the year-month family.
+    ///
+    /// # Errors
+    /// `INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION` when `end` comes
+    /// before `start`.
+    pub fn year_month_interval(start: YearMonthField, end: YearMonthField) -> Result<Self> {
+        if end < start {
+            return Err(error::interval_from_to(start.name(), end.name()));
+        }
+        Ok(Self::YearMonthInterval { start, end })
+    }
+
+    /// `INTERVAL start [TO end]` of the day-time family.
+    ///
+    /// # Errors
+    /// `INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION` when `end` comes
+    /// before `start`.
+    pub fn day_time_interval(start: DayTimeField, end: DayTimeField) -> Result<Self> {
+        if end < start {
+            return Err(error::interval_from_to(start.name(), end.name()));
+        }
+        Ok(Self::DayTimeInterval { start, end })
+    }
+
+    /// Whether a collated string occurs in this type, at any depth.
+    #[must_use]
+    pub fn contains_collation(&self) -> bool {
+        match self {
+            Self::CollatedString(_) => true,
+            Self::Array(a) => a.element_type().contains_collation(),
+            Self::Map(m) => {
+                m.key_type().contains_collation() || m.value_type().contains_collation()
+            }
+            Self::Struct(s) => s
+                .fields()
+                .iter()
+                .any(|f| f.data_type().contains_collation()),
+            _ => false,
+        }
+    }
+
+    /// `self`, or `KRISHIV_UNSUPPORTED_FEATURE` if it holds a collated
+    /// string. The analyzer does not take collated types yet (ADR 0043,
+    /// unit 2a): a user-facing entry point that cannot honour a collation
+    /// refuses it here, so no operator compares such a column as bytes.
+    ///
+    /// # Errors
+    /// As above.
+    pub fn refuse_collations(self) -> Result<Self> {
+        if self.contains_collation() {
+            return Err(error::unsupported(format!(
+                "collated strings (\"{}\")",
+                self.sql()
+            )));
+        }
+        Ok(self)
+    }
+
+    /// `STRING COLLATE collation`: [`Self::String`] for `UTF8_BINARY`, else
+    /// [`Self::CollatedString`].
+    #[must_use]
+    pub fn collated_string(collation: Collation) -> Self {
+        if collation.is_utf8_binary() {
+            Self::String
+        } else {
+            Self::CollatedString(collation)
+        }
+    }
+
     /// `TIME(precision)`.
     ///
     /// # Errors
@@ -209,9 +366,12 @@ impl DataType {
             Self::Integer => "integer".to_owned(),
             Self::Long => "long".to_owned(),
             Self::Decimal(_)
+            | Self::CollatedString(_)
             | Self::Time { .. }
             | Self::Geometry { .. }
-            | Self::Geography { .. } => self.atomic_simple_string(),
+            | Self::Geography { .. }
+            | Self::YearMonthInterval { .. }
+            | Self::DayTimeInterval { .. } => self.atomic_simple_string(),
             other => other.keyword().to_owned(),
         }
     }
@@ -220,9 +380,12 @@ impl DataType {
     fn atomic_simple_string(&self) -> String {
         match self {
             Self::Decimal(d) => format!("decimal({},{})", d.precision, d.scale),
+            Self::CollatedString(c) => format!("string collate {c}"),
             Self::Time { precision } => format!("time({precision})"),
             Self::Geometry { srid } => format!("geometry({srid})"),
             Self::Geography { srid } => format!("geography({srid})"),
+            Self::YearMonthInterval { start, end } => interval_string(start.name(), end.name()),
+            Self::DayTimeInterval { start, end } => interval_string(start.name(), end.name()),
             other => other.keyword().to_owned(),
         }
     }
@@ -290,6 +453,14 @@ impl DataType {
                 }
                 out.push('>');
             }
+            Self::CollatedString(c) => {
+                out.push_str(if sql {
+                    "STRING COLLATE "
+                } else {
+                    "string collate "
+                });
+                out.push_str(&c.to_string());
+            }
             atomic if sql => out.push_str(&atomic.atomic_simple_string().to_ascii_uppercase()),
             atomic => out.push_str(&atomic.atomic_simple_string()),
         }
@@ -306,7 +477,7 @@ impl DataType {
             Self::Long => "bigint",
             Self::Float => "float",
             Self::Double => "double",
-            Self::String => "string",
+            Self::String | Self::CollatedString(_) => "string",
             Self::Binary => "binary",
             Self::Decimal(_) => "decimal",
             Self::Date => "date",
@@ -315,6 +486,9 @@ impl DataType {
             Self::Time { .. } => "time",
             Self::Geometry { .. } => "geometry",
             Self::Geography { .. } => "geography",
+            Self::YearMonthInterval { .. }
+            | Self::DayTimeInterval { .. }
+            | Self::CalendarInterval => "interval",
             Self::Array(_) => "array",
             Self::Map(_) => "map",
             Self::Struct(_) => "struct",

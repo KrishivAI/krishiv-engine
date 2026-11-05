@@ -74,9 +74,14 @@ pub struct ParquetMetadata {
     /// Options the reader schema was built with (a decoder needing virtual
     /// columns rebuilds it from the same footer).
     pub(crate) reader_options: ArrowReaderOptions,
-    /// The file-native schema in engine types (what decoders produce).
+    /// The file-native schema in engine types (what decoders produce, with the
+    /// footer's ANSI interval types: see [`super::intervals`]).
     pub(crate) schema: SchemaRef,
     pub(crate) row_groups: Vec<RowGroup>,
+    /// The file's size in bytes (index and Bloom ranges are checked against it).
+    pub(crate) size: u64,
+    /// Whether the writer ordered binary statistics by signed bytes.
+    pub(crate) legacy_writer: bool,
     statistics: FileStatistics,
     heap: usize,
 }
@@ -92,6 +97,10 @@ impl FileMetadata for ParquetMetadata {
 
     fn heap_size(&self) -> usize {
         self.heap
+    }
+
+    fn unit_count(&self) -> Option<u64> {
+        Some(self.row_groups.len() as u64)
     }
 }
 
@@ -245,12 +254,15 @@ fn describe_checked(
     let reader = ArrowReaderMetadata::try_new(Arc::clone(meta), reader_options.clone())
         .map_err(footer_error)?;
     let schema = Arc::new(Schema::new_with_metadata(
-        reader
-            .schema()
-            .fields()
-            .iter()
-            .map(|f| Arc::new(spark_read_field(f)))
-            .collect::<Vec<FieldRef>>(),
+        super::intervals::typed(
+            reader
+                .schema()
+                .fields()
+                .iter()
+                .map(|f| Arc::new(spark_read_field(f)))
+                .collect::<Vec<FieldRef>>(),
+            meta.file_metadata().key_value_metadata(),
+        ),
         reader.schema().metadata().clone(),
     ));
     let legacy_writer = legacy_binary_stats(meta.file_metadata().created_by());
@@ -299,6 +311,8 @@ fn describe_checked(
         reader_options,
         schema,
         row_groups: planned,
+        size,
+        legacy_writer,
         statistics,
         heap,
     })
@@ -381,7 +395,25 @@ fn hint_field(
             let inner = Arc::new(Field::new(field.name(), value.as_ref().clone(), true));
             hint_field(&inner, path, descr, o).data_type().clone()
         }
-        DataType::Decimal32(p, s) | DataType::Decimal64(p, s) => DataType::Decimal128(*p, *s),
+        // arrow-rs decodes `BINARY` decimals only into `Decimal128`; the scan
+        // casts those to the carrier (design P2-T160).
+        DataType::Decimal32(p, s) | DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => {
+            let binary = |c: &parquet::schema::types::ColumnDescriptor| {
+                c.physical_type() == PhysicalType::BYTE_ARRAY
+                    && c.converted_type() == parquet::basic::ConvertedType::DECIMAL
+            };
+            // A nested leaf has no path here: any binary decimal in the file
+            // keeps the whole file's nested decimals on `Decimal128`.
+            let readable = match leaf() {
+                Some(c) => c.physical_type() != PhysicalType::BYTE_ARRAY,
+                None => !descr.columns().iter().any(|c| binary(c)),
+            };
+            if *p <= krishiv_types::arrow::DECIMAL64_MAX_PRECISION && readable {
+                DataType::Decimal64(*p, *s)
+            } else {
+                DataType::Decimal128(*p, *s)
+            }
+        }
         DataType::Timestamp(_, None)
             if o.int96_as_timestamp
                 && leaf().is_some_and(|c| c.physical_type() == PhysicalType::INT96) =>
@@ -444,7 +476,7 @@ fn spark_read_field(f: &FieldRef) -> Field {
 }
 
 /// The type of the leaf at `path` (structs only).
-fn leaf_type<'a>(schema: &'a Schema, path: &[String]) -> Option<&'a DataType> {
+pub(super) fn leaf_type<'a>(schema: &'a Schema, path: &[String]) -> Option<&'a DataType> {
     let (first, rest) = path.split_first()?;
     let mut dt = schema.field_with_name(first).ok()?.data_type();
     for name in rest {
@@ -471,7 +503,7 @@ fn legacy_binary_stats(created_by: Option<&str>) -> bool {
 }
 
 /// Statistics of one leaf column chunk in its engine type `dt`.
-fn column_statistics(
+pub(super) fn column_statistics(
     path: ColumnPath,
     d: &ColumnDescriptor,
     dt: &DataType,
@@ -549,7 +581,7 @@ fn scalar_bounds(
             DataType::Timestamp(TimeUnit::Microsecond, _) => {
                 ScalarValue::TimestampMicros(v.checked_mul(micros_per_unit?)?)
             }
-            DataType::Decimal128(p, sc) => ScalarValue::Decimal128 {
+            DataType::Decimal64(p, sc) | DataType::Decimal128(p, sc) => ScalarValue::Decimal128 {
                 unscaled: i128::from(v),
                 precision: *p,
                 scale: *sc,
@@ -561,7 +593,7 @@ fn scalar_bounds(
         Some(match dt {
             DataType::Utf8View => ScalarValue::Utf8(std::str::from_utf8(b).ok()?.to_owned()),
             DataType::BinaryView => ScalarValue::Binary(b.to_vec()),
-            DataType::Decimal128(p, sc) => ScalarValue::Decimal128 {
+            DataType::Decimal64(p, sc) | DataType::Decimal128(p, sc) => ScalarValue::Decimal128 {
                 unscaled: be_i128(b)?,
                 precision: *p,
                 scale: *sc,

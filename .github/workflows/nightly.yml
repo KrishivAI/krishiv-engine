@@ -66,13 +66,74 @@ jobs:
         if: always()
         run: sccache --show-stats
 
-  # P2-T105: full line + branch coverage (branch needs nightly rustc), report only.
+  # P2-T101 / P2-T110a: fresh differential fixtures each night, the seed being the date. Expressions
+  # against a real Spark 4.2 (local mode) and generated TPC-H queries against DuckDB; a new
+  # disagreement fails the job (known ones are ratcheted in tests/fixtures). Spark generation is
+  # slow (about 5 minutes per 300 roots), hence the root budget; raise it with the runner time.
+  differential:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      RUSTC_WRAPPER: "" # sccache is not installed in this job
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Seed (the date)
+        run: echo "SEED=$(date -u +%Y%m%d)" >> "$GITHUB_ENV"
+      - name: Generate queries (DuckDB)
+        run: |
+          mkdir -p "$RUNNER_TEMP/diff"
+          uv run --project bench python -I tests/scripts/gen_query_oracle.py \
+            --data crates/krishiv-exec/tests/fixtures/tpch-sf0.01-parquet \
+            --count 3000 --seed "$SEED" > "$RUNNER_TEMP/diff/queries.json"
+      - name: Queries against DuckDB
+        env:
+          KRISHIV_QUERY_ORACLE: ${{ runner.temp }}/diff/queries.json
+        run: cargo test -p krishiv-testkit --locked --test query_oracle matches_duckdb_up_to_known_failures
+      - name: Generate expressions (Spark 4.2, local mode)
+        run: |
+          env -u SPARK_HOME uv run --no-project --python 3.12 --with 'pyspark==4.2.0' \
+            python -I tests/scripts/gen_expr_differential.py --roots 1500 --seed "$SEED" \
+            > "$RUNNER_TEMP/diff/expr.json"
+      - name: Expressions against Spark
+        run: |
+          cargo run -p krishiv-testkit --locked --bin expr-diff -- \
+            --fixture "$RUNNER_TEMP/diff/expr.json" \
+            --known tests/fixtures/spark-4.2.0/expr-differential-known-failures.json \
+            --out "$RUNNER_TEMP/diff/expr-mismatches.json"
+      - name: TLP and NoREC hunt (one hour)
+        run: |
+          set -o pipefail
+          cargo run -p krishiv-testkit --release --locked --bin metamorphic-hunt -- \
+            --data crates/krishiv-exec/tests/fixtures/tpch-sf0.01-parquet \
+            --seed "$SEED" --seconds 3600 \
+            --regressions "$RUNNER_TEMP/diff/regressions" | tee "$RUNNER_TEMP/diff/metamorphic.txt"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: differential-${{ env.SEED }}
+          path: ${{ runner.temp }}/diff
+          retention-days: 30
+
+  # P2-T105: full line + branch coverage (branch needs nightly rustc). P2-T105b: the per-crate
+  # floors of `tests/coverage-floors.json` and the fall of the total against the previous
+  # nightly's `summary.json` fail the job; the report itself stays an artifact.
   coverage:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
       contents: read
+      actions: read # the previous nightly's coverage-report artifact
       id-token: write # Codecov OIDC upload (no secret)
     env:
       RUSTC_WRAPPER: "" # no sccache here: instrumented builds are not cacheable
@@ -84,15 +145,49 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The all-features instrumented build fills the runner's disk (2026-11-04: "No space left
+      # on device" 25 minutes in, the runner could not even write its own log). Drop the
+      # preinstalled toolchains this job never uses, as coverage.yml does.
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium /usr/local/share/boost \
+            /opt/microsoft /opt/az /usr/lib/google-cloud-sdk /usr/lib/mono /usr/local/julia* /usr/local/graalvm \
+            /opt/hostedtoolcache/Java_* /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/go /opt/hostedtoolcache/PyPy
+          df -h /
+      # Pinned (`COVERAGE_NIGHTLY` in xtask/src/coverage.rs): the nightly of 2026-10-31
+      # cannot compile apache-avro 0.22 (async-drop cycle), which ended every run since.
       - name: Nightly toolchain with llvm-tools (branch coverage)
-        run: rustup toolchain install nightly --profile minimal --component llvm-tools-preview
+        run: rustup toolchain install nightly-2026-08-12 --profile minimal --component llvm-tools-preview
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-llvm-cov,cargo-nextest
-      - run: cargo xtask coverage --all-features --html
+      # No `--branch`: with branch coverage `llvm-cov export -format=lcov` crashes on the pinned
+      # nightly after all tests pass ("functions have mismatched data", then a stack dump), as it
+      # did every night from 2026-10-26 (the probe PR #440 ran the four variants: only
+      # `--no-branch` completes). Branch coverage returns when the LLVM bug is fixed.
+      - run: cargo xtask coverage --all-features --html --no-branch
       - name: Per-crate summary
         run: cargo xtask coverage-summary --markdown | tee -a "$GITHUB_STEP_SUMMARY"
+      # The newest coverage-report artifact is the previous nightly's (this run uploads its own
+      # below). None, or an expired one, is no failure: the total is then not compared.
+      - name: Previous nightly's coverage summary
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=coverage-report&per_page=1" --jq '.artifacts[0].id // empty')
+          [ -n "$id" ] || exit 0
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > "${RUNNER_TEMP}/previous-coverage.zip"
+          # Into a temporary file, published only when the archive has the summary: an archive
+          # without it (an earlier run that failed before writing it) leaves no empty file behind.
+          unzip -p "${RUNNER_TEMP}/previous-coverage.zip" summary.json > "${RUNNER_TEMP}/previous-summary.tmp"
+          mv "${RUNNER_TEMP}/previous-summary.tmp" "${RUNNER_TEMP}/previous-summary.json"
+      - name: Coverage floors and total
+        run: cargo xtask coverage-summary --check tests/coverage-floors.json --previous "${RUNNER_TEMP}/previous-summary.json"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
         with:
           name: coverage-report
           path: |
@@ -204,6 +299,58 @@ jobs:
         run: "cargo test -p krishiv-exec --lib --release --locked loom_model::"
       - name: loom models (krishiv-io runtime filters)
         run: "cargo test -p krishiv-io --lib --release --locked loom_model::"
+
+  # P2-T061: the 22 TPC-H queries at SF1 (lineitem 6M rows, generated in
+  # process) with every compute-worker poll held to the 10 ms stall bound.
+  # The PR test job runs the same suite at 100 rows per table.
+  yield-tpch-sf1:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: Pinned tools (sccache)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: sccache@0.18.0
+      - name: TPC-H SF1 with no stalled poll
+        env:
+          KRISHIV_YIELD_TPCH_SF: "1"
+        run: "cargo test -p krishiv-exec --release --locked --test yield_discipline tpch_suite_counts_no_stalls -- --nocapture"
+
+  # The serialize-through mode (`krishiv.exec.debug.planRoundTrip`, P2-T173):
+  # the Spark golden ratchet with every plan encoded to `krishiv.plan.v1` and
+  # decoded before it runs. PR CI runs the TPC-H 22 the same way
+  # (`krishiv-session` test `plan_round_trip`) and round-trips the TPC-H and
+  # TPC-DS plans (`krishiv-plan-codec` test `ratchet`).
+  serialize-through:
+    if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: Pinned tools (sccache)
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: sccache@0.18.0
+      - name: Golden ratchet through the wire format
+        run: "cargo test -p krishiv-testkit --release --locked --test golden_ratchet serialize_through_matches_the_frozen_baseline -- --ignored"
 
   # cargo-fuzz targets (`fuzz/`), one hour each: the reusable `fuzz.yml`
   # (regression replay, cached corpus, crash triage). The weekly long run is

@@ -108,6 +108,72 @@ fn csv_tables_read_back_what_they_were_given() {
     );
 }
 
+/// Spark reads a CSV table without a header unless the table's options ask for one, so a directory with one row
+/// per file reads every row, not none.
+#[test]
+fn csv_tables_read_files_without_a_header_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    std::fs::write(data.join("part-00000.csv"), "1\n").unwrap();
+    std::fs::write(data.join("part-00001.csv"), "2\n").unwrap();
+    let s = session(&dir.path().join("wh"));
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE e (d INT) USING csv LOCATION '{}'",
+            data.display()
+        ),
+    );
+    assert_eq!(
+        col0(&s, "SELECT CAST(d AS STRING) FROM e ORDER BY d"),
+        ["1", "2"]
+    );
+}
+
+/// What a CSV table writes is Spark's text: no header line by default, and one when the table asks for it.
+#[test]
+fn csv_tables_write_a_header_line_only_when_asked() {
+    fn part_text(dir: &std::path::Path) -> String {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("part-"))
+            })
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect()
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let wh = dir.path().join("wh");
+    let s = session(&wh);
+    run(&s, "CREATE TABLE plain (a INT, b INT) USING csv");
+    run(&s, "INSERT INTO plain VALUES (1, 2)");
+    assert_eq!(part_text(&wh.join("plain")), "1,2\n");
+    run(
+        &s,
+        "CREATE TABLE headed (a INT, b INT) USING csv OPTIONS (header 'true')",
+    );
+    run(&s, "INSERT INTO headed VALUES (1, 2)");
+    assert_eq!(part_text(&wh.join("headed")), "a,b\n1,2\n");
+    assert_eq!(col0(&s, "SELECT concat_ws('|', a, b) FROM headed"), ["1|2"]);
+    run(&s, "CREATE TABLE ctas USING csv AS SELECT 1 AS x");
+    assert_eq!(part_text(&wh.join("ctas")), "1\n");
+    assert_eq!(col0(&s, "SELECT CAST(x AS STRING) FROM ctas"), ["1"]);
+    run(&s, "CREATE TABLE liked LIKE plain");
+    run(&s, "INSERT INTO liked VALUES (3, 4)");
+    assert_eq!(part_text(&wh.join("liked")), "3,4\n");
+    // LIKE copies the options, as Spark 4.2.0 does.
+    run(
+        &s,
+        "CREATE TABLE src (a INT, b INT) USING csv OPTIONS (header 'true', sep ';')",
+    );
+    run(&s, "CREATE TABLE liked_options LIKE src");
+    run(&s, "INSERT INTO liked_options VALUES (1, 2)");
+    assert_eq!(part_text(&wh.join("liked_options")), "a;b\n1;2\n");
+}
+
 #[test]
 fn create_table_errors() {
     let dir = tempfile::tempdir().unwrap();
@@ -226,6 +292,22 @@ fn ctas_writes_then_adds_the_table() {
     );
     assert!(!dir.path().join("bad").exists());
     assert_eq!(class(&s, "SELECT * FROM bad"), "TABLE_OR_VIEW_NOT_FOUND");
+}
+
+/// A CTAS that fails while writing removes the directory it made, so the
+/// same statement can be retried (and then succeeds).
+#[test]
+fn a_failed_ctas_leaves_no_directory_and_can_be_retried() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "SET spark.sql.ansi.enabled = true");
+    let _ = err(
+        &s,
+        "CREATE TABLE w USING parquet AS SELECT CAST('x' AS INT) AS a",
+    );
+    assert!(!dir.path().join("w").exists());
+    run(&s, "CREATE TABLE w USING parquet AS SELECT 1 AS a");
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM w"), ["1"]);
 }
 
 #[test]
@@ -494,9 +576,12 @@ fn insert_overwrite_never_loses_the_old_rows_before_the_new_ones_are_complete() 
     // manifest commit of P2-T082b) both: never fewer rows than the smaller side, and never none. The directory
     // listing re-reads a directory in which an entry vanished, so a file replaced mid-listing is replaced in
     // it. Until that commit a reader that listed the old files can also lose one to the overwrite's cleanup:
-    // that is the only error allowed.
+    // that is the only error allowed (with the commit log, which is the default, the read says
+    // `KRISHIV_CONCURRENT_COMMIT` instead: retry it).
     assert!(
-        errors.iter().all(|e| e.contains("FILE_NOT_EXIST")),
+        errors
+            .iter()
+            .all(|e| e.contains("FILE_NOT_EXIST") || e.contains("KRISHIV_CONCURRENT_COMMIT")),
         "{errors:?}"
     );
     let allowed: std::collections::BTreeSet<&str> = ["3", "5", "8"].into();
@@ -610,8 +695,11 @@ fn provider_names_and_defaults() {
     run(&s, "INSERT INTO q VALUES (4)");
     assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM q"), ["4"]);
     run(&s, "CREATE TABLE j (a INT) USING json");
+    run(&s, "INSERT INTO j VALUES (1)");
+    assert_eq!(col0(&s, "SELECT CAST(a AS STRING) FROM j"), ["1"]);
+    run(&s, "CREATE TABLE o (a INT) USING orc");
     assert_eq!(
-        class(&s, "INSERT INTO j VALUES (1)"),
+        class(&s, "INSERT INTO o VALUES (1)"),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
     assert_eq!(
@@ -656,7 +744,7 @@ fn existing_locations_and_names() {
     );
     assert_eq!(
         class(&s, "CREATE TABLE other_catalog.default.t (a INT)"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        "REQUIRES_SINGLE_PART_NAMESPACE"
     );
     run(&s, "CREATE TABLE spark_catalog.default.q (a INT)");
     run(&s, "INSERT INTO spark_catalog.default.q VALUES (1)");
@@ -887,4 +975,23 @@ fn insert_values_refuse_scalar_subqueries() {
     );
     // Without a subquery nothing changes.
     run(&s, "INSERT INTO t VALUES (1), (2)");
+}
+
+/// A CTAS owns the directory it makes: a concurrent or earlier one at the same location is never
+/// touched by a failure, and a dropped (cancelled) statement removes only what it made.
+#[test]
+fn a_failed_ctas_never_removes_a_directory_it_did_not_create() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "SET spark.sql.ansi.enabled = true");
+    // Another statement's table directory with data in it.
+    let other = dir.path().join("w");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("keep.txt"), b"data").unwrap();
+    let e = err(
+        &s,
+        "CREATE TABLE w USING parquet AS SELECT CAST('x' AS INT) AS a",
+    );
+    assert_eq!(e.error_class().name(), "LOCATION_ALREADY_EXISTS", "{e}");
+    assert_eq!(std::fs::read(other.join("keep.txt")).unwrap(), b"data");
 }

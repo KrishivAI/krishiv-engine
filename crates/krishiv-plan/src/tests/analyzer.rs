@@ -251,6 +251,9 @@ fn dataframes(base: i64) -> Vec<(&'static str, LogicalPlan)> {
         (
             "star",
             join_two.project(vec![Expr::new(ExprNode::Star(Star {
+                regex: None,
+                replace: Vec::new(),
+                position: None,
                 qualifier: Vec::new(),
                 except: Vec::new(),
                 plan_id: Some(PlanId(base + 2)),
@@ -513,6 +516,9 @@ fn corpus() -> Vec<(&'static str, ResolutionConf, LogicalPlan)> {
             "SELECT x.* FROM t",
             default,
             t().project(vec![Expr::new(ExprNode::Star(Star {
+                regex: None,
+                replace: Vec::new(),
+                position: None,
                 qualifier: vec!["x".to_owned()],
                 except: Vec::new(),
                 plan_id: None,
@@ -1558,7 +1564,7 @@ fn unsupported_inputs_fail_explicitly() {
         paths: vec![krishiv_common::secret::OptionValue::from_user("path", "/d")],
         options: std::collections::BTreeMap::new(),
     }));
-    let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("factorial", vec![c("b")])]);
+    let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("collation", vec![c("b")])]);
     for plan in [files, sha] {
         assert_eq!(class(&run(plan, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
     }
@@ -1576,7 +1582,25 @@ fn unsupported_inputs_fail_explicitly() {
         }
         .into(),
     ]);
-    assert_eq!(class(&run(interval, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
+    let out = run(interval.clone(), &ctx).unwrap().output;
+    assert_eq!(
+        out[0].data_type,
+        krishiv_types::DataType::DEFAULT_YEAR_MONTH_INTERVAL
+    );
+    assert!(!out[0].nullable);
+    // `spark.sql.legacy.interval.enabled` makes Spark's literals calendar
+    // intervals, which is refused rather than answered differently.
+    let legacy = context(
+        catalog(),
+        ResolutionConf {
+            legacy_interval: true,
+            ..ResolutionConf::default()
+        },
+    );
+    assert_eq!(
+        class(&run(interval, &legacy)),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
     // With ordinals off, an integer key is a constant.
     let off = context(
         catalog(),
@@ -2434,9 +2458,18 @@ fn typed_literals_resolve_with_the_session_zone() {
             "{value}"
         );
     }
-    // Clock-dependent spellings need the query clock.
+    // Spark's special values read the query clock and keep the literal's type.
+    for (kind, value, ty) in [
+        (TypedLiteralKind::Timestamp, "now", "timestamp"),
+        (TypedLiteralKind::TimestampNtz, "today", "timestamp_ntz"),
+        (TypedLiteralKind::Date, "tomorrow", "date"),
+        (TypedLiteralKind::Timestamp, "epoch", "timestamp"),
+    ] {
+        let a = project(kind, value, utc).unwrap();
+        assert_eq!(a.output[0].data_type.simple_string(), ty, "{value}");
+    }
+    // A bare time of day needs the clock too, which is not supported yet.
     for (kind, value) in [
-        (TypedLiteralKind::Timestamp, "now"),
         (TypedLiteralKind::TimestampLtz, "10:00"),
         (TypedLiteralKind::Timestamp, "10:00"),
     ] {
@@ -2987,13 +3020,16 @@ fn order_by_all_sorts_by_every_output_column() {
 }
 
 /// `* EXCEPT` drops the named columns; overlapping entries and nested
-/// fields fail with Spark's classes, unknown names resolve as usual.
+/// fields of a non-struct column fail, unknown names resolve as usual.
 #[test]
-fn star_except_drops_overlaps_and_rejects_nested() {
+fn star_except_drops_overlaps_and_rejects_nested_fields_of_a_flat_column() {
     use crate::Star;
 
     let except = |cols: &[&str]| {
         Expr::new(ExprNode::Star(Star {
+            regex: None,
+            replace: Vec::new(),
+            position: None,
             qualifier: Vec::new(),
             except: cols
                 .iter()
@@ -3012,7 +3048,7 @@ fn star_except_drops_overlaps_and_rejects_nested() {
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["a", "a", "a.b"])]);
     assert_eq!(class(&run(plan, &ctx())), "EXCEPT_OVERLAPPING_COLUMNS");
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["a.b"])]);
-    assert_eq!(class(&run(plan, &ctx())), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(class(&run(plan, &ctx())), "INVALID_EXTRACT_BASE_FIELD_TYPE");
     let plan = LogicalPlan::table(["t"]).project(vec![except(&["z"])]);
     assert_eq!(
         class(&run(plan, &ctx())),
@@ -3305,6 +3341,41 @@ fn inline_table_of_unevaluable_expressions_fails() {
     );
 }
 
+/// A cell that raises when Spark evaluates it while resolving the table is
+/// `FAILED_SQL_EXPRESSION_EVALUATION` (ANSI: `CAST('nan' AS INT)` fails;
+/// without ANSI it is NULL and the table resolves).
+#[test]
+fn inline_table_cell_that_fails_to_evaluate() {
+    let bad = || {
+        Expr::new(ExprNode::Cast {
+            expr: Arc::new(s("nan")),
+            to: DataType::Integer,
+            mode: crate::CastMode::Ansi,
+        })
+    };
+    let mut on = ctx();
+    on.conf.ansi = true;
+    let r = run(inline_table(vec![vec![int(1)], vec![bad()]], &["a"]), &on);
+    assert_eq!(
+        class(&r),
+        "INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION"
+    );
+    // The cast-named function form fails the same way.
+    let named = f("boolean", vec![s("XXX")]);
+    let r = run(inline_table(vec![vec![named]], &["a"]), &on);
+    assert_eq!(
+        class(&r),
+        "INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION"
+    );
+    let try_cast = Expr::new(ExprNode::Cast {
+        expr: Arc::new(s("nan")),
+        to: DataType::Integer,
+        mode: crate::CastMode::Try,
+    });
+    let r = run(inline_table(vec![vec![try_cast]], &["a"]), &on);
+    assert_eq!(class(&r), "OK");
+}
+
 /// The clock functions evaluate once per query, so they may stay.
 #[test]
 fn inline_table_of_clock_calls_resolves() {
@@ -3448,7 +3519,7 @@ fn legacy_flag_confs_follow_session_confs() {
     // booleans are not registry entries, so `SET` does not validate them).
     let odd_bool = conf(&[("spark.sql.legacy.allowParameterlessCount", "sometimes")]);
     assert!(!odd_bool.allow_parameterless_count);
-    assert_eq!(ResolutionConf::KEYS.len(), 21);
+    assert_eq!(ResolutionConf::KEYS.len(), 24);
     let charsets = conf(&[
         ("spark.sql.legacy.javaCharsets", "true"),
         ("spark.sql.legacy.codingErrorAction", "TRUE"),
@@ -3549,6 +3620,9 @@ fn parameterless_count_honours_the_legacy_flag() {
 fn star_with_table_in_count_honours_the_legacy_flag() {
     let star_t = || {
         Expr::new(ExprNode::Star(Star {
+            regex: None,
+            replace: Vec::new(),
+            position: None,
             qualifier: vec!["t".to_owned()],
             except: Vec::new(),
             plan_id: None,
@@ -3585,6 +3659,9 @@ fn star_with_table_in_count_honours_the_legacy_flag() {
     // single-star error, with or without the flag).
     let star_db_t = || {
         Expr::new(ExprNode::Star(Star {
+            regex: None,
+            replace: Vec::new(),
+            position: None,
             qualifier: vec!["db".to_owned(), "t".to_owned()],
             except: Vec::new(),
             plan_id: None,
@@ -3596,6 +3673,9 @@ fn star_with_table_in_count_honours_the_legacy_flag() {
     // An unknown qualifier keeps the star error, with or without the flag.
     let missing = || {
         Expr::new(ExprNode::Star(Star {
+            regex: None,
+            replace: Vec::new(),
+            position: None,
             qualifier: vec!["missing".to_owned()],
             except: Vec::new(),
             plan_id: None,
@@ -5051,11 +5131,6 @@ fn order_by_passes_sort_key_errors_through() {
 #[test]
 fn types_without_evaluation_are_refused() {
     use krishiv_types::Srid;
-    let refused = |plan: LogicalPlan, ctx: &AnalysisContext| {
-        let e = run(plan, ctx).err().unwrap();
-        assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
-        e.error.message_parameters()[0].1.clone()
-    };
     let one_row = || LogicalPlan::new(PlanNode::OneRowRelation);
     let time = DataType::Time { precision: 3 };
     let cast = Expr::from(Literal::Null(None)).cast(time.clone());
@@ -5068,10 +5143,8 @@ fn types_without_evaluation_are_refused() {
     // `spark.sql.timeType.enabled` is false (the default).
     assert_eq!(e.error.error_class(), ErrorClass::UnsupportedTimeType);
     let typed_null = Expr::from(Literal::Null(Some(DataType::Geometry { srid: Srid::Any })));
-    assert_eq!(
-        refused(one_row().project(vec![typed_null]), &ctx()),
-        "the GEOMETRY data type"
-    );
+    // Spatial types evaluate: a typed NULL of one resolves.
+    assert!(run(one_row().project(vec![typed_null]), &ctx()).is_ok());
     // Nested below a cast to another type, it is still found.
     let nested = Expr::from(Literal::Null(None))
         .cast(time)
@@ -5094,10 +5167,7 @@ fn types_without_evaluation_are_refused() {
     let cat =
         MemoryCatalog::new("spark_catalog").with_table(&["default"], "geo", vec![x, geo], None);
     let geo_ctx = context(cat, ResolutionConf::default());
-    assert_eq!(
-        refused(LogicalPlan::table(["geo"]).project(vec![c("x")]), &geo_ctx),
-        "the GEOGRAPHY data type"
-    );
+    assert!(run(LogicalPlan::table(["geo"]).project(vec![c("x")]), &geo_ctx).is_ok());
     // The same shapes over evaluable types resolve.
     let fine = Expr::from(Literal::Null(None)).cast(DataType::Date);
     let analyzed = run(one_row().project(vec![fine]), &ctx()).unwrap();
@@ -5131,13 +5201,10 @@ fn time_and_geometry_inside_nested_types_are_refused() {
             ErrorClass::UnsupportedTimeType
         );
     }
+    // A spatial field evaluates.
     let in_struct = DataType::Struct(StructType::new([StructField::new("a", geometry, true)]));
     let typed_null = Expr::new(ExprNode::Literal(Literal::Null(Some(in_struct))));
-    let e = run(LogicalPlan::table(["t"]).project(vec![typed_null]), &ctx)
-        .err()
-        .unwrap();
-    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert_eq!(e.error.message_parameters()[0].1, "the GEOMETRY data type");
+    assert!(run(LogicalPlan::table(["t"]).project(vec![typed_null]), &ctx).is_ok());
 }
 
 /// Spark 4.2 rejects the `TIME` type with `UNSUPPORTED_TIME_TYPE` while

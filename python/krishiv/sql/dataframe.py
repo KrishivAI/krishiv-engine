@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 import random
 import sys
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from functools import reduce
 from typing import TYPE_CHECKING, Any, cast
 
@@ -27,6 +27,7 @@ from krishiv.sql.column import Column, _literal, _named
 from krishiv.sql.functions import first as _first
 from krishiv.sql.group import GroupedData
 from krishiv.sql.na import _NO_VALUE, DataFrameNaFunctions
+from krishiv.sql.profile_view import ProfileView
 from krishiv.sql.row import Row
 from krishiv.sql.stat import DataFrameStatFunctions
 from krishiv.sql.types import StructType, _struct_from_columns
@@ -190,7 +191,7 @@ class DataFrame:
         except ImportError:
             return None
         rows = _eager_max_rows(self._session)
-        table = self.limit(rows).toArrow()
+        table = self.limit(rows)._shown()._arrow()
         cells = _convert.table_cells(table, self._session_zone())
         columns = [(name, type_) for name, type_ in self.dtypes]
         return _convert.repr_html_string(columns, cells)
@@ -994,7 +995,7 @@ class DataFrame:
         elif withReplacement is None and isinstance(fraction, float):
             replace, frac, sampled_seed = False, fraction, seed
         elif isinstance(withReplacement, float):
-            replace, frac, sampled_seed = False, float(withReplacement), fraction
+            replace, frac, sampled_seed = False, float(withReplacement), None if fraction is None else int(fraction)
         else:
             raise PySparkTypeError(
                 errorClass="NOT_EXPECTED_TYPE",
@@ -1500,21 +1501,22 @@ class DataFrame:
         partitioning hint, which has no effect on one node) comes back as a warning, as Spark
         logs it; the rows never change. Use ``explain`` to see the recorded hint.
         """
-        if len(parameters) == 1 and isinstance(parameters[0], list):
-            parameters = parameters[0]
+        params: Sequence[Any] = (
+            parameters[0] if len(parameters) == 1 and isinstance(parameters[0], list) else parameters
+        )
         if not isinstance(name, str):
             raise not_expected_type("name", "str", name)
         allowed = (str, float, int, Column, list)
         primitives = (str, float, int)
         allowed_repr = ", ".join([t.__name__ for t in allowed[:-1]] + [f"list[{t.__name__}]" for t in primitives])
         converted: list[Any] = []
-        for p in parameters:
+        for p in params:
             if not isinstance(p, allowed):
                 raise PySparkTypeError(
                     errorClass="DISALLOWED_TYPE_FOR_CONTAINER",
                     messageParameters={
                         "arg_name": "parameters",
-                        "arg_type": type(parameters).__name__,
+                        "arg_type": type(params).__name__,
                         "allowed_types": allowed_repr,
                         "item_type": type(p).__name__,
                     },
@@ -1525,7 +1527,7 @@ class DataFrame:
                         errorClass="DISALLOWED_TYPE_FOR_CONTAINER",
                         messageParameters={
                             "arg_name": "parameters",
-                            "arg_type": type(parameters).__name__,
+                            "arg_type": type(params).__name__,
                             "allowed_types": allowed_repr,
                             "item_type": type(p).__name__ + "[" + type(p[0]).__name__ + "]",
                         },
@@ -1781,7 +1783,18 @@ class DataFrame:
         return _convert.session_zone(self._session.conf.get("spark.sql.session.timeZone", "UTC") or "UTC")
 
     def toArrow(self) -> Any:
-        """The result as a ``pyarrow.Table`` (needs pyarrow)."""
+        """The result as a ``pyarrow.Table`` (needs pyarrow). As PySpark's Connect client, it refuses a year-month or
+        calendar interval at any depth, by its Spark type."""
+        table = self._arrow()
+        if any(_convert.not_collectable_arrow(f.type) for f in table.schema):
+            raise PySparkTypeError(
+                errorClass="UNSUPPORTED_DATA_TYPE_FOR_ARROW_CONVERSION",
+                messageParameters={"data_type": repr(_convert.not_collectable(self.schema))},
+            )
+        return table
+
+    def _arrow(self) -> Any:
+        """The result as a ``pyarrow.Table``, whatever its types."""
         pa = _convert.require_pyarrow("toArrow")
         stream = self._df.execute()
         try:
@@ -1796,7 +1809,7 @@ class DataFrame:
     def toPandas(self) -> Any:
         """The result as a ``pandas.DataFrame``, converted from Arrow (needs pyarrow and pandas). Instants are
         wall-clock times in the session time zone without a zone, as Spark's ``toPandas``."""
-        table = self.toArrow()
+        table = self._arrow()
         try:
             importlib.import_module("pandas")  # pandas itself is optional: only checked here
         except ImportError as e:
@@ -1804,8 +1817,16 @@ class DataFrame:
         return _convert.session_local(table, self._session_zone()).to_pandas()
 
     def collect(self) -> list[Row]:
-        """All result rows (needs pyarrow)."""
-        return _convert.rows_of(self.toArrow())
+        """All result rows (needs pyarrow). As PySpark's Connect client, it refuses a year-month or calendar interval
+        at any depth, by its Arrow type."""
+        table = self._arrow()
+        for f in table.schema:
+            if (name := _convert.not_collectable_arrow(f.type)) is not None:
+                raise PySparkTypeError(
+                    errorClass="UNSUPPORTED_DATA_TYPE_FOR_ARROW_CONVERSION",
+                    messageParameters={"data_type": name},
+                )
+        return _convert.rows_of(table)
 
     def take(self, num: int) -> list[Row]:
         return self.limit(num).collect()
@@ -1830,8 +1851,21 @@ class DataFrame:
         if not isinstance(truncate, bool | int):
             raise not_expected_type("truncate", "bool or int", truncate)
         rows = min(max(n, 0), _SHOW_MAX)  # Spark's bounds: MAX_ROUNDED_ARRAY_LENGTH - 1
-        cells = _convert.table_cells(self.limit(rows + 1).toArrow(), self._session_zone())
+        cells = _convert.table_cells(self.limit(rows + 1)._shown()._arrow(), self._session_zone())
         print(_convert.show_string(self.columns, cells, rows, truncate, vertical), end="")
+
+    def _shown(self) -> DataFrame:
+        """This frame with its interval columns as text, cast by the engine, which knows their fields."""
+        types = [t for _, t in self.dtypes]
+        if not any(_convert.holds_interval(t) for t in types):
+            return self
+        names = [f"_{i}" for i in range(len(types))]
+        return self.toDF(*names).selectExpr(
+            *(
+                f"CAST({n} AS STRING) AS {n}" if _convert.holds_interval(t) else n
+                for n, t in zip(names, types, strict=True)
+            )
+        )
 
     def explain(
         self,
@@ -1850,6 +1884,11 @@ class DataFrame:
         :meth:`explainString` for the text or the JSON document instead of printing.
         """
         print(self.explainString(extended, mode, analyze=analyze, verbose=verbose))
+
+    def profile(self) -> ProfileView:
+        """Runs the query and returns its profile as a viewer (``EXPLAIN ANALYZE``): leave it as
+        the last expression of a notebook cell, or call ``.save("profile.html")``. Krishiv extension."""
+        return ProfileView(self.explainString(analyze=True, json=True))
 
     def explainString(
         self,

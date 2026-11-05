@@ -33,6 +33,36 @@ const NON_DETERMINISTIC: &[&str] = &[
     "input_file_name",
 ];
 
+/// Whether `sql` is `CREATE [OR REPLACE] [TEMP[ORARY]] FUNCTION IDENTIFIER(` or
+/// `DROP [TEMP[ORARY]] FUNCTION [IF EXISTS] IDENTIFIER(`: a routine name is an identifier
+/// reference in both modes.
+fn names_a_function(sql: &str) -> bool {
+    let words: Vec<&str> = tokenize(sql)
+        .into_iter()
+        .filter(|t| !t.kind.is_trivia())
+        .take(8)
+        .filter_map(|t| sql.get(t.span.start..t.span.end))
+        .collect();
+    let at = |i: usize, w: &str| words.get(i).is_some_and(|x| x.eq_ignore_ascii_case(w));
+    let Some(f) = words
+        .iter()
+        .position(|w| w.eq_ignore_ascii_case("FUNCTION"))
+    else {
+        return false;
+    };
+    (at(0, "CREATE") || at(0, "DROP")) && f < 6 && {
+        // `IF [NOT] EXISTS` (CREATE has `IF NOT EXISTS`, DROP `IF EXISTS`).
+        let name = if at(f + 1, "IF") && at(f + 2, "NOT") {
+            f + 4
+        } else if at(f + 1, "IF") {
+            f + 3
+        } else {
+            f + 1
+        };
+        at(name, "IDENTIFIER") && at(name + 1, "(")
+    }
+}
+
 impl Session {
     /// `sql` with every `IDENTIFIER(expr)` replaced by the (quoted) identifier `expr` evaluates to.
     /// Text without the clause is returned as it is.
@@ -41,8 +71,11 @@ impl Session {
         sql: &'a str,
         options: &ParserOptions,
     ) -> Result<Cow<'a, str>, KrishivError> {
-        // The legacy mode reads `IDENTIFIER(expr)` as a function.
-        if options.legacy_identifier_clause {
+        let legacy = options.legacy_identifier_clause;
+        // The legacy mode reads `IDENTIFIER(expr)` as a function, which the grammar accepts only
+        // where a table or an expression may stand: a statement that does not parse as written
+        // (a column list, a rename target) keeps the parser's error.
+        if legacy && !names_a_function(sql) && krishiv_sql::parse_statement(sql, options).is_err() {
             return Ok(Cow::Borrowed(sql));
         }
         let tokens: Vec<_> = tokenize(sql)
@@ -93,9 +126,22 @@ impl Session {
                     .filter(|w| !w.is_empty())
                     .unwrap_or_default()
             };
-            let plain_position = in_hint
+            let mut plain_position = in_hint
                 || prev(1).eq_ignore_ascii_case("SHOW")
                 || (prev(1) == "(" && prev(2).eq_ignore_ascii_case("EXTRACT"));
+            // The legacy mode reads `IDENTIFIER(expr)` as a function: it names a whole table or
+            // column, never a part of a dotted name, an alias or a `USING` column.
+            if legacy {
+                plain_position = plain_position
+                    || prev(1) == "."
+                    || prev(1).eq_ignore_ascii_case("AS")
+                    || (prev(1) == "(" && prev(2).eq_ignore_ascii_case("USING"))
+                    // A unit is a keyword there: the call stays an unresolved routine.
+                    || (prev(1) == "("
+                        && ["TIMESTAMPADD", "TIMESTAMPDIFF"]
+                            .iter()
+                            .any(|f| prev(2).eq_ignore_ascii_case(f)));
+            }
             if !is_clause || after_colon || plain_position {
                 i += 1;
                 continue;
@@ -122,6 +168,14 @@ impl Session {
             };
             // Nothing between the brackets: left to the parser to refuse.
             if close <= i + 2 {
+                i = close + 1;
+                continue;
+            }
+            if legacy
+                && tokens
+                    .get(close + 1)
+                    .is_some_and(|n| n.kind == TokenKind::Sym(Sym::Dot))
+            {
                 i = close + 1;
                 continue;
             }

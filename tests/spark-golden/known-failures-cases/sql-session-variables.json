@@ -1,43 +1,16 @@
 {
   "cases": {
     "depends-on-command": [
-      10,
-      12,
-      15,
       63,
-      89,
-      144,
-      148,
-      197,
-      203,
-      206,
-      243,
-      244,
-      245
-    ],
-    "nested-interval-types": [
-      250
-    ],
-    "query-features": [
-      235,
-      237
+      89
     ],
     "sql-commands": [
       62,
       64,
       88,
-      135,
-      196,
-      202,
-      205,
-      208,
-      211,
       214,
       215,
       259
-    ],
-    "subqueries": [
-      60
     ]
   },
   "file": "sql-session-variables",

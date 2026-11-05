@@ -17,6 +17,7 @@ use arrow_schema::SchemaRef;
 use arrow_select::interleave::interleave;
 use krishiv_memory::{
     ConsumerHandle, MemoryError, Reservation, SpillError, SpillFile, SpillReader, SpillScope,
+    SpillWriter,
 };
 use krishiv_types::batch::{Batch, Weights};
 
@@ -173,19 +174,28 @@ fn prefix(row: &[u8]) -> u64 {
 
 /// The bytes of `batch`'s rows (what a copy of them, or a spill frame,
 /// holds), without the slack of the buffers it shares: a per-row size that
-/// does not depend on the batch's length.
+/// does not depend on the batch's length. A view column counts only the
+/// bytes its views reference, not the whole data buffers it shares.
 pub(crate) fn data_bytes(batch: &Batch) -> usize {
-    let columns: usize = batch
-        .data()
-        .columns()
-        .iter()
-        .map(|c| {
-            c.to_data()
-                .get_slice_memory_size()
-                .unwrap_or_else(|_| c.get_array_memory_size())
-        })
-        .sum();
-    columns + batch.num_rows() * weight_bytes(batch)
+    SpillWriter::frame_bytes(batch)
+}
+
+/// Buffer slack a held batch may carry over its rows' bytes before
+/// [`owned_rows`] copies it.
+const SLICE_SLACK_BYTES: usize = 16 << 10;
+
+/// `batch`, or a copy of its rows when its buffers are far larger than they
+/// are ([`data_bytes`]): a small slice of a large batch (a scan's morsel of
+/// a decoded batch), or views into shared pages, would keep, and be charged
+/// for, the whole buffers. For rows an operator holds until it spills them.
+/// Interleaving shares view buffers, so views are compacted on top.
+pub(crate) fn owned_rows(batch: Batch) -> Result<Batch> {
+    let data = data_bytes(&batch);
+    if batch.data().get_array_memory_size() <= 2 * data + SLICE_SLACK_BYTES {
+        return Ok(batch);
+    }
+    let rows: Vec<(usize, usize)> = (0..batch.num_rows()).map(|r| (0, r)).collect();
+    crate::join::compact_views(interleave_batches(&batch.schema(), &[batch], &rows)?)
 }
 
 fn weight_bytes(batch: &Batch) -> usize {
@@ -297,8 +307,9 @@ pub(crate) fn metadata_bytes(sources: usize) -> usize {
     sources.saturating_mul(size_of::<u64>().saturating_add(size_of::<u32>()))
 }
 
-/// Bytes per row of a sort merge's keyed rows (16-byte prefix, slice, row).
-const KEYED_ROW_BYTES: usize = size_of::<(u128, u32, u32)>();
+/// Bytes per row of a sort merge's keyed rows and the buffer that merges them,
+/// which holds the shorter of two runs, so half the rows at most.
+const KEYED_ROW_BYTES: usize = size_of::<Keyed>() + size_of::<Keyed>() / 2;
 /// Bytes per row of a sort merge's output order.
 const ORDER_ROW_BYTES: usize = size_of::<(u32, u32)>();
 
@@ -349,8 +360,8 @@ struct SortedRows {
 
 /// In-memory slices above which a bucket's merge sorts its rows instead of
 /// running a loser tree: with many small slices each tree step is a chain
-/// of cache misses, while one sort of the rows' key prefixes stays in
-/// cache (most comparisons end at a 16-byte prefix). An unbucketed sort has
+/// of cache misses, while merging the rows' key prefixes pair by pair stays
+/// in cache (most comparisons end at a 16-byte prefix). An unbucketed sort has
 /// one reader, so above this many batches it sorts on several threads
 /// ([`parallel_merge`]) when they and the memory allow, else runs the tree.
 const SORT_MIN_SLICES: usize = 64;
@@ -393,12 +404,83 @@ fn shared_prefix_len(memory: &[Slice]) -> usize {
     lo.iter().zip(hi).take_while(|(a, b)| a == b).count()
 }
 
+/// `(16-byte prefix, slice, row)`: a row of a merge, with its [`merge_cmp`] key.
+type Keyed = (u128, u32, u32);
+
+/// The total order of `merge_cmp`, deciding on the prefixes when they differ.
+fn keyed_cmp(memory: &[Slice], a: &Keyed, b: &Keyed) -> std::cmp::Ordering {
+    a.0.cmp(&b.0)
+        .then_with(|| merge_cmp(memory, (a.1, a.2), (b.1, b.2)))
+}
+
+/// Merges `keyed`'s sorted `..mid` and `mid..`, copying the shorter to `buf`
+/// and filling from the end it leaves free. No branch on the comparison: its
+/// outcome is close to random, so a branch would mispredict about every other
+/// row.
+fn merge_two(memory: &[Slice], keyed: &mut [Keyed], mid: usize, buf: &mut Vec<Keyed>) {
+    if keyed_cmp(memory, &keyed[mid - 1], &keyed[mid]).is_lt() {
+        return;
+    }
+    buf.clear();
+    if mid <= keyed.len() - mid {
+        buf.extend_from_slice(&keyed[..mid]);
+        let (mut left, mut right, mut out) = (0, mid, 0);
+        while left < buf.len() && right < keyed.len() {
+            let from_right = keyed_cmp(memory, &keyed[right], &buf[left]).is_lt();
+            keyed[out] = if from_right { keyed[right] } else { buf[left] };
+            right += usize::from(from_right);
+            left += usize::from(!from_right);
+            out += 1;
+        }
+        keyed[out..out + buf.len() - left].copy_from_slice(&buf[left..]);
+    } else {
+        buf.extend_from_slice(&keyed[mid..]);
+        let (mut left, mut right, mut out) = (mid, buf.len(), keyed.len());
+        while left > 0 && right > 0 {
+            let from_left = keyed_cmp(memory, &keyed[left - 1], &buf[right - 1]).is_gt();
+            out -= 1;
+            keyed[out] = if from_left {
+                keyed[left - 1]
+            } else {
+                buf[right - 1]
+            };
+            left -= usize::from(from_left);
+            right -= usize::from(!from_left);
+        }
+        keyed[..right].copy_from_slice(&buf[..right]);
+    }
+}
+
+/// Merges `keyed`'s sorted runs, which end at `ends` (offsets from `start`,
+/// where `keyed` begins), pair by pair and depth first, so that the small
+/// merges stay in cache.
+fn merge_runs(
+    memory: &[Slice],
+    keyed: &mut [Keyed],
+    ends: &[usize],
+    start: usize,
+    buf: &mut Vec<Keyed>,
+) {
+    if ends.len() < 2 {
+        return;
+    }
+    let (left, right) = ends.split_at(ends.len() / 2);
+    let mid = left[left.len() - 1] - start;
+    let (first, second) = keyed.split_at_mut(mid);
+    merge_runs(memory, first, left, start, buf);
+    merge_runs(memory, second, right, start + mid, buf);
+    merge_two(memory, keyed, mid, buf);
+}
+
 /// The rows of `memory`, as `(index into memory, row)`, in the merge's order.
+/// Each slice is already sorted, so this takes about `log2(slices)` passes
+/// over the rows, where sorting them whole would take `log2(rows)`.
 pub(super) fn sort_slices(memory: &[Slice]) -> Result<Vec<(u32, u32)>> {
     let too_many = || internal("a sort merge of more than u32::MAX rows".to_owned());
     let rows: usize = memory.iter().map(|(_, r)| r.len()).sum();
     let shared = shared_prefix_len(memory);
-    let mut keyed: Vec<(u128, u32, u32)> = Vec::with_capacity(rows);
+    let mut keyed: Vec<Keyed> = Vec::with_capacity(rows);
+    let mut ends = Vec::with_capacity(memory.len());
     for (i, (s, range)) in memory.iter().enumerate() {
         let i = u32::try_from(i).map_err(|_| too_many())?;
         keyed.extend(
@@ -406,11 +488,12 @@ pub(super) fn sort_slices(memory: &[Slice]) -> Result<Vec<(u32, u32)>> {
                 .iter()
                 .map(|&r| (wide_prefix(&s.rows.row(r as usize).data()[shared..]), i, r)),
         );
+        if !range.is_empty() {
+            ends.push(keyed.len());
+        }
     }
-    keyed.sort_unstable_by(|&(pa, sa, ra), &(pb, sb, rb)| {
-        pa.cmp(&pb)
-            .then_with(|| merge_cmp(memory, (sa, ra), (sb, rb)))
-    });
+    let mut buf = Vec::with_capacity(rows / 2);
+    merge_runs(memory, &mut keyed, &ends, 0, &mut buf);
     Ok(keyed.into_iter().map(|(_, s, r)| (s, r)).collect())
 }
 
@@ -1021,9 +1104,11 @@ pub(crate) fn write_run(
     let (mut max_batch_bytes, mut row_bytes) = (0, 1);
     while let Some(batch) = merger.next(batch_rows)? {
         query.check_cancelled()?;
-        let bytes = batch.data().get_array_memory_size();
+        // As read back: the writer compacts view columns, which here still
+        // share their inputs' buffers.
+        let bytes = SpillWriter::frame_bytes(&batch);
         max_batch_bytes = max_batch_bytes.max(bytes);
-        row_bytes = row_bytes.max(data_bytes(&batch).div_ceil(batch.num_rows().max(1)));
+        row_bytes = row_bytes.max(bytes.div_ceil(batch.num_rows().max(1)));
         if let Err(e) = writer.write(&batch) {
             return refused(e);
         }

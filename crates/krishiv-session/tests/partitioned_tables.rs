@@ -1048,3 +1048,156 @@ fn partitioned_ctas_keeps_dotted_column_names() {
     );
     assert_eq!(rows(&s, "SHOW PARTITIONS d"), ["p=x"]);
 }
+
+/// `DESCRIBE EXTENDED ... AS JSON` writes the keys in `DescribeTableJsonCommand`'s order (the `describe` golden's
+/// shape); a table without buckets or partitions leaves those keys out, and nested column types are refused.
+#[test]
+fn describe_as_json_lists_the_keys_in_spark_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE j (a STRING, b DECIMAL(5,2)) USING parquet COMMENT 'c' TBLPROPERTIES (password 'x')",
+    );
+    let lines = rows(&s, "DESCRIBE EXTENDED j AS JSON");
+    assert_eq!(lines.len(), 1);
+    let json = lines.join("");
+    let keys = [
+        "table_name",
+        "catalog_name",
+        "namespace",
+        "schema_name",
+        "columns",
+        "location",
+        "created_time",
+        "last_access",
+        "created_by",
+        "type",
+        "provider",
+        "comment",
+        "table_properties",
+        "collation",
+    ];
+    let mut at = 0;
+    for k in keys {
+        let found = json[at..]
+            .find(&format!("\"{k}\":"))
+            .unwrap_or_else(|| panic!("{k} in {json}"));
+        at += found;
+    }
+    assert!(json.contains(
+        r#"{"name":"b","type":{"name":"decimal","precision":5,"scale":2},"nullable":true}"#
+    ));
+    assert!(json.contains(r#""table_properties":{"password":"*********(redacted)"}"#));
+    assert!(!json.contains("partition_columns") && !json.contains("num_buckets"));
+    // `AS JSON` needs `EXTENDED` or `FORMATTED` and takes no column.
+    assert_eq!(
+        class(&s, "DESCRIBE j AS JSON"),
+        "DESCRIBE_JSON_NOT_EXTENDED"
+    );
+    assert_eq!(
+        class(&s, "DESC FORMATTED j a AS JSON"),
+        "UNSUPPORTED_FEATURE.DESC_TABLE_COLUMN_JSON"
+    );
+    run(&s, "CREATE TABLE n (a ARRAY<INT>) USING parquet");
+    assert_eq!(
+        class(&s, "DESCRIBE EXTENDED n AS JSON"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+}
+
+#[test]
+fn describe_as_json_values_follow_spark() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE jp (a INT COMMENT 'first' DEFAULT 1, token STRING, v VOID) USING parquet \
+         PARTITIONED BY (token) COMMENT 'tbl'",
+    );
+    run(&s, "ALTER TABLE jp ADD PARTITION (token='t1')");
+    let one = |sql: &str| -> serde_json::Value {
+        let lines = rows(&s, sql);
+        assert_eq!(lines.len(), 1, "{sql}");
+        serde_json::from_str(&lines[0]).unwrap_or_else(|e| panic!("{sql}: {e}: {}", lines[0]))
+    };
+    let t = one("DESCRIBE EXTENDED jp AS JSON");
+    assert_eq!(
+        t["columns"][0],
+        serde_json::json!({"name":"a","type":{"name":"int"},"nullable":true,
+                           "comment":"first","default":"1"})
+    );
+    assert_eq!(t["columns"][1]["type"], serde_json::json!({"name":"void"}));
+    let created = t["created_time"].as_str().unwrap();
+    assert!(
+        created.len() == 20 && created.as_bytes()[10] == b'T' && created.ends_with('Z'),
+        "{created}"
+    );
+    let p = one("DESCRIBE EXTENDED jp PARTITION (token='t1') AS JSON");
+    assert_eq!(p["partition_values"], serde_json::json!({"token":"t1"}));
+    assert_eq!(p["comment"], "tbl");
+    assert!(p["created_time"].as_str().unwrap().ends_with('Z'));
+}
+
+#[test]
+fn describe_as_json_of_bucketed_tables_statistics_and_refusals() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE jb (a INT, b TIMESTAMP, c BOOLEAN, d TINYINT, e SMALLINT, f BIGINT, g FLOAT, \
+         h DOUBLE, i BINARY, j DATE, k TIMESTAMP_NTZ, p INT) USING parquet PARTITIONED BY (p) \
+         CLUSTERED BY (a) SORTED BY (b) INTO 4 BUCKETS",
+    );
+    run(&s, "ALTER TABLE jb ADD PARTITION (p=1)");
+    run(&s, "ANALYZE TABLE jb PARTITION (p=1) COMPUTE STATISTICS");
+    let one = |sql: &str| -> serde_json::Value {
+        let lines = rows(&s, sql);
+        assert_eq!(lines.len(), 1, "{sql}");
+        serde_json::from_str(&lines[0]).unwrap()
+    };
+    let t = one("DESCRIBE EXTENDED jb AS JSON");
+    assert_eq!(t["num_buckets"], 4);
+    assert_eq!(t["bucket_columns"], serde_json::json!(["a"]));
+    assert_eq!(t["sort_columns"], serde_json::json!(["b"]));
+    let names: Vec<_> = t["columns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["type"]["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        names[..11],
+        [
+            "int",
+            "timestamp_ltz",
+            "boolean",
+            "byte",
+            "short",
+            "long",
+            "float",
+            "double",
+            "binary",
+            "date",
+            "timestamp_ntz"
+        ]
+    );
+    let p = one("DESCRIBE EXTENDED jb PARTITION (p=1) AS JSON");
+    assert!(
+        p["partition_statistics"]
+            .as_str()
+            .unwrap()
+            .contains("bytes")
+    );
+    assert_eq!(p["num_buckets"], 4);
+    run(&s, "CREATE TEMPORARY VIEW tv AS SELECT 1 AS x");
+    assert_eq!(
+        class(&s, "DESCRIBE EXTENDED tv AS JSON"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    run(&s, "CREATE VIEW pv AS SELECT 1 AS x");
+    assert_eq!(
+        class(&s, "DESCRIBE EXTENDED pv AS JSON"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+}

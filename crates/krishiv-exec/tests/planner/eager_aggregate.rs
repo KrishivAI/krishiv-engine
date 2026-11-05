@@ -9,13 +9,24 @@ use super::partial_aggregate::{Row, physical, runtime, sorted, tables};
 use super::run;
 use super::tpch::{Order, Tpch};
 
-/// Whether `q`'s statistics-ordered plan runs a partial aggregate.
+/// Whether `q`'s statistics-ordered plan runs a partial aggregate below a join (the rule's effect). The
+/// two-phase aggregate the physical planner puts above a join, under its exchange, is not the rule.
 fn fires(t: &Tpch, q: &str) -> bool {
     let plan = t.optimized(q, Order::Statistics).unwrap();
-    physical(t, &plan)
-        .unwrap()
-        .to_string()
-        .contains("PartialHashAggregate")
+    partial_below_join(&physical(t, &plan).unwrap().to_string())
+}
+
+/// Whether a `PartialHashAggregate` line sits in the subtree of a `Join` line of the plan's text tree.
+fn partial_below_join(text: &str) -> bool {
+    let indent = |l: &str| l.len() - l.trim_start_matches([' ', ':', '+', '-']).len();
+    let lines: Vec<&str> = text.lines().collect();
+    lines.iter().enumerate().any(|(i, l)| {
+        l.contains("Join")
+            && lines[i + 1..]
+                .iter()
+                .take_while(|c| indent(c) > indent(l))
+                .any(|c| c.contains("PartialHashAggregate"))
+    })
 }
 
 /// `q`'s rows with the rule's plan and without statistics, where it never runs.

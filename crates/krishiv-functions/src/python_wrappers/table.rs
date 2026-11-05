@@ -20,6 +20,53 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (">>", "operator"),
     (">>>", "operator"),
     ("if", "no PySpark function"),
+    (
+        "stack",
+        "generator: rewritten by the analyzer, no PySpark function",
+    ),
+    ("make_time", "TIME has no Python mapping yet (P2-T181)"),
+    ("time", "TIME has no Python mapping yet (P2-T181)"),
+    ("current_time", "TIME has no Python mapping yet (P2-T181)"),
+    (
+        "st_asbinary",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
+    (
+        "st_geogfromwkb",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
+    (
+        "st_geomfromwkb",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
+    (
+        "st_setsrid",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
+    (
+        "st_srid",
+        "GEOMETRY and GEOGRAPHY have no Python mapping yet (P2-T181)",
+    ),
+    (
+        "time_from_micros",
+        "TIME has no Python mapping yet (P2-T181)",
+    ),
+    (
+        "time_from_millis",
+        "TIME has no Python mapping yet (P2-T181)",
+    ),
+    (
+        "time_from_seconds",
+        "TIME has no Python mapping yet (P2-T181)",
+    ),
+    ("time_to_micros", "TIME has no Python mapping yet (P2-T181)"),
+    ("time_to_millis", "TIME has no Python mapping yet (P2-T181)"),
+    (
+        "time_to_seconds",
+        "TIME has no Python mapping yet (P2-T181)",
+    ),
+    ("to_time", "TIME has no Python mapping yet (P2-T181)"),
+    ("try_to_time", "TIME has no Python mapping yet (P2-T181)"),
     ("time_diff", "TIME has no Python mapping yet (P2-T181)"),
     ("time_trunc", "TIME has no Python mapping yet (P2-T181)"),
     (
@@ -194,6 +241,22 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
 
 /// Registry names whose wrapper is written by hand in `functions.py`.
 pub(super) const HANDWRITTEN: &[(&str, &str)] = &[
+    (
+        "make_ym_interval",
+        "an omitted field is `lit(0)`, wherever it falls, so `None` can't just drop it",
+    ),
+    (
+        "make_dt_interval",
+        "an omitted field is `lit(0)`, wherever it falls, so `None` can't just drop it",
+    ),
+    (
+        "make_interval",
+        "an omitted field is `lit(0)`, wherever it falls, so `None` can't just drop it",
+    ),
+    (
+        "try_make_interval",
+        "an omitted field is `lit(0)`, wherever it falls, so `None` can't just drop it",
+    ),
     ("count", "`count(\"*\")` is `count(*)`"),
     ("log", "`log(col)` is `ln(col)`; `log(base, col)` is `log`"),
     (
@@ -279,6 +342,7 @@ pub(super) fn rows() -> Vec<Row> {
         "degrees",
         "exp",
         "expm1",
+        "factorial",
         "hex",
         "hour",
         "initcap",
@@ -416,7 +480,7 @@ pub(super) fn rows() -> Vec<Row> {
     for name in ["date_diff", "datediff"] {
         rows.push(Row::new(name, "end: ColumnOrName, start: ColumnOrName"));
     }
-    for name in ["date_part", "extract"] {
+    for name in ["date_part", "datepart", "extract"] {
         rows.push(Row::new(name, "field: Column, source: ColumnOrName"));
     }
     for name in ["date_add", "date_sub", "dateadd"] {
@@ -482,6 +546,23 @@ pub(super) fn rows() -> Vec<Row> {
     for name in ["shiftleft", "shiftright", "shiftrightunsigned"] {
         rows.push(Row::new(name, "col: ColumnOrName, numBits: int"));
     }
+    rows.extend([
+        Row::new(
+            "aes_encrypt",
+            "input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName = None, padding: ColumnOrName = None, iv: ColumnOrName = None, aad: ColumnOrName = None",
+        )
+        .filled(&[("mode", "GCM"), ("padding", "DEFAULT"), ("iv", "")]),
+        Row::new(
+            "aes_decrypt",
+            "input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName = None, padding: ColumnOrName = None, aad: ColumnOrName = None",
+        )
+        .filled(&[("mode", "GCM"), ("padding", "DEFAULT")]),
+        Row::new(
+            "try_aes_decrypt",
+            "input: ColumnOrName, key: ColumnOrName, mode: ColumnOrName = None, padding: ColumnOrName = None, aad: ColumnOrName = None",
+        )
+        .filled(&[("mode", "GCM"), ("padding", "DEFAULT")]),
+    ]);
     rows.extend([
         Row::new(
             "assert_true",
@@ -584,6 +665,19 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("array_contains", "col: ColumnOrName, value: Any"),
         Row::new("array_distinct", "col: ColumnOrName"),
         Row::new("array_union", "col1: ColumnOrName, col2: ColumnOrName"),
+        Row::new("array_except", "col1: ColumnOrName, col2: ColumnOrName"),
+        Row::new("array_intersect", "col1: ColumnOrName, col2: ColumnOrName"),
+        Row::new("arrays_overlap", "a1: ColumnOrName, a2: ColumnOrName"),
+        Row::new("array_max", "col: ColumnOrName"),
+        Row::new("array_min", "col: ColumnOrName"),
+        Row::new("array_join", "col: ColumnOrName, delimiter: str, null_replacement: str = None"),
+        Row::new("array_position", "col: ColumnOrName, value: Any"),
+        Row::new("array_remove", "col: ColumnOrName, element: Any"),
+        Row::new("array_repeat", "col: ColumnOrName, count: ColumnOrName | int"),
+        Row::new("cardinality", "col: ColumnOrName"),
+        Row::new("flatten", "col: ColumnOrName"),
+        Row::new("sequence", "start: ColumnOrName, stop: ColumnOrName, step: ColumnOrName = None"),
+        Row::new("slice", "x: ColumnOrName, start: ColumnOrName | int, length: ColumnOrName | int"),
         Row::new("sort_array", "col: ColumnOrName, asc: bool = True"),
         Row::new("arrays_zip", "*cols: ColumnOrName"),
         Row::new("get", "col: ColumnOrName, index: ColumnOrName | int"),
@@ -609,6 +703,8 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("sha2", "col: ColumnOrName, numBits: int")
             .one_of("numBits", &[0, 224, 256, 384, 512]),
         Row::new("startswith", "str: ColumnOrName, prefix: ColumnOrName"),
+    ]);
+    rows.extend([
         Row::new(
             "schema_of_json",
             "json: Column | str, options: dict[str, str] = None",

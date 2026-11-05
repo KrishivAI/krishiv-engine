@@ -26,12 +26,13 @@ class SparkConnectEngine(Engine):
         self,
         remote: str = "sc://127.0.0.1:15002",
         container: str | None = "krishiv-bench-spark",
-        container_data_root: str = "/data",
+        container_data_root: str | None = "/data",
         host_data_root: str | None = None,
     ):
         self.remote = remote
         self.container = container
-        self.cdata = container_data_root.rstrip("/")
+        # None/"" = the server sees the host paths (a Sail or Spark server on this host): no rewrite.
+        self.cdata = (container_data_root or "").rstrip("/")
         self.host_data_root = host_data_root
         self.spark: SparkSession | None = None
         self._p: DockerProc | None = None
@@ -61,7 +62,9 @@ class SparkConnectEngine(Engine):
         self.spark = SparkSession.builder.remote(self.remote).getOrCreate()
         host_root = str(self.host_data_root or dataset.root.parents[1])
         for t in dataset.tables:
-            p = str(dataset.root / f"{t}.parquet").replace(host_root, self.cdata, 1)
+            p = str(dataset.root / f"{t}.parquet")
+            if self.cdata:
+                p = p.replace(host_root, self.cdata, 1)
             self.spark.read.parquet(p).createOrReplaceTempView(t)
         if self.container:
             self._p = DockerProc(self.container)

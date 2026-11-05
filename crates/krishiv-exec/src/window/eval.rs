@@ -47,6 +47,8 @@ struct Unit<'a> {
     peers: Vec<(usize, usize)>,
     /// Each partition's first peer group.
     first_peer: Vec<u32>,
+    /// The ordering key, for `RANGE` frames with value bounds.
+    order: Option<super::frames::RangeKeys>,
 }
 
 /// A vector collected from fallible items with the exact capacity of the
@@ -100,6 +102,7 @@ impl<'a> Unit<'a> {
             peer_of: Vec::with_capacity(rows),
             peers: Vec::with_capacity(peers),
             first_peer: Vec::with_capacity(parts),
+            order: None,
         };
         let mut i = 0;
         for s in slices {
@@ -145,11 +148,31 @@ pub(super) fn evaluate(
     slices: &[Slice<'_>],
     ansi: bool,
 ) -> Result<Vec<ArrayRef>> {
-    let unit = Unit::new(slices)?;
+    let mut unit = Unit::new(slices)?;
+    if has_range_offsets(plan)
+        && let [key] = plan.order_by.as_slice()
+    {
+        unit.order = super::frames::RangeKeys::new(
+            slices,
+            key.column,
+            key.descending,
+            key.nulls_first,
+            ansi,
+        )?;
+    }
     plan.functions
         .iter()
         .map(|f| function(f, &unit, ansi))
         .collect()
+}
+
+/// Whether a function of `plan` has a `RANGE` frame with a value bound.
+pub(super) fn has_range_offsets(plan: &WindowPlan) -> bool {
+    plan.functions.iter().any(|f| {
+        f.frame.units == super::FrameUnits::Range
+            && (super::frames::is_range_offset(f.frame.lower)
+                || super::frames::is_range_offset(f.frame.upper))
+    })
 }
 
 fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool) -> Result<ArrayRef> {
@@ -220,6 +243,7 @@ fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool) -> Result<ArrayRef
                 part: &part,
                 peers: &peers,
                 n: u.rows,
+                order: u.order.as_ref(),
             };
             if matches!(f.function, WindowFunction::Offset { .. }) {
                 super::frames::offset_value(f, u.slices, &rows)?
@@ -315,6 +339,7 @@ fn aggregate(
             part: &part,
             peers: &peers,
             n: u.rows,
+            order: u.order.as_ref(),
         };
         let frames = super::frames::frames(f.frame, &rows)?;
         return super::frames::aggregate(a, f, u.slices, &frames, ansi);
@@ -673,6 +698,19 @@ pub(super) fn snapshot_slots(part_start: &[bool], open: usize) -> (usize, usize)
     (held, len)
 }
 
+/// Whether `a` keeps a value per distinct row (an exact percentile's map,
+/// which `Accumulator::group_bytes` does not count).
+pub(super) fn keeps_values(a: &AggregateExpr) -> bool {
+    matches!(
+        a.function,
+        AggregateFunction::Percentile { .. } | AggregateFunction::PercentileDisc { .. }
+    )
+}
+
+/// The bytes an exact percentile's map may take for one row: an entry of two
+/// words, in a table that doubles (`ExactAcc::projected`).
+const KEPT_VALUE_BYTES: usize = 2 * 32;
+
 /// The view type a string or binary argument is read as.
 pub(super) fn view_type(t: &DataType) -> DataType {
     match t {
@@ -819,6 +857,9 @@ pub(super) fn cost(
 ) -> Result<usize> {
     // `part_of`, `peer_of`; `parts` and `first_peer`; `peers`.
     let mut total = rows * 8 + parts * 20 + peers * 16;
+    if has_range_offsets(plan) {
+        total += rows * super::frames::RANGE_KEY_BYTES;
+    }
     for f in &plan.functions {
         let (out, _) = f.output()?;
         total += match &f.function {
@@ -882,7 +923,13 @@ pub(super) fn cost(
                         0
                     };
                     let slots = if shape == Shape::Whole { 0 } else { rows * 4 };
+                    let kept = if keeps_values(a) {
+                        rows * KEPT_VALUE_BYTES
+                    } else {
+                        0
+                    };
                     ids + slots
+                        + kept
                         + snapshot_heap(a, shape, held)
                         + groups * state
                         + width(&out, segments)

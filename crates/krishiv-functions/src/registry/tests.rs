@@ -645,10 +645,10 @@ fn calendar_signatures() {
     // What stays unregistered is known to Spark, so it is not "not found".
     assert!(
         matches!(
-            builtins().lookup("make_interval", SparkProfile::V4_2),
+            builtins().lookup("hll_sketch_agg", SparkProfile::V4_2),
             Lookup::KnownUnsupported
         ),
-        "make_interval"
+        "hll_sketch_agg"
     );
 }
 
@@ -1421,12 +1421,12 @@ fn session_and_clock_functions() {
         result("localtimestamp", &[], &[]).unwrap(),
         ty(DataType::TimestampNtz)
     );
-    // `current_time` is a `TIME`, which Krishiv has no type for: it stays
-    // known-unsupported where Spark has it (4.1+).
+    // `current_time` is a `TIME`, evaluated since P2-T181.
     assert!(matches!(
         builtins().lookup("current_time", SparkProfile::V4_2),
-        Lookup::KnownUnsupported
+        Lookup::Found(_)
     ));
+
     // `shuffle` needs an array type the engine has no representation for:
     // it stays known-unsupported where Spark has it.
     assert!(matches!(
@@ -1684,6 +1684,11 @@ fn uniform_and_randstr_signatures() {
 /// on every pair of bound kinds: both layers map their own type to the
 /// shared `uniform_result` rule, and the test pins the two mappers against
 /// each other so one side cannot drift without the other.
+/// `t` as the executor hands it to a function, and as functions return it.
+fn wide(t: &DataType) -> arrow_schema::DataType {
+    krishiv_types::arrow::client_arrow_type(&t.to_arrow())
+}
+
 #[test]
 fn uniform_result_agrees_with_the_executor_bind() {
     use crate::scalar::{BindOptions, bind_scalar};
@@ -1715,14 +1720,14 @@ fn uniform_result_agrees_with_the_executor_bind() {
             let bound = bind_scalar(
                 "uniform",
                 &[
-                    a.clone().unwrap_or(DataType::Null).to_arrow().into(),
-                    b.clone().unwrap_or(DataType::Null).to_arrow().into(),
+                    wide(&a.clone().unwrap_or(DataType::Null)).into(),
+                    wide(&b.clone().unwrap_or(DataType::Null)).into(),
                 ],
                 &BindOptions::new(),
             )
             .unwrap();
             assert_eq!(
-                reg.data_type.clone().map(|t| t.to_arrow()),
+                reg.data_type.as_ref().map(wide),
                 Some(bound.return_type().clone()),
                 "uniform({a:?}, {b:?})"
             );
@@ -2228,10 +2233,11 @@ fn json_signatures() {
     let s = ty(DataType::String);
     let map_ss = || DataType::Map(MapType::new(DataType::String, DataType::String, true).into());
     let string_lit = |text: &str| Some(Constant::String(text.to_owned()));
-    // `json_array_length` and `get_json_object` take strings exactly.
+    // `json_array_length` takes a string and nothing else; `get_json_object`
+    // takes strings exactly.
     assert_eq!(
         def("json_array_length").inputs,
-        Inputs::Expects(vec![InputType::Exact(DataType::String)])
+        Inputs::Expects(vec![InputType::Strict(DataType::String)])
     );
     assert_eq!(
         result("json_array_length", std::slice::from_ref(&s), &[]).unwrap(),
@@ -3309,4 +3315,23 @@ fn quantile_results_follow_the_percentage_shape() {
         (distinct.data_type, distinct.nullable),
         (Some(DataType::Long), false)
     );
+}
+
+#[test]
+fn slice_wants_an_array_and_sequence_two_or_three_arguments() {
+    let i = ty(DataType::Integer);
+    let err = result("slice", &[i.clone(), i.clone(), i.clone()], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class().name(),
+        "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    );
+    for n in [1, 4] {
+        let args = vec![i.clone(); n];
+        let err = result("sequence", &args, &[]).unwrap_err();
+        assert_eq!(
+            err.error_class().name(),
+            "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+            "{n} arguments"
+        );
+    }
 }

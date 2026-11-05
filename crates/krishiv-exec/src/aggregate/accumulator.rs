@@ -23,18 +23,17 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use arrow_array::builder::ArrayBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
-    Int32Type, Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Decimal128Array, Float32Array,
     Float64Array, Int64Array, ListArray, PrimitiveArray, StringArray, StringViewArray, UInt32Array,
 };
 use arrow_buffer::{NullBuffer, i256};
-use arrow_schema::{DataType, Field, TimeUnit};
+use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use krishiv_kernels::KernelCtx;
 use krishiv_kernels::compare::CompareKind;
 use krishiv_kernels::decimal::DecimalNative;
@@ -47,8 +46,8 @@ use super::mode::ModeAcc;
 use super::moments::Moments;
 use super::quantile::{self, ExactAcc, GkAcc};
 use super::{
-    AggInput, AggregateExpr, AggregateFunction, decimal_sum_overflow, long_overflow, out_of_range,
-    unsupported,
+    AggInput, AggregateExpr, AggregateFunction, decimal_sum_overflow, interval_sum_overflow,
+    is_ansi_interval, long_overflow, out_of_range, unsupported,
 };
 use krishiv_common::error::KrishivError;
 
@@ -74,6 +73,8 @@ pub(crate) fn min_max_supported(t: &DataType) -> bool {
             | DataType::Decimal128(..)
             | DataType::Date32
             | DataType::Timestamp(TimeUnit::Microsecond, _)
+            | DataType::Interval(IntervalUnit::YearMonth)
+            | DataType::Duration(TimeUnit::Microsecond)
             | DataType::Utf8
             | DataType::Utf8View
             | DataType::Binary
@@ -303,6 +304,15 @@ enum Kind {
     TrySumInt {
         sum: Vec<i64>,
         state: Vec<u8>,
+    },
+    /// `sum`, `try_sum`, `avg`, `try_avg` of an ANSI interval, in months or
+    /// microseconds. Every addition checks the family's range, ANSI on or
+    /// off: `sum` and `avg` raise, the `try_` forms keep `over` (sticky).
+    SumInterval {
+        sum: Vec<i64>,
+        count: Vec<i64>,
+        over: Vec<bool>,
+        months: bool,
     },
     /// `bit_and` / `bit_or` / `bit_xor`: the running value with whether
     /// a non-NULL input arrived.
@@ -605,6 +615,35 @@ fn ints(a: &ArrayRef) -> Result<Cow<'_, [i64]>> {
     })
 }
 
+/// An ANSI interval's months or microseconds; a partial state holds them as
+/// `bigint`.
+fn interval_values(a: &ArrayRef) -> Result<Cow<'_, [i64]>> {
+    Ok(match a.data_type() {
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            widen(a.as_primitive::<IntervalYearMonthType>())
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            Cow::Borrowed(a.as_primitive::<DurationMicrosecondType>().values())
+        }
+        _ => ints(a)?,
+    })
+}
+
+/// `a + b` within the range of the interval family: a year-month value is an
+/// `int` of months, whatever the width of its running sum.
+fn interval_add(a: i64, b: i64, months: bool) -> Option<i64> {
+    a.checked_add(b)
+        .filter(|s| !months || i32::try_from(*s).is_ok())
+}
+
+/// `sum / count` rounded `HALF_UP`, as Spark's `DivideYMInterval` and
+/// `DivideDTInterval` divide an interval `avg`; `count` is positive.
+fn interval_mean(sum: i64, count: i64) -> i128 {
+    let (s, c) = (i128::from(sum), i128::from(count));
+    let (q, r) = (s / c, s % c);
+    if r.abs() * 2 >= c { q + s.signum() } else { q }
+}
+
 fn widen<T>(a: &PrimitiveArray<T>) -> Cow<'static, [i64]>
 where
     T: arrow_array::ArrowPrimitiveType,
@@ -708,6 +747,9 @@ fn int_like(a: &ArrayRef) -> Result<Cow<'_, [i128]>> {
                 .map(|&v| i128::from(v))
                 .collect(),
         ),
+        DataType::Interval(IntervalUnit::YearMonth) | DataType::Duration(TimeUnit::Microsecond) => {
+            conv(interval_values(a)?.iter().map(|&v| i128::from(v)).collect())
+        }
         _ => conv(ints(a)?.iter().map(|&v| i128::from(v)).collect()),
     })
 }
@@ -984,6 +1026,14 @@ impl Accumulator {
         };
         let kind = match (&expr.function, &result) {
             (F::Count, _) => Kind::Count(Vec::new()),
+            (F::Sum | F::TrySum | F::Avg | F::TryAvg, t) if is_ansi_interval(t) => {
+                Kind::SumInterval {
+                    sum: Vec::new(),
+                    count: Vec::new(),
+                    over: Vec::new(),
+                    months: matches!(t, DataType::Interval(_)),
+                }
+            }
             (F::Sum | F::TrySum, DataType::Int64) => {
                 if matches!(expr.function, F::TrySum) {
                     Kind::TrySumInt {
@@ -1194,6 +1244,9 @@ impl Accumulator {
             Kind::Collect(c) => c.vecs(),
             Kind::Vector(v) => v.vecs(),
             Kind::TrySumInt { sum, state } => vec![v(sum), v(state)],
+            Kind::SumInterval {
+                sum, count, over, ..
+            } => vec![v(sum), v(count), v(over)],
             Kind::Mode(m) => m.vecs(),
             Kind::ListAgg(l) => l.vecs(),
             // The quantile and HLL states are maps and buffers, not
@@ -1347,6 +1400,13 @@ impl Accumulator {
                 sum.resize(n, 0);
                 state.resize(n, 0);
             }
+            Kind::SumInterval {
+                sum, count, over, ..
+            } => {
+                sum.resize(n, 0);
+                count.resize(n, 0);
+                over.resize(n, false);
+            }
             Kind::Mode(m) => m.resize(n),
             Kind::ListAgg(l) => l.resize(n),
             Kind::Exact(e) => e.resize(n),
@@ -1420,6 +1480,13 @@ impl Accumulator {
             Kind::TrySumInt { sum, state } => {
                 sum.reserve(new);
                 state.reserve(new);
+            }
+            Kind::SumInterval {
+                sum, count, over, ..
+            } => {
+                sum.reserve(new);
+                count.reserve(new);
+                over.reserve(new);
             }
             Kind::Mode(m) => m.reserve(new),
             Kind::ListAgg(l) => l.reserve(new),
@@ -1503,7 +1570,84 @@ impl Accumulator {
         if self.expr.input == AggInput::State {
             return Err(internal("a running fold over partial states".to_owned()));
         }
+        if matches!(self.kind, Kind::Exact(_)) {
+            return self.update_running_exact(groups, cols, run);
+        }
         self.fold(groups, &args, false, &Weights::Const(1), Some(run), None)
+    }
+
+    /// The flags of an exact percentile call: its percentages, `reverse`,
+    /// whether it interpolates (`cont`), the legacy discrete rule and whether
+    /// it returns an array.
+    fn exact_params(&self) -> Result<(Vec<f64>, bool, bool, bool, bool)> {
+        use AggregateFunction as F;
+        match &self.expr.function {
+            F::Percentile {
+                percentages,
+                array,
+                reverse,
+            } => Ok((percentages.clone(), *reverse, true, false, *array)),
+            F::PercentileDisc {
+                percentages,
+                array,
+                reverse,
+                legacy,
+            } => Ok((percentages.clone(), *reverse, false, *legacy, *array)),
+            _ => Err(internal(
+                "an exact percentile over another aggregate".to_owned(),
+            )),
+        }
+    }
+
+    /// [`update_running`](Self::update_running) for the exact percentiles,
+    /// whose state is a value map: the rows are folded in runs ending at a
+    /// snapshot row. A window evaluates them
+    /// over a whole partition or a running frame (`percentile` accepts an
+    /// ordered window); a snapshot freezes the answer at its row instead of
+    /// copying the value map.
+    fn update_running_exact(
+        &mut self,
+        groups: &[u32],
+        cols: &[ArrayRef],
+        run: &Running<'_>,
+    ) -> Result<()> {
+        let mut lo = 0;
+        while lo < groups.len() {
+            let hi = (lo..groups.len())
+                .find(|&i| run.snapshots[i] != Running::NONE)
+                .map_or(groups.len(), |i| i + 1);
+            let part: Vec<ArrayRef> = cols.iter().map(|c| c.slice(lo, hi - lo)).collect();
+            let args: Vec<&ArrayRef> = self
+                .expr
+                .args
+                .iter()
+                .map(|&i| arg(&part, i))
+                .collect::<Result<_>>()?;
+            self.fold(
+                &groups[lo..hi],
+                &args,
+                false,
+                &Weights::Const(1),
+                None,
+                None,
+            )?;
+            let last = hi - 1;
+            if run.snapshots[last] != Running::NONE {
+                let (percentages, reverse, cont, legacy, _) = self.exact_params()?;
+                if let Kind::Exact(acc) = &mut self.kind {
+                    acc.freeze(
+                        run.parts[last] as usize,
+                        run.snapshots[last] as usize,
+                        &percentages,
+                        reverse,
+                        cont,
+                        legacy,
+                    );
+                }
+            }
+            lo = hi;
+        }
+        Ok(())
     }
 
     /// Merges partial states (`states`: this aggregate's state columns).
@@ -1547,6 +1691,7 @@ impl Accumulator {
                     | Kind::By { .. }
                     | Kind::Moments(_)
                     | Kind::TrySumInt { .. }
+                    | Kind::SumInterval { .. }
                     | Kind::Collect(_)
                     | Kind::Vector(_)
                     | Kind::Bit { .. }
@@ -1717,6 +1862,45 @@ impl Accumulator {
                         }
                         snapshot!(i, sum, st);
                     }
+                }
+            }
+            (
+                Kind::SumInterval {
+                    sum,
+                    count,
+                    over,
+                    months,
+                },
+                _,
+            ) => {
+                let raises = matches!(
+                    self.expr.function,
+                    AggregateFunction::Sum | AggregateFunction::Avg
+                );
+                let months = *months;
+                let v = interval_values(args[0])?;
+                // A partial's count says it holds rows; its NULL sum then
+                // says it overflowed.
+                let counts = if state { Some(ints(args[1])?) } else { None };
+                for (i, &g) in groups.iter().enumerate() {
+                    let g = g as usize;
+                    let rows = match &counts {
+                        Some(c) => c[i],
+                        None => i64::from(valid(i)),
+                    };
+                    if rows > 0 {
+                        count[g] = count[g].saturating_add(rows);
+                        if state && !valid(i) {
+                            over[g] = true;
+                        } else if !over[g] {
+                            match interval_add(sum[g], v[i], months) {
+                                Some(s) => sum[g] = s,
+                                None if raises => return Err(interval_sum_overflow()),
+                                None => over[g] = true,
+                            }
+                        }
+                    }
+                    snapshot!(i, sum, count, over);
                 }
             }
             // The bitwise aggregates: NULLs skipped, NULL for no input.
@@ -2359,6 +2543,7 @@ impl Accumulator {
             | Kind::Approx(_)
             | Kind::Hll(_) => 1,
             Kind::TrySumInt { .. }
+            | Kind::SumInterval { .. }
             | Kind::SumDec { .. }
             | Kind::AvgFloat { .. }
             | Kind::AvgDec { .. }
@@ -2441,6 +2626,17 @@ impl Accumulator {
                 )),
                 Arc::new(BooleanArray::from_iter(
                     ids.iter().map(|i| Some(state[pick(i)] != 0)),
+                )),
+            ],
+            Kind::SumInterval {
+                sum, count, over, ..
+            } => vec![
+                Arc::new(Int64Array::from_iter(ids.iter().map(|i| {
+                    let g = pick(i);
+                    (count[g] > 0 && !over[g]).then(|| sum[g])
+                }))),
+                Arc::new(Int64Array::from_iter_values(
+                    ids.iter().map(|i| count[pick(i)]),
                 )),
             ],
             Kind::Bit { values, set, .. } => {
@@ -2662,43 +2858,34 @@ impl Accumulator {
             Kind::TrySumInt { sum, state } => Arc::new(Int64Array::from_iter(
                 ids.iter().map(|i| (state[at(i)] == 1).then(|| sum[at(i)])),
             )),
+            Kind::SumInterval {
+                sum, count, over, ..
+            } => {
+                let mean = matches!(
+                    self.expr.function,
+                    AggregateFunction::Avg | AggregateFunction::TryAvg
+                );
+                narrow(
+                    ids.iter().map(|i| {
+                        let g = at(i);
+                        (count[g] > 0 && !over[g]).then(|| {
+                            if mean {
+                                interval_mean(sum[g], count[g])
+                            } else {
+                                i128::from(sum[g])
+                            }
+                        })
+                    }),
+                    &self.result,
+                )?
+            }
             Kind::Bit { values, set, .. } => {
                 self.value_array(values, &self.result, |i| set[i], ids)?
             }
             Kind::Mode(m) => m.evaluate(ids)?,
             Kind::ListAgg(l) => l.evaluate(ids)?,
             Kind::Exact(acc) => {
-                use AggregateFunction as F;
-                let (percentages, reverse, cont, legacy, array) = match &self.expr.function {
-                    F::Percentile {
-                        percentages,
-                        array,
-                        reverse,
-                    } => (percentages.clone(), *reverse, true, false, *array),
-                    F::PercentileDisc {
-                        percentages,
-                        array,
-                        reverse,
-                        legacy,
-                    } => (percentages.clone(), *reverse, false, *legacy, *array),
-                    _ => {
-                        return Err(internal(
-                            "an exact percentile over another aggregate".to_owned(),
-                        ));
-                    }
-                };
-                let field = if array {
-                    match &self.result {
-                        DataType::List(field) => Some(Arc::clone(field)),
-                        _ => {
-                            return Err(internal(
-                                "an exact percentile array of another type than a list".to_owned(),
-                            ));
-                        }
-                    }
-                } else {
-                    None
-                };
+                let (percentages, reverse, cont, legacy, array) = self.exact_params()?;
                 exact_results(
                     acc,
                     ids,
@@ -2707,7 +2894,7 @@ impl Accumulator {
                     cont,
                     legacy,
                     array,
-                    field.as_ref(),
+                    &self.result,
                 )?
             }
             Kind::Approx(gk) => {
@@ -2767,16 +2954,21 @@ fn exact_results(
     cont: bool,
     legacy_disc: bool,
     array: bool,
-    field: Option<&Arc<Field>>,
+    t: &DataType,
 ) -> Result<ArrayRef> {
-    use arrow_array::builder::Float64Builder;
     if !array {
-        return Ok(Arc::new(Float64Array::from_iter(ids.iter().map(|&i| {
+        let it = ids.iter().map(|&i| {
             acc.evaluate(i as usize, percentages, reverse, cont, legacy_disc)
                 .and_then(|mut v| v.pop())
-        }))));
+        });
+        return approx_column(it, t);
     }
-    let mut values = Float64Builder::new();
+    let DataType::List(field) = t else {
+        return Err(internal(
+            "an exact percentile array of another type than a list".to_owned(),
+        ));
+    };
+    let mut values: Vec<Option<f64>> = Vec::new();
     let mut offsets = Vec::with_capacity(ids.len() + 1);
     let mut present = Vec::with_capacity(ids.len());
     offsets.push(0);
@@ -2787,21 +2979,14 @@ fn exact_results(
             .evaluate(i as usize, percentages, reverse, cont, legacy_disc)
             .filter(|vs| !vs.is_empty());
         present.push(got.is_some());
-        for v in got.into_iter().flatten() {
-            values.append_value(v);
-        }
+        values.extend(got.into_iter().flatten().map(Some));
         offsets.push(
             i32::try_from(values.len())
                 .map_err(|_| internal("a percentile of too many values".to_owned()))?,
         );
     }
-    let Some(field) = field else {
-        return Err(internal(
-            "an exact percentile array without its element field".to_owned(),
-        ));
-    };
     Ok(quantile::finish_lists(
-        Arc::new(values.finish()),
+        approx_column(values.into_iter(), field.data_type())?,
         offsets,
         Arc::clone(field),
         Some(&present),
@@ -2866,8 +3051,8 @@ fn approx_results(
     ))
 }
 
-/// Approximate values as a column of type `t`: integers, dates and
-/// timestamps truncate (as Spark's `toByte`/`toShort`/`toInt`/`toLong`
+/// Percentile values as a column of type `t`: integers, dates, timestamps and
+/// ANSI intervals truncate (as Spark's `toByte`/`toShort`/`toInt`/`toLong`
 /// do), decimals truncate at their scale, floats convert.
 fn approx_column(it: impl Iterator<Item = Option<f64>>, t: &DataType) -> Result<ArrayRef> {
     Ok(match t {
@@ -2878,6 +3063,16 @@ fn approx_column(it: impl Iterator<Item = Option<f64>>, t: &DataType) -> Result<
             Arc::new(out) as ArrayRef
         }
         DataType::Float64 => Arc::new(it.collect::<Float64Array>()) as ArrayRef,
+        // `as` saturates like `toInt` and `toLong`: the largest microseconds
+        // read as a double are one past the range, and come back.
+        #[expect(clippy::cast_possible_truncation, reason = "Java narrowing parity")]
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            narrow(it.map(|v| v.map(|x| i128::from(x as i32))), t)?
+        }
+        #[expect(clippy::cast_possible_truncation, reason = "Java narrowing parity")]
+        DataType::Duration(TimeUnit::Microsecond) => {
+            narrow(it.map(|v| v.map(|x| i128::from(x as i64))), t)?
+        }
         DataType::Decimal64(_, s) | DataType::Decimal128(_, s) => {
             let scale = *s;
             approx_ints(it.map(|v| v.map(|x| decimal_unscaled(x, scale))), t)?
@@ -2960,6 +3155,8 @@ fn narrow(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<ArrayR
         DataType::Int64 => prim::<Int64Type>(it, t),
         DataType::Date32 => prim::<Date32Type>(it, t),
         DataType::Timestamp(..) => prim::<TimestampMicrosecondType>(it, t),
+        DataType::Interval(_) => prim::<IntervalYearMonthType>(it, t),
+        DataType::Duration(_) => prim::<DurationMicrosecondType>(it, t),
         DataType::Decimal64(..) => prim::<Decimal64Type>(it, t),
         _ => prim::<Decimal128Type>(it, t),
     }

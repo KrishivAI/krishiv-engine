@@ -5,8 +5,8 @@
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    TimestampMicrosecondType,
 };
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::{DataType, Schema};
@@ -16,7 +16,7 @@ use krishiv_kernels::text::{java_decimal_string, java_double_string, java_float_
 
 use super::convert::{encode_base64, kind_of};
 use super::options::JsonOptions;
-use crate::csv::convert::Kind;
+use crate::csv::convert::{Kind, interval_text};
 use crate::error::{FormatError, FormatResult};
 use crate::format::{Encoder, WrittenFile};
 use crate::options::FormatOptions;
@@ -64,21 +64,7 @@ impl JsonEncoder {
         let kinds = schema
             .fields()
             .iter()
-            .map(|f| {
-                kind_of(f.data_type()).map_err(|_| {
-                    FormatError::Other(
-                        krishiv_common::error::UnsupportedDataTypeForDatasource {
-                            format: "JSON".to_owned(),
-                            column_name: format!("`{}`", f.name()),
-                            column_type: format!(
-                                "\"{}\"",
-                                crate::text::spark_type_name(f.data_type())
-                            ),
-                        }
-                        .into(),
-                    )
-                })
-            })
+            .map(|f| kind_of(f).map_err(|_| crate::error::unsupported_column("JSON", f)))
             .collect::<FormatResult<Vec<_>>>()?;
         Ok(Self {
             o: opts,
@@ -154,7 +140,7 @@ impl JsonEncoder {
             }
             (Kind::Decimal(_, s), _) => {
                 buf.push_str(&java_decimal_string(
-                    a.as_primitive::<Decimal128Type>().value(i),
+                    crate::csv::convert::decimal_at(a, i),
                     *s,
                 ));
             }
@@ -183,6 +169,9 @@ impl JsonEncoder {
                     .format_timestamp(a.as_primitive::<TimestampMicrosecondType>().value(i))
                     .map_err(write_err)?;
                 push_quoted(buf, &s);
+            }
+            (Kind::YearMonth(..) | Kind::DayTime(..), _) => {
+                push_quoted(buf, &interval_text(kind, a, i).unwrap_or_default());
             }
             (Kind::TimestampNtz, _) => {
                 let s = dt

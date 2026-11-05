@@ -157,7 +157,7 @@ impl Hints {
         strategy: JoinStrategy,
     ) -> Arc<LogicalPlan> {
         let ident: Option<Vec<String>> = match &p.node {
-            PlanNode::SubqueryAlias { alias, .. } => Some(vec![alias.clone()]),
+            PlanNode::SubqueryAlias { alias, .. } => Some(alias_parts(alias)),
             PlanNode::Scan(s) => match &s.source {
                 ReadSource::Table { name, .. } => Some(name.clone()),
                 ReadSource::Files { .. } => Some(Vec::new()),
@@ -168,7 +168,7 @@ impl Hints {
                 strategy: old,
             } => {
                 let inner = match &input.node {
-                    PlanNode::SubqueryAlias { alias, .. } => Some(vec![alias.clone()]),
+                    PlanNode::SubqueryAlias { alias, .. } => Some(alias_parts(alias)),
                     PlanNode::Scan(s) => match &s.source {
                         ReadSource::Table { name, .. } => Some(name.clone()),
                         ReadSource::Files { .. } => None,
@@ -268,4 +268,13 @@ fn bad_parameter(e: &Expr) -> AnalysisError {
         },
         e.origin,
     )
+}
+
+/// An alias's name parts: a global view's `global_temp.v` is stored as one string joined by
+/// `ALIAS_PART_SEP`.
+fn alias_parts(alias: &str) -> Vec<String> {
+    alias
+        .split(crate::plan::ALIAS_PART_SEP)
+        .map(str::to_owned)
+        .collect()
 }

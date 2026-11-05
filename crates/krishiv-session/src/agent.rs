@@ -65,14 +65,16 @@ use arrow_array::MapArray;
 use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    Date32Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
+    TimestampMicrosecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
-use arrow_schema::{DataType as ArrowType, Schema, TimeUnit};
+use arrow_schema::{DataType as ArrowType, Field, IntervalUnit, Schema, TimeUnit};
 use krishiv_common::error::{ErrorContextType, KrishivError};
 use krishiv_kernels::cast::TimeZoneRules;
 pub use krishiv_kernels::datetime::ZoneRef;
 use krishiv_kernels::datetime::resolve_zone;
+use krishiv_types::{DataType, DayTimeField, YearMonthField};
 use twox_hash::XxHash3_128;
 
 /// Default most rows rendered (`row cap` stops the stream past this).
@@ -779,6 +781,26 @@ fn format_rows(rows: u64) -> String {
 // later MCP server share one implementation.
 // ---------------------------------------------------------------------------
 
+/// [`cell`] with the Spark type of `field`: an interval prints in its own
+/// fields. An interval nested in an array, map or struct prints in its family's
+/// default fields, since it takes the column's whole type to tell them.
+pub fn field_cell(field: &Field, a: &dyn Array, i: usize, null: &str, tz: &ZoneRef) -> String {
+    if a.is_null(i) {
+        return null.to_owned();
+    }
+    match DataType::from_arrow_field(field) {
+        Ok(DataType::YearMonthInterval { start, end }) => {
+            let months = a.as_primitive::<IntervalYearMonthType>().value(i);
+            krishiv_types::interval::year_month_string(months, start, end)
+        }
+        Ok(DataType::DayTimeInterval { start, end }) => {
+            let micros = a.as_primitive::<DurationMicrosecondType>().value(i);
+            krishiv_types::interval::day_time_string(micros, start, end)
+        }
+        _ => cell(a, i, null, tz),
+    }
+}
+
 /// One value as text; `null` stands in for SQL NULL.
 ///
 /// Moved from `krishiv-cli` (the CLI's table output now goes through it
@@ -821,6 +843,20 @@ pub fn cell(a: &dyn Array, i: usize, null: &str, tz: &ZoneRef) -> String {
                 .checked_add(shift)
                 .and_then(arrow_array::temporal_conversions::timestamp_us_to_datetime)
                 .map_or_else(String::new, |d| d.to_string())
+        }
+        ArrowType::Interval(IntervalUnit::YearMonth) => krishiv_types::interval::year_month_string(
+            a.as_primitive::<IntervalYearMonthType>().value(i),
+            YearMonthField::Year,
+            YearMonthField::Month,
+        ),
+        ArrowType::Duration(TimeUnit::Microsecond) => krishiv_types::interval::day_time_string(
+            a.as_primitive::<DurationMicrosecondType>().value(i),
+            DayTimeField::Day,
+            DayTimeField::Second,
+        ),
+        ArrowType::Interval(IntervalUnit::MonthDayNano) => {
+            let v = a.as_primitive::<IntervalMonthDayNanoType>().value(i);
+            krishiv_types::interval::calendar_string(v.months, v.days, v.nanoseconds / 1_000)
         }
         ArrowType::List(_) => {
             let inner = a.as_list::<i32>().value(i);

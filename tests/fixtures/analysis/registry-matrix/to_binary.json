@@ -26,11 +26,11 @@
     },
     {
       "id": "to_binary#35b4d980b59d/ansi_on",
-      "reason": "SELECT to_binary('abc', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT to_binary('abc', INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "to_binary#35b4d980b59d/ansi_off",
-      "reason": "SELECT to_binary('abc', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT to_binary('abc', INTERVAL '1-2' YEAR TO MONTH) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "to_binary#3cf2a0779cfc/ansi_on",
@@ -57,28 +57,12 @@
       "reason": "SELECT to_binary('abc', CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
-      "id": "to_binary#62203c3e758b/ansi_on",
-      "reason": "SELECT to_binary(INTERVAL '1 02:03:04' DAY TO SECOND, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "to_binary#62203c3e758b/ansi_off",
-      "reason": "SELECT to_binary(INTERVAL '1 02:03:04' DAY TO SECOND, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "to_binary#63b111740dc1/ansi_on",
-      "reason": "SELECT to_binary(INTERVAL '1-2' YEAR TO MONTH, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "to_binary#63b111740dc1/ansi_off",
-      "reason": "SELECT to_binary(INTERVAL '1-2' YEAR TO MONTH, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
       "id": "to_binary#6742c217371d/ansi_on",
-      "reason": "SELECT to_binary('abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT to_binary('abc', INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "to_binary#6742c217371d/ansi_off",
-      "reason": "SELECT to_binary('abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT to_binary('abc', INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "to_binary#94a597ad1e4e/ansi_on",

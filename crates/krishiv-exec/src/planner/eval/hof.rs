@@ -524,10 +524,17 @@ impl PhysExpr for Call {
                 let ArrowType::List(field) = &self.out else {
                     return Err(internal("a higher-order call over a non-list"));
                 };
-                Arc::new(
+                // The element field takes what the analyzer typed, such as an
+                // interval's fields, which the body's values don't carry.
+                let out: ArrayRef = Arc::new(
                     list::transform_list(&list, &body, field.is_nullable())
                         .map_err(|e| internal(&e.to_string()))?,
-                ) as ArrayRef
+                );
+                if super::func::same_shape(out.data_type(), &self.out) {
+                    super::func::relabeled(&out, &self.out)?
+                } else {
+                    out
+                }
             }
             "filter" | "exists" | "forall" => {
                 let keep = body
@@ -2276,7 +2283,9 @@ mod tests {
             map_key_dedup_last_win: false,
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
+            legacy_time_parser: false,
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            partition_shift: 0,
         }
     }
 

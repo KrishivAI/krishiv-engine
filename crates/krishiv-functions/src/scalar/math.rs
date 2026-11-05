@@ -11,16 +11,16 @@
 use std::sync::Arc;
 
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
 };
-use arrow_array::{Array, ArrayRef, Float64Array, Int64Array, new_null_array};
-use arrow_schema::DataType;
+use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, Float64Array, Int64Array, new_null_array};
+use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use krishiv_common::error::KrishivError;
-use krishiv_kernels::OverflowMode;
 use krishiv_kernels::math::{
     self, BinaryFn, DecimalRounding, Extremum, RoundMode, UnaryFn, round_decimal_type,
 };
+use krishiv_kernels::{OverflowMode, interval};
 
 use super::args::{Inputs, internal, is_binary, is_string, unsupported};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
@@ -144,6 +144,33 @@ fn width_bucket(value: f64, min: f64, max: f64, buckets: i64) -> Option<i64> {
     })
 }
 
+/// `width_bucket` over a value and bounds of carrier `T`, read as `double`s.
+fn width_bucket_binding<T: ArrowPrimitiveType>(as_double: fn(T::Native) -> f64) -> Binding {
+    Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
+        let value = x.array::<T>(0)?;
+        let min = x.array::<T>(1)?;
+        let max = x.array::<T>(2)?;
+        let buckets = x.array::<Int64Type>(3)?;
+        let out: Int64Array = (0..value.len())
+            .map(|i| {
+                let all =
+                    value.is_valid(i) && min.is_valid(i) && max.is_valid(i) && buckets.is_valid(i);
+                if all {
+                    width_bucket(
+                        as_double(value.value(i)),
+                        as_double(min.value(i)),
+                        as_double(max.value(i)),
+                        buckets.value(i),
+                    )
+                } else {
+                    None
+                }
+            })
+            .collect();
+        Ok(Arc::new(out) as ArrayRef)
+    })
+}
+
 /// The overflow policy of integral math under the session's ANSI mode.
 pub(super) fn overflow_mode(opts: &BindOptions) -> OverflowMode {
     if opts.ansi {
@@ -247,6 +274,11 @@ fn ceil_floor(t: &DataType, scale: Option<i32>, ceil: bool, one_arg: bool) -> Op
         DataType::Float64 if one_arg => Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
             Ok(Arc::new(math::ceil_floor_to_long(&x.array::<Float64Type>(0)?, ceil)) as ArrayRef)
         }),
+        // Spark's one-argument `floor`/`ceil` keep the type of a decimal whose scale is 0
+        // (`case dt @ DecimalType.Fixed(_, 0) => dt`), and its values are already whole.
+        DataType::Decimal128(_, 0) if one_arg => {
+            Binding::new(t.clone(), |x: &Inputs<'_>| x.column(0))
+        }
         DataType::Decimal128(p, s) => {
             let (rp, rs) = round_decimal_type(*p, *s, scale.unwrap_or(0));
             let out = DataType::Decimal128(rp, rs);
@@ -402,6 +434,18 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(Arc::new(math::unary(f, &x.array::<Float64Type>(0)?, &ctx)) as ArrayRef)
             })
         }
+        ("sign" | "signum", [DataType::Interval(IntervalUnit::YearMonth)]) => {
+            Binding::new(double, |x: &Inputs<'_>| {
+                let a = x.array::<IntervalYearMonthType>(0)?;
+                Ok(Arc::new(interval::sign_year_month(&a)) as ArrayRef)
+            })
+        }
+        ("sign" | "signum", [DataType::Duration(TimeUnit::Microsecond)]) => {
+            Binding::new(double, |x: &Inputs<'_>| {
+                let a = x.array::<DurationMicrosecondType>(0)?;
+                Ok(Arc::new(interval::sign_day_time(&a)) as ArrayRef)
+            })
+        }
         ("pow" | "power" | "atan2" | "hypot" | "log", [DataType::Float64, DataType::Float64]) => {
             let f = match listed {
                 "atan2" => BinaryFn::Atan2,
@@ -414,34 +458,22 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(Arc::new(math::binary(f, l.operand(), r.operand())?) as ArrayRef)
             })
         }
-        (
-            "width_bucket",
-            [
-                DataType::Float64,
-                DataType::Float64,
-                DataType::Float64,
-                DataType::Int64,
-            ],
-        ) => Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
-            let value = x.array::<Float64Type>(0)?;
-            let min = x.array::<Float64Type>(1)?;
-            let max = x.array::<Float64Type>(2)?;
-            let buckets = x.array::<Int64Type>(3)?;
-            let out: Int64Array = (0..value.len())
-                .map(|i| {
-                    let all = value.is_valid(i)
-                        && min.is_valid(i)
-                        && max.is_valid(i)
-                        && buckets.is_valid(i);
-                    if all {
-                        width_bucket(value.value(i), min.value(i), max.value(i), buckets.value(i))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            Ok(Arc::new(out) as ArrayRef)
-        }),
+        ("width_bucket", [value, min, max, DataType::Int64]) if value == min && value == max => {
+            match value {
+                DataType::Float64 => width_bucket_binding::<Float64Type>(|v| v),
+                DataType::Interval(IntervalUnit::YearMonth) => {
+                    width_bucket_binding::<IntervalYearMonthType>(f64::from)
+                }
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "Spark's `Number.doubleValue` of the microseconds"
+                )]
+                DataType::Duration(TimeUnit::Microsecond) => {
+                    width_bucket_binding::<DurationMicrosecondType>(|v| v as f64)
+                }
+                _ => return Some((listed, Err(bad_types(listed, args)))),
+            }
+        }
         ("pi", []) => constant(std::f64::consts::PI),
         ("e", []) => constant(std::f64::consts::E),
         ("round" | "bround", [t] | [t, _]) => {

@@ -21,7 +21,7 @@ use apache_avro::Schema as AvroSchema;
 use apache_avro::schema::InnerDecimalSchema;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, RecordBatch};
-use arrow_schema::{DataType, SchemaRef, TimeUnit};
+use arrow_schema::{DataType, IntervalUnit, SchemaRef, TimeUnit};
 use bytes::Bytes;
 
 use super::block_codec;
@@ -254,6 +254,12 @@ fn put_scalar(
             put_long(out, i64::from(prim::<t::Int32Type>(array, row)));
         }
         (AvroSchema::Long, DataType::Int64) => put_long(out, prim::<t::Int64Type>(array, row)),
+        (AvroSchema::Int, DataType::Interval(IntervalUnit::YearMonth)) => {
+            put_long(out, i64::from(prim::<t::IntervalYearMonthType>(array, row)));
+        }
+        (AvroSchema::Long, DataType::Duration(TimeUnit::Microsecond)) => {
+            put_long(out, prim::<t::DurationMicrosecondType>(array, row));
+        }
         (AvroSchema::Float, DataType::Float32) => {
             out.extend_from_slice(&prim::<t::Float32Type>(array, row).to_le_bytes());
         }
@@ -294,9 +300,12 @@ fn put_scalar(
             }
             out.extend_from_slice(v);
         }
-        (AvroSchema::Decimal(d), DataType::Decimal128(_, scale)) => {
+        (
+            AvroSchema::Decimal(d),
+            DataType::Decimal64(_, scale) | DataType::Decimal128(_, scale),
+        ) => {
             let v = rescale(
-                prim::<t::Decimal128Type>(array, row),
+                crate::csv::convert::decimal_at(array, row),
                 *scale,
                 d.scale,
                 d.precision,
@@ -440,6 +449,7 @@ impl AvroEncoder {
     /// `KRISHIV_INVALID_FORMAT_OPTION_VALUE` for a bad `avroSchema`;
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a schema with no Avro type.
     pub(crate) fn new(schema: &SchemaRef, o: &FormatOptions) -> FormatResult<Self> {
+        crate::error::refuse_calendar_intervals("Avro", schema)?;
         let opts = AvroOptions::new(o)?;
         let codec = block_codec(opts.codec)?;
         let json = match &opts.avro_schema {

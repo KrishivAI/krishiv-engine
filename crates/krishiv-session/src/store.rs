@@ -46,11 +46,15 @@ pub(crate) struct StoreColumn {
 }
 
 /// A permanent view: its query as SQL text, parsed again at each read (so it follows the tables it reads), and the
-/// namespace that was current when it was created, in which its bare table names resolve.
+/// namespace that was current when it was created, in which its bare table names resolve when its frozen path does not hold them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ViewDef {
     pub(crate) sql: String,
     pub(crate) namespace: String,
+    /// The SQL path when the view was created (Spark freezes it with the view): the bare names of its text
+    /// resolve through it first, whatever `SET PATH` does later, and fall back to `namespace` when no schema
+    /// of the path holds the name.
+    pub(crate) path: Vec<Vec<String>>,
     /// The names the query's output had when the view was created (before a column list renamed them): a
     /// read projects the stored columns from the query's output by these names, so a base table that gained
     /// columns does not change the view (Spark's schema compensation).
@@ -268,6 +272,8 @@ pub(crate) trait CatalogStore: Send + Sync {
     fn has_namespace(&self, namespace: &str) -> bool;
     /// Adds a namespace; `false` when it exists already (nothing changes).
     fn create_namespace(&self, namespace: &str, meta: NamespaceMeta) -> bool;
+    /// Changes a namespace's metadata with `change`; `false` when it does not exist.
+    fn alter_namespace(&self, namespace: &str, change: &dyn Fn(&mut NamespaceMeta)) -> bool;
     /// Removes a namespace; with `cascade` also its tables, which are returned so that the caller can delete
     /// the managed ones' data after the metadata change.
     ///
@@ -383,6 +389,16 @@ impl CatalogStore for InMemoryCatalogStore {
         true
     }
 
+    fn alter_namespace(&self, namespace: &str, change: &dyn Fn(&mut NamespaceMeta)) -> bool {
+        let mut state = self.lock();
+        let Some(meta) = state.namespaces.get_mut(namespace) else {
+            return false;
+        };
+        change(meta);
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+        true
+    }
+
     fn drop_namespace(
         &self,
         namespace: &str,
@@ -443,8 +459,12 @@ impl CatalogStore for InMemoryCatalogStore {
             (true, CreateMode::IfNotExists) => return Ok(false),
             (true, CreateMode::Replace) | (false, _) => {}
         }
+        let changed = format!("{}.{}", key.0, key.1);
         state.tables.insert(key, Arc::new(table));
         self.epoch.fetch_add(1, Ordering::AcqRel);
+        // What the result cache holds for this table is stale (it also covers the results
+        // computed between a table's data being written and its partitions being registered).
+        crate::result_cache::global().invalidate_table(&changed);
         Ok(true)
     }
 
@@ -455,8 +475,10 @@ impl CatalogStore for InMemoryCatalogStore {
             Some(current) if Arc::ptr_eq(current, expected) => {}
             _ => return false,
         }
+        let changed = format!("{}.{}", key.0, key.1);
         state.tables.insert(key, Arc::new(table));
         self.epoch.fetch_add(1, Ordering::AcqRel);
+        crate::result_cache::global().invalidate_table(&changed);
         true
     }
 
@@ -467,6 +489,7 @@ impl CatalogStore for InMemoryCatalogStore {
             .remove(&(namespace.to_owned(), name.to_owned()));
         if removed.is_some() {
             self.epoch.fetch_add(1, Ordering::AcqRel);
+            crate::result_cache::global().invalidate_table(&format!("{namespace}.{name}"));
         }
         removed
     }

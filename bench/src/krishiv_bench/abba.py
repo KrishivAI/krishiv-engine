@@ -22,6 +22,7 @@ import datetime as dt
 import fcntl
 import json
 import math
+import os
 import random
 import statistics
 import threading
@@ -40,6 +41,52 @@ from .paths import data_root, dataset_dir, fmt_sf, results_dir
 from .runner import git_info, load_queries, machine_info
 
 LOAD_INDICATIVE = 4.0
+
+
+def load_bound(record: dict) -> float:
+    """The 1-minute load above which a run is indicative only.
+
+    The run's own threads drive the load average up (``--threads 12`` reaches about 12 on an idle
+    machine), so the bound during the run is ``LOAD_INDICATIVE`` of *other* load on top of them,
+    counting at most the machine's CPUs. A record without ``threads`` (older results) keeps the
+    plain bound.
+
+    This is less sensitive than the plain bound: short queries keep the run's own share of the
+    average below ``threads``, and other work of up to ``LOAD_INDICATIVE`` plus that gap then goes
+    unnoticed during the run. Other work already there when the run starts is caught by the load
+    at start, which is judged against the plain bound.
+    """
+    threads = record.get("threads")
+    if not isinstance(threads, int) or threads <= 0:
+        return LOAD_INDICATIVE
+    return LOAD_INDICATIVE + min(threads, os.cpu_count() or threads)
+
+
+def load_line(record: dict) -> str:
+    """The report line on the machine load: what was measured, the bound and why it is indicative."""
+    s = record["summary"]
+    # A record saved before the summary held the bound is rendered as saved, not re-summarized.
+    bound = s.get("load_bound", load_bound(record))
+    own = bound - LOAD_INDICATIVE
+    makeup = (
+        f"{LOAD_INDICATIVE:g} of other load plus the run's {own:g} threads"
+        if own > 0
+        else f"{LOAD_INDICATIVE:g}, as the record has no thread count"
+    )
+    start = record["load_at_start"]
+    verdict = "INDICATIVE ONLY" if s["indicative"] else "load within bound"
+    reasons = []
+    if math.isnan(start) or start > LOAD_INDICATIVE:
+        reasons.append(f"load at start {start:.1f} is not at most {LOAD_INDICATIVE:g}")
+    if math.isnan(s["max_load"]) or s["max_load"] > bound:
+        reasons.append(f"max load {s['max_load']:.1f} is above the bound")
+    why = f" ({'; '.join(reasons)})" if reasons else ""
+    return (
+        f"Load: at start {start:.1f}, max 1-min average {s['max_load']:.1f}; bound {bound:g} "
+        f"({makeup}): {verdict}{why}."
+    )
+
+
 BOOTSTRAP_ITERS = 2000
 PATTERN = ("krishiv", "duckdb", "duckdb", "krishiv")  # ABBA
 
@@ -192,6 +239,7 @@ def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s
         "shared, never dropped; both engines read the same Parquet files, no table is loaded or cached up front",
         "bench_lock_wait_s": lock_wait_s,
         "load_at_start": load_start,
+        "threads": threads,
         "queries": {},
     }
     duck.setup(ds)
@@ -288,7 +336,15 @@ def summarize(record: dict, a: str = "krishiv", b: str = "duckdb") -> dict:
         "queries_ok": len(ok),
         "failed": failed,
         "max_load": max_load,
-        "indicative": (max_load > LOAD_INDICATIVE) or math.isnan(max_load),
+        "load_bound": load_bound(record),
+        # Other work on the machine before the run (nothing of ours is running yet), or more load
+        # during it than the run's own threads explain.
+        "indicative": (
+            math.isnan(max_load)
+            or math.isnan(record["load_at_start"])
+            or record["load_at_start"] > LOAD_INDICATIVE
+            or max_load > load_bound(record)
+        ),
     }
     if ok:
         ratios = {q: e["ratio"] for q, e in ok.items()}
@@ -323,8 +379,7 @@ def markdown(record: dict) -> str:
         )
     else:
         lines.append(f"No query passed the correctness check (0/{s['queries_total']}).")
-    tag = "INDICATIVE ONLY" if s["indicative"] else "load within bound"
-    lines.append(f"Max 1-min load average {s['max_load']:.1f} (bound {LOAD_INDICATIVE:g}): {tag}.")
+    lines.append(load_line(record))
     return "\n".join(lines)
 
 

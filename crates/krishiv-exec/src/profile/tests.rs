@@ -29,6 +29,7 @@ fn env() -> ExprEnv {
         map_key_dedup_last_win: false,
         legacy_java_charsets: false,
         legacy_coding_error_action: false,
+        legacy_time_parser: false,
     }
 }
 
@@ -318,12 +319,6 @@ fn corrupt_documents_are_rejected() {
             Box::new(|v| v["operators"][0]["role"] = "x".into()),
         ),
         (
-            "unknown metric kind",
-            Box::new(|v| {
-                v["operators"][2]["extra"][0]["kind"] = "avg".into();
-            }),
-        ),
-        (
             "a plan input is not a later node",
             Box::new(|v| {
                 v["plan"][1]["children"] = serde_json::json!([0]);
@@ -482,6 +477,122 @@ fn bytes_are_human() {
 /// The checked-in JSON Schema lists exactly the members the writer emits,
 /// at every level (a drift test: a new member needs a schema change, and a
 /// removed one a version bump).
+/// The share is the probes' table time over the drivers' busy time, in the
+/// JSON and the text; a query without a probe has none, and a document from
+/// before the fields existed still reads.
+#[test]
+fn the_hash_probe_share_is_reported() {
+    let mut m = metrics();
+    assert_eq!(m.hash_probe_share(), None);
+    m.drivers.busy = Duration::from_millis(400);
+    assert_eq!(m.hash_probe_share(), None);
+    let mut probe = entry("HashJoinProbe", Some(2), OperatorRole::Operator, 1);
+    probe.extra = vec![(Cow::Borrowed("probe_table_ns"), Metric::Count(100_000_000))];
+    m.operators.insert(OperatorId(9), probe);
+    assert_eq!(m.hash_probe_share(), Some(0.25));
+
+    let p = QueryProfile::new(&plan(matching()), m, true);
+    let doc = p.to_json_value();
+    assert_eq!(doc["query"]["busy_ns"], 400_000_000_u64);
+    assert_eq!(doc["query"]["hash_probe_share"], 0.25);
+    let text = p.to_text(TextOptions::default());
+    assert!(
+        text.contains("hash probe: 25.0% of 400.0 ms driver busy time"),
+        "{text}"
+    );
+    let back = QueryProfile::from_json(&p.to_json()).map(|b| b.metrics.drivers.busy);
+    assert_eq!(back.ok(), Some(Duration::from_millis(400)));
+
+    let mut old = doc;
+    let query = old["query"].as_object_mut();
+    query.map(|q| q.remove("busy_ns"));
+    let back = QueryProfile::from_json(&old.to_string()).map(|b| b.metrics.drivers.busy);
+    assert_eq!(back.ok(), Some(Duration::ZERO));
+}
+
+/// A document of a later minor loads: unknown members are ignored and an
+/// unknown metric kind is kept as text. A different major is refused.
+#[test]
+fn a_later_minor_is_read() {
+    let p = QueryProfile::new(&plan(matching()), metrics(), true);
+    let mut v = p.to_json_value();
+    v["minor"] = 7.into();
+    v["tasks"] = serde_json::json!([{"fragment": 3}]);
+    v["query"]["new_counter"] = 5.into();
+    v["operators"][2]["extra"][0]["kind"] = "avg".into();
+    let back = QueryProfile::from_json(&v.to_string()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(back.plan, p.plan);
+    let (_, kept) = &back.metrics.operators[&OperatorId(2)].extra[0];
+    assert_eq!(*kept, Metric::Text("3".to_owned()));
+    v["version"] = 2.into();
+    assert!(QueryProfile::from_json(&v.to_string()).is_err());
+}
+
+/// The spread of rows over the drivers is written and read back, and a
+/// document without it (written before minor 1) reads as no spread.
+#[test]
+fn instances_round_trip() {
+    let mut m = metrics();
+    if let Some(e) = m.operators.get_mut(&OperatorId(1)) {
+        e.metrics.drivers = 4;
+        e.metrics.min_driver_rows_out = 0;
+        e.metrics.max_driver_rows_out = 91_000;
+    }
+    let p = QueryProfile::new(&plan(matching()), m, false);
+    let v = p.to_json_value();
+    assert_eq!(
+        v["operators"][1]["instances"],
+        serde_json::json!({"count": 4, "min_rows_out": 0, "max_rows_out": 91000})
+    );
+    assert_eq!(QueryProfile::from_json(&v.to_string()).ok(), Some(p));
+    let mut old = v;
+    if let Some(o) = old["operators"][1].as_object_mut() {
+        o.remove("instances");
+    }
+    let back = QueryProfile::from_json(&old.to_string()).unwrap_or_else(|e| panic!("{e}"));
+    let e = &back.metrics.operators[&OperatorId(1)].metrics;
+    assert_eq!((e.min_driver_rows_out, e.max_driver_rows_out), (0, 0));
+}
+
+/// `planning` round-trips and must be an object.
+#[test]
+fn planning_round_trips() {
+    let mut p = QueryProfile::new(&plan(matching()), metrics(), false);
+    p.planning = Some(serde_json::json!({"parsed": "p"}));
+    let back = QueryProfile::from_json(&p.to_json()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(back, p);
+    let mut v = p.to_json_value();
+    v["planning"] = "x".into();
+    assert!(QueryProfile::from_json(&v.to_string()).is_err());
+}
+
+/// The usage block sums the operators' counters (T138).
+#[test]
+fn usage_equals_the_operator_sums() {
+    let mut m = metrics();
+    m.memory.peak_reserved = 4096;
+    for (id, bytes, rows) in [(2, 700, 30), (1, 50, 4)] {
+        let e = m.operators.get_mut(&OperatorId(id)).expect("operator");
+        e.extra
+            .push((Cow::Borrowed("scan_bytes"), Metric::Count(bytes)));
+        e.extra
+            .push((Cow::Borrowed("scan_rows_decoded"), Metric::Count(rows)));
+        e.metrics.spilled_bytes = 10 * bytes;
+    }
+    let u = QueryUsage::of(&m);
+    assert_eq!(u.fidelity, "measured");
+    assert_eq!(u.wall, Duration::from_millis(3));
+    assert_eq!(u.cpu, Duration::from_micros(30));
+    assert_eq!(u.rows_out, 1);
+    assert_eq!((u.scan_bytes, u.scan_rows), (750, 34));
+    assert_eq!(u.spill_bytes, 7500);
+    assert_eq!(u.peak_memory_bytes, 4096);
+    let v = QueryProfile::new(&plan(matching()), m, false).to_json_value();
+    assert_eq!(v["minor"], PROFILE_MINOR);
+    assert_eq!(v["usage"]["scan"]["bytes"], 750);
+    assert_eq!(v["usage"]["cpu_ns"], 30_000);
+}
+
 #[test]
 fn schema_matches_the_writer() {
     use serde_json::Value;
@@ -491,7 +602,12 @@ fn schema_matches_the_writer() {
     );
     let schema: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap_or_default())
         .unwrap_or_default();
-    let doc = QueryProfile::new(&plan(matching()), metrics(), true).to_json_value();
+    let mut profile = QueryProfile::new(&plan(matching()), metrics(), true);
+    profile.planning = Some(
+        serde_json::json!({"parsed": "p", "analyzed": "a", "steps": [],
+        "optimized": "o", "physical": "x"}),
+    );
+    let doc = profile.to_json_value();
     let keys = |v: &Value| -> Vec<String> {
         let mut k: Vec<String> = v
             .as_object()
@@ -538,6 +654,14 @@ fn schema_matches_the_writer() {
         &props["query"]["properties"]["memory"],
         &doc["query"]["memory"],
     );
+    check(&schema["$defs"]["planning"], &doc["planning"]);
+    check(&props["environment"], &doc["environment"]);
+    check(&props["usage"], &doc["usage"]);
+    check(
+        &props["operators"]["items"]["properties"]["instances"],
+        &doc["operators"][0]["instances"],
+    );
+    check(&props["usage"]["properties"]["scan"], &doc["usage"]["scan"]);
     check(&props["pipelines"]["items"], &doc["pipelines"][0]);
     check(&props["plan"]["items"], &doc["plan"][0]);
     let op = &props["operators"]["items"];

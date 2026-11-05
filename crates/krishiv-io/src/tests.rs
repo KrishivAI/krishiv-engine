@@ -841,6 +841,9 @@ fn secrets_stay_secret_and_key_the_cache() {
         .unwrap()
         .unwrap();
     assert!(fp1.is_some() && fp1 != fp2);
+    // Without a resolver: the same fingerprints for inline and plain values.
+    assert_eq!(o.metadata_fingerprint_now(), Some(fp1));
+    assert_eq!(o2.metadata_fingerprint_now(), Some(fp2));
     // A reference resolves through the provider; without one it fails.
     let (o3, _) = parse(
         &[("key", OptionValue::reference("scope", "name"))],
@@ -854,6 +857,7 @@ fn secrets_stay_secret_and_key_the_cache() {
         .unwrap()
         .unwrap();
     assert_eq!(got.expose_secret(), "scope/name");
+    assert_eq!(o3.metadata_fingerprint_now(), None);
     let e = o3
         .resolve_secret("key", &options::NoSecrets)
         .now_or_never()
@@ -1655,6 +1659,7 @@ fn capabilities_and_metadata_needs() {
         page_pruning: false,
         page_checksums: false,
         write: false,
+        random_access: None,
     };
     assert!(
         caps.is_splittable("a.csv")

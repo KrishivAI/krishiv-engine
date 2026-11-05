@@ -319,43 +319,89 @@ fn etc_gmt_zones_reject_a_padded_hour() {
     );
 }
 
-/// The legacy time parser is not implemented: pattern functions refuse it
-/// by name instead of answering with the new parser; the other policies
-/// behave as before.
+/// `spark.sql.legacy.timeParserPolicy = LEGACY` reads and prints patterns
+/// with the `SimpleDateFormat` family; the other policies behave as before.
 #[test]
-fn the_legacy_time_parser_is_refused() {
+fn the_legacy_time_parser_reads_and_prints_legacy_patterns() {
     let s = session();
     block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = LEGACY")).unwrap();
-    for sql in [
-        "SELECT to_timestamp('2024-01-05', 'yyyy-MM-dd')",
-        "SELECT date_format(TIMESTAMP '2024-01-05 10:00:00', 'yyyy')",
-        "SELECT unix_timestamp('2024-01-05', 'yyyy-MM-dd')",
-        // The default pattern of the one-argument string forms is a pattern too.
-        "SELECT unix_timestamp('2024-01-05 10:00:00')",
-        "SELECT to_unix_timestamp('2024-01-05 10:00:00')",
-    ] {
-        let err = block_on(s.sql(sql))
-            .err()
-            .unwrap_or_else(|| panic!("{sql} resolved"));
-        assert_eq!(
-            err.error_class(),
-            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
-            "{sql}"
-        );
-        assert!(err.to_string().contains("timeParserPolicy"), "{err}");
-    }
+    // `S` is the millisecond count, not fraction digits.
+    assert_eq!(
+        column(
+            &s,
+            "date_format(TIMESTAMP '2024-01-05 10:00:00.123456', 'SSSS')",
+            ""
+        ),
+        text(&[Some("0123")])
+    );
+    // A two-digit year reads in the 80/20 window.
+    assert_eq!(
+        column(&s, "to_date('99-01-05', 'yy-MM-dd')", ""),
+        text(&[Some("1999-01-05")])
+    );
+    // `Q` is no legacy pattern letter.
+    let err = block_on(s.sql("SELECT date_format(TIMESTAMP '2024-01-05 10:00:00', 'Q')"))
+        .and_then(|df| block_on(df.collect()))
+        .expect_err("Q is rejected");
+    assert!(
+        err.to_string().contains("INVALID_DATETIME_PATTERN"),
+        "{err}"
+    );
     // One-argument forms are casts, not patterns.
     assert_eq!(
         column(&s, "to_timestamp('2024-01-05')", ""),
         text(&[Some("2024-01-05 00:00:00")])
     );
-    // A timestamp argument has no text to parse: not refused.
-    block_on(s.sql("SELECT unix_timestamp(TIMESTAMP '2024-01-05 10:00:00')")).unwrap();
     block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = CORRECTED")).unwrap();
     assert_eq!(
         column(&s, "to_date('2024-01-05', 'yyyy-MM-dd')", ""),
         text(&[Some("2024-01-05")])
     );
+}
+
+/// The legacy parser is not lenient but stops where the pattern does, the
+/// legacy printer knows the week letters, and region offsets before 1900
+/// are `java.util.TimeZone`'s raw offset (each as Spark 4.2.0 answers).
+#[test]
+fn the_legacy_time_parser_matches_spark_edges() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = LEGACY")).unwrap();
+    for (expr, want) in [
+        ("try_to_timestamp('2020-13-01', 'yyyy-MM-dd')", None),
+        (
+            "try_to_timestamp('2020-01-01 25:00', 'yyyy-MM-dd HH:mm')",
+            None,
+        ),
+        (
+            "unix_timestamp('2020-01-01x', 'yyyy-MM-dd')",
+            Some("1577836800"),
+        ),
+        (
+            "try_to_timestamp('2020-01-01 trailing', 'yyyy-MM-dd')",
+            Some("2020-01-01 00:00:00"),
+        ),
+        (
+            "date_format(TIMESTAMP '2020-01-05 10:00:00', 'YYYY ww W u F E')",
+            Some("2020 02 2 7 1 Sun"),
+        ),
+    ] {
+        assert_eq!(column(&s, expr, ""), text(&[want]), "{expr}");
+    }
+    block_on(s.sql("SET spark.sql.session.timeZone = Asia/Kolkata")).unwrap();
+    for (at, want) in [
+        ("1850-06-01 00:00:00", "1850-06-01 00:00:00 +0530"),
+        ("1900-06-01 00:00:00", "1900-06-01 00:00:00 +0521"),
+    ] {
+        assert_eq!(
+            column(
+                &s,
+                &format!("date_format(TIMESTAMP '{at}', 'yyyy-MM-dd HH:mm:ss Z')"),
+                ""
+            ),
+            text(&[Some(want)]),
+            "{at}"
+        );
+    }
 }
 
 /// `current_timezone()` returns the configured string and the patterns
@@ -457,5 +503,60 @@ fn a_region_session_zone_serves_the_calls_that_read_it() {
     assert_eq!(
         column(&s, "to_date('2024-01-05 +08:00', 'yyyy-MM-dd XXX')", ""),
         text(&[Some("2024-01-05")])
+    );
+}
+
+/// Under LEGACY a fixed-offset session zone prints as `GMT+hh:mm` (Spark
+/// 4.2.0), `ZZ` has no colon, and `to_timestamp_ntz` keeps the corrected
+/// parser.
+#[test]
+fn legacy_names_a_fixed_offset_zone_and_ntz_keeps_the_corrected_parser() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = LEGACY")).unwrap();
+    for zone in ["+05:30", "UTC+05:30"] {
+        block_on(s.sql(&format!("SET spark.sql.session.timeZone = {zone}"))).unwrap();
+        assert_eq!(
+            column(
+                &s,
+                "date_format(TIMESTAMP '2024-01-01 00:00:00', 'z zzzz ZZ')",
+                ""
+            ),
+            text(&[Some("GMT+05:30 GMT+05:30 +0530")]),
+            "{zone}"
+        );
+    }
+    assert_eq!(
+        column(
+            &s,
+            "CAST(to_timestamp_ntz('2024-01-01 00:00:00.000123', 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS STRING)",
+            ""
+        ),
+        text(&[Some("2024-01-01 00:00:00.000123")])
+    );
+    // A format column takes the same parser as a literal format.
+    assert_eq!(
+        column(
+            &s,
+            "to_timestamp_ntz(v, f)",
+            "FROM VALUES ('2024-01-01 00:00:00.000123', 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS t(v, f)"
+        ),
+        text(&[Some("2024-01-01 00:00:00.000123")])
+    );
+}
+
+/// Java's raw offset for Casablanca is 0 although the database marks +01:00
+/// as daylight time (Spark 4.2.0: `+0000 WET` in 1890).
+#[test]
+fn legacy_prints_casablancas_raw_offset_before_1900() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = LEGACY")).unwrap();
+    block_on(s.sql("SET spark.sql.session.timeZone = Africa/Casablanca")).unwrap();
+    assert_eq!(
+        column(
+            &s,
+            "date_format(TIMESTAMP '1890-01-01 00:00:00', 'Z z')",
+            ""
+        ),
+        text(&[Some("+0000 WET")])
     );
 }

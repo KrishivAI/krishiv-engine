@@ -94,7 +94,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--floors", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("shards", nargs="+", help="AREA=path/to/outcomes.json")
+    ap.add_argument("shards", nargs="*", help="AREA=path/to/outcomes.json (none: every area is untested)")
     args = ap.parse_args(argv)
     shards = []
     for s in args.shards:

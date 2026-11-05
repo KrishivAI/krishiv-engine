@@ -48,6 +48,10 @@ impl FunctionRegistry for Registry {
         self.base.lookup(name, profile)
     }
 
+    fn spark_deterministic(&self, name: &str) -> Option<bool> {
+        name.eq_ignore_ascii_case("rand").then_some(false)
+    }
+
     fn version(&self) -> u64 {
         self.version
     }
@@ -65,6 +69,7 @@ fn param(name: &str, t: DataType, default: Option<Expr>) -> SqlParam {
 fn func(name: &str, params: Vec<SqlParam>, returns: Option<DataType>, body: Expr) -> SqlFunction {
     SqlFunction {
         qualifier: Vec::new(),
+        path: Vec::new(),
         returns_table: None,
         name: name.to_owned(),
         params,
@@ -74,6 +79,7 @@ fn func(name: &str, params: Vec<SqlParam>, returns: Option<DataType>, body: Expr
         source: SourceId(1),
         deterministic: true,
         reads_data: false,
+        ansi: None,
     }
 }
 
@@ -560,7 +566,8 @@ fn scalar_subquery(plan: LogicalPlan) -> Expr {
 #[test]
 fn parameters_are_visible_in_the_bodys_subqueries() {
     // `(SELECT x)`: a constant argument at any depth; a column argument
-    // one subquery down is an outer reference; two down is refused.
+    // one subquery down is an outer reference; two down is an unresolved
+    // column, whatever the argument (Spark's `sql-udf` 2.2.1).
     let one = func(
         "one",
         vec![param("x", DataType::Integer, None)],
@@ -580,19 +587,27 @@ fn parameters_are_visible_in_the_bodys_subqueries() {
         "{}",
         r.plan.root()
     );
-    let two = func(
-        "two",
-        vec![param("x", DataType::Integer, None)],
-        Some(DataType::Integer),
-        scalar_subquery(
-            LogicalPlan::new(crate::PlanNode::OneRowRelation).project(vec![scalar_subquery(
-                LogicalPlan::new(crate::PlanNode::OneRowRelation).project(vec![c("x")]),
-            )]),
-        ),
-    );
-    assert!(call(vec![f("two", vec![int(3)])], vec![two.clone()]).is_ok());
-    let (class, _) = err(&call(vec![f("two", vec![c("a")])], vec![two]));
-    assert_eq!(class, "KRISHIV_UNSUPPORTED_FEATURE");
+    let two =
+        func(
+            "two",
+            vec![param("x", DataType::Integer, None)],
+            Some(DataType::Integer),
+            f(
+                "+",
+                vec![
+                    int(1),
+                    scalar_subquery(LogicalPlan::new(crate::PlanNode::OneRowRelation).project(
+                        vec![scalar_subquery(
+                            LogicalPlan::new(crate::PlanNode::OneRowRelation).project(vec![c("x")]),
+                        )],
+                    )),
+                ],
+            ),
+        );
+    for arg in [int(3), c("a")] {
+        let (class, _) = err(&call(vec![f("two", vec![arg])], vec![two.clone()]));
+        assert_eq!(class, "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION", "{class}");
+    }
 }
 
 #[test]
@@ -727,4 +742,47 @@ fn builtins_rank_before_session_functions() {
     let abs = func("abs", vec![], Some(DataType::Integer), int(1));
     let r = call(vec![f("abs", vec![int(-5)])], vec![abs]).unwrap();
     assert!(calls(&r).iter().any(|n| n == "abs"));
+}
+
+#[test]
+fn an_aggregate_over_a_nondeterministic_argument_is_refused() {
+    let r = call(vec![sum(add(c("a"), f("rand", vec![int(0)])))], Vec::new());
+    let (class, params) = err(&r);
+    assert_eq!(class, "AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION");
+    assert_eq!(params["sqlExpr"], "\"sum((a + SQRT(0)))\"");
+    // A deterministic argument is fine.
+    assert!(call(vec![sum(add(c("a"), int(1)))], Vec::new()).is_ok());
+}
+
+#[test]
+fn another_error_wins_over_a_nondeterministic_aggregate_argument() {
+    let r = call(vec![c("a"), sum(f("rand", vec![int(0)]))], Vec::new());
+    assert_eq!(err(&r).0, "MISSING_GROUP_BY");
+}
+
+#[test]
+fn a_sql_function_is_as_deterministic_as_its_body() {
+    let noisy = func(
+        "noisy",
+        Vec::new(),
+        Some(DataType::Double),
+        f("rand", vec![int(0)]),
+    );
+    let r = call(vec![sum(f("noisy", Vec::new()))], vec![noisy]);
+    assert_eq!(
+        err(&r).0,
+        "AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION"
+    );
+    // A deterministic body takes a nondeterministic argument.
+    let r = call(
+        vec![sum(f("add2", vec![f("rand", vec![int(0)])]))],
+        vec![add2()],
+    );
+    assert!(r.is_ok(), "{:?}", r.err().map(|e| e.error.to_string()));
+}
+
+#[test]
+fn an_unknown_function_is_reported_before_its_arguments_errors() {
+    let r = call(vec![f("no_such_fn", vec![c("no_such_column")])], Vec::new());
+    assert_eq!(err(&r).0, "UNRESOLVED_ROUTINE");
 }

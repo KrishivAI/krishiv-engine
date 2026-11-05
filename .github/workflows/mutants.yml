@@ -4,7 +4,10 @@ name: Mutation testing (nightly)
 # and the spill-file serialization, with the score per area tracked in the run
 # summary and in the `mutation-score` artifact (90 days). Nightly only, never
 # per PR; each night one seventh of the mutants per area (the full set once a
-# week, so a job stays inside the six-hour limit); GitHub-hosted runners only (`cargo xtask workflow-lint`). The
+# week, so a job stays inside the six-hour limit; the kernels area runs as three
+# slices and the parser as two side by side, the first full run having taken 5.5 hours for its seventh,
+# and single long slices having lost their runner several times (see "Runner health" below);
+# GitHub-hosted runners only (`cargo xtask workflow-lint`). The
 # acceptance numbers are in `tests/mutation-floors.json`.
 on:
   schedule:
@@ -24,8 +27,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CARGO_PROFILE_DEV_DEBUG: line-tables-only
-  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  # No debug info at all: every mutant is a full rebuild and link of the crate's test binaries, and
+  # the long slices ran the runner out of memory or disk (no mutant needs a backtrace with lines).
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   RUSTC_WRAPPER: "" # every mutant is a different build; nothing to cache
@@ -39,24 +44,53 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # `parts` halves (thirds, ...) a night's slice across that many jobs of the area.
           - area: kernels
+            part: 1
+            parts: 3
+            package: krishiv-kernels
+            files: crates/krishiv-kernels/src/**/*.rs
+            skip: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**
+          - area: kernels
+            part: 2
+            parts: 3
+            package: krishiv-kernels
+            files: crates/krishiv-kernels/src/**/*.rs
+            skip: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**
+          - area: kernels
+            part: 3
+            parts: 3
             package: krishiv-kernels
             files: crates/krishiv-kernels/src/**/*.rs
             skip: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**
           - area: hash
+            part: 1
+            parts: 1
             package: krishiv-kernels
             files: crates/krishiv-kernels/src/hash.rs crates/krishiv-kernels/src/hash/**/*.rs
             skip: ""
           - area: parser
+            part: 1
+            parts: 2
+            package: krishiv-sql
+            files: crates/krishiv-sql/src/**/*.rs
+            skip: ""
+          - area: parser
+            part: 2
+            parts: 2
             package: krishiv-sql
             files: crates/krishiv-sql/src/**/*.rs
             skip: ""
           - area: serialization
+            part: 1
+            parts: 1
             package: krishiv-memory
             files: crates/krishiv-memory/src/spillfile/**/*.rs
             skip: ""
     env:
       AREA: ${{ matrix.area }}
+      PART: ${{ matrix.part }}
+      PARTS: ${{ matrix.parts }}
       SHARDS: 7
       SHARD_INPUT: ${{ inputs.shard }}
       PACKAGE: ${{ matrix.package }}
@@ -70,36 +104,64 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Runner health. Slices of 3-5 hours have repeatedly ended with "The hosted runner lost
+      # communication with the server" or a shutdown signal, with no sign of why in the log. Free
+      # the preinstalled tooling the job never uses (as coverage.yml and nightly.yml do) and log
+      # memory, disk and the target directory every five minutes, so the next loss leaves its cause.
+      - name: Free runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL \
+            /usr/share/swift /usr/local/share/powershell /usr/local/share/chromium /usr/local/share/boost \
+            /opt/microsoft /opt/az /usr/lib/google-cloud-sdk /usr/lib/mono /usr/local/julia* /usr/local/graalvm \
+            /opt/hostedtoolcache/Java_* /opt/hostedtoolcache/Ruby /opt/hostedtoolcache/go /opt/hostedtoolcache/PyPy
+          df -h /
       - name: Toolchain (from rust-toolchain.toml)
         run: rustup show active-toolchain
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-mutants@27.1.0,cargo-nextest@0.9.148
-      # `--in-place`: the runner is disposable. A mutant that hangs is killed
-      # at three times the baseline test time (at least two minutes).
+      # `--in-place`: the runner is disposable. cargo-mutants refuses it with
+      # `--jobs` (parallel jobs each need their own copy of the tree), so the
+      # mutants run one at a time. A mutant that hangs is killed at three
+      # times the baseline test time (at least two minutes).
       - name: cargo mutants
         run: |
           # One slice (every 7th mutant) per night: the full set is swept
           # once a week, and a slice is a representative sample of it.
-          SHARD="${SHARD_INPUT:-$(( 10#$(date -u +%j) % SHARDS ))}"
+          if [ -n "$SHARD_INPUT" ] && ! [[ "$SHARD_INPUT" =~ ^[0-6]$ ]]; then
+            echo "::error::the shard input must be a single digit 0-6, got '$SHARD_INPUT'" >&2
+            exit 1
+          fi
+          NIGHT="${SHARD_INPUT:-$(( 10#$(date -u +%j) % SHARDS ))}"
+          # A night's slice is cut into PARTS pieces, one per job: piece `PART` is shard
+          # NIGHT*PARTS+PART-1 of SHARDS*PARTS, so the pieces together are the slice.
+          SHARD=$(( NIGHT * PARTS + PART - 1 ))
+          TOTAL=$(( SHARDS * PARTS ))
           echo "SHARD=$SHARD" >> "$GITHUB_ENV"
           args=(--package "$PACKAGE" --test-tool nextest --in-place --no-shuffle
-                --shard "$SHARD/$SHARDS" --timeout-multiplier 3 --minimum-test-timeout 120
-                --output "$RUNNER_TEMP/out" --jobs 2)
+                --shard "$SHARD/$TOTAL" --timeout-multiplier 3 --minimum-test-timeout 120
+                --output "$RUNNER_TEMP/out")
           set -f  # pass the globs to cargo-mutants literally (it expands them recursively)
           for f in $FILES; do args+=(--file "$f"); done
           for f in $SKIP; do args+=(--exclude "$f"); done
           # Exit 2 (missed mutants) and 3 (timeouts) are results, scored below;
           # anything else (usage error, failing baseline: 1, 4) fails the job.
+          # Heartbeat every five minutes: free memory, disk and the size of target/.
+          ( while sleep 300; do
+              echo "::notice::heartbeat $(date -u +%T) $(free -m | awk 'NR==2{print "mem used/avail MB " $3 "/" $7}') $(df -h / | awk 'NR==2{print "disk avail " $4}') target=$(du -sh target 2>/dev/null | cut -f1)"
+            done ) &
+          heartbeat=$!
           rc=0
           cargo mutants "${args[@]}" -- --locked || rc=$?
+          kill "$heartbeat" 2>/dev/null || true
           case "$rc" in 0|2|3) ;; *) exit "$rc" ;; esac
       - name: Missed mutants
         if: always()
         run: |
           missed="$RUNNER_TEMP/out/mutants.out/missed.txt"
           {
-            echo "### Missed mutants: $AREA, slice $SHARD of $SHARDS"
+            echo "### Missed mutants: $AREA part $PART of $PARTS, shard $SHARD of $(( SHARDS * PARTS ))"
             echo
             echo '```text'
             head -n 200 "$missed" 2>/dev/null || echo "(none recorded)"
@@ -109,12 +171,18 @@ jobs:
         if: always()
         run: |
           mkdir -p outcomes
-          cp "$RUNNER_TEMP/out/mutants.out/outcomes.json" "outcomes/$AREA.json"
-          cp "$RUNNER_TEMP/out/mutants.out/missed.txt" "outcomes/$AREA.missed.txt" || true
+          # No file when cargo-mutants failed before testing a mutant: the
+          # job is already red, and the scorer reports the area as untested.
+          for f in outcomes.json missed.txt; do
+            src="$RUNNER_TEMP/out/mutants.out/$f"
+            [ -f "$src" ] || continue
+            case "$f" in outcomes.json) dst="outcomes/$AREA.$PART.json" ;; *) dst="outcomes/$AREA.$PART.missed.txt" ;; esac
+            cp "$src" "$dst"
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: mutants-${{ matrix.area }}
+          name: mutants-${{ matrix.area }}-${{ matrix.part }}
           path: outcomes
           retention-days: 30
 
@@ -140,8 +208,23 @@ jobs:
         shell: bash # -eo pipefail: the scorer's status survives the tee
         run: |
           args=()
+          shopt -s nullglob # no shard file: every area is reported untested
+          # Parts per area (the `parts` of the matrix). An area with a part missing (its job
+          # failed or timed out before writing outcomes) is reported untested, never scored
+          # from the parts that did arrive.
+          declare -A EXPECT=([kernels]=3 [hash]=1 [parser]=2 [serialization]=1)
+          declare -A HAVE=()
           for f in shards/*.json; do
-            args+=("$(basename "$f" .json)=$f")
+            area="$(basename "$f" .json)"; area="${area%%.*}" # `kernels.2.json` is part 2
+            HAVE[$area]=$(( ${HAVE[$area]:-0} + 1 ))
+          done
+          for f in shards/*.json; do
+            area="$(basename "$f" .json)"; area="${area%%.*}"
+            if [ "${HAVE[$area]}" -ne "${EXPECT[$area]:-1}" ]; then
+              echo "::warning::$area has ${HAVE[$area]} of ${EXPECT[$area]:-1} parts; reported untested" >&2
+              continue
+            fi
+            args+=("$area=$f")
           done
           python3 tests/scripts/mutation_score.py --floors tests/mutation-floors.json \
             --out mutation-score.json "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"

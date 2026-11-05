@@ -153,6 +153,9 @@ fn every_expression_form_prints() {
     let cases: Vec<(Expr, &str)> = vec![
         (
             Expr::new(ExprNode::Star(Star {
+                regex: None,
+                replace: Vec::new(),
+                position: None,
                 qualifier: vec!["t".to_owned()],
                 except: Vec::new(),
                 plan_id: Some(PlanId(4)),
@@ -240,7 +243,7 @@ fn every_expression_form_prints() {
                 end: DayTimeField::Second,
             }
             .into(),
-            "INTERVAL '1:01' MINUTE TO SECOND",
+            "INTERVAL '01:01' MINUTE TO SECOND",
         ),
         (
             Literal::Decimal {

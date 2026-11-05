@@ -38,14 +38,20 @@
 //! (`partition << ROW_BITS | row`) hashed by `g`.
 //! - **Fixed** (thread-local tables): a fixed capacity, cleared when full;
 //!   the rows stay in their partitions, so a group seen again later becomes
-//!   a second row (a partial duplicate merged by the final phase). Every
-//!   [`ADAPT_ROWS`] input rows, an [`Hll`] of a 1/8 sample of the input
-//!   hashes grows the capacity 4x when deduplication could halve the rows,
-//!   or switches to **append** (no lookups) when over 95% of the keys are
-//!   unique. This is DuckDB's thread-local abandon (fixed-size thread-local
-//!   tables, <https://duckdb.org/2022/03/07/aggregate-hashtable.html>;
+//!   a second row (a partial duplicate merged by the final phase). An
+//!   [`Hll`] of a 1/8 sample of the input hashes estimates the keys. After
+//!   an index filled, it grows to the estimate's capacity (at least 2x)
+//!   once the partial duplicates outweigh [`GROW_DUPLICATE_FACTOR`] times
+//!   the larger index (DuckDB 2.0's `RadixHTAdaptivity::TryGrow`), if the
+//!   keys fit in [`MAX_SINK_SLOTS`], and is rebuilt over the rows. Every
+//!   [`ADAPT_ROWS`] input rows, it switches to **append** (no lookups)
+//!   when over 95% of the keys are unique. This is DuckDB's thread-local
+//!   abandon (fixed-size thread-local tables,
+//!   <https://duckdb.org/2022/03/07/aggregate-hashtable.html>;
 //!   `radix_partitioned_hashtable.cpp`) with its capacities: 2^15 slots
-//!   above two threads, 2^18 at two.
+//!   above two threads, 2^18 at two. Growing only every [`ADAPT_ROWS`]
+//!   rows, by 4x, left TPC-DS q22's index (204K groups a driver) clearing
+//!   for its first 3M rows: ten times the columnar path's partial rows.
 //! - **Grow**: a classic growing table that never abandons. Deterministic
 //!   mode (ADR 0023) uses it for thread-local tables, because when a
 //!   fixed table abandons depends on which morsels a driver received. One
@@ -97,14 +103,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::{Array, ArrayRef, RecordBatch, UInt32Array};
 use hashbrown::HashTable;
+use krishiv_kernels::prefetch_read;
 use krishiv_types::batch::{Batch, Weights};
 
 use super::accumulator::Accumulator;
+use super::merge_index::{MergeIndex, Slot};
 use super::table::{AggCore, batch};
 use super::{AggregateOutput, unsupported};
 use crate::error::{Result, internal};
 use crate::hash::{HashSeed, PARTITIONS, ProbeCount, ProbeTotals, grown, spill_partition};
-use crate::rows::{EncodedKeys, Hll, RowLayout};
+use crate::rows::{EncodedKeys, FLAT_MAX_BYTES, Hll, RowLayout};
 
 /// Radix bits of `h` of a partitioned table (DuckDB's initial 4 bits; the
 /// final phase merges ranges of these partitions, see [`final_tasks`]).
@@ -161,12 +169,23 @@ impl Refs {
 /// most two threads (DuckDB's sink capacities); entries up to 2/3 of it.
 const SINK_SLOTS: usize = 1 << 15;
 const SINK_SLOTS_FEW_THREADS: usize = 1 << 18;
-/// Largest capacity the adaptation grows a fixed index to.
-const MAX_SINK_SLOTS: usize = 1 << 22;
-/// Input rows between adaptations of a fixed index.
+/// Largest capacity a fixed index grows to: 2.5 MiB of index, about one
+/// thread's share of a 32 MiB L3 at 12 threads. Past the caches a lookup
+/// costs about as much as the partial duplicate it saves (P2-T159 step 0:
+/// 3-5 LLC misses a row in a growing table): TPC-DS q67, about 5.8M groups,
+/// ran 8% slower growing to 2^22 slots.
+const MAX_SINK_SLOTS: usize = 1 << 19;
+/// Input rows between append decisions of a fixed index.
 pub(crate) const ADAPT_ROWS: usize = 1 << 20;
+/// Bytes of partial duplicates per byte of the grown index from which a
+/// full fixed index grows (DuckDB 2.0's `GROWTH_DUPLICATE_BYTES_FACTOR`).
+const GROW_DUPLICATE_FACTOR: usize = 4;
 /// Bytes per index bucket: a `u32` reference and hashbrown's control byte.
 const BUCKET_BYTES: usize = size_of::<u32>() + 1;
+
+/// Rows of a merge whose slots and candidate rows are prefetched together
+/// (the join's lookups measured the same at 32, 64 and 256).
+const PREFETCH_ROWS: usize = 64;
 
 /// How a table's index treats a full index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -243,6 +262,8 @@ const SKETCH_ROWS: usize = 4096;
 
 /// Register bits of the per-partition sketches.
 const PART_HLL_BITS: u32 = 10;
+// A fused aggregation reports these sketches as its exchange's.
+const _: () = assert!(PART_HLL_BITS == crate::EXCHANGE_HLL_BITS);
 /// Register bits of a fixed index's input sample.
 const ADAPT_HLL_BITS: u32 = 12;
 
@@ -260,6 +281,8 @@ struct Adapt {
     /// at least [`EARLY_RATE`] of the interval's rows were pushed: see
     /// [`RowTable::wants_widen_early`].
     early: bool,
+    /// The index was cleared since the last apply decided its mode.
+    filled: bool,
 }
 
 /// Share of input rows that must make new rows, once a fixed index has
@@ -356,6 +379,8 @@ pub(crate) struct RowTable {
     widen_to: u32,
     widen_at: usize,
     index: HashTable<u32>,
+    /// A large merge table's index, instead of `index` ([`Self::presize`]).
+    merge_index: Option<MergeIndex>,
     mode: Mode,
     adapt: Option<Adapt>,
     groups: usize,
@@ -409,6 +434,7 @@ impl RowTable {
             widen_to: bits,
             widen_at: WIDEN_GROUPS,
             index: HashTable::new(),
+            merge_index: None,
             mode,
             adapt: (local && matches!(mode, Mode::Fixed { .. })).then(|| Adapt {
                 sketch: Hll::new(ADAPT_HLL_BITS),
@@ -417,6 +443,7 @@ impl RowTable {
                 next: ADAPT_ROWS,
                 window: (0, 0),
                 early: false,
+                filled: false,
             }),
             groups: 0,
             rows_in: 0,
@@ -431,6 +458,15 @@ impl RowTable {
     /// whose fixed index was cleared).
     pub(crate) fn len(&self) -> usize {
         self.groups
+    }
+
+    /// Calls `f` with the stored `h` of every row, partition by partition.
+    pub(crate) fn for_each_hash(&self, mut f: impl FnMut(u64)) {
+        for part in &self.parts {
+            for row in part.rows.chunks_exact(self.stride) {
+                f(word(row, 0));
+            }
+        }
     }
 
     /// Counts the clears of a full fixed index into `counter`.
@@ -485,8 +521,8 @@ impl RowTable {
     /// Spreads the rows (with their long key bytes) and states over
     /// `1 << widen_to` radix partitions of `h`, in row order, so each
     /// group's states are unchanged. A growing index is rebuilt over the
-    /// new rows; a fixed one is cleared (as when full: later rows of its
-    /// keys become partial duplicates); append mode has none. Partition
+    /// new rows, a fixed one over up to its limit of them
+    /// ([`reindex`](Self::reindex)); append mode has none. Partition
     /// sketches start from the rows.
     ///
     /// The copy is built beside the table, which changes only once it is
@@ -495,6 +531,7 @@ impl RowTable {
         if self.widen_to <= self.bits {
             return Ok(());
         }
+        self.only_hashbrown()?;
         let (bits, refs) = (self.widen_to, Refs::new(self.widen_to));
         let stride = self.stride;
         let nparts = 1usize << bits;
@@ -566,7 +603,10 @@ impl RowTable {
                     });
                 }
             }
-            Mode::Fixed { .. } => self.unique &= self.groups == 0,
+            // Rebuilt like a grown one: an empty index would make one more
+            // partial row of every key seen again (q39, q65, q67 and q75
+            // widen early). A unique table keeps all its keys (they fit).
+            Mode::Fixed { limit } => self.reindex(limit),
             Mode::Append => {}
         }
         self.start_sketches(0);
@@ -578,7 +618,9 @@ impl RowTable {
     /// the state arrays of one new partition at a time (at most the
     /// states' bytes, twice for validity and offsets), the row lists and
     /// references (two `u32` per group, plus per-partition list headers),
-    /// and the sketches it starts.
+    /// and the sketches it starts. The rebuilt index is not counted again:
+    /// the old one is dropped first and the new one is no larger (a fixed
+    /// index holds at most the keys its capacity held).
     pub(crate) fn widen_bytes(&self) -> usize {
         let nparts = 1usize << self.widen_to;
         let accs: usize = self
@@ -594,7 +636,9 @@ impl RowTable {
 
     /// Buckets of the index (its capacity).
     pub(crate) fn buckets(&self) -> usize {
-        buckets(&self.index)
+        self.merge_index
+            .as_ref()
+            .map_or_else(|| buckets(&self.index), MergeIndex::slots)
     }
 
     /// Whether every group has one row (no partial duplicates).
@@ -620,6 +664,7 @@ impl RowTable {
     pub(crate) fn memory_size(&self) -> usize {
         self.parts.iter().map(Part::bytes).sum::<usize>()
             + buckets(&self.index) * BUCKET_BYTES
+            + self.merge_index.as_ref().map_or(0, MergeIndex::bytes)
             + self.sketch_bytes()
     }
 
@@ -727,33 +772,71 @@ impl RowTable {
         })
     }
 
-    /// The mode the next apply runs in (a fixed index adapts every
-    /// [`ADAPT_ROWS`] input rows).
+    /// The mode the next apply runs in: a fixed index turns append-only
+    /// every [`ADAPT_ROWS`] input rows if nearly every key is unique, and
+    /// grows after it filled ([`grown_limit`](Self::grown_limit)).
     fn next_mode(&self) -> Mode {
         let (Mode::Fixed { limit }, Some(a)) = (self.mode, &self.adapt) else {
             return self.mode;
         };
-        if a.rows < a.next {
-            return self.mode;
+        if a.rows >= a.next {
+            #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
+            let rows = a.rows as f64;
+            if Self::distinct(a) / rows > 0.95 {
+                return Mode::Append;
+            }
         }
-        #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
-        let (rows, pushed) = (a.rows as f64, a.pushed.max(1) as f64);
-        // The sample is 1/8 of the hashes.
-        let distinct = (a.sketch.estimate() * 8.0).max(1.0);
-        if distinct / rows > 0.95 {
-            Mode::Append
-        } else if pushed >= 2.0 * distinct && limit * 4 * 3 / 2 <= MAX_SINK_SLOTS {
-            Mode::Fixed { limit: limit * 4 }
-        } else {
-            self.mode
+        match a.filled.then(|| self.grown_limit(limit, a)).flatten() {
+            Some(limit) => Mode::Fixed { limit },
+            None => self.mode,
         }
+    }
+
+    /// The input's distinct keys, estimated from the sample (1/8 of the
+    /// hashes); at least 1.
+    fn distinct(a: &Adapt) -> f64 {
+        (a.sketch.estimate() * 8.0).max(1.0)
+    }
+
+    /// The limit a full fixed index of `limit` keys grows to (DuckDB 2.0's
+    /// `TryGrow`, research C11): room for the distinct keys at load 2/3,
+    /// and at least twice the slots; `None` when that passes
+    /// [`MAX_SINK_SLOTS`] (the keys would not fit, so a larger index only
+    /// adds cache misses: DuckDB grows to its memory limit instead), and
+    /// while the partial duplicates (rows beyond the distinct keys) take
+    /// fewer than [`GROW_DUPLICATE_FACTOR`] times the grown index's bytes.
+    /// The growth stops a table's index from clearing over and over when
+    /// its keys repeat but do not fit: every row it makes then is a partial
+    /// duplicate that the final phase copies and merges again.
+    fn grown_limit(&self, limit: usize, a: &Adapt) -> Option<usize> {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a non-negative estimate, capped by the row count"
+        )]
+        let distinct = (Self::distinct(a) as usize).min(self.groups);
+        let slots = (limit * 3 / 2).next_power_of_two();
+        let grown = (distinct * 3 / 2).next_power_of_two().max(slots * 2);
+        if grown > MAX_SINK_SLOTS {
+            return None;
+        }
+        let grown = grown * 2 / 3;
+        let index = buckets_for(grown) * BUCKET_BYTES;
+        ((self.groups - distinct) * self.stride >= GROW_DUPLICATE_FACTOR * index).then_some(grown)
     }
 
     /// Index bytes in `mode` after `new` more keys: a growing index grows
     /// with its keys, a fixed one up to its limit (it is cleared there).
     fn index_bytes(&self, mode: Mode, new: usize) -> usize {
+        if let Some(index) = &self.merge_index {
+            return index.projected(new);
+        }
         let len = match mode {
             Mode::Append => return 0,
+            // A grown index is rebuilt over the rows ([`reindex`](Self::reindex)).
+            Mode::Fixed { limit } if mode != self.mode && !self.unique => {
+                self.groups.saturating_add(new).min(limit)
+            }
             Mode::Fixed { limit } => self.index.len().saturating_add(new).min(limit),
             Mode::Grow => self.index.len().saturating_add(new),
         };
@@ -768,6 +851,9 @@ impl RowTable {
     /// Grows the index for `new` more keys, as [`index_bytes`](Self::index_bytes)
     /// assumed.
     fn reserve_index(&mut self, new: usize) {
+        if self.merge_index.is_some() {
+            return;
+        }
         let len = match self.mode {
             Mode::Append => return,
             Mode::Fixed { limit } => self.index.len().saturating_add(new).min(limit),
@@ -901,12 +987,27 @@ impl RowTable {
         if mode == Mode::Append && self.mode != Mode::Append {
             self.unique &= self.groups == 0;
             self.index = HashTable::new();
+            self.merge_index = None;
         }
         let grew = mode != self.mode && mode != Mode::Append;
         self.mode = mode;
-        if let Some(a) = self.adapt.as_mut()
-            && a.rows >= a.next
+        if grew
+            && !self.unique
+            && let Mode::Fixed { limit } = mode
         {
+            self.reindex(limit);
+        }
+        let Some(a) = self.adapt.as_mut() else {
+            return;
+        };
+        a.filled = false;
+        if grew {
+            // The early-widening rate counts from here: the rows of the
+            // clears before are not the input's new keys.
+            a.window = (a.rows, a.pushed);
+            a.early = false;
+        }
+        if a.rows >= a.next {
             #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
             let rate = (a.pushed - a.window.1) as f64 / (a.rows - a.window.0).max(1) as f64;
             a.early = !grew && rate >= EARLY_RATE;
@@ -915,9 +1016,66 @@ impl RowTable {
         }
     }
 
+    /// Rebuilds a grown fixed index over the table's rows, up to `limit`
+    /// keys, one entry per key: the last partition's rows first, each
+    /// partition's newest first (so in a one-partition table, the newest
+    /// keys are the ones kept). Without it, every key whose
+    /// entry an earlier clear dropped would make one more partial duplicate
+    /// when it next came (on TPC-DS q22 about as many rows again as the
+    /// table's keys). DuckDB clears a table it grows: its rows are already
+    /// spread over partitions there, ours are still in the table.
+    fn reindex(&mut self, limit: usize) {
+        let Self {
+            parts,
+            index,
+            stride,
+            gseed,
+            refs,
+            views,
+            resizes,
+            ..
+        } = self;
+        let (stride, gseed, refs, views) = (*stride, *gseed, *refs, views.as_ref());
+        let parts: &[Part] = parts;
+        let before = index.capacity();
+        index.clear();
+        let groups = parts.iter().map(|p| p.rows.len() / stride).sum::<usize>();
+        index.reserve(groups.min(limit), |&o| {
+            fin(word(row_at(parts, stride, refs, o), 0), gseed)
+        });
+        if index.capacity() != before
+            && let Some(c) = resizes
+        {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+        'parts: for (p, part) in parts.iter().enumerate().rev() {
+            for row in (0..part.rows.len() / stride).rev() {
+                if index.len() >= limit {
+                    break 'parts;
+                }
+                let r = refs.make(p, row);
+                let (key, heap) = row_heap_at(parts, stride, refs, r);
+                let g = fin(word(key, 0), gseed);
+                let found = index.find(g, |&o| match views {
+                    Some(l) => {
+                        let (other, other_heap) = row_heap_at(parts, stride, refs, o);
+                        !other.is_empty() && l.eq(other, other_heap, key, heap)
+                    }
+                    None => same_key(row_at(parts, stride, refs, o), key, stride),
+                });
+                if found.is_none() {
+                    index.insert_unique(g, r, |&o| {
+                        fin(word(row_at(parts, stride, refs, o), 0), gseed)
+                    });
+                }
+            }
+        }
+    }
+
     /// Folds a prepared batch in. Call after reserving
     /// [`projected`](Self::projected) bytes.
     pub(crate) fn apply(&mut self, p: &RowPrepared) -> Result<()> {
+        self.only_hashbrown()?;
         let n = p.keys.len();
         self.rows_in = self.rows_in.saturating_add(n);
         self.switch(self.next_mode());
@@ -1145,6 +1303,12 @@ impl RowTable {
 
     /// The loop of [`probe_all`](Self::probe_all) for one key shape;
     /// `COUNT` adds each lookup's key comparisons to `count`.
+    ///
+    /// The index's control bytes are mostly cached, the rows it points to
+    /// are not (TPC-DS q22: 29% of the probe in the key compare). So each
+    /// [`PREFETCH_ROWS`] rows' first tag-matching rows are prefetched
+    /// before the rows are resolved in order; a candidate that an insert or
+    /// a clear in between made stale is only a wasted prefetch.
     fn probe_rows<const VIEWS: bool, const COUNT: bool>(
         &mut self,
         keys: &EncodedKeys,
@@ -1153,13 +1317,35 @@ impl RowTable {
         count: &mut ProbeCount,
     ) -> Result<()> {
         let (hashes, heap) = (keys.hashes(), keys.heap());
-        for (k, &h) in hashes.iter().enumerate() {
-            refs.push(self.find_or_insert::<VIEWS, COUNT>(keys.row(k), heap, h, limit, count)?);
+        let mut gs = [0_u64; PREFETCH_ROWS];
+        for (c, chunk) in hashes.chunks(PREFETCH_ROWS).enumerate() {
+            for (g, &h) in gs.iter_mut().zip(chunk) {
+                *g = fin(h, self.gseed);
+            }
+            let gs = &gs[..chunk.len()];
+            if self.index.len() > PREFETCH_ROWS {
+                for &g in gs {
+                    if let Some(&r) = self.index.find(g, |_| true) {
+                        prefetch_read(row_at(&self.parts, self.stride, self.refs, r), 0);
+                    }
+                }
+            }
+            for (i, (&h, &g)) in chunk.iter().zip(gs).enumerate() {
+                let k = c * PREFETCH_ROWS + i;
+                refs.push(self.find_or_insert::<VIEWS, COUNT>(
+                    keys.row(k),
+                    heap,
+                    (h, g),
+                    limit,
+                    count,
+                )?);
+            }
         }
         Ok(())
     }
 
-    /// The row of key row `key` (with hash `h`; its long values in
+    /// The row of key row `key` (with hash `h` and index hash
+    /// `g = fin(h, gseed)`; its long values in
     /// `key_heap`), inserting it if new; an index holding `limit` keys is
     /// cleared before it takes another (the rows stay: a key seen again
     /// gets a new row). `VIEWS`: the layout has string or binary views;
@@ -1169,7 +1355,7 @@ impl RowTable {
         &mut self,
         key: &[u8],
         key_heap: &[u8],
-        h: u64,
+        (h, g): (u64, u64),
         limit: usize,
         count: &mut ProbeCount,
     ) -> Result<u32> {
@@ -1185,10 +1371,10 @@ impl RowTable {
             bits,
             refs,
             views,
+            adapt,
             ..
         } = self;
         let (stride, gseed) = (*stride, *gseed);
-        let g = fin(h, gseed);
         // A lookup first (hashbrown inlines `find`; most rows are hits),
         // then an insert on a miss.
         let mut compares = 0_u64;
@@ -1217,6 +1403,9 @@ impl RowTable {
         if index.len() >= limit {
             index.clear();
             *unique = false;
+            if let Some(a) = adapt {
+                a.filled = true;
+            }
             if let Some(c) = abandons {
                 c.fetch_add(1, Ordering::Relaxed);
             }
@@ -1482,6 +1671,7 @@ impl RowTable {
         let part = self.merge_part(c);
         let mut refs = Vec::with_capacity(c.refs.len());
         self.reserve_index(c.refs.len());
+        self.reserve_merge_index(c.refs.len())?;
         if let Some(v) = self.parts.get_mut(part) {
             v.rows.reserve(c.refs.len() * self.stride);
             v.heap.reserve(c.heap);
@@ -1489,28 +1679,33 @@ impl RowTable {
         let mut result = Ok(());
         let mut count = ProbeCount::default();
         let counted = self.probes.is_some();
-        for &r in &c.refs {
-            let (row, heap) = row_heap_at(&src.parts, src.stride, src.refs, r);
-            let h = word(row, 0);
-            let found = match (self.views.is_some(), counted) {
-                (true, false) => {
-                    self.find_or_insert::<true, false>(row, heap, h, usize::MAX, &mut count)
-                }
-                (false, false) => {
-                    self.find_or_insert::<false, false>(row, heap, h, usize::MAX, &mut count)
-                }
-                (true, true) => {
-                    self.find_or_insert::<true, true>(row, heap, h, usize::MAX, &mut count)
-                }
-                (false, true) => {
-                    self.find_or_insert::<false, true>(row, heap, h, usize::MAX, &mut count)
-                }
-            };
-            match found {
-                Ok(id) => refs.push(id),
-                Err(e) => {
-                    result = Err(e);
-                    break;
+        if self.merge_index.is_some() {
+            result = self.merge_rows_salted(src, c, &mut refs, &mut count);
+        } else {
+            for &r in &c.refs {
+                let (row, heap) = row_heap_at(&src.parts, src.stride, src.refs, r);
+                let h = word(row, 0);
+                let h = (h, fin(h, self.gseed));
+                let found = match (self.views.is_some(), counted) {
+                    (true, false) => {
+                        self.find_or_insert::<true, false>(row, heap, h, usize::MAX, &mut count)
+                    }
+                    (false, false) => {
+                        self.find_or_insert::<false, false>(row, heap, h, usize::MAX, &mut count)
+                    }
+                    (true, true) => {
+                        self.find_or_insert::<true, true>(row, heap, h, usize::MAX, &mut count)
+                    }
+                    (false, true) => {
+                        self.find_or_insert::<false, true>(row, heap, h, usize::MAX, &mut count)
+                    }
+                };
+                match found {
+                    Ok(id) => refs.push(id),
+                    Err(e) => {
+                        result = Err(e);
+                        break;
+                    }
                 }
             }
         }
@@ -1535,12 +1730,116 @@ impl RowTable {
         })
     }
 
+    /// Refuses what would look keys up in the empty `hashbrown` index of a
+    /// table holding a [`MergeIndex`], and so duplicate its groups: such a
+    /// table only merges.
+    fn only_hashbrown(&self) -> Result<()> {
+        if self.merge_index.is_some() {
+            return Err(internal("a merge table only takes merges".to_owned()));
+        }
+        Ok(())
+    }
+
+    /// Grows a [`MergeIndex`] for `new` more keys, as
+    /// [`index_bytes`](Self::index_bytes) assumed.
+    fn reserve_merge_index(&mut self, new: usize) -> Result<()> {
+        let (parts, stride, gseed, refs) = (&self.parts, self.stride, self.gseed, self.refs);
+        if let Some(index) = &mut self.merge_index
+            && index.reserve(new, |r| fin(word(row_at(parts, stride, refs, r), 0), gseed))?
+            && let Some(c) = &self.resizes
+        {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(())
+    }
+
+    /// The lookups of [`apply_merge`](Self::apply_merge) over a
+    /// [`MergeIndex`]: each [`PREFETCH_ROWS`] rows' slots, then their first
+    /// salt-matching rows, are prefetched before they are resolved in order.
+    /// New keys get rows in input order, as with `hashbrown`.
+    fn merge_rows_salted(
+        &mut self,
+        src: &Self,
+        c: &MergeChunk,
+        out: &mut Vec<u32>,
+        count: &mut ProbeCount,
+    ) -> Result<()> {
+        let counted = self.probes.is_some();
+        let Self {
+            parts,
+            sketches,
+            groups,
+            merge_index,
+            stride,
+            gseed,
+            bits,
+            refs,
+            views,
+            ..
+        } = self;
+        let Some(index) = merge_index else {
+            return Err(internal("no merge index".to_owned()));
+        };
+        let (stride, gseed, bits, refs) = (*stride, *gseed, *bits, *refs);
+        let mut gs = [0_u64; PREFETCH_ROWS];
+        for rows in c.refs.chunks(PREFETCH_ROWS) {
+            for (g, &r) in gs.iter_mut().zip(rows) {
+                *g = fin(word(row_at(&src.parts, src.stride, src.refs, r), 0), gseed);
+                index.prefetch_slot(*g);
+            }
+            let gs = &gs[..rows.len()];
+            for &g in gs {
+                if let Slot::Candidate(_, r) = index.walk(g, index.start(g)) {
+                    prefetch_read(row_at(parts, stride, refs, r), 0);
+                }
+            }
+            for (&from, &g) in rows.iter().zip(gs) {
+                let (key, key_heap) = row_heap_at(&src.parts, src.stride, src.refs, from);
+                let mut at = index.start(g);
+                let mut compares = 0_u64;
+                let id = loop {
+                    match index.walk(g, at) {
+                        Slot::Empty(free) => {
+                            let shape = (stride, bits, refs, views.as_ref());
+                            let h = word(key, 0);
+                            let r = push_row(parts, sketches, groups, shape, (key, key_heap), h)?;
+                            index.insert(free, g, r);
+                            break r;
+                        }
+                        Slot::Candidate(found, r) => {
+                            if counted {
+                                compares += 1;
+                            }
+                            let same = match views {
+                                Some(l) => {
+                                    let (row, heap) = row_heap_at(parts, stride, refs, r);
+                                    !row.is_empty() && l.eq(row, heap, key, key_heap)
+                                }
+                                None => same_key(row_at(parts, stride, refs, r), key, stride),
+                            };
+                            if same {
+                                break r;
+                            }
+                            at = index.after(found);
+                        }
+                    }
+                };
+                if counted {
+                    count.add(compares);
+                }
+                out.push(id);
+            }
+        }
+        Ok(())
+    }
+
     /// Moves partitions `ranges` out into tables of their own (in order):
     /// each holds its range's rows and states, no index or sketch,
     /// and takes no more rows (append mode, never merged into). This table
     /// keeps the partitions no range names, and drops its index.
     pub(crate) fn split_parts(&mut self, ranges: &[Range<usize>]) -> Vec<Self> {
         self.index = HashTable::new();
+        self.merge_index = None;
         self.sketches = None;
         self.sketching = false;
         self.adapt = None;
@@ -1570,6 +1869,7 @@ impl RowTable {
                     widen_to: self.bits,
                     widen_at: usize::MAX,
                     index: HashTable::new(),
+                    merge_index: None,
                     mode: Mode::Append,
                     adapt: None,
                     groups,
@@ -1813,18 +2113,36 @@ pub(crate) fn final_tasks(tables: &[&RowTable]) -> Vec<FinalTask> {
 
 impl RowTable {
     /// Presizes a merge table's index for `groups` keys (the final phase's
-    /// estimate).
-    pub(crate) fn presize(&mut self, groups: usize) {
+    /// estimate). One over [`FLAT_MAX_BYTES`] is a [`MergeIndex`].
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` if a [`MergeIndex`] cannot be allocated.
+    pub(crate) fn presize(&mut self, groups: usize) -> Result<()> {
+        if Self::salted_merge(groups) {
+            self.merge_index = Some(MergeIndex::new(groups)?);
+            return Ok(());
+        }
         let (parts, stride, gseed, refs) = (&self.parts, self.stride, self.gseed, self.refs);
         let before = self.index.capacity();
         self.index.reserve(groups, |&r| {
             fin(word(row_at(parts, stride, refs, r), 0), gseed)
         });
         self.count_resize(before);
+        Ok(())
+    }
+
+    /// Whether a merge table of `groups` keys takes a [`MergeIndex`]: the
+    /// join's size rule, [`FLAT_MAX_BYTES`].
+    fn salted_merge(groups: usize) -> bool {
+        buckets_for(groups).saturating_mul(BUCKET_BYTES) > FLAT_MAX_BYTES
     }
 
     /// [`memory_size`](Self::memory_size) after [`presize`](Self::presize).
     pub(crate) fn projected_presize(&self, groups: usize) -> usize {
+        if Self::salted_merge(groups) {
+            return self.memory_size() - buckets(&self.index) * BUCKET_BYTES
+                + MergeIndex::bytes_for(groups);
+        }
         self.memory_size() - buckets(&self.index) * BUCKET_BYTES
             + self.index_bytes(Mode::Grow, groups)
     }
@@ -1936,6 +2254,173 @@ mod tests {
         }
     }
 
+    /// Merges `inputs` chunk by chunk into a new table presized for `presize`
+    /// groups, checking the projections hold; returns the table.
+    fn merged(
+        core: &Arc<AggCore>,
+        seed: &HashSeed,
+        inputs: &[RowTable],
+        presize: usize,
+    ) -> RowTable {
+        let mut out = RowTable::new(core, seed, Mode::Grow, false, RADIX_BITS).unwrap();
+        let want = out.projected_presize(presize);
+        out.presize(presize).unwrap();
+        assert!(out.memory_size() <= want, "{} > {want}", out.memory_size());
+        for t in inputs {
+            for p in 0..PARTS {
+                for start in (0..t.part_len(p)).step_by(1024) {
+                    let end = (start + 1024).min(t.part_len(p));
+                    let c = t.merge_chunk(p, start..end).unwrap();
+                    let want = out.projected_merge(&c);
+                    out.apply_merge(t, &c).unwrap();
+                    assert!(out.memory_size() <= want, "{} > {want}", out.memory_size());
+                }
+            }
+        }
+        out
+    }
+
+    /// A merge through the salted index finds the same groups, in the same
+    /// order, with the same states, as one through `hashbrown`; a low
+    /// estimate only makes it grow.
+    #[test]
+    fn a_large_merge_table_takes_the_salted_index() {
+        let core = core();
+        let seed = HashSeed::new(Some(5));
+        let input = |keys: Range<i64>| {
+            let mut t = RowTable::new(&core, &seed, Mode::Append, true, RADIX_BITS).unwrap();
+            for s in keys.clone().step_by(4096) {
+                apply(&mut t, &batch(&core, s..(s + 4096).min(keys.end)));
+            }
+            t
+        };
+        // Overlapping: keys of the second are hits for 10,000 of its rows.
+        let inputs = [input(0..30_000), input(20_000..40_000)];
+        let flat = merged(&core, &seed, &inputs, 1_000);
+        assert!(flat.merge_index.is_none());
+        let large = merged(&core, &seed, &inputs, 40_000);
+        assert!(large.merge_index.is_some());
+        // 8,000 keys presize 2^14 slots: too few, so this one grows.
+        let grown = merged(&core, &seed, &inputs, 8_000);
+        assert!(grown.buckets() > 1 << 14);
+        let ids = flat.ids(0..flat.len());
+        let want = flat.output_batch(&ids).unwrap();
+        assert_eq!(want.num_rows(), 40_000);
+        for t in [&large, &grown] {
+            assert_eq!(t.len(), 40_000);
+            assert_eq!(t.output_batch(&t.ids(0..t.len())).unwrap(), want);
+        }
+    }
+
+    /// A detailed profile counts the salted merge's lookups and key compares.
+    #[test]
+    fn a_salted_merge_counts_its_probes() {
+        let core = core();
+        let seed = HashSeed::new(Some(5));
+        let mut t = RowTable::new(&core, &seed, Mode::Append, true, RADIX_BITS).unwrap();
+        apply(&mut t, &batch(&core, 0..4_000));
+        let totals = Arc::new(ProbeTotals::default());
+        let mut out = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS)
+            .unwrap()
+            .with_probes(Some(Arc::clone(&totals)));
+        out.presize(10_000).unwrap();
+        // Twice: 4,000 new keys, then 4,000 hits with a compare each.
+        for _ in 0..2 {
+            for p in 0..PARTS {
+                let c = t.merge_chunk(p, 0..t.part_len(p)).unwrap();
+                out.apply_merge(&t, &c).unwrap();
+            }
+        }
+        assert_eq!(out.len(), 4_000);
+        let count = totals.get();
+        assert_eq!(count.lookups, 8_000);
+        assert!(count.compares >= 4_000, "{}", count.compares);
+    }
+
+    /// Different keys with one forged hash meet in one slot's walk, with
+    /// equal salts: each is compared, and each stays its own group.
+    #[test]
+    fn a_salted_merge_tells_apart_keys_of_one_salt() {
+        const H: u64 = 0x1234;
+        let core = core();
+        let seed = HashSeed::new(Some(5));
+        let mut real = RowTable::new(&core, &seed, Mode::Append, true, RADIX_BITS).unwrap();
+        apply(&mut real, &batch(&core, 0..50));
+        let mut src = RowTable::new(&core, &seed, Mode::Append, false, RADIX_BITS).unwrap();
+        let refs: Vec<u32> = real
+            .ids(0..50)
+            .iter()
+            .map(|&r| {
+                let mut row = row_at(&real.parts, real.stride, real.refs, r).to_vec();
+                row[..8].copy_from_slice(&H.to_le_bytes());
+                src.push(&row, &[], H).unwrap()
+            })
+            .collect();
+        let c = MergeChunk {
+            part: 0,
+            refs,
+            states: Vec::new(),
+            heap: 0,
+        };
+        let mut out = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+        out.presize(10_000).unwrap();
+        let (mut first, mut again) = (Vec::new(), Vec::new());
+        let mut count = ProbeCount::default();
+        out.merge_rows_salted(&src, &c, &mut first, &mut count)
+            .unwrap();
+        out.merge_rows_salted(&src, &c, &mut again, &mut count)
+            .unwrap();
+        assert_eq!(out.len(), 50);
+        assert_eq!(first, again);
+        let mut distinct = first.clone();
+        distinct.sort_unstable();
+        distinct.dedup();
+        assert_eq!(distinct.len(), 50);
+    }
+
+    /// A table with a merge index refuses raw input, and splitting a table
+    /// drops the index.
+    #[test]
+    fn a_merge_table_only_takes_merges() {
+        let core = core();
+        let seed = HashSeed::new(Some(5));
+        let mut out = RowTable::new(&core, &seed, Mode::Grow, false, RADIX_BITS).unwrap();
+        out.presize(10_000).unwrap();
+        let held = out.memory_size();
+        let b = batch(&core, 0..10);
+        let prepared = out.prepare(&b, false).unwrap();
+        assert!(out.apply(&prepared).is_err());
+        out.widen_to = RADIX_BITS;
+        out.bits = 0;
+        assert!(out.widen().is_err());
+        out.bits = RADIX_BITS;
+        out.split_parts(&[]);
+        assert!(out.merge_index.is_none() && out.memory_size() < held);
+    }
+
+    /// Long string keys compare through the layout and their bytes are
+    /// counted, as with `hashbrown`.
+    #[test]
+    fn a_salted_merge_compares_long_string_keys() {
+        let core = core_str();
+        let seed = HashSeed::new(Some(9));
+        let input = |keys: Range<i64>| {
+            let mut t = RowTable::new(&core, &seed, Mode::Append, true, RADIX_BITS).unwrap();
+            apply(&mut t, &long_keys(&core, keys));
+            t
+        };
+        let inputs = [input(0..1_500), input(1_000..2_000)];
+        let flat = merged(&core, &seed, &inputs, 100);
+        let salted = merged(&core, &seed, &inputs, 10_000);
+        assert!(salted.merge_index.is_some());
+        assert_eq!(salted.len(), 2_000);
+        assert!(salted.memory_size() >= 2_000 * 200);
+        assert_eq!(
+            salted.output_batch(&salted.ids(0..salted.len())).unwrap(),
+            flat.output_batch(&flat.ids(0..flat.len())).unwrap()
+        );
+    }
+
     /// A seedless 64-bit mix (splitmix64's finalizer) for test hashes.
     fn mix(mut x: u64) -> u64 {
         x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -2028,7 +2513,9 @@ mod tests {
     }
 
     /// After `ADAPT_ROWS` rows, unique keys switch a fixed index to
-    /// append-only, and keys that repeat beyond its capacity grow it.
+    /// append-only; keys that repeat beyond its capacity grow it to their
+    /// count as soon as it has filled with enough partial duplicates, long
+    /// before `ADAPT_ROWS`.
     #[test]
     fn fixed_index_adapts() {
         let core = core();
@@ -2038,6 +2525,7 @@ mod tests {
         let mut repeat =
             RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, RADIX_BITS).unwrap();
         let step = 8192;
+        let mut grown_at = None;
         for start in (0..ADAPT_ROWS + step).step_by(step) {
             let s = i64::try_from(start).unwrap();
             apply(&mut unique, &batch(&core, s..s + 8192));
@@ -2045,12 +2533,36 @@ mod tests {
                 &mut repeat,
                 &batch(&core, (s..s + 8192).map(|i| i % 10_000)),
             );
+            if grown_at.is_none() && repeat.mode != (Mode::Fixed { limit: 1024 }) {
+                grown_at = Some(start);
+            }
         }
         assert_eq!(unique.mode, Mode::Append);
-        assert_eq!(repeat.mode, Mode::Fixed { limit: 4096 });
-        // Growth stops at MAX_SINK_SLOTS (limit = 2/3 of the slots): from
-        // 2^21 slots a 4x step would pass it; from 2^20 it lands on it.
-        let grow_from = |slots: usize| {
+        // 10,000 keys at load 2/3: 2^14 slots, in one step from 2^11.
+        assert_eq!(
+            repeat.mode,
+            Mode::Fixed {
+                limit: (1 << 14) * 2 / 3
+            }
+        );
+        assert!(grown_at.is_some_and(|r| r < 64 * 1024), "{grown_at:?}");
+        // Once grown, the 10,000 keys stay in the index: no more rows.
+        let groups = repeat.groups;
+        apply(&mut repeat, &batch(&core, (0..8192).map(|i| i % 10_000)));
+        assert_eq!(repeat.groups, groups);
+    }
+
+    /// A full fixed index grows (DuckDB 2.0's rule) only once its partial
+    /// duplicates take `GROW_DUPLICATE_FACTOR` times the grown index's
+    /// bytes, at least 2x and at most to `MAX_SINK_SLOTS`; and it decides
+    /// only after it filled.
+    #[test]
+    fn fixed_index_grows_by_its_duplicates() {
+        let core = core();
+        let seed = HashSeed::new(Some(2));
+        // A full index of `slots` with about 512 distinct keys and `dups`
+        // rows beyond them.
+        let table = |slots: usize, dups: usize| {
             let mut t = RowTable::new(
                 &core,
                 &seed,
@@ -2062,26 +2574,227 @@ mod tests {
             )
             .unwrap();
             let a = t.adapt.as_mut().unwrap();
-            (a.rows, a.pushed) = (ADAPT_ROWS, ADAPT_ROWS);
             for h in 0..64 {
+                a.sketch.add(mix(h));
+            }
+            a.filled = true;
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a small positive estimate"
+            )]
+            let distinct = RowTable::distinct(a) as usize;
+            t.groups = distinct + dups;
+            t
+        };
+        // From 2^11 slots: the distinct keys fit, so 2x, 2^12 slots.
+        let index = buckets_for((1 << 12) * 2 / 3) * BUCKET_BYTES;
+        let stride = table(1 << 11, 0).stride;
+        let enough = (GROW_DUPLICATE_FACTOR * index).div_ceil(stride);
+        assert_eq!(
+            table(1 << 11, enough - 1).next_mode(),
+            Mode::Fixed {
+                limit: (1 << 11) * 2 / 3
+            }
+        );
+        let grown = Mode::Fixed {
+            limit: (1 << 12) * 2 / 3,
+        };
+        assert_eq!(table(1 << 11, enough).next_mode(), grown);
+        // Not before it filled.
+        let mut t = table(1 << 11, enough);
+        t.adapt.as_mut().unwrap().filled = false;
+        assert_eq!(t.mode, t.next_mode());
+        // The switch to it restarts the early-widening window.
+        let mut t = table(1 << 11, enough);
+        let a = t.adapt.as_mut().unwrap();
+        (a.rows, a.pushed, a.early) = (5_000, 4_000, true);
+        t.switch(t.next_mode());
+        assert_eq!(t.mode, grown);
+        let a = t.adapt.as_ref().unwrap();
+        assert!(!a.filled && !a.early);
+        assert_eq!(a.window, (5_000, 4_000));
+        // At most MAX_SINK_SLOTS: from half of it, 2x lands on it; from
+        // there it cannot double.
+        let huge = 1 << 30;
+        let full = Mode::Fixed {
+            limit: MAX_SINK_SLOTS * 2 / 3,
+        };
+        assert_eq!(table(MAX_SINK_SLOTS / 2, huge).next_mode(), full);
+        assert_eq!(table(MAX_SINK_SLOTS, huge).next_mode(), full);
+        // Many distinct keys: straight to their capacity when they fit.
+        let many = |hashes: u64| {
+            let mut t = table(1 << 11, huge);
+            let a = t.adapt.as_mut().unwrap();
+            for h in 64..hashes {
                 a.sketch.add(mix(h));
             }
             t.next_mode()
         };
+        let Mode::Fixed { limit } = many(20_000) else {
+            panic!("{:?}", many(20_000));
+        };
+        assert!(limit >= 100_000, "{limit}");
+        // Keys that would not fit in MAX_SINK_SLOTS: no growth at all.
         assert_eq!(
-            grow_from(1 << 21),
+            many(60_000),
             Mode::Fixed {
-                limit: (1 << 21) * 2 / 3
+                limit: (1 << 11) * 2 / 3
             }
         );
-        assert_eq!(
-            grow_from(1 << 20),
-            Mode::Fixed {
-                limit: (1 << 20) * 2 / 3 * 4
+    }
+
+    /// A grown index is rebuilt over the rows, newest first in a
+    /// one-partition table, up to its limit: keys an earlier clear dropped
+    /// find their row again, for fixed-width and long string keys.
+    #[test]
+    fn a_grown_index_finds_rows_from_before_its_clears() {
+        let seed = HashSeed::new(Some(4));
+        let int = core();
+        let string = core_str();
+        type Keys = fn(&AggCore, std::ops::Range<i64>) -> Batch;
+        let cases: [(&Arc<AggCore>, Keys); 2] = [
+            (&int, |c, r| batch(c, r)),
+            (&string, |c, r| long_keys(c, r)),
+        ];
+        for (core, keys) in cases {
+            let table = || {
+                // One partition, as a thread-local table starts: rows in
+                // arrival order.
+                let mut t = RowTable::new(core, &seed, Mode::Fixed { limit: 8 }, true, 0).unwrap();
+                apply(&mut t, &keys(core, 0..100));
+                assert_eq!((t.groups, t.unique), (100, false));
+                assert!(t.index.len() <= 8);
+                t
+            };
+            // Room for every key: none makes another row.
+            let mut t = table();
+            t.switch(Mode::Fixed { limit: 1_000 });
+            assert_eq!(t.index.len(), 100);
+            apply(&mut t, &keys(core, 0..100));
+            assert_eq!(t.groups, 100);
+            // Room for 50: the newest 50 keys are found, the oldest are not.
+            let mut t = table();
+            t.switch(Mode::Fixed { limit: 50 });
+            assert_eq!(t.index.len(), 50);
+            apply(&mut t, &keys(core, 50..100));
+            assert_eq!(t.groups, 100);
+            apply(&mut t, &keys(core, 0..50));
+            assert_eq!(t.groups, 150);
+            // The same output as one row per key.
+            let all = t.ids(0..t.groups);
+            let out = t.output_batch(&all).unwrap();
+            let counts = out.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
+            assert_eq!(counts.iter().flatten().sum::<i64>(), 200);
+        }
+    }
+
+    /// A full fixed index grows through `apply` itself (sketch, clears and
+    /// all), within the bytes `projected` reserved, for fixed-width and long
+    /// string keys; the growth counts as a resize, and afterwards a repeated
+    /// key makes no new row.
+    #[test]
+    fn a_full_index_grows_inside_its_projection() {
+        let seed = HashSeed::new(Some(6));
+        let int = core();
+        let string = core_str();
+        type Keys = fn(&AggCore, std::ops::Range<i64>) -> Batch;
+        let cases: [(&Arc<AggCore>, Keys); 2] = [
+            (&int, |c, r| batch(c, r)),
+            (&string, |c, r| long_keys(c, r)),
+        ];
+        for (core, keys) in cases {
+            let resizes = Arc::new(AtomicU64::new(0));
+            let mut t = RowTable::new(core, &seed, Mode::Fixed { limit: 8 }, true, RADIX_BITS)
+                .unwrap()
+                .with_resizes(Arc::clone(&resizes));
+            // 100 keys, over and over: every pass past the first is all
+            // partial duplicates until the index grows.
+            for _ in 0..20 {
+                apply(&mut t, &keys(core, 0..100));
             }
-        );
-        const { assert!(((1 << 20) * 2 / 3 * 4) * 3 / 2 <= MAX_SINK_SLOTS) };
-        // Deterministic and two-thread defaults.
+            let Mode::Fixed { limit } = t.mode else {
+                panic!("{:?}", t.mode);
+            };
+            assert!(limit >= 100, "{limit}");
+            assert!(resizes.load(Ordering::Relaxed) > 0);
+            let groups = t.groups;
+            apply(&mut t, &keys(core, 0..100));
+            assert_eq!(t.groups, groups);
+            let out = t.output_batch(&t.ids(0..t.groups)).unwrap();
+            let counts = out.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
+            assert_eq!(counts.iter().flatten().sum::<i64>(), 2_100);
+        }
+    }
+
+    /// A rebuild over several partitions stops at its limit and keeps one
+    /// entry per key; rows it leaves out only make partial duplicates.
+    #[test]
+    fn a_rebuild_over_partitions_stops_at_its_limit() {
+        let seed = HashSeed::new(Some(7));
+        let core = core();
+        let mut t =
+            RowTable::new(&core, &seed, Mode::Fixed { limit: 8 }, true, RADIX_BITS).unwrap();
+        apply(&mut t, &batch(&core, 0..100));
+        assert!(!t.unique);
+        assert!(t.part_count() > 1);
+        t.switch(Mode::Fixed { limit: 50 });
+        assert_eq!(t.index.len(), 50);
+        // The indexed keys are 50 distinct keys, and each finds its row.
+        let indexed: Vec<u32> = t.index.iter().copied().collect();
+        let out = t.output_batch(&indexed).unwrap();
+        let mut keys: Vec<i64> = out
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .iter()
+            .flatten()
+            .collect();
+        keys.sort_unstable();
+        keys.dedup();
+        assert_eq!(keys.len(), 50);
+        apply(&mut t, &batch(&core, keys.iter().copied()));
+        assert_eq!(t.groups, 100);
+        let out = t.output_batch(&t.ids(0..t.groups)).unwrap();
+        let counts = out.column(1).as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(counts.iter().flatten().sum::<i64>(), 150);
+    }
+
+    /// Widening a fixed index that was cleared rebuilds it over the rows,
+    /// up to its limit and one entry per key: the indexed keys make no new
+    /// rows afterwards, and the index is no larger than before.
+    #[test]
+    fn widening_a_cleared_fixed_index_rebuilds_it() {
+        let seed = HashSeed::new(Some(7));
+        let core = core();
+        let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 64 }, true, 0)
+            .unwrap()
+            .widening(RADIX_BITS, 100);
+        apply(&mut t, &batch(&core, (0..300).map(|i| i % 200)));
+        assert!(!t.unique && t.wants_widen());
+        let (groups, buckets) = (t.groups, t.buckets());
+        t.widen().unwrap();
+        assert_eq!(t.part_count(), PARTS);
+        assert_eq!(t.index.len(), 64);
+        assert!(t.buckets() <= buckets);
+        let indexed: Vec<u32> = t.index.iter().copied().collect();
+        let out = t.output_batch(&indexed).unwrap();
+        let keys: Vec<i64> = out
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap()
+            .iter()
+            .flatten()
+            .collect();
+        apply(&mut t, &batch(&core, keys.iter().copied()));
+        assert_eq!(t.groups, groups);
+    }
+
+    /// Deterministic, one-thread and two-thread defaults.
+    #[test]
+    fn local_modes() {
         assert_eq!(Mode::local(true, 12), Mode::Grow);
         assert_eq!(Mode::local(false, 1), Mode::Grow);
         assert_eq!(
@@ -2136,6 +2849,28 @@ mod tests {
             .collect();
         v.sort_unstable();
         v
+    }
+
+    /// A fixed index cleared inside a prefetched chunk of rows: the rows of
+    /// the chunk after the clear still find (or make) their own key's row,
+    /// so each key's partial rows add up to its input rows.
+    #[test]
+    fn a_clear_inside_a_prefetched_chunk_keeps_every_count() {
+        let core = core();
+        let seed = HashSeed::new(Some(6));
+        // 100 keys of index, 150 keys cycling: a clear every 100 new keys,
+        // at varying positions within each 64-row chunk.
+        let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 100 }, false, 0).unwrap();
+        apply(&mut t, &batch(&core, (0..5_000).map(|i| i % 150)));
+        assert!(!t.is_unique());
+        let mut sums = [0_i64; 150];
+        for (k, c, s) in sorted(&t.output_batch(&t.ids(0..t.len())).unwrap()) {
+            let k = usize::try_from(k.unwrap()).unwrap();
+            assert_eq!(c, s);
+            sums[k] += c.unwrap();
+        }
+        let want: Vec<i64> = (0..150).map(|k| (5_000 - k + 149) / 150).collect();
+        assert_eq!(sums.to_vec(), want);
     }
 
     /// One partition (one thread) and sixteen fold the same groups; output
@@ -2224,8 +2959,7 @@ mod tests {
 
     /// Widening spreads a narrow table's rows, long key bytes and states
     /// over the radix partitions without changing any group: a growing
-    /// index still finds every key, a fixed one is cleared, and sketches
-    /// start.
+    /// or fixed index still finds every key, and sketches start.
     #[test]
     fn widening_keeps_every_group() {
         let core = core();
@@ -2264,8 +2998,10 @@ mod tests {
             apply(&mut t, &batch(&core, 0..4_500));
             match mode {
                 // Every key is found again: no new rows, still unique.
-                Mode::Grow => assert_eq!((t.len(), t.is_unique()), (groups, true)),
-                _ => assert!(t.len() > groups && !t.is_unique(), "{mode:?}"),
+                Mode::Grow | Mode::Fixed { .. } => {
+                    assert_eq!((t.len(), t.is_unique()), (groups, true), "{mode:?}");
+                }
+                Mode::Append => assert!(t.len() > groups && !t.is_unique()),
             }
             // Widening an already wide table changes nothing.
             let n = t.len();

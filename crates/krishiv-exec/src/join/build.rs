@@ -399,7 +399,7 @@ fn build_need(part: &Part, row_layout: bool, marks: bool) -> Option<(usize, usiz
 }
 
 /// A duration in whole nanoseconds, saturating.
-fn nanos(d: std::time::Duration) -> u64 {
+pub(super) fn nanos(d: std::time::Duration) -> u64 {
     u64::try_from(d.as_nanos()).unwrap_or(u64::MAX)
 }
 

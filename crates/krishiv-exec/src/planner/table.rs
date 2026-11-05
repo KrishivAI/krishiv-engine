@@ -32,6 +32,12 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
     fn statistics(&self) -> Option<TableStats> {
         None
     }
+
+    /// How many units (row groups) a whole read of the table touches, when
+    /// known. The cost of a late fetch (design P2-T063) needs it.
+    fn scan_units(&self) -> Option<u64> {
+        None
+    }
 }
 
 /// Finds the provider of the table a resolved scan reads, at the version

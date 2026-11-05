@@ -72,15 +72,20 @@
 
 pub mod aggregate;
 mod cancel;
+pub mod carrier;
 mod channel;
 pub mod console;
 mod context;
 mod driver;
 mod error;
+pub mod exchange;
+mod exchange_stats;
 mod executor;
 pub mod files;
 pub mod hash;
 mod join;
+mod loops;
+mod map_keys;
 mod metrics;
 mod morsel;
 mod operator;
@@ -108,12 +113,14 @@ pub use context::{
     QueryId, TaskContext,
 };
 pub use error::Result;
+pub use exchange_stats::{EXCHANGE_HLL_BITS, ExchangeStats, PartitionStats};
 pub use executor::{
     Executor, ExecutorConfig, TaskHandle, TokioClock, TokioExecutor, WorkloadClass,
 };
 pub use join::{
     HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, JoinType, NestedLoopJoin,
-    NestedLoopJoinNode, NestedLoopSpec,
+    NestedLoopJoinNode, NestedLoopSpec, SkewSplit, SortMergeJoin, SortMergeJoinNode,
+    merge_join_supported, skew_split_sides,
 };
 pub use metrics::prometheus;
 pub use metrics::registry::{
@@ -132,11 +139,12 @@ pub use operator::{
     FlushOutput, GlobalState, LocalState, Operator, OperatorOutput, Sink, SinkStatus, Source,
 };
 pub use operators::{
-    DEFAULT_MAX_MERGE_FAN_IN, Expand, FileScan, FileScanMetrics, FileScanSource, FileSelections,
-    FileWrite, FileWriteSink, Filter, FilterPushdown, FnPredicate, Generate, Limit,
-    METADATA_COLUMN, MemoryScan, NullOf, Predicate, Project, ProjectItem, PushedFilter,
-    ReplicateRows, RowStageSettings, RuntimeFilters, ScalarExpr, ScanPushdown, ScanPushdowns, Sort,
-    SortKey, SortMetrics, TopN, UnionAlign,
+    DEFAULT_MAX_MERGE_FAN_IN, Expand, FetchSlot, FileScan, FileScanMetrics, FileScanSource,
+    FileSelections, FileWrite, FileWriteSink, Filter, FilterPushdown, FnPredicate, Generate,
+    LateFetch, Limit, METADATA_COLUMN, MemoryScan, NullOf, Predicate, Project, ProjectItem,
+    PushedFilter, ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ReplicateRows, RowStageSettings,
+    RuntimeFilters, ScalarExpr, ScanPushdown, ScanPushdowns, Sort, SortKey, SortMetrics, TakeRows,
+    TopN, UnionAlign,
 };
 pub use pipeline::{ExecNode, PipelineBuilder};
 pub use runner::{QueryRunner, Scheduler};

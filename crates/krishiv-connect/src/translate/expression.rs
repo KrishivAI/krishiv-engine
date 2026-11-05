@@ -105,7 +105,9 @@ impl Translator<'_> {
             ExprType::Cast(c) => {
                 let to = match &c.cast_to_type {
                     Some(CastToType::Type(t)) => data_type(t)?,
-                    Some(CastToType::TypeStr(s)) => krishiv_types::parse_data_type(s)?,
+                    Some(CastToType::TypeStr(s)) => {
+                        krishiv_types::parse_data_type(s)?.refuse_collations()?
+                    }
                     None => {
                         return Err(not_set(
                             "spark.connect.Expression.Cast",
@@ -218,6 +220,9 @@ impl Translator<'_> {
 fn star(s: &expression::UnresolvedStar) -> Result<Star> {
     match (&s.unparsed_target, s.plan_id) {
         (None, plan_id) => Ok(Star {
+            regex: None,
+            replace: Vec::new(),
+            position: None,
             qualifier: Vec::new(),
             except: Vec::new(),
             plan_id: plan_id.map(PlanId),
@@ -231,6 +236,9 @@ fn star(s: &expression::UnresolvedStar) -> Result<Star> {
                 ));
             };
             Ok(Star {
+                regex: None,
+                replace: Vec::new(),
+                position: None,
                 qualifier: parse_attribute_name(path)?,
                 except: Vec::new(),
                 plan_id: None,

@@ -137,3 +137,22 @@ fn output_names_show_the_defaults() {
     assert_eq!(n("regexp('a', 'a')"), "REGEXP(a, a)");
     assert_eq!(n("rlike('a', 'a')"), "RLIKE(a, a)");
 }
+
+/// Whether the list items of the single column of `sql` may be null.
+fn items_nullable(s: &Session, sql: &str) -> bool {
+    let df = block_on(s.sql(sql)).unwrap_or_else(|e| panic!("{sql}: {e}"));
+    let schema = block_on(df.schema()).unwrap();
+    match schema.field(0).data_type() {
+        arrow_schema::DataType::List(f) => f.is_nullable(),
+        other => panic!("{sql}: not a list: {other}"),
+    }
+}
+
+/// Spark types the result `ArrayType(subject.dataType)`, so items may be
+/// null (`RegExpExtractAll`), while `split` promises non-null items.
+#[test]
+fn regexp_extract_all_items_are_nullable() {
+    let s = Session::new().unwrap();
+    assert!(items_nullable(&s, "SELECT regexp_extract_all('a', '(a)')"));
+    assert!(!items_nullable(&s, "SELECT split('a', 'b')"));
+}

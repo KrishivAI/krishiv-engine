@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "datepart#1037ae6e7926/ansi_on",
+      "reason": "SELECT datepart(CAST(X'C328FF' AS STRING), TIMESTAMP '2019-08-12 01:00:00.123456') | NON_FOLDABLE_ARGUMENT where Spark has INVALID_EXTRACT_FIELD"
+    },
+    {
+      "id": "datepart#1037ae6e7926/ansi_off",
+      "reason": "SELECT datepart(CAST(X'C328FF' AS STRING), TIMESTAMP '2019-08-12 01:00:00.123456') | NON_FOLDABLE_ARGUMENT where Spark has INVALID_EXTRACT_FIELD"
+    },
+    {
+      "id": "datepart#b14d70b31dba/ansi_on",
+      "reason": "SELECT datepart(map('a', 1), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#b14d70b31dba/ansi_off",
+      "reason": "SELECT datepart(map('a', 1), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#b1deed49f56b/ansi_on",
+      "reason": "SELECT datepart(named_struct('a', 1, 'b', 'x'), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#b1deed49f56b/ansi_off",
+      "reason": "SELECT datepart(named_struct('a', 1, 'b', 'x'), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#d6c393002650/ansi_on",
+      "reason": "SELECT datepart(array(1, 2), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "datepart#d6c393002650/ansi_off",
+      "reason": "SELECT datepart(array(1, 2), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
+    }
+  ],
+  "format_version": 1,
+  "function": "datepart"
+}

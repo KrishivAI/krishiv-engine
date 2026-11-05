@@ -115,7 +115,7 @@ fn plain_carrier(t: &DataType) -> ArrowType {
     match t {
         DataType::String => ArrowType::Utf8,
         DataType::Binary => ArrowType::Binary,
-        _ => t.to_arrow(),
+        _ => krishiv_types::arrow::client_arrow_type(&t.to_arrow()),
     }
 }
 

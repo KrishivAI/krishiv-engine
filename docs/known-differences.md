@@ -18,3 +18,18 @@ evaluate first. When one row would raise from several expressions, the
 error reported can differ in class as well as in the blamed expression (for
 example `DIVIDE_BY_ZERO` against `ARITHMETIC_OVERFLOW`); a query that raises
 in one engine still raises in the other.
+
+## Result cache, reproducible results (Krishiv extensions, off by default)
+
+`krishiv.resultCache.enabled` and `krishiv.deterministicOrder` add behaviour Spark does not have; with
+both off (the default) nothing differs. See [reference/result-cache.md](reference/result-cache.md) for
+what is cached, when entries go, and the one staleness the cache accepts (a change made outside the
+engine, until the entry expires or `REFRESH TABLE`).
+
+## A malformed value of a Spark config key fails at `SET`
+
+A Spark key that Krishiv maps to a typed setting (for example
+`spark.sql.autoBroadcastJoinThreshold`) is checked when it is set: a value
+that does not parse fails the `SET` with `KRISHIV_INVALID_CONFIG_VALUE`.
+Spark stores the string and fails when a query reads it, with
+`INVALID_CONF_VALUE.TYPE_MISMATCH` (SQLSTATE 22022).

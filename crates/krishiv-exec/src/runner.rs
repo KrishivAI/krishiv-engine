@@ -403,6 +403,7 @@ fn inputs(p: &Pipeline) -> Vec<OperatorId> {
     let mut ids: Vec<OperatorId> = p
         .input
         .iter()
+        .chain(&p.second_input)
         .chain(p.operator_inputs.iter().flatten())
         .copied()
         .collect();
@@ -479,13 +480,19 @@ fn start_group(
         if let Some(input) = &pipeline.input {
             source_ctx = source_ctx.with_dependency(read(input)?);
         }
+        if let Some(input) = &pipeline.second_input {
+            source_ctx = source_ctx.with_second_dependency(read(input)?);
+        }
         let operator_deps = pipeline
             .operator_inputs
             .iter()
             .map(|i| i.as_ref().map(read).transpose())
             .collect::<Result<Vec<_>>>()?;
         let source_global = source.global_state(&source_ctx)?;
-        let drivers = if pipeline.preserve_order {
+        // One driver when the pipeline must keep order, and for every pipeline under
+        // `krishiv.deterministicOrder`: no interleaving of drivers, no run-to-run
+        // difference in the order of merges or output rows.
+        let drivers = if pipeline.preserve_order || query.config().deterministic_order {
             1
         } else {
             executor

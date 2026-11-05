@@ -135,6 +135,8 @@ mod walk;
 
 pub use cache::{CacheKey, normalized_plan_hash, normalized_subtree_hash};
 pub use display::Annotated;
+#[doc(hidden)]
+pub use display::identity_string;
 pub use encode::{ENCODING_VERSION, StructuralHash};
 pub use expr::{
     AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FieldOp, FrameBound, FrameUnits,
@@ -150,9 +152,10 @@ pub use partial::partial_state_columns;
 pub const GENERATE_QUALIFIER_PREFIX: &str = "__krishiv_generate_";
 
 pub use plan::{
-    Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy,
-    LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs,
+    ALIAS_PART_SEP, Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind,
+    JoinStrategy, LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs,
     TABLE_FUNCTION_NAME_SEP, TableVersion, UnpivotColumnSet, generator_arg,
+    without_generated_marker,
 };
-pub use raises::{conjuncts, may_raise};
+pub use raises::{conjuncts, is_deterministic, may_raise};
 pub use walk::{MAX_DEPTH, check_depth};

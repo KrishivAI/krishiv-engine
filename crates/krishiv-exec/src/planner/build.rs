@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use arrow_schema::{Schema, SchemaRef};
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
-use krishiv_io::{ColumnPath, FilterId};
+use krishiv_io::{ColumnPath, FilterId, MetadataCols};
 use krishiv_optimizer::PlanStats;
 use krishiv_plan::{
     AttrId, BoundColumn, CastMode, Expr, ExprNode, Literal, LogicalPlan, NullOrdering, Plan,
@@ -41,9 +41,10 @@ use crate::error::Result;
 use crate::operator::{Operator, Source};
 use crate::operators::{FilterPushdown, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN};
 use crate::physical::{
-    PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter,
-    SharedId, SharedPlan, SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId, Values, expand_op,
-    filter_op, generate_op, project_op, replicate_op, scan_filter, sort_op, top_n_op,
+    LoopLimits, PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode,
+    ScanRuntimeFilter, SharedId, SharedPlan, SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId,
+    Values, expand_op, filter_op, generate_op, project_op, replicate_op, scan_filter, sort_op,
+    top_n_op,
 };
 use crate::values::{LocalValues, ValueService};
 
@@ -152,6 +153,7 @@ fn ends_in_sort(n: &PhysNode) -> bool {
             PhysNode::Sort { .. } | PhysNode::TopN { .. } => return true,
             PhysNode::Project { input, .. }
             | PhysNode::Filter { input, .. }
+            | PhysNode::LateFetch { input, .. }
             | PhysNode::Limit { input, .. } => n = input,
             _ => return false,
         }
@@ -165,6 +167,48 @@ struct Copy {
     filters: std::ops::Range<u64>,
 }
 
+/// One key of the order of a relation's rows within each partition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OrderKey {
+    pub(crate) attr: AttrId,
+    pub(crate) descending: bool,
+    pub(crate) nulls_first: bool,
+}
+
+impl OrderKey {
+    /// `keys` (columns of `layout`) as attributes; `None` when a key is not
+    /// in `layout`, so neither a provided nor a required order is cut short.
+    pub(crate) fn of(keys: &[SortKey], layout: &[AttrId]) -> Option<Vec<Self>> {
+        keys.iter()
+            .map(|k| {
+                Some(Self {
+                    attr: *layout.get(k.column)?,
+                    descending: k.descending,
+                    nulls_first: k.nulls_first,
+                })
+            })
+            .collect()
+    }
+}
+
+/// What `node` keeps of its input's row order `order` (design P2-T174
+/// unit 4): a node passing rows on in order within each stream keeps the
+/// keys up to the first one `layout` drops; any other node, none.
+fn kept_order(node: &PhysNode, order: &[OrderKey], layout: &[AttrId]) -> Vec<OrderKey> {
+    match node {
+        PhysNode::Project { .. }
+        | PhysNode::Filter { .. }
+        | PhysNode::Limit { .. }
+        | PhysNode::Window { .. }
+        | PhysNode::WindowGroupLimit { .. } => order
+            .iter()
+            .take_while(|k| layout.contains(&k.attr))
+            .copied()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// A planned relation.
 pub(crate) struct Planned {
     pub(crate) node: PhysNode,
@@ -176,6 +220,9 @@ pub(crate) struct Planned {
     pub(crate) sites: Vec<Site>,
     /// How its rows are placed in partitions.
     pub(crate) placement: Placement,
+    /// The order of its rows within each partition; empty when none is
+    /// known.
+    pub(crate) ordering: Vec<OrderKey>,
 }
 
 impl Planned {
@@ -213,9 +260,11 @@ impl Planned {
         layout: Vec<AttrId>,
         explain: (&str, String),
     ) -> Self {
+        let node = make(Box::new(self.node));
         Self {
             schema,
-            node: make(Box::new(self.node)),
+            ordering: kept_order(&node, &self.ordering, &layout),
+            node,
             sites: kept(&self.sites, &layout),
             placement: self.placement.restrict(&layout),
             layout,
@@ -266,12 +315,17 @@ pub(crate) struct Planner<'a> {
     pub(crate) scan_filters: HashMap<ScanId, Vec<ScanRuntimeFilter>>,
     /// The estimates of every relation of the plan, computed once.
     pub(crate) stats: PlanStats,
+    /// The schema of each loop being planned, by id, for its `LoopRef`s.
+    loops: HashMap<u32, SchemaRef>,
 }
 
 impl<'a> Planner<'a> {
     fn new(cx: &'a PlanningContext, root: &Arc<LogicalPlan>) -> Self {
         let next_id = max_id(root).saturating_add(1).max(1 << 62);
         let mut env = EvalEnv::new(&cx.config, Arc::clone(&cx.user));
+        if let Some(micros) = cx.query_start_micros {
+            env.set_query_start_micros(micros);
+        }
         // Planning validates UDF calls against the session's library; the
         // implementation a plan runs comes from its worker.
         env.udfs = cx.udfs.clone();
@@ -295,6 +349,7 @@ impl<'a> Planner<'a> {
             next_subquery: next_id.saturating_add(SUBQUERY_GAP),
             next_exchange: 0,
             scan_filters: HashMap::new(),
+            loops: HashMap::new(),
         }
     }
 
@@ -338,6 +393,8 @@ impl<'a> Planner<'a> {
             PlanNode::Filter { input, predicate } => {
                 if let PlanNode::Scan(scan) = &input.node
                     && !has_subquery(predicate)
+                    // The scan evaluates pushed filters over the table's columns.
+                    && scan.metadata_column().is_none()
                 {
                     return self.scan(p, scan, Some(predicate));
                 }
@@ -535,6 +592,15 @@ impl<'a> Planner<'a> {
                 let input = self.plan(input)?;
                 self.window(input, exprs, partition_by, order_by, None)
             }
+            PlanNode::UnionLoop {
+                id,
+                anchor,
+                recursive,
+                max_level,
+                limit,
+                output,
+            } => self.union_loop(*id, anchor, recursive, *max_level, *limit, output),
+            PlanNode::UnionLoopRef { id, output } => self.loop_ref(*id, output),
             PlanNode::OneRowRelation => Ok(one_row()),
             PlanNode::Range {
                 start,
@@ -553,6 +619,91 @@ impl<'a> Planner<'a> {
         }
     }
 
+    /// A recursive CTE: the anchor, then the recursive term round after
+    /// round. Columns are matched by position; the node's schema is the
+    /// anchor's with the loop's names and nullability.
+    fn union_loop(
+        &mut self,
+        id: u32,
+        anchor: &Arc<LogicalPlan>,
+        recursive: &Arc<LogicalPlan>,
+        max_level: Option<u32>,
+        limit: Option<u64>,
+        output: &[BoundColumn],
+    ) -> Result<Planned> {
+        let anchor = self.plan(anchor)?;
+        if anchor.schema.fields().len() != output.len() {
+            return Err(internal("a recursive CTE whose anchor has another width"));
+        }
+        let fields: Vec<arrow_schema::Field> = anchor
+            .schema
+            .fields()
+            .iter()
+            .zip(output)
+            .map(|(f, c)| {
+                arrow_schema::Field::new(c.name.clone(), f.data_type().clone(), c.nullable)
+                    .with_metadata(f.metadata().clone())
+            })
+            .collect();
+        let schema: SchemaRef = Arc::new(Schema::new(fields));
+        self.loops.insert(id, Arc::clone(&schema));
+        let recursive = self.plan(recursive);
+        self.loops.remove(&id);
+        let recursive = recursive?;
+        if recursive.schema.fields().len() != output.len() {
+            return Err(internal(
+                "a recursive CTE whose recursive term has another width",
+            ));
+        }
+        let layout: Vec<AttrId> = output.iter().map(|c| c.id).collect();
+        let mut limits = loop_limits(&self.cx.config, max_level);
+        limits.pushed_limit = limit;
+        let explain = ExplainNode::new(
+            "UnionLoop",
+            format!("#{id} [{}]", columns(output)),
+            vec![anchor.explain, recursive.explain],
+        );
+        Ok(Planned {
+            ordering: Vec::new(),
+            node: PhysNode::UnionLoop {
+                id,
+                anchor: Box::new(anchor.node),
+                recursive: Box::new(recursive.node),
+                layout: layout.clone(),
+                nullable: output.iter().map(|c| c.nullable).collect(),
+                limits,
+            },
+            schema,
+            layout,
+            explain,
+            sites: Vec::new(),
+            placement: Placement::Unknown,
+        })
+    }
+
+    /// The recursive term's read of the previous round.
+    fn loop_ref(&mut self, id: u32, output: &[BoundColumn]) -> Result<Planned> {
+        let schema = self
+            .loops
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| internal("a recursive reference outside its CTE"))?;
+        let layout: Vec<AttrId> = output.iter().map(|c| c.id).collect();
+        let explain = ExplainNode::leaf("LoopRef", format!("#{id} [{}]", columns(output)));
+        Ok(Planned {
+            ordering: Vec::new(),
+            node: PhysNode::LoopRef {
+                id,
+                layout: layout.clone(),
+            },
+            schema,
+            layout,
+            explain,
+            sites: Vec::new(),
+            placement: Placement::Unknown,
+        })
+    }
+
     /// A reference read from the definition's shared plan.
     fn shared_read(&mut self, r: &krishiv_plan::CteRef) -> Result<Planned> {
         let (id, schema) = self.shared_plan(&r.source, &r.name)?;
@@ -563,6 +714,7 @@ impl<'a> Planner<'a> {
         );
         // No runtime filter reaches a shared plan: it is computed once for every reader.
         Ok(Planned {
+            ordering: Vec::new(),
             node: PhysNode::SharedRead {
                 id,
                 layout: layout.clone(),
@@ -628,8 +780,12 @@ impl<'a> Planner<'a> {
             && let Some(total) = n.checked_add(skip)
             && usize::try_from(total).is_ok_and(|t| t <= TopN::MAX_ROWS)
         {
+            let deterministic = krishiv_optimizer::plan_is_deterministic(sorted);
+            if let Some(fetched) = self.late_fetch(sorted, order, skip, n, deterministic)? {
+                return Ok(fetched);
+            }
             let sorted = self.plan(sorted)?;
-            let top = self.top_n(sorted, order, total)?;
+            let top = self.top_n(sorted, order, total, deterministic)?;
             if skip == 0 {
                 return Ok(top);
             }
@@ -650,7 +806,7 @@ impl<'a> Planner<'a> {
     }
 
     /// The `Limit` operator over `input`.
-    fn skip_rows(input: Planned, offset: u64, limit: u64) -> Planned {
+    pub(super) fn skip_rows(input: Planned, offset: u64, limit: u64) -> Planned {
         let schema = Limit::with_offset(Arc::clone(&input.schema), offset, limit).schema();
         let layout = input.layout.clone();
         let detail = match (offset, limit) {
@@ -773,6 +929,7 @@ impl<'a> Planner<'a> {
         }
         let schema = schema.ok_or_else(|| internal("a union without inputs"))?;
         Ok(Planned {
+            ordering: Vec::new(),
             node: PhysNode::Union { inputs: nodes },
             schema,
             layout,
@@ -891,11 +1048,13 @@ impl<'a> Planner<'a> {
     ) -> Planned {
         let mut children = vec![input.explain];
         children.extend(prepared.explain);
+        let node = make(Box::new(input.node), input.layout, prepared.subqueries);
         Planned {
             sites: kept(&input.sites, &layout),
             placement: input.placement.restrict(&layout),
+            ordering: kept_order(&node, &input.ordering, &layout),
             schema,
-            node: make(Box::new(input.node), input.layout, prepared.subqueries),
+            node,
             layout,
             explain: ExplainNode::new(explain.0, explain.1, children),
         }
@@ -908,10 +1067,19 @@ impl<'a> Planner<'a> {
     }
 
     /// Whether every table `plan` reads reports statistics, so its estimate
-    /// does not rest on default row counts. A `WITH` reference counts as
-    /// default-sized, as the estimator treats it.
+    /// does not rest on default row counts. A `WITH` reference has its
+    /// definition's, as the estimator treats it.
     pub(crate) fn has_statistics(&self, plan: &Arc<LogicalPlan>) -> bool {
         self.stats.has_statistics(plan)
+    }
+
+    pub(super) fn next_scan_id(&mut self) -> Result<ScanId> {
+        let id = ScanId(self.next_scan);
+        self.next_scan = self
+            .next_scan
+            .checked_add(1)
+            .ok_or_else(|| internal("scan id overflow"))?;
+        Ok(id)
     }
 
     fn scan(
@@ -920,13 +1088,27 @@ impl<'a> Planner<'a> {
         scan: &krishiv_plan::Scan,
         filter: Option<&Arc<Expr>>,
     ) -> Result<Planned> {
+        self.scan_reading(plan, scan, filter, false)
+    }
+
+    /// A scan; with `row_id`, its output ends in the row id, in two columns
+    /// the plan above doesn't name.
+    pub(super) fn scan_reading(
+        &mut self,
+        plan: &Arc<LogicalPlan>,
+        scan: &krishiv_plan::Scan,
+        filter: Option<&Arc<Expr>>,
+        row_id: bool,
+    ) -> Result<Planned> {
         // Table metadata only: the scan itself is built when the plan is
         // instantiated.
         let provider = self.cx.tables.provider(scan)?;
         let factory = provider.scan()?;
         let table = factory.table_schema();
+        let metadata = crate::operators::scan_metadata(scan);
+        let hidden = usize::from(metadata != MetadataCols::default());
         let mut projection = Vec::with_capacity(scan.output.len());
-        for c in &scan.output {
+        for c in &scan.output[..scan.output.len() - hidden] {
             let field = table
                 .fields()
                 .iter()
@@ -960,13 +1142,11 @@ impl<'a> Planner<'a> {
         let schema = factory.output_schema(&ScanPushdowns {
             projection: Some(projection.clone()),
             filters: pushed,
+            row_id,
+            metadata,
             ..ScanPushdowns::default()
         })?;
-        let id = ScanId(self.next_scan);
-        self.next_scan = self
-            .next_scan
-            .checked_add(1)
-            .ok_or_else(|| internal("scan id overflow"))?;
+        let id = self.next_scan_id()?;
         let sites = if self.rf.enabled() {
             let scan_rows = self.estimated_rows(plan);
             let name = source_name(scan);
@@ -987,7 +1167,12 @@ impl<'a> Planner<'a> {
             Vec::new()
         };
         let exact = scan_filter_plan.as_ref().is_some_and(|f| f.exact);
+        let mut layout: Vec<AttrId> = scan.output.iter().map(|c| c.id).collect();
+        if row_id {
+            layout.extend([self.fresh_id(), self.fresh_id()]);
+        }
         let mut planned = Planned {
+            ordering: Vec::new(),
             schema,
             node: PhysNode::Scan(ScanNode {
                 id,
@@ -996,8 +1181,9 @@ impl<'a> Planner<'a> {
                 filter: scan_filter_plan,
                 runtime_filters: Vec::new(),
                 row_stage: self.rf.row_stage(),
+                row_id,
             }),
-            layout: scan.output.iter().map(|c| c.id).collect(),
+            layout,
             explain: ExplainNode::leaf("Scan", detail),
             sites,
             placement: Placement::Unknown,
@@ -1411,6 +1597,7 @@ impl<'a> Planner<'a> {
         let schema = sort_op(&input.schema, &keys, None)?.schema();
         let layout = input.layout.clone();
         let sites = input.sites.clone();
+        let ordering = OrderKey::of(&keys, &layout).unwrap_or_default();
         let mut planned = input.wrap(
             |input| PhysNode::Sort { input, keys },
             schema,
@@ -1418,6 +1605,7 @@ impl<'a> Planner<'a> {
             ("Sort", orders(order)),
         );
         planned.sites = sites;
+        planned.ordering = ordering;
         Ok(planned)
     }
 
@@ -1428,6 +1616,7 @@ impl<'a> Planner<'a> {
         keys: &[SortKey],
         n: u64,
         detail: String,
+        bound: Option<FilterId>,
     ) -> Result<Planned> {
         let schema = top_n_op(&input.schema, keys, n)?.schema();
         let layout = input.layout.clone();
@@ -1437,6 +1626,7 @@ impl<'a> Planner<'a> {
                 input,
                 keys: local,
                 limit: n,
+                bound,
             },
             schema,
             layout,
@@ -1465,13 +1655,80 @@ impl<'a> Planner<'a> {
         local
     }
 
-    fn top_n(&mut self, input: Planned, order: &[SortOrder], n: u64) -> Result<Planned> {
+    /// The runtime filter a top-N of `n` rows over `input` offers its bound
+    /// on `keys`' first key through (design P2-T063), if a scan can use it:
+    /// the key is a column of a scan directly below, read in byte order.
+    /// `deterministic`: nothing below changes with the rows it sees (dropping
+    /// rows moves what `rand()` returns for later ones). A conjunct that may
+    /// raise has already cleared the scan's sites: the filter above must see
+    /// every row.
+    fn top_n_bound(
+        &mut self,
+        input: &Planned,
+        keys: &[SortKey],
+        n: u64,
+        deterministic: bool,
+    ) -> Option<FilterId> {
+        fn scan_below(node: &PhysNode) -> Option<&ScanNode> {
+            match node {
+                PhysNode::Scan(s) => Some(s),
+                PhysNode::Filter { input, .. } => scan_below(input),
+                _ => None,
+            }
+        }
+        if n == 0 || !deterministic {
+            return None;
+        }
+        let key = keys.first()?;
+        let attr = *input.layout.get(key.column)?;
+        let key_type = input.schema.fields().get(key.column)?.data_type().clone();
+        let scan = scan_below(&input.node)?;
+        let bound_column = scan.scan.output.iter().find(|c| c.id == attr)?;
+        if !krishiv_io::runtime_filter::supported_key_type(&key_type)
+            || matches!(
+                bound_column.data_type,
+                krishiv_types::DataType::CollatedString(_)
+            )
+        {
+            return None;
+        }
+        let site = input
+            .sites
+            .iter()
+            .find(|s| s.attr == attr && s.scan == scan.id)?;
+        let id = FilterId(self.next_filter);
+        self.next_filter += 1;
+        self.scan_filters
+            .entry(site.scan)
+            .or_default()
+            .push(ScanRuntimeFilter {
+                id,
+                column: site.column.clone(),
+                key_type,
+            });
+        Some(id)
+    }
+
+    pub(super) fn top_n(
+        &mut self,
+        input: Planned,
+        order: &[SortOrder],
+        n: u64,
+        deterministic: bool,
+    ) -> Result<Planned> {
         let (input, keys) = self.sort_keys(input, order)?;
-        // Each partition keeps its best `n` rows before the gather.
-        let input = if input.placement.satisfies(Distribution::Single) {
-            input
+        let bound = self.top_n_bound(&input, &keys, n, deterministic);
+        let detail = |bound: Option<FilterId>| match bound {
+            Some(id) => format!("{n}, {}, bound {id}", orders(order)),
+            None => format!("{n}, {}", orders(order)),
+        };
+        // Each partition keeps its best `n` rows before the gather, and that
+        // is where the rows are ranked first, so that top-N offers the bound.
+        let (input, bound) = if input.placement.satisfies(Distribution::Single) {
+            (input, bound)
         } else {
-            Self::local_top_n(input, &keys, n, format!("{n}, {}", orders(order)))?
+            let local = Self::local_top_n(input, &keys, n, detail(bound), bound)?;
+            (local, None)
         };
         let input = self.require(input, Distribution::Single)?;
         let schema = top_n_op(&input.schema, &keys, n)?.schema();
@@ -1481,10 +1738,11 @@ impl<'a> Planner<'a> {
                 input,
                 keys,
                 limit: n,
+                bound,
             },
             schema,
             layout,
-            ("TopN", format!("{n}, {}", orders(order))),
+            ("TopN", detail(bound)),
         );
         planned.sites.clear();
         Ok(planned)
@@ -1701,6 +1959,7 @@ fn range_node(
     use arrow_schema::{DataType, Field, Schema};
     let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
     Planned {
+        ordering: Vec::new(),
         schema,
         node: PhysNode::Range(crate::physical::RangeNode {
             start,
@@ -1725,6 +1984,7 @@ fn range_node(
 /// One row without columns (`SELECT` without `FROM`).
 fn one_row() -> Planned {
     Planned {
+        ordering: Vec::new(),
         schema: Arc::new(Schema::empty()),
         node: PhysNode::OneRow,
         layout: Vec::new(),
@@ -1749,7 +2009,7 @@ fn limit_value(e: &Expr) -> Result<u64> {
     }
 }
 
-fn source_name(scan: &krishiv_plan::Scan) -> String {
+pub(crate) fn source_name(scan: &krishiv_plan::Scan) -> String {
     match &scan.source {
         krishiv_plan::ReadSource::Table { name, .. } => name.join("."),
         krishiv_plan::ReadSource::Files { format, .. } => format!("{format} files"),
@@ -1804,6 +2064,25 @@ pub(crate) fn unsupported(feature: &str) -> KrishivError {
     .into()
 }
 
+/// The bounds of a loop: `MAX RECURSION LEVEL` over
+/// `spark.sql.cteRecursionLevelLimit`, and `spark.sql.cteRecursionRowLimit`
+/// (a negative value: none).
+fn loop_limits(config: &krishiv_common::config::Config, max_level: Option<u32>) -> LoopLimits {
+    use krishiv_common::config::{CTE_RECURSION_LEVEL_LIMIT, CTE_RECURSION_ROW_LIMIT, ConfigValue};
+    let conf = |entry| config.get(entry).and_then(ConfigValue::as_int);
+    let bound = |v: Option<i64>, default: i64| match v.unwrap_or(default) {
+        n if n < 0 => i64::MAX,
+        n => n,
+    };
+    LoopLimits {
+        level: max_level.unwrap_or_else(|| {
+            u32::try_from(bound(conf(&CTE_RECURSION_LEVEL_LIMIT), 100)).unwrap_or(u32::MAX)
+        }),
+        rows: u64::try_from(bound(conf(&CTE_RECURSION_ROW_LIMIT), 1_000_000)).unwrap_or(u64::MAX),
+        pushed_limit: None,
+    }
+}
+
 #[cfg(test)]
 mod attach_tests {
     use std::collections::BTreeMap;
@@ -1830,6 +2109,7 @@ mod attach_tests {
             filter: None,
             runtime_filters: Vec::new(),
             row_stage: crate::operators::RowStageSettings::default(),
+            row_id: false,
         })
     }
 

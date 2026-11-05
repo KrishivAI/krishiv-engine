@@ -152,7 +152,7 @@ fn timestamp_fields_match_spark() {
 }
 
 #[test]
-fn day_arithmetic_wraps_with_ansi_off_and_raises_with_ansi_on() {
+fn day_arithmetic_wraps_like_java_int_with_or_without_ansi() {
     let ctx = KernelCtx::new();
     let start = date("2016-07-30");
     let d = |days| Operand::<Int32Type>::Scalar(Some(days));
@@ -173,17 +173,12 @@ fn day_arithmetic_wraps_with_ansi_off_and_raises_with_ansi_on() {
     assert_eq!(run(false, i32::MAX, wrap).unwrap().value(0), -2_147_466_637);
     assert_eq!(run(false, i32::MIN, wrap).unwrap().value(0), -2_147_466_636);
     assert_eq!(run(true, i32::MIN, wrap).unwrap().value(0), -2_147_466_636);
-    // ANSI on: ARITHMETIC_OVERFLOW (Spark wraps silently, ADR 0023).
+    // ANSI on: Spark wraps silently too.
     for (sub, days) in [(false, i32::MAX), (true, i32::MIN)] {
-        let e = run(sub, days, OverflowMode::AnsiError).unwrap_err();
-        assert_eq!(
-            (e.row(), e.error_class()),
-            (Some(0), ErrorClass::ArithmeticOverflow)
-        );
-        assert!(
-            e.to_string()
-                .starts_with("[ARITHMETIC_OVERFLOW] overflow. If necessary")
-        );
+        let ansi = run(sub, days, OverflowMode::AnsiError).unwrap();
+        let wrapped = run(sub, days, wrap).unwrap();
+        assert!(ansi.is_valid(0));
+        assert_eq!(ansi.value(0), wrapped.value(0));
         // try_add / try_subtract: NULL.
         assert!(
             run(sub, days, OverflowMode::NullOnOverflow)
@@ -191,14 +186,6 @@ fn day_arithmetic_wraps_with_ansi_off_and_raises_with_ansi_on() {
                 .is_null(0)
         );
     }
-    // The 4.0 and 4.1 text.
-    let old = KernelCtx::new().with_spark_version(SparkVersion::V4_0);
-    let s = Operand::Array(&dates(&[start]));
-    let e = date_add(s, d(i32::MAX), OverflowMode::AnsiError, &old).unwrap_err();
-    assert!(
-        e.to_string()
-            .starts_with("[ARITHMETIC_OVERFLOW] integer overflow.")
-    );
     // NULL rows never raise.
     let a = Date32Array::from(vec![Some(i32::MAX), None]);
     let n = Int32Array::from(vec![Some(0), Some(i32::MAX)]);

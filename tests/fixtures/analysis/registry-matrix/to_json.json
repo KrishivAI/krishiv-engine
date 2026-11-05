@@ -1,60 +1,12 @@
 {
   "entries": [
     {
-      "id": "to_json#00cf4abf1100/ansi_on",
-      "reason": "SELECT to_json(INTERVAL '1-2' YEAR TO MONTH, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_JSON_SCHEMA"
-    },
-    {
-      "id": "to_json#00cf4abf1100/ansi_off",
-      "reason": "SELECT to_json(INTERVAL '1-2' YEAR TO MONTH, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_JSON_SCHEMA"
-    },
-    {
       "id": "to_json#13178ca09205/ansi_on",
       "reason": "SELECT to_json(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(map() AS map<string,string>)) | resolves to string where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
     },
     {
       "id": "to_json#13178ca09205/ansi_off",
       "reason": "SELECT to_json(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), CAST(map() AS map<string,string>)) | resolves to string where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
-    },
-    {
-      "id": "to_json#223ca234b207/ansi_on",
-      "reason": "SELECT to_json(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_JSON_SCHEMA"
-    },
-    {
-      "id": "to_json#223ca234b207/ansi_off",
-      "reason": "SELECT to_json(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_JSON_SCHEMA"
-    },
-    {
-      "id": "to_json#92c2a850d2ab/ansi_on",
-      "reason": "SELECT to_json(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
-    },
-    {
-      "id": "to_json#92c2a850d2ab/ansi_off",
-      "reason": "SELECT to_json(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
-    },
-    {
-      "id": "to_json#db7856e11291/ansi_on",
-      "reason": "SELECT to_json(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_JSON_SCHEMA"
-    },
-    {
-      "id": "to_json#db7856e11291/ansi_off",
-      "reason": "SELECT to_json(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_JSON_SCHEMA"
-    },
-    {
-      "id": "to_json#f4dbcfd1aebb/ansi_on",
-      "reason": "SELECT to_json(INTERVAL '1 02:03:04' DAY TO SECOND, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_JSON_SCHEMA"
-    },
-    {
-      "id": "to_json#f4dbcfd1aebb/ansi_off",
-      "reason": "SELECT to_json(INTERVAL '1 02:03:04' DAY TO SECOND, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_JSON_SCHEMA"
-    },
-    {
-      "id": "to_json#fca38eb9456a/ansi_on",
-      "reason": "SELECT to_json(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
-    },
-    {
-      "id": "to_json#fca38eb9456a/ansi_off",
-      "reason": "SELECT to_json(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
     }
   ],
   "format_version": 1,

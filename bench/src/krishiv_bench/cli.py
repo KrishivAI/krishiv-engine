@@ -126,6 +126,16 @@ def main(argv=None) -> None:
     r.add_argument("--warmup", type=int, help="discarded warm-up runs per query (default 2; 1 for h2o-*)")
     r.add_argument("--queries", help="comma list, e.g. q01,q05")
     r.add_argument("--spark-remote", default="sc://127.0.0.1:15002")
+    r.add_argument(
+        "--spark-container",
+        default="krishiv-bench-spark",
+        help="docker container of the Spark Connect server (server-side memory/CPU); empty = a host server, e.g. Sail",
+    )
+    r.add_argument(
+        "--spark-data-root",
+        default="/data",
+        help="where the server sees $KRISHIV_DATA (default /data, the container mount; empty = same paths as the host)",
+    )
     r.add_argument("--duckdb-threads", type=int)
     r.add_argument("--duckdb-memory-limit", default="12GB")
     r.add_argument("--timeout", type=float, default=600, help="per-query timeout seconds (0 = none)")
@@ -227,8 +237,8 @@ def main(argv=None) -> None:
     rf.add_argument(
         "--s3",
         action="store_true",
-        help="serve the mirror from a throw-away rclone container (docker run --rm) and read it over s3:// "
-        "(DuckDB and Polars; Krishiv reads the local mirror)",
+        help="serve the mirror from a throw-away versitygw container (docker run --rm) and read it over s3:// "
+        "(all engines; Krishiv reads it through its --table URLs)",
     )
     rf.add_argument("--reps", type=int, default=5, help="timed repetitions per scope (after one validation pass)")
     rf.add_argument("--timeout", type=float, default=1800, help="per-engine timeout seconds (0 = none)")
@@ -475,6 +485,8 @@ def main(argv=None) -> None:
         kw = {}
         if a.engine == "spark-connect":
             kw["remote"] = a.spark_remote
+            kw["container"] = a.spark_container or None
+            kw["container_data_root"] = a.spark_data_root or None
         if a.engine == "krishiv":
             kw["threads"] = a.duckdb_threads
         if a.engine == "duckdb":

@@ -23,22 +23,26 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::builder::{
-    ArrayBuilder, BooleanBuilder, Date32Builder, Decimal128Builder, Float32Builder, Float64Builder,
-    Int8Builder, Int16Builder, Int32Builder, Int64Builder, ListBuilder, MapBuilder, NullBuilder,
-    StringViewBuilder, StructBuilder, TimestampMicrosecondBuilder, UInt8Builder, UInt16Builder,
-    UInt32Builder, UInt64Builder, make_builder,
+    ArrayBuilder, BooleanBuilder, Date32Builder, Decimal64Builder, Decimal128Builder,
+    DurationMicrosecondBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
+    Int32Builder, Int64Builder, IntervalMonthDayNanoBuilder, IntervalYearMonthBuilder, ListBuilder,
+    MapBuilder, NullBuilder, StringViewBuilder, StructBuilder, TimestampMicrosecondBuilder,
+    UInt8Builder, UInt16Builder, UInt32Builder, UInt64Builder, make_builder,
 };
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+    Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
+    TimestampMicrosecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow_array::{
-    Array, ArrayRef, BooleanArray, GenericListArray, ListArray, MapArray, StructArray,
+    Array, ArrayRef, BooleanArray, GenericListArray, ListArray, MapArray, PrimitiveArray,
+    StructArray,
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer, NullBufferBuilder, OffsetBuffer};
-use arrow_schema::{DataType, FieldRef, TimeUnit};
+use arrow_schema::{DataType, FieldRef, IntervalUnit, TimeUnit};
 use krishiv_common::error::{DuplicatedMapKey, KrishivError, LegacyErrorTemp2128, NullMapKey};
+use krishiv_types::interval::calendar_string;
 
 use crate::compare::SparkOrd;
 use crate::error::KernelError;
@@ -67,10 +71,10 @@ impl DedupPolicy {
 
 /// Whether the kernel builds maps over keys of Arrow type `t`: the types
 /// the analyzer's casts produce (integers, floats, decimals, strings,
-/// binary, dates, microsecond timestamps, and arrays and structs of those).
-/// Anything else (a map, dictionary, union, interval, time of day, decimal
-/// beyond 128 bits, non-microsecond timestamps) cannot arrive here; the
-/// binding refuses it first.
+/// binary, dates, microsecond timestamps, ANSI intervals, and arrays and structs
+/// of those). Anything else (a map, dictionary, union, calendar interval, time of
+/// day, decimal beyond 128 bits, non-microsecond timestamps) cannot arrive here;
+/// the binding refuses it first.
 #[must_use]
 pub fn supports_key(t: &DataType) -> bool {
     match t {
@@ -86,6 +90,7 @@ pub fn supports_key(t: &DataType) -> bool {
         | DataType::UInt64
         | DataType::Float32
         | DataType::Float64
+        | DataType::Decimal64(..)
         | DataType::Decimal128(..)
         | DataType::Utf8
         | DataType::Utf8View
@@ -94,28 +99,53 @@ pub fn supports_key(t: &DataType) -> bool {
         | DataType::BinaryView
         | DataType::LargeBinary
         | DataType::Date32
-        | DataType::Timestamp(TimeUnit::Microsecond, _) => true,
+        | DataType::Timestamp(TimeUnit::Microsecond, _)
+        | DataType::Interval(IntervalUnit::YearMonth)
+        | DataType::Duration(TimeUnit::Microsecond) => true,
         DataType::List(f) | DataType::LargeList(f) => supports_key(f.data_type()),
-        DataType::Struct(fs) => fs.iter().all(|f| supports_value(f.data_type())),
+        DataType::Struct(fs) => fs
+            .iter()
+            .all(|f| supports_value(f.data_type()) && !holds_calendar(f.data_type())),
         _ => false,
     }
 }
 
+/// Whether `t` holds a calendar interval somewhere.
+fn holds_calendar(t: &DataType) -> bool {
+    match t {
+        DataType::Interval(IntervalUnit::MonthDayNano) => true,
+        DataType::List(f) | DataType::LargeList(f) | DataType::Map(f, _) => {
+            holds_calendar(f.data_type())
+        }
+        DataType::Struct(fs) => fs.iter().any(|f| holds_calendar(f.data_type())),
+        _ => false,
+    }
+}
+
+/// Whether a key of Arrow type `t` is stored at the top level of a map: the key
+/// types, plus a calendar interval, which Spark dedups by its three fields but
+/// doesn't order (so only `map`, `map_from_arrays`, `map_from_entries` and
+/// `map_concat` meet it, never as an array element).
+#[must_use]
+pub fn supports_map_key(t: &DataType) -> bool {
+    matches!(t, DataType::Interval(IntervalUnit::MonthDayNano)) || supports_key(t)
+}
+
 /// Whether the kernel stores values of Arrow type `t`: the key types, plus
-/// maps of those (a map value may itself be a map).
+/// calendar intervals and maps (a map value may itself be a map), at any depth.
 #[must_use]
 pub fn supports_value(t: &DataType) -> bool {
-    if supports_key(t) {
-        return true;
-    }
     match t {
+        DataType::Interval(IntervalUnit::MonthDayNano) => true,
+        DataType::List(f) | DataType::LargeList(f) => supports_value(f.data_type()),
+        DataType::Struct(fs) => fs.iter().all(|f| supports_value(f.data_type())),
         DataType::Map(entries, _) => match entries.data_type() {
             DataType::Struct(fs) if fs.len() == 2 => {
-                supports_key(fs[0].data_type()) && supports_value(fs[1].data_type())
+                supports_map_key(fs[0].data_type()) && supports_value(fs[1].data_type())
             }
             _ => false,
         },
-        _ => false,
+        _ => supports_key(t),
     }
 }
 
@@ -180,6 +210,8 @@ pub fn keys_equal(a: &dyn Array, i: usize, b: &dyn Array, j: usize) -> Result<bo
             a.as_primitive::<Float64Type>().value(i),
             b.as_primitive::<Float64Type>().value(j),
         )),
+        (T::Decimal64(..), T::Decimal64(..)) => Ok(a.as_primitive::<Decimal64Type>().value(i)
+            == b.as_primitive::<Decimal64Type>().value(j)),
         (T::Decimal128(..), T::Decimal128(..)) => Ok(a.as_primitive::<Decimal128Type>().value(i)
             == b.as_primitive::<Decimal128Type>().value(j)),
         (x, y) if is_string(x) && is_string(y) => Ok(string_value(a, i) == string_value(b, j)),
@@ -190,6 +222,18 @@ pub fn keys_equal(a: &dyn Array, i: usize, b: &dyn Array, j: usize) -> Result<bo
         (T::Timestamp(TimeUnit::Microsecond, _), T::Timestamp(TimeUnit::Microsecond, _)) => {
             Ok(a.as_primitive::<TimestampMicrosecondType>().value(i)
                 == b.as_primitive::<TimestampMicrosecondType>().value(j))
+        }
+        (T::Interval(IntervalUnit::YearMonth), T::Interval(IntervalUnit::YearMonth)) => {
+            Ok(a.as_primitive::<IntervalYearMonthType>().value(i)
+                == b.as_primitive::<IntervalYearMonthType>().value(j))
+        }
+        (T::Duration(TimeUnit::Microsecond), T::Duration(TimeUnit::Microsecond)) => {
+            Ok(a.as_primitive::<DurationMicrosecondType>().value(i)
+                == b.as_primitive::<DurationMicrosecondType>().value(j))
+        }
+        (T::Interval(IntervalUnit::MonthDayNano), T::Interval(IntervalUnit::MonthDayNano)) => {
+            Ok(a.as_primitive::<IntervalMonthDayNanoType>().value(i)
+                == b.as_primitive::<IntervalMonthDayNanoType>().value(j))
         }
         (T::List(_) | T::LargeList(_), T::List(_) | T::LargeList(_)) => list_equal(a, i, b, j),
         (T::Struct(_), T::Struct(_)) => struct_equal(a.as_struct(), i, b.as_struct(), j),
@@ -344,6 +388,7 @@ fn append_value(
         T::UInt64 => prim!(UInt64Type, UInt64Builder),
         T::Float32 => prim!(Float32Type, Float32Builder),
         T::Float64 => prim!(Float64Type, Float64Builder),
+        T::Decimal64(..) => prim!(Decimal64Type, Decimal64Builder),
         T::Decimal128(..) => prim!(Decimal128Type, Decimal128Builder),
         t if is_string(t) => {
             let b = downcast::<StringViewBuilder>(builder)?;
@@ -366,6 +411,15 @@ fn append_value(
         T::Date32 => prim!(Date32Type, Date32Builder),
         T::Timestamp(TimeUnit::Microsecond, _) => {
             prim!(TimestampMicrosecondType, TimestampMicrosecondBuilder)
+        }
+        T::Interval(IntervalUnit::YearMonth) => {
+            prim!(IntervalYearMonthType, IntervalYearMonthBuilder)
+        }
+        T::Interval(IntervalUnit::MonthDayNano) => {
+            prim!(IntervalMonthDayNanoType, IntervalMonthDayNanoBuilder)
+        }
+        T::Duration(TimeUnit::Microsecond) => {
+            prim!(DurationMicrosecondType, DurationMicrosecondBuilder)
         }
         T::List(_) | T::LargeList(_) => {
             if array.is_null(idx) {
@@ -574,6 +628,10 @@ fn key_text(keys: &dyn Array, key: usize) -> Result<String, KernelError> {
                 Ok(format!("{v:?}"))
             }
         }
+        T::Decimal64(_, scale) => decimal_text(
+            i128::from(keys.as_primitive::<Decimal64Type>().value(key)),
+            *scale,
+        ),
         T::Decimal128(_, scale) => {
             decimal_text(keys.as_primitive::<Decimal128Type>().value(key), *scale)
         }
@@ -583,6 +641,22 @@ fn key_text(keys: &dyn Array, key: usize) -> Result<String, KernelError> {
             .as_primitive::<TimestampMicrosecondType>()
             .value(key)
             .to_string()),
+        T::Interval(IntervalUnit::YearMonth) => Ok(keys
+            .as_primitive::<IntervalYearMonthType>()
+            .value(key)
+            .to_string()),
+        T::Duration(TimeUnit::Microsecond) => Ok(keys
+            .as_primitive::<DurationMicrosecondType>()
+            .value(key)
+            .to_string()),
+        T::Interval(IntervalUnit::MonthDayNano) => {
+            let v = keys.as_primitive::<IntervalMonthDayNanoType>().value(key);
+            Ok(calendar_string(
+                v.months,
+                v.days,
+                v.nanoseconds.wrapping_div(1_000),
+            ))
+        }
         T::List(_) | T::LargeList(_) => {
             let (from, to) = list_range(keys, key)?;
             let values = list_values(keys);
@@ -1099,6 +1173,17 @@ pub fn build_map(
 /// hash kernel takes (the same bytes hash the same).
 fn hashable(array: &dyn Array) -> Result<ArrayRef, KernelError> {
     Ok(match array.data_type() {
+        // The hash kernel has no calendar form, and this one is only for dedup:
+        // equal intervals mix to one `bigint`.
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            let mixed: PrimitiveArray<Int64Type> =
+                array.as_primitive::<IntervalMonthDayNanoType>().unary(|v| {
+                    i64::from(v.months).rotate_left(40)
+                        ^ i64::from(v.days).rotate_left(20)
+                        ^ v.nanoseconds
+                });
+            Arc::new(mixed)
+        }
         DataType::Utf8View => Arc::new(arrow_array::StringArray::from_iter(
             array.as_string_view().iter(),
         )),
@@ -2082,11 +2167,20 @@ mod tests {
             DataType::BinaryView,
             DataType::Date32,
             DataType::Timestamp(TimeUnit::Microsecond, None),
+            DataType::Interval(IntervalUnit::YearMonth),
+            DataType::Duration(TimeUnit::Microsecond),
             DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
         ] {
             assert!(supports_key(&t), "{t}");
             assert!(supports_value(&t), "{t}");
         }
+        let calendar = DataType::Interval(IntervalUnit::MonthDayNano);
+        let calendars = DataType::List(Arc::new(Field::new("element", calendar.clone(), true)));
+        assert!(!supports_key(&calendar));
+        assert!(supports_map_key(&calendar));
+        assert!(supports_value(&calendar));
+        assert!(!supports_map_key(&calendars));
+        assert!(supports_value(&calendars));
         assert!(supports_value(&DataType::Map(int_field_entries(), false)));
         assert!(!supports_key(&DataType::Map(int_field_entries(), false)));
         assert!(!supports_key(&DataType::Dictionary(

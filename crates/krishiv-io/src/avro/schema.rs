@@ -22,12 +22,14 @@
 //! Write (Arrow → Avro) maps the same way back: nullable fields become
 //! `["null", T]` unions, `Decimal128` a `fixed` decimal, zoned timestamps
 //! `timestamp-micros` and unzoned ones `local-timestamp-micros`.
-//! `byte`/`short` widen to `int` on the next read, as in Spark.
+//! `byte`/`short` widen to `int` on the next read, as in Spark. ANSI intervals
+//! are `int` or `long` with a property naming the Spark type (`intervals`).
 
 use std::sync::Arc;
 
 use apache_avro::{Schema as AvroSchema, types::Value as AvroValue};
-use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
+use arrow_schema::{DataType, Field, Fields, IntervalUnit, Schema as ArrowSchema, TimeUnit};
+use krishiv_types::DataType as SparkType;
 
 use crate::error::{FormatError, FormatResult};
 
@@ -321,7 +323,12 @@ impl Writer {
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for an Arrow type with no Avro type.
-    fn fragment(&self, dt: &DataType, scope: &str) -> FormatResult<String> {
+    fn fragment(
+        &self,
+        dt: &DataType,
+        spark: Option<&SparkType>,
+        scope: &str,
+    ) -> FormatResult<String> {
         Ok(match dt {
             DataType::Null => r#""null""#.to_owned(),
             DataType::Boolean => r#""boolean""#.to_owned(),
@@ -333,7 +340,7 @@ impl Writer {
             DataType::BinaryView | DataType::Binary | DataType::LargeBinary => {
                 r#""bytes""#.to_owned()
             }
-            DataType::Decimal128(p, s) => {
+            DataType::Decimal64(p, s) | DataType::Decimal128(p, s) => {
                 let name = avro_name(&format!("{scope}_decimal"));
                 format!(
                     r#"{{"type":"fixed","name":{name},"size":{size},"logicalType":"decimal","precision":{p},"scale":{s}}}"#,
@@ -360,9 +367,21 @@ impl Writer {
             DataType::Timestamp(TimeUnit::Millisecond, None) => {
                 r#"{"type":"long","logicalType":"local-timestamp-millis"}"#.to_owned()
             }
-            DataType::Struct(fields) => self.record(scope, fields)?,
+            DataType::Interval(IntervalUnit::YearMonth)
+            | DataType::Duration(TimeUnit::Microsecond) => super::intervals::fragment(dt, spark)?,
+            DataType::Struct(fields) => {
+                let spark = match spark {
+                    Some(SparkType::Struct(s)) => Some(s),
+                    _ => None,
+                };
+                self.record(scope, fields, spark)?
+            }
             DataType::List(item) | DataType::LargeList(item) | DataType::FixedSizeList(item, _) => {
-                let inner = self.fragment(item.data_type(), scope)?;
+                let element = match spark {
+                    Some(SparkType::Array(a)) => Some(a.element_type()),
+                    _ => None,
+                };
+                let inner = self.fragment(item.data_type(), element, scope)?;
                 let items = if item.is_nullable() {
                     format!("[\"null\",{inner}]")
                 } else {
@@ -388,7 +407,11 @@ impl Writer {
                         "an Avro map needs string keys (only UTF-8 keys are supported)".to_owned(),
                     ));
                 };
-                let inner = self.fragment(value.data_type(), scope)?;
+                let value_type = match spark {
+                    Some(SparkType::Map(m)) => Some(m.value_type()),
+                    _ => None,
+                };
+                let inner = self.fragment(value.data_type(), value_type, scope)?;
                 let values = if value.is_nullable() {
                     format!("[\"null\",{inner}]")
                 } else {
@@ -404,11 +427,18 @@ impl Writer {
         })
     }
 
-    /// The JSON of a record named `scope` with `fields`.
+    /// The JSON of a record named `scope` with `fields`. `spark` is the
+    /// record's Spark type, when a field above it gave one; a physical plan's
+    /// nested Arrow fields can't say an interval's fields themselves.
     ///
     /// # Errors
     /// As [`Self::fragment`].
-    fn record(&self, scope: &str, fields: &Fields) -> FormatResult<String> {
+    fn record(
+        &self,
+        scope: &str,
+        fields: &Fields,
+        spark: Option<&krishiv_types::StructType>,
+    ) -> FormatResult<String> {
         let name = avro_name(scope);
         let mut out = format!(
             r#"{{"type":"record","name":{name}"#,
@@ -425,7 +455,15 @@ impl Writer {
             if i > 0 {
                 out.push(',');
             }
-            let inner = self.fragment(f.data_type(), &format!("{name}_{}", avro_name(f.name())))?;
+            let own = spark
+                .and_then(|s| s.fields().iter().find(|x| x.name() == f.name()))
+                .map(|x| x.data_type().clone())
+                .or_else(|| SparkType::from_arrow_field(f).ok());
+            let inner = self.fragment(
+                f.data_type(),
+                own.as_ref(),
+                &format!("{name}_{}", avro_name(f.name())),
+            )?;
             let ty = if f.is_nullable() {
                 format!("[\"null\",{inner}]")
             } else {
@@ -454,7 +492,7 @@ pub(crate) fn schema_json_of_arrow(
     Writer {
         namespace: record_namespace.to_owned(),
     }
-    .record(record_name, schema.fields())
+    .record(record_name, schema.fields(), None)
 }
 
 /// The default value of an Avro record field, for schema evolution: missing

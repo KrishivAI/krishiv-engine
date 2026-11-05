@@ -10,12 +10,12 @@ use krishiv_optimizer::TableStats;
 use krishiv_plan::analyzer::testing::context;
 use krishiv_plan::analyzer::{MemoryCatalog, ResolutionConf, TableColumn};
 
-use super::{Env, table};
+use super::{Env, env_of, table};
 
 /// `t` (10 rows, as [`super::env`]) and `big`, the same rows with
 /// statistics claiming 100 million: a build of `big` is too large to
 /// broadcast.
-fn env() -> Env {
+pub(super) fn env() -> Env {
     let (schema, batches) = table(10);
     let columns: Vec<TableColumn> = schema
         .fields()
@@ -86,6 +86,48 @@ fn a_large_build_is_partitioned_and_a_small_one_broadcast() {
     ");
     assert_eq!(
         exchanges_of(&env, "SELECT x.s FROM big x JOIN t y ON x.a = y.a"),
+        ["BroadcastExchange"]
+    );
+}
+
+/// `spark.sql.autoBroadcastJoinThreshold` (Spark's `canBroadcastBySize`,
+/// `ops/reports/2026-11-03-broadcast-threshold-semantics.md`): a negative
+/// value turns broadcasting by size off, 0 broadcasts only an empty build,
+/// and a hint broadcasts whatever the threshold.
+#[test]
+fn the_broadcast_threshold_setting_decides_by_size() {
+    let env = env();
+    let with = |threshold: &str, sql: &str| {
+        let mut config = krishiv_common::config::Config::new();
+        config
+            .set("spark.sql.autoBroadcastJoinThreshold", threshold)
+            .unwrap();
+        let plan = env
+            .plan_with(sql, config)
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let mut out = Vec::new();
+        exchanges(plan.explain(), &mut out);
+        out
+    };
+    let small = "SELECT x.s FROM big x JOIN t y ON x.a = y.a";
+    let partitioned = [
+        "Exchange hashpartitioning(a#0)",
+        "Exchange hashpartitioning(a#3)",
+    ];
+    assert_eq!(with("10m", small), ["BroadcastExchange"]);
+    assert_eq!(with("-1", small), partitioned);
+    assert_eq!(with("-10", small), partitioned);
+    assert_eq!(with("0", small), partitioned);
+    // Raised past the large build's estimate, it is broadcast too.
+    assert_eq!(
+        with("1p", "SELECT x.s FROM big x JOIN big y ON x.a = y.a"),
+        ["BroadcastExchange"]
+    );
+    assert_eq!(
+        with(
+            "-1",
+            "SELECT /*+ BROADCAST(y) */ x.s FROM big x JOIN t y ON x.a = y.a"
+        ),
         ["BroadcastExchange"]
     );
 }
@@ -179,8 +221,9 @@ fn a_join_on_an_aggregated_key_exchanges_only_the_other_side() {
        +- Project [a#0, count(1)#4611686018427387904 AS n#3] (ids +4)
           +- HashAggregate keys=[a#0], functions=[count(1)]
              +- Exchange hashpartitioning(a#0)
-                +- Project [a#0]
-                   +- Scan spark_catalog.default.big [a#0, s#2]
+                +- PartialHashAggregate keys=[a#0], functions=[count(1)]
+                   +- Project [a#0]
+                      +- Scan spark_catalog.default.big [a#0, s#2]
     ");
     // Through a CTE reference, which renames the definition's columns.
     let sql = "WITH g AS (SELECT a, count(*) AS n FROM big GROUP BY a) \
@@ -387,4 +430,71 @@ fn a_window_requires_its_partitioning() {
             "Exchange hashpartitioning(a#0, b#1)".to_owned(),
         ]
     );
+}
+
+/// A window over rows already in the order it needs, within partitions
+/// placed as it needs, reuses that order (design P2-T174 unit 4): one sort
+/// for both windows. A window keyed otherwise sorts again.
+#[test]
+fn a_window_reuses_the_order_of_the_window_below() {
+    let env = env();
+    insta::assert_snapshot!(
+        explain(
+            &env,
+            "SELECT a, r, sum(b) OVER (PARTITION BY a) AS w FROM \
+             (SELECT a, b, rank() OVER (PARTITION BY a ORDER BY b) AS r FROM t)"
+        ),
+        @"
+    Project [a#0, r#3, _we0#6 AS w#5]
+    +- Window [_we0], partition=[a#0], order=[]
+       +- Project [a#0, b#1, _we0#4 AS r#3]
+          +- Window [_we0], partition=[a#0], order=[b#1 ASC NULLS FIRST]
+             +- Sort [a#0 ASC NULLS FIRST, b#1 ASC NULLS FIRST]
+                +- Exchange hashpartitioning(a#0)
+                   +- Scan spark_catalog.default.t [a#0, b#1]
+    "
+    );
+    insta::assert_snapshot!(
+        explain(
+            &env,
+            "SELECT a, r, sum(b) OVER (PARTITION BY a ORDER BY a) AS w FROM \
+             (SELECT a, b, rank() OVER (PARTITION BY a ORDER BY b) AS r FROM t)"
+        ),
+        @"
+    Project [a#0, r#3, _we0#6 AS w#5]
+    +- Window [_we0], partition=[a#0], order=[a#0 ASC NULLS FIRST]
+       +- Sort [a#0 ASC NULLS FIRST, a#0 ASC NULLS FIRST]
+          +- Project [a#0, b#1, _we0#4 AS r#3]
+             +- Window [_we0], partition=[a#0], order=[b#1 ASC NULLS FIRST]
+                +- Sort [a#0 ASC NULLS FIRST, b#1 ASC NULLS FIRST]
+                   +- Exchange hashpartitioning(a#0)
+                      +- Scan spark_catalog.default.t [a#0, b#1]
+    "
+    );
+}
+
+/// The same windows give the same rows whether the upper one reuses the
+/// lower one's order or sorts again (`ORDER BY a` within `PARTITION BY a`
+/// is one peer group, the whole partition), on enough rows for several
+/// drivers and sort buckets.
+#[test]
+fn a_reused_window_order_gives_the_rows_of_a_new_sort() {
+    let env = env_of(20_000);
+    let query = |order: &str| {
+        let sql = format!(
+            "SELECT k, b, r, sum(b) OVER (PARTITION BY k {order}) AS w, \
+             count(*) OVER (PARTITION BY k {order}) AS c FROM \
+             (SELECT k, b, rank() OVER (PARTITION BY k ORDER BY b DESC) AS r FROM \
+             (SELECT a % 97 AS k, b FROM t))"
+        );
+        let mut rows = env.rows(&sql).1;
+        rows.sort();
+        (env.plan(&sql).unwrap().explain().to_string(), rows)
+    };
+    let (reused, rows) = query("");
+    let (sorted, again) = query("ORDER BY k");
+    assert_eq!(reused.matches("Sort [").count(), 1, "{reused}");
+    assert_eq!(sorted.matches("Sort [").count(), 2, "{sorted}");
+    assert_eq!(rows.len(), 20_000);
+    assert_eq!(rows, again);
 }

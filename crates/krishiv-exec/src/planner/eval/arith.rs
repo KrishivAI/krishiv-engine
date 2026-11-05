@@ -5,16 +5,18 @@ use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, IntervalYearMonthType,
 };
-use arrow_array::{ArrayRef, PrimitiveArray, RecordBatch};
-use arrow_schema::DataType as ArrowType;
+use arrow_array::{Array, ArrayRef, PrimitiveArray, RecordBatch};
+use arrow_schema::{DataType as ArrowType, IntervalUnit, TimeUnit};
 use krishiv_kernels::decimal::{
-    DecimalOp, DecimalPlan, decimal_arith, decimal_integral_divide, decimal_unary,
+    DecimalCarrier, DecimalOp, DecimalOperand, DecimalPlan, decimal_arith_any,
+    decimal_integral_divide_any, decimal_unary,
 };
 use krishiv_kernels::integer::{self, SparkIntegral, UnaryOp};
 use krishiv_kernels::{
-    Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Mul, NullOnOverflow, Sub, float,
+    Add, AnsiError, ArithOp, JavaWrap, KernelCtx, Mul, NullOnOverflow, Sub, float, interval,
 };
 use krishiv_plan::Builtin;
 
@@ -47,9 +49,9 @@ pub(super) fn binary(
 ) -> Result<Arc<dyn PhysExpr>> {
     let decimal = match (l.data_type(), r.data_type(), &out) {
         (
-            ArrowType::Decimal128(lp, ls),
-            ArrowType::Decimal128(rp, rs),
-            ArrowType::Decimal128(p, s),
+            ArrowType::Decimal64(lp, ls) | ArrowType::Decimal128(lp, ls),
+            ArrowType::Decimal64(rp, rs) | ArrowType::Decimal128(rp, rs),
+            ArrowType::Decimal64(p, s) | ArrowType::Decimal128(p, s),
         ) => {
             let dop = match op {
                 Builtin::Add => DecimalOp::Add,
@@ -83,6 +85,18 @@ pub(super) fn binary(
         decimal,
         kernels: env.kernels,
     }))
+}
+
+/// A decimal operand of either carrier, as the kernels take it.
+fn decimal_operand(v: &Value) -> Result<DecimalOperand<'_>> {
+    Ok(match v {
+        Value::Array(a) => DecimalOperand::of_array(a.as_ref())?,
+        Value::Scalar(s) => DecimalOperand::Scalar(match DecimalOperand::of_array(s.as_ref())? {
+            DecimalOperand::Decimal64(a) => a.is_valid(0).then(|| i128::from(a.value(0))),
+            DecimalOperand::Decimal128(a) => a.is_valid(0).then(|| a.value(0)),
+            DecimalOperand::Scalar(v) => v,
+        }),
+    })
 }
 
 fn is_arith_type(t: &ArrowType) -> bool {
@@ -143,6 +157,10 @@ where
 }
 
 impl PhysExpr for Binary {
+    fn is_constant(&self) -> bool {
+        self.l.is_constant() && self.r.is_constant()
+    }
+
     fn data_type(&self) -> &ArrowType {
         &self.out
     }
@@ -162,13 +180,17 @@ impl PhysExpr for Binary {
         }
         let (op, ansi, ctx) = (self.op, self.ansi, &self.kernels);
         let out = if let Some(plan) = &self.decimal {
-            let (a, b) = (prim::<Decimal128Type>(&l), prim::<Decimal128Type>(&r));
-            let out = if ansi {
-                decimal_arith::<AnsiError>(a, b, plan, ctx)
+            let (a, b) = (decimal_operand(&l)?, decimal_operand(&r)?);
+            let carrier = if matches!(self.out, ArrowType::Decimal64(..)) {
+                DecimalCarrier::Decimal64
             } else {
-                decimal_arith::<NullOnOverflow>(a, b, plan, ctx)
-            }?;
-            Arc::new(out) as ArrayRef
+                DecimalCarrier::Decimal128
+            };
+            if ansi {
+                decimal_arith_any::<AnsiError>(a, b, plan, carrier, ctx)
+            } else {
+                decimal_arith_any::<NullOnOverflow>(a, b, plan, carrier, ctx)
+            }?
         } else {
             match &self.out {
                 ArrowType::Int8 => integral::<Int8Type>(op, &l, &r, ansi, ctx)?,
@@ -197,7 +219,7 @@ struct Negative {
 
 pub(super) fn negative(e: Arc<dyn PhysExpr>, env: &EvalEnv) -> Result<Arc<dyn PhysExpr>> {
     let t = e.data_type();
-    if !is_arith_type(t) && !matches!(t, ArrowType::Decimal128(..)) {
+    if !is_arith_type(t) && !matches!(t, ArrowType::Decimal64(..) | ArrowType::Decimal128(..)) {
         return Err(unsupported(&format!("unary minus on {t}")));
     }
     Ok(Arc::new(Negative {
@@ -208,6 +230,10 @@ pub(super) fn negative(e: Arc<dyn PhysExpr>, env: &EvalEnv) -> Result<Arc<dyn Ph
 }
 
 impl PhysExpr for Negative {
+    fn is_constant(&self) -> bool {
+        self.e.is_constant()
+    }
+
     fn data_type(&self) -> &ArrowType {
         self.e.data_type()
     }
@@ -243,6 +269,10 @@ impl PhysExpr for Negative {
                 UnaryOp::Negate,
                 a.as_primitive::<Float64Type>(),
             )?),
+            ArrowType::Decimal64(..) => Arc::new(decimal_unary(
+                UnaryOp::Negate,
+                a.as_primitive::<Decimal64Type>(),
+            )?),
             _ => Arc::new(decimal_unary(
                 UnaryOp::Negate,
                 a.as_primitive::<Decimal128Type>(),
@@ -255,14 +285,23 @@ impl PhysExpr for Negative {
     }
 }
 
+/// What `div` reads its operands as.
+#[derive(Debug, Clone, Copy)]
+enum DivideOperands {
+    Long,
+    /// The operands' decimal types.
+    Decimal((u8, i8), (u8, i8)),
+    YearMonth,
+    DayTime,
+}
+
 /// `l div r` (`IntegralDivide`): a `bigint` truncated towards zero, from
-/// `bigint` or decimal operands (the analyzer cast them).
+/// `bigint`, decimal or ANSI interval operands (the analyzer cast them).
 #[derive(Debug)]
 struct IntegralDivide {
     l: Arc<dyn PhysExpr>,
     r: Arc<dyn PhysExpr>,
-    /// Decimal operands' types.
-    decimal: Option<((u8, i8), (u8, i8))>,
+    operands: DivideOperands,
     ansi: bool,
     kernels: KernelCtx,
 }
@@ -272,23 +311,36 @@ pub(super) fn integral_divide(
     r: Arc<dyn PhysExpr>,
     env: &EvalEnv,
 ) -> Result<Arc<dyn PhysExpr>> {
-    let decimal = match (l.data_type(), r.data_type()) {
-        (ArrowType::Int64, ArrowType::Int64) => None,
-        (ArrowType::Decimal128(lp, ls), ArrowType::Decimal128(rp, rs)) => {
-            Some(((*lp, *ls), (*rp, *rs)))
-        }
+    let operands = match (l.data_type(), r.data_type()) {
+        (ArrowType::Int64, ArrowType::Int64) => DivideOperands::Long,
+        (
+            ArrowType::Decimal64(lp, ls) | ArrowType::Decimal128(lp, ls),
+            ArrowType::Decimal64(rp, rs) | ArrowType::Decimal128(rp, rs),
+        ) => DivideOperands::Decimal((*lp, *ls), (*rp, *rs)),
+        (
+            ArrowType::Interval(IntervalUnit::YearMonth),
+            ArrowType::Interval(IntervalUnit::YearMonth),
+        ) => DivideOperands::YearMonth,
+        (
+            ArrowType::Duration(TimeUnit::Microsecond),
+            ArrowType::Duration(TimeUnit::Microsecond),
+        ) => DivideOperands::DayTime,
         (lt, rt) => return Err(unsupported(&format!("`div` on {lt} and {rt}"))),
     };
     Ok(Arc::new(IntegralDivide {
         l,
         r,
-        decimal,
+        operands,
         ansi: env.ansi,
         kernels: env.kernels,
     }))
 }
 
 impl PhysExpr for IntegralDivide {
+    fn is_constant(&self) -> bool {
+        self.l.is_constant() && self.r.is_constant()
+    }
+
     fn data_type(&self) -> &ArrowType {
         &ArrowType::Int64
     }
@@ -307,8 +359,8 @@ impl PhysExpr for IntegralDivide {
             l = Value::Array(Arc::clone(l.array()));
         }
         let ctx = &self.kernels;
-        let out: ArrayRef = match self.decimal {
-            None => {
+        let out: ArrayRef = match self.operands {
+            DivideOperands::Long => {
                 let (a, b) = (prim::<Int64Type>(&l), prim::<Int64Type>(&r));
                 Arc::new(if self.ansi {
                     integer::integral_divide::<AnsiError>(a, b, ctx)?
@@ -316,14 +368,24 @@ impl PhysExpr for IntegralDivide {
                     integer::integral_divide::<JavaWrap>(a, b, ctx)?
                 })
             }
-            Some((lt, rt)) => {
-                let (a, b) = (prim::<Decimal128Type>(&l), prim::<Decimal128Type>(&r));
+            DivideOperands::Decimal(lt, rt) => {
+                let (a, b) = (decimal_operand(&l)?, decimal_operand(&r)?);
                 Arc::new(if self.ansi {
-                    decimal_integral_divide::<AnsiError>(a, b, lt, rt, ctx)?
+                    decimal_integral_divide_any::<AnsiError>(a, b, lt, rt, ctx)?
                 } else {
-                    decimal_integral_divide::<NullOnOverflow>(a, b, lt, rt, ctx)?
+                    decimal_integral_divide_any::<NullOnOverflow>(a, b, lt, rt, ctx)?
                 })
             }
+            DivideOperands::YearMonth => Arc::new(interval::integral_divide_year_month(
+                prim::<IntervalYearMonthType>(&l),
+                prim::<IntervalYearMonthType>(&r),
+                self.ansi,
+            )?),
+            DivideOperands::DayTime => Arc::new(interval::integral_divide_day_time(
+                prim::<DurationMicrosecondType>(&l),
+                prim::<DurationMicrosecondType>(&r),
+                self.ansi,
+            )?),
         };
         Ok(if scalar {
             Value::Scalar(out)

@@ -26,9 +26,10 @@
 use krishiv_common::error::{
     DecimalPrecisionExceedsMaxPrecision, FailedToParseTooComplex, IncompleteTypeDefinitionArray,
     IncompleteTypeDefinitionMap, IncompleteTypeDefinitionStruct, InternalError, InvalidIdentifier,
-    InvalidJsonDataType, KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1228,
-    NegativeScaleDisallowed, ParseEmptyStatement, ParseSyntaxError, StInvalidSridValue,
-    UnclosedBracketedComment, UnsupportedDatatype, UnsupportedTimePrecision, WkbParseError,
+    InvalidIntervalFormatUnsupportedFromToExpression, InvalidJsonDataType, KrishivError,
+    KrishivUnsupportedFeature, LegacyErrorTemp1228, NegativeScaleDisallowed, ParseEmptyStatement,
+    ParseSyntaxError, StInvalidSridValue, UnclosedBracketedComment, UnsupportedDatatype,
+    UnsupportedTimePrecision, WkbParseError,
 };
 
 use crate::DecimalType;
@@ -113,6 +114,17 @@ pub(crate) fn missing(at: &str, missing: &str) -> KrishivError {
 pub(crate) fn unsupported_data_type(type_name: &str) -> KrishivError {
     UnsupportedDatatype {
         type_name: format!("\"{type_name}\""),
+    }
+    .into()
+}
+
+/// `INVALID_INTERVAL_FORMAT.UNSUPPORTED_FROM_TO_EXPRESSION` for a type's
+/// fields, lower-case, as Spark's `AstBuilder` passes them.
+pub(crate) fn interval_from_to(from: &str, to: &str) -> KrishivError {
+    InvalidIntervalFormatUnsupportedFromToExpression {
+        input: String::new(),
+        from: from.to_owned(),
+        to: to.to_owned(),
     }
     .into()
 }

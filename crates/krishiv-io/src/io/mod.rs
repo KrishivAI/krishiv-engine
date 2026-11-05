@@ -22,9 +22,12 @@
 
 #[cfg(unix)]
 pub mod beneath;
+pub mod block_cache;
 pub mod cache;
 mod coalesce;
 pub mod fault;
+#[cfg(unix)]
+pub mod local_listing;
 mod pace;
 pub mod stores;
 pub mod upload;
@@ -33,6 +36,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -40,26 +44,33 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::future::{BoxFuture, try_join_all};
 use krishiv_common::config::{
-    Config, ConfigValue, IO_COALESCE_BYTES, IO_COALESCE_WASTE_BYTES, IO_COALESCE_WASTE_DIVISOR,
-    IO_FOOTER_READ_BYTES, IO_MAX_CONCURRENT_REQUESTS, IO_MAX_REQUEST_BYTES, IO_MAX_RETRIES,
-    IO_METADATA_CACHE_BYTES, IO_MULTIPART_PART_BYTES, IO_REQUEST_TIMEOUT,
+    Config, ConfigValue, IO_CACHE_BLOCK_BYTES, IO_CACHE_DISK_BYTES, IO_CACHE_ENABLED,
+    IO_CACHE_MEMORY_BYTES, IO_CACHE_PATH, IO_COALESCE_BYTES, IO_COALESCE_WASTE_BYTES,
+    IO_COALESCE_WASTE_DIVISOR, IO_FOOTER_READ_BYTES, IO_MAX_CONCURRENT_REQUESTS,
+    IO_MAX_REQUEST_BYTES, IO_MAX_RETRIES, IO_METADATA_CACHE_BYTES, IO_MULTIPART_PART_BYTES,
+    IO_REQUEST_TIMEOUT,
 };
-use krishiv_common::secret::{OptionValue, SecretString};
+use krishiv_common::secret::SecretString;
 use krishiv_memory::{ConsumerHandle, MemoryPool, Reservation};
 use object_store::path::Path;
-use object_store::{GetOptions, GetRange, ObjectMeta, ObjectStore, PutOptions, PutPayload};
+use object_store::{
+    GetOptions, GetRange, ObjectMeta, ObjectStore, PutMode, PutOptions, PutPayload,
+};
 use tokio::sync::Semaphore;
 
-pub use self::cache::{CacheKey, MetadataCache};
+pub use self::block_cache::{
+    BlockCache, BlockCacheConfig, CacheStats as BlockCacheStats, CachingStore, ObjectSize,
+};
+pub use self::cache::{CacheKey, CacheStats, MetadataCache};
 pub use self::coalesce::{Coalesced, Waste, coalesce, coalesce_with};
 pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
-pub use self::pace::StorePolicy;
 use self::pace::{Direction, Pacer};
 pub use self::stores::{
     AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,
-    GCS_KEYFILE, GCS_STORAGE_ROOT_URL, ObjectScheme, ParsedUrl, S3_ACCESS_KEY, S3_ENDPOINT,
-    S3_ENDPOINT_REGION, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_KEY, S3_SESSION_TOKEN,
-    StoreRegistry, parse_object_url,
+    GCS_KEYFILE, GCS_STORAGE_ROOT_URL, ObjectScheme, OpenedStore, ParsedUrl, S3_ACCESS_KEY,
+    S3_ENDPOINT, S3_ENDPOINT_REGION, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_KEY,
+    S3_SESSION_TOKEN, StoreRegistry, StoreSettings, parse_object_url, register,
+    register_with_options,
 };
 pub use self::upload::Upload;
 use crate::error::{
@@ -67,72 +78,10 @@ use crate::error::{
 };
 use crate::format::{FileFormat, FileMetadata, MetadataNeeds, ReadAt};
 use crate::options::{FormatOptions, NoSecrets};
+pub use krishiv_store::{StoreId, StorePolicy};
 
 /// Largest footer read a format may ask for in one tail read.
 pub const MAX_TAIL_BYTES: u64 = 1024 * 1024;
-
-/// Identifies a registered store, e.g. `s3://bucket`. Its text is printed in
-/// paths, so it must not hold credentials (they are redacted if it does).
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct StoreId(Arc<str>);
-
-impl StoreId {
-    /// A store id.
-    #[must_use]
-    pub fn new(id: impl AsRef<str>) -> Self {
-        Self(Arc::from(id.as_ref()))
-    }
-
-    /// Whether the store is an object store or HTTP (by the id's URL
-    /// scheme), where a request costs latency: local files are `file`.
-    #[must_use]
-    pub fn is_remote(&self) -> bool {
-        const REMOTE: [&str; 10] = [
-            "s3", "s3a", "gs", "gcs", "az", "azure", "abfs", "abfss", "http", "https",
-        ];
-        self.0
-            .split_once("://")
-            .is_some_and(|(scheme, _)| REMOTE.iter().any(|r| scheme.eq_ignore_ascii_case(r)))
-    }
-}
-
-/// Separates a store's name from the alias of one write's private
-/// registration of it (see [`StoreId::private_to`]).
-const PRIVATE_MARK: &str = "#private-";
-
-impl StoreId {
-    /// The id under which one write (`job`) registers its own store for the
-    /// same location as `self`: a distinct registry key whose text, in every
-    /// message and in `EXPLAIN`, is still `self`'s.
-    #[must_use]
-    pub fn private_to(&self, job: &str) -> Self {
-        Self::new(format!("{}{PRIVATE_MARK}{job}", self.0))
-    }
-
-    /// The full registry key: [`Display`](fmt::Display) hides the alias of
-    /// [`Self::private_to`] and redacts credentials.
-    #[must_use]
-    pub fn key(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for StoreId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let shown = self
-            .0
-            .split_once(PRIVATE_MARK)
-            .map_or(&*self.0, |(name, _)| name);
-        // Typed redaction (ADR 0038): URL credentials never print.
-        OptionValue::from_user("path", shown).fmt(f)
-    }
-}
-
-impl fmt::Debug for StoreId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "StoreId({self})")
-    }
-}
 
 /// The version of a file seen at listing; every read checks it.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -286,6 +235,8 @@ pub struct IoConfig {
     pub retry_max: Duration,
     /// Seed of the jitter (deterministic tests).
     pub seed: u64,
+    /// The local block cache of remote reads (`krishiv.io.cache.*`); `None`: off.
+    pub block_cache: Option<BlockCacheConfig>,
 }
 
 impl Default for IoConfig {
@@ -340,6 +291,25 @@ impl IoConfig {
             retry_base: Duration::from_millis(50),
             retry_max: Duration::from_secs(10),
             seed: 0x5EED,
+            block_cache: c
+                .get(&IO_CACHE_ENABLED)
+                .and_then(ConfigValue::as_bool)
+                .unwrap_or(false)
+                .then(|| BlockCacheConfig {
+                    dir: c
+                        .get(&IO_CACHE_PATH)
+                        .and_then(ConfigValue::as_str)
+                        .map_or_else(
+                            || {
+                                std::env::temp_dir()
+                                    .join(format!("krishiv-block-cache-{}", user_suffix()))
+                            },
+                            PathBuf::from,
+                        ),
+                    disk_bytes: size_of(c, &IO_CACHE_DISK_BYTES, 10 << 30),
+                    memory_bytes: size_of(c, &IO_CACHE_MEMORY_BYTES, 64 << 20),
+                    block_bytes: size_of(c, &IO_CACHE_BLOCK_BYTES, 1 << 20),
+                }),
         }
     }
 }
@@ -389,6 +359,9 @@ pub(crate) struct Lane {
     /// The store's in-flight request cap, shared by reads and writes.
     permits: Semaphore,
     pacer: Pacer,
+    /// The store answers a listing only when all of it is known, so the
+    /// wait for an object is the wait for the whole listing.
+    whole_listing: bool,
 }
 
 impl Lane {
@@ -409,6 +382,8 @@ pub struct IoScheduler {
     config: IoConfig,
     stores: RwLock<HashMap<StoreId, Registered>>,
     cache: MetadataCache,
+    /// The local block cache of remote reads, when `krishiv.io.cache.enabled`.
+    block_cache: Option<Arc<BlockCache>>,
     runtime: Option<tokio::runtime::Handle>,
     totals: IoCounters,
     jitter: AtomicU64,
@@ -437,7 +412,14 @@ impl IoScheduler {
     }
 
     fn build(config: IoConfig, runtime: Option<tokio::runtime::Handle>) -> Arc<Self> {
+        // A cache that cannot start (no directory) is off, never an error.
+        let block_cache = config.block_cache.clone().and_then(|c| {
+            BlockCache::new(c)
+                .inspect_err(|e| tracing::warn!("the block cache is off: {e}"))
+                .ok()
+        });
         Arc::new(Self {
+            block_cache,
             cache: MetadataCache::new(config.metadata_cache_bytes),
             jitter: AtomicU64::new(config.seed),
             config,
@@ -461,9 +443,33 @@ impl IoScheduler {
         store: Arc<dyn ObjectStore>,
         policy: StorePolicy,
     ) {
+        self.register(id, store, policy, false);
+    }
+
+    /// Registers (or replaces) the unpaced store `id`, whose listing answers
+    /// all at once: no request timeout applies to it, however long it takes.
+    pub fn register_whole_listing_store(&self, id: StoreId, store: Arc<dyn ObjectStore>) {
+        self.register(id, store, StorePolicy::UNPACED, true);
+    }
+
+    fn register(
+        &self,
+        id: StoreId,
+        store: Arc<dyn ObjectStore>,
+        policy: StorePolicy,
+        whole_listing: bool,
+    ) {
+        // Remote reads go through the block cache (local files never do).
+        let store: Arc<dyn ObjectStore> = match &self.block_cache {
+            Some(cache) if id.is_remote() => {
+                Arc::new(CachingStore::new(store, id.to_string(), Arc::clone(cache)))
+            }
+            _ => store,
+        };
         let lane = Arc::new(Lane {
             permits: Semaphore::new(self.config.max_concurrent_requests),
             pacer: Pacer::new(policy),
+            whole_listing,
         });
         self.stores
             .write()
@@ -505,6 +511,15 @@ impl IoScheduler {
     /// [`MetadataCache::attach_pool`]).
     pub fn attach_memory(&self, pool: &Arc<dyn MemoryPool>) {
         self.cache.attach_pool(pool);
+        if let Some(c) = &self.block_cache {
+            c.attach_pool(pool);
+        }
+    }
+
+    /// What the block cache has done (`None` when it is off).
+    #[must_use]
+    pub fn block_cache_stats(&self) -> Option<BlockCacheStats> {
+        self.block_cache.as_ref().map(|c| c.stats())
     }
 
     /// The metadata cache.
@@ -543,6 +558,26 @@ impl IoScheduler {
             jittered.max(ra.min(Duration::from_secs(300)))
         })
     }
+}
+
+/// The `If-Unmodified-Since` limit for a file seen as modified at `micros`
+/// (no ETag). The token is truncated to microseconds, so the rest of that
+/// microsecond is allowed (stores keep nanoseconds). A whole-second token is
+/// most likely an HTTP date (one-second resolution) of a store that keeps a
+/// finer mtime, and the header is itself formatted to the second, so the limit
+/// is the next second boundary. A change to the file up to about two seconds
+/// after the planned mtime can therefore go unseen on a store without an
+/// ETag, as with any HTTP-date validator.
+fn unmodified_since_limit(micros: i64) -> Option<chrono::DateTime<chrono::Utc>> {
+    let slack_ns = if micros % 1_000_000 == 0 {
+        1_000_000_000
+    } else {
+        999
+    };
+    micros
+        .checked_mul(1000)
+        .and_then(|ns| ns.checked_add(slack_ns))
+        .map(chrono::DateTime::from_timestamp_nanos)
 }
 
 fn splitmix(mut z: u64) -> u64 {
@@ -621,6 +656,17 @@ impl fmt::Debug for PinnedStore {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "PinnedStore({})", self.id)
     }
+}
+
+/// The outcome of [`IoContext::put_if_absent`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PutIfAbsent {
+    /// This call created the object.
+    Created,
+    /// The object was already there, written by someone else.
+    Exists,
+    /// The store rejects conditional creation (it does not implement `If-None-Match` / `PutMode::Create`).
+    Unsupported,
 }
 
 /// A query's handle on the scheduler (cheap to clone).
@@ -918,20 +964,17 @@ impl IoContext {
             let outcome = {
                 let _permit = lane.admit(Direction::Read, &file.path).await?;
                 self.count(|c| &c.requests, 1);
+                let mut extensions = ScheduledRequest.into_extensions();
+                extensions.insert(ObjectSize(file.size));
                 let mut opts = GetOptions {
                     range: Some(GetRange::Bounded(range.clone())),
-                    extensions: ScheduledRequest.into_extensions(),
+                    extensions,
                     ..GetOptions::default()
                 };
                 match &file.version {
                     VersionToken::ETag(e) => opts.if_match = Some(e.to_string()),
                     VersionToken::Modified(us) => {
-                        // The token is truncated to microseconds; allow the
-                        // rest of that microsecond (stores keep nanoseconds).
-                        opts.if_unmodified_since = us
-                            .checked_mul(1000)
-                            .and_then(|ns| ns.checked_add(999))
-                            .map(chrono::DateTime::from_timestamp_nanos);
+                        opts.if_unmodified_since = unmodified_since_limit(*us);
                     }
                     VersionToken::Immutable => {}
                 }
@@ -1030,6 +1073,21 @@ impl IoContext {
             outcome: outcome.clone(),
         });
         outcome
+    }
+
+    /// `file`'s metadata as read by `format` if the cache holds an entry
+    /// loaded with at least `needs`, without any read: `None` otherwise, or
+    /// when a metadata key in `options` is a secret reference.
+    #[must_use]
+    pub fn cached_metadata<F: FileFormat + ?Sized>(
+        &self,
+        format: &F,
+        file: &FileRef,
+        needs: MetadataNeeds,
+        options: &FormatOptions,
+    ) -> Option<Arc<dyn FileMetadata>> {
+        let key = CacheKey::new(format.name(), file, options.metadata_fingerprint_now()?);
+        self.sched.cache.get(&key, needs).ok()
     }
 
     /// [`Self::read_metadata`] as an owned future that runs on the I/O
@@ -1161,6 +1219,104 @@ impl IoContext {
             .await
     }
 
+    /// Creates the object `path` only if there is none (`If-None-Match: *`
+    /// / `PutMode::Create`): the primitive of the commit log. A transient
+    /// failure or a timed-out response is never retried blind: the object
+    /// is read back, and one holding exactly `bytes` means the write
+    /// landed, so it counts as created.
+    ///
+    /// # Errors
+    /// `TASK_WRITE_FAILED` if the store refuses or after retries.
+    pub async fn put_if_absent(
+        &self,
+        store: &StoreId,
+        path: &Path,
+        bytes: Bytes,
+    ) -> Result<PutIfAbsent> {
+        let (s, lane) = self.sched.store(store)?;
+        let cfg = &self.sched.config;
+        let display = format!("{store}/{path}");
+        let mut attempt = 0;
+        let mut maybe_landed = false;
+        loop {
+            let r = {
+                let _permit = lane.admit(Direction::Write, path).await?;
+                self.count(|c| &c.requests, 1);
+                let opts = PutOptions {
+                    mode: PutMode::Create,
+                    extensions: ScheduledRequest.into_extensions(),
+                    ..PutOptions::default()
+                };
+                tokio::time::timeout(
+                    cfg.request_timeout,
+                    s.put_opts(path, PutPayload::from_bytes(bytes.clone()), opts),
+                )
+                .await
+            };
+            let retry_after = match r {
+                Ok(Ok(_)) => {
+                    self.count(|c| &c.bytes_written, bytes.len() as u64);
+                    return Ok(PutIfAbsent::Created);
+                }
+                Ok(Err(
+                    object_store::Error::NotImplemented { .. }
+                    | object_store::Error::NotSupported { .. },
+                )) => return Ok(PutIfAbsent::Unsupported),
+                Ok(Err(object_store::Error::AlreadyExists { .. })) => {
+                    // After an unanswered attempt the object may be ours.
+                    if maybe_landed && self.get_object(store, path).await?.as_ref() == Some(&bytes)
+                    {
+                        return Ok(PutIfAbsent::Created);
+                    }
+                    return Ok(PutIfAbsent::Exists);
+                }
+                Ok(Err(e)) => match transient(&e) {
+                    Some(retry_after) => {
+                        maybe_landed = true;
+                        retry_after
+                    }
+                    None => return Err(write_failed(&display, &e.to_string())),
+                },
+                Err(_elapsed) => {
+                    maybe_landed = true;
+                    None
+                }
+            };
+            if attempt >= cfg.max_retries {
+                // The last answer may be a lost one: an object holding our bytes is a success.
+                if maybe_landed
+                    && self.get_object(store, path).await.ok().flatten().as_ref() == Some(&bytes)
+                {
+                    return Ok(PutIfAbsent::Created);
+                }
+                return Err(write_failed(&display, "gave up after retries"));
+            }
+            self.count(|c| &c.retries, 1);
+            tokio::time::sleep(self.sched.backoff(attempt, retry_after)).await;
+            attempt += 1;
+        }
+    }
+
+    /// The whole object `path` of `store`, or `None` if there is none.
+    ///
+    /// # Errors
+    /// `KRISHIV_OBJECT_STORE_REQUEST_FAILED` after retries.
+    pub async fn get_object(&self, store: &StoreId, path: &Path) -> Result<Option<Bytes>> {
+        let (s, lane) = self.sched.store(store)?;
+        self.metadata_request(&lane, store, path, || async {
+            let opts = GetOptions {
+                extensions: ScheduledRequest.into_extensions(),
+                ..GetOptions::default()
+            };
+            match s.get_opts(path, opts).await {
+                Ok(r) => r.bytes().await.map(Some),
+                Err(object_store::Error::NotFound { .. }) => Ok(None),
+                Err(e) => Err(e),
+            }
+        })
+        .await
+    }
+
     /// Every object under the directory `prefix` of `store`, at any depth.
     ///
     /// # Errors
@@ -1169,6 +1325,11 @@ impl IoContext {
         let (s, lane) = self.sched.store(store)?;
         let cfg = &self.sched.config;
         let display = format!("{store}/{prefix}");
+        let object_wait = if lane.whole_listing {
+            Duration::MAX
+        } else {
+            cfg.request_timeout
+        };
         let mut attempt = 0;
         loop {
             // The timeout bounds the wait for each object (and so each
@@ -1181,11 +1342,8 @@ impl IoContext {
                 let mut listed = s.list(Some(prefix));
                 let mut out = Vec::new();
                 loop {
-                    match tokio::time::timeout(
-                        cfg.request_timeout,
-                        futures::StreamExt::next(&mut listed),
-                    )
-                    .await
+                    match tokio::time::timeout(object_wait, futures::StreamExt::next(&mut listed))
+                        .await
                     {
                         Ok(None) => return Ok(out),
                         Ok(Some(Ok(m))) => out.push(m),
@@ -1387,4 +1545,19 @@ impl<T> Drop for AbortOnDrop<T> {
 }
 
 #[cfg(test)]
+mod block_cache_tests;
+#[cfg(test)]
 mod tests;
+
+/// The user's id for the name of a per-user default directory (as the spill directory's):
+/// the effective user id on Unix (the one files are created with), else empty.
+fn user_suffix() -> String {
+    #[cfg(unix)]
+    {
+        rustix::process::geteuid().as_raw().to_string()
+    }
+    #[cfg(not(unix))]
+    {
+        String::new()
+    }
+}

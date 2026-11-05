@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-"""A throw-away S3-compatible server (``rclone serve s3`` in ``docker run --rm``) over a remote-filter mirror.
+"""A throw-away S3-compatible server (``versitygw posix`` in ``docker run --rm``) over a remote-filter mirror.
 
-rclone serves a plain directory (each top-level directory is a bucket), so the 28 GB mirror is read in place; MinIO
-cannot do that .
+versitygw serves a plain directory (each top-level directory is a bucket), so the 28 GB mirror is read in place; MinIO
+cannot do that. It answers a ``Range`` request with ``206 Partial Content``; ``rclone serve s3`` answered ``200``, which
+the ``object_store`` client behind Polars and Krishiv refuses.
 
 The container is named ``krishiv-bench-rf-<pid>`` and is always removed on exit, error or interrupt; the long-lived
-``bench-minio`` / ``krishiv-bench-minio`` containers are never touched. Engines read ``s3://fw/<file>`` through the
-endpoint and credentials in the environment variables of :meth:`S3Server.env`.
+``bench-minio`` / ``krishiv-bench-minio`` containers are never touched. Engines read ``s3://fwbucket/<file>``
+through the endpoint and credentials in the environment variables of :meth:`S3Server.env`.
 """
 
 from __future__ import annotations
@@ -22,8 +23,8 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-IMAGE = "rclone/rclone:1.68.2"
-BUCKET = "fw"
+IMAGE = "versity/versitygw:latest"  # pin by digest once a run has passed
+BUCKET = "fwbucket"  # S3 bucket names have at least 3 characters (the table is still `fw`)
 ACCESS_KEY = "krishiv"
 SECRET_KEY = "krishiv-bench-secret"
 ENV_ENDPOINT, ENV_ACCESS, ENV_SECRET = "KRISHIV_BENCH_S3_ENDPOINT", "KRISHIV_BENCH_S3_KEY", "KRISHIV_BENCH_S3_SECRET"
@@ -63,15 +64,21 @@ class S3Server:
             "run", "--rm", "-d", "--name", self.name,
             "-p", "127.0.0.1::9000",
             "-v", f"{self.table_dir.resolve()}:/data/{BUCKET}:ro",
-            IMAGE, "serve", "s3", "/data", "--addr", ":9000", "--read-only",
-            "--auth-key", f"{ACCESS_KEY},{SECRET_KEY}",
+            "-e", f"ROOT_ACCESS_KEY={ACCESS_KEY}", "-e", f"ROOT_SECRET_KEY={SECRET_KEY}",
+            IMAGE, "--port", ":9000", "posix", "/data",
         )  # fmt: skip
         mapping = self._docker("port", self.name, "9000/tcp").splitlines()[0]
         self.endpoint = mapping.replace("0.0.0.0", "127.0.0.1")
         deadline = time.monotonic() + self._ready_timeout_s
         while not self._ready(self.endpoint):
             if time.monotonic() > deadline:
-                raise RuntimeError(f"the S3 container {self.name} was not ready after {self._ready_timeout_s:.0f}s")
+                try:  # the container's own words: a server that exits at once would otherwise leave only the timeout
+                    logs = self._docker("logs", "--tail", "15", self.name)
+                except RuntimeError as e:
+                    logs = str(e)
+                raise RuntimeError(
+                    f"the S3 container {self.name} was not ready after {self._ready_timeout_s:.0f}s: {logs[-600:]}"
+                )
             time.sleep(0.5)
         return self
 

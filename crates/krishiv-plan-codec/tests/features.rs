@@ -48,6 +48,10 @@ fn the_header_lists_exactly_the_features_in_use() {
         ["window", "window_frame_offsets", "window_offset_functions"]
     );
     assert_eq!(
+        message("window_range_values").features,
+        ["window", "window_range_bounds"]
+    );
+    assert_eq!(
         message("aggregate_mode_regr_bit_listagg").features,
         ["mode_regr_bit_listagg_aggs"]
     );
@@ -64,15 +68,29 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("legacy_charset_switches").features,
         ["legacy_charset_switches"]
     );
-    // Every registered feature occurs in some inventory case, except
-    // `legacy_statistical_aggregate`: it fires only around a moment
-    // aggregate, and the encoder refuses every moment aggregate (pinned by
-    // the TPC-DS ratchet), so no encodable case can use it. The test below
-    // pins its `plan_features` rule on plans that are never encoded.
+    assert_eq!(
+        message("legacy_time_parser").features,
+        ["legacy_time_parser"]
+    );
+    assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
+    assert_eq!(
+        message("options_map_literal").features,
+        ["options_map_literals"]
+    );
+    assert_eq!(
+        message("aggregate_any_value").features,
+        ["any_value_by_aggregates"]
+    );
+    assert_eq!(
+        message("aggregate_max_min_by").features,
+        ["any_value_by_aggregates", "nested_types"]
+    );
+    assert_eq!(
+        message("aggregate_moments_legacy_statistical").features,
+        ["legacy_statistical_aggregate", "moment_aggregates"]
+    );
+    // Every registered feature occurs in some inventory case.
     for f in Feature::ALL {
-        if *f == Feature::LegacyStatisticalAggregate {
-            continue;
-        }
         assert!(
             cases().iter().any(|(_, p)| plan_features(p).contains(f)),
             "{f}: no inventory case uses it"
@@ -103,10 +121,9 @@ fn a_feature_in_a_subquery_plan_counts() {
 }
 
 /// `legacy_statistical_aggregate` fires only for a plan that sets the flag
-/// around a moment aggregate. The flag alone changes nothing the encoder
-/// can write (it refuses every moment aggregate), so such plans list no
-/// feature: a reader without it keeps reading them, and the flag itself
-/// still round-trips.
+/// around a moment aggregate. The flag alone changes nothing a worker
+/// computes, so such plans list no feature: a reader without it keeps
+/// reading them, and the flag itself still round-trips.
 #[test]
 fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
     use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
@@ -152,14 +169,33 @@ fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
         decode_with(&bytes, &Limits::default(), &without).unwrap(),
         flag_only
     );
-    // A moment aggregate without the flag lists none either.
-    assert!(plan_features(&plan_of(aggregate_node())).is_empty());
+    // A moment aggregate without the flag lists only its own feature.
+    assert_eq!(
+        plan_features(&plan_of(aggregate_node()))
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [Feature::MomentAggregates]
+    );
     // Both together list the feature: in an aggregate node, ...
     let with_both = plan_of_env(aggregate_node(), legacy());
     assert_eq!(
         plan_features(&with_both).into_iter().collect::<Vec<_>>(),
-        [Feature::LegacyStatisticalAggregate]
+        [
+            Feature::LegacyStatisticalAggregate,
+            Feature::MomentAggregates
+        ]
     );
+    // A reader with the moments but without the flag refuses it naming
+    // the flag: it would give NULL where the plan asks for NaN.
+    let bytes = encode(&with_both).unwrap();
+    let moments_only = ReaderFeatures::only([Feature::MomentAggregates]);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &moments_only).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["legacy_statistical_aggregate".to_owned()]
+        }
+    );
+    assert_eq!(decode(&bytes).unwrap(), with_both);
     // ... in a window function, ...
     let window = plan_of_env(
         PhysNode::Window {
@@ -179,7 +215,11 @@ fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
     );
     assert_eq!(
         plan_features(&window).into_iter().collect::<Vec<_>>(),
-        [Feature::LegacyStatisticalAggregate, Feature::Window]
+        [
+            Feature::LegacyStatisticalAggregate,
+            Feature::MomentAggregates,
+            Feature::Window
+        ]
     );
     // ... and in a subquery plan ...
     let subquery = plan_of_env(
@@ -196,7 +236,10 @@ fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
     );
     assert_eq!(
         plan_features(&subquery).into_iter().collect::<Vec<_>>(),
-        [Feature::LegacyStatisticalAggregate]
+        [
+            Feature::LegacyStatisticalAggregate,
+            Feature::MomentAggregates
+        ]
     );
     // ... but never for another aggregate under the flag.
     let plain = plan_of_env(
@@ -371,6 +414,24 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         Some(Feature::PercentileAggregates)
     );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::CovarPop
+        )),
+        Some(Feature::MomentAggregates)
+    );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::AnyValue { ignore_nulls: true }
+        )),
+        Some(Feature::AnyValueByAggregates)
+    );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::First { ignore_nulls: true }
+        )),
+        None
+    );
     // A frame needs a feature only for an offset bound: the `Window`
     // node's format carries the others, `CURRENT ROW` at both ends included.
     use krishiv_exec::window::{FrameBound, FrameUnits, WindowFrame};
@@ -409,6 +470,19 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         Some(Feature::WindowOffsetFunctions)
     );
+    for bound in [
+        FrameBound::RangeInt(3),
+        FrameBound::RangeFloat(1.0_f64.to_bits()),
+    ] {
+        assert_eq!(
+            feature_of(Construct::Frame(&frame(
+                FrameBound::UnboundedPreceding,
+                bound
+            ))),
+            Some(Feature::WindowRangeBounds)
+        );
+    }
+    assert_eq!(Feature::WindowRangeBounds.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::Window.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowFrameOffsets.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowOffsetFunctions.kind(), FeatureKind::Semantic);
@@ -426,6 +500,7 @@ fn constructs_map_to_one_feature_or_the_baseline() {
     );
     let write = WritePlan {
         partition_by: vec![0],
+        column_types: std::collections::BTreeMap::new(),
         ..base
     };
     let node = node_of(write);
@@ -511,6 +586,28 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
             missing: vec!["shared_subplan".to_owned()]
         }
     );
+    // A reader without `late_fetch` refuses the node and a row id alone.
+    let late_fetch = cases()
+        .into_iter()
+        .find(|(n, _)| n == "late_fetch")
+        .unwrap()
+        .1;
+    let top = late_fetch.root().children()[0];
+    let row_id = plan_of(top.children()[0].clone());
+    for plan in [late_fetch.clone(), row_id] {
+        let err = decode_with(
+            &encode(&plan).unwrap(),
+            &Limits::default(),
+            &ReaderFeatures::only([]),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CodecError::UnsupportedFeatures {
+                missing: vec!["late_fetch".to_owned()]
+            }
+        );
+    }
     // A reader without `lambda_functions` refuses the lambda plan naming
     // the feature, even though it knows `nested_types`.
     let bytes = encode(
@@ -589,6 +686,55 @@ fn a_reader_without_the_filter_feature_refuses_a_masked_aggregate() {
 }
 
 #[test]
+fn a_reader_without_write_column_types_refuses_the_plan_naming_it() {
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "write_files_column_types")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let reader = ReaderFeatures::only([Feature::WritePlan, Feature::IntervalTypes]);
+    assert!(!reader.contains(Feature::WriteColumnTypes));
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &reader).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["write_column_types".to_owned()]
+        }
+    );
+    assert_eq!(Feature::WriteColumnTypes.kind(), FeatureKind::Semantic);
+}
+
+/// The header lists each feature of a write, and the Spark types it names
+/// even when its input holds none of them.
+#[test]
+fn a_partitioned_write_with_column_types_lists_every_feature() {
+    let write = krishiv_exec::physical::WritePlan {
+        partition_by: vec![0],
+        column_types: std::collections::BTreeMap::from([(
+            0,
+            krishiv_types::DataType::YearMonthInterval {
+                start: krishiv_types::YearMonthField::Year,
+                end: krishiv_types::YearMonthField::Month,
+            },
+        )]),
+        ..inventory::write_plan()
+    };
+    let features = plan_features(&plan_of(PhysNode::WriteFiles {
+        input: Box::new(PhysNode::OneRow),
+        write: Some(write),
+    }));
+    for feature in [
+        Feature::IntervalTypes,
+        Feature::PartitionedWrites,
+        Feature::WriteColumnTypes,
+    ] {
+        assert!(features.contains(&feature), "{feature}: {features:?}");
+    }
+}
+
+#[test]
 fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
     let bytes = encode(
         &cases()
@@ -638,6 +784,21 @@ fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
             missing: vec!["percentile_aggregates".to_owned()]
         }
     );
+    // Likewise the moment and the `any_value`/`max_by`/`min_by` plans.
+    for (case, feature) in [
+        ("aggregate_moments", "moment_aggregates"),
+        ("aggregate_any_value", "any_value_by_aggregates"),
+        ("aggregate_max_min_by", "any_value_by_aggregates"),
+    ] {
+        let bytes = encode(&cases().into_iter().find(|(n, _)| n == case).unwrap().1).unwrap();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &reader).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec![feature.to_owned()]
+            },
+            "{case}"
+        );
+    }
 }
 
 #[test]
@@ -1113,6 +1274,192 @@ fn type_parameters_are_checked_on_decode() {
     corrupt(&srid_on_int, "a type parameter on a type that has none");
 }
 
+#[test]
+fn interval_types_and_literals_need_their_feature() {
+    use krishiv_plan::{Expr, ExprNode, Literal, YearMonthField};
+    use krishiv_types::DataType;
+    assert_eq!(message("interval_literals").features, ["interval_types"]);
+    // A bare literal is baseline: older plans hold them with no feature.
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "interval_literals")
+        .unwrap();
+    let mut root = plan.root().clone();
+    let PhysNode::Project { items, layout, .. } = &mut root else {
+        panic!("not a project");
+    };
+    items.truncate(1);
+    layout.truncate(1);
+    assert!(to_message(&plan_of(root)).unwrap().features.is_empty());
+    assert_eq!(message("interval_scan").features, ["interval_types"]);
+    assert!(
+        message("interval_array_aggregate")
+            .features
+            .contains(&"interval_types".to_owned())
+    );
+    assert_eq!(
+        message("interval_nested").features,
+        ["interval_types", "nested_types"]
+    );
+    for t in [
+        DataType::DEFAULT_YEAR_MONTH_INTERVAL,
+        DataType::DEFAULT_DAY_TIME_INTERVAL,
+        DataType::CalendarInterval,
+    ] {
+        assert_eq!(
+            feature_of(Construct::Type(&t)),
+            Some(Feature::IntervalTypes)
+        );
+        let arrow = t.to_arrow();
+        assert_eq!(
+            feature_of(Construct::ArrowType(&arrow)),
+            Some(Feature::IntervalTypes)
+        );
+    }
+    // The bare literal predates the feature (`base/expressions` holds one);
+    // as an argument it needs it, since nothing else then names the type.
+    let literal = std::sync::Arc::new(Expr::new(ExprNode::Literal(Literal::YearMonthInterval {
+        months: 1,
+        start: YearMonthField::Month,
+        end: YearMonthField::Month,
+    })));
+    assert_eq!(feature_of(Construct::Expr(&literal)), None);
+    let cast = Expr::new(ExprNode::Cast {
+        expr: std::sync::Arc::clone(&literal),
+        to: DataType::String,
+        mode: krishiv_plan::CastMode::Ansi,
+    });
+    assert_eq!(
+        feature_of(Construct::Expr(&cast)),
+        Some(Feature::IntervalTypes)
+    );
+    assert_eq!(Feature::IntervalTypes.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::IntervalTypes.legacy_level(), 6);
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::IntervalTypes),
+    );
+    for case in ["interval_literals", "interval_scan", "interval_nested"] {
+        let bytes = message(case).encode_to_vec();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["interval_types".to_owned()]
+            },
+            "{case}"
+        );
+        assert!(decode(&bytes).is_ok(), "{case}");
+    }
+}
+
+/// The analyzer's internal functions travel by name, and an older reader
+/// refuses them through the interval feature.
+#[test]
+fn internal_interval_functions_travel_by_name_under_their_feature() {
+    use krishiv_plan::{Builtin, FunctionId};
+    for b in [
+        Builtin::DateAddInterval,
+        Builtin::MultiplyInterval,
+        Builtin::DivideInterval,
+        Builtin::CalendarAdd,
+        Builtin::CalendarSubtract,
+        Builtin::CalendarNegate,
+    ] {
+        assert!(Builtin::ALL.contains(&b), "{b:?}");
+        assert!(b.is_analyzer_internal(), "{b:?}");
+        assert_eq!(Builtin::from_name(b.name()), Some(b));
+        let id = FunctionId::Builtin(b);
+        assert_eq!(
+            feature_of(Construct::Function(&id)),
+            Some(Feature::IntervalTypes),
+            "{b:?}"
+        );
+    }
+}
+
+/// An interval type's fields are external input: a missing field, fields
+/// that do not increase and fields on another type are corrupt.
+#[test]
+fn a_decoded_interval_type_is_checked() {
+    use pb::data_type::Kind;
+    let edit = |change: &dyn Fn(&mut pb::DataType)| {
+        let mut m = message("interval_scan");
+        let Some(pb::node::Kind::Scan(scan)) = m.nodes[0].kind.as_mut() else {
+            panic!("not a scan");
+        };
+        change(scan.output[0].data_type.as_mut().unwrap());
+        m
+    };
+    let ym = |start: pb::YearMonthField, end: pb::YearMonthField| {
+        edit(&move |t: &mut pb::DataType| {
+            t.kind = Kind::YearMonthInterval as i32;
+            t.ym_start = start as i32;
+            t.ym_end = end as i32;
+        })
+    };
+    assert!(
+        decode(&ym(pb::YearMonthField::Year, pb::YearMonthField::Month).encode_to_vec()).is_ok()
+    );
+    corrupt(
+        &ym(pb::YearMonthField::Month, pb::YearMonthField::Year),
+        "an invalid interval type",
+    );
+    let dt = edit(&|t: &mut pb::DataType| {
+        t.kind = Kind::DayTimeInterval as i32;
+        t.ym_start = 0;
+        t.ym_end = 0;
+        t.dt_start = pb::DayTimeField::Second as i32;
+        t.dt_end = pb::DayTimeField::Hour as i32;
+    });
+    corrupt(&dt, "an invalid interval type");
+    let on_calendar = edit(&|t: &mut pb::DataType| {
+        t.kind = Kind::CalendarInterval as i32;
+        t.dt_start = pb::DayTimeField::Hour as i32;
+    });
+    corrupt(&on_calendar, "a type parameter on a type that has none");
+    let on_int = edit(&|t: &mut pb::DataType| {
+        t.kind = Kind::Integer as i32;
+        t.ym_start = pb::YearMonthField::Month as i32;
+    });
+    corrupt(&on_int, "a type parameter on a type that has none");
+    let missing = edit(&|t: &mut pb::DataType| {
+        t.kind = Kind::YearMonthInterval as i32;
+        t.ym_start = 0;
+        t.ym_end = pb::YearMonthField::Month as i32;
+    });
+    corrupt(&missing, "an unknown interval field");
+}
+
+/// A literal's fields are external input too, for both field families.
+#[test]
+fn a_decoded_interval_literal_is_checked() {
+    let edit = |change: &dyn Fn(&mut pb::literal::Kind)| {
+        let mut m = message("interval_literals");
+        for e in &mut m.exprs {
+            if let Some(pb::expr::Kind::Literal(pb::Literal { kind: Some(k) })) = &mut e.kind {
+                change(k);
+            }
+        }
+        m
+    };
+    let year_month = edit(&|k: &mut pb::literal::Kind| {
+        if let pb::literal::Kind::YearMonth(v) = k {
+            v.start = pb::YearMonthField::Month as i32;
+            v.end = pb::YearMonthField::Year as i32;
+        }
+    });
+    corrupt(&year_month, "an invalid interval literal");
+    let day_time = edit(&|k: &mut pb::literal::Kind| {
+        if let pb::literal::Kind::DayTime(v) = k {
+            v.start = pb::DayTimeField::Second as i32;
+            v.end = pb::DayTimeField::Hour as i32;
+        }
+    });
+    corrupt(&day_time, "an invalid interval literal");
+}
+
 /// A time inside an array is a time plan: the header names `time_type`
 /// (beside `nested_types`), so a reader without it refuses the plan as
 /// unsupported rather than misreading the nested type as corrupt.
@@ -1241,4 +1588,122 @@ fn a_shared_plans_constructs_are_in_the_header() {
     assert!(features.contains(&Feature::Window), "{features:?}");
     assert!(features.contains(&Feature::SharedSubplan), "{features:?}");
     assert_eq!(decode(&encode(&plan).unwrap()).unwrap(), plan);
+}
+
+/// A collated string needs `collated_strings` wherever the plan names it:
+/// a Spark type, a nested type's JSON, or the tag of an Arrow field at any
+/// depth (the carrier, `Utf8View`, alone says `string`).
+#[test]
+fn collated_strings_need_their_feature_wherever_they_appear() {
+    use krishiv_types::arrow::SPARK_TYPE_METADATA_KEY;
+    use krishiv_types::{Collation, DataType};
+    assert_eq!(message("collated_scan").features, ["collated_strings"]);
+    assert_eq!(
+        message("collated_nested").features,
+        ["collated_strings", "nested_types"]
+    );
+    assert_eq!(
+        message("collated_output").features,
+        ["collated_strings", "nested_types"]
+    );
+    let lcase = inventory::collated("UTF8_LCASE");
+    assert_eq!(
+        feature_of(Construct::Type(&lcase)),
+        Some(Feature::CollatedStrings)
+    );
+    assert_eq!(feature_of(Construct::Type(&DataType::String)), None);
+    let tagged = |tag: &str| {
+        arrow_schema::Field::new("s", arrow_schema::DataType::Utf8View, true).with_metadata(
+            std::collections::HashMap::from([(SPARK_TYPE_METADATA_KEY.to_owned(), tag.to_owned())]),
+        )
+    };
+    let field = lcase.to_arrow_field("s", true);
+    assert_eq!(field, tagged("string collate UTF8_LCASE"));
+    assert_eq!(
+        feature_of(Construct::ArrowField(&field)),
+        Some(Feature::CollatedStrings)
+    );
+    for plain in [
+        DataType::String.to_arrow_field("s", true),
+        tagged("string"),
+        tagged("not a type"),
+    ] {
+        assert_eq!(feature_of(Construct::ArrowField(&plain)), None, "{plain:?}");
+    }
+    assert_eq!(Feature::CollatedStrings.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::CollatedStrings.legacy_level(), 6);
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::CollatedStrings),
+    );
+    for case in ["collated_scan", "collated_nested", "collated_output"] {
+        let bytes = message(case).encode_to_vec();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["collated_strings".to_owned()]
+            },
+            "{case}"
+        );
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == case).unwrap();
+        assert_eq!(decode(&bytes).unwrap(), plan, "{case}");
+    }
+    // A header that hides the type is corrupt.
+    let mut m = message("collated_scan");
+    m.features.clear();
+    m.min_reader_version = 2;
+    corrupt(
+        &m,
+        "the feature header does not match the plan's constructs",
+    );
+    // The indeterminate collation of a mixed expression is the analyzer's,
+    // never a plan's.
+    let indeterminate = DataType::CollatedString(Collation::INDETERMINATE);
+    let mut plan = inventory::file_scan();
+    plan.scan.output[0].data_type = indeterminate;
+    assert!(matches!(
+        encode(&plan_of(PhysNode::Scan(plan))),
+        Err(CodecError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn a_decoded_collation_is_checked() {
+    use pb::data_type::Kind;
+    // `collated_scan`'s first output column is `string collate UTF8_LCASE`.
+    let edit = |change: &dyn Fn(&mut pb::DataType)| {
+        let mut m = message("collated_scan");
+        let Some(pb::node::Kind::Scan(scan)) = m.nodes[0].kind.as_mut() else {
+            panic!("not a scan");
+        };
+        change(scan.output[0].data_type.as_mut().unwrap());
+        m
+    };
+    let named =
+        |name: &'static str| edit(&move |t: &mut pb::DataType| t.collation = name.to_owned());
+    assert_eq!(
+        message("collated_scan").nodes[0].kind,
+        named("UTF8_LCASE").nodes[0].kind
+    );
+    assert!(decode(&named("UNICODE_CI").encode_to_vec()).is_ok());
+    // Only the canonical name the encoder writes: the bytes re-encode the
+    // same.
+    for name in [
+        "utf8_lcase",
+        "SYSTEM.BUILTIN.UTF8_LCASE",
+        "UNICODE_CS",
+        "UTF8_BINARY",
+        "null",
+        "",
+        "NOPE",
+    ] {
+        corrupt(&named(name), "an invalid collation");
+    }
+    let on_string = edit(&|t: &mut pb::DataType| t.kind = Kind::String as i32);
+    corrupt(
+        &on_string,
+        "a collation on a type that is not a collated string",
+    );
 }

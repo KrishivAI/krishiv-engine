@@ -1,0 +1,562 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Interval operators: the rewrites of Spark's `BinaryArithmeticWithDatetimeResolver`
+//! and the arithmetic of intervals themselves.
+
+use std::sync::Arc;
+
+use arrow_array::cast::AsArray as _;
+use arrow_array::types::{
+    DurationMicrosecondType, Float64Type, Int32Type, Int64Type, IntervalYearMonthType,
+};
+use arrow_array::{Array, ArrayRef, RecordBatch, new_null_array};
+use arrow_schema::{DataType as ArrowType, IntervalUnit, TimeUnit};
+use krishiv_common::error::KrishivError;
+use krishiv_kernels::datetime::{
+    ZoneRef, date_add_months, timestamp_add_day_time, timestamp_add_months,
+};
+use krishiv_kernels::interval::{
+    AddOp, ScaleOp, add_day_time, add_year_month, extract_days, negate_day_time, negate_year_month,
+    scale_day_time, scale_year_month, subtract_dates, subtract_timestamps,
+};
+use krishiv_kernels::interval_calendar::{
+    add_calendar, date_add_calendar, negate_calendar, scale_calendar, timestamp_add_calendar,
+};
+use krishiv_plan::Builtin;
+
+use super::logic::prim;
+use super::{EvalEnv, PhysExpr, Value};
+use crate::error::Result;
+use crate::planner::build::internal;
+
+/// Whether `t` carries an ANSI interval.
+pub(super) fn is_ansi(t: &ArrowType) -> bool {
+    matches!(
+        t,
+        ArrowType::Interval(IntervalUnit::YearMonth) | ArrowType::Duration(TimeUnit::Microsecond)
+    )
+}
+
+/// Whether `t` carries a calendar interval.
+pub(super) fn is_calendar(t: &ArrowType) -> bool {
+    matches!(t, ArrowType::Interval(IntervalUnit::MonthDayNano))
+}
+
+/// A two-operand interval operator.
+#[derive(Debug, Clone)]
+struct Binary {
+    op: Builtin,
+    l: Arc<dyn PhysExpr>,
+    r: Arc<dyn PhysExpr>,
+    out: ArrowType,
+    nullable: bool,
+    /// The session zone, when an operand is a `TIMESTAMP`.
+    zone: Option<ZoneRef>,
+    kernels: krishiv_kernels::KernelCtx,
+    /// A calendar operator's `ansiEnabled`.
+    exact: bool,
+    /// ANSI `+ - * /`: a row's overflow is NULL, under `TryEval`.
+    null_on_overflow: bool,
+}
+
+/// `op(l, r)`; `out` is the result's Arrow type.
+pub(super) fn binary(
+    op: Builtin,
+    l: Arc<dyn PhysExpr>,
+    r: Arc<dyn PhysExpr>,
+    out: ArrowType,
+    nullable: bool,
+    env: &EvalEnv,
+) -> Result<Arc<dyn PhysExpr>> {
+    let zone = match l.data_type() {
+        ArrowType::Timestamp(_, Some(_)) => Some(env.zone_rules()?),
+        _ => None,
+    };
+    Ok(Arc::new(Binary {
+        op,
+        l,
+        r,
+        out,
+        nullable,
+        zone,
+        kernels: env.kernels,
+        exact: false,
+        null_on_overflow: false,
+    }))
+}
+
+/// `op(l, r)` of a calendar operator that takes `ansiEnabled`.
+pub(super) fn calendar_binary(
+    op: Builtin,
+    l: Arc<dyn PhysExpr>,
+    r: Arc<dyn PhysExpr>,
+    out: ArrowType,
+    nullable: bool,
+    exact: bool,
+    env: &EvalEnv,
+) -> Result<Arc<dyn PhysExpr>> {
+    // Without `exact`, `DateAddInterval` runs through a timestamp in the session zone.
+    let zone = if op == Builtin::DateAddInterval && !exact {
+        Some(env.zone_rules()?)
+    } else {
+        None
+    };
+    Ok(Arc::new(Binary {
+        op,
+        l,
+        r,
+        out,
+        nullable,
+        zone,
+        kernels: env.kernels,
+        exact,
+        null_on_overflow: false,
+    }))
+}
+
+/// The months of a year-month value as plain integers, as the date kernels take them.
+fn months(v: &Value) -> Value {
+    let a: ArrayRef = Arc::new(
+        v.array()
+            .as_primitive::<IntervalYearMonthType>()
+            .reinterpret_cast::<Int32Type>(),
+    );
+    match v {
+        Value::Array(_) => Value::Array(a),
+        Value::Scalar(_) => Value::Scalar(a),
+    }
+}
+
+/// The microseconds of a day-time value as plain integers.
+fn micros(v: &Value) -> Value {
+    let a: ArrayRef = Arc::new(
+        v.array()
+            .as_primitive::<DurationMicrosecondType>()
+            .reinterpret_cast::<Int64Type>(),
+    );
+    match v {
+        Value::Array(_) => Value::Array(a),
+        Value::Scalar(_) => Value::Scalar(a),
+    }
+}
+
+impl Binary {
+    fn apply(&self, l: &Value, r: &Value) -> Result<ArrayRef> {
+        let zone = self
+            .zone
+            .as_ref()
+            .map(|z| z as &dyn krishiv_kernels::datetime::TimeZoneRules);
+        let op = |b| {
+            if b == Builtin::Add {
+                AddOp::Add
+            } else {
+                AddOp::Subtract
+            }
+        };
+        let scale_op = |b| {
+            if b == Builtin::Multiply {
+                ScaleOp::Multiply
+            } else {
+                ScaleOp::Divide
+            }
+        };
+        Ok(match self.op {
+            Builtin::DateAddYmInterval => {
+                let r = months(r);
+                Arc::new(date_add_months(
+                    prim(l),
+                    prim(&r),
+                    false,
+                    false,
+                    &self.kernels,
+                )?)
+            }
+            Builtin::TimestampAddYmInterval => {
+                let r = months(r);
+                Arc::new(
+                    timestamp_add_months(prim(l), prim(&r), false, zone, false)?
+                        .with_data_type(self.out.clone()),
+                )
+            }
+            Builtin::TimestampAddInterval if is_calendar(r.array().data_type()) => Arc::new(
+                timestamp_add_calendar(prim(l), prim(r), zone)?.with_data_type(self.out.clone()),
+            ),
+            Builtin::DateAddInterval => Arc::new(date_add_calendar(
+                prim(l),
+                prim(r),
+                self.exact,
+                zone,
+                &self.kernels,
+            )?),
+            b @ (Builtin::CalendarAdd | Builtin::CalendarSubtract) => Arc::new(add_calendar(
+                l.array().as_primitive(),
+                r.array().as_primitive(),
+                b == Builtin::CalendarSubtract,
+                self.exact,
+            )?),
+            b @ (Builtin::MultiplyInterval | Builtin::DivideInterval) => Arc::new(scale_calendar(
+                l.array().as_primitive(),
+                r.array().as_primitive::<Float64Type>(),
+                if b == Builtin::MultiplyInterval {
+                    ScaleOp::Multiply
+                } else {
+                    ScaleOp::Divide
+                },
+                self.exact,
+            )?),
+            Builtin::TimestampAddInterval => {
+                let r = micros(r);
+                Arc::new(
+                    timestamp_add_day_time(prim(l), prim(&r), false, zone, false)?
+                        .with_data_type(self.out.clone()),
+                )
+            }
+            Builtin::SubtractDates => Arc::new(subtract_dates(prim(l), prim(r))?),
+            Builtin::SubtractTimestamps => Arc::new(subtract_timestamps(prim(l), prim(r), zone)?),
+            b @ (Builtin::Add | Builtin::Subtract) => match self.out {
+                ArrowType::Interval(_) => Arc::new(add_year_month(
+                    prim(l),
+                    prim(r),
+                    op(b),
+                    self.null_on_overflow,
+                )?),
+                _ => Arc::new(add_day_time(
+                    prim(l),
+                    prim(r),
+                    op(b),
+                    self.null_on_overflow,
+                )?),
+            },
+            b @ (Builtin::Multiply | Builtin::Divide) => match self.out {
+                ArrowType::Interval(_) => Arc::new(scale_year_month(
+                    l.array().as_primitive(),
+                    r.array().as_ref(),
+                    scale_op(b),
+                    self.null_on_overflow,
+                )?),
+                _ => Arc::new(scale_day_time(
+                    l.array().as_primitive(),
+                    r.array().as_ref(),
+                    scale_op(b),
+                    self.null_on_overflow,
+                )?),
+            },
+            other => {
+                return Err(internal(&format!(
+                    "{} is not an interval operator",
+                    other.name()
+                )));
+            }
+        })
+    }
+}
+
+impl PhysExpr for Binary {
+    fn data_type(&self) -> &ArrowType {
+        &self.out
+    }
+
+    fn nullable(&self) -> bool {
+        self.nullable
+    }
+
+    fn is_constant(&self) -> bool {
+        self.l.is_constant() && self.r.is_constant()
+    }
+
+    fn null_on_overflow(&self) -> Option<Arc<dyn PhysExpr>> {
+        matches!(
+            self.op,
+            Builtin::Add | Builtin::Subtract | Builtin::Multiply | Builtin::Divide
+        )
+        .then(|| {
+            Arc::new(Self {
+                null_on_overflow: true,
+                ..self.clone()
+            }) as Arc<dyn PhysExpr>
+        })
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let (mut l, r) = (
+            self.l.eval(batch, partition)?,
+            self.r.eval(batch, partition)?,
+        );
+        let scalar = l.is_scalar() && r.is_scalar();
+        if scalar {
+            l = Value::Array(Arc::clone(l.array()));
+        }
+        let out = self.apply(&l, &r)?;
+        Ok(if scalar {
+            Value::Scalar(out)
+        } else {
+            Value::Array(out)
+        })
+    }
+}
+
+/// A one-operand interval operator.
+#[derive(Debug)]
+struct Unary {
+    op: Builtin,
+    e: Arc<dyn PhysExpr>,
+    out: ArrowType,
+    /// A calendar operator's `ansiEnabled`.
+    exact: bool,
+}
+
+/// `- e` of a calendar interval.
+pub(super) fn calendar_negate(e: Arc<dyn PhysExpr>, exact: bool) -> Arc<dyn PhysExpr> {
+    let out = e.data_type().clone();
+    Arc::new(Unary {
+        op: Builtin::CalendarNegate,
+        e,
+        out,
+        exact,
+    })
+}
+
+/// `op(e)`: unary `-`, or `ExtractANSIIntervalDays`.
+pub(super) fn unary(op: Builtin, e: Arc<dyn PhysExpr>) -> Arc<dyn PhysExpr> {
+    let out = if op == Builtin::ExtractAnsiIntervalDays {
+        ArrowType::Int32
+    } else {
+        e.data_type().clone()
+    };
+    Arc::new(Unary {
+        op,
+        e,
+        out,
+        exact: false,
+    })
+}
+
+impl PhysExpr for Unary {
+    fn data_type(&self) -> &ArrowType {
+        &self.out
+    }
+
+    fn nullable(&self) -> bool {
+        self.e.nullable()
+    }
+
+    fn is_constant(&self) -> bool {
+        self.e.is_constant()
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.e.eval(batch, partition)?;
+        let a = v.array();
+        let out: ArrayRef = match (self.op, a.data_type()) {
+            (Builtin::ExtractAnsiIntervalDays, ArrowType::Duration(_)) => {
+                Arc::new(extract_days(a.as_primitive()))
+            }
+            (Builtin::CalendarNegate, _) => {
+                Arc::new(negate_calendar(a.as_primitive(), self.exact)?)
+            }
+            (_, ArrowType::Interval(_)) => Arc::new(negate_year_month(a.as_primitive())?),
+            (_, ArrowType::Duration(_)) => Arc::new(negate_day_time(a.as_primitive())?),
+            (_, t) => return Err(internal(&format!("an interval operator on {t}"))),
+        };
+        Ok(match v {
+            Value::Scalar(_) => Value::Scalar(out),
+            Value::Array(_) => Value::Array(out),
+        })
+    }
+}
+
+/// Spark's `TryEval`: the child's values, NULL in a row where it fails. The
+/// batch runs whole first; only a failure pays for going row by row. A
+/// nondeterministic child goes row by row at once, since running it a second
+/// time would read different values. An operator that can give NULL for its
+/// own overflow does, so only a failure in its operands goes row by row.
+#[derive(Debug)]
+struct TryEval {
+    e: Arc<dyn PhysExpr>,
+    deterministic: bool,
+}
+
+pub(super) fn try_eval(e: Arc<dyn PhysExpr>, deterministic: bool) -> Arc<dyn PhysExpr> {
+    let e = e.null_on_overflow().unwrap_or(e);
+    Arc::new(TryEval { e, deterministic })
+}
+
+impl PhysExpr for TryEval {
+    fn data_type(&self) -> &ArrowType {
+        self.e.data_type()
+    }
+
+    fn nullable(&self) -> bool {
+        true
+    }
+
+    fn is_constant(&self) -> bool {
+        self.e.is_constant()
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        if self.deterministic {
+            match self.e.eval(batch, partition) {
+                Ok(v) => return Ok(v),
+                Err(e) if !is_row_failure(&e) => return Err(e),
+                Err(_) => {}
+            }
+            if self.e.is_constant() {
+                return Ok(Value::Scalar(new_null_array(self.e.data_type(), 1)));
+            }
+        }
+        if batch.num_rows() == 0 {
+            return Ok(Value::Array(new_null_array(self.e.data_type(), 0)));
+        }
+        let null = || new_null_array(self.e.data_type(), 1);
+        let mut rows: Vec<ArrayRef> = Vec::with_capacity(batch.num_rows());
+        for row in 0..batch.num_rows() {
+            rows.push(match self.e.eval(&batch.slice(row, 1), partition) {
+                Ok(v) => Arc::clone(v.array()),
+                Err(e) if !is_row_failure(&e) => return Err(e),
+                Err(_) => null(),
+            });
+        }
+        let parts: Vec<&dyn Array> = rows.iter().map(AsRef::as_ref).collect();
+        let out =
+            arrow_select::concat::concat(&parts).map_err(|e| internal(&format!("TryEval: {e}")))?;
+        Ok(Value::Array(out))
+    }
+}
+
+/// Whether `e` is what a row's value raised, which `TryEval` turns into NULL,
+/// and not a failure of the query: out of memory, cancelled, a bug, or
+/// something Krishiv has not built.
+fn is_row_failure(e: &KrishivError) -> bool {
+    let class = e.error_class().name();
+    !(class.starts_with("KRISHIV_")
+        || class.starts_with("INTERNAL_ERROR")
+        || class.starts_with("UNABLE_TO_ACQUIRE_MEMORY"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use arrow_array::{Int32Array, IntervalYearMonthArray};
+    use arrow_schema::{Field, Schema};
+    use krishiv_common::error::{IntervalDividedByZero, KrishivUnsupportedFeature};
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct Fails(fn() -> KrishivError);
+
+    impl PhysExpr for Fails {
+        fn data_type(&self) -> &ArrowType {
+            &ArrowType::Int32
+        }
+
+        fn nullable(&self) -> bool {
+            false
+        }
+
+        fn is_constant(&self) -> bool {
+            false
+        }
+
+        fn eval(&self, _: &RecordBatch, _: u32) -> Result<Value> {
+            Err((self.0)())
+        }
+    }
+
+    fn run(fail: fn() -> KrishivError) -> Result<Value> {
+        let schema = Schema::new(vec![Field::new("a", ArrowType::Int32, false)]);
+        let column: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![column])
+            .map_err(|e| internal(&e.to_string()))?;
+        try_eval(Arc::new(Fails(fail)), true).eval(&batch, 0)
+    }
+
+    #[test]
+    fn try_eval_gives_null_for_a_row_and_raises_what_is_no_row_failure()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let nulls = run(|| IntervalDividedByZero {}.into())?;
+        assert_eq!(nulls.array().null_count(), 2);
+        let e = run(|| {
+            KrishivUnsupportedFeature {
+                feature: "x".to_owned(),
+            }
+            .into()
+        })
+        .err()
+        .ok_or("raised nothing")?;
+        assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+        let e = run(|| internal("a bug")).err().ok_or("raised nothing")?;
+        assert_eq!(e.error_class().name(), "INTERNAL_ERROR");
+        Ok(())
+    }
+
+    /// A column that counts how often it runs.
+    #[derive(Debug)]
+    struct Counted {
+        values: ArrayRef,
+        data_type: ArrowType,
+        runs: Arc<AtomicUsize>,
+    }
+
+    impl PhysExpr for Counted {
+        fn data_type(&self) -> &ArrowType {
+            &self.data_type
+        }
+
+        fn nullable(&self) -> bool {
+            false
+        }
+
+        fn eval(&self, batch: &RecordBatch, _: u32) -> Result<Value> {
+            self.runs.fetch_add(1, Ordering::Relaxed);
+            Ok(Value::Array(self.values.slice(0, batch.num_rows())))
+        }
+    }
+
+    #[test]
+    fn an_operator_under_try_eval_gives_null_for_its_own_overflow_in_one_pass()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let months: ArrayRef = Arc::new(IntervalYearMonthArray::from(vec![4, 6, i32::MIN]));
+        let by: ArrayRef = Arc::new(Int32Array::from(vec![2, 0, -1]));
+        let column = |values: &ArrayRef| {
+            Arc::new(Counted {
+                values: Arc::clone(values),
+                data_type: values.data_type().clone(),
+                runs: Arc::clone(&runs),
+            }) as Arc<dyn PhysExpr>
+        };
+        let divide = Binary {
+            op: Builtin::Divide,
+            l: column(&months),
+            r: column(&by),
+            out: months.data_type().clone(),
+            nullable: true,
+            zone: None,
+            kernels: krishiv_kernels::KernelCtx::default(),
+            exact: false,
+            null_on_overflow: false,
+        };
+        let schema = Schema::new(vec![Field::new("a", ArrowType::Int32, false)]);
+        let rows: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![rows])?;
+        let out = try_eval(Arc::new(divide), true).eval(&batch, 0)?;
+        let out = out.array().as_primitive::<IntervalYearMonthType>();
+        assert_eq!(out.value(0), 2);
+        assert!(out.is_null(1) && out.is_null(2));
+        assert_eq!(runs.load(Ordering::Relaxed), 2, "each operand ran once");
+        Ok(())
+    }
+
+    #[test]
+    fn a_nondeterministic_child_runs_once_per_row()
+    -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", ArrowType::Int32, false)]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2]))])?;
+        let e = try_eval(Arc::new(Fails(|| IntervalDividedByZero {}.into())), false);
+        assert_eq!(e.eval(&batch, 0)?.array().null_count(), 2);
+        assert_eq!(e.eval(&batch.slice(0, 0), 0)?.array().len(), 0);
+        Ok(())
+    }
+}

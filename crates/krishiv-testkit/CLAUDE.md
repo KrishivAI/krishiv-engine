@@ -47,6 +47,17 @@ through the executor (`file_format::drive::ThroughExecutor`, P2-T117b). `file_fo
 until P2-T119 brings the datasets to the nightly box (~1 GB of generated data: `KRISHIV_TPCH_DIR`, see
 `tests/scripts/tpch_parquet_checksums.py`).
 
+Differential testing (P2-T101, T110a, T110b): `expr_diff` replays seeded random scalar expressions against Spark 4.2's
+answers (`tests/fixtures/spark-4.2.0/expr-differential.json`, written by `tests/scripts/gen_expr_differential.py`; minimal
+mismatches ratcheted in `expr-differential-known-failures.json`; command `expr-diff`); `query_oracle` replays generated TPC-H
+queries against DuckDB's rows (`tests/fixtures/query-oracle/`, `tests/scripts/gen_query_oracle.py`); `metamorphic` is TLP and
+NoREC over generated predicates with no second engine, an expression-tree reducer and regression files
+(`tests/fixtures/metamorphic/regressions/*.json`, replayed by the `regressions_hold` test; command `metamorphic-hunt`, the
+nightly `differential` job). A planted-bug test per oracle proves it finds what it is for. `float_edge_sweep` (Comet 1.2.0 check 1) crosses `-0.0`, `NaN`, `+/-Infinity`, subnormals, the extremes and NULL with arithmetic, comparison, window-aggregate, ordering, cast, math, hash and collection functions for DOUBLE and FLOAT in both ANSI modes against Spark 4.2 (`tests/fixtures/spark-4.2.0/float-edge-sweep.json`, `tests/scripts/gen_float_edge_sweep.py`; ratchet `float-edge-sweep-known-failures.json`). `metamorphic_reduce` shrinks a
+finding's data too (`ddmin` over the rows of the `nulls` view; the regression file keeps `rows`) and asks Spark 4.2 for the
+reduced statements (`metamorphic-hunt --spark CMD`, `tests/scripts/spark_answers.py`): same answers = oracle artefact (not
+filed), different = the engine bug with Spark's rows attached.
+
 ## Key files
 Paths are relative to this crate.
 - `src/golden/` the SQLQueryTestSuite runner, report and manifest; `src/file_format/` the `FileFormat` conformance suite

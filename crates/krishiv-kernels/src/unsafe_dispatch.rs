@@ -1,10 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The only `unsafe` in `krishiv-kernels` (form (a) of the kernel unsafe
-//! policy: calling a `#[target_feature]` clone after feature detection).
+//! The only `unsafe` in `krishiv-kernels`: form (a) of the kernel unsafe
+//! policy (calling a `#[target_feature]` clone after feature detection) and
+//! the software prefetch of P2-T157 section 8.
 //! `cargo xtask source-guard` rejects `unsafe` in any other file of this
 //! crate, and `cargo xtask budgets` counts the blocks.
 
 use crate::dispatch::{Baseline, KernelCtx, Target};
+
+/// Asks the CPU to load the cache line of `slice[index]`: a hint, with no
+/// effect on results. A no-op out of bounds, under Miri and off x86-64.
+#[inline(always)]
+pub fn prefetch_read<T>(slice: &[T], index: usize) {
+    #[cfg(all(target_arch = "x86_64", not(miri)))]
+    if let Some(item) = slice.get(index) {
+        use std::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+        // SAFETY: a prefetch has no architectural effect and never faults,
+        // SSE is part of the x86-64 baseline, and the address is a live
+        // reference.
+        unsafe { _mm_prefetch::<_MM_HINT_T0>(std::ptr::from_ref(item).cast()) };
+    }
+    #[cfg(not(all(target_arch = "x86_64", not(miri))))]
+    let _ = (slice, index);
+}
 
 /// A kernel body: everything [`Kernel::run`] calls must be `#[inline]`d into
 /// it so the whole loop is compiled with the clone's target features.
@@ -94,4 +111,19 @@ fn unsafe_run_v3<K: Kernel>(kernel: K) -> K::Output {
 )]
 fn unsafe_run_v4<K: Kernel>(kernel: K) -> K::Output {
     kernel.run()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prefetch_read;
+
+    #[test]
+    fn a_prefetch_changes_nothing_and_ignores_a_bad_index() {
+        let values = [1_u64, 2, 3];
+        prefetch_read(&values, 1);
+        prefetch_read(&values, 3);
+        prefetch_read(&values, usize::MAX);
+        prefetch_read::<u64>(&[], 0);
+        assert_eq!(values, [1, 2, 3]);
+    }
 }

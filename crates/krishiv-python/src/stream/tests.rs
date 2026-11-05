@@ -393,22 +393,72 @@ fn single_array_must_be_a_table() {
     assert!(err.to_string().contains("null rows"), "{err}");
 }
 
-#[test]
-fn short_children_are_rejected() {
-    // A struct of length 3 whose child has 2 rows: arrow-rs would panic
-    // building a batch from it; the import validates first.
-    let child = Int64Array::from(vec![1, 2]).into_data();
-    let struct_type = DataType::Struct(vec![Field::new("id", DataType::Int64, false)].into());
-    // SAFETY: deliberately inconsistent data, as a foreign producer may send.
-    let data = unsafe {
-        ArrayData::new_unchecked(struct_type.clone(), 3, None, None, 0, vec![], vec![child])
-    };
+/// An array whose sizes are not consistent, as a hostile producer may send it.
+fn unchecked(
+    data_type: DataType,
+    len: usize,
+    offset: usize,
+    children: Vec<ArrayData>,
+) -> ArrayData {
+    // SAFETY: deliberately inconsistent data; it is only exported and imported, never read as
+    // a valid array here.
+    unsafe { ArrayData::new_unchecked(data_type, len, None, None, offset, vec![], children) }
+}
+
+/// Imports a one-column struct of `len` rows at `offset` over `child` and returns the error.
+fn import_inconsistent_struct(child: ArrayData, len: usize, offset: usize) -> String {
+    let struct_type =
+        DataType::Struct(vec![Field::new("c", child.data_type().clone(), true)].into());
+    let data = unchecked(struct_type.clone(), len, offset, vec![child]);
     let schema_c = FFI_ArrowSchema::try_from(&Field::new("", struct_type, false)).unwrap();
     let mut array_c = FFI_ArrowArray::new(&data);
     // SAFETY: valid C structs owned by this frame.
     let err = unsafe { ffi::import_array(&raw const schema_c, &raw mut array_c) }.unwrap_err();
+    err.to_string()
+}
+
+#[test]
+fn short_children_are_rejected() {
+    // A struct of length 3 whose child has 2 rows: arrow-rs would panic
+    // building a batch from it; the import validates first.
+    let err = import_inconsistent_struct(Int64Array::from(vec![1, 2]).into_data(), 3, 0);
+    assert!(err.starts_with("[KRISHIV_INVALID_ARROW_DATA]"), "{err}");
+}
+
+#[test]
+fn a_struct_window_past_its_child_is_rejected() {
+    // Length 2 at offset 1 over a child of 2 rows reaches row 3: arrow-rs's full validation
+    // accepts it and slicing the child then panics (found by the `capsule_import` fuzz target).
+    let err = import_inconsistent_struct(Int64Array::from(vec![1, 2]).into_data(), 2, 1);
     assert!(
-        err.to_string().starts_with("[KRISHIV_INVALID_ARROW_DATA]"),
+        err.starts_with("[KRISHIV_INVALID_ARROW_DATA]") && err.contains("struct window"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_sliced_fixed_size_list_with_short_values_is_rejected() {
+    // Three slots at offset 1 reach slot 4: eight values are needed and the list has six, the
+    // right count for an unsliced list of three.
+    let list_type = DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
+    let values = Int64Array::from(vec![1, 2, 3, 4, 5, 6]).into_data();
+    let list = unchecked(list_type, 3, 1, vec![values]);
+    let err = import_inconsistent_struct(list, 3, 0);
+    assert!(
+        err.starts_with("[KRISHIV_INVALID_ARROW_DATA]") && err.contains("fixed-size list"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_fixed_size_list_with_short_values_is_rejected() {
+    // Three slots of two values need six values; the list has four.
+    let list_type = DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
+    let values = Int64Array::from(vec![1, 2, 3, 4]).into_data();
+    let list = unchecked(list_type, 3, 0, vec![values]);
+    let err = import_inconsistent_struct(list, 3, 0);
+    assert!(
+        err.starts_with("[KRISHIV_INVALID_ARROW_DATA]") && err.contains("fixed-size list"),
         "{err}"
     );
 }
@@ -848,13 +898,13 @@ fn single_array_with_an_invalid_format_is_rejected() {
 
 #[test]
 fn an_exported_stream_stays_done_after_an_error() {
-    use arrow_array::ffi_stream::ArrowArrayStreamReader;
+    use arrow_array::ffi_stream::RecordBatchStreamReader;
     let reader = scripted(
         schema(),
         vec![Err(ArrowError::ComputeError("first".into())), Ok(batch())],
     );
     let stream = ffi::export_stream(reader, None);
-    let mut consumer = ArrowArrayStreamReader::try_new(stream).unwrap();
+    let mut consumer = RecordBatchStreamReader::try_new(stream).unwrap();
     assert!(consumer.next().unwrap().is_err());
     assert!(consumer.next().is_none(), "no batch after an error");
 }
@@ -887,7 +937,7 @@ impl Drop for Probe {
 /// the query) and nothing polls it afterwards.
 #[test]
 fn releasing_the_exported_query_stream_drops_the_engine_stream() {
-    use arrow_array::ffi_stream::ArrowArrayStreamReader;
+    use arrow_array::ffi_stream::RecordBatchStreamReader;
     use futures::StreamExt as _;
 
     let produced = Arc::new(AtomicUsize::new(0));
@@ -900,7 +950,7 @@ fn releasing_the_exported_query_stream_drops_the_engine_stream() {
     let first = futures::executor::block_on(stream.next()).unwrap().unwrap();
     let reader = query::QueryReader::new(first.schema(), Some(first), stream);
     let exported = ffi::export_stream(Box::new(reader), None);
-    let mut consumer = ArrowArrayStreamReader::try_new(exported).unwrap();
+    let mut consumer = RecordBatchStreamReader::try_new(exported).unwrap();
     consumer.next().unwrap().unwrap(); // the first batch
     consumer.next().unwrap().unwrap(); // one pulled from the engine
     assert_eq!(produced.load(Ordering::SeqCst), 2);
@@ -928,12 +978,12 @@ fn failing(batches: usize) -> krishiv_session::RecordBatchStream {
 /// is left, intact, in the error slot for the caller to raise.
 #[test]
 fn a_later_engine_error_is_kept_in_the_error_slot() {
-    use arrow_array::ffi_stream::ArrowArrayStreamReader;
+    use arrow_array::ffi_stream::RecordBatchStreamReader;
 
     let reader = query::QueryReader::new(schema(), Some(batch()), failing(1));
     let slot = reader.error_slot();
     let exported = ffi::export_stream(Box::new(reader), None);
-    let mut consumer = ArrowArrayStreamReader::try_new(exported).unwrap();
+    let mut consumer = RecordBatchStreamReader::try_new(exported).unwrap();
     consumer.next().unwrap().unwrap();
     consumer.next().unwrap().unwrap();
     let err = consumer.next().unwrap().unwrap_err();
@@ -992,13 +1042,13 @@ impl Drop for PanicsOnDrop {
 /// abort the host process.
 #[test]
 fn a_panicking_destructor_does_not_unwind_into_release() {
-    use arrow_array::ffi_stream::ArrowArrayStreamReader;
+    use arrow_array::ffi_stream::RecordBatchStreamReader;
     let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let reader = Box::new(PanicsOnDrop {
         dropped: Arc::clone(&dropped),
     });
     let exported = ffi::export_stream(reader, None);
-    let mut consumer = ArrowArrayStreamReader::try_new(exported).unwrap();
+    let mut consumer = RecordBatchStreamReader::try_new(exported).unwrap();
     assert!(consumer.next().is_none());
     drop(consumer);
     assert!(dropped.load(Ordering::SeqCst), "the reader was released");

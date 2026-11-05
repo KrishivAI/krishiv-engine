@@ -13,8 +13,8 @@ use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, Aggreg
 use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
-    SubqueryValueKind, WritePlan,
+    Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId,
+    SubqueryPlan, SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::physical::{SharedId, SharedPlan};
 use krishiv_exec::planner::ExplainNode;
@@ -22,14 +22,14 @@ use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
     WindowFunctionPlan, WindowPlan,
 };
-use krishiv_exec::{RowStageSettings, SortKey};
+use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, CastMode, DayTimeField, Expr, ExprNode, FunctionId, FunctionKind,
     Literal, Origin, PlanId, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SourceId, Span,
     TableVersion, YearMonthField,
 };
-use krishiv_types::{DataType, DecimalType, Srid};
+use krishiv_types::{Collation, DataType, DecimalType, Srid};
 
 use crate::arrow::{schema_from, type_from};
 use crate::error::{CodecError, Result, corrupt};
@@ -316,6 +316,7 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         map_key_dedup_last_win: env.map_key_dedup_last_win.unwrap_or(false),
         legacy_java_charsets: env.legacy_java_charsets.unwrap_or(false),
         legacy_coding_error_action: env.legacy_coding_error_action.unwrap_or(false),
+        legacy_time_parser: env.legacy_time_parser.unwrap_or(false),
     };
     if !env.zone_name_matches_zone() {
         return Err(corrupt("a session zone name that is not its offset"));
@@ -454,9 +455,36 @@ impl Decoder {
         Ok(match required(&m.kind, "a node kind")? {
             Kind::Scan(s) => PhysNode::Scan(self.scan(s)?),
             Kind::OneRow(_) => PhysNode::OneRow,
+            Kind::ExchangeSource(e) => PhysNode::ExchangeSource {
+                id: ExchangeId(e.id),
+                partitioning: partitioning(required(&e.partitioning, "the partitioning")?)?,
+                schema: schema_from(&e.schema)?,
+            },
             Kind::SharedRead(s) => PhysNode::SharedRead {
                 id: SharedId(s.id),
                 layout: layout(&s.layout),
+            },
+            Kind::UnionLoop(u) => {
+                let limits = u
+                    .limits
+                    .as_ref()
+                    .ok_or_else(|| corrupt("a recursive loop without limits"))?;
+                PhysNode::UnionLoop {
+                    id: u.id,
+                    anchor: self.boxed(u.anchor)?,
+                    recursive: self.boxed(u.recursive)?,
+                    layout: layout(&u.layout),
+                    nullable: u.nullable.clone(),
+                    limits: krishiv_exec::physical::LoopLimits {
+                        level: limits.level,
+                        rows: limits.rows,
+                        pushed_limit: limits.pushed_limit,
+                    },
+                }
+            }
+            Kind::LoopRef(r) => PhysNode::LoopRef {
+                id: r.id,
+                layout: layout(&r.layout),
             },
             Kind::Range(r) if r.step == 0 => return Err(corrupt("a range with step 0")),
             Kind::Range(r) if r.num_slices == Some(0) => {
@@ -527,10 +555,18 @@ impl Decoder {
                 input: self.boxed(s.input)?,
                 keys: sort_keys(&s.keys)?,
             },
+            Kind::LateFetch(f) => PhysNode::LateFetch {
+                input: self.boxed(f.input)?,
+                scan: self.scan(required(&f.scan, "a late fetch scan")?)?,
+                file_col: usize_of(f.file_col)?,
+                row_col: usize_of(f.row_col)?,
+                output: f.output.iter().map(fetch_slot).collect::<Result<_>>()?,
+            },
             Kind::TopN(t) => PhysNode::TopN {
                 input: self.boxed(t.input)?,
                 keys: sort_keys(&t.keys)?,
                 limit: t.limit,
+                bound: t.bound.map(FilterId),
             },
             Kind::Window(w) => PhysNode::Window {
                 input: self.boxed(w.input)?,
@@ -545,6 +581,7 @@ impl Decoder {
                 aggregate: aggregate(a)?,
             },
             Kind::HashJoin(j) => PhysNode::HashJoin(self.hash_join(j)?),
+            Kind::SortMergeJoin(j) => PhysNode::SortMergeJoin(self.merge_join(j)?),
             Kind::NestedLoopJoin(j) => PhysNode::NestedLoopJoin(NestedLoopPlan {
                 probe: self.boxed(j.probe)?,
                 build: self.boxed(j.build)?,
@@ -644,6 +681,35 @@ impl Decoder {
         Ok(plan)
     }
 
+    fn merge_join(&mut self, j: &pb::SortMergeJoinNode) -> Result<SortMergeJoinPlan> {
+        let (probe_keys, build_keys) = (usizes(&j.probe_keys)?, usizes(&j.build_keys)?);
+        if probe_keys.is_empty()
+            || probe_keys.len() != build_keys.len()
+            || probe_keys.len() != j.null_safe.len()
+        {
+            return Err(corrupt(
+                "a sort-merge join whose key lists differ in length",
+            ));
+        }
+        let join_type = join_type(j.join_type)?;
+        if j.single_match && join_type != JoinType::LeftOuter {
+            return Err(corrupt("single match on a join that is not left outer"));
+        }
+        if join_type == JoinType::NullAwareAnti {
+            return Err(corrupt("a null-aware anti sort-merge join"));
+        }
+        Ok(SortMergeJoinPlan {
+            probe: self.boxed(j.probe)?,
+            build: self.boxed(j.build)?,
+            join_type,
+            probe_keys,
+            build_keys,
+            null_safe: j.null_safe.clone(),
+            residual: self.residual(j.residual.as_ref())?,
+            single_match: j.single_match,
+        })
+    }
+
     fn exchange(&mut self, e: &pb::ExchangeNode) -> Result<ExchangePlan> {
         Ok(ExchangePlan {
             id: ExchangeId(e.id),
@@ -693,6 +759,7 @@ impl Decoder {
                 min_rows: row_stage.min_rows,
                 max_pass_rate: row_stage.max_pass_rate,
             },
+            row_id: s.row_id,
         })
     }
 
@@ -776,6 +843,14 @@ impl Decoder {
             deterministic: f.deterministic,
         })
     }
+}
+
+fn fetch_slot(s: &pb::FetchSlot) -> Result<FetchSlot> {
+    use pb::fetch_slot::Kind;
+    Ok(match required(&s.kind, "a late fetch slot")? {
+        Kind::Input(i) => FetchSlot::Input(usize_of(*i)?),
+        Kind::Fetched(i) => FetchSlot::Fetched(usize_of(*i)?),
+    })
 }
 
 fn sort_keys(v: &[pb::SortKey]) -> Result<Vec<SortKey>> {
@@ -891,12 +966,19 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
         }
     };
     let frame = required(&f.frame, "a window frame")?;
-    let bound = |b: i32, offset: i64| {
+    let bound = |b: i32, offset: i64, range: &[u8]| {
+        let bad = || corrupt("a RANGE window frame bound of the wrong width");
         enum_map!(pb::FrameBound, b, "window frame bound", {
             UnboundedPreceding => FrameBound::UnboundedPreceding,
             CurrentRow => FrameBound::CurrentRow,
             UnboundedFollowing => FrameBound::UnboundedFollowing,
             Offset => FrameBound::Offset(offset),
+            RangeInt => FrameBound::RangeInt(i128::from_be_bytes(
+                range.try_into().map_err(|_| bad())?,
+            )),
+            RangeFloat => FrameBound::RangeFloat(u64::from_be_bytes(
+                range.try_into().map_err(|_| bad())?,
+            )),
         })
     };
     Ok(WindowFunctionPlan {
@@ -906,8 +988,8 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
                 Rows => FrameUnits::Rows,
                 Range => FrameUnits::Range,
             })?,
-            lower: bound(frame.lower, frame.lower_offset)?,
-            upper: bound(frame.upper, frame.upper_offset)?,
+            lower: bound(frame.lower, frame.lower_offset, &frame.lower_range)?,
+            upper: bound(frame.upper, frame.upper_offset, &frame.upper_range)?,
         },
         filter: f.filter.map(usize_of).transpose()?,
         name: f.name.clone(),
@@ -948,6 +1030,18 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         ModeMax => AggregateFunction::ModeMax,
         TrySum => AggregateFunction::TrySum,
         TryAvg => AggregateFunction::TryAvg,
+        StddevSamp => AggregateFunction::StddevSamp,
+        StddevPop => AggregateFunction::StddevPop,
+        VarSamp => AggregateFunction::VarSamp,
+        VarPop => AggregateFunction::VarPop,
+        Skewness => AggregateFunction::Skewness,
+        Kurtosis => AggregateFunction::Kurtosis,
+        Corr => AggregateFunction::Corr,
+        CovarSamp => AggregateFunction::CovarSamp,
+        CovarPop => AggregateFunction::CovarPop,
+        AnyValue => AggregateFunction::AnyValue { ignore_nulls: ignore },
+        MaxBy => AggregateFunction::MaxBy,
+        MinBy => AggregateFunction::MinBy,
         Listagg => if a.listagg_desc.len() != a.listagg_nulls_first.len() {
             return Err(corrupt("a listagg state of another shape than its orders"));
         } else {
@@ -975,7 +1069,9 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
     }
     let takes_ignore = matches!(
         function,
-        AggregateFunction::First { .. } | AggregateFunction::Last { .. }
+        AggregateFunction::First { .. }
+            | AggregateFunction::Last { .. }
+            | AggregateFunction::AnyValue { .. }
     );
     if ignore && !takes_ignore {
         return Err(corrupt("`ignore_nulls` on a function without it"));
@@ -998,6 +1094,14 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         arg_type: type_from(&a.arg_type)?,
         name: a.name.clone(),
         mask: a.mask.map(usize_of).transpose()?,
+        element: if a.result_element.is_empty() {
+            None
+        } else {
+            match schema_from(&a.result_element)?.fields().iter().as_slice() {
+                [field] => Some(Arc::clone(field)),
+                _ => return Err(corrupt("an aggregate element that is not one field")),
+            }
+        },
     })
 }
 
@@ -1143,6 +1247,7 @@ fn join_filter(f: &pb::JoinFilter) -> Result<JoinFilterPlan> {
             bloom_max_bytes: usize_of(o.bloom_max_bytes)?,
             bloom_fpp: o.bloom_fpp,
             bloom_max_fpp: o.bloom_max_fpp,
+            bloom_bytes: o.bloom_bytes,
         },
     })
 }
@@ -1209,6 +1314,17 @@ fn write_plan(m: &pb::WritePlan) -> Result<WritePlan> {
         max_records_per_file: m.max_records_per_file,
         target_file_bytes: m.target_file_bytes,
         partition_by: usizes(&m.partition_by)?,
+        column_types: m
+            .column_types
+            .iter()
+            .map(|c| {
+                let t = c
+                    .data_type
+                    .as_ref()
+                    .ok_or_else(|| corrupt("a write column without a type"))?;
+                Ok((usize_of(c.column)?, spark_type(t)?))
+            })
+            .collect::<Result<_>>()?,
     })
 }
 
@@ -1235,6 +1351,10 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
             .map_err(|_| corrupt("an invalid geometry type"))?,
         Geography => DataType::geography(Srid::from_i32(t.srid))
             .map_err(|_| corrupt("an invalid geography type"))?,
+        YearMonthInterval => interval_year_month(t)?,
+        DayTimeInterval => interval_day_time(t)?,
+        CalendarInterval => DataType::CalendarInterval,
+        CollatedString => collated_string(t)?,
     })?;
     let (precision, scale, srid) = match data_type {
         DataType::Decimal(_) => (true, true, false),
@@ -1242,13 +1362,49 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         DataType::Geometry { .. } | DataType::Geography { .. } => (false, false, true),
         _ => (false, false, false),
     };
-    if (!precision && t.precision != 0) || (!scale && t.scale != 0) || (!srid && t.srid != 0) {
+    let (year_month, day_time) = match data_type {
+        DataType::YearMonthInterval { .. } => (true, false),
+        DataType::DayTimeInterval { .. } => (false, true),
+        _ => (false, false),
+    };
+    if (!precision && t.precision != 0)
+        || (!scale && t.scale != 0)
+        || (!srid && t.srid != 0)
+        || (!year_month && (t.ym_start != 0 || t.ym_end != 0))
+        || (!day_time && (t.dt_start != 0 || t.dt_end != 0))
+    {
         return Err(corrupt("a type parameter on a type that has none"));
     }
     if !data_type.is_nested() && !t.json.is_empty() {
         return Err(corrupt("a JSON form on a type that is not nested"));
     }
+    if !matches!(data_type, DataType::CollatedString(_)) && !t.collation.is_empty() {
+        return Err(corrupt(
+            "a collation on a type that is not a collated string",
+        ));
+    }
     Ok(data_type)
+}
+
+/// A collated string type from its collation's canonical name: only the
+/// form the encoder writes, so the plan encodes to the same bytes.
+fn collated_string(t: &pb::DataType) -> Result<DataType> {
+    match Collation::parse(&t.collation) {
+        Ok(c) if !c.is_utf8_binary() && !c.is_indeterminate() && c.name() == t.collation => {
+            Ok(DataType::CollatedString(c))
+        }
+        _ => Err(corrupt("an invalid collation")),
+    }
+}
+
+fn interval_year_month(t: &pb::DataType) -> Result<DataType> {
+    DataType::year_month_interval(year_month_field(t.ym_start)?, year_month_field(t.ym_end)?)
+        .map_err(|_| corrupt("an invalid interval type"))
+}
+
+fn interval_day_time(t: &pb::DataType) -> Result<DataType> {
+    DataType::day_time_interval(day_time_field(t.dt_start)?, day_time_field(t.dt_end)?)
+        .map_err(|_| corrupt("an invalid interval type"))
 }
 
 /// A nested type from its Spark JSON (depth-bounded by `from_json`).
@@ -1302,16 +1458,38 @@ fn literal(l: &pb::Literal) -> Result<Literal> {
         Kind::Date(v) => Literal::Date(*v),
         Kind::Timestamp(v) => Literal::Timestamp(*v),
         Kind::TimestampNtz(v) => Literal::TimestampNtz(*v),
-        Kind::YearMonth(v) => Literal::YearMonthInterval {
+        Kind::YearMonth(v) => {
+            let (start, end) = (year_month_field(v.start)?, year_month_field(v.end)?);
+            DataType::year_month_interval(start, end)
+                .map_err(|_| corrupt("an invalid interval literal"))?;
+            Literal::YearMonthInterval {
+                months: v.months,
+                start,
+                end,
+            }
+        }
+        Kind::DayTime(v) => {
+            let (start, end) = (day_time_field(v.start)?, day_time_field(v.end)?);
+            DataType::day_time_interval(start, end)
+                .map_err(|_| corrupt("an invalid interval literal"))?;
+            Literal::DayTimeInterval {
+                micros: v.micros,
+                start,
+                end,
+            }
+        }
+        Kind::Calendar(v) => Literal::CalendarInterval {
             months: v.months,
-            start: year_month_field(v.start)?,
-            end: year_month_field(v.end)?,
-        },
-        Kind::DayTime(v) => Literal::DayTimeInterval {
+            days: v.days,
             micros: v.micros,
-            start: day_time_field(v.start)?,
-            end: day_time_field(v.end)?,
         },
+        // Bounded by the plan's byte limit: every entry takes wire bytes.
+        Kind::Map(v) => Literal::Map(
+            v.entries
+                .iter()
+                .map(|e| (e.key.clone(), e.value.clone()))
+                .collect(),
+        ),
     })
 }
 

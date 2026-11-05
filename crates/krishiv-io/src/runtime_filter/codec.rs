@@ -25,6 +25,7 @@ use hashbrown::HashTable;
 
 use super::KeyFilter;
 use super::bloom::{RuntimeBloom, xxh64};
+use super::bound::TopNBound;
 use super::hash::{RowHash, decimal_hash};
 use super::key::{KeyRange, KeyValue, supported_key_type};
 use super::member::{Class, Exact, Member, SMALL_SET_MAX, Small};
@@ -75,11 +76,12 @@ fn put_key_type(out: &mut Vec<u8>, t: &DataType) {
         D::Binary => 14,
         D::LargeBinary => 15,
         D::BinaryView => 16,
+        D::Decimal64(..) => 17,
         _ => 0,
     };
     out.push(tag);
     match t {
-        D::Decimal128(p, s) => {
+        D::Decimal64(p, s) | D::Decimal128(p, s) => {
             out.push(*p);
             out.extend_from_slice(&s.to_le_bytes());
         }
@@ -102,7 +104,11 @@ impl KeyFilter {
     pub fn encode(&self) -> Vec<u8> {
         let mut out = vec![FORMAT_VERSION, RowHash::CURRENT.id(), NORMALIZATION_VERSION];
         put_key_type(&mut out, &self.key_type);
-        out.push(u8::from(self.nulls_pass) | (u8::from(self.empty) << 1));
+        out.push(
+            u8::from(self.nulls_pass)
+                | (u8::from(self.empty) << 1)
+                | (u8::from(self.bound.is_some()) << 2),
+        );
         out.extend_from_slice(&self.keys.to_le_bytes());
         match &self.range {
             None => out.push(0),
@@ -152,6 +158,12 @@ impl KeyFilter {
                 put_bytes(&mut out, &b.to_bytes());
             }
         }
+        // Only a filter with a bound has these bytes, so any other filter
+        // encodes as it did before bounds existed.
+        if let Some(b) = &self.bound {
+            out.push(u8::from(b.descending));
+            put_value(&mut out, &b.value);
+        }
         out
     }
 
@@ -169,7 +181,7 @@ impl KeyFilter {
         let key_type = r.key_type()?;
         let class = Class::of(&key_type).ok_or_else(|| bad("an unsupported key type"))?;
         let flags = r.u8()?;
-        if flags > 3 {
+        if flags > 7 {
             return Err(bad("unknown flags"));
         }
         let keys = u64::from_le_bytes(r.array()?);
@@ -205,11 +217,25 @@ impl KeyFilter {
             ),
             _ => return Err(bad("an unknown row form")),
         };
+        let bound = if flags & 4 == 0 {
+            None
+        } else {
+            let descending = match r.u8()? {
+                0 => false,
+                1 => true,
+                _ => return Err(bad("an unknown bound direction")),
+            };
+            Some(TopNBound {
+                value: r.value(class)?,
+                descending,
+            })
+        };
         if !r.0.is_empty() {
             return Err(bad("trailing bytes"));
         }
         Ok(Self {
             key_type,
+            bound,
             range,
             values,
             member,
@@ -342,6 +368,11 @@ impl Reader<'_> {
             14 => D::Binary,
             15 => D::LargeBinary,
             16 => D::BinaryView,
+            17 => {
+                let p = self.u8()?;
+                let s = i8::from_le_bytes(self.array()?);
+                D::Decimal64(p, s)
+            }
             _ => return Err(bad("an unknown key type")),
         };
         if !supported_key_type(&t) {

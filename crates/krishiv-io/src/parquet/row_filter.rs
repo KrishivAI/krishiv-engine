@@ -25,13 +25,20 @@
 //!   driver), except that a later piece of the file may start from what the
 //!   last one measured, so cutting a split finer does not guess again
 //!   ([`LateMaterialization::resuming`]).
+//! - **A top-N bound goes first, in its own pass.** It usually reads one
+//!   small column and, once tight, drops most rows, so the larger predicate
+//!   and output columns are decoded only where it left something. It doesn't
+//!   adapt per row group: it tightens, so an earlier row group says nothing
+//!   about the next one, and a useless pass costs one decode of a column
+//!   that the size rule requires to be small.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrowPrimitiveType, BooleanArray, RecordBatch};
 use arrow_buffer::BooleanBuffer;
@@ -185,6 +192,16 @@ fn compare(a: &dyn Array, op: CmpOp, lit: &ScalarValue) -> Option<BooleanBuffer>
         (DataType::Timestamp(TimeUnit::Microsecond, _), S::TimestampMicros(v)) => {
             prim::<TimestampMicrosecondType>(a, op, *v)
         }
+        (
+            DataType::Decimal64(_, s),
+            S::Decimal128 {
+                unscaled, scale, ..
+            },
+        ) if s == scale => match i64::try_from(*unscaled) {
+            Ok(v) => prim::<Decimal64Type>(a, op, v),
+            // Beyond every value of the column: not filtered here.
+            Err(_) => return None,
+        },
         (
             DataType::Decimal128(_, s),
             S::Decimal128 {
@@ -481,11 +498,6 @@ impl ScanPredicate {
             counters,
         }
     }
-
-    /// A row filter of this one predicate.
-    pub(crate) fn into_filter(self) -> RowFilter {
-        RowFilter::new(vec![Box::new(self)])
-    }
 }
 
 /// `batch` with every column widened by `widen`; a column that cannot be
@@ -593,11 +605,18 @@ pub(crate) struct LateMaterialization {
     /// Row groups decoded with the filter, and without it.
     groups_on: u64,
     groups_off: u64,
+    /// No row filter at all (`eligible` false, or policy off).
+    forbidden: bool,
+    /// The top-N bound's pass is in the current row filter.
+    bound_on: bool,
+    /// The bound's pass: apart from `counters`, whose fraction decides
+    /// about the other pass.
+    bound_counters: Arc<Counters>,
 }
 
 impl LateMaterialization {
-    /// `eligible`: the scan reads no row index and no column needs a
-    /// calendar check, which must see every row of a decoded row group.
+    /// `eligible`: no column needs a calendar check, which must see every
+    /// row of a decoded row group.
     /// `kept`: the fraction of rows the static predicate keeps, estimated
     /// from statistics; above [`DENSE`] the first row group is read
     /// without the filter (and measured).
@@ -628,6 +647,9 @@ impl LateMaterialization {
             idle: false,
             groups_on: 0,
             groups_off: 0,
+            forbidden: !eligible || policy == crate::request::RowFilterPolicy::Off,
+            bound_on: false,
+            bound_counters: Arc::new(Counters::default()),
         }
     }
 
@@ -663,15 +685,28 @@ impl LateMaterialization {
     }
 
     /// `(row groups decoded with the filter, without it, rows the filter
-    /// evaluated, rows it kept)`, for `EXPLAIN ANALYZE`.
+    /// evaluated, rows it kept)`, for `EXPLAIN ANALYZE`; rows count once per
+    /// pass.
     pub(crate) fn report(&self) -> (u64, u64, u64, u64) {
         let (filtered, passed) = self.counters.totals();
-        (self.groups_on, self.groups_off, filtered, passed)
+        let (bound_filtered, bound_passed) = self.bound_counters.totals();
+        (
+            self.groups_on,
+            self.groups_off,
+            filtered + bound_filtered,
+            passed + bound_passed,
+        )
     }
 
     /// Whether the current row group is decoded with the filter.
     pub(crate) fn is_on(&self) -> bool {
         self.on
+    }
+
+    /// Whether the current row group decodes some columns first, by either
+    /// pass, so the others may not be needed.
+    pub(crate) fn filters_first(&self) -> bool {
+        self.on || self.bound_on
     }
 
     /// Whether the filter is on by default, before any measurement.
@@ -696,12 +731,16 @@ impl LateMaterialization {
     /// `mask(columns)` gives the predicate's leaves and whether filtering
     /// may pay; when it cannot, the filter stays off for the rest of the
     /// scan (the predicate columns only grow with later runtime filters).
+    /// `bounds` are the top-N bounds, each asked about on its own every time.
     pub(crate) fn filter(
         &mut self,
         on: bool,
         dynamic: &[PushdownExpr],
-        mask: impl FnOnce(&[ColumnPath]) -> (ProjectionMask, Worth),
+        bounds: &[PushdownExpr],
+        mut mask: impl FnMut(&[ColumnPath]) -> (ProjectionMask, Worth),
     ) -> RowFilter {
+        let bound = self.bound_pass(bounds, &mut mask);
+        self.bound_on = bound.is_some();
         let expr = self.expr(dynamic);
         // Without a predicate there is nothing to switch on: asking again
         // at every row-group boundary would rebuild the decoder for
@@ -723,14 +762,47 @@ impl LateMaterialization {
                         self.widen,
                         Arc::clone(&self.counters),
                     )
-                    .into_filter()
                 })
             })
         } else {
             None
         };
         self.on = built.is_some();
-        built.unwrap_or_else(|| RowFilter::new(Vec::new()))
+        RowFilter::new(
+            bound
+                .into_iter()
+                .chain(built)
+                .map(|p| Box::new(p) as Box<dyn ArrowPredicate>)
+                .collect(),
+        )
+    }
+
+    /// The pass over `bounds`, if it may pay.
+    fn bound_pass(
+        &self,
+        bounds: &[PushdownExpr],
+        mask: &mut impl FnMut(&[ColumnPath]) -> (ProjectionMask, Worth),
+    ) -> Option<ScanPredicate> {
+        if self.forbidden || bounds.is_empty() {
+            return None;
+        }
+        let e = match bounds {
+            [one] => one.to_nnf(),
+            _ => PushdownExpr::And(bounds.iter().map(PushdownExpr::to_nnf).collect()),
+        };
+        let cols = columns(&e);
+        if cols.is_empty() {
+            return None;
+        }
+        let (projection, worth) = mask(&cols);
+        (worth == Worth::Yes).then(|| {
+            ScanPredicate::new(
+                Arc::new(e),
+                projection,
+                self.widen,
+                Arc::clone(&self.bound_counters),
+            )
+        })
     }
 
     /// The runtime filters changed. If the scan had no predicate to filter
@@ -766,7 +838,7 @@ impl LateMaterialization {
 
     /// A row group starts: while off, its first batch is measured.
     pub(crate) fn start_row_group(&mut self) {
-        if self.on {
+        if self.filters_first() {
             self.groups_on += 1;
         } else {
             self.groups_off += 1;
@@ -1140,11 +1212,11 @@ mod tests {
         let all = |_: &[ColumnPath]| (ProjectionMask::all(), Worth::Yes);
         // Nothing measured: the first row group filters.
         assert!(late.is_on());
-        assert_eq!(n(&late.filter(true, &[], all)), 1);
+        assert_eq!(n(&late.filter(true, &[], &[], all)), 1);
         // A quarter kept: off for the next row group.
         late.counters.add(4, 1);
         assert!(!late.want());
-        assert_eq!(n(&late.filter(false, &[], all)), 0);
+        assert_eq!(n(&late.filter(false, &[], &[], all)), 0);
         assert!(!late.is_on());
         // Off: the first batch of a row group is measured, then no other.
         late.start_row_group();
@@ -1167,7 +1239,7 @@ mod tests {
             true,
             None,
         );
-        assert_eq!(n(&auto.filter(true, &[], small)), 0);
+        assert_eq!(n(&auto.filter(true, &[], &[], small)), 0);
         assert!(!auto.want());
         let mut forced = LateMaterialization::new(
             crate::request::RowFilterPolicy::On,
@@ -1176,11 +1248,11 @@ mod tests {
             true,
             None,
         );
-        assert_eq!(n(&forced.filter(true, &[], small)), 1);
+        assert_eq!(n(&forced.filter(true, &[], &[], small)), 1);
         assert!(forced.want());
         // No projected column outside the predicate: nothing to save, ever.
         let only = |_: &[ColumnPath]| (ProjectionMask::all(), Worth::Never);
-        assert_eq!(n(&late.filter(true, &[], only)), 0);
+        assert_eq!(n(&late.filter(true, &[], &[], only)), 0);
         assert!(!late.is_on());
         assert!(!late.want());
     }
@@ -1289,7 +1361,10 @@ mod tests {
             assert_eq!(cols, [c("a")]);
             (ProjectionMask::all(), Worth::Yes)
         };
-        assert_eq!(n(&late.filter(true, std::slice::from_ref(&member), all)), 1);
+        assert_eq!(
+            n(&late.filter(true, std::slice::from_ref(&member), &[], all)),
+            1
+        );
         // Off: a sample evaluates both (a > 2 AND a in {5}).
         late.on = false;
         late.start_row_group();
@@ -1340,7 +1415,7 @@ mod tests {
         // The first guess is "on", but there is no predicate: the filter is
         // empty, and no boundary asks for a rebuild or a sample.
         assert!(late.is_on());
-        assert_eq!(n(&late.filter(true, &[], all)), 0);
+        assert_eq!(n(&late.filter(true, &[], &[], all)), 0);
         for _ in 0..3 {
             assert!(!late.want(), "nothing to rebuild for");
             late.start_row_group();
@@ -1349,7 +1424,10 @@ mod tests {
         // A runtime filter is the first predicate: filtering is wanted again.
         late.runtime_filters_changed(std::slice::from_ref(&member));
         assert!(late.want());
-        assert_eq!(n(&late.filter(true, std::slice::from_ref(&member), all)), 1);
+        assert_eq!(
+            n(&late.filter(true, std::slice::from_ref(&member), &[], all)),
+            1
+        );
         assert!(late.is_on());
     }
 
@@ -1410,10 +1488,42 @@ mod tests {
         );
         assert!(!row_index.want());
         let all = |_: &[ColumnPath]| (ProjectionMask::all(), Worth::Yes);
-        assert_eq!(n(&row_index.filter(true, &[], all)), 0);
+        assert_eq!(n(&row_index.filter(true, &[], &[], all)), 0);
+        // A bound goes in a pass of its own, if its column is small enough.
+        let bound = PushdownExpr::cmp(c("k"), CmpOp::LtEq, ScalarValue::Int32(0));
+        let mut both = LateMaterialization::new(
+            crate::request::RowFilterPolicy::On,
+            Some(&e),
+            None,
+            true,
+            None,
+        );
+        assert_eq!(
+            n(&both.filter(true, &[], std::slice::from_ref(&bound), all)),
+            2
+        );
+        assert!(both.filters_first());
+        let small = |_: &[ColumnPath]| (ProjectionMask::all(), Worth::Small);
+        let mut no_pass = LateMaterialization::new(
+            crate::request::RowFilterPolicy::Auto,
+            None,
+            None,
+            true,
+            None,
+        );
+        assert_eq!(
+            n(&no_pass.filter(true, &[], std::slice::from_ref(&bound), small)),
+            0
+        );
+        assert!(!no_pass.filters_first());
+        // ... but never where no row may be dropped in the decoder.
+        assert_eq!(
+            n(&row_index.filter(true, &[], std::slice::from_ref(&bound), all)),
+            0
+        );
         // No predicate at all: nothing to evaluate.
         let mut none =
             LateMaterialization::new(crate::request::RowFilterPolicy::On, None, None, true, None);
-        assert_eq!(n(&none.filter(true, &[], all)), 0);
+        assert_eq!(n(&none.filter(true, &[], &[], all)), 0);
     }
 }

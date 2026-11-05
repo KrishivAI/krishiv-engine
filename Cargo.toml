@@ -85,16 +85,19 @@ parquet = { version = "60", default-features = false }
 # object_store is pinned to the version delta_kernel 0.30 builds against (ADR 0028
 # update 2026-10-17); never enable parquet's `object_store` feature (deny.toml).
 # Cloud TLS (the `aws`, `gcp` and `azure` features) is opt-in through
-# `krishiv-io/cloud`: it brings reqwest over rustls (aws-lc-rs) and its HTTP
+# `krishiv-io/cloud` (which turns on `krishiv-store/cloud`, ADR 0044): it brings reqwest over rustls (aws-lc-rs) and its HTTP
 # stack, which would otherwise blow the dependency and binary-size budgets for
 # the default build. OpenSSL stays banned (deny.toml).
 object_store = { version = "=0.14.2", default-features = false }
+# Header types for the Hugging Face bearer token (T195); already in the tree through
+# object_store's reqwest. Only under krishiv-io/cloud.
+http = { version = "1", default-features = false }
 # Avro container files (P2-T081b): datum encode/decode, codecs and schema
 # parsing. Only the pure-Rust codecs are enabled (deflate is built in;
 # snappy needs no OpenSSL). The `zstandard` feature stays off: it pulls
 # zstd 0.13, which carries RUSTSEC-2026-0391, and no apache-avro release
-# allows zstd 0.14; zstandard, bzip2 and xz files are refused.
-apache-avro = { version = "=0.22.0", default-features = false, features = ["snappy"] }
+# allows zstd 0.14; zstandard and xz files are refused.
+apache-avro = { version = "=0.22.0", default-features = false, features = ["bzip", "snappy"] }
 # Implementing `object_store::ObjectStore` (an `async_trait` trait) for store
 # wrappers; already in the tree through object_store itself.
 async-trait = { version = "0.1.89", default-features = false }
@@ -113,6 +116,11 @@ md5 = { package = "md-5", version = "0.11", default-features = false }
 sha1 = { version = "0.11", default-features = false }
 sha2 = { version = "0.11", default-features = false }
 libm = { version = "0.2", default-features = false }
+# AES of aes_encrypt / aes_decrypt (ADR 0042); krishiv-functions only.
+aes = { version = "0.9", default-features = false, features = ["zeroize"] }
+cbc = { version = "0.2", default-features = false, features = ["zeroize"] }
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc", "zeroize"] }
+getrandom = { version = "0.4", default-features = false }
 xxhash-rust = { version = "0.8", default-features = false }
 twox-hash = { version = "2.1", default-features = false }
 crossbeam-deque = { version = "0.8.8", default-features = false }
@@ -123,6 +131,11 @@ futures = { version = "0.3.34", default-features = false }
 roaring = { version = "0.11", default-features = false }
 smallvec = { version = "1.16", default-features = false }
 lz4_flex = { version = "0.14", default-features = false }
+# Hadoop text codecs of the CSV, JSON and text sources (T081a). flate2 and snap are
+# already built for parquet; bzip2 default feature = pure-Rust libbz2-rs-sys (no C; do not enable bzip2-sys).
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
+snap = { version = "1", default-features = false }
+bzip2 = { version = "0.6", default-features = true }
 zstd = { version = "0.14", default-features = false }
 regex = { version = "1.13", default-features = false }
 regex-automata = { version = "0.4", default-features = false }
@@ -160,7 +173,7 @@ prost-reflect = { version = "0.16.5", default-features = false }
 # Concurrency model checking (dev-dependency only, under `--cfg loom`).
 loom = { version = "0.7", default-features = false }
 # Self-removing test directories (dev-dependency only).
-rustix = { version = "=1.1.5", default-features = false, features = ["fs", "std"] }
+rustix = { version = "=1.1.5", default-features = false, features = ["fs", "process", "std"] }
 tempfile = { version = "3.27", default-features = false }
 thiserror = { version = "2.0", default-features = false }
 serde = { version = "1.0.229", default-features = false }

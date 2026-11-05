@@ -11,11 +11,20 @@ import math
 import re
 import struct
 import unicodedata
+from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
 from typing import Any
 
 from krishiv.sql.row import Row, _create_row
+from krishiv.sql.types import (
+    ArrayType,
+    CalendarIntervalType,
+    DataType,
+    MapType,
+    StructType,
+    YearMonthIntervalType,
+)
 
 
 def require_pyarrow(action: str) -> Any:
@@ -25,6 +34,49 @@ def require_pyarrow(action: str) -> Any:
     except ImportError as e:
         raise ImportError(f"{action} needs pyarrow; install it with `pip install 'krishiv[pyarrow]'`") from e
     return pyarrow
+
+
+def _leaves(t: DataType) -> Iterator[DataType]:
+    """The leaf types of ``t``, depth first."""
+    if isinstance(t, ArrayType):
+        yield from _leaves(t.elementType)
+    elif isinstance(t, MapType):
+        yield from _leaves(t.keyType)
+        yield from _leaves(t.valueType)
+    elif isinstance(t, StructType):
+        for f in t.fields:
+            yield from _leaves(f.dataType)
+    else:
+        yield t
+
+
+def not_collectable(t: DataType) -> DataType | None:
+    """The first year-month or calendar interval in ``t``, which PySpark's Connect client won't bring back."""
+    return next((x for x in _leaves(t) if isinstance(x, YearMonthIntervalType | CalendarIntervalType)), None)
+
+
+def not_collectable_arrow(arrow_type: Any) -> str | None:
+    """The name of the first year-month or calendar interval in an Arrow type."""
+    import pyarrow as pa
+
+    if pa.types.is_struct(arrow_type):
+        children = [arrow_type.field(i).type for i in range(arrow_type.num_fields)]
+    elif pa.types.is_map(arrow_type):
+        children = [arrow_type.key_type, arrow_type.item_type]
+    elif pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type) or pa.types.is_fixed_size_list(arrow_type):
+        children = [arrow_type.value_type]
+    else:
+        name = str(arrow_type)
+        return name if name in ("month_interval", "month_day_nano_interval") else None
+    return next((n for n in map(not_collectable_arrow, children) if n is not None), None)
+
+
+_HOLDS_INTERVAL = re.compile(r"\binterval\b(?!:)")
+
+
+def holds_interval(simple_type: str) -> bool:
+    """Whether a ``simpleString`` type is or holds an interval of any family (a field may be named ``interval``)."""
+    return _HOLDS_INTERVAL.search(simple_type) is not None
 
 
 def rows_of(table: Any) -> list[Row]:
@@ -112,7 +164,21 @@ def cell(value: Any, arrow_type: Any, zone: tzinfo = UTC) -> str:
         return value.isoformat()
     if isinstance(value, bytes | bytearray):
         return "[" + " ".join(f"{b:02X}" for b in value) + "]"
+    if isinstance(value, timedelta):
+        return _day_time_cell(value)
     return str(value)
+
+
+def _day_time_cell(value: timedelta) -> str:
+    """A day-time interval as ``Dataset.show`` prints it, in its default fields (Arrow carries no others)."""
+    micros = abs(value // timedelta(microseconds=1))
+    sign = "-" if value < timedelta(0) else ""
+    seconds, micros = divmod(micros, 1_000_000)
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    fraction = f".{micros:06d}".rstrip("0") if micros else ""
+    return f"INTERVAL '{sign}{days} {hours:02d}:{minutes:02d}:{seconds:02d}{fraction}' DAY TO SECOND"
 
 
 def _shortest_single(value: float) -> str:

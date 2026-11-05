@@ -31,11 +31,11 @@ use std::sync::Arc;
 use arrow_array::builder::ArrayBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
-    Int32Type, Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, BinaryArray, Float64Array, Int64Array, ListArray};
-use arrow_schema::{DataType, Field, TimeUnit};
+use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
 
 use crate::error::{Result, internal};
 
@@ -79,8 +79,8 @@ const HEAD_SIZE: usize = 50_000;
 const COMPRESS_THRESHOLD: usize = 10_000;
 
 /// Whether `t` is a type the exact percentiles take here: Spark's
-/// numeric input (`NumericAndAnsiInterval` has no interval here); the
-/// approximate one also reads dates and timestamps as doubles.
+/// `NumericAndAnsiInterval` input; the approximate one also reads dates and
+/// timestamps as doubles.
 pub(crate) fn quantile_supported(t: &DataType, approx: bool) -> bool {
     match t {
         DataType::Int8
@@ -90,7 +90,9 @@ pub(crate) fn quantile_supported(t: &DataType, approx: bool) -> bool {
         | DataType::Float32
         | DataType::Float64
         | DataType::Decimal64(..)
-        | DataType::Decimal128(..) => true,
+        | DataType::Decimal128(..)
+        | DataType::Interval(IntervalUnit::YearMonth)
+        | DataType::Duration(TimeUnit::Microsecond) => true,
         DataType::Date32 | DataType::Timestamp(TimeUnit::Microsecond, _) if approx => true,
         _ => false,
     }
@@ -113,17 +115,24 @@ fn key(v: f64) -> u64 {
 pub(crate) struct ExactAcc {
     maps: Vec<HashMap<u64, i64>>,
     totals: Vec<i64>,
+    /// Window snapshots: the percentiles a running frame computed at a row,
+    /// kept instead of a copy of the value map (so a snapshot costs the
+    /// size of its answer, not of the partition's distinct values).
+    /// `Some(r)` for a snapshot group `g`, whose `evaluate` returns `r`.
+    frozen: Vec<Option<Option<Vec<f64>>>>,
 }
 
 impl ExactAcc {
     pub(crate) fn resize(&mut self, n: usize) {
         self.maps.resize_with(n, HashMap::new);
         self.totals.resize(n, 0);
+        self.frozen.resize(n, None);
     }
 
     pub(crate) fn reserve(&mut self, new: usize) {
         self.maps.reserve(new);
         self.totals.reserve(new);
+        self.frozen.reserve(new);
     }
 
     /// Bytes held: the maps (an entry is two words) and the totals.
@@ -133,6 +142,14 @@ impl ExactAcc {
             .map(|m| m.capacity().saturating_mul(32))
             .sum::<usize>()
             + self.totals.capacity().saturating_mul(8)
+            + self.frozen.capacity().saturating_mul(32)
+            + self
+                .frozen
+                .iter()
+                .flatten()
+                .flatten()
+                .map(|v| v.capacity().saturating_mul(8))
+                .sum::<usize>()
     }
 
     /// The projected size after adding `new` groups (empty maps) and folding
@@ -145,6 +162,22 @@ impl ExactAcc {
         self.size()
             .saturating_add(new.saturating_mul(32 + 8))
             .saturating_add(rows.saturating_mul(2 * 32))
+    }
+
+    /// Freezes the percentiles of group `from` as group `to`'s answer (a
+    /// window snapshot): no copy of the value map, and `to` holds only its
+    /// result. The flags are those of [`evaluate`](Self::evaluate).
+    pub(crate) fn freeze(
+        &mut self,
+        from: usize,
+        to: usize,
+        percentages: &[f64],
+        reverse: bool,
+        cont: bool,
+        legacy_disc: bool,
+    ) {
+        let answer = self.evaluate(from, percentages, reverse, cont, legacy_disc);
+        self.frozen[to] = Some(answer);
     }
 
     /// Folds `count` of `v` into `g`.
@@ -191,6 +224,9 @@ impl ExactAcc {
         cont: bool,
         legacy_disc: bool,
     ) -> Option<Vec<f64>> {
+        if let Some(Some(answer)) = self.frozen.get(g) {
+            return answer.clone();
+        }
         let total = self.totals[g];
         if total == 0 || self.maps[g].is_empty() {
             return None;
@@ -731,6 +767,12 @@ pub(crate) fn double_of(a: &ArrayRef, i: usize) -> Result<Option<f64>> {
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             a.as_primitive::<TimestampMicrosecondType>().value(i) as f64
         }
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            f64::from(a.as_primitive::<IntervalYearMonthType>().value(i))
+        }
+        DataType::Duration(TimeUnit::Microsecond) => {
+            a.as_primitive::<DurationMicrosecondType>().value(i) as f64
+        }
         t => return Err(internal(format!("a quantile value of type {t}"))),
     }))
 }
@@ -780,6 +822,7 @@ mod tests {
             arg_type: t,
             name: "q".to_owned(),
             mask: None,
+            element: None,
         }
     }
 

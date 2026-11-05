@@ -135,6 +135,24 @@ fn timestampadd_overflow_names_the_operation() {
 }
 
 #[test]
+fn timediff_is_timestampdiff() {
+    let s = session();
+    for (expr, want) in [
+        (
+            "timediff(HOUR, TIMESTAMP '2022-02-14 01:02:03', TIMESTAMP '2022-02-14 12:00:03')",
+            "10",
+        ),
+        (
+            "timediff(QUARTER, TIMESTAMP '2023-08-10 01:02:03', TIMESTAMP '2022-01-14 01:02:03')",
+            "-6",
+        ),
+        ("timediff(DAY, DATE '2022-02-15', DATE '2023-02-15')", "365"),
+    ] {
+        assert_eq!(one(&s, expr).as_deref(), Some(want), "{expr}");
+    }
+}
+
+#[test]
 fn timestampdiff_counts_whole_units_on_the_wall_clock() {
     let s = session();
     for (expr, want) in [
@@ -450,4 +468,165 @@ fn make_timestamp_ntz_without_ansi_gives_null_for_a_bad_field() {
         one(&s, "try_make_timestamp_ntz(2021, 2, 28, 6, 30, 45)").as_deref(),
         Some("2021-02-28 06:30:45")
     );
+}
+
+/// A join condition holds no nondeterministic expression
+/// (`INVALID_NON_DETERMINISTIC_EXPRESSIONS`), even through a SQL function.
+#[test]
+fn a_nondeterministic_join_condition_is_refused() {
+    let s = session();
+    block_on(s.sql("CREATE FUNCTION nd_pick() RETURNS INT RETURN FLOOR(RAND() * 6) + 1")).unwrap();
+    for sql in [
+        "SELECT * FROM VALUES(1) AS a(x) JOIN VALUES(1) AS b(y) ON rand() > 0.5",
+        "SELECT * FROM VALUES(1) AS a(x) JOIN VALUES(1) AS b(y) ON nd_pick() = 1",
+    ] {
+        let r = block_on(async { s.sql(sql).await?.collect().await });
+        let e = r.expect_err(sql);
+        assert!(
+            format!("{e:?}").contains("InvalidNonDeterministicExpressions"),
+            "{sql}: {e:?}"
+        );
+    }
+}
+
+/// With `spark.sql.legacy.identifierClause` on, `IDENTIFIER('c1')` is a
+/// column reference, qualified and backquoted forms included.
+#[test]
+fn legacy_identifier_function_names_a_column() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.identifierClause = true")).unwrap();
+    for (expr, want) in [
+        ("IDENTIFIER('c1')", "1"),
+        ("IDENTIFIER('t.c1')", "1"),
+        ("IDENTIFIER('`c1`')", "1"),
+        ("IDENTIFIER('c1') + 1", "2"),
+    ] {
+        let got = column(&s, expr, "FROM VALUES(1) AS T(c1)");
+        assert_eq!(got, vec![Some(want.to_owned())], "{expr}");
+    }
+}
+
+/// A modifier on the legacy `IDENTIFIER('c1')` call is not dropped: the call
+/// stays a function call, which does not resolve.
+#[test]
+fn legacy_identifier_call_with_a_modifier_is_not_a_column() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.identifierClause = true")).unwrap();
+    let r = block_on(async {
+        s.sql("SELECT IDENTIFIER('c1') FILTER (WHERE missing) FROM VALUES(1) AS T(c1)")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(r.is_err(), "{r:?}");
+}
+
+/// A SQL function is refused in `ORDER BY`, `LIMIT` and a generator
+/// (`UNSUPPORTED_SQL_UDF_USAGE`), as Spark's `ResolveSQLFunctions` does.
+#[test]
+fn a_sql_function_is_refused_in_sort_limit_and_generate() {
+    let s = session();
+    block_on(s.sql("CREATE FUNCTION udf_id(x INT) RETURNS INT RETURN x")).unwrap();
+    // A call in the select list is fine under an ORDER BY of plain columns.
+    let ok = block_on(async {
+        s.sql("SELECT udf_id(c1) FROM VALUES(1) AS t(c1) ORDER BY c1")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(ok.is_ok(), "{ok:?}");
+    for (sql, node) in [
+        (
+            "SELECT * FROM VALUES(1) AS t(c1) ORDER BY udf_id(c1)",
+            "Sort",
+        ),
+        (
+            "SELECT * FROM VALUES(1) AS t(c1) LIMIT udf_id(1)",
+            "GlobalLimit",
+        ),
+        (
+            "SELECT * FROM VALUES(1) AS t(c1) LATERAL VIEW EXPLODE(ARRAY(udf_id(c1))) AS e",
+            "Generate",
+        ),
+    ] {
+        let r = block_on(async { s.sql(sql).await?.collect().await });
+        let e = format!("{:?}", r.expect_err(sql));
+        assert!(
+            e.contains("UnsupportedSqlUdfUsage") && e.contains(node),
+            "{sql}: {e}"
+        );
+    }
+}
+
+/// The legacy `IDENTIFIER(expr)` also names a table in `FROM` and `INSERT INTO`; a column list
+/// keeps the parser's error, and a unit of `TIMESTAMPADD` stays a keyword.
+#[test]
+fn legacy_identifier_function_names_a_table() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.identifierClause = true")).unwrap();
+    block_on(s.sql("CREATE TEMPORARY VIEW IDENTIFIER('lv') AS SELECT 7 AS a")).unwrap();
+    let rows = block_on(async {
+        s.sql("SELECT * FROM IDENTIFIER('l' || 'v')")
+            .await?
+            .collect()
+            .await
+    });
+    assert!(rows.is_ok(), "{rows:?}");
+    let refused = block_on(async {
+        s.sql("CREATE TABLE lt(IDENTIFIER('c1') INT) USING CSV")
+            .await
+    });
+    assert!(refused.is_err());
+    let routine = block_on(async {
+        s.sql("SELECT TIMESTAMPADD(IDENTIFIER('YEAR'), 1, DATE'2024-01-15')")
+            .await
+    });
+    assert!(routine.is_err());
+}
+
+/// A SQL function resolves its body under the ANSI mode captured when it was
+/// created, whatever the caller's (Spark's `sql-udf` 3.3).
+#[test]
+fn a_sql_function_keeps_the_ansi_mode_it_was_created_under() {
+    let s = session();
+    for sql in [
+        "SET spark.sql.ansi.enabled = true",
+        "CREATE FUNCTION cast_ansi(x INT) RETURNS INT RETURN CAST('abc' AS INT) + x",
+        "CREATE TEMPORARY FUNCTION cast_ansi_t(x INT) RETURNS INT RETURN CAST('abc' AS INT) + x",
+        "SET spark.sql.ansi.enabled = false",
+        "CREATE FUNCTION cast_plain(x INT) RETURNS INT RETURN CAST('abc' AS INT) + x",
+    ] {
+        block_on(s.sql(sql)).unwrap();
+    }
+    for f in ["cast_ansi", "cast_ansi_t"] {
+        let r = block_on(async { s.sql(&format!("SELECT {f}(0)")).await?.collect().await });
+        let e = format!("{:?}", r.expect_err(f));
+        assert!(e.contains("CastInvalidInput"), "{f}: {e}");
+    }
+    // Without ANSI the invalid cast is NULL, and NULL + 0 is NULL: one row.
+    let r = block_on(async { s.sql("SELECT cast_plain(0)").await?.collect().await });
+    let batches = r.unwrap();
+    assert_eq!(
+        batches
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        1
+    );
+    assert!(batches[0].column(0).is_null(0), "{batches:?}");
+}
+
+/// A parameter is visible one scalar subquery down; two down it is an
+/// unresolved column, as in Spark (`sql-udf` 2.2.1).
+#[test]
+fn a_parameter_in_a_doubly_nested_subquery_is_unresolved() {
+    let s = session();
+    block_on(s.sql("CREATE FUNCTION sub_one(a INT) RETURNS INT RETURN 1 + (SELECT a)")).unwrap();
+    let ok = block_on(async { s.sql("SELECT sub_one(5)").await?.collect().await });
+    assert!(ok.is_ok(), "{ok:?}");
+    let r = block_on(
+        s.sql("CREATE FUNCTION sub_two(a INT) RETURNS INT RETURN 1 + (SELECT (SELECT a))"),
+    );
+    let e = format!("{:?}", r.expect_err("deep"));
+    assert!(e.contains("UnresolvedColumn"), "{e}");
 }

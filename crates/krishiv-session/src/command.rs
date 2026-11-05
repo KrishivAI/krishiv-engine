@@ -39,14 +39,13 @@ use krishiv_plan::{
 use krishiv_sql::ast::{
     Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeKind,
     DataTypeSpec, DdlName, DeclareVariable, DropFunction, DropVariable, DropView, Expr, ExprKind,
-    FunctionBodyKind, FunctionReturnsKind, Ident, ObjectName, Refresh, RefreshKind, Reset, Set,
-    SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TimeZone,
+    FunctionBodyKind, FunctionReturnsKind, Ident, ObjectName, Query, Refresh, RefreshKind, Reset,
+    Set, SetExprKind, SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TimeZone,
 };
 use krishiv_types::{DataType, DecimalType};
 
-use crate::cache::is_cache_name;
 use crate::catalog::{CATALOG, NAMESPACE, TempTable};
-use crate::catalog::{is_hidden_name, reserved_temp_view_name};
+use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::dataframe::DataFrame;
 use crate::functions::{col, lit, lit_null};
@@ -240,7 +239,30 @@ impl Session {
     /// prefix `` `__krishiv_cache_` `` (in any letter case), which queries
     /// cannot spell either.
     pub(crate) async fn exec_create_view(&self, v: &CreateView) -> Result<DataFrame, KrishivError> {
-        if is_hidden_name(&v.name.value) || is_cache_name(&v.name.value) {
+        self.create_temp_view(v, false).await
+    }
+
+    /// `CREATE [OR REPLACE] [GLOBAL] TEMPORARY VIEW`: a global view lives in `global_temp`.
+    pub(crate) async fn create_temp_view(
+        &self,
+        v: &CreateView,
+        global: bool,
+    ) -> Result<DataFrame, KrishivError> {
+        let key = if global {
+            crate::catalog::global_key(&v.name.value)
+        } else {
+            v.name.value.clone()
+        };
+        let shown = if global {
+            format!(
+                "{}.{}",
+                quote(crate::catalog::GLOBAL_NAMESPACE),
+                quote(&v.name.value)
+            )
+        } else {
+            quote(&v.name.value)
+        };
+        if is_reserved_view_name(&v.name.value) {
             return Err(reserved_temp_view_name(&v.name.value));
         }
         if v.or_replace && v.if_not_exists {
@@ -254,17 +276,17 @@ impl Session {
             && self
                 .state
                 .catalog
-                .exists(&v.name.value, env.analysis.conf.case_sensitive)
+                .exists(&key, env.analysis.conf.case_sensitive)
         {
             return Err(TempTableOrViewAlreadyExists {
-                relation_name: quote(&v.name.value),
+                relation_name: shown,
             }
             .into());
         }
         let plan = krishiv_sql::lower(&v.query, self.next_source_id()).map_err(|e| e.error)?;
         crate::catalog::check_view_cycle(
             &self.state.catalog,
-            &v.name.value,
+            &key,
             plan.root(),
             env.analysis.conf.case_sensitive,
         )?;
@@ -322,7 +344,7 @@ impl Session {
         // for writes).
         unique_view_columns(&columns, case_sensitive)?;
         self.state.catalog.put(
-            &v.name.value,
+            &key,
             TempTable::View {
                 plan: Arc::clone(&df.plan),
                 columns,
@@ -337,10 +359,11 @@ impl Session {
     /// returning an empty frame as in Spark.
     pub(crate) async fn exec_drop_view(&self, v: &DropView) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
-        if self
-            .state
-            .catalog
-            .exists(&v.name.value, env.analysis.conf.case_sensitive)
+        if !is_global_key(&v.name.value)
+            && self
+                .state
+                .catalog
+                .exists(&v.name.value, env.analysis.conf.case_sensitive)
         {
             self.state.catalog.drop_table(&v.name.value);
             self.state.cache.invalidate_table(&v.name.value);
@@ -372,6 +395,16 @@ impl Session {
                 store
                     .table(&namespace, &fold(only))
                     .map(|_| format!("{namespace}.{}", fold(only)))
+            }
+            [namespace, name]
+                if namespace.eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE)
+                    && self
+                        .state
+                        .catalog
+                        .exists(&crate::catalog::global_key(name), case_sensitive) =>
+            {
+                // The cache records a view by the last part of the name it was read by.
+                Some(name.clone())
             }
             [namespace, name] => store
                 .table(&fold(namespace), &fold(name))
@@ -679,11 +712,18 @@ impl Session {
                 let inner = original
                     .get(query.span.start..query.span.end)
                     .unwrap_or_default();
-                let inner_sql = padded_select("", inner, query.span.start, "");
-                let inner_analysis = self
-                    .analyze_variable_query(&inner_sql)
-                    .await
-                    .map_err(|e| map_variable_error(e, text, v.span, query.span))?;
+                let mut inner_sql = padded_select("", inner, query.span.start, "");
+                let mut first = self.analyze_variable_query(&inner_sql).await;
+                // A bare `DEFAULT` that is no column of the query reads the target's default.
+                if let Err(e) = &first
+                    && e.error_class().name().starts_with("UNRESOLVED_COLUMN")
+                    && let Some(rewritten) = default_row_query(query, inner, &stored)
+                {
+                    inner_sql = padded_select("", &rewritten, query.span.start, "");
+                    first = self.analyze_variable_query(&inner_sql).await;
+                }
+                let inner_analysis =
+                    first.map_err(|e| map_variable_error(e, text, v.span, query.span))?;
                 let width = inner_analysis.analyzed.output.len();
                 if width != targets.len() {
                     return Err(AssignmentArityMismatch {
@@ -827,9 +867,10 @@ impl Session {
             (Some(namespace), part)
         };
         let name = part.value.to_lowercase();
-        let case_sensitive = self.query_env().analysis.conf.case_sensitive;
+        let conf = self.query_env().analysis.conf;
+        let case_sensitive = conf.case_sensitive;
         let source = self.next_source_id();
-        let mut entry = self.declare(f, &name, source, case_sensitive, redacted)?;
+        let mut entry = self.declare(f, &name, source, case_sensitive, conf.ansi, redacted)?;
         let reads = self.reads_data(&entry.def);
         if reads && f.characteristics.data_access == Some(SqlDataAccess::ContainsSql) {
             return Err(InvalidSqlFunctionDataAccess {}.into());
@@ -841,6 +882,7 @@ impl Session {
         if let Some(namespace) = &namespace {
             entry.def = Arc::new(SqlFunction {
                 qualifier: vec![crate::catalog::CATALOG.to_owned(), namespace.clone()],
+                path: self.query_env().catalog.sql_path_snapshot(),
                 ..(*entry.def).clone()
             });
             return self
@@ -919,6 +961,7 @@ impl Session {
         name: &str,
         source: krishiv_plan::SourceId,
         case_sensitive: bool,
+        ansi: bool,
         redacted: &RedactedSql,
     ) -> Result<Entry, KrishivError> {
         let fold = |n: &str| {
@@ -1052,6 +1095,7 @@ impl Session {
         let def = SqlFunction {
             name: name.to_owned(),
             qualifier: Vec::new(),
+            path: Vec::new(),
             returns_table,
             params: out_params,
             returns,
@@ -1060,6 +1104,7 @@ impl Session {
             source,
             deterministic: f.characteristics.deterministic.unwrap_or(true),
             reads_data: f.characteristics.data_access == Some(SqlDataAccess::ReadsSqlData),
+            ansi: Some(ansi),
         };
         Ok(Entry {
             def: Arc::new(def),
@@ -1814,7 +1859,7 @@ pub(crate) fn arrow_value(
     row: usize,
 ) -> Result<(DataType, Literal), KrishivError> {
     use arrow_array::types::{
-        Date32Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
+        Date32Type, Decimal64Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
         TimestampMicrosecondType,
     };
     let data_type = arrow_krishiv_type(array.data_type())?;
@@ -1844,14 +1889,17 @@ pub(crate) fn arrow_value(
                 .as_primitive::<arrow_array::types::Float64Type>()
                 .value(row),
         ),
-        ArrowType::Decimal128(_, _) => {
+        ArrowType::Decimal64(..) | ArrowType::Decimal128(..) => {
             let DataType::Decimal(decimal) = &data_type else {
                 return Err(crate::session::internal(
                     "a variable decimal changed type".to_owned(),
                 ));
             };
             Literal::Decimal {
-                unscaled: array.as_primitive::<Decimal128Type>().value(row),
+                unscaled: match array.as_primitive_opt::<Decimal64Type>() {
+                    Some(a) => i128::from(a.value(row)),
+                    None => array.as_primitive::<Decimal128Type>().value(row),
+                },
                 data_type: *decimal,
             }
         }
@@ -1896,7 +1944,7 @@ pub(crate) fn arrow_krishiv_type(data_type: &ArrowType) -> Result<DataType, Kris
         ArrowType::Int64 => Ok(DataType::Long),
         ArrowType::Float32 => Ok(DataType::Float),
         ArrowType::Float64 => Ok(DataType::Double),
-        ArrowType::Decimal128(precision, scale) => {
+        ArrowType::Decimal64(precision, scale) | ArrowType::Decimal128(precision, scale) => {
             decimal_type(*precision, *scale).map(DataType::Decimal)
         }
         ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View => Ok(DataType::String),
@@ -1928,6 +1976,37 @@ fn decimal_type(precision: u8, scale: i8) -> Result<DecimalType, KrishivError> {
 
 /// Whether `e` is exactly the bare `DEFAULT` keyword (through
 /// parentheses): `SET var = DEFAULT` reads the variable's default.
+/// The text of the row query `query` (`inner`) with each bare `DEFAULT` of its select list replaced by
+/// the default of the variable it is assigned to; `None` unless the query is a plain `SELECT` with one
+/// item per target and at least one bare `DEFAULT`.
+fn default_row_query(query: &Query, inner: &str, stored: &[StoredVariable]) -> Option<String> {
+    let SetExprKind::Select(select) = &query.body.kind else {
+        return None;
+    };
+    if select.projection.len() != stored.len()
+        || !select.projection.iter().any(|i| is_bare_default(&i.expr))
+    {
+        return None;
+    }
+    let mut text = inner.to_owned();
+    for (item, var) in select.projection.iter().zip(stored).rev() {
+        if !is_bare_default(&item.expr) {
+            continue;
+        }
+        let replacement = match &var.default_query {
+            Some(q) => format!("({q})"),
+            None => format!("CAST(NULL AS {})", var.data_type.simple_string()),
+        };
+        let start = item.expr.span.start.checked_sub(query.span.start)?;
+        let end = item.expr.span.end.checked_sub(query.span.start)?;
+        if !text.is_char_boundary(start) || !text.is_char_boundary(end) || start > end {
+            return None;
+        }
+        text.replace_range(start..end, &replacement);
+    }
+    Some(text)
+}
+
 pub(crate) fn is_bare_default(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Nested(inner) => is_bare_default(inner),

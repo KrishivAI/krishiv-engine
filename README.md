@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://krishiv.ai">
-    <img src="docs/assets/krishiv-banner.svg" alt="Krishiv: Spark-compatible batch, streaming and incremental views, from embedded to distributed" width="100%">
+    <img src="docs/assets/krishiv-banner.svg" alt="Krishiv: One Engine. Every Workload. Batch, streaming, incremental, SQL, Rust-native" width="100%">
   </a>
 </p>
 
@@ -12,7 +12,7 @@
   <a href="https://scorecard.dev/viewer/?uri=github.com/KrishivAI/krishiv-engine"><img src="https://api.scorecard.dev/projects/github.com/KrishivAI/krishiv-engine/badge" alt="OpenSSF Scorecard"></a>
   <a href="https://codspeed.io/KrishivAI/krishiv-engine"><img src="https://img.shields.io/endpoint?url=https://codspeed.io/badge.json" alt="CodSpeed"></a>
   <a href="https://codecov.io/gh/KrishivAI/krishiv-engine"><img src="https://codecov.io/gh/KrishivAI/krishiv-engine/graph/badge.svg" alt="Codecov"></a>
-  <a href="https://krishiv.ai"><img src="https://img.shields.io/badge/web-krishiv.ai-F59E0B.svg" alt="Website: krishiv.ai"></a>
+  <a href="https://krishiv.ai"><img src="https://img.shields.io/badge/web-krishiv.ai-0A0B0C.svg" alt="Website: krishiv.ai"></a>
 </p>
 
 <p align="center">

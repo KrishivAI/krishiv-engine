@@ -18,6 +18,7 @@
 mod ddl;
 mod expr;
 mod function;
+pub(crate) use function::check_temporary_function_name;
 mod script;
 mod types;
 
@@ -141,6 +142,9 @@ pub(crate) struct Parser<'s> {
     markers: Vec<usize>,
     /// How many script bodies the cursor is inside: a statement there ends at its `;`.
     in_script: usize,
+    /// How many select items enclose the cursor (Spark's `NamedExpression` ancestors): a
+    /// backquoted name there may be a column regex.
+    in_named: usize,
     /// How many script statements enclose the cursor (compounds, branches and loop bodies).
     script_depth: usize,
     /// The first error Spark raises after parsing (in `AstBuilder`) that
@@ -649,6 +653,7 @@ impl<'s> Parser<'s> {
             closers,
             markers,
             in_script: 0,
+            in_named: 0,
             script_depth: 0,
             deferred: None,
             cast_types: vec![],
@@ -1621,6 +1626,11 @@ impl<'s> Parser<'s> {
             self.reset_command()?
         } else if self.kw_at(0, "CREATE") {
             self.create_command()?
+        } else if self.kw_at(0, "REPLACE") && self.kw_at(1, "TABLE") {
+            // `REPLACE TABLE` is `CREATE OR REPLACE TABLE`.
+            let start = self.start();
+            self.bump();
+            self.create_table_command(start, true, false, false)?
         } else if self.kw_at(0, "DROP") {
             self.drop_command()?
         } else if self.kw_at(0, "USE") {
@@ -1630,10 +1640,14 @@ impl<'s> Parser<'s> {
             &[
                 "ALTER", "SHOW", "DESC", "DESCRIBE", "INSERT", "DELETE", "UPDATE", "MERGE",
                 "TRUNCATE", "CACHE", "UNCACHE", "CLEAR", "REFRESH", "ANALYZE", "MSCK", "REPAIR",
-                "ADD", "LIST",
+                "ADD", "LIST", "COMMENT",
             ],
         ) {
             self.command_statement()?
+        } else if self.kw_at(0, "WITH")
+            && let Some(insert) = self.with_insert_command()?
+        {
+            insert
         } else if self.kw_at(0, "FROM") {
             // A multi-table insert, or a `FROM ... SELECT` query. The
             // query runs first; only its syntax failure reads as an
@@ -1685,6 +1699,35 @@ impl<'s> Parser<'s> {
             });
         }
         Ok(statement)
+    }
+
+    /// `WITH ctes INSERT INTO|OVERWRITE ... query`: the common table expressions scope over the
+    /// rows written, so they become the `WITH` of the insert's query. `None` (with nothing
+    /// consumed) when no `INSERT` follows the `WITH` clause, so the statement is a query.
+    fn with_insert_command(&mut self) -> PR<Option<Statement>> {
+        let save = self.checkpoint();
+        let start = self.start();
+        let with = match self.with_clause() {
+            Ok(with) if self.kw_at(0, "INSERT") => with,
+            Ok(_) | Err(Fail::Syntax) => {
+                self.restore(save);
+                return Ok(None);
+            }
+            Err(e) => return Err(e),
+        };
+        self.commit(save);
+        let Statement::Insert(mut insert) = self.insert_command()? else {
+            return self.fail();
+        };
+        for clause in &mut insert.clauses {
+            // Spark refuses a `WITH` in both places.
+            if clause.query.with.is_some() {
+                return self.fail();
+            }
+            clause.query.with = Some(with.clone());
+        }
+        insert.span = self.span_from(start);
+        Ok(Some(Statement::Insert(insert)))
     }
 
     /// `SET`, `SET -v`, `SET key`, `SET key = value` or `SET TIME ZONE
@@ -1861,7 +1904,7 @@ impl<'s> Parser<'s> {
                 (TimeZone::Named(zone), t.span)
             }
             _ if self.kw_at(0, "INTERVAL") => {
-                let from = self.start();
+                let from = self.pos;
                 let mut end = self.src.len();
                 for t in self.toks.iter().skip(self.pos) {
                     if t.kind == TokenKind::Sym(Sym::Semi) {
@@ -1869,14 +1912,44 @@ impl<'s> Parser<'s> {
                         break;
                     }
                 }
-                let rest = self.src.get(from..end).unwrap_or_default();
-                let form = format!("SET TIME ZONE {}", rest.trim_matches(|c: char| c <= ' '));
-                return Self::fatal(error::unsupported_set_time_zone(
-                    &form,
-                    self.span_from(start),
-                ));
+                let whole = Span::new(start, end);
+                // An interval that does not reach the end of the statement
+                // is the grammar's catch-all alternative.
+                let parsed = self
+                    .interval()
+                    .ok()
+                    .filter(|_| self.pos >= self.toks.len() || self.sym_at(0, Sym::Semi));
+                let offset = match parsed {
+                    Some(Literal::Interval(iv)) => validate::interval::time_zone_offset(&iv, whole),
+                    Some(Literal::Typed { value, .. }) => {
+                        validate::interval::time_zone_offset_typed(&value, whole)
+                    }
+                    _ => {
+                        self.pos = from;
+                        return Self::fatal(error::invalid_time_zone_displacement(whole));
+                    }
+                };
+                match offset {
+                    Ok(zone) => {
+                        // `from` is a token index; the span starts at the byte.
+                        let begin = self.toks.get(from).map_or(start, |t| t.span.start);
+                        (TimeZone::Named(zone), self.span_from(begin))
+                    }
+                    Err(e) => return Self::fatal(e),
+                }
             }
-            _ => return self.fail(),
+            // The grammar's catch-all alternative (`SET TIME ZONE .*?`).
+            _ => {
+                let mut end = self.src.len();
+                for t in self.toks.iter().skip(self.pos) {
+                    if t.kind == TokenKind::Sym(Sym::Semi) {
+                        end = t.span.start;
+                        break;
+                    }
+                }
+                let end = end.max(self.span_from(start).end);
+                return Self::fatal(error::invalid_time_zone_displacement(Span::new(start, end)));
+            }
         };
         let span = self.span_from(start);
         self.command_end()?;
@@ -1905,7 +1978,10 @@ impl<'s> Parser<'s> {
             };
             // One keyword at most: `DECLARE VAR variable INT` declares
             // a variable named `variable`.
-            if !p.eat_kw("VARIABLE") {
+            // A `VAR` or `VARIABLE` followed by `=` or `,` is the variable's name
+            // (`DECLARE var = 'x'`), as ANTLR's prediction reads it.
+            let named_var = p.sym_at(1, Sym::Eq) || p.sym_at(1, Sym::Comma);
+            if !named_var && !p.eat_kw("VARIABLE") {
                 p.eat_kw("VAR");
             }
             if p.kw_at(0, "IF") && p.kw_at(1, "NOT") && p.kw_at(2, "EXISTS") {
@@ -3839,7 +3915,7 @@ impl<'s> Parser<'s> {
                 span: self.span_from(begin),
             }))
         } else if self.eat_kw("EXTEND") {
-            PipeOpKind::Extend(self.comma_sep(Self::select_item)?)
+            PipeOpKind::Extend(self.comma_sep(Self::named_item)?)
         } else if self.eat_kw("SET") {
             PipeOpKind::Set(self.comma_sep(|p| {
                 let start = p.start();
@@ -4104,7 +4180,7 @@ impl<'s> Parser<'s> {
         } else {
             self.set_quantifier()
         };
-        let projection = self.comma_sep(Self::select_item)?;
+        let projection = self.comma_sep(Self::named_item)?;
         Ok((hints, quantifier, projection))
     }
 
@@ -4172,6 +4248,7 @@ impl<'s> Parser<'s> {
             selection,
             group_by,
             having,
+            having_as_where: self.opts.having_without_group_by_as_where,
             windows,
             qualify,
             span: self.span_from(start),
@@ -4381,6 +4458,14 @@ impl<'s> Parser<'s> {
             // `COMMA? hintStatement`: a comma needs another hint.
             self.eat_sym(Sym::Comma);
         }
+    }
+
+    /// A select item of a select list: its names may be column regexes.
+    fn named_item(&mut self) -> PR<SelectItem> {
+        self.in_named += 1;
+        let item = self.select_item();
+        self.in_named -= 1;
+        item
     }
 
     fn select_item(&mut self) -> PR<SelectItem> {
@@ -4946,7 +5031,7 @@ impl<'s> Parser<'s> {
     /// `name(.name)*` or a string.
     fn option_key(&mut self) -> PR<OptionKey> {
         let start = self.start();
-        if let Some(text) = self.string_lit() {
+        if let Some(text) = self.single_string() {
             let span = self.span_from(start);
             return Ok(OptionKey {
                 parts: vec![Ident {
@@ -5060,7 +5145,7 @@ impl<'s> Parser<'s> {
         let start = self.start();
         self.expect_kw("PIVOT")?;
         self.expect_sym(Sym::LParen)?;
-        let aggregates = self.comma_sep(Self::select_item)?;
+        let aggregates = self.comma_sep(Self::named_item)?;
         self.expect_kw("FOR")?;
         let columns = if self.sym_at(0, Sym::LParen) {
             self.paren_list(|p| p.name_part(true))?

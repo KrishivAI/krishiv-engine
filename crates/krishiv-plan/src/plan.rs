@@ -70,6 +70,11 @@ pub struct LogicalPlan {
 /// quoted name with a dot in it stays one part.
 pub const TABLE_FUNCTION_NAME_SEP: char = '\u{1f}';
 
+/// What joins the parts of a multi-part [`PlanNode::SubqueryAlias`] alias (a
+/// global temporary view's `global_temp.v`): a control character no identifier
+/// holds, so a quoted alias with a dot in it stays one part.
+pub const ALIAS_PART_SEP: char = '\u{1e}';
+
 /// The relation node kinds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -430,6 +435,39 @@ pub enum PlanNode {
         /// analyzer-assigned id.
         output: BoundColumn,
     },
+    /// A recursive common table expression (Spark's `UnionLoop`): `anchor`
+    /// runs once; `recursive` then runs again and again, reading in its
+    /// [`PlanNode::UnionLoopRef`] (the same `id`) the rows the previous round
+    /// produced, until a round is empty. The node's rows are the anchor's
+    /// and every round's, in order. `recursive` is wrapped in a
+    /// [`PlanNode::WithCte`] that defines the CTE's name as the reference
+    /// while unresolved. The session executes the loop before physical
+    /// planning and replaces the node by a scan of its result.
+    UnionLoop {
+        /// Ties the node to its [`PlanNode::UnionLoopRef`]s.
+        id: u32,
+        /// The non-recursive term.
+        anchor: Arc<LogicalPlan>,
+        /// The recursive term.
+        recursive: Arc<LogicalPlan>,
+        /// `MAX RECURSION LEVEL n`; else the session's
+        /// `spark.sql.cteRecursionLevelLimit` applies.
+        max_level: Option<u32>,
+        /// The rows the readers of the loop need at most (every read sits
+        /// under a `LIMIT`, set by the session before physical planning):
+        /// the loop stops once it produced this many.
+        limit: Option<u64>,
+        /// The output columns (empty until resolved), named by the anchor.
+        output: Vec<BoundColumn>,
+    },
+    /// The recursive term's read of the previous round of its
+    /// [`PlanNode::UnionLoop`].
+    UnionLoopRef {
+        /// The loop's id.
+        id: u32,
+        /// The columns (empty until resolved).
+        output: Vec<BoundColumn>,
+    },
 }
 
 /// The attribute a resolved generator reads: its argument is always a
@@ -607,6 +645,60 @@ pub struct Scan {
     pub version: Option<TableVersion>,
 }
 
+/// Field-metadata key the analyzer puts on every field of the generated
+/// `_metadata` struct, so a table column of that name and shape is never
+/// taken for it.
+pub(crate) const GENERATED_METADATA_KEY: &str = "krishiv.generated_file_metadata";
+
+/// `t` without the analyzer's provenance marker on the fields of a generated
+/// `_metadata` struct: what a stored column keeps when a query's output is
+/// materialized (`CREATE TABLE .. AS SELECT _metadata`), so the stored
+/// values are never mistaken for the generated column.
+#[must_use]
+pub fn without_generated_marker(t: &krishiv_types::DataType) -> krishiv_types::DataType {
+    use krishiv_types::{DataType, StructField, StructType};
+    let DataType::Struct(s) = t else {
+        return t.clone();
+    };
+    DataType::Struct(StructType::new(s.fields().iter().map(|f| {
+        let mut map = f.metadata().as_map().clone();
+        map.remove(GENERATED_METADATA_KEY);
+        StructField::new(f.name(), f.data_type().clone(), f.nullable())
+            .with_metadata(krishiv_types::Metadata::from_map(map))
+    })))
+}
+
+impl Scan {
+    /// The hidden `_metadata` column of a file source this scan outputs
+    /// (always last), if it does: a struct of the source's own fields.
+    #[must_use]
+    pub fn metadata_column(&self) -> Option<&BoundColumn> {
+        let c = self.output.last()?;
+        let krishiv_types::DataType::Struct(s) = &c.data_type else {
+            return None;
+        };
+        // Every field is one of the source's own (a pruned scan keeps only
+        // the fields read), so a user column of this name that holds anything
+        // else is a table column.
+        const FIELDS: [&str; 7] = [
+            "file_path",
+            "file_name",
+            "file_size",
+            "file_block_start",
+            "file_block_length",
+            "file_modification_time",
+            "row_index",
+        ];
+        (c.name == "_metadata"
+            && !s.fields().is_empty()
+            && s.fields().iter().all(|f| {
+                FIELDS.iter().any(|n| *n == f.name())
+                    && f.metadata().as_map().contains_key(GENERATED_METADATA_KEY)
+            }))
+        .then_some(c)
+    }
+}
+
 /// A table version: an Iceberg snapshot id or a Delta table version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TableVersion(pub i64);
@@ -670,6 +762,14 @@ pub enum JoinKind {
     /// left row matches more than one right row: how a correlated scalar
     /// subquery without an aggregate is evaluated (Spark's single join).
     Single,
+    /// `[CROSS] JOIN LATERAL (q)`, an inner join whose right side reads the
+    /// left side's columns. Unresolved plans only: Resolve reads the right
+    /// side with the left side in scope and the subquery rewrite plans an
+    /// ordinary [`JoinKind::Inner`] join.
+    LateralInner,
+    /// `LEFT JOIN LATERAL (q)`; unresolved plans only, like
+    /// [`JoinKind::LateralInner`].
+    LateralLeft,
 }
 
 impl JoinKind {
@@ -824,7 +924,14 @@ impl LogicalPlan {
             | PlanNode::InlineTable { .. }
             | PlanNode::TableFunction { .. }
             | PlanNode::Range { .. }
+            | PlanNode::UnionLoopRef { .. }
             | PlanNode::OneRowRelation => {}
+            PlanNode::UnionLoop {
+                anchor, recursive, ..
+            } => {
+                f(anchor);
+                f(recursive);
+            }
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
             | PlanNode::Filter { input, .. }
@@ -866,7 +973,14 @@ impl LogicalPlan {
             | PlanNode::InlineTable { .. }
             | PlanNode::TableFunction { .. }
             | PlanNode::Range { .. }
+            | PlanNode::UnionLoopRef { .. }
             | PlanNode::OneRowRelation => {}
+            PlanNode::UnionLoop {
+                anchor, recursive, ..
+            } => {
+                f(anchor);
+                f(recursive);
+            }
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
             | PlanNode::Filter { input, .. }
@@ -910,6 +1024,8 @@ impl LogicalPlan {
             | PlanNode::CteRef(_)
             | PlanNode::OneRowRelation
             | PlanNode::Range { .. }
+            | PlanNode::UnionLoop { .. }
+            | PlanNode::UnionLoopRef { .. }
             | PlanNode::Shift { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::JoinHint { .. }
@@ -990,6 +1106,8 @@ impl LogicalPlan {
             | PlanNode::CteRef(_)
             | PlanNode::OneRowRelation
             | PlanNode::Range { .. }
+            | PlanNode::UnionLoop { .. }
+            | PlanNode::UnionLoopRef { .. }
             | PlanNode::Shift { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::JoinHint { .. }
@@ -1138,6 +1256,9 @@ impl LogicalPlan {
                     return Some(out);
                 }
                 PlanNode::Range { output, .. } => return Some(vec![output.clone()]),
+                PlanNode::UnionLoop { output, .. } | PlanNode::UnionLoopRef { output, .. } => {
+                    return Some(output.clone());
+                }
                 PlanNode::Scan(s) => return Some(s.output.clone()),
                 PlanNode::CteRef(r) => return Some(r.output.clone()),
                 PlanNode::Shift { input, offset } => {

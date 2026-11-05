@@ -118,7 +118,7 @@ fn a_failing_shared_body_fails_the_query_and_releases_its_memory() {
 // -------------------------------------------------------------- deterministic instances (unit 3)
 
 /// `sql` optimized as a session does (with a configuration: `ShareCte` runs), planned and run.
-fn sharing(env: &super::Env, sql: &str, conf: &[(&str, &str)]) -> (usize, Vec<String>) {
+pub(super) fn sharing(env: &super::Env, sql: &str, conf: &[(&str, &str)]) -> (usize, Vec<String>) {
     use std::sync::Arc;
 
     use krishiv_common::config::Config;

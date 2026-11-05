@@ -68,6 +68,7 @@ mod topn;
 
 pub(crate) use keys::KeyEncoder;
 pub use keys::SortKey;
+pub(crate) use merge::{data_bytes, owned_rows};
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortMetrics};
 pub use topn::TopN;
 
@@ -91,7 +92,11 @@ const SPILL_BATCH_BYTES: usize = 128 << 10;
 
 /// [`TaskContext::run_blocking`] for a source, which has no context in
 /// `get_data`.
-async fn blocking<T, F>(query: &Arc<QueryContext>, executor: &Arc<dyn Executor>, f: F) -> Result<T>
+pub(crate) async fn blocking<T, F>(
+    query: &Arc<QueryContext>,
+    executor: &Arc<dyn Executor>,
+    f: F,
+) -> Result<T>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
@@ -105,7 +110,10 @@ where
 }
 
 /// A breaker's source-side global state: its sink's finalized state.
-fn finalized<T: Send + Sync + 'static>(ctx: &TaskContext, what: &str) -> Result<GlobalState> {
+pub(super) fn finalized<T: Send + Sync + 'static>(
+    ctx: &TaskContext,
+    what: &str,
+) -> Result<GlobalState> {
     let state = ctx
         .dependency()
         .cloned()

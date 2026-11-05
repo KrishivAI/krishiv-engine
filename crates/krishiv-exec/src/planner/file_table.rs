@@ -33,6 +33,7 @@ const FOOTER_CHUNK: usize = 4;
 pub struct FileTable {
     scan: FileScan,
     statistics: Option<TableStats>,
+    units: Option<u64>,
 }
 
 impl FileTable {
@@ -67,10 +68,14 @@ impl FileTable {
         let width = io.config().max_concurrent_requests.max(1);
         let mut stats: Option<FileStatistics> = None;
         let mut known = true;
+        let mut units = Some(0_u64);
         let read = |f| io.read_metadata(format.as_ref(), f, MetadataNeeds::default(), &options);
         in_order(&files, width, read, |meta| {
             let s = meta.statistics();
             known &= s.rows.exact().is_some();
+            units = units
+                .zip(meta.unit_count())
+                .map(|(a, b)| a.saturating_add(b));
             stats = Some(match stats.take() {
                 None => s,
                 Some(acc) => merge(acc, &s),
@@ -89,7 +94,11 @@ impl FileTable {
             ScanOptions::from_config(config),
             SplitConfig::from_config(config, worker_slots),
         );
-        Ok(Self { scan, statistics })
+        Ok(Self {
+            scan,
+            statistics,
+            units,
+        })
     }
 }
 
@@ -100,6 +109,10 @@ impl TableProvider for FileTable {
 
     fn statistics(&self) -> Option<TableStats> {
         self.statistics.clone()
+    }
+
+    fn scan_units(&self) -> Option<u64> {
+        self.units
     }
 }
 
@@ -291,7 +304,7 @@ fn literal(v: &ScalarValue, t: &arrow_schema::DataType) -> Option<Literal> {
                 precision,
                 scale,
             },
-            A::Decimal128(p, s),
+            A::Decimal64(p, s) | A::Decimal128(p, s),
         ) if precision == p && scale == s => Literal::Decimal {
             unscaled: *unscaled,
             data_type: DecimalType::try_new(u32::from(*p), u32::try_from(*s).ok()?).ok()?,

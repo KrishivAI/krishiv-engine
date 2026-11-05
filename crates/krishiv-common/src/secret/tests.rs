@@ -211,3 +211,29 @@ fn wiping_leaves_plaintext_empty() {
     super::wipe_bytes(&mut bytes);
     assert!(bytes.is_empty());
 }
+
+#[test]
+fn object_store_paths_are_not_credentials() {
+    for url in [
+        "hf://datasets/cornell-movie-review-data/rotten_tomatoes/validation.parquet",
+        "hf://datasets/acme/tiny@v2/data/t.parquet",
+        "https://huggingface.co/datasets/a/b/resolve/main/c.parquet",
+        "s3a://bucket/key/part-00000.parquet",
+    ] {
+        assert!(
+            OptionValue::from_user("path", url).as_plain().is_some(),
+            "{url} was classified as a credential"
+        );
+    }
+    // Only the `hf://datasets/...` shape is exempt: userinfo in any other `hf://` URL is a credential.
+    for url in [
+        "hf://user:SECRET@datasets/acme/tiny/t.parquet",
+        "hf://SECRETTOKEN@datasets/acme/tiny/t.parquet",
+        "HF://user:SECRET@host/x",
+    ] {
+        assert!(
+            OptionValue::from_user("path", url).as_plain().is_none(),
+            "{url} was not redacted"
+        );
+    }
+}

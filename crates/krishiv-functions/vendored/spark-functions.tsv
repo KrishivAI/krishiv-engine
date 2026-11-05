@@ -268,7 +268,7 @@ luhn_check	function	3.5	true	scalar	0100000	1
 make_date	function	3.5	true	scalar	0001000	3
 make_dt_interval	function	3.5	true	scalar	1111100	[0, 1, 2, 3, 4]
 make_interval	function	3.5	true	scalar	1111111	
-make_time	function	4.1	unknown	unknown	0001000	3
+make_time	function	4.1	true	scalar	0001000	3
 make_timestamp	function	3.5	true	scalar	0111001	[1, 2, 3, 6, 7]
 make_timestamp_ltz	function	3.5	true	scalar	0011001	[2, 6]
 make_timestamp_ntz	function	3.5	true	scalar	0010001	[2, 6]
@@ -435,15 +435,15 @@ theta_sketch_agg	function	4.1	true	aggregate	0110000	[1, 2]
 theta_sketch_estimate	function	4.1	true	aggregate	0100000	1
 theta_union	function	4.1	true	aggregate	0011000	[2, 3]
 theta_union_agg	function	4.1	true	aggregate	0110000	[1, 2]
-time	function	4.1	unknown	unknown	0100000	1
+time	function	4.1	true	scalar	0100000	1
 time_bucket	function	4.2	true	scalar	0011000	[2, 3]
 time_diff	function	4.1	true	scalar	0001000	3
-time_from_micros	function	4.2	unknown	unknown	0100000	1
-time_from_millis	function	4.2	unknown	unknown	0100000	1
-time_from_seconds	function	4.2	unknown	unknown	0100000	1
-time_to_micros	function	4.2	unknown	unknown	0100000	1
-time_to_millis	function	4.2	unknown	unknown	0100000	1
-time_to_seconds	function	4.2	unknown	unknown	0100000	1
+time_from_micros	function	4.2	true	scalar	0100000	1
+time_from_millis	function	4.2	true	scalar	0100000	1
+time_from_seconds	function	4.2	true	scalar	0100000	1
+time_to_micros	function	4.2	true	scalar	0100000	1
+time_to_millis	function	4.2	true	scalar	0100000	1
+time_to_seconds	function	4.2	true	scalar	0100000	1
 time_trunc	function	4.1	true	scalar	0010000	2
 timestamp	function	3.5	true	scalar	0100000	1
 timestamp_micros	function	3.5	true	scalar	0100000	1
@@ -458,7 +458,7 @@ to_date	function	3.5	true	scalar	0110000	[1, 2]
 to_json	function	3.5	true	scalar	0110000	[1, 2]
 to_number	function	3.5	true	scalar	0010000	2
 to_protobuf	function	4.0	unknown	unknown	0011100	[2, 3, 4]
-to_time	function	4.1	unknown	unknown	0110000	[1, 2]
+to_time	function	4.1	true	scalar	0110000	[1, 2]
 to_timestamp	function	3.5	true	scalar	0110000	[1, 2]
 to_timestamp_ltz	function	3.5	true	scalar	0110000	[1, 2]
 to_timestamp_ntz	function	3.5	true	scalar	0110000	[1, 2]
@@ -492,7 +492,7 @@ try_sum	function	3.5	true	aggregate	0100000	[1, 2]
 try_to_binary	function	3.5	true	scalar	0110000	[1, 2]
 try_to_date	function	4.1	true	scalar	0110000	[1, 2]
 try_to_number	function	3.5	true	scalar	0010000	2
-try_to_time	function	4.1	unknown	unknown	0110000	[1, 2]
+try_to_time	function	4.1	true	scalar	0110000	[1, 2]
 try_to_timestamp	function	3.5	true	scalar	0110000	[1, 2]
 try_url_decode	function	4.0	true	scalar	0100000	1
 try_validate_utf8	function	4.0	true	scalar	0100000	1

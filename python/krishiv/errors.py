@@ -63,6 +63,7 @@ _TEMPLATES = {
     "CANNOT_BE_NONE": "Argument `<arg_name>` cannot be None.",
     "WRONG_NUM_COLUMNS": "Function `<func_name>` should take at least <num_cols> columns.",
     "UNSUPPORTED_DATA_TYPE": "Unsupported DataType `<data_type>`.",
+    "UNSUPPORTED_DATA_TYPE_FOR_ARROW_CONVERSION": "<data_type> is not supported in conversion to Arrow.",
     "DIFFERENT_ROWS": "<error_msg>",
     "DIFFERENT_SCHEMA": "Schemas do not match.\n--- actual\n+++ expected\n<error_msg>",
     "DIFFERENT_PANDAS_DATAFRAME": (
@@ -226,7 +227,7 @@ class PySparkException(Exception):
         message: str | None = None,
         errorClass: str | None = None,
         messageParameters: dict[str, Any] | None = None,
-        contexts: list[QueryContext] | list[tuple] | None = None,
+        contexts: list[QueryContext] | list[tuple[Any, ...]] | None = None,
         sqlState: str | None = None,
         rendered: str | None = None,
     ) -> None:
@@ -416,7 +417,7 @@ def _from_native(
     sql_state: str | None,
     message: str,
     parameters: dict[str, str],
-    contexts: list[tuple] | None = None,
+    contexts: list[tuple[Any, ...]] | None = None,
     rendered: str | None = None,
 ) -> PySparkException:
     """The exception for an engine error (called by ``krishiv._native``); ``rendered`` is

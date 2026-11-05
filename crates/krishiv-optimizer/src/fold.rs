@@ -23,12 +23,13 @@ use arrow_array::{
     new_null_array,
 };
 use arrow_schema::{DataType as ArrowType, TimeUnit};
-use krishiv_functions::scalar::{Arg, bind_udf};
+use krishiv_functions::scalar::{Arg, BindArg, BindOptions, bind_scalar, bind_udf};
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
 use krishiv_plan::{
     Builtin, CastMode, Expr, ExprNode, FunctionId, FunctionKind, Literal, LogicalPlan, PlanNode,
     ResolvedExpr, ResolvedFunction,
 };
+use krishiv_types::arrow::client_arrow_type;
 use krishiv_types::{DataType, DecimalType};
 use krishiv_udf_sdk::UdfLibrary;
 
@@ -372,7 +373,7 @@ fn arrow_type(t: &DataType) -> Option<ArrowType> {
     Some(match t {
         DataType::String => ArrowType::Utf8,
         DataType::Binary | DataType::Boolean | DataType::Timestamp => return None,
-        other => other.to_arrow(),
+        other => client_arrow_type(&other.to_arrow()),
     })
 }
 
@@ -500,6 +501,11 @@ fn fold_udf(e: &Arc<Expr>, ctx: &UdfFoldCtx<'_>) -> Arc<Expr> {
     let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
         return Arc::clone(e);
     };
+    if matches!(f.id, FunctionId::Registry { .. })
+        && f.id.name().eq_ignore_ascii_case("aes_encrypt")
+    {
+        return fold_aes_encrypt(e, f, ctx);
+    }
     let FunctionId::Udf { name, version } = &f.id else {
         return Arc::clone(e);
     };
@@ -547,12 +553,63 @@ fn fold_udf(e: &Arc<Expr>, ctx: &UdfFoldCtx<'_>) -> Arc<Expr> {
     udf_literal(&out, &f.data_type).unwrap_or_else(|| Arc::clone(e))
 }
 
+/// `aes_encrypt` over literals, folded once at planning as Spark's
+/// `ConstantFolding` does: the call (and its key) leaves the plan for one
+/// ciphertext, so every task, partition and batch sees the same IV. A
+/// failure leaves the call in the plan, so the error surfaces at execution.
+fn fold_aes_encrypt(e: &Arc<Expr>, f: &ResolvedFunction, ctx: &UdfFoldCtx<'_>) -> Arc<Expr> {
+    if f.kind != FunctionKind::Scalar || f.distinct || f.filter.is_some() {
+        return Arc::clone(e);
+    }
+    let Some(literals) = f
+        .args
+        .iter()
+        .map(|a| aes_argument(a))
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Arc::clone(e);
+    };
+    let bind_args: Vec<BindArg> = literals.iter().cloned().map(BindArg::Literal).collect();
+    let Ok(bound) = bind_scalar(
+        f.id.name(),
+        &bind_args,
+        &BindOptions::new().with_ansi(ctx.ansi),
+    ) else {
+        return Arc::clone(e);
+    };
+    let args: Vec<Arg> = literals.into_iter().map(Arg::Scalar).collect();
+    let Ok(out) = bound.invoke(&args, 1) else {
+        return Arc::clone(e);
+    };
+    udf_literal(&out, &f.data_type).unwrap_or_else(|| Arc::clone(e))
+}
+
+/// An `aes_encrypt` argument that is a literal, or a string or binary literal
+/// cast to `BINARY` (the analyzer's implicit cast of the input, key and IV;
+/// the cast folder leaves binary targets alone): a string's bytes are its
+/// UTF-8.
+fn aes_argument(a: &Arc<Expr>) -> Option<ArrayRef> {
+    match &a.node {
+        ExprNode::Literal(l) => udf_array(l),
+        ExprNode::Cast { expr, to, .. } if *to == DataType::Binary => match &expr.node {
+            ExprNode::Literal(Literal::String(s)) => {
+                Some(Arc::new(arrow_array::BinaryArray::from_iter_values([
+                    s.as_bytes()
+                ])))
+            }
+            ExprNode::Literal(l @ Literal::Binary(_)) => udf_array(l),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// A literal as a one-row array, for UDF arguments: every scalar literal
 /// (intervals have no UDF form).
 fn udf_array(l: &Literal) -> Option<ArrayRef> {
     Some(match l {
         Literal::Null(None) => Arc::new(arrow_array::NullArray::new(1)),
-        Literal::Null(Some(t)) => new_null_array(&t.to_arrow(), 1),
+        Literal::Null(Some(t)) => new_null_array(&client_arrow_type(&t.to_arrow()), 1),
         Literal::Boolean(v) => Arc::new(BooleanArray::from(vec![*v])),
         Literal::Byte(v) => Arc::new(Int8Array::from(vec![*v])),
         Literal::Short(v) => Arc::new(Int16Array::from(vec![*v])),

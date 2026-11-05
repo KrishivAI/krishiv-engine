@@ -24,6 +24,7 @@ fn env() -> ExprEnv {
         map_key_dedup_last_win: false,
         legacy_java_charsets: false,
         legacy_coding_error_action: false,
+        legacy_time_parser: false,
     }
 }
 
@@ -140,6 +141,7 @@ fn a_write_keeps_the_shared_plans() {
             max_records_per_file: 1,
             target_file_bytes: 1,
             partition_by: Vec::new(),
+            column_types: std::collections::BTreeMap::new(),
         })
         .unwrap();
     assert_eq!(p.shared().len(), 1);
@@ -165,6 +167,7 @@ fn filtered_scan(id: u64) -> PhysNode {
             key_type: DataType::Int64,
         }],
         row_stage: crate::operators::RowStageSettings::default(),
+        row_id: false,
     })
 }
 

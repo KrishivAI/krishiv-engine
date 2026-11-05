@@ -168,7 +168,9 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Window { .. }
                 | PlanNode::ReplicateRows { .. } => true,
                 // Lowering builds the generator without its columns.
-                PlanNode::Generate { output, .. } => !output.is_empty(),
+                PlanNode::Generate { output, .. }
+                | PlanNode::UnionLoop { output, .. }
+                | PlanNode::UnionLoopRef { output, .. } => !output.is_empty(),
             },
             Node::Expr(e) => match &e.node {
                 ExprNode::Column(_)
@@ -177,7 +179,8 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | ExprNode::Function(_)
                 | ExprNode::Field { .. }
                 | ExprNode::UpdateFields { .. }
-                | ExprNode::Alias { .. } => false,
+                | ExprNode::Alias { .. }
+                | ExprNode::MultiAlias { .. } => false,
                 ExprNode::Cast { mode, .. } => match mode {
                     CastMode::Default => false,
                     CastMode::Legacy | CastMode::Ansi | CastMode::Try => true,
@@ -261,8 +264,12 @@ impl Teardown {
             PlanNode::Read(_)
             | PlanNode::Scan(_)
             | PlanNode::Range { .. }
+            | PlanNode::UnionLoopRef { .. }
             | PlanNode::CteRef(_)
             | PlanNode::OneRowRelation => {}
+            PlanNode::UnionLoop {
+                anchor, recursive, ..
+            } => self.plans.extend([anchor, recursive]),
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => self.exprs.extend(v),
@@ -403,10 +410,10 @@ impl Teardown {
             ExprNode::Column(_)
             | ExprNode::Literal(_)
             | ExprNode::TypedLiteral { .. }
-            | ExprNode::Star(_)
             | ExprNode::Resolved(
                 ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
             ) => {}
+            ExprNode::Star(s) => self.exprs.extend(s.replace.into_iter().map(|(_, e)| e)),
             ExprNode::Function(FunctionCall {
                 args,
                 filter,
@@ -429,6 +436,7 @@ impl Teardown {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(

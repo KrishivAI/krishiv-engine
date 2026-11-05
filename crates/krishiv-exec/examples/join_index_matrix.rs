@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The P2-T158 join index sweep: the flat (`hashbrown`) and the salted
 //! [`JoinIndex`] over the same join rows, the salted probe with and
-//! without its touch pass, and today's arrow-row `KeyTable`, single
+//! without its prefetch pass, and today's arrow-row `KeyTable`, single
 //! thread, interleaved.
 //!
 //! ```text
@@ -16,7 +16,7 @@
 //! times the probe of `2N` pre-encoded keys in 4,096-row batches:
 //! `hit` (uniform over the `N` keys) and `half` (uniform over `2N` values,
 //! half present). Each repetition runs the variants in the order
-//! `flat, salted, touch, keytable` and then reversed (ABBA), so drift
+//! `flat, salted, prefetch, keytable` and then reversed (ABBA), so drift
 //! hits every variant alike; the report gives the median, min and max ns
 //! per probe of `2 * reps` samples and the flat / salted ratio of medians
 //! (above 1: the salted directory is faster). Build times (ns per row,
@@ -28,7 +28,7 @@
 //! which half match, as an inner join (build columns gathered) and a left
 //! semi join (key-only build), for `N` in `JOIN_INDEX_SIZES`.
 //!
-//! `JOIN_INDEX_PERF=<flat|salted|touch|keytable|none>,<N>,<probes per key>,<spread>[,str24]`
+//! `JOIN_INDEX_PERF=<flat|salted|prefetch|keytable|none>,<N>,<probes per key>,<spread>[,str24]`
 //! builds one index of `N` keys and probes it `probes * N` times with
 //! keys uniform over `spread * N` values (1 in `spread` hits); `none`
 //! builds and encodes the same keys without probing, so the difference of
@@ -222,13 +222,13 @@ fn index(f: &Fixture, choice: IndexChoice) -> JoinIndex {
 }
 
 /// Probes every batch; returns the matches (so nothing is optimized out).
-fn probe_rows(f: &Fixture, ix: &JoinIndex, touch: bool, out: &mut Vec<u32>) -> usize {
+fn probe_rows(f: &Fixture, ix: &JoinIndex, prefetch: bool, out: &mut Vec<u32>) -> usize {
     let mut found = 0;
     // Row ids of a full batch, built once: no allocation in the timed loop.
     let ids: Vec<u32> = (0..u32::try_from(BATCH).expect("batch")).collect();
     for (keys, _, _) in &f.probes {
         out.clear();
-        ix.find_with(&f.layout, keys, &ids[..keys.len()], &f.arena, out, touch);
+        ix.find_with(&f.layout, keys, &ids[..keys.len()], &f.arena, out, prefetch);
         found += out.iter().filter(|&&h| h != NO_MATCH).count();
     }
     found
@@ -303,7 +303,7 @@ fn perf_run(spec: &str) {
     let found = match kind {
         "flat" => probe_rows(&f, &index(&f, IndexChoice::Flat), false, &mut out),
         "salted" => probe_rows(&f, &index(&f, IndexChoice::Salted), false, &mut out),
-        "touch" => probe_rows(&f, &index(&f, IndexChoice::Salted), true, &mut out),
+        "prefetch" => probe_rows(&f, &index(&f, IndexChoice::Salted), true, &mut out),
         "keytable" => probe_legacy(&f, &legacy(&f)),
         // The baseline: the same fixture and a built index, no probes.
         _ => index(&f, IndexChoice::Salted).len(),
@@ -475,7 +475,7 @@ fn main() {
     let mut stdout = std::io::stdout().lock();
     writeln!(
         stdout,
-        "key\tN\tprobe\tflat_ns\tsalted_ns\ttouch_ns\tkeytable_ns\tflat/salted\tsalted/touch\tkeytable/best\tflat_B/key\tsalted_B/key\tbuild_flat_ns\tbuild_salted_ns\tranges(min-max)"
+        "key\tN\tprobe\tflat_ns\tsalted_ns\tprefetch_ns\tkeytable_ns\tflat/salted\tsalted/prefetch\tkeytable/best\tflat_B/key\tsalted_B/key\tbuild_flat_ns\tbuild_salted_ns\tranges(min-max)"
     )
     .expect("stdout");
     for kt in env_list("JOIN_INDEX_KEYS", "i64,str24")

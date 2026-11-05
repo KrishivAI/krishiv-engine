@@ -64,12 +64,30 @@ pub struct OperatorMetrics {
     pub blocked_on_memory: Duration,
     /// Time waiting on a `Blocked` sink (backpressure).
     pub blocked_on_sink: Duration,
+    /// The fewest rows one driver produced (skew; meaningful when
+    /// [`drivers`](Self::drivers) is not 0).
+    pub min_driver_rows_out: u64,
+    /// The most rows one driver produced.
+    pub max_driver_rows_out: u64,
 }
 
 impl OperatorMetrics {
     /// Adds `o` (another driver's or worker's counters), saturating (a
     /// merged profile may come from a document).
     pub fn merge(&mut self, o: &Self) {
+        // The spread of rows per driver merges as min and max over the
+        // drivers that ran (a side with none has no spread).
+        match (self.drivers, o.drivers) {
+            (_, 0) => {}
+            (0, _) => {
+                self.min_driver_rows_out = o.min_driver_rows_out;
+                self.max_driver_rows_out = o.max_driver_rows_out;
+            }
+            _ => {
+                self.min_driver_rows_out = self.min_driver_rows_out.min(o.min_driver_rows_out);
+                self.max_driver_rows_out = self.max_driver_rows_out.max(o.max_driver_rows_out);
+            }
+        }
         self.drivers = self.drivers.saturating_add(o.drivers);
         self.rows_in = self.rows_in.saturating_add(o.rows_in);
         self.batches_in = self.batches_in.saturating_add(o.batches_in);
@@ -97,6 +115,8 @@ impl OperatorMetrics {
         self.drivers = 1;
         self.max_driver_compute_time = self.compute_time;
         self.max_driver_blocked_on_io = self.blocked_on_io;
+        self.min_driver_rows_out = self.rows_out;
+        self.max_driver_rows_out = self.rows_out;
     }
 
     pub(crate) fn input(&mut self, rows: usize) {
@@ -123,6 +143,10 @@ pub struct DriverStats {
     pub max_slice: Duration,
     /// Polls longer than the stall threshold.
     pub stalls: u64,
+    /// Time the drivers spent in polls, summed: their busy time, the
+    /// denominator of [`QueryMetrics::hash_probe_share`]. Wall time of each
+    /// poll, so a thread descheduled mid-poll counts as busy.
+    pub busy: Duration,
 }
 
 impl DriverStats {
@@ -133,6 +157,7 @@ impl DriverStats {
         self.yields = self.yields.saturating_add(o.yields);
         self.max_slice = self.max_slice.max(o.max_slice);
         self.stalls = self.stalls.saturating_add(o.stalls);
+        self.busy = self.busy.saturating_add(o.busy);
     }
 }
 
@@ -390,6 +415,28 @@ impl QueryMetrics {
         self.wall_time = self.wall_time.max(o.wall_time);
         self.workers = self.workers.saturating_add(o.workers);
     }
+
+    /// The share of the drivers' busy time spent in hash-join table work:
+    /// the sum of the joins' `probe_table_ns` over [`DriverStats::busy`]
+    /// (ADR 0011's E02 tripwire reads it). `None` for a query that probed
+    /// no hash table, or whose drivers report no busy time.
+    #[must_use]
+    pub fn hash_probe_share(&self) -> Option<f64> {
+        let mut table = None;
+        for e in self.operators.values() {
+            if let Some(&Metric::Count(n)) = e.extra("probe_table_ns") {
+                table = Some(table.unwrap_or(0_u64).saturating_add(n));
+            }
+        }
+        let busy = self.drivers.busy.as_nanos();
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a ratio for a report: nanoseconds past 2^53 lose only digits it does not show"
+        )]
+        table
+            .filter(|&t| t > 0 && busy > 0)
+            .map(|t| t as f64 / busy as f64)
+    }
 }
 
 /// A small dense id of the current thread, for counting the threads that
@@ -418,6 +465,27 @@ mod tests {
         };
         m.as_driver();
         m
+    }
+
+    #[test]
+    fn rows_per_driver_merge_as_min_and_max() {
+        let mut total = OperatorMetrics::default();
+        for (ms, rows) in [(5, 10), (40, 1), (7, 3)] {
+            total.merge(&op(ms, rows));
+        }
+        assert_eq!(
+            (total.min_driver_rows_out, total.max_driver_rows_out),
+            (1, 10)
+        );
+        // A side without drivers has no spread and changes nothing.
+        let mut other = OperatorMetrics::default();
+        other.merge(&total);
+        other.merge(&OperatorMetrics::default());
+        assert_eq!(
+            (other.min_driver_rows_out, other.max_driver_rows_out),
+            (1, 10)
+        );
+        assert_eq!(other.drivers, 3);
     }
 
     #[test]

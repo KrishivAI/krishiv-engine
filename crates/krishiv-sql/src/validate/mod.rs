@@ -33,11 +33,11 @@
 //! | a `DESCRIBE` with `AS JSON` but no `EXTENDED`/`FORMATTED`, with a column and `AS JSON`, or with a column and a partition | `DESCRIBE_JSON_NOT_EXTENDED`, `UNSUPPORTED_FEATURE.DESC_TABLE_COLUMN_JSON`, `UNSUPPORTED_FEATURE.DESC_TABLE_COLUMN_PARTITION` |
 //! | a `DESCRIBE` partition key without a value | `INVALID_SQL_SYNTAX.EMPTY_PARTITION_VALUE` |
 //!
-//! Not checked here: an inline table whose expressions fail when Spark
+//! Not checked here (the analyzer raises it, `Resolver::inline_table`): an inline table whose expressions fail when Spark
 //! evaluates them while parsing (`INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION`),
 //! which needs expression evaluation.
 
-mod interval;
+pub(crate) mod interval;
 pub(crate) mod literal;
 mod pipe;
 mod relation;
@@ -644,7 +644,9 @@ impl Checker<'_> {
             AlterTableAction::SetPartitionLocation { partition, .. } => {
                 self.partition_values(Some(partition))
             }
-            AlterTableAction::SetLocation(_) | AlterTableAction::RecoverPartitions => Ok(()),
+            AlterTableAction::SetLocation(_)
+            | AlterTableAction::SetComment(_)
+            | AlterTableAction::RecoverPartitions => Ok(()),
         }
     }
 
@@ -1037,15 +1039,23 @@ impl Checker<'_> {
                 ));
             }
         }
+        // Spark compares CTE names with the session's resolver.
+        let key = |n: &str| {
+            if self.opts.case_sensitive {
+                n.to_owned()
+            } else {
+                n.to_lowercase()
+            }
+        };
         let mut seen = HashSet::new();
         let mut duplicates: Vec<&str> = vec![];
         for cte in &with.ctes {
-            let name = cte.name.value.to_lowercase();
-            if !seen.insert(name.clone()) && !duplicates.iter().any(|d| d.to_lowercase() == name) {
+            let name = key(&cte.name.value);
+            if !seen.insert(name.clone()) && !duplicates.iter().any(|d| key(d) == name) {
                 let first = with
                     .ctes
                     .iter()
-                    .find(|c| c.name.value.to_lowercase() == name)
+                    .find(|c| key(&c.name.value) == name)
                     .map_or(cte.name.value.as_str(), |c| c.name.value.as_str());
                 duplicates.push(first);
             }

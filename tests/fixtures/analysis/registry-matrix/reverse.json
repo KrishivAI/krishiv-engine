@@ -39,22 +39,6 @@
     {
       "id": "reverse#6d11d9d7634a/ansi_off",
       "reason": "SELECT reverse(CAST(array() AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "reverse#b32c7db50969/ansi_on",
-      "reason": "SELECT reverse(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "reverse#b32c7db50969/ansi_off",
-      "reason": "SELECT reverse(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "reverse#c0dc5ee20538/ansi_on",
-      "reason": "SELECT reverse(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "reverse#c0dc5ee20538/ansi_off",
-      "reason": "SELECT reverse(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     }
   ],
   "format_version": 1,

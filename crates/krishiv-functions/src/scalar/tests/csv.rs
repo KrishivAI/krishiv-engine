@@ -647,14 +647,18 @@ fn from_csv_option_names_and_values() {
             vec![("unescapedQuoteHandling", "BAD")],
             "unescapedQuoteHandling=BAD",
         ),
-        (vec![("timeFormat", "HH")], "timeFormat"),
         (vec![("quote", "ab")], "quote"),
     ] {
         let err = from_csv_bind_error("a INT", &pairs);
         assert!(err.contains(named), "{pairs:?}: {err}");
     }
     // A malformed pattern keeps Spark's error (not an unsupported-option one).
-    for option in ["dateFormat", "timestampFormat", "timestampNTZFormat"] {
+    for option in [
+        "dateFormat",
+        "timeFormat",
+        "timestampFormat",
+        "timestampNTZFormat",
+    ] {
         let err = from_csv_bind_error("a INT", &[(option, "yyyy-MM-dd'")]);
         assert!(err.contains("INVALID_DATETIME_PATTERN"), "{option}: {err}");
     }
@@ -894,4 +898,36 @@ fn from_csv_time_only_timestamps_use_the_current_date() {
         .value(0);
     let day = start.div_euclid(86_400_000_000) * 86_400_000_000;
     assert_eq!(micros, day + (12 * 3600 + 30 * 60) * 1_000_000);
+}
+
+/// Spark's NTZ formatter is never the legacy one (`forTimestampNTZ`): under
+/// LEGACY, `.000123` is still 123 microseconds.
+#[test]
+fn from_csv_ntz_pattern_ignores_the_legacy_time_parser() {
+    use arrow_array::types::TimestampMicrosecondType;
+    let csv = strs(&[Some("2024-01-02 03:04:05.000123")]);
+    let schema_arr: ArrayRef = Arc::new(StringArray::from(vec![Some("t TIMESTAMP_NTZ")]));
+    let opts = map_lit(&[("timestampNTZFormat", "yyyy-MM-dd HH:mm:ss.SSSSSS")]);
+    let f = bind_scalar(
+        "from_csv",
+        &[
+            BindArg::Column {
+                ty: DataType::Utf8,
+                nullable: true,
+            },
+            BindArg::Literal(Arc::clone(&schema_arr)),
+            BindArg::Literal(Arc::clone(&opts)),
+        ],
+        &BindOptions::new().with_legacy_time_parser(true),
+    )
+    .unwrap();
+    let out = f
+        .invoke(&[col(&csv), lit(&schema_arr), lit(&opts)], 1)
+        .unwrap();
+    let micros = out
+        .as_struct()
+        .column(0)
+        .as_primitive::<TimestampMicrosecondType>()
+        .value(0);
+    assert_eq!(micros.rem_euclid(1_000_000), 123);
 }

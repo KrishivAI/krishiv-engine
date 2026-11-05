@@ -178,6 +178,9 @@ impl Gen<'_> {
             }),
             1 => ExprNode::Literal(self.literal()),
             2 => ExprNode::Star(Star {
+                regex: None,
+                replace: Vec::new(),
+                position: None,
                 qualifier: self.many(0, 1, Gen::name),
                 except: Vec::new(),
                 plan_id: self.plan_ref(),
@@ -757,6 +760,15 @@ fn m_literal(v: &mut Literal, w: &mut Walk) -> bool {
             site!(w, flip(start, DayTimeField::Day, DayTimeField::Hour));
             site!(w, flip(end, DayTimeField::Second, DayTimeField::Minute));
         }
+        Literal::CalendarInterval {
+            months,
+            days,
+            micros,
+        } => {
+            site!(w, *months += 1);
+            site!(w, *days += 1);
+            site!(w, *micros += 1);
+        }
     }
     false
 }
@@ -806,6 +818,9 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             m_type(to, w) || m_expr(expr, w)
         }
         ExprNode::Alias { expr, name } => m_string(name, w) || m_expr(expr, w),
+        ExprNode::MultiAlias { expr, names } => {
+            names.iter_mut().any(|n| m_string(n, w)) || m_expr(expr, w)
+        }
         ExprNode::Lambda { params, body } => {
             site!(
                 w,
@@ -1005,6 +1020,23 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
     let p = Arc::make_mut(p);
     match &mut p.node {
         PlanNode::OneRowRelation | PlanNode::TableFunction { .. } | PlanNode::Range { .. } => false,
+        PlanNode::UnionLoopRef { id, .. } => {
+            site!(w, *id += 1);
+            false
+        }
+        PlanNode::UnionLoop {
+            id,
+            anchor,
+            recursive,
+            max_level,
+            limit,
+            ..
+        } => {
+            site!(w, *id += 1);
+            site!(w, *max_level = max_level.map_or(Some(1), |n| Some(n + 1)));
+            site!(w, *limit = limit.map_or(Some(1), |n| Some(n + 1)));
+            m_plan(anchor, w) || m_plan(recursive, w)
+        }
         PlanNode::Read(s) => m_source(s, w),
         PlanNode::PartialAggregate {
             input,

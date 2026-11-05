@@ -29,6 +29,7 @@ __all__ = [
     "count_star",
     "expr",
     "lit",
+    "map_literal",
 ]
 
 @final
@@ -78,6 +79,19 @@ class DataFrame:
         path: str,
         options: list[tuple[str, str]] | None = ...,
         partition_by: list[str] | None = ...,
+        bucket_by: tuple[int, list[str]] | None = ...,
+        sort_by: list[str] | None = ...,
+    ) -> None: ...
+    def write_table(
+        self,
+        insert_into: bool,
+        table: str,
+        format: str | None,
+        mode: str,
+        options: list[tuple[str, str]] | None = ...,
+        partition_by: list[str] | None = ...,
+        bucket_by: tuple[int, list[str]] | None = ...,
+        sort_by: list[str] | None = ...,
     ) -> None: ...
     def write_to_table(
         self,

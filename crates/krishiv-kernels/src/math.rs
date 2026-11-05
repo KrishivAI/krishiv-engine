@@ -12,9 +12,9 @@
 //! ports of `math/fdlibm.rs` where `libm` differs), so a result is the same on
 //! every worker and CPU. Measured against Spark 4.0-4.2 on 280 random inputs
 //! per function, the results are bit-identical for `sqrt`, `cbrt`, `exp`,
-//! `expm1`, `log2`, `log1p`, `log10` (one input in 145 differs), `asin`,
+//! `expm1`, `log2`, `log1p`, `log10` (one input in 145 differs), `ln` (fdlibm's `log`, which Spark's `Log` calls through `StrictMath`), `asin`,
 //! `acos`, `atan`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`,
-//! `hypot` and `pow`; `sin`, `cos`, `tan`, `ln` and `atan2` differ in the last
+//! `hypot` and `pow`; `sin`, `cos`, `tan` and `atan2` differ in the last
 //! bit for about 1 to 2 inputs in 100 (the JVM's intrinsics are not fdlibm).
 //!
 //! # Domains
@@ -119,7 +119,7 @@ impl UnaryFn {
             Self::Cbrt => fdlibm::cbrt(x),
             Self::Exp => libm::exp(x),
             Self::Expm1 => libm::expm1(x),
-            Self::Ln => return (x > 0.0 || x.is_nan()).then(|| libm::log(x)),
+            Self::Ln => return (x > 0.0 || x.is_nan()).then(|| fdlibm::log(x)),
             Self::Log2 => return (x > 0.0 || x.is_nan()).then(|| libm::log(x) / LN_2),
             Self::Log10 => return (x > 0.0 || x.is_nan()).then(|| fdlibm::log10(x)),
             Self::Log1p => return (x > -1.0 || x.is_nan()).then(|| libm::log1p(x)),
@@ -203,7 +203,7 @@ impl BinaryFn {
                 if l <= 0.0 || r <= 0.0 {
                     return None;
                 }
-                libm::log(r) / libm::log(l)
+                fdlibm::log(r) / fdlibm::log(l)
             }
         })
     }

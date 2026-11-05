@@ -3,8 +3,8 @@
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    TimestampMicrosecondType,
 };
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::{DataType, Schema};
@@ -12,7 +12,7 @@ use bytes::Bytes;
 use krishiv_kernels::datetime_pattern::Purpose;
 use krishiv_kernels::text::{java_decimal_string, java_double_string, java_float_string32};
 
-use super::convert::Kind;
+use super::convert::{Kind, interval_text};
 use super::options::{CsvOptions, Syntax};
 use crate::error::{FormatError, FormatResult};
 use crate::format::{Encoder, WrittenFile};
@@ -51,21 +51,7 @@ impl CsvEncoder {
         let kinds = schema
             .fields()
             .iter()
-            .map(|f| {
-                Kind::of(f.data_type()).map_err(|_| {
-                    FormatError::Other(
-                        krishiv_common::error::UnsupportedDataTypeForDatasource {
-                            format: "CSV".to_owned(),
-                            column_name: format!("`{}`", f.name()),
-                            column_type: format!(
-                                "\"{}\"",
-                                crate::text::spark_type_name(f.data_type())
-                            ),
-                        }
-                        .into(),
-                    )
-                })
-            })
+            .map(|f| Kind::of_field(f).map_err(|_| crate::error::unsupported_column("CSV", f)))
             .collect::<FormatResult<Vec<_>>>()?;
         let mut enc = Self {
             out: Vec::new(),
@@ -205,10 +191,9 @@ impl CsvEncoder {
                     a.as_primitive::<Float64Type>().value(i),
                 ));
             }
-            (Kind::Decimal(_, s), _) => buf.push_str(&java_decimal_string(
-                a.as_primitive::<Decimal128Type>().value(i),
-                *s,
-            )),
+            (Kind::Decimal(_, s), _) => {
+                buf.push_str(&java_decimal_string(super::convert::decimal_at(a, i), *s));
+            }
             (Kind::Str, DataType::Utf8View) => buf.push_str(a.as_string_view().value(i)),
             (Kind::Str, DataType::Utf8) => buf.push_str(a.as_string::<i32>().value(i)),
             (Kind::Str, _) => buf.push_str(a.as_string::<i64>().value(i)),
@@ -233,6 +218,9 @@ impl CsvEncoder {
                     .format_ntz(a.as_primitive::<TimestampMicrosecondType>().value(i))
                     .map_err(write_err)?,
             ),
+            (Kind::YearMonth(..) | Kind::DayTime(..), _) => {
+                buf.push_str(&interval_text(kind, a, i).unwrap_or_default());
+            }
         }
         Ok(true)
     }

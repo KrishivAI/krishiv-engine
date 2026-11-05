@@ -35,11 +35,13 @@
 //! cached per generation. [`ScanFilter::evaluate`] filters rows.
 
 mod bloom;
+mod bound;
 mod codec;
 mod filter;
 mod hash;
 mod key;
 mod member;
+mod merge;
 mod sync;
 
 use std::fmt;
@@ -87,6 +89,9 @@ pub enum FilterSnapshot {
     Disabled(DisabledReason),
     /// The producer's final knowledge (a join build): published once.
     Final(Arc<KeyFilter>),
+    /// What a producer knows so far (a top-N's bound): each later snapshot
+    /// drops at least the rows this one does. See [`RuntimeFilter::tighten`].
+    Tightening(Arc<KeyFilter>),
 }
 
 /// A snapshot with the generation it was published as: they travel
@@ -259,6 +264,34 @@ impl RuntimeFilter {
         Some(generation)
     }
 
+    /// Publishes `keys` as the next generation if it is tighter than the
+    /// current [`FilterSnapshot::Tightening`], or if nothing was published
+    /// yet, and returns the generation. The comparison is of values, under
+    /// the write lock, so the bound only tightens whatever order drivers
+    /// publish in. `None` when nothing changed.
+    pub fn tighten(&self, keys: Arc<KeyFilter>) -> Option<u64> {
+        let mut state = self
+            .state
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let tighter = match &state.snapshot {
+            FilterSnapshot::Pending => true,
+            FilterSnapshot::Tightening(old) => keys.tighter_than(old),
+            FilterSnapshot::Disabled(_) | FilterSnapshot::Final(_) => false,
+        };
+        if !tighter {
+            return None;
+        }
+        let generation = state.generation + 1;
+        *state = Arc::new(Published {
+            generation,
+            snapshot: FilterSnapshot::Tightening(keys),
+        });
+        // Under the lock: a reader that sees the new hint finds this state.
+        self.hint.store(generation, Ordering::Release);
+        Some(generation)
+    }
+
     /// Publishes [`FilterSnapshot::Disabled`] if nothing was published yet
     /// (a producer's drop path: failure or cancellation).
     pub fn abandon(&self, reason: DisabledReason) {
@@ -340,7 +373,7 @@ impl ScanFilter {
         }
         let published = self.filter.published();
         let keys = match &published.snapshot {
-            FilterSnapshot::Final(k) => Some(Arc::clone(k)),
+            FilterSnapshot::Final(k) | FilterSnapshot::Tightening(k) => Some(Arc::clone(k)),
             FilterSnapshot::Pending | FilterSnapshot::Disabled(_) => None,
         };
         let predicate = keys.as_ref().and_then(|k| match &self.column {
@@ -357,10 +390,20 @@ impl ScanFilter {
         l
     }
 
-    /// The current snapshot's knowledge, if final.
+    /// The current snapshot's knowledge, if it has any.
     #[must_use]
     pub fn current(&self) -> Option<Arc<KeyFilter>> {
         self.lowered().keys.clone()
+    }
+
+    /// Whether this is a bound that keeps tightening (a top-N's), not a
+    /// value that arrives once.
+    #[must_use]
+    pub fn is_tightening(&self) -> bool {
+        matches!(
+            self.filter.published().snapshot,
+            FilterSnapshot::Tightening(_)
+        )
     }
 
     /// The generation [`Self::current`] and [`Self::predicate`] are of.

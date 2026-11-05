@@ -15,8 +15,8 @@ FROM t |> JOIN u ON t.a = u.a |> UNION ALL (SELECT 1, 2)
 FROM t |> SELECT DISTINCT a
   => Distinct | +- Project [a] |    +- PipeOperator |       +- Read t | 
 FROM t |> AGGREGATE sum(a) GROUP BY 1
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature a position in a pipe AGGREGATE GROUP BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 36..37
+  => Aggregate [* @1], [* @1, sum(a)] | +- PipeOperator |    +- Read t | 
 FROM t |> SET a = 1
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature pipe SET is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..19
+  => Project [* REPLACE (a)] | +- PipeOperator |    +- Read t | 
 FROM t |> TABLESAMPLE (3 ROWS)
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature TABLESAMPLE is not supported by Krishiv yet. SQLSTATE: 0A000 @ 10..30

@@ -172,6 +172,7 @@ fn env_data() -> ExprEnv {
         map_key_dedup_last_win: false,
         legacy_java_charsets: false,
         legacy_coding_error_action: false,
+        legacy_time_parser: false,
     }
 }
 
@@ -288,6 +289,7 @@ fn inconsistent_plans_are_internal_errors() {
             max_records_per_file: 0,
             target_file_bytes: 0,
             partition_by: Vec::new(),
+            column_types: std::collections::BTreeMap::new(),
         }),
     };
     check(

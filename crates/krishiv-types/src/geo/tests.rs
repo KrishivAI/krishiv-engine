@@ -147,3 +147,25 @@ fn arbitrary_bytes_never_panic() {
         }
     }
 }
+
+#[test]
+fn points_print_as_extended_well_known_text() {
+    use super::to_ewkt;
+    let point = unhex("0101000000000000000000F03F0000000000000040");
+    assert_eq!(to_ewkt(0, &point).unwrap(), "POINT(1 2)");
+    assert_eq!(to_ewkt(3857, &point).unwrap(), "SRID=3857;POINT(1 2)");
+    // Big-endian input prints the same.
+    let xdr = unhex("00000000013FF00000000000004000000000000000");
+    assert_eq!(to_ewkt(0, &xdr).unwrap(), "POINT(1 2)");
+    // Anything but a two-dimensional point is not printed yet.
+    let line = rewrite(
+        &unhex(
+            "010200000002000000000000000000F03F000000000000004000000000000008400000000000001040",
+        ),
+        SpatialKind::Geometry,
+        ByteOrder::Ndr,
+    )
+    .unwrap();
+    assert!(to_ewkt(0, &line).is_err());
+    assert!(to_ewkt(0, &[1]).is_err());
+}

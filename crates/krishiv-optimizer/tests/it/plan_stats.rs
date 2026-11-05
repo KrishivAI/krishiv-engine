@@ -645,11 +645,80 @@ fn only_plans_over_tables_with_statistics_are_measured() {
     assert!(!stats.has_statistics(other.root()));
     assert!(stats.get(other.root()).is_none());
     assert_eq!(stats.rows(other.root()), krishiv_optimizer::DEFAULT_ROWS);
-    // A `WITH` reference counts as default-sized.
-    let plan = resolve("WITH c AS (SELECT a FROM t) SELECT * FROM c");
+}
+
+/// A `WITH` reference holds what its definition holds, under its own
+/// attributes: the physical planner picks a join's build side from it.
+#[test]
+fn a_with_reference_reads_its_definition() {
+    let plan = resolve("WITH c AS (SELECT a FROM t WHERE a > 0) SELECT * FROM c");
     let stats = PlanStats::compute(plan.root(), &fixture());
     let reference = find(plan.root(), |p| matches!(p.node, PlanNode::CteRef(_)));
-    assert!(!stats.has_statistics(&reference));
+    let PlanNode::CteRef(r) = &reference.node else {
+        unreachable!("found by its node");
+    };
+    assert!(stats.has_statistics(&reference));
+    let PlanNode::WithCte { ctes, .. } =
+        &find(plan.root(), |p| matches!(p.node, PlanNode::WithCte { .. })).node
+    else {
+        unreachable!("found by its node");
+    };
+    let definition = stats.get(&ctes[0].plan).unwrap();
+    let read = stats.get(&reference).unwrap();
+    assert!(read.rows < krishiv_optimizer::DEFAULT_ROWS);
+    assert_eq!(read.rows, definition.rows);
+    assert_eq!(
+        read.cols[&r.output[0].id].ndv,
+        definition.cols[&r.source[0]].ndv
+    );
+    // Outside the plan that defines it, it is default-sized.
+    let alone = PlanStats::compute(&reference, &fixture());
+    assert!(!alone.has_statistics(&reference));
+    assert_eq!(alone.rows(&reference), krishiv_optimizer::DEFAULT_ROWS);
+}
+
+/// A reference finds its definition wherever it sits: through a definition
+/// reading another, in a subquery, and under an inner `WITH` of the same name.
+#[test]
+fn a_with_reference_finds_its_definition_in_every_scope() {
+    fn references(p: &Arc<LogicalPlan>, out: &mut Vec<Arc<LogicalPlan>>) {
+        if matches!(p.node, PlanNode::CteRef(_)) {
+            out.push(Arc::clone(p));
+        }
+        p.for_each_child(&mut |c| references(c, out));
+        p.for_each_expr(&mut |e| {
+            if let ExprNode::Subquery { plan, .. } = &e.node {
+                references(plan, out);
+            }
+        });
+    }
+    let t_rows = {
+        let plan = resolve("SELECT a FROM t");
+        PlanStats::compute(plan.root(), &fixture()).rows(plan.root())
+    };
+    for sql in [
+        "WITH c AS (SELECT a FROM t), d AS (SELECT a FROM c) SELECT * FROM d",
+        "WITH c AS (SELECT a FROM t) SELECT 1 WHERE EXISTS (SELECT 1 FROM c)",
+        "WITH c AS (SELECT ga AS a FROM g) \
+         SELECT * FROM (WITH c AS (SELECT a FROM t) SELECT * FROM c)",
+    ] {
+        let plan = resolve(sql);
+        let stats = PlanStats::compute(plan.root(), &fixture());
+        let mut found = Vec::new();
+        references(plan.root(), &mut found);
+        assert!(!found.is_empty(), "{sql}");
+        for r in &found {
+            assert_eq!(stats.rows(r), t_rows, "{sql}");
+            assert!(stats.has_statistics(r), "{sql}");
+        }
+    }
+    // A definition over a table without statistics rests on the default.
+    let plan = resolve("WITH c AS (SELECT ga FROM g) SELECT * FROM c");
+    let stats = PlanStats::compute(plan.root(), &fixture());
+    let mut found = Vec::new();
+    references(plan.root(), &mut found);
+    assert!(!found.is_empty());
+    assert!(found.iter().all(|r| !stats.has_statistics(r)));
 }
 
 /// Every relation is estimated once, shared subtrees and subquery plans

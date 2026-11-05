@@ -1290,6 +1290,8 @@ pub enum AlterTableAction {
     },
     /// `SET TBLPROPERTIES (...)`.
     SetTblProperties(Vec<TableOption>),
+    /// `COMMENT ON TABLE name IS 'comment'` (`None` for `IS NULL`).
+    SetComment(Option<String>),
     /// `UNSET TBLPROPERTIES [IF EXISTS] (...)`.
     UnsetTblProperties {
         /// `IF EXISTS`.
@@ -1456,6 +1458,8 @@ pub enum AlterNamespaceAction {
     SetProperties(Vec<TableOption>),
     /// `SET LOCATION '...'`.
     SetLocation(String),
+    /// `COMMENT ON SCHEMA name IS 'comment'` (`None` for `IS NULL`).
+    SetComment(Option<String>),
     /// `DEFAULT COLLATION ...`.
     DefaultCollation(ObjectName),
 }
@@ -2409,6 +2413,9 @@ pub struct Select {
     pub group_by: Option<GroupBy>,
     /// `HAVING`.
     pub having: Option<Expr>,
+    /// `spark.sql.legacy.parser.havingWithoutGroupByAsWhere`: a `HAVING` with no `GROUP BY` over
+    /// a select list with no aggregate call filters the rows, as `WHERE` does.
+    pub having_as_where: bool,
     /// `WINDOW`.
     pub windows: Vec<NamedWindow>,
     /// `QUALIFY`.
@@ -3306,6 +3313,9 @@ pub enum ExprKind {
         qualifier: Vec<Ident>,
         /// Excluded columns.
         except: Vec<ObjectName>,
+        /// A backquoted name read as a regular expression over the column names
+        /// (`spark.sql.parser.quotedRegexColumnNames`); the qualifier is its table.
+        regex: Option<Box<str>>,
     },
     /// `expr.field`.
     Field(Box<Expr>, Ident),

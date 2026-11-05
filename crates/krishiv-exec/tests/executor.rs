@@ -592,7 +592,8 @@ async fn the_stall_detector_fails_a_non_yielding_driver() {
 }
 
 /// A driver that blocks inside a poll (a sleep standing in for blocking
-/// I/O) is a stall too: only run-queue waits are left out of a slice.
+/// I/O) is a stall too: only run-queue waits and what page faults explain are
+/// left out of a slice. The first polls may fault, so it blocks on many.
 #[tokio::test]
 async fn the_stall_detector_fails_a_blocking_driver() {
     let runner = QueryRunner::new(executor(1));
@@ -602,7 +603,7 @@ async fn the_stall_detector_fails_a_blocking_driver() {
         ..ExecConfig::default()
     };
     let q = query(&root, 1, config);
-    let (_, scan) = scan(4 * DEFAULT_BATCH_SIZE as u64);
+    let (_, scan) = scan(16 * DEFAULT_BATCH_SIZE as u64);
     let block = hook(|_| {
         std::thread::sleep(Duration::from_millis(30));
         Ok(())
@@ -752,6 +753,17 @@ fn config_join_row_layout_keys() {
     assert_eq!(off.join_radix_bits, 5);
     assert_eq!(read("1").join_radix_bits, 3);
     assert_eq!(read("9").join_radix_bits, 6);
+}
+
+#[test]
+fn config_merge_join_buffer_bytes() {
+    let default = ExecConfig::from_config(&Config::new());
+    assert_eq!(default.join_merge_buffer_bytes, 0);
+    let (config, _) = Config::from_pairs([("krishiv.exec.join.smj.bufferBytes", "4m")]).unwrap();
+    assert_eq!(
+        ExecConfig::from_config(&config).join_merge_buffer_bytes,
+        4 << 20
+    );
 }
 
 /// Sort hash buckets are on by default; `krishiv.exec.sort.hashBuckets`
@@ -1720,4 +1732,77 @@ async fn a_scan_starts_after_the_pipeline_publishing_its_filter() {
     assert_eq!(values(&out)[0], 1_000);
     assert_eq!(consumer.finalized_at_start.load(Ordering::Relaxed), 1);
     assert_released(&root);
+}
+
+/// A source counting its drivers: one local state per driver.
+struct CountingScan(Arc<RangeSource>, Arc<AtomicU64>);
+
+impl krishiv_exec::Source for CountingScan {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn global_state(&self, ctx: &TaskContext) -> Result<krishiv_exec::GlobalState> {
+        self.0.global_state(ctx)
+    }
+
+    fn max_parallelism(&self, g: &krishiv_exec::GlobalState) -> usize {
+        self.0.max_parallelism(g)
+    }
+
+    fn local_state(&self, ctx: &TaskContext, g: &krishiv_exec::GlobalState) -> Result<LocalState> {
+        self.1.fetch_add(1, Ordering::AcqRel);
+        self.0.local_state(ctx, g)
+    }
+
+    fn get_data<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        g: &'a krishiv_exec::GlobalState,
+    ) -> BoxFuture<'a, Result<Option<Batch>>> {
+        self.0.get_data(local, g)
+    }
+}
+
+/// `krishiv.deterministicOrder` runs every pipeline on one driver; without it the same plan uses
+/// the executor's threads.
+#[tokio::test]
+async fn deterministic_order_runs_one_driver_per_pipeline() {
+    for (deterministic, many) in [(true, false), (false, true)] {
+        let runner = QueryRunner::new(executor(4));
+        let root = root(1 << 30);
+        let q = query(
+            &root,
+            1,
+            ExecConfig {
+                deterministic_order: deterministic,
+                // Many morsels, so the source allows many drivers.
+                morsel_rows: 1_000,
+                ..ExecConfig::default()
+            },
+        );
+        let drivers = Arc::new(AtomicU64::new(0));
+        let source = Arc::new(CountingScan(
+            RangeSource::new(100_000),
+            Arc::clone(&drivers),
+        ));
+        let plan = Arc::new(Scan(source as Arc<dyn krishiv_exec::Source>));
+        let mut stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
+        let mut rows = 0;
+        while let Some(batch) = stream.next().await {
+            rows += batch.unwrap().num_rows();
+        }
+        q.finished().await;
+        assert_eq!(rows, 100_000);
+        let used = drivers.load(Ordering::Acquire);
+        if many {
+            assert!(
+                used > 1,
+                "four threads use more than one driver, got {used}"
+            );
+        } else {
+            assert_eq!(used, 1, "one driver");
+        }
+        assert_released(&root);
+    }
 }

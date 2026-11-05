@@ -31,6 +31,7 @@ mod file_scan;
 mod file_write;
 mod filter;
 mod generate;
+mod late_fetch;
 mod limit;
 mod project;
 mod range;
@@ -42,23 +43,28 @@ mod union;
 
 pub use expand::{Expand, NullOf};
 pub use expr::{FnPredicate, Predicate, ScalarExpr};
-pub use file_scan::{FileScan, FileScanMetrics, FileScanSource, METADATA_COLUMN};
+pub use file_scan::{
+    FileScan, FileScanMetrics, FileScanSource, METADATA_COLUMN, ROW_FILE_COLUMN,
+    ROW_POSITION_COLUMN,
+};
 pub use file_write::{FileWrite, FileWriteSink};
 pub use filter::Filter;
 pub use generate::Generate;
+pub use late_fetch::{FetchSlot, LateFetch};
 pub use limit::Limit;
 pub use project::{Project, ProjectItem};
 pub(crate) use range::Range;
 pub use replicate::ReplicateRows;
 pub(crate) use runtime_filter::RowStage;
 pub use runtime_filter::{RowStageSettings, RuntimeFilters};
+pub(crate) use scan::scan_metadata;
 pub use scan::{
-    FileSelections, FilterPushdown, MemoryScan, PushedFilter, ScanPushdown, ScanPushdowns,
+    FileSelections, FilterPushdown, MemoryScan, PushedFilter, ScanPushdown, ScanPushdowns, TakeRows,
 };
 #[cfg(all(test, not(loom)))]
 use scan::{ScanGlobal, ScanLocal};
-pub(crate) use sort::KeyEncoder;
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortKey, SortMetrics, TopN};
+pub(crate) use sort::{KeyEncoder, blocking, data_bytes, owned_rows};
 pub use union::UnionAlign;
 
 use crate::error::{Result, internal};

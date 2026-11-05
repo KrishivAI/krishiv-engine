@@ -28,6 +28,7 @@ mod cond;
 mod field;
 mod func;
 mod hof;
+mod interval;
 pub(crate) mod logic;
 mod nested_cast;
 mod strings;
@@ -43,7 +44,8 @@ use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, new_n
 use arrow_schema::{DataType as ArrowType, SchemaRef};
 use krishiv_common::config::{
     ANSI_ENABLED, Config, LEGACY_CODING_ERROR_ACTION, LEGACY_JAVA_CHARSETS,
-    LEGACY_STATISTICAL_AGGREGATE, MAP_KEY_DEDUP_POLICY, SESSION_TIME_ZONE,
+    LEGACY_STATISTICAL_AGGREGATE, LEGACY_TIME_PARSER_POLICY, MAP_KEY_DEDUP_POLICY,
+    SESSION_TIME_ZONE,
 };
 use krishiv_common::error::{KrishivError, KrishivUdfNotAvailable};
 use krishiv_kernels::KernelCtx;
@@ -169,6 +171,11 @@ pub(crate) trait PhysExpr: Send + Sync + fmt::Debug {
     fn is_constant(&self) -> bool {
         false
     }
+    /// This expression with a row's own arithmetic overflow as NULL instead of
+    /// an error, if it can do that without running again by row (`TryEval`).
+    fn null_on_overflow(&self) -> Option<Arc<dyn PhysExpr>> {
+        None
+    }
 }
 
 /// What every expression of one query is evaluated with.
@@ -203,9 +210,16 @@ pub(crate) struct EvalEnv {
     pub(crate) legacy_java_charsets: bool,
     /// `spark.sql.legacy.codingErrorAction`; plan data, like the dedup policy.
     pub(crate) legacy_coding_error_action: bool,
+    /// `spark.sql.legacy.timeParserPolicy = LEGACY`; plan data too.
+    pub(crate) legacy_time_parser: bool,
     /// Counts the unseeded random binds of one plan instantiation (see
     /// [`BindOptions::seed_salt`](krishiv_functions::scalar::BindOptions::seed_salt)).
     pub(crate) seed_salt: Arc<AtomicU64>,
+    /// Added to the partition index the random functions draw their stream
+    /// for. Spark runs round `k` of a recursive CTE as a fresh plan whose
+    /// seeded random streams start at partition `k - 1` (`rand(7)` gives
+    /// the seed's first value in round 1, `rand(8)`'s in round 2, ...).
+    pub(crate) partition_shift: u32,
 }
 
 impl EvalEnv {
@@ -251,6 +265,10 @@ impl EvalEnv {
         };
         let legacy_java_charsets = flag(&LEGACY_JAVA_CHARSETS);
         let legacy_coding_error_action = flag(&LEGACY_CODING_ERROR_ACTION);
+        let legacy_time_parser = config
+            .get(&LEGACY_TIME_PARSER_POLICY)
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("LEGACY"));
         let query_start_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -268,8 +286,15 @@ impl EvalEnv {
             map_key_dedup_last_win,
             legacy_java_charsets,
             legacy_coding_error_action,
+            legacy_time_parser,
             seed_salt: Arc::new(AtomicU64::new(0)),
+            partition_shift: 0,
         }
+    }
+
+    /// Fixes the query start instant (see `PlanningContext::query_start_micros`).
+    pub(crate) fn set_query_start_micros(&mut self, micros: i64) {
+        self.query_start_micros = micros;
     }
 
     /// The environment a plan fixed, with this worker's kernels. UDFs are
@@ -289,7 +314,9 @@ impl EvalEnv {
             map_key_dedup_last_win: env.map_key_dedup_last_win,
             legacy_java_charsets: env.legacy_java_charsets,
             legacy_coding_error_action: env.legacy_coding_error_action,
+            legacy_time_parser: env.legacy_time_parser,
             seed_salt: Arc::new(AtomicU64::new(0)),
+            partition_shift: 0,
         }
     }
 
@@ -305,6 +332,7 @@ impl EvalEnv {
             map_key_dedup_last_win: self.map_key_dedup_last_win,
             legacy_java_charsets: self.legacy_java_charsets,
             legacy_coding_error_action: self.legacy_coding_error_action,
+            legacy_time_parser: self.legacy_time_parser,
         }
     }
 }
@@ -381,19 +409,76 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             &data_type.to_arrow(),
             *nullable,
         ),
-        ExprNode::Cast { expr, to, mode } => cast::compile(compile(expr, input)?, to, *mode, input),
+        ExprNode::Cast { expr, to, mode } => match expr.interval_type() {
+            Some(from) if *to == krishiv_types::DataType::String => {
+                Ok(cast::interval_to_string(compile(expr, input)?, from))
+            }
+            from if cast::is_interval_cast(from.as_ref(), to) => {
+                cast::interval_cast(compile(expr, input)?, from, to, *mode)
+            }
+            _ => {
+                let mut child = compile(expr, input)?;
+                if let Some(part) = expr
+                    .nested_interval_type()
+                    .and_then(|from| nested_cast::rendered_part(&from, to))
+                {
+                    child = nested_cast::interval_leaves(child, part);
+                }
+                Ok(nested_cast::narrowed(
+                    cast::compile(child, to, *mode, input)?,
+                    to,
+                ))
+            }
+        },
         ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Scalar => {
             if let FunctionId::Registry { name, .. } = &f.id
                 && hof::is_supported(name)
             {
                 return hof::compile(name, f, input, e);
             }
-            let args = f
+            let mut args = f
                 .args
                 .iter()
                 .map(|a| compile(a, input))
                 .collect::<Result<Vec<_>>>()?;
-            match &f.id {
+            // These write an interval as its string, which takes its fields.
+            if let FunctionId::Registry { name, .. } = &f.id
+                && matches!(name.as_str(), "to_json" | "to_csv")
+                && let (Some(first), Some(from)) = (
+                    args.first_mut(),
+                    f.args.first().and_then(|a| a.nested_interval_type()),
+                )
+            {
+                let from = if name == "to_json" {
+                    nested_cast::without_key_intervals(&from)
+                } else {
+                    from
+                };
+                *first = nested_cast::interval_leaves(Arc::clone(first), from);
+            }
+            // Evaluated once, the operator then sees the two operands as the
+            // columns 0 and 1 of a batch of their values.
+            let split = if guards_right_operand(f, &args, input.env.ansi) {
+                let (right, left) = (args.pop(), args.pop());
+                left.zip(right)
+            } else {
+                None
+            };
+            if let Some((l, r)) = &split {
+                args = vec![
+                    Arc::new(Column {
+                        index: 0,
+                        data_type: l.data_type().clone(),
+                        nullable: l.nullable(),
+                    }),
+                    Arc::new(Column {
+                        index: 1,
+                        data_type: r.data_type().clone(),
+                        nullable: true,
+                    }),
+                ];
+            }
+            let built = match &f.id {
                 FunctionId::Builtin(b) => builtin(*b, f, args, input, e),
                 FunctionId::Registry { name, .. } => {
                     if name == "coalesce" {
@@ -421,11 +506,57 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                     func::compile_udf(&udf, f, args, input, e)
                 }
                 _ => Err(unsupported_expr(e)),
+            };
+            match split {
+                Some((l, r)) => built.map(|op| logic::left_then_right(l, r, op)),
+                None => built,
             }
         }
         // Includes subqueries: the planner replaces those it runs by
         // columns ([`Input::subqueries`]).
         _ => Err(unsupported_expr(e)),
+    }
+}
+
+/// Spark's `BinaryExpression.eval` returns NULL on a NULL left
+/// value without evaluating the right operand: when the right operand may
+/// raise and the left may be NULL, the right one is evaluated only where the
+/// left is set (see [`logic::left_then_right`]). Not `/`, `%` and `div`: Spark's
+/// `DivModLike.eval` evaluates the divisor first, and a failing divisor raises
+/// whatever the left value is.
+fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: bool) -> bool {
+    let guarded = match &f.id {
+        FunctionId::Builtin(b) => matches!(
+            b,
+            Builtin::Eq
+                | Builtin::Lt
+                | Builtin::LtEq
+                | Builtin::Gt
+                | Builtin::GtEq
+                | Builtin::Add
+                | Builtin::Subtract
+                | Builtin::Multiply
+        ),
+        FunctionId::Registry { name, .. } => {
+            matches!(name.as_str(), "nullif" | "date_add" | "date_sub")
+        }
+        _ => false,
+    };
+    guarded
+        && matches!(
+            (args, f.args.as_slice()),
+            ([left, _], [left_ir, right_ir])
+                if left.nullable()
+                    && krishiv_plan::is_deterministic(left_ir)
+                    && krishiv_plan::may_raise(right_ir, ansi)
+        )
+}
+
+/// The `ansiEnabled` a calendar operator takes as its last argument.
+fn exact_flag(f: &ResolvedFunction) -> Result<bool> {
+    match f.args.last().map(|a| &a.node) {
+        Some(ExprNode::Literal(Literal::Boolean(v))) => Ok(*v),
+        _ => Err(unsupported("a calendar operator without its mode")),
     }
 }
 
@@ -471,14 +602,58 @@ fn builtin(
         ) => {
             let r = args.pop().ok_or_else(arity)?;
             let l = args.pop().ok_or_else(arity)?;
-            arith::binary(b, l, r, out, f.nullable, env)?
+            if interval::is_ansi(l.data_type()) {
+                interval::binary(b, l, r, out, f.nullable, env)?
+            } else {
+                arith::binary(b, l, r, out, f.nullable, env)?
+            }
         }
+        (
+            Builtin::DateAddYmInterval
+            | Builtin::TimestampAddYmInterval
+            | Builtin::TimestampAddInterval
+            | Builtin::SubtractDates
+            | Builtin::SubtractTimestamps,
+            2,
+        ) => {
+            let r = args.pop().ok_or_else(arity)?;
+            let l = args.pop().ok_or_else(arity)?;
+            interval::binary(b, l, r, out, f.nullable, env)?
+        }
+        (
+            Builtin::DateAddInterval
+            | Builtin::MultiplyInterval
+            | Builtin::DivideInterval
+            | Builtin::CalendarAdd
+            | Builtin::CalendarSubtract,
+            3,
+        ) => {
+            let exact = exact_flag(f)?;
+            args.pop();
+            let r = args.pop().ok_or_else(arity)?;
+            let l = args.pop().ok_or_else(arity)?;
+            interval::calendar_binary(b, l, r, out, f.nullable, exact, env)?
+        }
+        (Builtin::CalendarNegate, 2) => {
+            let exact = exact_flag(f)?;
+            args.pop();
+            interval::calendar_negate(args.pop().ok_or_else(arity)?, exact)
+        }
+        (Builtin::ExtractAnsiIntervalDays, 1) => interval::unary(b, args.pop().ok_or_else(arity)?),
+        (Builtin::TryEval, 1) => interval::try_eval(args.pop().ok_or_else(arity)?, f.deterministic),
         (Builtin::IntegralDivide, 2) => {
             let r = args.pop().ok_or_else(arity)?;
             let l = args.pop().ok_or_else(arity)?;
             arith::integral_divide(l, r, env)?
         }
-        (Builtin::Negative, 1) => arith::negative(args.pop().ok_or_else(arity)?, env)?,
+        (Builtin::Negative, 1) => {
+            let e = args.pop().ok_or_else(arity)?;
+            if interval::is_ansi(e.data_type()) {
+                interval::unary(b, e)
+            } else {
+                arith::negative(e, env)?
+            }
+        }
         (Builtin::In, n) if n >= 2 => cond::in_list(args, env)?,
         (Builtin::Between, 3) => {
             let hi = args.pop().ok_or_else(arity)?;
@@ -577,9 +752,9 @@ impl PhysExpr for Lit {
 /// A literal as a one-row array of its type's Arrow form.
 pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
     use arrow_array::{
-        BinaryViewArray, BooleanArray as B, Date32Array, Decimal128Array, Float32Array,
-        Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, MapArray, NullArray,
-        StringArray, StringViewArray, StructArray, TimestampMicrosecondArray,
+        BinaryViewArray, BooleanArray as B, Date32Array, Decimal64Array, Decimal128Array,
+        Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, MapArray,
+        NullArray, StringArray, StringViewArray, StructArray, TimestampMicrosecondArray,
     };
     use arrow_buffer::{OffsetBuffer, ScalarBuffer};
     use arrow_schema::Field;
@@ -597,16 +772,23 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
         Literal::Decimal {
             unscaled,
             data_type,
-        } => {
-            let ArrowType::Decimal128(p, s) = DataType::Decimal(*data_type).to_arrow() else {
-                return Err(internal("decimal literal type"));
-            };
-            Arc::new(
+        } => match DataType::Decimal(*data_type).to_arrow() {
+            ArrowType::Decimal64(p, s) => {
+                let v = i64::try_from(*unscaled)
+                    .map_err(|_| internal("decimal literal above its precision"))?;
+                Arc::new(
+                    Decimal64Array::from(vec![v])
+                        .with_precision_and_scale(p, s)
+                        .map_err(|e| internal(&e.to_string()))?,
+                ) as ArrayRef
+            }
+            ArrowType::Decimal128(p, s) => Arc::new(
                 Decimal128Array::from(vec![*unscaled])
                     .with_precision_and_scale(p, s)
                     .map_err(|e| internal(&e.to_string()))?,
-            )
-        }
+            ),
+            _ => return Err(internal("decimal literal type")),
+        },
         Literal::String(v) => Arc::new(StringViewArray::from(vec![v.as_str()])),
         Literal::Binary(v) => Arc::new(BinaryViewArray::from(vec![v.as_slice()])),
         Literal::Date(v) => Arc::new(Date32Array::from(vec![*v])),
@@ -615,6 +797,28 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
                 .with_data_type(DataType::Timestamp.to_arrow()),
         ),
         Literal::TimestampNtz(v) => Arc::new(TimestampMicrosecondArray::from(vec![*v])),
+        Literal::YearMonthInterval { months, .. } => {
+            Arc::new(arrow_array::IntervalYearMonthArray::from(vec![*months]))
+        }
+        Literal::DayTimeInterval { micros, .. } => {
+            Arc::new(arrow_array::DurationMicrosecondArray::from(vec![*micros]))
+        }
+        Literal::CalendarInterval {
+            months,
+            days,
+            micros,
+        } => Arc::new(arrow_array::IntervalMonthDayNanoArray::from(vec![
+            arrow_buffer::IntervalMonthDayNano::new(
+                *months,
+                *days,
+                micros.checked_mul(1000).ok_or_else(|| {
+                    unsupported(
+                        "a calendar interval whose microseconds overflow the nanosecond \
+                             field of its Arrow type",
+                    )
+                })?,
+            ),
+        ])),
         // A one-row string map, as the JSON options bind.
         Literal::Map(pairs) => {
             let keys: ArrayRef = Arc::new(StringArray::from(
@@ -855,7 +1059,9 @@ mod tests {
             map_key_dedup_last_win: false,
             legacy_java_charsets: false,
             legacy_coding_error_action: false,
+            legacy_time_parser: false,
             seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            partition_shift: 0,
         }
     }
 
@@ -957,5 +1163,20 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn a_calendar_literal_past_the_nanosecond_field_is_refused_by_name() {
+        let literal = |micros| Literal::CalendarInterval {
+            months: 0,
+            days: 0,
+            micros,
+        };
+        assert!(super::literal_array(&literal(i64::MAX / 1000)).is_ok());
+        let e = super::literal_array(&literal(i64::MAX / 1000 + 1)).err();
+        assert_eq!(
+            e.map(|e| e.error_class().name().to_owned()).as_deref(),
+            Some("KRISHIV_UNSUPPORTED_FEATURE")
+        );
     }
 }

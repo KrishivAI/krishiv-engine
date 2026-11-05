@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import gc
 import sys
-from datetime import UTC, date
+from datetime import UTC, date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -229,6 +229,10 @@ def test_cell_formats_like_spark() -> None:
     assert cell(Decimal("5.000"), pa.decimal128(10, 3)) == "5.000"
     assert cell(b"\x01\xff", pa.binary()) == "[01 FF]"
     assert cell(True, pa.bool_()) == "true"
+    us = pa.duration("us")
+    assert cell(timedelta(days=1), us) == "INTERVAL '1 00:00:00' DAY TO SECOND"
+    assert cell(timedelta(days=1, hours=2, minutes=3, seconds=4.5), us) == "INTERVAL '1 02:03:04.5' DAY TO SECOND"
+    assert cell(-timedelta(hours=1), us) == "INTERVAL '-0 01:00:00' DAY TO SECOND"
     assert cell(None, pa.int32()) == "NULL"
     from datetime import datetime
 
