@@ -210,7 +210,9 @@ jobs:
       # telemetry-otlp is off in every default build: compile its code and tests here too, and
       # keep OpenTelemetry out of the default dependency tree (T125 section 6.5).
       - run: cargo clippy -p krishiv-session --all-targets --features telemetry-otlp --locked -- -D warnings
-      - run: "! cargo tree -e normal -p krishiv --locked | grep -q opentelemetry"
+      - run: |
+          cargo tree -e normal -p krishiv --locked > "$RUNNER_TEMP/tree.txt"
+          ! grep -q opentelemetry "$RUNNER_TEMP/tree.txt"
 
   test:
     needs: changes

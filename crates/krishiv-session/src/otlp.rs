@@ -13,6 +13,10 @@
 //!   over the snapshot, like the Prometheus one: the SDK cannot be handed
 //!   pre-aggregated histograms.
 //!
+//! The module is behind the `telemetry-otlp` feature and, like `unstable-ir`, is
+//! not covered by semver: it exposes OpenTelemetry 0.33 and
+//! tracing-opentelemetry 0.34 types.
+//!
 //! Nothing here runs unless the application builds one of these; the
 //! default embedded build does not compile this module.
 
@@ -168,7 +172,13 @@ impl OtlpTracing {
     /// `http(s)` URL or a header the HTTP client refuses.
     pub fn new(config: &OtlpConfig) -> Result<Self, KrishivError> {
         config.check()?;
-        let headers: HashMap<String, String> = config.headers.iter().cloned().collect();
+        // The trace exporter url-decodes header values (and drops one that decodes to
+        // invalid HTTP): encode `%` so a value goes out as written.
+        let headers: HashMap<String, String> = config
+            .headers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.replace('%', "%25")))
+            .collect();
         let built = off_runtime(|| {
             SpanExporter::builder()
                 .with_http()
@@ -485,6 +495,9 @@ impl OtlpMetrics {
         snapshot: impl Fn() -> MetricsSnapshot + Send + 'static,
     ) -> Result<Self, KrishivError> {
         config.check()?;
+        if interval.is_zero() {
+            return Err(export_error("interval", "(must be longer than zero)"));
+        }
         let config = config.clone();
         let (instance, start) = (crate::telemetry::new_session_id(), SystemTime::now());
         let (stop, rx) = mpsc::channel::<()>();

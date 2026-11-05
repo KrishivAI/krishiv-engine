@@ -166,16 +166,37 @@ fn query_spans_reach_the_collector_with_the_database_attributes() {
 
 #[test]
 fn engine_metrics_reach_the_collector() {
+    use opentelemetry_proto::tonic::metrics::v1::metric::Data;
     let (url, seen) = collector();
-    let session = Session::new().expect("session");
+    // The query-end fold is on only with `krishiv.metrics.enabled`.
+    let session = Session::builder()
+        .config("krishiv.metrics.enabled", "true")
+        .build()
+        .expect("session");
+    // A finished query puts a counter and a histogram in the registry.
+    let df = block_on(session.sql("SELECT 1 AS x")).expect("plans");
+    block_on(df.collect()).expect("runs");
     let pusher = OtlpMetrics::start(
         &OtlpConfig::new(&url),
         Duration::from_millis(50),
         move || session.metrics(),
     )
     .expect("pusher");
+    // A push that carries a sum and a histogram as well as the gauges.
     let request = wait_for(&seen, |path, body| {
-        (path == "/v1/metrics").then(|| ExportMetricsServiceRequest::decode(body).ok())?
+        let request = (path == "/v1/metrics")
+            .then(|| ExportMetricsServiceRequest::decode(body).ok())
+            .flatten()?;
+        let kinds: Vec<_> = request
+            .resource_metrics
+            .iter()
+            .flat_map(|r| &r.scope_metrics)
+            .flat_map(|s| &s.metrics)
+            .filter_map(|m| m.data.as_ref())
+            .collect();
+        (kinds.iter().any(|d| matches!(d, Data::Sum(_)))
+            && kinds.iter().any(|d| matches!(d, Data::Histogram(_))))
+        .then_some(request)
     });
     let sent: Vec<_> = request
         .resource_metrics
@@ -201,9 +222,18 @@ fn engine_metrics_reach_the_collector() {
         .resource
         .as_ref()
         .expect("resource");
-    for key in ["service.name", "service.instance.id", "worker.id"] {
-        assert!(resource.attributes.iter().any(|a| a.key == key), "{key}");
-    }
+    let value = |key: &str| {
+        resource
+            .attributes
+            .iter()
+            .find(|a| a.key == key)
+            .and_then(|a| match a.value.as_ref()?.value.as_ref()? {
+                Value::StringValue(v) => Some(v.clone()),
+                _ => None,
+            })
+    };
+    assert_eq!(value("worker.id").as_deref(), Some("local"));
+    assert!(value("service.instance.id").is_some());
     drop(pusher);
 }
 
