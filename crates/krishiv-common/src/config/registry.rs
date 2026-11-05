@@ -21,6 +21,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &TARGET_PARTITION_BYTES,
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
+    &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_BUILD_SIDE,
     &EXEC_JOIN_RADIX_BITS,
@@ -180,6 +181,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.files.minPartitionNum", &FILES_MIN_PARTITION_NUM),
     ("spark.sql.files.openCostInBytes", &FILES_OPEN_COST_IN_BYTES),
     ("spark.sql.storeAssignmentPolicy", &STORE_ASSIGNMENT_POLICY),
+    (
+        "krishiv.exec.debug.planRoundTrip",
+        &EXEC_DEBUG_PLAN_ROUND_TRIP,
+    ),
     (
         "krishiv.io.maxConcurrentRequests",
         &IO_MAX_CONCURRENT_REQUESTS,
@@ -530,6 +535,20 @@ pub static EXEC_AGG_ROW_LAYOUT: ConfigEntry = ConfigEntry {
           radix-partitioned tables and merge the partitions in parallel. Results are the \
           same either way; aggregations with nested or dictionary keys \
           keep the columnar path.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Serialize-through mode (P2-T173, design P2-T171 section 8.1 phase C).
+pub static EXEC_DEBUG_PLAN_ROUND_TRIP: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.debug.planRoundTrip",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Internal, for tests: every query's physical plan is encoded to the \
+          `krishiv.plan.v1` wire format and decoded again before it runs, as a worker \
+          would receive it. A plan the format cannot carry, or one that decodes to a \
+          different plan, fails the query. Results are the same either way.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

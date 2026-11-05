@@ -781,6 +781,7 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
         bloom_max_bytes,
         bloom_fpp,
         bloom_max_fpp,
+        bloom_bytes,
     } = f.options;
     pb::JoinFilter {
         id: f.id.0,
@@ -794,6 +795,7 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
             bloom_max_bytes: bloom_max_bytes as u64,
             bloom_fpp,
             bloom_max_fpp,
+            bloom_bytes,
         }),
     }
 }
@@ -1040,23 +1042,20 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 nested,
             ));
         }
-        // The format has no code for these yet.
-        f @ (AggregateFunction::StddevSamp
-        | AggregateFunction::StddevPop
-        | AggregateFunction::VarSamp
-        | AggregateFunction::VarPop
-        | AggregateFunction::Skewness
-        | AggregateFunction::Kurtosis
-        | AggregateFunction::Corr
-        | AggregateFunction::CovarSamp
-        | AggregateFunction::CovarPop
-        | AggregateFunction::AnyValue { .. }
-        | AggregateFunction::MaxBy
-        | AggregateFunction::MinBy) => {
-            return Err(CodecError::Unsupported(format!(
-                "the aggregate function {f:?}"
-            )));
+        AggregateFunction::StddevSamp => (pb::AggregateFunction::StddevSamp, false),
+        AggregateFunction::StddevPop => (pb::AggregateFunction::StddevPop, false),
+        AggregateFunction::VarSamp => (pb::AggregateFunction::VarSamp, false),
+        AggregateFunction::VarPop => (pb::AggregateFunction::VarPop, false),
+        AggregateFunction::Skewness => (pb::AggregateFunction::Skewness, false),
+        AggregateFunction::Kurtosis => (pb::AggregateFunction::Kurtosis, false),
+        AggregateFunction::Corr => (pb::AggregateFunction::Corr, false),
+        AggregateFunction::CovarSamp => (pb::AggregateFunction::CovarSamp, false),
+        AggregateFunction::CovarPop => (pb::AggregateFunction::CovarPop, false),
+        AggregateFunction::AnyValue { ignore_nulls } => {
+            (pb::AggregateFunction::AnyValue, *ignore_nulls)
         }
+        AggregateFunction::MaxBy => (pb::AggregateFunction::MaxBy, false),
+        AggregateFunction::MinBy => (pb::AggregateFunction::MinBy, false),
     };
     Ok(pb::AggregateExpr {
         function: function as i32,
@@ -1173,6 +1172,24 @@ fn write_plan(write: &WritePlan, nested: &Cell<bool>) -> Result<pb::WritePlan> {
     })
 }
 
+/// One entry of an options map literal. Its entries are a call's options,
+/// classified as a source's are: an inline secret or a URL with credentials
+/// is refused (ADR 0038), and a literal cannot hold a secret reference.
+fn map_entry(key: &str, value: &str) -> Result<pb::MapLiteralEntry> {
+    match OptionValue::from_user(key, value) {
+        OptionValue::Plain(value) => Ok(pb::MapLiteralEntry {
+            key: key.to_owned(),
+            value,
+        }),
+        OptionValue::Secret(_) => Err(CodecError::Unsupported(format!(
+            "the option `{key}` is an inline secret (use a secret reference)"
+        ))),
+        OptionValue::Url(_) => Err(CodecError::Unsupported(format!(
+            "the option `{key}` is a URL with credentials (use a secret reference)"
+        ))),
+    }
+}
+
 /// A plan carries plain text and `secret(scope, key)` references only.
 fn option(key: &str, value: &OptionValue) -> Result<pb::OptionValue> {
     use pb::option_value::Kind;
@@ -1264,6 +1281,19 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
             });
         }
         DataType::CalendarInterval => (Kind::CalendarInterval, 0, 0, 0),
+        DataType::CollatedString(c) => {
+            // By canonical name: ids index an ICU build's table.
+            if c.is_indeterminate() || c.is_utf8_binary() {
+                return Err(CodecError::Unsupported(format!(
+                    "a string type of collation {c}"
+                )));
+            }
+            return Ok(pb::DataType {
+                kind: Kind::CollatedString as i32,
+                collation: c.name(),
+                ..pb::DataType::default()
+            });
+        }
         _ => {
             return Err(CodecError::Unsupported(
                 "a Spark type this version does not know".to_owned(),
@@ -1324,6 +1354,12 @@ fn literal(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
             months: *months,
             days: *days,
             micros: *micros,
+        }),
+        Literal::Map(entries) => Kind::Map(pb::MapLiteral {
+            entries: entries
+                .iter()
+                .map(|(key, value)| map_entry(key, value))
+                .collect::<Result<_>>()?,
         }),
         _ => {
             return Err(CodecError::Unsupported(

@@ -16,7 +16,9 @@ use arrow_schema::SchemaRef;
 use futures::Stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use krishiv_common::config::{Config, ConfigValue, METRICS_ENABLED, PARTITION_OVERWRITE_MODE};
+use krishiv_common::config::{
+    Config, ConfigValue, EXEC_DEBUG_PLAN_ROUND_TRIP, METRICS_ENABLED, PARTITION_OVERWRITE_MODE,
+};
 use krishiv_common::error::{
     AllPartitionColumnsNotAllowed, ColumnAlreadyExists, ErrorQueryContext, InternalError,
     KrishivError, KrishivUnsupportedFeature, PartitionColumnNotFoundInSchema,
@@ -442,6 +444,38 @@ fn metrics_enabled(config: &Config) -> bool {
         .get(&METRICS_ENABLED)
         .and_then(ConfigValue::as_bool)
         .unwrap_or(false)
+}
+
+/// `plan` as a worker receives it in the serialize-through mode
+/// (`krishiv.exec.debug.planRoundTrip`, design P2-T171 section 8.1):
+/// encoded to `krishiv.plan.v1` and decoded again, or `None` when the mode
+/// is off.
+///
+/// # Errors
+/// `INTERNAL_ERROR` when the format cannot carry the plan or it decodes to
+/// a different plan.
+fn round_trip(plan: &PhysicalPlan, config: &Config) -> Result<Option<PhysicalPlan>, KrishivError> {
+    let on = config
+        .get(&EXEC_DEBUG_PLAN_ROUND_TRIP)
+        .and_then(ConfigValue::as_bool)
+        .unwrap_or(false);
+    if !on {
+        return Ok(None);
+    }
+    let fail = |what: String| -> KrishivError {
+        InternalError {
+            message: format!("plan round trip: {what}"),
+        }
+        .into()
+    };
+    let bytes = krishiv_plan_codec::encode(plan).map_err(|e| fail(e.to_string()))?;
+    let back = krishiv_plan_codec::decode(&bytes).map_err(|e| fail(e.to_string()))?;
+    if back != *plan {
+        return Err(fail(
+            "the decoded plan differs from the encoded one".to_owned(),
+        ));
+    }
+    Ok(Some(back))
 }
 
 impl Session {
@@ -1643,6 +1677,8 @@ impl Session {
         env: &QueryEnv,
         detailed: bool,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
+        let decoded = round_trip(physical, &env.config)?;
+        let physical = decoded.as_ref().unwrap_or(physical);
         // The history row first: its id names the query's memory pool, so `system.memory.query_id`
         // joins `system.queries.query_id`.
         let log_id = self

@@ -47,6 +47,11 @@ pub struct KeyFilterOptions {
     pub bloom_fpp: f64,
     /// A Bloom filter expected to pass more false positives is not built.
     pub bloom_max_fpp: f64,
+    /// The Bloom filter's size in bytes, fixed by the planner for a
+    /// producer of several partitions (design P2-T177 §2.4): every partial
+    /// is then that size, so the partials' filters OR into the value's.
+    /// `None` sizes it for the keys seen.
+    pub bloom_bytes: Option<u32>,
 }
 
 impl Default for KeyFilterOptions {
@@ -60,6 +65,7 @@ impl Default for KeyFilterOptions {
             bloom_max_bytes: 8 << 20,
             bloom_fpp: 0.01,
             bloom_max_fpp: 0.05,
+            bloom_bytes: None,
         }
     }
 }
@@ -442,14 +448,18 @@ fn dense(range: Option<&KeyRange>, count: usize) -> bool {
     }
 }
 
-/// A Bloom filter sized exactly for `hashes`, unless empty or expected to
-/// pass too many false positives.
+/// A Bloom filter sized exactly for `hashes` (or of the planned size),
+/// unless empty or expected to pass too many false positives.
 fn bloom(hashes: &[u64], options: &KeyFilterOptions) -> Option<RuntimeBloom> {
     if hashes.is_empty() {
         return None;
     }
     let items = hashes.len() as u64;
-    let bytes = RuntimeBloom::bytes_for(items, options.bloom_fpp).min(options.bloom_max_bytes);
+    let bytes = match options.bloom_bytes {
+        Some(planned) => usize::try_from(planned).unwrap_or(usize::MAX),
+        None => RuntimeBloom::bytes_for(items, options.bloom_fpp),
+    }
+    .min(options.bloom_max_bytes);
     let mut bloom = RuntimeBloom::with_bytes(bytes);
     for &h in hashes {
         bloom.insert_hash(h);

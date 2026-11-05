@@ -903,3 +903,72 @@ fn runtime_filter_bytes() {
     assert!(mismatched.is_empty(), "results differ: {mismatched:?}");
     assert!(not_fewer.is_empty(), "no fewer bytes: {not_fewer:?}");
 }
+
+/// The planned Bloom size of every runtime filter a join in `node`
+/// publishes, with whether the join is partitioned.
+fn bloom_sizes(node: &krishiv_exec::physical::PhysNode, out: &mut Vec<(bool, Option<u32>)>) {
+    if let krishiv_exec::physical::PhysNode::HashJoin(j) = node {
+        let partitioned = j.distribution == krishiv_exec::physical::JoinDistribution::Partitioned;
+        out.extend(
+            j.runtime_filters
+                .iter()
+                .map(|f| (partitioned, f.options.bloom_bytes)),
+        );
+    }
+    for c in node.children() {
+        bloom_sizes(c, out);
+    }
+}
+
+/// A partitioned build's Bloom size is fixed at planning, so that its
+/// partitions' filters merge (design P2-T177 §2.4); a broadcast build's
+/// is not. On one worker the build sizes it for its keys, so results and
+/// drops match the broadcast plan's.
+#[test]
+fn a_partitioned_build_plans_its_bloom_size() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 13;
+    write(dir.path(), "big.parquet", &table(&mut rng, 4000, 40_000, 0));
+    write(
+        dir.path(),
+        "small.parquet",
+        &table(&mut rng, 600, 40_000, 0),
+    );
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    let q = "SELECT b.v FROM big b JOIN small s ON b.k64 = s.k64";
+    let bloom = [
+        ("krishiv.runtimeFilter.bloom.minApplicationRows", "0"),
+        ("krishiv.runtimeFilter.inList.maxValues", "0"),
+        ("krishiv.runtimeFilter.exactSet.maxValues", "0"),
+        ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
+    ];
+    let mut results = Vec::new();
+    for (threshold, partitioned) in [("10m", false), ("-1", true)] {
+        let mut mode = bloom.to_vec();
+        mode.push(("spark.sql.autoBroadcastJoinThreshold", threshold));
+        configured(&mut t, &mode);
+        let plan = t.plan_sql(q).unwrap();
+        let mut sizes = Vec::new();
+        bloom_sizes(plan.plan.root(), &mut sizes);
+        assert!(!sizes.is_empty(), "{plan}");
+        for (p, size) in sizes {
+            assert_eq!(p, partitioned, "{plan}");
+            match size {
+                // Sized for the build's estimate at a 1% false-positive rate.
+                Some(bytes) => assert!(partitioned && bytes >= 32, "{bytes}\n{plan}"),
+                None => assert!(!partitioned, "{plan}"),
+            }
+        }
+        let (got, c) = run(&plan);
+        results.push((sorted(&got), c.rows_dropped));
+    }
+    assert_eq!(results[0], results[1]);
+}

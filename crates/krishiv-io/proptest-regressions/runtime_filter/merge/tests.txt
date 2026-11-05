@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 3b2edf5c7d532a27ddfc4d8b8bf2eb2cb51c64f863e556cc666cc97b47eed712 # shrinks to a = [Some(-57), Some(0), Some(1), Some(-1), Some(2), Some(3), Some(4), Some(7), Some(-2), Some(5), Some(-15), Some(8), Some(9), Some(37), Some(10), Some(6), Some(-3), Some(11), Some(12), Some(-4), Some(13), Some(-16), Some(14), Some(-5), Some(-6), Some(15), Some(-7), Some(16), Some(17), Some(-8), Some(-9), Some(-10), Some(-11), Some(-17), Some(-18), Some(18), Some(19), Some(-12), Some(20)], b = [Some(7), Some(-1), Some(-2), Some(1), Some(-3), Some(8), Some(-15), Some(2), Some(-24), Some(-4), Some(3)], c = [Some(4), Some(9), Some(-5), Some(-12), Some(-6), Some(10), Some(-7), Some(-25), Some(11), Some(12), Some(56), Some(-26), Some(13), Some(-8), Some(-9), Some(-13), Some(-14), Some(14), Some(15), Some(5), Some(16), Some(-10), Some(0), Some(57), Some(-16), Some(-11), Some(17), Some(-27)], o = KeyFilterOptions { max_values: 0, exact_max_values: 28, bloom: true, scan_waits: false, bloom_max_items: 4000000, bloom_max_bytes: 8388608, bloom_fpp: 0.01, bloom_max_fpp: 1.0, bloom_bytes: None }
