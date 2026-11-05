@@ -422,10 +422,7 @@ impl Session {
             ),
             None => runtime.memory(),
         };
-        let cache = Arc::new(RelationCache::with_results(
-            &memory,
-            Arc::clone(&runtime.results),
-        ));
+        let cache = RelationCache::on(&memory, &runtime.invalidation);
         let io = IoScheduler::with_runtime(
             IoConfig::from_config(&runtime.config),
             runtime.executor.io_handle().clone(),

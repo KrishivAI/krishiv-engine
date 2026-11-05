@@ -1213,4 +1213,28 @@ mod tests {
         let e = block_on(alone.sql("SELECT * FROM pt_parent")).unwrap_err();
         assert_eq!(e.error_class().name(), "TABLE_OR_VIEW_NOT_FOUND");
     }
+
+    /// A session's cached snapshot of a permanent table is dropped when
+    /// another session of the runtime writes the table (Spark's shared
+    /// `CacheManager`), and `CLEAR CACHE` in one session clears every
+    /// session's.
+    #[test]
+    fn a_write_in_one_session_drops_another_sessions_cached_table() {
+        let a = Session::new().unwrap();
+        table(&a, "rc_shared", "(1), (2)");
+        let b = a.new_session();
+        run(&a, "CACHE TABLE rc_shared");
+        assert_eq!(rows(&run(&a, "SELECT * FROM rc_shared")), 2);
+        assert!(a.cache_reserved() > 0);
+        run(&b, "INSERT INTO rc_shared VALUES (3)");
+        assert_eq!(
+            rows(&run(&a, "SELECT * FROM rc_shared")),
+            3,
+            "not a stale snapshot"
+        );
+        run(&a, "CACHE TABLE rc_shared");
+        assert!(a.cache_reserved() > 0);
+        run(&b, "CLEAR CACHE");
+        assert_eq!(a.cache_reserved(), 0);
+    }
 }

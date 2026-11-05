@@ -73,6 +73,9 @@ pub struct EngineRuntime {
     /// built alone share it, as before), a store of its own for a supplied
     /// runtime (ADR 0037 §6 holds per runtime).
     pub(crate) results: Arc<ResultCache>,
+    /// The runtime's invalidation hub: a table change from any session
+    /// reaches the result cache and every session's relation cache.
+    pub(crate) invalidation: Arc<crate::cache::Invalidation>,
     /// The permanent catalog and the managed tables' warehouse, shared by
     /// every session of the runtime (Spark's `SharedState`).
     pub(crate) catalog_store: Arc<InMemoryCatalogStore>,
@@ -222,6 +225,7 @@ impl EngineRuntime {
         } else {
             Arc::new(ResultCache::default())
         };
+        let invalidation = crate::cache::Invalidation::new(Arc::clone(&results));
         let runtime = Self {
             pairs,
             config: Arc::new(config),
@@ -234,7 +238,8 @@ impl EngineRuntime {
             query_index: AtomicU64::new(0),
             session_seq: AtomicU64::new(0),
             history: Arc::new(QueryHistory::new(capacity)),
-            catalog_store: Arc::new(InMemoryCatalogStore::with_results(Arc::clone(&results))),
+            catalog_store: Arc::new(InMemoryCatalogStore::with_hub(Arc::clone(&invalidation))),
+            invalidation,
             warehouse: Arc::new(Warehouse::default()),
             results,
             deadlines: OnceLock::new(),

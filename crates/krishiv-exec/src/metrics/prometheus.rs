@@ -239,7 +239,9 @@ mod tests {
             arbitration_aborts: 1,
             cache_hits: 3,
             cache_misses: 1,
-            cancel_latency_secs: None,
+            // Not a value a succeeded query has: here only so the snapshot
+            // carries every sourced metric.
+            cancel_latency_secs: Some(0.5),
         });
         for class in ["interactive", "batch", "background", "agent"] {
             registry.add_gauge(

@@ -147,9 +147,13 @@ impl SessionCatalog {
     /// `warehouse`.
     pub(crate) fn over(store: Arc<InMemoryCatalogStore>, warehouse: Arc<Warehouse>) -> Self {
         Self {
+            tables: RwLock::default(),
+            epoch: AtomicU64::new(0),
+            hidden: AtomicU64::new(0),
             store,
             warehouse,
-            ..Self::default()
+            current_namespace: RwLock::default(),
+            path: RwLock::default(),
         }
     }
 

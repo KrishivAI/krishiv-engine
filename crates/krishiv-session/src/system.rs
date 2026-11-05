@@ -1231,7 +1231,7 @@ mod tests {
         let sources = Sources {
             queries: Arc::new(QueryLog::default()),
             io: krishiv_io::IoScheduler::new(krishiv_io::IoConfig::default()),
-            relations: Arc::new(crate::cache::RelationCache::new(&memory)),
+            relations: crate::cache::RelationCache::new(&memory),
             metrics: Arc::new(krishiv_exec::MetricsRegistry::new()),
             memory,
             monitor: Arc::new(Monitor::new(
