@@ -1358,7 +1358,7 @@ impl Resolver<'_> {
                     // (Spark's `RuntimeReplaceable` `Collation`); a plain string is `UTF8_BINARY`.
                     let child = call_kids.first();
                     let name = match child.and_then(|k| k.ty.data_type.as_ref()) {
-                        Some(DataType::String) => {
+                        Some(DataType::String) | None => {
                             krishiv_types::Collation::UTF8_BINARY.qualified_name()
                         }
                         Some(DataType::CollatedString(c)) => c.qualified_name(),

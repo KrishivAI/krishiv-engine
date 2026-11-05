@@ -128,6 +128,8 @@ fn collation_names_the_collation_of_its_argument() {
         "SYSTEM.BUILTIN.UTF8_LCASE"
     );
     assert_eq!(one("SELECT collation('a')"), "SYSTEM.BUILTIN.UTF8_BINARY");
+    // An untyped NULL is the default string.
+    assert_eq!(one("SELECT collation(NULL)"), "SYSTEM.BUILTIN.UTF8_BINARY");
     assert_eq!(
         one("SELECT collation('a' COLLATE en_ci)"),
         "SYSTEM.BUILTIN.en_CI"
