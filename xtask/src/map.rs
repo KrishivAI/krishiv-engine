@@ -147,7 +147,7 @@ pub fn public_items(text: &str) -> Vec<(String, String)> {
     out
 }
 
-fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+pub(crate) fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for entry in entries {
         let path = entry.map_err(|e| e.to_string())?.path();

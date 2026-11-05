@@ -630,6 +630,7 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
             x(&["registry-coverage"]),
             // Report only until P2-T193 turns it into a gate.
             x(&["maps-check", "--report"]),
+            x(&["file-size"]),
             x(&["metrics-gate"]),
             x(&["dco", "--base", base]),
             Cmd::new(
