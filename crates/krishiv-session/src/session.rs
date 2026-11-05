@@ -5,15 +5,12 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::task::{Context, Poll};
-use std::time::Instant;
+use std::task::Poll;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
-use futures::Stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use krishiv_common::config::{Config, ConfigValue, METRICS_ENABLED, PARTITION_OVERWRITE_MODE};
@@ -30,15 +27,14 @@ use krishiv_exec::planner::{
 };
 use krishiv_exec::{
     ExecConfig, Executor, ExecutorConfig, MetricsRegistry, MetricsSnapshot, QueryContext, QueryId,
-    QueryOutcome, QueryRunner, Scheduler, Status, TokioExecutor, WorkloadClass,
+    QueryRunner, Scheduler, TokioExecutor, WorkloadClass,
 };
 use krishiv_io::{
-    DirectoryWrite, FormatRegistry, IoConfig, IoCounters, IoScheduler, SaveMode, StoreId,
+    DirectoryWrite, FormatRegistry, IoConfig, IoScheduler, SaveMode, StoreId, StoreRegistry,
     is_spark_file_source, parse_object_url,
 };
 use krishiv_memory::{
-    ArbitrationStats, MemoryConfig, MemoryPool, RelationStore, SpillConfig, SpillManager,
-    SpillScope, TreePool,
+    MemoryConfig, MemoryPool, RelationStore, SpillConfig, SpillManager, SpillScope, TreePool,
 };
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
@@ -56,12 +52,14 @@ use object_store::ObjectStore;
 #[cfg(not(unix))]
 use object_store::local::LocalFileSystem;
 
+use crate::admission::{AdmissionController, QueryRequest, Unlimited};
 use crate::cache::RelationCache;
 use crate::catalog::{FileScans, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
 use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
+use crate::query_fold::{Admitted, MetricStream, PendingFold, QueryFold, QueryStart, QueuedRow};
 use crate::sql_functions::{QueryFunctions, SqlFunctions};
 use crate::udfs::SessionFunctions;
 use crate::variables::SessionVariables;
@@ -131,6 +129,8 @@ pub(crate) struct SessionState {
     /// Fixed for the session's life: caches and fingerprints never mix
     /// identities (a new identity gets a new session).
     pub(crate) principal: Arc<Principal>,
+    /// Decides when each query may start (E5); the default admits at once.
+    pub(crate) admission: Arc<dyn AdmissionController>,
     pub(crate) policy: Arc<dyn AccessPolicy>,
     pub(crate) functions: Arc<dyn FunctionRegistry>,
     /// The session's registered UDFs, shared with the registry above and
@@ -138,22 +138,22 @@ pub(crate) struct SessionState {
     udfs: Arc<UdfLibrary>,
     /// The SQL-bodied functions the session defines.
     pub(crate) sql_functions: SqlFunctions,
-    executor: Arc<dyn Executor>,
+    pub(crate) executor: Arc<dyn Executor>,
     runner: QueryRunner,
     memory: Arc<dyn MemoryPool>,
     /// The concrete pool tree behind [`Self::memory`]: its arbitration
     /// counters feed the metrics fold.
-    memory_tree: Arc<TreePool>,
+    pub(crate) memory_tree: Arc<TreePool>,
     /// The engine's metrics registry: every query that reaches execution
     /// folds into it once at query end (when `krishiv.metrics.enabled`).
-    metrics: Arc<MetricsRegistry>,
+    pub(crate) metrics: Arc<MetricsRegistry>,
     /// The spill directory, opened by the first query that plans for
     /// execution (`krishiv.spill.*` are build-time keys).
     spill: Arc<Mutex<Option<SpillManager>>>,
     /// Whether a store creates objects only if absent (the commit log's
     /// probe), by store id; per session, never process-wide.
     commit_log_probes: Mutex<HashMap<String, bool>>,
-    io: Arc<IoScheduler>,
+    pub(crate) io: Arc<IoScheduler>,
     formats: Arc<FormatRegistry>,
     /// The session's content-addressed relations: every memory table's
     /// batches as Arrow IPC, so workers resolve a batch range through it
@@ -195,6 +195,7 @@ pub struct SessionBuilder {
     policy: Option<Arc<dyn AccessPolicy>>,
     executor: Option<Arc<dyn Executor>>,
     functions: Option<Arc<dyn FunctionRegistry>>,
+    admission: Option<Arc<dyn AdmissionController>>,
 }
 
 impl fmt::Debug for SessionBuilder {
@@ -242,6 +243,21 @@ impl SessionBuilder {
     /// ```
     pub fn principal(mut self, principal: Principal) -> Self {
         self.principal = Some(principal);
+        self
+    }
+
+    /// The admission controller every query asks for a permit before it
+    /// runs (default: [`Unlimited`], which admits at once). While it
+    /// waits the query's `system.queries` state is `queued`.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use krishiv_session::{Session, Unlimited};
+    /// let s = Session::builder().admission_controller(Arc::new(Unlimited)).build()?;
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn admission_controller(mut self, controller: Arc<dyn AdmissionController>) -> Self {
+        self.admission = Some(controller);
         self
     }
 
@@ -375,6 +391,7 @@ impl SessionBuilder {
                 plan_ids: AtomicI64::new(0),
                 query_ids: AtomicU64::new(0),
                 queries,
+                admission: self.admission.unwrap_or_else(|| Arc::new(Unlimited)),
                 session_id: crate::telemetry::new_session_id(),
                 statements: AtomicU64::new(0),
                 sql_sources: AtomicU32::new(1),
@@ -466,6 +483,7 @@ impl Session {
             policy: None,
             executor: None,
             functions: None,
+            admission: None,
         }
     }
 
@@ -1122,6 +1140,29 @@ impl Session {
         SourceId(self.state.sql_sources.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// The block-cache scope of this session's stores: its principal. The session's storage
+    /// credentials come from its own configuration, so one principal's queries may share blocks
+    /// and no other principal's may (E15).
+    pub(crate) fn credential_scope(&self) -> krishiv_io::CacheScope {
+        krishiv_io::CacheScope::Principal(self.state.principal.id())
+    }
+
+    /// The I/O context of this session's principal (E15, E12).
+    fn scoped_io(&self) -> krishiv_io::IoContext {
+        self.state
+            .io
+            .context()
+            .with_principal(Arc::clone(&self.state.principal))
+    }
+
+    /// A store registry reading with this session's credential scope (E15).
+    fn scoped_stores(&self, config: &Arc<Config>) -> Arc<StoreRegistry> {
+        Arc::new(
+            krishiv_io::query_registry(Arc::clone(config), &self.state.io)
+                .with_cache_scope(self.credential_scope()),
+        )
+    }
+
     /// The analysis inputs of one query.
     pub(crate) fn query_env(&self) -> QueryEnv {
         // Before any analysis loads a table: a fill is refused if an
@@ -1131,12 +1172,9 @@ impl Session {
         // Cloud stores are built from this snapshot, lazily per query:
         // plans carry only path strings, and the worker resolves the store
         // at listing from the read's option values (P2-T084).
-        let stores = Arc::new(krishiv_io::query_registry(
-            Arc::clone(&config),
-            &self.state.io,
-        ));
+        let stores = self.scoped_stores(&config);
         let files = Arc::new(FileReads::new(
-            self.state.io.context(),
+            self.scoped_io(),
             Arc::clone(&self.state.formats),
             Arc::new(ObjectPaths::new(
                 StoreId::new(LOCAL_STORE),
@@ -1147,7 +1185,7 @@ impl Session {
             Arc::clone(&config),
         ));
         let scans = FileScans {
-            io: self.state.io.context(),
+            io: self.scoped_io(),
             config: Arc::clone(&config),
             slots: u64::try_from(self.state.executor.parallelism().max(1)).unwrap_or(1),
             runtime: self.state.executor.io_handle().clone(),
@@ -1554,9 +1592,62 @@ impl Session {
         detailed: bool,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
         let (stream, query, _) = self
-            .run_on_query_logged(physical, worker, env, detailed)
+            .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
         Ok((stream, query))
+    }
+
+    /// Asks the admission controller for a permit for the query whose
+    /// `system.queries` row is `log_id`. A controller that answers at once
+    /// leaves the row `running`; one that waits shows it `queued`. A refusal
+    /// closes the row as failed with the controller's error class, and a
+    /// caller that drops the query while it is queued closes it `cancelled`.
+    async fn admit(&self, log_id: &str) -> Result<crate::admission::Permit, KrishivError> {
+        let request = QueryRequest {
+            principal: Arc::clone(&self.state.principal),
+            tags: self.state.queries.tags_now(),
+            class: WorkloadClass::Interactive,
+            estimate: None,
+        };
+        let controller = Arc::clone(&self.state.admission);
+        let mut admit = std::pin::pin!(controller.admit(&request));
+        let mut queued = QueuedRow {
+            state: Arc::clone(&self.state),
+            id: log_id,
+            open: true,
+        };
+        let admitted = match std::future::poll_fn(|cx| Poll::Ready(admit.as_mut().poll(cx))).await {
+            Poll::Ready(done) => done,
+            Poll::Pending => {
+                self.state.queries.set_state(log_id, "queued");
+                let done = admit.await;
+                if done.is_ok() {
+                    self.state.queries.set_state(log_id, "running");
+                }
+                done
+            }
+        };
+        queued.open = false;
+        match admitted {
+            Ok(permit) => Ok(permit),
+            Err(error) => {
+                self.state.queries.record_failed_row(log_id, &error);
+                Err(error)
+            }
+        }
+    }
+
+    /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
+    /// that is about to change something (a write replacing files) takes the permit first and
+    /// passes it on, so a refused or cancelled query has changed nothing.
+    pub(crate) async fn admit_query(&self, env: &QueryEnv) -> Result<Admitted, KrishivError> {
+        let log_id = self
+            .state
+            .queries
+            .begin(env.text.as_deref(), env.statement_class);
+        *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        let permit = self.admit(&log_id).await?;
+        Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 
     /// As [`Self::run_on_query`], also returning the id of the `system.queries` row this execution
@@ -1568,19 +1659,20 @@ impl Session {
         worker: WorkerContext,
         env: &QueryEnv,
         detailed: bool,
+        admitted: Option<Admitted>,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
-        // The history row first: its id names the query's memory pool, so `system.memory.query_id`
-        // joins `system.queries.query_id`.
-        let log_id = self
-            .state
-            .queries
-            .begin(env.text.as_deref(), env.statement_class);
-        *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        // The history row and the permit first (unless the caller took them already, before it
+        // changed anything): the row's id names the query's memory pool, so
+        // `system.memory.query_id` joins `system.queries.query_id`.
+        let (log_id, permit) = match admitted {
+            Some(admitted) => admitted.into_parts(),
+            None => self.admit_query(env).await?.into_parts(),
+        };
         let id = QueryId(self.state.query_ids.fetch_add(1, Ordering::Relaxed));
         let pool = self
             .state
             .memory
-            .child(&crate::system::pool_name(&log_id), None);
+            .child(&crate::system::pool_name(&log_id), permit.memory_budget());
         let query = QueryContext::new(
             id,
             WorkloadClass::Interactive,
@@ -1598,22 +1690,49 @@ impl Session {
             self.state.metrics.query_begin(query.class());
         }
         let row_id = log_id.clone();
-        let mut pending = PendingFold(Some(QueryFold {
-            query: Arc::clone(&query),
-            state: Arc::clone(&self.state),
-            start: QueryStart::capture(&self.state),
-            metrics_on,
-            log_id,
-        }));
+        let mut pending = PendingFold(
+            Some(QueryFold {
+                query: Arc::clone(&query),
+                state: Arc::clone(&self.state),
+                start: QueryStart::capture(&self.state),
+                metrics_on,
+                log_id,
+                _permit: permit,
+            }),
+            None,
+        );
         // A plan the wire format cannot carry fails as a submit failure does:
         // its row records the error.
         let submitted = match crate::plan_round_trip::round_trip(physical, &env.config) {
             Ok(decoded) => {
                 let physical = decoded.as_ref().unwrap_or(physical);
-                self.state
+                // Submitted from a task of its own: instantiation runs on the blocking pool and
+                // goes on when the caller gives up, so the admission permit must outlive it
+                // (see `PendingFold`). The task hands the stream over, or cancels it if the
+                // caller is gone.
+                let submit = self
+                    .state
                     .runner
-                    .submit(physical.clone(), worker, Arc::clone(&query))
+                    .submit(physical.clone(), worker, Arc::clone(&query));
+                let (stream_tx, stream_rx) = tokio::sync::oneshot::channel();
+                let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
+                pending.1 = Some(done_rx);
+                let abandoned = Arc::clone(&query);
+                drop(self.state.executor.spawn(
+                    WorkloadClass::Interactive,
+                    Box::pin(async move {
+                        let result = submit.await;
+                        let started = result.is_ok();
+                        if let Err(Ok(stream)) = stream_tx.send(result) {
+                            abandoned.cancel();
+                            drop(stream);
+                        }
+                        let _ = done_tx.send(started);
+                    }),
+                ));
+                stream_rx
                     .await
+                    .unwrap_or_else(|_| Err(internal("a query ended during its setup".to_owned())))
             }
             Err(error) => Err(error),
         };
@@ -1656,207 +1775,6 @@ impl Session {
     }
 }
 
-/// The process counters a query-end fold attributes, and when the query
-/// started: read at query start so the fold records the deltas.
-struct QueryStart {
-    started: Instant,
-    arbitration: ArbitrationStats,
-    cache_hits: u64,
-    cache_misses: u64,
-    bytes_read: u64,
-    bytes_written: u64,
-}
-
-impl QueryStart {
-    fn capture(state: &SessionState) -> Self {
-        let totals = state.io.totals();
-        Self {
-            started: Instant::now(),
-            arbitration: state.memory_tree.stats(),
-            cache_hits: IoCounters::get(&totals.cache_hits),
-            cache_misses: IoCounters::get(&totals.cache_misses),
-            bytes_read: IoCounters::get(&totals.bytes_read),
-            bytes_written: IoCounters::get(&totals.bytes_written),
-        }
-    }
-
-    /// Folds the query's metrics with the deltas since [`Self::capture`]:
-    /// the one fold of this query. `error` is the stream's terminal error,
-    /// if any; otherwise the query's own error decides the outcome (none is
-    /// success). A zero wall time means the query never finished (a
-    /// cancelled stream dropped early): the duration then runs to now.
-    fn fold(
-        self,
-        state: &SessionState,
-        query: &QueryContext,
-        error: Option<&KrishivError>,
-        metrics_on: bool,
-        log_id: &str,
-    ) {
-        let stored = query.error();
-        let (status, error_class) = Status::from_error(error.or(stored.as_ref()));
-        let metrics = query.metrics();
-        let wall = metrics.wall_time;
-        // A zero wall time means the query never finished (a cancelled
-        // stream dropped early): the duration then runs from query start
-        // to the fold.
-        let duration = if wall.is_zero() {
-            self.started.elapsed()
-        } else {
-            wall
-        };
-        state.queries.finish(
-            log_id,
-            &crate::system::Finished {
-                state: match status {
-                    Status::Succeeded => "finished",
-                    Status::Failed => "failed",
-                    Status::Cancelled => "cancelled",
-                    Status::Denied => "denied",
-                },
-                wall_ns: i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX),
-                peak_memory_bytes: i64::try_from(metrics.memory.peak_reserved).unwrap_or(i64::MAX),
-                error_class: error_class.as_deref(),
-                // The most operators one query keeps.
-                operators: metrics
-                    .operators
-                    .iter()
-                    .take(500)
-                    .map(|(id, e)| crate::system::OperatorRow::of(log_id, *id, e, metrics.workers))
-                    .collect(),
-                totals: Some(crate::system::Totals {
-                    rows_produced: metrics
-                        .operators
-                        .values()
-                        .filter(|e| e.node.is_none() && e.role == krishiv_exec::OperatorRole::Sink)
-                        .map(|e| i64::try_from(e.metrics.rows_in).unwrap_or(i64::MAX))
-                        .max(),
-                    // Process-wide deltas: concurrent queries see each other's I/O.
-                    bytes_read: i64::try_from(
-                        IoCounters::get(&state.io.totals().bytes_read)
-                            .saturating_sub(self.bytes_read),
-                    )
-                    .unwrap_or(i64::MAX),
-                    bytes_written: i64::try_from(
-                        IoCounters::get(&state.io.totals().bytes_written)
-                            .saturating_sub(self.bytes_written),
-                    )
-                    .unwrap_or(i64::MAX),
-                    workload_class: query.class().as_str(),
-                    cpu_ns: i64::try_from(metrics.drivers.busy.as_nanos()).unwrap_or(i64::MAX),
-                    spill_bytes: metrics
-                        .operators
-                        .values()
-                        .map(|e| i64::try_from(e.metrics.spill_write_bytes).unwrap_or(i64::MAX))
-                        .fold(0, i64::saturating_add),
-                    spill_files: metrics
-                        .operators
-                        .values()
-                        .map(|e| i64::try_from(e.metrics.spill_files).unwrap_or(i64::MAX))
-                        .fold(0, i64::saturating_add),
-                    pipelines: i64::try_from(metrics.pipelines.len()).unwrap_or(i64::MAX),
-                    workers: i64::try_from(metrics.workers).unwrap_or(i64::MAX),
-                }),
-            },
-        );
-        if !metrics_on {
-            return;
-        }
-        let totals = state.io.totals();
-        let arbitration = state.memory_tree.stats();
-        state.metrics.fold(&QueryOutcome {
-            class: query.class(),
-            status,
-            error_class: error_class.as_deref(),
-            duration_secs: duration.as_secs_f64(),
-            metrics: &metrics,
-            arbitration_spills: arbitration
-                .spill_requests
-                .saturating_sub(self.arbitration.spill_requests),
-            arbitration_aborts: arbitration.aborts.saturating_sub(self.arbitration.aborts),
-            cache_hits: IoCounters::get(&totals.cache_hits).saturating_sub(self.cache_hits),
-            cache_misses: IoCounters::get(&totals.cache_misses).saturating_sub(self.cache_misses),
-        });
-    }
-}
-
-/// The one fold of a running query, taken when its stream ends.
-struct QueryFold {
-    query: Arc<QueryContext>,
-    state: Arc<SessionState>,
-    start: QueryStart,
-    /// `krishiv.metrics.enabled` as the query started.
-    metrics_on: bool,
-    /// The query's id in `system.queries`.
-    log_id: String,
-}
-
-impl QueryFold {
-    fn finish(self, error: Option<&KrishivError>) {
-        self.start.fold(
-            &self.state,
-            &self.query,
-            error,
-            self.metrics_on,
-            &self.log_id,
-        );
-    }
-}
-
-/// The fold of a query whose stream does not exist yet: dropped while still
-/// holding it (the caller cancelled), it cancels the query and folds it.
-struct PendingFold(Option<QueryFold>);
-
-impl Drop for PendingFold {
-    fn drop(&mut self) {
-        if let Some(fold) = self.0.take() {
-            fold.query.cancel();
-            fold.finish(None);
-        }
-    }
-}
-
-/// The result stream with the query's fold attached: the stream's end
-/// (batches, the query's error, or a drop) folds the query's metrics once.
-struct MetricStream {
-    inner: BoxStream<'static, Result<Batch, KrishivError>>,
-    fold: Option<QueryFold>,
-}
-
-impl Stream for MetricStream {
-    type Item = Result<Batch, KrishivError>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.inner.as_mut().poll_next(cx) {
-            Poll::Ready(None) => {
-                if let Some(fold) = self.fold.take() {
-                    fold.finish(None);
-                }
-                Poll::Ready(None)
-            }
-            Poll::Ready(Some(Err(error))) => {
-                if let Some(fold) = self.fold.take() {
-                    fold.finish(Some(&error));
-                }
-                Poll::Ready(Some(Err(error)))
-            }
-            Poll::Ready(Some(Ok(batch))) => Poll::Ready(Some(Ok(batch))),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-impl Drop for MetricStream {
-    fn drop(&mut self) {
-        if let Some(fold) = self.fold.take() {
-            // The caller went away: cancel first (a recorded error wins),
-            // then fold what the drivers merged so far.
-            fold.query.cancel();
-            fold.finish(None);
-        }
-    }
-}
-
 impl Session {
     /// The directory a write of `text` goes to, as it physically is (links in
     /// its existing part resolved): the policy is asked about the directory
@@ -1870,10 +1788,7 @@ impl Session {
         options: &BTreeMap<String, OptionValue>,
         env: &QueryEnv,
     ) -> Result<krishiv_exec::files::LocatedPath, KrishivError> {
-        let stores = Arc::new(krishiv_io::query_registry(
-            Arc::clone(&env.config),
-            &self.state.io,
-        ));
+        let stores = self.scoped_stores(&env.config);
         let at = ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
             self.state.cwd.clone(),
@@ -1890,7 +1805,16 @@ impl Session {
     pub(crate) async fn authorize_write_path(
         &self,
         at: &krishiv_exec::files::LocatedPath,
+        options: &BTreeMap<String, OptionValue>,
     ) -> Result<(), KrishivError> {
+        // The encoder resolves secret options (`encryptionKey`) for this principal: USAGE first.
+        let r = krishiv_plan::analyzer::authorize_secret_refs(
+            &*self.state.policy,
+            &self.state.principal,
+            options.values(),
+        )
+        .await;
+        crate::access::audit(self, StatementClass::Write, r)?;
         let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
         for privilege in [Privilege::Modify, Privilege::Create] {
             let r = authorize(
@@ -1967,6 +1891,7 @@ impl Session {
         env: &QueryEnv,
         target: WriteTarget,
         types: &[DataType],
+        pre: &mut Option<Admitted>,
     ) -> Result<Vec<String>, KrishivError> {
         let WriteTarget {
             format,
@@ -2007,18 +1932,25 @@ impl Session {
             !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
         let max_records = max_records_per_file(&options, format.name())?;
         let at = self.locate_write_path(text, &options, env)?;
-        let io = self.state.io.context();
-        self.authorize_write_path(&at).await?;
+        let io = self.scoped_io();
+        self.authorize_write_path(&at, &options).await?;
         // A link swapped into the checked path since fails the write
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.
         crate::access::still_physical(self, &at)?;
-        let job = job_uuid();
-        // Every name of the write is resolved relative to the directory
-        // opened here, never through a link (P2-T199). The registration
-        // lives until the write is over.
-        let (store, _registration) = self.anchor_local_write(&at, &job)?;
+        // The admission permit before anything is replaced: `DirectoryWrite::begin` deletes what
+        // an overwrite replaces, which a refused or cancelled query must not have done.
+        // Admitted by the caller already (it changed something before this write), else here.
+        let mut admitted = Some(match pre.take() {
+            Some(admitted) => admitted,
+            None => self.admit_query(env).await?,
+        });
         let written = async {
+            let job = job_uuid();
+            // Every name of the write is resolved relative to the directory
+            // opened here, never through a link (P2-T199). The registration
+            // lives until the write is over.
+            let (store, _registration) = self.anchor_local_write(&at, &job)?;
             let Some(write) = DirectoryWrite::begin(
                 &io,
                 store.clone(),
@@ -2060,7 +1992,9 @@ impl Session {
                 column_types,
             })?;
             let worker = self.worker(env);
-            let (mut rows, _, row_id) = self.run_on_query_logged(&plan, worker, env, false).await?;
+            let (mut rows, _, row_id) = self
+                .run_on_query_logged(&plan, worker, env, false, admitted.take())
+                .await?;
             let mut batches = Vec::new();
             while let Some(batch) = rows.next().await {
                 batches.push(batch?);
@@ -2114,6 +2048,14 @@ impl Session {
             Ok(dirs.into_iter().collect())
         }
         .await;
+        // A statement that ended before its query ran (an `ignore` that found its path, or an
+        // error in the preparation) settles its row with that outcome.
+        if let Some(unrun) = admitted.take() {
+            match &written {
+                Ok(_) => unrun.finish_ok(),
+                Err(error) => unrun.fail(error),
+            }
+        }
         // A store error after the anchor is open may be a link swapped into
         // the path: the audited denial is what the caller sees then.
         if written.is_err()
@@ -2500,7 +2442,7 @@ impl Session {
             state: Arc::clone(&self.state),
             config: Arc::clone(&env.config),
         }))
-        .with_io(self.state.io.context())
+        .with_io(self.scoped_io())
         .with_formats(Arc::clone(&self.state.formats))
         .with_config(Arc::clone(&env.config))
     }
