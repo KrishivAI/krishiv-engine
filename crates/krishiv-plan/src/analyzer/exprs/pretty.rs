@@ -147,6 +147,7 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
         {
             k[0].to_owned()
         }
+        ExprNode::Collate { name, .. } => format!("collate({}, {name})", k[0]),
         ExprNode::Cast { to, mode, .. } => {
             let cast = if *mode == CastMode::Try {
                 "TRY_CAST"

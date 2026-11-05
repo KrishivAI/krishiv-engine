@@ -322,6 +322,25 @@ impl Lowerer {
         )
     }
 
+    /// `expr COLLATE name`: an unknown name is `COLLATION_INVALID_NAME` (with Spark's proposals).
+    fn collate(
+        &self,
+        expr: Arc<IrExpr>,
+        name: &str,
+        name_span: Span,
+        span: Span,
+    ) -> Result<IrExpr, ParseError> {
+        let collation = krishiv_types::Collation::parse(name).map_err(|e| err(e, name_span))?;
+        Ok(self.ex(
+            ExprNode::Collate {
+                expr,
+                collation,
+                name: name.to_owned(),
+            },
+            span,
+        ))
+    }
+
     fn op(&self, b: Builtin, args: Vec<IrExpr>, span: Span) -> IrExpr {
         self.call(b.name(), args.into_iter().map(arc).collect(), span)
     }
@@ -2345,6 +2364,21 @@ impl Lowerer {
                     }
                     [] => return Err(unsupported("a function name", f.name.span)),
                 };
+                // `collate(expr, 'name')` is the function form of `expr COLLATE name`.
+                if qualifier.is_empty()
+                    && !name.quoted
+                    && name.value.eq_ignore_ascii_case("collate")
+                    && f.args.len() == 2
+                    && f.quantifier.is_none()
+                    && f.within_group.is_empty()
+                    && f.filter.is_none()
+                    && f.null_treatment.is_none()
+                    && f.over.is_none()
+                    && let ExprKind::Literal(Literal::String(text)) = &f.args[1].expr.kind
+                {
+                    let expr = self.arg(&f.args[0].expr)?;
+                    return self.collate(expr, text, f.args[1].expr.span, sp);
+                }
                 // With `spark.sql.legacy.identifierClause` on, `IDENTIFIER('a.b')`
                 // is an ordinary call (the parser builds `dynamic_name` only
                 // otherwise): Spark resolves a constant string argument to the
@@ -2523,7 +2557,16 @@ impl Lowerer {
                 let args = vec![self.arg(base)?, self.arg(index)?];
                 self.call("__subscript", args, sp)
             }
-            ExprKind::Collate(..) => return Err(unsupported("COLLATE", sp)),
+            ExprKind::Collate(inner, name) => {
+                let text = name
+                    .parts
+                    .iter()
+                    .map(|p| p.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                let expr = self.arg(inner)?;
+                self.collate(expr, &text, name.span, sp)?
+            }
             ExprKind::VariantGet(..) => return Err(unsupported("variant paths", sp)),
             ExprKind::TableArgument(_) => return Err(unsupported("TABLE arguments", sp)),
             ExprKind::Lambda { params, body } => {

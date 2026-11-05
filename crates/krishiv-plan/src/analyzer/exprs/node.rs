@@ -1439,6 +1439,45 @@ impl Resolver<'_> {
                     ..keep(arg_type(to.clone(), nullable))
                 }
             }
+            ExprNode::Collate {
+                collation, name, ..
+            } => {
+                let child = &kids[0].ty;
+                if !matches!(
+                    child.data_type.as_ref(),
+                    Some(DataType::String | DataType::CollatedString(_)) | None
+                ) {
+                    return Err(AnalysisError::new(
+                        krishiv_common::error::DatatypeMismatchUnexpectedInputType {
+                            sql_expr: format!(
+                                "\"collate({}, {name})\"",
+                                pretty(&kids[0].shown(), self.ctx.conf.session_zone)
+                            ),
+                            param_index: "first".to_owned(),
+                            required_type: "\"STRING\"".to_owned(),
+                            input_sql: format!(
+                                "\"{}\"",
+                                pretty(&kids[0].shown(), self.ctx.conf.session_zone)
+                            ),
+                            input_type: coerce::quoted_type(child.data_type.as_ref()),
+                        },
+                        e.origin,
+                    ));
+                }
+                // A cast to the collated type: the carrier is unchanged, so it costs nothing at
+                // run time. The unresolved node stays the display form.
+                let to = DataType::collated_string(*collation);
+                let mut bound = Bound {
+                    expr: rebuilt(ExprNode::Cast {
+                        expr: Arc::clone(&args[0]),
+                        to: to.clone(),
+                        mode: CastMode::Ansi,
+                    }),
+                    ..keep(arg_type(to, child.nullable))
+                };
+                bound.shown = Some(Arc::clone(e));
+                bound
+            }
             // Generators take their several names before this point
             // (`extract_generator`, lowering): any other expression with
             // a multi-part alias is an error.
