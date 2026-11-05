@@ -135,52 +135,52 @@ impl JsonOptions {
             out.timestamp_output = Some(DateTimePattern::new_fast(LEGACY_TIMESTAMP));
         }
         for (name, value) in options {
-            match name.as_str() {
-                "enableDateTimeParsingFallback" => out.datetime_fallback = is_true(value),
-                "dateFormat" if legacy => {
+            match name.to_ascii_lowercase().as_str() {
+                "enabledatetimeparsingfallback" => out.datetime_fallback = is_true(value),
+                "dateformat" if legacy => {
                     out.date_format = Some(DateTimePattern::new_fast(value));
                     out.date_output = Some(DateTimePattern::new_fast(value));
                 }
-                "timestampFormat" if legacy => {
+                "timestampformat" if legacy => {
                     out.timestamp_format = Some(DateTimePattern::new_fast(value));
                     out.timestamp_output = Some(DateTimePattern::new_fast(value));
                 }
-                "dateFormat" => {
+                "dateformat" => {
                     let pattern = DateTimePattern::new(value, Purpose::Parse)?;
                     out.date_format = Some(pattern);
                     out.date_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
-                "timeFormat" => {
+                "timeformat" => {
                     let pattern = DateTimePattern::new(value, Purpose::Parse)?;
                     out.time_format = Some(pattern);
                     out.time_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
-                "timestampFormat" => {
+                "timestampformat" => {
                     let pattern = DateTimePattern::new(value, Purpose::Parse)?;
                     out.timestamp_format = Some(pattern);
                     out.timestamp_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
                 // Spark builds the NTZ formatter with `forTimestampNTZ`, which
                 // never takes the legacy one, whatever the parser policy.
-                "timestampNTZFormat" => {
+                "timestampntzformat" => {
                     let pattern = DateTimePattern::new(value, Purpose::Parse)?;
                     out.timestamp_ntz_format = Some(pattern);
                     out.timestamp_ntz_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
-                "primitivesAsString" => out.primitives_as_string = is_true(value),
-                "prefersDecimal" => out.prefers_decimal = is_true(value),
-                "allowComments" => out.allow_comments = is_true(value),
-                "allowSingleQuotes" => out.allow_single_quotes = is_true(value),
-                "allowNumericLeadingZeros" => out.allow_numeric_leading_zeros = is_true(value),
-                "allowBackslashEscapingAnyCharacter" => {
+                "primitivesasstring" => out.primitives_as_string = is_true(value),
+                "prefersdecimal" => out.prefers_decimal = is_true(value),
+                "allowcomments" => out.allow_comments = is_true(value),
+                "allowsinglequotes" => out.allow_single_quotes = is_true(value),
+                "allownumericleadingzeros" => out.allow_numeric_leading_zeros = is_true(value),
+                "allowbackslashescapinganycharacter" => {
                     out.allow_backslash_escaping_any = is_true(value);
                 }
-                "allowUnquotedFieldNames" => out.allow_unquoted_field_names = is_true(value),
-                "allowUnquotedControlChars" => out.allow_unquoted_control_chars = is_true(value),
-                "allowNonNumericNumbers" => out.allow_non_numeric_numbers = is_true(value),
-                "sortKeys" => out.sort_keys = is_true(value),
-                "ignoreNullFields" => out.ignore_null_fields = is_true(value),
-                "dropFieldIfAllNull" => out.drop_field_if_all_null = is_true(value),
+                "allowunquotedfieldnames" => out.allow_unquoted_field_names = is_true(value),
+                "allowunquotedcontrolchars" => out.allow_unquoted_control_chars = is_true(value),
+                "allownonnumericnumbers" => out.allow_non_numeric_numbers = is_true(value),
+                "sortkeys" => out.sort_keys = is_true(value),
+                "ignorenullfields" => out.ignore_null_fields = is_true(value),
+                "dropfieldifallnull" => out.drop_field_if_all_null = is_true(value),
                 "mode" => {
                     out.mode = match value.trim().to_ascii_uppercase().as_str() {
                         "PERMISSIVE" => ParseMode::Permissive,
