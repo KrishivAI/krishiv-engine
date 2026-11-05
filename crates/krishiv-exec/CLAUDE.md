@@ -36,7 +36,10 @@ split through the same `Merge`.
 `values/` (P2-T177) `ValueService` + `LocalValues`: runtime filters, subquery results and broadcast builds as
 versioned values (`ValueId`, `Version` are plan data), published as one partial per producer partition and visible
 once every producer partition published (count 1 unless the task says otherwise; a retried partition's partial is
-ignored); `WorkerContext` holds the service, a fresh `LocalValues` per instantiation by default.
+ignored); `WorkerContext` holds the service, a fresh `LocalValues` per instantiation by default. A runtime filter's
+partials merge with `KeyFilter::merge` under the publishing join's options (`ValueService::filter_options`); a
+partitioned join's Bloom size is planned (`KeyFilterOptions::bloom_bytes`, P2-T177 unit 2) and dropped at
+instantiation when the filter has one producer partition.
 Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
 (adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model. A scan's pipeline
 starts after the pipelines publishing the filters worth the wait (`scan_waits`: not when the build reads the scan's

@@ -2366,6 +2366,7 @@ dependencies = [
  "krishiv-memory",
  "krishiv-optimizer",
  "krishiv-plan",
+ "krishiv-plan-codec",
  "krishiv-sql",
  "krishiv-types",
  "krishiv-udf-sdk",

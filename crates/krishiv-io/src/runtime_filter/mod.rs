@@ -41,6 +41,7 @@ mod filter;
 mod hash;
 mod key;
 mod member;
+mod merge;
 mod sync;
 
 use std::fmt;

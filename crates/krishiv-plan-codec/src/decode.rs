@@ -29,7 +29,7 @@ use krishiv_plan::{
     Literal, Origin, PlanId, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SourceId, Span,
     TableVersion, YearMonthField,
 };
-use krishiv_types::{DataType, DecimalType, Srid};
+use krishiv_types::{Collation, DataType, DecimalType, Srid};
 
 use crate::arrow::{schema_from, type_from};
 use crate::error::{CodecError, Result, corrupt};
@@ -1030,6 +1030,18 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         ModeMax => AggregateFunction::ModeMax,
         TrySum => AggregateFunction::TrySum,
         TryAvg => AggregateFunction::TryAvg,
+        StddevSamp => AggregateFunction::StddevSamp,
+        StddevPop => AggregateFunction::StddevPop,
+        VarSamp => AggregateFunction::VarSamp,
+        VarPop => AggregateFunction::VarPop,
+        Skewness => AggregateFunction::Skewness,
+        Kurtosis => AggregateFunction::Kurtosis,
+        Corr => AggregateFunction::Corr,
+        CovarSamp => AggregateFunction::CovarSamp,
+        CovarPop => AggregateFunction::CovarPop,
+        AnyValue => AggregateFunction::AnyValue { ignore_nulls: ignore },
+        MaxBy => AggregateFunction::MaxBy,
+        MinBy => AggregateFunction::MinBy,
         Listagg => if a.listagg_desc.len() != a.listagg_nulls_first.len() {
             return Err(corrupt("a listagg state of another shape than its orders"));
         } else {
@@ -1057,7 +1069,9 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
     }
     let takes_ignore = matches!(
         function,
-        AggregateFunction::First { .. } | AggregateFunction::Last { .. }
+        AggregateFunction::First { .. }
+            | AggregateFunction::Last { .. }
+            | AggregateFunction::AnyValue { .. }
     );
     if ignore && !takes_ignore {
         return Err(corrupt("`ignore_nulls` on a function without it"));
@@ -1233,6 +1247,7 @@ fn join_filter(f: &pb::JoinFilter) -> Result<JoinFilterPlan> {
             bloom_max_bytes: usize_of(o.bloom_max_bytes)?,
             bloom_fpp: o.bloom_fpp,
             bloom_max_fpp: o.bloom_max_fpp,
+            bloom_bytes: o.bloom_bytes,
         },
     })
 }
@@ -1339,6 +1354,7 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         YearMonthInterval => interval_year_month(t)?,
         DayTimeInterval => interval_day_time(t)?,
         CalendarInterval => DataType::CalendarInterval,
+        CollatedString => collated_string(t)?,
     })?;
     let (precision, scale, srid) = match data_type {
         DataType::Decimal(_) => (true, true, false),
@@ -1362,7 +1378,23 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
     if !data_type.is_nested() && !t.json.is_empty() {
         return Err(corrupt("a JSON form on a type that is not nested"));
     }
+    if !matches!(data_type, DataType::CollatedString(_)) && !t.collation.is_empty() {
+        return Err(corrupt(
+            "a collation on a type that is not a collated string",
+        ));
+    }
     Ok(data_type)
+}
+
+/// A collated string type from its collation's canonical name: only the
+/// form the encoder writes, so the plan encodes to the same bytes.
+fn collated_string(t: &pb::DataType) -> Result<DataType> {
+    match Collation::parse(&t.collation) {
+        Ok(c) if !c.is_utf8_binary() && !c.is_indeterminate() && c.name() == t.collation => {
+            Ok(DataType::CollatedString(c))
+        }
+        _ => Err(corrupt("an invalid collation")),
+    }
 }
 
 fn interval_year_month(t: &pb::DataType) -> Result<DataType> {
@@ -1451,6 +1483,13 @@ fn literal(l: &pb::Literal) -> Result<Literal> {
             days: v.days,
             micros: v.micros,
         },
+        // Bounded by the plan's byte limit: every entry takes wire bytes.
+        Kind::Map(v) => Literal::Map(
+            v.entries
+                .iter()
+                .map(|e| (e.key.clone(), e.value.clone()))
+                .collect(),
+        ),
     })
 }
 

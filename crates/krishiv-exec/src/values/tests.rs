@@ -165,15 +165,79 @@ fn a_filter_stays_pending_until_complete() {
         .publish(partial(FILTER, 1, 0, Value::Filter(keys(&[2]))))
         .unwrap();
     assert_eq!(p, Publication::Complete);
-    // Filters do not merge yet: the complete value applies nothing.
-    assert!(matches!(
-        cell.published().snapshot,
-        FilterSnapshot::Disabled(DisabledReason::Off)
-    ));
-    assert!(matches!(
-        read.current().unwrap().1.as_ref(),
-        Value::Filter(FilterSnapshot::Disabled(_))
-    ));
+    // The complete value is the merge: both partitions' keys pass.
+    assert_eq!(
+        passes(&cell.published().snapshot, &[1, 2, 3]),
+        [true, true, false]
+    );
+    let Value::Filter(snapshot) = read.current().unwrap().1.as_ref().clone() else {
+        panic!("not a filter")
+    };
+    assert_eq!(passes(&snapshot, &[1, 2, 3]), [true, true, false]);
+}
+
+/// Which of `probe` the final filter `snapshot` keeps.
+fn passes(snapshot: &FilterSnapshot, probe: &[i64]) -> Vec<bool> {
+    let FilterSnapshot::Final(f) = snapshot else {
+        panic!("{snapshot:?}")
+    };
+    f.evaluate(&Int64Array::from(probe.to_vec()))
+        .unwrap()
+        .iter()
+        .map(|b| b == Some(true))
+        .collect()
+}
+
+/// A filter of `keys` collected with `options`.
+fn keys_with(keys: &[i64], options: KeyFilterOptions) -> FilterSnapshot {
+    let mut b = KeyFilterBuilder::new(DataType::Int64, options).unwrap();
+    b.add(&Int64Array::from(keys.to_vec()), None).unwrap();
+    FilterSnapshot::Final(Arc::new(b.finish()))
+}
+
+#[test]
+fn partials_merge_within_the_publishing_joins_options() {
+    // Three build partitions, each with a Bloom of the planned size.
+    let planned = KeyFilterOptions {
+        exact_max_values: 0,
+        bloom_bytes: Some(4_096),
+        ..KeyFilterOptions::default()
+    };
+    let values = of(&[(FILTER, 3)]);
+    values
+        .declare_filter(FilterId(1), ColumnPath::new("k"), DataType::Int64)
+        .unwrap();
+    values.filter_options(FilterId(1), planned).unwrap();
+    // Later options (another task's join) do not replace the first.
+    values
+        .filter_options(FilterId(1), KeyFilterOptions::default())
+        .unwrap();
+    let part = |p: i64| (0..300).map(|k| k * 3 + p).collect::<Vec<_>>();
+    for p in [2, 0, 1] {
+        let snapshot = keys_with(&part(p), planned);
+        values
+            .publish(partial(
+                FILTER,
+                u32::try_from(p).unwrap(),
+                0,
+                Value::Filter(snapshot),
+            ))
+            .unwrap();
+    }
+    let snapshot = values
+        .filter(FilterId(1))
+        .unwrap()
+        .published()
+        .snapshot
+        .clone();
+    let FilterSnapshot::Final(f) = &snapshot else {
+        panic!("{snapshot:?}")
+    };
+    assert_eq!(f.bloom_bytes(), Some(4_096), "the partials' Blooms ORed");
+    assert_eq!(f.key_count(), 900);
+    let all: Vec<i64> = (0..900).collect();
+    assert!(passes(&snapshot, &all).iter().all(|p| *p));
+    assert!(values.filter_options(FilterId(9), planned).is_err());
 }
 
 #[test]

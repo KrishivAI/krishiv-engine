@@ -564,6 +564,30 @@ enum AggregateFunction {
   AGGREGATE_FUNCTION_PERCENTILE_DISC = 32;
   // feature: percentile_aggregates
   AGGREGATE_FUNCTION_APPROX_COUNT_DISTINCT = 33;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_STDDEV_SAMP = 34;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_STDDEV_POP = 35;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_VAR_SAMP = 36;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_VAR_POP = 37;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_SKEWNESS = 38;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_KURTOSIS = 39;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_CORR = 40;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_COVAR_SAMP = 41;
+  // feature: moment_aggregates
+  AGGREGATE_FUNCTION_COVAR_POP = 42;
+  // feature: any_value_by_aggregates
+  AGGREGATE_FUNCTION_ANY_VALUE = 43;
+  // feature: any_value_by_aggregates
+  AGGREGATE_FUNCTION_MAX_BY = 44;
+  // feature: any_value_by_aggregates
+  AGGREGATE_FUNCTION_MIN_BY = 45;
 }
 
 enum AggregateInput {
@@ -574,7 +598,7 @@ enum AggregateInput {
 
 message AggregateExpr {
   AggregateFunction function = 1;
-  // `first` / `last` only.
+  // `first`, `last` and `any_value` only.
   bool ignore_nulls = 2;
   repeated uint64 args = 3;
   AggregateInput input = 4;
@@ -712,6 +736,9 @@ message KeyFilterOptions {
   double bloom_max_fpp = 7;
   // ignorable
   bool scan_waits = 8;
+  // ignorable: a reader that skips it sizes each Bloom for its keys; filters
+  // of several build partitions then merge to their range, and pass more rows.
+  optional uint32 bloom_bytes = 9;
 }
 
 message UnionNode {
@@ -1004,6 +1031,8 @@ message DataType {
     KIND_DAY_TIME_INTERVAL = 20;
     // feature: interval_types
     KIND_CALENDAR_INTERVAL = 21;
+    // feature: collated_strings
+    KIND_COLLATED_STRING = 22;
   }
   Kind kind = 1;
   // `KIND_DECIMAL` and `KIND_TIME` only.
@@ -1029,6 +1058,11 @@ message DataType {
   // feature: interval_types
   // `KIND_DAY_TIME_INTERVAL` only: the trailing field.
   DayTimeField dt_end = 9;
+  // feature: collated_strings
+  // `KIND_COLLATED_STRING` only: the collation's canonical name (never
+  // `UTF8_BINARY`, which is `KIND_STRING`). Ids index an ICU build's
+  // table, so they never travel.
+  string collation = 10;
 }
 
 enum YearMonthField {
@@ -1065,7 +1099,22 @@ message Literal {
     DayTimeLiteral day_time = 16;
     // feature: interval_types
     CalendarLiteral calendar = 17;
+    // feature: options_map_literals
+    MapLiteral map = 18;
   }
+}
+
+// feature: options_map_literals
+// A `MAP<STRING, STRING>` literal: one call's options (`from_json`,
+// `from_csv`, `from_xml` and the like), entries in their given order.
+message MapLiteral {
+  repeated MapLiteralEntry entries = 1;
+}
+
+// feature: options_map_literals
+message MapLiteralEntry {
+  string key = 1;
+  string value = 2;
 }
 
 message NullLiteral {

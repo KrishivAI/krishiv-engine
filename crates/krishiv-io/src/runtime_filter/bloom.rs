@@ -115,6 +115,37 @@ impl RuntimeBloom {
         }
     }
 
+    /// Adds every hash `other` holds: a bitwise OR. `false`, and nothing
+    /// changed, when the two differ in size (their hashes land in different
+    /// blocks).
+    pub fn union_with(&mut self, other: &Self) -> bool {
+        if self.blocks.len() != other.blocks.len() {
+            return false;
+        }
+        for (a, b) in self.blocks.iter_mut().zip(&other.blocks) {
+            for (w, x) in a.iter_mut().zip(b) {
+                *w |= x;
+            }
+        }
+        true
+    }
+
+    /// The share of random hashes that pass, measured from the bits set:
+    /// the mean over blocks of the product of each word's fill. Unlike
+    /// [`Self::expected_fpp`] it needs no count of distinct hashes, so it
+    /// also holds for a union of filters whose keys overlap.
+    #[must_use]
+    pub fn pass_rate(&self) -> f64 {
+        let block = |b: &[u32; 8]| {
+            b.iter()
+                .map(|w| f64::from(w.count_ones()) / 32.0)
+                .product::<f64>()
+        };
+        #[expect(clippy::cast_precision_loss, reason = "a rate")]
+        let n = self.blocks.len() as f64;
+        self.blocks.iter().map(block).sum::<f64>() / n
+    }
+
     /// Whether `hash` may have been added (never `false` for one that was).
     #[inline]
     #[must_use]
