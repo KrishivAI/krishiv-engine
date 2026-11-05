@@ -2091,7 +2091,7 @@ fn deep_plans_resolve_on_a_small_stack_and_added_nodes_count() {
 #[test]
 fn principals_securables_and_contexts_print_safely() {
     let local = Principal::local_user();
-    assert!(local.id().starts_with("user:``/"));
+    assert!(local.id().starts_with("user:-/"));
     let mut service = Principal::new("etl", crate::analyzer::PrincipalKind::Service);
     service.tenant = Some("acme".to_owned());
     service.groups = vec!["b".to_owned(), "a".to_owned(), "a".to_owned()];

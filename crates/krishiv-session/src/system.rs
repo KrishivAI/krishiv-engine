@@ -969,13 +969,27 @@ impl QueryLog {
     /// admission): `denied`, `cancelled` or `failed` by its class.
     pub(crate) fn record_failed_row(&self, id: &str, error: &KrishivError) {
         let class = error.error_class().name();
+        let state = outcome_state(class);
+        self.close_unrun(id, state, (state != "cancelled").then_some(class));
+    }
+
+    /// Closes the live row `id` of a query that never ran (refused, cancelled while queued,
+    /// or ended before its run): its wall time is the time since it was submitted, so the
+    /// queue time is not lost.
+    pub(crate) fn close_unrun(&self, id: &str, state: &'static str, error_class: Option<&str>) {
+        let waited_ms = {
+            let rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
+            rows.iter()
+                .find(|r| r.id == id)
+                .map_or(0, |r| now_ms().saturating_sub(r.submitted_ms).max(0))
+        };
         self.finish(
             id,
             &Finished {
-                state: outcome_state(class),
-                wall_ns: 0,
+                state,
+                wall_ns: waited_ms.saturating_mul(1_000_000),
                 peak_memory_bytes: 0,
-                error_class: (outcome_state(class) != "cancelled").then_some(class),
+                error_class,
                 operators: Vec::new(),
                 totals: None,
             },
