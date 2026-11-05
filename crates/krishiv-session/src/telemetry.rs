@@ -67,17 +67,40 @@ impl QueryTrace {
             krishiv.session_id = %session_id,
             krishiv.query_id = tracing::field::Empty,
         );
-        if !span.is_disabled() {
-            let (operation, summary, text) = self.attributes();
-            span.record("db.operation.name", operation.as_str());
-            span.record("db.query.summary", summary.as_str());
-            span.record("db.query.text", text.as_str());
-            span.record(
-                "krishiv.query_id",
-                format!("{session_id}-{}", self.seq).as_str(),
-            );
-        }
+        self.fill(&span, session_id);
         span
+    }
+
+    /// The span of `Session::sql` itself: parse, analysis and, for a command
+    /// that runs eagerly (`INSERT ... SELECT`, DDL), its execution. A query's
+    /// rows are produced later, inside the `krishiv.query` span of its action.
+    pub(crate) fn prepare_span(&self, session_id: &str) -> Span {
+        let span = tracing::info_span!(
+            "krishiv.sql",
+            db.system.name = "krishiv",
+            db.operation.name = tracing::field::Empty,
+            db.query.summary = tracing::field::Empty,
+            db.query.text = tracing::field::Empty,
+            krishiv.session_id = %session_id,
+            krishiv.query_id = tracing::field::Empty,
+        );
+        self.fill(&span, session_id);
+        span
+    }
+
+    /// Records the attributes, if a subscriber wants the span.
+    fn fill(&self, span: &Span, session_id: &str) {
+        if span.is_disabled() {
+            return;
+        }
+        let (operation, summary, text) = self.attributes();
+        span.record("db.operation.name", operation.as_str());
+        span.record("db.query.summary", summary.as_str());
+        span.record("db.query.text", text.as_str());
+        span.record(
+            "krishiv.query_id",
+            format!("{session_id}-{}", self.seq).as_str(),
+        );
     }
 }
 

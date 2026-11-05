@@ -1475,20 +1475,25 @@ impl DataFrame {
     pub async fn collect_with_metrics(
         &self,
     ) -> Result<(Vec<RecordBatch>, krishiv_exec::QueryMetrics), KrishivError> {
+        use tracing::Instrument as _;
         let df = self.clone();
+        let span = self.span();
         self.session
-            .on_executor(async move {
-                let a = df.action_analysis().await?;
-                let (physical, fill) = df.physical_cached(&a).await?;
-                let (stream, query) = df.session.run_with_query(&physical, &a.env).await?;
-                let mut stream = fill.fill(stream, &df.session.state.cache);
-                let mut out = Vec::new();
-                while let Some(batch) = stream.next().await {
-                    out.push(crate::carrier::client_batch(&batch?)?);
+            .on_executor(
+                async move {
+                    let a = df.action_analysis().await?;
+                    let (physical, fill) = df.physical_cached(&a).await?;
+                    let (stream, query) = df.session.run_with_query(&physical, &a.env).await?;
+                    let mut stream = fill.fill(stream, &df.session.state.cache);
+                    let mut out = Vec::new();
+                    while let Some(batch) = stream.next().await {
+                        out.push(crate::carrier::client_batch(&batch?)?);
+                    }
+                    drop(stream);
+                    Ok((out, query.metrics()))
                 }
-                drop(stream);
-                Ok((out, query.metrics()))
-            })
+                .instrument(span),
+            )
             .await
     }
 

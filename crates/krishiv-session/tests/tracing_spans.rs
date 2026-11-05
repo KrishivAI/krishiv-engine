@@ -85,13 +85,18 @@ fn spans() -> &'static Spans {
 
 /// The `krishiv.query` spans whose `db.query.summary` mentions `table`.
 fn spans_of(table: &str) -> Vec<BTreeMap<String, String>> {
+    spans_named("krishiv.query", table)
+}
+
+/// The spans called `name` whose `db.query.summary` mentions `table`.
+fn spans_named(name: &str, table: &str) -> Vec<BTreeMap<String, String>> {
     spans()
         .lock()
         .map(|s| s.clone())
         .unwrap_or_default()
         .into_iter()
         .filter(|(n, f)| {
-            n == "krishiv.query"
+            n == name
                 && f.get("db.query.summary")
                     .is_some_and(|summary| summary.contains(table))
         })
@@ -170,4 +175,35 @@ fn a_frame_without_a_statement_has_no_query_text() {
         .filter(|(n, f)| n == "krishiv.query" && !f.contains_key("db.query.text"))
         .count();
     assert!(plain >= 1);
+}
+
+#[test]
+fn collect_with_metrics_runs_in_a_query_span() {
+    spans();
+    let s = session("orders_m");
+    let df = block_on(s.sql("SELECT a FROM orders_m")).expect("plans");
+    let (batches, _metrics) = block_on(df.collect_with_metrics()).expect("runs");
+    assert_eq!(
+        batches
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        3
+    );
+    assert_eq!(spans_of("orders_m").len(), 1, "one action, one span");
+}
+
+#[test]
+fn a_command_that_runs_eagerly_has_a_span_around_its_execution() {
+    spans();
+    let s = session("orders_e");
+    block_on(s.sql("CREATE TEMPORARY VIEW v_e AS SELECT a FROM orders_e")).expect("runs");
+    let prepared = spans_named("krishiv.sql", "orders_e");
+    let p = prepared
+        .first()
+        .expect("a krishiv.sql span for the statement");
+    assert_eq!(p["db.operation.name"], "CREATE");
+    assert!(p["db.query.text"].contains("v_e"), "{p:?}");
+    // The planning and eager work is not a query span of its own.
+    assert!(spans_of("orders_e").is_empty());
 }
