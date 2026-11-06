@@ -589,3 +589,38 @@ fn the_result_cache_probe_does_not_count_a_relation_cache_hit_twice() {
         "relation cache hits for one run with the result cache"
     );
 }
+
+#[test]
+fn query_text_honours_the_max_bytes_and_literals_settings() {
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.literals", "mask")
+        .unwrap();
+    run_all(&s, "SELECT 'canary-7f3a' AS c, 424242 AS n").unwrap();
+    let texts = strings_in(
+        &s,
+        "SELECT query_text FROM system.queries WHERE query_text LIKE 'SELECT ? AS c%'",
+    );
+    assert_eq!(texts, ["SELECT ? AS c , ? AS n"]);
+    let leaked = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.queries \
+         WHERE query_text LIKE '%canary-7f3a%' OR query_text LIKE '%424242%'",
+    );
+    // The statement that reads the table names the canary itself; only that row may.
+    assert!(leaked[0].parse::<u32>().unwrap() <= 1, "{leaked:?}");
+    // Back to `keep`, and a short limit: the text is cut and says so.
+    s.conf()
+        .set("krishiv.system.queryText.literals", "keep")
+        .unwrap();
+    s.conf()
+        .set("krishiv.system.queryText.maxBytes", "12")
+        .unwrap();
+    run_all(&s, "SELECT 'cutting-edge-literal' AS c").unwrap();
+    let cut = strings_in(
+        &s,
+        "SELECT concat(query_text, '|', CAST(query_text_truncated AS STRING)) FROM system.queries \
+         WHERE query_text LIKE 'SELECT %cutt'",
+    );
+    assert_eq!(cut, ["SELECT 'cutt|true"]);
+}
