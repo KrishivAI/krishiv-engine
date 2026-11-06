@@ -220,6 +220,16 @@ fn write_value(
         }
         ArrowType::List(_) | ArrowType::LargeList(_) => write_list(col, row, text, ctx)?,
         ArrowType::Map(_, _) => write_map(col, row, text, ctx)?,
+        // A variant prints its own JSON (Spark's `to_json` of a container
+        // holding variants), not its carrier struct.
+        ArrowType::Struct(_) if krishiv_types::arrow::is_variant_struct(col.data_type()) => {
+            let c = crate::variant::VariantColumn::new(col.as_ref())?;
+            if let Some(v) = c.get(row)? {
+                crate::variant::write_json(&v, ctx.zone, text)?;
+            } else {
+                text.push_str("null");
+            }
+        }
         ArrowType::Struct(_) => write_struct(col, row, text, ctx)?,
         other => {
             return Err(internal(format!("a JSON value of Arrow type {other}")));

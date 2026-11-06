@@ -63,6 +63,11 @@ impl QueryId {
         })
     }
 
+    /// An id the runtime minted, or one already parsed (canonical).
+    pub(crate) fn minted(text: String) -> Self {
+        Self(Arc::from(text))
+    }
+
     /// The id as text.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -126,6 +131,7 @@ fn java_uuid(text: &str) -> Option<Arc<str>> {
 #[must_use]
 pub struct QueryOptions {
     pub(crate) operation_id: Option<String>,
+    pub(crate) deadline: Option<std::time::Duration>,
 }
 
 impl QueryOptions {
@@ -144,6 +150,15 @@ impl QueryOptions {
     /// collide.
     pub fn operation_id(mut self, id: impl Into<String>) -> Self {
         self.operation_id = Some(id.into());
+        self
+    }
+
+    /// Limits each query the statement runs to `limit` from the start of
+    /// its execution (`KRISHIV_QUERY_TIMEOUT` past it). With
+    /// `krishiv.query.maxExecutionTime` also set, the shorter applies: a
+    /// statement can tighten the session's limit, never loosen it.
+    pub fn deadline(mut self, limit: std::time::Duration) -> Self {
+        self.deadline = Some(limit);
         self
     }
 }

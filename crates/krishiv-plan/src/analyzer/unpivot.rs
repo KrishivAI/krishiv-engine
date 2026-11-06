@@ -219,6 +219,7 @@ impl Resolver<'_> {
                     col: col.clone(),
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 }),
         );
         let node = PlanNode::Expand {

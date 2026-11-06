@@ -18,14 +18,14 @@ Limit 100
                         :     +- Filter (d_year#83 IN (1999, 2000, 2001))
                         :        +- Scan spark_catalog.default.date_dim [d_date_sk#77, d_year#83, d_moy#85] (shared #1)
                         +- Project [cs_sold_date_sk#43, cs_quantity#61, ss_item_sk#2, ss_store_sk#7, ss_quantity#10, sr_return_quantity#33]
-                           +- Join Inner, ((sr_customer_sk#26 == cs_bill_customer_sk#46) and (sr_item_sk#25 == cs_item_sk#58))
+                           +- Join Inner, ((ss_item_sk#2 == cs_item_sk#58) and (ss_customer_sk#3 == cs_bill_customer_sk#46))
                               :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#43, cs_bill_customer_sk#46, cs_item_sk#58, cs_quantity#61]
-                              +- Project [ss_item_sk#2, ss_store_sk#7, ss_quantity#10, sr_item_sk#25, sr_customer_sk#26, sr_return_quantity#33]
+                              +- Project [ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_quantity#10, sr_return_quantity#33]
                                  +- Join Inner, (d_date_sk#77 == ss_sold_date_sk#0)
                                     :- Project [d_date_sk#77]
                                     :  +- Filter ((d_moy#85 == 9) and (d_year#83 == 1999))
                                     :     +- Shared #1, printed above
-                                    +- Project [ss_sold_date_sk#0, ss_item_sk#2, ss_store_sk#7, ss_quantity#10, sr_item_sk#25, sr_customer_sk#26, sr_return_quantity#33]
+                                    +- Project [ss_sold_date_sk#0, ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_quantity#10, sr_return_quantity#33]
                                        +- Join Inner, (((ss_customer_sk#3 == sr_customer_sk#26) and (ss_item_sk#2 == sr_item_sk#25)) and (ss_ticket_number#9 == sr_ticket_number#32))
                                           :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_ticket_number#9, ss_quantity#10]
                                           +- Project [sr_item_sk#25, sr_customer_sk#26, sr_ticket_number#32, sr_return_quantity#33]

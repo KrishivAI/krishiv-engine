@@ -20,6 +20,7 @@ The `denied` value of `status` is reserved: access-policy denials fail before ex
 |---|---|---|---|---|---|---|
 | `krishiv.query.count` | `krishiv_query_count_total` | counter | `{query}` | status(succeeded, failed, cancelled, denied); class(interactive, batch, background, agent); error_class | query fold | Queries that reached execution, by outcome. `error_class` is present on failed and denied queries, from the error-class registry. |
 | `krishiv.query.duration` | `krishiv_query_duration_seconds` | histogram | `s` | status(succeeded, failed, cancelled, denied); class(interactive, batch, background, agent) | query fold | Wall time from the start of execution to its end, in seconds. |
+| `krishiv.query.cancel.latency` | `krishiv_query_cancel_latency_seconds` | histogram | `s` | — | query fold | Time from a query's cancellation (by the user, a timeout, the engine or a closing session) to the end of its result stream, in seconds. |
 | `krishiv.query.active` | `krishiv_query_active` | gauge | `{query}` | class(interactive, batch, background, agent) | scrape | Queries currently executing, by workload class. |
 | `krishiv.query.cpu.time` | `krishiv_query_cpu_time_seconds_total` | counter | `s` | class(interactive, batch, background, agent) | query fold | Operator compute time summed over the query's drivers, in seconds. |
 | `krishiv.query.scan.rows` | `krishiv_query_scan_rows_total` | counter | `{row}` | — | query fold | Rows file and memory scans produced, summed over the query's drivers. |
