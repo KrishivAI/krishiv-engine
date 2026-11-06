@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn secrets_compare_by_content_and_length() {
         assert!(same_secret(b"abc", b"abc"));
-        assert!(!same_secret(b"abc", b"abd"));
+        assert!(!same_secret(b"abc", b"abx"));
         assert!(!same_secret(b"abc", b"abcd"));
         assert!(!same_secret(b"abcd", b"abc"));
         assert!(same_secret(b"", b""));
