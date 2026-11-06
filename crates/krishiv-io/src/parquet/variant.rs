@@ -22,6 +22,17 @@
 //! shredded and in the residual object is corrupt, as is a nanosecond
 //! timestamp (Spark 4.2.0 reads neither).
 //!
+//! Where a writer broke the specification, this reader follows
+//! `VariantShredding.md` and Spark 4.2.0's raises `MALFORMED_VARIANT`
+//! (invalid files only; a valid file reads the same):
+//! - `value` and `typed_value` both NULL at the top or in an array element
+//!   is a variant null here;
+//! - a shredded field whose group is NULL is a missing field here;
+//! - a `FIXED_LEN_BYTE_ARRAY(16)` shredded value is read as a UUID here
+//!   (Spark refuses a UUID shredding schema);
+//! - a residual `value` next to a scalar or array `typed_value` is parsed
+//!   here (Spark ignores it), so malformed residual bytes raise here.
+//!
 //! **Writing** is unshredded, as Spark 4.2 writes by default: the group
 //! `{metadata, value}` (both required binary) annotated `VARIANT(1)` at any
 //! depth ([`annotate`]); the footer's Spark schema says `variant` too.
@@ -749,6 +760,123 @@ mod tests {
             t = next;
         }
         is_variant_group(&t)
+    }
+
+    use arrow_array::{
+        BinaryArray, Decimal128Array, Int64Array, StructArray as Sa, TimestampSecondArray,
+    };
+    use krishiv_types::variant::VariantBuilder;
+
+    fn bin(rows: &[Option<Vec<u8>>]) -> ArrayRef {
+        Arc::new(BinaryArray::from(
+            rows.iter().map(|r| r.as_deref()).collect::<Vec<_>>(),
+        ))
+    }
+
+    /// A variant group of `metadata`, `value` and `typed_value` (any given).
+    fn group(parts: Vec<(&str, ArrayRef)>) -> ArrayRef {
+        let fields: Vec<(Arc<Field>, ArrayRef)> = parts
+            .into_iter()
+            .map(|(n, a)| (Arc::new(Field::new(n, a.data_type().clone(), true)), a))
+            .collect();
+        Arc::new(Sa::from(fields))
+    }
+
+    fn corrupt_message(col: &ArrayRef) -> String {
+        match to_memory(col) {
+            Err(FormatError::Corrupt(m)) => m,
+            other => panic!("not corrupt: {other:?}"),
+        }
+    }
+
+    /// Hostile shapes are `Corrupt` errors, never a panic or a wrong value.
+    #[test]
+    fn corrupt_groups_are_refused() {
+        let (meta, obj) = VariantBuilder::from_json(r#"{"a":1}"#).unwrap();
+        let (_, int) = VariantBuilder::from_json("1").unwrap();
+        let shredded_a = || {
+            group(vec![
+                ("value", bin(&[None])),
+                (
+                    "typed_value",
+                    Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
+                ),
+            ])
+        };
+        let typed_object = |a: ArrayRef| -> ArrayRef {
+            Arc::new(Sa::from(vec![(
+                Arc::new(Field::new("a", a.data_type().clone(), true)),
+                a,
+            )]))
+        };
+        let cases: Vec<(ArrayRef, &str)> = vec![
+            (Arc::new(Int64Array::from(vec![1])), "that is not a group"),
+            (
+                group(vec![("value", bin(&[Some(int.clone())]))]),
+                "without metadata",
+            ),
+            (
+                group(vec![
+                    ("metadata", bin(&[None])),
+                    ("value", bin(&[None])),
+                    (
+                        "typed_value",
+                        Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
+                    ),
+                ]),
+                "with a NULL metadata",
+            ),
+            (
+                group(vec![
+                    ("metadata", bin(&[Some(meta.clone())])),
+                    ("value", bin(&[Some(int)])),
+                    ("typed_value", typed_object(shredded_a())),
+                ]),
+                "with a residual value that is not an object",
+            ),
+            (
+                group(vec![
+                    ("metadata", bin(&[Some(meta.clone())])),
+                    ("value", bin(&[Some(obj)])),
+                    ("typed_value", typed_object(shredded_a())),
+                ]),
+                "with a field both shredded and in its value",
+            ),
+            (
+                group(vec![
+                    ("metadata", bin(&[Some(meta.clone())])),
+                    ("value", bin(&[None])),
+                    (
+                        "typed_value",
+                        typed_object(Arc::new(Int64Array::from(vec![Some(1)]))),
+                    ),
+                ]),
+                "with a shredded field that is not a group",
+            ),
+        ];
+        for (col, want) in cases {
+            assert_eq!(
+                corrupt_message(&col),
+                format!("a VARIANT column {want}"),
+                "{want}"
+            );
+        }
+        // Types Spark 4.2.0 does not shred: refused, never truncated or rescaled.
+        for typed in [
+            Arc::new(TimestampSecondArray::from(vec![Some(1)])) as ArrayRef,
+            Arc::new(
+                Decimal128Array::from(vec![Some(1)])
+                    .with_precision_and_scale(10, -1)
+                    .unwrap(),
+            ),
+        ] {
+            let col = group(vec![
+                ("metadata", bin(&[Some(meta.clone())])),
+                ("value", bin(&[None])),
+                ("typed_value", typed),
+            ]);
+            assert!(to_memory(&col).is_err());
+        }
     }
 
     /// A variant inside a struct, a list and a map value: annotated on write,
