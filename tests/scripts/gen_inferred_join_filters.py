@@ -10,7 +10,8 @@ For each query the optimized plan is computed twice, once normally and once with
 `spark.sql.optimizer.excludedRules=...InferFiltersFromConstraints` (so the predicates left are the
 ones the query wrote, after predicate pushdown). Setting `spark.sql.constraintPropagationEnabled=false`
 was tried first and does NOT suppress the inferred filters in the optimized plan (Spark 4.2.0).
-For every scan (leaf of the optimized plan, including scalar-subquery and EXISTS plans) the conjuncts of the Filter directly above it are split into:
+For every scan (leaf of the optimized plan, including scalar-subquery and EXISTS plans) the conjuncts of
+the Filter directly above it are split into:
 
   written       (a) present with the rule excluded
   isnotnull     (b) inferred `isnotnull(attribute)`
