@@ -10,10 +10,11 @@
 //! so it stays an unresolved column.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use krishiv_types::DataType;
 
-use crate::Literal;
+use crate::{Expr, ExprNode, Literal};
 
 /// A session variable: its declared or inferred type and its current
 /// value, always of that type (assignment casts keep them in step).
@@ -22,7 +23,64 @@ pub struct SessionVariable {
     /// The declared or inferred type.
     pub data_type: DataType,
     /// The current value, of [`Self::data_type`].
-    pub value: Literal,
+    pub value: VariableValue,
+}
+
+/// A variable's value: a literal, or an `ARRAY`, `STRUCT` or `MAP` value held
+/// as its unresolved constructor (`array(..)`, `named_struct(..)`, `map(..)`
+/// over literals, cast to the declared type), which each reading query
+/// resolves like any expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VariableValue {
+    /// A scalar value (or the NULL of any type).
+    Scalar(Literal),
+    /// A nested value as its constructor.
+    Nested(Arc<Expr>),
+}
+
+impl From<Literal> for VariableValue {
+    fn from(l: Literal) -> Self {
+        Self::Scalar(l)
+    }
+}
+
+impl VariableValue {
+    /// The literal of a scalar value; `None` for a nested one.
+    #[must_use]
+    pub fn as_literal(&self) -> Option<&Literal> {
+        match self {
+            Self::Scalar(l) => Some(l),
+            Self::Nested(_) => None,
+        }
+    }
+
+    /// Spark's `Literal.sql` of the value (`ARRAY('a', 'b')`), as variable
+    /// references show it in names.
+    #[must_use]
+    pub fn sql(&self) -> String {
+        fn render(e: &Expr) -> String {
+            match &e.node {
+                // A typed NULL element prints with its type, as Spark's `Literal.sql`.
+                ExprNode::Literal(Literal::Null(Some(t))) => format!("CAST(NULL AS {})", t.sql()),
+                ExprNode::Literal(l) => l.to_string(),
+                ExprNode::Cast { expr, .. } => render(expr),
+                ExprNode::Function(f) => format!(
+                    "{}({})",
+                    f.name.to_uppercase(),
+                    f.args
+                        .iter()
+                        .map(|a| render(a))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                _ => String::new(),
+            }
+        }
+        match self {
+            Self::Scalar(l) => l.to_string(),
+            Self::Nested(e) => render(e),
+        }
+    }
 }
 
 /// The variables one query resolves, with the session's variable version
@@ -90,6 +148,24 @@ impl VariableSnapshot {
     }
 }
 
+impl VariableSnapshot {
+    /// A struct variable a prefix of `parts` names, with the prefix's length:
+    /// `v.f`, `session.v.f` and `label.v.f` read the field `f` of the
+    /// variable (the longest prefix wins). Only nested struct values have
+    /// fields, so any other variable is never a prefix.
+    #[must_use]
+    pub fn get_struct_prefix(&self, parts: &[String]) -> Option<(&SessionVariable, usize)> {
+        (1..parts.len()).rev().find_map(|k| {
+            self.get(&parts[..k])
+                .filter(|v| {
+                    matches!(v.value, VariableValue::Nested(_))
+                        && matches!(v.data_type, DataType::Struct(_))
+                })
+                .map(|v| (v, k))
+        })
+    }
+}
+
 /// The unqualified variable name `parts` names (`v`, `session.v` or
 /// `system.session.v`, in any letter case), or `None` when the parts are
 /// not a variable's shape. The single source of truth for that shape:
@@ -115,7 +191,7 @@ mod tests {
     fn var(n: i32) -> SessionVariable {
         SessionVariable {
             data_type: DataType::Integer,
-            value: Literal::Integer(n),
+            value: Literal::Integer(n).into(),
         }
     }
 
@@ -124,8 +200,8 @@ mod tests {
     }
 
     fn value(snapshot: &VariableSnapshot, parts: &[&str]) -> Option<i32> {
-        match snapshot.get(&names(parts))?.value {
-            Literal::Integer(n) => Some(n),
+        match snapshot.get(&names(parts))?.value.as_literal()? {
+            Literal::Integer(n) => Some(*n),
             _ => None,
         }
     }

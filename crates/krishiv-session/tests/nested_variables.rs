@@ -1,0 +1,95 @@
+// SPDX-License-Identifier: Apache-2.0
+//! `ARRAY`, `STRUCT` and `MAP` session and script variables (T196), as Spark
+//! 4.2.0 runs them (`sql-session-variables.sql`, `randomly_generated_scripts`
+//! #27): the value is kept and read back whole, by element and by field.
+#![cfg(test)]
+
+use arrow_array::RecordBatch;
+use arrow_array::cast::AsArray;
+use futures::executor::block_on;
+use krishiv_session::Session;
+
+fn run(s: &Session, sql: &str) -> Vec<RecordBatch> {
+    block_on(async { s.sql(sql).await?.collect().await }).unwrap_or_else(|e| panic!("{sql}: {e}"))
+}
+
+fn text(s: &Session, sql: &str) -> String {
+    let out = run(s, &format!("SELECT CAST(({sql}) AS STRING)"));
+    let c = out[0].column(0);
+    if c.is_null(0) {
+        return "NULL".to_owned();
+    }
+    c.as_string_view().value(0).to_owned()
+}
+
+#[test]
+fn session_variables_hold_nested_values() {
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        "DECLARE VARIABLE a ARRAY<STRING> DEFAULT split('Dan Smith', ' ')",
+    );
+    assert_eq!(text(&s, "a"), "[Dan, Smith]");
+    assert_eq!(text(&s, "a[0]"), "Dan");
+    run(&s, "SET VARIABLE a = array('x', NULL)");
+    assert_eq!(text(&s, "a"), "[x, null]");
+    assert_eq!(text(&s, "size(a)"), "2");
+    run(&s, "SET VARIABLE a = NULL");
+    assert_eq!(text(&s, "a"), "NULL");
+    run(&s, "SET VARIABLE a = array()");
+    assert_eq!(text(&s, "size(a)"), "0");
+
+    run(
+        &s,
+        "DECLARE VARIABLE m MAP<STRING, DOUBLE> DEFAULT MAP('Hello', 5.1, 'World', -7.1E10)",
+    );
+    assert_eq!(text(&s, "to_json(m)"), "{\"Hello\":5.1,\"World\":-7.1E10}");
+    assert_eq!(text(&s, "typeof(m)"), "map<string,double>");
+
+    run(
+        &s,
+        "DECLARE VARIABLE st STRUCT<a INT, b ARRAY<INT>> DEFAULT named_struct('a', 1, 'b', array(2, 3))",
+    );
+    assert_eq!(text(&s, "st.a"), "1");
+    assert_eq!(text(&s, "session.st.b[1]"), "3");
+    assert_eq!(text(&s, "system.session.st.b"), "[2, 3]");
+
+    // Names as Spark 4.2.0 gives them.
+    run(&s, "SET VARIABLE a = array('x', NULL)");
+    let names = |sql: &str| {
+        let df = block_on(s.sql(sql)).unwrap();
+        let schema = block_on(df.schema()).unwrap();
+        schema
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names("SELECT size(a), st.a, CAST(session.st.b AS STRING)"),
+        [
+            "size(variablereference(system.session.a=ARRAY('x', CAST(NULL AS STRING))))",
+            "a",
+            "CAST(variablereference(system.session.st=NAMED_STRUCT('a', 1, 'b', ARRAY(2, 3))).b AS STRING)",
+        ]
+    );
+}
+
+#[test]
+fn script_variables_hold_nested_values() {
+    let s = Session::new().unwrap();
+    let out = run(
+        &s,
+        "BEGIN
+           DECLARE parts ARRAY<STRING>;
+           DECLARE first STRING;
+           SET parts = split('Dan Smith', ' ');
+           CASE parts[0] WHEN 'Dan' THEN SET first = 'manager'; ELSE SET first = 'other'; END CASE;
+           FOR r AS SELECT array(1, 2) AS xs DO
+             SET first = concat(first, ':', CAST(size(r.xs) AS STRING));
+           END FOR;
+           SELECT first;
+         END",
+    );
+    assert_eq!(out[0].column(0).as_string_view().value(0), "manager:2");
+}

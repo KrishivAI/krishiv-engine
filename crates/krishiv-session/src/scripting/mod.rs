@@ -25,7 +25,7 @@ use krishiv_common::error::{
     UnsupportedFeatureSqlScriptingDropTemporaryVariable, VariableAlreadyExists, VariableNotFound,
 };
 use krishiv_common::redact::RedactedSql;
-use krishiv_plan::analyzer::{LocalFrame, SessionVariable};
+use krishiv_plan::analyzer::{LocalFrame, SessionVariable, VariableValue};
 use krishiv_plan::{Expr as PlanExpr, ExprNode, Literal, LogicalPlan, PlanNode};
 use krishiv_sql::ast::{
     Compound, DataTypeSpec, DeclareVariable, Expr, ForStatement, Handler, HandlerBody,
@@ -363,7 +363,8 @@ impl Run<'_> {
                 tokio::task::yield_now().await;
                 let mut vars = BTreeMap::new();
                 for (i, name) in names.iter().enumerate() {
-                    let (data_type, value) = arrow_value(batch.column(i), row)?;
+                    let (data_type, value) =
+                        crate::nested_value::arrow_variable_value(batch.column(i), row)?;
                     vars.insert(
                         self.fold(name),
                         Local {
@@ -592,8 +593,8 @@ impl Run<'_> {
             .transpose()?;
         let (data_type, value, default_sql) = match (&declared, &d.default) {
             (_, None) => match declared {
-                Some(t) => (t.clone(), Literal::Null(Some(t)), None),
-                None => (DataType::Null, Literal::Null(None), None),
+                Some(t) => (t.clone(), Literal::Null(Some(t)).into(), None),
+                None => (DataType::Null, Literal::Null(None).into(), None),
             },
             (declared, Some(default)) => {
                 if contains_subquery(default) {
@@ -619,7 +620,7 @@ impl Run<'_> {
                 };
                 let (inferred, value) = self
                     .handle()
-                    .eval_variable_value(&sql, self.redacted, d.span, default.span)
+                    .eval_variable(&sql, self.redacted, d.span, default.span)
                     .await?;
                 (declared.clone().unwrap_or(inferred), value, Some(sql))
             }
@@ -703,7 +704,8 @@ impl Run<'_> {
         }
     }
 
-    fn store(&mut self, target: &Target, value: Literal) {
+    fn store(&mut self, target: &Target, value: impl Into<VariableValue>) {
+        let value = value.into();
         match target {
             Target::Local { scope, key } => {
                 if let Some(local) = self
@@ -756,16 +758,11 @@ impl Run<'_> {
                         match default_sql {
                             Some(sql) => {
                                 handle
-                                    .eval_variable_value(
-                                        &sql,
-                                        self.redacted,
-                                        set.span,
-                                        a.value.span,
-                                    )
+                                    .eval_variable(&sql, self.redacted, set.span, a.value.span)
                                     .await?
                                     .1
                             }
-                            None => Literal::Null(Some(data_type)),
+                            None => Literal::Null(Some(data_type)).into(),
                         }
                     } else {
                         if contains_default(&a.value) {
@@ -778,7 +775,7 @@ impl Run<'_> {
                             &format!(" AS {})", data_type.simple_string()),
                         );
                         handle
-                            .eval_variable_value(&sql, self.redacted, set.span, a.value.span)
+                            .eval_variable(&sql, self.redacted, set.span, a.value.span)
                             .await?
                             .1
                     };

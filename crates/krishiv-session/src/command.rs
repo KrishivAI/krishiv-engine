@@ -32,7 +32,9 @@ use krishiv_common::error::{
     UserDefinedFunctionsSqlTableUdfBodyMustBeAQuery, VariableAlreadyExists, VariableNotFound,
 };
 use krishiv_common::redact::RedactedSql;
-use krishiv_plan::analyzer::{FunctionLookup, SqlFunction, SqlParam, TableColumn, variable_name};
+use krishiv_plan::analyzer::{
+    FunctionLookup, SqlFunction, SqlParam, TableColumn, VariableValue, variable_name,
+};
 use krishiv_plan::{
     Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, SourceId, SubqueryKind,
 };
@@ -564,8 +566,8 @@ impl Session {
             .transpose()?;
         let (data_type, value, default_query) = match (&declared, &v.default) {
             (_, None) => match declared {
-                Some(t) => (t.clone(), Literal::Null(Some(t)), None),
-                None => (DataType::Null, Literal::Null(None), None),
+                Some(t) => (t.clone(), Literal::Null(Some(t)).into(), None),
+                None => (DataType::Null, Literal::Null(None).into(), None),
             },
             (declared, Some(default)) => {
                 if contains_subquery(default) {
@@ -590,9 +592,8 @@ impl Session {
                     ),
                     None => padded_select("SELECT ", slice, default.span.start, ""),
                 };
-                let (inferred, value) = self
-                    .eval_variable_value(&sql, text, v.span, default.span)
-                    .await?;
+                let (inferred, value) =
+                    self.eval_variable(&sql, text, v.span, default.span).await?;
                 let data_type = declared.clone().unwrap_or(inferred);
                 (data_type, value, Some(sql))
             }
@@ -650,11 +651,11 @@ impl Session {
                         match &var.default_query {
                             Some(query) => {
                                 let (_, value) = self
-                                    .eval_variable_value(query, text, v.span, a.value.span)
+                                    .eval_variable(query, text, v.span, a.value.span)
                                     .await?;
                                 value
                             }
-                            None => Literal::Null(Some(var.data_type.clone())),
+                            None => Literal::Null(Some(var.data_type.clone())).into(),
                         }
                     } else {
                         if contains_default(&a.value) && !has_default_var {
@@ -669,9 +670,8 @@ impl Session {
                             a.value.span.start,
                             &format!(" AS {})", var.data_type.simple_string()),
                         );
-                        let (_, value) = self
-                            .eval_variable_value(&sql, text, v.span, a.value.span)
-                            .await?;
+                        let (_, value) =
+                            self.eval_variable(&sql, text, v.span, a.value.span).await?;
                         value
                     };
                     pending.push((key.clone(), var.clone(), value));
@@ -746,7 +746,7 @@ impl Session {
                             key.clone(),
                             StoredVariable {
                                 data_type: var.data_type.clone(),
-                                value: Literal::Null(Some(var.data_type.clone())),
+                                value: Literal::Null(Some(var.data_type.clone())).into(),
                                 default_query: var.default_query.clone(),
                             },
                         );
@@ -788,7 +788,7 @@ impl Session {
                     crate::session::internal("a row assignment returned no batches".to_owned())
                 })?;
                 for ((key, var), i) in keys.iter().zip(&stored).zip(0..) {
-                    let (_, value) = arrow_value(batch.column(i), 0)?;
+                    let (_, value) = crate::nested_value::arrow_variable_value(batch.column(i), 0)?;
                     self.state.variables.put(
                         key.clone(),
                         StoredVariable {
@@ -1798,6 +1798,35 @@ impl Session {
         command_span: Span,
         expr_span: Span,
     ) -> Result<(DataType, Literal), KrishivError> {
+        let batch = self
+            .eval_variable_row(sql, text, command_span, expr_span)
+            .await?;
+        arrow_value(batch.column(0), 0)
+    }
+
+    /// As [`Self::eval_variable_value`], for a variable's value, which may
+    /// be an `ARRAY`, `STRUCT` or `MAP` ([`crate::nested_value`]).
+    pub(crate) async fn eval_variable(
+        &self,
+        sql: &str,
+        text: &RedactedSql,
+        command_span: Span,
+        expr_span: Span,
+    ) -> Result<(DataType, VariableValue), KrishivError> {
+        let batch = self
+            .eval_variable_row(sql, text, command_span, expr_span)
+            .await?;
+        crate::nested_value::arrow_variable_value(batch.column(0), 0)
+    }
+
+    /// The one-row, one-column batch of `sql`.
+    async fn eval_variable_row(
+        &self,
+        sql: &str,
+        text: &RedactedSql,
+        command_span: Span,
+        expr_span: Span,
+    ) -> Result<RecordBatch, KrishivError> {
         let analysis = self
             .analyze_variable_query(sql)
             .await
@@ -1820,7 +1849,7 @@ impl Session {
                 "a variable expression returned more than one column".to_owned(),
             ));
         }
-        arrow_value(batch.column(0), 0)
+        Ok(batch.clone())
     }
 }
 

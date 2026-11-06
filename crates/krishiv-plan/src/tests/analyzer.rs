@@ -1420,7 +1420,7 @@ fn every_context_input_changes_the_key() {
                 "v".to_owned(),
                 SessionVariable {
                     data_type: DataType::Integer,
-                    value: Literal::Integer(1),
+                    value: Literal::Integer(1).into(),
                 },
             )]
             .into_iter()
@@ -1941,7 +1941,7 @@ fn session_variables_resolve_after_columns() {
                 "var1".to_owned(),
                 SessionVariable {
                     data_type: DataType::Integer,
-                    value: Literal::Integer(1),
+                    value: Literal::Integer(1).into(),
                 },
             )]),
             version: 3,
@@ -1987,7 +1987,7 @@ fn variable_versions_change_the_fingerprint() {
             "var1".to_owned(),
             SessionVariable {
                 data_type: DataType::Integer,
-                value: Literal::Integer(1),
+                value: Literal::Integer(1).into(),
             },
         )]),
         version: base.variables.version + 1,

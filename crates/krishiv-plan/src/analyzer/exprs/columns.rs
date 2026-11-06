@@ -2,6 +2,7 @@
 //! Column and field resolution, and Spark's `UNRESOLVED_COLUMN`/`UNRESOLVED_FIELD` errors with their suggestions.
 
 use super::*;
+use crate::analyzer::VariableValue;
 
 /// `FIELD_NOT_FOUND` for a struct field `parts` names below a struct with
 /// `fields` (Spark's `GetStructField` by an unknown name, checked against
@@ -457,6 +458,48 @@ impl Resolver<'_> {
         // value as a typed literal, so no physical, executor or plan-codec
         // change is needed; the expression keeps the spelling it was
         // written with for names and errors.
+        // A nested value resolves from its constructor; `v.f` of a struct
+        // variable reads its field.
+        let nested = match self.ctx.variables.get(&c.name) {
+            Some(var) => match &var.value {
+                VariableValue::Nested(e) => Some((var, Arc::clone(e), c.name.len())),
+                VariableValue::Scalar(_) => None,
+            },
+            None => {
+                self.ctx
+                    .variables
+                    .get_struct_prefix(&c.name)
+                    .and_then(|(var, used)| match &var.value {
+                        VariableValue::Nested(e) => Some((var, Arc::clone(e), used)),
+                        VariableValue::Scalar(_) => None,
+                    })
+            }
+        };
+        if let Some((var, ctor, used)) = nested {
+            let value = var.value.sql();
+            let mut e = ctor;
+            for field in &c.name[used..] {
+                e = Arc::new(
+                    Expr::new(ExprNode::Field {
+                        base: e,
+                        name: field.clone(),
+                    })
+                    .with_origin(origin),
+                );
+            }
+            let mut b = self.expr(&e, cx)?;
+            let (top, var_name) = (&c.name[c.name.len() - 1], &c.name[used - 1]);
+            let mut text = format!(
+                "variablereference(system.session.{}={})",
+                var_name.to_lowercase(),
+                value
+            );
+            for field in &c.name[used..] {
+                text = format!("{text}.{field}");
+            }
+            b.shown = Some(named_as(top, text, c, origin));
+            return Ok(b);
+        }
         if let Some(var) = self.ctx.variables.get(&c.name) {
             let Some(name) = c.name.last() else {
                 debug_assert!(false, "a variable name is never empty");
@@ -466,10 +509,18 @@ impl Resolver<'_> {
                 id: self.fresh(),
                 name: name.clone(),
                 data_type: var.data_type.clone(),
-                nullable: matches!(var.value, Literal::Null(_)),
+                nullable: matches!(var.value, VariableValue::Scalar(Literal::Null(_))),
             };
             return Ok(Bound {
-                expr: Arc::new(Expr::new(ExprNode::Literal(var.value.clone())).with_origin(origin)),
+                expr: Arc::new(
+                    Expr::new(ExprNode::Literal(
+                        var.value
+                            .as_literal()
+                            .cloned()
+                            .unwrap_or(Literal::Null(None)),
+                    ))
+                    .with_origin(origin),
+                ),
                 ty: column(&col),
                 agg: None,
                 win: None,
@@ -482,7 +533,7 @@ impl Resolver<'_> {
                     format!(
                         "variablereference(system.session.{}={})",
                         name.to_lowercase(),
-                        var.value
+                        var.value.sql()
                     ),
                     c,
                     origin,
