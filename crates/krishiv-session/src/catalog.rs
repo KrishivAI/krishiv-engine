@@ -358,6 +358,13 @@ enum FilesKey {
     /// A permanent table, by `namespace.table`.
     Table(String),
     Read(ReadSource),
+    /// A reference to a file table with read options of its own: the table's identity (and
+    /// whether its columns are known) plus the files read with the merged options.
+    Reference {
+        key: String,
+        known: bool,
+        source: ReadSource,
+    },
 }
 
 /// The key a reference to a file table scans under, and what it reads. A reference that carries
@@ -373,9 +380,18 @@ fn reference_key(
     if let (false, ReadSource::Files { .. }) = (options.is_empty(), source) {
         let mut merged = source.clone();
         if let ReadSource::Files { options: base, .. } = &mut merged {
-            base.extend(options.iter().map(|(k, v)| (k.clone(), v.clone())));
+            for (k, v) in options {
+                // Option keys are case-insensitive: the reference's spelling replaces the table's.
+                base.retain(|b, _| !b.eq_ignore_ascii_case(k));
+                base.insert(k.clone(), v.clone());
+            }
         }
-        return (FilesKey::Read(merged.clone()), merged);
+        let key = FilesKey::Reference {
+            key,
+            known,
+            source: merged.clone(),
+        };
+        return (key, merged);
     }
     let key = if known {
         FilesKey::Table(key)
@@ -524,7 +540,7 @@ impl QueryCatalog {
                 continue;
             };
             let listing = match &key {
-                FilesKey::Table(_) => {
+                FilesKey::Table(_) | FilesKey::Reference { known: true, .. } => {
                     self.files
                         .listing_known(format, paths, options, Arc::clone(&table))
                         .await?

@@ -61,3 +61,49 @@ fn two_references_with_different_options_each_keep_theirs() {
     );
     assert_eq!(all, ["6"], "2 rows x 3 rows");
 }
+
+#[test]
+fn an_empty_table_still_reads_with_reference_options() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    block_on(s.sql(&format!(
+        "CREATE TABLE e (a STRING, b STRING) USING csv LOCATION '{}'",
+        dir.path().display()
+    )))
+    .unwrap();
+    // The table's columns are declared: no file is needed to know them.
+    assert!(column(&s, "SELECT a FROM e WITH ('header' = 'true')").is_empty());
+}
+
+#[test]
+fn reference_option_keys_override_the_tables_whatever_their_case() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.csv"), "a,b\n1,2\n").unwrap();
+    let s = Session::new().unwrap();
+    block_on(s.sql(&format!(
+        "CREATE TABLE h (a STRING, b STRING) USING csv OPTIONS ('header' = 'false') LOCATION '{}'",
+        dir.path().display()
+    )))
+    .unwrap();
+    assert_eq!(column(&s, "SELECT a FROM h ORDER BY a"), ["1", "a"]);
+    assert_eq!(
+        column(&s, "SELECT a FROM h WITH ('HEADER' = 'true')"),
+        ["1"]
+    );
+}
+
+#[test]
+fn tables_over_the_same_files_keep_their_own_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.csv"), "1,2\n").unwrap();
+    let s = Session::new().unwrap();
+    for (name, cols) in [("t1", "a STRING, b STRING"), ("t2", "x STRING, y STRING")] {
+        block_on(s.sql(&format!(
+            "CREATE TABLE {name} ({cols}) USING csv LOCATION '{}'",
+            dir.path().display()
+        )))
+        .unwrap();
+    }
+    assert_eq!(column(&s, "SELECT a FROM t1 WITH ('sep' = ',')"), ["1"]);
+    assert_eq!(column(&s, "SELECT y FROM t2 WITH ('sep' = ',')"), ["2"]);
+}
