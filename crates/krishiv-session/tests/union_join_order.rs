@@ -220,6 +220,10 @@ fn a_branch_that_repeats_a_column_keeps_both_positions() -> R {
             vec!["1|1"],
         ),
         (format!("SELECT * EXCEPT (x) FROM ({U})"), vec!["1", "6"]),
+        (
+            format!("SELECT y FROM (SELECT b AS y, x AS y FROM ({U}) u(x, b))"),
+            vec!["1", "5"],
+        ),
         (format!("SELECT * FROM ({U}) WHERE x = 5"), vec!["5|6"]),
         (
             format!("SELECT x, count(*) FROM ({U}) GROUP BY x"),

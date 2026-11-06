@@ -1678,7 +1678,8 @@ impl Resolver<'_> {
                             let a = Attr {
                                 col: output,
                                 qual: no_qual(),
-                                source: None, duplicate: false,
+                                source: None,
+                                duplicate: false,
                             };
                             grown.out.push(a.clone());
                             known.push((k, a.clone()));
@@ -4163,11 +4164,17 @@ pub(super) fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
                 },
             }
         }
-        ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => Attr {
+        ExprNode::Resolved(ResolvedExpr::Alias { output, expr }) => Attr {
             col: output.clone(),
             qual: no_qual(),
             source: None,
-            duplicate: false,
+            // Spark's `Alias` of an attribute keeps the attribute's metadata.
+            duplicate: match &expr.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                    scope.iter().any(|a| a.col.id == c.id && a.duplicate)
+                }
+                _ => false,
+            },
         },
         _ => Attr {
             col: BoundColumn {

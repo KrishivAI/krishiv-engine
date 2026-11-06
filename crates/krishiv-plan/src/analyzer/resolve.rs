@@ -40,7 +40,8 @@ pub(super) struct Attr {
     /// (`Resolver::distinct_output_ids`): Spark's `__is_duplicate`
     /// metadata. A name that matches it and another column resolves to the
     /// other. It follows the attribute wherever the attribute is copied
-    /// (instances, CTE references, column aliases).
+    /// (instances, CTE references, column aliases, an alias of the bare
+    /// column); a new attribute computed from it does not have it.
     pub(super) duplicate: bool,
 }
 
