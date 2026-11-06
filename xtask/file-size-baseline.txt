@@ -25,16 +25,16 @@
 5392 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 3020 crates/krishiv-session/src/catalog.rs
-2527 crates/krishiv-session/src/command.rs
+2286 crates/krishiv-session/src/command.rs
 2630 crates/krishiv-session/src/dataframe.rs
 2789 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
-3291 crates/krishiv-session/src/table_commands.rs
+3268 crates/krishiv-session/src/table_commands.rs
 # +4 lines over main: `Query::organization_span`, the clause span Spark's errors cite for SORT/DISTRIBUTE/CLUSTER BY (P2b row 11)
 3873 crates/krishiv-sql/src/ast.rs
 2641 crates/krishiv-sql/src/lower.rs
 # +9 lines over main: fills `Query::organization_span` when a clause is written (P2b row 11)
-5272 crates/krishiv-sql/src/parser.rs
+5234 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs
 2153 crates/krishiv-testkit/src/file_format/mod.rs

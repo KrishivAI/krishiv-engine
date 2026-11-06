@@ -1,40 +1,22 @@
 {
   "cases": {
     "depends-on-command": [
-      122,
       177
     ],
     "generators": [
       215,
       216
     ],
-    "parser-tail": [
-      1
-    ],
     "query-features": [
-      103,
       186
     ],
     "sql-commands": [
       48,
-      61,
-      63,
       70,
       71,
       73,
       75,
-      76,
-      100,
-      157,
-      161,
-      162,
-      185,
-      189,
-      199,
-      208,
-      209,
-      210,
-      235
+      76
     ]
   },
   "file": "identifier-clause",

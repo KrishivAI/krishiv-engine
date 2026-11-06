@@ -846,6 +846,36 @@ fn legacy_identifier_clause_takes_only_the_function_syntax() {
     }
 }
 
+/// A session variable's name in `DECLARE` and `DROP TEMPORARY VARIABLE` is
+/// an identifier reference in both modes (Spark 4.2 `createVariable`,
+/// `dropVariable`).
+#[test]
+fn legacy_identifier_clause_names_declared_variables() {
+    let legacy =
+        ParserOptions::from_conf(|k| (k == "spark.sql.legacy.identifierClause").then_some("true"));
+    for opts in [&legacy, &defaults()] {
+        let Statement::DeclareVariable(d) =
+            parse_statement("DECLARE IDENTIFIER('my_var') = 'value'", opts).unwrap()
+        else {
+            panic!("not a DECLARE")
+        };
+        assert_eq!(d.names[0].parts[0].value, "my_var");
+        let Statement::DropVariable(d) = parse_statement(
+            "DROP TEMPORARY VARIABLE IF EXISTS IDENTIFIER('my_var')",
+            opts,
+        )
+        .unwrap() else {
+            panic!("not a DROP VARIABLE")
+        };
+        assert_eq!(d.name.parts[0].value, "my_var");
+    }
+    // The legacy mode is back after the name: an alias in the default
+    // still refuses the literal.
+    let aliased = "DECLARE IDENTIFIER('v') = (SELECT 1 AS IDENTIFIER('c'))";
+    assert!(parse_statement(aliased, &legacy).is_err());
+    parse_statement(aliased, &defaults()).unwrap();
+}
+
 #[test]
 fn variant_paths() {
     use ast::VariantPathPartKind as K;
