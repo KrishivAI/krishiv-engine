@@ -1052,6 +1052,12 @@ fn the_variant_type_needs_its_feature() {
         Some(Feature::VariantType)
     );
     assert_eq!(Feature::VariantType.kind(), FeatureKind::Semantic);
+    // A variant carried only in an Arrow schema (an exchange's columns).
+    let carrier = DataType::Variant.to_arrow();
+    assert_eq!(
+        feature_of(Construct::ArrowType(&carrier)),
+        Some(Feature::VariantType)
+    );
     let bytes = message("variant_scan").encode_to_vec();
     let older = ReaderFeatures::only(
         Feature::ALL

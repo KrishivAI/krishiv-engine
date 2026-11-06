@@ -35,3 +35,47 @@ fn nested_variant_casts_run() {
         "{k -> true}"
     );
 }
+
+/// Spark 4.2.0 (oracle): containers with variants as strings and as JSON, no
+/// ordering of variants, NULL parents' hidden values never cast, a NOT NULL
+/// target field of a missing value is NULL.
+#[test]
+fn review_cases_match_spark() {
+    assert_eq!(
+        one("CAST(array(parse_json('1'), parse_json('\"x\"')) AS STRING)"),
+        "[1, \"x\"]"
+    );
+    assert_eq!(
+        one("CAST(named_struct('a', parse_json('[1]')) AS STRING)"),
+        "{[1]}"
+    );
+    assert_eq!(
+        one("to_json(array(parse_json('1'), parse_json('{\"a\":\"b\"}')))"),
+        "[1,{\"a\":\"b\"}]"
+    );
+    assert_eq!(
+        one("to_json(named_struct('v', parse_json('2')))"),
+        "{\"v\":2}"
+    );
+    // The NULL row's hidden `x` is never cast to INT.
+    assert_eq!(
+        one(
+            "isnull(CAST(CASE WHEN rand() < 2 THEN NULL ELSE named_struct('a', parse_json('\"x\"')) \
+             END AS STRUCT<a: INT>))"
+        ),
+        "true"
+    );
+    assert_eq!(
+        one("try_variant_get(parse_json('{}'), '$', 'struct<a int not null>')"),
+        "{null}"
+    );
+    let s = Session::new().unwrap();
+    let e = block_on(async {
+        s.sql("SELECT array_min(array(parse_json('2'), parse_json('1')))")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert!(e.to_string().contains("INVALID_ORDERING_TYPE"), "{e}");
+}

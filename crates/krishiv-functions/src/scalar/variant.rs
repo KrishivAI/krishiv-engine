@@ -159,7 +159,9 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             };
             // The analyzer checked the type literal.
             let to = match string_literal(args, 2) {
-                Some(Some(t)) => krishiv_types::parse_data_type(&t).ok(),
+                Some(Some(t)) => krishiv_types::parse_data_type(&t)
+                    .ok()
+                    .map(|t| t.as_nullable()),
                 None if rest.is_empty() => Some(SparkType::Variant),
                 _ => None,
             };

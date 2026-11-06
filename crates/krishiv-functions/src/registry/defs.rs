@@ -1334,7 +1334,8 @@ pub(super) fn spark_orderable(t: &DataType) -> bool {
         DataType::Map(_)
         | DataType::CalendarInterval
         | DataType::Geometry { .. }
-        | DataType::Geography { .. } => false,
+        | DataType::Geography { .. }
+        | DataType::Variant => false,
         DataType::Array(a) => spark_orderable(a.element_type()),
         DataType::Struct(s) => s.fields().iter().all(|f| spark_orderable(f.data_type())),
         _ => true,

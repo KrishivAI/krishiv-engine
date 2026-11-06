@@ -100,12 +100,19 @@ pub(super) fn target_type(name: &str, c: &CallTypes<'_>) -> Result<DataType, Kri
     Ok(t)
 }
 
+/// `VariantGet.dataType`: the target `asNullable`.
 fn variant_get(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    Ok(ArgType::new(target_type("variant_get", c)?, true))
+    Ok(ArgType::new(
+        target_type("variant_get", c)?.as_nullable(),
+        true,
+    ))
 }
 
 fn try_variant_get(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    Ok(ArgType::new(target_type("try_variant_get", c)?, true))
+    Ok(ArgType::new(
+        target_type("try_variant_get", c)?.as_nullable(),
+        true,
+    ))
 }
 
 pub(super) fn specs() -> Vec<Spec> {
