@@ -224,10 +224,12 @@ struct SinkGlobal {
     /// partial was lost, published as disabled).
     filters: Mutex<Vec<Option<KeyFilterBuilder>>>,
     /// The drivers' reservations of those partials, held until they are
-    /// published (I11). The published filter itself lives in the task's
-    /// value service until the task ends: at most the filters' planned
-    /// sizes, as a join build's published filters.
+    /// published (I11).
     filter_memory: Mutex<Vec<Reservation>>,
+    /// The published filters' memory, held with the sink's state: a final
+    /// filter that does not fit is published as its min/max range only, as
+    /// a join build's.
+    published: Mutex<Option<Reservation>>,
 }
 
 struct SinkLocal {
@@ -392,6 +394,7 @@ impl Sink for ExchangeSink {
             writer: Mutex::new(Some(writer)),
             filters: Mutex::new(self.partials()),
             filter_memory: Mutex::default(),
+            published: Mutex::default(),
         }))
     }
 
@@ -495,7 +498,7 @@ impl Sink for ExchangeSink {
     fn finalize<'a>(
         &'a self,
         global: &'a GlobalState,
-        _ctx: &'a TaskContext,
+        ctx: &'a TaskContext,
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let g = global_ref::<SinkGlobal>(global, "ExchangeSink")?;
@@ -507,10 +510,25 @@ impl Sink for ExchangeSink {
             // output never committed is never merged.
             if let Some((values, producer)) = &self.publisher {
                 let partials = std::mem::take(&mut *lock(&g.filters));
-                for (f, b) in self.filters.iter().zip(partials) {
-                    let snapshot = b.map_or(
+                let finished: Vec<_> = partials
+                    .into_iter()
+                    .map(|b| b.map(KeyFilterBuilder::finish))
+                    .collect();
+                // The partials are gone: their memory funds the final
+                // filters, each reserved before it is published.
+                lock(&g.filter_memory).clear();
+                let mut held = ctx.consumer().reservation();
+                for (f, keys) in self.filters.iter().zip(finished) {
+                    let snapshot = keys.map_or(
                         FilterSnapshot::Disabled(DisabledReason::ProducerFailed),
-                        |b| FilterSnapshot::Final(Arc::new(b.finish())),
+                        |keys| {
+                            let keys = if held.try_grow(keys.heap_bytes()).is_ok() {
+                                keys
+                            } else {
+                                keys.range_only()
+                            };
+                            FilterSnapshot::Final(Arc::new(keys))
+                        },
                     );
                     values.publish(Partial {
                         value: ValueId::Filter(f.id),
@@ -519,7 +537,7 @@ impl Sink for ExchangeSink {
                         payload: Value::Filter(snapshot),
                     })?;
                 }
-                lock(&g.filter_memory).clear();
+                *lock(&g.published) = Some(held);
             }
             Ok(())
         })

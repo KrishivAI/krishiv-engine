@@ -6,9 +6,11 @@
 //! Only the scans of a fragment's streaming pipeline are dealt
 //! ([`streaming_scans`]); every task reads the others whole. A fragment
 //! with a scan of an unknown table, or of anything but a table, is not
-//! dealt at all (one task reads it whole).
+//! dealt at all (one task reads it whole). A file its format cannot split
+//! (gzip CSV, `multiLine` CSV or JSON) is dealt whole, as a local scan
+//! keeps it ([`TableDealer::with_unsplittable`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use krishiv_common::error::KrishivError;
 use krishiv_exec::physical::{
@@ -28,6 +30,8 @@ pub struct TableDealer {
     /// with `.` as the plan names it (`spark_catalog.default.t`).
     files: BTreeMap<String, Vec<SplitFileRef>>,
     config: SplitConfig,
+    /// The paths of files dealt whole.
+    unsplittable: BTreeSet<String>,
 }
 
 impl TableDealer {
@@ -35,7 +39,21 @@ impl TableDealer {
     /// splits with `config`.
     #[must_use]
     pub fn new(files: BTreeMap<String, Vec<SplitFileRef>>, config: SplitConfig) -> Self {
-        Self { files, config }
+        Self {
+            files,
+            config,
+            unsplittable: BTreeSet::new(),
+        }
+    }
+
+    /// The same dealer keeping the files at `paths` whole: those its
+    /// format's capabilities do not split (`is_splittable` false), so
+    /// every byte of one is read by one task and `_metadata` reports the
+    /// whole file, as a local scan does. Every other file is splittable.
+    #[must_use]
+    pub fn with_unsplittable(mut self, paths: impl IntoIterator<Item = String>) -> Self {
+        self.unsplittable.extend(paths);
+        self
     }
 }
 
@@ -58,7 +76,9 @@ impl StageSplits for TableDealer {
             let Some(files) = self.files.get(&name.join(".")) else {
                 return Ok(None);
             };
-            let partitions = plan_file_partitions(&self.config, files, |_| true);
+            let partitions = plan_file_partitions(&self.config, files, |f| {
+                !self.unsplittable.contains(f.path.as_ref())
+            });
             for (t, splits) in assign_file_splits(files, &partitions, tasks)
                 .into_iter()
                 .enumerate()

@@ -556,3 +556,53 @@ fn a_filter_merged_from_every_build_task_crosses_stages() {
     );
     assert_eq!(root.reserved(), 0);
 }
+
+/// A file its format cannot split (gzip or `multiLine` CSV) is dealt whole,
+/// as a local scan keeps it: one task reads all of its bytes, so its
+/// `_metadata.file_block_length` is the file's length. Other files of the
+/// same size are cut into ranges.
+#[test]
+fn an_unsplittable_file_is_dealt_whole() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let plan = tpch
+        .plan_sql(
+            "SELECT l_orderkey FROM lineitem",
+            Arc::new(Config::clone(&tpch.config)),
+        )
+        .unwrap();
+    let ranges = |dealer: &TableDealer| {
+        let mut ranges = Vec::new();
+        for task in dealer.splits(&plan, 4).unwrap().unwrap() {
+            for splits in task.values() {
+                let ScanSplits::Files { files, partitions } = splits else {
+                    panic!("not file splits: {splits:?}");
+                };
+                for s in partitions.iter().flat_map(|p| &p.splits) {
+                    ranges.push((s.range.start, s.range.end, files[s.file].size));
+                }
+            }
+        }
+        ranges
+    };
+    let cut = ranges(&dealer(&tpch.files));
+    assert!(
+        cut.iter()
+            .any(|&(start, end, size)| start > 0 || end < size),
+        "{cut:?}"
+    );
+    let paths = tpch.files["spark_catalog.default.lineitem"]
+        .iter()
+        .map(|f| f.path.to_string());
+    let whole = ranges(&dealer(&tpch.files).with_unsplittable(paths));
+    assert!(!whole.is_empty());
+    assert!(
+        whole
+            .iter()
+            .all(|&(start, end, size)| start == 0 && end == size),
+        "{whole:?}"
+    );
+}

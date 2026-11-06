@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::task::{Context, Poll};
 
@@ -62,6 +62,9 @@ struct Inner {
     /// Deals each stage's scans to its tasks (P2-T178); `None` runs every
     /// scanning stage as one task.
     splits: Mutex<Option<Arc<dyn StageSplits>>>,
+    /// The highest task attempt any submission started: a write's commit
+    /// sweeps the files of failed attempts only when one above 0 ran.
+    max_attempt: AtomicU32,
 }
 
 impl std::fmt::Debug for Coordinator {
@@ -90,6 +93,7 @@ impl Coordinator {
                 next_job: AtomicU64::new(0),
                 running: Mutex::default(),
                 splits: Mutex::default(),
+                max_attempt: AtomicU32::new(0),
             }),
         }
     }
@@ -103,6 +107,16 @@ impl Coordinator {
             .splits
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(splits);
+    }
+
+    /// The highest task attempt any submission so far started (0 when no
+    /// task was retried). A file write run here passes it to
+    /// `DirectoryWrite::note_attempt` before its commit, so the files a
+    /// failed attempt left are swept instead of committed next to the
+    /// retry's.
+    #[must_use]
+    pub fn max_attempt(&self) -> u32 {
+        self.inner.max_attempt.load(Ordering::Relaxed)
     }
 
     /// The events so far: each task shipped and its outcome, in order.
@@ -170,6 +184,7 @@ impl Inner {
                         return Err(internal(format!("{event}: {message}")));
                     }
                     task.attempt += 1;
+                    self.max_attempt.fetch_max(task.attempt, Ordering::Relaxed);
                 }
                 Ok(other) => return Err(internal(format!("{event}: answered {other:?}"))),
                 Err(e) => return Err(e),

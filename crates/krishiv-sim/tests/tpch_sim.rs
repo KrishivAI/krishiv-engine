@@ -481,15 +481,41 @@ fn an_unseeded_query_is_refused() {
 /// commit from the gathered rows makes them a table with every row once.
 #[test]
 fn a_write_on_two_workers_names_files_by_task_and_commits_once() {
+    let (names, _) = write_on_two_workers(None);
+    check_spark_names(names);
+}
+
+/// A write task whose attempt fails after it wrote its files is rerun under
+/// its own file names; the commit, told the coordinator retried a task,
+/// sweeps the failed attempt's files, so the table holds every row once and
+/// no data file the commit did not list.
+#[test]
+fn a_retried_write_task_commits_only_the_retry_files() {
+    let fault = Fault {
+        map: 0,
+        attempt: 0,
+        after: 0,
+    };
+    let (mut committed, mut listed) = write_on_two_workers(Some(fault));
+    committed.sort();
+    listed.retain(|p| !p.ends_with("/_SUCCESS"));
+    listed.sort();
+    assert_eq!(listed, committed);
+}
+
+/// Runs `SELECT ... FROM lineitem` into `memory://out` on two workers with
+/// `fault`, checks every row is written once and `_SUCCESS` exists, and
+/// returns the committed files and every object under `out/`.
+fn write_on_two_workers(fault: Option<Fault>) -> (Vec<String>, Vec<String>) {
     let store = store();
     let config = ClusterConfig {
         sim: SimConfig::with_seed(11),
         workers: 2,
         partitions: 4,
         slots: 2,
-        fault: None,
+        fault,
     };
-    let names = Arc::new(Mutex::new(Vec::new()));
+    let names = Arc::new(Mutex::new((Vec::new(), Vec::new())));
     let out = Arc::clone(&names);
     let client_store = Arc::clone(&store);
     simulate(
@@ -547,6 +573,10 @@ fn a_write_on_two_workers_names_files_by_task_and_commits_once() {
                 }
             }
             let options = FormatOptions::defaults(ParquetFormat.options());
+            w.note_attempt(coordinator.max_attempt());
+            if fault.is_some() {
+                assert!(coordinator.max_attempt() > 0, "{:?}", coordinator.trace());
+            }
             let committed = w
                 .commit(&tpch.io, &ParquetFormat, schema, &options, files)
                 .await?;
@@ -557,12 +587,25 @@ fn a_write_on_two_workers_names_files_by_task_and_commits_once() {
             object_store::ObjectStoreExt::head(client_store.as_ref(), &success)
                 .await
                 .unwrap();
-            *out.lock().unwrap() = committed.iter().map(|f| f.path.to_string()).collect();
+            let prefix = object_store::path::Path::from("out");
+            let listed: Vec<String> = client_store
+                .list(Some(&prefix))
+                .map(|m| m.unwrap().location.to_string())
+                .collect()
+                .await;
+            *out.lock().unwrap() = (
+                committed.iter().map(|f| f.path.to_string()).collect(),
+                listed,
+            );
             Ok(())
         },
     )
     .unwrap_or_else(|e| panic!("{e}"));
-    let mut names = std::mem::take(&mut *names.lock().unwrap());
+    std::mem::take(&mut *names.lock().unwrap())
+}
+
+/// Checks `names` are Spark's file names of a write with several tasks.
+fn check_spark_names(mut names: Vec<String>) {
     names.sort();
     assert!(names.len() >= 2, "{names:?}");
     // Spark's `part-<task>-<job>-c<file>`: a task whose drivers each write
