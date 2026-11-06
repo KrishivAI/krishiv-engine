@@ -565,21 +565,27 @@ fn a_write_on_two_workers_names_files_by_task_and_commits_once() {
     let mut names = std::mem::take(&mut *names.lock().unwrap());
     names.sort();
     assert!(names.len() >= 2, "{names:?}");
-    let mut partitions = Vec::new();
+    // Spark's `part-<task>-<job>-c<file>`: a task whose drivers each write
+    // a file numbers them from c000 (how many depends on its splits).
+    let mut files: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
     for n in &names {
-        let p = n
+        let (task, file) = n
             .strip_prefix("out/part-")
-            .and_then(|r| r.strip_suffix("-job-sim-c000.snappy.parquet"))
+            .and_then(|r| r.strip_suffix(".snappy.parquet"))
+            .and_then(|r| r.split_once("-job-sim-c"))
             .unwrap_or_else(|| panic!("not a Spark name: {n}"));
-        assert_eq!(p.len(), 5, "{n}");
-        partitions.push(p.parse::<u32>().unwrap());
+        assert_eq!((task.len(), file.len()), (5, 3), "{n}");
+        files
+            .entry(task.parse().unwrap())
+            .or_default()
+            .push(file.parse().unwrap());
     }
-    partitions.dedup();
-    assert_eq!(
-        partitions.len(),
-        names.len(),
-        "one file per task: {names:?}"
-    );
+    assert!(files.len() >= 2, "files of one task only: {names:?}");
+    for (task, mut numbers) in files {
+        numbers.sort_unstable();
+        let expected: Vec<u32> = (0..u32::try_from(numbers.len()).unwrap()).collect();
+        assert_eq!(numbers, expected, "task {task}: {names:?}");
+    }
 }
 
 /// A file changed between the coordinator's listing and a worker's read
