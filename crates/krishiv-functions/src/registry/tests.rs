@@ -168,15 +168,14 @@ fn kinds_determinism_and_execution() {
     }
     for name in ["rand", "randn", "uuid", "uniform", "randstr", "shuffle"] {
         // The optimizer's flag comes from Spark; the implemented ones are
-        // nondeterministic scalar bindings (`shuffle` stays unimplemented:
-        // it needs an array type the engine has no representation for).
+        // nondeterministic scalar bindings.
         assert_eq!(
             builtins().spark_function(name).unwrap().deterministic,
             Some(false),
             "{name}"
         );
     }
-    for name in ["rand", "randn", "uuid", "uniform", "randstr"] {
+    for name in ["rand", "randn", "uuid", "uniform", "randstr", "shuffle"] {
         let d = def(name);
         assert!(!d.deterministic, "{name}");
         assert_eq!(d.execution, Execution::Scalar, "{name}");
@@ -1436,13 +1435,6 @@ fn session_and_clock_functions() {
     assert!(matches!(
         builtins().lookup("current_time", SparkProfile::V4_2),
         Lookup::Found(_)
-    ));
-
-    // `shuffle` needs an array type the engine has no representation for:
-    // it stays known-unsupported where Spark has it.
-    assert!(matches!(
-        builtins().lookup("shuffle", SparkProfile::V4_2),
-        Lookup::KnownUnsupported
     ));
 }
 
