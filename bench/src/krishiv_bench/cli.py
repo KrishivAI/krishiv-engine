@@ -235,6 +235,7 @@ def main(argv=None) -> None:
         "--perf", action="store_true", help="also sample the Krishiv run under perf record -g (folded stacks)"
     )
     gd.add_argument("--perf-runs", type=int, default=1, help="warm runs sampled per query with --perf")
+    gd.add_argument("--warmup", type=int, default=1, help="unprofiled runs of each engine before the profiled one")
     gd.add_argument("--runner", help=RUNNER_HELP)
     xb = sub.add_parser(
         "ab",
@@ -544,6 +545,7 @@ def main(argv=None) -> None:
             a.busy_share,
             a.perf,
             a.perf_runs,
+            a.warmup,
         )
     elif a.cmd == "ab":
         from .ab import parse_conf, run_ab
