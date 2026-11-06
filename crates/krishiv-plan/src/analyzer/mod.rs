@@ -99,6 +99,8 @@ mod resolve;
 mod setops;
 mod sqlfn;
 mod subquery;
+mod subquery_legacy;
+mod subquery_shapes;
 mod suggest;
 pub mod table_functions;
 #[cfg(any(test, feature = "testing"))]
@@ -106,6 +108,7 @@ pub mod testing;
 mod unexecutable;
 mod unpivot;
 mod variables;
+mod variant;
 mod windows;
 
 use krishiv_kernels::datetime::{TimeZoneRules, ZoneRef, resolve_zone};
@@ -366,6 +369,24 @@ pub struct ResolutionConf {
     /// `spark.sql.function.concatBinaryAsString`: `concat` of binaries
     /// returns a string.
     pub concat_binary_as_string: bool,
+    /// `spark.sql.optimizer.decorrelateExistsSubqueryLegacyIncorrectCountHandling.enabled`:
+    /// `EXISTS` / `IN` over a correlated global aggregate decorrelate as
+    /// Spark's legacy rule does, grouping by the correlated columns (no
+    /// row where nothing matched).
+    pub legacy_exists_in_count: bool,
+    /// `spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled`:
+    /// a correlated scalar subquery with `GROUP BY` reads its value over
+    /// no rows (a count's 0) where nothing matched, not NULL.
+    pub legacy_scalar_count: bool,
+    /// `spark.sql.optimizer.scalarSubqueryUseSingleJoin` (Spark 4.0+,
+    /// default on): a correlated scalar subquery that may return more than
+    /// one row per outer row runs as a single join, which fails at run
+    /// time on a second row; off, analysis refuses it.
+    pub scalar_single_join: bool,
+    /// `spark.sql.legacy.scalarSubqueryAllowGroupByNonEqualityCorrelatedPredicate`:
+    /// with the single join off, a grouped scalar subquery on columns the
+    /// correlation does not fix runs as an outer join (a row per group).
+    pub legacy_group_by_non_equality: bool,
 }
 
 impl Default for ResolutionConf {
@@ -396,13 +417,17 @@ impl Default for ResolutionConf {
             legacy_interval: false,
             legacy_null_in_empty_list: false,
             concat_binary_as_string: false,
+            legacy_exists_in_count: false,
+            legacy_scalar_count: false,
+            scalar_single_join: true,
+            legacy_group_by_non_equality: false,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 24] = [
+    pub const KEYS: [&'static str; 28] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -427,6 +452,10 @@ impl ResolutionConf {
         "spark.sql.legacy.interval.enabled",
         "spark.sql.legacy.nullInEmptyListBehavior",
         "spark.sql.function.concatBinaryAsString",
+        "spark.sql.optimizer.decorrelateExistsSubqueryLegacyIncorrectCountHandling.enabled",
+        "spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled",
+        "spark.sql.optimizer.scalarSubqueryUseSingleJoin",
+        "spark.sql.legacy.scalarSubqueryAllowGroupByNonEqualityCorrelatedPredicate",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -485,6 +514,11 @@ impl ResolutionConf {
             legacy_interval: on(Self::KEYS[21]),
             legacy_null_in_empty_list: on(Self::KEYS[22]),
             concat_binary_as_string: on(Self::KEYS[23]),
+            legacy_exists_in_count: on(Self::KEYS[24]),
+            legacy_scalar_count: on(Self::KEYS[25]),
+            scalar_single_join: conf(Self::KEYS[26])
+                .is_none_or(|s| s.trim().eq_ignore_ascii_case("true")),
+            legacy_group_by_non_equality: on(Self::KEYS[27]),
         }
     }
 }

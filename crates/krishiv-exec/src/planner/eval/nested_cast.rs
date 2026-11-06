@@ -272,7 +272,15 @@ impl PhysExpr for Narrowed {
 
 /// `field`, carrying `t`.
 fn retyped(field: &Field, t: ArrowType) -> Field {
-    field.clone().with_data_type(t)
+    // A rendered interval is a plain string: its interval marker goes.
+    let rendered = t == ArrowType::Utf8View && *field.data_type() != ArrowType::Utf8View;
+    let mut field = field.clone().with_data_type(t);
+    if rendered {
+        let mut metadata = field.metadata().clone();
+        metadata.remove(krishiv_types::arrow::SPARK_TYPE_METADATA_KEY);
+        field = field.with_metadata(metadata);
+    }
+    field
 }
 
 /// The fields of a map's entries as a key and a value type.
@@ -394,7 +402,7 @@ fn map_leaves(from: &DataType, a: &ArrayRef, leaf: &Leaf<'_>) -> Result<ArrayRef
 
 /// `a` with its rows also NULL where `parent` is: the values a NULL parent
 /// row holds are never read, so they must not be cast.
-fn masked(a: &ArrayRef, parent: Option<&NullBuffer>) -> Result<ArrayRef> {
+pub(super) fn masked(a: &ArrayRef, parent: Option<&NullBuffer>) -> Result<ArrayRef> {
     let Some(parent) = parent.filter(|n| n.null_count() > 0) else {
         return Ok(Arc::clone(a));
     };
@@ -411,7 +419,7 @@ fn masked(a: &ArrayRef, parent: Option<&NullBuffer>) -> Result<ArrayRef> {
 /// The 32-bit offsets and values of a list or map whose rows read only
 /// their own values: a NULL row with a non-empty range is dropped from the
 /// values (they are taken again without it).
-fn compact<O: OffsetSizeTrait>(
+pub(super) fn compact<O: OffsetSizeTrait>(
     offsets: &[O],
     nulls: Option<&NullBuffer>,
     values: &ArrayRef,

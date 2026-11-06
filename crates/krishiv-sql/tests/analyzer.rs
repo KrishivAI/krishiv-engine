@@ -359,8 +359,9 @@ fn resolution_corpus_matches_spark() {
     // subqueries; 117 since unit 4 resolved one under a join; 13 since
     // interval literals and date and timestamp arithmetic, P2-T001b; 12
     // since a correlated `EXISTS` in an aggregate's key or `FILTER`; 11 since
-    // a scalar subquery over no relation reads the outer query's columns).
-    assert_eq!(gaps, 11, "statements in documented gaps");
+    // a scalar subquery over no relation reads the outer query's columns; 9
+    // since grouped scalar subqueries run as Spark's single join, P2b row 20).
+    assert_eq!(gaps, 9, "statements in documented gaps");
     assert_eq!(by_design, NULLABLE_BY_DESIGN.len());
     // Classes of lateral aliases, ordinals and type coercion, each matched
     // against Spark above.

@@ -4,6 +4,7 @@ expression: report
 ---
 krishiv.query.count counter {query} [status=succeeded|failed|cancelled|denied,class=interactive|batch|background|agent,error_class] -> krishiv_query_count_total
 krishiv.query.duration histogram s [status=succeeded|failed|cancelled|denied,class=interactive|batch|background|agent] -> krishiv_query_duration_seconds
+krishiv.query.cancel.latency histogram s [] -> krishiv_query_cancel_latency_seconds
 krishiv.query.active gauge {query} [class=interactive|batch|background|agent] -> krishiv_query_active
 krishiv.query.cpu.time counter s [class=interactive|batch|background|agent] -> krishiv_query_cpu_time_seconds_total
 krishiv.query.scan.rows counter {row} [] -> krishiv_query_scan_rows_total

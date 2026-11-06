@@ -1270,6 +1270,8 @@ pub mod data_type {
         CalendarInterval = 21,
         /// feature: collated_strings
         CollatedString = 22,
+        /// feature: variant_type
+        Variant = 23,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -1301,6 +1303,7 @@ pub mod data_type {
                 Self::DayTimeInterval => "KIND_DAY_TIME_INTERVAL",
                 Self::CalendarInterval => "KIND_CALENDAR_INTERVAL",
                 Self::CollatedString => "KIND_COLLATED_STRING",
+                Self::Variant => "KIND_VARIANT",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1329,6 +1332,7 @@ pub mod data_type {
                 "KIND_DAY_TIME_INTERVAL" => Some(Self::DayTimeInterval),
                 "KIND_CALENDAR_INTERVAL" => Some(Self::CalendarInterval),
                 "KIND_COLLATED_STRING" => Some(Self::CollatedString),
+                "KIND_VARIANT" => Some(Self::Variant),
                 _ => None,
             }
         }

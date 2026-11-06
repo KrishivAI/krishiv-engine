@@ -136,6 +136,7 @@ impl Resolver<'_> {
             col: output,
             qual,
             source: None,
+            duplicate: false,
         };
         self.wrap(
             Arc::new(LogicalPlan::new(node).with_origin(o)),
@@ -432,6 +433,7 @@ impl Resolver<'_> {
                 },
                 qual: Arc::from(Vec::new()),
                 source: None,
+                duplicate: false,
             });
         }
         let one = Arc::new(LogicalPlan::new(PlanNode::OneRowRelation).with_origin(o));
