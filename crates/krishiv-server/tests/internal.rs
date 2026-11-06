@@ -46,9 +46,9 @@ impl UiSource for Fake {
                     {"query_id": "q-run", "state": "running", "principal": "ann", "submitted_at": 2_000,
                      "query_text": "SELECT 1", "secret_option": "hunter2", "workers": 1},
                     {"query_id": "q-wait", "state": "queued", "principal": "bob", "submitted_at": 1_000},
-                    {"query_id": "q-a", "state": "succeeded", "principal": "ann", "submitted_at": 100,
+                    {"query_id": "q-a", "state": "finished", "principal": "ann", "submitted_at": 100,
                      "wall_ns": 1_000, "peak_memory_bytes": 10, "rows_produced": 5, "spill_bytes": 0},
-                    {"query_id": "q-b", "state": "succeeded", "principal": "ann", "submitted_at": 200,
+                    {"query_id": "q-b", "state": "finished", "principal": "ann", "submitted_at": 200,
                      "wall_ns": 1_500, "peak_memory_bytes": 30, "rows_produced": 5, "spill_bytes": 7},
                     {"query_id": "q-bad", "state": "failed", "principal": "bob", "submitted_at": 300,
                      "error_class": "DIVIDE_BY_ZERO"}

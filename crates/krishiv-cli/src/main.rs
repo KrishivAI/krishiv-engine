@@ -118,15 +118,30 @@ fn run() {
         #[cfg(feature = "ui")]
         Command::Server { port, host } => {
             let addr = std::net::SocketAddr::new(host, port);
-            let result = krishiv_server::run_blocking(addr, |a| {
-                println!("krishiv server listening on http://{a}");
-            });
-            if let Err(e) = result {
+            if let Err(e) = run_server(addr) {
                 eprintln!("krishiv server: {e}");
                 std::process::exit(1);
             }
         }
     }
+}
+
+/// `krishiv server`: the admin API and web UI over this process's engine runtime, behind a fresh token that
+/// is printed once at start-up (the UI's `/api/internal` routes refuse any request without it).
+#[cfg(feature = "ui")]
+fn run_server(addr: std::net::SocketAddr) -> Result<(), String> {
+    let runtime = krishiv_session::EngineRuntime::builder()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let source =
+        krishiv_server::session_source::SessionSource::new(runtime).map_err(|e| e.to_string())?;
+    let token = krishiv_server::internal::random_token().map_err(|e| e.to_string())?;
+    let app = krishiv_server::internal::router_with_ui(std::sync::Arc::new(source), &token);
+    krishiv_server::run_blocking_with(addr, app, |a| {
+        println!("krishiv server listening on http://{a}");
+        println!("UI token (send as `Authorization: Bearer <token>` to /api/internal/*): {token}");
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// `krishiv mcp`: stdio until the client closes it. Exit 0 ok, 1 failure.
