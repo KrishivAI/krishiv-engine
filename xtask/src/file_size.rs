@@ -373,6 +373,50 @@ mod tests {
     }
 
     #[test]
+    fn write_baseline_finds_the_changed_files_through_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {args:?}");
+        };
+        let src = root.join("crates/c/src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(root.join("xtask")).unwrap();
+        let lines = |n: usize| "fn f() {}\n".repeat(n);
+        std::fs::write(src.join("a.rs"), lines(2100)).unwrap();
+        std::fs::write(src.join("b.rs"), lines(2100)).unwrap();
+        std::fs::write(
+            root.join(BASELINE),
+            "# why\n2300 crates/c/src/a.rs\n2100 crates/c/src/b.rs\n",
+        )
+        .unwrap();
+        git(&["init", "-q", "-b", "main"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "base"]);
+        git(&["checkout", "-q", "-b", "topic"]);
+        // b.rs grows in a commit, new.rs is untracked, a.rs shrank but is not changed here.
+        std::fs::write(src.join("b.rs"), lines(2200)).unwrap();
+        git(&["commit", "-q", "-am", "grow b"]);
+        std::fs::write(src.join("new.rs"), lines(2001)).unwrap();
+        run(root, &["--write-baseline", "--base", "main"]).unwrap();
+        let text = std::fs::read_to_string(root.join(BASELINE)).unwrap();
+        assert_eq!(
+            text,
+            "# why\n2300 crates/c/src/a.rs\n2200 crates/c/src/b.rs\n2001 crates/c/src/new.rs\n"
+        );
+        assert!(run(root, &["--write-baseline", "--base", "nope"]).is_err());
+        assert!(run(root, &["--base"]).is_err());
+        assert!(run(root, &["--only"]).is_err());
+    }
+
+    #[test]
     fn the_baseline_round_trips() {
         let cur = map(&[("a.rs", 2500), ("b.rs", 100), ("c/d.rs", 2001)]);
         let text = render_baseline(&cur);
