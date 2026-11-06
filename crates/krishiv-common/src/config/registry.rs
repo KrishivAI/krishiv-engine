@@ -27,6 +27,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_RADIX_BITS,
     &EXEC_JOIN_STRATEGY,
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
+    &EXEC_JOIN_SHARED_BROADCAST_BYTES,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
@@ -298,6 +299,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.legacy.statisticalAggregate",
         &LEGACY_STATISTICAL_AGGREGATE,
+    ),
+    (
+        "krishiv.exec.join.sharedBroadcastBytes",
+        &EXEC_JOIN_SHARED_BROADCAST_BYTES,
     ),
     (
         "krishiv.io.parquet.bloomFilter.enabled",
@@ -650,6 +655,23 @@ pub static EXEC_JOIN_SMJ_BUFFER_BYTES: ConfigEntry = ConfigEntry {
           moves them to a spill file; 0 takes a share of the memory pool. Spark bounds these \
           rows by count (`spark.sql.sortMergeJoinExec.buffer.in.memory.threshold` and \
           `spark.sql.sortMergeJoinExec.buffer.spill.threshold`), which have no effect here.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// The most one query's shared broadcast tables may hold on a worker
+/// (P2-T177 unit 3, row 30c (b)).
+pub static EXEC_JOIN_SHARED_BROADCAST_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.sharedBroadcastBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(0)),
+    doc: "Bytes the broadcast join tables one query shares among its tasks on a worker may \
+          hold; 0 sets no cap beyond the query's memory. A shared build that grows past it \
+          stops, and each task of the query builds its own table from the broadcast rows \
+          instead, spilling as needed. A cap below the query's memory avoids the spill of the query's \
+          other memory that precedes that fallback when the table does not fit.",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.1.0",

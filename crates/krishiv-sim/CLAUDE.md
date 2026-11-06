@@ -12,7 +12,8 @@ Paths are relative to this crate.
 - `src/lib.rs` `simulate` (the turmoil world: worker hosts + a coordinator client), `ClusterConfig`, `SimConfig`
 - `src/cluster.rs` `Coordinator`: a `krishiv_exec::Scheduler` that ships fragments and task descriptors to workers, retries a failed task as its next attempt, runs the root stage, records a trace, releases each job's map outputs
 - `src/worker.rs` `serve` (one worker host: own executor, pool, tables via `HostSetup`, one exchange and one
-  `BroadcastTables` per job, so a broadcast join's table is built once per host and job) and `HostSetup`
+  `BroadcastTables` per job, so a broadcast join's table is built once per host and job, capped by the task's
+  `krishiv.exec.join.sharedBroadcastBytes`) and `HostSetup`
 - `src/exchange.rs` `HostExchange` (writes to the host's `LocalShuffle`, reads map partition `m` from worker `m mod W`, remotely over TCP), `Fault`
 - `src/wire.rs` the length-prefixed request/reply messages; `src/task.rs` the `krishiv.task.v1alpha` task descriptor
   (with the file splits the coordinator dealt, `Coordinator::deal_scans`; relation batches are refused)

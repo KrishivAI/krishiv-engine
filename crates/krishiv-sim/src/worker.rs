@@ -149,8 +149,9 @@ impl Host {
     }
 
     /// `job`'s exchange and broadcast tables on this host, made on first
-    /// use.
-    fn job(&self, job: u64) -> (Arc<HostExchange>, Arc<BroadcastTables>) {
+    /// use; the tables hold at most `limit` bytes
+    /// (`krishiv.exec.join.sharedBroadcastBytes` of the task that made them).
+    fn job(&self, job: u64, limit: Option<usize>) -> (Arc<HostExchange>, Arc<BroadcastTables>) {
         let mut jobs = self.jobs.lock().unwrap_or_else(PoisonError::into_inner);
         let j = jobs.entry(job).or_insert_with(|| Job {
             exchange: Arc::new(HostExchange::worker(
@@ -161,7 +162,7 @@ impl Host {
             )),
             broadcasts: Arc::new(BroadcastTables::new(
                 Arc::clone(&self.executor),
-                self.pool.child(&format!("job-{job}-broadcasts"), None),
+                self.pool.child(&format!("job-{job}-broadcasts"), limit),
             )),
         });
         (Arc::clone(&j.exchange), Arc::clone(&j.broadcasts))
@@ -225,7 +226,7 @@ impl Host {
             "stage-{}-task-{}-attempt-{}",
             task.stage, task.partition, task.attempt
         );
-        let (exchange, broadcasts) = self.job(job);
+        let (exchange, broadcasts) = self.job(job, settings.shared_broadcast_bytes);
         let worker = self
             .worker
             .clone()
@@ -390,7 +391,7 @@ mod tests {
         assert!(format!("{host:?}").starts_with("Host"));
         assert!(host.existing(5).is_none());
         // A job's exchange and broadcast tables are made once and reused.
-        let (first, second) = (host.job(5), host.job(5));
+        let (first, second) = (host.job(5, None), host.job(5, None));
         assert!(Arc::ptr_eq(&first.0, &second.0));
         assert!(Arc::ptr_eq(&first.1, &second.1));
         assert!(host.existing(5).is_some());

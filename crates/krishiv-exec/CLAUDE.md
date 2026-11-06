@@ -32,8 +32,9 @@ sink (also the runtime filter producer, P2-T163: per-driver partials, published 
 (P2-T177 unit 3) `BroadcastTables`, a worker resource (`WorkerContext::with_broadcasts`): a broadcast join over a cut
 broadcast exchange builds its table once per job and worker (its own query over the resource's pool, no spill, its
 reservations never abort a query) and every task probes it through a `PrebuiltSink` that republishes its runtime
-filters. A shared build that does not fit (`UNABLE_TO_ACQUIRE_MEMORY`) falls back to one spilling build per task
-(`SharedOrOwnRows` then reads the broadcast for the task; owner decision 2026-11-06).
+filters. A shared build that does not fit (`UNABLE_TO_ACQUIRE_MEMORY`, or past `krishiv.exec.join.sharedBroadcastBytes`, the
+worker's cap per query) falls back to one spilling build per task (`SharedOrOwnRows` then reads the broadcast for the
+task; owner decision 2026-11-06); each task's build reports `broadcast_shared` or `broadcast_fallback` (count 1).
 `join/merge.rs` sort-merge join (P2-T056): `SortMergeJoin` is the source over two `Sort`s in hash buckets of the keys
 (`Sort::bucket_reader`, `PipelineBuilder::set_merge_source`), `Merge` the merge of one bucket pair; a key's right rows
 are the group, spilled past `krishiv.exec.join.smj.bufferBytes`; `join/fallback.rs` runs a grace partition that will not
