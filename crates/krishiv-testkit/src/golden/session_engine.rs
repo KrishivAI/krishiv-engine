@@ -524,6 +524,7 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
         (DataType::Geometry { .. } | DataType::Geography { .. }, ArrowType::Struct(_)) => {
             spatial_cell(col, row).ok_or_else(unexpected)?
         }
+        (DataType::Variant, ArrowType::Struct(_)) => variant_cell(col, row)?,
         (DataType::Time { .. }, ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond)) => {
             Cell::Time(
                 col.as_primitive::<arrow_array::types::Time64NanosecondType>()
@@ -540,6 +541,15 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
 }
 
 /// The text Spark prints the spatial value at `row` of `col` as.
+fn variant_cell(col: &ArrayRef, row: usize) -> Result<Cell, EngineError> {
+    let c =
+        krishiv_kernels::variant::VariantColumn::new(col.as_ref()).map_err(|e| engine_error(&e))?;
+    Ok(match c.get(row).map_err(|e| engine_error(&e))? {
+        Some(v) => Cell::Variant(v.metadata().to_vec(), v.value_bytes().to_vec()),
+        None => Cell::Null,
+    })
+}
+
 fn spatial_cell(col: &ArrayRef, row: usize) -> Option<Cell> {
     let s = col.as_struct_opt()?;
     let srid = s.column(0).as_primitive_opt::<Int32Type>()?.value(row);
@@ -712,6 +722,7 @@ fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, Engine
         (DataType::Geometry { .. } | DataType::Geography { .. }, ArrowType::Struct(_)) => {
             spatial_cell(col, row).ok_or_else(unexpected)?
         }
+        (DataType::Variant, ArrowType::Struct(_)) => variant_cell(col, row)?,
         (DataType::Time { .. }, ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond)) => {
             Cell::Time(
                 col.as_primitive::<arrow_array::types::Time64NanosecondType>()

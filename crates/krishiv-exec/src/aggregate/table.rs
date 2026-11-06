@@ -12,7 +12,8 @@ use krishiv_types::batch::{Batch, Weights};
 
 use super::accumulator::Accumulator;
 use super::rowtable::{RowPrepared, RowTable};
-use super::{AggregateExpr, AggregateOutput, AggregateSpec};
+use super::udf::{UdfAcc, check_state, resolve};
+use super::{AggregateExpr, AggregateFunction, AggregateOutput, AggregateSpec};
 use crate::error::{Result, internal};
 use crate::hash::{HashSeed, KeyEncoder, KeyTable, ProbeCount, ProbeTotals, spill_partition};
 use crate::rows::RowLayout;
@@ -57,6 +58,11 @@ impl AggCore {
         let mut ranges = Vec::with_capacity(spec.aggregates.len());
         let mut at = spec.group_by.len();
         for a in &spec.aggregates {
+            // A worker without the UDF, or with another state under the
+            // same version, refuses the plan before any row.
+            if let AggregateFunction::Udf(call) = &a.function {
+                check_state(&resolve(call, spec.udafs.as_ref())?, call)?;
+            }
             let n = a.state_fields()?.len();
             ranges.push(at..at + n);
             at += n;
@@ -77,6 +83,10 @@ impl AggCore {
 
     /// The accumulator of aggregate `a`, with the spec's semantics flags.
     pub(crate) fn accumulator(&self, a: &AggregateExpr) -> Result<Accumulator> {
+        if let AggregateFunction::Udf(call) = &a.function {
+            let acc = UdfAcc::new(call, self.spec.udafs.as_ref(), self.spec.ansi)?;
+            return Accumulator::udf(a, acc);
+        }
         Ok(Accumulator::new(a, self.spec.ansi)?.legacy_statistical(self.spec.legacy_statistical))
     }
 

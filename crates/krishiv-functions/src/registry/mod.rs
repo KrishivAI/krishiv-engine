@@ -39,6 +39,7 @@ mod r#struct;
 mod text;
 mod time;
 mod url;
+mod variant;
 mod vector;
 mod xml;
 
@@ -50,6 +51,7 @@ pub use catalog::SparkFunction;
 pub use defs::legacy_day_count;
 pub use defs::{approx_percentile_result, exact_percentile_result};
 pub(crate) use json::parse_json_schema;
+pub use variant::variant_castable;
 
 use crate::signature::{Arity, FunctionKind, Inputs, ResultType, SparkProfile};
 
@@ -315,7 +317,7 @@ impl Registry {
             rows.into_iter().map(|r| (r.name, r)).collect();
         let mut defs = HashMap::new();
         let mut unlisted = Vec::new();
-        for (id, spec) in (0_u32..).zip(defs::specs()) {
+        for (id, spec) in (0_u32..).zip(defs::specs().into_iter().chain(variant::specs())) {
             let grammar = grammar_row(spec.name);
             let Some(row) = spark.get(spec.name).or(grammar.as_ref()) else {
                 unlisted.push(spec.name);

@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import h2o, micro, micro_data
+from . import h2o, memguard, micro, micro_data
 from .adapters import ENGINES
 from .paths import data_root
 from .report import write_report
@@ -162,6 +162,19 @@ def main(argv=None) -> None:
         "--cold",
         action="store_true",
         help="evict the dataset from the page cache before every run (results are not comparable with warm runs)",
+    )
+    r.add_argument(
+        "--min-mem-avail",
+        type=float,
+        default=memguard.DEFAULT_MIN_FRACTION,
+        help="wait before each timed run until MemAvailable is this fraction of MemTotal, and mark runs that dip "
+        "below it 'invalid: memory reclaimed' (0 = off)",
+    )
+    r.add_argument(
+        "--mem-retries",
+        type=int,
+        default=memguard.DEFAULT_RETRIES,
+        help="times to retry a run marked invalid before the query fails",
     )
     _add_memcap_args(r)
     nc = sub.add_parser(
@@ -426,6 +439,8 @@ def main(argv=None) -> None:
         methods = tuple(m.strip() for m in a.methods.split(",") if m.strip())
         if not methods or set(methods) - {"ours", "theirs"}:
             ap.error(f"--methods must be a comma list of: ours, theirs (got {a.methods!r})")
+        if a.cgroup_gb is not None and not a.sequential:
+            ap.error("--cgroup-gb needs --sequential (the cgroup scope is one engine worker's)")
         run_reproduce(
             a.suite,
             a.sf,
@@ -599,6 +614,8 @@ def main(argv=None) -> None:
             a.timeout or None,
             a.dataset,
             a.cold,
+            min_mem_avail=a.min_mem_avail or None,
+            mem_retries=a.mem_retries,
         )
         print(f"result: {f}")
     elif a.suite == "micro":

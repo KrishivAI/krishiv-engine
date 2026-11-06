@@ -25,7 +25,10 @@ use super::analytics::Analytics;
 use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::quoted_type;
-use super::exprs::{Bound, Cx, WindowUse, names, pretty, semantic_key, unresolved};
+use super::exprs::{
+    Bound, Cx, WindowUse, builtin_name, names, pretty, semantic_key, synth_call, synth_call_of,
+    unresolved,
+};
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, FileMetadata, TableKind};
 use crate::{
@@ -104,10 +107,13 @@ impl Resolver<'_> {
             let qual: Arc<[String]> = Arc::from(vec![n.clone()]);
             let out = output
                 .iter()
-                .map(|c| Attr {
+                .zip(def.out.iter())
+                .map(|(c, a)| Attr {
                     col: c.clone(),
                     qual: Arc::clone(&qual),
                     source: None,
+                    // Spark's `CTERelationRef` keeps the metadata.
+                    duplicate: a.duplicate,
                 })
                 .collect();
             let node = PlanNode::CteRef(CteRef {
@@ -146,6 +152,7 @@ impl Resolver<'_> {
                 col,
                 qual: Arc::clone(&qual),
                 source: Some((*securable, Arc::from(c.name.as_str()))),
+                duplicate: false,
             });
         }
         let node = PlanNode::Scan(Scan {
@@ -188,6 +195,7 @@ impl Resolver<'_> {
             },
             qual: Arc::clone(qual),
             source: None,
+            duplicate: false,
         };
         rel.hidden = Arc::from(vec![attr]);
         rel.widen = Some(Arc::new(Widen::Scan));
@@ -210,6 +218,7 @@ impl Resolver<'_> {
                 },
                 qual: no_qual(),
                 source: None,
+                duplicate: false,
             })
             .collect();
         let node = PlanNode::Scan(Scan {
@@ -502,6 +511,7 @@ impl Resolver<'_> {
             col: compute.clone(),
             qual: no_qual(),
             source: None,
+            duplicate: false,
         });
         let inner = self.projection(Origin::UNKNOWN, base, inner_exprs, inner_out);
         let mut outer_exprs = Vec::with_capacity(items.len() + outputs - 1);
@@ -546,6 +556,7 @@ impl Resolver<'_> {
                     col: output,
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 });
             }
         }
@@ -597,6 +608,7 @@ impl Resolver<'_> {
                                 col: output.clone(),
                                 qual: no_qual(),
                                 source: None,
+                                duplicate: false,
                             });
                         }
                         items.push(bound);
@@ -632,6 +644,7 @@ impl Resolver<'_> {
                                 col: output.clone(),
                                 qual: no_qual(),
                                 source: None,
+                                duplicate: false,
                             });
                         }
                         items.push(bound);
@@ -672,6 +685,7 @@ impl Resolver<'_> {
                             col: output.clone(),
                             qual: no_qual(),
                             source: None,
+                            duplicate: false,
                         });
                     }
                     items.push(bound);
@@ -692,6 +706,7 @@ impl Resolver<'_> {
                     col: output.clone(),
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 });
             }
             items.push(b);
@@ -745,6 +760,15 @@ impl Resolver<'_> {
                 if matches!(expr.node, ExprNode::Resolved(ResolvedExpr::Column(_))) =>
             {
                 pretty(expr, zone)
+            }
+            // A cast of an alias (`v:a::int`) keeps the alias's name.
+            ExprNode::Cast { expr, .. }
+                if matches!(expr.node, ExprNode::Resolved(ResolvedExpr::Alias { .. })) =>
+            {
+                match &expr.node {
+                    ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
+                    _ => pretty(expr, zone),
+                }
             }
             // A higher-order call names its output from the bound call:
             // lambdas read `namedlambdavariable()`, and a three-argument
@@ -1638,7 +1662,7 @@ impl Resolver<'_> {
                         Some((_, a)) => a.clone(),
                         None if info.distinct_rewritten
                             && !f.distinct
-                            && !matches!(f.id.name(), "min" | "max") =>
+                            && !matches!(builtin_name(f), "min" | "max") =>
                         {
                             // Spark rewrites this call with the select list's. Planned over the
                             // rewrite's own rows (one per distinct set) it would count each group
@@ -1666,6 +1690,7 @@ impl Resolver<'_> {
                                 col: output,
                                 qual: no_qual(),
                                 source: None,
+                                duplicate: false,
                             };
                             grown.out.push(a.clone());
                             known.push((k, a.clone()));
@@ -1805,6 +1830,7 @@ impl Resolver<'_> {
                             col: output,
                             qual: no_qual(),
                             source: None,
+                            duplicate: false,
                         };
                         st.grown.out.push(a.clone());
                         st.known.push((key, a.clone()));
@@ -2260,7 +2286,9 @@ impl Resolver<'_> {
                     && let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node
                     && f.kind == FunctionKind::Aggregate
                 {
-                    let key = x.to_string();
+                    // The identity, not the display: a session UDF and a
+                    // built-in of its name are two calls.
+                    let key = crate::identity_string(x);
                     if !calls.iter().any(|(k, _)| *k == key) {
                         calls.push((key, f.clone()));
                     }
@@ -2348,6 +2376,20 @@ impl Resolver<'_> {
                 None => sets.push((key, vec![i])),
             }
         }
+        // A global aggregate over no rows evaluates each call on an empty
+        // group; a regular call becomes `first` of its partial result, which
+        // is NULL there. The count family is coalesced to 0 below, but an
+        // aggregate UDF's empty-group value is unknown at analysis.
+        if global
+            && regular
+                .iter()
+                .any(|&i| matches!(calls[i].1.id, crate::FunctionId::Udf { .. }))
+        {
+            return Err(unsupported(
+                "an aggregate UDF without GROUP BY next to a filtered DISTINCT aggregate or several DISTINCT argument sets",
+                origin,
+            ));
+        }
         // Every distinct argument, once (in order of first appearance),
         // with its nullable expansion column.
         let zone = self.ctx.conf.session_zone;
@@ -2382,6 +2424,7 @@ impl Resolver<'_> {
                 col,
                 qual: no_qual(),
                 source: None,
+                duplicate: false,
             });
         }
         let gid_attr = Attr {
@@ -2391,6 +2434,7 @@ impl Resolver<'_> {
             ),
             qual: no_qual(),
             source: None,
+            duplicate: false,
         };
         // The grouping expressions that are not plain input columns, once
         // each: computed below the expansion so every projection groups
@@ -2419,6 +2463,7 @@ impl Resolver<'_> {
                     col,
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 },
             ));
         }
@@ -2445,6 +2490,7 @@ impl Resolver<'_> {
                 col,
                 qual: no_qual(),
                 source: None,
+                duplicate: false,
             };
             computed.push((k, Arc::clone(filter), attr.clone()));
             filter_cols.push((k, attr));
@@ -2469,6 +2515,7 @@ impl Resolver<'_> {
                     col,
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 },
             ));
         }
@@ -2503,6 +2550,7 @@ impl Resolver<'_> {
                     col,
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 },
             ));
         }
@@ -2664,7 +2712,7 @@ impl Resolver<'_> {
             // A resolved `listagg` holds its ordering keys after its value
             // and delimiter: written again, they are the `WITHIN GROUP`
             // list. A resolved `mode` encodes its ordering in its arguments.
-            let mut call = synth_call(f.id.name(), Vec::new(), f.filter.clone(), origin);
+            let mut call = synth_call_of(f, Vec::new(), f.filter.clone(), origin);
             if let ExprNode::Function(c) = &mut Arc::make_mut(&mut call).node {
                 let keys = if f.id.name() == "listagg" {
                     f.within_group.len().min(mapped.len())
@@ -2736,7 +2784,7 @@ impl Resolver<'_> {
                         )?
                         .expr;
                 }
-                let b = self.bind(&synth_call(f.id.name(), args, Some(filter), origin), &r1_cx)?;
+                let b = self.bind(&synth_call_of(f, args, Some(filter), origin), &r1_cx)?;
                 new_call.insert(calls[i].0.clone(), b.expr);
             }
         }
@@ -2765,7 +2813,9 @@ impl Resolver<'_> {
             // A global count over no rows is 0, but `first` of the zero
             // partial rows the second phase sees is NULL: the count family
             // is coalesced to 0 (a grouped query always has a row per group).
-            if matches!(calls[i].1.id.name(), "count" | "count_if") {
+            if matches!(calls[i].1.id, crate::FunctionId::Registry { .. })
+                && matches!(calls[i].1.id.name(), "count" | "count_if")
+            {
                 replaced = self
                     .bind(
                         &synth_call(
@@ -2923,6 +2973,7 @@ impl Resolver<'_> {
                     col: output,
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 };
                 info.out.push(a.clone());
                 a
@@ -3073,6 +3124,7 @@ impl Resolver<'_> {
                 col: JoinKind::existence_column(id),
                 qual: Arc::from(Vec::new()),
                 source: None,
+                duplicate: false,
             });
         } else if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
             out.extend(r.out.iter().map(|a| nullable(a, rn)));
@@ -3348,11 +3400,17 @@ impl Resolver<'_> {
     ) -> Result<(Arc<Expr>, Vec<Keys>), AnalysisError> {
         let cs = self.ctx.conf.case_sensitive;
         let side = |rel: &Rel, which: &str, name: &String| {
-            let hits: Vec<&Attr> = rel
-                .out
-                .iter()
-                .filter(|a| same(&a.col.name, name, cs))
-                .collect();
+            let mut hits: Vec<&Attr> = Vec::new();
+            for a in rel.out.iter() {
+                if same(&a.col.name, name, cs) && !hits.iter().any(|h| h.col.id == a.col.id) {
+                    hits.push(a);
+                }
+            }
+            // Spark resolves the key through `getCandidatesForResolution`:
+            // a union input's repeat of a column does not count.
+            if hits.len() > 1 {
+                hits.retain(|a| !a.duplicate);
+            }
             match hits[..] {
                 [a] => Ok(a.clone()),
                 [a, ..] if lenient => Ok(a.clone()),
@@ -3870,6 +3928,8 @@ impl Resolver<'_> {
                     col: output,
                     qual: no_qual(),
                     source: a.source.clone(),
+                    // Spark's `Alias` keeps its child's metadata.
+                    duplicate: a.duplicate,
                 });
             }
             let node = PlanNode::Project {
@@ -4046,30 +4106,6 @@ struct Lift<'a> {
     origin: Origin,
 }
 
-/// The attribute a named item outputs; a column keeps its input
-/// attribute's qualifier and source.
-/// An unresolved call of `name` to `args` (with `filter`), for the
-/// analyzer to bind over already-resolved columns.
-fn synth_call(
-    name: &str,
-    args: Vec<Arc<Expr>>,
-    filter: Option<Arc<Expr>>,
-    origin: Origin,
-) -> Arc<Expr> {
-    Arc::new(
-        Expr::new(ExprNode::Function(FunctionCall {
-            within_group: Vec::new(),
-            name: name.to_owned(),
-            qualifier: Vec::new(),
-            arg_names: Vec::new(),
-            args,
-            distinct: false,
-            filter,
-        }))
-        .with_origin(origin),
-    )
-}
-
 /// The expansion column evaluating `a`: the input column it already is,
 /// or the fresh column computed for its semantic key (`None` when neither
 /// holds, for the caller to leave the rewrite).
@@ -4101,14 +4137,14 @@ fn expand_col(
 
 /// `x` with the rewritten aggregate's calls and grouping expressions
 /// replaced: a call the second aggregate's call (keyed by the original's
-/// text, attribute ids included), a grouping expression its column.
+/// identity string, attribute ids included), a grouping expression its column.
 fn subst_distinct(
     x: &Arc<Expr>,
     new_call: &HashMap<String, Arc<Expr>>,
     key_map: &HashMap<u128, Arc<Expr>>,
     memo: &mut HashMap<usize, u128>,
 ) -> Arc<Expr> {
-    if let Some(n) = new_call.get(&x.to_string()) {
+    if let Some(n) = new_call.get(&crate::identity_string(x)) {
         return Arc::clone(n);
     }
     if let Some(n) = key_map.get(&semantic_key(x, memo)) {
@@ -4129,13 +4165,21 @@ pub(super) fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
                     col: c.clone(),
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 },
             }
         }
-        ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => Attr {
+        ExprNode::Resolved(ResolvedExpr::Alias { output, expr }) => Attr {
             col: output.clone(),
             qual: no_qual(),
             source: None,
+            // Spark's `Alias` of an attribute keeps the attribute's metadata.
+            duplicate: match &expr.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                    scope.iter().any(|a| a.col.id == c.id && a.duplicate)
+                }
+                _ => false,
+            },
         },
         _ => Attr {
             col: BoundColumn {
@@ -4146,6 +4190,7 @@ pub(super) fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
             },
             qual: no_qual(),
             source: None,
+            duplicate: false,
         },
     }
 }

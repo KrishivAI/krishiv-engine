@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use krishiv_common::secret::{OptionValue, SecretValue};
 use krishiv_exec::JoinType;
-use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
+use krishiv_exec::aggregate::{
+    AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
+};
 use krishiv_exec::physical::{
     AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
@@ -1061,6 +1063,21 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         }
         AggregateFunction::MaxBy => (pb::AggregateFunction::MaxBy, false),
         AggregateFunction::MinBy => (pb::AggregateFunction::MinBy, false),
+        AggregateFunction::Udf(call) => {
+            return Ok(pb::AggregateExpr {
+                function: pb::AggregateFunction::Udf as i32,
+                args: indexes(&a.args),
+                input: match a.input {
+                    AggInput::Raw => pb::AggregateInput::Raw,
+                    AggInput::State => pb::AggregateInput::State,
+                } as i32,
+                arg_type: arrow_bytes(&a.arg_type, nested),
+                name: a.name.clone(),
+                mask: a.mask.map(|m| m as u64),
+                udaf: Some(Box::new(udaf_call(call, nested)?)),
+                ..Default::default()
+            });
+        }
     };
     Ok(pb::AggregateExpr {
         function: function as i32,
@@ -1074,6 +1091,25 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         name: a.name.clone(),
         mask: a.mask.map(|m| m as u64),
         ..Default::default()
+    })
+}
+
+/// The call of an aggregate UDF; `nested` is set when an argument, state
+/// or result type is an array, map or struct.
+fn udaf_call(call: &UdafCall, nested: &Cell<bool>) -> Result<pb::UdafCall> {
+    let fields = |fs: &[arrow_schema::Field]| {
+        if fs.iter().any(|f| arrow_type_is_nested(f.data_type())) {
+            nested.set(true);
+        }
+        schema_bytes(&arrow_schema::Schema::new(fs.to_vec()))
+    };
+    Ok(pb::UdafCall {
+        name: call.name.clone(),
+        version: u64::from(call.version),
+        args: fields(&call.args),
+        result: Some(spark_type(&call.result, nested)?),
+        nullable: call.nullable,
+        state: fields(&call.state),
     })
 }
 
@@ -1269,6 +1305,7 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         DataType::Time { precision } => (Kind::Time, u32::from(*precision), 0, 0),
         DataType::Geometry { srid } => (Kind::Geometry, 0, 0, srid.to_i32()),
         DataType::Geography { srid } => (Kind::Geography, 0, 0, srid.to_i32()),
+        DataType::Variant => (Kind::Variant, 0, 0, 0),
         DataType::YearMonthInterval { start, end } => {
             return Ok(pb::DataType {
                 kind: Kind::YearMonthInterval as i32,

@@ -293,3 +293,42 @@ fn union_by_name_duplicates_compare_as_the_session_does() {
         json!(["COLUMN_ALREADY_EXISTS", {"columnName": "`k`"}])
     );
 }
+
+/// A union input that repeats a column gets a projection re-aliasing the
+/// repeat (Spark's `DeduplicateUnionChildOutput`: `Project [k#1, k#1 AS
+/// k#n]`), `k` above the union is the first copy, and re-analysis is a
+/// fixed point. The analyzed union, analyzed again under another operator
+/// (a DataFrame temporary view stores the analyzed plan), still reads `k`
+/// as the first copy.
+#[test]
+fn a_union_input_that_repeats_a_column_gets_distinct_attributes() {
+    use super::dsl::c;
+    let union = |first: LogicalPlan, second: LogicalPlan| {
+        LogicalPlan::new(PlanNode::Union {
+            inputs: vec![Arc::new(first), Arc::new(second)],
+            by_name: false,
+            allow_missing_columns: false,
+        })
+    };
+    // Both `INT`: no widening cast replaces the repeat.
+    let u = union(
+        LogicalPlan::table(["a"]).project(vec![c("k"), c("k")]),
+        LogicalPlan::table(["c"]).project(vec![c("k"), c("k")]),
+    );
+    let a = analyze(u.clone().project(vec![c("k")]), false).unwrap();
+    assert_eq!(a.output.len(), 1);
+    let text = a.plan.root().to_string();
+    assert!(
+        text.lines()
+            .any(|l| l.trim_start().starts_with(":- Project [k#") && l.contains(" AS k#")),
+        "the repeat is re-aliased:\n{text}"
+    );
+    let ctx = context(catalog(), ResolutionConf::default());
+    let again = block_on(DefaultAnalyzer.analyze(&a.plan, &ctx)).unwrap();
+    assert!(again.plan.structurally_eq(&a.plan), "a fixed point");
+    // The resolved union, read again by name.
+    let resolved = analyze(u, false).unwrap();
+    let over = (**resolved.plan.root()).clone().project(vec![c("k")]);
+    let r = analyze(over, false).unwrap();
+    assert_eq!(r.output.len(), 1);
+}
