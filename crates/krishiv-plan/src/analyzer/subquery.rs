@@ -1388,6 +1388,41 @@ impl Rewriter {
                 };
                 Ok((node(agg, plan.origin), corr))
             }
+            // A window never adds or drops rows: EXISTS reads through it.
+            // For its values, the window runs per correlation value too
+            // (Spark's `DecorrelateInnerQuery` adds the correlated inner
+            // columns to its partitioning), which only equalities on a bare
+            // inner column allow.
+            PlanNode::Window {
+                input,
+                exprs,
+                partition_by,
+                order_by,
+            } if !window_reads_outer(exprs, partition_by, order_by) => {
+                if !keep {
+                    return self.pull(input, false);
+                }
+                let (inner, corr) = self.pull(input, true)?;
+                let mut extra: Vec<BoundColumn> = Vec::new();
+                for c in &corr {
+                    if inner_columns(c).is_empty() {
+                        continue;
+                    }
+                    if !is_outer_equality(c) {
+                        return Err(unsupported(
+                            "outer references below a window that are not equalities",
+                            plan.origin,
+                        ));
+                    }
+                    for col in inner_columns(c) {
+                        if !extra.iter().any(|e| e.id == col.id) {
+                            extra.push(col);
+                        }
+                    }
+                }
+                let window = repartitioned(plan, inner, exprs, partition_by, order_by, &extra)?;
+                Ok((window, corr))
+            }
             PlanNode::Limit { .. } | PlanNode::Offset { .. } if bounded(plan).is_some() => {
                 let Some(b) = bounded(plan) else {
                     return Err(unsupported(
@@ -2222,6 +2257,17 @@ impl Rewriter {
                 };
                 self.limited_domain(plan, &b, distinct, domain)
             }
+            PlanNode::Window {
+                input,
+                exprs,
+                partition_by,
+                order_by,
+            } if !window_reads_outer(exprs, partition_by, order_by) => {
+                let (inner, renumber) = self.domained(input, distinct, domain)?;
+                let extra = domain_columns(domain, renumber);
+                let window = repartitioned(plan, inner, exprs, partition_by, order_by, &extra)?;
+                Ok((window, renumber))
+            }
             PlanNode::ReplicateRows { input, count } => {
                 let (inner, renumber) = self.domained(input, distinct, domain)?;
                 let replicate = PlanNode::ReplicateRows {
@@ -2567,12 +2613,14 @@ fn set_op_or_join(p: &LogicalPlan) -> bool {
     )
 }
 
-/// [`set_op_or_join`], or a select list that reads the outer query: below a
+/// [`set_op_or_join`], a window over a correlation that is not an equality
+/// (partitioned by the domain), or a select list that reads the outer query: below a
 /// domain it reads the domain's columns, and `pull` cannot lift it.
 pub(super) fn needs_domain(p: &LogicalPlan) -> bool {
     set_op_or_join(p)
         || matches!(&p.node, PlanNode::Project { exprs, .. }
             if exprs.iter().any(|e| has_outer(Node::Expr(e))))
+        || matches!(&p.node, PlanNode::Window { input, .. } if non_equality_correlation(input))
 }
 
 /// What sends an `EXISTS` through the domain: [`needs_domain`], or a
@@ -2604,6 +2652,80 @@ fn outer_host(p: &Arc<LogicalPlan>) -> Option<Arc<LogicalPlan>> {
     None
 }
 
+/// Whether a window's own expressions read the outer query (Spark refuses
+/// it: "Correlated column is not allowed in window function").
+fn window_reads_outer(
+    exprs: &[Arc<Expr>],
+    partition_by: &[Arc<Expr>],
+    order_by: &[SortOrder],
+) -> bool {
+    exprs.iter().any(|e| has_outer(Node::Expr(e)))
+        || partition_by.iter().any(|e| has_outer(Node::Expr(e)))
+        || order_by.iter().any(|o| has_outer(Node::Expr(&o.expr)))
+}
+
+/// The window `plan` over `input`, partitioned by `extra` too (the
+/// correlation's inner columns, or the domain's), in the node and in each
+/// window expression's spec, which must agree.
+fn repartitioned(
+    plan: &Arc<LogicalPlan>,
+    input: Arc<LogicalPlan>,
+    exprs: &[Arc<Expr>],
+    partition_by: &[Arc<Expr>],
+    order_by: &[SortOrder],
+    extra: &[BoundColumn],
+) -> R<Arc<LogicalPlan>> {
+    let added: Vec<Arc<Expr>> = extra
+        .iter()
+        .filter(|c| {
+            !partition_by.iter().any(
+                |k| matches!(&k.node, ExprNode::Resolved(ResolvedExpr::Column(o)) if o.id == c.id),
+            )
+        })
+        .map(|c| col_expr(c, Origin::UNKNOWN))
+        .collect();
+    let mut keys = partition_by.to_vec();
+    keys.extend(added.iter().cloned());
+    let mut items = Vec::with_capacity(exprs.len());
+    for e in exprs {
+        let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &e.node else {
+            return Err(unsupported("a correlated window of this form", plan.origin));
+        };
+        let ExprNode::Window(WindowExpr {
+            function,
+            window: WindowSpecRef::Spec(spec),
+        }) = &expr.node
+        else {
+            return Err(unsupported("a correlated window of this form", plan.origin));
+        };
+        let mut spec = spec.clone();
+        spec.partition_by.extend(added.iter().cloned());
+        let window = Arc::new(
+            Expr::new(ExprNode::Window(WindowExpr {
+                function: Arc::clone(function),
+                window: WindowSpecRef::Spec(spec),
+            }))
+            .with_origin(expr.origin),
+        );
+        items.push(Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                expr: window,
+                output: output.clone(),
+            }))
+            .with_origin(e.origin),
+        ));
+    }
+    Ok(node(
+        PlanNode::Window {
+            input,
+            exprs: items,
+            partition_by: keys,
+            order_by: order_by.to_vec(),
+        },
+        plan.origin,
+    ))
+}
+
 /// [`needs_domain`], a limit (ranked within each domain value), a global
 /// aggregate (one row for every outer row, matches or not) or a grouped
 /// aggregate over a correlation that is not an equality (`pull` would group
@@ -2629,6 +2751,7 @@ pub(super) fn non_equality_correlation(p: &LogicalPlan) -> bool {
         }
         PlanNode::Project { input, .. }
         | PlanNode::Generate { input, .. }
+        | PlanNode::Window { input, .. }
         | PlanNode::Sort { input, .. } => non_equality_correlation(input),
         PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
             non_equality_correlation(input)
@@ -2706,6 +2829,7 @@ fn on_path_through(p: &Arc<LogicalPlan>, hit: fn(&LogicalPlan) -> bool, global: 
         PlanNode::Project { input, .. }
         | PlanNode::Filter { input, .. }
         | PlanNode::Generate { input, .. }
+        | PlanNode::Window { input, .. }
         | PlanNode::Sort { input, .. } => on_path_through(input, hit, global),
         PlanNode::Limit { input, .. } | PlanNode::Offset { input, .. } if global => {
             on_path_through(input, hit, global)

@@ -242,3 +242,42 @@ fn decorrelation_switches_and_spark_3_5_refuse_a_correlation_below() -> R {
     }
     Ok(())
 }
+
+/// A window on the correlation path runs per outer value (Spark's
+/// `DecorrelateInnerQuery` adds the correlated inner columns, or the
+/// domain's, to its partitioning): a running sum restarts for each `y1`.
+#[test]
+fn a_window_below_a_correlation_is_partitioned_per_outer_value() -> R {
+    let s = session()?;
+    check(
+        &s,
+        &[
+            (
+                "select x1, (select max(s) from (select sum(y2) over (order by y2) s from y where y1 = x1) t) from x",
+                &["1|6", "2|9", "3|6"],
+            ),
+            (
+                "select x1 from x where x2 in (select rank() over (order by y2) from y where y1 = x1)",
+                &["1", "2"],
+            ),
+            (
+                "select x1 from x where exists (select rank() over (order by y2) from y where y1 = x1 + 1)",
+                &["1", "2"],
+            ),
+            // Not an equality on a bare column: through the domain.
+            (
+                "select x1, (select max(s) from (select count(*) over (order by y2) s from y where y1 < x1) t) from x",
+                &["1|NULL", "2|3", "3|5"],
+            ),
+            (
+                "select x1, (select max(s) from (select sum(y2) over (order by y2) s from y where y1 + 0 = x1) t) from x",
+                &["1|6", "2|9", "3|6"],
+            ),
+            // Ranked, then limited per outer value.
+            (
+                "select x1, (select s from (select sum(y2) over (order by y2) s from y where y1 = x1) t order by s desc limit 1) from x",
+                &["1|6", "2|9", "3|6"],
+            ),
+        ],
+    )
+}
