@@ -151,15 +151,18 @@ impl VariableSnapshot {
 impl VariableSnapshot {
     /// A struct variable a prefix of `parts` names, with the prefix's length:
     /// `v.f`, `session.v.f` and `label.v.f` read the field `f` of the
-    /// variable (the longest prefix wins). Only nested struct values have
-    /// fields, so any other variable is never a prefix.
+    /// variable (the longest prefix wins). Only struct variables have
+    /// fields: a nested value, or a NULL one, whose declared type still
+    /// names them (Spark: `SET VARIABLE st = NULL; SELECT st.a` is NULL).
     #[must_use]
     pub fn get_struct_prefix(&self, parts: &[String]) -> Option<(&SessionVariable, usize)> {
         (1..parts.len()).rev().find_map(|k| {
             self.get(&parts[..k])
                 .filter(|v| {
-                    matches!(v.value, VariableValue::Nested(_))
-                        && matches!(v.data_type, DataType::Struct(_))
+                    matches!(
+                        v.value,
+                        VariableValue::Nested(_) | VariableValue::Scalar(Literal::Null(_))
+                    ) && matches!(v.data_type, DataType::Struct(_))
                 })
                 .map(|v| (v, k))
         })

@@ -76,6 +76,28 @@ fn session_variables_hold_nested_values() {
 }
 
 #[test]
+fn a_null_struct_variable_still_has_its_fields() {
+    // Spark 4.2.0: the declared type names the fields, so they read NULL.
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        "DECLARE VARIABLE st STRUCT<a: INT> DEFAULT named_struct('a', 1)",
+    );
+    run(&s, "SET VARIABLE st = NULL");
+    assert_eq!(text(&s, "st.a"), "NULL");
+    assert_eq!(text(&s, "st"), "NULL");
+    run(
+        &s,
+        "DECLARE VARIABLE st2 STRUCT<a: INT, b: STRUCT<c: STRING>> DEFAULT NULL",
+    );
+    assert_eq!(text(&s, "st2.b.c"), "NULL");
+    let err = block_on(async { s.sql("SELECT st.z").await?.collect().await })
+        .err()
+        .map(|e| e.error_class().name().to_owned());
+    assert_eq!(err.as_deref(), Some("FIELD_NOT_FOUND"));
+}
+
+#[test]
 fn script_variables_hold_nested_values() {
     let s = Session::new().unwrap();
     let out = run(

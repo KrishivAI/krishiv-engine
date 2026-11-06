@@ -472,6 +472,16 @@ impl Resolver<'_> {
                     .get_struct_prefix(&c.name)
                     .and_then(|(var, used)| match &var.value {
                         VariableValue::Nested(e) => Some((var, Arc::clone(e), used)),
+                        // A NULL struct: its fields are NULLs of the declared type.
+                        VariableValue::Scalar(Literal::Null(_)) => {
+                            let null = Arc::new(Expr::new(ExprNode::Literal(Literal::Null(None))));
+                            let typed = Arc::new(Expr::new(ExprNode::Cast {
+                                expr: null,
+                                to: var.data_type.clone(),
+                                mode: crate::CastMode::Default,
+                            }));
+                            Some((var, typed, used))
+                        }
                         VariableValue::Scalar(_) => None,
                     })
             }
