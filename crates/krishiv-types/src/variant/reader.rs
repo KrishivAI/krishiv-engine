@@ -17,7 +17,7 @@
 //!           count:u8/u32 offs:(n+1)*u{off} data
 //! ```
 //!
-//! Object field ids are ordered by key bytes (not numerically); the offset
+//! Object field ids are ordered by key (Java `String` order) (not numerically); the offset
 //! table is parallel to the id table, so `offsets[i]` is the start of field
 //! `i` and `offsets[n]` the total data length. Array offsets are monotonic
 //! and delimit each element. Every accessor re-validates the bounds it
@@ -488,11 +488,12 @@ fn validate_exact(
             if id >= meta.dict_size {
                 return Err(malformed());
             }
-            // Field ids must be ordered by key bytes with unique keys; value
-            // offsets stay unconstrained (Spark emits values in input order).
+            // Field ids must be ordered by key (Java `String` order, as Spark
+            // sorts them) with unique keys; value offsets stay unconstrained
+            // (Spark emits values in input order).
             let key = meta.key(id)?;
             if let Some(prev) = previous
-                && prev >= key
+                && super::key_order(prev, key) != core::cmp::Ordering::Less
             {
                 return Err(malformed());
             }
@@ -507,7 +508,7 @@ fn validate_exact(
 /// `new` checks the metadata (version 1, offset widths 1-4, monotonic
 /// dictionary offsets ending exactly at the key bytes, sorted-flagged
 /// dictionaries strictly increasing) and the root value's framing (every id
-/// in dictionary range and ordered by key bytes with unique keys, every
+/// in dictionary range and ordered by key (Java `String` order) with unique keys, every
 /// offset inside the declared total, decimals within their width bounds,
 /// exact consumption). Nested values are only validated when
 /// accessed. All bounds use checked arithmetic and fallible slicing, so
@@ -717,7 +718,7 @@ impl<'a> VariantRef<'a> {
     }
 
     /// The field stored under `key`, via binary search over the field ids
-    /// (which are ordered by key bytes).
+    /// (ordered by key, Java `String` order).
     ///
     /// # Errors
     ///
@@ -739,7 +740,7 @@ impl<'a> VariantRef<'a> {
                 return Err(malformed());
             }
             let stored = self.meta.key(id)?;
-            match stored.cmp(key.as_bytes()) {
+            match super::key_order(stored, key.as_bytes()) {
                 core::cmp::Ordering::Less => lo = mid + 1,
                 core::cmp::Ordering::Greater => hi = mid,
                 core::cmp::Ordering::Equal => {

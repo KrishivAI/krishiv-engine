@@ -33,7 +33,7 @@ pub(crate) mod make;
 pub(crate) mod unit;
 pub(crate) mod zone;
 
-pub use crate::cast::{FixedOffset, TimeZoneRules};
+pub use crate::cast::{Clocked, FixedOffset, TimeZoneRules};
 pub use calendar::{
     TruncUnit, Zones, convert_timezone, day_name, from_utc_timestamp, last_day, make_date,
     month_name, months_between, next_day, to_utc_timestamp, trunc_date, trunc_timestamp, unix_date,

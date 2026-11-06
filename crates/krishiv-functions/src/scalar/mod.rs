@@ -56,6 +56,7 @@ mod string;
 mod r#struct;
 mod udf;
 mod url;
+mod variant;
 mod vector;
 mod xml;
 
@@ -477,7 +478,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 33] = [
+const FAMILIES: [(&[&str], Binder); 34] = [
     (array::NAMES, array::bind),
     (collection::NAMES, collection::bind),
     (string::NAMES, string::bind),
@@ -502,6 +503,7 @@ const FAMILIES: [(&[&str], Binder); 33] = [
     (r#struct::NAMES, r#struct::bind),
     (url::NAMES, url::bind),
     (geo::NAMES, geo::bind),
+    (variant::NAMES, variant::bind),
     (csv::NAMES, csv::bind),
     (format::NAMES, format::bind),
     (xml::NAMES, xml::bind),
