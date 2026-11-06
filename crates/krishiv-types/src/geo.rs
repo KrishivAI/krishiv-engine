@@ -349,14 +349,15 @@ impl Writer {
     }
 }
 
+mod wkt;
+
 #[cfg(test)]
 mod tests;
 
 /// The text Spark prints a spatial value as (extended well-known text):
-/// `POINT(1 2)`, with `SRID=<n>;` in front unless the SRID is 0.
-///
-/// Only a two-dimensional point is printed so far; any other geometry is
-/// `KRISHIV_UNSUPPORTED_FEATURE`.
+/// `POINT(1 2)`, with `SRID=<n>;` in front unless the SRID is 0. Every
+/// geometry type prints, with `Z`/`M`/`ZM` ordinates, empty geometries and
+/// nested collections; see [`wkt`] for the rules (from a real Spark 4.2.0 run).
 ///
 /// ```
 /// use krishiv_types::geo::{rewrite, to_ewkt, ByteOrder, SpatialKind};
@@ -368,38 +369,9 @@ mod tests;
 /// ```
 ///
 /// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` for anything but a two-dimensional point.
+/// `WKB_PARSE_ERROR` for a value that is not well-formed ISO WKB.
 pub fn to_ewkt(srid: i32, wkb: &[u8]) -> Result<String> {
-    let coord = |at: usize| -> Option<f64> {
-        let bytes: [u8; 8] = wkb.get(at..at + 8)?.try_into().ok()?;
-        Some(match wkb.first()? {
-            0 => f64::from_be_bytes(bytes),
-            _ => f64::from_le_bytes(bytes),
-        })
-    };
-    let code = wkb
-        .get(1..HEADER)
-        .and_then(|b| <[u8; 4]>::try_from(b).ok())
-        .map(|b| match wkb.first() {
-            Some(0) => u32::from_be_bytes(b),
-            _ => u32::from_le_bytes(b),
-        });
-    let (Some(POINT), Some(x), Some(y), true) = (
-        code,
-        coord(HEADER),
-        coord(HEADER + 8),
-        wkb.len() == HEADER + 16,
-    ) else {
-        return Err(error::unsupported(
-            "printing a geometry that is not a two-dimensional point".to_owned(),
-        ));
-    };
-    let prefix = if srid == 0 {
-        String::new()
-    } else {
-        format!("SRID={srid};")
-    };
-    Ok(format!("{prefix}POINT({x} {y})"))
+    wkt::to_ewkt(srid, wkb)
 }
 
 /// Whether `t` is, or holds anywhere inside it, a geometry or geography.
