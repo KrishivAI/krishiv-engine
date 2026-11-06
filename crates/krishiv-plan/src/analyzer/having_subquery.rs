@@ -15,7 +15,10 @@ use super::ops::{Grouped, col_expr, no_qual};
 use super::resolve::{Attr, Env, Resolver};
 use crate::walk::{Node, visit_distinct};
 use crate::{AttrId, Expr, ExprNode, FunctionKind, LogicalPlan, Origin, PlanNode, ResolvedExpr};
-use krishiv_common::error::MissingAttributesResolvedAttributeMissingFromInput;
+use krishiv_common::error::{
+    MissingAttributesResolvedAttributeMissingFromInput,
+    UnsupportedSubqueryExpressionCategoryAggregateFunctionMixedOuterLocalReferences,
+};
 
 type R<T> = Result<T, AnalysisError>;
 
@@ -97,6 +100,17 @@ impl Resolver<'_> {
         let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node else {
             return Err(unsupported("an aggregate call", x.origin));
         };
+        // A call over a column of this query and an outer reference is
+        // Spark's `AGGREGATE_FUNCTION_MIXED_OUTER_LOCAL_REFERENCES`, here in
+        // the `HAVING` or `ORDER BY` of a subquery's own aggregate.
+        if let Some(m) = mixed_aggregate(x) {
+            return Err(AnalysisError::new(
+                UnsupportedSubqueryExpressionCategoryAggregateFunctionMixedOuterLocalReferences {
+                    function: mixed_sql(&m, &st.info.input.out, st.env),
+                },
+                x.origin,
+            ));
+        }
         let a = match st.known.iter().find(|(kk, _)| *kk == key) {
             Some((_, a)) => a.clone(),
             None if st.info.distinct_rewritten

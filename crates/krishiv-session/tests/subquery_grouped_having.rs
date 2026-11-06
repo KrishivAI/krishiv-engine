@@ -170,3 +170,38 @@ fn the_other_having_shapes_stay_refused() -> R {
     }
     Ok(())
 }
+
+/// An aggregate call that reads a column of its own query and an outer column,
+/// in the `HAVING` of the subquery's own aggregate, is Spark's
+/// `AGGREGATE_FUNCTION_MIXED_OUTER_LOCAL_REFERENCES` (invalid-correlation.sql
+/// #5 and #6 hold Spark 4.2.0's class and the printed call).
+#[test]
+fn a_mixed_aggregate_in_a_subquerys_own_having_is_the_mixed_reference_error() -> R {
+    let s = session()?;
+    run(
+        &s,
+        "create or replace temporary view t3(k, z) as values (1, 1), (2, 2)",
+    )?;
+    for (q, call) in [
+        (
+            "select k from t group by 1 having exists \
+             (select y from u group by 1 having y < min(a + y))",
+            "min((outer(t.a) + u.y))",
+        ),
+        (
+            "select k from t where k in (select k from u where exists \
+             (select 1 from t3 group by 1 having min(d + z) > 1))",
+            "min((outer(u.d) + t3.z))",
+        ),
+    ] {
+        let e = run(&s, q).expect_err(q).to_string();
+        assert!(
+            e.contains(
+                "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.AGGREGATE_FUNCTION_MIXED_OUTER_LOCAL_REFERENCES"
+            ),
+            "{q}: {e}"
+        );
+        assert!(e.contains(call), "{q}: {e}");
+    }
+    Ok(())
+}
