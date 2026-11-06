@@ -210,7 +210,10 @@ impl fmt::Debug for UdfLibrary {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{ArgField, InvokeContext, ReturnField, Signature, UdfArg, UdfError};
+    use super::super::{
+        ArgField, GroupsAccumulator, InvokeContext, ReturnField, Signature, StateField, UdfArg,
+        UdfError,
+    };
     use super::*;
 
     use arrow_array::ArrayRef;
@@ -499,9 +502,9 @@ mod tests {
 
     /// An aggregate with nothing to compute: enough to register and list.
     #[derive(Debug)]
-    struct Sum;
+    struct StubAggregate;
 
-    impl AggregateUdf for Sum {
+    impl AggregateUdf for StubAggregate {
         fn name(&self) -> &str {
             "sum_stub"
         }
@@ -523,7 +526,7 @@ mod tests {
             })
         }
 
-        fn state_fields(&self, _: &[ArgField]) -> Result<Vec<super::super::StateField>, UdfError> {
+        fn state_fields(&self, _: &[ArgField]) -> Result<Vec<StateField>, UdfError> {
             Ok(Vec::new())
         }
 
@@ -531,7 +534,7 @@ mod tests {
             &self,
             _: &[ArgField],
             _: &InvokeContext,
-        ) -> Result<Box<dyn super::super::GroupsAccumulator>, UdfError> {
+        ) -> Result<Box<dyn GroupsAccumulator>, UdfError> {
             Err(UdfError::new("test only"))
         }
     }
@@ -540,7 +543,7 @@ mod tests {
     fn aggregates_register_resolve_by_version_and_show_in_debug() {
         let lib = UdfLibrary::new();
         assert!(lib.is_empty());
-        lib.register_aggregate(Arc::new(Sum)).unwrap();
+        lib.register_aggregate(Arc::new(StubAggregate)).unwrap();
         assert!(!lib.is_empty());
         assert!(lib.get_aggregate("sum_stub").is_some());
         assert!(lib.get_aggregate_versioned("sum_stub", 3).is_some());
@@ -549,7 +552,7 @@ mod tests {
         let shown = format!("{lib:?}");
         assert!(shown.contains("aggregates: [\"sum_stub@3\"]"), "{shown}");
         // The stub's remaining methods answer.
-        let udaf = Sum;
+        let udaf = StubAggregate;
         assert_eq!(udaf.signature(), &Signature::Exact(Vec::new()));
         assert!(udaf.return_field(&[]).is_ok());
         assert!(udaf.state_fields(&[]).is_ok_and(|f| f.is_empty()));

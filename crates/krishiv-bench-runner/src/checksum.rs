@@ -484,6 +484,8 @@ mod tests {
         assert_eq!(json_float(f64::INFINITY), "Infinity");
         assert_eq!(json_float(f64::NEG_INFINITY), "-Infinity");
         assert_eq!(json_float(1.5), "1.5");
+        assert_eq!(json_float(1.0), "1.0");
+        assert_eq!(json_float(-0.0), "-0.0");
     }
 
     #[test]
