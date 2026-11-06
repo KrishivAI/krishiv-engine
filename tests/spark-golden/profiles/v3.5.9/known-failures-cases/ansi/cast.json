@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "sql-commands": [
+      37,
+      38
+    ],
+    "v35-ansi-default": [
+      62,
+      99
+    ]
+  },
+  "file": "ansi/cast",
+  "format_version": 1
+}

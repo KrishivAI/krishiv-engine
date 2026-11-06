@@ -1,0 +1,36 @@
+{
+  "cases": {
+    "depends-on-command": [
+      103,
+      177,
+      235
+    ],
+    "parser-tail": [
+      1
+    ],
+    "sql-commands": [
+      48,
+      61,
+      63,
+      70,
+      71,
+      73,
+      75,
+      76,
+      104,
+      105,
+      106,
+      157,
+      161,
+      162,
+      175,
+      178,
+      186,
+      189,
+      208,
+      209
+    ]
+  },
+  "file": "identifier-clause-legacy",
+  "format_version": 1
+}

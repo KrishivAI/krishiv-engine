@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "other-version": [
+      7,
+      8,
+      72,
+      121
+    ]
+  },
+  "file": "interval",
+  "format_version": 1
+}

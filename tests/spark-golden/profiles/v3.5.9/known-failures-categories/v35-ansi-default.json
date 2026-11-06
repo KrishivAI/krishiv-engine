@@ -1,0 +1,13 @@
+{
+  "category": "v35-ansi-default",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "error (CAST_INVALID_INPUT|DATATYPE_MISMATCH\\.(BINARY_OP_DIFF_TYPES|BINARY_OP_WRONG_TYPE|CAST_WITH_CONF_SUGGESTION)|NUMERIC_VALUE_OUT_OF_RANGE|CANNOT_PARSE_TIMESTAMP|INVALID_INTERVAL_FORMAT)",
+      "order": 9500
+    }
+  ],
+  "summary": "Spark 3.5 runs with spark.sql.ansi.enabled=false by default; Krishiv runs the 4.2 default (ANSI on) on every set, so lenient casts, coercions and parses raise instead",
+  "task": "P3-T090"
+}

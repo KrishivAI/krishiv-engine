@@ -1,0 +1,13 @@
+{
+  "category": "other-version",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": ".*",
+      "order": 9990
+    }
+  ],
+  "summary": "failures on this older Spark version that are not sorted yet (the engine runs its 4.2 behaviour on every set)",
+  "task": "P3-T090"
+}

@@ -65,3 +65,21 @@ fn matches_the_baseline(tag: &str) -> R {
 fn spark_4_3_0_matches_its_baseline() -> R {
     matches_the_baseline("v4.3.0")
 }
+
+#[test]
+#[ignore = "needs the fetched v4.1.4 goldens: the nightly golden-profiles job runs it with --ignored"]
+fn spark_4_1_4_matches_its_baseline() -> R {
+    matches_the_baseline("v4.1.4")
+}
+
+#[test]
+#[ignore = "needs the fetched v4.0.5 goldens: the nightly golden-profiles job runs it with --ignored"]
+fn spark_4_0_5_matches_its_baseline() -> R {
+    matches_the_baseline("v4.0.5")
+}
+
+#[test]
+#[ignore = "needs the fetched v3.5.9 goldens: the nightly golden-profiles job runs it with --ignored"]
+fn spark_3_5_9_matches_its_baseline() -> R {
+    matches_the_baseline("v3.5.9")
+}

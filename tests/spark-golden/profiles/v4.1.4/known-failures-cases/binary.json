@@ -1,0 +1,15 @@
+{
+  "cases": {
+    "fn-string": [
+      3
+    ],
+    "other-version": [
+      4,
+      5,
+      6,
+      7
+    ]
+  },
+  "file": "binary",
+  "format_version": 1
+}
