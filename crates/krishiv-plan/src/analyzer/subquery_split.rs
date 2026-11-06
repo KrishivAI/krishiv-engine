@@ -558,6 +558,27 @@ pub(super) fn group_joined(
     keys
 }
 
+/// The columns of the enclosing query a subquery expression `x` reads: the
+/// outer references in its plan and, for an `IN`, its values' columns.
+fn subquery_reads(x: &Expr) -> Vec<crate::AttrId> {
+    let mut reads: Vec<crate::AttrId> = Vec::new();
+    let ExprNode::Subquery { kind, plan } = &x.node else {
+        return reads;
+    };
+    let _ = crate::walk::visit_distinct(Node::Plan(plan), |n| {
+        if let Node::Expr(e) = n
+            && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+        {
+            reads.push(c.id);
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    if let SubqueryKind::In(values) = kind {
+        reads.extend(values.iter().flat_map(inner_columns).map(|c| c.id));
+    }
+    reads
+}
+
 /// Spark's `MISSING_AGGREGATION` check for a subquery in an aggregate's
 /// output, outside a call and a grouping key: it may read only grouping
 /// columns of the aggregate's input (`exists(.. where b.k = a.v) .. group by
@@ -570,22 +591,23 @@ pub(super) fn check_grouped_reads(
 ) -> R<()> {
     // The grouped columns: a key that is the column itself (Spark matches
     // an outer reference to the grouping expressions with `semanticEquals`,
-    // so `GROUP BY k % 2` does not group `k`), and the outer columns a
-    // subquery in a key reads (a key and an output may hold separately
-    // resolved copies of one subquery, `GROUP BY cast(exists(..) as int)`).
+    // so `GROUP BY k % 2` does not group `k`), and the columns a subquery in
+    // a key reads (a key and an output may hold separately resolved copies
+    // of one subquery, `GROUP BY cast(t1a in (..) as int) + 1`, which Spark
+    // matches as a whole).
     let mut key_reads: Vec<crate::AttrId> = Vec::new();
     for k in keys {
         if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &k.node {
             key_reads.push(c.id);
         }
-        let _ = crate::walk::visit_distinct(Node::Expr(k), |n| {
-            if let Node::Expr(e) = n
-                && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
-            {
-                key_reads.push(c.id);
+        let mut stack = vec![Arc::clone(k)];
+        while let Some(x) = stack.pop() {
+            if matches!(x.node, ExprNode::Subquery { .. }) {
+                key_reads.extend(subquery_reads(&x));
+                continue;
             }
-            std::ops::ControlFlow::Continue(())
-        });
+            x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
     }
     let grouped = |id: crate::AttrId| key_reads.contains(&id);
     let from_input = |id: crate::AttrId| input.iter().any(|c| c.id == id);
@@ -594,19 +616,8 @@ pub(super) fn check_grouped_reads(
         if is_call(&x) || keys.iter().any(|k| **k == *x) {
             continue;
         }
-        if let ExprNode::Subquery { kind, plan } = &x.node {
-            let mut reads: Vec<crate::AttrId> = Vec::new();
-            let _ = crate::walk::visit_distinct(Node::Plan(plan), |n| {
-                if let Node::Expr(e) = n
-                    && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
-                {
-                    reads.push(c.id);
-                }
-                std::ops::ControlFlow::Continue(())
-            });
-            if let SubqueryKind::In(values) = kind {
-                reads.extend(values.iter().flat_map(inner_columns).map(|c| c.id));
-            }
+        if matches!(x.node, ExprNode::Subquery { .. }) {
+            let reads = subquery_reads(&x);
             if reads.iter().any(|id| from_input(*id) && !grouped(*id)) {
                 return Err(super::unsupported(
                     "a subquery in an aggregate's output that reads a column not grouped by",
