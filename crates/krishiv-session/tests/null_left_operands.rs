@@ -149,7 +149,7 @@ fn binary_math_functions_do_not_evaluate_the_right_side_on_null_left_rows() {
              from range(3) order by id"
         ));
         assert_eq!(
-            got.unwrap(),
+            got.unwrap_or_else(|e| panic!("{f}: {e}")),
             some(&[Some("true"), Some("false"), Some("false")]),
             "{f}"
         );
