@@ -193,6 +193,12 @@ struct Plan {
 }
 
 impl Plan {
+    /// Pending releases plus unsettled grants cover `shortfall`, and some
+    /// of it is grants (a wait for pending releases alone is the abort
+    /// phase's own).
+    fn covered_by_grants(&self, shortfall: usize) -> bool {
+        self.credit > 0 && self.pending.saturating_add(self.credit) >= shortfall
+    }
     fn excess(&self, group: Option<&Arc<Node>>) -> usize {
         group.map_or(0, |g| g.reserved().saturating_sub(self.fair_share))
     }
@@ -396,7 +402,7 @@ impl Round {
             // Other drivers' grants are about to be used or returned: wait
             // for their retries, re-planning on every change, rather than
             // fail or abort while a retry is about to free them.
-            if plan.credit > 0 && plan.pending.saturating_add(plan.credit) >= shortfall {
+            if plan.covered_by_grants(shortfall) {
                 match self.wait(slot, deadline, Vec::new(), Until::Change).await? {
                     Waited::Step(s) => return Ok(s),
                     Waited::Deadline => return Err(self.exhausted(&binding)),
@@ -506,9 +512,18 @@ impl Round {
         loop {
             let mut released = waiter.listen();
             let mut aborted = self.group().map(|g| g.abort_event.listen());
-            match self.step(slot)? {
-                Step::Short(..) => {}
+            let short = match self.step(slot)? {
+                Step::Short(b, need) => (b, need),
                 s => return Ok(Waited::Step(s)),
+            };
+            // The caller planned before this listener existed: a grant
+            // settled in between notified no one, so check it again now.
+            if until == Until::Change {
+                let (binding, need) = short;
+                let plan = self.plan(&binding, &self.consumers_within(&binding));
+                if !plan.covered_by_grants(binding.shortfall(need, self.class())) {
+                    return Ok(Waited::TicketsDone);
+                }
             }
             if until_tickets_done && tickets.is_empty() {
                 return Ok(Waited::TicketsDone);

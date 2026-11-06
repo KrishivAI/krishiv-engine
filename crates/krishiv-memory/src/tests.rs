@@ -1646,3 +1646,44 @@ async fn grants_of_drivers_waiting_for_memory_are_not_waited_for() {
         started.elapsed()
     );
 }
+
+/// A retry that uses its grant but for a sub-quantum remainder returns
+/// nothing to the pools, so that release wakes no one: settling the grant
+/// itself wakes a round waiting for it, which then fails at once.
+#[tokio::test(start_paused = true)]
+async fn settling_a_grant_with_a_sub_quantum_remainder_wakes_waiting_rounds() {
+    let root = root(Some(4 * Q), Q);
+    let q = root.child_pool("q", Some(4 * Q));
+    let (a, b) = (SpillOwner::new(), SpillOwner::new());
+    let ha = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "a",
+        Some(a.signal() as Arc<dyn Spillable>),
+    );
+    let hb = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "b",
+        Some(b.signal() as Arc<dyn Spillable>),
+    );
+    b.reserve_for(&hb, 3 * Q, || async {}).await.unwrap();
+    let started = tokio::time::Instant::now();
+    let want = tokio::spawn({
+        let ha = Arc::clone(&ha);
+        async move { a.reserve_for(&ha, 2 * Q, || async {}).await }
+    });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(!want.is_finished());
+    let mut r = hb.reservation();
+    // The consumer quantum is the limit / 64 (64 KiB): 16 KiB stays in it.
+    r.try_grow(3 * Q - (16 << 10)).unwrap();
+    hb.settle_grant();
+    assert_eq!(root.reserved(), 3 * Q, "the remainder stays in the quantum");
+    let e = want.await.unwrap().unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    drop(r);
+}

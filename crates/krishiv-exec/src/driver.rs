@@ -918,6 +918,9 @@ impl Driver {
         };
         let reserved = pause(run_ref, None, reserved).await;
         self.end_wait();
+        // On an error from here, or from the retry, the grant stays
+        // unsettled until the consumer unregisters with the failed task;
+        // rounds of the query's other drivers see the abort first.
         let granted = reserved?.0;
         run.query.check_cancelled()?;
         Ok(granted)

@@ -93,6 +93,7 @@ impl fmt::Debug for GrantCredit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("GrantCredit")
             .field("bytes", &self.bytes())
+            .field("unsettled", &self.unsettled())
             .finish_non_exhaustive()
     }
 }
@@ -196,14 +197,20 @@ impl ConsumerHandle {
         let unused = self.credit.bytes.swap(0, Ordering::AcqRel);
         if unused > 0 {
             self.pool.release(self.id, unused);
-        } else if unsettled > 0
+        }
+        // Always, not only through the release: a sub-quantum remainder
+        // returns nothing to the pools, and that release notifies no one.
+        if unsettled > 0
             && let Some(shared) = self.credit.shared.get().and_then(Weak::upgrade)
         {
             shared.release.released();
         }
     }
 
-    /// Returns unused grant credit to the pool.
+    /// Returns unused grant credit to the pool. An unsettled grant stays
+    /// unsettled: only the driver that asked for it settles it
+    /// ([`settle_grant`](Self::settle_grant)); operators managing their own
+    /// credit (flush steps) never hold one.
     pub fn release_credit(&self) {
         let unused = self.credit.bytes.swap(0, Ordering::AcqRel);
         if unused > 0 {
