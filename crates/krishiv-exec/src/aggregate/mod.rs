@@ -79,6 +79,8 @@ mod table;
 mod udf;
 
 #[cfg(test)]
+mod slice_tests;
+#[cfg(test)]
 mod tests;
 
 use std::sync::Arc;

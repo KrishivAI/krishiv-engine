@@ -5,7 +5,7 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
+use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_row::Rows;
 use arrow_schema::SchemaRef;
 use krishiv_types::batch::{Batch, Weights};
@@ -614,4 +614,12 @@ impl Table {
 
 fn mixed() -> krishiv_common::error::KrishivError {
     internal("a batch prepared for another table layout".to_owned())
+}
+
+/// Bytes a copy of `a`'s rows takes: its own range of its buffers (a slice
+/// does not count its parent's), plus allocation padding per buffer.
+pub(crate) fn own_bytes(a: &dyn Array) -> usize {
+    a.to_data()
+        .get_slice_memory_size()
+        .map_or_else(|_| a.get_array_memory_size(), |b| b + 4 * 64)
 }

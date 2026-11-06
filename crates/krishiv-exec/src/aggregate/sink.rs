@@ -55,6 +55,11 @@ const CHUNK: usize = 1024;
 /// Memory a spillable table keeps reserved for the scratch of spill I/O
 /// (a writer needs about twice the batch it encodes plus a 64 KiB buffer).
 const HEADROOM: usize = 128 << 10;
+/// Fewest rows of an input batch applied at once: a batch whose worst case
+/// (every row a new group) the pool refuses is applied in halves down to
+/// this size, so a driver's reservation is a slice's worst case, not a
+/// whole batch's.
+const MIN_SLICE_ROWS: usize = 256;
 
 /// `EXPLAIN ANALYZE` counters of one aggregate, also reported through
 /// [`Sink::extra_metrics`].
@@ -277,6 +282,35 @@ impl HashAggregate {
         } else {
             0
         }
+    }
+
+    /// Folds `input` (a batch or a slice of one) into the driver's table
+    /// after reserving its worst case; `Some(missing)` if the pool refuses
+    /// it (nothing applied).
+    fn apply_slice(&self, input: &Batch, l: &mut Local) -> Result<Option<usize>> {
+        let p = l.table.prepare(input, false)?;
+        // The spill headroom is idle while a batch is applied: the apply's
+        // transient bytes may use it.
+        let want = l.table.projected(&p)? + self.headroom().max(l.table.transient(&p));
+        if let Err(bytes) = reserve_to(&mut l.reservation, want) {
+            return Ok(Some(bytes));
+        }
+        l.table.apply(&p)?;
+        // A fold may outgrow its projection (an aggregate UDF reports its
+        // size only after it folds): charge the excess now where the pool
+        // allows; where it does not, the next batch's reservation fails and
+        // the table spills (one fold's growth at most is unreserved).
+        let _ = reserve_to(&mut l.reservation, l.table.memory_size());
+        // Widening is a cost choice: only with memory to spare.
+        let r = &mut l.reservation;
+        l.table.widen_if(true, |bytes| r.try_grow(bytes).is_ok())?;
+        shrink_to(&mut l.reservation, l.table.memory_size() + self.headroom());
+        if self.core.spec.spill.is_some() {
+            let combined = global(&l.global)?.combined.load(AtomicOrdering::Relaxed);
+            l.signal
+                .set_spillable_bytes(l.table.memory_size() + combined);
+        }
+        Ok(None)
     }
 
     fn spiller(&self, ctx: &TaskContext) -> Option<Spiller> {
@@ -519,6 +553,13 @@ struct Local {
     /// This driver's report as a map task of a fused aggregation's exchange:
     /// its tables spilled so far.
     exchange: Option<ExchangeStats>,
+    /// The input batch being applied in slices (see [`MIN_SLICE_ROWS`]):
+    /// its row count and the rows applied before a slice's memory was
+    /// refused. The driver retries the same batch after `NeedMemory`.
+    applied: Option<(usize, usize)>,
+    /// Rows applied at once since a whole batch's memory was refused
+    /// (doubled after each slice that fit, `None` again at a whole batch).
+    slice: Option<usize>,
 }
 
 /// A partition being merged from disk.
@@ -840,6 +881,14 @@ fn global(state: &GlobalState) -> Result<&Global> {
     state
         .downcast_ref::<Global>()
         .ok_or_else(|| internal("wrong global state for HashAggregate".to_owned()))
+}
+
+/// The rows of the batch in hand a driver's table applied before a
+/// slice's memory was refused (tests).
+#[cfg(test)]
+pub(super) fn resumes_at(l: &LocalState) -> Option<usize> {
+    l.downcast_ref::<Local>()
+        .and_then(|l| l.applied.map(|(_, at)| at))
 }
 
 /// Grows `r` to `want` bytes; `Err(missing)` if the pool refuses.
@@ -1345,6 +1394,8 @@ impl Sink for HashAggregate {
             global: Arc::clone(g),
             partition: ctx.partition(),
             exchange: self.exchange.as_ref().map(|_| ExchangeStats::new(PARTS)),
+            applied: None,
+            slice: None,
         }))
     }
 
@@ -1356,27 +1407,40 @@ impl Sink for HashAggregate {
                     .to_owned(),
             ));
         }
-        let p = l.table.prepare(&input, false)?;
-        // The spill headroom is idle while a batch is applied: the apply's
-        // transient bytes may use it.
-        let want = l.table.projected(&p)? + self.headroom().max(l.table.transient(&p));
-        if let Err(bytes) = reserve_to(&mut l.reservation, want) {
-            return Ok(SinkStatus::NeedMemory { bytes });
-        }
-        l.table.apply(&p)?;
-        // A fold may outgrow its projection (an aggregate UDF reports its
-        // size only after it folds): charge the excess now where the pool
-        // allows; where it does not, the next batch's reservation fails and
-        // the table spills (one fold's growth at most is unreserved).
-        let _ = reserve_to(&mut l.reservation, l.table.memory_size());
-        // Widening is a cost choice: only with memory to spare.
-        let r = &mut l.reservation;
-        l.table.widen_if(true, |bytes| r.try_grow(bytes).is_ok())?;
-        shrink_to(&mut l.reservation, l.table.memory_size() + self.headroom());
-        if self.core.spec.spill.is_some() {
-            let combined = global(&l.global)?.combined.load(AtomicOrdering::Relaxed);
-            l.signal
-                .set_spillable_bytes(l.table.memory_size() + combined);
+        let rows = input.num_rows();
+        let mut at = l
+            .applied
+            .take()
+            .filter(|&(n, _)| n == rows)
+            .map_or(0, |(_, at)| at);
+        while at < rows {
+            let mut len = l.slice.map_or(rows - at, |s| s.min(rows - at));
+            loop {
+                let part = if len == rows {
+                    input.clone()
+                } else {
+                    input.slice(at, len)?
+                };
+                match self.apply_slice(&part, l)? {
+                    None => break,
+                    // The worst case of fewer rows may fit: every row of
+                    // the batch counts as a new group, which few are once
+                    // the table holds the input's keys.
+                    Some(_) if len > MIN_SLICE_ROWS => {
+                        len = (len / 2).max(MIN_SLICE_ROWS);
+                        l.slice = Some(len);
+                    }
+                    Some(bytes) => {
+                        if at > 0 {
+                            l.applied = Some((rows, at));
+                        }
+                        return Ok(SinkStatus::NeedMemory { bytes });
+                    }
+                }
+            }
+            at += len;
+            // Back towards whole batches as memory allows.
+            l.slice = l.slice.map(|s| s.saturating_mul(2)).filter(|&s| s < rows);
         }
         Ok(SinkStatus::NeedMoreInput)
     }
