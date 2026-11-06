@@ -12,9 +12,10 @@ import os
 from typing import Any
 
 from .base import Dataset, Engine, Query, table_path
+from .proc_mem import SelfTreeMeasure
 
 
-class PolarsEngine(Engine):
+class PolarsEngine(SelfTreeMeasure, Engine):
     name = "polars"
 
     def __init__(self, threads: int | None = None, memory_limit: str | None = None, streaming: bool = False):

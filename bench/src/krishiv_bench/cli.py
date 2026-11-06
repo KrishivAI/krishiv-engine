@@ -111,6 +111,24 @@ def h2o_target(ap: argparse.ArgumentParser, a: argparse.Namespace) -> tuple[Path
     return root, str(root.relative_to(data_root())), h2o.SIZE_GB[a.size]
 
 
+def add_reference_cache_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--cold",
+        action="store_true",
+        help="drop the dataset from the page cache before every timed run (not comparable with warm results)",
+    )
+    p.add_argument(
+        "--refresh-reference",
+        action="store_true",
+        help="run DuckDB again and replace its cached answers and timings (refcache/ under $KRISHIV_DATA)",
+    )
+    p.add_argument(
+        "--no-reference-cache",
+        action="store_true",
+        help="neither read nor write the DuckDB reference cache",
+    )
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="krishiv-bench")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -140,6 +158,11 @@ def main(argv=None) -> None:
     r.add_argument("--duckdb-memory-limit", default="12GB")
     r.add_argument("--timeout", type=float, default=600, help="per-query timeout seconds (0 = none)")
     r.add_argument("--runner", help=RUNNER_HELP)
+    r.add_argument(
+        "--cold",
+        action="store_true",
+        help="evict the dataset from the page cache before every run (results are not comparable with warm runs)",
+    )
     _add_memcap_args(r)
     nc = sub.add_parser(
         "nested-check",
@@ -161,6 +184,7 @@ def main(argv=None) -> None:
     ab.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
     ab.add_argument("--reps", type=int, default=3, help="ABBA blocks per query (2 samples per engine each)")
     ab.add_argument("--queries", help="comma list, e.g. q01,q05")
+    add_reference_cache_args(ab)
     ab.add_argument("--threads", type=int, default=8, help="threads for both engines")
     ab.add_argument("--memory-limit", default="12g", help="memory limit for both engines")
     ab.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
@@ -225,6 +249,7 @@ def main(argv=None) -> None:
     rr.add_argument("--methods", default="ours,theirs", help="comma list of: ours, theirs")
     rr.add_argument("--reps", type=int, default=3, help="interleaved blocks per query (2 samples per engine each)")
     rr.add_argument("--queries", help="comma list, e.g. q01,q05")
+    add_reference_cache_args(rr)
     rr.add_argument("--threads", type=int, default=12)
     rr.add_argument("--memory-gb", type=int, default=32)
     rr.add_argument("--timeout", type=float, default=600, help="per-run timeout for the ours method (seconds)")
@@ -283,6 +308,12 @@ def main(argv=None) -> None:
     rp.add_argument("--dataset")
     rp.add_argument("--rows", default="10m", help="memcap: sales rows of the results to report")
     rp.add_argument("--baseline", default="duckdb")
+    rp.add_argument(
+        "--ladder",
+        action="store_true",
+        help="scale ladder: flag queries whose ratio to duckdb grows >1.5x between consecutive scale factors "
+        "(uses every result of --suite in the results dir, or the files given)",
+    )
     rp.add_argument("files", nargs="*", type=Path, help="explicit result JSONs (default: newest per engine)")
     mn = sub.add_parser(
         "minimize", help="shrink a query that differs from the reference engine to a minimal query and data slice"
@@ -413,6 +444,9 @@ def main(argv=None) -> None:
             a.profile,
             sequential=a.sequential,
             cap_gb=a.cgroup_gb,
+            reference_cache=not a.no_reference_cache,
+            refresh_reference=a.refresh_reference,
+            cold=a.cold,
         )
     elif a.cmd == "ledger":
         from .ledger import run_ledger
@@ -441,6 +475,9 @@ def main(argv=None) -> None:
             a.timeout,
             a.suite,
             a.runner,
+            reference_cache=not a.no_reference_cache,
+            refresh_reference=a.refresh_reference,
+            cold=a.cold,
         )
     elif a.cmd == "explain-diff":
         from .explain_diff import run_explain_diff
@@ -547,6 +584,7 @@ def main(argv=None) -> None:
                 a.queries.split(",") if a.queries else None,
                 kw,
                 a.timeout or None,
+                a.cold,
             )
             print(f"result: {f}")
             if failed:
@@ -562,6 +600,7 @@ def main(argv=None) -> None:
             kw,
             a.timeout or None,
             a.dataset,
+            a.cold,
         )
         print(f"result: {f}")
     elif a.suite == "micro":
@@ -570,6 +609,10 @@ def main(argv=None) -> None:
         from .memcap import write_memcap_report
 
         print(f"report: {write_memcap_report(a.rows)}")
+    elif a.ladder:
+        from .ladder import write_ladder
+
+        print(f"ladder: {write_ladder(a.suite, a.files or None, a.dataset)}")
     else:
         if h2o.is_h2o(a.suite):
             root, _, a.sf = h2o_target(ap, a)

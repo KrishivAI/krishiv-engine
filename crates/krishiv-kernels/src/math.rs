@@ -14,7 +14,8 @@
 //! per function, the results are bit-identical for `sqrt`, `cbrt`, `exp`,
 //! `expm1`, `log2`, `log1p`, `log10` (one input in 145 differs), `ln` (fdlibm's `log`, which Spark's `Log` calls through `StrictMath`), `asin`,
 //! `acos`, `atan`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`,
-//! `hypot` and `pow`; `sin`, `cos`, `tan` and `atan2` differ in the last
+//! `hypot`, `pow` and `atan2` (fdlibm's, checked on 1,756 inputs in
+//! `tests/atan2_goldens.rs`); `sin`, `cos` and `tan` differ in the last
 //! bit for about 1 to 2 inputs in 100 (the JVM's intrinsics are not fdlibm).
 //!
 //! # Domains
@@ -197,7 +198,7 @@ impl BinaryFn {
         Some(match self {
             Self::Pow => java_pow(l, r),
             // Spark calls `atan2(y + 0.0, x + 0.0)`: both -0.0 become +0.0.
-            Self::Atan2 => libm::atan2(l + 0.0, r + 0.0),
+            Self::Atan2 => fdlibm::atan2(l + 0.0, r + 0.0),
             Self::Hypot => fdlibm::hypot(l, r),
             Self::Log => {
                 if l <= 0.0 || r <= 0.0 {

@@ -592,6 +592,31 @@ fn options_parse_booleans_and_reject_bad_patterns() {
 }
 
 #[test]
+fn option_names_are_case_insensitive_like_spark() {
+    use std::collections::BTreeMap;
+    // Spark 4.2.0: `DATEFORMAT`, `dateformat` and `dateFormat` are one option.
+    for name in ["DATEFORMAT", "dateformat", "dateFormat"] {
+        let opts = JsonOptions::from_map(&BTreeMap::from([
+            (name.to_owned(), "dd/MM/yyyy".to_owned()),
+            ("PRIMITIVESASSTRING".to_owned(), "true".to_owned()),
+            ("Mode".to_owned(), "FAILFAST".to_owned()),
+        ]))
+        .unwrap();
+        assert!(opts.date_format.is_some(), "{name}");
+        assert!(opts.primitives_as_string, "{name}");
+    }
+    let off = JsonOptions::from_map_with(
+        &BTreeMap::from([(
+            "ENABLEDATETIMEPARSINGFALLBACK".to_owned(),
+            "false".to_owned(),
+        )]),
+        true,
+    )
+    .unwrap();
+    assert!(!off.datetime_fallback);
+}
+
+#[test]
 fn base64_round_trips_binary() {
     let target = DataType::BinaryView;
     let out = read(

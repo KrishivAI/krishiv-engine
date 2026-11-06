@@ -46,7 +46,9 @@ from .dialect import dialect_reason
 from .errors import describe_error, error_fields
 from .h2o import is_h2o
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
-from .runner import git_info, load_queries, machine_info
+from .refcache import RefCache
+from .resources import evict_page_cache
+from .runner import cold_record, git_info, load_queries, machine_info
 
 REFERENCE = "duckdb"
 DEFAULT_ENGINES = ["krishiv", "duckdb", "polars", "datafusion", "sail", "spark-local"]
@@ -95,8 +97,17 @@ def _status_of(e: Exception) -> str:
     return "timeout" if isinstance(e, EngineTimeout) else "error"
 
 
-# Polars' SQL front end does not run every query; these are its errors for a query it cannot plan or execute. Such a
-# query is reported "unsupported" with the error, never rewritten.
+# Polars' SQL front end does not run every query; these are its errors for a query it cannot plan. Such a query is
+# reported "unsupported" with the error, never rewritten.
+#
+# `ComputeError` and `InvalidOperationError` are deliberately not here. Probed on Polars 2.0.0 (all 22 TPC-H and
+# 99 TPC-DS queries at SF1 raised neither: 121 of 121 ran), they are raised at run time for SQL Polars does plan: a
+# failed cast (`CAST('x' AS INT)`), a narrowing cast out of range, a string compared with a number, arithmetic on a
+# string, a scalar subquery returning several rows, an invalid regex. Those are errors in the query or the data (or a
+# coercion Polars does not do), which the other engines report as errors too; calling them "unsupported" would hide a
+# failure to investigate. The planning errors that stay: recursive CTEs, LATERAL, unknown functions and tables and
+# window frames Polars lacks are `SQLInterfaceError`; a parse error is `SQLInterfaceError` as well; an unknown column is
+# `ColumnNotFoundError`.
 POLARS_UNSUPPORTED = frozenset(
     {
         "SQLInterfaceError",
@@ -104,8 +115,6 @@ POLARS_UNSUPPORTED = frozenset(
         "UnsuitableSQLError",
         "ColumnNotFoundError",
         "SchemaFieldNotFoundError",
-        "InvalidOperationError",
-        "ComputeError",
         "SchemaError",
     }
 )
@@ -136,14 +145,29 @@ def setup_engines(engines: MutableMapping[str, Any], ds: Dataset) -> dict[str, d
     return failed
 
 
-def correctness(qm: Mapping[str, Query], engines: Mapping[str, Engine]) -> tuple[dict[str, dict], int]:
+def correctness(
+    qm: Mapping[str, Query],
+    engines: Mapping[str, Engine],
+    cache: RefCache | None = None,
+    suite: str = "",
+    ds: Dataset | None = None,
+) -> tuple[dict[str, dict], int]:
     """One untimed run per engine (``qm``: the query as each engine runs it); verdict per engine against DuckDB
-    (and Krishiv). Returns (verdicts, row count)."""
+    (and Krishiv). Returns (verdicts, row count).
+
+    With a ``cache`` DuckDB's answer is read from it, not run, when the same query over the same data was answered
+    before by this version (its timed runs stay live: the engines are interleaved); a fresh answer is stored."""
     rows: dict[str, list] = {}
     verdict: dict[str, dict] = {}
+    akey = cache.answer_key(suite, ds, check_query(qm[REFERENCE])) if cache and ds is not None else None
     for name, eng in engines.items():
+        if cache and akey and name == REFERENCE and (hit := cache.load(akey)):
+            rows[name] = hit[1]
+            continue
         try:
             rows[name] = eng.run(check_query(qm[name]))
+            if cache and akey and name == REFERENCE:
+                cache.store(akey, rows[name])
         except (EngineError, EngineTimeout, EngineCrashed) as e:
             verdict[name] = _fail(_answer_status(name, e), e)
     ref = rows.get(REFERENCE)
@@ -229,8 +253,10 @@ def check_description(name: str, baseline: dict | None, q: Query | None = None) 
     return "row count and order-independent checksum of the timed run's own result"
 
 
-def _timed(eng: Engine, q: Query, nrows: int, baseline: dict | None) -> float:
+def _timed(eng: Engine, q: Query, nrows: int, baseline: dict | None, cold_root: Path | None = None) -> float:
     """One timed run whose full result (row count and checksum) must equal the verified one; returns the seconds."""
+    if cold_root is not None:
+        evict_page_cache(cold_root)
     n, secs = eng.timed_run(q)
     if n != nrows:
         raise EngineError(f"timed run returned {n} rows, expected {nrows}")
@@ -261,10 +287,18 @@ def _finish(entry, samples, peaks, cpus, qm, engines, profile) -> None:
 
 
 def ours_query(
-    qm: Mapping[str, Query], engines: Mapping[str, Engine], reps: int, timeout_s: float, profile: bool = False
+    qm: Mapping[str, Query],
+    engines: Mapping[str, Engine],
+    reps: int,
+    timeout_s: float,
+    profile: bool = False,
+    cache: RefCache | None = None,
+    suite: str = "",
+    ds: Dataset | None = None,
+    cold_root: Path | None = None,
 ) -> dict:
     load_before = loadavg()
-    verdict, nrows = correctness(qm, engines)
+    verdict, nrows = correctness(qm, engines, cache, suite, ds)
     entry: dict[str, Any] = {"rows": nrows, "engines": {n: dict(v) for n, v in verdict.items()}}
     live = [n for n in engines if verdict.get(n, {}).get("status") == "ok"]
     if REFERENCE not in live:
@@ -280,7 +314,7 @@ def ours_query(
             if name not in samples:
                 continue
             try:
-                secs = _timed(engines[name], qm[name], nrows, sums[name])
+                secs = _timed(engines[name], qm[name], nrows, sums[name], cold_root)
                 samples[name].append(secs)
                 _note_peak(peaks, name, engines[name])
                 if (cpu := engines[name].last_cpu_seconds) is not None:
@@ -303,11 +337,18 @@ def sequential_query(
     samples_n: int,
     timeout_s: float,
     profile: bool = False,
+    cache: RefCache | None = None,
+    suite: str = "",
+    cold_root: Path | None = None,
 ) -> tuple[dict, dict[str, dict]]:
     """One query, one engine alive at a time (DuckDB, then Krishiv, then the rest): a fresh worker per engine inside
     its own memory cgroup runs the verified answer, one untimed run through the timed path (its checksum is the
     baseline) and ``samples_n`` timed runs, each of which must give the same full result. Returns the entry and the
-    engines' ``info`` (version, config, build)."""
+    engines' ``info`` (version, config, build).
+
+    With a ``cache`` the reference engine's answer, samples, CPU and peak are read from it when the same query over the
+    same data was measured before with this version, threads, memory and sample count, and stored after a fresh run;
+    the other engines are always run and checked against the cached rows."""
     load_before = loadavg()
     order = [REFERENCE] + [n for n in ("krishiv",) if n in names and n != REFERENCE]
     order += [n for n in names if n not in order]
@@ -319,6 +360,21 @@ def sequential_query(
     cpus: dict[str, list[float]] = {}
     nrows = 0
     for name in order:
+        ckey = (
+            cache.timing_key(suite, ds, qm[name], threads, memory_gb, samples_n, cap_gb, cold_root is not None)
+            if cache and name == REFERENCE
+            else None
+        )
+        hit = cache.load(ckey) if cache and ckey else None
+        if hit:
+            meta, rows[name] = hit
+            infos[name] = meta["info"]
+            nrows = result_rows(qm[REFERENCE], rows[name])
+            verdicts[name] = {"status": "ok", "result_check": meta["result_check"], "cached_utc": meta["created_utc"]}
+            samples[name], cpus[name] = meta["samples_s"], meta["cpu_seconds"]
+            if meta.get("peak_rss_bytes") is not None:
+                peaks[name] = meta["peak_rss_bytes"]
+            continue
         # Polars' default engine runs first; if its worker is killed (out of memory), the engine is run again with
         # Polars' streaming engine ("polars-streaming") and the result says so.
         attempts = [name, "polars-streaming"] if name == "polars" else [name]
@@ -347,7 +403,7 @@ def sequential_query(
                 verdicts[name]["result_check"] = check_description(name, baseline, qm[name])
                 samples[name], cpus[name] = [], []
                 for _ in range(samples_n):
-                    samples[name].append(_timed(eng, qm[name], nrows, baseline))
+                    samples[name].append(_timed(eng, qm[name], nrows, baseline, cold_root))
                     _note_peak(peaks, name, eng)
                     if (cpu := eng.last_cpu_seconds) is not None:
                         cpus[name].append(cpu)
@@ -369,6 +425,18 @@ def sequential_query(
                 eng.teardown()
             if not (crashed and attempt + 1 < len(attempts)):
                 break
+        if cache and ckey and verdicts.get(name, {}).get("status") == "ok" and name in samples:
+            cache.store(
+                ckey,
+                rows[name],
+                {
+                    "info": infos[name],
+                    "result_check": verdicts[name]["result_check"],
+                    "samples_s": samples[name],
+                    "cpu_seconds": cpus[name],
+                    "peak_rss_bytes": peaks.get(name),
+                },
+            )
         if name not in (REFERENCE, "krishiv"):
             rows.pop(name, None)  # only DuckDB's and Krishiv's rows are compared against later engines
     entry: dict[str, Any] = {"rows": nrows, "engines": {n: dict(v) for n, v in verdicts.items()}}
@@ -435,6 +503,9 @@ def run_reproduce(
     record_extra: Mapping[str, Any] | None = None,
     sequential: bool = False,
     cap_gb: int | None = None,
+    reference_cache: bool = True,
+    refresh_reference: bool = False,
+    cold: bool = False,
 ) -> Path:
     names = engines or DEFAULT_ENGINES
     if REFERENCE not in names:
@@ -445,6 +516,12 @@ def run_reproduce(
     pub = PUBLISHED[suite]
     runs = runs or pub["runs"]
     their_timeout_s = their_timeout_s or pub["timeout_s"]
+    cold_root = ds.root if cold else None
+    cache = (
+        RefCache(refresh=refresh_reference, engine=REFERENCE, version=dist_version(REFERENCE))
+        if reference_cache
+        else None
+    )
     per_engine = {n: {q.id: q for q in suite_queries(suite, ds, n, only)} for n in names}
     queries = [{n: per_engine[n][qid] for n in names} for qid in per_engine[REFERENCE]]
     lock_path = data_root() / ".bench.lock"
@@ -475,7 +552,12 @@ def run_reproduce(
                 "worker_cgroup_gb": cap_gb,
             },
             "theirs": {"runs": runs, "timeout_s": their_timeout_s, "source": pub["source"]},
-            "cache_policy": "OS page cache shared and never dropped; correctness run precedes timing",
+            "cache_policy": (
+                "cold: the dataset is dropped from the OS page cache before every timed run of the ours method"
+                if cold
+                else "OS page cache shared and never dropped; correctness run precedes timing"
+            ),
+            "cold": cold_record(cold),
             "bench_lock_wait_s": waited,
             "load_at_start": loadavg(),
             "engines": {},
@@ -486,7 +568,9 @@ def run_reproduce(
             record["setup_failures"] = {}
             for qm in queries:
                 qid = qm[REFERENCE].id
-                ent, infos = sequential_query(qm, names, ds, threads, memory_gb, cap_gb, 2 * reps, timeout_s, profile)
+                ent, infos = sequential_query(
+                    qm, names, ds, threads, memory_gb, cap_gb, 2 * reps, timeout_s, profile, cache, suite, cold_root
+                )
                 for n, info in infos.items():
                     record["engines"].setdefault(n, info)
                 record["queries"][qid] = ent
@@ -500,7 +584,11 @@ def run_reproduce(
                     record["engines"][n] = {"version": e.version(), "config": e.config(), "build": e.build_info()}
                 for qm in queries:
                     qid = qm[REFERENCE].id
-                    ent = ours_query(qm, engs, reps, timeout_s, profile) if "ours" in methods else {}
+                    ent = (
+                        ours_query(qm, engs, reps, timeout_s, profile, cache, suite, ds, cold_root)
+                        if "ours" in methods
+                        else {}
+                    )
                     record["queries"][qid] = ent
                     print(_line(qid, ent), flush=True)
             finally:
@@ -510,6 +598,7 @@ def run_reproduce(
             names = [n for n in names if n not in record["setup_failures"]]
             _run_theirs(record, queries, ds, names, threads, memory_gb, runs, their_timeout_s, "ours" in methods)
     record["finished_utc"] = dt.datetime.now(dt.UTC).isoformat()
+    record["reference_cache"] = cache.summary() if cache is not None else {"enabled": False}
     record["summary"] = summarize(record)
     out = results_dir()
     out.mkdir(parents=True, exist_ok=True)

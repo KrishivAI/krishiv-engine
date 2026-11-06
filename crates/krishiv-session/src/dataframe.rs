@@ -2121,12 +2121,16 @@ impl DataFrameWriter {
     /// the output has not; `ALL_PARTITION_COLUMNS_NOT_ALLOWED` when every
     /// output column is a partition column.
     pub async fn save(self, path: &str) -> Result<(), KrishivError> {
-        self.save_reporting(path).await.map(drop)
+        self.save_reporting(path, None).await.map(drop)
     }
 
     /// [`Self::save`], returning the partition directories (`col=value/...`
     /// below `path`, escaped) that hold the committed files.
-    pub(crate) async fn save_reporting(self, path: &str) -> Result<Vec<String>, KrishivError> {
+    pub(crate) async fn save_reporting(
+        self,
+        path: &str,
+        admitted: Option<crate::query_fold::Admitted>,
+    ) -> Result<Vec<String>, KrishivError> {
         self.assert_not_bucketed("save")?;
         let target = WriteTarget {
             format: self.format,
@@ -2139,32 +2143,45 @@ impl DataFrameWriter {
         let session = df.session.clone();
         session
             .on_executor(async move {
-                let a = df.action_analysis().await?;
-                // Files hold a geometry or geography as a WKB column with a
-                // Parquet logical type (P2-T181 unit U3); until it lands, a
-                // spatial value is not written as the `{srid, wkb}` struct
-                // Spark cannot read.
-                if a.analyzed
-                    .output
-                    .iter()
-                    .any(|c| krishiv_types::geo::holds_spatial(&c.data_type))
-                {
-                    return Err(krishiv_common::error::KrishivUnsupportedFeature {
-                        feature: "writing GEOMETRY or GEOGRAPHY columns to files".to_owned(),
+                let mut admitted = admitted;
+                let written = async {
+                    let a = df.action_analysis().await?;
+                    // Files hold a geometry or geography as a WKB column with a
+                    // Parquet logical type (P2-T181 unit U3); until it lands, a
+                    // spatial value is not written as the `{srid, wkb}` struct
+                    // Spark cannot read.
+                    if a.analyzed
+                        .output
+                        .iter()
+                        .any(|c| krishiv_types::geo::holds_spatial(&c.data_type))
+                    {
+                        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                            feature: "writing GEOMETRY or GEOGRAPHY columns to files".to_owned(),
+                        }
+                        .into());
                     }
-                    .into());
+                    // A write reads the cache like any other action.
+                    let (physical, _) = df.physical_cached(&a).await?;
+                    let types: Vec<_> = a
+                        .analyzed
+                        .output
+                        .iter()
+                        .map(|c| c.data_type.clone())
+                        .collect();
+                    df.session
+                        .write_files(physical, &a.env, target, &types, &mut admitted)
+                        .await
                 }
-                // A write reads the cache like any other action.
-                let (physical, _) = df.physical_cached(&a).await?;
-                let types: Vec<_> = a
-                    .analyzed
-                    .output
-                    .iter()
-                    .map(|c| c.data_type.clone())
-                    .collect();
-                df.session
-                    .write_files(physical, &a.env, target, &types)
-                    .await
+                .await;
+                // An admission the write did not take (it ended before its query ran) is settled
+                // with that outcome; dropped with the future, it closes its row `cancelled`.
+                if let Some(unrun) = admitted.take() {
+                    match &written {
+                        Ok(_) => unrun.finish_ok(),
+                        Err(error) => unrun.fail(error),
+                    }
+                }
+                written
             })
             .await
     }
@@ -2510,7 +2527,7 @@ impl DataFrameWriterV2 {
         let df = self.df;
         let session = df.session.clone();
         session
-            .on_executor(async move { df.session.exec_write_v2(&df, spec, mode).await })
+            .on_executor(async move { df.session.exec_write_v2(&df, spec, mode, &mut None).await })
             .await
     }
 

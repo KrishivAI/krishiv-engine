@@ -42,6 +42,7 @@
 #![forbid(unsafe_code)]
 
 mod access;
+mod admission;
 mod cache;
 mod carrier;
 mod catalog;
@@ -61,6 +62,7 @@ pub mod otlp;
 mod partitions;
 mod plan_round_trip;
 mod profile;
+mod query_fold;
 mod recursion;
 mod result_cache;
 mod scripting;
@@ -78,6 +80,7 @@ mod view_schema;
 mod window;
 
 pub use access::{PathPrefixPolicy, ReadOnlyPolicy, StatementInfo};
+pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use system::register_build_features;
 
 pub mod agent;

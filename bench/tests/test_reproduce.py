@@ -464,6 +464,11 @@ def test_polars_sql_errors_are_unsupported_not_failures():
     assert _answer_status("polars", EngineError("SQLInterfaceError: unsupported SQL")) == "unsupported"
     assert _answer_status("polars-streaming", EngineError("ColumnNotFoundError: x")) == "unsupported"
     assert _answer_status("polars", EngineError("MemoryError: x")) == "error"
+    # run-time errors of SQL Polars does plan are failures, not missing support
+    assert _answer_status("polars", EngineError("ComputeError: cannot compare string with numeric type")) == "error"
+    assert (
+        _answer_status("polars", EngineError("InvalidOperationError: conversion from `str` to `i32` failed")) == "error"
+    )
     assert _answer_status("duckdb", EngineError("SQLInterfaceError: x")) == "error"
     assert _answer_status("polars", EngineTimeout("slow")) == "timeout"
     assert _answer_status("polars", EngineCrashed("died")) == "error"
@@ -854,3 +859,32 @@ def test_krishiv_without_the_option_times_with_run(tmp_path, monkeypatch):
     eng, sent = _krishiv_with_replies(tmp_path, monkeypatch, lambda text: "2 0.1", checked=False)
     assert eng.timed_run(q("SELECT 1")) == (2, 0.1)
     assert sent == ["RUN"]
+
+
+@pytest.mark.parametrize(
+    ("sql", "status"),
+    [
+        ("WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT * FROM r", "unsupported"),
+        ("SELECT * FROM t, LATERAL (SELECT * FROM t) x", "unsupported"),
+        ("SELECT no_such_function(a) FROM t", "unsupported"),
+        ("SELECT zzz FROM t", "unsupported"),
+        ("SELECT FROM WHERE", "unsupported"),
+        ("SELECT CAST(b AS INT) FROM t", "error"),
+        ("SELECT * FROM t WHERE a = b", "error"),
+        ("SELECT b + 1 FROM t", "error"),
+        ("SELECT (SELECT a FROM t) FROM t", "error"),
+    ],
+)
+def test_the_polars_statuses_follow_what_real_polars_raises(sql: str, status: str):
+    """Real Polars errors, formatted as the worker reports them, get the status the narrowed set gives them."""
+    import polars as pl
+
+    from krishiv_bench.adapters.process import EngineError
+    from krishiv_bench.errors import describe_error
+    from krishiv_bench.reproduce import _answer_status
+
+    t = pl.DataFrame({"a": [1, 2], "b": ["x", "y"]}).lazy()
+    with pytest.raises(Exception) as raised:  # noqa: PT011  # whichever class Polars raises is what is classified
+        pl.SQLContext(t=t).execute(sql).collect()
+    e = raised.value
+    assert _answer_status("polars", EngineError(describe_error(e))) == status, describe_error(e)[:80]

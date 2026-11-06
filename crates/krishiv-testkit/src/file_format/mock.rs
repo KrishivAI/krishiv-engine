@@ -1147,7 +1147,10 @@ impl FileFormat for MockFormat {
                     .await?;
                 v.first().map(|b| b.to_vec()).unwrap_or_default()
             };
-            if let Some(key) = o.resolve_secret("encryptionKey", io.secrets()).await? {
+            if let Some(key) = o
+                .resolve_secret("encryptionKey", io.principal(), io.secrets())
+                .await?
+            {
                 xor(&mut footer, key.expose_secret().as_bytes());
             }
             let meta = decode_footer(&footer, footer_start)?;
@@ -1242,7 +1245,9 @@ impl FileFormat for MockFormat {
         o: &'a FormatOptions,
     ) -> BoxFuture<'a, FormatResult<Box<dyn Encoder>>> {
         Box::pin(async move {
-            let key = o.resolve_secret("encryptionKey", io.secrets()).await?;
+            let key = o
+                .resolve_secret("encryptionKey", io.principal(), io.secrets())
+                .await?;
             let mut e = MockEncoder {
                 schema,
                 batch_rows: usize::try_from(o.int("batchRows").unwrap_or(1000)).unwrap_or(1000),

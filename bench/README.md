@@ -461,6 +461,57 @@ Only engines that run Spark SQL `explode` take part (Krishiv, Spark, Sail); the 
 Comet's conversion: one `<table>.parquet` file per table instead of Hive-partitioned directories, and DuckDB's default
 row-group size instead of 512 MiB. This is not part of the P2b exit gate.
 
+## Resource telemetry, cold runs and the scale ladder
+
+`krishiv-bench run` records, per query, from `/proc/<pid>/io` and `/proc/<pid>/stat` deltas around each timed sample
+(medians over the samples). Measured: Krishiv (the runner process tree), DuckDB (the harness process), Polars,
+DataFusion and Spark local mode (the harness process and its children, Python baseline included), Spark Connect in a
+container and in-process ClickHouse (chDB). **Not measured (fields are `null`):** a host Spark Connect server such as
+Sail, and Krishiv's spill bytes (the runner does not report them yet).
+
+| Field | Meaning |
+|---|---|
+| `read_bytes_median` | bytes fetched from the storage layer; 0 when the run came from the page cache |
+| `rchar_median`, `syscr_median` | bytes requested of read syscalls (cache hits included) and the number of those syscalls |
+| `read_size_mean_bytes` | `rchar / syscr`: small values mean many small reads |
+| `cpu_seconds_median`, `avg_cores` | user+system CPU seconds; median of CPU / wall per sample |
+| `peak_rss_bytes`, `spill_bytes` | maximum over the samples; spill is `null` where the engine does not report it |
+
+`krishiv-bench report` shows them in its "Resource use" table. A process of the tree that exits inside a sample
+loses its last slice (at most 20 ms of sampling); `null` means "not measured", never 0.
+
+`krishiv-bench run --cold` calls `posix_fadvise(POSIX_FADV_DONTNEED)` on every dataset file before each run, warm-up
+included (no root needed; only clean pages are dropped), and records `"cold": {"enabled": true, ...}` in the result.
+**Cold results are not comparable with warm ones**; SF10 and SF100 warm runs come from the page cache and hide
+I/O-bound gaps that show at SF1000. `reproduce` (the `ours` method) and `abba` take `--cold` too and evict before every
+timed run; `ab` and the `theirs` method of `reproduce` do not.
+
+`krishiv-bench report --suite tpch --ladder [result.json ...]` takes results at two or more scale factors (newest per
+scale factor and engine) and flags each query whose engine / `duckdb` ratio grows by more than 1.5x between
+consecutive scale factors; it warns when cold and warm results are mixed. It writes `ladder_<suite>.md`.
+
+## Reference cache (`reproduce`, `abba`)
+
+DuckDB's answers never change, and at SF1000 running it costs hours, so `reproduce` and `abba` keep what it produced
+in `$KRISHIV_DATA/refcache/` and reuse it. An entry is keyed by the suite, scale factor, dataset (manifest checksum,
+else each file's name, size, modification time and first and last 64 KiB), query id, the hash of the text DuckDB runs, and DuckDB's installed version; a change to
+any of them is a miss. The engine under test is always run and checked against the cached rows exactly as against a
+fresh answer.
+
+| Command | What is reused | What stays live |
+|---|---|---|
+| `reproduce --sequential` | the answer **and** DuckDB's timed samples, CPU and peak RSS (also keyed by threads, memory, cgroup cap, sample count, `--cold` and the machine: CPU model, cores, RAM, host name); the record marks it `cached_utc` | the other engines |
+| `reproduce` (interleaved), `abba` | the answer (the untimed correctness run is skipped; `abba` marks `reference_cached_utc`) | DuckDB's timed runs: interleaving exists to give both engines the same machine at the same moment, which a replayed time cannot |
+
+The run record's `reference_cache` block says whether the cache was on and how many entries it read (`hits`) and wrote
+(`stores`). On an `abba` hit DuckDB's untimed warm-up run is skipped while Krishiv still has its own; the entry says so
+(`reference_warmup`). The `theirs` method of `reproduce` (best of N hot runs of each engine, DuckDB included) never
+uses the cache. A cache write that fails (a full disk) is skipped, never fatal.
+
+`--refresh-reference` runs DuckDB again and replaces the entries; `--no-reference-cache` neither reads nor writes
+them. An answer over 1,000,000 rows is not stored. A replayed time was measured on the machine and load of its
+`created_utc`, so refresh after a hardware or OS change.
+
 ## Result JSON (`$KRISHIV_DATA/results/<ts>_<engine>_<suite>_sf<N>.json`)
 `machine` (CPU model, cores, RAM, OS, governor), `git` (krishiv-engine commit/branch/dirty), `engine` (name, version, config (Krishiv: threads, memory limit, `build_profile`, `target_cpu`), build, and `allocator` when the engine reports it, e.g. `mimalloc`; the CLI prints it as `allocator=<name>` in `krishiv --version`, the wheel via `krishiv.build_info()`),
 `dataset` (name, SF, path, tables, generator version, manifest sha256), and per query: `iterations`, `times_s`, `p50_s`, `p99_s`, `min_s`, `max_s`, `mean_s`,

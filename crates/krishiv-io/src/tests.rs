@@ -3,6 +3,7 @@
 //! (the format-level behaviour is covered by the conformance suite in
 //! `krishiv-testkit`).
 
+use krishiv_common::Principal;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -671,7 +672,12 @@ static OPTS: OptionSchema = OptionSchema {
 struct Vault;
 
 impl SecretResolver for Vault {
-    fn resolve<'a>(&'a self, scope: &'a str, key: &'a str) -> BoxFuture<'a, Result<SecretString>> {
+    fn resolve<'a>(
+        &'a self,
+        _principal: &'a Principal,
+        scope: &'a str,
+        key: &'a str,
+    ) -> BoxFuture<'a, Result<SecretString>> {
         Box::pin(async move { Ok(SecretString::new(format!("{scope}/{key}"))) })
     }
 }
@@ -805,28 +811,28 @@ fn secrets_stay_secret_and_key_the_cache() {
     assert!(!format!("{o:?}").contains("hunter2"));
     assert!(o.has_secret("key") && !o.has_secret("flag"));
     let got = o
-        .resolve_secret("key", &Vault)
+        .resolve_secret("key", &Principal::local_user(), &Vault)
         .now_or_never()
         .unwrap()
         .unwrap()
         .unwrap();
     assert_eq!(got.expose_secret(), "hunter2");
     assert!(
-        o.resolve_secret("flag", &Vault)
+        o.resolve_secret("flag", &Principal::local_user(), &Vault)
             .now_or_never()
             .unwrap()
             .unwrap()
             .is_none()
     );
     assert!(
-        o.resolve_secret("nope", &Vault)
+        o.resolve_secret("nope", &Principal::local_user(), &Vault)
             .now_or_never()
             .unwrap()
             .unwrap()
             .is_none()
     );
     let fp1 = o
-        .metadata_fingerprint(&Vault)
+        .metadata_fingerprint(&Principal::local_user(), &Vault)
         .now_or_never()
         .unwrap()
         .unwrap();
@@ -836,7 +842,7 @@ fn secrets_stay_secret_and_key_the_cache() {
     )
     .unwrap();
     let fp2 = o2
-        .metadata_fingerprint(&Vault)
+        .metadata_fingerprint(&Principal::local_user(), &Vault)
         .now_or_never()
         .unwrap()
         .unwrap();
@@ -851,7 +857,7 @@ fn secrets_stay_secret_and_key_the_cache() {
     )
     .unwrap();
     let got = o3
-        .resolve_secret("key", &Vault)
+        .resolve_secret("key", &Principal::local_user(), &Vault)
         .now_or_never()
         .unwrap()
         .unwrap()
@@ -859,7 +865,7 @@ fn secrets_stay_secret_and_key_the_cache() {
     assert_eq!(got.expose_secret(), "scope/name");
     assert_eq!(o3.metadata_fingerprint_now(), None);
     let e = o3
-        .resolve_secret("key", &options::NoSecrets)
+        .resolve_secret("key", &Principal::local_user(), &options::NoSecrets)
         .now_or_never()
         .unwrap()
         .unwrap_err();
@@ -875,7 +881,7 @@ fn secrets_stay_secret_and_key_the_cache() {
     // metadata key with a default).
     let d = FormatOptions::defaults(&OPTS);
     assert!(
-        d.metadata_fingerprint(&Vault)
+        d.metadata_fingerprint(&Principal::local_user(), &Vault)
             .now_or_never()
             .unwrap()
             .unwrap()

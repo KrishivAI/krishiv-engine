@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The fdlibm routines Java's `StrictMath` runs, for the functions where the
 //! pure-Rust `libm` crate (musl's algorithms) differs from them in the last
-//! bit: `cbrt`, `log`, `log10`, `hypot`, `acosh` and `tanh`. Spark calls these
+//! bit: `cbrt`, `log`, `log10`, `hypot`, `acosh`, `tanh` and `atan2`. Spark calls these
 //! through the JVM, so reproducing the same algorithm reproduces its bits.
 //!
 //! The algorithms are Sun Microsystems' fdlibm (1993): "Developed at
@@ -311,6 +311,84 @@ pub(super) fn tanh(x: f64) -> f64 {
         1.0 - 1.0e-300
     };
     if high >= 0 { z } else { -z }
+}
+
+/// `atan2(y, x)` (`e_atan2.c`): `atan(|y/x|)` placed in the quadrant by the
+/// signs, with fdlibm's own rounding at the far end (`pi - (z - pi_lo)`),
+/// which musl's `atan2` computes differently in the last bit.
+pub(super) fn atan2(y: f64, x: f64) -> f64 {
+    const TINY: f64 = 1.0e-300;
+    use std::f64::consts::{FRAC_PI_2 as PI_O_2, FRAC_PI_4 as PI_O_4, PI};
+    const PI_LO: f64 = 1.224_646_799_147_353_2e-16;
+    if x.is_nan() || y.is_nan() {
+        return x + y;
+    }
+    let (hx, hy) = (hi(x), hi(y));
+    let (ax, ay) = (hx & 0x7fff_ffff, hy & 0x7fff_ffff);
+    let (lx, ly) = (lo(x), lo(y));
+    // x = 1.0
+    if hx.wrapping_sub(0x3ff0_0000) == 0 && lx == 0 {
+        return libm::atan(y);
+    }
+    // 2 * sign(x) + sign(y)
+    let m = ((hy >> 31) & 1) | ((hx >> 30) & 2);
+    // y = 0
+    if ay == 0 && ly == 0 {
+        return match m {
+            0 | 1 => y,
+            2 => PI + TINY,
+            _ => -PI - TINY,
+        };
+    }
+    // x = 0
+    if ax == 0 && lx == 0 {
+        return if hy < 0 {
+            -PI_O_2 - TINY
+        } else {
+            PI_O_2 + TINY
+        };
+    }
+    // x is infinite
+    if ax == 0x7ff0_0000 {
+        return if ay == 0x7ff0_0000 {
+            match m {
+                0 => PI_O_4 + TINY,
+                1 => -PI_O_4 - TINY,
+                2 => 3.0 * PI_O_4 + TINY,
+                _ => -3.0 * PI_O_4 - TINY,
+            }
+        } else {
+            match m {
+                0 => 0.0,
+                1 => -0.0,
+                2 => PI + TINY,
+                _ => -PI - TINY,
+            }
+        };
+    }
+    // y is infinite
+    if ay == 0x7ff0_0000 {
+        return if hy < 0 {
+            -PI_O_2 - TINY
+        } else {
+            PI_O_2 + TINY
+        };
+    }
+    // y / x
+    let k = ay.wrapping_sub(ax) >> 20;
+    let z = if k > 60 {
+        PI_O_2 + 0.5 * PI_LO
+    } else if hx < 0 && k < -60 {
+        0.0
+    } else {
+        libm::atan((y / x).abs())
+    };
+    match m {
+        0 => z,
+        1 => -z,
+        2 => PI - (z - PI_LO),
+        _ => (z - PI_LO) - PI,
+    }
 }
 
 #[cfg(test)]
