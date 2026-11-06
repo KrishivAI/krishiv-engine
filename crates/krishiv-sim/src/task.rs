@@ -654,4 +654,27 @@ mod tests {
         };
         assert!(decode_task(&message.encode_to_vec()).is_err());
     }
+
+    #[test]
+    fn a_descriptor_filter_twice_or_without_a_value_is_refused() {
+        let task = |filters: Vec<FilterValue>| Task {
+            stage: 1,
+            stage_attempt: 0,
+            partition: 0,
+            partitions: 1,
+            attempt: 0,
+            exchanges: Vec::new(),
+            output: None,
+            settings: Some(Settings::of(&ExecConfig::default())),
+            scans: Vec::new(),
+            filters,
+        };
+        let value = |keys: Option<Vec<u8>>| FilterValue { id: 4, keys };
+        let e =
+            decode_task(&task(vec![value(Some(vec![1])), value(Some(vec![2]))]).encode_to_vec())
+                .unwrap_err();
+        assert!(e.message().contains("filter 4 twice"), "{}", e.message());
+        let e = decode_task(&task(vec![value(None)]).encode_to_vec()).unwrap_err();
+        assert!(e.message().contains("without a value"), "{}", e.message());
+    }
 }

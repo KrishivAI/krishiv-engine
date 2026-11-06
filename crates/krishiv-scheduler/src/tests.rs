@@ -333,3 +333,32 @@ fn only_streaming_scans_are_dealt() {
     assert_eq!(e.error_class(), ErrorClass::InternalError);
     assert!(e.message().contains("scan 2"), "{e}");
 }
+
+/// The streaming side of a sort-merge or nested-loop join is its probe:
+/// only those scans may be dealt.
+#[test]
+fn streaming_scans_follow_every_join_kind_to_its_probe() {
+    use krishiv_exec::physical::{NestedLoopPlan, ScanId, SortMergeJoinPlan};
+
+    let nested = PhysNode::NestedLoopJoin(NestedLoopPlan {
+        probe: Box::new(scan(1)),
+        build: Box::new(scan(2)),
+        join_type: krishiv_exec::JoinType::Inner,
+        residual: None,
+    });
+    let merge = PhysNode::SortMergeJoin(SortMergeJoinPlan {
+        probe: Box::new(nested),
+        build: Box::new(scan(3)),
+        join_type: krishiv_exec::JoinType::Inner,
+        probe_keys: vec![0],
+        build_keys: vec![0],
+        null_safe: vec![false],
+        residual: None,
+        single_match: false,
+    });
+    let ids: Vec<ScanId> = crate::streaming_scans(&merge)
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(ids, vec![ScanId(1)]);
+}
