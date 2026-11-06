@@ -857,3 +857,83 @@ impl ExecNode for SharedBuildJoinNode {
         b.push_operator_reading(self.join.probe(), sink).map(drop)
     }
 }
+
+#[cfg(all(test, not(loom)))]
+#[expect(
+    clippy::disallowed_methods,
+    clippy::unwrap_used,
+    reason = "test-only runtime plumbing via #[tokio::test] and test assertions; never runs on a compute worker"
+)]
+mod tests {
+    use futures::FutureExt as _;
+    use krishiv_memory::{MemoryConfig, TreePool};
+
+    use super::*;
+
+    /// A query's pool under a 1 MiB root, with another consumer of the
+    /// query holding 768 KiB that cannot spill.
+    fn crowded() -> (Arc<dyn MemoryPool>, Arc<dyn MemoryPool>, ConsumerId) {
+        let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
+            limit: Some(1 << 20),
+            ..MemoryConfig::default()
+        });
+        let query = root.child("q", None);
+        let other = query.register("other", None);
+        query.try_reserve(other, 768 << 10).unwrap();
+        (root, query, other)
+    }
+
+    /// The shared build's pool refuses a request that does not fit
+    /// instead of aborting the query holding it, where the plain pool
+    /// aborts the query; every other call is the wrapped pool's.
+    #[tokio::test]
+    async fn the_shared_builds_pool_never_aborts_its_query() {
+        let (_root, query, other) = crowded();
+        let pool = NoAbortPool(query.child("broadcast-1", None));
+        let b = pool.register("build", None);
+        let e = KrishivError::from(pool.reserve(b, 512 << 10).await.unwrap_err());
+        assert!(does_not_fit(&e), "{e}");
+        assert!(query.check_aborted().is_ok(), "the query was aborted");
+        let e = pool.reserve_without_abort(b, 512 << 10).await.unwrap_err();
+        assert!(does_not_fit(&KrishivError::from(e)));
+
+        // Delegation.
+        pool.try_reserve(b, 1024).unwrap();
+        pool.try_reserve_scratch(b, 1024).unwrap();
+        pool.try_reserve_unguarded(b, 1024).unwrap();
+        pool.reserve(b, 1024).await.unwrap();
+        assert!(pool.reserved() >= 4096);
+        assert!(pool.peak_reserved() >= pool.reserved());
+        assert!(!pool.snapshot().entries.is_empty());
+        assert_eq!(pool.limit(), None);
+        assert_eq!(pool.effective_limit(), Some(1 << 20));
+        assert!(pool.check_aborted().is_ok());
+        assert!(pool.aborted().now_or_never().is_none());
+        let c = pool.register("other-build", None);
+        pool.transfer(b, c, 1024).unwrap();
+        pool.release(b, usize::MAX);
+        pool.release(c, usize::MAX);
+        assert_eq!(pool.reserved(), 0);
+        // A child keeps the rule.
+        let child = pool.child("part", None);
+        let d = child.register("d", None);
+        let e = KrishivError::from(child.reserve(d, 512 << 10).await.unwrap_err());
+        assert!(does_not_fit(&e), "{e}");
+        assert!(query.check_aborted().is_ok());
+        child.unregister(d);
+        pool.unregister(b);
+        pool.unregister(c);
+        query.release(other, usize::MAX);
+        assert!(!format!("{pool:?}").is_empty());
+
+        // The plain pool aborts the query to make room.
+        let (_root, query, _other) = crowded();
+        let plain = query.child("broadcast-1", None);
+        let b = plain.register("build", None);
+        assert!(plain.reserve(b, 512 << 10).await.is_err());
+        assert!(
+            query.check_aborted().is_err(),
+            "the plain pool did not abort"
+        );
+    }
+}
