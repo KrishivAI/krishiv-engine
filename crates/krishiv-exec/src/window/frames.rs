@@ -21,10 +21,12 @@
 //! - **Strings and binaries** (`min`/`max`/`first`/`last`) pick a row: a
 //!   segment tree of row indices compared by bytes, or the next or previous
 //!   row that counts; values are gathered as views, never copied.
-//! - **In order** for a floating-point `sum` or `avg`, or an integer `sum`
-//!   under ANSI: rounding and overflow depend on the order and grouping of
-//!   the additions, so each frame folds its rows from its start, as
-//!   Spark's does (O(rows × frame) like Spark's).
+//! - **In order** for a floating-point `sum` or `avg`, an integer `sum`
+//!   under ANSI, the moment aggregates (`var_*`, `stddev_*`, `skewness`,
+//!   `kurtosis`, `corr`, `covar_*`, `regr_*`) and `max_by`/`min_by`:
+//!   rounding, overflow and ties depend on the order and grouping of the
+//!   rows, so each frame folds its rows from its start, as Spark's does
+//!   (O(rows × frame) like Spark's).
 
 use std::sync::Arc;
 

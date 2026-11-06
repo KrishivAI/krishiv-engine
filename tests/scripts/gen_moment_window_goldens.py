@@ -10,6 +10,14 @@ Python's `repr` (`nan`, `inf`, `None`); the file is `{"cases": [{"sql": ..., "ro
     SPARK_HOME=<empty dir> uv run --no-project --python 3.12 --with 'pyspark-client==4.2.0' \\
       python tests/scripts/gen_moment_window_goldens.py --remote sc://127.0.0.1:15012 \\
       --out tests/fixtures/spark-4.2.0/moment-window-goldens.json
+
+or against a local Spark 4.2.0 (`krishiv-internal/ops/scripts/spark-local.sh`, which runs a script with PySpark
+4.2.0 and a JDK): write a one-line wrapper that sets `sys.argv = [..., "--local", "--out", PATH]` and runs this file.
+
+Besides the default block (ANSI on, every function and frame) there are three small blocks that carry a `conf`
+object the test applies before running the case: the same one-argument and two-argument statistics with ANSI off
+and with `spark.sql.legacy.statisticalAggregate=true` (two frames each), and `corr` values over the groups whose
+`x` varies (the default block's `corr` only ever raises: group 6 has a constant `x`).
 """
 
 from __future__ import annotations
@@ -62,24 +70,66 @@ def sql(fn: str, args: str, frame: str) -> str:
     return f"SELECT id, {fn}({args}) OVER ({over}) FROM m ORDER BY id"
 
 
+# The flag-sensitive statistics (a division by zero where Spark gives NULL, or NaN under the legacy flag).
+FLAG_ONE = ["skewness", "kurtosis", "var_samp", "stddev_samp"]
+FLAG_TWO = ["corr", "covar_samp"]
+FLAG_FRAMES = ["", "ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"]
+# Groups whose x varies (no constant x), so `corr` has values to compare.
+VARYING = "WHERE g NOT IN (6, 8)"
+
+
+def where_sql(fn: str, args: str, frame: str) -> str:
+    over = f"PARTITION BY g {frame}".strip()
+    return f"SELECT id, {fn}({args}) OVER ({over}) FROM m {VARYING} ORDER BY id"
+
+
+def blocks() -> list[tuple[dict[str, str], list[str]]]:
+    default = [sql(f, "x", fr) for fr in FRAMES for f in ONE]
+    default += [sql(f, "y, x", fr) for fr in FRAMES for f in TWO]
+    flagged = [sql(f, "x", fr) for fr in FLAG_FRAMES for f in FLAG_ONE]
+    flagged += [sql(f, "y, x", fr) for fr in FLAG_FRAMES for f in FLAG_TWO]
+    corr_values = [where_sql("corr", "y, x", fr) for fr in FRAMES]
+    return [
+        ({}, default),
+        ({}, corr_values),
+        ({"spark.sql.ansi.enabled": "false"}, flagged),
+        ({"spark.sql.legacy.statisticalAggregate": "true"}, flagged),
+    ]
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--remote", required=True)
+    ap.add_argument("--remote")
+    ap.add_argument("--local", action="store_true", help="a local Spark session instead of Spark Connect")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     from pyspark.sql import SparkSession
 
-    spark = SparkSession.builder.remote(a.remote).create()
+    if a.local:
+        spark = (
+            SparkSession.builder.master("local[1]")
+            .config("spark.ui.enabled", "false")
+            .config("spark.sql.shuffle.partitions", "1")
+            .getOrCreate()
+        )
+    else:
+        spark = SparkSession.builder.remote(a.remote).create()
     spark.sql(VIEW).collect()
-    queries = [sql(f, "x", fr) for fr in FRAMES for f in ONE]
-    queries += [sql(f, "y, x", fr) for fr in FRAMES for f in TWO]
     cases = []
-    for q in queries:
-        try:
-            rows = [[str(r[0]), repr(r[1])] for r in spark.sql(q).collect()]
-            cases.append({"sql": q, "rows": rows})
-        except Exception as e:
-            cases.append({"sql": q, "error": str(e).split("JVM stacktrace")[0].strip()[:200]})
+    for conf, queries in blocks():
+        for key, value in conf.items():
+            spark.conf.set(key, value)
+        for q in queries:
+            case = {"sql": q}
+            if conf:
+                case["conf"] = conf
+            try:
+                case["rows"] = [[str(r[0]), repr(r[1])] for r in spark.sql(q).collect()]
+            except Exception as e:
+                case["error"] = str(e).split("JVM stacktrace")[0].strip()[:200]
+            cases.append(case)
+        for key in conf:
+            spark.conf.unset(key)
     spark.stop()
     doc = {"format_version": FORMAT_VERSION, "generator": GENERATOR, "view": VIEW, "cases": cases}
     Path(a.out).write_text(json.dumps(doc, indent=1) + "\n")

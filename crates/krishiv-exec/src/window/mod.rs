@@ -672,10 +672,14 @@ impl Window {
                 crate::aggregate::check_udaf(a, udafs.as_ref())?;
             }
         }
-        if let Some(e) = Arc::get_mut(&mut me.env) {
-            e.udafs = udafs;
-            e.legacy = env.legacy_statistical_aggregate;
-        }
+        // The environment was just built, so nothing shares it; an error here would be a bug, not a dropped flag.
+        let Some(e) = Arc::get_mut(&mut me.env) else {
+            return Err(internal(
+                "a window environment shared before its settings were set".to_owned(),
+            ));
+        };
+        e.udafs = udafs;
+        e.legacy = env.legacy_statistical_aggregate;
         Ok(me)
     }
 

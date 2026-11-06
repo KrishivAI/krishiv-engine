@@ -268,6 +268,11 @@ fn merge(family: Family, a: &mut Row, b: &Row) {
 /// division by zero whatever `legacy` says, `DIVIDE_BY_ZERO` with `ansi` and
 /// NULL without. Spark's `evaluateExpression`.
 ///
+/// `regr_avgx`/`regr_avgy` are planned as a plain average now (Spark's
+/// `RuntimeReplaceableAggregate`), so the two arms below run only for a plan
+/// decoded from an older codec version: they keep the running-mean form the
+/// engine used then, which can differ from Spark in the last bit.
+///
 /// The pair buffer's slots hold `x` (the first argument) in `xAvg`/`xMk`
 /// and `y` (the second) in `yAvg`/`yMk`, as `update` folds them; the
 /// regression aggregates read them as `regr_*(y, x)` documents them (so

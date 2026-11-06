@@ -5,7 +5,8 @@
 //! `fn(..) OVER (PARTITION BY g)` over a table of NULLs, NaN, infinities,
 //! `-0.0`, huge values and one-row, all-NULL and constant groups. A case must
 //! give Spark's values bit for bit (two NaNs match) or Spark's error class.
-//! Cases the engine refuses are listed in `REFUSED` and must keep failing with
+//! A case with a `conf` object (ANSI off, `spark.sql.legacy.statisticalAggregate`) runs in a session with those
+//! settings. Cases the engine refuses are listed in `REFUSED` and must keep failing with
 //! `KRISHIV_UNSUPPORTED_FEATURE`, so enabling one forces the list to shrink.
 #![cfg(test)]
 
@@ -51,20 +52,29 @@ fn moment_window_aggregates_match_spark() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/spark-4.2.0/moment-window-goldens.json");
     let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    let s = Session::new().unwrap();
-    block_on(async {
-        s.sql(doc["view"].as_str().unwrap())
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-    });
+    let view = doc["view"].as_str().unwrap();
+    // One session per distinct `conf`, each with the view.
+    let mut sessions: Vec<(String, Session)> = Vec::new();
     let mut wrong = Vec::new();
     let mut refused = Vec::new();
     for case in doc["cases"].as_array().unwrap() {
         let sql = case["sql"].as_str().unwrap();
-        let name = sql.split(['(', ' ']).nth(3).unwrap_or("?").to_owned();
+        // `SELECT id, fn(args) OVER ...`: the third word-or-paren piece is the function name.
+        let name = sql.split(['(', ' ']).nth(2).unwrap_or("?").to_owned();
+        let conf = case
+            .get("conf")
+            .map_or_else(String::new, ToString::to_string);
+        if !sessions.iter().any(|(c, _)| *c == conf) {
+            let s = Session::new().unwrap();
+            if let Some(map) = case.get("conf").and_then(Value::as_object) {
+                for (k, v) in map {
+                    s.conf().set(k, v.as_str().unwrap()).unwrap();
+                }
+            }
+            block_on(async { s.sql(view).await.unwrap().collect().await.unwrap() });
+            sessions.push((conf.clone(), s));
+        }
+        let s = &sessions.iter().find(|(c, _)| *c == conf).unwrap().1;
         let result = block_on(async { s.sql(sql).await?.collect().await });
         match (result, case.get("rows")) {
             (Ok(batches), Some(want)) => {
@@ -99,9 +109,10 @@ fn moment_window_aggregates_match_spark() {
             }
             (Err(e), Some(_)) => wrong.push(format!("{sql}: {}", e.error_class().name())),
             (Err(e), None) => {
-                // Spark raised; the engine must raise something of the same family.
+                // Spark raised; the engine must raise the same error class (Spark's text opens with `[CLASS]`).
                 let want = case["error"].as_str().unwrap();
-                if !want.contains(e.error_class().name().split('.').next().unwrap_or("")) {
+                let got = e.error_class().name();
+                if !want.contains(&format!("[{got}")) && !want.contains(&format!("{got}]")) {
                     wrong.push(format!(
                         "{sql}: engine {}, Spark {want}",
                         e.error_class().name()
