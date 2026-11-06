@@ -38,6 +38,7 @@ fn matches_the_baseline(tag: &str) -> R {
     let unused = known.unused_categories();
     assert!(unused.is_empty(), "categories without cases: {unused:?}");
     let manifest = ExclusionManifest::load(&ExclusionManifest::default_path())?;
+    assert!(manifest.frozen, "the exclusion manifest is frozen");
     let set = GoldenSet::scan(&dir)?;
     let mut engine = SessionEngine::new().map_err(|e| e.message)?;
     let result = run(&mut engine, &set, &manifest)?;
