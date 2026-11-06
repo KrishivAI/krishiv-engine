@@ -16,7 +16,7 @@ from pathlib import Path
 
 import psutil
 
-from . import clickbench_queries, compare
+from . import clickbench_queries, compare, memguard
 from .adapters import Dataset, Engine, Query, make_engine
 from .dialect import unsupported_reason
 from .errors import error_fields
@@ -239,6 +239,8 @@ def run_suite(
     timeout_s: float | None = 600,
     dataset: str | None = None,
     cold: bool = False,
+    min_mem_avail: float | None = memguard.DEFAULT_MIN_FRACTION,
+    mem_retries: int = memguard.DEFAULT_RETRIES,
 ) -> Path:
     ds_name = dataset or SUITE_DATASET[suite]
     root = dataset_dir(ds_name, sf)
@@ -273,6 +275,7 @@ def run_suite(
 
         oracle_rows = dsb.load_oracle(root)
 
+    mem_floor = memguard.threshold_bytes(min_mem_avail) if min_mem_avail else None
     started = dt.datetime.now(dt.UTC)
     sf_s = fmt_sf(sf)
     stem = f"{started.strftime('%Y%m%dT%H%M%SZ')}_{engine_name}_{ds_name}_sf{sf_s}"
@@ -294,6 +297,7 @@ def run_suite(
         "warmup": warmup,
         "timeout_s": timeout_s,
         "cold": cold_record(cold),
+        "mem_guard": {"min_mem_avail_fraction": min_mem_avail, "threshold_bytes": mem_floor, "retries": mem_retries},
         "answers_available": bool(answers or oracle_rows),
         "queries": {},
     }
@@ -305,33 +309,58 @@ def run_suite(
         for q in queries:
             entry: dict = {"iterations": iterations}
             times, meas = [], []
+            invalid: list[dict] = []
             rows: list[tuple] = []
             try:
                 for i in range(warmup + iterations):
-                    if cold:
-                        evict_page_cache(root)
-                    eng.begin_measure()
-                    m = None
-                    try:
-                        t0 = time.perf_counter()
-                        fut = pool.submit(eng.run, q)
+                    for attempt in range(mem_retries + 1):
+                        if mem_floor:
+                            reached, _ = memguard.wait_for_memory(mem_floor)
+                            if not reached:
+                                raise MemoryError(f"MemAvailable stayed below {mem_floor} bytes; host memory not free")
+                        if cold:
+                            evict_page_cache(root)
+                        # No sampler when the guard is off: opting out restores uninstrumented runs
+                        # (its /proc reads would show in in-process adapters' rchar/syscr).
+                        sampler = memguard.MemSampler() if mem_floor else None
+                        eng.begin_measure()
+                        m = None
+                        failure: Exception | None = None
                         try:
-                            rows = fut.result(timeout=timeout_s)
-                        except cf.TimeoutError:
-                            eng.cancel()
-                            with contextlib.suppress(Exception):
-                                fut.result(timeout=30)
-                            pool.shutdown(wait=False, cancel_futures=True)
-                            pool = cf.ThreadPoolExecutor(max_workers=1)
-                            raise TimeoutError(f"query exceeded {timeout_s}s") from None
-                        dtm = time.perf_counter() - t0
-                    finally:
-                        m = eng.end_measure()
-                    if i >= warmup:
-                        times.append(dtm)
-                        meas.append(m)
+                            with sampler if sampler is not None else contextlib.nullcontext():
+                                t0 = time.perf_counter()
+                                fut = pool.submit(eng.run, q)
+                                try:
+                                    rows = fut.result(timeout=timeout_s)
+                                except cf.TimeoutError:
+                                    eng.cancel()
+                                    with contextlib.suppress(Exception):
+                                        fut.result(timeout=30)
+                                    pool.shutdown(wait=False, cancel_futures=True)
+                                    pool = cf.ThreadPoolExecutor(max_workers=1)
+                                    raise TimeoutError(f"query exceeded {timeout_s}s") from None
+                                dtm = time.perf_counter() - t0
+                        except Exception as e:
+                            failure = e  # decided below: memory reclaimed (retry) or a real failure
+                        finally:
+                            m = eng.end_measure()
+                        low = sampler.min_available if sampler is not None else None
+                        if mem_floor and low is not None and memguard.is_invalid(low, mem_floor):
+                            invalid.append(memguard.InvalidSample(i, attempt, low, mem_floor).as_dict())
+                            continue
+                        if failure is not None:
+                            raise failure
+                        if i >= warmup:
+                            times.append(dtm)
+                            meas.append(m)
+                        break
+                    else:
+                        # Warm-up too: timings must not follow a warm-up done under memory pressure.
+                        raise MemoryError(f"{memguard.INVALID_REASON} in all {mem_retries + 1} attempts of run {i}")
             except Exception as e:  # record, keep going
                 entry.update(error_fields(e))
+                if invalid:
+                    entry["invalid_samples"] = invalid
                 record["queries"][q.id] = entry
                 print(f"  {q.id}: ERROR {entry['error'][:120]}")
                 continue
@@ -350,6 +379,8 @@ def run_suite(
                 rows_match_expected=(len(rows) == expected[q.id]) if q.id in expected else None,
                 **resource_fields(meas, times),
             )
+            if invalid:
+                entry["invalid_samples"] = invalid
             if q.id in oracle_rows:
                 ok, msg = compare.rows_match(rows, oracle_rows[q.id], ordered, sql=q.sql)
                 entry["answer_check"] = {"status": "pass" if ok else "fail", "detail": msg}

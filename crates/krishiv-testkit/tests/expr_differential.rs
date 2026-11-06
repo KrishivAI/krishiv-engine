@@ -272,3 +272,37 @@ fn the_date_arithmetic_overflow_divergence_is_not_reported_and_nothing_else_is()
     );
     Ok(())
 }
+
+/// With errors on several rows Spark reports whichever row its plan reaches first, which depends
+/// on the plan and, over a scan, varies between runs (Spark 4.2.0, 2026-11-06: the nightly's
+/// `... BETWEEN ((l % (-2.25BD DIV m)) * d) AND i` raises `CAST_OVERFLOW` over the VALUES table,
+/// `DIVIDE_BY_ZERO` or `REMAINDER_BY_ZERO` over Parquet). The engine's error agrees when an
+/// erroring row raises it on its own (`rowErrors`); another error or rows do not.
+#[test]
+fn an_error_of_any_erroring_row_agrees() -> R {
+    let fx = Fixture::parse(
+        r#"{"setup":"s","cases":[{"sql":"e","ansi":true,"kids":[],"root":true,
+        "error":"CAST_OVERFLOW","rowErrors":["CAST_OVERFLOW","DIVIDE_BY_ZERO","REMAINDER_BY_ZERO"]}]}"#,
+    )?;
+    assert_eq!(fx.cases[0].row_errors.len(), 3);
+    for class in ["CAST_OVERFLOW", "DIVIDE_BY_ZERO", "REMAINDER_BY_ZERO"] {
+        assert!(run(&fx, &mut Always(class)).is_empty(), "{class}");
+    }
+    assert_eq!(run(&fx, &mut Always("ARITHMETIC_OVERFLOW")).len(), 1);
+    struct Rows;
+    impl Evaluator for Rows {
+        fn eval(&mut self, _: &str, _: bool) -> Expect {
+            Expect::Rows {
+                schema: "boolean".into(),
+                rows: vec!["false".into()],
+            }
+        }
+    }
+    assert_eq!(run(&fx, &mut Rows).len(), 1);
+    // A fixture without `rowErrors` keeps the exact comparison.
+    let plain = Fixture::parse(
+        r#"{"setup":"s","cases":[{"sql":"e","ansi":true,"kids":[],"root":true,"error":"CAST_OVERFLOW"}]}"#,
+    )?;
+    assert_eq!(run(&plain, &mut Always("DIVIDE_BY_ZERO")).len(), 1);
+    Ok(())
+}

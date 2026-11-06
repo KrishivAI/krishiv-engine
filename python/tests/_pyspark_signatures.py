@@ -285,6 +285,7 @@ PYSPARK_SIGNATURES = {
     "shiftRight": "col, numBits",
     "shiftRightUnsigned": "col, numBits",
     "shiftleft": "col, numBits",
+    "shuffle": "col, seed=None",
     "shiftright": "col, numBits",
     "shiftrightunsigned": "col, numBits",
     "sign": "col",

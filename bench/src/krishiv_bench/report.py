@@ -43,6 +43,30 @@ def cache_mode_lines(results: dict[str, dict]) -> list[str]:
     return lines
 
 
+def invalid_sample_lines(results: dict[str, dict], qids) -> list[str]:
+    """A section listing timed runs discarded because the host reclaimed memory (``--min-mem-avail``); empty if none."""
+    rows = []
+    for e, r in results.items():
+        for q in qids:
+            inv = r["queries"].get(q, {}).get("invalid_samples") or []
+            if inv:
+                low = min(i["min_mem_avail_bytes"] for i in inv)
+                rows.append(f"| {q} | {e} | {len(inv)} | {_gb(low)} | {_gb(inv[0]['threshold_bytes'])} |")
+    if not rows:
+        return []
+    return [
+        "## Invalid samples",
+        "",
+        "Runs discarded and retried because host MemAvailable fell below the threshold during the run "
+        "(`invalid: memory reclaimed`).",
+        "",
+        "| query | engine | invalid runs | lowest MemAvailable GB | threshold GB |",
+        "|---|---|---|---|---|",
+        *rows,
+        "",
+    ]
+
+
 def render(results: dict[str, dict], baseline: str | None = None) -> str:
     engines = list(results)
     if not engines:
@@ -159,6 +183,7 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
         )
     L.append("")
 
+    L += invalid_sample_lines(results, qids)
     L += [
         "## Correctness",
         "",
