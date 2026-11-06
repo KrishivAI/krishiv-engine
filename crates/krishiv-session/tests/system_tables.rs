@@ -647,3 +647,49 @@ fn queries_carry_the_sqlstate_of_a_failure_and_are_never_partial_in_one_process(
     );
     assert_eq!(partial, ["0"]);
 }
+
+/// Column `index` of the rows `sql` returns.
+fn column_of(s: &Session, sql: &str, index: usize) -> Vec<String> {
+    let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    let mut out = Vec::new();
+    for batch in &b {
+        let c = batch.column(index);
+        if let Some(v) = c.as_string_view_opt() {
+            out.extend((0..v.len()).map(|i| v.value(i).to_owned()));
+        } else if let Some(v) = c.as_string_opt::<i32>() {
+            out.extend((0..v.len()).map(|i| v.value(i).to_owned()));
+        } else {
+            let v = c.as_string::<i64>();
+            out.extend((0..v.len()).map(|i| v.value(i).to_owned()));
+        }
+    }
+    out
+}
+
+#[test]
+fn show_tables_in_system_lists_the_tables() {
+    let s = Session::new().unwrap();
+    let mut names = column_of(&s, "SHOW TABLES IN system", 1);
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "caches",
+            "capabilities",
+            "memory",
+            "metrics",
+            "operators",
+            "queries"
+        ]
+    );
+    assert_eq!(
+        column_of(&s, "SHOW TABLES IN SYSTEM LIKE 'q*'", 1),
+        ["queries"]
+    );
+    // `system` is still not a database of the session catalog.
+    let dbs = column_of(&s, "SHOW DATABASES", 0);
+    assert!(
+        !dbs.iter().any(|d| d.eq_ignore_ascii_case("system")),
+        "{dbs:?}"
+    );
+}
