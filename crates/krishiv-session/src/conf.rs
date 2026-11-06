@@ -13,7 +13,10 @@ use krishiv_kernels::datetime::{resolve_zone, zone_id};
 /// Prefixes of entries read once, when the session is built (memory pool,
 /// spill directory, I/O scheduler): setting them later would not apply,
 /// so it fails like a static config.
-const BUILD_TIME: &[&str] = &["krishiv.memory.", "krishiv.spill.", "krishiv.io."];
+pub(crate) const BUILD_TIME: &[&str] = &["krishiv.memory.", "krishiv.spill.", "krishiv.io."];
+
+/// Session keys fixed when the session is built (its memory pool).
+const SESSION_BUILD_TIME: &[&str] = &["krishiv.session.memoryLimit"];
 
 /// The configuration of a session, shared by its clones. Queries read an
 /// immutable snapshot ([`Self::snapshot`]).
@@ -48,13 +51,10 @@ fn refuse_unsupported_switch(key: &str, value: &str) -> Result<(), KrishivError>
 }
 
 /// The builder's initial settings, checked as `SET` checks a runtime one.
-pub(crate) fn checked_pairs(
-    pairs: Vec<(String, String)>,
-) -> Result<Vec<(String, String)>, KrishivError> {
-    for (k, v) in &pairs {
-        refuse_unsupported_switch(k, v)?;
-    }
-    Ok(pairs)
+pub(crate) fn check_pairs(pairs: &[(String, String)]) -> Result<(), KrishivError> {
+    pairs
+        .iter()
+        .try_for_each(|(k, v)| refuse_unsupported_switch(k, v))
 }
 
 /// Spark switches for collation features the engine refuses (ADR 0043 Decision 7 and 9): the
@@ -256,7 +256,9 @@ pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
 pub(crate) fn is_modifiable(key: &str) -> bool {
     match lookup(key) {
         Some(entry) => {
-            entry.scope == Scope::Session && !BUILD_TIME.iter().any(|p| entry.key.starts_with(p))
+            entry.scope == Scope::Session
+                && !BUILD_TIME.iter().any(|p| entry.key.starts_with(p))
+                && !SESSION_BUILD_TIME.contains(&entry.key)
         }
         None => true,
     }
