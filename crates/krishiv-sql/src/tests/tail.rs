@@ -1084,3 +1084,38 @@ fn nested_table_argument_partitions_parse_in_bounded_time() {
         ExprKind::Subquery(..)
     ));
 }
+
+/// The name in `IDENTIFIER_TOO_MANY_NAME_PARTS` is printed as Spark quotes it: each part in backticks, a backtick
+/// inside a part doubled, the parts joined by dots.
+#[test]
+fn too_many_name_parts_quotes_each_part() {
+    for (sql, quoted) in [
+        ("SELECT 1 AS IDENTIFIER('a.b')", "`a`.`b`"),
+        ("SELECT 1 AS IDENTIFIER('`x``y`.z')", "`x``y`.`z`"),
+    ] {
+        let message = parse_query(sql, &defaults()).unwrap_err().to_string();
+        assert!(message.contains(quoted), "{sql}: {message}");
+    }
+}
+
+/// `nesting_bound` counts brackets, `CASE ... END` and the angle brackets of `ARRAY`, `MAP` and `STRUCT` types
+/// (a `<` or `>` elsewhere is a comparison), plus one per lambda arrow.
+#[test]
+fn nesting_bound_counts_brackets_cases_angles_and_arrows() {
+    let bound = |sql: &str| crate::parser::nesting_bound(sql, &crate::lexer::tokenize(sql));
+    assert_eq!(bound("((1))"), 2);
+    assert_eq!(bound("CASE WHEN (a) THEN 1 END"), 2);
+    // a closed type angle ends its level: the later `>` is a comparison and must not close another level
+    for ty in ["ARRAY<INT>", "MAP<INT, INT>", "STRUCT<a: INT>"] {
+        let sql = format!("{ty} (1 > (((2))))");
+        assert_eq!(bound(&sql), 4, "{sql}");
+        let sql = format!("({ty})");
+        assert_eq!(bound(&sql), 2, "{sql}");
+    }
+    assert_eq!(
+        bound("a < (b)"),
+        1,
+        "a `<` after a plain word is a comparison"
+    );
+    assert_eq!(bound("x -> (x)"), 2);
+}
