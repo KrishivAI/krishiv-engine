@@ -84,4 +84,3 @@ Paths are relative to this crate.
 `s43-*` / `v35-*` categories); the goldens themselves are fetched by `tests/scripts/import_spark_golden.sh <tag>` in the nightly `golden-profiles` job
 (the test is `#[ignore]`d locally). Refresh with `golden-report --engine session --tag <tag> --ratchet update --known-failures
 tests/spark-golden/profiles/<tag>/known-failures.json`; new failures need a rule in that directory's categories first.
-
