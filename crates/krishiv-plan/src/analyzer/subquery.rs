@@ -1825,7 +1825,7 @@ impl Rewriter {
             return Ok((base, read));
         }
         let through_domain = forced.is_some() || on_path(plan, split::limit_hit);
-        if !through_domain && aggregates_below(plan) {
+        if !through_domain && aggregates_below(plan) && !self.grouped_having_fixed(plan)? {
             return Err(unsupported(
                 "a correlated scalar subquery of this shape",
                 plan.origin,
