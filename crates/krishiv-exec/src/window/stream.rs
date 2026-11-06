@@ -73,7 +73,7 @@ pub(super) enum Fold {
 }
 
 impl Fold {
-    pub(super) fn new(a: &AggregateExpr, ansi: bool) -> Result<Self> {
+    pub(super) fn new(a: &AggregateExpr, ansi: bool, legacy: bool) -> Result<Self> {
         if exact_decimal(a) {
             return Ok(Self::Decimal {
                 a: Box::new(a.clone()),
@@ -98,7 +98,7 @@ impl Fold {
             mask: None,
             ..a.clone()
         };
-        let mut acc = Accumulator::new(&local, ansi)?;
+        let mut acc = Accumulator::new(&local, ansi)?.legacy_statistical(legacy);
         acc.resize(2);
         Ok(Self::Rows {
             acc: Box::new(acc),
@@ -401,7 +401,7 @@ pub(super) fn copy_partition(
     for f in &env.plan.functions {
         whole.push(match &f.function {
             WindowFunction::Aggregate(a) if f.shape()? == Shape::Whole => {
-                Some(Fold::new(a, env.ansi)?.charged(a, consumer))
+                Some(Fold::new(a, env.ansi, env.legacy)?.charged(a, consumer))
             }
             _ => None,
         });
@@ -615,12 +615,14 @@ impl Emit {
             let (r, l) = match &f.function {
                 WindowFunction::Aggregate(a) => match f.shape()? {
                     Shape::Whole | Shape::Frame => (None, None),
-                    Shape::RunningRows => {
-                        (Some(Fold::new(a, env.ansi)?.charged(a, consumer)), None)
-                    }
-                    Shape::RunningPeers => {
-                        (None, Some(Fold::new(a, env.ansi)?.charged(a, consumer)))
-                    }
+                    Shape::RunningRows => (
+                        Some(Fold::new(a, env.ansi, env.legacy)?.charged(a, consumer)),
+                        None,
+                    ),
+                    Shape::RunningPeers => (
+                        None,
+                        Some(Fold::new(a, env.ansi, env.legacy)?.charged(a, consumer)),
+                    ),
                 },
                 WindowFunction::CumeDist => {
                     lead = true;

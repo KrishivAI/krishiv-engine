@@ -628,7 +628,7 @@ fn fold_from_file(
     shed.grow(&mut charge, state.saturating_mul(frames.len()))?;
     let mut folds = Vec::with_capacity(frames.len());
     for _ in frames {
-        folds.push(Fold::new(a, env.ansi)?);
+        folds.push(Fold::new(a, env.ansi, env.legacy)?);
     }
     let live = || frames.iter().filter(|(s, e)| s < e);
     if let (Some(lo), Some(hi)) = (live().map(|f| f.0).min(), live().map(|f| f.1).max()) {
@@ -818,7 +818,7 @@ impl Framed {
                 Self::Prefix(Box::new(Prefix {
                     edges: Edges::open(env, f, file, consumer)?,
                     stream: Stream::open(file, consumer)?,
-                    fold: Fold::new(a, env.ansi)?,
+                    fold: Fold::new(a, env.ansi, env.legacy)?,
                     folded: 0,
                 }))
             }
@@ -1009,7 +1009,8 @@ impl Held {
                     }
                 })
                 .collect::<Result<_>>()?;
-            let out = frames::aggregate(a, f, &self.slices(lo, hi), &rebased, env.ansi)?;
+            let out =
+                frames::aggregate(a, f, &self.slices(lo, hi), &rebased, env.ansi, env.legacy)?;
             self.charge.shrink(eval);
             return Ok(out);
         }
@@ -1045,7 +1046,14 @@ impl Held {
             part_start: &[],
             peer_start: &[],
         };
-        let out = frames::aggregate(a, f, &[row], &vec![(0, 0); frames.len()], env.ansi);
+        let out = frames::aggregate(
+            a,
+            f,
+            &[row],
+            &vec![(0, 0); frames.len()],
+            env.ansi,
+            env.legacy,
+        );
         self.charge.shrink(eval);
         out
     }

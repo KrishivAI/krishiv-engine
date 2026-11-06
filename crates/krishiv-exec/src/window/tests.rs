@@ -1172,7 +1172,8 @@ fn reserved_cost_matches_what_evaluation_holds() {
                 part_start: &part,
                 peer_start: &peer,
             };
-            let out = super::eval::evaluate(&window, &[slice], true, &super::utc_zone()).unwrap();
+            let out =
+                super::eval::evaluate(&window, &[slice], true, false, &super::utc_zone()).unwrap();
             let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
             // Outputs, row maps (`part_of`, `peer_of`) and the partition and
             // peer-group vectors.
@@ -1982,7 +1983,8 @@ fn frame_costs_cover_their_outputs() {
                 part_start: &part,
                 peer_start: &peer,
             };
-            let out = super::eval::evaluate(&window, &[slice], false, &super::utc_zone()).unwrap();
+            let out =
+                super::eval::evaluate(&window, &[slice], false, false, &super::utc_zone()).unwrap();
             let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
             let held: usize = out
                 .iter()
@@ -2045,7 +2047,8 @@ fn offset_function_costs_cover_their_scratch() {
             part_start: &part,
             peer_start: &peer,
         };
-        let out = super::eval::evaluate(&window, &[slice], false, &super::utc_zone()).unwrap();
+        let out =
+            super::eval::evaluate(&window, &[slice], false, false, &super::utc_zone()).unwrap();
         // What an array holds of its own: views share the input's value
         // buffers.
         let own = |a: &ArrayRef| {
@@ -2106,7 +2109,7 @@ fn trees_larger_than_a_chunk_match_the_reference() {
         part_start: &part,
         peer_start: &peer,
     };
-    let out = super::eval::evaluate(&window, &[slice], false, &super::utc_zone()).unwrap();
+    let out = super::eval::evaluate(&window, &[slice], false, false, &super::utc_zone()).unwrap();
     let got: Vec<String> = data
         .iter()
         .enumerate()

@@ -748,6 +748,7 @@ pub(super) fn aggregate(
     slices: &[Slice<'_>],
     frames: &[(u32, u32)],
     ansi: bool,
+    legacy: bool,
 ) -> Result<ArrayRef> {
     let method = method(a, ansi)?;
     if method == Method::Bytes {
@@ -759,20 +760,20 @@ pub(super) fn aggregate(
         Method::Bytes => Err(internal("strings over frames picked above".to_owned())),
         Method::Tree => {
             let rows = slices.iter().map(|s| s.len).sum();
-            tree(a, &args, mask.as_ref(), rows, frames, ansi)
+            tree(a, &args, mask.as_ref(), rows, frames, ansi, legacy)
         }
-        Method::InOrder => in_order(a, &args, mask.as_ref(), frames, ansi),
+        Method::InOrder => in_order(a, &args, mask.as_ref(), frames, ansi, legacy),
     }
 }
 
 /// An accumulator of `a` over its argument columns as they are.
-fn accumulator(a: &AggregateExpr, ansi: bool) -> Result<Accumulator> {
+fn accumulator(a: &AggregateExpr, ansi: bool, legacy: bool) -> Result<Accumulator> {
     let local = AggregateExpr {
         args: (0..a.args.len()).collect(),
         input: AggInput::Raw,
         ..a.clone()
     };
-    Accumulator::new(&local, ansi)
+    Ok(Accumulator::new(&local, ansi)?.legacy_statistical(legacy))
 }
 
 /// The segment tree (see the module docs). Node `k` of `1..2n` is a group:
@@ -785,9 +786,10 @@ fn tree(
     rows: usize,
     frames: &[(u32, u32)],
     ansi: bool,
+    legacy: bool,
 ) -> Result<ArrayRef> {
     let n = rows;
-    let mut t = accumulator(a, ansi)?;
+    let mut t = accumulator(a, ansi, legacy)?;
     t.resize(2 * n);
     let leaves: Vec<u32> = (0..n)
         .map(|i| if passes(mask, i) { id(n + i) } else { Ok(0) })
@@ -816,7 +818,7 @@ fn tree(
         hi = lo;
     }
     // Each frame's nodes, left to right, merged into its row's group.
-    let mut out = accumulator(a, ansi)?;
+    let mut out = accumulator(a, ansi, legacy)?;
     out.resize(frames.len());
     let (mut groups, mut nodes) = (Vec::new(), Vec::new());
     let mut right = Vec::new();
@@ -860,9 +862,10 @@ fn in_order(
     mask: Option<&BooleanArray>,
     frames: &[(u32, u32)],
     ansi: bool,
+    legacy: bool,
 ) -> Result<ArrayRef> {
     let n = frames.len();
-    let mut out = accumulator(a, ansi)?;
+    let mut out = accumulator(a, ansi, legacy)?;
     out.resize(n);
     let (mut groups, mut rows) = (Vec::new(), Vec::new());
     let mut flush = |groups: &mut Vec<u32>, rows: &mut Vec<u32>| -> Result<()> {
@@ -1070,7 +1073,7 @@ pub(super) fn cost(a: &AggregateExpr, f: &WindowFunctionPlan, rows: usize) -> Re
     } else if picks_bytes(a) {
         rows * (size_of::<(usize, usize)>() * 2 + 8 + 2 * size_of::<Option<u32>>())
     } else {
-        let state = accumulator(a, true)?.group_bytes();
+        let state = accumulator(a, true, false)?.group_bytes();
         // The tree's nodes and each row's result (an in-order fold needs
         // the results only), the leaf ids (then the result ids), and one
         // chunk of merges: a chunk of parents while the tree is built, of

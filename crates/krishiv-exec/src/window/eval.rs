@@ -147,6 +147,7 @@ pub(super) fn evaluate(
     plan: &WindowPlan,
     slices: &[Slice<'_>],
     ansi: bool,
+    legacy: bool,
     zone: &krishiv_kernels::datetime::ZoneRef,
 ) -> Result<Vec<ArrayRef>> {
     let mut unit = Unit::new(slices)?;
@@ -164,7 +165,7 @@ pub(super) fn evaluate(
     }
     plan.functions
         .iter()
-        .map(|f| function(f, &unit, ansi))
+        .map(|f| function(f, &unit, ansi, legacy))
         .collect()
 }
 
@@ -177,7 +178,7 @@ pub(super) fn has_range_offsets(plan: &WindowPlan) -> bool {
     })
 }
 
-fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool) -> Result<ArrayRef> {
+fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool, legacy: bool) -> Result<ArrayRef> {
     let n = u.rows;
     let int = |v: i64| i32::try_from(v).map_err(|_| too_large());
     Ok(match &f.function {
@@ -237,7 +238,7 @@ fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool) -> Result<ArrayRef
                 .0?;
             Arc::new(Int32Array::from(v))
         }
-        WindowFunction::Aggregate(a) => aggregate(a, f, u, ansi)?,
+        WindowFunction::Aggregate(a) => aggregate(a, f, u, ansi, legacy)?,
         WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
             let part = |i: usize| u.parts[u.part_of[i] as usize];
             let peers = |i: usize| u.peers[u.peer_of[i] as usize];
@@ -332,6 +333,7 @@ fn aggregate(
     f: &WindowFunctionPlan,
     u: &Unit<'_>,
     ansi: bool,
+    legacy: bool,
 ) -> Result<ArrayRef> {
     let shape = f.shape()?;
     if shape == Shape::Frame {
@@ -344,7 +346,7 @@ fn aggregate(
             order: u.order.as_ref(),
         };
         let frames = super::frames::frames(f.frame, &rows)?;
-        return super::frames::aggregate(a, f, u.slices, &frames, ansi);
+        return super::frames::aggregate(a, f, u.slices, &frames, ansi, legacy);
     }
     if exact_decimal(a) {
         return decimal_aggregate(a, f, shape, u, ansi);
@@ -361,7 +363,7 @@ fn aggregate(
         mask: None,
         ..a.clone()
     };
-    let mut acc = Accumulator::new(&local, ansi)?;
+    let mut acc = Accumulator::new(&local, ansi)?.legacy_statistical(legacy);
     let parts = u.parts.len();
     // Group `parts` takes rows the filter drops; it is never evaluated.
     let trash = id(parts)?;

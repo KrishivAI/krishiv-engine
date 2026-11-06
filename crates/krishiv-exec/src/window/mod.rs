@@ -457,6 +457,9 @@ struct Env {
     /// `spark.sql.ansi.enabled`: overflow raises instead of wrapping or
     /// becoming NULL.
     ansi: bool,
+    /// `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates give NaN instead of NULL where Spark
+    /// divides by zero.
+    legacy: bool,
     /// The session time zone, for a year-month `RANGE` bound over a `TIMESTAMP` key.
     zone: krishiv_kernels::datetime::ZoneRef,
 }
@@ -564,6 +567,21 @@ impl Window {
         zone: krishiv_kernels::datetime::ZoneRef,
         spill: Option<SpillScope>,
     ) -> Result<Self> {
+        Self::with_settings(input, plan, ansi, false, zone, spill)
+    }
+
+    /// [`Self::with_zone`] with `spark.sql.legacy.statisticalAggregate` (`legacy`).
+    ///
+    /// # Errors
+    /// As [`Self::with_zone`].
+    pub(crate) fn with_settings(
+        input: SchemaRef,
+        plan: WindowPlan,
+        ansi: bool,
+        legacy: bool,
+        zone: krishiv_kernels::datetime::ZoneRef,
+        spill: Option<SpillScope>,
+    ) -> Result<Self> {
         let width = input.fields().len();
         let column = |i: usize, what: &str| {
             if i < width {
@@ -636,6 +654,7 @@ impl Window {
                 input,
                 plan,
                 ansi,
+                legacy,
                 zone,
             }),
             spill,
@@ -655,7 +674,14 @@ impl Window {
         env: &crate::planner::eval::EvalEnv,
         spill: Option<SpillScope>,
     ) -> Result<Self> {
-        Self::with_zone(input, plan, env.ansi, env.zone_rules()?, spill)
+        Self::with_settings(
+            input,
+            plan,
+            env.ansi,
+            env.legacy_statistical_aggregate,
+            env.zone_rules()?,
+            spill,
+        )
     }
 
     /// [`Self::with_zone`] in UTC: the tests' constructor (production code names the session zone).
@@ -799,7 +825,13 @@ impl Window {
                     peer_start: &l.pending[i].peer_start[offset..offset + len],
                 })
                 .collect();
-            eval::evaluate(&self.env.plan, &unit, self.env.ansi, &self.env.zone)?
+            eval::evaluate(
+                &self.env.plan,
+                &unit,
+                self.env.ansi,
+                self.env.legacy,
+                &self.env.zone,
+            )?
         };
         // One output batch per slice: its input columns, then the slice of
         // each window column.
