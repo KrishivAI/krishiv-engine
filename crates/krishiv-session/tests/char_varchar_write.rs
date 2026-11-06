@@ -111,3 +111,17 @@ fn a_cast_to_char_or_varchar_is_a_string_cast() {
         "abcdef"
     );
 }
+
+#[test]
+fn describe_formatted_of_a_column_shows_its_declared_type_and_statistics() {
+    let s = fresh();
+    let rows = |sql: &str| {
+        let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+        b.iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>()
+    };
+    assert_eq!(rows("describe t c"), 3);
+    assert_eq!(rows("describe formatted t c"), 10);
+    assert_eq!(text_at(&s, "describe formatted t c", 1), "c");
+}

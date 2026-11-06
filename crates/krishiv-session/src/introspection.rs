@@ -602,15 +602,12 @@ impl Session {
                         .await;
                 }
                 if !column.is_empty() {
-                    if mode.is_some() {
-                        // Spark adds statistics rows; the engine keeps none.
-                        return Err(unsupported("DESCRIBE EXTENDED | FORMATTED ... column"));
-                    }
                     return self
                         .describe_column(
                             &columns,
                             column,
                             &self.declared_char_varchars(&name, temp),
+                            mode.is_some(),
                         )
                         .await;
                 }
@@ -745,6 +742,7 @@ impl Session {
         columns: &[(String, DataType, Option<String>)],
         column: &[krishiv_sql::ast::ColumnName],
         declared: &std::collections::HashMap<String, String>,
+        statistics: bool,
     ) -> Result<DataFrame, KrishivError> {
         let wanted = match column {
             [krishiv_sql::ast::ColumnName::Ident(i)] => i.value.clone(),
@@ -762,7 +760,7 @@ impl Session {
             }
             .into());
         };
-        let rows = vec![
+        let mut rows = vec![
             vec![s("col_name"), s(name)],
             vec![s("data_type"), s(shown_type(declared, name, data_type))],
             vec![
@@ -770,6 +768,22 @@ impl Session {
                 s(comment.clone().unwrap_or_else(|| "NULL".to_owned())),
             ],
         ];
+        // `EXTENDED | FORMATTED` add the statistics rows; the catalog keeps none, so they are NULL.
+        for stat in statistics
+            .then_some([
+                "min",
+                "max",
+                "num_nulls",
+                "distinct_count",
+                "avg_col_len",
+                "max_col_len",
+                "histogram",
+            ])
+            .into_iter()
+            .flatten()
+        {
+            rows.push(vec![s(stat), s("NULL")]);
+        }
         self.ordered_frame(&["info_name", "info_value"], &[], rows)
             .await
     }
