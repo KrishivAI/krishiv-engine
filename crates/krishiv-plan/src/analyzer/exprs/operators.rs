@@ -211,6 +211,9 @@ impl Resolver<'_> {
                 }
             }
         }
+        if matches!(op, Builtin::In) {
+            self.refuse_char_in(kids, origin)?;
+        }
         // `ApplyCharTypePadding`: a bare `char(n)` operand of a comparison pads (see `char_varchar`).
         let padded = matches!(
             op,

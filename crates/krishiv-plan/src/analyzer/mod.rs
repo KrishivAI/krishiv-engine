@@ -664,7 +664,8 @@ pub struct AnalysisTimings {
 }
 
 /// A resolved plan and what a cache, the policy layer and EXPLAIN need.
-/// Equality ignores [`Self::timings`].
+/// Equality ignores [`Self::timings`] and [`Self::output_declared`] (which follows from the plan, the catalog and
+/// `spark.sql.legacy.charVarcharAsString`, all in the fingerprint).
 #[derive(Debug, Clone)]
 pub struct AnalyzedPlan {
     /// The resolved plan.

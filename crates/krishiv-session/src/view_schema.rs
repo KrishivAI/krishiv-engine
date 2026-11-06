@@ -165,7 +165,12 @@ pub(crate) fn check_read(
         let mut changed = (**entry).clone();
         changed.columns = output
             .iter()
-            .map(|o| StoreColumn::plain(o.name.clone(), o.data_type.clone(), o.nullable))
+            .enumerate()
+            .map(|(i, o)| {
+                let mut c = StoreColumn::plain(o.name.clone(), o.data_type.clone(), o.nullable);
+                c.char_varchar = analyzed.output_declared.get(i).cloned().flatten();
+                c
+            })
             .collect();
         if let Some(v) = &mut changed.view {
             v.query_columns = output.iter().map(|o| o.name.clone()).collect();

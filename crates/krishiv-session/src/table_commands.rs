@@ -2250,7 +2250,7 @@ impl Session {
                     None => lit_null().cast(column.data_type.clone()),
                 },
             };
-            let checked = crate::char_write::checked(value, column, &env.analysis.conf);
+            let checked = crate::char_write::checked(value, column, &env.analysis.conf)?;
             select.push(checked.alias(&column.name));
         }
         let df = base.select(select);

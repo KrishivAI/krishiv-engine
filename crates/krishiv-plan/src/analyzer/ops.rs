@@ -101,6 +101,12 @@ impl Resolver<'_> {
                     ..a.col.clone()
                 })
                 .collect();
+            // Each reference to a CTE holds the declared `CHAR`/`VARCHAR` types of its definition.
+            for (a, c) in def.out.iter().zip(&output) {
+                if let Some(d) = self.declared.get(&a.col.id).cloned() {
+                    self.declared.insert(c.id, d);
+                }
+            }
             let qual: Arc<[String]> = Arc::from(vec![n.clone()]);
             let out = output
                 .iter()
@@ -233,7 +239,7 @@ impl Resolver<'_> {
     /// the `Shift` node when it exists already. Ids past `MAX_ID` are an
     /// error, never an overflow.
     pub(super) fn shifted(
-        &self,
+        &mut self,
         c: &Rel,
         offset: u64,
         plan: Option<Arc<LogicalPlan>>,
@@ -244,6 +250,12 @@ impl Resolver<'_> {
                 FailedToParseTooComplex {},
                 c.plan.origin,
             ));
+        }
+        // The declared `CHAR`/`VARCHAR` types follow the shifted ids.
+        for a in c.out.iter().chain(c.hidden.iter()) {
+            if let Some(d) = self.declared.get(&a.col.id).cloned() {
+                self.declared.insert(AttrId(a.col.id.0 + offset), d);
+            }
         }
         let sh = |a: &Attr| Attr {
             col: BoundColumn {
@@ -329,7 +341,9 @@ impl Resolver<'_> {
         if items.iter().any(|b| b.win.is_some()) {
             return self.window_project(p.origin, c, &items, &[]);
         }
-        Ok(self.lateral_project(p.origin, c, &items, &[]))
+        let rel = self.lateral_project(p.origin, c, &items, &[]);
+        self.carry_declared(&items);
+        Ok(rel)
     }
 
     /// `c` outputting the merged-away `USING` columns (`c.hidden`) the
@@ -3863,6 +3877,9 @@ impl Resolver<'_> {
                     name: name.clone(),
                     ..a.col.clone()
                 };
+                if let Some(d) = self.declared.get(&a.col.id).cloned() {
+                    self.declared.insert(output.id, d);
+                }
                 exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                     ResolvedExpr::Alias {
                         expr: col_expr(&a.col, Origin::UNKNOWN),

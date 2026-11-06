@@ -6,7 +6,9 @@
 //! branch is a tagged `raise_error`, which [`map_error`] turns into the error class once the write
 //! has failed, so the check needs no kernel of its own.
 
-use krishiv_common::error::{ErrorClass, ExceedLimitLength, KrishivError};
+use krishiv_common::error::{
+    ErrorClass, ExceedLimitLength, KrishivError, KrishivUnsupportedFeature,
+};
 use krishiv_plan::analyzer::{AnalyzedPlan, ResolutionConf};
 
 use crate::column::Column;
@@ -27,26 +29,38 @@ fn limit(declared: &str) -> Option<i32> {
 }
 
 /// `value` as stored in a column declared `declared`: trimmed to the limit or failing the write.
-pub(crate) fn checked(value: Column, column: &StoreColumn, conf: &ResolutionConf) -> Column {
+pub(crate) fn checked(
+    value: Column,
+    column: &StoreColumn,
+    conf: &ResolutionConf,
+) -> Result<Column, KrishivError> {
     let declared = column
         .char_varchar
         .as_deref()
         .filter(|_| !conf.char_varchar_as_string);
     let Some(n) = declared.and_then(limit) else {
-        return value;
+        // Spark checks inside arrays, maps and structs too; that recursion is not implemented, so a write to
+        // such a column is refused rather than stored unchecked.
+        return match declared {
+            Some(_) => Err(KrishivUnsupportedFeature {
+                feature: "writes to nested CHAR or VARCHAR columns".to_owned(),
+            }
+            .into()),
+            None => Ok(value),
+        };
     };
     let tail = || call_function("substring", [value.clone(), lit(n + 1)]);
     let over = call_function("length", [tail()])
         .gt(lit(0))
         .and(call_function("trim", [tail()]).not_eq(lit("")));
-    call_function(
+    Ok(call_function(
         "if",
         [
             over,
             call_function("raise_error", [lit(format!("{TAG}{n}"))]),
             call_function("substring", [value, lit(1), lit(n)]),
         ],
-    )
+    ))
 }
 
 /// The stored columns of a table or view made from a query: its output columns, each keeping the

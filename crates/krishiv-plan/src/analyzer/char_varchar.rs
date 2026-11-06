@@ -4,11 +4,15 @@
 //! maps the attributes that hold such a column to their catalog string (`char(5)`).
 //!
 //! Read-side padding (`spark.sql.readSideCharPadding`): a scan of a table with `char(n)` columns is read through
-//! `rpad(c, n, ' ')`, so a `CHAR(5)` holding `'N'` reads as `'N    '`. The padded column is a new attribute with
-//! the column's name that carries the same declared type.
+//! `rpad(c, greatest(char_length(c), n), ' ')`, so a `CHAR(5)` holding `'N'` reads as `'N    '` while a longer
+//! value (a file written elsewhere, or under `charVarcharAsString`) is left as it is: Spark's
+//! `readSidePadding` only pads. The padded column is a new attribute with the column's name that carries the
+//! same declared type. The declared type follows an attribute through a bare-column alias
+//! ([`Resolver::carry_declared`]) and a second instance of a relation (`Resolver::shifted`).
 
 use std::sync::Arc;
 
+use super::AnalysisError;
 use super::catalog::FunctionLookup;
 use super::exprs::Bound;
 use super::resolve::{Attr, Rel, Resolver};
@@ -45,9 +49,9 @@ impl Resolver<'_> {
         if padded.is_empty() {
             return rel;
         }
-        if self
-            .rpad_call(Arc::new(Expr::literal(Literal::Null(None))), 0, false)
-            .is_none()
+        if ["rpad", "greatest", "char_length"]
+            .iter()
+            .any(|f| self.function_entry(f).is_none())
         {
             return rel;
         }
@@ -59,7 +63,7 @@ impl Resolver<'_> {
                 out.push(a.clone());
                 continue;
             };
-            let Some(call) = self.rpad_call(
+            let Some(call) = self.read_pad_call(
                 super::ops::col_expr(&a.col, Origin::UNKNOWN),
                 n,
                 a.col.nullable,
@@ -91,6 +95,21 @@ impl Resolver<'_> {
     }
 }
 
+/// The column `e` is, or casts to its own `string` type (the read projection of a permanent view casts its
+/// columns to their stored types).
+fn bare_column(e: &Expr) -> Option<&BoundColumn> {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+        ExprNode::Cast { expr, to, .. } if *to == DataType::String => match &expr.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) if c.data_type == DataType::String => {
+                Some(c)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// The declared length `n` of a bare `char(n)` attribute operand; `None` for any other operand (an expression,
 /// a nested field, a `varchar` column).
 fn bare_char(
@@ -117,32 +136,105 @@ fn string_literal(b: &Bound) -> Option<&str> {
 }
 
 impl Resolver<'_> {
-    /// `rpad(arg, n, ' ')`, `None` when the registry has no `rpad`.
-    fn rpad_call(&self, arg: Arc<Expr>, n: i32, nullable: bool) -> Option<Arc<Expr>> {
-        let FunctionLookup::Found(entry) = self
+    /// The registry entry of the builtin `name`, `None` when there is none.
+    fn function_entry(&self, name: &str) -> Option<crate::analyzer::catalog::FunctionEntry> {
+        match self
             .ctx
             .functions
-            .lookup(&["rpad".to_owned()], self.ctx.profile)
-        else {
-            return None;
-        };
+            .lookup(&[name.to_owned()], self.ctx.profile)
+        {
+            FunctionLookup::Found(entry) => Some(entry),
+            _ => None,
+        }
+    }
+
+    /// A call of the builtin `name`; `None` when the registry has none.
+    fn named_call(
+        &self,
+        name: &str,
+        args: Vec<Arc<Expr>>,
+        data_type: DataType,
+        nullable: bool,
+    ) -> Option<Arc<Expr>> {
+        let entry = self.function_entry(name)?;
         Some(Arc::new(Expr::new(ExprNode::Resolved(
             ResolvedExpr::Function(ResolvedFunction {
                 id: entry.id.clone(),
                 kind: entry.kind,
-                args: vec![
-                    arg,
-                    Arc::new(Expr::literal(Literal::Integer(n))),
-                    Arc::new(Expr::literal(Literal::String(" ".to_owned()))),
-                ],
+                args,
                 distinct: false,
                 filter: None,
                 within_group: Vec::new(),
-                data_type: DataType::String,
+                data_type,
                 nullable,
                 deterministic: true,
             }),
         ))))
+    }
+
+    fn int_literal(n: i32) -> Arc<Expr> {
+        Arc::new(Expr::literal(Literal::Integer(n)))
+    }
+
+    /// `rpad(arg, len, ' ')`.
+    fn rpad_to(&self, arg: Arc<Expr>, len: Arc<Expr>, nullable: bool) -> Option<Arc<Expr>> {
+        let blank = Arc::new(Expr::literal(Literal::String(" ".to_owned())));
+        self.named_call("rpad", vec![arg, len, blank], DataType::String, nullable)
+    }
+
+    /// `rpad(arg, n, ' ')` (it cuts a longer value to `n`, as Spark's comparison padding does).
+    fn rpad_call(&self, arg: Arc<Expr>, n: i32, nullable: bool) -> Option<Arc<Expr>> {
+        self.rpad_to(arg, Self::int_literal(n), nullable)
+    }
+
+    /// The read-side form: `rpad(arg, greatest(char_length(arg), n), ' ')` pads and never cuts.
+    fn read_pad_call(&self, arg: Arc<Expr>, n: i32, nullable: bool) -> Option<Arc<Expr>> {
+        let chars = self.named_call(
+            "char_length",
+            vec![Arc::clone(&arg)],
+            DataType::Integer,
+            nullable,
+        )?;
+        let len = self.named_call(
+            "greatest",
+            vec![chars, Self::int_literal(n)],
+            DataType::Integer,
+            false,
+        )?;
+        self.rpad_to(arg, len, nullable)
+    }
+
+    /// The declared type follows `c AS x` (Spark keeps the field metadata through an alias of a bare column).
+    pub(super) fn carry_declared(&mut self, items: &[Bound]) {
+        if self.declared.is_empty() {
+            return;
+        }
+        for b in items {
+            if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node
+                && let Some(c) = bare_column(expr)
+                && let Some(d) = self.declared.get(&c.id).cloned()
+            {
+                self.declared.insert(output.id, d);
+            }
+        }
+    }
+
+    /// `c IN (...)` over a bare `char(n)` column: Spark pads the column and the literals to a common width
+    /// (`ApplyCharTypePadding`), which is not implemented yet, so it is refused rather than answered with
+    /// unpadded literals (that matches no row).
+    pub(super) fn refuse_char_in(
+        &self,
+        kids: &[Bound],
+        origin: Origin,
+    ) -> Result<(), AnalysisError> {
+        if !self.ctx.conf.char_varchar_as_string
+            && kids
+                .first()
+                .is_some_and(|k| bare_char(&self.declared, k).is_some())
+        {
+            return Err(super::bind::unsupported("IN over a CHAR column", origin));
+        }
+        Ok(())
     }
 
     /// Spark's `ApplyCharTypePadding` for the comparison of `kids` (`=`, `<=>`, `<`, `<=`, `>`, `>=`): only a bare

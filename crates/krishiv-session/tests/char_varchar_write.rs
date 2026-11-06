@@ -133,8 +133,7 @@ fn view_properties_serde_properties_and_partition_locations() {
     run(&s, "alter view tv set tblproperties('yes'='no')").unwrap();
     run(&s, "alter view tv unset tblproperties('yes')").unwrap();
     run(&s, "alter table t set serdeproperties('yes'='no')").unwrap();
-    let described = text_at(&s, "describe table extended t", 1);
-    assert!(!described.is_empty());
+    assert!(all_text(&s, "describe table extended t").contains("[yes=no]"));
     run(&s, "drop table if exists tp").unwrap();
     run(
         &s,
@@ -195,4 +194,113 @@ fn msck_repair_registers_the_partition_directories_it_finds() {
     assert_eq!(rows("show partitions pr"), 1);
     let e = run(&s, "msck repair table pr sync partitions").unwrap_err();
     assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+fn all_text(s: &Session, sql: &str) -> String {
+    let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    let mut out = String::new();
+    for batch in &b {
+        for c in 0..batch.num_columns() {
+            let a = batch.column(c);
+            for i in 0..batch.num_rows() {
+                let v = a.as_string_opt::<i32>().map_or_else(
+                    || a.as_string_view().value(i).to_owned(),
+                    |x| x.value(i).to_owned(),
+                );
+                out.push_str(&v);
+                out.push('\t');
+            }
+        }
+    }
+    out
+}
+
+fn count(s: &Session, sql: &str) -> usize {
+    let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    b.iter().map(arrow_array::RecordBatch::num_rows).sum()
+}
+
+#[test]
+fn read_side_padding_only_pads() {
+    let s = fresh();
+    run(&s, "set spark.sql.legacy.charVarcharAsString=true").unwrap();
+    run(&s, "insert into t values ('abcdef', 'x')").unwrap();
+    run(&s, "set spark.sql.legacy.charVarcharAsString=false").unwrap();
+    // A value longer than the column (written under the legacy flag) is read as it is, not cut.
+    assert_eq!(first_text(&s, "select c from t"), "abcdef");
+}
+
+#[test]
+fn the_declared_type_follows_aliases_instances_and_unions() {
+    let s = fresh();
+    run(&s, "insert into t values ('a', 'x')").unwrap();
+    // The padded column still compares equal to an unpadded literal after an alias.
+    assert_eq!(
+        count(&s, "select * from (select c as x from t) where x = 'a'"),
+        1
+    );
+    // A second instance of a CTE (self-join) pads its side too.
+    assert_eq!(
+        count(
+            &s,
+            "with w as (select * from t) select 1 from w a join w b on a.v = b.v where b.c = 'a'"
+        ),
+        1
+    );
+    // A permanent view over the column pads too.
+    run(&s, "drop view if exists vv").unwrap();
+    run(&s, "create view vv as select c as y from t").unwrap();
+    assert_eq!(count(&s, "select * from vv where y = 'a'"), 1);
+    for (name, query) in [
+        ("ta", "select c as x from t"),
+        ("tu", "select c from t union all select c from t"),
+    ] {
+        run(&s, &format!("drop table if exists {name}")).unwrap();
+        run(&s, &format!("create table {name} using parquet as {query}")).unwrap();
+        let ddl = first_text(&s, &format!("show create table {name}"));
+        assert!(ddl.contains("CHAR(3)"), "{name}: {ddl}");
+    }
+}
+
+#[test]
+fn in_over_a_char_column_and_nested_char_writes_are_refused() {
+    let s = fresh();
+    let e = block_on(async {
+        s.sql("select * from t where c in ('a', 'b')")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    // A varchar column and the legacy flag are not affected.
+    run(&s, "select * from t where v in ('a', 'b')").unwrap();
+    run(&s, "drop table if exists tn").unwrap();
+    run(&s, "create table tn(a array<varchar(2)>) using parquet").unwrap();
+    let e = run(&s, "insert into tn values (array('abc'))").unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+#[test]
+fn lengths_count_code_points_and_nulls_pass() {
+    let s = fresh();
+    // Four-byte characters: three of them overflow char(3)? No: exactly three fit, four do not.
+    run(
+        &s,
+        "insert into t values ('\u{1F600}\u{1F600}\u{1F600}', null)",
+    )
+    .unwrap();
+    let e = run(
+        &s,
+        "insert into t values ('\u{1F600}\u{1F600}\u{1F600}\u{1F600}', null)",
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "EXCEED_LIMIT_LENGTH");
+    run(&s, "insert into t values (null, null)").unwrap();
+    assert_eq!(count(&s, "select * from t where c is null"), 1);
+    // Rows that fit and rows that do not in one statement: the failing one fails the statement, and a
+    // statement of rows that all fit is not affected by the check.
+    let e = run(&s, "insert into t values ('a', 'x'), ('abcd', 'y')").unwrap_err();
+    assert_eq!(e.error_class().name(), "EXCEED_LIMIT_LENGTH");
+    run(&s, "insert into t values ('a', 'x'), ('b', 'y')").unwrap();
 }
