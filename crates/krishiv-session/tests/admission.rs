@@ -33,6 +33,8 @@ struct Gate {
     slots: Slots,
     refuse: AtomicBool,
     requests: std::sync::Mutex<Vec<String>>,
+    /// The estimate each request carried: `Some(scan_bytes)` or `None` when unknown.
+    estimates: std::sync::Mutex<Vec<Option<Option<u64>>>>,
 }
 
 impl Gate {
@@ -43,6 +45,7 @@ impl Gate {
             slots: Slots::default(),
             refuse: AtomicBool::new(false),
             requests: std::sync::Mutex::default(),
+            estimates: std::sync::Mutex::default(),
         })
     }
 }
@@ -57,6 +60,10 @@ impl AdmissionController for Gate {
                 .lock()
                 .unwrap()
                 .push(request.principal.name.clone());
+            self.estimates
+                .lock()
+                .unwrap()
+                .push(request.estimate.as_ref().map(|e| e.scan_bytes));
             if self.refuse.load(Ordering::SeqCst) {
                 return Err(KrishivUnsupportedFeature {
                     feature: "\"too many queries\"".into(),
@@ -440,4 +447,58 @@ async fn a_cancelled_queued_query_counts_its_queue_time_in_wall_ns() {
         wall >= 50_000_000,
         "the 60 ms in the queue count: {wall} ns"
     );
+}
+
+/// A query that reads only `system.*` skips the controller, even one that refuses everything;
+/// a query that reads anything else, or nothing, does not.
+#[tokio::test]
+async fn a_query_reading_only_system_tables_skips_admission() {
+    let gate = Gate::new();
+    gate.first.store(false, Ordering::SeqCst);
+    gate.refuse.store(true, Ordering::SeqCst);
+    let s = Session::builder()
+        .admission_controller(Arc::<Gate>::clone(&gate))
+        .build()
+        .unwrap();
+    let rows = s
+        .sql("SELECT query_id FROM system.queries")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert!(rows.iter().all(|b| b.num_columns() == 1));
+    assert!(
+        gate.requests.lock().unwrap().is_empty(),
+        "the gate was not asked"
+    );
+    let refused = s.sql("SELECT 1 AS one").await.unwrap().collect().await;
+    assert!(
+        refused.is_err(),
+        "a query reading nothing is admitted as usual"
+    );
+    assert_eq!(gate.requests.lock().unwrap().len(), 1);
+}
+
+/// The request carries the estimate of the optimized plan for a controller that reads it, and
+/// the default controller is never made to compute one.
+#[tokio::test]
+async fn the_request_carries_the_estimate_for_a_controller_that_wants_it() {
+    let gate = Gate::new();
+    gate.first.store(false, Ordering::SeqCst);
+    let s = Session::builder()
+        .admission_controller(Arc::<Gate>::clone(&gate))
+        .build()
+        .unwrap();
+    s.sql("SELECT 1 AS one")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let seen = gate.estimates.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].is_some(), "an estimate was computed: {seen:?}");
+    assert!(!krishiv_session::Unlimited.uses_estimate());
+    assert!(gate.uses_estimate());
 }

@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
-use krishiv_exec::planner::{ExplainNode, ProviderStatistics, TableProviderResolver};
+use krishiv_exec::planner::{ExplainNode, PhysicalPlan, ProviderStatistics, TableProviderResolver};
 use krishiv_optimizer::PlanStats;
 use krishiv_plan::{LogicalPlan, Plan};
 use krishiv_sql::ast::{Explain, SetKind, Statement, TimeZone};
@@ -317,8 +317,18 @@ impl DataFrame {
             .session
             .physical_inspected(&analysis.analyzed, &analysis.env)
             .await?;
-        let stats =
-            ProviderStatistics(Arc::clone(&analysis.env.catalog) as Arc<dyn TableProviderResolver>);
+        Ok(estimate_of(&optimized, &physical, &analysis.env.catalog))
+    }
+}
+
+/// The estimate of an optimized plan and its physical plan, from the statistics `catalog` gives.
+pub(crate) fn estimate_of(
+    optimized: &Plan,
+    physical: &PhysicalPlan,
+    catalog: &Arc<crate::catalog::QueryCatalog>,
+) -> Estimate {
+    {
+        let stats = ProviderStatistics(Arc::clone(catalog) as Arc<dyn TableProviderResolver>);
         let estimates = PlanStats::compute(optimized.root(), &stats);
         // Each scan counts once per path that reaches it: the two sides of a self-join share one subtree and read
         // it twice.
@@ -370,13 +380,15 @@ impl DataFrame {
             .lines()
             .map(str::to_owned)
             .collect();
-        Ok(Estimate {
+        Estimate {
             scan_bytes: scan_bytes.map(f64_to_u64),
             rows,
             plan,
-        })
+        }
     }
+}
 
+impl DataFrame {
     /// The text of `mode`. With `lenient` (SQL `EXPLAIN`) a query that does
     /// not analyze or plan is described in the text, as Spark does;
     /// otherwise (`DataFrame.explain`) it is the error.

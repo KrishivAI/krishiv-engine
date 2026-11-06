@@ -2496,7 +2496,7 @@ impl Session {
                 // Admitted before the drop: a controller that refuses the write, or a caller that
                 // gives up while it queues, must not have lost the old table. The write takes
                 // this admission instead of asking again.
-                let mut pre = Some(self.admit_query(&analysis.env).await?);
+                let mut pre = Some(self.admit_query(&analysis.env, false).await?);
                 let done = async {
                     self.drop_named_table(&name, &env, true).await?;
                     self.exec_write_v2(df, spec, V2Mode::Create, &mut pre).await

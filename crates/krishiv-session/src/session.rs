@@ -1446,6 +1446,14 @@ impl Session {
             .with_user(self.state.principal.name.as_str())
             .with_udfs(Arc::clone(&self.state.udfs));
         let physical = self.state.planner.plan(&optimized, &cx)?;
+        // The admission request's estimate, only for a controller that reads it.
+        if self.state.admission.uses_estimate() {
+            env.catalog.set_estimate(crate::explain::estimate_of(
+                &optimized,
+                &physical,
+                &env.catalog,
+            ));
+        }
         // Spark logs what analysis and planning ignore (hints) as
         // warnings; `DataFrame::warnings` returns them too.
         for w in analyzed.warnings.iter().chain(physical.warnings()) {
@@ -1511,12 +1519,21 @@ impl Session {
     /// leaves the row `running`; one that waits shows it `queued`. A refusal
     /// closes the row as failed with the controller's error class, and a
     /// caller that drops the query while it is queued closes it `cancelled`.
-    async fn admit(&self, log_id: &str) -> Result<crate::admission::Permit, KrishivError> {
+    async fn admit(
+        &self,
+        log_id: &str,
+        env: &QueryEnv,
+        exempt: bool,
+    ) -> Result<crate::admission::Permit, KrishivError> {
+        // A query that reads only `system.*` is never queued behind the load it inspects.
+        if exempt {
+            return Ok(crate::admission::Permit::unlimited());
+        }
         let request = QueryRequest {
             principal: Arc::clone(&self.state.principal),
             tags: self.state.queries.tags_now(),
             class: WorkloadClass::Interactive,
-            estimate: None,
+            estimate: env.catalog.estimate(),
         };
         let controller = Arc::clone(&self.state.admission);
         let mut admit = std::pin::pin!(controller.admit(&request));
@@ -1549,14 +1566,18 @@ impl Session {
     /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
     /// that is about to change something (a write replacing files) takes the permit first and
     /// passes it on, so a refused or cancelled query has changed nothing.
-    pub(crate) async fn admit_query(&self, env: &QueryEnv) -> Result<Admitted, KrishivError> {
+    pub(crate) async fn admit_query(
+        &self,
+        env: &QueryEnv,
+        exempt: bool,
+    ) -> Result<Admitted, KrishivError> {
         let log_id = self.state.queries.begin_as(
             env.text.as_deref(),
             env.statement_class,
             self.operation_id(),
         )?;
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
-        let permit = self.admit(&log_id).await?;
+        let permit = self.admit(&log_id, env, exempt).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 
@@ -1577,7 +1598,10 @@ impl Session {
         // `system.memory.query_id` joins `system.queries.query_id`.
         let (log_id, permit) = match admitted {
             Some(admitted) => admitted.into_parts(),
-            None => self.admit_query(env).await?.into_parts(),
+            None => self
+                .admit_query(env, env.catalog.reads_only_system())
+                .await?
+                .into_parts(),
         };
         let id = QueryId(self.state.runtime.reserve(
             self.state.number,
@@ -1869,7 +1893,7 @@ impl Session {
         // Admitted by the caller already (it changed something before this write), else here.
         let mut admitted = Some(match pre.take() {
             Some(admitted) => admitted,
-            None => self.admit_query(env).await?,
+            None => self.admit_query(env, false).await?,
         });
         let written = async {
             let job = job_uuid();
