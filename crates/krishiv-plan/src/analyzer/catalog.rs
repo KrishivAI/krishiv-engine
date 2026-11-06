@@ -78,6 +78,22 @@ pub struct TableColumn {
     pub data_type: DataType,
     /// Whether it may be null.
     pub nullable: bool,
+    /// The catalog string a `CHAR(n)` / `VARCHAR(n)` column was declared with (`char(5)`; the type is `string`),
+    /// Spark's `__CHAR_VARCHAR_TYPE_STRING` field metadata; `None` for any other column.
+    pub char_varchar: Option<String>,
+}
+
+impl TableColumn {
+    /// A column that is not `CHAR` / `VARCHAR`.
+    #[must_use]
+    pub fn new(name: impl Into<String>, data_type: DataType, nullable: bool) -> Self {
+        Self {
+            name: name.into(),
+            data_type,
+            nullable,
+            char_varchar: None,
+        }
+    }
 }
 
 /// What a catalog entry is.

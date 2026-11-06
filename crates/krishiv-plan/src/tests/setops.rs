@@ -23,6 +23,7 @@ fn table(cat: MemoryCatalog, name: &str, cols: &[(&str, DataType, bool)]) -> Mem
             name: (*n).to_owned(),
             data_type: t.clone(),
             nullable: *nullable,
+            char_varchar: None,
         })
         .collect();
     cat.with_table(&["default"], name, columns, None)

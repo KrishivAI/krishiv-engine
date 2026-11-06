@@ -205,6 +205,9 @@ pub(super) struct Resolver<'a> {
     /// The first aggregate over a nondeterministic argument: Spark checks
     /// it after the operators' other rules, so any other error wins.
     pub(super) pending_nondeterministic: Option<AnalysisError>,
+    /// The attributes that hold a `CHAR(n)` / `VARCHAR(n)` column, by id, with the catalog string they were
+    /// declared with (see `char_varchar`).
+    pub(super) declared: HashMap<AttrId, Arc<str>>,
 }
 
 type Resolved = (
@@ -244,6 +247,7 @@ pub(super) fn resolve(
         fn_path: Vec::new(),
         sql_calls: 0,
         pending_nondeterministic: None,
+        declared: HashMap::new(),
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).

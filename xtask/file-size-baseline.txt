@@ -25,7 +25,8 @@
 2630 crates/krishiv-session/src/dataframe.rs
 2867 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
-3284 crates/krishiv-session/src/table_commands.rs
+# +2 over the previous baseline: TableColumn::new wraps over the line width at two sites after TableColumn gained char_varchar (T001b)
+3286 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
 2774 crates/krishiv-sql/src/lower.rs
 5263 crates/krishiv-sql/src/parser.rs

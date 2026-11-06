@@ -694,11 +694,11 @@ impl Session {
                         "datasource views without declared column types",
                     ));
                 };
-                Ok(TableColumn {
-                    name: ident.value.clone(),
-                    data_type: spec.to_data_type()?,
-                    nullable: !c.not_null,
-                })
+                Ok(TableColumn::new(
+                    ident.value.clone(),
+                    spec.to_data_type()?,
+                    !c.not_null,
+                ))
             })
             .collect::<Result<Vec<_>, KrishivError>>()?;
         if columns.is_empty() {
@@ -2204,10 +2204,12 @@ impl Session {
             .analyzed
             .output
             .iter()
-            .map(|c| TableColumn {
-                name: c.name.clone(),
-                data_type: krishiv_plan::without_generated_marker(&c.data_type),
-                nullable: c.nullable,
+            .map(|c| {
+                TableColumn::new(
+                    c.name.clone(),
+                    krishiv_plan::without_generated_marker(&c.data_type),
+                    c.nullable,
+                )
             })
             .collect();
         // The query provides every column but the static partition columns.

@@ -893,11 +893,11 @@ impl Session {
             .fields()
             .iter()
             .map(|f| {
-                Ok(TableColumn {
-                    name: f.name().clone(),
-                    data_type: DataType::from_arrow_field(f)?.refuse_collations()?,
-                    nullable: f.is_nullable(),
-                })
+                Ok(TableColumn::new(
+                    f.name().clone(),
+                    DataType::from_arrow_field(f)?.refuse_collations()?,
+                    f.is_nullable(),
+                ))
             })
             .collect::<Result<Vec<_>, KrishivError>>()?;
         if let Some(b) = batches.iter().find(|b| b.schema() != schema) {

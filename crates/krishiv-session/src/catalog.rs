@@ -982,6 +982,7 @@ impl QueryCatalog {
                 name: c.name.clone(),
                 data_type: c.data_type.clone(),
                 nullable: c.nullable,
+                char_varchar: c.char_varchar.clone(),
             })
             .collect();
         let entry = Arc::new(TempTable::Files {
@@ -2153,11 +2154,7 @@ mod tests {
                 paths: vec![],
                 options: Default::default(),
             },
-            columns: vec![TableColumn {
-                name: col.to_owned(),
-                data_type: DataType::Integer,
-                nullable: false,
-            }],
+            columns: vec![TableColumn::new(col.to_owned(), DataType::Integer, false)],
         }
     }
 

@@ -142,6 +142,9 @@ impl Resolver<'_> {
                 data_type: c.data_type.clone(),
                 nullable: c.nullable,
             };
+            if let Some(declared) = &c.char_varchar {
+                self.declared.insert(col.id, Arc::from(declared.as_str()));
+            }
             out.push(Attr {
                 col,
                 qual: Arc::clone(&qual),
@@ -158,7 +161,7 @@ impl Resolver<'_> {
         });
         let mut rel = self.make(p.origin, node, out, &[]);
         self.with_metadata_column(&mut rel, meta.file_metadata, &qual);
-        Ok(rel)
+        Ok(self.pad_char_columns(rel, p.origin))
     }
 
     /// `rel`, a scan of a file source, with the hidden `_metadata` column of

@@ -303,11 +303,7 @@ impl Session {
             .analyzed
             .output
             .iter()
-            .map(|c| TableColumn {
-                name: c.name.clone(),
-                data_type: c.data_type.clone(),
-                nullable: c.nullable,
-            })
+            .map(|c| TableColumn::new(c.name.clone(), c.data_type.clone(), c.nullable))
             .collect();
         if !v.columns.is_empty() {
             let declared: Vec<String> = v.columns.iter().map(|c| c.name.value.clone()).collect();

@@ -491,6 +491,7 @@ fn tpcds_ctx() -> krishiv_plan::analyzer::AnalysisContext {
                 name: (*c).to_owned(),
                 data_type: krishiv_types::parse_data_type(ty).unwrap(),
                 nullable: true,
+                char_varchar: None,
             })
             .collect();
         cat = cat.with_table(&["default"], table, columns, None);
