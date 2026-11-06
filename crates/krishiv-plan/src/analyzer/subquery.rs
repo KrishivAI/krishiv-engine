@@ -405,7 +405,7 @@ fn aggregates_below(p: &LogicalPlan) -> bool {
 
 /// Whether `p` is one row of expressions over no relation: `SELECT 1`,
 /// `VALUES (1)`, through aliases and projections.
-fn one_row_literals(p: &LogicalPlan) -> bool {
+pub(super) fn one_row_literals(p: &LogicalPlan) -> bool {
     match &p.node {
         PlanNode::OneRowRelation => true,
         PlanNode::InlineTable { rows, .. } => rows.len() == 1,

@@ -83,3 +83,23 @@ fn calls_are_named_as_spark_names_them() {
     let schema = block_on(df.schema()).unwrap();
     assert_eq!(schema.field(1).name(), "id(c1)");
 }
+
+/// `x IN (SELECT 1)` is `x = 1` (Spark folds the one-row subquery), so a
+/// NULL `x` is NULL and the rest compare; inside a SQL function too.
+#[test]
+fn in_over_one_row_of_values_is_an_equality() {
+    let s = session();
+    run(
+        &s,
+        "CREATE TEMPORARY FUNCTION in1(x INT) RETURNS INT RETURN IF(x IN (SELECT 1), 1, 0)",
+    );
+    let out = run(&s, "SELECT in1(c1) FROM t1");
+    assert_eq!(ints(&out), vec![vec![0], vec![0], vec![1]]);
+    let out = run(
+        &s,
+        "SELECT CAST(NULL AS INT) IN (SELECT 1) IS NULL, 2 IN (SELECT 1)",
+    );
+    let b = &out[0];
+    assert!(b.column(0).as_boolean().value(0));
+    assert!(!b.column(1).as_boolean().value(0));
+}
