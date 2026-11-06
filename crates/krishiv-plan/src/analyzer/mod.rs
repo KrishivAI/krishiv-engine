@@ -396,6 +396,11 @@ pub struct ResolutionConf {
     /// `spark.sql.optimizer.decorrelateOffset.enabled` (Spark 4.0+, default
     /// on): the same for an `OFFSET`.
     pub decorrelate_offset: bool,
+    /// `spark.sql.optimizer.optimizeUncorrelatedInSubqueriesInJoinCondition.enabled`
+    /// (default on): an `IN` subquery in a join condition becomes a join.
+    /// Off, Spark evaluates it as an expression, where
+    /// [`Self::legacy_null_in_empty_list`] applies.
+    pub in_join_condition_as_join: bool,
 }
 
 impl Default for ResolutionConf {
@@ -432,13 +437,14 @@ impl Default for ResolutionConf {
             legacy_group_by_non_equality: false,
             decorrelate_limit: true,
             decorrelate_offset: true,
+            in_join_condition_as_join: true,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 30] = [
+    pub const KEYS: [&'static str; 31] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -469,6 +475,7 @@ impl ResolutionConf {
         "spark.sql.legacy.scalarSubqueryAllowGroupByNonEqualityCorrelatedPredicate",
         "spark.sql.optimizer.decorrelateLimit.enabled",
         "spark.sql.optimizer.decorrelateOffset.enabled",
+        "spark.sql.optimizer.optimizeUncorrelatedInSubqueriesInJoinCondition.enabled",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -535,6 +542,8 @@ impl ResolutionConf {
             decorrelate_limit: conf(Self::KEYS[28])
                 .is_none_or(|s| s.trim().eq_ignore_ascii_case("true")),
             decorrelate_offset: conf(Self::KEYS[29])
+                .is_none_or(|s| s.trim().eq_ignore_ascii_case("true")),
+            in_join_condition_as_join: conf(Self::KEYS[30])
                 .is_none_or(|s| s.trim().eq_ignore_ascii_case("true")),
         }
     }
@@ -636,6 +645,14 @@ impl ContextFingerprint {
             c.legacy_interval,
             c.legacy_null_in_empty_list,
             c.concat_binary_as_string,
+            c.legacy_percentile_disc,
+            c.legacy_exists_in_count,
+            c.legacy_scalar_count,
+            c.scalar_single_join,
+            c.legacy_group_by_non_equality,
+            c.decorrelate_limit,
+            c.decorrelate_offset,
+            c.in_join_condition_as_join,
         ];
         num(
             &mut b,

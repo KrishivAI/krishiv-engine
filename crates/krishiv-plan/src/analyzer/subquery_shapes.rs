@@ -13,8 +13,8 @@ use super::ops::col_expr;
 use super::subquery::has_outer;
 use crate::walk::{Node, visit_distinct};
 use crate::{
-    AttrId, Builtin, Expr, ExprNode, Grouping, Literal, LogicalPlan, Origin, PlanNode,
-    ResolvedExpr, SubqueryKind,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, Grouping, JoinKind, Literal, LogicalPlan, Origin,
+    PlanNode, ResolvedExpr, SubqueryKind,
 };
 use krishiv_types::DataType;
 
@@ -254,6 +254,127 @@ pub(super) fn three_valued_ins(on: &Arc<Expr>, legacy: bool) -> R<Arc<Expr>> {
         Ok(super::subquery::boolean(
             Builtin::Or,
             vec![exists(eq), super::subquery::boolean(Builtin::And, vec![unknown, null])],
+        ))
+    })
+}
+
+/// The join condition `on` as Spark evaluates it when
+/// `spark.sql.optimizer.optimizeUncorrelatedInSubqueriesInJoinCondition` is
+/// off (`flags.0` false; `flags.1` is the legacy flag below). Each conjunct the optimizer leaves in a `kind` join (one reading
+/// both sides, or only the side an outer or anti join keeps) evaluates an
+/// uncorrelated one-value `IN` subquery as an expression: three-valued, and
+/// NULL for a NULL value under `spark.sql.legacy.nullInEmptyListBehavior`
+/// even over no rows. Here `v IN q` (the existence join's two-valued
+/// answer) becomes `CASE WHEN v IN q THEN true WHEN some NULL in q OR (v IS
+/// NULL AND q has rows) THEN NULL ELSE false END`, the two tests on `q`
+/// being uncorrelated `IN`s of their own. Conjuncts Spark pushes into one
+/// side become filters there and are rewritten to joins: unchanged, as is
+/// a multi-value `IN`, which compares a struct that is never NULL.
+pub(super) fn in_join_condition_ins(
+    on: &Arc<Expr>,
+    kind: JoinKind,
+    sides: [&HashSet<AttrId>; 2],
+    (as_join, legacy): (bool, bool),
+    fresh: &mut impl FnMut() -> AttrId,
+) -> R<Arc<Expr>> {
+    if as_join {
+        return Ok(Arc::clone(on));
+    }
+    let stays = |c: &Arc<Expr>| {
+        let cols = super::subquery::inner_columns(c);
+        let reads = |side: &HashSet<AttrId>| cols.iter().any(|col| side.contains(&col.id));
+        match (reads(sides[0]), reads(sides[1])) {
+            (true, true) => true,
+            (true, false) => matches!(
+                kind,
+                JoinKind::LeftOuter | JoinKind::LeftAnti | JoinKind::FullOuter
+            ),
+            (false, true) => matches!(kind, JoinKind::RightOuter | JoinKind::FullOuter),
+            (false, false) => false,
+        }
+    };
+    let parts = super::subquery::conjuncts(on)
+        .into_iter()
+        .map(|c| {
+            if stays(&c) {
+                three_valued_in_values(&c, sides, legacy, fresh)
+            } else {
+                Ok(c)
+            }
+        })
+        .collect::<R<Vec<_>>>()?;
+    Ok(super::subquery::and_all(parts).unwrap_or_else(|| Arc::clone(on)))
+}
+
+/// `c` with each uncorrelated one-value `IN` subquery three-valued (see
+/// [`in_join_condition_ins`]).
+fn three_valued_in_values(
+    c: &Arc<Expr>,
+    sides: [&HashSet<AttrId>; 2],
+    legacy: bool,
+    fresh: &mut impl FnMut() -> AttrId,
+) -> R<Arc<Expr>> {
+    use super::subquery::{boolean, node};
+    Arc::clone(c).transform_up(&mut |x: Arc<Expr>| {
+        let ExprNode::Subquery {
+            kind: SubqueryKind::In(values),
+            plan,
+        } = &x.node
+        else {
+            return Ok(x);
+        };
+        let ([v], [col]) = (&values[..], &super::subquery::output(plan)?[..]) else {
+            return Ok(x);
+        };
+        // A value over both sides is refused by the caller.
+        let cols = super::subquery::inner_columns(v);
+        let both = sides
+            .iter()
+            .all(|side| cols.iter().any(|col| side.contains(&col.id)));
+        if both || null_literal(v) || has_outer(Node::Plan(plan)) {
+            return Ok(x);
+        }
+        let truth = |b: bool| Arc::new(Expr::literal(Literal::Boolean(b)));
+        // `true IN (SELECT true FROM input)`: whether `input` has a row.
+        let mut any_row = |input: Arc<LogicalPlan>| {
+            let output = BoundColumn {
+                id: fresh(),
+                name: "any".to_owned(),
+                data_type: DataType::Boolean,
+                nullable: false,
+            };
+            let exprs = vec![Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Alias {
+                    expr: truth(true),
+                    output,
+                },
+            )))];
+            let origin = input.origin;
+            Arc::new(Expr::new(ExprNode::Subquery {
+                kind: SubqueryKind::In(vec![truth(true)]),
+                plan: node(PlanNode::Project { input, exprs }, origin),
+            }))
+        };
+        let col_null = boolean(Builtin::IsNull, vec![col_expr(col, Origin::UNKNOWN)]);
+        let has_null = any_row(node(
+            PlanNode::Filter {
+                input: Arc::clone(plan),
+                predicate: col_null,
+            },
+            plan.origin,
+        ));
+        let v_null = boolean(Builtin::IsNull, vec![Arc::clone(v)]);
+        let unknown_value = if legacy {
+            v_null
+        } else {
+            boolean(Builtin::And, vec![v_null, any_row(Arc::clone(plan))])
+        };
+        let unknown = boolean(Builtin::Or, vec![has_null, unknown_value]);
+        let null = Arc::new(Expr::literal(Literal::Null(Some(DataType::Boolean))));
+        // NULL among the arguments: a nullable result.
+        Ok(boolean(
+            Builtin::When,
+            vec![x, truth(true), unknown, null, truth(false)],
         ))
     })
 }

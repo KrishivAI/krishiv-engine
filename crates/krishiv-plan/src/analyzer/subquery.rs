@@ -44,8 +44,8 @@ use super::catalog::{FunctionLookup, FunctionRegistry};
 use super::exprs::{literal_type, pretty};
 use super::ops::{MAX_ID, col_expr};
 use super::subquery_shapes::{
-    Bounded, aggregates_below, bounded, check_in, constant_side, fold_one_row_bounds, outer_ids,
-    three_valued_ins,
+    Bounded, aggregates_below, bounded, check_in, constant_side, fold_one_row_bounds,
+    in_join_condition_ins, outer_ids, three_valued_ins,
 };
 pub(super) use super::subquery_shapes::{null_literal, one_row_aggregate};
 use super::{AnalysisError, ResolutionConf, SparkProfile};
@@ -93,6 +93,7 @@ pub(super) fn rewrite(
         lateral: false,
         legacy_exists_in_count: conf.legacy_exists_in_count,
         legacy_null_in_empty: conf.legacy_null_in_empty_list,
+        in_join_as_join: conf.in_join_condition_as_join,
         legacy_scalar_count: conf.legacy_scalar_count,
         single_join: conf.scalar_single_join && profile != SparkProfile::V3_5,
         legacy_group_by: conf.legacy_group_by_non_equality,
@@ -125,6 +126,7 @@ struct Rewriter {
     legacy_exists_in_count: bool,
     /// `spark.sql.legacy.nullInEmptyListBehavior`.
     legacy_null_in_empty: bool,
+    in_join_as_join: bool,
     /// `spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled`.
     legacy_scalar_count: bool,
     /// `spark.sql.optimizer.scalarSubqueryUseSingleJoin` (always off for 3.5).
@@ -810,6 +812,10 @@ impl Rewriter {
         let left_ids: HashSet<AttrId> = output(left)?.iter().map(|c| c.id).collect();
         let right_ids: HashSet<AttrId> = output(right)?.iter().map(|c| c.id).collect();
         let on = &three_valued_ins(on, self.legacy_null_in_empty)?;
+        let flags = (self.in_join_as_join, self.legacy_null_in_empty);
+        let on = &in_join_condition_ins(on, *kind, [&left_ids, &right_ids], flags, &mut || {
+            self.fresh()
+        })?;
         let (mut plain, mut on_left, mut on_right) = (Vec::new(), Vec::new(), Vec::new());
         for c in conjuncts(on) {
             if !self.existential(&c) {
