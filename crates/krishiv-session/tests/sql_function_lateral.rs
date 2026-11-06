@@ -82,6 +82,13 @@ fn calls_are_named_as_spark_names_them() {
     let df = block_on(s.sql("SELECT c1, id(c1) FROM t1 GROUP BY c1")).unwrap();
     let schema = block_on(df.schema()).unwrap();
     assert_eq!(schema.field(1).name(), "id(c1)");
+    // Spark 4.2.0 names `grouping` over the call as written.
+    let df = block_on(
+        s.sql("SELECT id(c1), c2, GROUPING(id(c1)), SUM(c1) FROM t1 GROUP BY ROLLUP(id(c1), c2)"),
+    )
+    .unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.field(2).name(), "grouping(id(c1))");
 }
 
 /// `x IN (SELECT 1)` is `x = 1` (Spark folds the one-row subquery), so a
