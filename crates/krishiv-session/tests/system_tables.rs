@@ -621,3 +621,26 @@ fn query_text_honours_the_max_bytes_and_literals_settings() {
     );
     assert_eq!(cut, ["SELECT 'cutt|true"]);
 }
+
+#[test]
+fn queries_carry_the_sqlstate_of_a_failure_and_are_never_partial_in_one_process() {
+    let s = Session::new().unwrap();
+    run_all(&s, "SELECT 1").unwrap();
+    assert!(run_all(&s, "SELECT * FROM no_such_table_xyz").is_err());
+    let failed = strings_in(
+        &s,
+        "SELECT concat(error_class, '|', sqlstate) FROM system.queries \
+         WHERE error_class = 'TABLE_OR_VIEW_NOT_FOUND'",
+    );
+    assert_eq!(failed, ["TABLE_OR_VIEW_NOT_FOUND|42P01"]);
+    let ok = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.queries WHERE state = 'finished' AND sqlstate IS NOT NULL",
+    );
+    assert_eq!(ok, ["0"]);
+    let partial = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.queries WHERE partial",
+    );
+    assert_eq!(partial, ["0"]);
+}
