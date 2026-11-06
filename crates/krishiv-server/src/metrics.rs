@@ -66,7 +66,9 @@ fn same_secret(a: &[u8], b: &[u8]) -> bool {
     for i in 0..a.len().max(b.len()) {
         diff |= usize::from(a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0));
     }
-    diff == 0
+    // `black_box` keeps the compiler from turning the fold into an early exit. The length is not
+    // secret from a timing observer; the token's bytes are not revealed by the time taken.
+    std::hint::black_box(diff) == 0
 }
 
 /// Whether `headers` carry `Authorization: Bearer <token>` for exactly `token`. An empty `token`
@@ -140,8 +142,8 @@ mod tests {
             let mut h = HeaderMap::new();
             h.insert(
                 header::AUTHORIZATION,
-                header::HeaderValue::from_str(value)
-                    .unwrap_or_else(|_| header::HeaderValue::from_static("")),
+                header::HeaderValue::from_bytes(value.as_bytes())
+                    .unwrap_or_else(|e| panic!("test header {value:?}: {e}")),
             );
             h
         };
@@ -151,6 +153,18 @@ mod tests {
         assert!(!bearer_matches(&with("Bearer s3cret2"), "s3cret"));
         assert!(!bearer_matches(&with("Basic s3cret"), "s3cret"));
         assert!(!bearer_matches(&with("s3cret"), "s3cret"));
+        // A tab or a second space after the scheme is not the single space the scheme allows.
+        assert!(!bearer_matches(&with("Bearer\ts3cret"), "s3cret"));
+        assert!(!bearer_matches(&with("Bearer  s3cret"), "s3cret"));
+        // Non-ASCII credentials never match.
+        assert!(!bearer_matches(&with("Bearer s3cr\u{e9}t"), "s3cret"));
+        // With two Authorization headers only the first is read, so a later one cannot stand in.
+        let mut two = with("Bearer wrong");
+        two.append(
+            header::AUTHORIZATION,
+            header::HeaderValue::from_static("Bearer s3cret"),
+        );
+        assert!(!bearer_matches(&two, "s3cret"));
         assert!(!bearer_matches(&HeaderMap::new(), "s3cret"));
         // An empty token never matches, not even an empty credential.
         assert!(!bearer_matches(&with("Bearer "), ""));
