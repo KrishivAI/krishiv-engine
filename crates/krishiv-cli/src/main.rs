@@ -153,7 +153,7 @@ fn run_server(addr: std::net::SocketAddr, conf: &[(String, String)]) -> Result<(
     let app = krishiv_server::internal::router_with_ui(std::sync::Arc::new(source), &token);
     krishiv_server::run_blocking_with(addr, app, |a| {
         println!("krishiv server listening on http://{a}");
-        println!("UI token (send as `Authorization: Bearer <token>` to /api/internal/*): {token}");
+        println!("open http://{a}/?token={token}");
     })
     .map_err(|e| e.to_string())
 }
