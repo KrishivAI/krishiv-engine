@@ -63,6 +63,7 @@ Paths are relative to this crate.
 - `src/golden/` the SQLQueryTestSuite runner, report and manifest; `src/file_format/` the `FileFormat` conformance suite
 - `src/kernel_eval/` kernel evaluation for the Spark function matrix; `src/fn_matrix.rs` matrix loader
 - `src/hash_fixture.rs` hash golden fixtures; `src/batch_stream.rs` batch == bounded-stream harness; `src/slt.rs` sqllogictest runner
+- `src/partitioned_writes.rs` (P2-T082b acceptance): partitioned writes Spark reads back. `tests/fixtures/partitioned-writes/cases.json` is written by the `write-partition-cases` binary and read by a real Spark 4.2.0 (`tests/scripts/gen_partitioned_write_goldens.py`); test `partitioned_write_goldens` checks the partition directories and that Krishiv reads Spark's schema (partition-type inference included) and rows
 - `src/bin/` report binaries; `tests/` the differential and interop suites (e.g. `registry_matrix.rs`, `file_format_mock.rs`, `parquet_interop.rs`)
 
 ## Extension points

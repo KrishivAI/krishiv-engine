@@ -1,0 +1,22 @@
+{
+  "format_version": 1,
+  "comment": "Partitioned writes Krishiv makes and Spark 4.2.0 reads back (P2-T082b acceptance). Each case: the query Krishiv writes, its partition columns, the file format and the read options. tests/scripts/gen_partitioned_write_goldens.py writes them with Krishiv, reads them with Spark and records Spark's schema, rows and partition directories in tests/fixtures/spark-4.2.0/partitioned-write-goldens.json.",
+  "cases": [
+    {"id": "int_one_level", "format": "parquet", "partition_by": ["p"], "options": {},
+     "query": "SELECT id, CAST(id % 3 AS INT) AS p FROM range(0, 9)"},
+    {"id": "string_escapes_and_null", "format": "parquet", "partition_by": ["p"], "options": {},
+     "query": "SELECT * FROM VALUES (1, 'a b'), (2, 'x/y'), (3, 'k=v'), (4, '50%'), (5, 'é'), (6, NULL), (7, ''), (8, 'a#b') AS t(id, p)"},
+    {"id": "date_and_null_date", "format": "parquet", "partition_by": ["d"], "options": {},
+     "query": "SELECT * FROM VALUES (1, DATE '2024-02-29'), (2, DATE '1999-12-31'), (3, CAST(NULL AS DATE)) AS t(id, d)"},
+    {"id": "two_levels", "format": "parquet", "partition_by": ["a", "b"], "options": {},
+     "query": "SELECT * FROM VALUES (1, 'x', 1), (2, 'x', 2), (3, 'y', 1), (4, 'y', NULL) AS t(id, a, b)"},
+    {"id": "decimal_and_long_values", "format": "parquet", "partition_by": ["p"], "options": {},
+     "query": "SELECT * FROM VALUES (1, CAST(1.50 AS DECIMAL(5,2))), (2, CAST(-0.25 AS DECIMAL(5,2))) AS t(id, p)"},
+    {"id": "boolean_partition", "format": "parquet", "partition_by": ["p"], "options": {},
+     "query": "SELECT * FROM VALUES (1, true), (2, false) AS t(id, p)"},
+    {"id": "csv_with_header", "format": "csv", "partition_by": ["p"], "options": {"header": "true"},
+     "query": "SELECT * FROM VALUES (1, 'one', 'a'), (2, 'two', 'b') AS t(id, s, p)"},
+    {"id": "json_lines", "format": "json", "partition_by": ["p"], "options": {},
+     "query": "SELECT * FROM VALUES (1, 'one', 10), (2, 'two', 20) AS t(id, s, p)"}
+  ]
+}

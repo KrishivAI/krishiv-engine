@@ -1,0 +1,128 @@
+{
+ "format_version": 1,
+ "generator": "tests/scripts/gen_partitioned_write_goldens.py",
+ "spark_version": "4.2.0",
+ "cases": [
+  {
+   "id": "int_one_level",
+   "partition_dirs": [
+    "p=0",
+    "p=1",
+    "p=2"
+   ],
+   "schema": "struct<id:bigint,p:int>",
+   "rows": [
+    "0|0",
+    "1|1",
+    "2|2",
+    "3|0",
+    "4|1",
+    "5|2",
+    "6|0",
+    "7|1",
+    "8|2"
+   ]
+  },
+  {
+   "id": "string_escapes_and_null",
+   "partition_dirs": [
+    "p=50%25",
+    "p=__HIVE_DEFAULT_PARTITION__",
+    "p=a b",
+    "p=a%23b",
+    "p=k%3Dv",
+    "p=x%2Fy",
+    "p=é"
+   ],
+   "schema": "struct<id:int,p:string>",
+   "rows": [
+    "1|a b",
+    "2|x/y",
+    "3|k=v",
+    "4|50%",
+    "5|é",
+    "6|NULL",
+    "7|NULL",
+    "8|a#b"
+   ]
+  },
+  {
+   "id": "date_and_null_date",
+   "partition_dirs": [
+    "d=1999-12-31",
+    "d=2024-02-29",
+    "d=__HIVE_DEFAULT_PARTITION__"
+   ],
+   "schema": "struct<id:int,d:date>",
+   "rows": [
+    "1|2024-02-29",
+    "2|1999-12-31",
+    "3|NULL"
+   ]
+  },
+  {
+   "id": "two_levels",
+   "partition_dirs": [
+    "a=x/b=1",
+    "a=x/b=2",
+    "a=y/b=1",
+    "a=y/b=__HIVE_DEFAULT_PARTITION__"
+   ],
+   "schema": "struct<id:int,a:string,b:int>",
+   "rows": [
+    "1|x|1",
+    "2|x|2",
+    "3|y|1",
+    "4|y|NULL"
+   ]
+  },
+  {
+   "id": "decimal_and_long_values",
+   "partition_dirs": [
+    "p=-0.25",
+    "p=1.50"
+   ],
+   "schema": "struct<id:int,p:double>",
+   "rows": [
+    "1|1.5",
+    "2|-0.25"
+   ]
+  },
+  {
+   "id": "boolean_partition",
+   "partition_dirs": [
+    "p=false",
+    "p=true"
+   ],
+   "schema": "struct<id:int,p:string>",
+   "rows": [
+    "1|true",
+    "2|false"
+   ]
+  },
+  {
+   "id": "csv_with_header",
+   "partition_dirs": [
+    "p=a",
+    "p=b"
+   ],
+   "schema": "struct<id:string,s:string,p:string>",
+   "rows": [
+    "1|one|a",
+    "2|two|b"
+   ]
+  },
+  {
+   "id": "json_lines",
+   "partition_dirs": [
+    "p=10",
+    "p=20"
+   ],
+   "schema": "struct<id:bigint,s:string,p:int>",
+   "rows": [
+    "1|one|10",
+    "2|two|20"
+   ]
+  }
+ ]
+}
