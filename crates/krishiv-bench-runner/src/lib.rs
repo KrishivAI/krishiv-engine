@@ -449,9 +449,10 @@ impl Runner {
                 Ok(format!("OK {} {secs:.6}", count_rows(&batches)))
             }
             (Some("RUN_CHECKED"), Some(file), None, _) => {
-                let (batches, secs, _) = self.execute(&read_sql(&decode_path(file)?)?)?;
+                let (batches, secs, df) = self.execute(&read_sql(&decode_path(file)?)?)?;
                 // The checksum is taken after the seconds, outside the timed span.
-                let sum = checksum::of(&batches)?;
+                let schema = futures::executor::block_on(df.schema())?;
+                let sum = checksum::of(&batches, &schema)?;
                 Ok(format!(
                     "OK {} {secs:.6} {}",
                     count_rows(&batches),

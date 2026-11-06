@@ -14,12 +14,13 @@
 //! engines. Floats are printed as JSON numbers, with Python's `NaN`/`Infinity` tokens for the non-finite ones.
 
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type};
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_row::{RowConverter, SortField};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, Schema};
 
 use crate::RunnerError;
 
@@ -50,14 +51,31 @@ fn weight(row_hash: u64) -> f64 {
 }
 
 /// A floating-point column's values as `f64`, NULLs as `None`.
-fn floats(a: &ArrayRef) -> Vec<Option<f64>> {
-    match a.data_type() {
-        DataType::Float32 => a
-            .as_primitive::<Float32Type>()
+///
+/// # Errors
+/// The array is not the floating-point type its column was declared with (a batch whose type differs from the schema).
+fn floats(a: &ArrayRef, declared: &DataType) -> Result<Vec<Option<f64>>, RunnerError> {
+    let mismatch = || {
+        RunnerError::Config(format!(
+            "result checksum: a batch column is {}, the schema says {declared}",
+            a.data_type()
+        ))
+    };
+    if a.data_type() != declared {
+        return Err(mismatch());
+    }
+    match declared {
+        DataType::Float32 => Ok(a
+            .as_primitive_opt::<Float32Type>()
+            .ok_or_else(mismatch)?
             .iter()
             .map(|v| v.map(f64::from))
-            .collect(),
-        _ => a.as_primitive::<Float64Type>().iter().collect(),
+            .collect()),
+        _ => Ok(a
+            .as_primitive_opt::<Float64Type>()
+            .ok_or_else(mismatch)?
+            .iter()
+            .collect()),
     }
 }
 
@@ -102,19 +120,18 @@ fn json_float(v: f64) -> String {
     }
 }
 
-/// The checksum of `batches`.
+/// The checksum of `batches`. The column types are those of the first batch; `schema` (the result's) gives them when
+/// there is none, so a result of no batches has the same structure as one of empty batches, and as the harness's
+/// checksum of an empty table.
 ///
 /// # Errors
-/// A column type Arrow's row encoding cannot take.
-pub(crate) fn of(batches: &[RecordBatch]) -> Result<Checksum, RunnerError> {
-    let Some(first) = batches.first() else {
-        return Ok(Checksum {
-            kinds: vec!["rows"],
-            values: vec!["0".to_owned()],
-        });
+/// A column type Arrow's row encoding cannot take, or a batch whose columns differ from the first one's.
+pub(crate) fn of(batches: &[RecordBatch], schema: &Schema) -> Result<Checksum, RunnerError> {
+    let fields = match batches.first() {
+        Some(first) => first.schema(),
+        None => Arc::new(schema.clone()),
     };
-    let types: Vec<DataType> = first
-        .schema()
+    let types: Vec<DataType> = fields
         .fields()
         .iter()
         .map(|f| f.data_type().clone())
@@ -166,10 +183,17 @@ pub(crate) fn of(batches: &[RecordBatch]) -> Result<Checksum, RunnerError> {
             }
             None => Vec::new(),
         };
-        for h in &row_hashes {
-            row_sum = row_sum.wrapping_add(u128::from(*h));
+        if batch.num_columns() != types.len() {
+            return Err(RunnerError::Config(format!(
+                "result checksum: a batch has {} columns, the schema {}",
+                batch.num_columns(),
+                types.len()
+            )));
         }
-        for (state, array) in columns.iter_mut().zip(batch.columns()) {
+        for h in &row_hashes {
+            row_sum = row_sum.saturating_add(u128::from(*h));
+        }
+        for ((state, array), declared) in columns.iter_mut().zip(batch.columns()).zip(&types) {
             state.count += u64::try_from(array.len() - array.null_count()).unwrap_or(u64::MAX);
             if let Some(converter) = &state.converter {
                 let encoded = converter
@@ -179,11 +203,11 @@ pub(crate) fn of(batches: &[RecordBatch]) -> Result<Checksum, RunnerError> {
                     if array.is_valid(k) {
                         state.exact = state
                             .exact
-                            .wrapping_add(u128::from(hash_bytes(row.as_ref())));
+                            .saturating_add(u128::from(hash_bytes(row.as_ref())));
                     }
                 }
             } else {
-                for (k, v) in floats(array).into_iter().enumerate() {
+                for (k, v) in floats(array, declared)?.into_iter().enumerate() {
                     if let Some(v) = v {
                         state.sum += v;
                         if let Some(h) = row_hashes.get(k) {
@@ -230,7 +254,7 @@ pub(crate) fn of(batches: &[RecordBatch]) -> Result<Checksum, RunnerError> {
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{Float64Array, Int64Array, StringArray};
+    use arrow_array::{Float32Array, Float64Array, Int64Array, StringArray};
     use arrow_schema::{Field, Schema};
 
     use super::*;
@@ -253,7 +277,9 @@ mod tests {
     }
 
     fn json(b: &[RecordBatch]) -> String {
-        of(b).unwrap_or_else(|e| unreachable!("{e}")).to_json()
+        of(b, &Schema::empty())
+            .unwrap_or_else(|e| unreachable!("{e}"))
+            .to_json()
     }
 
     #[test]
@@ -322,5 +348,177 @@ mod tests {
             json(&[]),
             "{\"kinds\":[\"rows\"],\"values\":[0],\"source\":\"run\"}"
         );
+    }
+
+    fn sum_of(b: &[RecordBatch], schema: &Schema) -> String {
+        of(b, schema)
+            .unwrap_or_else(|e| unreachable!("{e}"))
+            .to_json()
+    }
+
+    #[test]
+    fn no_batches_and_an_empty_batch_have_the_same_structure() {
+        let schema = Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("s", DataType::Utf8, true),
+            Field::new("m", DataType::Float64, true),
+        ]);
+        let empty = batch(&[], &[], &[]);
+        assert_eq!(sum_of(&[], &schema), sum_of(&[empty], &schema));
+        let got = sum_of(&[], &schema);
+        assert!(
+            got.starts_with(
+                "{\"kinds\":[\"rows\",\"count\",\"exact\",\"count\",\"exact\",\"count\",\"float\","
+            ),
+            "{got}"
+        );
+        assert!(
+            got.contains("\"values\":[0,0,\"0\",0,\"0\",0,null,"),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn a_float_only_result_sums_without_a_row_hash() {
+        let schema = Arc::new(Schema::new(vec![Field::new("m", DataType::Float64, true)]));
+        let b = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Float64Array::from(vec![
+                Some(1.5),
+                None,
+                Some(2.0),
+            ]))],
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        let got = sum_of(&[b], &schema);
+        assert_eq!(
+            got,
+            "{\"kinds\":[\"rows\",\"count\",\"float\"],\"values\":[3,2,3.5],\"source\":\"run\"}"
+        );
+    }
+
+    #[test]
+    fn float32_and_all_null_float_columns() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("f", DataType::Float32, true),
+            Field::new("n", DataType::Float64, true),
+            Field::new("k", DataType::Int64, false),
+        ]));
+        let b = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Float32Array::from(vec![Some(0.5_f32), Some(1.5)])),
+                Arc::new(Float64Array::from(vec![None::<f64>, None])),
+                Arc::new(Int64Array::from(vec![1, 2])),
+            ],
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        let got = sum_of(&[b], &schema);
+        // rows 2; f: count 2, sum 2.0; n: count 0, null; k: count 2; then the row hash and the two weighted floats
+        assert!(
+            got.starts_with("{\"kinds\":[\"rows\",\"count\",\"float\",\"count\",\"float\",\"count\",\"exact\",\"exact\",\"float\",\"float\"],"),
+            "{got}"
+        );
+        assert!(got.contains("\"values\":[2,2,2.0,0,null,2,"), "{got}");
+        assert!(got.matches("null").count() == 2, "{got}");
+    }
+
+    #[test]
+    fn nested_and_dictionary_columns_are_checksummed() {
+        use arrow_array::types::Int32Type;
+        use arrow_array::{DictionaryArray, ListArray, StructArray};
+
+        let lists: [Option<Vec<Option<i32>>>; 3] =
+            [Some(vec![Some(1), Some(2)]), None, Some(vec![])];
+        let words = ["a", "b", "a"];
+        let numbers = [1_i64, 2, 3];
+        let make = |order: [usize; 3], words: [&str; 3]| {
+            let list = ListArray::from_iter_primitive::<Int32Type, _, _>(
+                order.iter().map(|i| lists[*i].clone()),
+            );
+            let dict: DictionaryArray<Int32Type> = order.iter().map(|i| words[*i]).collect();
+            let st = StructArray::from(vec![(
+                Arc::new(Field::new("x", DataType::Int64, false)),
+                Arc::new(Int64Array::from(
+                    order.iter().map(|i| numbers[*i]).collect::<Vec<_>>(),
+                )) as ArrayRef,
+            )]);
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("l", list.data_type().clone(), true),
+                Field::new("d", dict.data_type().clone(), false),
+                Field::new("s", st.data_type().clone(), false),
+            ]));
+            let b = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(list), Arc::new(dict), Arc::new(st)],
+            )
+            .unwrap_or_else(|e| unreachable!("{e}"));
+            (b, schema)
+        };
+        let (b, schema) = make([0, 1, 2], words);
+        let a = sum_of(&[b], &schema);
+        let (shuffled, _) = make([2, 0, 1], words);
+        assert_eq!(a, sum_of(&[shuffled], &schema), "row order does not matter");
+        assert!(a.contains("\"values\":[3,2,"), "{a}"); // 3 rows; the list column has 2 non-NULL values
+        let (changed, _) = make([0, 1, 2], ["a", "b", "b"]);
+        assert_ne!(a, sum_of(&[changed], &schema));
+    }
+
+    #[test]
+    fn a_later_batch_of_another_type_is_an_error_not_a_panic() {
+        let schema = Arc::new(Schema::new(vec![Field::new("m", DataType::Float64, true)]));
+        let first = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Float64Array::from(vec![1.0]))],
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        let other = Arc::new(Schema::new(vec![Field::new("m", DataType::Float32, true)]));
+        let second = RecordBatch::try_new(other, vec![Arc::new(Float32Array::from(vec![1.0_f32]))])
+            .unwrap_or_else(|e| unreachable!("{e}"));
+        assert!(of(&[first, second], &schema).is_err());
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn shuffling_rows_and_resplitting_batches_keeps_the_checksum(
+            rows in proptest::collection::vec(
+                (proptest::prelude::any::<i64>(), proptest::option::of("[a-c]{0,3}"), proptest::option::of(-1000.0_f64..1000.0)),
+                0..40,
+            ),
+            seed in proptest::prelude::any::<u64>(),
+            cut in 0_usize..40,
+        ) {
+            let schema = Schema::new(vec![
+                Field::new("k", DataType::Int64, false),
+                Field::new("s", DataType::Utf8, true),
+                Field::new("m", DataType::Float64, true),
+            ]);
+            let make = |rs: &[(i64, Option<String>, Option<f64>)]| {
+                let names: Vec<Option<&str>> = rs.iter().map(|r| r.1.as_deref()).collect();
+                batch(
+                    &rs.iter().map(|r| r.0).collect::<Vec<_>>(),
+                    &names,
+                    &rs.iter().map(|r| r.2).collect::<Vec<_>>(),
+                )
+            };
+            let whole = sum_of(&[make(&rows)], &schema);
+            let mut shuffled = rows;
+            // a deterministic shuffle from the seed
+            let mut x = seed | 1;
+            for i in (1..shuffled.len()).rev() {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                shuffled.swap(i, usize::try_from(x % (i as u64 + 1)).unwrap_or(0));
+            }
+            let at = cut.min(shuffled.len());
+            let (head, tail) = shuffled.split_at(at);
+            let split = sum_of(&[make(head), make(tail)], &schema);
+            // sums of floats differ in the last bits by order: compare the exact parts and the counts
+            let strip = |s: &str| s.split("\"values\":").nth(1).map(|v| {
+                v.split(',').filter(|t| !t.contains('.') && !t.contains('e')).collect::<Vec<_>>().join(",")
+            });
+            proptest::prop_assert_eq!(strip(&whole), strip(&split));
+        }
     }
 }

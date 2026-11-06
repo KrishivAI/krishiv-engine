@@ -461,6 +461,23 @@ Only engines that run Spark SQL `explode` take part (Krishiv, Spark, Sail); the 
 Comet's conversion: one `<table>.parquet` file per table instead of Hive-partitioned directories, and DuckDB's default
 row-group size instead of 512 MiB. This is not part of the P2b exit gate.
 
+## How a timed result is checked (`result_check`)
+
+Every timed run of `reproduce` (and `abba`'s Krishiv side) must reproduce the verified answer's order-independent
+checksum (`result_check.py`: row count, per-column counts and sums or value hashes, a row hash that ties the columns
+together, and float columns also summed weighted by the row hash). The record's `result_check` text says how an engine
+was held to it:
+
+* Krishiv's runner answers `RUN_CHECKED` with the checksum of the timed run's own result, computed after the clock
+  stops (`source: run`). A runner without the command answers only `RUN`; the adapter then checksums a separate untimed
+  `DUMP` of the query and the record says so (`source: dump`).
+* Spark Connect times `spark.sql(q)` plus `toArrow()` (the full result as Arrow, no per-row Python objects) and
+  checksums it; the other adapters checksum the Arrow result they time.
+* A query whose `LIMIT` may cut a tie, or an adapter with no checksum, is held to the row count only, and the record
+  says that.
+
+`--cgroup-gb` (the worker's memory cgroup) needs `--sequential`; without it the command is refused.
+
 ## Resource telemetry, cold runs and the scale ladder
 
 `krishiv-bench run` records, per query, from `/proc/<pid>/io` and `/proc/<pid>/stat` deltas around each timed sample

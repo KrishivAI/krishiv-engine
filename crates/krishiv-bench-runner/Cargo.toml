@@ -17,7 +17,7 @@ doc = false
 arrow-array.workspace = true
 arrow-row.workspace = true
 arrow-schema.workspace = true
-futures ={ workspace = true, features = ["alloc", "executor"] }
+futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-exec = { path = "../krishiv-exec" }
 krishiv-alloc = { path = "../krishiv-alloc" }
