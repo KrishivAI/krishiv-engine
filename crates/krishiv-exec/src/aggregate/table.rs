@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_row::Rows;
-use arrow_schema::SchemaRef;
+use arrow_schema::{DataType, SchemaRef};
 use krishiv_types::batch::{Batch, Weights};
 
 use super::accumulator::Accumulator;
@@ -616,10 +616,18 @@ fn mixed() -> krishiv_common::error::KrishivError {
     internal("a batch prepared for another table layout".to_owned())
 }
 
-/// Bytes a copy of `a`'s rows takes: its own range of its buffers (a slice
-/// does not count its parent's), plus allocation padding per buffer.
+/// Bytes a copy of `a`'s rows takes (`take`, the row tables' gather): its
+/// own range of its buffers, not a slice's parent's, plus a cache line of
+/// allocation padding per buffer. A view array's copy holds its views and
+/// shares the data buffers.
 pub(crate) fn own_bytes(a: &dyn Array) -> usize {
-    a.to_data()
-        .get_slice_memory_size()
-        .map_or_else(|_| a.get_array_memory_size(), |b| b + 4 * 64)
+    let nulls = a.nulls().map_or(0, |n| n.len().div_ceil(8) + 64);
+    if matches!(a.data_type(), DataType::Utf8View | DataType::BinaryView) {
+        return a.len() * size_of::<u128>() + 64 + nulls;
+    }
+    let d = a.to_data();
+    d.get_slice_memory_size().map_or_else(
+        |_| a.get_array_memory_size(),
+        |b| b + 64 * (d.buffers().len() + d.child_data().len() + 1),
+    )
 }
