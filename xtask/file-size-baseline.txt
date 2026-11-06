@@ -27,7 +27,8 @@
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 3255 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
-2774 crates/krishiv-sql/src/lower.rs
+# +1: CAST(x AS CHAR(n)) lowers as a string cast (T001b)
+2775 crates/krishiv-sql/src/lower.rs
 5263 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs

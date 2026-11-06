@@ -1,8 +1,5 @@
 {
   "cases": {
-    "nested-interval-types": [
-      80
-    ],
     "sql-commands": [
       2,
       7,

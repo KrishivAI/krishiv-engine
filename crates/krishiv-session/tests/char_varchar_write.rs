@@ -99,3 +99,15 @@ fn a_table_or_view_made_from_a_query_keeps_the_declared_type() {
     .unwrap();
     assert!(!first_text(&s, "show create table t3").contains("CHAR"));
 }
+
+#[test]
+fn a_cast_to_char_or_varchar_is_a_string_cast() {
+    let s = fresh();
+    run(&s, "insert into t values ('ab', 'x')").unwrap();
+    // No truncation and no padding beyond what the char column's read already gave.
+    assert_eq!(first_text(&s, "select cast(c as char(1)) from t"), "ab ");
+    assert_eq!(
+        first_text(&s, "select cast('abcdef' as varchar(2))"),
+        "abcdef"
+    );
+}
