@@ -258,3 +258,25 @@ fn nested_variant_columns_read_as_spark_reads_them() {
         .collect();
     assert_eq!(got, want);
 }
+
+/// `variant_explode(NULL)` gives no rows and the `_outer` form one NULL row
+/// (Spark 4.2.0, oracle).
+#[test]
+fn variant_explode_of_null() {
+    let s = session();
+    let rows = |sql: &str| {
+        let out = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+        out.iter().map(RecordBatch::num_rows).sum::<usize>()
+    };
+    assert_eq!(rows("SELECT * FROM variant_explode(NULL)"), 0);
+    assert_eq!(rows("SELECT * FROM variant_explode_outer(NULL)"), 1);
+    let out = block_on(async {
+        s.sql("SELECT pos, key, value FROM variant_explode_outer(NULL)")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    let b = out.iter().find(|b| b.num_rows() > 0).unwrap();
+    assert!((0..3).all(|c| b.column(c).is_null(0)));
+}

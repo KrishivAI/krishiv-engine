@@ -111,7 +111,24 @@ impl Resolver<'_> {
         let rels = [&c];
         let cx = Self::cx(&c.out, &rels, env, "Generate");
         let arg = &self.stack_rows(arg, &cx)?;
-        let b = self.bind(arg, &cx)?;
+        let mut b = self.bind(arg, &cx)?;
+        // `variant_explode` expects a VARIANT: an untyped NULL is cast to one
+        // (and gives no rows), as `ExpectsInputTypes` casts it.
+        if kind == GeneratorKind::VariantExplode
+            && matches!(b.ty.data_type, None | Some(DataType::Null))
+        {
+            let cast = Expr::new(ExprNode::Cast {
+                expr: Arc::clone(&b.expr),
+                to: DataType::Variant,
+                mode: crate::CastMode::Legacy,
+            })
+            .with_origin(b.expr.origin);
+            b = Bound {
+                ty: super::exprs::arg_type(DataType::Variant, true),
+                expr: Arc::new(cast),
+                ..b
+            };
+        }
         if super::ops::has_generator(&b.expr) {
             return Err(AnalysisError::new(
                 UnsupportedGeneratorNestedInExpressions {
