@@ -1238,7 +1238,9 @@ pub(super) fn group_size(total: usize, fan_in: usize) -> usize {
 /// Reserves (with arbitration) the memory to merge up to `max_fan_in` of
 /// `runs` at once. An intermediate merge (`writing` a run) halves the
 /// fan-in down to 2 while the pool refuses and also reserves the spill
-/// writer's scratch; the final merge needs every run.
+/// writer's scratch; the final merge needs every run. While a smaller
+/// fan-in is left, a refusal must not abort the query: those requests
+/// spill other consumers but never escalate to an abort.
 pub(super) async fn merge_budget(
     runs: &[SpillRun],
     max_fan_in: usize,
@@ -1248,16 +1250,33 @@ pub(super) async fn merge_budget(
 ) -> Result<(Reservation, usize)> {
     let mut fan_in = max_fan_in.min(runs.len());
     let mut budget = handle.reservation();
-    loop {
+    if writing && fan_in > 2 {
         match budget
-            .grow(merge_need(runs, fan_in, batch_rows, writing))
+            .grow_without_abort(merge_need(runs, fan_in, batch_rows, writing))
             .await
         {
             Ok(()) => return Ok((budget, fan_in)),
-            Err(_) if writing && fan_in > 2 => fan_in = (fan_in / 2).max(2),
+            // That round spilled what it could: smaller fan-ins only take
+            // what is free now, and arbitration runs again at 2.
+            Err(MemoryError::Exhausted { .. }) => {}
+            // An abort (this query was chosen by another request) ends the merge.
             Err(e) => return Err(e.into()),
         }
+        while fan_in > 2 {
+            fan_in = (fan_in / 2).max(2);
+            if fan_in > 2
+                && budget
+                    .try_grow(merge_need(runs, fan_in, batch_rows, writing))
+                    .is_ok()
+            {
+                return Ok((budget, fan_in));
+            }
+        }
     }
+    budget
+        .grow(merge_need(runs, fan_in, batch_rows, writing))
+        .await?;
+    Ok((budget, fan_in))
 }
 
 /// The memory to merge `fan_in` of `runs` at once (see [`merge_budget`]).
