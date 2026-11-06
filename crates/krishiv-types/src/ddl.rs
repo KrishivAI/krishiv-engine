@@ -21,8 +21,8 @@
 //! `INTERVAL` alone is a calendar interval; followed by fields it is an ANSI
 //! interval (`INTERVAL YEAR TO MONTH`, `INTERVAL HOUR TO SECOND`, ...).
 //!
-//! Char/varchar and variant types are recognized and
-//! rejected with `KRISHIV_UNSUPPORTED_FEATURE`.
+//! Char/varchar types are recognized and rejected with
+//! `KRISHIV_UNSUPPORTED_FEATURE`.
 
 use krishiv_common::error::ErrorClass;
 
@@ -678,7 +678,6 @@ impl<'a> Parser<'a> {
     fn unsupported_type(&self, lower: &str) -> Option<String> {
         let what = match lower {
             "char" | "character" | "varchar" => "char/varchar data types",
-            "variant" => "the variant data type",
             _ => return None,
         };
         Some(format!("{what} (\"{}\")", lower.to_ascii_uppercase()))
@@ -901,6 +900,7 @@ fn resolve(lower: &str, args: &[String]) -> Option<Result<DataType>> {
         ("double", []) => DataType::Double,
         ("string", []) => DataType::String,
         ("binary", []) => DataType::Binary,
+        ("variant", []) => DataType::Variant,
         ("interval", []) => DataType::CalendarInterval,
         ("date", []) => DataType::Date,
         ("timestamp" | "timestamp_ltz", []) => DataType::Timestamp,
