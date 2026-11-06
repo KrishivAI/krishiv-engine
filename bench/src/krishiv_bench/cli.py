@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import h2o, micro, micro_data
+from . import h2o, memguard, micro, micro_data
 from .adapters import ENGINES
 from .paths import data_root
 from .report import write_report
@@ -162,6 +162,19 @@ def main(argv=None) -> None:
         "--cold",
         action="store_true",
         help="evict the dataset from the page cache before every run (results are not comparable with warm runs)",
+    )
+    r.add_argument(
+        "--min-mem-avail",
+        type=float,
+        default=memguard.DEFAULT_MIN_FRACTION,
+        help="wait before each timed run until MemAvailable is this fraction of MemTotal, and mark runs that dip "
+        "below it 'invalid: memory reclaimed' (0 = off)",
+    )
+    r.add_argument(
+        "--mem-retries",
+        type=int,
+        default=memguard.DEFAULT_RETRIES,
+        help="times to retry a run marked invalid before the query fails",
     )
     _add_memcap_args(r)
     nc = sub.add_parser(
@@ -601,6 +614,8 @@ def main(argv=None) -> None:
             a.timeout or None,
             a.dataset,
             a.cold,
+            min_mem_avail=a.min_mem_avail or None,
+            mem_retries=a.mem_retries,
         )
         print(f"result: {f}")
     elif a.suite == "micro":
