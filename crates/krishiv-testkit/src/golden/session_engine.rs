@@ -692,6 +692,12 @@ fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, Engine
         (DataType::String | DataType::CollatedString(_), ArrowType::LargeUtf8) => {
             Cell::Str(col.as_string::<i64>().value(row).to_owned())
         }
+        // As at the top level: a binary-safe STRING holding bytes that are not UTF-8 (Spark's
+        // `UTF8String.toString` replaces the malformed sequences), and BINARY in any carrier.
+        (DataType::String | DataType::CollatedString(_), _) => Cell::Str(
+            String::from_utf8_lossy(&binary_value(col, row).ok_or_else(unexpected)?).into_owned(),
+        ),
+        (DataType::Binary, _) => Cell::Binary(binary_value(col, row).ok_or_else(unexpected)?),
         (DataType::Date, ArrowType::Date32) => {
             Cell::Date(col.as_primitive::<Date32Type>().value(row))
         }
@@ -1340,9 +1346,9 @@ mod tests {
     #[test]
     fn nested_scalars_render_by_spark_type() -> R {
         use arrow_array::{
-            BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
-            Int8Array, Int16Array, Int32Array, Int64Array, LargeStringArray, StringArray,
-            StringViewArray, TimestampMicrosecondArray,
+            BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
+            Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, LargeBinaryArray,
+            LargeStringArray, StringArray, StringViewArray, TimestampMicrosecondArray,
         };
         let cell = |col: ArrayRef, ty: DataType| nested_cell(&col, 0, &ty).map_err(err);
         let int = |v: Vec<Option<i32>>| -> ArrayRef { Arc::new(Int32Array::from(v)) };
@@ -1422,10 +1428,18 @@ mod tests {
             )?,
             Cell::TimestampNtz(2_000_000)
         );
-        // A nested `binary` has no cell: the harness reports the mismatch.
+        // A nested `binary` reads in any carrier, as the top-level one does; bytes that are not
+        // UTF-8 under a `string` type are replaced, as Spark's `UTF8String.toString` does.
         let binary: ArrayRef = Arc::new(BinaryArray::from(vec![&b"a"[..]]));
-        let got = nested_cell(&binary, 0, &DataType::Binary).unwrap_err();
-        assert!(got.message.contains("Arrow type Binary"), "{}", got.message);
+        assert_eq!(cell(binary, DataType::Binary)?, Cell::Binary(b"a".to_vec()));
+        let large: ArrayRef = Arc::new(LargeBinaryArray::from(vec![&b"bc"[..]]));
+        assert_eq!(cell(large, DataType::Binary)?, Cell::Binary(b"bc".to_vec()));
+        let view: ArrayRef = Arc::new(BinaryViewArray::from(vec![&b"\xff"[..]]));
+        assert_eq!(
+            cell(Arc::clone(&view), DataType::Binary)?,
+            Cell::Binary(vec![0xff])
+        );
+        assert_eq!(cell(view, DataType::String)?, Cell::Str("\u{FFFD}".into()));
         // So does any other Arrow/value mismatch.
         let got = nested_cell(&int(vec![Some(1)]), 0, &DataType::String).unwrap_err();
         assert!(
