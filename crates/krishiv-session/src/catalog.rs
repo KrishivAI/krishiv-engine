@@ -360,6 +360,31 @@ enum FilesKey {
     Read(ReadSource),
 }
 
+/// The key a reference to a file table scans under, and what it reads. A reference that carries
+/// read options (`FROM t WITH ('k' = 'v')`) is a read of the table's files with those options over
+/// the table's own, so two references with different options keep their own listing, decoder
+/// options and scan; one without options shares the table's.
+fn reference_key(
+    key: String,
+    known: bool,
+    source: &ReadSource,
+    options: &BTreeMap<String, krishiv_common::secret::OptionValue>,
+) -> (FilesKey, ReadSource) {
+    if let (false, ReadSource::Files { .. }) = (options.is_empty(), source) {
+        let mut merged = source.clone();
+        if let ReadSource::Files { options: base, .. } = &mut merged {
+            base.extend(options.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        return (FilesKey::Read(merged.clone()), merged);
+    }
+    let key = if known {
+        FilesKey::Table(key)
+    } else {
+        FilesKey::View(key)
+    };
+    (key, source.clone())
+}
+
 /// How a query opens the file tables of its scans.
 #[derive(Debug, Clone)]
 pub(crate) struct FileScans {
@@ -533,17 +558,12 @@ impl QueryCatalog {
             .into_iter()
             .filter_map(|scan| {
                 let (key, source) = match &scan.source {
-                    ReadSource::Table { name, .. } => {
+                    ReadSource::Table { name, options } => {
                         let (key, table) = self.entry_of(name)?;
                         let TempTable::Files { source, known, .. } = &*table else {
                             return None;
                         };
-                        let key = if *known {
-                            FilesKey::Table(key)
-                        } else {
-                            FilesKey::View(key)
-                        };
-                        (key, source.clone())
+                        reference_key(key, *known, source, options)
                     }
                     source @ ReadSource::Files { .. } => {
                         (FilesKey::Read(source.clone()), source.clone())
@@ -656,7 +676,7 @@ impl QueryCatalog {
         let mut assigned: Vec<(ScanId, ScanSplitsKind)> = Vec::new();
         for scan in scans {
             match &scan.scan.source {
-                ReadSource::Table { name, .. } => {
+                ReadSource::Table { name, options } => {
                     let last = name.last().map_or("", String::as_str);
                     let Some(table) = self.loaded(last) else {
                         return Err(InternalError {
@@ -676,8 +696,12 @@ impl QueryCatalog {
                                 ));
                             }
                         }
-                        TempTable::Files { .. } => {
-                            let key = FilesKey::View(last.to_lowercase());
+                        TempTable::Files { source, known, .. } => {
+                            let key = if options.is_empty() {
+                                FilesKey::View(last.to_lowercase())
+                            } else {
+                                reference_key(last.to_lowercase(), *known, source, options).0
+                            };
                             let table = self.opened(&key).ok_or_else(|| InternalError {
                                 message: "a scan of files that was not opened before planning"
                                     .to_owned(),
@@ -1175,7 +1199,7 @@ impl TableProviderResolver for QueryCatalog {
                         .into()
                     })
             }
-            ReadSource::Table { name, .. } => {
+            ReadSource::Table { name, options } => {
                 let last = name.last().map_or("", String::as_str);
                 // Analysis loaded every table a scan names.
                 let Some(table) = self.loaded_for(name) else {
@@ -1199,15 +1223,11 @@ impl TableProviderResolver for QueryCatalog {
                     TempTable::Memory { table, .. } => {
                         Ok(Arc::clone(table) as Arc<dyn TableProvider>)
                     }
-                    TempTable::Files { known, .. } => {
+                    TempTable::Files { known, source, .. } => {
                         let key = self
                             .entry_of(name)
                             .map_or_else(|| last.to_lowercase(), |(k, _)| k);
-                        self.files_provider(&if *known {
-                            FilesKey::Table(key)
-                        } else {
-                            FilesKey::View(key)
-                        })
+                        self.files_provider(&reference_key(key, *known, source, options).0)
                     }
                     // Views are inlined as subqueries before analysis, so
                     // no scan ever reads one.
