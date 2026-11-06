@@ -304,6 +304,46 @@ impl Rewriter {
 }
 
 impl Rewriter {
+    /// Whether `input` holds, anywhere below, a global aggregate over a
+    /// correlated input: one row for every outer row, matches or not
+    /// (Spark's count bug; the legacy flag keeps the old behaviour).
+    pub(super) fn nested_global(&self, input: &Arc<LogicalPlan>) -> bool {
+        let mut found = false;
+        let _ = crate::walk::visit_distinct(Node::Plan(input), |n| {
+            if let Node::Plan(q) = n
+                && matches!(&q.node, PlanNode::Aggregate { grouping: Grouping::GroupBy(k), .. } if k.is_empty())
+                && has_outer(Node::Plan(q))
+            {
+                found = true;
+                return std::ops::ControlFlow::Break(());
+            }
+            std::ops::ControlFlow::Continue(())
+        });
+        found && !self.legacy_scalar_count
+    }
+
+    /// Whether a correlated scalar subquery over `input` goes through the
+    /// domain: a shape [`needs_domain`] names, a correlation that is not an
+    /// equality, or (with no grouping) a global aggregate below.
+    pub(super) fn scalar_needs_domain(&self, input: &Arc<LogicalPlan>, global: bool) -> bool {
+        super::on_path(input, super::needs_domain)
+            || (global && self.nested_global(input))
+            || (super::non_equality_correlation(input) && super::deterministic_filters(input))
+    }
+
+    /// [`Rewriter::domain`], with the domain kept for a global aggregate
+    /// below (its row is aggregated per domain value and outer-joined to it).
+    pub(super) fn domain_counting(
+        &mut self,
+        base: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+    ) -> R<super::Lifted> {
+        self.lateral = self.nested_global(input);
+        let domained = self.domain(base, input);
+        self.lateral = false;
+        domained
+    }
+
     /// A global aggregate (no `GROUP BY`) over `input` whose output reads a
     /// joined subquery outside its calls (`SELECT 1 IN (..), count(*) FROM
     /// a`): the calls run in a global aggregate, which keeps its one row

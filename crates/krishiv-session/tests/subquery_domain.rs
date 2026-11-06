@@ -260,17 +260,11 @@ fn a_correlated_side_of_a_join() -> R {
 #[test]
 fn shapes_not_rewritten_yet_are_refused() -> R {
     let s = session()?;
-    for sql in [
-        // Spark's FULL JOIN answer here is not the per-row join: (1, 3), (2, 2), (NULL, 6).
-        "select t0a, (select sum(t1b) from (select t1b from t1 full join t2 \
-         on t1a = t0a and t1b = t2b)) from t0",
-        // Spark: (1, 19), (2, 17), (NULL, 13).
-        "select t0a, (select sum(c) from (select sum(t1c) c from t1 where t1a = t0a \
-         union all select t2c from t2)) from t0",
-    ] {
-        let e = failure(&s, sql);
-        assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{sql}: {e}");
-    }
+    // Spark's FULL JOIN answer here is not the per-row join: (1, 3), (2, 2), (NULL, 6).
+    let sql = "select t0a, (select sum(t1b) from (select t1b from t1 full join t2 \
+               on t1a = t0a and t1b = t2b)) from t0";
+    let e = failure(&s, sql);
+    assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{sql}: {e}");
     Ok(())
 }
 
@@ -316,5 +310,18 @@ fn a_written_semi_join_is_no_set_operation() -> R {
             );
         }
     }
+    Ok(())
+}
+
+/// A global aggregate in one branch of a union has a row for an outer row
+/// without matches: Spark's answer, (1, 19), (2, 17), (NULL, 13).
+#[test]
+fn a_global_aggregate_in_a_union_branch_keeps_its_row() -> R {
+    let s = session()?;
+    let q = "select t0a, (select sum(c) from (select sum(t1c) c from t1 where t1a = t0a \
+             union all select t2c from t2)) from t0";
+    let mut want = vec!["1|19".to_owned(), "2|17".to_owned(), "NULL|13".to_owned()];
+    want.sort();
+    assert_eq!(run(&s, q)?, want, "{q}");
     Ok(())
 }

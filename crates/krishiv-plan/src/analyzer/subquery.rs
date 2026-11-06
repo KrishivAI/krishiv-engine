@@ -1594,14 +1594,12 @@ impl Rewriter {
         } else {
             None
         };
-        if on_path(input, needs_domain)
-            || (non_equality_correlation(input) && deterministic_filters(input))
-        {
+        if self.scalar_needs_domain(input, keys.is_empty()) {
             if !keys.is_empty() {
                 legacy_grouped(empty.as_ref(), plan.origin)?;
                 return self.scalar_grouped(base, plan, input, keys);
             }
-            let (inner, inner_keys, outer_keys) = self.domain(&base, input)?;
+            let (inner, inner_keys, outer_keys) = self.domain_counting(&base, input)?;
             return self.scalar_join(
                 base,
                 plan,
