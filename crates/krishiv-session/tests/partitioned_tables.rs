@@ -884,6 +884,34 @@ fn add_partition_outside_the_policy_is_denied() {
 }
 
 #[test]
+fn msck_repair_of_a_denied_partition_directory_is_denied() {
+    // MSCK REPAIR registers each partition at its directory, so it asks the policy as ADD PARTITION does.
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let warehouse = dir.path().join("wh");
+    std::fs::create_dir_all(&warehouse).unwrap();
+    let s = Session::builder()
+        .access_policy(Arc::new(NoOutside))
+        .config("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
+        .build()
+        .unwrap();
+    run(
+        &s,
+        "CREATE TABLE t (a INT, p STRING) USING parquet PARTITIONED BY (p)",
+    );
+    let root = warehouse.join("t");
+    std::fs::create_dir_all(root.join("p=inside")).unwrap();
+    run(&s, "MSCK REPAIR TABLE t");
+    assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=inside"]);
+    std::fs::create_dir_all(root.join("p=outside")).unwrap();
+    assert_eq!(
+        class(&s, "MSCK REPAIR TABLE t"),
+        "KRISHIV_INSUFFICIENT_PERMISSIONS"
+    );
+    assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=inside"]);
+}
+
+#[test]
 fn partition_values_are_escaped_and_filtered() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());

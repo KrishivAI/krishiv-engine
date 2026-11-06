@@ -901,6 +901,13 @@ impl Resolver<'_> {
                 Ok(self.wrap(Arc::clone(p), o.plan_id, out, &[]))
             }
             PlanNode::CteRef(r) => {
+                // A reference in a stored analyzed plan (a DataFrame's temporary view) holds the declared
+                // `CHAR`/`VARCHAR` types of its definition's columns, as a fresh reference does.
+                for (source, out) in r.source.iter().zip(&r.output) {
+                    if let Some(d) = self.declared.get(source).cloned() {
+                        self.declared.insert(out.id, d);
+                    }
+                }
                 let qual: Arc<[String]> = vec![r.name.clone()].into();
                 let out = r
                     .output

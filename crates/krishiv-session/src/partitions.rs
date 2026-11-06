@@ -356,8 +356,8 @@ fn list_partition_dirs(
     let mut names: Vec<(String, PathBuf)> = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(listing)? {
         let entry = entry.map_err(listing)?;
-        // `file_type` does not follow symbolic links, so a linked directory is skipped.
-        if !entry.file_type().map_err(listing)?.is_dir() {
+        // Spark lists the local file system through Hadoop, which follows a symbolic link to a directory.
+        if !std::fs::metadata(entry.path()).map_err(listing)?.is_dir() {
             continue;
         }
         let Ok(n) = entry.file_name().into_string() else {
@@ -379,30 +379,29 @@ fn list_partition_dirs(
     Ok(())
 }
 
-/// A partition `LOCATION` as the catalog stores it: Spark makes a relative path qualified against the
-/// working directory of the process (`makeQualified`).
-/// An empty location fails as `CREATE TABLE ... LOCATION ''` does (Spark 4.2.0 throws Hadoop's unclassified
-/// `IllegalArgumentException` "Can not create a Path from an empty string" here).
-fn qualified(location: &str) -> Result<PathBuf, KrishivError> {
-    let bare = location.strip_prefix("file:").unwrap_or(location);
-    if bare.is_empty() {
+/// A partition `LOCATION` as the catalog stores it: qualified as the statement's access check qualified it
+/// (`Session::qualify_path`: Spark's `makeQualified`, a relative path against the working directory), so the
+/// directory the command probes is the one the policy was asked about. An empty location fails as
+/// `CREATE TABLE ... LOCATION ''` does (Spark 4.2.0 throws Hadoop's unclassified `IllegalArgumentException`
+/// "Can not create a Path from an empty string" here); a location outside the local file system is not supported.
+fn qualified(session: &Session, location: &str) -> Result<PathBuf, KrishivError> {
+    if location
+        .strip_prefix("file:")
+        .unwrap_or(location)
+        .is_empty()
+    {
         return Err(krishiv_common::error::InvalidEmptyLocation {
             location: location.to_owned(),
         }
         .into());
     }
-    let path = PathBuf::from(bare);
-    if path.is_absolute() {
-        return Ok(path);
+    let display = session.qualify_path(location)?;
+    match display.strip_prefix("file:") {
+        Some(path) => Ok(PathBuf::from(path)),
+        None => Err(unsupported(
+            "partition locations outside the local file system",
+        )),
     }
-    std::env::current_dir()
-        .map(|dir| dir.join(path))
-        .map_err(|e| {
-            InternalError {
-                message: format!("the working directory is unknown: {e}"),
-            }
-            .into()
-        })
 }
 
 /// `spec` in partition-column order.
@@ -635,6 +634,10 @@ impl Session {
             "",
             &mut dirs,
         )?;
+        // Each partition is registered at its directory: the same check `ADD PARTITION` makes of a location.
+        for dir in &dirs {
+            self.authorize_dir(&table.location.join(dir)).await?;
+        }
         self.register_partitions(&name, &dirs, true);
         self.empty_frame().await
     }
@@ -652,7 +655,7 @@ impl Session {
         let written = self.written_spec(partition, original).await?;
         let spec = exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
         let mut changed = (**table).clone();
-        let path = qualified(location)?;
+        let path = qualified(self, location)?;
         // Reads and writes of the table follow the table root, not a partition's own location, so a location
         // that already holds data would be reported as set and then ignored.
         if path.is_file() || holds_files(&path)? {
@@ -710,7 +713,7 @@ impl Session {
             let written = self.written_spec(&part.spec, original).await?;
             let spec = exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
             let location = match &part.location {
-                Some(l) => qualified(l)?,
+                Some(l) => qualified(self, l)?,
                 None => partition_path(&table.location, &ordered(table, &spec)),
             };
             if find_partition(&changed, &spec).is_some()

@@ -279,7 +279,8 @@ fn change_column_to_an_equivalent_character_type_is_allowed() {
 
 #[test]
 fn msck_repair_of_a_missing_directory_fails() {
-    // Spark 4.2.0 throws `FileNotFoundException` ("File file:<dir> does not exist").
+    // Spark 4.2.0 throws an unclassified `FileNotFoundException` ("File file:<dir> does not exist"); Krishiv
+    // maps that failure to `PATH_NOT_FOUND`, its error class for a missing path (not a Spark-observable class here).
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("gone");
     let s = Session::new().unwrap();
@@ -597,4 +598,38 @@ fn equal_null_and_lateral_aliases_pad_char_comparisons() {
         ),
         1
     );
+}
+
+#[test]
+fn stored_cte_references_wide_chars_and_linked_partitions() {
+    let s = fresh();
+    run(&s, "insert into t values ('a', 'x')").unwrap();
+    // A DataFrame temp view over a CTE keeps the declared type through the stored CTE reference.
+    block_on(async {
+        s.sql("with w as (select c from t) select c from w")
+            .await?
+            .create_or_replace_temp_view("cv")
+            .await
+    })
+    .unwrap();
+    assert_eq!(count(&s, "select * from cv where c = 'a'"), 1);
+    // A comparison over the widest CHAR analyzes without building the padded literal.
+    run(&s, "drop table if exists wide").unwrap();
+    run(&s, "create table wide(c char(2147483647)) using parquet").unwrap();
+    assert_eq!(count(&s, "select * from wide where c = 'a'"), 0);
+    // MSCK REPAIR follows a symbolic link to a partition directory, as Spark's Hadoop listing does.
+    let dir = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    run(&s, "drop table if exists pl").unwrap();
+    run(
+        &s,
+        &format!(
+            "create table pl(a string, k string) using parquet partitioned by (k) location '{}'",
+            dir.path().display()
+        ),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), dir.path().join("k=x")).unwrap();
+    run(&s, "msck repair table pl").unwrap();
+    assert_eq!(first_text(&s, "show partitions pl"), "k=x");
 }

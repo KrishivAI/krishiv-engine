@@ -19,6 +19,9 @@ use super::resolve::{Attr, Rel, Resolver};
 use crate::{BoundColumn, Expr, ExprNode, Literal, Origin, ResolvedExpr, ResolvedFunction};
 use krishiv_types::DataType;
 
+/// The most spaces a comparison literal is padded with during analysis; a wider pad is an `rpad` call.
+const MAX_LITERAL_PADDING: i32 = 1 << 16;
+
 /// `n` of a declared `char(n)`; `None` for `varchar(n)`, nested types and other strings.
 pub(super) fn char_length(declared: &str) -> Option<i32> {
     declared
@@ -342,6 +345,11 @@ impl Resolver<'_> {
         let literal = |k: &Bound, to: i32| -> Option<Bound> {
             let text = string_literal(k)?;
             let width = i32::try_from(text.chars().count()).ok()?;
+            // A wide declaration (`CHAR(2147483647)`) would build a huge literal while analyzing even an empty
+            // table: past `MAX_LITERAL_PADDING` the literal pads at run time instead (same value, `rpad`).
+            if to.saturating_sub(width) > MAX_LITERAL_PADDING {
+                return pad(k, to);
+            }
             let padded = format!("{text}{}", " ".repeat(usize::try_from(to - width).ok()?));
             Some(Bound {
                 expr: Arc::new(Expr::literal(Literal::String(padded)).with_origin(k.expr.origin)),
