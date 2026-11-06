@@ -492,10 +492,25 @@ impl Resolver<'_> {
                         }
                     }
                 };
+                // A session aggregate UDF (ADR 0045): `DISTINCT` only when it
+                // allows it (a window refuses `DISTINCT` for every aggregate).
+                if !is_builtin_entry(&entry)
+                    && entry.kind == FunctionKind::Aggregate
+                    && f.distinct
+                    && self.ctx.functions.rejects_distinct(entry.id.name())
+                {
+                    return Err(AnalysisError::new(
+                        InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                            pretty_name: format!("`{lookup_name}`"),
+                            syntax: "DISTINCT".to_owned(),
+                        },
+                        e.origin,
+                    ));
+                }
                 // `array_agg` is Spark's spelling of `collect_list` (its
                 // result column is named `collect_list(...)`): resolve it
                 // as `collect_list` throughout.
-                if entry.id.name() == "array_agg" {
+                if is_builtin_entry(&entry) && entry.id.name() == "array_agg" {
                     entry = match self
                         .ctx
                         .functions
@@ -510,7 +525,7 @@ impl Resolver<'_> {
                 // `string_agg` is Spark's alias of `listagg` (its result
                 // column is named `listagg(...)`): resolve it as `listagg`
                 // throughout.
-                if entry.id.name() == "string_agg" {
+                if is_builtin_entry(&entry) && entry.id.name() == "string_agg" {
                     entry = match self
                         .ctx
                         .functions
@@ -527,10 +542,11 @@ impl Resolver<'_> {
                 // `listagg_call`); any other function keeps Spark's
                 // `FUNCTION_WITH_UNSUPPORTED_SYNTAX` error.
                 if !f.within_group.is_empty()
-                    && !matches!(
-                        entry.id.name(),
-                        "mode" | "listagg" | "percentile_cont" | "percentile_disc"
-                    )
+                    && !(is_builtin_entry(&entry)
+                        && matches!(
+                            entry.id.name(),
+                            "mode" | "listagg" | "percentile_cont" | "percentile_disc"
+                        ))
                 {
                     return Err(AnalysisError::new(
                         InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
@@ -543,22 +559,24 @@ impl Resolver<'_> {
                 if !window_fn && entry.kind == FunctionKind::Aggregate {
                     self.nondeterministic_arguments(e, &kids[..n]);
                 }
-                if entry.id.name() == "mode" {
+                if is_builtin_entry(&entry) && entry.id.name() == "mode" {
                     return self.mode_call(&entry, e, f, &kids, window_fn);
                 }
-                if entry.id.name() == "listagg" {
+                if is_builtin_entry(&entry) && entry.id.name() == "listagg" {
                     return self.listagg_call(&entry, e, f, &kids, window_fn);
                 }
-                if matches!(
-                    entry.id.name(),
-                    "percentile"
-                        | "percentile_approx"
-                        | "approx_percentile"
-                        | "median"
-                        | "percentile_cont"
-                        | "percentile_disc"
-                        | "approx_count_distinct"
-                ) {
+                if is_builtin_entry(&entry)
+                    && matches!(
+                        entry.id.name(),
+                        "percentile"
+                            | "percentile_approx"
+                            | "approx_percentile"
+                            | "median"
+                            | "percentile_cont"
+                            | "percentile_disc"
+                            | "approx_count_distinct"
+                    )
+                {
                     return self.quantile_call(&entry, e, f, &kids, n, window_fn);
                 }
                 if !window_fn {
@@ -584,9 +602,17 @@ impl Resolver<'_> {
                     let mut shown_kids = Vec::with_capacity(n);
                     for (arg, k) in f.args.iter().zip(&kids[..n]) {
                         if let ExprNode::Alias { name, .. } = &arg.node {
+                            // The bound child is the alias itself: show what it names.
+                            let shown = k.shown();
+                            let inner = match &shown.node {
+                                ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {
+                                    Arc::clone(expr)
+                                }
+                                _ => shown,
+                            };
                             shown_kids.push(Arc::new(
                                 Expr::new(ExprNode::Alias {
-                                    expr: k.shown(),
+                                    expr: inner,
                                     name: name.clone(),
                                 })
                                 .with_origin(arg.origin),
@@ -813,7 +839,7 @@ impl Resolver<'_> {
                     ));
                     return Ok(b);
                 }
-                if entry.id.name() == "count" && n == 0 {
+                if is_builtin_entry(&entry) && entry.id.name() == "count" && n == 0 {
                     return self.parameterless_count(e, &entry, &kids, agg, window_fn);
                 }
                 // `assert_true(c)` is `assert_true(c, '<c>' is not true!)`:
@@ -1631,7 +1657,9 @@ impl Resolver<'_> {
             return e;
         };
         let [value] = &values[..] else { return e };
-        if !matches!(plan.node, crate::PlanNode::Aggregate { .. })
+        // Spark's legacy rule (`subquery_legacy.rs`) answers it otherwise.
+        if self.ctx.conf.legacy_exists_in_count
+            || !matches!(plan.node, crate::PlanNode::Aggregate { .. })
             || !crate::analyzer::subquery::one_row_aggregate(plan)
         {
             return e;

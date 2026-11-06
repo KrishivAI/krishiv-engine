@@ -32,6 +32,7 @@ mod interval;
 pub(crate) mod logic;
 mod nested_cast;
 mod strings;
+mod variant_cast;
 
 pub(crate) use cast::canonical_carrier;
 
@@ -424,6 +425,9 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 {
                     child = nested_cast::interval_leaves(child, part);
                 }
+                if variant_cast::is_variant_cast(child.data_type(), to) {
+                    return variant_cast::compile(child, to, *mode, input.env);
+                }
                 Ok(nested_cast::narrowed(
                     cast::compile(child, to, *mode, input)?,
                     to,
@@ -546,7 +550,35 @@ fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: 
                 | Builtin::Multiply
         ),
         FunctionId::Registry { name, .. } => {
-            matches!(name.as_str(), "nullif" | "date_add" | "date_sub")
+            // `nullif`, `date_add`/`date_sub`, Spark's `BinaryMathExpression`s (`power`, `atan2`, `hypot`), the bitwise
+            // and shift operators, and the string and date `BinaryExpression`s: all return NULL on a NULL left value
+            // before looking at the right one.
+            matches!(
+                name.as_str(),
+                "nullif"
+                    | "date_add"
+                    | "date_sub"
+                    | "power"
+                    | "pow"
+                    | "atan2"
+                    | "hypot"
+                    | "&"
+                    | "|"
+                    | "^"
+                    | "<<"
+                    | ">>"
+                    | ">>>"
+                    | "shiftleft"
+                    | "shiftright"
+                    | "shiftrightunsigned"
+                    | "instr"
+                    | "contains"
+                    | "startswith"
+                    | "endswith"
+                    | "add_months"
+                    | "datediff"
+                    | "date_diff"
+            )
         }
         _ => false,
     };

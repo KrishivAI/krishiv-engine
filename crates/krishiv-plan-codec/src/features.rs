@@ -147,6 +147,7 @@ registry! {
     (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "A `WritePlan` laid out by partition columns (Spark's directory layout)."),
     (percentile_aggregates, PercentileAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The percentile family and `approx_count_distinct` aggregates (`percentile`, `percentile_approx`, `percentile_disc`, `approx_count_distinct` with their folded parameters)."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
+    (rust_udaf, RustUdaf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust aggregate UDF (`UdafCall`, by name and version, with its argument and state columns)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
     (session_zone_name, SessionZoneName, POST_MIGRATION_READER_VERSION, Semantic, "The configured session time zone name (`spark.sql.session.timeZone`) where it differs from the rendered offset; without it a worker shows the offset in `current_timezone()` and `VV`/`z` patterns."),
     (shared_subplan, SharedSubplan, POST_MIGRATION_READER_VERSION, Semantic, "Subplans run once per query and read by several `SharedRead` nodes (`WITH` bodies computed once)."),
@@ -154,6 +155,7 @@ registry! {
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
+    (variant_type, VariantType, POST_MIGRATION_READER_VERSION, Semantic, "The `VARIANT` type (Parquet Variant v1 values, unshredded in memory)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -238,6 +240,7 @@ fn type_feature(t: &DataType) -> Option<Feature> {
         | DataType::DayTimeInterval { .. }
         | DataType::CalendarInterval => Some(Feature::IntervalTypes),
         DataType::CollatedString(_) => Some(Feature::CollatedStrings),
+        DataType::Variant => Some(Feature::VariantType),
         _ => t.is_nested().then_some(Feature::NestedTypes),
     }
 }
@@ -449,6 +452,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                 Some(Feature::TimeType)
             } else if arrow_interval(t) {
                 Some(Feature::IntervalTypes)
+            } else if krishiv_types::arrow::is_variant_struct(t) {
+                // A variant's carrier is one value, not a struct.
+                Some(Feature::VariantType)
             } else {
                 arrow_nested(t).then_some(Feature::NestedTypes)
             }
@@ -542,6 +548,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::PercentileApprox { .. }
             | AggregateFunction::PercentileDisc { .. }
             | AggregateFunction::ApproxCountDistinct { .. } => Some(Feature::PercentileAggregates),
+            AggregateFunction::Udf(_) => Some(Feature::RustUdaf),
         },
         // Built-ins and registry functions travel by name; only a
         // session UDF (by name and version) needs a reader with it.
@@ -562,6 +569,13 @@ fn aggregate_constructs<'a>(a: &'a AggregateExpr, f: &mut impl FnMut(Construct<'
     f(Construct::AggregateFunction(&a.function));
     if let Some(element) = &a.element {
         visit_arrow_field(element, f);
+    }
+    if let AggregateFunction::Udf(call) = &a.function {
+        call.args
+            .iter()
+            .chain(&call.state)
+            .for_each(|x| visit_arrow_field(x, f));
+        visit_type(&call.result, f);
     }
 }
 

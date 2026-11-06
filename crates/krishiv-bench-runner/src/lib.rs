@@ -6,6 +6,10 @@
 //!
 //! * `RUN <query.sql>`: plans and executes the query, materialising every result batch. Replies
 //!   `OK <rows> <seconds>`; the seconds cover parsing, analysis, planning and execution.
+//! * `RUN_CHECKED <query.sql>`: as `RUN`, replying `OK <rows> <seconds> <json>` where `json` is an
+//!   order-independent checksum of the full result (`{"kinds":[..],"values":[..],"source":"run"}`, see
+//!   `checksum.rs`), computed after the seconds are taken, so it is not part of them. The harness holds each timed
+//!   run to the checksum of the verified run of the same binary.
 //! * `PROFILE <query.sql>`: as `RUN`, replying `OK <rows> <seconds> <json>` where `json` is one line,
 //!   `{"phases":[{"name":"parse_analyze","seconds":..},{"name":"plan_execute","seconds":..}]}`: the wall
 //!   time of `Session::sql` (parse and analysis) and of `collect` (planning, execution and materialising).
@@ -51,6 +55,8 @@
 //! A failure replies `ERR <one-line message>`; the process keeps serving.
 
 #![forbid(unsafe_code)]
+
+mod checksum;
 
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -441,6 +447,17 @@ impl Runner {
             (Some("RUN"), Some(file), None, _) => {
                 let (batches, secs, _) = self.execute(&read_sql(&decode_path(file)?)?)?;
                 Ok(format!("OK {} {secs:.6}", count_rows(&batches)))
+            }
+            (Some("RUN_CHECKED"), Some(file), None, _) => {
+                let (batches, secs, df) = self.execute(&read_sql(&decode_path(file)?)?)?;
+                // The checksum is taken after the seconds, outside the timed span.
+                let schema = futures::executor::block_on(df.schema())?;
+                let sum = checksum::of(&batches, &schema)?;
+                Ok(format!(
+                    "OK {} {secs:.6} {}",
+                    count_rows(&batches),
+                    sum.to_json()
+                ))
             }
             (Some(cmd @ ("PROFILE" | "PROFILE_DETAILED")), Some(file), None, _) => {
                 let metered = if cmd == "PROFILE" {

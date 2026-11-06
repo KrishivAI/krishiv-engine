@@ -157,7 +157,7 @@ fn key_use(
         Node::Expr(e) => match &e.node {
             ExprNode::Resolved(ResolvedExpr::Function(f))
                 if f.kind == crate::FunctionKind::Aggregate
-                    && (f.distinct || names.contains(&f.id.name()))
+                    && (f.distinct || names.contains(&super::exprs::builtin_name(f)))
                     && f.args.iter().any(|a| held(expr_type(a))) =>
             {
                 Some((key, e.origin))

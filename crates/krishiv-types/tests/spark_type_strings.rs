@@ -14,13 +14,7 @@ use serde_json::Value;
 
 /// Spark types that parse in Spark but are out of scope here; Krishiv
 /// rejects them with `KRISHIV_UNSUPPORTED_FEATURE`.
-const OUT_OF_SCOPE: &[&str] = &[
-    "char(5)",
-    "varchar(10)",
-    "variant",
-    "array<char(3)>",
-    "struct<a:variant>",
-];
+const OUT_OF_SCOPE: &[&str] = &["char(5)", "varchar(10)", "array<char(3)>"];
 
 /// An explicit `UTF8_BINARY` is Spark's `StringType` with an explicit
 /// collation: it prints `string collate UTF8_BINARY`. Krishiv's type is the

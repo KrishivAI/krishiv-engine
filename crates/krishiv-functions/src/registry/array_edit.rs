@@ -14,13 +14,14 @@
 //! types it.
 
 use krishiv_common::error::{
-    DatatypeMismatchArrayFunctionDiffTypes, DatatypeMismatchUnexpectedInputType, KrishivError,
+    DatatypeMismatchArrayFunctionDiffTypes, DatatypeMismatchUnexpectedInputType,
+    InvalidParameterValueLong, KrishivError,
 };
 use krishiv_types::{ArrayType, DataType};
 
 use super::defs::{Spec, scalar};
 use super::hof::{call_sql, ordinal, quoted};
-use crate::signature::{ArgType, CallTypes, InputType, Inputs};
+use crate::signature::{ArgType, CallTypes, Constant, InputType, Inputs};
 
 /// The result of an append, prepend or insert: the array type, NULL when the
 /// array (or, for an insert, the position) is NULL.
@@ -100,6 +101,35 @@ fn compact(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     ))
 }
 
+/// `shuffle(array[, seed])`: the array's own type. The seed must be an
+/// `INT`/`BIGINT` literal or a NULL literal (Spark's `expressionToSeed`;
+/// anything else is `INVALID_PARAMETER_VALUE.LONG`, checked on a Spark
+/// 4.2.0 run).
+fn shuffle(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let Some(DataType::Array(a)) = c.data_type(0) else {
+        return Err(unexpected("shuffle", c, 0, "\"ARRAY\""));
+    };
+    if c.args().len() > 1 {
+        let literal = c.is_literal(1)
+            && matches!(
+                (c.data_type(1), c.constant(1)),
+                (None, Some(Constant::Null)) | (Some(DataType::Integer | DataType::Long), Some(_))
+            );
+        if !literal {
+            return Err(InvalidParameterValueLong {
+                function_name: "`shuffle`".to_owned(),
+                parameter: "`seed`".to_owned(),
+                invalid_value: format!("\"{}\"", c.sql(1).unwrap_or_default()),
+            }
+            .into());
+        }
+    }
+    Ok(ArgType::new(
+        DataType::Array(std::sync::Arc::clone(a)),
+        c.args()[0].nullable,
+    ))
+}
+
 /// The signatures of this family.
 pub(super) fn specs() -> Vec<Spec> {
     let mut out = scalar(&["array_append"], &Inputs::ArrayItem, append);
@@ -109,6 +139,12 @@ pub(super) fn specs() -> Vec<Spec> {
         &["array_compact"],
         &Inputs::Expects(vec![InputType::Array]),
         compact,
+    ));
+    // The array argument takes an untyped NULL as `array<void>`; the seed stays as written.
+    out.extend(scalar(
+        &["shuffle"],
+        &Inputs::Expects(vec![InputType::Array, InputType::Any]),
+        shuffle,
     ));
     out
 }

@@ -52,65 +52,22 @@ pub(in crate::analyzer) fn pretty(e: &Expr, zone: Option<SessionZone>) -> String
     done.remove(&addr(e)).unwrap_or_default()
 }
 
-/// The names of the outer references of a subquery plan, in order, each
-/// once.
+/// The names of the outer references of a subquery plan, in order, one per
+/// reference: Spark's `getOuterReferences` keeps repeats
+/// (`WHERE y1 = x1 AND y2 = x1 + 1` is `scalarsubquery(x1, x1)` in Spark
+/// 4.2.0).
 pub(super) fn outer_names(plan: &crate::LogicalPlan) -> String {
     use crate::walk::{Node, visit_distinct};
-    fn collect(node: Node<'_>) -> Vec<(AttrId, String)> {
-        let mut names: Vec<(AttrId, String)> = Vec::new();
-        let _ = visit_distinct(node, |n| {
-            if let Node::Expr(e) = n
-                && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
-                && !names.iter().any(|(id, _)| *id == c.id)
-            {
-                names.push((c.id, c.name.clone()));
-            }
-            std::ops::ControlFlow::Continue(())
-        });
-        names
-    }
-    let mut names = collect(Node::Plan(plan));
-    // Spark lists each reference of a set operation's branches, not once per
-    // column. `INTERSECT` and `EXCEPT` are a semi or an anti join by now.
-    let mut union = None;
+    let mut names: Vec<String> = Vec::new();
     let _ = visit_distinct(Node::Plan(plan), |n| {
-        let Node::Plan(p) = n else {
-            return std::ops::ControlFlow::Continue(());
-        };
-        match &p.node {
-            crate::PlanNode::Union { inputs, .. } => union = Some(inputs.clone()),
-            crate::PlanNode::Join {
-                left,
-                right,
-                kind: crate::JoinKind::LeftSemi | crate::JoinKind::LeftAnti,
-                ..
-            } => union = Some(vec![Arc::clone(left), Arc::clone(right)]),
-            _ => return std::ops::ControlFlow::Continue(()),
+        if let Node::Expr(e) = n
+            && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
+        {
+            names.push(c.name.clone());
         }
-        std::ops::ControlFlow::Break(())
+        std::ops::ControlFlow::Continue(())
     });
-    // Only when a branch reads the outer query: over an uncorrelated set
-    // operation, the references above it are listed as anywhere else.
-    if union.is_some_and(|inputs: Vec<_>| {
-        inputs
-            .iter()
-            .any(|input| !collect(Node::Plan(input)).is_empty())
-    }) {
-        names = Vec::new();
-        let _ = visit_distinct(Node::Plan(plan), |n| {
-            if let Node::Expr(e) = n
-                && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
-            {
-                names.push((c.id, c.name.clone()));
-            }
-            std::ops::ControlFlow::Continue(())
-        });
-    }
-    names
-        .into_iter()
-        .map(|(_, n)| n)
-        .collect::<Vec<_>>()
-        .join(", ")
+    names.join(", ")
 }
 
 pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> String {
@@ -165,11 +122,17 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             format!("{cast}({} AS {})", k[0], to.sql())
         }
         // An unresolved alias keeps `AS name` (a `struct` call rewritten
-        // to `named_struct` shows its children as written); a resolved
-        // one is its expression (its output names the attribute).
+        // to `named_struct` shows its children as written).
         ExprNode::Alias { name, .. } => format!("{} AS {name}", k[0]),
         ExprNode::MultiAlias { names, .. } => format!("{} AS ({})", k[0], names.join(", ")),
-        ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
+        // Spark's `Alias.sql`: an alias inside an expression shows its name.
+        ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
+            format!(
+                "{} AS {}",
+                k[0],
+                crate::analyzer::pivot::quote_if_needed(&output.name)
+            )
+        }
         ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => k.join(", "),
         ExprNode::Field { name, .. } | ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => {
             format!("{}.{}", k[0], name)
