@@ -17,8 +17,9 @@
 2215 crates/krishiv-kernels/src/csv.rs
 2429 crates/krishiv-kernels/src/map.rs
 2468 crates/krishiv-plan/src/analyzer/coerce.rs
-4582 crates/krishiv-plan/src/analyzer/ops.rs
-3082 crates/krishiv-plan/src/analyzer/subquery.rs
+# +9 lines over main: a cast of an alias (`v:a::int`) keeps the alias's name (T001c, PR #491)
+4591 crates/krishiv-plan/src/analyzer/ops.rs
+3098 crates/krishiv-plan/src/analyzer/subquery.rs
 5392 crates/krishiv-plan/src/tests/analyzer.rs
 3062 crates/krishiv-session/src/catalog.rs
 2527 crates/krishiv-session/src/command.rs

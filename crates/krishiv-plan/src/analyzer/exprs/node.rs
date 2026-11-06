@@ -584,9 +584,17 @@ impl Resolver<'_> {
                     let mut shown_kids = Vec::with_capacity(n);
                     for (arg, k) in f.args.iter().zip(&kids[..n]) {
                         if let ExprNode::Alias { name, .. } = &arg.node {
+                            // The bound child is the alias itself: show what it names.
+                            let shown = k.shown();
+                            let inner = match &shown.node {
+                                ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {
+                                    Arc::clone(expr)
+                                }
+                                _ => shown,
+                            };
                             shown_kids.push(Arc::new(
                                 Expr::new(ExprNode::Alias {
-                                    expr: k.shown(),
+                                    expr: inner,
                                     name: name.clone(),
                                 })
                                 .with_origin(arg.origin),

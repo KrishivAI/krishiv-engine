@@ -285,6 +285,7 @@ fn atomic_from_name(name: &str) -> Option<Result<DataType>> {
         DataType::Date,
         DataType::Timestamp,
         DataType::TimestampNtz,
+        DataType::Variant,
     ];
     if let Some(t) = atomic.into_iter().find(|t| t.type_name() == name) {
         return Some(Ok(t));
@@ -325,7 +326,7 @@ fn atomic_from_name(name: &str) -> Option<Result<DataType>> {
     if let Some(t) = geography_from_name(name) {
         return Some(t);
     }
-    // A Spark type Krishiv does not have yet (`char(3)`, `variant`, ...).
+    // A Spark type Krishiv does not have yet (`char(3)`, ...).
     match crate::parse_data_type(name) {
         Err(e) if e.error_class() == ErrorClass::KrishivUnsupportedFeature => Some(Err(e)),
         _ => None,

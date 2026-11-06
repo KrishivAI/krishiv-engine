@@ -10,8 +10,8 @@ use krishiv_optimizer::{
     optimize_with_options,
 };
 use krishiv_plan::{
-    Builtin, Expr, ExprNode, FunctionId, JoinCondition, Literal, LogicalPlan, PlanNode, ReadSource,
-    ResolvedExpr, Scan,
+    BoundColumn, Builtin, Expr, ExprNode, FunctionId, JoinCondition, Literal, LogicalPlan,
+    PlanNode, ReadSource, ResolvedExpr, Scan,
 };
 use serde_json::Value;
 
@@ -111,6 +111,87 @@ fn tpch_join_orders() {
         );
         insta::assert_snapshot!(what, optimized.root().to_string());
     }
+}
+
+/// TPC-H statistics at scale factor `sf` as the benchmark runner reads
+/// them from Parquet footers (`krishiv-exec` `planner/file_table.rs`): row
+/// counts and bounds, no distinct counts; an integral column's distinct
+/// count is its range, at most its rows (`StatSource::IntegralRange`), and
+/// a decimal or string column has none. Rows and key ranges scale from the
+/// SF10 fixture; `nation` and `region` keep theirs.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "TPC-H's integral bounds are small non-negative integers"
+)]
+fn footers(sf: u64) -> Fixture {
+    let Fixture(mut tables) = fixture();
+    let scaled = |n: &str| !matches!(n, "nation" | "region");
+    // A key's range is its table's rows (keys run from 1).
+    let keys: Vec<f64> = tables
+        .iter()
+        .filter(|(n, _)| scaled(n))
+        .map(|(_, t)| t.rows as f64)
+        .collect();
+    let integral = |c: &str| c.ends_with("key") || matches!(c, "p_size" | "ps_availqty");
+    for (name, t) in &mut tables {
+        if scaled(name) {
+            t.rows = t.rows * sf / 10;
+        }
+        for (col, c) in &mut t.columns {
+            c.distinct = None;
+            if let Some(Literal::Double(m)) = &mut c.max
+                && keys.contains(m)
+            {
+                *m = *m * sf as f64 / 10.0;
+            }
+            if let (true, Some(Literal::Double(lo)), Some(Literal::Double(hi))) =
+                (integral(col), &c.min, &c.max)
+            {
+                c.source = StatSource::IntegralRange;
+                c.distinct = Some(((hi - lo) as u64 + 1).min(t.rows));
+            }
+        }
+    }
+    Fixture(tables)
+}
+
+/// The `Join Inner` lines of `text` whose condition reads `needle`.
+fn joins_on<'a>(text: &'a str, needle: &str) -> Vec<&'a str> {
+    text.lines()
+        .filter(|l| l.contains("Join Inner") && l.contains(needle))
+        .collect()
+}
+
+/// TPC-H q02 at SF1000 statistics (`research/bench/sf1000-2026-11-05.md`
+/// section 5). `p_partkey`, `ps_partkey` and the decorrelated aggregate's
+/// `ps_partkey` are one equivalence class, so partsupp and the aggregate
+/// share a partkey equality even though the query writes it only through
+/// part. The join on the minimum cost must carry it: on `ps_supplycost`
+/// alone (about 100K values for 800M rows) that join is close to many to
+/// many and filled a 40 GB spill cap. No join repeats a key of one class.
+#[test]
+fn q02_keeps_the_composite_key_at_sf1000() {
+    let ctx = support::ctx();
+    let plan = support::resolve(&support::tpch_sql(2), &ctx);
+    let optimized = optimize_with(&plan, &footers(1000)).unwrap();
+    let text = optimized.root().to_string();
+    let cost = joins_on(&text, "min(ps_supplycost)");
+    assert_eq!(cost.len(), 1, "{text}");
+    assert!(cost[0].contains("ps_partkey"), "{text}");
+    for l in text.lines().filter(|l| l.contains("Join Inner")) {
+        let keys = l.split(" and ").filter(|c| c.contains("partkey")).count();
+        assert!(keys <= 1, "a join repeats the partkey class: {l}\n{text}");
+    }
+    // The minimum groups only the filtered parts' partsupp rows (its
+    // input is reduced by a semi join with them), not all 200M parts'.
+    assert!(text.contains("Join LeftSemi"), "{text}");
+    let db = data::tpch(7, 150);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root())
+    );
+    insta::assert_snapshot!(text);
 }
 
 /// Statistics propagation steers estimates only: with it off, every TPC-H
@@ -775,4 +856,252 @@ fn a_union_keeps_its_column_statistics() {
     let optimized = optimize_with(&plan, &TpcdsFooters).unwrap();
     no_union_build(optimized.root(), "q05 shape");
     insta::assert_snapshot!(optimized.root().to_string());
+}
+
+/// A composite key whose columns are also equal to a third input's (q09:
+/// lineitem and partsupp on part and supplier keys, part and supplier on
+/// each) is planned the same however its equalities are written, and the
+/// plan is a fixed point: the key's selectivity sits on the same conjunct
+/// whichever the query wrote first.
+#[test]
+fn composite_keys_over_a_class_do_not_depend_on_the_written_order() {
+    let ctx = support::ctx();
+    let written = support::tpch_sql(9);
+    let swapped = written.replace(
+        "AND ps_suppkey = l_suppkey\n        AND ps_partkey = l_partkey",
+        "AND ps_partkey = l_partkey\n        AND ps_suppkey = l_suppkey",
+    );
+    assert_ne!(written, swapped);
+    for stats in [fixture(), footers(1000)] {
+        let plans: Vec<_> = [&written, &swapped]
+            .into_iter()
+            .map(|sql| {
+                let plan = support::resolve(sql, &ctx);
+                let optimized = optimize_with(&plan, &stats).unwrap();
+                let again = optimize_with(&optimized, &stats).unwrap();
+                assert!(
+                    again.structurally_eq(&optimized),
+                    "q09 is a fixed point:\n{}\n{}",
+                    optimized.root(),
+                    again.root()
+                );
+                // Conjuncts keep the order the query wrote them in.
+                let text = optimized.root().to_string();
+                let sorted = text.lines().map(|l| match l.split_once("Join Inner, ") {
+                    Some((head, cond)) => {
+                        let cond = cond.replace(['(', ')'], "");
+                        let mut parts: Vec<&str> = cond.split(" and ").collect();
+                        parts.sort_unstable();
+                        format!("{head}Join Inner, {}", parts.join(" and "))
+                    }
+                    None => l.to_owned(),
+                });
+                sorted.collect::<Vec<_>>().join("\n")
+            })
+            .collect();
+        assert_eq!(plans[0], plans[1]);
+    }
+}
+
+/// The columns of each column equality in `e`'s conjuncts.
+fn equalities(e: &Expr) -> Vec<[&BoundColumn; 2]> {
+    fn col(a: &Expr) -> Option<&BoundColumn> {
+        match &a.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+            _ => None,
+        }
+    }
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        return Vec::new();
+    };
+    match (&f.id, f.args.as_slice()) {
+        (FunctionId::Builtin(Builtin::And), args) => {
+            args.iter().flat_map(|a| equalities(a)).collect()
+        }
+        (FunctionId::Builtin(Builtin::Eq), [a, b]) => match (col(a), col(b)) {
+            (Some(a), Some(b)) => vec![[a, b]],
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// Panics on a join holding two equalities over one column (a key the
+/// joins below already imply).
+fn no_repeated_key(root: &LogicalPlan, what: &str) {
+    let mut stack = vec![root];
+    while let Some(p) = stack.pop() {
+        p.for_each_child(&mut |c| stack.push(c));
+        if let PlanNode::Join {
+            condition: JoinCondition::On(c),
+            ..
+        } = &p.node
+        {
+            let mut ids: Vec<_> = equalities(c).iter().flatten().map(|c| c.id).collect();
+            let n = ids.len();
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(ids.len(), n, "{what} repeats a join key:\n{root}");
+        }
+    }
+}
+
+/// Inputs the query relates only through a third one join on the implied
+/// equality, each join holds one equality of the class, and nulls (which
+/// `=` never matches) keep the rows the written plan keeps.
+#[test]
+fn implied_equalities_join_inputs_related_through_a_third() {
+    let sql = "SELECT t1.b, t2.b, t3.b FROM t t1 JOIN t t2 ON t1.a = t2.a \
+               JOIN t t3 ON t3.a = t1.a JOIN u ON u.a = t2.a";
+    let optimized = same_rows(sql);
+    no_cross_product(optimized.root(), sql);
+    no_repeated_key(optimized.root(), sql);
+    assert!(optimize(&optimized).unwrap().structurally_eq(&optimized));
+    insta::assert_snapshot!(optimized.root().to_string());
+}
+
+/// Two columns of one input in a class: the input is filtered on their
+/// equality, and the join takes one of them.
+#[test]
+fn a_class_with_two_columns_of_one_input_filters_that_input() {
+    let sql = "SELECT t1.b, s.b FROM t t1 JOIN (SELECT a AS x, a AS y, b FROM t) s \
+               ON t1.a = s.x AND t1.a = s.y";
+    let optimized = same_rows(sql);
+    no_repeated_key(optimized.root(), sql);
+    assert!(optimize(&optimized).unwrap().structurally_eq(&optimized));
+    let text = optimized.root().to_string();
+    assert_eq!(text.matches(" == ").count(), 2, "{text}");
+    insta::assert_snapshot!(text);
+}
+
+/// Nested columns form no class: two columns of one input equal to a third
+/// stay two join keys, as written, instead of a key and a filter of that
+/// input (the executor's `=` cannot compare a struct holding an array, which
+/// its join keys can).
+#[test]
+fn nested_equalities_stay_as_written() {
+    let ty = krishiv_types::parse_data_type("struct<x: array<int>>").unwrap();
+    let col = |name: &str| krishiv_plan::analyzer::TableColumn {
+        name: name.to_owned(),
+        data_type: ty.clone(),
+        nullable: true,
+    };
+    let cat = support::catalog()
+        .with_table(&["default"], "n1", vec![col("a"), col("b")], None)
+        .with_table(&["default"], "n2", vec![col("c")], None);
+    let sql = "SELECT 1 FROM n1 t JOIN n2 u ON t.a = u.c AND t.b = u.c";
+    let plan = support::resolve(sql, &support::ctx_over(cat));
+    let optimized = optimize(&plan).unwrap();
+    let text = optimized.root().to_string();
+    assert!(!text.contains("Filter"), "{text}");
+    assert_eq!(text.matches(" == ").count(), 2, "{text}");
+}
+
+/// A written equality the others imply is left out of the plan, and the
+/// rows stay those of the written plan.
+#[test]
+fn a_written_equality_the_others_imply_is_left_out() {
+    let sql = "SELECT t1.b FROM t t1 JOIN t t2 ON t1.a = t2.a JOIN t t3 \
+               ON t2.a = t3.a AND t1.a = t3.a";
+    let optimized = same_rows(sql);
+    no_repeated_key(optimized.root(), sql);
+    let joins = optimized.root().to_string().matches("Join Inner").count();
+    let eqs = optimized.root().to_string().matches(" == ").count();
+    assert_eq!((joins, eqs), (2, 2), "{}", optimized.root());
+}
+
+/// One class over many inputs (every input joined on the same column)
+/// derives an equality per pair of inputs; planning stays fast, every join
+/// holds one of them and the rows are the written plan's.
+#[test]
+fn a_class_over_many_inputs_plans_quickly() {
+    let mut sql = "SELECT t1.b FROM t t1".to_owned();
+    for i in 2..=30 {
+        sql.push_str(&format!(" JOIN t t{i} ON t{i}.a = t{}.a", i - 1));
+    }
+    let plan = support::resolve(&sql, &support::ctx());
+    let started = std::time::Instant::now();
+    let optimized = optimize(&plan).unwrap();
+    assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+    no_cross_product(optimized.root(), "the class");
+    no_repeated_key(optimized.root(), "the class");
+    let eqs = optimized.root().to_string().matches(" == ").count();
+    assert_eq!(eqs, 29, "{}", optimized.root());
+}
+
+/// The right side of the semi join restricting the aggregate in `text`
+/// (the lines under its `Shift`), or `None` without one.
+fn restriction_domain(text: &str) -> Option<String> {
+    let start = text.lines().position(|l| l.contains("Join LeftSemi"))?;
+    let lines: Vec<&str> = text.lines().skip(start + 1).collect();
+    let shift = lines.iter().position(|l| l.contains("Shift +"))?;
+    let indent = lines[shift].find("Shift").unwrap_or(0);
+    let mut out = vec![lines[shift]];
+    out.extend(lines[shift + 1..].iter().take_while(|l| {
+        l.find(|c: char| c.is_alphanumeric())
+            .is_some_and(|i| i > indent)
+    }));
+    Some(out.join("\n"))
+}
+
+/// An aggregate joined to `partsupp ⋈ filtered part` on partsupp's key is
+/// restricted by the filtered parts alone: the domain follows the inner
+/// join's `ps_partkey = p_partkey` into part, which scans far fewer rows
+/// than partsupp joined to it (without that step the domain is the join,
+/// reading all of partsupp again).
+#[test]
+fn a_restriction_domain_follows_an_inner_join_equality() {
+    let sql = "SELECT x.ps_partkey, g.m FROM \
+               (SELECT ps_partkey, ps_suppkey FROM partsupp JOIN part ON ps_partkey = p_partkey \
+                WHERE p_size = 15 AND p_type LIKE '%BRASS') x \
+               LEFT JOIN (SELECT l_partkey AS k, sum(l_quantity) AS m FROM lineitem GROUP BY l_partkey) g \
+               ON g.k = x.ps_partkey";
+    let ctx = support::ctx();
+    let plan = support::resolve(sql, &ctx);
+    let optimized = optimize_with(&plan, &fixture()).unwrap();
+    let text = optimized.root().to_string();
+    let domain = restriction_domain(&text).unwrap_or_else(|| panic!("not restricted:\n{text}"));
+    assert!(domain.contains("p_partkey"), "{text}");
+    assert!(
+        !domain.contains("partsupp"),
+        "the domain reads partsupp:\n{text}"
+    );
+    assert!(
+        optimize_with(&optimized, &fixture())
+            .unwrap()
+            .structurally_eq(&optimized)
+    );
+    let db = data::tpch(7, 150);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root())
+    );
+}
+
+/// Through an outer join the equality does not hold of every row (the
+/// preserved side keeps its unmatched keys), so the domain never moves
+/// across it.
+#[test]
+fn a_restriction_domain_does_not_follow_an_outer_join_equality() {
+    let sql = "SELECT x.ps_partkey, g.m FROM \
+               (SELECT ps_partkey, ps_suppkey FROM partsupp LEFT JOIN \
+                (SELECT p_partkey FROM part WHERE p_size = 15 AND p_type LIKE '%BRASS') p \
+                ON ps_partkey = p_partkey) x \
+               LEFT JOIN (SELECT l_partkey AS k, sum(l_quantity) AS m FROM lineitem GROUP BY l_partkey) g \
+               ON g.k = x.ps_partkey";
+    let ctx = support::ctx();
+    let plan = support::resolve(sql, &ctx);
+    let optimized = optimize_with(&plan, &fixture()).unwrap();
+    let text = optimized.root().to_string();
+    if let Some(domain) = restriction_domain(&text) {
+        assert!(
+            !domain.contains("p_partkey"),
+            "the domain crossed an outer join:\n{text}"
+        );
+    }
+    let db = data::tpch(7, 150);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root())
+    );
 }
