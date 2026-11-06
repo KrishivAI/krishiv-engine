@@ -202,9 +202,59 @@ fn interval_month_bounds_on_every_integral_and_decimal_key_count_months() {
 }
 
 #[test]
-fn a_malformed_float_text_bound_is_refused() {
+fn a_hopeless_string_bound_raises_the_cast_error_only_under_ansi() {
     let d = tempfile::tempdir().unwrap();
     let s = session(d.path());
-    let r = frames(&s, "f_float8", "'1.2.3' preceding and 1 following");
-    assert!(r.is_err(), "{r:?}");
+    // Spark 4.2.0, ANSI on: 'x' is CAST_INVALID_INPUT (STRING to DOUBLE).
+    let err = frames(&s, "f_float8", "'x' preceding and 1 following").unwrap_err();
+    assert!(err.contains("CAST_INVALID_INPUT"), "{err}");
+    // ANSI off: Spark reads 'x' as a NULL bound (not an error); the engine refuses rather than guess, and does not
+    // invent a cast error.
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
+    let err = frames(&s, "f_float8", "'x' preceding and 1 following").unwrap_err();
+    assert!(!err.contains("CAST_INVALID_INPUT"), "{err}");
+}
+
+#[test]
+fn text_that_spark_reads_is_never_reported_as_a_cast_error() {
+    let d = tempfile::tempdir().unwrap();
+    let s = session(d.path());
+    // Spark 4.2.0 reads all of these: '1d' as a double (Java accepts the suffix), a decimal cast, '1.5' on an INT
+    // key. The engine may refuse some, but must not raise a cast error for them.
+    for (key, bounds) in [
+        ("f_float8", "'1d' preceding and 1 following"),
+        (
+            "f_numeric",
+            "cast('1.5' as decimal(3,1)) preceding and 1 following",
+        ),
+        ("f_float8", "'1.2.3' preceding and 1 following"),
+    ] {
+        if let Err(e) = frames(&s, key, bounds) {
+            assert!(!e.contains("CAST_INVALID_INPUT"), "{key} {bounds}: {e}");
+        }
+    }
+}
+
+#[test]
+fn an_interval_beside_a_number_differs_in_type_on_a_float_key_only() {
+    let d = tempfile::tempdir().unwrap();
+    let s = session(d.path());
+    // Spark 4.2.0: DOUBLE key -> SPECIFIED_WINDOW_FRAME_DIFF_TYPES; INT key -> the interval is cast to the key's
+    // type and the frame runs.
+    let err = frames(
+        &s,
+        "f_float8",
+        "interval '1' month preceding and 1 following",
+    )
+    .unwrap_err();
+    assert!(err.contains("SPECIFIED_WINDOW_FRAME_DIFF_TYPES"), "{err}");
+    assert!(
+        frames(
+            &s,
+            "f_numeric",
+            "interval '1' month preceding and 1 following"
+        )
+        .is_ok(),
+        "an INT key casts the interval"
+    );
 }

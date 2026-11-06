@@ -275,10 +275,14 @@ fn is_numeric_key(key: &krishiv_types::DataType) -> bool {
     )
 }
 
-/// The `CAST_INVALID_INPUT` of a `RANGE` bound that is a cast of a malformed string literal (the analyzer's
-/// `CAST('x' AS DOUBLE)` under a `PRECEDING` negation, or a string cast to the key's type); `None` for any other
-/// bound.
-fn malformed_string_bound(x: &Arc<Expr>) -> Option<krishiv_common::error::CastInvalidInput> {
+/// The `CAST_INVALID_INPUT` Spark raises for a `RANGE` bound that is `CAST('x' AS DOUBLE)` (the analyzer's cast
+/// under a `PRECEDING` negation) of a string with no digit at all (`'x'`, `''`), under ANSI. Anything else stays
+/// unsupported rather than guessed: Java's double parser also accepts `'1d'`, `'1f'` and hexadecimal floats, a cast
+/// to a decimal accepts text this parser does not read, and with ANSI off a malformed string is a NULL bound.
+fn malformed_string_bound(
+    x: &Arc<Expr>,
+    ansi: bool,
+) -> Option<krishiv_common::error::CastInvalidInput> {
     use krishiv_types::DataType as T;
     let inner = crate::expr::negated(x).unwrap_or(x);
     let ExprNode::Cast { expr, to, .. } = &inner.node else {
@@ -287,14 +291,16 @@ fn malformed_string_bound(x: &Arc<Expr>) -> Option<krishiv_common::error::CastIn
     let ExprNode::Literal(Literal::String(raw)) = &expr.node else {
         return None;
     };
-    let readable = match to {
-        T::Double | T::Float => parse_float_text(raw, false).is_some(),
-        _ => raw.trim().parse::<i64>().is_ok(),
-    };
-    (!readable).then(|| krishiv_common::error::CastInvalidInput {
+    let hopeless = ansi
+        && matches!(to, T::Double)
+        && !raw
+            .bytes()
+            .any(|b| b.is_ascii_digit() || matches!(b, b'\'' | b'\\'))
+        && parse_float_text(raw, false).is_none();
+    hopeless.then(|| krishiv_common::error::CastInvalidInput {
         expression: format!("'{raw}'"),
         source_type: "\"STRING\"".to_owned(),
-        target_type: format!("\"{}\"", to.sql()),
+        target_type: "\"DOUBLE\"".to_owned(),
     })
 }
 
@@ -372,22 +378,25 @@ fn range_value_signed(
         // is 1, `MONTH '12'` is 12). `YEAR TO MONTH` is not matched yet.
         let count = match (start, end) {
             (krishiv_types::YearMonthField::Year, krishiv_types::YearMonthField::Year) => {
-                months / 12
+                Some(months / 12)
             }
-            (krishiv_types::YearMonthField::Month, krishiv_types::YearMonthField::Month) => months,
-            _ => i32::MIN,
+            (krishiv_types::YearMonthField::Month, krishiv_types::YearMonthField::Month) => {
+                Some(months)
+            }
+            _ => None,
         };
         return match key {
             T::Date | T::Timestamp | T::TimestampNtz => {
                 Some(RangeValue::Months(months, *start, *end))
             }
-            _ if count == i32::MIN => None,
-            T::Byte => i8::try_from(count).ok().map(|v| RangeValue::Int(v.into())),
-            T::Short => i16::try_from(count).ok().map(|v| RangeValue::Int(v.into())),
-            T::Integer | T::Long => Some(RangeValue::Int(count.into())),
+            T::Byte => i8::try_from(count?).ok().map(|v| RangeValue::Int(v.into())),
+            T::Short => i16::try_from(count?)
+                .ok()
+                .map(|v| RangeValue::Int(v.into())),
+            T::Integer | T::Long => Some(RangeValue::Int(count?.into())),
             T::Decimal(d) => {
                 let v =
-                    i128::from(count).checked_mul(10_i128.checked_pow(u32::from(d.scale()))?)?;
+                    i128::from(count?).checked_mul(10_i128.checked_pow(u32::from(d.scale()))?)?;
                 let max = 10_i128.checked_pow(u32::from(d.precision()))? - 1;
                 (-max..=max).contains(&v).then_some(RangeValue::Int(v))
             }
@@ -1349,8 +1358,14 @@ impl Resolver<'_> {
         // Both bounds are values of one type (`INTERVAL YEAR` and `INTERVAL MONTH` are two types); Spark checks
         // this before whether either type is valid for the key.
         // (Numeric keys cast both bounds to the key's type first, so only date and timestamp keys can differ.)
+        // A FLOAT or DOUBLE key cannot take an interval cast, so a frame mixing an interval and a number differs too
+        // (Spark 4.2.0: `INTERVAL '1' MONTH PRECEDING AND 1 FOLLOWING` over a DOUBLE key); an integral or decimal key
+        // casts the interval to its type, as the numeric bound is.
+        let is_interval =
+            |t: &T| matches!(t, T::YearMonthInterval { .. } | T::DayTimeInterval { .. });
         if let [Some(lt), Some(ut)] = &bound_types[..]
-            && matches!(key, T::Date | T::Timestamp | T::TimestampNtz)
+            && (matches!(key, T::Date | T::Timestamp | T::TimestampNtz)
+                || (matches!(key, T::Float | T::Double) && is_interval(lt) != is_interval(ut)))
             && lt != ut
             && let (Some(FrameBound::Offset(l)), Some(FrameBound::Offset(u))) = (
                 shown.frame.as_ref().map(|f| &f.lower),
@@ -1526,7 +1541,7 @@ impl Resolver<'_> {
                 }
             }
             values[k] = Some(range_value(x, &key).ok_or_else(|| {
-                if let Some(e) = malformed_string_bound(x) {
+                if let Some(e) = malformed_string_bound(x, self.ctx.conf.ansi) {
                     return AnalysisError::new(e, origin);
                 }
                 // A bound the key's type cannot hold raises the cast's overflow (`'999'` on a TINYINT key).
