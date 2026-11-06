@@ -209,7 +209,8 @@ impl Shared {
     }
 }
 
-/// What a depth-1 subtree is.
+/// What a group's subtree is: the top of a group is a child of the root or
+/// of a tenant pool ([`TreePool::tenant`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GroupKind {
     /// A query: arbitrates, can be aborted.
@@ -219,7 +220,8 @@ pub(crate) enum GroupKind {
     External,
 }
 
-/// Abort state of one depth-1 subtree, shared by all of its nodes.
+/// Abort state of one group's subtree (a query or an external pool), shared
+/// by all of its nodes.
 #[derive(Debug)]
 pub(crate) struct Group {
     pub(crate) kind: GroupKind,
@@ -339,9 +341,10 @@ pub(crate) struct Node {
     /// path accepted (statistics: a grant rolled back is not counted).
     peak: AtomicUsize,
     parent: Option<Arc<Node>>,
-    /// 0 = process root, 1 = query or external pool, deeper = task etc.
+    /// 0 = process root, 1 = query, tenant or external pool, deeper = a
+    /// tenant's queries, tasks etc.
     pub(crate) depth: usize,
-    /// `None` for the root.
+    /// `None` for the root and tenant pools: the nodes above every group.
     pub(crate) group: Option<Arc<Group>>,
     consumers: Mutex<HashMap<ConsumerId, Arc<Consumer>>>,
     pub(crate) shared: Arc<Shared>,
@@ -544,16 +547,32 @@ impl Node {
         false
     }
 
-    /// The depth-1 node (query or external pool) this node belongs to.
+    /// The top node of this node's group (query or external pool): the
+    /// highest ancestor sharing its group, a child of the root or of a
+    /// tenant pool. `None` for the root and tenant pools.
     pub(crate) fn group_node(self: &Arc<Self>) -> Option<Arc<Node>> {
+        let group = self.group.as_ref()?;
         let mut cur = self;
-        loop {
-            match cur.depth {
-                0 => return None,
-                1 => return Some(Arc::clone(cur)),
-                _ => cur = cur.parent.as_ref()?,
+        while let Some(parent) = cur.parent.as_ref() {
+            if !parent.group.as_ref().is_some_and(|g| Arc::ptr_eq(g, group)) {
+                break;
             }
+            cur = parent;
         }
+        Some(Arc::clone(cur))
+    }
+
+    /// Whether this node lies strictly below the top of its group: a task,
+    /// pipeline or operator pool of a query. A limit there fails only the
+    /// request, never the whole query.
+    pub(crate) fn is_inside_group(&self) -> bool {
+        let Some(group) = self.group.as_ref() else {
+            return false;
+        };
+        self.parent
+            .as_ref()
+            .and_then(|p| p.group.as_ref())
+            .is_some_and(|g| Arc::ptr_eq(g, group))
     }
 
     /// Aborts this query node: later grants through it fail (abort bit, in
@@ -745,8 +764,9 @@ fn node_path(node: &Arc<Node>) -> String {
 static NEXT_CONSUMER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// The pool-tree implementation of [`MemoryPool`]. The root's children are
-/// queries ([`MemoryPool::child`]) or capped pools for external consumers
-/// ([`TreePool::external`]); below a query, any depth of task, pipeline and
+/// queries ([`MemoryPool::child`]), capped pools for external consumers
+/// ([`TreePool::external`]) or tenant pools ([`TreePool::tenant`]) whose own
+/// children are queries; below a query, any depth of task, pipeline and
 /// operator pools.
 #[derive(Debug)]
 pub struct TreePool {
@@ -823,6 +843,40 @@ impl TreePool {
             None => Arc::new(Group::new(GroupKind::Query)),
         };
         Self::new_child(p, name, limit, group)
+    }
+
+    /// A tenant pool under the root (a session of a shared engine runtime):
+    /// its children ([`MemoryPool::child`]) are queries, each its own group
+    /// that arbitrates and can be aborted, all bounded by `limit` as well as
+    /// by the root. A request a tenant's limit refuses arbitrates inside the
+    /// tenant (spills, then aborts one of its queries), never outside it.
+    ///
+    /// ```
+    /// use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    /// let root = TreePool::new(&MemoryConfig { limit: Some(64 << 20), ..MemoryConfig::default() });
+    /// let tenant = root.tenant("session:a", Some(16 << 20));
+    /// let query = tenant.child("q1", None);
+    /// assert_eq!(query.effective_limit(), Some(16 << 20));
+    /// ```
+    pub fn tenant(&self, name: &str, limit: Option<usize>) -> Arc<TreePool> {
+        let mut root = &self.node;
+        while let Some(p) = &root.parent {
+            root = p;
+        }
+        Arc::new(Self {
+            node: Arc::new(Node {
+                name: name.to_owned(),
+                limit: limit.map(|l| l.min(MAX_BYTES)),
+                floor: floor(limit, root.shared.scratch_reserve),
+                word: AtomicUsize::new(0),
+                peak: AtomicUsize::new(0),
+                parent: Some(Arc::clone(root)),
+                depth: 1,
+                group: None,
+                consumers: Mutex::new(HashMap::new()),
+                shared: Arc::clone(&root.shared),
+            }),
+        })
     }
 
     /// A capped pool under the root for external consumers (a UDF worker

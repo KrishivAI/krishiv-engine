@@ -1414,3 +1414,108 @@ fn a_snapshot_lists_pools_then_consumers() {
             .all(|e| e.path != "process/query-1/hash_join")
     );
 }
+
+/// A tenant pool's children are queries of their own: aborting one leaves
+/// its siblings running, and a task pool's group top is its query, not the
+/// tenant.
+#[test]
+fn tenant_children_are_separate_queries() {
+    let root = root(Some(64 * Q), Q);
+    let tenant = root.tenant("session:a", Some(32 * Q));
+    let q1 = tenant.child_pool("q1", None);
+    let q2 = tenant.child_pool("q2", None);
+    let task = q1.child_pool("task", Some(4 * Q));
+    let top = task.node().group_node().unwrap();
+    assert!(Arc::ptr_eq(&top, q1.node()));
+    assert!(task.node().is_inside_group());
+    assert!(!q1.node().is_inside_group());
+    assert!(!tenant.node().is_inside_group());
+    assert!(tenant.node().group_node().is_none());
+    q1.node().abort(MemoryError::Aborted { held: 0 });
+    assert!(q1.check_aborted().is_err());
+    assert!(task.check_aborted().is_err());
+    assert!(q2.check_aborted().is_ok(), "a sibling query keeps running");
+    assert!(tenant.check_aborted().is_ok());
+    assert_eq!(q2.effective_limit(), Some(32 * Q));
+    // A tenant made from anywhere in the tree hangs off the root.
+    let nested = q2.tenant("session:b", None);
+    assert_eq!(nested.node().depth, 1);
+    assert_eq!(nested.effective_limit(), Some(64 * Q));
+}
+
+/// A request a tenant's limit refuses arbitrates inside the tenant: it
+/// aborts the tenant's own query above its fair share, never a query of the
+/// root or of another tenant, though those hold more.
+#[tokio::test(start_paused = true)]
+async fn a_tenant_limit_aborts_only_inside_the_tenant() {
+    let root = root(Some(64 * Q), Q);
+    let outsider = root.child_pool("outsider", None);
+    let ido = outsider.register("held", None);
+    outsider.try_reserve(ido, 30 * Q).unwrap();
+    let other = root.tenant("session:b", None);
+    let neighbour = other.child_pool("q", None);
+    let idn = neighbour.register("held", None);
+    neighbour.try_reserve(idn, 20 * Q).unwrap();
+    let tenant = root.tenant("session:a", Some(16 * Q));
+    let q1 = tenant.child_pool("q1", None);
+    let id1 = q1.register("held", None);
+    q1.try_reserve(id1, 12 * Q).unwrap();
+    let q2 = tenant.child_pool("q2", None);
+    let id2 = q2.register("agg", None);
+    // `q1` never releases, so the request fails after the release timeout.
+    let e = q2.reserve(id2, 8 * Q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    assert!(
+        q1.check_aborted().is_err(),
+        "the tenant's query was aborted"
+    );
+    assert!(outsider.check_aborted().is_ok());
+    assert!(neighbour.check_aborted().is_ok());
+    assert!(q2.check_aborted().is_ok());
+    assert_eq!(root.stats().aborts, 1);
+    assert!(tenant.reserved() <= 16 * Q);
+}
+
+/// Under the root's limit, queries of different tenants are ranked as one
+/// set: the query furthest above its fair share is aborted, whichever
+/// tenant holds it.
+#[tokio::test(start_paused = true)]
+async fn the_root_limit_ranks_queries_across_tenants() {
+    let root = root(Some(64 * Q), Q);
+    let a = root.tenant("session:a", None);
+    let b = root.tenant("session:b", None);
+    let big = a.child_pool("big", None);
+    let idb = big.register("held", None);
+    big.try_reserve(idb, 40 * Q).unwrap();
+    let small = b.child_pool("small", None);
+    let ids = small.register("held", None);
+    small.try_reserve(ids, 10 * Q).unwrap();
+    let asker = b.child_pool("asker", None);
+    let ida = asker.register("agg", None);
+    let e = asker.reserve(ida, 30 * Q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    assert!(big.check_aborted().is_err());
+    assert!(small.check_aborted().is_ok());
+    assert!(asker.check_aborted().is_ok());
+}
+
+/// The pool snapshot lists a tenant between the root and its queries.
+#[test]
+fn snapshots_show_the_tenant_level() {
+    let root = root(Some(64 * Q), Q);
+    let tenant = root.tenant("session:a", Some(32 * Q));
+    let q = tenant.child_pool("q1", None);
+    let id = q.register("op", None);
+    q.try_reserve(id, Q).unwrap();
+    let snapshot = root.snapshot();
+    let paths: Vec<_> = snapshot.entries.iter().map(|e| e.path.as_str()).collect();
+    assert!(paths.contains(&"process/session:a"), "{paths:?}");
+    assert!(paths.contains(&"process/session:a/q1"), "{paths:?}");
+    let t = snapshot
+        .entries
+        .iter()
+        .find(|e| e.path == "process/session:a")
+        .unwrap();
+    assert_eq!(t.limit, Some(32 * Q));
+    assert_eq!(t.parent.as_deref(), Some("process"));
+}
