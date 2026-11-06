@@ -97,7 +97,7 @@ fn in_over_one_row_of_values_is_an_equality() {
     assert_eq!(ints(&out), vec![vec![0], vec![0], vec![1]]);
     let out = run(
         &s,
-        "SELECT CAST(NULL AS INT) IN (SELECT 1) IS NULL, 2 IN (SELECT 1)",
+        "SELECT isnull(CAST(NULL AS INT) IN (SELECT 1)), 2 IN (SELECT 1)",
     );
     let b = &out[0];
     assert!(b.column(0).as_boolean().value(0));

@@ -954,7 +954,9 @@ impl<'a> Planner<'a> {
         for e in exprs {
             subqueries(e, &mut found);
         }
-        let mut by_plan: HashMap<usize, BoundColumn> = HashMap::new();
+        // Keyed by kind and plan address: `NULL IN (q)` and `v IN (q)` over
+        // one row read the same plan as `EXISTS` and as a scalar.
+        let mut by_plan: HashMap<(bool, usize), BoundColumn> = HashMap::new();
         let mut prepared = Prepared {
             exprs: Vec::with_capacity(exprs.len()),
             subqueries: Vec::new(),
@@ -962,7 +964,10 @@ impl<'a> Planner<'a> {
             explain: Vec::new(),
         };
         for (kind, plan) in found {
-            let key = Arc::as_ptr(&plan) as usize;
+            let key = (
+                kind == SubqueryValueKind::Scalar,
+                Arc::as_ptr(&plan) as usize,
+            );
             if by_plan.contains_key(&key) {
                 continue;
             }
@@ -1887,11 +1892,17 @@ fn subqueries(e: &Expr, out: &mut Vec<(SubqueryValueKind, Arc<LogicalPlan>)>) {
 }
 
 /// `e` with each subquery of `columns` (by the address of its plan)
-/// replaced by the column of its value.
-fn with_subquery_columns(e: Arc<Expr>, columns: &HashMap<usize, BoundColumn>) -> Result<Arc<Expr>> {
+/// replaced by the column of its value (keyed by kind and plan address).
+fn with_subquery_columns(
+    e: Arc<Expr>,
+    columns: &HashMap<(bool, usize), BoundColumn>,
+) -> Result<Arc<Expr>> {
     e.transform_down(&mut |x: Arc<Expr>| {
-        if let ExprNode::Subquery { plan, .. } = &x.node
-            && let Some(c) = columns.get(&(Arc::as_ptr(plan) as usize))
+        if let ExprNode::Subquery { kind, plan } = &x.node
+            && let Some(c) = columns.get(&(
+                matches!(kind, SubqueryKind::Scalar),
+                Arc::as_ptr(plan) as usize,
+            ))
         {
             return Ok::<_, KrishivError>(Arc::new(Expr::new(ExprNode::Resolved(
                 ResolvedExpr::Column(c.clone()),
