@@ -87,6 +87,16 @@ fn a_set_operation_runs_once_per_outer_value() -> R {
         )?,
         ["1|3", "2|NULL", "NULL|NULL"]
     );
+    // Both sides over one view (the second a fresh instance); Spark: (1, 3),
+    // (2, NULL), (NULL, NULL).
+    assert_eq!(
+        run(
+            &s,
+            "select t0a, (select sum(c) from (select t1c c from t1 where t1a = t0a \
+             intersect select t1c from t1 where t1b = t0b)) from t0"
+        )?,
+        ["1|3", "2|NULL", "NULL|NULL"]
+    );
     // A NULL outer value owns its own rows, through `<=>`.
     assert_eq!(
         run(
@@ -257,9 +267,6 @@ fn shapes_not_rewritten_yet_are_refused() -> R {
         // Spark: (1, 19), (2, 17), (NULL, 13).
         "select t0a, (select sum(c) from (select sum(t1c) c from t1 where t1a = t0a \
          union all select t2c from t2)) from t0",
-        // Spark: (1, 3), (2, NULL), (NULL, NULL).
-        "select t0a, (select sum(c) from (select t1c c from t1 where t1a = t0a \
-         intersect select t1c from t1 where t1b = t0b)) from t0",
     ] {
         let e = failure(&s, sql);
         assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{sql}: {e}");
