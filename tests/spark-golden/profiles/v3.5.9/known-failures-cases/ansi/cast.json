@@ -1,12 +1,12 @@
 {
   "cases": {
+    "other-version": [
+      62,
+      99
+    ],
     "sql-commands": [
       37,
       38
-    ],
-    "v35-ansi-default": [
-      62,
-      99
     ]
   },
   "file": "ansi/cast",
