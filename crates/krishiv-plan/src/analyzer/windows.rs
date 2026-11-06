@@ -267,6 +267,37 @@ impl RangeValue {
     }
 }
 
+fn is_numeric_key(key: &krishiv_types::DataType) -> bool {
+    use krishiv_types::DataType as T;
+    matches!(
+        key,
+        T::Byte | T::Short | T::Integer | T::Long | T::Float | T::Double
+    )
+}
+
+/// The `CAST_INVALID_INPUT` of a `RANGE` bound that is a cast of a malformed string literal (the analyzer's
+/// `CAST('x' AS DOUBLE)` under a `PRECEDING` negation, or a string cast to the key's type); `None` for any other
+/// bound.
+fn malformed_string_bound(x: &Arc<Expr>) -> Option<krishiv_common::error::CastInvalidInput> {
+    use krishiv_types::DataType as T;
+    let inner = crate::expr::negated(x).unwrap_or(x);
+    let ExprNode::Cast { expr, to, .. } = &inner.node else {
+        return None;
+    };
+    let ExprNode::Literal(Literal::String(raw)) = &expr.node else {
+        return None;
+    };
+    let readable = match to {
+        T::Double | T::Float => parse_float_text(raw, false).is_some(),
+        _ => raw.trim().parse::<i64>().is_ok(),
+    };
+    (!readable).then(|| krishiv_common::error::CastInvalidInput {
+        expression: format!("'{raw}'"),
+        source_type: "\"STRING\"".to_owned(),
+        target_type: format!("\"{}\"", to.sql()),
+    })
+}
+
 /// The value of the `RANGE` frame bound `x` (a literal, or the negation of
 /// one for `PRECEDING`) cast to the type of the ordering key; `None` for
 /// anything but a literal, or a value the key's type cannot hold.
@@ -294,21 +325,21 @@ fn range_value_signed(
     let cast_text;
     let l = match &x.node {
         ExprNode::Literal(l) => l,
-        ExprNode::Cast {
-            expr,
-            to: to @ (T::Float | T::Double),
-            ..
-        } if matches!(key, T::Float | T::Double)
-            && matches!(&expr.node, ExprNode::Literal(Literal::String(_))) =>
-        {
+        // The analyzer's `CAST('1' AS DOUBLE)` under the `PRECEDING` negation, or a cast of a string to the key's
+        // type: the string read as that type.
+        ExprNode::Cast { expr, to, .. } => {
             let ExprNode::Literal(Literal::String(text)) = &expr.node else {
                 return None;
             };
-            let v = parse_float_text(text, matches!(to, T::Float))?;
-            cast_text = if matches!(to, T::Float) {
-                Literal::Float(v as f32)
-            } else {
-                Literal::Double(v)
+            cast_text = match to {
+                T::Float if matches!(key, T::Float | T::Double) => {
+                    Literal::Float(parse_float_text(text, true)? as f32)
+                }
+                T::Double if is_numeric_key(key) => Literal::Double(parse_float_text(text, false)?),
+                t if t == key && matches!(key, T::Byte | T::Short | T::Integer | T::Long) => {
+                    Literal::Long(text.trim().parse::<i64>().ok()?)
+                }
+                _ => return None,
             };
             &cast_text
         }
@@ -371,8 +402,20 @@ fn range_value_signed(
     let lit = match l {
         // A string bound is cast to a FLOAT or DOUBLE key's type (Spark's `Cast` of the string: `'inf'` and `'NaN'`
         // are values). Text this parser does not know stays unsupported rather than guessed.
-        Literal::String(text) if matches!(key, T::Float | T::Double) => {
-            Lit::Double(parse_float_text(text, matches!(key, T::Float))?)
+        Literal::String(text)
+            if matches!(
+                key,
+                T::Float | T::Double | T::Byte | T::Short | T::Integer | T::Long
+            ) =>
+        {
+            if !negate && !matches!(key, T::Float | T::Double) {
+                // A `FOLLOWING` bound is not negated: the string is cast straight to the key's type.
+                Lit::Exact(text.trim().parse::<i128>().ok()?, 0)
+            } else {
+                // A `PRECEDING` bound is negated, which reads the string as a DOUBLE first; the double is then
+                // cast to the key's type.
+                Lit::Double(parse_float_text(text, matches!(key, T::Float))?)
+            }
         }
         Literal::Byte(v) => Lit::Exact(i128::from(*v), 0),
         Literal::Short(v) => Lit::Exact(i128::from(*v), 0),
@@ -458,6 +501,24 @@ fn parse_float_text(text: &str, single: bool) -> Option<f64> {
         body.parse::<f64>().ok()?
     };
     Some(sign * v)
+}
+
+/// The signed value of a `RANGE` bound that is the analyzer's `CAST('1' AS DOUBLE)` (under the `PRECEDING`
+/// negation); `None` for anything else.
+fn range_double_of_cast(x: &Arc<Expr>) -> Option<f64> {
+    let (inner, sign) = match crate::expr::negated(x) {
+        Some(n) => (n, -1.0),
+        None => (x, 1.0),
+    };
+    let ExprNode::Cast { expr, to, .. } = &inner.node else {
+        return None;
+    };
+    match (&expr.node, to) {
+        (ExprNode::Literal(Literal::String(text)), krishiv_types::DataType::Double) => {
+            parse_float_text(text, false).map(|d| sign * d)
+        }
+        _ => None,
+    }
 }
 
 /// Whether the `RANGE` bound `x` (or the negation of one) is a string literal.
@@ -1363,8 +1424,8 @@ impl Resolver<'_> {
                             ));
                         }
                     } else if !numeric(&bt) {
-                        // A string literal is cast to the key's type: a float key reads `'inf'`/`'NaN'`
-                        // (`range_value` below); any other numeric key raises what the cast raises.
+                        // A `FOLLOWING` string literal is cast straight to the key's type (`range_value` below reads
+                        // `'inf'`, `'NaN'` for a float key); an integral key raises what that cast raises.
                         if !(matches!(bt, T::String) && is_string_bound(x)) {
                             return Err(unsupported(
                                 "a non-numeric RANGE window frame bound",
@@ -1372,21 +1433,20 @@ impl Resolver<'_> {
                             ));
                         }
                         if !matches!(key, T::Float | T::Double) {
-                            let cast = Arc::new(Expr::new(ExprNode::Cast {
-                                expr: Arc::clone(crate::expr::negated(x).unwrap_or(x)),
+                            if !matches!(key, T::Byte | T::Short | T::Integer | T::Long) {
+                                return Err(unsupported(
+                                    "a string RANGE window frame bound",
+                                    origin,
+                                ));
+                            }
+                            let to_key = Arc::new(Expr::new(ExprNode::Cast {
+                                expr: Arc::clone(x),
                                 to: key.clone(),
                                 mode: crate::expr::CastMode::Default,
                             }));
-                            match self.fold(&cast, self.ctx.conf.ansi) {
-                                Some(Constant::Error(e)) => {
-                                    return Err(AnalysisError::new(e, origin));
-                                }
-                                _ => {
-                                    return Err(unsupported(
-                                        "a string RANGE window frame bound",
-                                        origin,
-                                    ));
-                                }
+                            if let Some(Constant::Error(e)) = self.fold(&to_key, self.ctx.conf.ansi)
+                            {
+                                return Err(AnalysisError::new(e, origin));
                             }
                         }
                     }
@@ -1466,6 +1526,20 @@ impl Resolver<'_> {
                 }
             }
             values[k] = Some(range_value(x, &key).ok_or_else(|| {
+                if let Some(e) = malformed_string_bound(x) {
+                    return AnalysisError::new(e, origin);
+                }
+                // A bound the key's type cannot hold raises the cast's overflow (`'999'` on a TINYINT key).
+                if let Some(d) = range_double_of_cast(x) {
+                    let to_key = Arc::new(Expr::new(ExprNode::Cast {
+                        expr: Arc::new(Expr::literal(Literal::Double(d))),
+                        to: key.clone(),
+                        mode: crate::expr::CastMode::Default,
+                    }));
+                    if let Some(Constant::Error(e)) = self.fold(&to_key, self.ctx.conf.ansi) {
+                        return AnalysisError::new(e, origin);
+                    }
+                }
                 unsupported("RANGE window frame bounds other than literals", origin)
             })?);
         }
