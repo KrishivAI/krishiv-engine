@@ -1,18 +1,9 @@
 {
   "cases": {
-    "nested-interval-types": [
-      28
-    ],
     "query-features": [
-      18,
-      19,
       23,
       24,
-      25,
-      26,
-      27,
-      29,
-      30
+      26
     ]
   },
   "file": "pivot",

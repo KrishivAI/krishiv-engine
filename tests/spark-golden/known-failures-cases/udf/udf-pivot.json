@@ -1,16 +1,7 @@
 {
   "cases": {
     "depends-on-command": [
-      18,
-      19,
-      23,
-      24,
-      25,
-      27,
-      28
-    ],
-    "test-udfs": [
-      26
+      24
     ]
   },
   "file": "udf/udf-pivot",
