@@ -346,6 +346,43 @@ fn fetch_runs_on_the_io_runtime_and_aborts_when_dropped() {
     assert!(format!("{sched:?}").contains("IoScheduler"));
 }
 
+/// A read that finished while the caller was busy reports its own duration,
+/// not the time it then waited to be awaited.
+#[test]
+fn fetch_timed_measures_the_read_not_the_wait_to_use_it() {
+    let io_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    let inner = Arc::new(InMemory::new());
+    let fault = FaultStore::new(Arc::clone(&inner) as Arc<dyn ObjectStore>);
+    let sched = IoScheduler::with_runtime(IoConfig::default(), io_rt.handle().clone());
+    let id = StoreId::new("memory://t");
+    sched.register_store(id.clone(), Arc::clone(&fault) as Arc<dyn ObjectStore>);
+    let io = sched.context();
+    let caller = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    caller.block_on(async {
+        let path = Path::from("x");
+        inner.put(&path, vec![7_u8; 64].into()).await.unwrap();
+        let f = FileRef::from_meta(id, &inner.head(&path).await.unwrap());
+        fault.set_latency(Duration::from_millis(100));
+        let pending = io.fetch_timed(f, vec![0..8]);
+        // The read runs on the I/O runtime while the caller does other work.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let (bytes, took) = pending.await.unwrap();
+        assert_eq!(bytes[0].len(), 8);
+        assert!(took >= Duration::from_millis(100), "{took:?}");
+        assert!(
+            took < Duration::from_millis(400),
+            "the 500 ms the result sat unused must not count: {took:?}"
+        );
+    });
+}
+
 #[test]
 fn uploads_pick_put_or_multipart_and_abort() {
     rt().block_on(async {

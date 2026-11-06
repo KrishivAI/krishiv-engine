@@ -477,6 +477,39 @@ fn bytes_are_human() {
 /// The checked-in JSON Schema lists exactly the members the writer emits,
 /// at every level (a drift test: a new member needs a schema change, and a
 /// removed one a version bump).
+/// The share is the probes' table time over the drivers' busy time, in the
+/// JSON and the text; a query without a probe has none, and a document from
+/// before the fields existed still reads.
+#[test]
+fn the_hash_probe_share_is_reported() {
+    let mut m = metrics();
+    assert_eq!(m.hash_probe_share(), None);
+    m.drivers.busy = Duration::from_millis(400);
+    assert_eq!(m.hash_probe_share(), None);
+    let mut probe = entry("HashJoinProbe", Some(2), OperatorRole::Operator, 1);
+    probe.extra = vec![(Cow::Borrowed("probe_table_ns"), Metric::Count(100_000_000))];
+    m.operators.insert(OperatorId(9), probe);
+    assert_eq!(m.hash_probe_share(), Some(0.25));
+
+    let p = QueryProfile::new(&plan(matching()), m, true);
+    let doc = p.to_json_value();
+    assert_eq!(doc["query"]["busy_ns"], 400_000_000_u64);
+    assert_eq!(doc["query"]["hash_probe_share"], 0.25);
+    let text = p.to_text(TextOptions::default());
+    assert!(
+        text.contains("hash probe: 25.0% of 400.0 ms driver busy time"),
+        "{text}"
+    );
+    let back = QueryProfile::from_json(&p.to_json()).map(|b| b.metrics.drivers.busy);
+    assert_eq!(back.ok(), Some(Duration::from_millis(400)));
+
+    let mut old = doc;
+    let query = old["query"].as_object_mut();
+    query.map(|q| q.remove("busy_ns"));
+    let back = QueryProfile::from_json(&old.to_string()).map(|b| b.metrics.drivers.busy);
+    assert_eq!(back.ok(), Some(Duration::ZERO));
+}
+
 /// Mean reads in flight is the scans' outstanding read time over the query's
 /// wall time, in the JSON and the text; a query without a scan read has none.
 #[test]
@@ -512,39 +545,6 @@ fn the_mean_reads_in_flight_is_reported() {
         .unwrap()
         .remove("scan_reads_in_flight_mean");
     assert!(QueryProfile::from_json(&old.to_string()).is_ok());
-}
-
-/// The share is the probes' table time over the drivers' busy time, in the
-/// JSON and the text; a query without a probe has none, and a document from
-/// before the fields existed still reads.
-#[test]
-fn the_hash_probe_share_is_reported() {
-    let mut m = metrics();
-    assert_eq!(m.hash_probe_share(), None);
-    m.drivers.busy = Duration::from_millis(400);
-    assert_eq!(m.hash_probe_share(), None);
-    let mut probe = entry("HashJoinProbe", Some(2), OperatorRole::Operator, 1);
-    probe.extra = vec![(Cow::Borrowed("probe_table_ns"), Metric::Count(100_000_000))];
-    m.operators.insert(OperatorId(9), probe);
-    assert_eq!(m.hash_probe_share(), Some(0.25));
-
-    let p = QueryProfile::new(&plan(matching()), m, true);
-    let doc = p.to_json_value();
-    assert_eq!(doc["query"]["busy_ns"], 400_000_000_u64);
-    assert_eq!(doc["query"]["hash_probe_share"], 0.25);
-    let text = p.to_text(TextOptions::default());
-    assert!(
-        text.contains("hash probe: 25.0% of 400.0 ms driver busy time"),
-        "{text}"
-    );
-    let back = QueryProfile::from_json(&p.to_json()).map(|b| b.metrics.drivers.busy);
-    assert_eq!(back.ok(), Some(Duration::from_millis(400)));
-
-    let mut old = doc;
-    let query = old["query"].as_object_mut();
-    query.map(|q| q.remove("busy_ns"));
-    let back = QueryProfile::from_json(&old.to_string()).map(|b| b.metrics.drivers.busy);
-    assert_eq!(back.ok(), Some(Duration::ZERO));
 }
 
 /// A document of a later minor loads: unknown members are ignored and an

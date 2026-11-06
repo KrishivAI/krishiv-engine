@@ -9,7 +9,7 @@
   "properties": {
     "format": { "const": "krishiv.query-profile" },
     "version": { "const": 1 },
-    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`. A reader ignores members it does not know." },
+    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras. A reader ignores members it does not know." },
     "planning": { "$ref": "#/$defs/planning", "description": "Present for EXPLAIN ANALYZE VERBOSE (added in minor 1)." },
     "environment": {
       "type": "object",
@@ -59,7 +59,7 @@
         "max_slice_ns": { "$ref": "#/$defs/u64", "description": "Longest single poll of a driver." },
         "stalls": { "$ref": "#/$defs/u64", "description": "Polls longer than the stall threshold." },
         "busy_ns": { "$ref": "#/$defs/u64", "description": "Added within v1 (absent in earlier documents): time the drivers spent in polls, summed." },
-        "scan_reads_in_flight_mean": { "oneOf": [{ "type": "number", "minimum": 0 }, { "type": "null" }], "description": "Added within v1 (absent in earlier documents): the scans' scan_read_inflight_ns (each read from issue to completion, summed) over wall_time_ns; null when no file scan read. Derived, so a reader recomputes it. The per-scan numbers are the operator extras scan_reads, scan_read_bytes, scan_read_wait_ns and scan_read_inflight_ns." },
+        "scan_reads_in_flight_mean": { "oneOf": [{ "type": "number", "minimum": 0 }, { "type": "null" }], "description": "Added in minor 2 (absent in earlier documents): the scans' scan_read_inflight_ns (each read from issue to completion, summed) over wall_time_ns; null when no file scan read. Derived, so a reader recomputes it. The per-scan numbers are the operator extras scan_reads, scan_read_bytes, scan_read_wait_ns and scan_read_inflight_ns." },
         "hash_probe_share": { "oneOf": [{ "type": "number", "minimum": 0 }, { "type": "null" }], "description": "Added within v1 (absent in earlier documents): the operators' probe_table_ns over busy_ns; null when no hash table was probed. Derived, so a reader recomputes it." },
         "memory": {
           "type": "object",

@@ -30,6 +30,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arrow_array::RecordBatch;
 use bytes::Bytes;
@@ -152,28 +153,33 @@ impl Ready {
 /// and when it was issued.
 type Pending = (
     u64,
-    BoxFuture<'static, Result<Vec<Bytes>>>,
+    BoxFuture<'static, Result<(Vec<Bytes>, Duration)>>,
     Vec<Range<u64>>,
-    tokio::time::Instant,
 );
 
 /// What one stream's reads cost, for `EXPLAIN ANALYZE` and the profile.
 ///
-/// A read is one requested byte range; the scheduler may coalesce several
-/// into one store request (those are counted per query in
-/// [`IoCounters`](crate::IoCounters)). Mean reads in flight over a time `T`
-/// is `inflight_ns / T`, summed over the streams of a scan.
+/// A read is one fetch: the byte ranges the stream asked for together (the
+/// decoder's next ranges on demand, or its upcoming ones as a prefetch). The
+/// scheduler may coalesce them further into fewer store requests (counted
+/// per query in [`IoCounters`](crate::IoCounters)). Mean reads in flight over
+/// a time `T` is `inflight_ns / T`, summed over the streams of a scan.
+///
+/// Not counted: footer and metadata reads, late-fetch reads (`take`), and a
+/// prefetch dropped before it was used (`release_prefetch`, the stream's end).
+/// A failed prefetch counts nothing, and its wait is lost with it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct ReadStats {
-    /// Byte ranges read (prefetched or fetched on demand).
+    /// Fetches completed (prefetched or on demand).
     pub reads: u64,
-    /// Bytes those ranges cover.
+    /// Bytes the ranges of those fetches cover.
     pub bytes: u64,
     /// Nanoseconds the stream was blocked waiting for a read.
     pub wait_ns: u64,
-    /// Nanoseconds reads were outstanding, summed over reads: a prefetch
-    /// from its issue until it was taken, a direct read for its duration.
+    /// Nanoseconds reads were outstanding, summed over fetches: each
+    /// fetch's own duration, measured inside the read, never less than the
+    /// time the stream waited for it.
     pub inflight_ns: u64,
 }
 
@@ -186,21 +192,15 @@ impl ReadStats {
         self.inflight_ns = self.inflight_ns.saturating_add(o.inflight_ns);
     }
 
-    fn record(
-        &mut self,
-        ranges: &[Range<u64>],
-        waited: std::time::Duration,
-        outstanding: std::time::Duration,
-    ) {
-        let ns = |d: std::time::Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
-        self.reads = self
-            .reads
-            .saturating_add(u64::try_from(ranges.len()).unwrap_or(u64::MAX));
+    fn record(&mut self, ranges: &[Range<u64>], waited: Duration, outstanding: Duration) {
+        let ns = |d: Duration| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX);
+        self.reads = self.reads.saturating_add(1);
         self.bytes = self
             .bytes
             .saturating_add(ranges.iter().map(|r| r.end.saturating_sub(r.start)).sum());
         self.wait_ns = self.wait_ns.saturating_add(ns(waited));
-        self.inflight_ns = self.inflight_ns.saturating_add(ns(outstanding));
+        // A read was outstanding at least while the stream waited for it.
+        self.inflight_ns = self.inflight_ns.saturating_add(ns(outstanding.max(waited)));
     }
 }
 
@@ -525,16 +525,14 @@ impl ScanStream {
             ))
             .into_error(&self.file.display_path()));
         }
-        if let Some((_, fut, wanted, issued)) = self.in_flight.take() {
+        if let Some((_, fut, wanted)) = self.in_flight.take() {
             // The prefetch was issued for what the decoder asks next; a
             // failed prefetch is only a lost hint (the fetch below retries).
             let waiting = tokio::time::Instant::now();
             let result = fut.await;
-            let done = tokio::time::Instant::now();
-            if result.is_ok() {
-                self.reads.record(&wanted, done - waiting, done - issued);
-            }
-            if let Ok(bytes) = result {
+            let waited = waiting.elapsed();
+            if let Ok((bytes, took)) = result {
+                self.reads.record(&wanted, waited, took);
                 for (range, bytes) in wanted.into_iter().zip(bytes) {
                     self.ready.insert(Chunk {
                         range,
@@ -646,8 +644,8 @@ impl ScanStream {
         if grow > 0 && self.mem.try_grow(grow).is_err() {
             return;
         }
-        let fut = self.io.fetch(self.file.clone(), ranges.clone());
-        self.in_flight = Some((span, fut, ranges, tokio::time::Instant::now()));
+        let fut = self.io.fetch_timed(self.file.clone(), ranges.clone());
+        self.in_flight = Some((span, fut, ranges));
     }
 
     /// Drops prefetched bytes and returns the bytes released.

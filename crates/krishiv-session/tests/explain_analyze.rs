@@ -311,8 +311,9 @@ fn analyze_tpch_q1_on_the_fixture() {
     assert!(text.contains("groups=3"), "{text}");
 }
 
-/// A file scan reports what its reads cost: ranges read, bytes, time waited
-/// and time outstanding (mean reads in flight is the last over the span).
+/// A file scan reports what its reads cost: fetches, bytes, time waited and
+/// time outstanding. The file was read, so at least what the decoder took was
+/// fetched; nothing is read twice, so no more than the file's size.
 #[test]
 fn a_file_scan_reports_its_read_costs() {
     let path = concat!(
@@ -341,6 +342,13 @@ fn a_file_scan_reports_its_read_costs() {
     assert!(get("scan_read_inflight_ns") >= get("scan_read_wait_ns"));
     // The file was read through the scheduler: at least what the decoder took.
     assert!(get("scan_read_bytes") >= get("scan_bytes"));
+    // Each range is fetched once: never more than the file holds.
+    let size = std::fs::metadata(path).unwrap().len();
+    assert!(
+        get("scan_read_bytes") <= size,
+        "{} > {size}",
+        get("scan_read_bytes")
+    );
 }
 
 #[test]
