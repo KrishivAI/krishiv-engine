@@ -122,6 +122,38 @@ fn staged_table(dir: &std::path::Path) -> (String, String) {
     ("t".to_owned(), dest.to_str().expect("utf-8").to_owned())
 }
 
+/// A table under a directory named `krishiv` (a home folder named after the product) must not rewrite the
+/// program name in `version.txt`.
+#[test]
+fn a_krishiv_directory_in_a_table_path_leaves_the_version_line_alone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let nested = dir.path().join("krishiv");
+    std::fs::create_dir_all(&nested).expect("mkdir");
+    let (name, path) = staged_table(&nested);
+    let out = dir.path().join("bundle.tar");
+    let o = krishiv(
+        &[
+            "debug-bundle",
+            "-e",
+            "select count(*) as n from t",
+            "--table",
+            &format!("{name}={path}"),
+            "--format",
+            "tar",
+            "-o",
+            out.to_str().expect("utf-8"),
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let files = read_bundle(&out);
+    let version = std::str::from_utf8(&files["version.txt"]).expect("utf-8");
+    // The program name and the package version are intact; the allocator line follows (its name depends on the features).
+    let head = concat!("krishiv ", env!("CARGO_PKG_VERSION"), "\nallocator=");
+    assert!(version.starts_with(head), "{version}");
+    assert!(version.ends_with('\n'), "{version}");
+}
+
 #[test]
 fn redaction_hides_literals_secrets_and_paths() {
     let dir = tempfile::tempdir().expect("tempdir");

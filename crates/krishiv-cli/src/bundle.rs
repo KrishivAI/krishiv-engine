@@ -130,7 +130,9 @@ fn run_inner(args: &BundleArgs) -> Result<(), String> {
         Redacted::vetted(&environment_json, &subs),
     )?;
     let version = version_text();
-    archive.add("version.txt", Redacted::vetted(&version, &subs))?;
+    // Build information, no user data: a table path with a `krishiv` directory (a home folder named after
+    // the product) must not rewrite the program name in it.
+    archive.add("version.txt", Redacted::vetted(&version, &[]))?;
 
     names.push("config.json".to_owned());
     names.push("environment.json".to_owned());

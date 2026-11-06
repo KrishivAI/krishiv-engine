@@ -41,7 +41,7 @@ use krishiv_types::DataType;
 
 use super::bind::{addr, unsupported};
 use super::catalog::{FunctionLookup, FunctionRegistry};
-use super::exprs::{literal_type, pretty};
+use super::exprs::{builtin_name, literal_type, pretty};
 use super::ops::{MAX_ID, col_expr};
 use super::subquery_shapes::{aggregates_below, check_in, positive_literal};
 pub(super) use super::subquery_shapes::{null_literal, one_row_aggregate};
@@ -2699,7 +2699,7 @@ fn alias(value: Arc<Expr>, output: &BoundColumn) -> Arc<Expr> {
 fn over_no_rows(e: &Arc<Expr>) -> R<Arc<Expr>> {
     Arc::clone(e).transform_up(&mut |x: Arc<Expr>| match &x.node {
         ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
-            let zero = match f.id.name() {
+            let zero = match builtin_name(f) {
                 "count" | "count_if" | "approx_count_distinct" => Literal::Long(0),
                 "sum" | "avg" | "min" | "max" | "any_value" | "first" | "last" | "first_value"
                 | "last_value" | "stddev" | "stddev_samp" | "stddev_pop" | "variance"
@@ -2841,7 +2841,7 @@ fn on_no_rows(e: &Arc<Expr>) -> Option<Option<Literal>> {
     // A bare count is 0 over no rows.
     if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
         && f.kind == FunctionKind::Aggregate
-        && f.id.name() == "count"
+        && builtin_name(f) == "count"
     {
         return Some(Some(Literal::Long(0)));
     }
@@ -2855,7 +2855,7 @@ fn on_no_rows(e: &Arc<Expr>) -> Option<Option<Literal>> {
     while let Some(x) = stack.pop() {
         match &x.node {
             ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
-                if !matches!(f.id.name(), "sum" | "avg" | "min" | "max" | "any_value") {
+                if !matches!(builtin_name(f), "sum" | "avg" | "min" | "max" | "any_value") {
                     return None;
                 }
                 any_aggregate = true;
@@ -2906,7 +2906,7 @@ fn integer_on_no_rows(e: &Arc<Expr>) -> Option<Option<i64>> {
             ..
         } => integer_on_no_rows(expr),
         ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
-            match f.id.name() {
+            match builtin_name(f) {
                 "count" => Some(Some(0)),
                 "sum" | "avg" | "min" | "max" | "any_value" => Some(None),
                 _ => None,

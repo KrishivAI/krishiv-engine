@@ -173,7 +173,7 @@ fn query_seed(opts: &BindOptions) -> u64 {
 /// assigns each its own random seed) while one query always draws the same
 /// streams. The salt counts the unseeded binds of one plan instantiation,
 /// in compilation order.
-fn unseeded_seed(opts: &BindOptions) -> i64 {
+pub(super) fn unseeded_seed(opts: &BindOptions) -> i64 {
     use std::sync::atomic::Ordering;
     let salt = opts.seed_salt.fetch_add(1, Ordering::Relaxed);
     splitmix64(query_seed(opts).wrapping_add(salt)) as i64
