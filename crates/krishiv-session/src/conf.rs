@@ -32,6 +32,14 @@ pub(crate) struct ConfStore {
     local_zone: Arc<str>,
 }
 
+/// Spark switches for collation features the engine refuses (ADR 0043 Decision 7 and 9): the
+/// collation-aware hash functions, collated map keys and schema-level default collations.
+const UNSUPPORTED_COLLATION_SWITCHES: &[&str] = &[
+    "spark.sql.legacy.collationAwareHashFunctions",
+    "spark.sql.collation.allowInMapKeys",
+    "spark.sql.collation.schemaLevel.enabled",
+];
+
 impl ConfStore {
     pub(crate) fn new(config: Config) -> Self {
         Self::with_local_zone(config, &local_zone())
@@ -282,6 +290,18 @@ impl RuntimeConf {
         if !is_modifiable(key) {
             return Err(CannotModifyStaticConfig {
                 key: format!("\"{key}\""),
+            }
+            .into());
+        }
+        // Collation switches the engine does not honour yet (ADR 0043): turning one on would
+        // change results silently, so it is refused.
+        if UNSUPPORTED_COLLATION_SWITCHES
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(key))
+            && value.trim().eq_ignore_ascii_case("true")
+        {
+            return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                feature: format!("{key} = true"),
             }
             .into());
         }

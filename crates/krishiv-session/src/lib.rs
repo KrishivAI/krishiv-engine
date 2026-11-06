@@ -46,6 +46,7 @@ mod admission;
 mod cache;
 mod carrier;
 mod catalog;
+mod collation_defaults;
 mod column;
 mod command;
 mod conf;

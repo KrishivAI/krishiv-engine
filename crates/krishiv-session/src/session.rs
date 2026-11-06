@@ -636,6 +636,7 @@ impl Session {
         query: &str,
         redacted: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
+        crate::collation_defaults::refuse_unhonoured(&statement)?;
         match statement {
             Statement::Query(q) => {
                 let plan =

@@ -319,3 +319,65 @@ fn an_explicit_cast_is_an_explicit_collation() {
         ErrorClass::CollationMismatchExplicit
     );
 }
+
+/// Defaults and switches the engine does not honour yet are refused instead of being ignored
+/// (ADR 0043 Decisions 7 and 9): a silently ignored `DEFAULT COLLATION` would type strings
+/// wrongly.
+#[test]
+fn unsupported_collation_defaults_and_switches_are_refused() {
+    let s = Session::new().unwrap();
+    for (sql, class) in [
+        (
+            "CREATE SCHEMA s1 DEFAULT COLLATION UTF8_LCASE",
+            ErrorClass::UnsupportedFeatureSchemaLevelCollations,
+        ),
+        (
+            "CREATE TABLE tt (a STRING) DEFAULT COLLATION UTF8_LCASE",
+            ErrorClass::UnsupportedFeatureObjectLevelCollations,
+        ),
+        (
+            "CREATE TABLE tm (m MAP<STRING COLLATE UTF8_LCASE, INT>)",
+            ErrorClass::UnsupportedFeatureCollationsInMapKeys,
+        ),
+        (
+            "CREATE VIEW vv DEFAULT COLLATION UTF8_LCASE AS SELECT 'a' AS c",
+            ErrorClass::KrishivUnsupportedFeature,
+        ),
+        (
+            "CREATE TEMPORARY VIEW tv DEFAULT COLLATION UNICODE AS SELECT 'a' AS c",
+            ErrorClass::KrishivUnsupportedFeature,
+        ),
+        (
+            "SET spark.sql.legacy.collationAwareHashFunctions = true",
+            ErrorClass::KrishivUnsupportedFeature,
+        ),
+        (
+            "SET spark.sql.collation.allowInMapKeys = true",
+            ErrorClass::KrishivUnsupportedFeature,
+        ),
+        (
+            "SET spark.sql.collation.schemaLevel.enabled = true",
+            ErrorClass::KrishivUnsupportedFeature,
+        ),
+    ] {
+        let e = block_on(s.sql(sql)).unwrap_err();
+        assert_eq!(e.error_class(), class, "{sql}");
+    }
+    // The defaults themselves, a binary view default, and the switches off are fine; the
+    // session default collation does not change literals (Spark 4.2).
+    for sql in [
+        "SET spark.sql.collation.allowInMapKeys = false",
+        "SET spark.sql.session.collation.default = UTF8_LCASE",
+        "CREATE VIEW vb DEFAULT COLLATION UTF8_BINARY AS SELECT 'a' AS c",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    assert_eq!(
+        class_of(&s, "SET COLLATION UTF8_LCASE"),
+        ErrorClass::InvalidSetSyntax
+    );
+}
+
+fn class_of(s: &Session, sql: &str) -> ErrorClass {
+    block_on(s.sql(sql)).unwrap_err().error_class()
+}
