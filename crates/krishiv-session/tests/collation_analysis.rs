@@ -495,6 +495,14 @@ fn result_boundaries_and_equal_null() {
         one("SELECT typeof(format_number(123, '###' COLLATE UTF8_LCASE))"),
         "string"
     );
+    // Codex review of #493 (third round): a binary-result call nested in another string call does
+    // not pass its argument's collation on, so it cannot conflict with another explicit one.
+    assert_eq!(
+        one(
+            "SELECT collation(concat(soundex('Robert' COLLATE UTF8_LCASE), 'b' COLLATE UNICODE_CI))"
+        ),
+        "SYSTEM.BUILTIN.UNICODE_CI"
+    );
     // A cast back to plain STRING: the other operand decides, with no false mismatch.
     assert_eq!(
         one(

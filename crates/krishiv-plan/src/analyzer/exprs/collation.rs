@@ -253,12 +253,18 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
             },
         )),
         ExprNode::Cast { expr, to, .. } if is_string(Some(to)) => strength_of(expr, memo),
-        ExprNode::Function(f) if INSPECTS.contains(&f.name.to_ascii_lowercase().as_str()) => {
-            // `collation(x)` and `typeof(x)` return an ordinary string: the collation of the
-            // argument stops here.
+        ExprNode::Function(f)
+            if INSPECTS.contains(&f.name.to_ascii_lowercase().as_str())
+                || BINARY_RESULT.contains(&f.name.to_ascii_lowercase().as_str()) =>
+        {
+            // `collation(x)` and `typeof(x)` return an ordinary string, and so do the
+            // binary-result functions (`soundex`, `md5`, ...): the collation of the arguments
+            // stops here.
             Some((Collation::UTF8_BINARY, Strength::Default))
         }
-        ExprNode::Resolved(ResolvedExpr::Function(f)) if INSPECTS.contains(&f.id.name()) => {
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if INSPECTS.contains(&f.id.name()) || BINARY_RESULT.contains(&f.id.name()) =>
+        {
             Some((Collation::UTF8_BINARY, Strength::Default))
         }
         ExprNode::Function(_) | ExprNode::Resolved(ResolvedExpr::Function(_)) => {

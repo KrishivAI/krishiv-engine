@@ -13,7 +13,7 @@ use arrow_array::{Array, ArrayRef, Int32Array, RecordBatch, StringArray, StringV
 use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
 use futures::executor::block_on;
 use krishiv_common::error::ErrorClass;
-use krishiv_session::functions::{call_function, col};
+use krishiv_session::functions::{call_function, call_udf, col};
 use krishiv_session::{
     ArgField, InvokeContext, NullHandling, ReturnField, ScalarUdf, Session, Signature, UdfArg,
     UdfError, UdfInputType, UdfProperties,
@@ -157,6 +157,27 @@ fn a_udf_runs_through_the_dataframe_api_identically() {
     let via_df = block_on(df.order_by([col("x").asc()]).collect()).unwrap();
     assert_eq!(ints(&via_sql), ints(&via_df));
     assert_eq!(ints(&via_sql), [Some(2), Some(3), Some(4)]);
+}
+
+#[test]
+fn call_udf_resolves_like_call_function() {
+    let s = session();
+    s.register_udf(AddOne).unwrap();
+    let df = s
+        .table("people")
+        .select([call_udf("add_one", [col("id")]).alias("x")]);
+    let rows = block_on(df.order_by([col("x").asc()]).collect()).unwrap();
+    assert_eq!(ints(&rows), [Some(2), Some(3), Some(4)]);
+    // A built-in of the same name still wins on the bare search path.
+    s.register_udf(UpperUdf).unwrap();
+    let df = s.table("people").select([call_udf("upper", [col("name")])]);
+    let rows = block_on(df.collect()).unwrap();
+    let names = strings(&rows);
+    assert!(!names.is_empty());
+    assert!(
+        names.iter().flatten().all(|v| !v.starts_with("udf:")),
+        "{names:?}"
+    );
 }
 
 /// `upper` implemented as a UDF, shadowing the built-in by name only.

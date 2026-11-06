@@ -472,6 +472,10 @@ impl FunctionRegistry for QueryFunctions {
         self.base.resolve_udf(name, version)
     }
 
+    fn rejects_distinct(&self, name: &str) -> bool {
+        self.base.rejects_distinct(name)
+    }
+
     /// The built-ins' version and the session map's, mixed: a change to
     /// either is a different number.
     fn version(&self) -> u64 {
