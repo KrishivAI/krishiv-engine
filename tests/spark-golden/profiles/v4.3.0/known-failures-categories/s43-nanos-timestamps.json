@@ -6,6 +6,10 @@
     {
       "detail": "TIMESTAMP_(NTZ|LTZ)\\(\\d\\)|timestamp_nanos|unix_nanos|UNSUPPORTED_TIME_PRECISION",
       "order": 9000
+    },
+    {
+      "file": "^timestamp-(ltz|ntz)-nanos$",
+      "order": 9000
     }
   ],
   "summary": "Spark 4.3 nanosecond TIMESTAMP_NTZ(n)/TIMESTAMP_LTZ(n) types, timestamp_nanos, unix_nanos",
