@@ -47,6 +47,19 @@ fn full_registry() -> Arc<MetricsRegistry> {
         cache_misses: 0,
         cancel_latency_secs: None,
     });
+    // A cancelled query with a reason: the cancel-latency histogram's sample.
+    registry.fold(&QueryOutcome {
+        class: WorkloadClass::Interactive,
+        status: Status::Cancelled,
+        error_class: Some("OPERATION_CANCELED"),
+        duration_secs: 0.1,
+        metrics: &krishiv_exec::QueryMetrics::default(),
+        arbitration_spills: 0,
+        arbitration_aborts: 0,
+        cache_hits: 0,
+        cache_misses: 0,
+        cancel_latency_secs: Some(0.01),
+    });
     for class in ["interactive", "batch", "background", "agent"] {
         registry
             .add_gauge(
@@ -403,7 +416,7 @@ async fn scraping_does_not_change_counters() {
     assert!(first.starts_with("HTTP/1.1 200"), "{first}");
     assert_eq!(body(&first), body(&second));
     assert_eq!(registry.snapshot(), before);
-    assert_eq!(registry.fold_count(), 2);
+    assert_eq!(registry.fold_count(), 3);
 }
 
 #[tokio::test]
