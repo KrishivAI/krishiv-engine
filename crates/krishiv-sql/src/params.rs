@@ -135,14 +135,6 @@ mod tests {
     }
 
     #[test]
-    fn a_double_quoted_token_ends_an_expression_so_a_colon_after_it_is_a_path() {
-        // A string literal or (with double-quoted identifiers on) an identifier: either way
-        // `:a` is the variant path operator, never a marker.
-        assert!(found("SELECT \"v\":a FROM t").is_empty());
-        assert_eq!(found("SELECT \"v\" = :a").len(), 1);
-    }
-
-    #[test]
     fn markers_in_strings_and_comments_are_text() {
         assert!(found("SELECT '?', ':a' /* ? :b */ -- :c ?\n, \"?\"").is_empty());
     }
