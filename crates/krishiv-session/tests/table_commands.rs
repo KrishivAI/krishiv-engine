@@ -346,6 +346,10 @@ fn create_table_like_a_view_takes_the_default_source() {
     run(&s, "CREATE TABLE d LIKE pv");
     run(&s, "INSERT INTO d VALUES (3, 's')");
     assert_eq!(part_text(&wh.join("d")), "3,s\n");
+    // An explicit USING never consults the default.
+    run(&s, "SET spark.sql.sources.default=nonexistent");
+    run(&s, "CREATE TABLE e LIKE v USING csv");
+    run(&s, "SET spark.sql.sources.default=csv");
     // A table keeps its own provider.
     run(&s, "CREATE TABLE j (a INT) USING json");
     run(&s, "CREATE TABLE k LIKE j");

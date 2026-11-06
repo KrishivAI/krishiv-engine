@@ -1764,11 +1764,7 @@ impl Session {
             options.clone_from(&s.options);
             // A view has no provider of its own: Spark gives the new table
             // `spark.sql.sources.default` (`CreateTableLikeCommand`, `isViewLike`).
-            let provider = if s.view.is_some() {
-                self.provider_of(None)?
-            } else {
-                s.provider.clone()
-            };
+            let provider = s.view.is_none().then(|| s.provider.clone());
             (s.columns.clone(), provider)
         } else if self.temp_entry_of(&source, &env)
             && let Some(entry) = self
@@ -1792,7 +1788,7 @@ impl Session {
                         comment: None,
                     })
                     .collect(),
-                self.provider_of(None)?,
+                None,
             )
         } else {
             return Err(source.not_found());
@@ -1805,7 +1801,12 @@ impl Session {
                     .collect::<Vec<_>>()
                     .join("."),
             ))?,
-            None => source_provider,
+            // `None`: a view, which has no provider of its own. The default
+            // is looked up only here, so an explicit `USING` never depends on it.
+            None => match source_provider {
+                Some(p) => p,
+                None => self.provider_of(None)?,
+            },
         };
         let external = t.location.is_some();
         let location = match &t.location {
