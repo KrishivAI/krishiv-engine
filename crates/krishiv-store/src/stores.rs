@@ -377,6 +377,9 @@ pub struct StoreRegistry {
     /// Every scoped store id this registry handed out, for [`Self::on_release`].
     scoped_ids: Mutex<HashSet<StoreId>>,
     release: Mutex<Vec<ReleaseHook>>,
+    /// The hash of every `fs.*` setting of [`Self::config`], computed once:
+    /// `None` when there is none.
+    settings_hash: std::sync::OnceLock<Option<u64>>,
 }
 
 /// Called with each scoped store id when the registry is dropped.
@@ -423,6 +426,7 @@ impl StoreRegistry {
             skew: DEFAULT_REFRESH_SKEW,
             scoped_ids: Mutex::new(HashSet::new()),
             release: Mutex::new(Vec::new()),
+            settings_hash: std::sync::OnceLock::new(),
             cache_scope: CacheScope::Isolated,
         }
     }
@@ -555,7 +559,15 @@ impl StoreRegistry {
     }
 
     /// The id of `url`'s store under `options`: the URL's store id (with the `#scope:` nonce
-    /// of its credential scope, if any) plus the non-secret hash of the per-read options.
+    /// of its credential scope, if any, else with a `#cfg:` hash of every `fs.*` setting the
+    /// registry builds from) plus the non-secret hash of the per-read options.
+    ///
+    /// The `#cfg:` part lets one `IoScheduler` serve many sessions (one engine runtime): stores
+    /// of sessions whose `fs.*` settings differ in anything (a key, an endpoint, a region) get
+    /// different ids, so a query's registration never replaces another session's store and
+    /// cache entries keyed by the id are never shared between them. Sessions with equal
+    /// settings, or none, share the store. Secret values enter the hash through their keyed
+    /// fingerprint (ADR 0038), so the id carries no secret.
     fn id_of(
         &self,
         url: &ParsedUrl,
@@ -567,8 +579,38 @@ impl StoreRegistry {
                 &StoreId::new(format!("{}#scope:{}", url.store_id.key(), entry.nonce)),
                 options,
             ),
-            None => effective_store_id(&url.store_id, options),
+            None => match self.settings_hash() {
+                Some(hash) => effective_store_id(
+                    &StoreId::new(format!("{}#cfg:{hash:016x}", url.store_id.key())),
+                    options,
+                ),
+                None => effective_store_id(&url.store_id, options),
+            },
         }
+    }
+
+    /// The hash of every `fs.*` setting this registry builds from, or `None` without one.
+    fn settings_hash(&self) -> Option<u64> {
+        *self.settings_hash.get_or_init(|| {
+            let mut settings: Vec<(String, OptionValue)> = self
+                .config
+                .keys()
+                .into_iter()
+                .filter(|k| is_store_option(k))
+                .filter_map(|k| self.config.get(&k).map(|v| (k, v)))
+                .collect();
+            if settings.is_empty() {
+                return None;
+            }
+            settings.sort_by(|a, b| {
+                a.0.to_ascii_lowercase()
+                    .cmp(&b.0.to_ascii_lowercase())
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            let relevant: Vec<(&str, &OptionValue)> =
+                settings.iter().map(|(k, v)| (k.as_str(), v)).collect();
+            Some(options_hash(&relevant))
+        })
     }
 
     /// Parses `text` and builds its store: the id to register it under, the store, the key within

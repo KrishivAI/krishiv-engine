@@ -882,6 +882,8 @@ fn settable_by_is_set_for_the_limits_a_user_must_not_raise() {
         "krishiv.memory.limit",
         "krishiv.spill.dir",
         "krishiv.io.cache.path",
+        // One cap for the runtime's one shared store (design P2-E1 R6).
+        "krishiv.resultCache.maxBytes",
     ] {
         assert_eq!(
             lookup(key).map(|e| e.settable_by),
@@ -889,11 +891,7 @@ fn settable_by_is_set_for_the_limits_a_user_must_not_raise() {
             "{key}"
         );
     }
-    for key in [
-        "krishiv.cache.maxBytes",
-        "krishiv.resultCache.maxBytes",
-        "krishiv.experimental.ivm",
-    ] {
+    for key in ["krishiv.cache.maxBytes", "krishiv.experimental.ivm"] {
         assert_eq!(
             lookup(key).map(|e| e.settable_by),
             Some(SettableBy::Admin),

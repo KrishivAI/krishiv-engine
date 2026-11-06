@@ -19,10 +19,13 @@ use krishiv_types::batch::Batch;
 use crate::admission::Permit;
 use crate::session::SessionState;
 
-/// The process counters a query-end fold attributes, and when the query
-/// started: read at query start so the fold records the deltas.
+/// The counters a query-end fold attributes, and when the query started:
+/// read at query start so the fold records the deltas. Bytes read and
+/// written come from the query's own I/O context (design P2-E1 R3: the
+/// scheduler's totals are the whole runtime's, every session's I/O).
 pub(crate) struct QueryStart {
     started: Instant,
+    io: krishiv_io::IoContext,
     arbitration: ArbitrationStats,
     cache_hits: u64,
     cache_misses: u64,
@@ -31,15 +34,17 @@ pub(crate) struct QueryStart {
 }
 
 impl QueryStart {
-    pub(crate) fn capture(state: &SessionState) -> Self {
+    pub(crate) fn capture(state: &SessionState, io: &krishiv_io::IoContext) -> Self {
         let totals = state.io.totals();
+        let own = io.counters();
         Self {
             started: Instant::now(),
+            io: io.clone(),
             arbitration: state.runtime.memory_tree.stats(),
             cache_hits: IoCounters::get(&totals.cache_hits),
             cache_misses: IoCounters::get(&totals.cache_misses),
-            bytes_read: IoCounters::get(&totals.bytes_read),
-            bytes_written: IoCounters::get(&totals.bytes_written),
+            bytes_read: IoCounters::get(&own.bytes_read),
+            bytes_written: IoCounters::get(&own.bytes_written),
         }
     }
 
@@ -96,12 +101,12 @@ impl QueryStart {
                         .max(),
                     // Process-wide deltas: concurrent queries see each other's I/O.
                     bytes_read: i64::try_from(
-                        IoCounters::get(&state.io.totals().bytes_read)
+                        IoCounters::get(&self.io.counters().bytes_read)
                             .saturating_sub(self.bytes_read),
                     )
                     .unwrap_or(i64::MAX),
                     bytes_written: i64::try_from(
-                        IoCounters::get(&state.io.totals().bytes_written)
+                        IoCounters::get(&self.io.counters().bytes_written)
                             .saturating_sub(self.bytes_written),
                     )
                     .unwrap_or(i64::MAX),

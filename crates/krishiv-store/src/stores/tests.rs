@@ -737,3 +737,43 @@ fn web_urls_and_hf_names_are_checked_when_parsed() {
         );
     }
 }
+
+/// One `IoScheduler` serves every session of an engine runtime (design
+/// P2-E1 R3): a store built from a session's `fs.*` settings is registered
+/// under an id carrying a hash of all of them, so sessions that differ in any
+/// setting (here only the endpoint) never share a store or a cache entry,
+/// equal settings share one, no settings keep the bare id, and no secret is
+/// in the id.
+#[test]
+fn store_ids_carry_a_hash_of_every_fs_setting() {
+    let url = parse_object_url("s3://bucket/k/d.parquet").unwrap();
+    let none = BTreeMap::new();
+    let id = |pairs: &[(&str, &str)]| {
+        let registry = StoreRegistry::new(config(pairs));
+        registry.id_of(&url, None, &none)
+    };
+    let a = id(&[("fs.s3a.endpoint", "http://a:9000")]);
+    let b = id(&[("fs.s3a.endpoint", "http://b:9000")]);
+    assert_ne!(a, b, "an endpoint alone separates the stores");
+    assert_eq!(a, id(&[("fs.s3a.endpoint", "http://a:9000")]));
+    assert!(a.key().starts_with("s3://bucket#cfg:"), "{}", a.key());
+    assert_eq!(id(&[]), url.store_id, "no fs.* setting: the bare id");
+    assert_eq!(id(&[("spark.sql.ansi.enabled", "false")]), url.store_id);
+    // Keys match without case, as Spark's do.
+    assert_eq!(a, id(&[("FS.S3A.ENDPOINT", "http://a:9000")]));
+    // Secrets: different secrets differ, and none appears in the id.
+    let canary = "Canary-31337-secret";
+    let s1 = id(&[("fs.s3a.secret.key", canary)]);
+    let s2 = id(&[("fs.s3a.secret.key", "another")]);
+    assert_ne!(s1, s2);
+    assert!(!s1.key().contains(canary));
+    assert!(!format!("{s1} {s1:?}").contains(canary));
+    // Per-read options still add their own hash.
+    let mut options = BTreeMap::new();
+    options.insert(
+        "fs.s3a.endpoint".to_owned(),
+        OptionValue::Plain("http://c:9000".to_owned()),
+    );
+    let registry = StoreRegistry::new(config(&[("fs.s3a.endpoint", "http://a:9000")]));
+    assert_ne!(registry.id_of(&url, None, &options), a);
+}

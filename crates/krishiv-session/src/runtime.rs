@@ -23,8 +23,9 @@ use krishiv_exec::{
     Executor, ExecutorConfig, MetricsRegistry, QueryContext, QueryRunner, TokioExecutor,
     WorkloadClass,
 };
-use krishiv_io::{FormatRegistry, IoScheduler};
+use krishiv_io::{FormatRegistry, IoConfig, IoScheduler, StoreId};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillManager, TreePool};
+use object_store::ObjectStore;
 
 use crate::QueryId;
 use crate::cancel::{self, CancelReason, Deadlines};
@@ -84,9 +85,12 @@ pub struct EngineRuntime {
     deadlines: OnceLock<Deadlines>,
     /// The queries running now, and the closed sessions.
     live: Mutex<LiveSet>,
-    /// The I/O schedulers of the runtime's sessions, read by the metadata
-    /// cache gauge (weak: a scheduler ends with its session).
-    io: Arc<Mutex<Vec<Weak<IoScheduler>>>>,
+    /// The I/O scheduler: pacing, the file-metadata and block caches and
+    /// the local store, one for every session (design P2-E1 R3). Stores built
+    /// from a session's `fs.*` settings carry a fingerprint of them in their
+    /// id, so sessions with different settings never share a store or a cache
+    /// entry (`krishiv_store::StoreRegistry`).
+    pub(crate) io: Arc<IoScheduler>,
     /// Whether the runtime was built for one session that owns it (the
     /// default builder), or supplied by the host.
     private: bool,
@@ -214,6 +218,19 @@ impl EngineRuntime {
             None => TokioExecutor::new(&ExecutorConfig::default().with_config(&config))?,
         };
         let memory_tree = TreePool::new(&MemoryConfig::from_config(&config));
+        let io =
+            IoScheduler::with_runtime(IoConfig::from_config(&config), executor.io_handle().clone());
+        io.attach_memory(&(Arc::<TreePool>::clone(&memory_tree) as Arc<dyn MemoryPool>));
+        #[cfg(unix)]
+        io.register_whole_listing_store(
+            StoreId::new(crate::session::LOCAL_STORE),
+            Arc::new(krishiv_io::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        );
+        #[cfg(not(unix))]
+        io.register_store(
+            StoreId::new(crate::session::LOCAL_STORE),
+            Arc::new(object_store::local::LocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        );
         let metrics = Arc::new(MetricsRegistry::new());
         let capacity = config
             .get(&SYSTEM_QUERIES_CAPACITY)
@@ -244,7 +261,7 @@ impl EngineRuntime {
             results,
             deadlines: OnceLock::new(),
             live: Mutex::new(LiveSet::default()),
-            io: Arc::new(Mutex::new(Vec::new())),
+            io,
             private,
         };
         runtime.register_gauges()?;
@@ -446,13 +463,6 @@ impl EngineRuntime {
             .remove(&session);
     }
 
-    /// Makes the metadata cache gauge count `io`'s cache too.
-    pub(crate) fn add_io(&self, io: &Arc<IoScheduler>) {
-        let mut all = self.io.lock().unwrap_or_else(PoisonError::into_inner);
-        all.retain(|w| w.strong_count() > 0);
-        all.push(Arc::downgrade(io));
-    }
-
     /// Registers the engine gauges on the runtime's registry: closures over
     /// the owning components, evaluated at scrape time, never pushed. No
     /// gauge holds the runtime itself, so the runtime can end.
@@ -475,15 +485,7 @@ impl EngineRuntime {
             metrics.add_gauge(
                 "krishiv.cache.size",
                 vec![("cache".to_owned(), "metadata".to_owned())],
-                move || {
-                    let all = io.lock().unwrap_or_else(PoisonError::into_inner);
-                    Some(
-                        all.iter()
-                            .filter_map(Weak::upgrade)
-                            .map(|io| io.cache().bytes())
-                            .fold(0, u64::saturating_add),
-                    )
-                },
+                move || Some(io.cache().bytes()),
             )?;
         }
         {
@@ -595,5 +597,25 @@ mod tests {
             &crate::QueryId::minted("zz".to_owned()),
             CancelReason::Admin
         ));
+    }
+
+    /// One I/O scheduler for every session of the runtime (design P2-E1 R3).
+    #[test]
+    fn sessions_share_the_runtimes_io_scheduler() {
+        let rt = EngineRuntime::builder().build().unwrap();
+        let a = crate::Session::builder()
+            .runtime(Arc::clone(&rt))
+            .build()
+            .unwrap();
+        let b = a.new_session();
+        assert!(Arc::ptr_eq(&a.state.io, &rt.io));
+        assert!(Arc::ptr_eq(&b.state.io, &rt.io));
+        let gauges = rt
+            .metrics()
+            .gauges
+            .iter()
+            .filter(|g| g.name == "krishiv.cache.size")
+            .count();
+        assert_eq!(gauges, 1);
     }
 }

@@ -65,7 +65,7 @@ mod lifecycle;
 mod run_task;
 
 /// The store id of the local file system.
-const LOCAL_STORE: &str = "file";
+pub(crate) const LOCAL_STORE: &str = "file";
 
 /// Now, as microseconds since the epoch.
 fn query_start_micros() -> i64 {
@@ -1104,8 +1104,11 @@ impl Session {
         // plans carry only path strings, and the worker resolves the store
         // at listing from the read's option values (P2-T084).
         let stores = self.scoped_stores(&config);
+        // One I/O context for the query's reads, scans and writes: its
+        // counters are the query's own bytes (`system.queries`).
+        let io = self.scoped_io();
         let files = Arc::new(FileReads::new(
-            self.scoped_io(),
+            io.clone(),
             Arc::clone(&self.state.runtime.formats),
             Arc::new(ObjectPaths::new(
                 StoreId::new(LOCAL_STORE),
@@ -1116,7 +1119,7 @@ impl Session {
             Arc::clone(&config),
         ));
         let scans = FileScans {
-            io: self.scoped_io(),
+            io: io.clone(),
             config: Arc::clone(&config),
             slots: u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1),
             runtime: self.state.runtime.executor.io_handle().clone(),
@@ -1196,6 +1199,7 @@ impl Session {
         // least as new.
         let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
         QueryEnv {
+            io,
             config,
             parser,
             analysis,
@@ -1600,7 +1604,7 @@ impl Session {
             Some(QueryFold {
                 query: Arc::clone(&query),
                 state: Arc::clone(&self.state),
-                start: QueryStart::capture(&self.state),
+                start: QueryStart::capture(&self.state, &env.io),
                 metrics_on,
                 log_id,
                 _permit: permit,
@@ -2355,7 +2359,7 @@ impl Session {
         .with_spill_scopes(Arc::new(QuerySpill {
             state: Arc::clone(&self.state),
         }))
-        .with_io(self.scoped_io())
+        .with_io(env.io.clone())
         .with_formats(Arc::clone(&self.state.runtime.formats))
         .with_config(Arc::clone(&env.config))
     }
@@ -2557,6 +2561,9 @@ fn conf_values<'k>(config: &Config, keys: &[&'k str]) -> BTreeMap<&'k str, Strin
 #[derive(Clone)]
 pub(crate) struct QueryEnv {
     pub(crate) config: Arc<Config>,
+    /// The query's I/O context: every read, scan and write of the query goes
+    /// through it, so its counters are the query's own.
+    pub(crate) io: krishiv_io::IoContext,
     pub(crate) parser: ParserOptions,
     pub(crate) analysis: AnalysisContext,
     pub(crate) catalog: Arc<QueryCatalog>,

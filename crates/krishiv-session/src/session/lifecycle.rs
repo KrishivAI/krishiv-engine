@@ -14,15 +14,11 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64};
 use krishiv_common::config::{Config, ConfigValue, SESSION_MEMORY_LIMIT};
 use krishiv_common::error::KrishivError;
 use krishiv_exec::planner::DefaultPlanner;
-use krishiv_io::{IoConfig, IoScheduler, StoreId};
 use krishiv_memory::{MemoryPool, RelationStore};
 use krishiv_plan::analyzer::FunctionRegistry;
 use krishiv_udf_sdk::UdfLibrary;
-use object_store::ObjectStore;
-#[cfg(not(unix))]
-use object_store::local::LocalFileSystem;
 
-use super::{LOCAL_STORE, Session, SessionParts, SessionState};
+use super::{Session, SessionParts, SessionState};
 use crate::admission::Unlimited;
 use crate::cache::RelationCache;
 use crate::catalog::SessionCatalog;
@@ -57,22 +53,7 @@ impl Session {
             None => runtime.memory(),
         };
         let cache = RelationCache::on(&memory, &runtime.invalidation);
-        let io = IoScheduler::with_runtime(
-            IoConfig::from_config(&runtime.config),
-            runtime.executor.io_handle().clone(),
-        );
-        io.attach_memory(&memory);
-        #[cfg(unix)]
-        io.register_whole_listing_store(
-            StoreId::new(LOCAL_STORE),
-            Arc::new(krishiv_io::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
-        );
-        #[cfg(not(unix))]
-        io.register_store(
-            StoreId::new(LOCAL_STORE),
-            Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
-        );
-        runtime.add_io(&io);
+        let io = Arc::clone(&runtime.io);
         let cwd = std::env::current_dir()
             .ok()
             .and_then(|d| d.to_str().map(str::to_owned))
