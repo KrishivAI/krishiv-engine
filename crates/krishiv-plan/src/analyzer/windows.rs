@@ -51,7 +51,7 @@ use krishiv_common::error::{
 };
 
 use super::bind::unsupported;
-use super::exprs::{Bound, Cx, WindowUse, pretty, semantic_key};
+use super::exprs::{Bound, Cx, WindowUse, builtin_name, pretty, semantic_key};
 use super::ops::col_expr;
 use super::resolve::{Attr, Rel, Resolver};
 use super::{AnalysisError, ArgType, Constant};
@@ -900,8 +900,10 @@ impl Resolver<'_> {
         // aggregate with its ordering as further arguments, as Spark's
         // `ListAgg.sql` does (the percentiles show the ordered value
         // first, then the percentage).
+        // A session UDF named like one of these is not restricted
+        // (`builtin_name` is empty for it).
         let name = call.id.name();
-        let whole_only = match name {
+        let whole_only = match builtin_name(&call) {
             "listagg" => !call.within_group.is_empty(),
             "median" | "percentile_cont" | "percentile_disc" => true,
             _ => false,
