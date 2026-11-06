@@ -494,3 +494,23 @@ fn result_boundaries_and_equal_null() {
         ErrorClass::KrishivUnsupportedFeature
     );
 }
+
+/// `nvl2`'s first argument only selects: it does not decide the result's collation (Codex review).
+#[test]
+fn nvl2_selector_does_not_unify() {
+    assert_eq!(
+        one("SELECT typeof(nvl2('x' COLLATE UTF8_LCASE, 'a', 'b'))"),
+        "string"
+    );
+    assert_eq!(
+        one("SELECT typeof(nvl2('x', 'a' COLLATE UNICODE_CI, 'b' COLLATE UNICODE_CI))"),
+        "string collate UNICODE_CI"
+    );
+    // The selector's collation does not leak into an enclosing call either.
+    assert_eq!(
+        one(
+            "SELECT typeof(concat(nvl2('x' COLLATE UTF8_LCASE, 'a', 'b'), 'c' COLLATE UNICODE_CI))"
+        ),
+        "string collate UNICODE_CI"
+    );
+}

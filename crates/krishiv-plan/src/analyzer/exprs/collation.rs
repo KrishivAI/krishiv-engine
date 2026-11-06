@@ -181,6 +181,12 @@ const BINARY_RESULT: &[&str] = &[
 /// Calls that read the type of their argument: it stays collated.
 const INSPECTS: &[&str] = &["collation", "typeof"];
 
+/// How many leading arguments of `name` only select (a null test) and so take no part in the
+/// collation of the result: `nvl2(selector, if_not_null, if_null)`.
+fn selector_args(name: &str) -> usize {
+    usize::from(name.eq_ignore_ascii_case("nvl2"))
+}
+
 /// Whether a lookup in a map compares keys of a collated type (`m[k]`, `element_at`): the
 /// key compare is bytes until unit 3b, so only array indexing and plain-key maps are exempt.
 fn map_lookup_compares_collation(kids: &[Bound]) -> bool {
@@ -256,8 +262,19 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
             Some((Collation::UTF8_BINARY, Strength::Default))
         }
         ExprNode::Function(_) | ExprNode::Resolved(ResolvedExpr::Function(_)) => {
+            let skip = match &e.node {
+                ExprNode::Function(f) => selector_args(&f.name),
+                ExprNode::Resolved(ResolvedExpr::Function(f)) => selector_args(f.id.name()),
+                _ => 0,
+            };
             let mut kids = Vec::new();
-            e.for_each_child(&mut |k| kids.extend(strength_of(k, memo)));
+            let mut index = 0;
+            e.for_each_child(&mut |k| {
+                if index >= skip {
+                    kids.extend(strength_of(k, memo));
+                }
+                index += 1;
+            });
             merge(&kids).ok().flatten()
         }
         _ => None,
@@ -353,7 +370,7 @@ impl Resolver<'_> {
             ));
         }
         let mut memo = Memo::new();
-        let items: Vec<(Collation, Strength)> = kids[..n]
+        let items: Vec<(Collation, Strength)> = kids[selector_args(&name).min(n)..n]
             .iter()
             .filter(|k| is_string(k.ty.data_type.as_ref()))
             .filter_map(|k| {
