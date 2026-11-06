@@ -13,6 +13,18 @@ use std::borrow::Cow;
 /// The nesting depth after which a reference stays as written (Spark's `ConfigReader` limit).
 const MAX_DEPTH: usize = 10;
 
+impl crate::Session {
+    /// `query` as this session's parser reads it: its `${name}` references replaced from the
+    /// session's configuration, unless `spark.sql.variable.substitute` is false (Spark's
+    /// `SparkSqlParser` substitutes before it parses). For callers that parse SQL text themselves
+    /// (the golden harness); outside semver, like the rest of `unstable-ir`.
+    #[cfg(feature = "unstable-ir")]
+    #[must_use]
+    pub fn substitute_variables(&self, query: &str) -> String {
+        self.substituted(query).into_owned()
+    }
+}
+
 /// `text` with every known `${name}` replaced by its value from `lookup` (configuration by key).
 pub(crate) fn substitute<'a>(
     text: &'a str,
