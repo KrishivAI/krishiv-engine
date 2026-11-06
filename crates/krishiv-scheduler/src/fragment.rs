@@ -178,8 +178,9 @@ impl Cutter<'_> {
                         input: Box::new(input),
                         partitioning: e.partitioning.clone(),
                         filters: e.filters.clone(),
+                        schema: e.schema.clone(),
                     }),
-                    self.schema(e.id)?,
+                    self.schema(e)?,
                 )
             }
             None => (
@@ -246,10 +247,14 @@ impl Cutter<'_> {
         Ok(id)
     }
 
-    fn schema(&self, id: ExchangeId) -> Result<SchemaRef> {
-        self.schemas.get(&id).cloned().ok_or_else(|| {
+    /// The columns of `e`'s input: the plan's, else the caller's.
+    fn schema(&self, e: &ExchangePlan) -> Result<SchemaRef> {
+        if let Some(s) = &e.schema {
+            return Ok(SchemaRef::clone(s));
+        }
+        self.schemas.get(&e.id).cloned().ok_or_else(|| {
             InternalError {
-                message: format!("exchange {} has no schema", id.0),
+                message: format!("exchange {} has no schema", e.id.0),
             }
             .into()
         })
@@ -279,7 +284,7 @@ impl Cutter<'_> {
                 return Ok(PhysNode::ExchangeSource {
                     id: e.id,
                     partitioning: e.partitioning.clone(),
-                    schema: self.schema(e.id)?,
+                    schema: self.schema(e)?,
                 });
             }
             PhysNode::UnionLoop { .. } => {

@@ -556,3 +556,57 @@ fn a_filter_merged_from_every_build_task_crosses_stages() {
     );
     assert_eq!(root.reserved(), 0);
 }
+
+/// The schemas the planner writes into the plan (T176 unit 1 review m4)
+/// are the ones instantiation builds: the fragmenter takes them instead
+/// of instantiating the plan, and an exchange read refuses other columns.
+#[test]
+fn the_planners_exchange_schemas_are_the_instantiated_ones() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let worker = WorkerContext::new(Arc::clone(&tpch.tables) as _);
+    let mut partitioned = Config::clone(&tpch.config);
+    partitioned
+        .set("spark.sql.autoBroadcastJoinThreshold", "-1")
+        .unwrap();
+    let partitioned = Arc::new(partitioned);
+    for q in 1..=22 {
+        for plan in [
+            tpch.plan(q).unwrap(),
+            tpch.plan_sql(
+                &std::fs::read_to_string(repo().join(format!("bench/queries/tpch/q{q:02}.sql")))
+                    .unwrap(),
+                Arc::clone(&partitioned),
+            )
+            .unwrap(),
+        ] {
+            let planned = krishiv_scheduler::plan_data_schemas(&plan)
+                .unwrap_or_else(|| panic!("q{q:02}: an exchange without a schema"));
+            let built = krishiv_exec::physical::plan_schemas(&plan, &worker).unwrap();
+            assert_eq!(
+                planned.exchanges.keys().collect::<Vec<_>>(),
+                built.exchanges.keys().collect::<Vec<_>>(),
+                "q{q:02}"
+            );
+            for (id, schema) in &planned.exchanges {
+                assert_eq!(
+                    schema.fields(),
+                    built.exchanges[id].fields(),
+                    "q{q:02} exchange {}",
+                    id.0
+                );
+            }
+            for (id, schema) in &planned.nested_loop_probes {
+                assert_eq!(
+                    schema.fields(),
+                    built.nested_loop_probes[id].fields(),
+                    "q{q:02} nested loop over {}",
+                    id.0
+                );
+            }
+        }
+    }
+}

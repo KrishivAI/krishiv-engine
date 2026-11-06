@@ -69,6 +69,7 @@ fn range(end: i64, output: u64) -> PhysNode {
 
 fn exchange(id: u64, input: PhysNode, partitioning: Partitioning) -> PhysNode {
     PhysNode::Exchange(ExchangePlan {
+        schema: None,
         id: ExchangeId(id),
         input: Box::new(input),
         partitioning,
@@ -123,6 +124,7 @@ fn join_of(join_type: JoinType, probe: i64, build: i64) -> PhysicalPlan {
         DataType::Long,
     );
     let root = PhysNode::NestedLoopJoin(NestedLoopPlan {
+        probe_schema: None,
         probe: Box::new(exchange(1, range(probe, 1), Partitioning::RoundRobin)),
         build: Box::new(exchange(2, range(build, 2), Partitioning::Broadcast)),
         join_type,
@@ -356,4 +358,33 @@ fn a_join_whose_rows_round_robin_cannot_route_stays_whole() {
         )
     };
     assert_eq!(split_nested_loops(&left, &mut inner).unwrap(), left);
+}
+
+#[test]
+fn a_task_without_probe_rows_still_publishes_its_bitmap() {
+    // Two probe rows over four tasks: two tasks read none, and no build row
+    // matches.
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let plain = QueryRunner::new(Arc::clone(&executor) as _);
+    let stages = StageRunner::new(Arc::clone(&executor) as _, 4).unwrap();
+    let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let mut id = 200;
+    for join_type in JOINS {
+        let plan = join_of(join_type, 2, 10);
+        id += 1;
+        let want = run(&plain, &plan, &root, id).unwrap();
+        let expected = match join_type {
+            JoinType::RightOuter | JoinType::RightAnti => 10,
+            JoinType::FullOuter => 12,
+            _ => 0,
+        };
+        assert_eq!(want.len(), expected, "{join_type:?}");
+        id += 1;
+        assert_eq!(
+            run(&stages, &plan, &root, id).unwrap(),
+            want,
+            "{join_type:?}"
+        );
+    }
+    assert_eq!(root.reserved(), 0);
 }

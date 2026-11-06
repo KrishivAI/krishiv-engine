@@ -92,8 +92,13 @@ fn walk(
         return Ok(());
     }
     let (Some(probe), Some(build_schema)) = (
-        schemas.nested_loop_probes.get(&build.id).cloned(),
-        schemas.exchanges.get(&build.id).cloned(),
+        j.probe_schema
+            .clone()
+            .or_else(|| schemas.nested_loop_probes.get(&build.id).cloned()),
+        build
+            .schema
+            .clone()
+            .or_else(|| schemas.exchanges.get(&build.id).cloned()),
     ) else {
         return Ok(());
     };
@@ -115,13 +120,14 @@ fn walk(
     let mut join = j.clone();
     join.marks = Some(marks);
     schemas.exchanges.insert(local, SchemaRef::clone(&schema));
-    schemas.exchanges.insert(rest, schema);
+    schemas.exchanges.insert(rest, SchemaRef::clone(&schema));
     let exchange = |id, input| {
         PhysNode::Exchange(ExchangePlan {
             id,
             input: Box::new(input),
             partitioning: Partitioning::RoundRobin,
             filters: Vec::new(),
+            schema: Some(SchemaRef::clone(&schema)),
         })
     };
     *n = PhysNode::Union {
@@ -132,6 +138,36 @@ fn walk(
     };
     *split += 1;
     Ok(())
+}
+
+/// What a fragmenter needs of `plan`'s columns, from the plan alone: the
+/// planner's schema of every exchange and the probe columns of every join
+/// [`split_nested_loops`] may split (T176 unit 1 review m4). `None` when
+/// some are missing (a plan written without them): instantiate it instead
+/// ([`krishiv_exec::physical::plan_schemas`]).
+#[must_use]
+pub fn plan_data_schemas(plan: &PhysicalPlan) -> Option<PlanSchemas> {
+    let mut out = PlanSchemas::default();
+    let mut stack: Vec<&PhysNode> = plan.roots().collect();
+    while let Some(n) = stack.pop() {
+        match n {
+            PhysNode::Exchange(e) => {
+                out.exchanges
+                    .insert(e.id, SchemaRef::clone(e.schema.as_ref()?));
+            }
+            PhysNode::NestedLoopJoin(j) if j.join_type.builds_preserved() => {
+                if let PhysNode::Exchange(build) = &*j.build
+                    && build.partitioning == Partitioning::Broadcast
+                {
+                    out.nested_loop_probes
+                        .insert(build.id, SchemaRef::clone(j.probe_schema.as_ref()?));
+                }
+            }
+            _ => {}
+        }
+        stack.extend(n.children());
+    }
+    Some(out)
 }
 
 /// One past the largest exchange id `plan` uses.

@@ -11,7 +11,7 @@
 #[path = "common/suites.rs"]
 mod suites;
 
-use krishiv_exec::physical::{PhysicalPlan, WorkerContext, instantiate};
+use krishiv_exec::physical::{PhysNode, PhysicalPlan, WorkerContext, instantiate, plan_schemas};
 use krishiv_plan_codec::{decode, encode};
 
 use suites::{Suite, queries};
@@ -30,6 +30,32 @@ fn assert_round_trips(name: &str, plan: &PhysicalPlan) -> Vec<u8> {
     assert!(back == *plan, "{name}: decode(encode(plan)) != plan");
     assert_eq!(encode(&back).unwrap(), bytes, "{name}: re-encoding differs");
     bytes
+}
+
+/// The planner's exchange schemas (plan data, T176 unit 1 review m4) are
+/// the instantiated ones: a fragmenter uses them in place of instantiating
+/// the plan.
+fn assert_planned_schemas(name: &str, plan: &PhysicalPlan, worker: &WorkerContext) {
+    let built = plan_schemas(plan, worker).unwrap_or_else(|e| panic!("{name}: schemas: {e}"));
+    let mut stack: Vec<&PhysNode> = plan.roots().collect();
+    let mut exchanges = 0;
+    while let Some(n) = stack.pop() {
+        if let PhysNode::Exchange(e) = n {
+            let planned = e
+                .schema
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name}: exchange {} without a schema", e.id.0));
+            assert_eq!(
+                planned.fields(),
+                built.exchanges[&e.id].fields(),
+                "{name}: exchange {}",
+                e.id.0
+            );
+            exchanges += 1;
+        }
+        stack.extend(n.children());
+    }
+    assert_eq!(exchanges, built.exchanges.len(), "{name}");
 }
 
 #[test]
@@ -59,11 +85,13 @@ fn tpcds_plans_round_trip() {
     let suite = Suite::tpcds();
     let all = queries("tpcds");
     assert_eq!(all.len(), 99);
+    let worker = WorkerContext::new(suite.tables());
     let mut not_planned = Vec::new();
     for (name, sql) in &all {
         match suite.plan(sql) {
             Ok(plan) => {
                 assert_round_trips(&format!("tpcds {name}"), &plan);
+                assert_planned_schemas(&format!("tpcds {name}"), &plan, &worker);
             }
             Err(_) => not_planned.push(name.as_str()),
         }

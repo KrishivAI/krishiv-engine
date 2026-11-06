@@ -597,6 +597,7 @@ impl Decoder {
                 join_type: join_type(j.join_type)?,
                 residual: self.residual(j.residual.as_ref())?,
                 marks: j.marks.map(MarksId),
+                probe_schema: j.probe_schema.as_deref().map(schema_from).transpose()?,
             }),
             Kind::Union(u) => PhysNode::Union {
                 inputs: u
@@ -745,6 +746,7 @@ impl Decoder {
                     })
                 })
                 .collect::<Result<_>>()?,
+            schema: e.schema.as_deref().map(schema_from).transpose()?,
         })
     }
 

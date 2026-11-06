@@ -299,7 +299,7 @@ impl Operator for UnmatchedBuildOp {
         unit_weights(input)?;
         let out = self
             .join
-            .build_rows(input.data(), base, &|row| self.marks.get(row))?;
+            .build_rows(input.data(), base, |row| self.marks.get(row))?;
         Ok(OperatorOutput::NeedMoreInput(out.map(Batch::new)))
     }
 
@@ -634,7 +634,7 @@ impl Shared {
         &self,
         build: &RecordBatch,
         base: u64,
-        matched: &dyn Fn(u64) -> bool,
+        matched: impl Fn(u64) -> bool,
     ) -> Result<Option<RecordBatch>> {
         let want = self.join_type() == JoinType::RightSemi;
         let keep: Vec<u32> = (0..build.num_rows())

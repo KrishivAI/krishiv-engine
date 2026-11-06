@@ -14,7 +14,7 @@ mod stages;
 
 pub use deal::TableDealer;
 pub use fragment::{Stage, StageInput, fragment, streaming_scans};
-pub use split::{published_marks, split_nested_loops};
+pub use split::{plan_data_schemas, published_marks, split_nested_loops};
 pub use stages::{
     Partials, StageRunner, StageSplits, StageValues, merge_partials, produced, stage_tasks,
 };

@@ -65,6 +65,7 @@ fn range(end: i64, output: u64) -> PhysNode {
 
 fn exchange(id: u64, input: PhysNode, partitioning: Partitioning) -> PhysNode {
     PhysNode::Exchange(ExchangePlan {
+        schema: None,
         id: ExchangeId(id),
         input: Box::new(input),
         partitioning,
@@ -113,6 +114,7 @@ fn join_plan(join_type: JoinType) -> PhysicalPlan {
         DataType::Long,
     );
     let root = PhysNode::NestedLoopJoin(NestedLoopPlan {
+        probe_schema: None,
         probe: Box::new(exchange(1, range(20, 1), Partitioning::RoundRobin)),
         build: Box::new(exchange(2, range(10, 2), Partitioning::Broadcast)),
         join_type,

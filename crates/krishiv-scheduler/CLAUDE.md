@@ -21,6 +21,9 @@ Paths are relative to this crate.
   its local stage runs N tasks, each publishing a build-match bitmap; the runner ORs them (`merge_partials`, a missing one
   fails the query) and ships them in `TaskSpec::marks` to the one-task `UnmatchedBuild` stage. Needs `plan_schemas`
   (probe columns); a join whose output round-robin cannot route (nested columns) stays whole. `tests/nested_split.rs`.
+  `plan_data_schemas`: the exchange and probe columns the planner wrote into the plan (`ExchangePlan::schema`,
+  `NestedLoopPlan::probe_schema`); the runner and the simulated coordinator instantiate the plan unrun only when some
+  are missing (a plan written without them). `tests/tpch_stages.rs` checks they equal the instantiated ones.
 - `src/deal.rs` `TableDealer`: a `StageSplits` dealing the listed files of named tables (P2-T178), used by the tests
   and the simulation's coordinator.
 - `src/stages.rs` `StageRunner`: a `krishiv_exec::Scheduler` running the stages bottom-up over a `LocalShuffle`

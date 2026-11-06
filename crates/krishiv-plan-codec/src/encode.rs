@@ -518,6 +518,7 @@ impl Encoder {
             join_type: join_type(join.join_type) as i32,
             residual: self.residual(join.residual.as_ref())?,
             marks: join.marks.map(|m| m.0),
+            probe_schema: join.probe_schema.as_deref().map(schema_bytes),
         })
     }
 
@@ -531,6 +532,7 @@ impl Encoder {
                 .iter()
                 .map(|f| exchange_filter(f, &self.nested))
                 .collect(),
+            schema: exchange.schema.as_deref().map(schema_bytes),
         })
     }
 

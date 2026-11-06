@@ -270,6 +270,12 @@ pub struct ExchangePlan {
     /// fragmenter on the exchange that feeds a join's build, empty on one
     /// worker.
     pub filters: Vec<ExchangeFilterPlan>,
+    /// The columns of its input, as the planner typed them: what a
+    /// fragmenter gives the [`PhysNode::ExchangeSource`] in its place,
+    /// without instantiating the plan (T176 unit 1 review m4). `None` in a
+    /// plan written without it; the fragmenter's caller then instantiates
+    /// the plan to learn them ([`plan_schemas`]).
+    pub schema: Option<SchemaRef>,
 }
 
 /// A runtime filter an exchange collects from the rows it writes, in place
@@ -832,6 +838,11 @@ pub struct NestedLoopPlan {
     /// emits them here (one task, or one worker). Set only by the
     /// fragmenter, on a join that returns build rows over a broadcast.
     pub marks: Option<MarksId>,
+    /// The probe input's columns, as the planner typed them, of a join that
+    /// returns build rows: what a split of the join pads its build rows
+    /// with ([`PlanSchemas::nested_loop_probes`]). `None` for other joins
+    /// and in plans written without it.
+    pub probe_schema: Option<SchemaRef>,
 }
 
 /// The second half of a split nested-loop join (design P2-T052b,
@@ -935,7 +946,7 @@ plan_data!(enum Partitioning {
     RoundRobin,
     Range { keys },
 });
-plan_data!(struct ExchangePlan { id, input, partitioning, filters });
+plan_data!(struct ExchangePlan { id, input, partitioning, filters, schema });
 plan_data!(struct ExchangeFilterPlan { id, column, key_type, options, null_safe });
 plan_data!(
     enum JoinDistribution {
@@ -1047,7 +1058,7 @@ impl UnmatchedBuildPlan {
     }
 }
 
-plan_data!(struct NestedLoopPlan { probe, build, join_type, residual, marks });
+plan_data!(struct NestedLoopPlan { probe, build, join_type, residual, marks, probe_schema });
 plan_data!(tuple MarksId(id));
 plan_data!(struct UnmatchedBuildPlan { marks, join_type, exchange, probe_schema, build_schema });
 plan_data!(struct PhysicalPlan { root, shared, schema, explain, warnings, env });
@@ -1342,6 +1353,7 @@ impl PhysicalPlan {
                 }),
                 partitioning: Partitioning::Single,
                 filters: Vec::new(),
+                schema: Some(WritePlan::result_schema()),
             })),
             shared: self.shared,
             explain,

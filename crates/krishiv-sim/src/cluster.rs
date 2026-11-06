@@ -30,7 +30,8 @@ use krishiv_exec::physical::{
 };
 use krishiv_exec::{ExecConfig, Executor, QueryContext, QueryId, QueryRunner, Scheduler};
 use krishiv_scheduler::{
-    Partials, StageSplits, StageValues, fragment, merge_partials, split_nested_loops, stage_tasks,
+    Partials, StageSplits, StageValues, fragment, merge_partials, plan_data_schemas,
+    split_nested_loops, stage_tasks,
 };
 use krishiv_types::batch::Batch;
 use turmoil::net::TcpStream;
@@ -198,8 +199,18 @@ impl Inner {
             job,
             workers: self.workers.clone(),
         };
-        let mut schemas = plan_schemas(&plan, &worker)?;
-        let plan = split_nested_loops(&plan, &mut schemas)?;
+        // The plan's own schemas; a plan written without them is
+        // instantiated, unrun, to learn them.
+        let mut schemas = match plan_data_schemas(&plan) {
+            Some(s) => s,
+            None => plan_schemas(&plan, &worker)?,
+        };
+        // One task per stage: nothing to split.
+        let plan = if self.partitions > 1 {
+            split_nested_loops(&plan, &mut schemas)?
+        } else {
+            plan
+        };
         let stages = fragment(&plan, &schemas.exchanges)?;
         let splits = self
             .splits

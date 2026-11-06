@@ -2126,6 +2126,7 @@ mod tests {
             input: Box::new(first),
             partitioning: Partitioning::Single,
             filters: Vec::new(),
+            schema: None,
         });
         let merge = PhysNode::Aggregate {
             input: Box::new(moved),

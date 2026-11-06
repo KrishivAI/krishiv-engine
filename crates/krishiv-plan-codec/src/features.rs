@@ -594,8 +594,26 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
             .for_each(|a| aggregate_constructs(a, f)),
         PhysNode::HashJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::SortMergeJoin(j) => f(Construct::Join(j.join_type)),
-        PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
-        PhysNode::Exchange(e) => f(Construct::Partitioning(&e.partitioning)),
+        // The planner's schemas are classified by field, as an exchange
+        // source's are.
+        PhysNode::NestedLoopJoin(j) => {
+            f(Construct::Join(j.join_type));
+            if let Some(schema) = &j.probe_schema {
+                schema
+                    .fields()
+                    .iter()
+                    .for_each(|field| visit_arrow_field(field, f));
+            }
+        }
+        PhysNode::Exchange(e) => {
+            f(Construct::Partitioning(&e.partitioning));
+            if let Some(schema) = &e.schema {
+                schema
+                    .fields()
+                    .iter()
+                    .for_each(|field| visit_arrow_field(field, f));
+            }
+        }
         // A reduce fragment may name a type only in the schema it reads
         // (a sort by column index above it), so the schema is classified
         // by field, as the plan's output schema is.
