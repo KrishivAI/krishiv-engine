@@ -341,11 +341,16 @@ impl Engine for SessionEngine {
         let format = format?;
         // `HiveResult.formatDescribeTableOutput`: the rows of DESCRIBE TABLE / COLUMN / QUERY print
         // each of their three cells left-aligned in 20 characters (`DESCRIBE SCHEMA` is not padded).
-        let padded = matches!(
-            krishiv_sql::parse_statement(sql, &self.options()),
-            Ok(Statement::Describe(d))
-                if matches!(d.kind, DescribeKind::Table { .. } | DescribeKind::Query { .. })
-        );
+        let describe = match krishiv_sql::parse_statement(sql, &self.options()) {
+            Ok(Statement::Describe(d)) => Some(matches!(
+                d.kind,
+                DescribeKind::Table { .. } | DescribeKind::Query { .. }
+            )),
+            // A `SHOW` command's plan has no `Sort`: its rows are sorted before comparing.
+            Ok(Statement::Show(_)) => Some(false),
+            _ => None,
+        };
+        let padded = describe == Some(true);
         // `HiveResult` prints only the name column (the second) of SHOW TABLES and SHOW VIEWS, the
         // schema line still lists all three.
         let names_only = matches!(
@@ -398,7 +403,9 @@ impl Engine for SessionEngine {
         Ok(QueryOutput {
             schema,
             rows,
-            sorted: Some(is_semantically_sorted(analyzed.plan.root())),
+            // `isSemanticallySorted`: a describe of a table, partition, column or query keeps its
+            // order; one of a namespace or function, and a `SHOW`, are sorted like any unsorted result.
+            sorted: Some(describe.unwrap_or_else(|| is_semantically_sorted(analyzed.plan.root()))),
         })
     }
 }

@@ -58,6 +58,22 @@ use crate::store::{
 /// The file formats a table can have.
 const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
 
+/// Spark's `CatalogUtils.makeQualifiedDBObjectPath` on the local file system: a location with a URI scheme
+/// stays as written; any other is resolved against the warehouse directory (an absolute path stays itself)
+/// and qualified as a `file:` URI.
+fn qualified_namespace_location(location: &str, warehouse: &std::path::Path) -> String {
+    let scheme = location.split_once(':').is_some_and(|(s, _)| {
+        s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    if scheme {
+        location.to_owned()
+    } else {
+        format!("file:{}", warehouse.join(location).display())
+    }
+}
+
 /// The short name of a data source written fully qualified, as Spark maps its built-in classes
 /// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
 fn short_provider(written: &str) -> String {
@@ -318,7 +334,7 @@ impl Session {
                 Box::new(move |m| m.properties.extend(properties.clone()))
             }
             AlterNamespaceAction::SetLocation(l) => {
-                let l = l.clone();
+                let l = qualified_namespace_location(l, &self.warehouse_dir()?);
                 Box::new(move |m| m.location = Some(l.clone()))
             }
             AlterNamespaceAction::SetComment(c) => {
@@ -583,6 +599,7 @@ impl Session {
             name: name.name.clone(),
             managed: false,
             provider: String::new(),
+            provider_written: String::new(),
             location: PathBuf::new(),
             columns,
             options: BTreeMap::new(),
@@ -1272,13 +1289,15 @@ impl Session {
                 "partition column types in CREATE TABLE ... AS SELECT",
             ));
         }
-        let provider = self.provider_of(t.using.as_ref().map(|u| {
+        let using = t.using.as_ref().map(|u| {
             u.parts
                 .iter()
                 .map(|p| p.value.as_str())
                 .collect::<Vec<_>>()
                 .join(".")
-        }))?;
+        });
+        let provider_written = self.written_provider(using.clone());
+        let provider = self.provider_of(using)?;
         let name = self.table_name(&t.name, &env)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
@@ -1347,6 +1366,7 @@ impl Session {
             name: name.name.clone(),
             managed: !external,
             provider,
+            provider_written,
             location,
             columns: Vec::new(),
             options,
@@ -1411,6 +1431,15 @@ impl Session {
             }
         }
         self.empty_frame().await
+    }
+
+    /// The provider as written in `using`, or `spark.sql.sources.default`'s
+    /// value: what a table's metadata prints (Spark keeps the case).
+    fn written_provider(&self, using: Option<String>) -> String {
+        using.unwrap_or_else(|| {
+            crate::conf::get(&self.state.conf.snapshot(), "spark.sql.sources.default")
+                .unwrap_or_else(|| "parquet".to_owned())
+        })
     }
 
     /// The provider named by `using`, or `spark.sql.sources.default`.
@@ -1762,7 +1791,10 @@ impl Session {
                 .clone_from(&s.layout.partition_columns);
             layout.bucket.clone_from(&s.layout.bucket);
             options.clone_from(&s.options);
-            (s.columns.clone(), s.provider.clone())
+            (
+                s.columns.clone(),
+                (s.provider.clone(), s.provider_written.clone()),
+            )
         } else if self.temp_entry_of(&source, &env)
             && let Some(entry) = self
                 .state
@@ -1785,19 +1817,21 @@ impl Session {
                         comment: None,
                     })
                     .collect(),
-                "parquet".to_owned(),
+                ("parquet".to_owned(), "parquet".to_owned()),
             )
         } else {
             return Err(source.not_found());
         };
-        let provider = match &t.using {
-            Some(u) => self.provider_of(Some(
-                u.parts
+        let (provider, provider_written) = match &t.using {
+            Some(u) => {
+                let using = u
+                    .parts
                     .iter()
                     .map(|p| p.value.as_str())
                     .collect::<Vec<_>>()
-                    .join("."),
-            ))?,
+                    .join(".");
+                (self.provider_of(Some(using.clone()))?, using)
+            }
             None => source_provider,
         };
         let external = t.location.is_some();
@@ -1810,6 +1844,7 @@ impl Session {
             name: name.name.clone(),
             managed: !external,
             provider,
+            provider_written,
             location,
             columns,
             options,
@@ -2606,6 +2641,7 @@ impl Session {
             return Err(unsupported("partitioned tables"));
         }
         let warehouse = self.warehouse_dir()?;
+        let provider_written = self.written_provider(spec.provider.clone());
         let provider = self.provider_of(spec.provider)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
@@ -2635,6 +2671,7 @@ impl Session {
             name: name.name.clone(),
             managed: true,
             provider,
+            provider_written,
             location: managed_location(&warehouse, &name.namespace, &name.name),
             columns: Vec::new(),
             options,
@@ -3123,6 +3160,29 @@ fn clear_dir(dir: &Path) -> Result<(), KrishivError> {
 mod tests {
     use super::*;
     use krishiv_types::{ArrayType, DecimalType};
+
+    #[test]
+    fn a_namespace_location_is_qualified_against_the_warehouse() {
+        let wh = std::path::Path::new("/w/warehouse");
+        assert_eq!(
+            qualified_namespace_location("someloc", wh),
+            "file:/w/warehouse/someloc"
+        );
+        assert_eq!(qualified_namespace_location("/abs/x", wh), "file:/abs/x");
+        assert_eq!(
+            qualified_namespace_location("file:/abs/x", wh),
+            "file:/abs/x"
+        );
+        assert_eq!(
+            qualified_namespace_location("s3a://bucket/x", wh),
+            "s3a://bucket/x"
+        );
+        // A colon after a path character is not a scheme.
+        assert_eq!(
+            qualified_namespace_location("a/b:c", wh),
+            "file:/w/warehouse/a/b:c"
+        );
+    }
 
     #[test]
     fn an_owned_directory_is_exclusive_and_reports_why_it_cannot_be_made() {
