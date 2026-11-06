@@ -7,15 +7,14 @@
 //! `db.query.summary` and the sanitized `db.query.text` (every literal
 //! replaced by `?`, comments dropped; [`krishiv_sql::sanitize_query_text`]),
 //! computed over the text with its secrets already redacted (`redact_sql`),
-//! plus `krishiv.session_id` and `krishiv.query_id`. Ids are minted here
-//! until the session context (T136) brings principal, tags and the caller's
-//! trace context. Without a subscriber `tracing` makes the span a no-op and
+//! plus `krishiv.session_id` (the session's `system.queries` id) and
+//! `krishiv.query_id`, minted here until the session context (T136) brings
+//! principal, tags and the caller's trace context. Without a subscriber `tracing` makes the span a no-op and
 //! the attributes are not built, so an embedded engine pays a disabled-callsite
 //! check and the copy of the statement text. The span stays open while the
 //! result stream is read (`in_span`), so its duration is the query's.
 
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 
 use futures::Stream;
@@ -142,10 +141,13 @@ impl Stream for SpanStream {
     }
 }
 
-/// A session id: 16 hex digits, unique within the process and
-/// unpredictable across processes (the std hasher's random keys).
+/// An instance id for the OTLP exporter's resource: 16 hex digits, unique
+/// within the process and unpredictable across processes (the std hasher's
+/// random keys). Sessions use their `system.queries` id instead.
+#[cfg(any(test, feature = "telemetry-otlp"))]
 pub(crate) fn new_session_id() -> String {
     use std::hash::{BuildHasher, Hasher, RandomState};
+    use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let mut h = RandomState::new().build_hasher();
     h.write_u64(NEXT.fetch_add(1, Ordering::Relaxed));
@@ -154,6 +156,8 @@ pub(crate) fn new_session_id() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::Ordering;
+
     use super::*;
 
     #[test]

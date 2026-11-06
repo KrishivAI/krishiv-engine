@@ -13,7 +13,10 @@ use krishiv_kernels::datetime::{resolve_zone, zone_id};
 /// Prefixes of entries read once, when the session is built (memory pool,
 /// spill directory, I/O scheduler): setting them later would not apply,
 /// so it fails like a static config.
-const BUILD_TIME: &[&str] = &["krishiv.memory.", "krishiv.spill.", "krishiv.io."];
+pub(crate) const BUILD_TIME: &[&str] = &["krishiv.memory.", "krishiv.spill.", "krishiv.io."];
+
+/// Session keys fixed when the session is built (its memory pool).
+const SESSION_BUILD_TIME: &[&str] = &["krishiv.session.memoryLimit"];
 
 /// The configuration of a session, shared by its clones. Queries read an
 /// immutable snapshot ([`Self::snapshot`]).
@@ -222,7 +225,9 @@ pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
 pub(crate) fn is_modifiable(key: &str) -> bool {
     match lookup(key) {
         Some(entry) => {
-            entry.scope == Scope::Session && !BUILD_TIME.iter().any(|p| entry.key.starts_with(p))
+            entry.scope == Scope::Session
+                && !BUILD_TIME.iter().any(|p| entry.key.starts_with(p))
+                && !SESSION_BUILD_TIME.contains(&entry.key)
         }
         None => true,
     }

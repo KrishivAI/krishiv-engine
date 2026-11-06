@@ -139,9 +139,59 @@ pub(crate) struct RelationStats {
     pub(crate) invalidations: u64,
 }
 
+/// Where a table change reaches every cache of an engine runtime: its result
+/// cache and each session's relation cache. The permanent catalog is the
+/// runtime's (design P2-E1), so a write in one session must drop what any
+/// session cached over the table, as Spark's shared `CacheManager` does.
+/// Relation caches are held weakly: a session's cache ends with it.
+#[derive(Debug)]
+pub(crate) struct Invalidation {
+    results: Arc<crate::result_cache::ResultCache>,
+    relations: Mutex<Vec<std::sync::Weak<RelationCache>>>,
+}
+
+impl Invalidation {
+    /// A hub over the runtime's `results`, with no relation cache yet.
+    pub(crate) fn new(results: Arc<crate::result_cache::ResultCache>) -> Arc<Self> {
+        Arc::new(Self {
+            results,
+            relations: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The live relation caches (copied, so none is called under the lock).
+    fn relations(&self) -> Vec<Arc<RelationCache>> {
+        let mut all = self
+            .relations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        all.retain(|w| w.strong_count() > 0);
+        all.iter().filter_map(std::sync::Weak::upgrade).collect()
+    }
+
+    /// Drops what every cache holds over the table `name`.
+    pub(crate) fn invalidate_table(&self, name: &str) {
+        self.results.invalidate_table(name);
+        for cache in self.relations() {
+            cache.invalidate_local(name);
+        }
+    }
+
+    /// Drops every entry of every cache (`CLEAR CACHE`).
+    pub(crate) fn clear(&self) {
+        self.results.clear();
+        for cache in self.relations() {
+            cache.clear_local();
+        }
+    }
+}
+
 /// The session relation cache: snapshots under the `relation_cache` pool.
 #[derive(Debug)]
 pub(crate) struct RelationCache {
+    /// The runtime's invalidation hub: a change seen here reaches every
+    /// cache of the runtime.
+    hub: Arc<Invalidation>,
     pool: Arc<dyn MemoryPool>,
     consumer: ConsumerId,
     hidden: AtomicU64,
@@ -156,11 +206,22 @@ pub(crate) struct RelationCache {
 }
 
 impl RelationCache {
-    /// An empty cache under `memory`.
-    pub(crate) fn new(memory: &Arc<dyn MemoryPool>) -> Self {
+    /// An empty cache under `memory` with a hub of its own (tests: sessions
+    /// use [`Self::on`]).
+    #[cfg(test)]
+    pub(crate) fn new(memory: &Arc<dyn MemoryPool>) -> Arc<Self> {
+        Self::on(
+            memory,
+            &Invalidation::new(Arc::clone(crate::result_cache::global())),
+        )
+    }
+
+    /// An empty cache under `memory`, registered with the runtime's `hub`.
+    pub(crate) fn on(memory: &Arc<dyn MemoryPool>, hub: &Arc<Invalidation>) -> Arc<Self> {
         let pool = memory.child("relation_cache", None);
         let consumer = pool.register("relation_cache", None);
-        Self {
+        let cache = Arc::new(Self {
+            hub: Arc::clone(hub),
             pool,
             consumer,
             hidden: AtomicU64::new(0),
@@ -168,7 +229,12 @@ impl RelationCache {
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             state: Mutex::new(CacheState::default()),
-        }
+        });
+        hub.relations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Arc::downgrade(&cache));
+        cache
     }
 
     /// The `krishiv.cache.maxBytes` cap of a query's configuration snapshot.
@@ -312,10 +378,13 @@ impl RelationCache {
         true
     }
 
-    /// Drops every entry.
+    /// Drops every entry of every cache of the runtime (`CLEAR CACHE`).
     pub(crate) fn clear(&self) {
-        // The result cache shares the invalidation: what is cleared here is cleared there.
-        crate::result_cache::global().clear();
+        self.hub.clear();
+    }
+
+    /// Drops every entry of this cache.
+    fn clear_local(&self) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
         for entry in state.entries.values() {
@@ -330,7 +399,11 @@ impl RelationCache {
     /// read may have changed. Matches the entry's tables and its pins, so
     /// versioned and temporary tables both clear.
     pub(crate) fn invalidate_table(&self, name: &str) {
-        crate::result_cache::global().invalidate_table(name);
+        self.hub.invalidate_table(name);
+    }
+
+    /// [`Self::invalidate_table`] in this cache only.
+    fn invalidate_local(&self, name: &str) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         self.invalidated();
         let lowered = name.to_lowercase();
