@@ -751,6 +751,58 @@ async fn blocks_read_from_disk_are_reserved_from_the_pool() {
     assert_eq!(root.reserved(), 0);
 }
 
+/// A block read back from disk that the memory tier keeps is charged once, in the tier (review of
+/// #533): two blocks fit a two-block pool, they are not charged again as the read's held blocks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_disk_block_kept_in_memory_is_charged_once() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, cache, store) = direct(tmp.path(), 1 << 22, 4 << 20);
+    let a = Path::from("o");
+    let data = pattern(1 << 20, 9);
+    inner.put(&a, data.clone().into()).await.unwrap();
+    let read = |range: std::ops::Range<u64>| {
+        let mut options = sized(1 << 20);
+        options.range = Some(object_store::GetRange::Bounded(range));
+        let (store, a) = (&store, a.clone());
+        async move {
+            store
+                .get_opts(&a, options)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap()
+        }
+    };
+    read(0..2 * BLOCK).await;
+    let root = TreePool::new(&MemoryConfig {
+        limit: Some(2 * usize::try_from(BLOCK).unwrap()),
+        quantum: 1,
+        spill_scratch_reserve: 0,
+        resident_guard: true,
+        ..MemoryConfig::default()
+    });
+    let pool: Arc<dyn MemoryPool> = Arc::clone(&root) as Arc<dyn MemoryPool>;
+    // Attaching empties the memory tier: the two blocks are on disk only.
+    cache.attach_pool(&pool);
+    let (errors, hits, evictions) = (
+        cache.stats().errors,
+        cache.stats().disk_hits,
+        cache.stats().evictions,
+    );
+    let got = read(0..2 * BLOCK).await;
+    assert_eq!(&got[..], &data[..usize::try_from(2 * BLOCK).unwrap()]);
+    assert_eq!(cache.stats().errors, errors, "no refusal: charged once");
+    assert_eq!(
+        cache.stats().evictions,
+        evictions,
+        "nothing evicted to make room"
+    );
+    assert!(cache.stats().disk_hits >= hits + 2);
+    assert_eq!(root.reserved() as u64, cache.memory_used());
+}
+
 /// A read with many separate runs of missing blocks fetches them all, a few at a time.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn many_runs_are_fetched_within_the_concurrency_bound() {

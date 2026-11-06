@@ -365,6 +365,11 @@ impl BlockCache {
                 return true;
             }
             let mut st = lock(&self.state);
+            // Evicting the whole tier cannot make room for more than it holds: a smaller tier means
+            // the read falls back to the plain read with the hot set kept.
+            if st.memory.used < bytes as u64 {
+                return false;
+            }
             let Some((_, old)) = st.memory.pop_oldest() else {
                 return false;
             };
@@ -420,8 +425,10 @@ impl BlockCache {
         match read {
             Ok(Ok(bytes)) => {
                 bump(&self.counters.disk_hits, 1);
-                self.remember(name, &bytes);
-                Some((bytes, true))
+                // A block the memory tier keeps is charged there; only one it does not keep is
+                // charged to the read that holds it.
+                let kept = self.remember(name, &bytes);
+                Some((bytes, !kept))
             }
             _ => {
                 // Unreadable or not the block we asked for: forget it.
@@ -444,12 +451,13 @@ impl BlockCache {
         let _ = std::fs::remove_file(self.file(name));
     }
 
-    /// Puts `bytes` in the memory tier (least recently used blocks leave).
-    fn remember(&self, name: u128, bytes: &Bytes) {
+    /// Puts `bytes` in the memory tier (least recently used blocks leave); `false` when the block
+    /// was not kept there (no tier, too large, or the pool granted no room).
+    fn remember(&self, name: u128, bytes: &Bytes) -> bool {
         let cap = self.cfg.memory_bytes;
         let size = bytes.len() as u64;
         if cap == 0 || size > cap {
-            return;
+            return false;
         }
         let mut st = lock(&self.state);
         let tick = Self::next_tick(&mut st);
@@ -471,21 +479,25 @@ impl BlockCache {
                     st.memory.used = st.memory.used.saturating_sub(old.len() as u64);
                     Self::release(&mut st, old.len());
                     if key == name {
-                        return;
+                        return false;
                     }
                 }
             }
         }
+        let mut kept = true;
         while st.memory.used > cap {
             let Some((key, old)) = st.memory.pop_oldest() else {
                 break;
             };
             if key != name {
                 bump(&self.counters.evictions, 1);
+            } else {
+                kept = false;
             }
             st.memory.used = st.memory.used.saturating_sub(old.len() as u64);
             Self::release(&mut st, old.len());
         }
+        kept
     }
 
     /// Writes the block to disk, removing the least recently used ones to stay under the cap.
