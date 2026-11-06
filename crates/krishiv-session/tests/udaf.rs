@@ -364,6 +364,62 @@ fn having_and_distinct_rewrites_keep_the_udaf() {
 }
 
 #[test]
+fn a_distinct_rewrite_never_merges_or_loses_a_udaf() {
+    let s = session_with(&[], Fault::None);
+    s.register_udaf(UdSum::new("max", Fault::None)).unwrap();
+    register_t(&s, 5);
+    // The built-in and the UDF, both rewritten: still two calls.
+    let got = run(
+        &s,
+        "SELECT max(DISTINCT v) FILTER (WHERE v > 0), \
+         session.max(DISTINCT v) FILTER (WHERE v > 0) FROM t",
+    );
+    let want = run(
+        &s,
+        "SELECT max(DISTINCT v) FILTER (WHERE v > 0), sum(DISTINCT v) FILTER (WHERE v > 0) FROM t",
+    );
+    assert_eq!(pairs(&got), pairs(&want));
+    // A regular UDF call next to the rewrite: grouped, as its built-in twin...
+    let got = run(
+        &s,
+        "SELECT session.max(v), sum(DISTINCT v) FILTER (WHERE v > 0) FROM t GROUP BY k ORDER BY k",
+    );
+    let want = run(
+        &s,
+        "SELECT sum(v), sum(DISTINCT v) FILTER (WHERE v > 0) FROM t GROUP BY k ORDER BY k",
+    );
+    assert_eq!(pairs(&got), pairs(&want));
+    // ... but refused without GROUP BY, where its empty-group value would be lost.
+    let e = error_of(
+        &s,
+        "SELECT session.max(v), sum(DISTINCT v) FILTER (WHERE v > 0) FROM t",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+}
+
+#[test]
+fn a_correlated_subquery_never_invents_a_udafs_empty_result() {
+    let s = session_with(&[], Fault::None);
+    // A sum under `count`'s name: NULL over no rows, where `count` is 0.
+    s.register_udaf(UdSum::new("count", Fault::None)).unwrap();
+    register_t(&s, 5);
+    let sql = "SELECT CAST(o.k AS BIGINT), (SELECT session.count(v) FROM t WHERE t.k = o.k) \
+               FROM VALUES (99) AS o(k)";
+    match block_on(async { s.sql(sql).await?.collect().await }) {
+        Ok(batches) => assert_eq!(pairs(&batches), [(Some(99), None)]),
+        Err(e) => assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{e}"
+        ),
+    }
+}
+
+#[test]
 fn contract_breaks_and_panics_fail_the_query_naming_the_udf() {
     for fault in [Fault::PanicInUpdate, Fault::WrongResultType] {
         let s = session_with(&[], fault);
