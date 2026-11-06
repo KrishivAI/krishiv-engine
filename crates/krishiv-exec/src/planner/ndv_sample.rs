@@ -26,8 +26,7 @@ use std::time::Duration;
 use arrow_array::{Array, ArrayRef};
 use arrow_row::{RowConverter, SortField};
 use krishiv_io::{
-    ByteRange, CacheKey, ColumnPath, DistinctSample, SampleKey, ScanOptions, ScanRequest,
-    ScanStream,
+    ByteRange, CacheKey, ColumnPath, DistinctSample, SampleKey, ScanRequest, ScanStream,
 };
 
 use super::file_table::FileTable;
@@ -53,7 +52,7 @@ pub struct SampleOptions {
 /// table's non-null rows (the sample's null fraction applied), clamped to
 /// `[distinct seen, non-null rows]`. `None` when the sample holds no value.
 #[must_use]
-pub fn estimate(s: &DistinctSample, table_rows: u64) -> Option<u64> {
+pub(super) fn estimate(s: &DistinctSample, table_rows: u64) -> Option<u64> {
     if s.rows == 0 {
         return (s.whole || s.nulls > 0).then_some(0);
     }
@@ -81,7 +80,7 @@ pub fn estimate(s: &DistinctSample, table_rows: u64) -> Option<u64> {
 /// Counts of one column's values over a sample.
 #[derive(Debug, Default)]
 struct Counter {
-    counts: HashMap<u64, u32>,
+    counts: HashMap<u64, u64>,
     rows: u64,
     nulls: u64,
     /// Stopped tracking: the sample is what was counted before.
@@ -122,6 +121,7 @@ impl Counter {
             distinct: self.counts.len() as u64,
             singletons: self.counts.values().filter(|&&c| c == 1).count() as u64,
             whole: whole && !self.full,
+            failed_within_ms: 0,
         }
     }
 }
@@ -169,9 +169,16 @@ impl FileTable {
             .map(|f| CacheKey::new(format.name(), f, None))
             .collect();
         let cache = self.io().scheduler().distinct_samples();
+        let table_files = self.files().len();
+        let key = |c: &str| SampleKey::new(keys.clone(), c, options.rows, table_files);
+        let timeout_ms = u64::try_from(options.timeout.as_millis()).unwrap_or(u64::MAX);
         let mut missing = Vec::new();
         for c in wanted {
-            match cache.get(&SampleKey::new(keys.clone(), c, options.rows)) {
+            match cache.get(&key(c)) {
+                // A sample that did not finish is tried again only with more time.
+                Some(s) if s.failed_within_ms > 0 && timeout_ms > s.failed_within_ms => {
+                    missing.push(c.clone());
+                }
                 Some(s) => self.keep_sample(c, &s, stats.rows),
                 None => missing.push(c.clone()),
             }
@@ -180,13 +187,35 @@ impl FileTable {
             return Ok(());
         }
         let read = self.read_sample(&files, &missing, options.rows);
-        let Ok(counters) = tokio::time::timeout(options.timeout, read).await else {
-            tracing::debug!(columns = ?missing, "distinct-value sample timed out");
-            return Ok(());
+        let counters = match tokio::time::timeout(options.timeout, read).await {
+            Ok(Ok(counters)) => counters,
+            failed => {
+                // Recorded, so later queries over the same files do not pay
+                // for it again (unless given more time).
+                let failure = DistinctSample {
+                    rows: 0,
+                    nulls: 0,
+                    distinct: 0,
+                    singletons: 0,
+                    whole: false,
+                    failed_within_ms: timeout_ms.max(1),
+                };
+                for c in &missing {
+                    cache.insert(key(c), failure);
+                    self.keep_sample(c, &failure, stats.rows);
+                }
+                return match failed {
+                    Ok(Err(e)) => Err(e),
+                    _ => {
+                        tracing::debug!(columns = ?missing, "distinct-value sample timed out");
+                        Ok(())
+                    }
+                };
+            }
         };
-        for (c, counter) in missing.iter().zip(counters?) {
+        for (c, counter) in missing.iter().zip(counters) {
             let s = counter.sample(whole);
-            cache.insert(SampleKey::new(keys.clone(), c, options.rows), s);
+            cache.insert(key(c), s);
             self.keep_sample(c, &s, stats.rows);
         }
         Ok(())
@@ -203,8 +232,12 @@ impl FileTable {
         let projection: Vec<ColumnPath> =
             columns.iter().map(|c| ColumnPath::new(c.clone())).collect();
         let mut counters: Vec<Counter> = columns.iter().map(|_| Counter::default()).collect();
-        let pool: Arc<dyn krishiv_memory::MemoryPool> =
-            krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+        // The query's pool, as the footer reads use; a context without one
+        // (embedded tests) reads under a pool of its own.
+        let pool: Arc<dyn krishiv_memory::MemoryPool> = match self.io().memory_pool() {
+            Some(p) => Arc::clone(p),
+            None => krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default()),
+        };
         let mut left = budget;
         for file in files {
             if left == 0 {
@@ -221,7 +254,7 @@ impl FileTable {
                 &req,
                 &self.options(),
                 krishiv_memory::Reservation::new(Arc::clone(&pool), id),
-                ScanOptions::default(),
+                self.scan_options(),
             )
             .await?;
             while let Some(batch) = stream.next_batch().await? {
@@ -257,6 +290,7 @@ mod tests {
             distinct,
             singletons,
             whole,
+            failed_within_ms: 0,
         }
     }
 
@@ -296,6 +330,7 @@ mod tests {
             distinct: 50,
             singletons: 50,
             whole: false,
+            failed_within_ms: 0,
         };
         // Half the 10,000 rows are values: sqrt(5000 / 50) * 50 = 500.
         assert_eq!(estimate(&s, 10_000), Some(500));
@@ -305,6 +340,7 @@ mod tests {
             distinct: 0,
             singletons: 0,
             whole: false,
+            failed_within_ms: 0,
         };
         assert_eq!(estimate(&empty, 100), Some(0));
         assert_eq!(estimate(&sample(0, 0, 0, false), 100), None);

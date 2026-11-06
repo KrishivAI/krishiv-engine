@@ -487,22 +487,22 @@ impl QueryCatalog {
     /// and errors reading the files' footers.
     pub(crate) async fn open_files(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
         let scans = self.file_scans(plan);
-        for (key, source, table, _) in scans.clone() {
-            if self.opened(&key).is_some() {
+        for (key, source, table, _) in &scans {
+            if self.opened(key).is_some() {
                 continue;
             }
             let ReadSource::Files {
                 format,
                 paths,
                 options,
-            } = &source
+            } = source
             else {
                 continue;
             };
-            let listing = match &key {
+            let listing = match key {
                 FilesKey::Table(_) => {
                     self.files
-                        .listing_known(format, paths, options, Arc::clone(&table))
+                        .listing_known(format, paths, options, Arc::clone(table))
                         .await?
                 }
                 _ => self.files.listing(format, paths, options).await?,
@@ -510,7 +510,7 @@ impl QueryCatalog {
             let opened = open_table(
                 Arc::clone(&listing.format),
                 self.scans.clone(),
-                table,
+                Arc::clone(table),
                 listing.files.to_vec(),
                 listing.options.clone(),
             )
@@ -519,7 +519,7 @@ impl QueryCatalog {
             self.opened
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .push((key, Arc::new(opened)));
+                .push((key.clone(), Arc::new(opened)));
         }
         // Boxed: the sample's future would otherwise nest inside every
         // caller's state machine (the MCP server's overflows the layout depth).
@@ -954,9 +954,10 @@ type FileScanOf = (
     Vec<(krishiv_plan::AttrId, String)>,
 );
 
-/// The attribute ids an equality or `IN` anywhere in `plan` (subqueries
-/// included) compares with expressions that read no column: the columns
-/// whose distinct count decides the comparison's selectivity.
+/// The attribute ids an equality or `IN` in a `Filter` condition of `plan`
+/// (subquery plans included) compares with a deterministic expression that
+/// reads no column: the columns whose distinct count decides the
+/// comparison's selectivity (P2-T164 U6).
 fn compared_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
     use krishiv_plan::{Builtin, FunctionId, ResolvedExpr, ResolvedFunction};
     fn column(e: &Expr) -> Option<krishiv_plan::AttrId> {
@@ -966,30 +967,27 @@ fn compared_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<kris
             _ => None,
         }
     }
-    fn reads_column(e: &Arc<Expr>) -> bool {
-        let mut found = false;
+    /// A value the comparison is with: no column, no subquery, every call
+    /// deterministic.
+    fn is_value(e: &Arc<Expr>) -> bool {
         let mut stack = vec![Arc::clone(e)];
         while let Some(x) = stack.pop() {
-            if found {
-                break;
-            }
             match &x.node {
                 ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_))
-                | ExprNode::Subquery { .. } => found = true,
+                | ExprNode::Subquery { .. } => return false,
+                ExprNode::Resolved(ResolvedExpr::Function(f)) if !f.deterministic => return false,
                 _ => x.for_each_child(&mut |c| stack.push(Arc::clone(c))),
             }
         }
-        found
+        true
     }
-    fn in_expr(e: &Arc<Expr>, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
+    /// The compared columns of a filter's `predicate`.
+    fn in_predicate(e: &Arc<Expr>, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
         let mut stack = vec![Arc::clone(e)];
         let mut seen = std::collections::HashSet::new();
         while let Some(x) = stack.pop() {
             if !seen.insert(Arc::as_ptr(&x)) {
                 continue;
-            }
-            if let ExprNode::Subquery { plan, .. } = &x.node {
-                compared_columns(plan, out);
             }
             if let ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
                 id: FunctionId::Builtin(b),
@@ -1000,12 +998,12 @@ fn compared_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<kris
                 match (b, args.as_slice()) {
                     (Builtin::Eq | Builtin::EqNullSafe, [a, c]) => {
                         for (col, value) in [(a, c), (c, a)] {
-                            if let Some(id) = column(col).filter(|_| !reads_column(value)) {
+                            if let Some(id) = column(col).filter(|_| is_value(value)) {
                                 out.insert(id);
                             }
                         }
                     }
-                    (Builtin::In, [x, list @ ..]) if !list.iter().any(reads_column) => {
+                    (Builtin::In, [x, list @ ..]) if list.iter().all(is_value) => {
                         if let Some(id) = column(x) {
                             out.insert(id);
                         }
@@ -1016,7 +1014,20 @@ fn compared_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<kris
             x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
         }
     }
-    plan.for_each_expr(&mut |e| in_expr(e, out));
+    /// Subquery plans inside any expression of a node.
+    fn subqueries(e: &Arc<Expr>, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
+        let mut stack = vec![Arc::clone(e)];
+        while let Some(x) = stack.pop() {
+            if let ExprNode::Subquery { plan, .. } = &x.node {
+                compared_columns(plan, out);
+            }
+            x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
+    }
+    if let PlanNode::Filter { predicate, .. } = &plan.node {
+        in_predicate(predicate, out);
+    }
+    plan.for_each_expr(&mut |e| subqueries(e, out));
     plan.for_each_child(&mut |c| compared_columns(c, out));
 }
 

@@ -43,6 +43,8 @@ pub struct FileTable {
     file_rows: Vec<Option<u64>>,
     /// The names of the columns read from the directories, not the files.
     partition_columns: Vec<String>,
+    /// The session's scan settings, for the samples' reads.
+    scan_options: ScanOptions,
     /// Distinct counts estimated from samples (P2-T164 U6), by column name;
     /// shared by the clones of the table.
     sampled: Arc<Mutex<HashMap<String, Option<u64>>>>,
@@ -99,13 +101,14 @@ impl FileTable {
         let statistics = known
             .then(|| stats.map(|s| table_stats(&s, &table)))
             .flatten();
+        let scan_options = ScanOptions::from_config(config);
         let scan = FileScan::new(
             format,
             io.clone(),
             Arc::clone(&table),
             files,
             options,
-            ScanOptions::from_config(config),
+            scan_options,
             SplitConfig::from_config(config, worker_slots),
         );
         Ok(Self {
@@ -116,6 +119,7 @@ impl FileTable {
             table,
             file_rows,
             partition_columns: Vec::new(),
+            scan_options,
             sampled: Arc::default(),
         })
     }
@@ -183,6 +187,11 @@ impl FileTable {
     /// The table's columns as the analyzer resolved them.
     pub(super) fn table_schema(&self) -> &SchemaRef {
         &self.table
+    }
+
+    /// The session's scan settings.
+    pub(super) fn scan_options(&self) -> ScanOptions {
+        self.scan_options
     }
 
     /// Each file's footer row count, in listing order.

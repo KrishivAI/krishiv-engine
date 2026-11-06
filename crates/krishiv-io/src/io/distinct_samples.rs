@@ -27,25 +27,33 @@ pub struct DistinctSample {
     pub singletons: u64,
     /// Whether the sample read every row of the table.
     pub whole: bool,
+    /// When the sample did not finish: the time it was given, in
+    /// milliseconds (0 for a sample that finished). A later query with no
+    /// more time does not try again.
+    pub failed_within_ms: u64,
 }
 
-/// The key of a sample: the files it read, in order, the column and the
-/// row budget.
+/// The key of a sample: the files it read, in order, the column, the row
+/// budget and the table's file count (a file added after the sampled ones
+/// changes whether the sample was the whole table).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SampleKey {
     files: Vec<CacheKey>,
     column: String,
     budget: u64,
+    table_files: usize,
 }
 
 impl SampleKey {
-    /// The key of a sample of `column` over `files` within `budget` rows.
+    /// The key of a sample of `column` over `files` within `budget` rows, of
+    /// a table of `table_files` files.
     #[must_use]
-    pub fn new(files: Vec<CacheKey>, column: &str, budget: u64) -> Self {
+    pub fn new(files: Vec<CacheKey>, column: &str, budget: u64, table_files: usize) -> Self {
         Self {
             files,
             column: column.to_owned(),
             budget,
+            table_files,
         }
     }
 }
@@ -135,29 +143,35 @@ mod tests {
             distinct,
             singletons: 0,
             whole: true,
+            failed_within_ms: 0,
         }
     }
 
     #[test]
     fn a_sample_is_found_by_its_files_column_and_budget() {
         let c = DistinctSamples::default();
-        let key = SampleKey::new(vec![file("a", "v1")], "x", 10);
+        let key = SampleKey::new(vec![file("a", "v1")], "x", 10, 1);
         c.insert(key.clone(), sample(3));
         assert_eq!(c.get(&key), Some(sample(3)));
         assert_eq!(
-            c.get(&SampleKey::new(vec![file("a", "v2")], "x", 10)),
+            c.get(&SampleKey::new(vec![file("a", "v2")], "x", 10, 1)),
             None,
             "another version"
         );
         assert_eq!(
-            c.get(&SampleKey::new(vec![file("a", "v1")], "y", 10)),
+            c.get(&SampleKey::new(vec![file("a", "v1")], "y", 10, 1)),
             None,
             "another column"
         );
         assert_eq!(
-            c.get(&SampleKey::new(vec![file("a", "v1")], "x", 20)),
+            c.get(&SampleKey::new(vec![file("a", "v1")], "x", 20, 1)),
             None,
             "another budget"
+        );
+        assert_eq!(
+            c.get(&SampleKey::new(vec![file("a", "v1")], "x", 10, 2)),
+            None,
+            "a file added after the sampled ones"
         );
     }
 
@@ -166,13 +180,13 @@ mod tests {
         let c = DistinctSamples::new(2);
         for (i, name) in ["a", "b", "c"].into_iter().enumerate() {
             c.insert(
-                SampleKey::new(vec![file(name, "v")], "x", 1),
+                SampleKey::new(vec![file(name, "v")], "x", 1, 1),
                 sample(i as u64),
             );
         }
         assert_eq!(c.len(), 1);
         assert!(
-            c.get(&SampleKey::new(vec![file("c", "v")], "x", 1))
+            c.get(&SampleKey::new(vec![file("c", "v")], "x", 1, 1))
                 .is_some()
         );
         assert!(!c.is_empty());

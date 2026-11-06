@@ -852,6 +852,13 @@ impl IoContext {
         self
     }
 
+    /// The query's pool this context reserves metadata reads from, when it
+    /// has one ([`Self::with_memory`]).
+    #[must_use]
+    pub fn memory_pool(&self) -> Option<&Arc<dyn MemoryPool>> {
+        self.memory.as_ref().map(|h| h.pool())
+    }
+
     async fn reserve(&self, bytes: u64) -> Result<Option<Reservation>> {
         let Some(h) = &self.memory else {
             return Ok(None);

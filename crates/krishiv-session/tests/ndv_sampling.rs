@@ -113,3 +113,43 @@ fn only_compared_columns_without_a_distinct_count_are_sampled() {
     let range = filter_rows(&on, &format!("SELECT * FROM {orders} WHERE status > 'F'"));
     assert!(range > 1.0, "{range}");
 }
+
+#[test]
+fn an_in_list_on_a_sampled_column_uses_its_distinct_count() {
+    let dir = tempfile::tempdir().unwrap();
+    let on = session(dir.path(), true);
+    let orders = table(dir.path(), "orders");
+    // Two of the three statuses: 2/3 of the 20,000 rows, not the default.
+    let rows = filter_rows(
+        &on,
+        &format!("SELECT * FROM {orders} WHERE status IN ('F', 'O')"),
+    );
+    assert!((rows - 20_000.0 * 2.0 / 3.0).abs() < 140.0, "{rows}");
+}
+
+#[test]
+fn a_sample_out_of_time_keeps_the_default_and_is_tried_again_with_more_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path(), true);
+    let nation = format!(
+        "SELECT * FROM {} WHERE n_name = 'NATION7'",
+        table(dir.path(), "nation")
+    );
+    s.conf()
+        .set("krishiv.optimizer.ndvSampling.timeout", "0s")
+        .unwrap();
+    assert_eq!(
+        filter_rows(&s, &nation),
+        5.0,
+        "no time: the default selectivity"
+    );
+    assert_eq!(
+        filter_rows(&s, &nation),
+        5.0,
+        "recorded: not tried again with no more time"
+    );
+    s.conf()
+        .set("krishiv.optimizer.ndvSampling.timeout", "10s")
+        .unwrap();
+    assert_eq!(filter_rows(&s, &nation), 1.0, "more time: sampled");
+}
