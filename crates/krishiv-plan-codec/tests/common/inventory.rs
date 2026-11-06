@@ -42,6 +42,7 @@ pub(crate) fn env() -> ExprEnv {
         legacy_java_charsets: false,
         legacy_coding_error_action: false,
         legacy_time_parser: false,
+        binary_output_style: None,
     }
 }
 
@@ -1743,6 +1744,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         legacy_charset_switches(),
     ));
     out.push(("legacy_time_parser".to_owned(), legacy_time_parser()));
+    out.push(("binary_output_style".to_owned(), binary_output_style()));
     out.push(("session_zone_name".to_owned(), session_zone_name()));
     out.push(("shared_subplan".to_owned(), shared_subplan()));
     out.extend(
@@ -1814,6 +1816,7 @@ fn legacy_charset_switches() -> PhysicalPlan {
         legacy_java_charsets: true,
         legacy_coding_error_action: true,
         legacy_time_parser: false,
+        binary_output_style: None,
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
@@ -1824,6 +1827,17 @@ fn legacy_charset_switches() -> PhysicalPlan {
 fn legacy_time_parser() -> PhysicalPlan {
     let env = ExprEnv {
         legacy_time_parser: true,
+        binary_output_style: None,
+        ..env()
+    };
+    let explain = ExplainNode::new("Root", "details", vec![]);
+    PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
+}
+
+/// A plan whose environment prints binary values as hex digits.
+fn binary_output_style() -> PhysicalPlan {
+    let env = ExprEnv {
+        binary_output_style: Some(Arc::from("HEX")),
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);

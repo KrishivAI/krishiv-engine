@@ -952,3 +952,21 @@ fn engine_runtime_entries_parse_and_default() {
     assert_eq!(SESSION_MEMORY_LIMIT.scope, Scope::Session);
     assert_eq!(SYSTEM_QUERIES_CAPACITY.scope, Scope::Cluster);
 }
+
+#[test]
+fn binary_output_style_parses_and_has_no_default() {
+    let mut c = Config::new();
+    assert_eq!(c.get(&BINARY_OUTPUT_STYLE), None);
+    c.set("spark.sql.binaryOutputStyle", "hex_discrete")
+        .unwrap();
+    assert_eq!(
+        c.get(&BINARY_OUTPUT_STYLE).and_then(ConfigValue::as_str),
+        Some("HEX_DISCRETE")
+    );
+    c.set("spark.sql.binaryOutputStyle", "utf-8").unwrap();
+    assert_eq!(
+        c.get(&BINARY_OUTPUT_STYLE).and_then(ConfigValue::as_str),
+        Some("UTF-8")
+    );
+    assert!(c.set("spark.sql.binaryOutputStyle", "ROT13").is_err());
+}

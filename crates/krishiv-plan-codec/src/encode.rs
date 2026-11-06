@@ -159,6 +159,7 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         legacy_java_charsets: env.legacy_java_charsets.then_some(true),
         legacy_coding_error_action: env.legacy_coding_error_action.then_some(true),
         legacy_time_parser: env.legacy_time_parser.then_some(true),
+        binary_output_style: env.binary_output_style.as_deref().map(str::to_owned),
     }
 }
 

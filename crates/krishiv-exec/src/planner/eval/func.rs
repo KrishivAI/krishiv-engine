@@ -255,6 +255,7 @@ pub(super) fn compile(
             replace_malformed: input.env.legacy_coding_error_action,
         })
         .with_legacy_time_parser(input.env.legacy_time_parser)
+        .with_binary_style(input.env.binary_style)
         .with_user(Arc::clone(&input.env.user))
         .with_seed_salt(Arc::clone(&input.env.seed_salt));
     let args_constant = args.iter().all(|a| a.is_constant());
