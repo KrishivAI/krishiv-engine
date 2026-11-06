@@ -1996,6 +1996,7 @@ name = "krishiv-bench-runner"
 version = "0.2.0-alpha"
 dependencies = [
  "arrow-array",
+ "arrow-row",
  "arrow-schema",
  "futures",
  "krishiv-alloc",

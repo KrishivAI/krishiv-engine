@@ -74,6 +74,39 @@ fn run_sql_reports_rows() {
 }
 
 #[test]
+fn run_checked_replies_a_checksum_that_is_stable_and_tells_results_apart() {
+    let dir = data_dir();
+    let r = runner(&dir);
+    let file = |name: &str, sql: &str| {
+        let p = dir.path().join(name);
+        std::fs::write(&p, sql).unwrap();
+        encode_path(p.to_str().unwrap())
+    };
+    let a = file(
+        "a.sql",
+        "SELECT l_returnflag, sum(l_extendedprice) AS p FROM lineitem GROUP BY l_returnflag",
+    );
+    let b = file(
+        "b.sql",
+        "SELECT l_returnflag, sum(l_extendedprice) + 1 AS p FROM lineitem GROUP BY l_returnflag",
+    );
+    let reply = |f: &str| r.handle_line(&format!("RUN_CHECKED {f}")).unwrap();
+    let (first, again, other) = (reply(&a), reply(&a), reply(&b));
+    assert!(first.starts_with("OK 3 "), "{first}");
+    // `OK <rows> <seconds> <json>`
+    let json = |s: &str| s.splitn(4, ' ').nth(3).unwrap().to_owned();
+    assert!(json(&first).starts_with("{\"kinds\":[\"rows\","), "{first}");
+    assert_eq!(json(&first), json(&again));
+    assert_ne!(json(&first), json(&other));
+    // RUN keeps its reply: rows and seconds only.
+    let plain = r.handle_line(&format!("RUN {a}")).unwrap();
+    assert_eq!(plain.split_whitespace().count(), 3, "{plain}");
+    // A failing query is an ERR, as for RUN.
+    let bad = file("bad.sql", "SELECT nope FROM lineitem");
+    assert!(reply(&bad).starts_with("ERR "));
+}
+
+#[test]
 fn a_directory_of_parts_is_one_table_and_an_empty_directory_is_refused() {
     let dir = data_dir();
     let parts = dir.path().join("orders");

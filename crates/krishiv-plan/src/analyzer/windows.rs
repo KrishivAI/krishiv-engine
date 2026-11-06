@@ -498,6 +498,7 @@ impl Resolver<'_> {
                     col: output.clone(),
                     qual: super::ops::no_qual(),
                     source: None,
+                    duplicate: false,
                 }),
                 _ => return Err(unsupported("a window relation without aliases", p.origin)),
             }
@@ -1517,6 +1518,7 @@ impl Resolver<'_> {
                     col: output,
                     qual: super::ops::no_qual(),
                     source: None,
+                    duplicate: false,
                 };
                 out.push(a.clone());
                 columns.push((*k, a));
@@ -1579,6 +1581,7 @@ impl Resolver<'_> {
             col: output,
             qual: super::ops::no_qual(),
             source: None,
+            duplicate: false,
         };
         extracted.push((k, Arc::clone(e), a.clone()));
         col_expr(&a.col, e.origin)

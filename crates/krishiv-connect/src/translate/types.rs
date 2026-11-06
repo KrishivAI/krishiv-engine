@@ -84,6 +84,7 @@ fn data_type_at(proto: &Proto, depth: usize) -> Result<DataType, KrishivError> {
             )?
         }
         Kind::CalendarInterval(_) => DataType::CalendarInterval,
+        Kind::Variant(_) => DataType::Variant,
         Kind::Geometry(g) => DataType::geometry(Srid::from_i32(g.srid))?,
         Kind::Geography(g) => DataType::geography(Srid::from_i32(g.srid))?,
         Kind::String(s) => {

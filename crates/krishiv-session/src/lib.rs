@@ -44,6 +44,7 @@
 mod access;
 mod admission;
 mod cache;
+mod cancel;
 mod carrier;
 mod catalog;
 mod collation_defaults;
@@ -88,6 +89,7 @@ pub use system::register_build_features;
 
 pub mod agent;
 
+pub use cancel::CancelReason;
 pub use column::Column;
 pub use conf::RuntimeConf;
 pub use dataframe::{
