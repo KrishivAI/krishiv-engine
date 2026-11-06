@@ -424,7 +424,33 @@ impl Resolver<'_> {
     /// session's settings, with `ansi` for the arithmetic: shared with
     /// every other fold of the pass.
     pub(in crate::analyzer) fn fold(&self, e: &Arc<Expr>, ansi: bool) -> Option<Constant> {
-        let conf = fold::Conf::new(
+        fold::constant(
+            e,
+            self.fold_conf(ansi),
+            &mut self.folds.borrow_mut(),
+            self.ctx.functions.as_ref(),
+        )
+    }
+
+    /// The value of `e` as the one-row array folding evaluates
+    /// (`fold::array`), under the same settings as [`Self::fold`].
+    pub(in crate::analyzer) fn fold_array(
+        &self,
+        e: &Arc<Expr>,
+        ansi: bool,
+    ) -> Option<Result<arrow_array::ArrayRef, krishiv_common::error::KrishivError>> {
+        fold::array(
+            e,
+            self.fold_conf(ansi),
+            &mut self.folds.borrow_mut(),
+            self.ctx.functions.as_ref(),
+        )
+    }
+
+    /// The folding settings of this session, with `ansi` for the
+    /// arithmetic.
+    fn fold_conf(&self, ansi: bool) -> fold::Conf {
+        fold::Conf::new(
             ansi,
             self.ctx.conf.decimal_precision_loss,
             self.ctx.conf.map_key_dedup_last_win,
@@ -434,12 +460,6 @@ impl Resolver<'_> {
             ),
             self.ctx.profile,
             self.ctx.conf.session_zone.and_then(SessionZone::fixed),
-        );
-        fold::constant(
-            e,
-            conf,
-            &mut self.folds.borrow_mut(),
-            self.ctx.functions.as_ref(),
         )
     }
 
