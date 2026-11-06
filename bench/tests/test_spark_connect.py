@@ -60,6 +60,41 @@ def test_setup_rewrites_to_the_container_mount(monkeypatch, tmp_path):
     assert seen[0] == "/data/tpch/sf1/nation.parquet"
 
 
+def test_timed_run_fetches_the_full_result_as_arrow_and_checksums_it(monkeypatch):
+    import types
+
+    import pyarrow as pa
+
+    from krishiv_bench.adapters.base import Query
+    from krishiv_bench.result_check import same
+
+    table = pa.table({"k": [1, 2, 3], "m": [0.5, 1.5, 2.5]})
+    asked: list[str] = []
+
+    def sql(text):
+        asked.append(text)
+        return types.SimpleNamespace(toArrow=lambda: table)
+
+    e = SparkConnectEngine(container=None, container_data_root=None)
+    monkeypatch.setattr(e, "spark", types.SimpleNamespace(sql=sql))
+    n, secs = e.timed_run(Query("q", "SELECT k, m FROM t", "tpch"))
+    assert (n, asked) == (3, ["SELECT k, m FROM t"])
+    assert secs >= 0
+    first = e.result_checksum()
+    assert first is not None
+    assert e.result_checksum() is None  # taken once
+    # The same result again gives the same checksum; a different one does not.
+    e.timed_run(Query("q", "SELECT k, m FROM t", "tpch"))
+    again = e.result_checksum()
+    assert again is not None
+    assert same(first, again)
+    table = pa.table({"k": [1, 2, 3], "m": [0.5, 1.5, 2.6]})
+    e.timed_run(Query("q", "SELECT k, m FROM t", "tpch"))
+    other = e.result_checksum()
+    assert other is not None
+    assert not same(first, other)
+
+
 def test_cli_passes_the_host_server_options(monkeypatch):
     from krishiv_bench import cli
 

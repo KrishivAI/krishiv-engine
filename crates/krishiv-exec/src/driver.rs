@@ -22,7 +22,7 @@ use krishiv_memory::{MemoryError, SpillOwner, Spillable};
 use krishiv_types::batch::Batch;
 
 use crate::context::{QueryContext, TaskContext};
-use crate::error::{Result, cancelled, internal};
+use crate::error::{Result, internal};
 use crate::executor::{Executor, TaskHandle};
 use crate::metrics::{DriverStats, OperatorMetrics};
 use crate::morsel::{Barrier, Countdown};
@@ -103,7 +103,7 @@ async fn pause<F: Future>(
         .await;
         match wake {
             Wake::Done(out) => return Ok((out, since(&*run.executor, pending_since))),
-            Wake::Cancelled => return Err(cancelled()),
+            Wake::Cancelled => return Err(query.cancellation()),
             Wake::Aborted(e) => {
                 let e = KrishivError::from(e);
                 query.fail(e.clone());

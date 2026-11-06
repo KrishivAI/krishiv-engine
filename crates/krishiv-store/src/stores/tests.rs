@@ -637,7 +637,9 @@ fn per_read_options_isolate_store_ids_without_leaking_values() {
     );
     let id = |pairs: &[(&str, &str)]| effective_store_id(&base, &read_options(pairs));
     let plain = id(&[(S3_ENDPOINT, "http://a:9000")]);
-    assert!(plain.to_string().starts_with("s3://bucket#"));
+    assert!(plain.key().starts_with("s3://bucket#"));
+    // Messages name the location only.
+    assert_eq!(plain.to_string(), "s3://bucket");
     assert_eq!(plain, id(&[(S3_ENDPOINT, "http://a:9000")]));
     assert_ne!(plain, id(&[(S3_ENDPOINT, "http://b:9000")]));
     assert_eq!(
@@ -736,4 +738,59 @@ fn web_urls_and_hf_names_are_checked_when_parsed() {
             format!("{:?}", StorePolicy::UNPACED)
         );
     }
+}
+
+/// One `IoScheduler` serves every session of an engine runtime (design
+/// P2-E1 R3): a store built from a session's `fs.*` settings is registered
+/// under an id carrying a hash of all of them, so sessions that differ in any
+/// setting (here only the endpoint) never share a store or a cache entry,
+/// equal settings share one, no settings keep the bare id, and no secret is
+/// in the id.
+#[test]
+fn store_ids_carry_a_hash_of_every_fs_setting() {
+    let url = parse_object_url("s3://bucket/k/d.parquet").unwrap();
+    let none = BTreeMap::new();
+    let id = |pairs: &[(&str, &str)]| {
+        let registry = StoreRegistry::new(config(pairs));
+        registry.id_of(&url, None, &none)
+    };
+    let a = id(&[("fs.s3a.endpoint", "http://a:9000")]);
+    let b = id(&[("fs.s3a.endpoint", "http://b:9000")]);
+    assert_ne!(a, b, "an endpoint alone separates the stores");
+    assert_eq!(a, id(&[("fs.s3a.endpoint", "http://a:9000")]));
+    assert!(a.key().starts_with("s3://bucket#cfg:"), "{}", a.key());
+    assert_eq!(id(&[]), url.store_id, "no fs.* setting: the bare id");
+    assert_eq!(id(&[("spark.sql.ansi.enabled", "false")]), url.store_id);
+    // Keys match without case, as Spark's do.
+    assert_eq!(a, id(&[("FS.S3A.ENDPOINT", "http://a:9000")]));
+    // Secrets: different secrets differ, and none appears in the id.
+    let canary = "Canary-31337-secret";
+    let s1 = id(&[("fs.s3a.secret.key", canary)]);
+    let s2 = id(&[("fs.s3a.secret.key", "another")]);
+    assert_ne!(s1, s2);
+    assert!(!s1.key().contains(canary));
+    assert!(!format!("{s1} {s1:?}").contains(canary));
+    // Messages show the location only: no hash, no fingerprint.
+    assert_eq!(a.to_string(), "s3://bucket");
+    // One scheduler serves many principals: equal settings, different
+    // principals, different ids (a registration never replaces another
+    // principal's, whose block-cache scope differs); the same principal shares.
+    let as_principal = |who: &str| {
+        StoreRegistry::new(config(&[("fs.s3a.endpoint", "http://a:9000")]))
+            .with_cache_scope(CacheScope::Principal(who.to_owned()))
+            .id_of(&url, None, &none)
+    };
+    assert_ne!(as_principal("alice"), as_principal("bob"));
+    assert_eq!(as_principal("alice"), as_principal("alice"));
+    assert!(as_principal("alice").key().contains("#p:"));
+    assert!(!as_principal("alice").key().contains("alice"));
+    assert_eq!(as_principal("alice").to_string(), "s3://bucket");
+    // Per-read options still add their own hash.
+    let mut options = BTreeMap::new();
+    options.insert(
+        "fs.s3a.endpoint".to_owned(),
+        OptionValue::Plain("http://c:9000".to_owned()),
+    );
+    let registry = StoreRegistry::new(config(&[("fs.s3a.endpoint", "http://a:9000")]));
+    assert_ne!(registry.id_of(&url, None, &options), a);
 }
