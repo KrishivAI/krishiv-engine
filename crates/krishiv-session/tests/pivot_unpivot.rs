@@ -272,29 +272,28 @@ fn skip_reason(file: &str, query: &str) -> Option<&'static str> {
         return Some("inputs are registered instead");
     }
     if file == "pivot.sql.out" {
-        // Several pivot columns stand for struct values, which the engine
-        // cannot value yet.
+        // The executor has no `min`/`max` over arrays and no comparison of
+        // structs holding arrays yet.
         for marker in [
-            "FOR (course, year) IN (('dotNET', 2012), ('Java', 2013))",
-            "FOR (course, s) IN (('dotNET', 2) as c1, ('Java', 1) as c2)",
+            "min(a)\n  FOR course",
             "FOR (y, course) IN ((2012, 'dotNET'), (2013, 'Java'))",
             "FOR (course, a) IN (('dotNET', array(1, 1)), ('Java', array(2, 2)))",
+        ] {
+            if query.contains(marker) {
+                return Some("needs array aggregates and comparisons");
+            }
+        }
+        // `yearsWithComplexTypes` is not registered here; the golden ratchet
+        // (`krishiv-testkit`) runs these statements over it.
+        for marker in [
+            "FOR a IN (array(1, 1), array(2, 2))",
+            "FOR s IN ((1, 'a'), (2, 'b'))",
             "FOR (course, s) IN (('dotNET', (1, 'a')), ('Java', (2, 'b')))",
+            "FOR m IN (map('1', 1), map('2', 2))",
             "FOR (course, m) IN (('dotNET', map('1', 1)), ('Java', map('2', 2)))",
         ] {
             if query.contains(marker) {
-                return Some("multi-column PIVOT needs struct values");
-            }
-        }
-        // Array, struct and map columns: the engine has no complex types.
-        for marker in [
-            "min(a)\n  FOR course",
-            "FOR a IN (array(1, 1), array(2, 2))",
-            "FOR s IN ((1, 'a'), (2, 'b'))",
-            "FOR m IN (map('1', 1), map('2', 2))",
-        ] {
-            if query.contains(marker) {
-                return Some("needs a complex-typed column");
+                return Some("reads yearsWithComplexTypes");
             }
         }
     }

@@ -411,8 +411,11 @@ fn pivot_without_pivot_columns_is_unsupported() {
     );
 }
 
+/// Several pivot columns are one struct column; each value names its
+/// output as Spark's cast of the struct to `STRING` prints it (Spark 4.2.0
+/// `pivot.sql` case 18: `{dotNET, 2012}`).
 #[test]
-fn pivot_on_several_columns_is_unsupported() {
+fn pivot_on_several_columns_compares_them_as_a_struct() {
     let r = run(pivot(
         &["course", "year"],
         vec![
@@ -421,12 +424,10 @@ fn pivot_on_several_columns_is_unsupported() {
         ],
         vec![sum_earnings()],
     ));
-    assert_eq!(
-        summary(&r),
-        serde_json::json!([
-            "KRISHIV_UNSUPPORTED_FEATURE",
-            {"feature": "multi-column PIVOT"},
-        ])
+    let names: Vec<String> = r.unwrap().output.iter().map(|c| c.name.clone()).collect();
+    assert!(
+        names.ends_with(&["{dotNET, 2012}".to_owned(), "{Java, 2013}".to_owned()]),
+        "{names:?}"
     );
 }
 
@@ -461,7 +462,7 @@ fn pivot_on_several_columns_checks_values_are_literal_first() {
         summary(&r),
         serde_json::json!([
             "NON_LITERAL_PIVOT_VALUES",
-            {"expression": "\"earnings\""},
+            {"expression": "\"named_struct(earnings, earnings, col2, 2012)\""},
         ])
     );
 }
@@ -775,8 +776,10 @@ fn pivot_names_a_non_literal_fractional_mismatch_as_written() {
     );
 }
 
+/// Literal pivot columns (only the IR can build them) are a struct of
+/// constants like any other.
 #[test]
-fn pivot_on_several_literal_columns_is_unsupported() {
+fn pivot_on_several_literal_columns_resolves() {
     let plan = LogicalPlan::new(PlanNode::Pivot {
         input: Arc::new(LogicalPlan::table(["sales"])),
         pivot_columns: vec![Arc::new(int(1)), Arc::new(int(2))],
@@ -786,13 +789,7 @@ fn pivot_on_several_literal_columns_is_unsupported() {
         }],
         aggregates: vec![Arc::new(sum_earnings())],
     });
-    assert_eq!(
-        summary(&run(plan)),
-        serde_json::json!([
-            "KRISHIV_UNSUPPORTED_FEATURE",
-            {"feature": "multi-column PIVOT"},
-        ])
-    );
+    assert!(run(plan).is_ok());
 }
 
 #[test]
