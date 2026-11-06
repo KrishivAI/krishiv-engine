@@ -134,6 +134,26 @@ fn subqueries_over_grouping_keys_group_by_their_existence_column() -> R {
     let q = "select k, exists (select 1 from b where b.k = a.k and rand(0) > 0.5), count(*) \
              from a group by k";
     assert!(run(&s, q).is_err(), "{q}");
+    // An uncorrelated EXISTS is computed once, so a `rand` inside it cannot
+    // split a group, even beside an IN that is joined.
+    let q = "select k, exists (select 1 from b where rand(0) < 2), k in (select k from b), \
+             count(*) from a group by k";
+    assert_eq!(
+        run(&s, q)?,
+        rows(&["1|true|true|2", "2|true|false|1", "NULL|true|false|1"]),
+        "{q}"
+    );
+    // The refusal says what is refused.
+    let err = run(
+        &s,
+        "select k, exists (select 1 from b where b.k = a.k and rand(0) > 0.5), \
+                       count(*) from a group by k",
+    )
+    .expect_err("refused");
+    assert!(
+        err.to_string().contains("nondeterministic subquery"),
+        "{err}"
+    );
     let q = "select k, rand(0) < 2 and exists (select 1 from b where b.k = a.k), count(*) \
              from a group by k";
     assert_eq!(

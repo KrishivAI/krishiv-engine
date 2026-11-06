@@ -620,6 +620,12 @@ pub(super) fn check_grouped_reads(
             continue;
         }
         if let ExprNode::Subquery { kind, plan } = &x.node {
+            // An uncorrelated scalar or EXISTS stays an expression computed
+            // once ([`Analyzer::existential`] leaves it out): it cannot
+            // split a group, even with `rand`.
+            if !matches!(kind, SubqueryKind::In(_)) && subquery_reads(&x).is_empty() {
+                continue;
+            }
             // The existence join runs below the aggregate, once per input
             // row: a nondeterministic value or subquery is not fixed within
             // a group even when it reads only grouped columns, and would
