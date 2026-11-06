@@ -18,6 +18,11 @@
 //! - `…_rows`: the same queries on the row-layout tables
 //!   (`krishiv.exec.agg.rowLayout`, P2-T159).
 //!
+//! - `aggregate/{count,udaf_count}_{64,262144}_keys`: `count(v)` against a
+//!   native Rust aggregate UDF computing the same (ADR 0045): the cost of the
+//!   UDF boundary (guarded calls, the engine's null and filter handling, the
+//!   state checks). The ADR's target is within 1.5x of `count`.
+//!
 //! `AGG_BENCH_THREADS=N` runs them (but the spill one) on `N` worker
 //! threads in the shipped (non-deterministic) mode instead: thread-local
 //! tables that abandon, and the parallel final phase.
@@ -39,7 +44,8 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use futures::StreamExt;
 use krishiv_exec::aggregate::{
-    AggregateExpr, AggregateFunction, AggregateNode, AggregateOutput, AggregateSpec, HashAggregate,
+    AggInput, AggregateExpr, AggregateFunction, AggregateNode, AggregateOutput, AggregateSpec,
+    HashAggregate, UdafCall, UdafEnv,
 };
 use krishiv_exec::testing::{Batches, Scan};
 use krishiv_exec::{
@@ -99,6 +105,155 @@ fn decimal_plan(batches: &[Batch], f: &AggregateFunction) -> Arc<dyn ExecNode> {
         require_unit_weights: false,
         legacy_statistical: false,
         udafs: None,
+    };
+    let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
+    AggregateNode::new(scan, HashAggregate::new(spec).expect("spec"))
+}
+
+/// `ucount(v)`: the non-NULL rows of a group, as `count(v)`.
+#[derive(Debug)]
+struct UCount(krishiv_udf_sdk::Signature);
+
+impl krishiv_udf_sdk::AggregateUdf for UCount {
+    fn name(&self) -> &str {
+        "ucount"
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn signature(&self) -> &krishiv_udf_sdk::Signature {
+        &self.0
+    }
+
+    fn return_field(
+        &self,
+        _: &[krishiv_udf_sdk::ArgField],
+    ) -> Result<krishiv_udf_sdk::ReturnField, krishiv_udf_sdk::UdfError> {
+        Ok(krishiv_udf_sdk::ReturnField {
+            data_type: krishiv_types::DataType::Long,
+            nullable: false,
+        })
+    }
+
+    fn state_fields(
+        &self,
+        _: &[krishiv_udf_sdk::ArgField],
+    ) -> Result<Vec<krishiv_udf_sdk::StateField>, krishiv_udf_sdk::UdfError> {
+        Ok(vec![krishiv_udf_sdk::StateField {
+            name: "count".to_owned(),
+            data_type: krishiv_types::DataType::Long,
+            nullable: false,
+        }])
+    }
+
+    fn accumulator(
+        &self,
+        _: &[krishiv_udf_sdk::ArgField],
+        _: &krishiv_udf_sdk::InvokeContext,
+    ) -> Result<Box<dyn krishiv_udf_sdk::GroupsAccumulator>, krishiv_udf_sdk::UdfError> {
+        Ok(Box::new(Counts(Vec::new())))
+    }
+}
+
+#[derive(Debug)]
+struct Counts(Vec<i64>);
+
+impl krishiv_udf_sdk::GroupsAccumulator for Counts {
+    fn resize(&mut self, groups: usize) {
+        self.0.resize(groups, 0);
+    }
+
+    fn update(
+        &mut self,
+        _: &[krishiv_udf_sdk::UdfArg<'_>],
+        groups: &[u32],
+    ) -> Result<(), krishiv_udf_sdk::UdfError> {
+        for &g in groups {
+            self.0[g as usize] += 1;
+        }
+        Ok(())
+    }
+
+    fn merge(
+        &mut self,
+        states: &[ArrayRef],
+        groups: &[u32],
+    ) -> Result<(), krishiv_udf_sdk::UdfError> {
+        let c = states[0]
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .expect("counts");
+        for (i, &g) in groups.iter().enumerate() {
+            self.0[g as usize] += c.value(i);
+        }
+        Ok(())
+    }
+
+    fn state(&self, groups: &[u32]) -> Result<Vec<ArrayRef>, krishiv_udf_sdk::UdfError> {
+        Ok(vec![self.evaluate(groups)?])
+    }
+
+    fn evaluate(&self, groups: &[u32]) -> Result<ArrayRef, krishiv_udf_sdk::UdfError> {
+        Ok(Arc::new(Int64Array::from_iter_values(
+            groups.iter().map(|&g| self.0[g as usize]),
+        )))
+    }
+
+    fn size(&self) -> usize {
+        self.0.capacity() * size_of::<i64>()
+    }
+}
+
+/// `select k, count(v) group by k`, or the same through [`UCount`].
+fn count_plan(batches: &[Batch], udaf: bool) -> Arc<dyn ExecNode> {
+    let s = schema();
+    let (aggregate, udafs) = if udaf {
+        let library = krishiv_udf_sdk::UdfLibrary::new();
+        library
+            .register_aggregate(Arc::new(UCount(krishiv_udf_sdk::Signature::Exact(vec![
+                krishiv_udf_sdk::UdfInputType::Exact(krishiv_types::DataType::Long),
+            ]))))
+            .expect("register");
+        let call = UdafCall {
+            name: "ucount".to_owned(),
+            version: 1,
+            args: vec![Field::new("arg0", DataType::Int64, false)],
+            result: krishiv_types::DataType::Long,
+            nullable: false,
+            state: vec![Field::new("count", DataType::Int64, false)],
+        };
+        let expr = AggregateExpr {
+            function: AggregateFunction::Udf(Box::new(call)),
+            args: vec![1],
+            input: AggInput::Raw,
+            arg_type: DataType::Null,
+            name: "c".to_owned(),
+            mask: None,
+            element: None,
+        };
+        let env = UdafEnv {
+            library: Arc::new(library),
+            time_zone: None,
+        };
+        (expr, Some(env))
+    } else {
+        (
+            AggregateExpr::new(AggregateFunction::Count, 1, DataType::Int64, "c"),
+            None,
+        )
+    };
+    let spec = AggregateSpec {
+        input: Arc::clone(&s),
+        group_by: vec![0],
+        aggregates: vec![aggregate],
+        output: AggregateOutput::Final,
+        ansi: true,
+        spill: None,
+        require_unit_weights: false,
+        legacy_statistical: false,
+        udafs,
     };
     let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
     AggregateNode::new(scan, HashAggregate::new(spec).expect("spec"))
@@ -274,6 +429,23 @@ fn bench(c: &mut Criterion) {
         for (suffix, mode) in modes {
             g.bench_function(format!("grouped_sum_{keys}_keys{suffix}"), |b| {
                 b.iter(|| black_box(run(&runner, &caller, plan(&batches, None), 1 << 30, mode)));
+            });
+        }
+    }
+    for keys in [64u64, 1 << 18] {
+        let batches = input(keys);
+        for (name, udaf) in [("count", false), ("udaf_count", true)] {
+            let mode = modes[0].1;
+            g.bench_function(format!("{name}_{keys}_keys"), |b| {
+                b.iter(|| {
+                    black_box(run(
+                        &runner,
+                        &caller,
+                        count_plan(&batches, udaf),
+                        1 << 30,
+                        mode,
+                    ))
+                });
             });
         }
     }

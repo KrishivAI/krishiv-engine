@@ -1,10 +1,11 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
-# Native Rust scalar UDFs
+# Native Rust UDFs
 
 An application that embeds Krishiv can add its own scalar functions, written in Rust and compiled into the
 same binary. A UDF implements `ScalarUdf` from `krishiv-udf-sdk` (re-exported by `krishiv` and
 `krishiv-session`), is registered on a session, and is then called from SQL and from the DataFrame API like
-a built-in. Aggregate UDFs are not available yet.
+a built-in. Aggregate UDFs implement `AggregateUdf` and are registered with `register_udaf` (see
+[Aggregate UDFs](#aggregate-udfs)).
 
 ## A complete example
 
@@ -105,6 +106,51 @@ A `UdfError` returned from `invoke`, a result of the wrong type, length or nulla
 trait method all fail the query with Spark's `FAILED_EXECUTE_UDF` (SQLSTATE 39000), naming the UDF. A
 `UdfError` from `return_field` fails the call at analysis. Don't panic: the engine catches it, but only
 after the worker thread has unwound.
+
+## Aggregate UDFs
+
+An aggregate UDF declares its partial state as Arrow columns and holds the state of every group of one
+hash-aggregate table in a `GroupsAccumulator`, over dense group indices:
+
+```rust
+#[derive(Debug)]
+struct Total;
+
+impl AggregateUdf for Total {
+    fn name(&self) -> &str { "total" }
+    fn version(&self) -> u32 { 1 }
+    fn signature(&self) -> &Signature { /* one BIGINT, as for a scalar UDF */ }
+    fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+        Ok(ReturnField { data_type: DataType::Long, nullable: true })
+    }
+    fn state_fields(&self, _: &[ArgField]) -> Result<Vec<StateField>, UdfError> {
+        Ok(vec![StateField { name: "sum".into(), data_type: DataType::Long, nullable: true }])
+    }
+    fn accumulator(&self, _: &[ArgField], _: &InvokeContext)
+        -> Result<Box<dyn GroupsAccumulator>, UdfError> {
+        Ok(Box::new(Sums(Vec::new())))
+    }
+}
+
+session.register_udaf(Total)?;
+session.sql("SELECT k, total(v) FROM t GROUP BY k").await?;
+```
+
+- **Groups.** `resize(n)` creates empty groups; `update(args, groups)` folds row `i` into `groups[i]`;
+  `merge(states, groups)` folds partial states (the columns `state` returned, possibly from another worker or a
+  spill file); `state(groups)` and `evaluate(groups)` return one row per group and must not change anything.
+  An empty group evaluates to the aggregate of no rows.
+- **What the engine does.** `FILTER (WHERE ...)` rows and, with the default `NullHandling::Strict`, rows with a
+  NULL argument never reach `update`. `DISTINCT` is allowed unless `properties()` sets `distinct = false`, which
+  makes `f(DISTINCT x)` `INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX`. Results and states are checked
+  against the declared types and nullability (a break is `FAILED_EXECUTE_UDF`); a `STRING` result or state is
+  returned on `Utf8`.
+- **Memory.** `size()` is read after every fold and reserved from the query's memory; a table that does not fit
+  spills its states as for a built-in aggregate.
+- **Plans.** Plans carry the name, version, argument and state columns. A worker whose UDF of that version
+  declares another state refuses the plan (`FAILED_EXECUTE_UDF`); one without it, `KRISHIV_UDF_NOT_AVAILABLE`.
+- **Not yet.** Aggregate UDFs over a window (`OVER (...)`) are `KRISHIV_UNSUPPORTED_FEATURE`. `retract` (rows
+  of weight −1, incremental maintenance only) defaults to unsupported.
 
 ## Stability
 

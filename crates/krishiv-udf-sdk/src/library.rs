@@ -273,7 +273,7 @@ mod tests {
         assert!(lib.get_versioned("nosuch", 2).is_none());
         assert_eq!(
             format!("{lib:?}"),
-            "UdfLibrary { udfs: [\"my_identity@2\"], epoch: 2 }"
+            "UdfLibrary { udfs: [\"my_identity@2\"], aggregates: [], epoch: 2 }"
         );
         assert_eq!(format!("{}", UdfLibrary::default().version()), "0");
     }
