@@ -71,9 +71,14 @@ class KrishivEngine(Engine):
         conf: list[tuple[str, str]] | None = None,
         launcher: list[str] | None = None,
         tables: dict[str, list[str]] | None = None,
+        checksum_in_run: bool = False,
     ):
         self.threads = threads or os.cpu_count() or 1
         self.memory_limit = memory_limit
+        # Time with ``RUN_CHECKED``: the runner also returns the result's checksum, taken after the seconds, so the
+        # timed run itself is verified (see ``timed_run``). Off by default: it holds the result a little longer.
+        self.checksum_in_run = checksum_in_run
+        self._run_checksum: dict | None = None
         self.binary = runner_binary(binary)
         self.conf = list(conf or [])
         # Tables read from URLs (``--table NAME=URL``: s3://, https://, hf://); when given, the dataset
@@ -259,17 +264,38 @@ class KrishivEngine(Engine):
         self._start()
 
     def timed_run(self, query: Query) -> tuple[int, float]:
-        """Executes to completion; returns the row count and the runner-measured seconds."""
+        """Executes to completion; returns the row count and the runner-measured seconds.
+
+        With ``checksum_in_run`` the runner's ``RUN_CHECKED`` hands back the checksum of the very result it timed
+        (computed after the seconds are taken). A runner that predates it answers ``bad command``; the engine then
+        falls back to ``RUN`` and the checksum of an untimed ``DUMP`` of the query (``result_checksum``).
+        """
+        self._run_checksum = None
+        if self.checksum_in_run:
+            try:
+                rows, secs, detail = self._command(f"RUN_CHECKED {_enc(self._sql_file(query))}").split(" ", 2)
+            except RunnerError as e:
+                if not str(e).startswith("bad command"):
+                    raise
+                self.checksum_in_run = False  # an older runner
+            else:
+                self._run_checksum = json.loads(detail)
+                self._pending = None
+                return int(rows), float(secs)
         rows, secs = self._command(f"RUN {_enc(self._sql_file(query))}").split()
         self._pending = query
         return int(rows), float(secs)
 
     def result_checksum(self) -> dict | None:
-        """The runner hands no rows back from ``RUN``: the checksum comes from an untimed ``DUMP`` of the query."""
+        """The checksum of the last timed run: the runner's own (``RUN_CHECKED``) or, from a runner whose ``RUN``
+        hands no rows back, that of an untimed ``DUMP`` of the query (marked ``"source": "dump"``)."""
         import pyarrow.parquet as pq
 
         from ..result_check import checksum
 
+        if self._run_checksum is not None:
+            done, self._run_checksum = self._run_checksum, None
+            return done
         query, self._pending = self._pending, None
         if query is None:
             return None
@@ -280,7 +306,7 @@ class KrishivEngine(Engine):
             parts = sorted(out.glob("*.parquet")) if out.is_dir() else [out]
             import pyarrow as pa
 
-            return checksum(pa.concat_tables([pq.read_table(p) for p in parts]))
+            return {**checksum(pa.concat_tables([pq.read_table(p) for p in parts])), "source": "dump"}
         finally:
             shutil.rmtree(out, ignore_errors=True)
 

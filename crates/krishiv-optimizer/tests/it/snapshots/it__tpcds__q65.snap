@@ -8,9 +8,9 @@ Limit 100
       +- Join Inner, (i_item_sk#29 == ss_item_sk#106)
          :- Scan spark_catalog.default.item [i_item_sk#29, i_item_desc#33, i_current_price#34, i_wholesale_cost#35, i_brand#37]
          +- Project [s_store_name#5, ss_item_sk#106, revenue#155]
-            +- Join Inner, (s_store_sk#0 == ss_store_sk#111)
+            +- Join Inner, (s_store_sk#0 == ss_store_sk#58)
                :- Scan spark_catalog.default.store [s_store_sk#0, s_store_name#5]
-               +- Project [ss_store_sk#111, ss_item_sk#106, revenue#155]
+               +- Project [ss_store_sk#58, ss_item_sk#106, revenue#155]
                   +- Join Inner, ((ss_store_sk#58 == ss_store_sk#111) and (CAST(revenue#155 AS DECIMAL(23,7)) <= (0.1 * ave#103)))
                      :- Aggregate [ss_store_sk#58], [ss_store_sk#58, avg(revenue#102) AS ave#103]
                      :  +- Aggregate [ss_store_sk#58, ss_item_sk#53], [ss_store_sk#58, sum(ss_sales_price#64) AS revenue#102]

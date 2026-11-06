@@ -584,9 +584,17 @@ impl Resolver<'_> {
                     let mut shown_kids = Vec::with_capacity(n);
                     for (arg, k) in f.args.iter().zip(&kids[..n]) {
                         if let ExprNode::Alias { name, .. } = &arg.node {
+                            // The bound child is the alias itself: show what it names.
+                            let shown = k.shown();
+                            let inner = match &shown.node {
+                                ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {
+                                    Arc::clone(expr)
+                                }
+                                _ => shown,
+                            };
                             shown_kids.push(Arc::new(
                                 Expr::new(ExprNode::Alias {
-                                    expr: k.shown(),
+                                    expr: inner,
                                     name: name.clone(),
                                 })
                                 .with_origin(arg.origin),
@@ -1558,7 +1566,9 @@ impl Resolver<'_> {
             return e;
         };
         let [value] = &values[..] else { return e };
-        if !matches!(plan.node, crate::PlanNode::Aggregate { .. })
+        // Spark's legacy rule (`subquery_legacy.rs`) answers it otherwise.
+        if self.ctx.conf.legacy_exists_in_count
+            || !matches!(plan.node, crate::PlanNode::Aggregate { .. })
             || !crate::analyzer::subquery::one_row_aggregate(plan)
         {
             return e;

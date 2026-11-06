@@ -143,6 +143,7 @@ impl Resolver<'_> {
                     col: col.clone(),
                     qual: super::ops::no_qual(),
                     source: None,
+                    duplicate: false,
                 });
                 let below = self.projection(origin, &c, items, out);
                 (below, col_expr(&col, Origin::UNKNOWN))
@@ -160,6 +161,7 @@ impl Resolver<'_> {
             col: col.clone(),
             qual: Arc::clone(&qual),
             source: None,
+            duplicate: false,
         }));
         let node = PlanNode::Generate {
             input: Arc::clone(&below.plan),
@@ -603,6 +605,7 @@ impl Resolver<'_> {
                 col: col.clone(),
                 qual: Arc::clone(&qual),
                 source: None,
+                duplicate: false,
             })
             .collect();
         let mut out = carried;

@@ -340,8 +340,8 @@ def test_duckdb_failure_in_timed_run_fails_only_that_query(engine: KrishivEngine
 def test_zero_timeout_disables_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     seen = {}
 
-    def fake_one(q, krishiv, duck, reps, timeout_s, duck_q=None):
-        del duck_q
+    def fake_one(q, krishiv, duck, reps, timeout_s, duck_q=None, *cache_args):
+        del duck_q, cache_args
         seen["krishiv"] = krishiv.timeout_s
         seen["arg"] = timeout_s
         return {"status": "failed", "reason": "stub"}
@@ -422,8 +422,8 @@ def test_run_abba_pairs_duckdb_texts_and_spark_null_order(tmp_path: Path, monkey
 
     seen: dict = {}
 
-    def fake_one(q, krishiv, duck, reps, timeout_s, duck_q=None):
-        del krishiv, reps, timeout_s
+    def fake_one(q, krishiv, duck, reps, timeout_s, duck_q=None, *cache_args):
+        del krishiv, reps, timeout_s, cache_args
         seen[q.id] = (q.sql, duck_q.sql if duck_q else None, duck.null_order)
         return {"status": "failed", "reason": "stub"}
 

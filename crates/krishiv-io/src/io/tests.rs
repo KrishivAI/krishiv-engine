@@ -616,7 +616,10 @@ fn the_fault_store_delegates_and_flags_unscheduled_requests() {
         assert!(format!("{:?}", s.io).contains("IoContext"));
         let _ = s.io.config();
         let _ = s.io.scheduler();
-        let resolved = s.io.secrets().resolve("a", "b").now_or_never();
+        let resolved =
+            s.io.secrets()
+                .resolve(s.io.principal(), "a", "b")
+                .now_or_never();
         assert!(resolved.is_some_and(|r| r.is_err()));
     });
 }
@@ -717,7 +720,12 @@ fn secrets_are_resolved_once_per_context() {
     #[derive(Debug, Default)]
     struct Counting(AtomicUsize);
     impl SecretResolver for Counting {
-        fn resolve<'a>(&'a self, _s: &'a str, key: &'a str) -> BoxFuture<'a, Result<SecretString>> {
+        fn resolve<'a>(
+            &'a self,
+            _p: &'a krishiv_common::Principal,
+            _s: &'a str,
+            key: &'a str,
+        ) -> BoxFuture<'a, Result<SecretString>> {
             self.0.fetch_add(1, Ordering::Relaxed);
             Box::pin(async move { Ok(SecretString::new(format!("v-{key}"))) })
         }
@@ -730,16 +738,22 @@ fn secrets_are_resolved_once_per_context() {
         for _ in 0..3 {
             assert_eq!(
                 io.secrets()
-                    .resolve("sc", "k")
+                    .resolve(io.principal(), "sc", "k")
                     .await
                     .unwrap()
                     .expose_secret(),
                 "v-k"
             );
         }
-        io.secrets().resolve("sc", "other").await.unwrap();
+        io.secrets()
+            .resolve(io.principal(), "sc", "other")
+            .await
+            .unwrap();
+        // Another principal never gets a value cached for the first.
+        let other = krishiv_common::Principal::new("other", krishiv_common::PrincipalKind::User);
+        io.secrets().resolve(&other, "sc", "k").await.unwrap();
     });
-    assert_eq!(counting.0.load(Ordering::Relaxed), 2);
+    assert_eq!(counting.0.load(Ordering::Relaxed), 3);
 }
 
 #[test]
@@ -837,4 +851,107 @@ fn if_unmodified_since_allows_the_rest_of_the_microsecond_or_of_a_whole_second()
     // A whole-second token is an HTTP date: the store may hold a later fraction of that second.
     assert_eq!(ns(unmodified_since_limit(2_000_000)), 3_000_000_000);
     assert!(unmodified_since_limit(i64::MAX).is_none());
+}
+
+/// Metadata too large to cache is served to later readers while one still holds it, so a scan of
+/// one large file decodes its footer once rather than once per split (SF1000 `lineitem`, kB1
+/// 2026-11-05); once nobody holds it, or after an invalidation, it is read again.
+#[test]
+fn metadata_too_large_to_cache_is_shared_while_held() {
+    let f = |p: &str| FileRef {
+        store: StoreId::new("s"),
+        path: Path::from(p),
+        size: 1,
+        version: VersionToken::Immutable,
+        modified_micros: None,
+    };
+    let none = crate::format::MetadataNeeds::default();
+    let pages = crate::format::MetadataNeeds {
+        page_index: true,
+        bloom: false,
+    };
+    let c = MetadataCache::new(100);
+    let key = CacheKey::new("m", &f("big"), None);
+    let big: Arc<dyn crate::format::FileMetadata> = Arc::new(Meta(1_000, none));
+    c.insert(key.clone(), Arc::clone(&big));
+    // Not cached: no entry and no bytes.
+    assert_eq!((c.len(), c.bytes()), (0, 0));
+    // Held by a reader: served, the same decoded metadata.
+    let got = c.get(&key, none).unwrap();
+    assert!(Arc::ptr_eq(&got, &big));
+    // Needs it was not loaded with: reported as for a cached entry.
+    assert!(matches!(c.get(&key, pages), Err(Some(n)) if n == none));
+    drop(got);
+    // An invalidation drops it even while held.
+    c.invalidate_path(&StoreId::new("s"), &Path::from("big"));
+    assert!(matches!(c.get(&key, none), Err(None)));
+    c.insert(key.clone(), Arc::clone(&big));
+    assert!(c.get(&key, none).is_ok());
+    c.clear();
+    assert!(matches!(c.get(&key, none), Err(None)));
+    // Nobody holds it: read again.
+    c.insert(key.clone(), Arc::clone(&big));
+    drop(big);
+    assert!(matches!(c.get(&key, none), Err(None)));
+}
+
+/// Review of the held entries (2026-11-05): a cached entry loaded with fewer needs does not mask
+/// a held one with more; a refused pool holds; a disabled cache holds nothing; a read from an
+/// older generation is not held; a held entry that later fits is cached.
+#[test]
+fn held_metadata_edges() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+
+    let f = |p: &str| FileRef {
+        store: StoreId::new("s"),
+        path: Path::from(p),
+        size: 1,
+        version: VersionToken::Immutable,
+        modified_micros: None,
+    };
+    let none = crate::format::MetadataNeeds::default();
+    let pages = crate::format::MetadataNeeds {
+        page_index: true,
+        bloom: false,
+    };
+    let key = CacheKey::new("m", &f("k"), None);
+    // The footer fits; with its page index it does not.
+    let c = MetadataCache::new(100);
+    c.insert(key.clone(), Arc::new(Meta(50, none)));
+    let full: Arc<dyn crate::format::FileMetadata> = Arc::new(Meta(500, pages));
+    c.insert(key.clone(), Arc::clone(&full));
+    assert!(Arc::ptr_eq(&c.get(&key, pages).unwrap(), &full));
+    assert!(Arc::ptr_eq(&c.get(&key, none).unwrap(), &full));
+    // A held entry that lacks needs reports what it was loaded with.
+    let c = MetadataCache::new(100);
+    let footer: Arc<dyn crate::format::FileMetadata> = Arc::new(Meta(500, none));
+    c.insert(key.clone(), Arc::clone(&footer));
+    assert!(matches!(c.get(&key, pages), Err(Some(n)) if n == none));
+    // Later fitting metadata is cached and the held reference dropped.
+    c.insert(key.clone(), Arc::new(Meta(10, pages)));
+    assert_eq!(c.len(), 1);
+    drop(footer);
+    assert!(c.get(&key, pages).is_ok());
+    // Limit 0: disabled, nothing held.
+    let c = MetadataCache::new(0);
+    let big: Arc<dyn crate::format::FileMetadata> = Arc::new(Meta(500, none));
+    c.insert(key.clone(), Arc::clone(&big));
+    assert!(matches!(c.get(&key, none), Err(None)));
+    // A read begun before an invalidation is not held.
+    let c = MetadataCache::new(100);
+    let generation = c.generation();
+    c.clear();
+    c.insert_read_in(generation, key.clone(), Arc::clone(&big));
+    assert!(matches!(c.get(&key, none), Err(None)));
+    // The cache's pool refuses the bytes: held, not cached.
+    let small: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
+        limit: Some(1 << 20),
+        ..MemoryConfig::default()
+    });
+    let c = MetadataCache::new(10 << 20);
+    c.attach_pool(&small);
+    let refused: Arc<dyn crate::format::FileMetadata> = Arc::new(Meta(2 << 20, none));
+    c.insert(key.clone(), Arc::clone(&refused));
+    assert!(c.is_empty());
+    assert!(Arc::ptr_eq(&c.get(&key, none).unwrap(), &refused));
 }

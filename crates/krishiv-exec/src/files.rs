@@ -1284,7 +1284,22 @@ mod tests {
             ("/a/b.parquet", "file", "a/b.parquet", "file:/a/b.parquet"),
         ] {
             let at = paths.locate(input).unwrap();
-            assert_eq!(at.store, StoreId::new(store), "{input}");
+            // A store built from `fs.*` settings is registered as
+            // `<store>#cfg:<hash>`; its display is the location.
+            assert_eq!(
+                at.store.to_string(),
+                StoreId::new(store).to_string(),
+                "{input}"
+            );
+            if store == "file" {
+                assert_eq!(at.store, StoreId::new(store), "{input}");
+            } else {
+                assert!(
+                    at.store.key().contains("#cfg:"),
+                    "{input}: {}",
+                    at.store.key()
+                );
+            }
             assert_eq!(at.path.as_ref(), path, "{input}");
             assert_eq!(at.display, display, "{input}");
             assert_eq!(paths.locate(&at.display).unwrap(), at, "{input}");

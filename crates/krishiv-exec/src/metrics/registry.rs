@@ -249,6 +249,16 @@ pub const CATALOGUE: &[MetricDef] = &[
         source: MetricSource::QueryFold,
     },
     MetricDef {
+        name: "krishiv.query.cancel.latency",
+        kind: MetricKind::Histogram,
+        unit: "s",
+        labels: &[],
+        description: "Time from a query's cancellation (by the user, a timeout, the engine or \
+                      a closing session) to the end of its result stream, in seconds.",
+        since: "0.2.0",
+        source: MetricSource::QueryFold,
+    },
+    MetricDef {
         name: "krishiv.query.active",
         kind: MetricKind::Gauge,
         unit: "{query}",
@@ -493,7 +503,8 @@ impl Status {
     }
 
     /// Classifies the query's error: none is success, `OPERATION_CANCELED`
-    /// is cancellation, `KRISHIV_INSUFFICIENT_PERMISSIONS` is denial, any
+    /// and the cancellations with a reason (`KRISHIV_QUERY_TIMEOUT`,
+    /// `KRISHIV_QUERY_KILLED`) are cancellation, `KRISHIV_INSUFFICIENT_PERMISSIONS` is denial, any
     /// other class is failure with its name as the `error_class` label.
     #[must_use]
     pub fn from_error(error: Option<&KrishivError>) -> (Self, Option<String>) {
@@ -502,7 +513,9 @@ impl Status {
         };
         let class = error.error_class().name().to_owned();
         match class.as_str() {
-            "OPERATION_CANCELED" => (Self::Cancelled, None),
+            "OPERATION_CANCELED" | "KRISHIV_QUERY_TIMEOUT" | "KRISHIV_QUERY_KILLED" => {
+                (Self::Cancelled, None)
+            }
             "KRISHIV_INSUFFICIENT_PERMISSIONS" => (Self::Denied, Some(class)),
             _ => (Self::Failed, Some(class)),
         }
@@ -530,6 +543,9 @@ pub struct QueryOutcome<'a> {
     pub cache_hits: u64,
     /// New metadata-cache misses since the query started.
     pub cache_misses: u64,
+    /// Seconds from the query's cancellation to the fold, for a cancelled
+    /// query ([`QueryContext::cancelled_at`](crate::QueryContext::cancelled_at)).
+    pub cancel_latency_secs: Option<f64>,
 }
 
 /// One series: its definition and its label values in definition order.
@@ -735,6 +751,9 @@ impl MetricsRegistry {
             &status_class,
             outcome.duration_secs.max(0.0),
         );
+        if let Some(latency) = outcome.cancel_latency_secs {
+            self.observe("krishiv.query.cancel.latency", &[], latency.max(0.0));
+        }
         self.add_counter("krishiv.query.cpu.time", &class_only, cpu_secs(m));
         self.add_counter("krishiv.query.scan.rows", &[], scan_rows(m) as f64);
         self.add_counter("krishiv.query.output.rows", &[], output_rows(m) as f64);
@@ -1302,6 +1321,7 @@ mod tests {
             arbitration_aborts: 0,
             cache_hits: 3,
             cache_misses: 1,
+            cancel_latency_secs: None,
         }
     }
 
@@ -1409,6 +1429,7 @@ mod tests {
             arbitration_aborts: 0,
             cache_hits: 0,
             cache_misses: 0,
+            cancel_latency_secs: None,
         });
         // Denied queries keep their class too.
         registry.fold(&QueryOutcome {
@@ -1421,6 +1442,7 @@ mod tests {
             arbitration_aborts: 0,
             cache_hits: 0,
             cache_misses: 0,
+            cancel_latency_secs: None,
         });
         let snap = registry.snapshot();
         assert_eq!(
@@ -1482,6 +1504,7 @@ mod tests {
                 arbitration_aborts: 0,
                 cache_hits: 0,
                 cache_misses: 0,
+                cancel_latency_secs: None,
             });
         }
         let snap = registry.snapshot();

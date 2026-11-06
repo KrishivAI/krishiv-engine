@@ -340,6 +340,15 @@ def test_cli_rejects_bad_methods(capsys):
     assert "--methods" in capsys.readouterr().err
 
 
+def test_cli_refuses_a_cgroup_cap_without_sequential(capsys):
+    from krishiv_bench import cli
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["reproduce", "--cgroup-gb", "8"])
+    assert exc.value.code == 2
+    assert "--cgroup-gb needs --sequential" in capsys.readouterr().err
+
+
 def _wait_for(path: Path) -> None:
     """Block until the worker signals readiness (an event, not a duration; the bound only stops a hung test)."""
     deadline = time.monotonic() + 60
@@ -455,6 +464,11 @@ def test_polars_sql_errors_are_unsupported_not_failures():
     assert _answer_status("polars", EngineError("SQLInterfaceError: unsupported SQL")) == "unsupported"
     assert _answer_status("polars-streaming", EngineError("ColumnNotFoundError: x")) == "unsupported"
     assert _answer_status("polars", EngineError("MemoryError: x")) == "error"
+    # run-time errors of SQL Polars does plan are failures, not missing support
+    assert _answer_status("polars", EngineError("ComputeError: cannot compare string with numeric type")) == "error"
+    assert (
+        _answer_status("polars", EngineError("InvalidOperationError: conversion from `str` to `i32` failed")) == "error"
+    )
     assert _answer_status("duckdb", EngineError("SQLInterfaceError: x")) == "error"
     assert _answer_status("polars", EngineTimeout("slow")) == "timeout"
     assert _answer_status("polars", EngineCrashed("died")) == "error"
@@ -483,7 +497,10 @@ def test_polars_streaming_engine_gives_the_same_rows(tmp_path):
 
 def test_check_description_says_what_was_compared():
     assert reproduce.check_description("spark-connect", None).startswith("row count only")
-    assert "separate untimed DUMP run" in reproduce.check_description("krishiv", {"kinds": [], "values": []})
+    dump = reproduce.check_description("krishiv", {"kinds": [], "values": [], "source": "dump"})
+    assert "separate untimed DUMP run" in dump
+    run = reproduce.check_description("krishiv", {"kinds": [], "values": [], "source": "run"})
+    assert "taken by the runner after the clock stops" in run
     assert "timed run's own result" in reproduce.check_description("duckdb", {"kinds": [], "values": []})
 
 
@@ -492,12 +509,17 @@ class Scripted(Fake):
 
     instances: ClassVar[list[Scripted]] = []
 
-    def __init__(self, name, rows=None, timed_exc=None, setup_exc=None, checksum=False):
+    def __init__(self, name, rows=None, timed_exc=None, setup_exc=None, checksum=False, source=None):
         super().__init__(rows)
         self.canned: list[tuple] = rows or []
         self.name, self.timed_exc, self.setup_exc, self.checksum = name, timed_exc, setup_exc, checksum
+        self.source = source  # the "source" a Krishiv checksum carries: "run" (RUN_CHECKED) or "dump"
         self.torn_down = 0
         Scripted.instances.append(self)
+
+    def result_checksum(self):
+        got = super().result_checksum()
+        return {**got, "source": self.source} if got is not None and self.source else got
 
     def setup(self, dataset):
         if self.setup_exc:
@@ -537,7 +559,7 @@ def test_sequential_query_records_how_each_engine_was_checked(monkeypatch, tiny)
         tiny,
         {
             "duckdb": lambda: Scripted("duckdb", rows, checksum=True),
-            "krishiv": lambda: Scripted("krishiv", rows, checksum=True),
+            "krishiv": lambda: Scripted("krishiv", rows, checksum=True, source="run"),
             "spark-connect": lambda: Scripted("spark-connect", rows),
         },
         ["duckdb", "krishiv", "spark-connect"],
@@ -545,7 +567,7 @@ def test_sequential_query_records_how_each_engine_was_checked(monkeypatch, tiny)
     got = entry["engines"]
     assert entry["rows"] == 2
     assert got["duckdb"]["result_check"].startswith("row count and order-independent checksum")
-    assert "separate untimed DUMP run" in got["krishiv"]["result_check"]
+    assert "taken by the runner after the clock stops" in got["krishiv"]["result_check"]
     assert got["spark-connect"]["result_check"].startswith("row count only")
     assert all(len(got[n]["samples_s"]) == 2 for n in got)
     assert set(infos) == {"duckdb", "krishiv", "spark-connect"}
@@ -763,6 +785,7 @@ def test_krishiv_checksums_a_separate_dump_of_the_query(tmp_path, monkeypatch):
     eng._tmp = tmp_path / "work"
     eng._tmp.mkdir()
     eng._pending = None
+    eng._run_checksum = None
     assert eng.result_checksum() is None  # nothing ran
 
     table = pa.table({"a": [1, 2, 3], "s": ["x", "y", "z"]})
@@ -779,3 +802,89 @@ def test_krishiv_checksums_a_separate_dump_of_the_query(tmp_path, monkeypatch):
     assert same(got, checksum(table))
     assert eng._pending is None
     assert not list(eng._tmp.glob("*.chk"))  # the dump is removed
+    assert got["source"] == "dump"
+
+
+def _krishiv_with_replies(tmp_path, monkeypatch, replies, checked=True):
+    """A ``KrishivEngine`` whose runner answers from ``replies`` (a function of the command line)."""
+    from krishiv_bench.adapters.krishiv import KrishivEngine
+
+    eng = object.__new__(KrishivEngine)
+    eng._tmp = tmp_path
+    eng._pending = None
+    eng._run_checksum = None
+    eng.checksum_in_run = checked
+    sent: list[str] = []
+
+    def command(text):
+        sent.append(text.split(" ", 1)[0])
+        return replies(text)
+
+    monkeypatch.setattr(eng, "_command", command)
+    return eng, sent
+
+
+def test_krishiv_run_checked_hands_back_the_checksum_of_the_timed_run(tmp_path, monkeypatch):
+    sums = '{"kinds":["rows"],"values":[3],"source":"run"}'
+    eng, sent = _krishiv_with_replies(tmp_path, monkeypatch, lambda text: f"3 0.25 {sums}")
+    assert eng.timed_run(q("SELECT 1")) == (3, 0.25)
+    assert sent == ["RUN_CHECKED"]
+    assert eng.result_checksum() == {"kinds": ["rows"], "values": [3], "source": "run"}
+    assert eng.result_checksum() is None  # taken once; nothing pending for a DUMP either
+
+
+def test_krishiv_falls_back_to_run_and_dump_for_a_runner_without_run_checked(tmp_path, monkeypatch):
+    from krishiv_bench.adapters.krishiv import RunnerError
+
+    def replies(text):
+        if text.startswith("RUN_CHECKED"):
+            raise RunnerError("bad command: RUN_CHECKED /x")
+        return "3 0.5"
+
+    eng, sent = _krishiv_with_replies(tmp_path, monkeypatch, replies)
+    assert eng.timed_run(q("SELECT 1")) == (3, 0.5)
+    assert sent == ["RUN_CHECKED", "RUN"]
+    assert eng.checksum_in_run is False  # not asked again
+    assert eng._pending is not None  # the checksum will come from a DUMP
+    assert eng.timed_run(q("SELECT 1")) == (3, 0.5)
+    assert sent[2:] == ["RUN"]
+    # Any other runner error is the query's, not a reason to fall back.
+    eng.checksum_in_run = True
+    monkeypatch.setattr(eng, "_command", lambda text: (_ for _ in ()).throw(RunnerError("DIVIDE_BY_ZERO")))
+    with pytest.raises(RunnerError, match="DIVIDE_BY_ZERO"):
+        eng.timed_run(q("SELECT 1"))
+
+
+def test_krishiv_without_the_option_times_with_run(tmp_path, monkeypatch):
+    eng, sent = _krishiv_with_replies(tmp_path, monkeypatch, lambda text: "2 0.1", checked=False)
+    assert eng.timed_run(q("SELECT 1")) == (2, 0.1)
+    assert sent == ["RUN"]
+
+
+@pytest.mark.parametrize(
+    ("sql", "status"),
+    [
+        ("WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT * FROM r", "unsupported"),
+        ("SELECT * FROM t, LATERAL (SELECT * FROM t) x", "unsupported"),
+        ("SELECT no_such_function(a) FROM t", "unsupported"),
+        ("SELECT zzz FROM t", "unsupported"),
+        ("SELECT FROM WHERE", "unsupported"),
+        ("SELECT CAST(b AS INT) FROM t", "error"),
+        ("SELECT * FROM t WHERE a = b", "error"),
+        ("SELECT b + 1 FROM t", "error"),
+        ("SELECT (SELECT a FROM t) FROM t", "error"),
+    ],
+)
+def test_the_polars_statuses_follow_what_real_polars_raises(sql: str, status: str):
+    """Real Polars errors, formatted as the worker reports them, get the status the narrowed set gives them."""
+    import polars as pl
+
+    from krishiv_bench.adapters.process import EngineError
+    from krishiv_bench.errors import describe_error
+    from krishiv_bench.reproduce import _answer_status
+
+    t = pl.DataFrame({"a": [1, 2], "b": ["x", "y"]}).lazy()
+    with pytest.raises(Exception) as raised:  # noqa: PT011  # whichever class Polars raises is what is classified
+        pl.SQLContext(t=t).execute(sql).collect()
+    e = raised.value
+    assert _answer_status("polars", EngineError(describe_error(e))) == status, describe_error(e)[:80]

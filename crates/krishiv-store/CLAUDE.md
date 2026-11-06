@@ -23,7 +23,7 @@ Paths are relative to this crate.
 - Public API stability: after the first publish, changing or removing a public item needs an ADR (ADR 0044, 0026).
 - Secrets (ADR 0038): sensitive values are `SecretString` from the moment they are read and exposed only at the
   object_store builder or credential call; `Debug`, errors and store ids never carry a secret or a key id.
-- Store ids are unique per process (the `IoScheduler` is process-wide): scoped ids carry a random nonce.
+- Store ids are unique per process (the `IoScheduler` is process-wide, one per engine runtime): scoped ids carry a random nonce; other ids built from settings with any `fs.*` key carry `#cfg:<hash>` of all of them (secrets through their keyed fingerprint), so sessions with different settings never share a store or a cache entry (`StoreRegistry::id_of`).
 - Cargo features are additive: `cloud` (object_store `aws`, `azure`, `gcp`), later `remote-signing`.
 - `#![forbid(unsafe_code)]`. No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 

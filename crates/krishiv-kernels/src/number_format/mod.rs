@@ -1071,7 +1071,7 @@ mod coverage_tests {
 
 #[cfg(test)]
 mod reach_tests {
-    use super::parse_format;
+    use super::{parse_format, quoted};
 
     fn parsed(pattern: &str) -> super::NumberFormat {
         let f = parse_format(pattern);
@@ -1088,5 +1088,27 @@ mod reach_tests {
     fn invalid_tokens_fail_without_validation() {
         // Without validation, an invalid token fails at parse time.
         assert!(parse_format("00X00").parse_input("1").is_err());
+    }
+
+    #[test]
+    fn invalid_format_errors_quote_the_format_with_escapes() {
+        // `quoted` wraps in single quotes and escapes `'` and `\`.
+        assert_eq!(quoted("9.9"), "'9.9'");
+        assert_eq!(quoted("0'\\"), "'0\\'\\\\'");
+        assert_eq!(quoted(""), "''");
+        let err = parse_format("x").validate("x").unwrap_err();
+        assert!(err.to_string().contains("'x'"), "{err}");
+    }
+
+    #[test]
+    fn mi_and_pr_need_their_second_letter() {
+        // `M` and `P` alone, at the end or before another letter, are invalid characters, not `MI` / `PR`.
+        for pattern in ["9M", "9P", "9MX", "9PX", "M9", "P9"] {
+            let f = parse_format(pattern);
+            assert!(f.validate(pattern).is_err(), "{pattern}");
+        }
+        for pattern in ["9MI", "9PR", "9mi", "9pr"] {
+            parsed(pattern);
+        }
     }
 }
