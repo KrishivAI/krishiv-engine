@@ -123,7 +123,12 @@ impl Session {
         }
         duplicate_aliases(&args, case_sensitive)?;
 
-        let bound = bind(&statement_text, &args, case_sensitive)?;
+        let bound = bind(
+            &statement_text,
+            &args,
+            case_sensitive,
+            env0.parser.double_quoted_identifiers,
+        )?;
         // The text of a dynamic statement does not see a running script's locals.
         let (bound, identifier_spans) = self
             .with_locals(Vec::new())
@@ -359,8 +364,13 @@ fn duplicate_aliases(args: &[Argument], case_sensitive: bool) -> Result<(), Kris
 /// named markers take the argument of that name, and then every argument
 /// must be named. Mixing the two is an error, as is a marker without an
 /// argument.
-fn bind(sql: &str, args: &[Argument], case_sensitive: bool) -> Result<String, KrishivError> {
-    let markers = krishiv_sql::parameter_markers(sql);
+fn bind(
+    sql: &str,
+    args: &[Argument],
+    case_sensitive: bool,
+    double_quoted_identifiers: bool,
+) -> Result<String, KrishivError> {
+    let markers = krishiv_sql::parameter_markers(sql, double_quoted_identifiers);
     let named = markers.iter().filter(|m| m.name.is_some()).count();
     if named > 0 && named < markers.len() {
         return Err(InvalidQueryMixedQueryParameters {}.into());
@@ -537,15 +547,15 @@ mod tests {
     fn markers_bind_by_position_or_name() {
         let args = [arg(Some("b"), "2", "\"2\""), arg(Some("a"), "'x'", "\"x\"")];
         assert_eq!(
-            bind("SELECT ?, ? FROM t", &args, false).unwrap(),
+            bind("SELECT ?, ? FROM t", &args, false, false).unwrap(),
             "SELECT 2, 'x' FROM t"
         );
         assert_eq!(
-            bind("SELECT :A, :b, ':a'", &args, false).unwrap(),
+            bind("SELECT :A, :b, ':a'", &args, false, false).unwrap(),
             "SELECT 'x', 2, ':a'"
         );
         assert_eq!(
-            class(bind("SELECT :A", &args, true)),
+            class(bind("SELECT :A", &args, true, false)),
             "UNBOUND_SQL_PARAMETER"
         );
     }
@@ -555,18 +565,18 @@ mod tests {
         let named = [arg(Some("a"), "1", "\"1\"")];
         let unnamed = [arg(None, "1", "\"1\"")];
         assert_eq!(
-            class(bind("SELECT ? + :a", &named, false)),
+            class(bind("SELECT ? + :a", &named, false, false)),
             "INVALID_QUERY_MIXED_QUERY_PARAMETERS"
         );
         assert_eq!(
-            class(bind("SELECT :a", &unnamed, false)),
+            class(bind("SELECT :a", &unnamed, false, false)),
             "ALL_PARAMETERS_MUST_BE_NAMED"
         );
-        let missing = bind("SELECT ?", &[], false).unwrap_err();
+        let missing = bind("SELECT ?", &[], false, false).unwrap_err();
         assert_eq!(missing.error_class().name(), "UNBOUND_SQL_PARAMETER");
         assert!(missing.to_string().contains("_7"), "{missing}");
         // Extra arguments are ignored.
-        assert_eq!(bind("SELECT 1", &named, false).unwrap(), "SELECT 1");
+        assert_eq!(bind("SELECT 1", &named, false, false).unwrap(), "SELECT 1");
     }
 
     #[test]

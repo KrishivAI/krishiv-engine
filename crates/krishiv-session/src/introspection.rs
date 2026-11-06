@@ -575,6 +575,11 @@ impl Session {
             if !keep(Some(pattern), &t.name) {
                 continue;
             }
+            if t.view.is_some() {
+                // The information holds the view's text, as SHOW CREATE TABLE does.
+                self.authorize_view_select(&ns, &t.name, &self.query_env())
+                    .await?;
+            }
             let mut entries = self.table_information(&t);
             if t.is_partitioned() {
                 entries.push((
