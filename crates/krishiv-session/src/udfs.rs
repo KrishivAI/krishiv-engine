@@ -406,6 +406,20 @@ fn to_input(t: &UdfInputType) -> Option<InputType> {
     })
 }
 
+/// `FAILED_EXECUTE_UDF` for a refused registration: the UDF's lower-case
+/// name (`unknown` when it has none or panics) and the refusal.
+pub(crate) fn registration_error(
+    name: Result<String, krishiv_udf_sdk::UdfError>,
+    e: &krishiv_udf_sdk::UdfError,
+) -> krishiv_common::error::KrishivError {
+    let name = name
+        .map(|n| n.to_lowercase())
+        .ok()
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "unknown".to_owned());
+    krishiv_functions::scalar::failed_execute(&name, "unknown", "unknown", e.message())
+}
+
 #[cfg(test)]
 mod tests {
     use krishiv_plan::analyzer::BuiltinFunctions;

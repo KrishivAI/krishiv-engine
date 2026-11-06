@@ -50,6 +50,18 @@ pub struct UdafEnv {
     pub time_zone: Option<i32>,
 }
 
+impl UdafEnv {
+    /// The environment of a session's `udfs` in the zone `time_zone`
+    /// (`None` without a library).
+    #[must_use]
+    pub fn of(udfs: Option<&Arc<UdfLibrary>>, time_zone: Option<i32>) -> Option<Self> {
+        udfs.map(|library| Self {
+            library: Arc::clone(library),
+            time_zone,
+        })
+    }
+}
+
 /// The implementation of `call` in `env`.
 ///
 /// # Errors

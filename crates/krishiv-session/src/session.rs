@@ -969,63 +969,31 @@ impl Session {
     /// ```
     ///
     /// # Errors
-    /// `FAILED_EXECUTE_UDF` when the UDF's `name` panics, is empty, or
-    /// contains a `.` or a backtick, since such a UDF can never be called
-    /// by name (the function name is `unknown` when there is none).
+    /// `FAILED_EXECUTE_UDF` (naming `unknown` if there is no name) when the
+    /// UDF's `name` panics, is empty, or holds a `.` or a backtick.
     pub fn register_udf(
         &self,
         udf: impl krishiv_udf_sdk::ScalarUdf,
     ) -> Result<(), krishiv_common::error::KrishivError> {
         let udf: Arc<dyn krishiv_udf_sdk::ScalarUdf> = Arc::new(udf);
-        if let Err(e) = self.state.udfs.register(Arc::clone(&udf)) {
-            let name = guard_call("unknown", "name", || udf.name().to_owned())
-                .map(|name| name.to_lowercase())
-                .unwrap_or_else(|_| "unknown".to_owned());
-            let name = if name.is_empty() {
-                "unknown".to_owned()
-            } else {
-                name
-            };
-            return Err(krishiv_functions::scalar::failed_execute(
-                &name,
-                "unknown",
-                "unknown",
-                e.message(),
-            ));
-        }
-        Ok(())
+        let named = || guard_call("unknown", "name", || udf.name().to_owned());
+        let done = self.state.udfs.register(Arc::clone(&udf));
+        done.map_err(|e| crate::udfs::registration_error(named(), &e))
     }
 
-    /// Registers a native Rust aggregate UDF (ADR 0045) under its name
-    /// (case-insensitive), replacing any UDF of that name, scalar or
-    /// aggregate. Resolution, qualification and the analysis fingerprint
-    /// follow [`register_udf`](Self::register_udf); the hash aggregate
-    /// drives its [`GroupsAccumulator`](krishiv_udf_sdk::GroupsAccumulator)
-    /// as it drives the built-in aggregates (partial and final phases,
-    /// spilling).
+    /// Registers a native Rust aggregate UDF (ADR 0045), replacing any UDF
+    /// of its name, scalar or aggregate; otherwise as [`register_udf`](Self::register_udf).
     ///
     /// # Errors
-    /// `FAILED_EXECUTE_UDF` when the UDF's `name` panics, is empty, or
-    /// contains a `.` or a backtick.
+    /// As [`register_udf`](Self::register_udf).
     pub fn register_udaf(
         &self,
         udaf: impl krishiv_udf_sdk::AggregateUdf,
     ) -> Result<(), krishiv_common::error::KrishivError> {
         let udaf: Arc<dyn krishiv_udf_sdk::AggregateUdf> = Arc::new(udaf);
-        if let Err(e) = self.state.udfs.register_aggregate(Arc::clone(&udaf)) {
-            let name = guard_call("unknown", "name", || udaf.name().to_owned())
-                .map(|name| name.to_lowercase())
-                .ok()
-                .filter(|name| !name.is_empty())
-                .unwrap_or_else(|| "unknown".to_owned());
-            return Err(krishiv_functions::scalar::failed_execute(
-                &name,
-                "unknown",
-                "unknown",
-                e.message(),
-            ));
-        }
-        Ok(())
+        let named = || guard_call("unknown", "name", || udaf.name().to_owned());
+        let done = self.state.udfs.register_aggregate(Arc::clone(&udaf));
+        done.map_err(|e| crate::udfs::registration_error(named(), &e))
     }
 
     /// The temporary tables and views, by name as registered.

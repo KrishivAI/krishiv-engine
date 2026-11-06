@@ -856,10 +856,7 @@ fn udaf_state(
     udfs: Option<&Arc<krishiv_udf_sdk::UdfLibrary>>,
 ) -> Result<AggregateExpr> {
     if let AggregateFunction::Udf(call) = &mut agg.function {
-        let env = udfs.map(|library| crate::aggregate::UdafEnv {
-            library: Arc::clone(library),
-            time_zone: None,
-        });
+        let env = crate::aggregate::UdafEnv::of(udfs, None);
         crate::aggregate::plan_udaf_state(call, env.as_ref())?;
     }
     Ok(agg)

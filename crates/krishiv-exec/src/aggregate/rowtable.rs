@@ -2199,16 +2199,11 @@ mod tests {
             Field::new("k", DataType::Utf8, true),
             Field::new("v", DataType::Int64, true),
         ]));
+        // As `core`'s, over a string key and with `count(*)` only.
         let spec = AggregateSpec {
             input: Arc::clone(&s),
-            group_by: vec![0],
             aggregates: vec![AggregateExpr::count_star("c")],
-            output: AggregateOutput::Final,
-            ansi: true,
-            spill: None,
-            require_unit_weights: false,
-            legacy_statistical: false,
-            udafs: None,
+            ..core().spec.clone()
         };
         Arc::new(AggCore::new(spec).unwrap())
     }
