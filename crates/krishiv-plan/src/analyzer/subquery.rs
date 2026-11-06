@@ -60,7 +60,7 @@ use krishiv_common::stack::{STEP, on_big_stack};
 
 #[path = "subquery_rank.rs"]
 mod rank;
-use rank::{repartitioned, window_reads_outer};
+use rank::{outer_only, repartitioned, window_reads_outer};
 
 type R<T> = Result<T, AnalysisError>;
 
@@ -1373,7 +1373,7 @@ impl Rewriter {
                 aggregates,
             } if keep && !keys.is_empty() && !keys.iter().any(|k| has_outer(Node::Expr(k))) => {
                 let (inner, corr) = self.pull(input, true)?;
-                if !corr.iter().all(is_outer_equality) {
+                if !corr.iter().all(|c| is_outer_equality(c) || outer_only(c)) {
                     return Err(unsupported(
                         "outer references below a grouped aggregate that are not equalities",
                         plan.origin,
