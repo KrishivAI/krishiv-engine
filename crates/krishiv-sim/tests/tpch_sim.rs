@@ -745,3 +745,65 @@ fn a_rerun_build_task_gives_one_partial_and_the_same_rows() {
         "{trace:?}"
     );
 }
+
+/// A full outer nested loop whose probe comes from a hash exchange runs as
+/// one task (its build's unmatched rows would come once per task otherwise;
+/// the split moves to P5, owner decision 2026-11-06), and its rows on two
+/// workers equal one worker's, the never-matched region once.
+#[test]
+fn a_full_outer_nested_loop_on_two_workers_equals_one_worker() {
+    let store = store();
+    let config = ClusterConfig {
+        sim: SimConfig::with_seed(5),
+        workers: 2,
+        partitions: 4,
+        slots: 2,
+        fault: None,
+    };
+    let client_store = Arc::clone(&store);
+    let results = Arc::new(Mutex::new(None));
+    let out = Arc::clone(&results);
+    simulate(
+        config,
+        Arc::new(Setup(Arc::clone(&store))),
+        move |coordinator: Coordinator, worker: WorkerContext| async move {
+            let tpch = open(Arc::clone(&client_store)).await?;
+            coordinator.deal_scans(dealer(&tpch, 64 << 10));
+            // `GROUP BY` puts a hash exchange under the probe side.
+            let sql = "SELECT n.n_name, r.r_name FROM \
+                       (SELECT n_name, n_regionkey FROM nation GROUP BY n_name, n_regionkey) n \
+                       FULL JOIN region r ON n.n_regionkey < r.r_regionkey";
+            let plan = tpch.plan_sql(sql).await?;
+            let schemas = krishiv_exec::physical::exchange_schemas(&plan, &worker)?;
+            let stages = krishiv_scheduler::fragment(&plan, &schemas)?;
+            let nested: Vec<bool> = stages
+                .iter()
+                .filter(|s| full_outer_nested_loop(s.plan.root()))
+                .map(|s| s.single)
+                .collect();
+            let executor: Arc<dyn Executor> = TokioExecutor::deterministic(config.slots)?;
+            let plain = QueryRunner::new(executor);
+            let pool: Arc<dyn MemoryPool> =
+                TreePool::with_clock(&MemoryConfig::default(), Arc::new(TokioClock));
+            let want = rows(5, &plain, &plan, &worker, &pool, 0).await?;
+            let got = rows(5, &coordinator, &plan, &worker, &pool, 1).await?;
+            *out.lock().unwrap() = Some((nested, got, want));
+            Ok(())
+        },
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    let (nested, got, want) = results.lock().unwrap().take().unwrap();
+    assert_eq!(nested, vec![true], "one single stage holds the join");
+    // Every nation matches the regions above its own; region 0 matches none.
+    let unmatched = want.iter().filter(|r| r.contains("AFRICA")).count();
+    assert_eq!(unmatched, 1, "{want:?}");
+    assert_eq!(got, want);
+}
+
+fn full_outer_nested_loop(n: &krishiv_exec::physical::PhysNode) -> bool {
+    matches!(
+        n,
+        krishiv_exec::physical::PhysNode::NestedLoopJoin(j)
+            if j.join_type == krishiv_exec::JoinType::FullOuter
+    ) || n.children().into_iter().any(full_outer_nested_loop)
+}

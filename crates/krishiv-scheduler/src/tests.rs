@@ -362,3 +362,33 @@ fn streaming_scans_follow_every_join_kind_to_its_probe() {
         .collect();
     assert_eq!(ids, vec![ScanId(1)]);
 }
+
+/// A nested loop that returns build rows (right or full outer) runs as one
+/// task even where it reads a hash exchange: each task would emit the
+/// unmatched build rows of the whole broadcast (design P2-T052b §2.2; the
+/// local/final split moves to P5, owner decision 2026-11-06). An inner
+/// nested loop over the same inputs may run as many tasks.
+#[test]
+fn a_build_preserving_nested_loop_runs_as_one_task() {
+    use krishiv_exec::JoinType;
+    use krishiv_exec::physical::NestedLoopPlan;
+
+    let stage = |join_type: JoinType| {
+        let nested = PhysNode::NestedLoopJoin(NestedLoopPlan {
+            probe: Box::new(exchange(1, range(), hash())),
+            build: Box::new(exchange(2, range(), Partitioning::Broadcast)),
+            join_type,
+            residual: None,
+        });
+        let root = exchange(3, nested, Partitioning::Single);
+        let stages = fragment(&plan(root), &schemas(&[1, 2, 3])).unwrap();
+        assert_eq!(stages.len(), 4);
+        // Stage 2 holds the join: it reads exchanges 1 and 2, writes 3.
+        assert_eq!(output(&stages[2]), Some(3));
+        stages[2].single
+    };
+    assert!(stage(JoinType::RightOuter));
+    assert!(stage(JoinType::FullOuter));
+    assert!(!stage(JoinType::Inner));
+    assert!(!stage(JoinType::LeftOuter));
+}
