@@ -1044,6 +1044,36 @@ fn nested_types_need_their_feature() {
 }
 
 #[test]
+fn the_variant_type_needs_its_feature() {
+    use krishiv_types::DataType;
+    assert_eq!(message("variant_scan").features, ["variant_type"]);
+    assert_eq!(
+        feature_of(Construct::Type(&DataType::Variant)),
+        Some(Feature::VariantType)
+    );
+    assert_eq!(Feature::VariantType.kind(), FeatureKind::Semantic);
+    // A variant carried only in an Arrow schema (an exchange's columns).
+    let carrier = DataType::Variant.to_arrow();
+    assert_eq!(
+        feature_of(Construct::ArrowType(&carrier)),
+        Some(Feature::VariantType)
+    );
+    let bytes = message("variant_scan").encode_to_vec();
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::VariantType),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["variant_type".to_owned()]
+        }
+    );
+}
+
+#[test]
 fn time_and_spatial_types_need_their_features() {
     use krishiv_types::{DataType, Srid};
     assert_eq!(message("time_project").features, ["time_type"]);

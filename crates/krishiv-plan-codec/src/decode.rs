@@ -1361,6 +1361,7 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         DayTimeInterval => interval_day_time(t)?,
         CalendarInterval => DataType::CalendarInterval,
         CollatedString => collated_string(t)?,
+        Variant => DataType::Variant,
     })?;
     let (precision, scale, srid) = match data_type {
         DataType::Decimal(_) => (true, true, false),
