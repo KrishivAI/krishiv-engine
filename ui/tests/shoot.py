@@ -15,7 +15,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
-import fixture_server  # noqa: E402
+import fixture_server
 
 PAGES = [
     ("health", "#/health"),
@@ -50,12 +50,20 @@ def main(out: Path) -> None:
                 for name, frag in PAGES:
                     page.evaluate(f"window.location.hash = {frag!r}")
                     page.wait_for_timeout(1200)
-                    page.screenshot(path=str(out / f"{name}-{label}-{scheme}.png"), full_page=True)
-                    wide = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+                    page.screenshot(
+                        path=str(out / f"{name}-{label}-{scheme}.png"), full_page=True
+                    )
+                    wide = page.evaluate(
+                        "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+                    )
                     if wide > 0:
-                        overflow.append(f"{name} {label} {scheme}: page is {wide}px wider than the screen")
+                        overflow.append(
+                            f"{name} {label} {scheme}: page is {wide}px wider than the screen"
+                        )
                 ctx.close()
-        (out / "overflow.txt").write_text("\n".join(overflow) + ("\n" if overflow else ""))
+        (out / "overflow.txt").write_text(
+            "\n".join(overflow) + ("\n" if overflow else "")
+        )
         print("horizontal page scroll:", len(overflow), "of", 5 * 3 * 2, "views")
         browser.close()
     print("wrote", len(list(out.glob("*.png"))), "screenshots to", out)

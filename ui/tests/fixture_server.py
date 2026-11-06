@@ -59,12 +59,21 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         url = urlparse(self.path)
         if url.path.startswith("/api/internal/"):
-            authorised = self.headers.get("Authorization") == f"Bearer {TOKEN}" or f"token={TOKEN}" in url.query
+            authorised = (
+                self.headers.get("Authorization") == f"Bearer {TOKEN}"
+                or f"token={TOKEN}" in url.query
+            )
             if not authorised:
-                return self.send_json(401, {"error": "unauthorized", "message": "a valid UI token is required"})
+                return self.send_json(
+                    401,
+                    {
+                        "error": "unauthorized",
+                        "message": "a valid UI token is required",
+                    },
+                )
             if url.path == "/api/internal/events":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
@@ -72,25 +81,34 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 try:
                     while True:
-                        self.wfile.write(f"event: queries\ndata: {json.dumps({'queries': DATA['live']})}\n\n".encode())
+                        self.wfile.write(
+                            f"event: queries\ndata: {json.dumps({'queries': DATA['live']})}\n\n".encode()
+                        )
                         self.wfile.flush()
                         time.sleep(1)
                 except (BrokenPipeError, ConnectionResetError):
                     return None
             body = route(url.path)
-            return self.send_json(200, body) if body is not None else self.send_json(404, {"error": "not_found"})
+            return (
+                self.send_json(200, body)
+                if body is not None
+                else self.send_json(404, {"error": "not_found"})
+            )
         rel = url.path.lstrip("/") or "index.html"
         f = ASSETS / rel
         if not f.is_file():
             return self.send_json(404, {"error": "not_found"})
         raw = f.read_bytes()
         self.send_response(200)
-        self.send_header("Content-Type", mimetypes.guess_type(f.name)[0] or "application/octet-stream")
+        self.send_header(
+            "Content-Type",
+            mimetypes.guess_type(f.name)[0] or "application/octet-stream",
+        )
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         self.send_json(200, {"cancelled": True})
 
 

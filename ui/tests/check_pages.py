@@ -18,13 +18,17 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
-import fixture_server  # noqa: E402
+import fixture_server
 
 VIEWPORTS = [("phone", 390, 844), ("tablet", 820, 1180), ("desktop", 1440, 900)]
 PAGES = [
     ("health", "#/health", ["Health", "Caches", "hit rate", "Uptime"]),
     ("queries", "#/queries", ["Queries", "SELECT l_returnflag", "Cancel"]),
-    ("query-detail", "#/queries/01932a40-1a00-7a01-8001-aaaaaaaaaa02", ["HashJoin", "128.0 MiB", "Operators"]),
+    (
+        "query-detail",
+        "#/queries/01932a40-1a00-7a01-8001-aaaaaaaaaa02",
+        ["HashJoin", "128.0 MiB", "Operators"],
+    ),
     ("history", "#/history", ["History", "DIVIDE_BY_ZERO", "Compare the two selected"]),
     ("resources", "#/resources", ["Memory", "Caches", "root/query-1"]),
 ]
@@ -55,54 +59,91 @@ def check(shots: Path | None) -> list[str]:
                 page = ctx.new_page()
                 errors: list[str] = []
                 foreign: list[str] = []
-                page.on("console", lambda m, errors=errors: errors.append(m.text) if m.type == "error" else None)
+                page.on(
+                    "console",
+                    lambda m, errors=errors: (
+                        errors.append(m.text) if m.type == "error" else None
+                    ),
+                )
                 page.on("pageerror", lambda e, errors=errors: errors.append(str(e)))
                 page.on(
                     "request",
-                    lambda r, foreign=foreign: foreign.append(r.url)
-                    if not r.url.startswith((origin, "data:", "blob:"))
-                    else None,
+                    lambda r, foreign=foreign: (
+                        foreign.append(r.url)
+                        if not r.url.startswith((origin, "data:", "blob:"))
+                        else None
+                    ),
                 )
                 page.goto(f"{origin}/?token=fixture")
                 for name, frag, texts in PAGES:
                     view = f"{name} {label} {scheme}"
                     page.evaluate(f"window.location.hash = {frag!r}")
                     page.wait_for_timeout(1000)
-                    wide = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
+                    wide = page.evaluate(
+                        "document.documentElement.scrollWidth - document.documentElement.clientWidth"
+                    )
                     if wide > 0:
-                        problems.append(f"{view}: the page scrolls sideways ({wide}px too wide)")
+                        problems.append(
+                            f"{view}: the page scrolls sideways ({wide}px too wide)"
+                        )
                     body = page.inner_text("body")
-                    problems += [f"{view}: missing text {t!r}" for t in texts if t.lower() not in body.lower()]
+                    problems += [
+                        f"{view}: missing text {t!r}"
+                        for t in texts
+                        if t.lower() not in body.lower()
+                    ]
                     if label == "phone":
                         small = page.evaluate(SMALL_TARGETS)
-                        problems += [f"{view}: touch target under 40 px: {s}" for s in small]
+                        problems += [
+                            f"{view}: touch target under 40 px: {s}" for s in small
+                        ]
                     if shots is not None:
                         shots.mkdir(parents=True, exist_ok=True)
-                        page.screenshot(path=str(shots / f"{name}-{label}-{scheme}.png"), full_page=True)
+                        page.screenshot(
+                            path=str(shots / f"{name}-{label}-{scheme}.png"),
+                            full_page=True,
+                        )
                 fonts = page.evaluate(
                     "Promise.all([document.fonts.load('14px \"Red Hat Text\"'),"
                     " document.fonts.load('700 24px \"Red Hat Display\"'),"
                     " document.fonts.load('13px \"Red Hat Mono\"')]).then(r => r.map(f => f.length))"
                 )
                 if not all(fonts):
-                    problems.append(f"{label} {scheme}: a Red Hat font did not load: {fonts}")
+                    problems.append(
+                        f"{label} {scheme}: a Red Hat font did not load: {fonts}"
+                    )
                 problems += [f"{label} {scheme}: console error: {e}" for e in errors]
-                problems += [f"{label} {scheme}: request outside the page's origin: {u}" for u in foreign]
+                problems += [
+                    f"{label} {scheme}: request outside the page's origin: {u}"
+                    for u in foreign
+                ]
                 if label == "phone":
                     page.evaluate("window.location.hash = '#/health'")
                     page.wait_for_timeout(200)
                     if page.get_by_role("dialog").count() != 0:
-                        problems.append(f"phone {scheme}: the menu is open before it is asked for")
+                        problems.append(
+                            f"phone {scheme}: the menu is open before it is asked for"
+                        )
                     page.get_by_role("button", name="Open the menu").click()
                     page.wait_for_timeout(300)
                     dialog = page.get_by_role("dialog")
-                    if dialog.count() != 1 or not dialog.get_by_role("link", name="Queries").is_visible():
-                        problems.append(f"phone {scheme}: the menu button does not open the pages")
+                    if (
+                        dialog.count() != 1
+                        or not dialog.get_by_role("link", name="Queries").is_visible()
+                    ):
+                        problems.append(
+                            f"phone {scheme}: the menu button does not open the pages"
+                        )
                     else:
                         dialog.get_by_role("link", name="Queries").click()
                         page.wait_for_timeout(300)
-                        if page.get_by_role("dialog").count() != 0 or "#/queries" not in page.url:
-                            problems.append(f"phone {scheme}: choosing a page does not close the menu and go there")
+                        if (
+                            page.get_by_role("dialog").count() != 0
+                            or "#/queries" not in page.url
+                        ):
+                            problems.append(
+                                f"phone {scheme}: choosing a page does not close the menu and go there"
+                            )
                 ctx.close()
         browser.close()
     return problems
@@ -110,5 +151,7 @@ def check(shots: Path | None) -> list[str]:
 
 if __name__ == "__main__":
     found = check(Path(sys.argv[1]) if len(sys.argv) > 1 else None)
-    print("\n".join(found) if found else "ui pages: ok (5 pages x 3 widths x dark/light)")
+    print(
+        "\n".join(found) if found else "ui pages: ok (5 pages x 3 widths x dark/light)"
+    )
     sys.exit(1 if found else 0)
