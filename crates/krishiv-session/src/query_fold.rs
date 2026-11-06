@@ -35,7 +35,7 @@ impl QueryStart {
         let totals = state.io.totals();
         Self {
             started: Instant::now(),
-            arbitration: state.memory_tree.stats(),
+            arbitration: state.runtime.memory_tree.stats(),
             cache_hits: IoCounters::get(&totals.cache_hits),
             cache_misses: IoCounters::get(&totals.cache_misses),
             bytes_read: IoCounters::get(&totals.bytes_read),
@@ -126,8 +126,8 @@ impl QueryStart {
             return;
         }
         let totals = state.io.totals();
-        let arbitration = state.memory_tree.stats();
-        state.metrics.fold(&QueryOutcome {
+        let arbitration = state.runtime.memory_tree.stats();
+        state.runtime.metrics.fold(&QueryOutcome {
             class: query.class(),
             status,
             error_class: error_class.as_deref(),
@@ -155,6 +155,9 @@ pub(crate) struct QueryFold {
     /// The admission slot, given back when the fold is consumed (the
     /// stream ended, failed or was dropped).
     pub(crate) _permit: crate::admission::Permit,
+    /// The statement's operation id, held until the query's stream ends, so
+    /// a running query keeps its id taken even after its DataFrame drops.
+    pub(crate) _operation: Option<Arc<crate::history::Operation>>,
 }
 
 impl QueryFold {
@@ -172,7 +175,7 @@ impl QueryFold {
             return;
         }
         // Detached: dropping the handle leaves the task running; it ends with the query.
-        drop(state.executor.spawn(
+        drop(state.runtime.executor.spawn(
             krishiv_exec::WorkloadClass::Interactive,
             Box::pin(async move {
                 query.finished().await;
@@ -188,7 +191,7 @@ impl QueryFold {
         let query = Arc::clone(&self.query);
         let state = Arc::clone(&self.state);
         self.finish(None);
-        drop(state.executor.spawn(
+        drop(state.runtime.executor.spawn(
             krishiv_exec::WorkloadClass::Interactive,
             Box::pin(async move {
                 if setup.await.unwrap_or(false) {
