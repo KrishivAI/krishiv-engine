@@ -130,8 +130,17 @@ fn describe_formatted_of_a_column_shows_its_declared_type_and_statistics() {
 fn view_properties_serde_properties_and_partition_locations() {
     let s = fresh();
     run(&s, "create view tv as select * from t").unwrap();
-    run(&s, "alter view tv set tblproperties('yes'='no')").unwrap();
+    run(
+        &s,
+        "alter view tv set tblproperties('yes'='no', 'keep'='1')",
+    )
+    .unwrap();
+    // `all_text` lists column by column: keys, then values.
+    assert_eq!(all_text(&s, "show tblproperties tv"), "keep\tyes\t1\tno\t");
     run(&s, "alter view tv unset tblproperties('yes')").unwrap();
+    assert_eq!(all_text(&s, "show tblproperties tv"), "keep\t1\t");
+    // A key that is not set is no error, with or without `IF EXISTS` (Spark 4.2.0).
+    run(&s, "alter view tv unset tblproperties('nope')").unwrap();
     run(&s, "alter table t set serdeproperties('yes'='no')").unwrap();
     assert!(all_text(&s, "describe table extended t").contains("[yes=no]"));
     run(&s, "drop table if exists tp").unwrap();
@@ -140,20 +149,81 @@ fn view_properties_serde_properties_and_partition_locations() {
         "create table tp(a string, v varchar(2), c char(2)) using parquet partitioned by (v, c)",
     )
     .unwrap();
-    // A relative location is made absolute; a partition that is not there is PARTITIONS_NOT_FOUND.
+    let dir = tempfile::tempdir().unwrap();
+    let (loc1, loc2) = (dir.path().join("loc1"), dir.path().join("loc2"));
+    // `all_text` lists column by column: the value of `Location` sits one column's length after its key.
+    let location = || {
+        let b = block_on(async {
+            s.sql("describe table extended tp partition (v='ke', c='nt')")
+                .await?
+                .collect()
+                .await
+        })
+        .unwrap();
+        let text = |a: &arrow_array::ArrayRef, i: usize| {
+            a.as_string_opt::<i32>().map_or_else(
+                || a.as_string_view().value(i).to_owned(),
+                |x| x.value(i).to_owned(),
+            )
+        };
+        b.iter()
+            .find_map(|batch| {
+                (0..batch.num_rows())
+                    .find(|&i| text(batch.column(0), i) == "Location")
+                    .map(|i| text(batch.column(1), i))
+            })
+            .unwrap()
+    };
     run(
         &s,
-        "alter table tp add partition (v='ke', c='nt') location 'loc1'",
+        &format!(
+            "alter table tp add partition (v='ke', c='nt') location '{}'",
+            loc1.display()
+        ),
     )
     .unwrap();
+    assert_eq!(location(), format!("file:{}", loc1.display()));
     run(
         &s,
-        "alter table tp partition (v='ke', c='nt') set location 'loc2'",
+        &format!(
+            "alter table tp partition (v='ke', c='nt') set location '{}'",
+            loc2.display()
+        ),
     )
     .unwrap();
+    assert_eq!(location(), format!("file:{}", loc2.display()));
+    // An empty location is refused (Spark: Hadoop cannot make a path of it).
+    for sql in [
+        "alter table tp partition (v='ke', c='nt') set location ''",
+        "alter table tp add partition (v='xx', c='yy') location ''",
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert_eq!(e.error_class().name(), "INVALID_EMPTY_LOCATION", "{sql}");
+    }
+    // A location already holding data, even only below a subdirectory, or a file, would be ignored by reads.
+    let nested = dir.path().join("nested");
+    std::fs::create_dir_all(nested.join("x=1")).unwrap();
+    std::fs::write(nested.join("x=1").join("part-0.parquet"), b"").unwrap();
+    let file = dir.path().join("plain");
+    std::fs::write(&file, b"x").unwrap();
+    for target in [&nested, &file] {
+        let e = run(
+            &s,
+            &format!(
+                "alter table tp partition (v='ke', c='nt') set location '{}'",
+                target.display()
+            ),
+        )
+        .unwrap_err();
+        assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    }
+    assert_eq!(location(), format!("file:{}", loc2.display()));
     let e = run(
         &s,
-        "alter table tp partition (v='no', c='pe') set location 'loc3'",
+        &format!(
+            "alter table tp partition (v='no', c='pe') set location '{}'",
+            dir.path().join("loc3").display()
+        ),
     )
     .unwrap_err();
     assert_eq!(e.error_class().name(), "PARTITIONS_NOT_FOUND");
@@ -164,6 +234,36 @@ fn view_properties_serde_properties_and_partition_locations() {
     )
     .unwrap_err();
     assert_eq!(e.error_class().name(), "_LEGACY_ERROR_TEMP_1232");
+}
+
+#[test]
+fn change_column_to_an_equivalent_character_type_is_allowed() {
+    // Spark 4.2.0: `CHARACTER(3)` is `CHAR(3)`, so the change is no change; `DESCRIBE` still shows `char(3)`.
+    let s = fresh();
+    run(&s, "alter table t change column c type character(3)").unwrap();
+    assert_eq!(text_at(&s, "describe table t", 1), "char(3)");
+    let e = run(&s, "alter table t change column c type char(4)").unwrap_err();
+    assert_eq!(e.error_class().name(), "NOT_SUPPORTED_CHANGE_COLUMN");
+}
+
+#[test]
+fn msck_repair_of_a_missing_directory_fails() {
+    // Spark 4.2.0 throws `FileNotFoundException` ("File file:<dir> does not exist").
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("gone");
+    let s = Session::new().unwrap();
+    run(&s, "drop table if exists pm").unwrap();
+    run(
+        &s,
+        &format!(
+            "create table pm(a string, k string) using parquet partitioned by (k) location '{}'",
+            root.display()
+        ),
+    )
+    .unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+    let e = run(&s, "msck repair table pm").unwrap_err();
+    assert_eq!(e.error_class().name(), "PATH_NOT_FOUND");
 }
 
 #[test]
@@ -350,4 +450,77 @@ fn hidden_file_metadata_survives_the_padding_projection() {
     let name = first_text(&s, "select _metadata.file_name from t");
     assert!(name.ends_with(".parquet"), "{name}");
     assert_eq!(first_text(&s, "select c from t"), "a  ");
+}
+
+#[test]
+fn an_explicit_cast_drops_the_declared_type() {
+    let s = fresh();
+    run(&s, "insert into t values ('a', 'x')").unwrap();
+    // `CAST(c AS STRING)` is a plain string: the padded `'a  '` no longer equals `'a'` (Spark 4.2.0: no row).
+    assert_eq!(
+        count(
+            &s,
+            "select * from (select cast(c as string) as x from t) q where x = 'a'"
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            &s,
+            "select * from (select try_cast(c as string) as x from t) q where x = 'a'"
+        ),
+        0
+    );
+    // A view over the cast stores `string` (`v_view_cast_desc` in the char/varchar goldens).
+    run(&s, "drop view if exists vc").unwrap();
+    run(&s, "create view vc as select cast(c as char(5)) c5 from t").unwrap();
+    assert_eq!(first_text(&s, "describe table vc"), "c5");
+    assert_eq!(text_at(&s, "describe table vc", 1), "string");
+    // A permanent view of the bare column keeps it: its read projection's cast is the engine's own.
+    run(&s, "drop view if exists vb").unwrap();
+    run(&s, "create view vb as select c from t").unwrap();
+    assert_eq!(count(&s, "select * from vb where c = 'a'"), 1);
+    assert_eq!(text_at(&s, "describe table vb", 1), "char(3)");
+}
+
+#[test]
+fn a_dataframe_temp_view_keeps_the_declared_type() {
+    let s = fresh();
+    run(&s, "insert into t values ('a', 'x')").unwrap();
+    block_on(async { s.table("t").create_or_replace_temp_view("dv").await }).unwrap();
+    assert_eq!(count(&s, "select * from dv where c = 'a'"), 1);
+    // Through an alias and a filter in the stored plan too.
+    block_on(async {
+        s.sql("select c as z from t where v = 'x'")
+            .await?
+            .create_or_replace_temp_view("dv2")
+            .await
+    })
+    .unwrap();
+    assert_eq!(count(&s, "select * from dv2 where z = 'a'"), 1);
+    // A cast in the stored plan drops it, as in a query.
+    block_on(async {
+        s.sql("select cast(c as string) as z from t")
+            .await?
+            .create_or_replace_temp_view("dv3")
+            .await
+    })
+    .unwrap();
+    assert_eq!(count(&s, "select * from dv3 where z = 'a'"), 0);
+}
+
+#[test]
+fn between_over_a_char_column_does_not_pad_its_bounds() {
+    // Spark 4.x rewrites `BETWEEN` before the padding rule sees a comparison, so the bounds stay unpadded
+    // (`cmp_default_c3_between` in the char/varchar goldens: 4.0.0-4.2.0 drop the `'ab'` row, 3.5.7 keeps it).
+    let s = fresh();
+    run(&s, "insert into t values ('a', 'x'), ('ab', 'y')").unwrap();
+    assert_eq!(
+        all_text(
+            &s,
+            "select c from t where c between 'a' and 'ab' order by c"
+        ),
+        "a  \t"
+    );
+    assert_eq!(count(&s, "select * from t where c between 'a' and 'a'"), 0);
 }

@@ -338,7 +338,7 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let items = self.select_items(c, exprs, env, "Aggregate")?;
         // The declared `CHAR`/`VARCHAR` types follow the aliases whichever projection is built below.
-        self.carry_declared(&items);
+        self.carry_declared(&items, exprs);
         let c = &self.reveal(c, &items)?;
         if items.iter().any(|b| has_generator(&b.expr)) {
             return self.generator_project(p.origin, c, exprs, &items);

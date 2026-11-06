@@ -369,8 +369,17 @@ fn list_partition_dirs(dir: &std::path::Path, depth: usize, prefix: &str, out: &
 
 /// A partition `LOCATION` as the catalog stores it: Spark makes a relative path qualified against the
 /// working directory of the process (`makeQualified`).
+/// An empty location fails as `CREATE TABLE ... LOCATION ''` does (Spark 4.2.0 throws Hadoop's unclassified
+/// `IllegalArgumentException` "Can not create a Path from an empty string" here).
 fn qualified(location: &str) -> Result<PathBuf, KrishivError> {
-    let path = PathBuf::from(location.strip_prefix("file:").unwrap_or(location));
+    let bare = location.strip_prefix("file:").unwrap_or(location);
+    if bare.is_empty() {
+        return Err(krishiv_common::error::InvalidEmptyLocation {
+            location: location.to_owned(),
+        }
+        .into());
+    }
+    let path = PathBuf::from(bare);
     if path.is_absolute() {
         return Ok(path);
     }
@@ -439,6 +448,25 @@ fn listed_files(dir: &Path) -> Vec<(String, u64)> {
         .collect();
     out.sort();
     out
+}
+
+/// Whether `dir` or a directory below it holds a file, skipping names that start with `_` or `.` as
+/// [`location_size`] does.
+fn holds_files(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|e| {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('_') || name.starts_with('.') {
+            return false;
+        }
+        match e.file_type() {
+            Ok(t) if t.is_dir() => holds_files(&e.path()),
+            _ => true,
+        }
+    })
 }
 
 /// The size of the data under `dir` as `CommandUtils.calculateSingleLocationSize` sums it: files and
@@ -576,6 +604,14 @@ impl Session {
         if matches!(r.action, Some(RepairAction::Drop | RepairAction::Sync)) {
             return Err(unsupported("MSCK REPAIR TABLE ... DROP | SYNC PARTITIONS"));
         }
+        // Spark 4.2.0 fails on a missing table directory (an unclassified `FileNotFoundException`) rather than
+        // registering nothing.
+        if !table.location.is_dir() {
+            return Err(krishiv_common::error::PathNotFound {
+                path: format!("file:{}", table.location.display()),
+            }
+            .into());
+        }
         let mut dirs = Vec::new();
         list_partition_dirs(
             &table.location,
@@ -603,7 +639,7 @@ impl Session {
         let path = qualified(location)?;
         // Reads and writes of the table follow the table root, not a partition's own location, so a location
         // that already holds data would be reported as set and then ignored.
-        if !listed_files(&path).is_empty() {
+        if path.is_file() || holds_files(&path) {
             return Err(unsupported(
                 "ALTER TABLE ... PARTITION ... SET LOCATION onto existing files",
             ));

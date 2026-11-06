@@ -49,7 +49,11 @@ pub(crate) fn checked(
             None => Ok(value),
         };
     };
-    let tail = || call_function("substring", [value.clone(), lit(n + 1)]);
+    // At the largest length no string can be longer (a value holds fewer than 2^31 characters).
+    let Some(past) = n.checked_add(1) else {
+        return Ok(value);
+    };
+    let tail = || call_function("substring", [value.clone(), lit(past)]);
     let over = call_function("length", [tail()])
         .gt(lit(0))
         .and(call_function("trim", [tail()]).not_eq(lit("")));

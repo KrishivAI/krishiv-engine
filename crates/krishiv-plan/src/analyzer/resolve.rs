@@ -880,6 +880,13 @@ impl Resolver<'_> {
                 if matches!(s.source, ReadSource::Table { .. }) && source.is_none() {
                     return Err(unsupported("a scan of an unchecked table", o));
                 }
+                if let Some(declared) = self.b.scan_declared.get(&name) {
+                    for c in &s.output {
+                        if let Some(d) = declared.get(&c.name) {
+                            self.declared.insert(c.id, Arc::clone(d));
+                        }
+                    }
+                }
                 let qual: Arc<[String]> = name.into();
                 let out = s
                     .output

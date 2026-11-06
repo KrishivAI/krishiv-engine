@@ -116,19 +116,51 @@ impl Resolver<'_> {
     }
 }
 
-/// The column `e` is, or casts to its own `string` type (the read projection of a permanent view casts its
-/// columns to their stored types).
-fn bare_column(e: &Expr) -> Option<&BoundColumn> {
+/// The column `e` is, or, when `internal_cast`, casts to its own `string` type (the read projection of a
+/// permanent view casts its columns to their stored types). A cast the query wrote drops the declared type, as
+/// in Spark.
+fn bare_column(e: &Expr, internal_cast: bool) -> Option<&BoundColumn> {
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
-        ExprNode::Cast { expr, to, .. } if *to == DataType::String => match &expr.node {
-            ExprNode::Resolved(ResolvedExpr::Column(c)) if c.data_type == DataType::String => {
-                Some(c)
+        ExprNode::Cast { expr, to, .. } if internal_cast && *to == DataType::String => {
+            match &expr.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) if c.data_type == DataType::String => {
+                    Some(c)
+                }
+                _ => None,
             }
-            _ => None,
-        },
+        }
         _ => None,
     }
+}
+
+/// The column `c` of the read-side padding call `rpad(c, greatest(char_length(c), n), ' ')`.
+fn read_padded_column(e: &Expr) -> Option<&BoundColumn> {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        return None;
+    };
+    let registry = |id: &crate::FunctionId, name: &str| {
+        matches!(id, crate::FunctionId::Registry { .. }) && id.name() == name
+    };
+    if !registry(&f.id, "rpad") || f.args.len() != 3 {
+        return None;
+    }
+    let ExprNode::Resolved(ResolvedExpr::Function(len)) = &f.args[1].node else {
+        return None;
+    };
+    if !registry(&len.id, "greatest") {
+        return None;
+    }
+    match &f.args[0].node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+        _ => None,
+    }
+}
+
+/// `x AS name` where `x` is a cast the engine built in ANSI mode before analysis.
+fn is_internal_cast_alias(e: &Expr) -> bool {
+    matches!(&e.node, ExprNode::Alias { expr, .. }
+        if matches!(expr.node, ExprNode::Cast { mode: crate::CastMode::Ansi, .. }))
 }
 
 /// The declared length `n` of a bare `char(n)` attribute operand; `None` for any other operand (an expression,
@@ -226,13 +258,22 @@ impl Resolver<'_> {
     }
 
     /// The declared type follows `c AS x` (Spark keeps the field metadata through an alias of a bare column).
-    pub(super) fn carry_declared(&mut self, items: &[Bound]) {
+    /// `written` are the select items before resolution: a cast passes the declared type on only if the engine
+    /// built it in ANSI mode before analysis (a permanent view's read projection, `cast_ansi`); the casts a
+    /// query writes reach the analyzer in the default or `TRY` mode.
+    pub(super) fn carry_declared(&mut self, items: &[Bound], written: &[Arc<Expr>]) {
         if self.declared.is_empty() {
             return;
         }
-        for b in items {
+        let aligned = items.len() == written.len();
+        for (i, b) in items.iter().enumerate() {
+            let internal_cast = aligned && is_internal_cast_alias(&written[i]);
+            // An item already resolved comes from a stored analyzed plan (a DataFrame's temporary view): its
+            // read-side padding call stands for the padded column.
+            let stored = aligned && matches!(written[i].node, ExprNode::Resolved(_));
             if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node
-                && let Some(c) = bare_column(expr)
+                && let Some(c) = bare_column(expr, internal_cast)
+                    .or_else(|| stored.then(|| read_padded_column(expr)).flatten())
                 && let Some(d) = self.declared.get(&c.id).cloned()
             {
                 self.declared.insert(output.id, d);

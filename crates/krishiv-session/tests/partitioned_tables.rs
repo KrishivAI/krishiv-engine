@@ -803,15 +803,25 @@ fn add_partition_locations() {
         location("p = 'y'"),
         format!("Location\tfile:{}", other.display())
     );
-    // A relative location is made absolute against the working directory (Spark's `makeQualified`).
-    run(&s, "ALTER TABLE t ADD PARTITION (p = 'z') LOCATION 'rel'");
+    // A relative location is made absolute against the working directory (Spark's `makeQualified`). The
+    // directory `ADD PARTITION` creates there has a name of its own and is removed even if an assertion fails.
+    struct RemoveOnDrop(std::path::PathBuf);
+    impl Drop for RemoveOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let rel = format!("krishiv-test-rel-{}", std::process::id());
+    let created = RemoveOnDrop(std::env::current_dir().unwrap().join(&rel));
+    run(
+        &s,
+        &format!("ALTER TABLE t ADD PARTITION (p = 'z') LOCATION '{rel}'"),
+    );
     assert_eq!(
         location("p = 'z'"),
-        format!(
-            "Location\tfile:{}",
-            std::env::current_dir().unwrap().join("rel").display()
-        )
+        format!("Location\tfile:{}", created.0.display())
     );
+    assert!(created.0.is_dir());
     assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=x", "p=y", "p=z"]);
 }
 
