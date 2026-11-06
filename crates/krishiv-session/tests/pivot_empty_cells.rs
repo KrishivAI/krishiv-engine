@@ -20,9 +20,17 @@ use futures::executor::block_on;
 use krishiv_session::Session;
 use serde_json::Value;
 
-/// Pivot columns of complex types (a map is not orderable, an array value is a `array(...)` call): the engine
-/// does not take them yet (P2b row 11).
-const KNOWN_GAPS: &[&str] = &["err-unorderable-pivot-col", "pf-array-pivot-col"];
+/// Cases not matched yet:
+/// - pivot columns of complex types (a map is not orderable, an array value is a `array(...)` call): the engine
+///   does not take them yet (P2b row 11);
+/// - several timestamp values, one of them a string: the analyzer cannot tell whether two values are equal, which
+///   decides Spark's result, so the engine refuses them (`docs/known-differences.md`).
+const KNOWN_GAPS: &[&str] = &[
+    "err-unorderable-pivot-col",
+    "pf-array-pivot-col",
+    "pf-ts-dup-cast-value",
+    "pf-ts-distinct-values",
+];
 
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -238,4 +246,102 @@ fn pivot_cells_match_spark() {
         "{} cases, mismatches:\n{report}",
         cases.len()
     );
+}
+
+/// Rows of `sql` over the fixture's views in a session of `profile`, as the generator writes them.
+fn rows_on(
+    profile: krishiv_plan::analyzer::SparkProfile,
+    sql: &str,
+) -> Result<Vec<String>, String> {
+    let fx = fixture();
+    let s = Session::builder()
+        .profile(profile)
+        .build()
+        .map_err(|e| e.to_string())?;
+    block_on(async {
+        for (name, view) in fx["views"].as_object().unwrap() {
+            s.sql(&format!(
+                "CREATE TEMPORARY VIEW {name} AS {}",
+                view.as_str().unwrap()
+            ))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        }
+        let batches = s
+            .sql(sql)
+            .await
+            .map_err(|e| e.to_string())?
+            .collect()
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut rows: Vec<String> = Vec::new();
+        for b in &batches {
+            for r in 0..b.num_rows() {
+                rows.push(
+                    b.columns()
+                        .iter()
+                        .map(|c| render(c, r))
+                        .collect::<Vec<_>>()
+                        .join("|"),
+                );
+            }
+        }
+        rows.sort();
+        Ok(rows)
+    })
+}
+
+/// Before Spark 4.2, `PivotFirst` keys a binary pivot column's values in a `HashMap` of byte arrays, which compares
+/// arrays by identity (`PivotFirst.scala:89` at v3.5.6, v4.0.0, v4.1.0): no row is found, so every cell is NULL, and
+/// repeated values are separate keys (no `INVALID_ARRAY_INDEX`). 4.2 matches by content (`pf-binary-pivot-col`).
+#[test]
+fn binary_pivot_columns_match_by_identity_before_4_2() {
+    use krishiv_plan::analyzer::SparkProfile;
+    for profile in [SparkProfile::V3_5, SparkProfile::V4_0, SparkProfile::V4_1] {
+        assert_eq!(
+            rows_on(
+                profile,
+                "SELECT * FROM b PIVOT (sum(v) FOR p IN (X'01', X'03'))"
+            )
+            .unwrap(),
+            ["1|NULL|NULL", "2|NULL|NULL"],
+            "{profile:?}"
+        );
+        assert_eq!(
+            rows_on(
+                profile,
+                "SELECT * FROM b PIVOT (sum(v) FOR p IN (X'01', X'01'))"
+            )
+            .unwrap(),
+            ["1|NULL|NULL", "2|NULL|NULL"],
+            "{profile:?}"
+        );
+    }
+    assert_eq!(
+        rows_on(
+            SparkProfile::V4_2,
+            "SELECT * FROM b PIVOT (sum(v) FOR p IN (X'01', X'03'))"
+        )
+        .unwrap(),
+        ["1|1|NULL", "2|3|NULL"]
+    );
+}
+
+/// Duplicate values with ANSI off and several aggregates: Spark writes the repeated value into the next aggregate's
+/// slots (its last index is past `indexSize`), which the engine refuses instead of returning.
+#[test]
+fn duplicate_values_with_ansi_off_and_several_aggregates_are_refused() {
+    let s = Session::builder().build().unwrap();
+    s.conf().set("spark.sql.ansi.enabled", "false").unwrap();
+    let e = block_on(async {
+        s.sql("SELECT * FROM VALUES (1, 10, 5) AS g(g, p, v) PIVOT (sum(v) AS s, max(v) AS m FOR p IN (10, 20, 10))")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
 }

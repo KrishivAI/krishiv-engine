@@ -229,12 +229,23 @@ impl Resolver<'_> {
     /// over the grouping columns picks, for each pivot value, the row of
     /// that value. A cell no input row matches is NULL (Spark's buffer slot
     /// is never written), every cell is nullable, and the aggregates'
-    /// arguments are evaluated on every input row (stage one). As Spark's
-    /// slot lookup: a NaN pivot value never matches; duplicate values
-    /// (after the cast, `0.0` and `-0.0` alike) leave fewer slots than
-    /// outputs, so each output past the slots raises `INVALID_ARRAY_INDEX`
-    /// when a row is produced (ANSI on; with ANSI off Spark's cells read
-    /// shifted slots, which the engine refuses instead of returning).
+    /// arguments are evaluated on every input row (stage one).
+    ///
+    /// The cells follow Spark's slot map (`PivotFirst.pivotIndex`: each
+    /// distinct value keyed to its last index, `indexSize` slots, output
+    /// `i` reading slot `i`): a NaN value is its own key and never matches
+    /// (Scala's numeric `==`); `0.0` and `-0.0` are one key; duplicate
+    /// values leave fewer slots than outputs, so an output past the slots
+    /// raises `INVALID_ARRAY_INDEX` when a row is produced with ANSI on and
+    /// is NULL with ANSI off, and a slot no value's last index names is
+    /// NULL. Before 4.2 a binary pivot column is keyed by array identity, so
+    /// no row matches and every cell is NULL. Refused, never answered
+    /// wrong: several values the analyzer cannot compare (a value of a
+    /// type it does not evaluate that is not a literal of the pivot
+    /// column's type), a collated pivot column before 4.2 (Spark keys it by
+    /// bytes, not by collation), and, with ANSI off and several aggregates,
+    /// duplicates whose last index is past the slots (Spark writes that
+    /// value into another aggregate's slots).
     #[expect(clippy::too_many_arguments, reason = "the resolved parts of one PIVOT")]
     fn pivot_first(
         &mut self,
@@ -249,29 +260,60 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let origin = p.origin;
         let ansi = self.ctx.conf.ansi;
-        // Which values Spark's slot map holds: duplicates collapse, and a
-        // NaN value is never found.
+        let pivot_type = pivot.ty.data_type.clone().unwrap_or(DataType::Null);
+        let profile = self.ctx.profile;
+        let before_4_2 = profile < super::SparkProfile::V4_2;
+        if before_4_2 && matches!(pivot_type, DataType::CollatedString(_)) {
+            return Err(unsupported(
+                "PIVOT on a collated column before Spark 4.2",
+                origin,
+            ));
+        }
+        // Before 4.2 a binary key is an array compared by identity: no value
+        // equals another, and no row matches.
+        let by_identity = before_4_2 && matches!(pivot_type, DataType::Binary);
         let mut keys: Vec<SlotKey> = Vec::with_capacity(casts.len());
-        let mut nan = Vec::with_capacity(casts.len());
         for (_, value) in casts {
             let bound = self.bind(value, cx)?;
+            // Spark evaluates every value cast to the pivot type at
+            // analysis: a cast that raises fails the query on any input.
             let key = match self.fold_array(&bound.expr, ansi) {
+                Some(Err(e)) => return Err(AnalysisError::new(e, value.origin)),
+                _ if by_identity => SlotKey::Never,
                 Some(Ok(a)) => SlotKey::of(&a),
-                // A value that raises was refused above; one that does
-                // not fold here has no slot of its own to compare.
-                _ => SlotKey::Opaque,
+                None => SlotKey::literal(&bound.expr),
             };
-            nan.push(matches!(key, SlotKey::Nan));
             keys.push(key);
         }
-        let mut slots = 0usize;
-        for (i, key) in keys.iter().enumerate() {
-            let dup = !matches!(key, SlotKey::Opaque) && keys[..i].contains(key);
-            slots += usize::from(!dup);
-        }
-        if slots < casts.len() && !ansi {
+        if keys.len() > 1 && keys.iter().any(|k| matches!(k, SlotKey::Opaque)) {
             return Err(unsupported(
-                "duplicate PIVOT values with spark.sql.ansi.enabled=false",
+                format!(
+                    "PIVOT values of type {} that are not literals of that type",
+                    pivot_type.catalog_string()
+                ),
+                origin,
+            ));
+        }
+        // The slot of each value (its last index among equal values) and
+        // the value each slot holds.
+        let last: Vec<usize> = (0..keys.len())
+            .map(|k| {
+                (k..keys.len())
+                    .rev()
+                    .find(|&j| keys[j].same(&keys[k]))
+                    .unwrap_or(k)
+            })
+            .collect();
+        let slots = (0..keys.len()).filter(|&k| last[k] == k).count();
+        let mut owner: Vec<Option<usize>> = vec![None; keys.len()];
+        for (k, &l) in last.iter().enumerate() {
+            if l < slots {
+                owner[l] = Some(k);
+            }
+        }
+        if !ansi && items.len() > 1 && last.iter().any(|&l| l >= slots) {
+            return Err(unsupported(
+                "duplicate PIVOT values with several aggregates and spark.sql.ansi.enabled=false",
                 origin,
             ));
         }
@@ -314,15 +356,18 @@ impl Resolver<'_> {
         let zone = self.ctx.conf.session_zone;
         let single = items.len() == 1;
         let mut combined = second_group.clone();
-        for (i, (value_name, value)) in casts.iter().enumerate() {
-            let matches = if nan[i] {
-                Arc::new(Expr::new(ExprNode::Literal(Literal::Boolean(false))).with_origin(origin))
-            } else {
-                call(
+        let never =
+            || Arc::new(Expr::new(ExprNode::Literal(Literal::Boolean(false))).with_origin(origin));
+        for (i, (value_name, _)) in casts.iter().enumerate() {
+            // The value slot `i` holds, and whether its rows match.
+            let read = owner.get(i).copied().flatten();
+            let matches = match read {
+                Some(k) if keys[k].matches() => call(
                     Builtin::EqNullSafe.name(),
-                    vec![Arc::clone(&pivot_col), Arc::clone(value)],
+                    vec![Arc::clone(&pivot_col), Arc::clone(&casts[k].1)],
                     origin,
-                )
+                ),
+                _ => never(),
             };
             for (k, original) in items.iter().enumerate() {
                 let agg = column_bound(&out[n + 1 + k], origin).expr;
@@ -333,8 +378,9 @@ impl Resolver<'_> {
                     Expr::new(ExprNode::Literal(Literal::Boolean(true))).with_origin(origin),
                 );
                 let mut cell = call("first", vec![picked, yes], origin);
-                if i >= slots {
-                    // Spark reads slot `i` of an array of `slots` entries.
+                if i >= slots && ansi {
+                    // Spark reads slot `i` of an array of `slots` entries:
+                    // out of range, which ANSI raises (and is NULL without).
                     let entries = vec![Arc::clone(&cell); slots.max(1)];
                     let index = i32::try_from(i).unwrap_or(i32::MAX);
                     let index = Arc::new(
@@ -526,17 +572,21 @@ impl Resolver<'_> {
 }
 
 /// A pivot value as Spark's `PivotFirst` slot map keys it: its exact
-/// value, with `0.0` and `-0.0` one key (the map's ordering equality), and
-/// NaN apart (Spark's lookup never finds it).
-#[derive(PartialEq)]
+/// value, with `0.0` and `-0.0` one key (Scala's numeric `==`).
 enum SlotKey {
-    /// A NaN value.
+    /// A NaN value: never equal to another key (numeric `==`), never found.
     Nan,
+    /// A key compared by identity (a binary array before 4.2): equal to
+    /// no other, never found.
+    Never,
     /// A floating value, `-0.0` as `0.0`.
     Float(u64),
     /// Any other value, as its one-row array.
     Value(arrow_array::ArrayRef),
-    /// A value the analyzer cannot evaluate: never a duplicate.
+    /// A literal of a type the analyzer does not evaluate (timestamp,
+    /// binary), compared by value.
+    Literal(Literal),
+    /// A value the analyzer cannot compare.
     Opaque,
 }
 
@@ -546,7 +596,7 @@ impl SlotKey {
         use arrow_array::cast::AsArray as _;
         use arrow_array::types::{Float32Type, Float64Type};
         let float = match a.data_type() {
-            _ if a.null_count() > 0 => None,
+            _ if a.is_empty() || a.null_count() > 0 => None,
             arrow_schema::DataType::Float64 => Some(a.as_primitive::<Float64Type>().value(0)),
             arrow_schema::DataType::Float32 => {
                 Some(f64::from(a.as_primitive::<Float32Type>().value(0)))
@@ -558,6 +608,42 @@ impl SlotKey {
             Some(v) => Self::Float((v + 0.0).to_bits()),
             None => Self::Value(Arc::clone(a)),
         }
+    }
+
+    /// The key of a value the analyzer does not evaluate: a timestamp or
+    /// binary literal by its value, anything else opaque.
+    fn literal(e: &Expr) -> Self {
+        match &e.node {
+            ExprNode::Literal(
+                l @ (Literal::Timestamp(_) | Literal::TimestampNtz(_) | Literal::Binary(_)),
+            ) => Self::Literal(l.clone()),
+            _ => Self::Opaque,
+        }
+    }
+
+    /// Whether two keys are one slot-map key.
+    fn same(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Float(a), Self::Float(b)) => a == b,
+            (Self::Value(a), Self::Value(b)) => a.to_data() == b.to_data(),
+            (Self::Literal(a), Self::Literal(b)) => literal_eq(a, b),
+            _ => false,
+        }
+    }
+
+    /// Whether rows of this value can be found in the map.
+    const fn matches(&self) -> bool {
+        !matches!(self, Self::Nan | Self::Never)
+    }
+}
+
+/// Equality of two timestamp or binary literals by value.
+fn literal_eq(a: &Literal, b: &Literal) -> bool {
+    match (a, b) {
+        (Literal::Timestamp(x), Literal::Timestamp(y))
+        | (Literal::TimestampNtz(x), Literal::TimestampNtz(y)) => x == y,
+        (Literal::Binary(x), Literal::Binary(y)) => x == y,
+        _ => false,
     }
 }
 
@@ -759,7 +845,7 @@ fn float_name(t: &Bound, r: &Resolver<'_>) -> Option<String> {
     let Some(Ok(a)) = r.fold_array(&t.expr, r.ctx.conf.ansi) else {
         return None;
     };
-    if a.null_count() > 0 {
+    if a.is_empty() || a.null_count() > 0 {
         return None;
     }
     let java = |v: f64, finite: &dyn Fn() -> String| {
@@ -798,6 +884,8 @@ fn part_name(b: &Bound, r: &Resolver<'_>) -> String {
             }
             Literal::TimestampNtz(us) => crate::spark_fmt::timestamp_value(*us),
             Literal::Null(_) => "null".to_owned(),
+            // Spark's cast of binary to string takes the bytes as UTF-8.
+            Literal::Binary(bytes) => String::from_utf8_lossy(bytes).into_owned(),
             _ => pretty(&b.expr, zone),
         };
     }

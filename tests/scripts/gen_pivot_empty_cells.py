@@ -31,6 +31,7 @@ VIEWS = {
     "(2,10,CAST(NULL AS DECIMAL(10,2)),CAST(NULL AS DATE)) AS d(g,p,x,dt)",
     "n": "SELECT * FROM VALUES (1,1,1.0),(1,1,1.0) AS n(g,p,v)",
     "tt": "SELECT * FROM VALUES (1,TIMESTAMP'2020-01-01 00:00:00',1),(2,TIMESTAMP'2020-01-01 00:00:00',2) AS tt(g,p,v)",
+    "b": "SELECT * FROM VALUES (1,X'01',1),(1,X'02',2),(2,X'01',3) AS b(g,p,v)",
 }
 
 # (id, sql, conf, note)
@@ -208,6 +209,68 @@ CASES = [
     ),
     ("pf-max-int-null-cell", "SELECT * FROM g PIVOT (max(v) FOR p IN (10, 20, 99))", {}, ""),
     ("pf-avg", "SELECT * FROM g PIVOT (avg(v) FOR p IN (10, 20, 99))", {}, "double"),
+    # Review round 1: duplicates of values the analyzer cannot fold, NaN twice, ANSI off, empty input, cast errors,
+    # binary pivot columns.
+    (
+        "pf-empty-input-ungrouped",
+        "SELECT * FROM (SELECT p, v FROM g WHERE p > 100) PIVOT (count(v) FOR p IN (10))",
+        {},
+        "ungrouped PivotFirst over empty input: the stage-2 global aggregate",
+    ),
+    (
+        "pf-ts-dup-values",
+        "SELECT * FROM tt PIVOT (count(v) FOR p IN (TIMESTAMP'2020-01-01 00:00:00', TIMESTAMP'2020-01-01 00:00:00'))",
+        {},
+        "duplicate timestamp values",
+    ),
+    (
+        "pf-ts-dup-cast-value",
+        "SELECT * FROM tt PIVOT (count(v) FOR p IN (TIMESTAMP'2020-01-01 00:00:00', '2020-01-01 00:00:00'))",
+        {},
+        "a string value equal to a timestamp value after the cast",
+    ),
+    (
+        "pf-ts-distinct-values",
+        "SELECT * FROM tt PIVOT (count(v) FOR p IN (TIMESTAMP'2020-01-01 00:00:00', '2021-01-01 00:00:00'))",
+        {},
+        "distinct timestamp values, one a string",
+    ),
+    (
+        "pf-float-nan-twice",
+        "SELECT * FROM f PIVOT (sum(v) FOR p IN (CAST('NaN' AS DOUBLE), CAST('NaN' AS DOUBLE)))",
+        {},
+        "two NaN values: separate keys?",
+    ),
+    (
+        "pf-int-dup-ansi-off",
+        "SELECT * FROM g PIVOT (sum(v) FOR p IN (10, 20, 10))",
+        {"spark.sql.ansi.enabled": "false"},
+        "duplicate values with ANSI off",
+    ),
+    (
+        "pf-int-dup-empty-input",
+        "SELECT * FROM (SELECT * FROM g WHERE g > 100) PIVOT (sum(v) FOR p IN (10, 10))",
+        {},
+        "duplicate values, no row produced",
+    ),
+    (
+        "pf-cast-error-value",
+        "SELECT * FROM (SELECT * FROM g WHERE g > 100) PIVOT (sum(v) FOR p IN ('abc'))",
+        {},
+        "a value whose cast to the pivot type fails, empty input",
+    ),
+    (
+        "pf-binary-pivot-col",
+        "SELECT * FROM b PIVOT (sum(v) FOR p IN (X'01', X'03'))",
+        {},
+        "binary pivot column (4.2: TreeMap, matched by content)",
+    ),
+    (
+        "pf-binary-dup-values",
+        "SELECT * FROM b PIVOT (sum(v) FOR p IN (X'01', X'01'))",
+        {},
+        "duplicate binary values",
+    ),
 ]
 
 

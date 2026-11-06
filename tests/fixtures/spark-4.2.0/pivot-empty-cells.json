@@ -10,7 +10,8 @@
   "s": "SELECT * FROM VALUES (1,'a',1),(1,'b',2),(1,NULL,3),(2,'a',4),(2,'B',5) AS s(g,p,v)",
   "d": "SELECT * FROM VALUES (1,10,CAST(1.25 AS DECIMAL(10,2)),DATE'2020-01-01'),(1,20,CAST(2.50 AS DECIMAL(10,2)),DATE'2021-02-03'),(2,10,CAST(NULL AS DECIMAL(10,2)),CAST(NULL AS DATE)) AS d(g,p,x,dt)",
   "n": "SELECT * FROM VALUES (1,1,1.0),(1,1,1.0) AS n(g,p,v)",
-  "tt": "SELECT * FROM VALUES (1,TIMESTAMP'2020-01-01 00:00:00',1),(2,TIMESTAMP'2020-01-01 00:00:00',2) AS tt(g,p,v)"
+  "tt": "SELECT * FROM VALUES (1,TIMESTAMP'2020-01-01 00:00:00',1),(2,TIMESTAMP'2020-01-01 00:00:00',2) AS tt(g,p,v)",
+  "b": "SELECT * FROM VALUES (1,X'01',1),(1,X'02',2),(2,X'01',3) AS b(g,p,v)"
  },
  "cases": [
   {
@@ -1812,6 +1813,277 @@
     "2|w|3.0|NULL|NULL",
     "3|r|NULL|NULL|NULL"
    ]
+  },
+  {
+   "id": "pf-empty-input-ungrouped",
+   "sql": "SELECT * FROM (SELECT p, v FROM g WHERE p > 100) PIVOT (count(v) FOR p IN (10))",
+   "conf": {},
+   "note": "ungrouped PivotFirst over empty input: the stage-2 global aggregate",
+   "path": "pivot_first",
+   "output": [
+    {
+     "name": "10",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "ok": true,
+   "rows": [
+    "NULL"
+   ]
+  },
+  {
+   "id": "pf-ts-dup-values",
+   "sql": "SELECT * FROM tt PIVOT (count(v) FOR p IN (TIMESTAMP'2020-01-01 00:00:00', TIMESTAMP'2020-01-01 00:00:00'))",
+   "conf": {},
+   "note": "duplicate timestamp values",
+   "path": "pivot_first",
+   "output": [
+    {
+     "name": "g",
+     "type": "int",
+     "nullable": false
+    },
+    {
+     "name": "2020-01-01 00:00:00",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "2020-01-01 00:00:00",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "ok": false,
+   "error_class": "INVALID_ARRAY_INDEX",
+   "sql_state": "22003"
+  },
+  {
+   "id": "pf-ts-dup-cast-value",
+   "sql": "SELECT * FROM tt PIVOT (count(v) FOR p IN (TIMESTAMP'2020-01-01 00:00:00', '2020-01-01 00:00:00'))",
+   "conf": {},
+   "note": "a string value equal to a timestamp value after the cast",
+   "path": "pivot_first",
+   "output": [
+    {
+     "name": "g",
+     "type": "int",
+     "nullable": false
+    },
+    {
+     "name": "2020-01-01 00:00:00",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "2020-01-01 00:00:00",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "ok": false,
+   "error_class": "INVALID_ARRAY_INDEX",
+   "sql_state": "22003"
+  },
+  {
+   "id": "pf-ts-distinct-values",
+   "sql": "SELECT * FROM tt PIVOT (count(v) FOR p IN (TIMESTAMP'2020-01-01 00:00:00', '2021-01-01 00:00:00'))",
+   "conf": {},
+   "note": "distinct timestamp values, one a string",
+   "path": "pivot_first",
+   "output": [
+    {
+     "name": "g",
+     "type": "int",
+     "nullable": false
+    },
+    {
+     "name": "2020-01-01 00:00:00",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "2021-01-01 00:00:00",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "ok": true,
+   "rows": [
+    "1|1|NULL",
+    "2|1|NULL"
+   ]
+  },
+  {
+   "id": "pf-float-nan-twice",
+   "sql": "SELECT * FROM f PIVOT (sum(v) FOR p IN (CAST('NaN' AS DOUBLE), CAST('NaN' AS DOUBLE)))",
+   "conf": {},
+   "note": "two NaN values: separate keys?",
+   "path": "pivot_first",
+   "output": [
+    {
+     "name": "g",
+     "type": "int",
+     "nullable": false
+    },
+    {
+     "name": "NaN",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "NaN",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "ok": true,
+   "rows": [
+    "1|NULL|NULL",
+    "2|NULL|NULL"
+   ]
+  },
+  {
+   "id": "pf-int-dup-ansi-off",
+   "sql": "SELECT * FROM g PIVOT (sum(v) FOR p IN (10, 20, 10))",
+   "conf": {
+    "spark.sql.ansi.enabled": "false"
+   },
+   "note": "duplicate values with ANSI off",
+   "path": "pivot_first",
+   "output": [
+    {
+     "name": "g",
+     "type": "int",
+     "nullable": false
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": false
+    },
+    {
+     "name": "10",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "20",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "10",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "ok": true,
+   "rows": [
+    "1|x|NULL|NULL|NULL",
+    "1|y|NULL|NULL|NULL",
+    "1|z|NULL|NULL|NULL",
+    "2|q|NULL|NULL|NULL",
+    "2|w|NULL|NULL|NULL",
+    "3|r|NULL|NULL|NULL"
+   ]
+  },
+  {
+   "id": "pf-int-dup-empty-input",
+   "sql": "SELECT * FROM (SELECT * FROM g WHERE g > 100) PIVOT (sum(v) FOR p IN (10, 10))",
+   "conf": {},
+   "note": "duplicate values, no row produced",
+   "path": "pivot_first",
+   "output": [
+    {
+     "name": "g",
+     "type": "int",
+     "nullable": false
+    },
+    {
+     "name": "s",
+     "type": "string",
+     "nullable": false
+    },
+    {
+     "name": "10",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "10",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "ok": true,
+   "rows": []
+  },
+  {
+   "id": "pf-cast-error-value",
+   "sql": "SELECT * FROM (SELECT * FROM g WHERE g > 100) PIVOT (sum(v) FOR p IN ('abc'))",
+   "conf": {},
+   "note": "a value whose cast to the pivot type fails, empty input",
+   "ok": false,
+   "error_class": "CAST_INVALID_INPUT",
+   "sql_state": "22018"
+  },
+  {
+   "id": "pf-binary-pivot-col",
+   "sql": "SELECT * FROM b PIVOT (sum(v) FOR p IN (X'01', X'03'))",
+   "conf": {},
+   "note": "binary pivot column (4.2: TreeMap, matched by content)",
+   "path": "pivot_first",
+   "output": [
+    {
+     "name": "g",
+     "type": "int",
+     "nullable": false
+    },
+    {
+     "name": "\u0001",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "\u0003",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "ok": true,
+   "rows": [
+    "1|1|NULL",
+    "2|3|NULL"
+   ]
+  },
+  {
+   "id": "pf-binary-dup-values",
+   "sql": "SELECT * FROM b PIVOT (sum(v) FOR p IN (X'01', X'01'))",
+   "conf": {},
+   "note": "duplicate binary values",
+   "path": "pivot_first",
+   "output": [
+    {
+     "name": "g",
+     "type": "int",
+     "nullable": false
+    },
+    {
+     "name": "\u0001",
+     "type": "bigint",
+     "nullable": true
+    },
+    {
+     "name": "\u0001",
+     "type": "bigint",
+     "nullable": true
+    }
+   ],
+   "ok": false,
+   "error_class": "INVALID_ARRAY_INDEX",
+   "sql_state": "22003"
   }
  ]
 }
