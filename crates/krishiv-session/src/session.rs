@@ -493,6 +493,11 @@ impl Session {
         if let Err(error) = &result
             && row.lock().unwrap_or_else(PoisonError::into_inner).is_none()
         {
+            self.state
+                .queries
+                .set_text_policy(crate::system::TextPolicy::from_config(
+                    &self.state.conf.snapshot(),
+                ));
             self.state.queries.record_refused(
                 Some(krishiv_sql::redact_sql(query).as_str()),
                 None,
@@ -1516,6 +1521,11 @@ impl Session {
     /// that is about to change something (a write replacing files) takes the permit first and
     /// passes it on, so a refused or cancelled query has changed nothing.
     pub(crate) async fn admit_query(&self, env: &QueryEnv) -> Result<Admitted, KrishivError> {
+        self.state
+            .queries
+            .set_text_policy(crate::system::TextPolicy::from_config(
+                &self.state.conf.snapshot(),
+            ));
         let log_id = self.state.queries.begin_as(
             env.text.as_deref(),
             env.statement_class,
