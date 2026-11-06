@@ -228,6 +228,8 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("pipelines", Long, true),
             ("workers", Long, true),
             ("cancel_reason", Text, true),
+            ("sqlstate", Text, true),
+            ("partial", Flag, false),
         ],
         _ => return None,
     })
@@ -584,6 +586,15 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             long(rows.iter().map(|r| r.pipelines)),
             long(rows.iter().map(|r| r.workers)),
             text(rows.iter().map(|r| r.cancel_reason)),
+            // The class's SQLSTATE (Spark's registry); NULL for a class the registry lacks.
+            text(rows.iter().map(|r| {
+                r.error_class
+                    .as_deref()
+                    .and_then(krishiv_common::error::ErrorClass::from_name)
+                    .and_then(krishiv_common::error::ErrorClass::sql_state)
+            })),
+            // One process, one worker: every row is whole (design §2.7 for the merged rows).
+            Arc::new(BooleanArray::from_iter(rows.iter().map(|_| Some(false)))),
         ];
     }
     let rows = capability_rows();
