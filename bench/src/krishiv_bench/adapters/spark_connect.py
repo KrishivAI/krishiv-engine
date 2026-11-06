@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import time
 from typing import TYPE_CHECKING
 
 from .base import Dataset, Engine, Measure, Query
@@ -73,6 +74,17 @@ class SparkConnectEngine(Engine):
     def run(self, query: Query) -> list[tuple]:
         assert self.spark is not None, "setup() not called"
         return [tuple(r) for r in self.spark.sql(query.sql).collect()]
+
+    def timed_run(self, query: Query) -> tuple[int, float]:
+        """The full result as Arrow record batches (``toArrow``), never Python row objects; its checksum is taken
+        after the clock stops (``result_checksum``), so a timed run is held to the verified answer."""
+        assert self.spark is not None, "setup() not called"
+        self._pending = None  # a result nobody took is not kept alongside the next
+        t0 = time.perf_counter()
+        table = self.spark.sql(query.sql).toArrow()
+        secs = time.perf_counter() - t0
+        self._pending = table
+        return table.num_rows, secs
 
     def cancel(self) -> None:
         if self.spark is not None:
