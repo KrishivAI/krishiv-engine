@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The moment aggregates as window functions over partitions evaluated from disk (a memory limit far below a
-//! partition): the result equals the in-memory one, and `spark.sql.legacy.statisticalAggregate` reaches the
-//! spilled path (a one-row frame is NULL by default and NaN under the flag).
+//! partition): every output row equals the in-memory one bit for bit, and
+//! `spark.sql.legacy.statisticalAggregate` reaches the spilled path (a sample variance over one row is NULL by
+//! default and NaN under the flag).
 #![cfg(test)]
 
 use std::sync::Arc;
@@ -27,9 +28,12 @@ fn session(legacy: bool, limited: Option<&std::path::Path>) -> Session {
             .config("krishiv.memory.limit", "6m");
     }
     let s = b.build().unwrap();
+    // `t(k, v, i)`: two groups, a NULL `v` every seventh row, and a unique row number `i` (the window orders by
+    // `v, i`, so ties in `v` do not make the result depend on the sort).
     let schema = Arc::new(Schema::new(vec![
         Field::new("k", DataType::Int64, false),
         Field::new("v", DataType::Int64, true),
+        Field::new("i", DataType::Int64, false),
     ]));
     let rows: Vec<i64> = (0..ROWS).collect();
     let batches = rows
@@ -42,6 +46,7 @@ fn session(legacy: bool, limited: Option<&std::path::Path>) -> Session {
                     Arc::new(Int64Array::from_iter(
                         c.iter().map(|i| (i % 7 != 0).then_some(i % 1000)),
                     )),
+                    Arc::new(Int64Array::from_iter_values(c.iter().copied())),
                 ],
             )
             .unwrap()
@@ -51,36 +56,62 @@ fn session(legacy: bool, limited: Option<&std::path::Path>) -> Session {
     s
 }
 
-/// The single row of `sql` as text, plus how many spill files the query wrote.
-fn run(s: &Session, sql: &str) -> (String, u64) {
+/// `sql`'s rows as text (every column), and the spill files the Window operator itself wrote.
+fn run(s: &Session, sql: &str) -> (Vec<String>, u64) {
     let df = block_on(s.sql(sql)).unwrap();
     let (batches, profile) = block_on(df.collect_with_profile()).unwrap();
     let spilled = profile
         .metrics
         .operators
         .values()
+        .filter(|e| e.name == "Window")
         .map(|e| e.metrics.spill_files)
         .sum();
-    let b = &batches[0];
-    let cells: Vec<String> = (0..b.num_columns())
-        .map(|c| {
-            let a = b.column(c);
-            if a.is_null(0) {
-                "None".to_owned()
-            } else if let DataType::Int64 = a.data_type() {
-                a.as_primitive::<Int64Type>().value(0).to_string()
-            } else {
-                format!("{:?}", a.as_primitive::<Float64Type>().value(0))
-            }
-        })
-        .collect();
-    (cells.join(" "), spilled)
+    let mut out = Vec::new();
+    for b in &batches {
+        for r in 0..b.num_rows() {
+            let cells: Vec<String> = (0..b.num_columns())
+                .map(|c| {
+                    let a = b.column(c);
+                    if a.is_null(r) {
+                        "None".to_owned()
+                    } else if let DataType::Int64 = a.data_type() {
+                        a.as_primitive::<Int64Type>().value(r).to_string()
+                    } else {
+                        // The bits, so two NaNs and `-0.0` against `0.0` compare as Spark's goldens do.
+                        a.as_primitive::<Float64Type>()
+                            .value(r)
+                            .to_bits()
+                            .to_string()
+                    }
+                })
+                .collect();
+            out.push(cells.join(" "));
+        }
+    }
+    (out, spilled)
 }
 
-fn query(function: &str, frame: &str) -> String {
+/// The rows of `run`, sorted by their first column (the row number).
+fn run_sorted(s: &Session, sql: &str) -> (Vec<String>, u64) {
+    let (mut rows, spilled) = run(s, sql);
+    rows.sort_by_key(|r| r.split(' ').next().unwrap().parse::<i64>().unwrap());
+    (rows, spilled)
+}
+
+/// Every row of `function` over `frame` (ordered by `v, i`); the test sorts the rows by `i` itself, since a final
+/// `ORDER BY` over 200,000 rows would be a second consumer of the 6 MB budget.
+fn all_rows(function: &str, frame: &str) -> String {
     format!(
-        "SELECT count(*), count(c), count(CASE WHEN isnan(c) THEN 1 END), max(c), min(c) FROM \
-         (SELECT {function} OVER (PARTITION BY k ORDER BY v {frame}) AS c FROM t)"
+        "SELECT i, c FROM (SELECT i, {function} OVER (PARTITION BY k ORDER BY v, i {frame}) AS c FROM t)"
+    )
+}
+
+/// How many rows are NaN, and how many are non-NULL.
+fn counts(function: &str, frame: &str) -> String {
+    format!(
+        "SELECT count(*), count(c), count(CASE WHEN isnan(c) THEN 1 END) FROM \
+         (SELECT {function} OVER (PARTITION BY k ORDER BY v, i {frame}) AS c FROM t)"
     )
 }
 
@@ -99,10 +130,19 @@ fn moment_windows_from_disk_equal_the_in_memory_result() {
             "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
             "ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING",
         ] {
-            let q = query(function, frame);
-            let (got, spilled) = run(&limited, &q);
-            assert!(spilled > 0, "{function} {frame}: the window did not spill");
-            assert_eq!(got, run(&memory, &q).0, "{function} {frame}");
+            let q = all_rows(function, frame);
+            let (got, spilled) = run_sorted(&limited, &q);
+            assert!(
+                spilled > 0,
+                "{function} {frame}: the Window operator did not spill"
+            );
+            let (want, _) = run_sorted(&memory, &q);
+            assert_eq!(
+                got.len(),
+                usize::try_from(ROWS).unwrap(),
+                "{function} {frame}"
+            );
+            assert!(got == want, "{function} {frame}: rows differ from memory");
         }
     }
 }
@@ -110,22 +150,29 @@ fn moment_windows_from_disk_equal_the_in_memory_result() {
 #[test]
 fn the_legacy_statistical_flag_reaches_a_window_evaluated_from_disk() {
     let dir = tempfile::tempdir().unwrap();
-    // A frame of the current row only: a sample variance over one row divides by zero.
-    let q = query(
+    let rows = ROWS.to_string();
+    let values: i64 = (0..ROWS).filter(|i| i % 7 != 0).count().try_into().unwrap();
+    // A frame of the current row only: a sample variance over one row divides by zero, and a NULL `v` is NULL.
+    let one = counts(
         "var_samp(CAST(v AS DOUBLE))",
         "ROWS BETWEEN CURRENT ROW AND CURRENT ROW",
     );
-    let rows = ROWS.to_string();
-    let (plain, spilled) = run(&session(false, Some(&dir.path().join("a"))), &q);
-    assert!(spilled > 0, "the window did not spill");
-    // NULL (or NaN where `v` is NULL, which `CAST` keeps NULL): no row is NaN without the flag.
-    assert!(plain.starts_with(&format!("{rows} 0 0 ")), "{plain}");
-    let (legacy, spilled) = run(&session(true, Some(&dir.path().join("b"))), &q);
-    assert!(spilled > 0, "the window did not spill");
-    // Every row with a value is NaN under the flag.
-    let nan_rows: i64 = (0..ROWS).filter(|i| i % 7 != 0).count().try_into().unwrap();
-    assert!(
-        legacy.starts_with(&format!("{rows} {nan_rows} {nan_rows} ")),
-        "{legacy}"
+    let (plain, spilled) = run(&session(false, Some(&dir.path().join("a"))), &one);
+    assert!(spilled > 0, "the Window operator did not spill");
+    assert_eq!(plain, [format!("{rows} 0 0")]);
+    let (legacy, spilled) = run(&session(true, Some(&dir.path().join("b"))), &one);
+    assert!(spilled > 0, "the Window operator did not spill");
+    assert_eq!(legacy, [format!("{rows} {values} {values}")]);
+
+    // A running frame: the first row with a value in each partition has one value, NaN under the flag.
+    let running = counts(
+        "var_samp(CAST(v AS DOUBLE))",
+        "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
     );
+    let (plain, _) = run(&session(false, Some(&dir.path().join("c"))), &running);
+    let (legacy, spilled) = run(&session(true, Some(&dir.path().join("d"))), &running);
+    assert!(spilled > 0, "the Window operator did not spill");
+    let nan = |line: &str| line.rsplit(' ').next().unwrap().to_owned();
+    assert_eq!(nan(&plain[0]), "0", "{plain:?}");
+    assert_eq!(nan(&legacy[0]), "2", "{legacy:?}");
 }

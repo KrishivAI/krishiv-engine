@@ -112,7 +112,7 @@ fn moment_window_aggregates_match_spark() {
                 // Spark raised; the engine must raise the same error class (Spark's text opens with `[CLASS]`).
                 let want = case["error"].as_str().unwrap();
                 let got = e.error_class().name();
-                if !want.contains(&format!("[{got}")) && !want.contains(&format!("{got}]")) {
+                if !want.contains(&format!("[{got}]")) {
                     wrong.push(format!(
                         "{sql}: engine {}, Spark {want}",
                         e.error_class().name()
