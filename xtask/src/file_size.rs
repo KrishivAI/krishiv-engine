@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `cargo xtask file-size [--write-baseline]`: no hand-written Rust file under a crate's `src/` grows
+//! `cargo xtask file-size [--write-baseline [--base REF] [--only PATH]...]`: no hand-written Rust file under a crate's `src/` grows
 //! past [`MAX_LINES`] lines (owner rule, 2026-11-01).
 //!
 //! Files already over the limit are listed with their size in `xtask/file-size-baseline.txt` (one
 //! `<lines> <path>` per line, sorted by path): they may shrink, never grow. A new file over the limit
 //! fails; a file that grew past its baseline fails. A PR that needs a bigger file raises that one line
 //! in the baseline, which shows in review. A shrink passes and is reported, so concurrent PRs do not
-//! all have to edit the same baseline line; `--write-baseline` rewrites the file from the tree and
-//! drops files that are back under the limit. Test files count when they sit under `src/`; the `tests/`
+//! all have to edit the same baseline line. `--write-baseline` updates only the lines of files this
+//! branch changed (against the merge base with `origin/main`, plus uncommitted and untracked files, or
+//! the paths given with `--only`): it sets a changed file's line and drops it when it is back under the
+//! limit, and leaves every other line alone, so two PRs never fight over a file neither changed. Lowering
+//! the lines of unchanged files is left to a main-only job. Test files count when they sit under `src/`; the `tests/`
 //! directories, generated code (`*.pb.rs`, `@generated`) and fixtures are not scanned.
 #![expect(clippy::print_stdout, reason = "command output is the interface")]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use crate::map::{MAX_LINES, is_generated};
@@ -96,6 +99,85 @@ pub fn render_baseline(current: &BTreeMap<String, usize>) -> String {
     out
 }
 
+/// `old_text` (the baseline file) with only the `touched` files' entries changed: a touched file's line is
+/// replaced by its current size, dropped when it is back under the limit, or inserted in path order when
+/// new. Comment lines (the reasons for raised lines) and every other entry stay exactly as they were.
+#[must_use]
+pub fn merge_baseline_text(
+    old_text: &str,
+    current: &BTreeMap<String, usize>,
+    touched: &BTreeSet<String>,
+) -> String {
+    let mut pending: BTreeMap<&str, usize> = touched
+        .iter()
+        .filter_map(|p| match current.get(p) {
+            Some(&l) if l > MAX_LINES => Some((p.as_str(), l)),
+            _ => None,
+        })
+        .collect();
+    let mut out = String::new();
+    for line in old_text.lines() {
+        let entry = if line.trim_start().starts_with('#') {
+            None
+        } else {
+            line.trim().split_once(' ').map(|(_, p)| p.trim())
+        };
+        if let Some(path) = entry {
+            // Insert new files that sort before this entry.
+            let before: Vec<&str> = pending.keys().copied().filter(|k| *k < path).collect();
+            for k in before {
+                if let Some(l) = pending.remove(k) {
+                    out.push_str(&format!("{l} {k}\n"));
+                }
+            }
+            if touched.contains(path) {
+                if let Some(l) = pending.remove(path) {
+                    out.push_str(&format!("{l} {path}\n"));
+                }
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    for (k, l) in pending {
+        out.push_str(&format!("{l} {k}\n"));
+    }
+    out
+}
+
+fn git_lines(root: &Path, args: &[&str]) -> Result<Vec<String>, String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|e| format!("git {args:?}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect())
+}
+
+/// The files this branch changed: committed since the merge base with `base`, uncommitted, and untracked.
+fn changed_files(root: &Path, base: &str) -> Result<BTreeSet<String>, String> {
+    let range = format!("{base}...HEAD");
+    let mut out = BTreeSet::new();
+    out.extend(git_lines(root, &["diff", "--name-only", &range])?);
+    out.extend(git_lines(root, &["diff", "--name-only", "HEAD"])?);
+    out.extend(git_lines(
+        root,
+        &["ls-files", "--others", "--exclude-standard"],
+    )?);
+    Ok(out)
+}
+
 fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     for entry in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
         let path = entry.map_err(|e| e.to_string())?.path();
@@ -137,22 +219,44 @@ pub fn scan(root: &Path) -> Result<BTreeMap<String, usize>, String> {
     Ok(out)
 }
 
-/// `xtask file-size [--write-baseline]`.
+/// `xtask file-size [--write-baseline [--base REF] [--only PATH]...]`.
 ///
 /// # Errors
-/// Returns an error for unknown flags, unreadable files, a malformed baseline, or any failing finding.
+/// Returns an error for unknown flags, unreadable files, a malformed baseline, a failed `git` call, or
+/// any failing finding.
 pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
-    let write = match flags {
-        [] => false,
-        ["--write-baseline"] => true,
-        other => return Err(format!("unknown flags {other:?}")),
-    };
+    let mut write = false;
+    let mut base = "origin/main".to_owned();
+    let mut only: Vec<String> = Vec::new();
+    let mut it = flags.iter();
+    while let Some(&flag) = it.next() {
+        match flag {
+            "--write-baseline" => write = true,
+            "--base" => base = (*it.next().ok_or("--base needs a ref")?).to_owned(),
+            "--only" => only.push((*it.next().ok_or("--only needs a path")?).to_owned()),
+            other => return Err(format!("unknown flags {other:?}")),
+        }
+    }
+    if !write && (!only.is_empty() || base != "origin/main") {
+        return Err("--base and --only go with --write-baseline".to_owned());
+    }
     let current = scan(root)?;
     let path = root.join(BASELINE);
     if write {
-        std::fs::write(&path, render_baseline(&current))
+        let touched = if only.is_empty() {
+            changed_files(root, &base)?
+        } else {
+            only.into_iter().collect()
+        };
+        let old = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => render_baseline(&BTreeMap::new()),
+            Err(e) => return Err(format!("{}: {e}", path.display())),
+        };
+        parse_baseline(&old)?;
+        std::fs::write(&path, merge_baseline_text(&old, &current, &touched))
             .map_err(|e| format!("{}: {e}", path.display()))?;
-        println!("file-size: wrote {BASELINE}");
+        println!("file-size: updated {BASELINE} for the files this branch changed");
         return Ok(());
     }
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -167,12 +271,12 @@ pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
     }
     for (f, was, n) in &report.shrunk {
         println!(
-            "note: {f} shrank from {was} to {n} lines: lower its baseline (`--write-baseline`)"
+            "note: {f} shrank from {was} to {n} lines: lower its baseline (`--write-baseline --only {f}`, or leave it to the main-only refresh)"
         );
     }
     for f in &report.stale {
         println!(
-            "note: {f} is under the limit or gone: drop it from {BASELINE} (`--write-baseline`)"
+            "note: {f} is under the limit or gone: drop it from {BASELINE} (`--write-baseline --only {f}`, or leave it to the main-only refresh)"
         );
     }
     println!("file-size: {} failing finding(s)", report.failures());
@@ -226,6 +330,93 @@ mod tests {
     }
 
     #[test]
+    fn writing_the_baseline_touches_only_the_changed_files_and_keeps_comments() {
+        let old = "# header\n4582 a.rs\n3000 b.rs\n# why c grew\n2500 c.rs\n";
+        let cur = map(&[
+            ("a.rs", 4543),
+            ("b.rs", 3100),
+            ("c.rs", 1000),
+            ("a0.rs", 2100),
+            ("z.rs", 2200),
+        ]);
+        let touched: BTreeSet<String> = ["b.rs", "c.rs", "a0.rs", "z.rs"].map(str::to_owned).into();
+        // a.rs shrank on its own but was not changed here: its line stays.
+        assert_eq!(
+            merge_baseline_text(old, &cur, &touched),
+            "# header\n4582 a.rs\n2100 a0.rs\n3100 b.rs\n# why c grew\n2200 z.rs\n"
+        );
+    }
+
+    #[test]
+    fn write_baseline_with_only_leaves_other_lines_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("crates/c/src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(dir.path().join("xtask")).unwrap();
+        let lines = |n: usize| "fn f() {}\n".repeat(n);
+        std::fs::write(src.join("a.rs"), lines(2100)).unwrap();
+        std::fs::write(src.join("b.rs"), lines(2100)).unwrap();
+        std::fs::write(
+            dir.path().join(BASELINE),
+            "2300 crates/c/src/a.rs\n2100 crates/c/src/b.rs\n",
+        )
+        .unwrap();
+        std::fs::write(src.join("b.rs"), lines(2200)).unwrap();
+        run(
+            dir.path(),
+            &["--write-baseline", "--only", "crates/c/src/b.rs"],
+        )
+        .unwrap();
+        let text = std::fs::read_to_string(dir.path().join(BASELINE)).unwrap();
+        assert!(text.contains("2300 crates/c/src/a.rs") && text.contains("2200 crates/c/src/b.rs"));
+        assert!(run(dir.path(), &["--only", "x"]).is_err());
+    }
+
+    #[test]
+    fn write_baseline_finds_the_changed_files_through_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {args:?}");
+        };
+        let src = root.join("crates/c/src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(root.join("xtask")).unwrap();
+        let lines = |n: usize| "fn f() {}\n".repeat(n);
+        std::fs::write(src.join("a.rs"), lines(2100)).unwrap();
+        std::fs::write(src.join("b.rs"), lines(2100)).unwrap();
+        std::fs::write(
+            root.join(BASELINE),
+            "# why\n2300 crates/c/src/a.rs\n2100 crates/c/src/b.rs\n",
+        )
+        .unwrap();
+        git(&["init", "-q", "-b", "main"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "base"]);
+        git(&["checkout", "-q", "-b", "topic"]);
+        // b.rs grows in a commit, new.rs is untracked, a.rs shrank but is not changed here.
+        std::fs::write(src.join("b.rs"), lines(2200)).unwrap();
+        git(&["commit", "-q", "-am", "grow b"]);
+        std::fs::write(src.join("new.rs"), lines(2001)).unwrap();
+        run(root, &["--write-baseline", "--base", "main"]).unwrap();
+        let text = std::fs::read_to_string(root.join(BASELINE)).unwrap();
+        assert_eq!(
+            text,
+            "# why\n2300 crates/c/src/a.rs\n2200 crates/c/src/b.rs\n2001 crates/c/src/new.rs\n"
+        );
+        assert!(run(root, &["--write-baseline", "--base", "nope"]).is_err());
+        assert!(run(root, &["--base"]).is_err());
+        assert!(run(root, &["--only"]).is_err());
+    }
+
+    #[test]
     fn the_baseline_round_trips() {
         let cur = map(&[("a.rs", 2500), ("b.rs", 100), ("c/d.rs", 2001)]);
         let text = render_baseline(&cur);
@@ -266,7 +457,11 @@ mod tests {
         assert!(run(dir.path(), &["--bogus"]).is_err());
         // No baseline yet: the big file is new.
         assert!(run(dir.path(), &[]).is_err());
-        run(dir.path(), &["--write-baseline"]).unwrap();
+        run(
+            dir.path(),
+            &["--write-baseline", "--only", "crates/c/src/big.rs"],
+        )
+        .unwrap();
         let text = std::fs::read_to_string(dir.path().join(BASELINE)).unwrap();
         assert!(text.contains("2100 crates/c/src/big.rs") && !text.contains("small.rs"));
         run(dir.path(), &[]).unwrap();
