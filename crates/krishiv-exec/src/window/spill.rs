@@ -341,7 +341,12 @@ impl Window {
                     .cursor
                     .take()
                     .ok_or_else(|| internal("window flush without its input".to_owned()))?;
-                let (cursor, next) = with_credit(ctx, &mut r.headroom, move || {
+                // The reader frees its previous batch's bytes into the credit while it reads the next one. The
+                // headroom takes them back up to `base` (not only up to what it lent: once a read leaves it at 0,
+                // that would hand every later read nothing, and the bytes would go to the pool, where buffered rows
+                // fill the limit, so the next read of a batch found no memory).
+                let keep = r.base;
+                let (cursor, next) = with_credit_keeping(ctx, &mut r.headroom, keep, move || {
                     let next = cursor.next()?;
                     Ok((cursor, next))
                 })
