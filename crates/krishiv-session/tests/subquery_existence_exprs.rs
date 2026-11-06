@@ -102,6 +102,19 @@ fn subqueries_over_grouping_keys_group_by_their_existence_column() -> R {
     let q = "select exists (select 1 from b where b.k = d.k), count(*) from a cross join d \
              group by exists (select 1 from b where b.k = a.k)";
     assert!(run(&s, q).is_err(), "{q}");
+    // Literals are part of the subquery, `#` and digits included.
+    run(
+        &s,
+        "create temporary view bs(k, s) as values (1, '#1'), (2, '#2')",
+    )?;
+    let q = "select exists (select 1 from bs where bs.k = a.k and bs.s = '#2'), count(*) from a \
+             group by exists (select 1 from bs where bs.k = a.k and bs.s = '#1')";
+    assert!(run(&s, q).is_err(), "{q}");
+    // The same two outer columns in swapped places are another subquery.
+    let q = "select exists (select 1 from bs where bs.k = d.k and bs.k = a.k + 1), count(*) \
+             from a cross join d \
+             group by exists (select 1 from bs where bs.k = a.k and bs.k = d.k + 1)";
+    assert!(run(&s, q).is_err(), "{q}");
     Ok(())
 }
 

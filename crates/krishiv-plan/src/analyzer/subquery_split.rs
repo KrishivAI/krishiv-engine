@@ -605,7 +605,7 @@ pub(super) fn check_grouped_reads(
     // of it, `GROUP BY cast(t1a in (..) as int) + 1`), never merely one over
     // the same columns.
     let mut key_cols: Vec<crate::AttrId> = Vec::new();
-    let mut key_subqueries: Vec<String> = Vec::new();
+    let mut key_subqueries: Vec<u128> = Vec::new();
     for k in keys {
         if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &k.node {
             key_cols.push(c.id);
@@ -643,46 +643,21 @@ pub(super) fn check_grouped_reads(
     Ok(())
 }
 
-/// The subquery expression `x` as text with its attribute ids left out
-/// (`#12`), so two copies resolved apart from one written subquery read the
-/// same: its kind, its `IN` values and its plan, then the ids of the
-/// enclosing query's columns it reads, which both copies share (outer
-/// references print without their table, so `a.k` and `c.k` would read the
-/// same otherwise). `None` for a nondeterministic subquery, whose copies are
-/// not the same value.
-fn fingerprint(x: &Expr) -> Option<String> {
-    let ExprNode::Subquery { kind, plan } = &x.node else {
+/// The subquery expression `x` as a structural hash (its kind, its `IN`
+/// values and its plan) with its own attribute ids normalized, so two copies
+/// resolved apart from one written subquery hash equal, and the ids of the
+/// enclosing query's columns it reads kept as they are, which both copies
+/// share (`a.k` and `c.k` differ). `None` for a nondeterministic subquery,
+/// whose copies are not the same value.
+fn fingerprint(x: &Expr) -> Option<u128> {
+    let ExprNode::Subquery { plan, .. } = &x.node else {
         return None;
     };
     if !super::plan_is_deterministic(plan) {
         return None;
     }
-    let head = match kind {
-        SubqueryKind::Scalar => "scalar".to_owned(),
-        SubqueryKind::Exists => "exists".to_owned(),
-        SubqueryKind::In(values) => {
-            let values: Vec<String> = values.iter().map(|v| pretty(v, None)).collect();
-            format!("in({})", values.join(","))
-        }
-    };
-    let text = format!("{head} {plan}");
-    let mut out = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        out.push(c);
-        if c == '#' {
-            while chars.peek().is_some_and(char::is_ascii_digit) {
-                chars.next();
-            }
-        }
-    }
-    let mut reads: Vec<u64> = subquery_reads(x).iter().map(|id| id.0).collect();
-    reads.sort_unstable();
-    reads.dedup();
-    let reads: Vec<String> = reads.iter().map(u64::to_string).collect();
-    out.push_str(" reads ");
-    out.push_str(&reads.join(","));
-    Some(out)
+    let reads = subquery_reads(x).iter().map(|id| id.0).collect();
+    Some(crate::cache::pinned_expr_hash(x, reads))
 }
 
 /// `e` with every `NOT` above an `AND`, an `OR` or another `NOT` that holds
