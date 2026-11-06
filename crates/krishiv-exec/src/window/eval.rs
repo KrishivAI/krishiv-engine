@@ -34,21 +34,21 @@ pub(super) struct Slice<'a> {
 }
 
 /// Complete partitions, as consecutive slices, and their boundaries.
-struct Unit<'a> {
-    slices: &'a [Slice<'a>],
-    rows: usize,
+pub(super) struct Unit<'a> {
+    pub(super) slices: &'a [Slice<'a>],
+    pub(super) rows: usize,
     /// Each row's partition.
-    part_of: Vec<u32>,
+    pub(super) part_of: Vec<u32>,
     /// Each partition's rows, `[start, end)`.
-    parts: Vec<(usize, usize)>,
+    pub(super) parts: Vec<(usize, usize)>,
     /// Each row's peer group.
-    peer_of: Vec<u32>,
+    pub(super) peer_of: Vec<u32>,
     /// Each peer group's rows, `[start, end)`.
-    peers: Vec<(usize, usize)>,
+    pub(super) peers: Vec<(usize, usize)>,
     /// Each partition's first peer group.
     first_peer: Vec<u32>,
     /// The ordering key, for `RANGE` frames with value bounds.
-    order: Option<super::frames::RangeKeys>,
+    pub(super) order: Option<super::frames::RangeKeys>,
 }
 
 /// A vector collected from fallible items with the exact capacity of the
@@ -142,13 +142,28 @@ impl<'a> Unit<'a> {
 }
 
 /// Evaluates every function of `plan` over the complete partitions
-/// `slices`: one column per function, a row per unit row.
+/// `slices`: one column per function, a row per unit row (the tests'
+/// form: no aggregate UDFs).
+#[cfg(test)]
 pub(super) fn evaluate(
+    plan: &WindowPlan,
+    slices: &[Slice<'_>],
+    ansi: bool,
+    zone: &krishiv_kernels::datetime::ZoneRef,
+) -> Result<Vec<ArrayRef>> {
+    evaluate_with(plan, slices, ansi, false, zone, None, None)
+}
+
+/// [`evaluate`] with the session's aggregate UDFs (ADR 0045), whose state is charged to
+/// `pool` as it grows.
+pub(super) fn evaluate_with(
     plan: &WindowPlan,
     slices: &[Slice<'_>],
     ansi: bool,
     legacy: bool,
     zone: &krishiv_kernels::datetime::ZoneRef,
+    udafs: Option<&crate::aggregate::UdafEnv>,
+    mut pool: Option<&mut krishiv_memory::Reservation>,
 ) -> Result<Vec<ArrayRef>> {
     let mut unit = Unit::new(slices)?;
     if has_range_offsets(plan)
@@ -163,10 +178,19 @@ pub(super) fn evaluate(
             zone,
         )?;
     }
-    plan.functions
-        .iter()
-        .map(|f| function(f, &unit, ansi, legacy))
-        .collect()
+    let mut columns = Vec::with_capacity(plan.functions.len());
+    for f in &plan.functions {
+        columns.push(match &f.function {
+            WindowFunction::Aggregate(a) if super::udaf::is_udf(a) => {
+                // A UDF's state is charged as it grows, and released with
+                // the function's evaluation.
+                let mut charge = super::udaf::Charge::new(pool.as_deref_mut());
+                super::udaf::aggregate(a, f, &unit, ansi, udafs, &mut charge)?
+            }
+            _ => function(f, &unit, ansi, legacy)?,
+        });
+    }
+    Ok(columns)
 }
 
 /// Whether a function of `plan` has a `RANGE` frame with a value bound.
@@ -876,6 +900,9 @@ pub(super) fn cost(
             WindowFunction::PercentRank => rows * 4 + width(&out, rows),
             WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
                 super::frames::offset_cost(f, rows)?
+            }
+            WindowFunction::Aggregate(a) if super::udaf::is_udf(a) => {
+                super::udaf::cost(f, rows, parts, &out)?
             }
             WindowFunction::Aggregate(a) if f.shape()? == Shape::Frame => {
                 super::frames::cost(a, f, rows)?

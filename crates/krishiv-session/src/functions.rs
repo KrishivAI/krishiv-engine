@@ -139,6 +139,21 @@ pub fn call_function(name: &str, args: impl IntoIterator<Item = Column>) -> Colu
     Column::function(name, args.into_iter().collect(), false)
 }
 
+/// A call of the UDF `name` registered on the session (Spark's `call_udf`).
+///
+/// It resolves through the same search path as [`call_function`] and SQL:
+/// a built-in of the same name wins, and `system.session.<name>` reaches
+/// the UDF only (see `Session::register_udf`).
+///
+/// ```
+/// use krishiv_session::functions::{call_udf, col};
+/// let c = call_udf("add_one", [col("id")]);
+/// ```
+#[must_use]
+pub fn call_udf(name: &str, args: impl IntoIterator<Item = Column>) -> Column {
+    call_function(name, args)
+}
+
 /// `sum(c)`.
 ///
 /// ```

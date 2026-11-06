@@ -27,7 +27,9 @@ use krishiv_plan::{
 
 use super::build::{Planned, Planner, column_of, internal, list, unsupported};
 use super::properties::Distribution;
-use crate::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput, arity};
+use crate::aggregate::{
+    AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall, arity,
+};
 use crate::error::Result;
 use crate::physical::{AggregatePlan, PhysNode, aggregate_node, aggregate_spec};
 
@@ -88,10 +90,18 @@ impl Planner<'_> {
             let mask = mask.map(|m| columns[m]);
             let want = c.f.data_type.to_arrow();
             let agg = match state_input(&c.f) {
+                Some(_) if matches!(function, AggregateFunction::Udf(_)) => {
+                    return Err(unsupported("merging the states of an aggregate UDF"));
+                }
                 Some((_, raw_type)) if mask.is_none() => {
                     merging_expr(function, args, raw_type, &input.schema, c.key.clone())?
                 }
                 Some(_) => return Err(internal("a filter on a call merging states")),
+                // A UDF call carries its whole Spark result type.
+                None if matches!(function, AggregateFunction::Udf(_)) => udaf_state(
+                    aggregate_expr(function, args, mask, &input.schema, c.key.clone())?,
+                    self.env.udfs.as_ref(),
+                )?,
                 None => aggregate_expr(function, args, mask, &input.schema, c.key.clone())?
                     .with_array_result(&want),
             };
@@ -293,6 +303,9 @@ impl Planner<'_> {
             }
             let l = lower(f)
                 .ok_or_else(|| unsupported(&format!("the aggregate function {}", f.id.name())))?;
+            if matches!(l.function, AggregateFunction::Udf(_)) {
+                return Err(unsupported("a partial aggregate of an aggregate UDF"));
+            }
             arg_at.push(wanted.len()..wanted.len() + l.args.len());
             wanted.extend(l.args);
             functions.push(l.function);
@@ -359,7 +372,7 @@ impl Planner<'_> {
             let key = e.to_string();
             let ident = krishiv_plan::identity_string(e);
             if !out.iter().any(|c| c.ident == ident) {
-                if !matches!(f.id, FunctionId::Registry { .. }) {
+                if !matches!(f.id, FunctionId::Registry { .. } | FunctionId::Udf { .. }) {
                     return Err(unsupported(&format!("the aggregate {key}")));
                 }
                 let id = self.fresh_id();
@@ -419,6 +432,23 @@ pub(super) struct Lowered {
 
 /// `None` for a function the executor does not run as an aggregate.
 pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
+    // Before the names: a UDF may be called as a built-in is (`count`).
+    // Its argument columns and state are filled by `aggregate_expr` and
+    // `udaf_state`.
+    if let FunctionId::Udf { name, version } = &f.id {
+        let call = UdafCall {
+            name: name.clone(),
+            version: *version,
+            args: Vec::new(),
+            result: f.data_type.clone(),
+            nullable: f.nullable,
+            state: Vec::new(),
+        };
+        return Some(Lowered {
+            function: AggregateFunction::Udf(Box::new(call)),
+            args: f.args.clone(),
+        });
+    }
     // `first(x, ignoreNulls)`: the analyzer checked the flag is a boolean
     // literal.
     let ignore_nulls = matches!(
@@ -802,6 +832,26 @@ pub(super) fn aggregate_expr(
     name: String,
 ) -> Result<AggregateExpr> {
     let typed = |a: &usize| view_type(schema.field(*a).data_type());
+    if let AggregateFunction::Udf(mut call) = function {
+        call.args = args
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let field = schema.field(*a);
+                let t = krishiv_types::arrow::client_arrow_type(&typed(a));
+                Field::new(format!("arg{i}"), t, field.is_nullable())
+            })
+            .collect();
+        return Ok(AggregateExpr {
+            function: AggregateFunction::Udf(call),
+            args,
+            input: crate::aggregate::AggInput::Raw,
+            arg_type: arrow_schema::DataType::Null,
+            name,
+            mask,
+            element: None,
+        });
+    }
     if matches!(
         function,
         AggregateFunction::MaxBy | AggregateFunction::MinBy
@@ -842,6 +892,19 @@ pub(super) fn aggregate_expr(
         mask,
         element: None,
     })
+}
+
+/// `agg` with the state its aggregate UDF declares, from the session's
+/// library (other aggregates unchanged).
+pub(super) fn udaf_state(
+    mut agg: AggregateExpr,
+    udfs: Option<&Arc<krishiv_udf_sdk::UdfLibrary>>,
+) -> Result<AggregateExpr> {
+    if let AggregateFunction::Udf(call) = &mut agg.function {
+        let env = crate::aggregate::UdafEnv::of(udfs, None);
+        crate::aggregate::plan_udaf_state(call, env.as_ref())?;
+    }
+    Ok(agg)
 }
 
 fn non_null_literal(e: &Expr) -> bool {

@@ -77,6 +77,7 @@ mod spill;
 mod stream;
 #[cfg(all(test, not(loom)))]
 mod tests;
+mod udaf;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -462,6 +463,8 @@ struct Env {
     legacy: bool,
     /// The session time zone, for a year-month `RANGE` bound over a `TIMESTAMP` key.
     zone: krishiv_kernels::datetime::ZoneRef,
+    /// The session's aggregate UDFs, for window frames of one (ADR 0045).
+    udafs: Option<crate::aggregate::UdafEnv>,
 }
 
 impl std::fmt::Debug for Window {
@@ -567,21 +570,6 @@ impl Window {
         zone: krishiv_kernels::datetime::ZoneRef,
         spill: Option<SpillScope>,
     ) -> Result<Self> {
-        Self::with_settings(input, plan, ansi, false, zone, spill)
-    }
-
-    /// [`Self::with_zone`] with `spark.sql.legacy.statisticalAggregate` (`legacy`).
-    ///
-    /// # Errors
-    /// As [`Self::with_zone`].
-    pub(crate) fn with_settings(
-        input: SchemaRef,
-        plan: WindowPlan,
-        ansi: bool,
-        legacy: bool,
-        zone: krishiv_kernels::datetime::ZoneRef,
-        spill: Option<SpillScope>,
-    ) -> Result<Self> {
         let width = input.fields().len();
         let column = |i: usize, what: &str| {
             if i < width {
@@ -654,8 +642,9 @@ impl Window {
                 input,
                 plan,
                 ansi,
-                legacy,
+                legacy: false,
                 zone,
+                udafs: None,
             }),
             spill,
             partitions: AtomicU64::new(0),
@@ -674,14 +663,20 @@ impl Window {
         env: &crate::planner::eval::EvalEnv,
         spill: Option<SpillScope>,
     ) -> Result<Self> {
-        Self::with_settings(
-            input,
-            plan,
-            env.ansi,
-            env.legacy_statistical_aggregate,
-            env.zone_rules()?,
-            spill,
-        )
+        let mut me = Self::with_zone(input, plan, env.ansi, env.zone_rules()?, spill)?;
+        let udafs = crate::aggregate::UdafEnv::of(env.udfs.as_ref(), env.zone);
+        // A worker without an aggregate UDF of the plan, or with another
+        // state under its version, refuses the plan before any row.
+        for f in &me.env.plan.functions {
+            if let WindowFunction::Aggregate(a) = &f.function {
+                crate::aggregate::check_udaf(a, udafs.as_ref())?;
+            }
+        }
+        if let Some(e) = Arc::get_mut(&mut me.env) {
+            e.udafs = udafs;
+            e.legacy = env.legacy_statistical_aggregate;
+        }
+        Ok(me)
     }
 
     /// [`Self::with_zone`] in UTC: the tests' constructor (production code names the session zone).
@@ -825,12 +820,14 @@ impl Window {
                     peer_start: &l.pending[i].peer_start[offset..offset + len],
                 })
                 .collect();
-            eval::evaluate(
+            eval::evaluate_with(
                 &self.env.plan,
                 &unit,
                 self.env.ansi,
                 self.env.legacy,
                 &self.env.zone,
+                self.env.udafs.as_ref(),
+                Some(&mut l.reservation),
             )?
         };
         // One output batch per slice: its input columns, then the slice of
