@@ -143,19 +143,21 @@ fn a_user_column_named_exists_never_collides() {
     );
 }
 
+/// `IN (SELECT 1)` is an `IN` over a one-row literal relation: Spark folds it
+/// into the expression, so it can sit under `OR` and answers as `IN (1)`.
 #[test]
-fn forms_spark_folds_before_any_join_are_refused() {
+fn a_one_row_literal_subquery_under_or_answers_as_its_value() {
     let env = env();
-    let sql = "SELECT a FROM t WHERE a IN (SELECT 1) OR s = 's0'";
-    let plan =
-        krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
-            .unwrap();
-    let e = block_on(DefaultAnalyzer.analyze(&plan, &env.ctx)).unwrap_err();
-    assert_eq!(
-        e.error.error_class().name(),
-        "KRISHIV_UNSUPPORTED_FEATURE",
-        "{sql}: {e}"
+    let sub = rows(
+        &env,
+        "SELECT a FROM t WHERE a IN (SELECT 1) OR s = 's0' ORDER BY a",
     );
+    let lit = rows(
+        &env,
+        "SELECT a FROM t WHERE a IN (1) OR s = 's0' ORDER BY a",
+    );
+    assert!(!lit.is_empty());
+    assert_eq!(sub, lit);
 }
 
 /// `NOT (x NOT IN s)` is `x IN s` under three-valued logic, as Spark's
