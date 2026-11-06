@@ -1364,6 +1364,11 @@ impl Sink for HashAggregate {
             return Ok(SinkStatus::NeedMemory { bytes });
         }
         l.table.apply(&p)?;
+        // A fold may outgrow its projection (an aggregate UDF reports its
+        // size only after it folds): charge the excess now where the pool
+        // allows; where it does not, the next batch's reservation fails and
+        // the table spills (one fold's growth at most is unreserved).
+        let _ = reserve_to(&mut l.reservation, l.table.memory_size());
         // Widening is a cost choice: only with memory to spare.
         let r = &mut l.reservation;
         l.table.widen_if(true, |bytes| r.try_grow(bytes).is_ok())?;
@@ -1399,7 +1404,9 @@ impl Sink for HashAggregate {
             report.end_task();
             lock(total).merge(&report);
         }
-        // Keep the headroom: a later spill of this table needs scratch.
+        // Charge what the last fold outgrew, where the pool allows. Keep the
+        // headroom: a later spill of this table needs scratch.
+        let _ = reserve_to(&mut reservation, table.memory_size());
         shrink_to(&mut reservation, table.memory_size() + self.headroom());
         let g = global(g)?;
         let mut inner = lock(&g.inner);

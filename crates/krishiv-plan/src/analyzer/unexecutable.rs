@@ -86,7 +86,7 @@ fn spatial_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
                 if f.kind == crate::FunctionKind::Aggregate
                     && (f.distinct
                         || matches!(
-                            f.id.name(),
+                            super::exprs::builtin_name(f),
                             "min" | "max" | "min_by" | "max_by" | "mode" | "collect_set"
                         ))
                     && f.args.iter().any(|a| is_spatial(expr_type(a))) =>

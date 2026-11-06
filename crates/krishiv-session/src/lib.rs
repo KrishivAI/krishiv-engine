@@ -110,8 +110,9 @@ pub use krishiv_plan::analyzer::{
 };
 pub use krishiv_sql::{ExplainKind, StatementClass};
 pub use krishiv_udf_sdk::{
-    ArgField, InvokeContext, NullHandling, ReturnField, ScalarUdf, Signature, UdfArg, UdfError,
-    UdfInputType, UdfLibrary, UdfProperties,
+    AggregateProperties, AggregateUdf, ArgField, GroupsAccumulator, InvokeContext, NullHandling,
+    ReturnField, ScalarUdf, Signature, StateField, UdfArg, UdfError, UdfInputType, UdfLibrary,
+    UdfProperties,
 };
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};

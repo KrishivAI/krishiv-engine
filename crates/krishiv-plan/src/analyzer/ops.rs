@@ -25,7 +25,10 @@ use super::analytics::Analytics;
 use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::quoted_type;
-use super::exprs::{Bound, Cx, WindowUse, names, pretty, semantic_key, unresolved};
+use super::exprs::{
+    Bound, Cx, WindowUse, builtin_name, names, pretty, semantic_key, synth_call, synth_call_of,
+    unresolved,
+};
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, FileMetadata, TableKind};
 use crate::{
@@ -1659,7 +1662,7 @@ impl Resolver<'_> {
                         Some((_, a)) => a.clone(),
                         None if info.distinct_rewritten
                             && !f.distinct
-                            && !matches!(f.id.name(), "min" | "max") =>
+                            && !matches!(builtin_name(f), "min" | "max") =>
                         {
                             // Spark rewrites this call with the select list's. Planned over the
                             // rewrite's own rows (one per distinct set) it would count each group
@@ -2283,7 +2286,9 @@ impl Resolver<'_> {
                     && let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node
                     && f.kind == FunctionKind::Aggregate
                 {
-                    let key = x.to_string();
+                    // The identity, not the display: a session UDF and a
+                    // built-in of its name are two calls.
+                    let key = crate::identity_string(x);
                     if !calls.iter().any(|(k, _)| *k == key) {
                         calls.push((key, f.clone()));
                     }
@@ -2370,6 +2375,20 @@ impl Resolver<'_> {
                 Some((_, v)) => v.push(i),
                 None => sets.push((key, vec![i])),
             }
+        }
+        // A global aggregate over no rows evaluates each call on an empty
+        // group; a regular call becomes `first` of its partial result, which
+        // is NULL there. The count family is coalesced to 0 below, but an
+        // aggregate UDF's empty-group value is unknown at analysis.
+        if global
+            && regular
+                .iter()
+                .any(|&i| matches!(calls[i].1.id, crate::FunctionId::Udf { .. }))
+        {
+            return Err(unsupported(
+                "an aggregate UDF without GROUP BY next to a filtered DISTINCT aggregate or several DISTINCT argument sets",
+                origin,
+            ));
         }
         // Every distinct argument, once (in order of first appearance),
         // with its nullable expansion column.
@@ -2693,7 +2712,7 @@ impl Resolver<'_> {
             // A resolved `listagg` holds its ordering keys after its value
             // and delimiter: written again, they are the `WITHIN GROUP`
             // list. A resolved `mode` encodes its ordering in its arguments.
-            let mut call = synth_call(f.id.name(), Vec::new(), f.filter.clone(), origin);
+            let mut call = synth_call_of(f, Vec::new(), f.filter.clone(), origin);
             if let ExprNode::Function(c) = &mut Arc::make_mut(&mut call).node {
                 let keys = if f.id.name() == "listagg" {
                     f.within_group.len().min(mapped.len())
@@ -2765,7 +2784,7 @@ impl Resolver<'_> {
                         )?
                         .expr;
                 }
-                let b = self.bind(&synth_call(f.id.name(), args, Some(filter), origin), &r1_cx)?;
+                let b = self.bind(&synth_call_of(f, args, Some(filter), origin), &r1_cx)?;
                 new_call.insert(calls[i].0.clone(), b.expr);
             }
         }
@@ -2794,7 +2813,9 @@ impl Resolver<'_> {
             // A global count over no rows is 0, but `first` of the zero
             // partial rows the second phase sees is NULL: the count family
             // is coalesced to 0 (a grouped query always has a row per group).
-            if matches!(calls[i].1.id.name(), "count" | "count_if") {
+            if matches!(calls[i].1.id, crate::FunctionId::Registry { .. })
+                && matches!(calls[i].1.id.name(), "count" | "count_if")
+            {
                 replaced = self
                     .bind(
                         &synth_call(
@@ -4085,30 +4106,6 @@ struct Lift<'a> {
     origin: Origin,
 }
 
-/// The attribute a named item outputs; a column keeps its input
-/// attribute's qualifier and source.
-/// An unresolved call of `name` to `args` (with `filter`), for the
-/// analyzer to bind over already-resolved columns.
-fn synth_call(
-    name: &str,
-    args: Vec<Arc<Expr>>,
-    filter: Option<Arc<Expr>>,
-    origin: Origin,
-) -> Arc<Expr> {
-    Arc::new(
-        Expr::new(ExprNode::Function(FunctionCall {
-            within_group: Vec::new(),
-            name: name.to_owned(),
-            qualifier: Vec::new(),
-            arg_names: Vec::new(),
-            args,
-            distinct: false,
-            filter,
-        }))
-        .with_origin(origin),
-    )
-}
-
 /// The expansion column evaluating `a`: the input column it already is,
 /// or the fresh column computed for its semantic key (`None` when neither
 /// holds, for the caller to leave the rewrite).
@@ -4140,14 +4137,14 @@ fn expand_col(
 
 /// `x` with the rewritten aggregate's calls and grouping expressions
 /// replaced: a call the second aggregate's call (keyed by the original's
-/// text, attribute ids included), a grouping expression its column.
+/// identity string, attribute ids included), a grouping expression its column.
 fn subst_distinct(
     x: &Arc<Expr>,
     new_call: &HashMap<String, Arc<Expr>>,
     key_map: &HashMap<u128, Arc<Expr>>,
     memo: &mut HashMap<usize, u128>,
 ) -> Arc<Expr> {
-    if let Some(n) = new_call.get(&x.to_string()) {
+    if let Some(n) = new_call.get(&crate::identity_string(x)) {
         return Arc::clone(n);
     }
     if let Some(n) = key_map.get(&semantic_key(x, memo)) {

@@ -1,6 +1,8 @@
 pub mod krishiv_session
 pub use krishiv_session::AccessDecision
 pub use krishiv_session::AccessPolicy
+pub use krishiv_session::AggregateProperties
+pub use krishiv_session::AggregateUdf
 pub use krishiv_session::AllowAll
 pub use krishiv_session::ArgField
 pub use krishiv_session::BoxFuture
@@ -8,6 +10,7 @@ pub use krishiv_session::CounterSample
 pub use krishiv_session::DenyAll
 pub use krishiv_session::ExplainKind
 pub use krishiv_session::GaugeSample
+pub use krishiv_session::GroupsAccumulator
 pub use krishiv_session::HistogramBucket
 pub use krishiv_session::HistogramSample
 pub use krishiv_session::InvokeContext
@@ -24,6 +27,7 @@ pub use krishiv_session::ScalarUdf
 pub use krishiv_session::Securable
 pub use krishiv_session::SecurableUse
 pub use krishiv_session::Signature
+pub use krishiv_session::StateField
 pub use krishiv_session::StatementClass
 pub use krishiv_session::TextOptions
 pub use krishiv_session::UdfArg
@@ -146,6 +150,7 @@ impl krishiv_session::functions::IntoLiteral for i8
 pub fn i8::into_literal(self) -> krishiv_plan::literal::Literal
 pub fn krishiv_session::functions::avg(krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::call_function(&str, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> krishiv_session::Column
+pub fn krishiv_session::functions::call_udf(&str, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> krishiv_session::Column
 pub fn krishiv_session::functions::coalesce(impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> krishiv_session::Column
 pub fn krishiv_session::functions::col(&str) -> krishiv_session::Column
 pub fn krishiv_session::functions::count(krishiv_session::Column) -> krishiv_session::Column
@@ -579,6 +584,7 @@ pub fn krishiv_session::Session::read(&self) -> krishiv_session::DataFrameReader
 pub fn krishiv_session::Session::refresh_files(&self)
 pub fn krishiv_session::Session::refresh_table(&self, &str)
 pub fn krishiv_session::Session::register_batches(&self, &str, arrow_schema::schema::SchemaRef, alloc::vec::Vec<arrow_array::record_batch::RecordBatch>) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::Session::register_udaf(&self, impl krishiv_udf_sdk::aggregate::AggregateUdf) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::register_udf(&self, impl krishiv_udf_sdk::udf::ScalarUdf) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::Session::sql(&self, &str) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::table(&self, &str) -> krishiv_session::DataFrame
@@ -630,6 +636,7 @@ impl core::fmt::Debug for krishiv_session::SessionFunctions
 pub fn krishiv_session::SessionFunctions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl krishiv_plan::analyzer::catalog::FunctionRegistry for krishiv_session::SessionFunctions
 pub fn krishiv_session::SessionFunctions::lookup(&self, &[alloc::string::String], krishiv_functions::signature::SparkProfile) -> krishiv_plan::analyzer::catalog::FunctionLookup
+pub fn krishiv_session::SessionFunctions::rejects_distinct(&self, &str) -> bool
 pub fn krishiv_session::SessionFunctions::resolve_udf(&self, &str, u32) -> core::option::Option<alloc::sync::Arc<dyn krishiv_udf_sdk::udf::ScalarUdf>>
 pub fn krishiv_session::SessionFunctions::spark_deterministic(&self, &str) -> core::option::Option<bool>
 pub fn krishiv_session::SessionFunctions::version(&self) -> u64
