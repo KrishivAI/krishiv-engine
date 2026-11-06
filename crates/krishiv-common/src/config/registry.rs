@@ -39,6 +39,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_RESIDENT_GUARD,
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
+    &QUERY_MAX_EXECUTION_TIME,
+    &QUERY_MAX_QUEUED_TIME,
     &CACHE_MAX_BYTES,
     &DETERMINISTIC_ORDER,
     &RESULT_CACHE_ENABLED,
@@ -153,6 +155,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
     ("krishiv.io.cache.blockBytes", &IO_CACHE_BLOCK_BYTES),
+    ("krishiv.query.maxQueuedTime", &QUERY_MAX_QUEUED_TIME),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
     ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
@@ -171,6 +174,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
+    ("krishiv.query.maxExecutionTime", &QUERY_MAX_EXECUTION_TIME),
     ("spark.sql.cteRecursionRowLimit", &CTE_RECURSION_ROW_LIMIT),
     (
         "krishiv.io.coalesceWasteDivisor",
@@ -809,6 +813,33 @@ pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::Startup,
 };
 
+/// The longest a query may run before it is cancelled (design P2-E1 §4).
+pub static QUERY_MAX_EXECUTION_TIME: ConfigEntry = ConfigEntry {
+    key: "krishiv.query.maxExecutionTime",
+    value_type: ValueType::Duration,
+    default: None,
+    doc: "The longest a query may run from the start of its execution: past it the query is \
+          cancelled and fails with `KRISHIV_QUERY_TIMEOUT`. The limit is read when the query \
+          starts. When unset, queries run without a time limit.",
+    scope: Scope::Session,
+    version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::User,
+};
+
+/// Reserved for admission (design P2-E1 §4, contract E5).
+pub static QUERY_MAX_QUEUED_TIME: ConfigEntry = ConfigEntry {
+    key: "krishiv.query.maxQueuedTime",
+    value_type: ValueType::Duration,
+    default: None,
+    doc: "Reserved: the longest a query may wait for admission before it starts. No admission \
+          queue exists yet, so the value is accepted and has no effect.",
+    scope: Scope::Session,
+    version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::User,
+};
+
 /// How long a request waits for aborted queries to release memory.
 pub static MEMORY_ABORT_RELEASE_TIMEOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.memory.abortReleaseTimeout",
@@ -895,12 +926,13 @@ pub static RESULT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
     key: "krishiv.resultCache.maxBytes",
     value_type: ValueType::Size,
     default: Some(ConfigValue::Size(64 * MIB)),
-    doc: "Most bytes the result cache holds, for the whole process, as Arrow batches outside the \
-          query memory pool; the setting of the session that stores a result applies. A result \
+    doc: "Most bytes the result cache of an engine runtime holds (the process-wide store of \
+          sessions built alone, or a supplied runtime's own), as Arrow batches outside the query \
+          memory pool; fixed when the runtime is built. A result \
           larger than the cap is not stored; when a new result would pass the cap the oldest \
           entries go first, and entries past their ttl go whenever a result is stored. Needs `krishiv.resultCache.enabled`.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
