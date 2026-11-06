@@ -18,6 +18,19 @@
 //! slot to the next one, which reads.
 //! An invalidation (`REFRESH`, `CLEAR CACHE`) starts a new generation: a
 //! read begun before it neither fills the cache nor serves later readers.
+//!
+//! **Held entries.** Metadata larger than the whole cache (or refused by
+//! its pool) is not cached, but the cache keeps a weak reference to it:
+//! while a reader still holds it (a scan stream decoding the file), later
+//! readers of the key take it instead of reading and decoding the footer
+//! again. A scan of one large file (TPC-H SF1000 `lineitem`: 32,767 row
+//! groups, a 69 MB footer, ~2,000 splits) then decodes its footer about
+//! once, not once per split. The bytes stay the holders' (the cache adds
+//! none), and an invalidation drops the reference as it drops entries.
+//! Sharing needs overlapping readers: a scan whose splits of one file run
+//! one after another with nothing else holding the footer reads it again
+//! per split (pinning it for the scan's lifetime is the follow-up). A
+//! cache of limit `0` is disabled and holds nothing either.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -91,6 +104,9 @@ struct Lru {
     generation: u64,
     /// Entries evicted for room (not invalidated).
     evictions: u64,
+    /// Metadata too large to cache, while its readers still hold it
+    /// (module docs, "Held entries").
+    held: HashMap<CacheKey, Weak<dyn FileMetadata>>,
 }
 
 impl Lru {
@@ -102,6 +118,13 @@ impl Lru {
                 r.shrink(usize::try_from(e.bytes).unwrap_or(usize::MAX));
             }
         }
+    }
+
+    /// Keeps a weak reference to `meta`, too large to cache, for the
+    /// readers that come while it is held; drops references nobody holds.
+    fn hold(&mut self, key: CacheKey, meta: &Arc<dyn FileMetadata>) {
+        self.held.retain(|_, w| w.strong_count() > 0);
+        self.held.insert(key, Arc::downgrade(meta));
     }
 
     fn evict_oldest(&mut self) -> bool {
@@ -246,23 +269,46 @@ impl MetadataCache {
         let mut lru = self.lock();
         lru.tick += 1;
         let tick = lru.tick;
-        let Some(e) = lru.map.get_mut(key) else {
-            return Err(None);
-        };
-        let loaded = e.meta.needs();
-        if !loaded.covers(&needs) {
-            return Err(Some(loaded));
+        let mut stale = None;
+        if let Some(e) = lru.map.get_mut(key) {
+            let loaded = e.meta.needs();
+            if loaded.covers(&needs) {
+                let old = std::mem::replace(&mut e.tick, tick);
+                let meta = Arc::clone(&e.meta);
+                lru.order.remove(&old);
+                lru.order.insert(tick, key.clone());
+                return Ok(meta);
+            }
+            stale = Some(loaded);
         }
-        let old = std::mem::replace(&mut e.tick, tick);
-        let meta = Arc::clone(&e.meta);
-        lru.order.remove(&old);
-        lru.order.insert(tick, key.clone());
-        Ok(meta)
+        // A cached entry that lacks `needs` may sit beside a held one
+        // loaded with more (a footer fits, the footer with its page index
+        // does not).
+        let held = match lru.held.get(key).map(Weak::upgrade) {
+            Some(None) => {
+                lru.held.remove(key);
+                None
+            }
+            Some(Some(meta)) => Some(meta),
+            None => None,
+        };
+        // A held reference can be the last one: freed outside the lock.
+        drop(lru);
+        match held {
+            Some(meta) if meta.needs().covers(&needs) => Ok(meta),
+            Some(meta) => {
+                let loaded = meta.needs();
+                Err(Some(stale.map_or(loaded, |s| s.union(loaded))))
+            }
+            None => Err(stale),
+        }
     }
 
     /// Caches `meta` under `key`, evicting least recently used entries to
-    /// stay within the limit. Metadata larger than the whole cache is not
-    /// cached.
+    /// stay within the limit. Metadata larger than the whole cache, or
+    /// refused by the cache's pool, is not cached but held while its
+    /// readers hold it (module docs, "Held entries"), replacing a cached
+    /// entry of the key; a cache of limit `0` holds nothing.
     pub fn insert(&self, key: CacheKey, meta: Arc<dyn FileMetadata>) {
         let generation = self.generation();
         self.insert_read_in(generation, key, meta);
@@ -277,11 +323,15 @@ impl MetadataCache {
         meta: Arc<dyn FileMetadata>,
     ) {
         let bytes = meta.heap_size() as u64;
-        if bytes > self.limit {
-            return;
-        }
         let mut lru = self.lock();
         if lru.generation != generation {
+            return;
+        }
+        if bytes > self.limit {
+            if self.limit > 0 {
+                lru.remove(&key);
+                lru.hold(key, &meta);
+            }
             return;
         }
         lru.tick += 1;
@@ -296,6 +346,7 @@ impl MetadataCache {
                 None | Some(Ok(())) => break,
                 Some(Err(_)) => {
                     if !lru.evict_oldest() {
+                        lru.hold(key, &meta);
                         return;
                     }
                 }
@@ -303,6 +354,7 @@ impl MetadataCache {
         }
         lru.bytes += bytes;
         lru.order.insert(tick, key.clone());
+        lru.held.remove(&key);
         lru.map.insert(key, Entry { meta, bytes, tick });
     }
 
@@ -319,6 +371,8 @@ impl MetadataCache {
         for k in victims {
             lru.remove(&k);
         }
+        lru.held
+            .retain(|k, _| !(&k.store == store && &k.path == path));
     }
 
     /// Drops every entry (`CLEAR CACHE`).
@@ -327,6 +381,7 @@ impl MetadataCache {
         lru.generation += 1;
         lru.map.clear();
         lru.order.clear();
+        lru.held.clear();
         lru.bytes = 0;
         if let Some(r) = lru.reservation.as_mut() {
             let held = r.size();
