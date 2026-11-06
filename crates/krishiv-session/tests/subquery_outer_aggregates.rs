@@ -151,12 +151,12 @@ fn an_outer_aggregate_anywhere_else_is_refused_as_in_spark() -> R {
         (
             "select dept_id from emp group by dept_id \
              having exists(select 1 from bonus where min(bonus_amt + emp.salary) > 0)",
-            "AGGREGATE_FUNCTION_MIXED_OUTER_LOCAL_REFERENCES] Unsupported subquery expression: Found an aggregate function in a correlated predicate that has both outer and local references, which is not supported: min((bonus.bonus_amt + outer(emp.salary)))",
+            "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.AGGREGATE_FUNCTION_MIXED_OUTER_LOCAL_REFERENCES] Unsupported subquery expression: Found an aggregate function in a correlated predicate that has both outer and local references, which is not supported: min((bonus.bonus_amt + outer(emp.salary)))",
         ),
         // So it is without an enclosing aggregate.
         (
             "select * from emp where exists(select 1 from bonus where min(bonus_amt + emp.salary) > 0)",
-            "AGGREGATE_FUNCTION_MIXED_OUTER_LOCAL_REFERENCES",
+            "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.AGGREGATE_FUNCTION_MIXED_OUTER_LOCAL_REFERENCES",
         ),
         // A call of the subquery's own aggregate.
         (
