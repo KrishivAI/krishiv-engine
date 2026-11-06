@@ -73,3 +73,42 @@ fn a_nan_string_bound_on_an_integer_key_is_a_cast_error() {
     let err = frames(&s, "f_numeric", "1.1 preceding and 'NaN' following").unwrap_err();
     assert!(err.contains("CAST_INVALID_INPUT"), "{err}");
 }
+
+#[test]
+fn malformed_string_bounds_are_not_read_as_numbers() {
+    let d = tempfile::tempdir().unwrap();
+    let s = session(d.path());
+    for bound in ["'--1'", "'++1'", "'+-1'", "'e5'", "'1x'"] {
+        let r = frames(
+            &s,
+            "f_float8",
+            &format!("{bound} preceding and 1 following"),
+        );
+        assert!(r.is_err(), "{bound}: {r:?}");
+    }
+}
+
+#[test]
+fn a_nan_lower_bound_sorts_above_a_finite_upper_one() {
+    let d = tempfile::tempdir().unwrap();
+    let s = session(d.path());
+    let err = frames(&s, "f_float8", "'NaN' following and 1 following").unwrap_err();
+    assert!(
+        err.contains("SPECIFIED_WINDOW_FRAME_WRONG_COMPARISON"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_float_cast_bound_is_parsed_at_single_precision() {
+    let s = Session::new().unwrap();
+    // 1.0000001192092896 is the float after 1.0; the text below is just above half way to it, so reading it as a
+    // double first and then a float would give 1.0.
+    let sql = "select id, last(id) over (order by k range between current row and \
+               cast('1.000000059604644775390625000001' as float) following) \
+               from (select 1 id, cast(0.0 as float) k union all select 2, cast(1.0000001192092896 as float)) \
+               order by id";
+    let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    let last = b[0].column(1).as_primitive::<Int32Type>();
+    assert_eq!(last.value(0), 2);
+}

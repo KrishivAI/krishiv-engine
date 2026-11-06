@@ -227,7 +227,8 @@ impl RangeValue {
     fn above(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Int(a), Self::Int(b)) => a > b,
-            (Self::Float(a), Self::Float(b)) => a > b,
+            // Spark orders NaN above every other value (and equal to itself).
+            (Self::Float(a), Self::Float(b)) => (a.is_nan() && !b.is_nan()) || a > b,
             (Self::Months(a, ..), Self::Months(b, ..)) => a > b,
             (Self::DayTime(a, ..), Self::DayTime(b, ..)) => a > b,
             _ => false,
@@ -303,7 +304,7 @@ fn range_value_signed(
             let ExprNode::Literal(Literal::String(text)) = &expr.node else {
                 return None;
             };
-            let v = parse_float_text(text)?;
+            let v = parse_float_text(text, matches!(to, T::Float))?;
             cast_text = if matches!(to, T::Float) {
                 Literal::Float(v as f32)
             } else {
@@ -336,8 +337,31 @@ fn range_value_signed(
         } else {
             *months
         };
-        return matches!(key, T::Date | T::Timestamp | T::TimestampNtz)
-            .then_some(RangeValue::Months(months, *start, *end));
+        // An integral or decimal key casts the interval to its own type: the count of its last field (`YEAR '1'`
+        // is 1, `MONTH '12'` is 12). `YEAR TO MONTH` is not matched yet.
+        let count = match (start, end) {
+            (krishiv_types::YearMonthField::Year, krishiv_types::YearMonthField::Year) => {
+                months / 12
+            }
+            (krishiv_types::YearMonthField::Month, krishiv_types::YearMonthField::Month) => months,
+            _ => i32::MIN,
+        };
+        return match key {
+            T::Date | T::Timestamp | T::TimestampNtz => {
+                Some(RangeValue::Months(months, *start, *end))
+            }
+            _ if count == i32::MIN => None,
+            T::Byte => i8::try_from(count).ok().map(|v| RangeValue::Int(v.into())),
+            T::Short => i16::try_from(count).ok().map(|v| RangeValue::Int(v.into())),
+            T::Integer | T::Long => Some(RangeValue::Int(count.into())),
+            T::Decimal(d) => {
+                let v =
+                    i128::from(count).checked_mul(10_i128.checked_pow(u32::from(d.scale()))?)?;
+                let max = 10_i128.checked_pow(u32::from(d.precision()))? - 1;
+                (-max..=max).contains(&v).then_some(RangeValue::Int(v))
+            }
+            _ => None,
+        };
     }
     // The literal as an exact decimal `(unscaled, scale)` or a double.
     enum Lit {
@@ -348,7 +372,7 @@ fn range_value_signed(
         // A string bound is cast to a FLOAT or DOUBLE key's type (Spark's `Cast` of the string: `'inf'` and `'NaN'`
         // are values). Text this parser does not know stays unsupported rather than guessed.
         Literal::String(text) if matches!(key, T::Float | T::Double) => {
-            Lit::Double(parse_float_text(text)?)
+            Lit::Double(parse_float_text(text, matches!(key, T::Float))?)
         }
         Literal::Byte(v) => Lit::Exact(i128::from(*v), 0),
         Literal::Short(v) => Lit::Exact(i128::from(*v), 0),
@@ -403,10 +427,10 @@ fn range_value_signed(
     }
 }
 
-/// A string cast to `DOUBLE` as Spark's cast reads it: surrounding whitespace is trimmed, `NaN`, `Inf`, `Infinity`
+/// A string cast to `FLOAT` (`single`) or `DOUBLE` as Spark's cast reads it: surrounding whitespace is trimmed, `NaN`, `Inf`, `Infinity`
 /// (any case, optionally signed) are the special values, and plain decimal text parses. `None` for anything else
 /// (Java also accepts `1d`, `1f` and hexadecimal floats; those stay unsupported here).
-fn parse_float_text(text: &str) -> Option<f64> {
+fn parse_float_text(text: &str, single: bool) -> Option<f64> {
     let t = text.trim();
     let (sign, body) = match t.strip_prefix('-') {
         Some(rest) => (-1.0, rest),
@@ -418,14 +442,22 @@ fn parse_float_text(text: &str) -> Option<f64> {
     if body.eq_ignore_ascii_case("inf") || body.eq_ignore_ascii_case("infinity") {
         return Some(sign * f64::INFINITY);
     }
-    if body.is_empty()
+    // The unsigned text starts with a digit or a decimal point (a second sign is malformed), and holds only
+    // decimal-float characters.
+    if !body.starts_with(|c: char| c.is_ascii_digit() || c == '.')
         || !body
             .bytes()
             .all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-'))
     {
         return None;
     }
-    body.parse::<f64>().ok().map(|v| sign * v)
+    // A FLOAT target is parsed at single precision, not rounded twice through a double.
+    let v = if single {
+        f64::from(body.parse::<f32>().ok()?)
+    } else {
+        body.parse::<f64>().ok()?
+    };
+    Some(sign * v)
 }
 
 /// Whether the `RANGE` bound `x` (or the negation of one) is a string literal.
@@ -1315,7 +1347,20 @@ impl Resolver<'_> {
             };
             match &key {
                 t if numeric(t) => {
-                    if !numeric(&bt) {
+                    if matches!(bt, T::YearMonthInterval { .. }) {
+                        // An integral or decimal key casts the interval to its type (months); a FLOAT or DOUBLE key
+                        // does not accept one.
+                        if matches!(key, T::Float | T::Double) {
+                            return Err(AnalysisError::new(
+                                DatatypeMismatchRangeFrameInvalidType {
+                                    sql_expr: spec_sql(shown),
+                                    order_spec_type: quoted(&key),
+                                    value_boundary_type: quoted(&bt),
+                                },
+                                origin,
+                            ));
+                        }
+                    } else if !numeric(&bt) {
                         // A string literal is cast to the key's type: a float key reads `'inf'`/`'NaN'`
                         // (`range_value` below); any other numeric key raises what the cast raises.
                         if !(matches!(bt, T::String) && is_string_bound(x)) {
@@ -1343,6 +1388,16 @@ impl Resolver<'_> {
                             }
                         }
                     }
+                }
+                T::Boolean if matches!(bt, T::YearMonthInterval { .. }) => {
+                    return Err(AnalysisError::new(
+                        DatatypeMismatchRangeFrameInvalidType {
+                            sql_expr: spec_sql(shown),
+                            order_spec_type: quoted(&key),
+                            value_boundary_type: quoted(&bt),
+                        },
+                        origin,
+                    ));
                 }
                 T::String | T::Boolean => {
                     // The bound is cast to the key's type, which is not a
