@@ -101,7 +101,7 @@ impl Resolver<'_> {
             Some((_, a)) => a.clone(),
             None if st.info.distinct_rewritten
                 && !f.distinct
-                && !matches!(f.id.name(), "min" | "max") =>
+                && !matches!(super::exprs::builtin_name(f), "min" | "max") =>
             {
                 // Spark rewrites this call with the select list's. Planned over the
                 // rewrite's own rows (one per distinct set) it would count each group

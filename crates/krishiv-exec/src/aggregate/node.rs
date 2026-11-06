@@ -185,6 +185,7 @@ pub fn union_distinct(
         spill,
         require_unit_weights: true,
         legacy_statistical: false,
+        udafs: None,
     };
     Ok(AggregateNode::new(input, HashAggregate::new(spec)?))
 }

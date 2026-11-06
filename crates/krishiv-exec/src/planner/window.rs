@@ -11,7 +11,7 @@ use krishiv_plan::{
     SortDirection, SortOrder, WindowSpecRef,
 };
 
-use super::aggregate::{aggregate_expr, lower};
+use super::aggregate::{aggregate_expr, lower, udaf_state};
 use super::build::{OrderKey, Planned, Planner, internal, list, orders, unsupported};
 use super::properties::Distribution;
 use crate::aggregate::AggregateFunction;
@@ -334,19 +334,24 @@ impl Planner<'_> {
         if c.f.distinct {
             return Err(unsupported("DISTINCT window aggregates"));
         }
-        Ok(WindowFunction::Aggregate(
-            aggregate_expr(
-                function,
-                args.to_vec(),
-                // A window applies the call's filter itself (as the
-                // `WindowFunctionPlan`'s own filter column); the accumulator's
-                // mask stays empty.
-                None,
-                &input.schema,
-                c.output.name.clone(),
-            )?
-            .with_array_result(&c.output.data_type.to_arrow()),
-        ))
+        let udf = matches!(function, AggregateFunction::Udf(_));
+        let expr = aggregate_expr(
+            function,
+            args.to_vec(),
+            // A window applies the call's filter itself (as the
+            // `WindowFunctionPlan`'s own filter column); the accumulator's
+            // mask stays empty.
+            None,
+            &input.schema,
+            c.output.name.clone(),
+        )?;
+        Ok(WindowFunction::Aggregate(if udf {
+            // An aggregate UDF (ADR 0045) carries its own result type and the
+            // state its library declares.
+            udaf_state(expr, self.env.udfs.as_ref())?
+        } else {
+            expr.with_array_result(&c.output.data_type.to_arrow())
+        }))
     }
 }
 
