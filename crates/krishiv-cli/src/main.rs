@@ -80,6 +80,9 @@ enum Command {
         /// Address to bind; loopback by default.
         #[arg(long, default_value = "127.0.0.1")]
         host: std::net::IpAddr,
+        /// Engine setting, `KEY=VALUE` (repeatable); `krishiv.ui.enabled=false` refuses to start.
+        #[arg(long = "conf", value_parser = common::key_value)]
+        conf: Vec<(String, String)>,
     },
 }
 
@@ -116,9 +119,9 @@ fn run() {
         #[cfg(feature = "mcp")]
         Command::Mcp { data, allow_root } => std::process::exit(run_mcp(data, allow_root)),
         #[cfg(feature = "ui")]
-        Command::Server { port, host } => {
+        Command::Server { port, host, conf } => {
             let addr = std::net::SocketAddr::new(host, port);
-            if let Err(e) = run_server(addr) {
+            if let Err(e) = run_server(addr, &conf) {
                 eprintln!("krishiv server: {e}");
                 std::process::exit(1);
             }
@@ -129,10 +132,21 @@ fn run() {
 /// `krishiv server`: the admin API and web UI over this process's engine runtime, behind a fresh token that
 /// is printed once at start-up (the UI's `/api/internal` routes refuse any request without it).
 #[cfg(feature = "ui")]
-fn run_server(addr: std::net::SocketAddr) -> Result<(), String> {
-    let runtime = krishiv_session::EngineRuntime::builder()
-        .build()
-        .map_err(|e| e.to_string())?;
+fn run_server(addr: std::net::SocketAddr, conf: &[(String, String)]) -> Result<(), String> {
+    let mut config = krishiv_common::config::Config::new();
+    let mut builder = krishiv_session::EngineRuntime::builder();
+    for (k, v) in conf {
+        config.set(k, v).map_err(|e| e.to_string())?;
+        builder = builder.config(k, v);
+    }
+    let enabled = config
+        .get(&krishiv_common::config::UI_ENABLED)
+        .and_then(krishiv_common::config::ConfigValue::as_bool)
+        .unwrap_or(true);
+    if !enabled {
+        return Err("krishiv.ui.enabled is false: not serving the UI".to_owned());
+    }
+    let runtime = builder.build().map_err(|e| e.to_string())?;
     let source =
         krishiv_server::session_source::SessionSource::new(runtime).map_err(|e| e.to_string())?;
     let token = krishiv_server::internal::random_token().map_err(|e| e.to_string())?;
