@@ -551,6 +551,155 @@ pub fn add_day_time_to_timestamp(
     base.checked_add(rest)
 }
 
+/// `time_bucket` with a day-time interval of `bucket` microseconds (positive): the start of the bucket of `t`,
+/// bucket `k` starting at `origin + k * bucket` added as a day-time interval in `zone` (`None` for
+/// `TIMESTAMP_NTZ`), as Spark 4.2's `DateTimeUtils.timeBucketDTInterval`. Below a day that is plain floor
+/// division; from a day up a DST shift moves a candidate by less than one bucket, so one step corrects `k`.
+/// `None` on `long` overflow (Spark: `ArithmeticException`).
+#[must_use]
+pub fn time_bucket_day_time(
+    bucket: i64,
+    t: i64,
+    origin: i64,
+    zone: Option<&dyn TimeZoneRules>,
+) -> Option<i64> {
+    if bucket <= 0 {
+        return None;
+    }
+    let mut k = t.checked_sub(origin)?.div_euclid(bucket);
+    if bucket < MICROS_PER_DAY {
+        return origin.checked_add(k.checked_mul(bucket)?);
+    }
+    let candidate = |k: i64| add_day_time_to_timestamp(origin, k.checked_mul(bucket)?, zone);
+    let mut c = candidate(k)?;
+    if c > t {
+        k = k.checked_sub(1)?;
+        c = candidate(k)?;
+    } else {
+        let next = candidate(k.checked_add(1)?)?;
+        if next <= t {
+            c = next;
+        }
+    }
+    Some(c)
+}
+
+/// `time_bucket` with a year-month interval of `bucket` months (positive): the start of the bucket of `t`, bucket
+/// `k` starting `k * bucket` months after `origin` on the local calendar of `zone` (`None` for `TIMESTAMP_NTZ`;
+/// the day clamped to the month, a DST overlap keeping the origin's offset), as Spark 4.2's
+/// `DateTimeUtils.timeBucketYMInterval`: `k` from the calendar months between the two, one step back when the
+/// candidate passes `t` within its month. `None` on overflow.
+#[must_use]
+pub fn time_bucket_year_month(
+    bucket: i32,
+    t: i64,
+    origin: i64,
+    zone: Option<&dyn TimeZoneRules>,
+) -> Option<i64> {
+    if bucket <= 0 {
+        return None;
+    }
+    let month_index = |utc: i64| -> Option<i64> {
+        let local = match zone {
+            Some(tz) => utc_to_local(utc, tz)?,
+            None => utc,
+        };
+        let (year, month, _) = civil_from_days(local.div_euclid(MICROS_PER_DAY));
+        year.checked_mul(12)?.checked_add(i64::from(month))
+    };
+    let months = month_index(t)?.checked_sub(month_index(origin)?)?;
+    let bucket = i64::from(bucket);
+    let candidate = |k: i64| add_months_to_timestamp(origin, k.checked_mul(bucket)?, zone);
+    let mut k = months.div_euclid(bucket);
+    let mut c = candidate(k)?;
+    if c > t {
+        k = k.checked_sub(1)?;
+        c = candidate(k)?;
+    }
+    Some(c)
+}
+
+/// `time_bucket` over a batch: `sizes` are months (`months`) or microseconds per row, `ts` and `origin` instants;
+/// a NULL in any of the three is NULL. An overflow is `DATETIME_OVERFLOW` for its row.
+///
+/// # Errors
+/// `DATETIME_OVERFLOW` as above.
+pub fn time_bucket_batch(
+    sizes: &[Option<i64>],
+    ts: &TimestampMicrosecondArray,
+    origin: &TimestampMicrosecondArray,
+    months: bool,
+    zone: Option<&dyn TimeZoneRules>,
+) -> Result<TimestampMicrosecondArray, KernelError> {
+    let mut out = Vec::with_capacity(ts.len());
+    for (row, ((size, t), start)) in sizes.iter().zip(ts.iter()).zip(origin.iter()).enumerate() {
+        let (Some(size), Some(t), Some(start)) = (*size, t, start) else {
+            out.push(None);
+            continue;
+        };
+        let bucket = if months {
+            i32::try_from(size)
+                .ok()
+                .and_then(|m| time_bucket_year_month(m, t, start, zone))
+        } else {
+            time_bucket_day_time(size, t, start, zone)
+        };
+        out.push(Some(bucket.ok_or_else(|| {
+            KernelError::datetime_overflow(row, "time_bucket")
+        })?));
+    }
+    Ok(TimestampMicrosecondArray::from(out))
+}
+
+/// `time + interval` for a day-time interval (Spark 4.2 `DateTimeUtils.timeAddInterval`): nanoseconds of the day plus
+/// the interval's microseconds; a result outside `[00:00, 24:00)` is `DATETIME_OVERFLOW` ("add <interval> to the time
+/// value <time>", the interval shown in its end field `end`, the time at precision `precision` as Spark's
+/// `toSQLValue` prints it). No truncation is needed: an interval ending before `SECOND` adds whole minutes, one ending
+/// in `SECOND` makes the result `TIME(6)`. A NULL in either is NULL.
+///
+/// # Errors
+/// `DATETIME_OVERFLOW` as above.
+pub fn time_add_day_time(
+    times: &arrow_array::Time64NanosecondArray,
+    micros: &arrow_array::DurationMicrosecondArray,
+    end: krishiv_types::DayTimeField,
+) -> Result<arrow_array::Time64NanosecondArray, KernelError> {
+    const NANOS_PER_DAY: i64 = 86_400_000_000_000;
+    let mut out = Vec::with_capacity(times.len());
+    for (row, (t, m)) in times.iter().zip(micros.iter()).enumerate() {
+        let (Some(t), Some(m)) = (t, m) else {
+            out.push(None);
+            continue;
+        };
+        let sum = m.checked_mul(1_000).and_then(|n| t.checked_add(n));
+        match sum {
+            Some(v) if (0..NANOS_PER_DAY).contains(&v) => out.push(Some(v)),
+            _ => {
+                let interval = krishiv_types::interval::day_time_string(m, end, end);
+                let time = format!("TIME '{}'", crate::cast::format_time(t));
+                return Err(KernelError::datetime_overflow(
+                    row,
+                    &format!("add {interval} to the time value {time}"),
+                ));
+            }
+        }
+    }
+    Ok(arrow_array::Time64NanosecondArray::from(out))
+}
+
+/// `end - start` of times (Spark 4.2 `DateTimeUtils.subtractTimes`): whole microseconds, truncated toward zero, as an
+/// `INTERVAL HOUR TO SECOND`. A NULL in either is NULL.
+#[must_use]
+pub fn subtract_times(
+    end: &arrow_array::Time64NanosecondArray,
+    start: &arrow_array::Time64NanosecondArray,
+) -> arrow_array::DurationMicrosecondArray {
+    end.iter()
+        .zip(start.iter())
+        .map(|(e, s)| e?.checked_sub(s?)?.checked_div(1_000))
+        .collect()
+}
+
 /// The value of an operand at row `i`; `None` is NULL.
 pub(crate) fn at<T: ArrowPrimitiveType>(o: &Operand<'_, T>, i: usize) -> Option<T::Native> {
     match o {

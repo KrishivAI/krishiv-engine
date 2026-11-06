@@ -295,6 +295,9 @@ impl Resolver<'_> {
         cx: &Cx<'_>,
         exact: bool,
     ) -> Result<Option<Bound>, AnalysisError> {
+        if let Some(b) = self.time_arithmetic(origin, l, r, cx, exact, false)? {
+            return Ok(Some(b));
+        }
         Ok(Some(match (kind(l), kind(r)) {
             (Kind::Calendar, Kind::Calendar) => {
                 self.calendar_pair(Builtin::CalendarAdd, Builtin::Add, origin, l, r, exact)
@@ -355,6 +358,9 @@ impl Resolver<'_> {
         cx: &Cx<'_>,
         exact: bool,
     ) -> Result<Option<Bound>, AnalysisError> {
+        if let Some(b) = self.time_arithmetic(origin, l, r, cx, exact, true)? {
+            return Ok(Some(b));
+        }
         let (lk, rk) = (kind(l), kind(r));
         Ok(Some(match (lk, rk) {
             (Kind::Calendar, Kind::Calendar | Kind::Null) => self.calendar_pair(
@@ -770,6 +776,104 @@ impl Resolver<'_> {
         Ok(difference)
     }
 
+    /// `TIME` arithmetic (Spark 4.2 `BinaryArithmeticWithDatetimeResolver`): `time + interval` and
+    /// `interval + time` are `TimeAddInterval(time, interval)` (shown time first), `time - interval` adds the
+    /// negated interval (shown as written), `time - time` is `SubtractTimes` (an `INTERVAL HOUR TO SECOND`); a NULL
+    /// beside a time is a day-time interval in `+` and a time in `-`, a string beside a time in `-` reads as
+    /// `TIME(6)`. `None` when no operand is a time, or for a pairing these rules leave to the others (`time + 1`,
+    /// `time - INTERVAL '1' MONTH`, which stay type mismatches).
+    fn time_arithmetic(
+        &mut self,
+        origin: Origin,
+        l: &Bound,
+        r: &Bound,
+        cx: &Cx<'_>,
+        exact: bool,
+        subtract: bool,
+    ) -> Result<Option<Bound>, AnalysisError> {
+        let is_time = |b: &Bound| matches!(b.ty.data_type, Some(DataType::Time { .. }));
+        if !is_time(l) && !is_time(r) {
+            return Ok(None);
+        }
+        let day_time = |b: &Bound| matches!(kind(b), Kind::DayTime | Kind::Days);
+        let null = |b: &Bound| kind(b) == Kind::Null;
+        let kids = [l.clone(), r.clone()];
+        if !subtract || (is_time(l) && day_time(r)) {
+            let (time, interval) = if is_time(l) && (day_time(r) || null(r)) {
+                (l, r)
+            } else if (day_time(l) || null(l)) && is_time(r) && !subtract {
+                (r, l)
+            } else {
+                return Ok(None);
+            };
+            let typed = if null(interval) {
+                self.implicit_cast(interval, Some(DataType::DEFAULT_DAY_TIME_INTERVAL))
+            } else {
+                interval.clone()
+            };
+            let end = match typed.ty.data_type {
+                Some(DataType::DayTimeInterval { end, .. }) => end,
+                _ => DayTimeField::Second,
+            };
+            let end_index = match end {
+                DayTimeField::Day => 0,
+                DayTimeField::Hour => 1,
+                DayTimeField::Minute => 2,
+                DayTimeField::Second => 3,
+            };
+            let added = if subtract {
+                negative(&typed, exact, origin)
+            } else {
+                Arc::clone(&typed.expr)
+            };
+            let call = registry_call(
+                "__time_add_interval",
+                vec![
+                    Arc::clone(&time.expr),
+                    added,
+                    Arc::new(Expr::literal(Literal::Integer(end_index))),
+                ],
+                origin,
+            );
+            let b = self.bind(&call, cx)?;
+            let t = b.ty.data_type.clone().unwrap_or(DataType::Null);
+            let name = if subtract {
+                registry_call("__time_minus", vec![l.shown(), r.shown()], origin)
+            } else {
+                registry_call("__time_plus", vec![time.shown(), interval.shown()], origin)
+            };
+            let mut out = bound(b.expr, t, name, &kids);
+            out.ty.nullable = b.ty.nullable;
+            return Ok(Some(out));
+        }
+        let operand = |b: &Bound| is_time(b) || matches!(kind(b), Kind::Null | Kind::String);
+        if !(operand(l) && operand(r)) {
+            return Ok(None);
+        }
+        let as_time = |me: &Self, b: &Bound| {
+            if is_time(b) {
+                b.clone()
+            } else {
+                me.implicit_cast(b, Some(DataType::Time { precision: 6 }))
+            }
+        };
+        let (a, b) = (as_time(self, l), as_time(self, r));
+        let call = registry_call(
+            "__subtract_times",
+            vec![Arc::clone(&a.expr), Arc::clone(&b.expr)],
+            origin,
+        );
+        let diff = self.bind(&call, cx)?;
+        let t = DataType::DayTimeInterval {
+            start: DayTimeField::Hour,
+            end: DayTimeField::Second,
+        };
+        let name = registry_call("__time_minus", vec![l.shown(), r.shown()], origin);
+        let mut out = bound(diff.expr, t, name, &kids);
+        out.ty.nullable = diff.ty.nullable;
+        Ok(Some(out))
+    }
+
     /// `l op r` of calendar intervals, shown as `shown_id`; a NULL takes the type.
     fn calendar_pair(
         &mut self,
@@ -944,6 +1048,22 @@ fn legacy_difference(origin: Origin) -> AnalysisError {
     unsupported(
         "a date or timestamp difference with spark.sql.legacy.interval.enabled",
         origin,
+    )
+}
+
+/// An unresolved call of the registry function `name` over already-resolved `args`, to bind in place.
+fn registry_call(name: &str, args: Vec<Arc<Expr>>, origin: Origin) -> Arc<Expr> {
+    Arc::new(
+        Expr::new(ExprNode::Function(crate::FunctionCall {
+            name: name.to_owned(),
+            qualifier: Vec::new(),
+            args,
+            arg_names: Vec::new(),
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+        }))
+        .with_origin(origin),
     )
 }
 

@@ -4498,7 +4498,7 @@ fn aggregate_sql(e: &Arc<Expr>, scope: &[Attr]) -> String {
 
 /// Whether `e` reads a column or calls a non-deterministic function, so it
 /// cannot be folded to a constant.
-fn not_constant(e: &Expr) -> bool {
+pub(super) fn not_constant(e: &Expr) -> bool {
     if matches!(
         &e.node,
         // A subquery is not foldable, whatever it selects.

@@ -103,6 +103,11 @@ pub enum Constant {
     /// A cast of a literal that Spark raises while folding it (overflow,
     /// malformed input); the function that reads the value raises it.
     Error(KrishivError),
+    /// An ANSI interval: months of a year-month interval, microseconds of a
+    /// day-time one (the argument's type says which).
+    Interval(i64),
+    /// A `TIMESTAMP` or `TIMESTAMP_NTZ`, in microseconds since the epoch.
+    Timestamp(i64),
 }
 
 /// The type of a value, as function signatures see it.
@@ -132,6 +137,7 @@ pub struct CallTypes<'a> {
     args: &'a [ArgType],
     constants: &'a [Option<Constant>],
     literals: &'a [bool],
+    foldable: &'a [bool],
     sql: Option<&'a dyn Fn(usize) -> Option<String>>,
     bound_sql: Option<&'a dyn Fn(usize) -> Option<String>>,
     ansi: bool,
@@ -162,6 +168,7 @@ impl<'a> CallTypes<'a> {
             args,
             constants,
             literals: &[],
+            foldable: &[],
             sql: None,
             bound_sql: None,
             ansi: true,
@@ -178,6 +185,23 @@ impl<'a> CallTypes<'a> {
     pub const fn with_literals(mut self, literals: &'a [bool]) -> Self {
         self.literals = literals;
         self
+    }
+
+    /// With `foldable[i]` telling whether argument `i` is foldable in Spark's sense (no column, subquery or
+    /// non-deterministic call), whether or not it folds to a [`Constant`] here.
+    #[must_use]
+    pub const fn with_foldable(mut self, foldable: &'a [bool]) -> Self {
+        self.foldable = foldable;
+        self
+    }
+
+    /// Whether argument `i` is foldable; without [`Self::with_foldable`], whether it has a constant.
+    #[must_use]
+    pub fn foldable(&self, i: usize) -> bool {
+        self.foldable
+            .get(i)
+            .copied()
+            .unwrap_or_else(|| self.constant(i).is_some())
     }
 
     /// With `spark.sql.ansi.enabled = ansi` (on by default): some legacy
@@ -382,7 +406,7 @@ impl InputType {
             // Spark's `AnyTimestampType` names itself in words. The time
             // fields also take a `TIME` (Spark types that overload
             // separately, so its message keeps the timestamp wording).
-            Self::OneOf(types)
+            Self::OneOf(types) | Self::StrictOneOf(types)
                 if matches!(
                     types
                         .iter()

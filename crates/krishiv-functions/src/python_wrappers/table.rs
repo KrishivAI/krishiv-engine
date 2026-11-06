@@ -73,6 +73,8 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "__subscript",
         "the lowering of `base[index]`; PySpark: `Column.getItem`",
     ),
+    ("__time_add_interval", "operator: `time + interval`"),
+    ("__subtract_times", "operator: `time - time`"),
     (
         "explode",
         "generator: a `Generate` node, not a DataFrame function yet",
@@ -788,6 +790,10 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("next_day", "date: ColumnOrName, dayOfWeek: str"),
         Row::new("trunc", "date: ColumnOrName, format: str"),
         Row::new("date_trunc", "format: str, timestamp: ColumnOrName"),
+        Row::new(
+            "time_bucket",
+            "bucket_size: Column, ts: ColumnOrName, origin: Column = None",
+        ),
         Row::new(
             "from_utc_timestamp",
             "timestamp: ColumnOrName, tz: Column | str",

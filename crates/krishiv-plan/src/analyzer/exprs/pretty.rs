@@ -223,6 +223,17 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
         }) if name == "__subscript" && qualifier.is_empty() && k.len() == 2 => {
             format!("{}[{}]", k[0], k[1])
         }
+        // `TimeAddInterval` and `SubtractTimes` show `left + right` / `left - right`, without the parentheses of
+        // Spark's arithmetic operators (`intervals.rs` `time_arithmetic` names them so).
+        ExprNode::Function(FunctionCall {
+            name, qualifier, ..
+        }) if qualifier.is_empty()
+            && k.len() == 2
+            && matches!(name.as_str(), "__time_plus" | "__time_minus") =>
+        {
+            let op = if name == "__time_plus" { '+' } else { '-' };
+            format!("{} {op} {}", k[0], k[1])
+        }
         ExprNode::Function(FunctionCall {
             name,
             qualifier,
@@ -684,14 +695,10 @@ pub(super) fn call(
             format!("to_char({d}{})", k.join(", "))
         }
         // `current_database` and `current_schema` are one expression
-        // (Spark's `CurrentDatabase`, shown as `current_schema`);
-        // `current_catalog` shows without parentheses.
+        // (Spark's `CurrentDatabase`, shown as `current_schema`).
         _ if name.eq_ignore_ascii_case("current_database") => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("current_schema({d}{})", k.join(", "))
-        }
-        _ if name.eq_ignore_ascii_case("current_catalog") && k.is_empty() && !distinct => {
-            "current_catalog".to_owned()
         }
         // `RLike` prints its function name upper case, whichever spelling
         // (`rlike`, `regexp`, `regexp_like`) the query used.

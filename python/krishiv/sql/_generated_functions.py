@@ -309,6 +309,7 @@ __all__ = [
     "sum",
     "tan",
     "tanh",
+    "time_bucket",
     "timestamp_micros",
     "timestamp_millis",
     "timestamp_seconds",
@@ -1909,6 +1910,11 @@ def tan(col: ColumnOrName) -> Column:
 def tanh(col: ColumnOrName) -> Column:
     """Calls the registry function ``tanh``."""
     return _call("tanh", _named(col, "col"))
+
+
+def time_bucket(bucket_size: Column, ts: ColumnOrName, origin: Column | None = None) -> Column:
+    """Calls the registry function ``time_bucket``."""
+    return _call("time_bucket", _named(bucket_size, "bucket_size"), _named(ts, "ts"), *_opt(_named, origin, "origin"))
 
 
 def timestamp_micros(col: ColumnOrName) -> Column:

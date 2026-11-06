@@ -11,7 +11,8 @@
 2491 crates/krishiv-exec/src/planner/eval/cond.rs
 2626 crates/krishiv-exec/src/planner/eval/hof.rs
 3063 crates/krishiv-exec/src/window/tests.rs
-2084 crates/krishiv-functions/src/registry/defs.rs
+# +14: nth_value refuses an interval or timestamp offset as UNEXPECTED_INPUT_TYPE before its value check (T025 rest)
+2098 crates/krishiv-functions/src/registry/defs.rs
 3337 crates/krishiv-functions/src/registry/tests.rs
 4186 crates/krishiv-io/src/avro/tests.rs
 2215 crates/krishiv-kernels/src/csv.rs

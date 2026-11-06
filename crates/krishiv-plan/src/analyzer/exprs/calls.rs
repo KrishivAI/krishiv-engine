@@ -81,6 +81,10 @@ impl Resolver<'_> {
             .map(|k| self.fold(&k.expr, self.ctx.conf.ansi))
             .collect();
         let literals: Vec<bool> = kids.iter().map(|k| fold::is_literal(&k.expr)).collect();
+        let foldable: Vec<bool> = kids
+            .iter()
+            .map(|k| !crate::analyzer::ops::not_constant(&k.expr))
+            .collect();
         // Rendered only if a rule's error quotes an argument.
         let zone = self.ctx.conf.session_zone;
         let sql = |i: usize| kids.get(i).map(|k| pretty(&k.shown(), zone));
@@ -108,6 +112,7 @@ impl Resolver<'_> {
         let bound_sql = |i: usize| call_kids.get(i).map(|k| pretty(&k.expr, zone));
         let call = CallTypes::new(&types, &constants)
             .with_literals(&literals)
+            .with_foldable(&foldable)
             .with_sql(&sql)
             .with_bound_sql(&bound_sql)
             .with_ansi(ansi)
