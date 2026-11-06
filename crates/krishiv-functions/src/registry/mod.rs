@@ -312,7 +312,7 @@ impl Registry {
             rows.into_iter().map(|r| (r.name, r)).collect();
         let mut defs = HashMap::new();
         let mut unlisted = Vec::new();
-        for (id, spec) in (0_u32..).zip(defs::specs()) {
+        for (id, spec) in (0_u32..).zip(defs::specs().into_iter().chain(variant::specs())) {
             let grammar = grammar_row(spec.name);
             let Some(row) = spark.get(spec.name).or(grammar.as_ref()) else {
                 unlisted.push(spec.name);

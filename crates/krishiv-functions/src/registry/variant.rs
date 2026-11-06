@@ -9,8 +9,8 @@
 //! holds (string map keys); anything else is
 //! `DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION` to `VARIANT`.
 //!
-//! `parse_json` takes a string (implicitly cast); the variant arguments take
-//! a `VARIANT` and nothing implicit. The type of `variant_get(v, path,
+//! `parse_json` and the path take a string, the variant arguments a
+//! `VARIANT`, with nothing cast implicitly. The type of `variant_get(v, path,
 //! type)` is the DDL type in the third argument, which must be a non-null
 //! string literal (`INVALID_SCHEMA.NON_STRING_LITERAL`, as `from_json`'s
 //! schema) naming a type a variant casts to (`VariantGet.checkDataType`:
@@ -140,11 +140,12 @@ fn try_variant_get(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 pub(super) fn specs() -> Vec<Spec> {
-    let string = Inputs::Expects(vec![InputType::Exact(DataType::String)]);
+    // `ExpectsInputTypes` on `StringTypeWithCollation`: no implicit cast.
+    let string = Inputs::Expects(vec![InputType::Strict(DataType::String)]);
     let variant = Inputs::Expects(vec![InputType::Strict(DataType::Variant)]);
     let get = Inputs::Expects(vec![
         InputType::Strict(DataType::Variant),
-        InputType::Exact(DataType::String),
+        InputType::Strict(DataType::String),
         InputType::Any,
     ]);
     let mut out = scalar(&["parse_json"], &string, parse_json);

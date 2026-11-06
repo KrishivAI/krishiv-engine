@@ -16,8 +16,8 @@
 4186 crates/krishiv-io/src/avro/tests.rs
 2215 crates/krishiv-kernels/src/csv.rs
 2429 crates/krishiv-kernels/src/map.rs
-2468 crates/krishiv-plan/src/analyzer/coerce.rs
-4582 crates/krishiv-plan/src/analyzer/ops.rs
+2464 crates/krishiv-plan/src/analyzer/coerce.rs
+4552 crates/krishiv-plan/src/analyzer/ops.rs
 3098 crates/krishiv-plan/src/analyzer/subquery.rs
 5392 crates/krishiv-plan/src/tests/analyzer.rs
 3004 crates/krishiv-session/src/catalog.rs

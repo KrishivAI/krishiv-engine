@@ -111,6 +111,24 @@ def h2o_target(ap: argparse.ArgumentParser, a: argparse.Namespace) -> tuple[Path
     return root, str(root.relative_to(data_root())), h2o.SIZE_GB[a.size]
 
 
+def add_reference_cache_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--cold",
+        action="store_true",
+        help="drop the dataset from the page cache before every timed run (not comparable with warm results)",
+    )
+    p.add_argument(
+        "--refresh-reference",
+        action="store_true",
+        help="run DuckDB again and replace its cached answers and timings (refcache/ under $KRISHIV_DATA)",
+    )
+    p.add_argument(
+        "--no-reference-cache",
+        action="store_true",
+        help="neither read nor write the DuckDB reference cache",
+    )
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="krishiv-bench")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -166,6 +184,7 @@ def main(argv=None) -> None:
     ab.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
     ab.add_argument("--reps", type=int, default=3, help="ABBA blocks per query (2 samples per engine each)")
     ab.add_argument("--queries", help="comma list, e.g. q01,q05")
+    add_reference_cache_args(ab)
     ab.add_argument("--threads", type=int, default=8, help="threads for both engines")
     ab.add_argument("--memory-limit", default="12g", help="memory limit for both engines")
     ab.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
@@ -230,6 +249,7 @@ def main(argv=None) -> None:
     rr.add_argument("--methods", default="ours,theirs", help="comma list of: ours, theirs")
     rr.add_argument("--reps", type=int, default=3, help="interleaved blocks per query (2 samples per engine each)")
     rr.add_argument("--queries", help="comma list, e.g. q01,q05")
+    add_reference_cache_args(rr)
     rr.add_argument("--threads", type=int, default=12)
     rr.add_argument("--memory-gb", type=int, default=32)
     rr.add_argument("--timeout", type=float, default=600, help="per-run timeout for the ours method (seconds)")
@@ -422,6 +442,9 @@ def main(argv=None) -> None:
             a.profile,
             sequential=a.sequential,
             cap_gb=a.cgroup_gb,
+            reference_cache=not a.no_reference_cache,
+            refresh_reference=a.refresh_reference,
+            cold=a.cold,
         )
     elif a.cmd == "ledger":
         from .ledger import run_ledger
@@ -450,6 +473,9 @@ def main(argv=None) -> None:
             a.timeout,
             a.suite,
             a.runner,
+            reference_cache=not a.no_reference_cache,
+            refresh_reference=a.refresh_reference,
+            cold=a.cold,
         )
     elif a.cmd == "explain-diff":
         from .explain_diff import run_explain_diff
