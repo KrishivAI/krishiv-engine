@@ -652,8 +652,8 @@ pub fn time_bucket_batch(
 }
 
 /// `time + interval` for a day-time interval (Spark 4.2 `DateTimeUtils.timeAddInterval`): nanoseconds of the day plus
-/// the interval's microseconds; a result outside `[00:00, 24:00)` is `DATETIME_OVERFLOW` ("add <interval> to the time
-/// value <time>", the interval shown in its end field `end`, the time at precision `precision` as Spark's
+/// the interval's microseconds; a result outside `[00:00, 24:00)` is `DATETIME_OVERFLOW` ("add `<interval>` to the time
+/// value `<time>`", the interval shown in its end field `end`, the time as Spark's
 /// `toSQLValue` prints it). No truncation is needed: an interval ending before `SECOND` adds whole minutes, one ending
 /// in `SECOND` makes the result `TIME(6)`. A NULL in either is NULL.
 ///
