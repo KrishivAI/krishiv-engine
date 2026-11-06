@@ -62,6 +62,7 @@ mod aggregates;
 mod calls;
 mod columns;
 mod conditionals;
+mod display;
 mod in_subquery;
 mod literals;
 mod node;
@@ -237,14 +238,19 @@ fn with_children(e: &Expr, kids: Vec<Arc<Expr>>) -> Arc<Expr> {
 fn ntz_variant(name: &str, kids: &[Bound]) -> Option<(&'static str, usize)> {
     let is = |n: &str| name.eq_ignore_ascii_case(n);
     if is("to_timestamp") && (1..=2).contains(&kids.len()) {
+        // A numeric argument is cast to a string first, as Spark's implicit casts do; an untyped NULL is a NULL.
         let ok = matches!(
             kids[0].ty.data_type,
-            Some(
+            None | Some(
                 DataType::String
                     | DataType::Date
                     | DataType::Timestamp
                     | DataType::TimestampNtz
                     | DataType::Null
+                    | DataType::Byte
+                    | DataType::Short
+                    | DataType::Integer
+                    | DataType::Long
             )
         );
         return ok.then_some(("to_timestamp_ntz", kids.len()));

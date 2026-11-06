@@ -613,7 +613,7 @@ fn parse_ntz_column(
     policy: ParsePolicy,
     operation: &str,
 ) -> Result<ArrayRef, KrishivError> {
-    let mut cache = PatternCache::new(Purpose::Parse, legacy);
+    let mut cache = PatternCache::new(Purpose::ParseNtz, legacy);
     let mut out = reserve::<Option<i64>>(strings.len())?;
     for i in 0..strings.len() {
         if strings.is_null(i) || fmts.is_null(i) {
@@ -1627,7 +1627,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             }
             // Spark's formatter factory keeps TIMESTAMP_NTZ on the corrected
             // parser under LEGACY.
-            let pat = match pattern_arg(args, 1, Purpose::Parse, false) {
+            let pat = match pattern_arg(args, 1, Purpose::ParseNtz, false) {
                 Ok(p) => p,
                 Err(e) => return Some((listed, Err(e))),
             };
@@ -1726,7 +1726,15 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             let pat = if has_fmt {
                 match pattern_arg(args, 1, Purpose::Format, opts.legacy_time_parser) {
                     Ok(p) => p,
-                    Err(e) => return Some((listed, Err(e))),
+                    // Spark builds the formatter lazily, so what its arguments raise comes first (a seconds
+                    // argument that does not cast): read them, then report the pattern.
+                    Err(e) => {
+                        let binding = Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
+                            longs_column(x, 0)?;
+                            Err(e.clone())
+                        });
+                        return Some((listed, Ok(binding)));
+                    }
                 }
             } else {
                 match default_pattern(Purpose::Format, opts.legacy_time_parser) {

@@ -558,6 +558,10 @@ pub(super) fn call(
         _ if name.eq_ignore_ascii_case("extract") && (2..=3).contains(&k.len()) => {
             format!("extract({} FROM {})", k[0], k[1])
         }
+        // `datepart` keeps its name and reads like `extract` (`date_part(field, source)` stays a call).
+        _ if name.eq_ignore_ascii_case("datepart") && (2..=3).contains(&k.len()) => {
+            format!("datepart({} FROM {})", k[0], k[1])
+        }
         // `trim` family: one argument is `trim(src)` / `ltrim(src)` /
         // `rtrim(src)` / `btrim(...)`; two are Spark's `TRIM(...)` form.
         // The analyzer keeps `trim(trimStr, src)` (characters first, as

@@ -1077,7 +1077,7 @@ fn datetime() -> Vec<Spec> {
     ));
     out.extend(scalar(
         &["time_trunc"],
-        &Inputs::Expects(vec![exact(DataType::String), any_time()]),
+        &Inputs::Expects(vec![exact(DataType::String), InputType::AnyTimeOrString]),
         time_trunc_result,
     ));
     out.extend(scalar(

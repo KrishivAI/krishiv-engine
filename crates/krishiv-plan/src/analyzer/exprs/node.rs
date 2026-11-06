@@ -412,11 +412,17 @@ impl Resolver<'_> {
                         b = make_nullable(b);
                     }
                     // Shown as Spark names it, over the operands as written
-                    // (a session variable keeps its name).
+                    // (a session variable keeps its name): `date_add` / `date_sub`, or the `try_` call
+                    // itself with its operands in the order written.
+                    let (shown_name, a, c) = if lookup_name.starts_with("try_") {
+                        (lookup_name, 0, 1)
+                    } else {
+                        (name, first, second)
+                    };
                     b.shown = Some(Arc::new(
                         Expr::function(
-                            name,
-                            vec![kids[first].shown(), kids[second].shown()]
+                            shown_name,
+                            vec![kids[a].shown(), kids[c].shown()]
                                 .into_iter()
                                 .map(|k| bare_variable(&k))
                                 .collect(),
@@ -1534,6 +1540,19 @@ impl Resolver<'_> {
                 }
             }),
         };
+        if let ExprNode::Function(f) = &e.node
+            && matches!(
+                &b.expr.node,
+                ExprNode::Resolved(ResolvedExpr::Function(r)) if !matches!(r.id, FunctionId::Udf { .. })
+            )
+            && let Some(shown) = super::display::spark_display(
+                &f.name,
+                &kids.iter().map(Bound::shown).collect::<Vec<_>>(),
+                e.origin,
+            )
+        {
+            b.shown = Some(shown);
+        }
         if b.shown.is_none() && kids.iter().any(|k| k.shown.is_some()) {
             b.shown = Some(with_children(
                 &b.expr,

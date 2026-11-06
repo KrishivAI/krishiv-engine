@@ -1447,6 +1447,12 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
             }
             implicit(from, &InputType::Exact(t.clone()), ansi)
         }),
+        (Some(f), InputType::AnyTimeOrString) if matches!(f, T::Time { .. }) => {
+            Some(Some(f.clone()))
+        }
+        (Some(T::String) | None, InputType::AnyTimeOrString) => {
+            Some(Some(T::Time { precision: 6 }))
+        }
         // A member of the strict collection stays, as does an untyped
         // `NULL` (which becomes the first member); anything else is
         // refused without implicit casts.
