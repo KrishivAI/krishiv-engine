@@ -9,8 +9,8 @@ needed, so every table is created EMPTY (no data files) in an in-memory catalog.
 For each query the optimized plan is computed twice, once normally and once with
 `spark.sql.optimizer.excludedRules=...InferFiltersFromConstraints` (so the predicates left are the
 ones the query wrote, after predicate pushdown). Setting `spark.sql.constraintPropagationEnabled=false`
-was tried first and does NOT suppress the inferred filters in the optimized plan (Spark 4.2.0). For every scan (leaf of the optimized plan, including
-scalar-subquery and EXISTS plans) the conjuncts of the Filter directly above it are split into:
+was tried first and does NOT suppress the inferred filters in the optimized plan (Spark 4.2.0).
+For every scan (leaf of the optimized plan, including scalar-subquery and EXISTS plans) the conjuncts of the Filter directly above it are split into:
 
   written       (a) present with the rule excluded
   isnotnull     (b) inferred `isnotnull(attribute)`
@@ -59,8 +59,7 @@ TPCH = {
     "c_acctbal decimal(15,2), c_mktsegment string, c_comment string",
     "part": "p_partkey bigint, p_name string, p_mfgr string, p_brand string, p_type string, p_size int, "
     "p_container string, p_retailprice decimal(15,2), p_comment string",
-    "partsupp": "ps_partkey bigint, ps_suppkey bigint, ps_availqty int, ps_supplycost decimal(15,2), "
-    "ps_comment string",
+    "partsupp": "ps_partkey bigint, ps_suppkey bigint, ps_availqty int, ps_supplycost decimal(15,2), ps_comment string",
     "supplier": "s_suppkey bigint, s_name string, s_address string, s_nationkey bigint, s_phone string, "
     "s_acctbal decimal(15,2), s_comment string",
     "nation": "n_nationkey bigint, n_name string, n_regionkey bigint, n_comment string",
@@ -115,8 +114,7 @@ NEGATIVE = [
     (
         "full_outer_with_side_filter",
         "FULL OUTER with filters inside the inputs: nothing is moved across",
-        "SELECT * FROM (SELECT * FROM na WHERE a = 5) q FULL OUTER JOIN "
-        "(SELECT * FROM nb WHERE y > 1) r ON a = b",
+        "SELECT * FROM (SELECT * FROM na WHERE a = 5) q FULL OUTER JOIN (SELECT * FROM nb WHERE y > 1) r ON a = b",
     ),
     (
         "cast_equality_inner",
@@ -341,9 +339,13 @@ class Jvm:
             kinds = sorted(self.cls(k) for k in ks)
             if kinds == ["AttributeReference", "Literal"]:
                 return "equivalence"
-        if c == "In" and ks and self.cls(ks[0]) == "AttributeReference":
-            if all(self.cls(k) == "Literal" for k in ks[1:]):
-                return "equivalence"
+        if (
+            c == "In"
+            and ks
+            and self.cls(ks[0]) == "AttributeReference"
+            and all(self.cls(k) == "Literal" for k in ks[1:])
+        ):
+            return "equivalence"
         if c == "InSet":
             ks = self.kids(inner)
             if len(ks) == 1 and self.cls(ks[0]) == "AttributeReference":
@@ -478,12 +480,12 @@ def run_golden_file(spark, jv: Jvm, path: Path, tag: str, idx: int) -> dict:
                 r = analyze_query(spark, jv, stmt)
                 r.update(n=n, sql=stmt)
                 queries.append(r)
-            except Exception as e:  # noqa: BLE001  (Py4J errors are heterogeneous)
+            except Exception as e:
                 skipped.append({"n": n, "reason": error_head(e), "head": head})
         else:
             try:
                 spark.sql(stmt)
-            except Exception as e:  # noqa: BLE001
+            except Exception as e:
                 skipped.append({"n": n, "reason": error_head(e), "head": head})
     spark.sql("USE default")
     return {"file": f"{tag}/{path.name}", "queries": queries, "skipped": skipped}
@@ -518,7 +520,9 @@ def main() -> None:
                 merged["tpch_nonnull"].update(part["tpch_nonnull"])
                 merged["negative"].update(part["negative"])
                 merged["golden_join_files"].extend(part["golden_join_files"])
-        merged["golden_join_files"].sort(key=lambda g: [Path(f).name for f in GOLDEN_FILES].index(g["file"].rsplit("/", 1)[1]))
+        merged["golden_join_files"].sort(
+            key=lambda g: [Path(f).name for f in GOLDEN_FILES].index(g["file"].rsplit("/", 1)[1])
+        )
         Path(args.out).write_text(json.dumps(merged, indent=1) + "\n")
         return
     parts = set(args.parts.split(","))
@@ -544,7 +548,8 @@ def main() -> None:
         "format_version": FORMAT_VERSION,
         "spark": spark.version,
         "categories": {
-            "written": "(a) conjuncts present with InferFiltersFromConstraints excluded (spark.sql.optimizer.excludedRules)",
+            "written": "(a) conjuncts present with InferFiltersFromConstraints excluded "
+            "(spark.sql.optimizer.excludedRules)",
             "isnotnull": "(b) inferred isnotnull(attribute)",
             "equivalence": "(c) inferred attr <cmp> literal, attr IN (literals), NOT of those",
             "substitution": "(d) any other inferred predicate (not inferred by Krishiv)",
