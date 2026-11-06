@@ -119,8 +119,8 @@ fn alias_column_lists_and_literal_runs_follow_spark() {
 /// Under `spark.sql.legacy.identifierClause` a session variable's name is
 /// still an identifier reference (Spark 4.2 `createVariable`, `dropVariable`):
 /// `DECLARE IDENTIFIER(..)` and `DROP TEMPORARY VARIABLE IDENTIFIER(..)` run
-/// (identifier-clause-legacy 175, 178); `SET VAR IDENTIFIER(..)` stays a
-/// syntax error, as in both modes.
+/// (identifier-clause-legacy 175, 178); `SET VAR IDENTIFIER(..)` is a syntax
+/// error in legacy mode (identifier-clause-legacy 176; it runs otherwise).
 #[test]
 fn legacy_mode_names_session_variables_by_identifier() {
     let s = Session::new().unwrap();
@@ -139,4 +139,34 @@ fn legacy_mode_names_session_variables_by_identifier() {
     );
     block_on(s.sql("DECLARE OR REPLACE VAR IDENTIFIER('v2') INT")).unwrap();
     block_on(s.sql("DROP TEMPORARY VAR IDENTIFIER('v2')")).unwrap();
+}
+
+/// In a name position an identifier literal stands for all of its parts
+/// (Spark 4.2 `visitMultipartIdentifier` expands it):
+/// `IDENTIFIER('spark_catalog.default').t1` is `spark_catalog.default.t1`,
+/// and a run of literals is one literal.
+#[test]
+fn a_multipart_identifier_literal_before_a_dot_names_its_parts() {
+    let s = Session::new().unwrap();
+    let rows = |sql: &str| {
+        let df = block_on(s.sql(sql)).unwrap();
+        block_on(df.collect())
+            .unwrap()
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>()
+    };
+    block_on(s.sql("CREATE TABLE t1(c1 INT) USING parquet")).unwrap();
+    block_on(s.sql("INSERT INTO IDENTIFIER('spark_catalog.default').t1 VALUES (1)")).unwrap();
+    assert_eq!(
+        rows("SELECT * FROM IDENTIFIER('spark_catalog.default').t1"),
+        1
+    );
+    assert_eq!(
+        rows("SELECT * FROM IDENTIFIER('spark_catalog' '.default').t1"),
+        1
+    );
+    assert_eq!(rows("SELECT * FROM IDENTIFIER('def' 'ault').t1"), 1);
+    block_on(s.sql("DROP TABLE IDENTIFIER('spark_catalog.default').t1")).unwrap();
+    assert_eq!(class_of(&s, "SELECT * FROM t1"), "TABLE_OR_VIEW_NOT_FOUND");
 }

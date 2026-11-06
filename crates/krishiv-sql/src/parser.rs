@@ -18,6 +18,7 @@
 mod ddl;
 mod expr;
 mod function;
+mod names;
 pub(crate) use function::check_temporary_function_name;
 mod script;
 mod types;
@@ -1233,13 +1234,7 @@ impl<'s> Parser<'s> {
     /// are enforced.
     fn ident_at(&self, n: usize, strong: bool) -> Option<Ident> {
         if self.identifier_literal_at(n) {
-            let (first, last) = (self.tok(n)?, self.tok(n + 3)?);
-            let literal = self.tok(n + 2)?.span.text(self.src);
-            return Some(Ident {
-                value: unescape_string(literal, !self.opts.escaped_string_literals, false),
-                quoted: true,
-                span: first.span.to(last.span),
-            });
+            return self.identifier_literal(n);
         }
         let t = self.tok(n)?;
         let text = t.span.text(self.src);
@@ -1267,42 +1262,6 @@ impl<'s> Parser<'s> {
         })
     }
 
-    /// Whether `IDENTIFIER('name')` starts at token `n`: an identifier
-    /// literal (not with only the legacy function syntax on).
-    fn identifier_literal_at(&self, n: usize) -> bool {
-        !self.opts.legacy_identifier_clause
-            && self.kw_at(n, "IDENTIFIER")
-            && self.sym_at(n + 1, Sym::LParen)
-            && self.single_string_at(n + 2)
-            && self.sym_at(n + 3, Sym::RParen)
-    }
-
-    /// Spark parses the string of an identifier literal as a name when it
-    /// builds the tree: it must be a name (not empty), of `parts` parts at
-    /// most (`1` for a position taking one identifier). The first problem
-    /// is deferred; the name is returned when there is none.
-    fn check_identifier_literal(
-        &mut self,
-        text: &str,
-        span: Span,
-        parts: usize,
-    ) -> Option<ObjectName> {
-        match parse_multipart_identifier(text, self.opts) {
-            Err(e) => self.defer(ParseError { span, ..e }),
-            Ok(name) if name.parts.len() > parts => {
-                let identifier: Vec<String> =
-                    name.parts.iter().map(|p| quote_ident(&p.value)).collect();
-                self.defer(error::identifier_too_many_name_parts(
-                    identifier.join("."),
-                    parts,
-                    span,
-                ));
-            }
-            Ok(name) => return Some(name),
-        }
-        None
-    }
-
     /// Whether token `n` is an identifier ([`Self::ident_at`] without
     /// building it).
     fn is_ident_at(&self, n: usize, strong: bool) -> bool {
@@ -1322,7 +1281,7 @@ impl<'s> Parser<'s> {
         let Some(id) = self.ident_at(0, strong) else {
             return self.fail();
         };
-        if self.identifier_literal_at(0) {
+        if let Some(len) = self.identifier_literal_len(0) {
             let mut id = id;
             // A name that is not one part is an error already; one part
             // is the identifier.
@@ -1331,7 +1290,7 @@ impl<'s> Parser<'s> {
             {
                 id.value.clone_from(&part.value);
             }
-            self.pos += 4;
+            self.pos += len;
             return Ok(id);
         }
         // Spark's `exitUnquotedIdentifier`: only ASCII letters, digits, `_`.
@@ -1374,10 +1333,10 @@ impl<'s> Parser<'s> {
 
     fn object_name(&mut self) -> PR<ObjectName> {
         let start = self.start();
-        let mut parts = vec![self.name_part(false)?];
+        let mut parts = self.name_parts(false)?;
         while self.sym_at(0, Sym::Dot) && self.is_ident_at(1, true) {
             self.bump();
-            parts.push(self.name_part(true)?);
+            parts.extend(self.name_parts(true)?);
         }
         Ok(ObjectName {
             parts,
@@ -1390,10 +1349,10 @@ impl<'s> Parser<'s> {
     #[inline(never)]
     fn variable_name(&mut self) -> PR<ObjectName> {
         let start = self.start();
-        let mut parts = vec![self.name_part(true)?];
+        let mut parts = self.name_parts(true)?;
         while self.sym_at(0, Sym::Dot) && self.is_ident_at(1, true) {
             self.bump();
-            parts.push(self.name_part(true)?);
+            parts.extend(self.name_parts(true)?);
         }
         Ok(ObjectName {
             parts,
@@ -1401,25 +1360,11 @@ impl<'s> Parser<'s> {
         })
     }
 
-    /// A session variable name in `DECLARE` or `DROP TEMPORARY VARIABLE`,
-    /// which Spark 4.2's grammar reads as an `identifierReference`
-    /// (`createVariable`, `dropVariable`): `IDENTIFIER('name')` names the
-    /// variable even with only the legacy function syntax on, where the
-    /// clause takes an expression (the session evaluates any other
-    /// expression before parsing).
-    fn variable_reference(&mut self) -> PR<ObjectName> {
-        let legacy = self.opts.legacy_identifier_clause;
-        self.opts.legacy_identifier_clause = false;
-        let name = self.variable_name();
-        self.opts.legacy_identifier_clause = legacy;
-        name
-    }
-
     /// A table name. Unless keywords are enforced, any keyword names a
     /// table here (`FROM order`, `FROM from t`), as Spark's grammar allows.
     fn table_name(&mut self) -> PR<ObjectName> {
         let start = self.start();
-        let mut parts = vec![self.name_part(true)?];
+        let mut parts = self.name_parts(true)?;
         // With only the legacy function syntax, `IDENTIFIER(` is never a
         // later part of a name.
         while self.sym_at(0, Sym::Dot)
@@ -1429,7 +1374,7 @@ impl<'s> Parser<'s> {
                 && self.sym_at(2, Sym::LParen))
         {
             self.bump();
-            parts.push(self.name_part(true)?);
+            parts.extend(self.name_parts(true)?);
         }
         Ok(ObjectName {
             parts,

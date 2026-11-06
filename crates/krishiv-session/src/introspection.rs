@@ -816,7 +816,8 @@ impl Session {
                         let default = c.default.as_ref()?;
                         Some(vec![
                             s(&c.name),
-                            s(c.data_type.catalog_string()),
+                            // `getDescribeMetadata`: `dataType.simpleString`.
+                            s(c.data_type.simple_string()),
                             s(default),
                         ])
                     }));
