@@ -1,22 +1,143 @@
 {
   "format_version": 1,
-  "comment": "Partitioned writes Krishiv makes and Spark 4.2.0 reads back (P2-T082b acceptance). Each case: the query Krishiv writes, its partition columns, the file format and the read options. tests/scripts/gen_partitioned_write_goldens.py writes them with Krishiv, reads them with Spark and records Spark's schema, rows and partition directories in tests/fixtures/spark-4.2.0/partitioned-write-goldens.json.",
+  "comment": "Partitioned writes Krishiv and Spark 4.2.0 both make, and Spark reads back (P2-T082b acceptance). Each case: the query written, its partition columns, the file format and options, and an optional second write (`then`: an append or an overwrite). tests/scripts/gen_partitioned_write_goldens.py writes each case with Krishiv (write-partition-cases) and with Spark, and records Spark's directories and Spark's read of Krishiv's output in tests/fixtures/spark-4.2.0/partitioned-write-goldens.json. Both sessions run in UTC.",
   "cases": [
-    {"id": "int_one_level", "format": "parquet", "partition_by": ["p"], "options": {},
-     "query": "SELECT id, CAST(id % 3 AS INT) AS p FROM range(0, 9)"},
-    {"id": "string_escapes_and_null", "format": "parquet", "partition_by": ["p"], "options": {},
-     "query": "SELECT * FROM VALUES (1, 'a b'), (2, 'x/y'), (3, 'k=v'), (4, '50%'), (5, 'é'), (6, NULL), (7, ''), (8, 'a#b') AS t(id, p)"},
-    {"id": "date_and_null_date", "format": "parquet", "partition_by": ["d"], "options": {},
-     "query": "SELECT * FROM VALUES (1, DATE '2024-02-29'), (2, DATE '1999-12-31'), (3, CAST(NULL AS DATE)) AS t(id, d)"},
-    {"id": "two_levels", "format": "parquet", "partition_by": ["a", "b"], "options": {},
-     "query": "SELECT * FROM VALUES (1, 'x', 1), (2, 'x', 2), (3, 'y', 1), (4, 'y', NULL) AS t(id, a, b)"},
-    {"id": "decimal_and_long_values", "format": "parquet", "partition_by": ["p"], "options": {},
-     "query": "SELECT * FROM VALUES (1, CAST(1.50 AS DECIMAL(5,2))), (2, CAST(-0.25 AS DECIMAL(5,2))) AS t(id, p)"},
-    {"id": "boolean_partition", "format": "parquet", "partition_by": ["p"], "options": {},
-     "query": "SELECT * FROM VALUES (1, true), (2, false) AS t(id, p)"},
-    {"id": "csv_with_header", "format": "csv", "partition_by": ["p"], "options": {"header": "true"},
-     "query": "SELECT * FROM VALUES (1, 'one', 'a'), (2, 'two', 'b') AS t(id, s, p)"},
-    {"id": "json_lines", "format": "json", "partition_by": ["p"], "options": {},
-     "query": "SELECT * FROM VALUES (1, 'one', 10), (2, 'two', 20) AS t(id, s, p)"}
+    {
+      "id": "int_one_level",
+      "format": "parquet",
+      "partition_by": [
+        "p"
+      ],
+      "options": {},
+      "query": "SELECT id, CAST(id % 3 AS INT) AS p FROM range(0, 9)"
+    },
+    {
+      "id": "string_escapes_and_null",
+      "format": "parquet",
+      "partition_by": [
+        "p"
+      ],
+      "options": {},
+      "query": "SELECT * FROM VALUES (1, 'a b'), (2, 'x/y'), (3, 'k=v'), (4, '50%'), (5, 'é'), (6, NULL), (7, ''), (8, 'a#b') AS t(id, p)"
+    },
+    {
+      "id": "date_and_null_date",
+      "format": "parquet",
+      "partition_by": [
+        "d"
+      ],
+      "options": {},
+      "query": "SELECT * FROM VALUES (1, DATE '2024-02-29'), (2, DATE '1999-12-31'), (3, CAST(NULL AS DATE)) AS t(id, d)"
+    },
+    {
+      "id": "two_levels",
+      "format": "parquet",
+      "partition_by": [
+        "a",
+        "b"
+      ],
+      "options": {},
+      "query": "SELECT * FROM VALUES (1, 'x', 1), (2, 'x', 2), (3, 'y', 1), (4, 'y', NULL) AS t(id, a, b)"
+    },
+    {
+      "id": "decimal_and_long_values",
+      "format": "parquet",
+      "partition_by": [
+        "p"
+      ],
+      "options": {},
+      "query": "SELECT * FROM VALUES (1, CAST(1.50 AS DECIMAL(5,2))), (2, CAST(-0.25 AS DECIMAL(5,2))) AS t(id, p)"
+    },
+    {
+      "id": "boolean_partition",
+      "format": "parquet",
+      "partition_by": [
+        "p"
+      ],
+      "options": {},
+      "query": "SELECT * FROM VALUES (1, true), (2, false) AS t(id, p)"
+    },
+    {
+      "id": "csv_with_header",
+      "format": "csv",
+      "partition_by": [
+        "p"
+      ],
+      "options": {
+        "header": "true"
+      },
+      "query": "SELECT * FROM VALUES (1, 'one', 'a'), (2, 'two', 'b') AS t(id, s, p)"
+    },
+    {
+      "id": "json_lines",
+      "format": "json",
+      "partition_by": [
+        "p"
+      ],
+      "options": {},
+      "query": "SELECT * FROM VALUES (1, 'one', 10), (2, 'two', 20) AS t(id, s, p)"
+    },
+    {
+      "id": "string_escapes_spark_list",
+      "format": "parquet",
+      "partition_by": [
+        "p"
+      ],
+      "options": {},
+      "query": "SELECT * FROM VALUES (1, 'q\"q'), (2, 'a''b'), (3, 'st*r'), (4, 'wh?'), (5, 'back\\\\slash'), (6, '{b}'), (7, '[s]'), (8, 'c^r'), (9, 'co:lon'), (10, 'tab\\tx') AS t(id, p)"
+    },
+    {
+      "id": "timestamp_partition",
+      "format": "parquet",
+      "partition_by": [
+        "ts"
+      ],
+      "options": {},
+      "query": "SELECT * FROM VALUES (1, TIMESTAMP '2024-01-02 03:04:05'), (2, TIMESTAMP '2024-01-02 03:04:05.123456'), (3, CAST(NULL AS TIMESTAMP)) AS t(id, ts)"
+    },
+    {
+      "id": "double_nan_and_negative_zero",
+      "format": "parquet",
+      "partition_by": [
+        "p"
+      ],
+      "options": {},
+      "query": "SELECT * FROM VALUES (1, CAST('NaN' AS DOUBLE)), (2, CAST(-0.0 AS DOUBLE)), (3, CAST(1.5 AS DOUBLE)) AS t(id, p)"
+    },
+    {
+      "id": "bigint_partition",
+      "format": "parquet",
+      "partition_by": [
+        "p"
+      ],
+      "options": {},
+      "query": "SELECT * FROM VALUES (1, 10000000000L), (2, -3L) AS t(id, p)"
+    },
+    {
+      "id": "append_new_and_existing_partition",
+      "format": "parquet",
+      "partition_by": [
+        "p"
+      ],
+      "options": {},
+      "query": "SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, p)",
+      "then": {
+        "mode": "append",
+        "query": "SELECT * FROM VALUES (3, 'b'), (4, 'c') AS t(id, p)"
+      }
+    },
+    {
+      "id": "overwrite_replaces_every_partition",
+      "format": "parquet",
+      "partition_by": [
+        "p"
+      ],
+      "options": {},
+      "query": "SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, p)",
+      "then": {
+        "mode": "overwrite",
+        "query": "SELECT * FROM VALUES (3, 'b'), (4, 'c') AS t(id, p)"
+      }
+    }
   ]
 }

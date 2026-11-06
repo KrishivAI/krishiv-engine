@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! P2-T082b acceptance: Spark 4.2.0 reads Krishiv's partitioned output identically. The fixture holds what a real
-//! Spark read of each case's directory returned (`tests/scripts/gen_partitioned_write_goldens.py`); this test writes
-//! every case again and checks that the partition directories are the ones Spark read and that Krishiv's own read of
-//! them gives Spark's schema and rows. A layout change fails here first; regenerate the fixture with Spark then.
+//! P2-T082b acceptance: Spark 4.2.0 reads Krishiv's partitioned output identically. The fixture
+//! (`tests/scripts/gen_partitioned_write_goldens.py`) holds, per case, the directories Spark's own writer makes and
+//! what Spark's reader returns from Krishiv's output (checked at generation against Spark's read of its own output).
+//! This test writes every case again and checks that Krishiv's directory names are Spark's writer's and that
+//! Krishiv's own read gives the schema, nullability and rows Spark read. Spark itself runs only at generation; the
+//! nightly `differential` job regenerates the fixture against Spark (`--check`), so a writer change Spark would
+//! read differently fails there.
 
-use krishiv_session::Session;
 use krishiv_testkit::partitioned_writes::{
-    ReadBack, cases_path, goldens_path, load, partition_dirs, read_back, write,
+    ReadBack, cases_path, goldens_path, load, partition_dirs, read_back, session, write,
 };
 use serde_json::Value;
 
@@ -21,7 +23,7 @@ fn spark_reads_krishiv_partitioned_writes() {
         cases.len(),
         "regenerate the fixture: the cases changed"
     );
-    let session = Session::new().unwrap();
+    let session = session().unwrap();
     let mut failures = Vec::new();
     for (case, golden) in cases.iter().zip(goldens) {
         assert_eq!(golden["id"], case.id.as_str());
@@ -37,15 +39,21 @@ fn spark_reads_krishiv_partitioned_writes() {
                 .collect()
         };
         let dirs = partition_dirs(&dir).unwrap();
-        if dirs != texts("partition_dirs") {
+        if dirs != texts("spark_partition_dirs") {
             failures.push(format!(
-                "{}: directories {dirs:?}, Spark read {:?}",
+                "{}: Krishiv wrote {dirs:?}, Spark's writer {:?}",
                 case.id,
-                texts("partition_dirs")
+                texts("spark_partition_dirs")
             ));
         }
         let spark = ReadBack {
             schema: golden["schema"].as_str().unwrap().to_owned(),
+            nullable: golden["nullable"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_bool().unwrap())
+                .collect(),
             rows: texts("rows"),
         };
         let ours = read_back(&session, case, &dir).unwrap();

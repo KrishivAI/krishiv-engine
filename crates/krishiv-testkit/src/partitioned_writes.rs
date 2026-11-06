@@ -31,6 +31,18 @@ pub struct Case {
     pub options: BTreeMap<String, String>,
     /// The query whose rows are written.
     pub query: String,
+    /// A second write into the same directory: its save mode (`append`, `overwrite`) and query.
+    pub then: Option<(String, String)>,
+}
+
+/// The session both the writer and the test use: UTC, as the generator's Spark session is.
+///
+/// # Errors
+/// A session that cannot be built.
+pub fn session() -> Result<Session, KrishivError> {
+    Session::builder()
+        .config("spark.sql.session.timeZone", "UTC")
+        .build()
 }
 
 /// What a read of a case's directory returned.
@@ -38,6 +50,8 @@ pub struct Case {
 pub struct ReadBack {
     /// `struct<...>` in Spark's simple-string form.
     pub schema: String,
+    /// Whether each column may be null, in order.
+    pub nullable: Vec<bool>,
     /// The rows as text, sorted.
     pub rows: Vec<String>,
 }
@@ -95,12 +109,17 @@ pub fn load(path: &Path) -> Result<Vec<Case>, String> {
                         .ok_or_else(|| bad("an option value that is not text"))
                 })
                 .collect::<Result<BTreeMap<_, _>, _>>()?;
+            let then = match c.get("then") {
+                None => None,
+                Some(t) => Some((text_of(t, "mode")?, text_of(t, "query")?)),
+            };
             Ok(Case {
                 id: text_of(c, "id")?,
                 format: text_of(c, "format")?,
                 partition_by,
                 options,
                 query: text_of(c, "query")?,
+                then,
             })
         })
         .collect()
@@ -111,16 +130,24 @@ pub fn load(path: &Path) -> Result<Vec<Case>, String> {
 /// # Errors
 /// The query's or the write's error.
 pub fn write(session: &Session, case: &Case, dir: &Path) -> Result<(), KrishivError> {
+    let mut writes = vec![("errorifexists", case.query.as_str())];
+    if let Some((mode, query)) = &case.then {
+        writes.push((mode.as_str(), query.as_str()));
+    }
     block_on(async {
-        let df = session.sql(&case.query).await?;
-        let mut writer = df
-            .write()
-            .format(&case.format)
-            .partition_by(&case.partition_by);
-        for (k, v) in &case.options {
-            writer = writer.option(k, v);
+        for (mode, query) in writes {
+            let df = session.sql(query).await?;
+            let mut writer = df
+                .write()
+                .mode(mode)
+                .format(&case.format)
+                .partition_by(&case.partition_by);
+            for (k, v) in &case.options {
+                writer = writer.option(k, v);
+            }
+            writer.save(&dir.to_string_lossy()).await?;
         }
-        writer.save(&dir.to_string_lossy()).await
+        Ok(())
     })
 }
 
@@ -142,6 +169,7 @@ pub fn read_back(session: &Session, case: &Case, dir: &Path) -> Result<ReadBack,
             .map(|c| format!("{}:{}", c.name, c.data_type.simple_string()))
             .collect();
         let schema = format!("struct<{}>", fields.join(","));
+        let nullable = analyzed.output.iter().map(|c| c.nullable).collect();
         let parts: Vec<String> = analyzed
             .output
             .iter()
@@ -156,20 +184,34 @@ pub fn read_back(session: &Session, case: &Case, dir: &Path) -> Result<ReadBack,
         let mut rows = Vec::new();
         for batch in text.collect().await? {
             let a = batch.column(0);
-            for i in 0..batch.num_rows() {
-                rows.push(a.as_string_opt::<i32>().map_or_else(
-                    || a.as_string_view().value(i).to_owned(),
-                    |s| s.value(i).to_owned(),
-                ));
+            for i in 0..a.len() {
+                let text = if let Some(s) = a.as_string_opt::<i32>() {
+                    s.value(i)
+                } else if let Some(s) = a.as_string_opt::<i64>() {
+                    s.value(i)
+                } else if let Some(s) = a.as_string_view_opt() {
+                    s.value(i)
+                } else {
+                    return Err(krishiv_common::error::InternalError {
+                        message: format!("a row text of type {}", a.data_type()),
+                    }
+                    .into());
+                };
+                rows.push(text.to_owned());
             }
         }
         rows.sort();
-        Ok(ReadBack { schema, rows })
+        Ok(ReadBack {
+            schema,
+            nullable,
+            rows,
+        })
     })
 }
 
-/// The directories below `dir` that hold data files, relative and sorted (`p=1`, `a=x/b=2`). Names starting
-/// with `_` or `.` (the commit log, `_SUCCESS`, checksums) are skipped, as Spark's listing skips them.
+/// The directories below `dir` that hold data files, relative and sorted (`p=1`, `a=x/b=2`; the root itself is
+/// `""`). Names Spark's file index skips are skipped (`InMemoryFileIndex.shouldFilterOutPathName`): a `.` prefix,
+/// and a `_` prefix without `=` (the commit log, `_SUCCESS`).
 ///
 /// # Errors
 /// A listing error, as text.
@@ -179,10 +221,11 @@ pub fn partition_dirs(dir: &Path) -> Result<Vec<String>, String> {
         for entry in std::fs::read_dir(at).map_err(|e| format!("{}: {e}", at.display()))? {
             let entry = entry.map_err(|e| e.to_string())?;
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with(['_', '.']) {
+            if name.starts_with('.') || (name.starts_with('_') && !name.contains('=')) {
                 continue;
             }
-            if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            // Follows a symbolic link, as Spark's listing and the generator's `Path.is_dir` do.
+            if entry.path().is_dir() {
                 walk(root, &entry.path(), out)?;
             } else {
                 has_file = true;
@@ -210,7 +253,7 @@ pub fn cli(args: &[String]) -> Result<Vec<String>, String> {
         return Err("usage: write-partition-cases CASES.json OUT_DIR".to_owned());
     };
     let cases = load(Path::new(cases))?;
-    let session = Session::new().map_err(|e| e.to_string())?;
+    let session = session().map_err(|e| e.to_string())?;
     let mut dirs = Vec::new();
     for case in &cases {
         let dir = Path::new(out).join(&case.id);
