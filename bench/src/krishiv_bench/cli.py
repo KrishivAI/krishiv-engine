@@ -426,6 +426,8 @@ def main(argv=None) -> None:
         methods = tuple(m.strip() for m in a.methods.split(",") if m.strip())
         if not methods or set(methods) - {"ours", "theirs"}:
             ap.error(f"--methods must be a comma list of: ours, theirs (got {a.methods!r})")
+        if a.cgroup_gb is not None and not a.sequential:
+            ap.error("--cgroup-gb needs --sequential (the cgroup scope is one engine worker's)")
         run_reproduce(
             a.suite,
             a.sf,
