@@ -229,5 +229,15 @@ fn legacy_shapes_not_reproduced_are_refused() -> R {
     run(&s, &format!("set {SCALAR_FLAG} = true"))?;
     let q = "select a, (select count(*) from r where r.c > l.a group by c) from l";
     assert!(run(&s, q).is_err(), "{q}");
+    // Grouped by a key the filter fixes (`d = 1`): one group per outer row
+    // at most, but the single join gives NULL where the legacy rule's count
+    // over no rows is 0.
+    let q = "select a, (select count(*) from r where r.c = l.a and r.d = 1 group by r.d) from l";
+    assert!(run(&s, q).is_err(), "{q}");
+    run(&s, &format!("set {SCALAR_FLAG} = false"))?;
+    // Several calls split into one subquery each over the input: with a
+    // nondeterministic filter they would read different rows.
+    let q = "select a, (select count(*) = count(d) from r where r.c = l.a and rand() < 0.5) from l";
+    assert!(run(&s, q).is_err(), "{q}");
     Ok(())
 }

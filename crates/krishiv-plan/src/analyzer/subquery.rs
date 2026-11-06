@@ -988,6 +988,11 @@ impl Rewriter {
         }
         let before = output(&input)?;
         split::check_grouped_reads(keys, aggregates, &before, p.origin)?;
+        if keys.is_empty()
+            && let Some(out) = self.global_with_subqueries(p, &input, aggregates)?
+        {
+            return Ok(out);
+        }
         let (base, all) = self.existence(input, all)?;
         let (base, mut all) = self.scalars(base, all)?;
         let aggregates = all.split_off(keys.len());
@@ -1647,6 +1652,7 @@ impl Rewriter {
             || (non_equality_correlation(input) && deterministic_filters(input))
         {
             if !keys.is_empty() {
+                legacy_grouped(empty.as_ref(), plan.origin)?;
                 return self.scalar_grouped(base, plan, input, keys);
             }
             let (inner, inner_keys, outer_keys) = self.domain(&base, input)?;
@@ -1674,6 +1680,7 @@ impl Rewriter {
             _ => false,
         };
         if !keys.iter().all(determined) {
+            legacy_grouped(empty.as_ref(), plan.origin)?;
             return self.scalar_grouped(base, plan, input, keys);
         }
         self.scalar_join(
@@ -3004,6 +3011,21 @@ fn having_over_global(
     };
     keys.is_empty()
         .then(|| (Arc::clone(input), Arc::clone(predicate), output.clone()))
+}
+
+/// Under Spark's legacy count handling a grouped scalar subquery reads its
+/// value over no rows (a count's 0) where nothing matched; the single join
+/// [`Rewriter::scalar_grouped`] builds gives NULL there, so a value that is
+/// not NULL over no rows (`empty`) is refused rather than answered NULL.
+fn legacy_grouped<T>(empty: Option<&T>, origin: Origin) -> R<()> {
+    match empty {
+        None => Ok(()),
+        Some(_) => Err(unsupported(
+            "a grouped correlated scalar subquery whose value over no rows is not NULL under \
+             spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled",
+            origin,
+        )),
+    }
 }
 
 /// Spark's refusal of a correlated reference where it cannot be lifted, naming

@@ -225,6 +225,14 @@ impl Rewriter {
                 }
             }
         }
+        // Each call becomes its own subquery over the input: a
+        // nondeterministic input would give each call different rows.
+        if !super::plan_is_deterministic(&c.input) {
+            return Err(super::unsupported(
+                "a correlated scalar subquery of several aggregates over a nondeterministic input",
+                c.origin,
+            ));
+        }
         let mut base = base;
         let mut reads = Vec::new();
         for k in wanted {
@@ -257,6 +265,10 @@ impl Rewriter {
     ) -> Option<Arc<Expr>> {
         let c = composite(plan)?;
         let having = c.having.clone()?;
+        // The value and the `HAVING` each become a subquery over the input.
+        if !super::plan_is_deterministic(&c.input) {
+            return None;
+        }
         let scalar = |p: Arc<LogicalPlan>| {
             Arc::new(Expr::new(ExprNode::Subquery {
                 kind: SubqueryKind::Scalar,
@@ -279,6 +291,100 @@ impl Rewriter {
             DataType::Boolean,
             nullable,
         ))
+    }
+}
+
+impl Rewriter {
+    /// A global aggregate (no `GROUP BY`) over `input` whose output reads a
+    /// joined subquery outside its calls (`SELECT 1 IN (..), count(*) FROM
+    /// a`): the calls run in a global aggregate, which keeps its one row
+    /// over no input, and the output, subqueries included, in a projection
+    /// above it. Joining the subquery below would make its column a group,
+    /// and an empty input no row. `None` when the output reads no such
+    /// subquery.
+    pub(super) fn global_with_subqueries(
+        &mut self,
+        p: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+        aggregates: &[Arc<Expr>],
+    ) -> R<Option<Arc<LogicalPlan>>> {
+        if !aggregates.iter().any(|a| self.joined_outside_calls(a)) {
+            return Ok(None);
+        }
+        let mut wanted: Vec<Arc<Expr>> = Vec::new();
+        for a in aggregates {
+            for k in calls(a) {
+                if !wanted.iter().any(|w| **w == *k) {
+                    wanted.push(k);
+                }
+            }
+        }
+        let mut items = Vec::with_capacity(wanted.len());
+        let mut reads = Vec::with_capacity(wanted.len());
+        for k in wanted {
+            let (data_type, nullable) = typed(&k);
+            let data_type = data_type.ok_or_else(|| {
+                super::unsupported(
+                    "a subquery beside a global aggregate of this shape",
+                    p.origin,
+                )
+            })?;
+            let output = BoundColumn {
+                id: self.fresh(),
+                name: pretty(&k, None),
+                data_type,
+                nullable,
+            };
+            reads.push((
+                Arc::clone(&k),
+                Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+                    output.clone(),
+                )))),
+            ));
+            items.push(Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Alias { expr: k, output },
+            ))));
+        }
+        let global = node(
+            PlanNode::Aggregate {
+                input: Arc::clone(input),
+                grouping: Grouping::GroupBy(Vec::new()),
+                aggregates: items.clone(),
+            },
+            p.origin,
+        );
+        // The calls may hold subqueries of their own (`FILTER (WHERE ..)`):
+        // those join below, as for any aggregate.
+        let global = self.aggregate(&global, Arc::clone(input), &[], &items)?;
+        let exprs: Vec<Arc<Expr>> = aggregates.iter().map(|a| replace(a, &reads)).collect();
+        let project = node(
+            PlanNode::Project {
+                input: Arc::clone(&global),
+                exprs: exprs.clone(),
+            },
+            p.origin,
+        );
+        self.project(&project, global, exprs).map(Some)
+    }
+
+    /// Whether `e` reads, outside its aggregate calls, a subquery that joins
+    /// the input (an `IN` or correlated `EXISTS`, a correlated scalar).
+    fn joined_outside_calls(&mut self, e: &Arc<Expr>) -> bool {
+        let mut stack = vec![Arc::clone(e)];
+        while let Some(x) = stack.pop() {
+            if is_call(&x) {
+                continue;
+            }
+            if let ExprNode::Subquery { kind, .. } = &x.node {
+                let scalar = matches!(kind, SubqueryKind::Scalar);
+                if self.existential(&x) || (scalar && self.correlated(&x)) {
+                    return true;
+                }
+                continue;
+            }
+            x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
+        }
+        false
     }
 }
 
@@ -462,15 +568,19 @@ pub(super) fn check_grouped_reads(
     input: &[BoundColumn],
     origin: Origin,
 ) -> R<()> {
-    // The columns the grouping keys read, inside their subqueries too (a
-    // key and an output may hold separately resolved copies of one
-    // subquery, `GROUP BY cast(exists(..) as int)`).
+    // The grouped columns: a key that is the column itself (Spark matches
+    // an outer reference to the grouping expressions with `semanticEquals`,
+    // so `GROUP BY k % 2` does not group `k`), and the outer columns a
+    // subquery in a key reads (a key and an output may hold separately
+    // resolved copies of one subquery, `GROUP BY cast(exists(..) as int)`).
     let mut key_reads: Vec<crate::AttrId> = Vec::new();
     for k in keys {
+        if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &k.node {
+            key_reads.push(c.id);
+        }
         let _ = crate::walk::visit_distinct(Node::Expr(k), |n| {
             if let Node::Expr(e) = n
-                && let ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) =
-                    &e.node
+                && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
             {
                 key_reads.push(c.id);
             }

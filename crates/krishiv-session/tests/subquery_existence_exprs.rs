@@ -85,6 +85,42 @@ fn subqueries_over_grouping_keys_group_by_their_existence_column() -> R {
     // MISSING_AGGREGATION; refused here, never answered per input row.
     let q = "select k, exists (select 1 from b where b.k = a.v) from a group by k";
     assert!(run(&s, q).is_err(), "{q}");
+    // A key over the column is not the column (Spark matches outer
+    // references to the keys with `semanticEquals`): `k % 2` groups 1 and 3
+    // together, so `k` is not fixed within the group.
+    let q = "select exists (select 1 from b where b.k = a.k), count(*) from a group by a.k % 2";
+    assert!(run(&s, q).is_err(), "{q}");
+    Ok(())
+}
+
+/// A global aggregate has one row even over no input; a subquery beside its
+/// calls reads that row, never becomes a group.
+#[test]
+fn a_subquery_beside_a_global_aggregate_keeps_its_one_row() -> R {
+    let s = Session::new()?;
+    run(
+        &s,
+        "create temporary view a(k, v) as values (1, 1), (2, 2), (1, 3), (null, 4)",
+    )?;
+    run(&s, "create temporary view b(k) as values (1), (3)")?;
+    run(
+        &s,
+        "create temporary view e(k, v) as select * from a where false",
+    )?;
+    for (q, want) in [
+        ("select 1 in (select k from b), count(*) from e", "true|0"),
+        ("select 1 in (select k from b), count(*) from a", "true|4"),
+        (
+            "select 2 in (select k from b) as f, sum(v) from e",
+            "false|NULL",
+        ),
+        (
+            "select count(*) + cast(1 in (select k from b) as int), max(v) from a",
+            "5|4",
+        ),
+    ] {
+        assert_eq!(run(&s, q)?, rows(&[want]), "{q}");
+    }
     Ok(())
 }
 
