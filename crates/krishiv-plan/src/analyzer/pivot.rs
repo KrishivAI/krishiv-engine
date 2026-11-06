@@ -1,17 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `ResolvePivot`: an unresolved PIVOT node becomes an aggregate
-//! of filtered aggregates, as Spark's `PivotTransformer` does (always its
-//! non-`PivotFirst` path, chosen to match its results).
+//! `ResolvePivot`: an unresolved PIVOT node becomes aggregates, along
+//! Spark's two paths (`PivotTransformer`, `ResolvePivot` before 4.2):
 //!
-//! For every pivot value and every aggregate the rule builds
-//! `agg(if(pivot_col <=> value, expr, NULL))` over the unresolved aggregate
-//! (the children of every aggregate call wrapped, as Spark's
-//! `transformDown` does; `first` / `last` also flip to ignoring nulls, for
-//! the nulls the `if` introduces) and binds it with the existing aggregate
-//! machinery: no second aggregate binder. The grouping is every input
-//! column neither the pivot columns nor the aggregates reference, in input
-//! order; the aggregate's output names are Spark's (`value` for one
-//! aggregate, `value_aggalias` or `value_<aggregate sql>` otherwise).
+//! - When every aggregate's type is one `PivotFirst` takes (numeric,
+//!   boolean, decimal), Spark's `PivotFirst` plan: the aggregates grouped by
+//!   the grouping columns and the pivot column, then one cell per pivot
+//!   value picked from that value's row. A cell with no matching row is
+//!   NULL, whatever the aggregate (`count` too).
+//! - Otherwise the `If` fallback: for every pivot value and every
+//!   aggregate, `agg(if(pivot_col <=> value, expr, NULL))` over the
+//!   unresolved aggregate (the children of every aggregate call wrapped, as
+//!   Spark's `transformDown` does; `first` / `last` also flip to ignoring
+//!   nulls, for the nulls the `if` introduces), so `count` of no matching
+//!   row is 0.
+//!
+//! Both bind with the existing aggregate machinery: no second aggregate
+//! binder. The grouping is every input column neither the pivot columns
+//! nor the aggregates reference, in input order; the output names are
+//! Spark's (`value` for one aggregate, `value_aggalias` or
+//! `value_<aggregate sql>` otherwise).
 //!
 //! Pivot values must be foldable (`NON_LITERAL_PIVOT_VALUES`) and castable
 //! to the pivot column type (`PIVOT_VALUE_DATA_TYPE_MISMATCH`). Several
@@ -31,7 +38,7 @@ use krishiv_types::DataType;
 
 use super::bind::{addr, unsupported};
 use super::coerce::can_cast;
-use super::exprs::{Bound, WindowUse, pretty};
+use super::exprs::{Bound, Cx, WindowUse, pretty};
 use super::fold;
 use super::ops::column_bound;
 use super::resolve::{Attr, Env, Rel, Resolver};
@@ -90,7 +97,9 @@ impl Resolver<'_> {
         let ansi = self.ctx.conf.ansi;
         for (i, v) in values.iter().enumerate() {
             for (b, t) in bound_values[i].iter().zip(&trimmed_values[i]) {
-                let folded = self.fold(&t.expr, ansi);
+                // The exact fold: a fractional value is not truncated to
+                // `INT` here (`CAST('NaN' AS DOUBLE)` is a valid value).
+                let folded = self.fold_array(&t.expr, ansi);
                 if folded.is_none() && !fold::is_literal(&t.expr) {
                     return Err(AnalysisError::new(
                         NonLiteralPivotValues {
@@ -99,7 +108,7 @@ impl Resolver<'_> {
                         b.expr.origin,
                     ));
                 }
-                if let Some(Constant::Error(e)) = folded {
+                if let Some(Err(e)) = folded {
                     return Err(AnalysisError::new(e, b.expr.origin));
                 }
             }
@@ -174,9 +183,15 @@ impl Resolver<'_> {
             .map(|a| column_bound(a, p.origin))
             .collect();
         let global = group.is_empty();
-        let pivot_ref = Arc::clone(&pivot_columns[0]);
         let zone = self.ctx.conf.session_zone;
         let single = items.len() == 1;
+        if items
+            .iter()
+            .all(|b| pivot_first_type(b.ty.data_type.as_ref()))
+        {
+            return self.pivot_first(p, &c, &cx, &pivots[0], &group, &items, &casts, env);
+        }
+        let pivot_ref = Arc::clone(&pivot_columns[0]);
         let mut combined: Vec<Bound> = group.clone();
         for (value_name, cast) in &casts {
             let cond = Cond {
@@ -206,6 +221,150 @@ impl Resolver<'_> {
         // sum(...) GROUP BY year`: the aggregate's output is the grouping
         // columns, then one aggregate per (value, aggregate) pair.
         self.build_aggregate(p.origin, &c, group, &combined, global, None, env)
+    }
+
+    /// Spark's `PivotFirst` path, taken when every aggregate's type is one
+    /// `PivotFirst.supportsDataType` accepts: the aggregates run grouped by
+    /// the grouping columns and the pivot column, then a second aggregate
+    /// over the grouping columns picks, for each pivot value, the row of
+    /// that value. A cell no input row matches is NULL (Spark's buffer slot
+    /// is never written), every cell is nullable, and the aggregates'
+    /// arguments are evaluated on every input row (stage one). As Spark's
+    /// slot lookup: a NaN pivot value never matches; duplicate values
+    /// (after the cast, `0.0` and `-0.0` alike) leave fewer slots than
+    /// outputs, so each output past the slots raises `INVALID_ARRAY_INDEX`
+    /// when a row is produced (ANSI on; with ANSI off Spark's cells read
+    /// shifted slots, which the engine refuses instead of returning).
+    #[expect(clippy::too_many_arguments, reason = "the resolved parts of one PIVOT")]
+    fn pivot_first(
+        &mut self,
+        p: &LogicalPlan,
+        c: &Rel,
+        cx: &Cx<'_>,
+        pivot: &Bound,
+        group: &[Bound],
+        items: &[Bound],
+        casts: &[(String, Arc<Expr>)],
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let origin = p.origin;
+        let ansi = self.ctx.conf.ansi;
+        // Which values Spark's slot map holds: duplicates collapse, and a
+        // NaN value is never found.
+        let mut keys: Vec<SlotKey> = Vec::with_capacity(casts.len());
+        let mut nan = Vec::with_capacity(casts.len());
+        for (_, value) in casts {
+            let bound = self.bind(value, cx)?;
+            let key = match self.fold_array(&bound.expr, ansi) {
+                Some(Ok(a)) => SlotKey::of(&a),
+                // A value that raises was refused above; one that does
+                // not fold here has no slot of its own to compare.
+                _ => SlotKey::Opaque,
+            };
+            nan.push(matches!(key, SlotKey::Nan));
+            keys.push(key);
+        }
+        let mut slots = 0usize;
+        for (i, key) in keys.iter().enumerate() {
+            let dup = !matches!(key, SlotKey::Opaque) && keys[..i].contains(key);
+            slots += usize::from(!dup);
+        }
+        if slots < casts.len() && !ansi {
+            return Err(unsupported(
+                "duplicate PIVOT values with spark.sql.ansi.enabled=false",
+                origin,
+            ));
+        }
+        // Stage one: the aggregates per grouping columns and pivot value.
+        let pivot_attr = self.attr("__pivot", &pivot.ty);
+        let mut first_items = group.to_vec();
+        first_items.push(Bound {
+            expr: Arc::new(
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                    expr: Arc::clone(&pivot.expr),
+                    output: pivot_attr,
+                }))
+                .with_origin(origin),
+            ),
+            ..pivot.clone()
+        });
+        for (k, b) in items.iter().enumerate() {
+            let output = self.attr(&format!("__agg{k}"), &b.ty);
+            first_items.push(Bound {
+                expr: Arc::new(
+                    Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                        expr: Arc::clone(&b.expr),
+                        output,
+                    }))
+                    .with_origin(origin),
+                ),
+                ..b.clone()
+            });
+        }
+        let mut first_group = group.to_vec();
+        first_group.push(pivot.clone());
+        let n = group.len();
+        let stage = self.build_aggregate(origin, c, first_group, &first_items, false, None, env)?;
+        // Stage two: one cell per (value, aggregate), as Spark orders them.
+        let out = Arc::clone(&stage.out);
+        let rels = [&stage];
+        let cx2 = Self::cx(&out, &rels, env, "Pivot");
+        let second_group: Vec<Bound> = out[..n].iter().map(|a| column_bound(a, origin)).collect();
+        let pivot_col = column_bound(&out[n], origin).expr;
+        let zone = self.ctx.conf.session_zone;
+        let single = items.len() == 1;
+        let mut combined = second_group.clone();
+        for (i, (value_name, value)) in casts.iter().enumerate() {
+            let matches = if nan[i] {
+                Arc::new(Expr::new(ExprNode::Literal(Literal::Boolean(false))).with_origin(origin))
+            } else {
+                call(
+                    Builtin::EqNullSafe.name(),
+                    vec![Arc::clone(&pivot_col), Arc::clone(value)],
+                    origin,
+                )
+            };
+            for (k, original) in items.iter().enumerate() {
+                let agg = column_bound(&out[n + 1 + k], origin).expr;
+                let null =
+                    Arc::new(Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(origin));
+                let picked = call("if", vec![Arc::clone(&matches), agg, null], origin);
+                let yes = Arc::new(
+                    Expr::new(ExprNode::Literal(Literal::Boolean(true))).with_origin(origin),
+                );
+                let mut cell = call("first", vec![picked, yes], origin);
+                if i >= slots {
+                    // Spark reads slot `i` of an array of `slots` entries.
+                    let entries = vec![Arc::clone(&cell); slots.max(1)];
+                    let index = i32::try_from(i).unwrap_or(i32::MAX);
+                    let index = Arc::new(
+                        Expr::new(ExprNode::Literal(Literal::Integer(index))).with_origin(origin),
+                    );
+                    cell = call(
+                        "__subscript",
+                        vec![call("array", entries, origin), index],
+                        origin,
+                    );
+                }
+                let bound = self.bind(&cell, &cx2)?;
+                let name = if single {
+                    value_name.clone()
+                } else {
+                    format!("{value_name}_{}", agg_suffix(&original.expr, zone))
+                };
+                let output = self.attr(&name, &bound.ty);
+                let expr = Arc::new(
+                    Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                        expr: bound.expr,
+                        output,
+                    }))
+                    .with_origin(origin),
+                );
+                combined.push(Bound { expr, ..bound });
+            }
+        }
+        let global = second_group.is_empty();
+        self.build_aggregate(origin, &stage, second_group, &combined, global, None, env)
     }
 
     /// Several pivot columns: Spark validates the values against the struct
@@ -366,6 +525,76 @@ impl Resolver<'_> {
     }
 }
 
+/// A pivot value as Spark's `PivotFirst` slot map keys it: its exact
+/// value, with `0.0` and `-0.0` one key (the map's ordering equality), and
+/// NaN apart (Spark's lookup never finds it).
+#[derive(PartialEq)]
+enum SlotKey {
+    /// A NaN value.
+    Nan,
+    /// A floating value, `-0.0` as `0.0`.
+    Float(u64),
+    /// Any other value, as its one-row array.
+    Value(arrow_array::ArrayRef),
+    /// A value the analyzer cannot evaluate: never a duplicate.
+    Opaque,
+}
+
+impl SlotKey {
+    fn of(a: &arrow_array::ArrayRef) -> Self {
+        use arrow_array::Array as _;
+        use arrow_array::cast::AsArray as _;
+        use arrow_array::types::{Float32Type, Float64Type};
+        let float = match a.data_type() {
+            _ if a.null_count() > 0 => None,
+            arrow_schema::DataType::Float64 => Some(a.as_primitive::<Float64Type>().value(0)),
+            arrow_schema::DataType::Float32 => {
+                Some(f64::from(a.as_primitive::<Float32Type>().value(0)))
+            }
+            _ => None,
+        };
+        match float {
+            Some(v) if v.is_nan() => Self::Nan,
+            Some(v) => Self::Float((v + 0.0).to_bits()),
+            None => Self::Value(Arc::clone(a)),
+        }
+    }
+}
+
+/// `PivotFirst.supportsDataType`: the aggregate result types Spark's
+/// `PivotFirst` path takes (the same in 3.5, 4.0, 4.1 and 4.2).
+fn pivot_first_type(t: Option<&DataType>) -> bool {
+    matches!(
+        t,
+        Some(
+            DataType::Boolean
+                | DataType::Byte
+                | DataType::Short
+                | DataType::Integer
+                | DataType::Long
+                | DataType::Float
+                | DataType::Double
+                | DataType::Decimal(_)
+        )
+    )
+}
+
+/// An unresolved call of `name` on `args`.
+fn call(name: &str, args: Vec<Arc<Expr>>, origin: Origin) -> Arc<Expr> {
+    Arc::new(
+        Expr::new(ExprNode::Function(FunctionCall {
+            name: name.to_owned(),
+            qualifier: Vec::new(),
+            args,
+            arg_names: Vec::new(),
+            distinct: false,
+            filter: None,
+            within_group: Vec::new(),
+        }))
+        .with_origin(origin),
+    )
+}
+
 /// A bare `*`, as `count(*)` writes it (see the binder's `star_args`).
 fn is_bare_star(e: &Expr) -> bool {
     matches!(&e.node, ExprNode::Star(s) if s.qualifier.is_empty() && s.plan_id.is_none())
@@ -514,7 +743,44 @@ fn value_name(v: &PivotValue, b: &Bound, t: &Bound, r: &Resolver<'_>) -> String 
     if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &b.expr.node {
         return output.name.clone();
     }
-    part_name(t, r)
+    float_name(t, r).unwrap_or_else(|| part_name(t, r))
+}
+
+/// A non-literal floating value named as Spark's cast to string prints its
+/// exact value (`CAST('NaN' AS DOUBLE)` is `NaN`); `None` for any other.
+fn float_name(t: &Bound, r: &Resolver<'_>) -> Option<String> {
+    use arrow_array::Array as _;
+    use arrow_array::cast::AsArray as _;
+    use arrow_array::types::{Float32Type, Float64Type};
+    if matches!(t.expr.node, ExprNode::Literal(_)) {
+        return None;
+    }
+    let Some(Ok(a)) = r.fold_array(&t.expr, r.ctx.conf.ansi) else {
+        return None;
+    };
+    if a.null_count() > 0 {
+        return None;
+    }
+    let java = |v: f64, finite: &dyn Fn() -> String| {
+        if v.is_nan() {
+            "NaN".to_owned()
+        } else if v.is_infinite() {
+            if v > 0.0 { "Infinity" } else { "-Infinity" }.to_owned()
+        } else {
+            finite()
+        }
+    };
+    match a.data_type() {
+        arrow_schema::DataType::Float64 => {
+            let v = a.as_primitive::<Float64Type>().value(0);
+            Some(java(v, &|| crate::spark_fmt::double(v)))
+        }
+        arrow_schema::DataType::Float32 => {
+            let v = a.as_primitive::<Float32Type>().value(0);
+            Some(java(f64::from(v), &|| crate::spark_fmt::float(v)))
+        }
+        _ => None,
+    }
 }
 
 /// One value (or part) rendered: a literal prints as Spark's cast to
@@ -530,6 +796,7 @@ fn part_name(b: &Bound, r: &Resolver<'_>) -> String {
                 crate::spark_fmt::timestamp_value(SessionZone::local_micros(zone, *us))
             }
             Literal::TimestampNtz(us) => crate::spark_fmt::timestamp_value(*us),
+            Literal::Null(_) => "null".to_owned(),
             _ => pretty(&b.expr, zone),
         };
     }
