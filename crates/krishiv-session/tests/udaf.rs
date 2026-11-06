@@ -543,14 +543,73 @@ fn contract_breaks_and_panics_fail_the_query_naming_the_udf() {
     assert_eq!(e.error_class(), ErrorClass::FailedExecuteUdf, "{e}");
 }
 
+/// The rows of `k, v, f` (all `BIGINT`) as triples.
+fn triples(batches: &[RecordBatch]) -> Vec<[Option<i64>; 3]> {
+    let mut out = Vec::new();
+    for b in batches {
+        let cols: Vec<_> = (0..3)
+            .map(|c| b.column(c).as_primitive::<Int64Type>())
+            .collect();
+        for i in 0..b.num_rows() {
+            out.push(std::array::from_fn(|c| {
+                (!cols[c].is_null(i)).then(|| cols[c].value(i))
+            }));
+        }
+    }
+    out
+}
+
 #[test]
-fn a_window_over_a_udaf_is_not_supported_yet() {
+fn window_frames_of_a_udaf_match_the_builtin() {
+    for round_trip in ["false", "true"] {
+        let s = session_with(
+            &[("krishiv.exec.debug.planRoundTrip", round_trip)],
+            Fault::None,
+        );
+        register_t(&s, 7);
+        for frame in [
+            "PARTITION BY k",
+            "PARTITION BY k ORDER BY v",
+            "PARTITION BY k ORDER BY v ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
+            "PARTITION BY k ORDER BY v ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING",
+            "PARTITION BY k ORDER BY v ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING",
+            "PARTITION BY k ORDER BY v RANGE BETWEEN 10 PRECEDING AND 5 FOLLOWING",
+            "ORDER BY v ROWS BETWEEN 3 PRECEDING AND 3 PRECEDING",
+        ] {
+            let q = |f: &str| {
+                format!("SELECT k, v, {f} OVER ({frame}) FROM t WHERE v < 60 ORDER BY k, v, 3")
+            };
+            let got = run(&s, &q("udsum(v)"));
+            let want = run(&s, &q("sum(v)"));
+            assert_eq!(
+                triples(&got),
+                triples(&want),
+                "{frame}, round trip {round_trip}"
+            );
+            let got = run(&s, &q("udsum(v) FILTER (WHERE v % 3 = 0)"));
+            let want = run(&s, &q("sum(v) FILTER (WHERE v % 3 = 0)"));
+            assert_eq!(triples(&got), triples(&want), "{frame} with FILTER");
+        }
+    }
+}
+
+#[test]
+fn a_window_udaf_refuses_distinct_and_reports_its_failures() {
     let s = session_with(&[], Fault::None);
     register_t(&s, 4);
-    let e = error_of(&s, "SELECT udsum(v) OVER (PARTITION BY k) FROM t");
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
+    let e = error_of(&s, "SELECT udsum(DISTINCT v) OVER (PARTITION BY k) FROM t");
+    assert!(
+        matches!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature | ErrorClass::DistinctWindowFunctionUnsupported
+        ),
         "{e}"
     );
+    let s = session_with(&[], Fault::PanicInUpdate);
+    register_t(&s, 4);
+    let e = error_of(
+        &s,
+        "SELECT udsum(v) OVER (PARTITION BY k ORDER BY v) FROM t",
+    );
+    assert_eq!(e.error_class(), ErrorClass::FailedExecuteUdf, "{e}");
 }

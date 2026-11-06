@@ -150,8 +150,13 @@ session.sql("SELECT k, total(v) FROM t GROUP BY k").await?;
   spills its states as for a built-in aggregate.
 - **Plans.** Plans carry the name, version, argument and state columns. A worker whose UDF of that version
   declares another state refuses the plan (`FAILED_EXECUTE_UDF`); one without it, `KRISHIV_UDF_NOT_AVAILABLE`.
-- **Not yet.** Aggregate UDFs over a window (`OVER (...)`) are `KRISHIV_UNSUPPORTED_FEATURE`. `retract` (rows
-  of weight −1, incremental maintenance only) defaults to unsupported.
+- **Windows.** `f(x) OVER (...)` runs over every frame a built-in aggregate takes. A whole partition is folded
+  once; a running frame (`UNBOUNDED PRECEDING` to `CURRENT ROW`) is folded a row or peer group at a time and
+  evaluated after each, which is why `evaluate` must not consume the state; any other frame folds each row's
+  frame on its own, so its cost is the sum of the frame lengths. `retract` is never needed. `DISTINCT` is
+  refused, as for built-ins.
+- **Not yet.** A window partition too large for memory (evaluated from disk) is `KRISHIV_UNSUPPORTED_FEATURE` for an
+  aggregate UDF. `retract` (rows of weight −1, incremental maintenance only) defaults to unsupported.
 
 ## Stability
 

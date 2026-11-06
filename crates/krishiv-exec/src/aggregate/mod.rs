@@ -103,7 +103,7 @@ pub(crate) use quantile::decimal_to_double;
 use sink::row_merge_running;
 pub use sink::{AggregateMetrics, HashAggregate};
 pub use udf::UdafEnv;
-pub(crate) use udf::plan_udaf_state;
+pub(crate) use udf::{accumulator_of, check_udaf, plan_udaf_state};
 
 use crate::error::{Result, internal};
 

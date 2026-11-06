@@ -56,6 +56,36 @@ pub struct UdafEnv {
     pub time_zone: Option<i32>,
 }
 
+/// Checks that `env` holds the aggregate UDF of `a`, with the state it was
+/// planned with (other aggregates pass).
+///
+/// # Errors
+/// As [`resolve`] and [`check_state`].
+pub(crate) fn check_udaf(a: &super::AggregateExpr, env: Option<&UdafEnv>) -> Result<()> {
+    match &a.function {
+        super::AggregateFunction::Udf(call) => check_state(&resolve(call, env)?, call),
+        _ => Ok(()),
+    }
+}
+
+/// The accumulator of `a`: an aggregate UDF's from `env`, else the built-in
+/// one (the window frames' constructor; a hash table has its own).
+///
+/// # Errors
+/// As [`UdfAcc::new`] or [`Accumulator::new`](super::Accumulator::new).
+pub(crate) fn accumulator_of(
+    a: &super::AggregateExpr,
+    ansi: bool,
+    env: Option<&UdafEnv>,
+) -> Result<super::Accumulator> {
+    match &a.function {
+        super::AggregateFunction::Udf(call) => {
+            super::Accumulator::udf(a, UdfAcc::new(call, env, ansi)?)
+        }
+        _ => super::Accumulator::new(a, ansi),
+    }
+}
+
 impl UdafEnv {
     /// The environment of a session's `udfs` in the zone `time_zone`
     /// (`None` without a library).

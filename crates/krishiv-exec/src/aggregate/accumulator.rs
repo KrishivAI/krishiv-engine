@@ -1149,8 +1149,12 @@ impl Accumulator {
                 values: Values::empty(t),
                 set: Vec::new(),
             },
+            // Built by `accumulator_of` with the session's library; a window
+            // partition evaluated from disk has none yet.
             (F::Udf(_), _) => {
-                return Err(internal("an aggregate UDF without its library".to_owned()));
+                return Err(unsupported(
+                    "an aggregate UDF over a window partition too large for memory".to_owned(),
+                ));
             }
             (f @ (F::Mode | F::ModeMin | F::ModeMax), _) => {
                 Kind::Mode(ModeAcc::new(expr.arg_type.clone(), f)?)

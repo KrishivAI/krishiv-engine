@@ -493,23 +493,19 @@ impl Resolver<'_> {
                     }
                 };
                 // A session aggregate UDF (ADR 0045): `DISTINCT` only when it
-                // allows it, and not over a window yet.
-                if !is_builtin_entry(&entry) && entry.kind == FunctionKind::Aggregate {
-                    if f.distinct && self.ctx.functions.rejects_distinct(entry.id.name()) {
-                        return Err(AnalysisError::new(
-                            InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
-                                pretty_name: format!("`{lookup_name}`"),
-                                syntax: "DISTINCT".to_owned(),
-                            },
-                            e.origin,
-                        ));
-                    }
-                    if window_fn {
-                        return Err(unsupported(
-                            format!("aggregate UDF {lookup_name} over a window"),
-                            e.origin,
-                        ));
-                    }
+                // allows it (a window refuses `DISTINCT` for every aggregate).
+                if !is_builtin_entry(&entry)
+                    && entry.kind == FunctionKind::Aggregate
+                    && f.distinct
+                    && self.ctx.functions.rejects_distinct(entry.id.name())
+                {
+                    return Err(AnalysisError::new(
+                        InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                            pretty_name: format!("`{lookup_name}`"),
+                            syntax: "DISTINCT".to_owned(),
+                        },
+                        e.origin,
+                    ));
                 }
                 // `array_agg` is Spark's spelling of `collect_list` (its
                 // result column is named `collect_list(...)`): resolve it

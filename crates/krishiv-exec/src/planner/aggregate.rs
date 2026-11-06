@@ -853,7 +853,7 @@ pub(super) fn aggregate_expr(
 
 /// `agg` with the state its aggregate UDF declares, from the session's
 /// library (other aggregates unchanged).
-fn udaf_state(
+pub(super) fn udaf_state(
     mut agg: AggregateExpr,
     udfs: Option<&Arc<krishiv_udf_sdk::UdfLibrary>>,
 ) -> Result<AggregateExpr> {

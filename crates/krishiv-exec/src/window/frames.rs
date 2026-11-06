@@ -680,7 +680,7 @@ fn concat(slices: &[Slice<'_>], make: impl Fn(&Slice<'_>) -> Result<ArrayRef>) -
 }
 
 /// The unit's argument columns of `a` and its filter mask.
-fn unit_inputs(
+pub(super) fn unit_inputs(
     a: &AggregateExpr,
     f: &WindowFunctionPlan,
     slices: &[Slice<'_>],
