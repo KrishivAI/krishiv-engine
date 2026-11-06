@@ -582,3 +582,19 @@ fn review_cases_grouped_aliases_user_rpad_and_oversized_lengths() {
     let e = run(&s, "create table tbig(c varchar(2147483648)) using parquet").unwrap_err();
     assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
 }
+
+#[test]
+fn equal_null_and_lateral_aliases_pad_char_comparisons() {
+    // `z_default_eq_funcs` (Spark 4.2.0): `equal_null` pads as `<=>` does.
+    let s = fresh();
+    run(&s, "insert into t values ('a', 'x')").unwrap();
+    assert_eq!(count(&s, "select * from t where equal_null(c, 'a')"), 1);
+    // A later select item reading an earlier CHAR alias compares it padded.
+    assert_eq!(
+        count(
+            &s,
+            "select * from (select c as x, x = 'a' as matched from t) q where matched"
+        ),
+        1
+    );
+}

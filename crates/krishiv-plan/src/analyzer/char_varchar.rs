@@ -277,24 +277,30 @@ impl Resolver<'_> {
     /// built it in ANSI mode before analysis (a permanent view's read projection, `cast_ansi`); the casts a
     /// query writes reach the analyzer in the default or `TRY` mode.
     pub(super) fn carry_declared(&mut self, items: &[Bound], written: &[Arc<Expr>]) {
+        let aligned = items.len() == written.len();
+        for (i, b) in items.iter().enumerate() {
+            self.carry_declared_item(b, aligned.then(|| &*written[i]));
+        }
+    }
+
+    /// [`Self::carry_declared`] for one item, `written` its form before resolution when known. The select list
+    /// calls it as each item is bound, so a later item that reads the alias (a lateral column alias) sees it.
+    pub(super) fn carry_declared_item(&mut self, b: &Bound, written: Option<&Expr>) {
         if self.declared.is_empty() {
             return;
         }
-        let aligned = items.len() == written.len();
-        for (i, b) in items.iter().enumerate() {
-            let internal_cast = aligned && is_internal_cast_alias(&written[i]);
-            // An item already resolved comes from a stored analyzed plan (a DataFrame's temporary view): its
-            // read-side padding call stands for the padded column.
-            let stored = aligned && matches!(written[i].node, ExprNode::Resolved(_));
-            if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node
-                && let Some(c) = bare_column(expr, internal_cast).or_else(|| {
-                    let (c, n) = read_padded_column(expr).filter(|_| stored)?;
-                    (self.declared.get(&c.id).and_then(|d| char_length(d)) == Some(n)).then_some(c)
-                })
-                && let Some(d) = self.declared.get(&c.id).cloned()
-            {
-                self.declared.insert(output.id, d);
-            }
+        let internal_cast = written.is_some_and(is_internal_cast_alias);
+        // An item already resolved comes from a stored analyzed plan (a DataFrame's temporary view): its
+        // read-side padding call stands for the padded column.
+        let stored = written.is_some_and(|w| matches!(w.node, ExprNode::Resolved(_)));
+        if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node
+            && let Some(c) = bare_column(expr, internal_cast).or_else(|| {
+                let (c, n) = read_padded_column(expr).filter(|_| stored)?;
+                (self.declared.get(&c.id).and_then(|d| char_length(d)) == Some(n)).then_some(c)
+            })
+            && let Some(d) = self.declared.get(&c.id).cloned()
+        {
+            self.declared.insert(output.id, d);
         }
     }
 

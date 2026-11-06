@@ -715,6 +715,8 @@ impl Resolver<'_> {
                 self.bind(e, &cx)?
             };
             let b = self.named(b)?;
+            // Before the next item binds: it may read this alias (a lateral column alias).
+            self.carry_declared_item(&b, Some(e));
             if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &b.expr.node {
                 lateral.push(Attr {
                     col: output.clone(),
