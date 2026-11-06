@@ -103,7 +103,6 @@ fn unsupported_and_unset_kinds() {
         Kind::Null(dt::Null::default()),
         Kind::Char(dt::Char::default()),
         Kind::VarChar(dt::VarChar::default()),
-        Kind::Variant(dt::Variant::default()),
     ] {
         let e = data_type(&proto_type(kind)).expect_err("unsupported");
         assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
@@ -113,6 +112,14 @@ fn unsupported_and_unset_kinds() {
             e.message()
         );
     }
+}
+
+#[test]
+fn the_variant_type_maps() {
+    assert_eq!(
+        data_type(&proto_type(Kind::Variant(dt::Variant::default()))),
+        Ok(DataType::Variant)
+    );
 }
 
 #[test]

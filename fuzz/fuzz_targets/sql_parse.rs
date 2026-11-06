@@ -47,13 +47,12 @@ fuzz_target!(|data: &[u8]| {
         Ok(q) => {
             // The checker re-parses every expression and renders the tree
             // with `Debug`, which costs more than linear time in the depth;
-            // check statements of a typical size and nesting only. A chain
-            // of infix operators nests to the left without a parenthesis,
-            // and the checker's cost grows with its cube (a 241-byte run of
-            // `*` took 11 s), so the operator count is bounded too.
+            // check statements of a typical size and nesting only. A chain of
+            // binary operators nests as deep as it is long (`a***...***2`), so
+            // the number of operators is bounded too.
             if sql.len() <= 4096
                 && nesting(&sql) <= 32
-                && infix_operators(&sql) <= 48
+                && operators(&sql) <= 32
                 && let Err(e) = check_spans(&sql, &q, &options)
             {
                 panic!("{e}");
@@ -118,9 +117,9 @@ fn redaction_oracle(data: &[u8]) {
     }
 }
 
-/// The number of symbol tokens that are neither brackets nor separators:
-/// the operators that chain into a left-nested tree without parentheses.
-fn infix_operators(sql: &str) -> usize {
+/// The number of operator symbols in `sql` (everything but brackets, commas, dots and semicolons): a
+/// chain of them is an expression nested as deep.
+fn operators(sql: &str) -> usize {
     tokenize(sql)
         .iter()
         .filter(|t| {

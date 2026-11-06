@@ -617,6 +617,7 @@ mod random;
 mod r#struct;
 mod text;
 mod url;
+mod variant;
 mod vector;
 
 #[test]
