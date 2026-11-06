@@ -8,7 +8,7 @@ use arrow_array::types::{Decimal128Type, Int32Type};
 use arrow_array::{Array, ArrayRef, Int32Array, ListArray, StringArray, StructArray};
 use arrow_schema::{DataType as ArrowType, Field};
 use krishiv_common::error::ErrorClass;
-use krishiv_types::variant::{VariantBuilder, VariantRef};
+use krishiv_types::variant::{VariantBuilder, VariantRef, VariantWriter};
 use krishiv_types::{ArrayType, DataType, DecimalType, StructField, StructType};
 
 use super::*;
@@ -352,4 +352,222 @@ fn types_spark_does_not_read_are_unknown_primitives() {
     assert_eq!(e.error_class(), ErrorClass::UnknownPrimitiveTypeInVariant);
     let e = cast_values(&[Some(v)], &DataType::String, true, &utc()).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::UnknownPrimitiveTypeInVariant);
+}
+
+#[test]
+fn review_cases_cast_as_spark() {
+    // A date keeps its type into a string cast.
+    let d: ArrayRef = Arc::new(arrow_array::Date32Array::from(vec![1]));
+    let v = cast_to_variant(d.as_ref(), &DataType::Date).unwrap();
+    let s = cast_from_variant(v.as_ref(), &DataType::String, true, &utc()).unwrap();
+    assert_eq!(s.as_string_view().value(0), "1970-01-02");
+    // A 38-digit decimal to a timestamp: no intermediate overflow.
+    let ts = cast_rows(
+        &[Some("12345678.901234567890123456789012345678")],
+        &DataType::Timestamp,
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        ts.as_primitive::<arrow_array::types::TimestampMicrosecondType>()
+            .value(0),
+        12_345_678_901_234
+    );
+    // An empty struct keeps the row count.
+    let empty = DataType::Struct(StructType::new(vec![]));
+    let out = cast_rows(&[Some("{}"), Some("{\"a\":1}")], &empty, true).unwrap();
+    assert_eq!(out.len(), 2);
+}
+
+/// Every Spark type into a variant and back out, and the JSON of every kind.
+#[test]
+fn every_type_round_trips_through_a_variant() {
+    use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
+    use arrow_array::{
+        BinaryArray, BooleanArray, Date32Array, Decimal64Array, Float32Array, Float64Array,
+        Int8Array, Int16Array, Int64Array, LargeStringArray, StringViewArray,
+        TimestampMicrosecondArray,
+    };
+    use krishiv_types::MapType;
+    let dec = |p, s| DataType::Decimal(DecimalType::try_new(p, s).unwrap());
+    let cases: Vec<(ArrayRef, DataType, &str)> = vec![
+        (
+            Arc::new(BooleanArray::from(vec![true])),
+            DataType::Boolean,
+            "true",
+        ),
+        (Arc::new(Int8Array::from(vec![-1])), DataType::Byte, "-1"),
+        (
+            Arc::new(Int16Array::from(vec![300])),
+            DataType::Short,
+            "300",
+        ),
+        (
+            Arc::new(Int64Array::from(vec![1 << 40])),
+            DataType::Long,
+            "1099511627776",
+        ),
+        (
+            Arc::new(Float32Array::from(vec![1.5])),
+            DataType::Float,
+            "1.5",
+        ),
+        (
+            Arc::new(Float64Array::from(vec![f64::NAN])),
+            DataType::Double,
+            r#""NaN""#,
+        ),
+        (
+            Arc::new(Float32Array::from(vec![f32::INFINITY])),
+            DataType::Float,
+            r#""Infinity""#,
+        ),
+        (
+            Arc::new(
+                Decimal64Array::from(vec![1250])
+                    .with_precision_and_scale(6, 2)
+                    .unwrap(),
+            ),
+            dec(6, 2),
+            "12.5",
+        ),
+        (
+            Arc::new(LargeStringArray::from(vec!["a\tb"])),
+            DataType::String,
+            r#""a\tb""#,
+        ),
+        (
+            Arc::new(StringViewArray::from(vec!["v"])),
+            DataType::String,
+            r#""v""#,
+        ),
+        (
+            Arc::new(BinaryArray::from(vec![&[1_u8, 2][..]])),
+            DataType::Binary,
+            r#""AQI=""#,
+        ),
+        (
+            Arc::new(Date32Array::from(vec![19_000])),
+            DataType::Date,
+            r#""2022-01-08""#,
+        ),
+        (
+            Arc::new(TimestampMicrosecondArray::from(vec![1_500_000]).with_timezone("UTC")),
+            DataType::Timestamp,
+            r#""1970-01-01 00:00:01.5+00:00""#,
+        ),
+        (
+            Arc::new(TimestampMicrosecondArray::from(vec![60_000_000])),
+            DataType::TimestampNtz,
+            r#""1970-01-01 00:01:00""#,
+        ),
+    ];
+    for (col, t, json) in cases {
+        let v = cast_to_variant(col.as_ref(), &t).unwrap();
+        assert_eq!(json_of(&v), vec![Some(json.to_owned())], "{t:?}");
+        // And back to its own type and to a string.
+        let back = cast_from_variant(v.as_ref(), &t, false, &utc()).unwrap();
+        assert_eq!(back.len(), 1);
+        cast_from_variant(v.as_ref(), &DataType::String, true, &utc()).unwrap();
+    }
+    // A map, a struct with a NULL field and a variant inside a variant.
+    let mut m = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+    m.keys().append_value("k");
+    m.values().append_null();
+    m.append(true).unwrap();
+    let map: ArrayRef = Arc::new(m.finish());
+    let mt = DataType::Map(Arc::new(MapType::new(
+        DataType::String,
+        DataType::Integer,
+        true,
+    )));
+    let v = cast_to_variant(map.as_ref(), &mt).unwrap();
+    assert_eq!(json_of(&v), vec![Some(r#"{"k":null}"#.to_owned())]);
+    let back = cast_from_variant(v.as_ref(), &mt, true, &utc()).unwrap();
+    assert_eq!(back.len(), 1);
+    let inner = column(&[Some(r#"{"x":[1]}"#), None]);
+    let outer = cast_to_variant(inner.as_ref(), &DataType::Variant).unwrap();
+    assert_eq!(json_of(&outer), vec![Some(r#"{"x":[1]}"#.to_owned()), None]);
+    // A wrong carrier is an internal error, not a panic.
+    let ints: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+    assert!(cast_to_variant(ints.as_ref(), &DataType::String).is_err());
+    assert!(VariantColumn::new(ints.as_ref()).is_err());
+}
+
+/// Every variant scalar into the types it casts to, and the shapes it does not.
+#[test]
+fn every_lane_casts_as_spark() {
+    let col = column(&[
+        Some("true"),
+        Some("7"),
+        Some("1.5e0"),
+        Some("2.25"),
+        Some("\"3\""),
+        Some("null"),
+        None,
+    ]);
+    // Which of `true, 7, 1.5e0, 2.25, "3"` are NULL as each type
+    // (`try_variant_get(parse_json(..), '$', type)` on Spark 4.2.0).
+    let f = false;
+    let t = true;
+    for (to, want) in [
+        (DataType::Long, [f, f, f, f, f]),
+        (DataType::Double, [f, f, f, f, f]),
+        (DataType::Float, [f, f, f, f, f]),
+        (DataType::Boolean, [f, f, f, f, t]),
+        (
+            DataType::Decimal(DecimalType::try_new(10, 2).unwrap()),
+            [f, f, f, f, f],
+        ),
+        (DataType::String, [f, f, f, f, f]),
+        (DataType::Binary, [t, t, t, t, f]),
+        (DataType::Timestamp, [t, f, f, f, t]),
+        (DataType::TimestampNtz, [t, t, t, t, t]),
+        (DataType::Date, [t, t, t, t, t]),
+    ] {
+        let out = cast_from_variant(col.as_ref(), &to, false, &utc()).unwrap();
+        let got: Vec<bool> = (0..5).map(|i| out.is_null(i)).collect();
+        assert_eq!(got, want, "{to:?}");
+        // The variant null and the SQL NULL are NULL too.
+        assert!(out.is_null(5) && out.is_null(6), "{to:?}");
+    }
+    // Containers of the wrong shape: NULL, or the error naming the value.
+    let shapes = column(&[Some("1"), Some("[1]"), Some(r#"{"a":1}"#)]);
+    let arr = DataType::Array(Arc::new(ArrayType::new(DataType::Long, true)));
+    let map = DataType::Map(Arc::new(krishiv_types::MapType::new(
+        DataType::String,
+        DataType::Long,
+        true,
+    )));
+    let st = DataType::Struct(StructType::new(vec![StructField::new(
+        "a",
+        DataType::Long,
+        true,
+    )]));
+    for t in [&arr, &map, &st] {
+        let out = cast_from_variant(shapes.as_ref(), t, false, &utc()).unwrap();
+        assert_eq!(out.null_count(), 2, "{t:?}");
+        let e = cast_from_variant(shapes.as_ref(), t, true, &utc()).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InvalidVariantCast, "{t:?}");
+    }
+    // A UUID only to a string; binary and dates print in JSON.
+    let mut w = VariantWriter::new();
+    w.uuid([0xab; 16]);
+    let (m, v) = w.finish().unwrap();
+    let r = VariantRef::new(&m, &v).unwrap();
+    let s = cast_values(&[Some(r)], &DataType::String, true, &utc()).unwrap();
+    assert_eq!(
+        s.as_string_view().value(0),
+        "abababab-abab-abab-abab-abababababab"
+    );
+    assert!(cast_values(&[Some(r)], &DataType::Long, true, &utc()).is_err());
+    // Long seconds past the timestamp range are invalid.
+    let big = column(&[Some("9223372036854775807")]);
+    assert!(cast_from_variant(big.as_ref(), &DataType::Timestamp, true, &utc()).is_err());
+    // A NULL column is all NULL.
+    let nulls: ArrayRef = Arc::new(arrow_array::NullArray::new(2));
+    let out = cast_from_variant(nulls.as_ref(), &DataType::Long, true, &utc()).unwrap();
+    assert_eq!(out.null_count(), 2);
+    // Paths raise on bad text.
+    assert!(parse_path_or_raise("$.a", "variant_get").is_ok());
 }

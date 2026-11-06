@@ -71,7 +71,7 @@ fn size_limit() -> KrishivError {
 
 /// Java's `String.compareTo`: UTF-16 code-unit order.
 fn java_order(a: &str, b: &str) -> Ordering {
-    a.encode_utf16().cmp(b.encode_utf16())
+    super::key_order(a.as_bytes(), b.as_bytes())
 }
 
 /// One field of an object being written: its key id and where its value
@@ -183,6 +183,12 @@ impl VariantWriter {
         self.buf.extend_from_slice(&micros.to_le_bytes());
     }
 
+    /// Appends a UUID (16 bytes, big-endian, as stored in Parquet).
+    pub fn uuid(&mut self, b: [u8; 16]) {
+        self.buf.push(primitive(20));
+        self.buf.extend_from_slice(&b);
+    }
+
     /// Appends binary bytes.
     ///
     /// # Errors
@@ -238,6 +244,19 @@ impl VariantWriter {
         Ok(FieldEntry {
             id,
             offset: self.buf.len() - start,
+        })
+    }
+
+    /// A field entry for `key` whose value was written at `offset` (relative
+    /// to its object's start): for a value written before it is known to
+    /// exist, so an absent field adds no key.
+    ///
+    /// # Errors
+    /// As [`Self::add_key`].
+    pub fn field_at(&mut self, key: &str, offset: usize) -> Result<FieldEntry, KrishivError> {
+        Ok(FieldEntry {
+            id: self.add_key(key)?,
+            offset,
         })
     }
 

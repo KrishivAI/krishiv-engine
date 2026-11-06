@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use arrow_array::builder::{
-    BinaryBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
+    BinaryBuilder, BooleanBuilder, Date32Builder, Float32Builder, Float64Builder, Int64Builder,
     StringBuilder, StringViewBuilder,
 };
 use arrow_array::cast::AsArray as _;
@@ -35,9 +35,6 @@ use krishiv_types::variant::{
 
 use super::{VariantColumn, VariantColumnBuilder, internal, unknown_type, uuid_string, write_json};
 use crate::cast::{CastMode, CastOptions, TimeZoneRules, cast};
-
-/// Microseconds per second.
-const MICROS: i128 = 1_000_000;
 
 /// Casts every row of `col` (a variant column) to `to`.
 ///
@@ -272,7 +269,8 @@ fn cast_to(
                 .zip(&columns)
                 .map(|(f, c)| cast_to(ctx, c, f.data_type()))
                 .collect::<Result<Vec<_>, _>>()?;
-            StructArray::try_new(fields, children, nulls(valid))
+            // The length is given: a `struct<>` has no child to take it from.
+            StructArray::try_new_with_length(fields, children, nulls(valid), values.len())
                 .map(|a| Arc::new(a) as ArrayRef)
                 .map_err(|e| internal(&e.to_string()))
         }
@@ -386,7 +384,7 @@ enum Lane {
     Double(Float64Builder),
     Float(Float32Builder),
     Decimal(Vec<i128>),
-    Date(Int32Builder),
+    Date(Date32Builder),
     Timestamp(Vec<i64>),
     TimestampNtz(Vec<i64>),
     Binary(BinaryBuilder),
@@ -401,7 +399,7 @@ impl Lane {
             Source::Double => Self::Double(Float64Builder::new()),
             Source::Float => Self::Float(Float32Builder::new()),
             Source::Decimal(..) => Self::Decimal(vec![]),
-            Source::Date => Self::Date(Int32Builder::new()),
+            Source::Date => Self::Date(Date32Builder::new()),
             Source::Timestamp => Self::Timestamp(vec![]),
             Source::TimestampNtz => Self::TimestampNtz(vec![]),
             Source::Binary => Self::Binary(BinaryBuilder::new()),
@@ -618,16 +616,21 @@ fn seconds_to_timestamp(input: &ArrayRef, source: Source) -> Result<ArrayRef, Kr
             .map(|v| v.and_then(|s| s.checked_mul(1_000_000)))
             .collect(),
         Source::Decimal(_, scale) => {
-            let div = 10_i128.checked_pow(u32::from(scale)).unwrap_or(i128::MAX);
+            // `toBigInteger` of `u × 10^-scale × 10^6`, truncating, without an
+            // intermediate product past `i128`.
+            let scale = u32::from(scale);
             input
                 .as_any()
                 .downcast_ref::<PrimitiveArray<Decimal128Type>>()
                 .ok_or_else(|| internal("a decimal lane that is not Decimal128"))?
                 .iter()
                 .map(|v| {
-                    v.and_then(|u| u.checked_mul(MICROS))
-                        .and_then(|m| m.checked_div(div))
-                        .and_then(|m| i64::try_from(m).ok())
+                    let micros = if scale >= 6 {
+                        v?.checked_div(10_i128.checked_pow(scale.saturating_sub(6))?)
+                    } else {
+                        v?.checked_mul(10_i128.checked_pow(6_u32.saturating_sub(scale))?)
+                    };
+                    micros.and_then(|m| i64::try_from(m).ok())
                 })
                 .collect()
         }

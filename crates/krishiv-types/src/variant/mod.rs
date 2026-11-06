@@ -19,7 +19,7 @@
 //!   the offset width, field-id width and `is_large` bit; arrays likewise
 //!   without field ids. Sorted-flagged dictionaries hold strictly increasing
 //!   keys.
-//! * Object field ids are ordered by key bytes with values in input order;
+//! * Object field ids are ordered by key (Java `String` order) with values in input order;
 //!   offsets are per-field starts plus the total, and are *not* monotonic.
 //! * Integers prefer the smallest int8/16/32/64 that fits; larger integers
 //!   become decimals (scale 0) up to 38 digits, then doubles.
@@ -47,6 +47,18 @@ mod writer;
 pub use builder::VariantBuilder;
 pub use reader::{VariantKind, VariantRef};
 pub use writer::{FieldEntry, VariantWriter, digits, strip_trailing_zeros};
+
+/// Java's `String.compareTo` of two UTF-8 keys: UTF-16 code-unit order, the
+/// order Spark sorts object fields in and searches them by. It differs from
+/// byte order only between supplementary characters and `U+E000..=U+FFFF`;
+/// keys that are not UTF-8 compare by bytes.
+#[must_use]
+pub fn key_order(a: &[u8], b: &[u8]) -> core::cmp::Ordering {
+    match (core::str::from_utf8(a), core::str::from_utf8(b)) {
+        (Ok(a), Ok(b)) => a.encode_utf16().cmp(b.encode_utf16()),
+        _ => a.cmp(b),
+    }
+}
 
 /// Maximum Variant value-buffer size in bytes (128 MiB).
 ///

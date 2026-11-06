@@ -83,3 +83,51 @@ fn variant_get_reads_a_column_of_paths() {
         .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InvalidVariantGetPath);
 }
+
+fn column_arg(a: &ArrayRef) -> BindArg {
+    BindArg::Column {
+        ty: a.data_type().clone(),
+        nullable: true,
+    }
+}
+
+#[test]
+fn the_variant_functions_bind_and_run() {
+    let opts = BindOptions::default();
+    let col = variants(&[Some(r#"{"a":null}"#), Some("null"), None]);
+    // to_json of a variant prints it; is_variant_null sees only variant nulls.
+    let f = bind_scalar("to_json", &[column_arg(&col)], &opts).unwrap();
+    let out = f.invoke(&[Arg::Array(Arc::clone(&col))], 3).unwrap();
+    let out: Vec<_> = out.as_string_view().iter().collect();
+    assert_eq!(out, vec![Some(r#"{"a":null}"#), Some("null"), None]);
+    let f = bind_scalar("is_variant_null", &[column_arg(&col)], &opts).unwrap();
+    let out = f.invoke(&[Arg::Array(Arc::clone(&col))], 3).unwrap();
+    let out: Vec<_> = out.as_boolean().iter().collect();
+    assert_eq!(out, vec![Some(false), Some(true), Some(false)]);
+    // try_parse_json is NULL where parse_json raises.
+    let text: ArrayRef = Arc::new(StringArray::from(vec![Some("{"), Some("1")]));
+    let t = BindArg::Column {
+        ty: arrow_schema::DataType::Utf8,
+        nullable: true,
+    };
+    let f = bind_scalar("try_parse_json", std::slice::from_ref(&t), &opts).unwrap();
+    let out = f.invoke(&[Arg::Array(Arc::clone(&text))], 2).unwrap();
+    assert!(out.is_null(0) && out.is_valid(1));
+    let f = bind_scalar("parse_json", &[t], &opts).unwrap();
+    assert!(f.invoke(&[Arg::Array(text)], 2).is_err());
+    // variant_get with a NULL literal path is NULL; without a type, a variant.
+    let v = column_arg(&col);
+    let f = bind_scalar("variant_get", &[v.clone(), lit(None)], &opts).unwrap();
+    let null_path: ArrayRef = Arc::new(StringArray::from(vec![None::<&str>]));
+    let out = f
+        .invoke(&[Arg::Array(Arc::clone(&col)), Arg::Scalar(null_path)], 3)
+        .unwrap();
+    assert_eq!(out.null_count(), 3);
+    let f = bind_scalar("variant_get", &[v, lit(Some("$.a"))], &opts).unwrap();
+    let path: ArrayRef = Arc::new(StringArray::from(vec!["$.a"]));
+    let out = f.invoke(&[Arg::Array(col), Arg::Scalar(path)], 3).unwrap();
+    // `{"a":null}`'s `a` is a variant null (a value); the others miss.
+    assert!(out.is_valid(0) && out.is_null(1) && out.is_null(2));
+    // A wrong argument type does not bind.
+    assert!(bind_scalar("is_variant_null", &[lit(Some("x"))], &opts).is_err());
+}
