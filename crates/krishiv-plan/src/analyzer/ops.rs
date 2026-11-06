@@ -2664,7 +2664,7 @@ impl Resolver<'_> {
             // A resolved `listagg` holds its ordering keys after its value
             // and delimiter: written again, they are the `WITHIN GROUP`
             // list. A resolved `mode` encodes its ordering in its arguments.
-            let mut call = synth_call(f.id.name(), Vec::new(), f.filter.clone(), origin);
+            let mut call = synth_call_of(f, Vec::new(), f.filter.clone(), origin);
             if let ExprNode::Function(c) = &mut Arc::make_mut(&mut call).node {
                 let keys = if f.id.name() == "listagg" {
                     f.within_group.len().min(mapped.len())
@@ -2736,7 +2736,7 @@ impl Resolver<'_> {
                         )?
                         .expr;
                 }
-                let b = self.bind(&synth_call(f.id.name(), args, Some(filter), origin), &r1_cx)?;
+                let b = self.bind(&synth_call_of(f, args, Some(filter), origin), &r1_cx)?;
                 new_call.insert(calls[i].0.clone(), b.expr);
             }
         }
@@ -4068,6 +4068,24 @@ fn synth_call(
         }))
         .with_origin(origin),
     )
+}
+
+/// A call of the function `f` resolved to, written again: a session UDF
+/// under `system.session`, so it binds to the UDF and not to a built-in of
+/// the same name.
+fn synth_call_of(
+    f: &ResolvedFunction,
+    args: Vec<Arc<Expr>>,
+    filter: Option<Arc<Expr>>,
+    origin: Origin,
+) -> Arc<Expr> {
+    let mut call = synth_call(f.id.name(), args, filter, origin);
+    if let (crate::FunctionId::Udf { .. }, ExprNode::Function(c)) =
+        (&f.id, &mut Arc::make_mut(&mut call).node)
+    {
+        c.qualifier = vec!["system".to_owned(), "session".to_owned()];
+    }
+    call
 }
 
 /// The expansion column evaluating `a`: the input column it already is,

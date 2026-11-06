@@ -63,9 +63,13 @@ pub(in crate::analyzer) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128
             ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => format!("o{}", c.id.0),
             ExprNode::Resolved(ResolvedExpr::Function(f)) => {
                 order = canon(f);
-                let id = match order {
-                    Canon::Flipped(to) => to.name(),
-                    _ => f.id.name(),
+                // A session UDF may share a built-in's name.
+                let id = match (&f.id, order) {
+                    (_, Canon::Flipped(to)) => to.name().to_owned(),
+                    (crate::FunctionId::Udf { name, version }, _) => {
+                        format!("system.session@{version}.{name}")
+                    }
+                    _ => f.id.name().to_owned(),
                 };
                 name = Some(f);
                 // The ordering keys are children; their directions are not.

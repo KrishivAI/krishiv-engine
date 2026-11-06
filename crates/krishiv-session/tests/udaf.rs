@@ -333,6 +333,37 @@ fn a_udaf_named_like_a_builtin_runs_only_under_its_session_name() {
 }
 
 #[test]
+fn having_and_distinct_rewrites_keep_the_udaf() {
+    let s = session_with(&[], Fault::None);
+    s.register_udaf(UdSum::new("max", Fault::None)).unwrap();
+    register_t(&s, 5);
+    // HAVING reuses the SELECT's calls by meaning: the UDF and the
+    // built-in of its name are different calls, either way round.
+    for (got, want) in [
+        (
+            "SELECT k, session.max(v) FROM t GROUP BY k HAVING max(v) > 990 ORDER BY k",
+            "SELECT k, sum(v) FROM t GROUP BY k HAVING max(v) > 990 ORDER BY k",
+        ),
+        (
+            "SELECT k, max(v) FROM t GROUP BY k HAVING session.max(v) > 0 ORDER BY k",
+            "SELECT k, max(v) FROM t GROUP BY k HAVING sum(v) > 0 ORDER BY k",
+        ),
+    ] {
+        assert_eq!(pairs(&run(&s, got)), pairs(&run(&s, want)), "{got}");
+    }
+    // A filtered DISTINCT call is rewritten and bound again.
+    let got = run(
+        &s,
+        "SELECT count(*), session.max(DISTINCT v) FILTER (WHERE v > 3) FROM t",
+    );
+    let want = run(
+        &s,
+        "SELECT count(*), sum(DISTINCT v) FILTER (WHERE v > 3) FROM t",
+    );
+    assert_eq!(pairs(&got), pairs(&want));
+}
+
+#[test]
 fn contract_breaks_and_panics_fail_the_query_naming_the_udf() {
     for fault in [Fault::PanicInUpdate, Fault::WrongResultType] {
         let s = session_with(&[], fault);
