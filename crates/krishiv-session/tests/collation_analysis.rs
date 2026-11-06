@@ -613,6 +613,16 @@ fn tables_filter_and_join_on_collation_keys() {
     assert_eq!(count("c1 where a in ('BBB', 'zzz')"), "2");
     // An explicit `UTF8_BINARY` beats the column's implicit `UTF8_LCASE`: bytes.
     assert_eq!(count("c1 where a = 'AAA' collate utf8_binary"), "1");
+    // `BETWEEN` coerces each half on its own: the same collation on both halves keys, different
+    // ones (the lower bound explicit binary, the upper implicit) stay with the guard.
+    assert_eq!(count("c1 where a between 'AAA' and 'bbb'"), "4");
+    assert_eq!(
+        class_of(
+            &s,
+            "select count(*) from c1 where a between 'A' collate utf8_binary and 'c'"
+        ),
+        ErrorClass::KrishivUnsupportedFeature
+    );
     // Two different explicit collations never compare.
     assert_eq!(
         class_of(

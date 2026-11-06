@@ -584,6 +584,18 @@ impl Resolver<'_> {
         {
             return Ok(None);
         }
+        // `x BETWEEN lo AND hi` is `x >= lo AND x <= hi` to Spark, each half coerced on its own: with
+        // different collations on the two halves (`x BETWEEN 'A' COLLATE UTF8_BINARY AND 'c'`) one
+        // collation for all three would compare a half in the wrong one. Those stay with the guard.
+        if name == "between" && n >= 3 {
+            let lower = [kids[0].clone(), kids[1].clone()];
+            let upper = [kids[0].clone(), kids[2].clone()];
+            if self.choose_collation(e, &lower, 2, name)?.0
+                != self.choose_collation(e, &upper, 2, name)?.0
+            {
+                return Ok(None);
+            }
+        }
         let (chosen, _) = self.choose_collation(e, kids, n, name)?;
         let Some(c) = chosen else {
             return Ok(None);
