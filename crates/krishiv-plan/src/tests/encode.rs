@@ -416,7 +416,7 @@ fn keys_are_stable() {
         .project(vec![Expr::column(["a"]).alias("b")]);
     let (hash, encoding) = key(plan);
     assert_eq!(encoding.len(), 509, "{encoding:?}");
-    assert_eq!(hash.to_string(), "b9cb1046de550e2b59306a0aaf649a5b");
+    assert_eq!(hash.to_string(), "494c61e739163994dc420bed6de23aaf");
     // Options other than inline secrets, whose keys are per process.
     let options = [
         ("header", OptionValue::Plain("true".to_owned())),
@@ -428,7 +428,7 @@ fn keys_are_stable() {
     }));
     let (hash, encoding) = key(read);
     assert_eq!(encoding.len(), 124, "{encoding:?}");
-    assert_eq!(hash.to_string(), "70b548782e030631f5f04ae7d540c496");
+    assert_eq!(hash.to_string(), "2bdda6ae512d51395d38e07dcd775b1b");
 }
 
 /// A plan whose subtrees are shared (`p = p.join(p)` 30 times) is keyed in

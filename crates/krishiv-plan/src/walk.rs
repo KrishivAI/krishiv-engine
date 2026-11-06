@@ -138,6 +138,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
                 | PlanNode::PipeOperator { .. }
+                | PlanNode::Repartition { .. }
                 | PlanNode::SetOp { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
@@ -392,7 +393,11 @@ impl Teardown {
             | PlanNode::Distinct { input } => {
                 self.plans.push(input);
             }
-            PlanNode::Hint { input, params, .. } => {
+            PlanNode::Hint { input, params, .. }
+            | PlanNode::Repartition {
+                input,
+                exprs: params,
+            } => {
                 self.plans.push(input);
                 self.exprs.extend(params);
             }

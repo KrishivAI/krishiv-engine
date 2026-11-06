@@ -71,7 +71,50 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 10;
+pub const ENCODING_VERSION: u16 = 11;
+
+/// The tag that starts a plan node's encoding: one per node kind, never
+/// reused (`plan_tags_are_unique`). A new kind takes the next number; a
+/// changed number bumps [`ENCODING_VERSION`].
+pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
+    match node {
+        PlanNode::Read(_) => 1,
+        PlanNode::Sql { .. } => 2,
+        PlanNode::Scan(_) => 3,
+        PlanNode::Project { .. } => 4,
+        PlanNode::WithColumns { .. } => 5,
+        PlanNode::Filter { .. } => 6,
+        PlanNode::Aggregate { .. } => 7,
+        PlanNode::Join { .. } => 8,
+        PlanNode::Sort { .. } => 9,
+        PlanNode::Limit { .. } => 10,
+        PlanNode::SubqueryAlias { .. } => 11,
+        PlanNode::WithCte { .. } => 12,
+        PlanNode::CteRef(_) => 13,
+        PlanNode::Shift { .. } => 14,
+        PlanNode::OneRowRelation => 15,
+        PlanNode::Hint { .. } => 16,
+        PlanNode::JoinHint { .. } => 17,
+        PlanNode::Union { .. } => 18,
+        PlanNode::Distinct { .. } => 19,
+        PlanNode::SetOp { .. } => 20,
+        PlanNode::ReplicateRows { .. } => 21,
+        PlanNode::Offset { .. } => 22,
+        PlanNode::Window { .. } => 23,
+        PlanNode::Expand { .. } => 24,
+        PlanNode::InlineTable { .. } => 25,
+        PlanNode::Pivot { .. } => 26,
+        PlanNode::Unpivot { .. } => 27,
+        PlanNode::TableFunction { .. } => 28,
+        PlanNode::Range { .. } => 29,
+        PlanNode::PartialAggregate { .. } => 30,
+        PlanNode::UnionLoop { .. } => 31,
+        PlanNode::UnionLoopRef { .. } => 32,
+        PlanNode::Generate { .. } => 33,
+        PlanNode::PipeOperator { .. } => 34,
+        PlanNode::Repartition { .. } => 35,
+    }
+}
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
@@ -650,19 +693,17 @@ impl<'k, 'a> Encoder<'k, 'a> {
     }
 
     fn plan_fields(&mut self, p: &'a LogicalPlan) {
+        self.u8(plan_tag(&p.node));
         match &p.node {
             PlanNode::Read(s) => {
-                self.u8(1);
                 self.source(s);
             }
-            PlanNode::OneRowRelation => self.u8(15),
             PlanNode::PartialAggregate {
                 keys,
                 aggregates,
                 states,
                 ..
             } => {
-                self.u8(30);
                 self.exprs(keys);
                 self.exprs(aggregates);
                 self.len(states.len());
@@ -671,7 +712,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
             }
             PlanNode::Sql { query, args } => {
-                self.u8(2);
                 self.str(query);
                 match args {
                     SqlArgs::None => self.u8(0),
@@ -694,7 +734,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 output,
                 version,
             }) => {
-                self.u8(3);
                 self.source(source);
                 self.len(output.len());
                 output.iter().for_each(|c| self.bound(c));
@@ -707,11 +746,9 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
             }
             PlanNode::Project { exprs, .. } => {
-                self.u8(4);
                 self.exprs(exprs);
             }
             PlanNode::WithColumns { columns, .. } => {
-                self.u8(5);
                 self.len(columns.len());
                 for (name, e) in columns {
                     self.str(name);
@@ -719,7 +756,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
             }
             PlanNode::Filter { predicate, .. } => {
-                self.u8(6);
                 self.expr(predicate);
             }
             PlanNode::Aggregate {
@@ -727,7 +763,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 aggregates,
                 ..
             } => {
-                self.u8(7);
                 match grouping {
                     Grouping::GroupBy(v) => {
                         self.u8(1);
@@ -753,7 +788,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
             PlanNode::Join {
                 kind, condition, ..
             } => {
-                self.u8(8);
                 let tag: u8 = match kind {
                     JoinKind::Inner => 1,
                     JoinKind::LeftOuter => 2,
@@ -785,21 +819,17 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
             }
             PlanNode::Sort { order, global, .. } => {
-                self.u8(9);
                 self.bool(*global);
                 self.orders(order);
             }
             PlanNode::Limit { limit, .. } => {
-                self.u8(10);
                 self.expr(limit);
             }
             PlanNode::SubqueryAlias { alias, columns, .. } => {
-                self.u8(11);
                 self.str(alias);
                 self.strs(columns);
             }
             PlanNode::WithCte { ctes, .. } => {
-                self.u8(12);
                 self.len(ctes.len());
                 ctes.iter().for_each(|c| self.str(&c.name));
             }
@@ -808,7 +838,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 source,
                 output,
             }) => {
-                self.u8(13);
                 self.str(name);
                 self.len(source.len());
                 source.iter().for_each(|id| self.put(&id.0.to_le_bytes()));
@@ -816,17 +845,18 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 output.iter().for_each(|c| self.bound(c));
             }
             PlanNode::Shift { offset, .. } => {
-                self.u8(14);
                 self.put(&offset.to_le_bytes());
             }
             PlanNode::Hint { name, params, .. } => {
-                self.u8(16);
                 self.str(name);
                 self.exprs(params);
             }
-            PlanNode::PipeOperator { .. } => self.u8(31),
+            // Only the tag.
+            PlanNode::OneRowRelation
+            | PlanNode::PipeOperator { .. }
+            | PlanNode::Distinct { .. } => {}
+            PlanNode::Repartition { exprs, .. } => self.exprs(exprs),
             PlanNode::JoinHint { strategy, .. } => {
-                self.u8(17);
                 self.str(strategy.name());
             }
             PlanNode::Union {
@@ -834,14 +864,11 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 by_name,
                 allow_missing_columns,
             } => {
-                self.u8(18);
                 self.len(inputs.len());
                 self.u8(u8::from(*by_name));
                 self.u8(u8::from(*allow_missing_columns));
             }
-            PlanNode::Distinct { .. } => self.u8(19),
             PlanNode::SetOp { op, all, .. } => {
-                self.u8(20);
                 self.u8(match op {
                     crate::SetOperation::Intersect => 0,
                     crate::SetOperation::Except => 1,
@@ -849,11 +876,9 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(u8::from(*all));
             }
             PlanNode::ReplicateRows { count, .. } => {
-                self.u8(21);
                 self.expr(count);
             }
             PlanNode::Offset { offset, .. } => {
-                self.u8(22);
                 self.expr(offset);
             }
             PlanNode::Window {
@@ -862,7 +887,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 order_by,
                 ..
             } => {
-                self.u8(23);
                 self.exprs(exprs);
                 self.exprs(partition_by);
                 self.orders(order_by);
@@ -872,14 +896,12 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 output,
                 ..
             } => {
-                self.u8(24);
                 self.len(projections.len());
                 projections.iter().for_each(|p| self.exprs(p));
                 self.len(output.len());
                 output.iter().for_each(|c| self.bound(c));
             }
             PlanNode::InlineTable { rows, columns } => {
-                self.u8(25);
                 self.len(rows.len());
                 rows.iter().for_each(|r| self.exprs(r));
                 self.strs(columns);
@@ -890,7 +912,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 aggregates,
                 ..
             } => {
-                self.u8(26);
                 self.exprs(pivot_columns);
                 self.len(values.len());
                 for v in values {
@@ -909,7 +930,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 include_nulls,
                 ..
             } => {
-                self.u8(27);
                 self.strs(value_columns);
                 self.str(name_column);
                 self.len(column_sets.len());
@@ -929,7 +949,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 output,
                 ..
             } => {
-                self.u8(31);
                 self.put(&id.to_le_bytes());
                 match limit {
                     None => self.u8(0),
@@ -949,7 +968,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 output.iter().for_each(|c| self.bound(c));
             }
             PlanNode::UnionLoopRef { id, output } => {
-                self.u8(32);
                 self.put(&id.to_le_bytes());
                 self.len(output.len());
                 output.iter().for_each(|c| self.bound(c));
@@ -963,7 +981,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 qualifier,
                 ..
             } => {
-                self.u8(30);
                 self.u8(match kind {
                     crate::GeneratorKind::Explode => 0,
                     crate::GeneratorKind::PosExplode => 1,
@@ -983,7 +1000,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
             }
             PlanNode::TableFunction { name, args } => {
-                self.u8(28);
                 self.str(name);
                 self.exprs(args);
             }
@@ -994,7 +1010,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 num_slices,
                 output,
             } => {
-                self.u8(29);
                 self.i64(*start);
                 self.i64(*end);
                 self.i64(*step);

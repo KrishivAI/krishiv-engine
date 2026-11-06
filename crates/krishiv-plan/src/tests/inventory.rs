@@ -19,6 +19,13 @@ use crate::{
 /// The node kinds a plan uses, named as in the inventory. No wildcard arm:
 /// a new node does not compile until it is named here.
 pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
+    kinds_of_node(plan, out);
+    plan.for_each_expr(&mut |e| expr_kinds(e, out));
+    plan.for_each_child(&mut |c| kinds(c, out));
+}
+
+/// The kind of `plan`'s own node.
+fn kinds_of_node(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
     out.insert(match &plan.node {
         PlanNode::Read(_) => "PlanNode::Read",
         PlanNode::Sql { .. } => "PlanNode::Sql",
@@ -39,6 +46,7 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Shift { .. } => "PlanNode::Shift",
         PlanNode::Hint { .. } => "PlanNode::Hint",
         PlanNode::PipeOperator { .. } => "PlanNode::PipeOperator",
+        PlanNode::Repartition { .. } => "PlanNode::Repartition",
         PlanNode::JoinHint { .. } => "PlanNode::JoinHint",
         PlanNode::Union { .. } => "PlanNode::Union",
         PlanNode::Distinct { .. } => "PlanNode::Distinct",
@@ -55,8 +63,6 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::UnionLoop { .. } => "PlanNode::UnionLoop",
         PlanNode::UnionLoopRef { .. } => "PlanNode::UnionLoopRef",
     });
-    plan.for_each_expr(&mut |e| expr_kinds(e, out));
-    plan.for_each_child(&mut |c| kinds(c, out));
 }
 
 fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
@@ -263,4 +269,38 @@ fn generated_kinds() -> BTreeSet<&'static str> {
         kinds(super::props::build(&bytes, false).root(), &mut out);
     }
     out
+}
+
+/// Every plan node kind starts its canonical encoding with its own tag, so
+/// two kinds never share an encoding prefix (PartialAggregate and
+/// Generate, PipeOperator and UnionLoop once did).
+#[test]
+fn plan_tags_are_unique() {
+    fn tags(plan: &LogicalPlan, out: &mut BTreeMap<&'static str, u8>) {
+        let mut kind = BTreeSet::new();
+        kinds_of_node(plan, &mut kind);
+        for k in kind {
+            let tag = crate::encode::plan_tag(&plan.node);
+            assert_eq!(*out.entry(k).or_insert(tag), tag, "{k} has one tag");
+        }
+        plan.for_each_child(&mut |c| tags(c, out));
+    }
+    let mut out = BTreeMap::new();
+    for seed in 0..4000_u32 {
+        let bytes: Vec<u8> = (0..400_u32)
+            .map(|j| u8::try_from((seed * 7919 + j * 104_729 + j * j) % 251).unwrap())
+            .collect();
+        tags(super::props::build(&bytes, false).root(), &mut out);
+    }
+    let plan_kinds = generated_kinds()
+        .into_iter()
+        .filter(|k| k.starts_with("PlanNode::"))
+        .count();
+    assert_eq!(out.len(), plan_kinds, "every plan node kind is generated");
+    let mut by_tag: BTreeMap<u8, &str> = BTreeMap::new();
+    for (kind, tag) in out {
+        if let Some(other) = by_tag.insert(tag, kind) {
+            panic!("{kind} and {other} share the tag {tag}");
+        }
+    }
 }

@@ -3712,6 +3712,12 @@ impl Resolver<'_> {
             // as Spark does.
             match self.bind_missing(&c, &exprs, env, "Sort", true) {
                 Ok((bounds, wide)) => {
+                    // No aggregate below to run a call in (Spark 4.2.0:
+                    // `SELECT x FROM t ORDER BY sum(x)` and a sort over
+                    // `DISTRIBUTE BY` over an aggregate).
+                    if let Some(e) = self.misplaced_aggregates(&bounds, p.origin) {
+                        return Err(e);
+                    }
                     let extended = wide.out.len() > c.out.len();
                     (bounds, wide, extended)
                 }

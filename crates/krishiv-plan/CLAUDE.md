@@ -18,6 +18,7 @@ Paths are relative to this crate.
 - `src/walk.rs` child mapping and tree rewrites; `src/display.rs` pretty-printer (insta snapshots)
 - `src/analyzer/mod.rs` analyzer entry; `src/analyzer/bind.rs` Bind stage (async, catalog and access policy)
 - `src/analyzer/windows.rs` window binding and extraction into `Window` relations
+- `src/analyzer/repartition.rs` `DISTRIBUTE BY` (`PlanNode::Repartition`): expressions checked as Spark checks `RepartitionByExpression`, then the node is dropped (one node has no partitions; run-time errors of the expressions are not raised)
 - `src/analyzer/suggest.rs` the edit-distance ranking of `UNRESOLVED_COLUMN` proposals (only classes whose Spark message proposes names use it)
 - `src/analyzer/access.rs` `authorize` (the one privilege check: fail closed, filtered readers never change a securable), `table_ident` / `namespace_parts`
 - `src/analyzer/resolve.rs` Resolve stage (sync); `src/analyzer/builtins.rs` `BuiltinFunctions`; `src/analyzer/coerce.rs` implicit coercion
@@ -29,7 +30,7 @@ Paths are relative to this crate.
 
 ## Invariants
 - `Arc` children for relations and expressions; rewrites go through `map_children` / `transform_up` / `transform_down`.
-- The canonical encoding (origins excluded, versioned) is the structural equality; `StructuralHash` is its
+- The canonical encoding (origins excluded, versioned) is the structural equality; each plan node kind has its own tag (`encode::plan_tag`, `plan_tags_are_unique`); `StructuralHash` is its
   XXH3-128 Merkle hash. Bump `ENCODING_VERSION` when the layout changes (`keys_are_stable` pins it).
 - Read options are `OptionValue`s (ADR 0038): secrets never print or enter the encoding in plaintext
   (canary tests in `src/tests/secrets.rs`); inline secrets encode as a per-process keyed fingerprint.

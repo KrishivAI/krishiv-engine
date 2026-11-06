@@ -3047,7 +3047,7 @@ fn having_over_global(
 
 /// Spark's refusal of a correlated reference where it cannot be lifted, naming
 /// those of `exprs` that hold one.
-fn correlated_reference(exprs: &[Arc<Expr>], origin: Origin) -> AnalysisError {
+pub(super) fn correlated_reference(exprs: &[Arc<Expr>], origin: Origin) -> AnalysisError {
     let outer: Vec<String> = exprs
         .iter()
         .filter(|e| has_outer(Node::Expr(e)))

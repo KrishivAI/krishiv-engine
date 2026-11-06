@@ -355,6 +355,7 @@ impl Display for NodeLine<'_> {
                 write!(f, " ({})", List(params))
             }
             PlanNode::PipeOperator { .. } => f.write_str("PipeOperator"),
+            PlanNode::Repartition { exprs, .. } => write!(f, "Repartition ({})", List(exprs)),
             PlanNode::JoinHint { strategy, .. } => {
                 write!(f, "JoinHint (strategy={})", strategy.name())
             }

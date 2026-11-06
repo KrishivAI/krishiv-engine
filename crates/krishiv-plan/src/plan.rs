@@ -226,6 +226,17 @@ pub enum PlanNode {
         /// Input.
         input: Arc<LogicalPlan>,
     },
+    /// `DISTRIBUTE BY exprs` (Spark's `RepartitionByExpression`; `CLUSTER
+    /// BY` and `SORT BY` put a local [`PlanNode::Sort`] above it). The
+    /// analyzer checks the expressions against the input (a column a
+    /// projection below dropped resolves) and drops the node: one node has
+    /// no partitions to set, as for the partitioning hints.
+    Repartition {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The partitioning expressions.
+        exprs: Vec<Arc<Expr>>,
+    },
     /// A join strategy hint on a relation (Spark's `ResolvedHint`): a join
     /// this relation is a side of prefers `strategy`. Rows pass through.
     JoinHint {
@@ -944,6 +955,7 @@ impl LogicalPlan {
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
             | PlanNode::PipeOperator { input }
+            | PlanNode::Repartition { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -993,6 +1005,7 @@ impl LogicalPlan {
             | PlanNode::Shift { input, .. }
             | PlanNode::Hint { input, .. }
             | PlanNode::PipeOperator { input }
+            | PlanNode::Repartition { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
@@ -1032,7 +1045,9 @@ impl LogicalPlan {
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
             | PlanNode::Distinct { .. } => {}
-            PlanNode::Hint { params, .. } => params.iter().for_each(f),
+            PlanNode::Hint { params, .. } | PlanNode::Repartition { exprs: params, .. } => {
+                params.iter().for_each(f);
+            }
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => v.iter().for_each(f),
@@ -1114,7 +1129,9 @@ impl LogicalPlan {
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
             | PlanNode::Distinct { .. } => {}
-            PlanNode::Hint { params, .. } => params.iter_mut().for_each(f),
+            PlanNode::Hint { params, .. } | PlanNode::Repartition { exprs: params, .. } => {
+                params.iter_mut().for_each(f);
+            }
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
                 SqlArgs::Positional(v) => v.iter_mut().for_each(f),
@@ -1348,6 +1365,7 @@ impl LogicalPlan {
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
                 | PlanNode::PipeOperator { .. }
+                | PlanNode::Repartition { .. }
                 | PlanNode::SetOp { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }

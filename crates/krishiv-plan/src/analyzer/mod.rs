@@ -95,6 +95,7 @@ pub(crate) mod legacy;
 mod ops;
 mod pivot;
 mod recursive;
+mod repartition;
 mod resolve;
 mod setops;
 mod sqlfn;

@@ -751,6 +751,11 @@ impl Encoder {
                 self.tag("PipeOperator");
                 self.plan(input, bias);
             }
+            PlanNode::Repartition { input, exprs } => {
+                self.tag("Repartition");
+                self.exprs(exprs, bias);
+                self.plan(input, bias);
+            }
             PlanNode::JoinHint { input, strategy } => {
                 self.tag("JoinHint");
                 self.debug(strategy);
@@ -1458,6 +1463,13 @@ mod tests {
                 (
                     "pipe-operator",
                     node(PlanNode::PipeOperator { input: base() }),
+                ),
+                (
+                    "repartition",
+                    node(PlanNode::Repartition {
+                        input: base(),
+                        exprs: vec![lit(1)],
+                    }),
                 ),
                 (
                     "join-hint",
