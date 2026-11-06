@@ -109,8 +109,7 @@ impl Resolver<'_> {
                     col: c.clone(),
                     qual: Arc::clone(&qual),
                     source: None,
-                    // Spark's `CTERelationRef` keeps the definition's
-                    // attribute metadata.
+                    // Spark's `CTERelationRef` keeps the metadata.
                     duplicate: a.duplicate,
                 })
                 .collect();
