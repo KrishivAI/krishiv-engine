@@ -1688,3 +1688,14 @@ fn a_denied_ctas_creates_no_directories() {
         "no parent was created"
     );
 }
+
+/// Table options are stored as text and never resolved, so a secret reference in
+/// `CREATE TABLE ... OPTIONS` is refused instead of being kept as its literal text.
+#[test]
+fn a_secret_in_create_table_options_is_refused() {
+    let s = session(Arc::new(AllowAll));
+    let r = block_on(
+        s.sql("CREATE TABLE t_sec (a INT) USING parquet OPTIONS (k = secret('scope', 'key'))"),
+    );
+    assert_eq!(class(r), "KRISHIV_UNSUPPORTED_FEATURE");
+}
