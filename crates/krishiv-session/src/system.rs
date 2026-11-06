@@ -1061,12 +1061,10 @@ impl QueryLog {
     /// or ended before its run): its wall time is the time since it was submitted, so the
     /// queue time is not lost.
     pub(crate) fn close_unrun(&self, id: &str, state: &'static str, error_class: Option<&str>) {
-        let waited_ms = {
-            let rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
-            rows.iter()
-                .find(|r| r.id == id)
-                .map_or(0, |r| now_ms().saturating_sub(r.submitted_ms).max(0))
-        };
+        let waited_ms = self
+            .history
+            .submitted_ms(&self.session_id, id)
+            .map_or(0, |at| now_ms().saturating_sub(at).max(0));
         self.finish(
             id,
             &Finished {
