@@ -128,30 +128,38 @@ pub fn render_baseline_for(
     let mut out = String::new();
     // Comment lines stay attached to the entry that follows them.
     let mut comments = String::new();
+    let mut wrote_entry = false;
     for line in existing_text.lines() {
         match entry_path(line) {
-            Some(p) if only.contains(&p) => {
-                if !pending.contains_key(&p) {
-                    comments.clear();
-                }
-                out.push_str(&std::mem::take(&mut comments));
-                if let Some(n) = pending.remove(&p) {
-                    out.push_str(&format!("{n} {p}\n"));
-                }
-            }
             Some(p) => {
+                // New entries that sort before this line go first, so the file stays sorted.
                 let before: Vec<(&String, usize)> = pending
                     .iter()
                     .filter(|(q, _)| q.as_str() < p.as_str())
                     .map(|(q, &n)| (*q, n))
                     .collect();
+                if !before.is_empty() && !wrote_entry {
+                    // The file header stays on top.
+                    out.push_str(&std::mem::take(&mut comments));
+                }
                 for (q, n) in before {
                     out.push_str(&format!("{n} {q}\n"));
                     pending.remove(q);
                 }
-                out.push_str(&std::mem::take(&mut comments));
-                out.push_str(line);
-                out.push('\n');
+                wrote_entry = true;
+                if only.contains(&p) {
+                    match pending.remove(&p) {
+                        Some(n) => {
+                            out.push_str(&std::mem::take(&mut comments));
+                            out.push_str(&format!("{n} {p}\n"));
+                        }
+                        None => comments.clear(),
+                    }
+                } else {
+                    out.push_str(&std::mem::take(&mut comments));
+                    out.push_str(line);
+                    out.push('\n');
+                }
             }
             None => {
                 comments.push_str(line);
@@ -407,6 +415,50 @@ mod tests {
         assert_eq!(
             text,
             "# header\n2300 mine.rs\n2100 new.rs\n# keep me\n4582 shrunk_elsewhere.rs\n"
+        );
+    }
+
+    #[test]
+    fn the_branch_scope_is_the_files_changed_since_the_merge_base() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git = |args: &[&str]| {
+            let st = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args(args)
+                .current_dir(root)
+                .status()
+                .unwrap();
+            assert!(st.success(), "git {args:?}");
+        };
+        let src = root.join("crates/c/src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(root.join("xtask")).unwrap();
+        let lines = |n: usize| "fn f() {}\n".repeat(n);
+        std::fs::write(src.join("untouched.rs"), lines(2100)).unwrap();
+        std::fs::write(src.join("mine.rs"), lines(2100)).unwrap();
+        std::fs::write(
+            root.join(BASELINE),
+            "# keep\n2100 crates/c/src/mine.rs\n2200 crates/c/src/untouched.rs\n",
+        )
+        .unwrap();
+        git(&["init", "-q", "-b", "main"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "base"]);
+        git(&["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(&["checkout", "-q", "-b", "topic"]);
+        // One committed change, one uncommitted, one new file: all count as changed.
+        std::fs::write(src.join("mine.rs"), lines(2300)).unwrap();
+        git(&["commit", "-q", "-am", "grow"]);
+        std::fs::write(src.join("added.rs"), lines(2050)).unwrap();
+        let changed = changed_files(root).unwrap();
+        assert!(changed.contains("crates/c/src/mine.rs"));
+        assert!(changed.contains("crates/c/src/added.rs"));
+        assert!(!changed.contains("crates/c/src/untouched.rs"));
+        run(root, &["--write-baseline"]).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(root.join(BASELINE)).unwrap(),
+            "# keep\n2050 crates/c/src/added.rs\n2300 crates/c/src/mine.rs\n2200 crates/c/src/untouched.rs\n"
         );
     }
 
