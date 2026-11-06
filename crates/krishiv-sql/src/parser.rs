@@ -2458,7 +2458,7 @@ impl<'s> Parser<'s> {
 
     /// `DROP ...`: a view, a table, a function, a namespace, or a temporary variable.
     /// Anything else fails where it stands, as in Spark. A `DROP VIEW`
-    /// the legacy reading rejects reads as a full view statement instead.
+    /// the one-part reading rejects reads as a full view statement instead.
     fn drop_command(&mut self) -> PR<Statement> {
         if !self.kw_at(1, "VIEW") {
             return self.drop_command_inner();
@@ -2466,12 +2466,15 @@ impl<'s> Parser<'s> {
         let start = self.start();
         let save = self.checkpoint();
         match self.drop_command_inner() {
-            Ok(statement) => {
+            // A one-part reading that deferred an error (an identifier
+            // literal of several parts, `DROP VIEW IDENTIFIER('a.b.c')`)
+            // reads as the full view statement, which takes the whole name.
+            Ok(statement) if self.deferred.is_none() => {
                 self.commit(save);
                 Ok(statement)
             }
             Err(Fail::Fatal(e)) => Err(Fail::Fatal(e)),
-            Err(Fail::Syntax) => {
+            Ok(_) | Err(Fail::Syntax) => {
                 self.restore(save);
                 self.expect_kw("DROP")?;
                 self.drop_full_view_command(start)

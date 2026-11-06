@@ -171,11 +171,15 @@ impl Session {
                 i = close + 1;
                 continue;
             }
-            if legacy
-                && tokens
-                    .get(close + 1)
-                    .is_some_and(|n| n.kind == TokenKind::Sym(Sym::Dot))
-            {
+            let dotted = tokens
+                .get(close + 1)
+                .is_some_and(|n| n.kind == TokenKind::Sym(Sym::Dot));
+            // An identifier literal followed by `.` is left to the parser: it is the first part
+            // of a dotted name where a name stands, but in an expression a column whose field
+            // is taken (`IDENTIFIER('t').c1` is `t`'s field `c1`, never the column `t.c1`),
+            // which the substituted text could not tell apart.
+            let literal = close == i + 3 && tokens[i + 2].kind == TokenKind::String;
+            if dotted && (legacy || literal) {
                 i = close + 1;
                 continue;
             }
