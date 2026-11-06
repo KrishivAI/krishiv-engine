@@ -2481,7 +2481,11 @@ fn collate_types_and_nameless_aliases() {
     // `STRING COLLATE ...`, including in nested types.
     let t = parse_data_type("STRING COLLATE UTF8_LCASE", &d).unwrap();
     assert_eq!(t.to_string(), "string collate UTF8_LCASE");
-    assert!(t.to_data_type().is_ok());
+    let lcase = krishiv_types::Collation::parse("UTF8_LCASE").unwrap();
+    assert_eq!(
+        t.to_data_type().unwrap(),
+        krishiv_types::DataType::collated_string(lcase)
+    );
     let t = parse_data_type("STRUCT<a: STRING COLLATE x, b: INT>", &d).unwrap();
     assert_eq!(t.to_string(), "struct<`a`:string collate x,`b`:int>");
     // `CHAR` and `VARCHAR` take one too, with any quoting of the name.
@@ -2497,7 +2501,8 @@ fn collate_types_and_nameless_aliases() {
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
     // A cast to a collated type lowers.
     let q = ok("SELECT CAST(a AS STRING COLLATE UTF8_LCASE) FROM t");
-    assert!(crate::lower(&q, krishiv_plan::SourceId(0)).is_ok());
+    let plan = crate::lower(&q, krishiv_plan::SourceId(0)).unwrap();
+    assert!(format!("{plan:?}").contains("CollatedString(Collation"));
     // `VALUES ... AS (columns)`: a column list without a table name.
     let q = ok("SELECT * FROM (VALUES (1), (2), (1) AS (my_col)) GROUP BY 1");
     let ast::SetExprKind::Select(s) = &q.body.kind else {

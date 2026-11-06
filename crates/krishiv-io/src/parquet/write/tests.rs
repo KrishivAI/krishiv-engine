@@ -638,5 +638,8 @@ fn collated_columns_write_the_spark_row_metadata() {
         .value
         .clone()
         .unwrap();
-    assert!(json.contains("spark.UTF8_LCASE"), "{json}");
+    assert!(
+        json.contains(r#""__COLLATIONS":{"a":"spark.UTF8_LCASE"}"#),
+        "{json}"
+    );
 }

@@ -210,12 +210,14 @@ fn conflicting_collations_are_refused_like_spark() {
     ] {
         block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
     }
-    let ok = block_on(
-        block_on(s.sql("select typeof(concat(b, 'z' collate unicode_ci)) from t1"))
-            .unwrap()
-            .collect(),
+    // An explicit collation outranks the column's implicit one.
+    assert_eq!(
+        value_of(
+            &s,
+            "select typeof(concat(b, 'z' collate unicode_ci)) from t1"
+        ),
+        "string collate UNICODE_CI"
     );
-    assert!(ok.is_ok());
     // Two different implicit collations are indeterminate.
     let err = block_on(s.sql("select trim(a, b) from t1")).unwrap_err();
     assert_eq!(
@@ -243,7 +245,11 @@ fn search_and_indeterminate_rules_follow_spark() {
     ] {
         block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
     }
-    assert!(block_on(s.sql("select levenshtein(a, b) from t1")).is_ok());
+    // `levenshtein` is not on Spark's indeterminate list: it just runs ('abc' to 'abcd').
+    assert_eq!(
+        value_of(&s, "select cast(levenshtein(a, b) as string) from t1"),
+        "1"
+    );
 }
 
 /// Calls whose answer depends on the collation refuse a non-binary one instead of matching
@@ -311,7 +317,11 @@ fn indeterminate_string_results_are_refused() {
         class_of(&s, "select length(concat(a, b)) from t1"),
         ErrorClass::KrishivUnsupportedFeature
     );
-    assert!(block_on(s.sql("select levenshtein(a, b) from t1")).is_ok());
+    // `levenshtein` is not on Spark's indeterminate list: it just runs ('abc' to 'abcd').
+    assert_eq!(
+        value_of(&s, "select cast(levenshtein(a, b) as string) from t1"),
+        "1"
+    );
 }
 
 /// A written `CAST(.. AS STRING COLLATE c)` is an explicit collation like `COLLATE`.
@@ -467,7 +477,10 @@ fn map_key_lookups_boundaries_and_builder_switches() {
     let built = Session::builder()
         .config("spark.sql.legacy.collationAwareHashFunctions", "true")
         .build();
-    assert!(built.is_err());
+    assert_eq!(
+        built.err().map(|e| e.error_class()),
+        Some(ErrorClass::KrishivUnsupportedFeature)
+    );
 }
 
 /// Codex review of #493 (second round): binary-result functions keep a plain `STRING`, a written
@@ -513,4 +526,14 @@ fn nvl2_selector_does_not_unify() {
         ),
         "string collate UNICODE_CI"
     );
+}
+
+/// The first value of the first column of `sql`, as text.
+fn value_of(s: &Session, sql: &str) -> String {
+    let b = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    let c = &b[0].columns()[0];
+    c.as_string_opt::<i32>().map_or_else(
+        || c.as_string_view().value(0).to_owned(),
+        |v| v.value(0).to_owned(),
+    )
 }
