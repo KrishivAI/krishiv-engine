@@ -3,13 +3,20 @@
 //! rewrite (`subquery.rs`) and the expression binder ask: one-row
 //! aggregates, literal relations, the `IN` forms Spark folds first.
 
+use std::collections::HashSet;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use super::AnalysisError;
 use super::bind::unsupported;
+use super::ops::col_expr;
 use super::subquery::has_outer;
-use crate::walk::Node;
-use crate::{Expr, ExprNode, Grouping, Literal, LogicalPlan, Origin, PlanNode, ResolvedExpr};
+use crate::walk::{Node, visit_distinct};
+use crate::{
+    AttrId, Builtin, Expr, ExprNode, Grouping, Literal, LogicalPlan, Origin, PlanNode,
+    ResolvedExpr, SubqueryKind,
+};
+use krishiv_types::DataType;
 
 type R<T> = Result<T, AnalysisError>;
 
@@ -159,31 +166,127 @@ pub(super) fn aggregates_below(p: &LogicalPlan) -> bool {
     }
 }
 
-/// Whether `p` is one row of expressions over no relation: `SELECT 1`,
-/// `VALUES (1)`, through aliases and projections.
-fn one_row_literals(p: &LogicalPlan) -> bool {
-    match &p.node {
-        PlanNode::OneRowRelation => true,
-        PlanNode::InlineTable { rows, .. } => rows.len() == 1,
-        PlanNode::Project { input, .. } | PlanNode::SubqueryAlias { input, .. } => {
-            one_row_literals(input)
-        }
-        _ => false,
-    }
-}
-
-/// The `IN` forms Spark folds before any join (`NullPropagation`, the
-/// one-row literal rewrite): `v IN (q)` with a NULL `v`, or over a one-row
-/// literal relation. They are refused rather than answered two-valued.
-pub(super) fn check_in(values: &[Arc<Expr>], plan: &Arc<LogicalPlan>, origin: Origin) -> R<()> {
+/// The `IN` form Spark folds before any join (`NullPropagation`): `v IN
+/// (q)` with a NULL `v`. It is refused rather than answered two-valued. Over
+/// a one-row relation of literals an `IN` is an existence join as over any
+/// other (`x IN (SELECT 1)` is false for a NULL `x` in Spark 4.2.0).
+pub(super) fn check_in(values: &[Arc<Expr>], origin: Origin) -> R<()> {
     if values.iter().any(|v| null_literal(v)) {
         return Err(unsupported("IN (subquery) with a NULL value", origin));
     }
-    if one_row_literals(plan) {
+    Ok(())
+}
+
+/// The attribute ids of the enclosing query's columns the subqueries in `e`
+/// read.
+pub(super) fn outer_ids(e: &Arc<Expr>) -> HashSet<AttrId> {
+    let mut ids = HashSet::new();
+    let _ = visit_distinct(Node::Expr(e), |n| {
+        if let Node::Expr(x) = n
+            && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &x.node
+        {
+            ids.insert(c.id);
+        }
+        ControlFlow::<()>::Continue(())
+    });
+    ids
+}
+
+/// The columns an `IN` subquery `s` reads outside its own plan: its values'
+/// and its outer references.
+fn in_reads(s: &Arc<Expr>, values: &[Arc<Expr>]) -> HashSet<AttrId> {
+    let mut ids = outer_ids(s);
+    let _ = values.iter().try_for_each(|v| {
+        visit_distinct(Node::Expr(v), |n| {
+            if let Node::Expr(x) = n
+                && let ExprNode::Resolved(ResolvedExpr::Column(c)) = &x.node
+            {
+                ids.insert(c.id);
+            }
+            ControlFlow::<()>::Continue(())
+        })
+    });
+    ids
+}
+
+/// The join condition `on` with each `IN` subquery that reads neither join
+/// input (`ON (3 IN (SELECT b FROM t)) IS NULL`) three-valued: Spark's
+/// `RewritePredicateSubquery` leaves such a subquery an expression, NULL
+/// when no row equals the value and some comparison is NULL. Over the
+/// subquery `q` with column `c`, `v IN q` is `EXISTS (q WHERE c = v) OR
+/// (EXISTS (q WHERE (c = v) IS NULL) AND NULL)`, both uncorrelated. A
+/// multi-value `IN` of this kind, or one under
+/// `spark.sql.legacy.nullInEmptyListBehavior` (NULL over no rows), is
+/// refused. A NULL literal value is left to [`check_in`].
+pub(super) fn three_valued_ins(on: &Arc<Expr>, legacy: bool) -> R<Arc<Expr>> {
+    Arc::clone(on).transform_down(&mut |x: Arc<Expr>| {
+        let ExprNode::Subquery {
+            kind: SubqueryKind::In(values),
+            plan,
+        } = &x.node
+        else {
+            return Ok(x);
+        };
+        if !in_reads(&x, values).is_empty() || values.iter().any(|v| null_literal(v)) {
+            return Ok(x);
+        }
+        let ([v], [c], false) = (&values[..], &super::subquery::output(plan)?[..], legacy) else {
+            return Err(unsupported(
+                "IN (subquery) in a join condition that reads neither side, with several values or a legacy NULL",
+                x.origin,
+            ));
+        };
+        let eq = super::subquery::boolean(Builtin::Eq, vec![Arc::clone(v), col_expr(c, Origin::UNKNOWN)]);
+        let exists = |predicate: Arc<Expr>| {
+            Arc::new(Expr::new(ExprNode::Subquery {
+                kind: SubqueryKind::Exists,
+                plan: super::subquery::node(
+                    PlanNode::Filter {
+                        input: Arc::clone(plan),
+                        predicate,
+                    },
+                    plan.origin,
+                ),
+            }))
+        };
+        let unknown = exists(super::subquery::boolean(Builtin::IsNull, vec![Arc::clone(&eq)]));
+        let null = Arc::new(Expr::new(ExprNode::Literal(Literal::Null(Some(DataType::Boolean)))));
+        Ok(super::subquery::boolean(
+            Builtin::Or,
+            vec![exists(eq), super::subquery::boolean(Builtin::And, vec![unknown, null])],
+        ))
+    })
+}
+
+/// The join condition conjunct `c`, an `IN` / `EXISTS` read from one join
+/// side `side`, refused when an `IN` in it reads a side that is a select
+/// list over no relation (through projections and aliases): Spark folds such a constant column into
+/// the condition (`SELECT 1 AS a`), and the `IN` then reads neither side
+/// and is three-valued (in-nullability), where an existence join is not.
+pub(super) fn constant_side(c: Arc<Expr>, side: &Arc<LogicalPlan>) -> R<Arc<Expr>> {
+    let has_in = super::subquery::subqueries(&c).iter().any(|s| {
+        matches!(
+            s.node,
+            ExprNode::Subquery {
+                kind: SubqueryKind::In(_),
+                ..
+            }
+        )
+    });
+    fn constant(p: &LogicalPlan) -> bool {
+        match &p.node {
+            PlanNode::OneRowRelation => true,
+            PlanNode::Project { input, .. } | PlanNode::SubqueryAlias { input, .. } => {
+                constant(input)
+            }
+            _ => false,
+        }
+    }
+    if has_in && constant(side) {
         return Err(unsupported(
-            "IN (subquery) over a one-row relation of literals",
-            origin,
+            "IN (subquery) in a join condition over a side with constant columns",
+            c.origin,
         ));
     }
-    Ok(())
+    Ok(c)
 }

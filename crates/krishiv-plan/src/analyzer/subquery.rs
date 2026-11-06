@@ -43,7 +43,10 @@ use super::bind::{addr, unsupported};
 use super::catalog::{FunctionLookup, FunctionRegistry};
 use super::exprs::{literal_type, pretty};
 use super::ops::{MAX_ID, col_expr};
-use super::subquery_shapes::{Bounded, aggregates_below, bounded, check_in, fold_one_row_bounds};
+use super::subquery_shapes::{
+    Bounded, aggregates_below, bounded, check_in, constant_side, fold_one_row_bounds, outer_ids,
+    three_valued_ins,
+};
 pub(super) use super::subquery_shapes::{null_literal, one_row_aggregate};
 use super::{AnalysisError, ResolutionConf, SparkProfile};
 use crate::walk::{Node, visit_distinct};
@@ -89,6 +92,7 @@ pub(super) fn rewrite(
         depth: 0,
         lateral: false,
         legacy_exists_in_count: conf.legacy_exists_in_count,
+        legacy_null_in_empty: conf.legacy_null_in_empty_list,
         legacy_scalar_count: conf.legacy_scalar_count,
         single_join: conf.scalar_single_join && profile != SparkProfile::V3_5,
         legacy_group_by: conf.legacy_group_by_non_equality,
@@ -119,6 +123,8 @@ struct Rewriter {
     lateral: bool,
     /// `spark.sql.optimizer.decorrelateExistsSubqueryLegacyIncorrectCountHandling.enabled`.
     legacy_exists_in_count: bool,
+    /// `spark.sql.legacy.nullInEmptyListBehavior`.
+    legacy_null_in_empty: bool,
     /// `spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled`.
     legacy_scalar_count: bool,
     /// `spark.sql.optimizer.scalarSubqueryUseSingleJoin` (always off for 3.5).
@@ -222,7 +228,7 @@ fn has_subquery(node: Node<'_>) -> bool {
 
 /// The subquery expressions directly in `e` (not inside subquery plans),
 /// each once.
-fn subqueries(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
+pub(super) fn subqueries(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     let mut stack = vec![Arc::clone(e)];
@@ -417,7 +423,7 @@ fn call(op: Builtin, args: Vec<Arc<Expr>>, data_type: DataType, nullable: bool) 
     ))))
 }
 
-fn boolean(op: Builtin, args: Vec<Arc<Expr>>) -> Arc<Expr> {
+pub(super) fn boolean(op: Builtin, args: Vec<Arc<Expr>>) -> Arc<Expr> {
     let nullable = op != Builtin::IsNull && args.iter().any(|a| typed(a).1);
     call(op, args, DataType::Boolean, nullable)
 }
@@ -440,7 +446,7 @@ fn columns(input: Arc<LogicalPlan>, out: &[BoundColumn]) -> Arc<LogicalPlan> {
 }
 
 /// The output of a resolved relation the rewrite builds on.
-fn output(p: &LogicalPlan) -> R<Vec<BoundColumn>> {
+pub(super) fn output(p: &LogicalPlan) -> R<Vec<BoundColumn>> {
     p.resolved_output()
         .ok_or_else(|| unsupported("a subquery over an unresolved plan", p.origin))
 }
@@ -803,6 +809,7 @@ impl Rewriter {
         let out = output(p)?;
         let left_ids: HashSet<AttrId> = output(left)?.iter().map(|c| c.id).collect();
         let right_ids: HashSet<AttrId> = output(right)?.iter().map(|c| c.id).collect();
+        let on = &three_valued_ins(on, self.legacy_null_in_empty)?;
         let (mut plain, mut on_left, mut on_right) = (Vec::new(), Vec::new(), Vec::new());
         for c in conjuncts(on) {
             if !self.existential(&c) {
@@ -821,9 +828,9 @@ impl Rewriter {
                 }
             }
             if ids.iter().all(|i| left_ids.contains(i)) {
-                on_left.push(c);
+                on_left.push(constant_side(c, left)?);
             } else if ids.iter().all(|i| right_ids.contains(i)) {
-                on_right.push(c);
+                on_right.push(constant_side(c, right)?);
             } else if ids
                 .iter()
                 .all(|i| left_ids.contains(i) || right_ids.contains(i))
@@ -1159,11 +1166,11 @@ impl Rewriter {
                 Some(sub) => (Arc::clone(sub), true),
                 None => (Arc::clone(&x), false),
             };
-            if let ExprNode::Subquery { kind, plan } = &sub.node {
+            if let ExprNode::Subquery { kind, .. } = &sub.node {
                 let wanted = match kind {
                     SubqueryKind::Exists => self.correlated(&sub),
                     SubqueryKind::In(values) => {
-                        check_in(values, plan, sub.origin)?;
+                        check_in(values, sub.origin)?;
                         true
                     }
                     SubqueryKind::Scalar => false,
@@ -2422,21 +2429,6 @@ impl Rewriter {
         self.next_id += 1;
         AttrId(self.next_id - 1)
     }
-}
-
-/// The attribute ids of the enclosing query's columns the subqueries in `e`
-/// read.
-fn outer_ids(e: &Arc<Expr>) -> HashSet<AttrId> {
-    let mut ids = HashSet::new();
-    let _ = visit_distinct(Node::Expr(e), |n| {
-        if let Node::Expr(x) = n
-            && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &x.node
-        {
-            ids.insert(c.id);
-        }
-        ControlFlow::<()>::Continue(())
-    });
-    ids
 }
 
 /// Whether a node holds what only a domain join can decorrelate: a set
