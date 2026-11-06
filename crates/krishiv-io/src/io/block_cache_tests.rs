@@ -697,6 +697,60 @@ async fn fetch_buffers_are_reserved_from_the_pool() {
     assert_eq!(root.reserved() as u64, cache.memory_used());
 }
 
+/// Blocks read back from the disk tier are held until the output is assembled, so they are reserved
+/// from the pool too (#432 follow-up): a range of more blocks than the pool holds is refused and
+/// answered by the plain read, and every reservation is returned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocks_read_from_disk_are_reserved_from_the_pool() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let tmp = tempfile::tempdir().unwrap();
+    // A disk-only cache: nothing is held in the memory tier.
+    let (inner, cache, store) = direct(tmp.path(), 1 << 22, 0);
+    let a = Path::from("o");
+    let data = pattern(1 << 20, 7);
+    inner.put(&a, data.clone().into()).await.unwrap();
+    let read = |range: std::ops::Range<u64>| {
+        let mut options = sized(1 << 20);
+        options.range = Some(object_store::GetRange::Bounded(range));
+        let (store, a) = (&store, a.clone());
+        async move {
+            store
+                .get_opts(&a, options)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap()
+        }
+    };
+    // Warm four blocks onto the disk before a pool is attached.
+    let warm = read(0..4 * BLOCK).await;
+    assert_eq!(&warm[..], &data[..usize::try_from(4 * BLOCK).unwrap()]);
+    let root = TreePool::new(&MemoryConfig {
+        limit: Some(2 * usize::try_from(BLOCK).unwrap()),
+        quantum: 1,
+        spill_scratch_reserve: 0,
+        resident_guard: true,
+        ..MemoryConfig::default()
+    });
+    let pool: Arc<dyn MemoryPool> = Arc::clone(&root) as Arc<dyn MemoryPool>;
+    cache.attach_pool(&pool);
+    let errors = cache.stats().errors;
+    let big = read(0..4 * BLOCK).await;
+    assert_eq!(&big[..], &data[..usize::try_from(4 * BLOCK).unwrap()]);
+    assert!(
+        cache.stats().errors > errors,
+        "four disk blocks do not fit a two-block pool: refused, answered by the plain read"
+    );
+    assert_eq!(root.reserved(), 0, "no reservation is left behind");
+    // Two blocks fit: served from the disk tier, and the reservation is returned.
+    let hits = cache.stats().disk_hits;
+    let two = read(0..2 * BLOCK).await;
+    assert_eq!(&two[..], &data[..usize::try_from(2 * BLOCK).unwrap()]);
+    assert!(cache.stats().disk_hits >= hits + 2);
+    assert_eq!(root.reserved(), 0);
+}
+
 /// A read with many separate runs of missing blocks fetches them all, a few at a time.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn many_runs_are_fetched_within_the_concurrency_bound() {
