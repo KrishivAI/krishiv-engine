@@ -24,14 +24,14 @@
 5392 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 2913 crates/krishiv-session/src/catalog.rs
-2527 crates/krishiv-session/src/command.rs
+2286 crates/krishiv-session/src/command.rs
 2630 crates/krishiv-session/src/dataframe.rs
 2789 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
-3291 crates/krishiv-session/src/table_commands.rs
+3268 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
 2774 crates/krishiv-sql/src/lower.rs
-5263 crates/krishiv-sql/src/parser.rs
+5225 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs
 2153 crates/krishiv-testkit/src/file_format/mod.rs
