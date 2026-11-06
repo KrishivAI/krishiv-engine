@@ -1089,6 +1089,14 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         return Err(corrupt("`ignore_nulls` on a function without it"));
     }
     let args = usizes(&a.args)?;
+    if let AggregateFunction::Udf(call) = &function
+        && a.input == pb::AggregateInput::Raw as i32
+        && call.args.len() != args.len()
+    {
+        return Err(corrupt(
+            "an aggregate UDF with another argument count than its call",
+        ));
+    }
     if let AggregateFunction::ListAgg { orders, .. } = &function
         && args.len() != orders.len() + 1
     {

@@ -145,7 +145,8 @@ session.sql("SELECT k, total(v) FROM t GROUP BY k").await?;
   makes `f(DISTINCT x)` `INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX`. Results and states are checked
   against the declared types and nullability (a break is `FAILED_EXECUTE_UDF`); a `STRING` result or state is
   returned on `Utf8`.
-- **Memory.** `size()` is read after every fold and reserved from the query's memory; a table that does not fit
+- **Memory.** `size()` is read after every fold; before a fold the table reserves the size plus the previous
+  fold's growth, so a fold that grows more than the last is reserved after it runs. A table that does not fit
   spills its states as for a built-in aggregate.
 - **Plans.** Plans carry the name, version, argument and state columns. A worker whose UDF of that version
   declares another state refuses the plan (`FAILED_EXECUTE_UDF`); one without it, `KRISHIV_UDF_NOT_AVAILABLE`.

@@ -1322,10 +1322,14 @@ impl Accumulator {
         if let Kind::ListAgg(l) = &self.kind {
             return l.projected(new, arg);
         }
-        // A UDF's growth is unknown until it folds: reserved after (one
-        // batch of overshoot, ADR 0045).
+        // A UDF's growth is unknown until it folds: its last fold's.
+        // (The row tables count the difference an argument makes.)
         if let Kind::Udf(u) = &self.kind {
-            return u.size();
+            return if arg.is_some() {
+                u.projected()
+            } else {
+                u.size()
+            };
         }
         let vecs: usize = self
             .vecs()

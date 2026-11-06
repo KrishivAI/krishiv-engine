@@ -97,11 +97,13 @@ impl Planner<'_> {
                     merging_expr(function, args, raw_type, &input.schema, c.key.clone())?
                 }
                 Some(_) => return Err(internal("a filter on a call merging states")),
-                None => udaf_state(
+                // A UDF call carries its whole Spark result type.
+                None if matches!(function, AggregateFunction::Udf(_)) => udaf_state(
                     aggregate_expr(function, args, mask, &input.schema, c.key.clone())?,
                     self.env.udfs.as_ref(),
-                )?
-                .with_array_result(&want),
+                )?,
+                None => aggregate_expr(function, args, mask, &input.schema, c.key.clone())?
+                    .with_array_result(&want),
             };
             if agg.result_type()? != want {
                 return Err(internal(&format!(

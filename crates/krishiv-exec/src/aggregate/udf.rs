@@ -9,7 +9,9 @@
 //! - every call goes through [`guard_call`]; an error, a panic or a broken
 //!   contract (a state or result of the wrong count, length, type or
 //!   nullability) fails the query with `FAILED_EXECUTE_UDF`, and after a
-//!   panic the accumulator is never called again;
+//!   panic in `resize`, `update`, `merge`, `retract` or `size` the
+//!   accumulator is never called again (`state` and `evaluate` read only, so
+//!   a panic there fails the call and leaves the state as it was);
 //! - rows a `FILTER` drops, and with
 //!   [`Strict`](krishiv_udf_sdk::NullHandling::Strict) rows with a NULL
 //!   argument, never reach `update`;
@@ -19,7 +21,11 @@
 //! - arguments reach the UDF with decimals on `Decimal128`, as scalar UDFs
 //!   get them; a `STRING`/`BINARY` result comes back on `Utf8`/`Binary`
 //!   and becomes a view;
-//! - [`size`](UdfAcc::size) is the UDF's own count, read after every fold.
+//! - [`size`](UdfAcc::size) is the UDF's own count, read after every fold;
+//!   before a fold the table reserves the size plus the previous fold's
+//!   growth ([`projected`](UdfAcc::projected)), so a fold that grows as the
+//!   last one did is reserved before it runs and a larger one after (ADR
+//!   0045 §4: one batch of overshoot at most).
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -177,9 +183,10 @@ pub(crate) fn check_state(udf: &Arc<dyn AggregateUdf>, call: &UdafCall) -> Resul
 /// A session aggregate UDF's accumulator, as one accumulator kind.
 #[derive(Debug)]
 pub(crate) struct UdfAcc {
-    /// Behind a lock only so the accumulator is `Sync` as the engine's
-    /// tables are (one driver owns it; the lock is never contended). A
-    /// panic is caught inside the guarded call, so it never poisons it.
+    /// Behind a lock only so the accumulator is `Sync`, as tables held by
+    /// a `Sink` (`Send + Sync`) must be (one driver owns it; the lock is
+    /// never contended). A panic is caught inside the guarded call, so it
+    /// never poisons it.
     acc: Mutex<Box<dyn GroupsAccumulator>>,
     name: String,
     /// The argument types as Spark prints them (for errors).
@@ -198,6 +205,10 @@ pub(crate) struct UdfAcc {
     groups: usize,
     /// The UDF's heap bytes after the last fold.
     bytes: usize,
+    /// The growth of the fold in progress (its `resize` and fold calls).
+    grown: usize,
+    /// The growth of the last complete fold.
+    growth: usize,
     /// The failure that poisoned the accumulator (a panic, or an error in
     /// a call that cannot report one).
     failed: Option<String>,
@@ -241,6 +252,8 @@ impl UdfAcc {
             strict: matches!(properties.null_handling, NullHandling::Strict),
             groups: 0,
             bytes: 0,
+            grown: 0,
+            growth: 0,
             failed: None,
         };
         me.refresh_size();
@@ -280,9 +293,24 @@ impl UdfAcc {
         let size = guard_call(&self.name, "size", || acc.size());
         drop(acc);
         match size {
-            Ok(b) => self.bytes = b,
+            Ok(b) => {
+                self.grown = self.grown.saturating_add(b.saturating_sub(self.bytes));
+                self.bytes = b;
+            }
             Err(e) => self.failed = Some(e.message().to_owned()),
         }
+    }
+
+    /// Ends a fold: its growth predicts the next one's.
+    fn end_fold(&mut self) {
+        self.refresh_size();
+        self.growth = std::mem::take(&mut self.grown);
+    }
+
+    /// The bytes to reserve before the next fold: the size plus the last
+    /// fold's growth.
+    pub(crate) const fn projected(&self) -> usize {
+        self.bytes.saturating_add(self.growth)
     }
 
     /// The heap bytes the UDF reported after the last fold.
@@ -354,6 +382,9 @@ impl UdfAcc {
             .iter()
             .map(|a| recarried_array(a, &client_arrow_type(a.data_type())))
             .collect::<std::result::Result<_, _>>()?;
+        // TODO(unit 3b / P4 IVM): retracted rows fold after the added ones of
+        // the batch; an order-sensitive UDAF would need the batch split at
+        // each change of sign. Batch queries only add.
         if plus.len() == n {
             self.call_update(&wide, groups, false)?;
         } else {
@@ -366,7 +397,7 @@ impl UdfAcc {
                 self.call_update(&a, &g, true)?;
             }
         }
-        self.refresh_size();
+        self.end_fold();
         self.healthy()
     }
 
@@ -444,7 +475,7 @@ impl UdfAcc {
             Ok(Err(e)) => return Err(self.caught(&e, false)),
             Err(e) => return Err(self.caught(&e, true)),
         }
-        self.refresh_size();
+        self.end_fold();
         self.healthy()
     }
 
@@ -563,3 +594,6 @@ fn take_rows(
         .collect::<Result<_>>()?;
     Ok((taken, rows.iter().map(|&i| groups[i]).collect()))
 }
+
+#[cfg(test)]
+mod tests;
