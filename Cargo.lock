@@ -2343,8 +2343,11 @@ name = "krishiv-server"
 version = "0.2.0-alpha"
 dependencies = [
  "axum",
+ "futures",
+ "getrandom 0.4.3",
  "krishiv-exec",
  "krishiv-ui-assets",
+ "serde_json",
  "tokio",
 ]
 

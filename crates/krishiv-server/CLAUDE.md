@@ -9,11 +9,13 @@ Admin and UI API server (REST, OpenAPI), serves the web UI. Today: `/api/v1/vers
 ## Key files
 Paths are relative to this crate.
 - `src/lib.rs` `router()`, `serve` and `run_blocking`
+- `src/internal.rs` the UI backend (P2-T133 part a): `router_with_ui(source, token)`, the `UiSource` trait (system-table rows as JSON, cancel), `/api/internal/{health,queries,queries/{id},queries/{id}/cancel,history,compare,resources,events}`; every route needs the token (Bearer, `krishiv_ui_token` cookie or `?token=`), every response of that router carries the CSP / `frame-ancestors 'none'` headers, columns are allowlisted per endpoint, `events` is SSE at one event a second
 - `src/metrics.rs` `router_with_metrics` and `render` (feature `metrics-prometheus` only)
 - `tests/serve.rs` server tests
 - `tests/metrics.rs` `/metrics` exposition tests (feature `metrics-prometheus` only)
 
 ## Extension points
+- A page's data: add a handler in `src/internal.rs` reading through `UiSource` and an allowlist of columns; a new system table is a `SystemTable` variant the source must serve.
 - New route: add it to `router()` in `src/lib.rs` under `/api/v1/` with its OpenAPI entry.
 
 ## Invariants

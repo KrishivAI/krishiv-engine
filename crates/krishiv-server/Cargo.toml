@@ -12,7 +12,10 @@ publish = false
 axum = { workspace = true, features = ["http1", "tokio"] }
 krishiv-exec = { path = "../krishiv-exec", optional = true }
 krishiv-ui-assets = { path = "../krishiv-ui-assets" }
-tokio = { workspace = true, features = ["rt-multi-thread", "net"] }
+futures = { workspace = true, features = ["alloc"] }
+getrandom.workspace = true
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time"] }
 
 [features]
 # Prometheus exposition of the engine metrics snapshot (`GET /metrics`).

@@ -23,6 +23,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(feature = "metrics-prometheus")]
 pub mod metrics;
 
+pub mod internal;
+
 async fn version() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/json")],
