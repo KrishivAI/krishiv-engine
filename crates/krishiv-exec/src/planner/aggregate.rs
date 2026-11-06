@@ -370,7 +370,7 @@ impl Planner<'_> {
             let key = e.to_string();
             let ident = krishiv_plan::identity_string(e);
             if !out.iter().any(|c| c.ident == ident) {
-                if !matches!(f.id, FunctionId::Registry { .. }) {
+                if !matches!(f.id, FunctionId::Registry { .. } | FunctionId::Udf { .. }) {
                     return Err(unsupported(&format!("the aggregate {key}")));
                 }
                 let id = self.fresh_id();
