@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 use std::time::Duration;
 
-use super::{ConfigEntry, ConfigValue, Scope, ValueType};
+use super::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
 
 const MIB: u64 = 1024 * 1024;
 
@@ -37,6 +37,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_ABORT_RELEASE_TIMEOUT,
     &MEMORY_SPILL_SCRATCH_RESERVE,
     &MEMORY_RESIDENT_GUARD,
+    &SESSION_MEMORY_LIMIT,
+    &SYSTEM_QUERIES_CAPACITY,
     &CACHE_MAX_BYTES,
     &DETERMINISTIC_ORDER,
     &RESULT_CACHE_ENABLED,
@@ -152,6 +154,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
     ("krishiv.io.cache.blockBytes", &IO_CACHE_BLOCK_BYTES),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
+    ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
@@ -178,6 +181,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &MEMORY_SPILL_WAIT_TIMEOUT,
     ),
     ("krishiv.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
+    ("krishiv.system.queries.capacity", &SYSTEM_QUERIES_CAPACITY),
     ("spark.sql.files.maxPartitionNum", &FILES_MAX_PARTITION_NUM),
     ("spark.sql.files.minPartitionNum", &FILES_MIN_PARTITION_NUM),
     ("spark.sql.files.openCostInBytes", &FILES_OPEN_COST_IN_BYTES),
@@ -413,6 +417,7 @@ pub static ANSI_ENABLED: ConfigEntry = ConfigEntry {
     doc: "When true, follow ANSI SQL semantics: invalid casts and arithmetic overflow raise \
           errors instead of returning NULL.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.ansi.enabled"),
 };
@@ -425,6 +430,7 @@ pub static SESSION_TIME_ZONE: ConfigEntry = ConfigEntry {
     doc: "Session time zone: a region ID such as `America/Los_Angeles` or a zone offset. \
           When unset, the local system time zone is used, as in Spark.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.session.timeZone"),
 };
@@ -436,6 +442,7 @@ pub static SQL_PATH_ENABLED: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Bool(false)),
     doc: "Whether `SET PATH` (the SQL standard routine and relation search path) is enabled.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.path.enabled"),
 };
@@ -448,6 +455,7 @@ pub static SQL_DEFAULT_PATH: ConfigEntry = ConfigEntry {
     doc: "What `DEFAULT_PATH` expands to: a comma-separated `SET PATH` element list without `PATH`. \
           Empty means `system.builtin, system.session, current_schema`.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.defaultPath"),
 };
@@ -459,6 +467,7 @@ pub static STORE_ASSIGNMENT_POLICY: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::String(Cow::Borrowed("ANSI"))),
     doc: "Type coercion rules when inserting a value into a column of a different type.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.storeAssignmentPolicy"),
 };
@@ -472,6 +481,7 @@ pub static CTE_PRECEDENCE_POLICY: ConfigEntry = ConfigEntry {
           nested definition shadowing an outer one, LEGACY inlines outer definitions first, \
           CORRECTED lets inner definitions shadow outer ones.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.legacy.ctePrecedencePolicy"),
 };
@@ -485,6 +495,7 @@ pub static MAP_KEY_DEDUP_POLICY: ConfigEntry = ConfigEntry {
           `map_from_arrays`, `map_from_entries`, `str_to_map`): `EXCEPTION` fails the query, \
           `LAST_WIN` keeps the value inserted last.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.mapKeyDedupPolicy"),
 };
@@ -500,6 +511,7 @@ pub static AUTO_BROADCAST_JOIN_THRESHOLD: ConfigEntry = ConfigEntry {
           task without a hint. A negative value turns broadcasting by size off; a \
           `BROADCAST` hint still broadcasts.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.autoBroadcastJoinThreshold"),
 };
@@ -511,6 +523,7 @@ pub static TARGET_PARTITION_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(128 * MIB)),
     doc: "Target size of a partition for scans and exchanges.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -523,6 +536,7 @@ pub static EXEC_BATCH_SIZE: ConfigEntry = ConfigEntry {
     doc: "Rows per batch passed between operators. Operators do about a millisecond of work \
           per batch, so the scheduler can switch tasks between batches.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -538,6 +552,7 @@ pub static EXEC_AGG_ROW_LAYOUT: ConfigEntry = ConfigEntry {
           same either way; aggregations with nested or dictionary keys \
           keep the columnar path.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -552,6 +567,7 @@ pub static EXEC_DEBUG_PLAN_ROUND_TRIP: ConfigEntry = ConfigEntry {
           would receive it. A plan the format cannot carry, or one that decodes to a \
           different plan, fails the query. Results are the same either way.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -567,6 +583,7 @@ pub static EXEC_JOIN_BUILD_SIDE: ConfigEntry = ConfigEntry {
           right anti or right outer join). Results are the same either way; false keeps \
           Spark's side (the right input).",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -581,6 +598,7 @@ pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
           the same either way; joins whose key types have no row encoding keep the \
           columnar path.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -594,6 +612,7 @@ pub static EXEC_SORT_HASH_BUCKETS: ConfigEntry = ConfigEntry {
           the hash of the partitioning keys and sorts, merges and evaluates the buckets in \
           parallel. Results are the same either way.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -607,6 +626,7 @@ pub static EXEC_JOIN_RADIX_BITS: ConfigEntry = ConfigEntry {
           the top bits of the key hash (3 to 6) and indexes them in parallel. Results are \
           the same for every value.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -620,6 +640,7 @@ pub static EXEC_JOIN_STRATEGY: ConfigEntry = ConfigEntry {
           `sortMerge` runs every equi-join without a strategy hint as a sort-merge join, except \
           `NOT IN` and keys that cannot be ordered. Results are the same either way.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -634,6 +655,7 @@ pub static EXEC_JOIN_SMJ_BUFFER_BYTES: ConfigEntry = ConfigEntry {
           rows by count (`spark.sql.sortMergeJoinExec.buffer.in.memory.threshold` and \
           `spark.sql.sortMergeJoinExec.buffer.spill.threshold`), which have no effect here.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -648,6 +670,7 @@ pub static EXEC_SEED: ConfigEntry = ConfigEntry {
           deterministic mode, so that the order of groups and of unordered `LIMIT` rows is \
           the same on every run. Unset, each query draws a random seed.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -660,6 +683,7 @@ pub static SHUFFLE_PARTITIONS_HINT: ConfigEntry = ConfigEntry {
     doc: "Shuffle partition count requested by the user. Treated as a hint: partitioning \
           is driven by `krishiv.exec.targetPartitionBytes`.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.shuffle.partitions"),
 };
@@ -671,6 +695,7 @@ pub static NETWORK_TIMEOUT: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Duration(Duration::from_secs(120))),
     doc: "Default timeout for network interactions between cluster processes.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: Some("spark.network.timeout"),
 };
@@ -685,6 +710,7 @@ pub static MEMORY_LIMIT: ConfigEntry = ConfigEntry {
           When unset: 80% of the effective memory limit (the tightest cgroup limit, else \
           physical memory), or 2 GiB where that cannot be determined.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -699,6 +725,7 @@ pub static MEMORY_RESERVATION_QUANTUM: ConfigEntry = ConfigEntry {
           rarely touch shared counters. Unused parts of a step are reclaimed before anything is \
           spilled. `1b` disables rounding.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -712,6 +739,7 @@ pub static MEMORY_SPILL_WAIT_TIMEOUT: ConfigEntry = ConfigEntry {
           before it gives up on it and aborts the query furthest above its fair share of memory. \
           A spill that has begun is awaited to its end.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -726,6 +754,7 @@ pub static MEMORY_SPILL_SCRATCH_RESERVE: ConfigEntry = ConfigEntry {
           frees it. Shared by every spill under the pool and released when each write ends. \
           `0` disables it.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -743,8 +772,41 @@ pub static MEMORY_RESIDENT_GUARD: ConfigEntry = ConfigEntry {
           limit below 4 GiB; elsewhere the setting has no effect. Spill I/O and arbitration \
           rounds whose spills are exhausted are exempt from it.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
+};
+
+/// The memory one session's queries may hold together, under the process
+/// limit (design P2-E1).
+pub static SESSION_MEMORY_LIMIT: ConfigEntry = ConfigEntry {
+    key: "krishiv.session.memoryLimit",
+    value_type: ValueType::Size,
+    default: None,
+    doc: "Memory the queries of one session may hold together: the limit of the session's own \
+          pool under the process root (`krishiv.memory.limit` still bounds the process). A \
+          request over it spills, then cancels one of the session's own queries, never another \
+          session's. Fixed when the session is built. When unset, a session's queries are \
+          bounded by the process limit only.",
+    scope: Scope::Session,
+    version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::Admin,
+};
+
+/// Most `system.queries` rows one engine runtime keeps (design P2-E1 §5).
+pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
+    key: "krishiv.system.queries.capacity",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(10_000)),
+    doc: "Most rows `system.queries` keeps for all the sessions of one engine runtime. A \
+          principal holding 1000 rows loses its oldest finished row first; at this capacity the \
+          oldest finished row of the principal holding the most finished rows goes. Running \
+          queries are never dropped.",
+    scope: Scope::Cluster,
+    version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::Startup,
 };
 
 /// How long a request waits for aborted queries to release memory.
@@ -756,6 +818,7 @@ pub static MEMORY_ABORT_RELEASE_TIMEOUT: ConfigEntry = ConfigEntry {
           memory; aborted queries release at their next batch boundary. While their memory \
           covers the request, no other query is aborted. The request fails after this time.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -771,6 +834,7 @@ pub static CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
           the query runs uncached instead of failing. `0` disables caching: queries always run \
           uncached.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -790,6 +854,7 @@ pub static DETERMINISTIC_ORDER: ConfigEntry = ConfigEntry {
           branches of a `UNION ALL` under an operator that must see all of them (a hash join \
           probing a union) still run side by side. Off by default.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -806,6 +871,7 @@ pub static RESULT_CACHE_ENABLED: ConfigEntry = ConfigEntry {
           read; a change made outside the engine is not seen until the entry expires. Off by \
           default.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -819,6 +885,7 @@ pub static RESULT_CACHE_TTL: ConfigEntry = ConfigEntry {
           entry is dropped before the next lookup and the query runs again. `0s` never \
           expires. Needs `krishiv.resultCache.enabled`.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -833,6 +900,7 @@ pub static RESULT_CACHE_MAX_BYTES: ConfigEntry = ConfigEntry {
           larger than the cap is not stored; when a new result would pass the cap the oldest \
           entries go first, and entries past their ttl go whenever a result is stored. Needs `krishiv.resultCache.enabled`.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -850,6 +918,7 @@ pub static SPILL_DIR: ConfigEntry = ConfigEntry {
           RAM file system (tmpfs). Prefer a local SSD; network and FUSE file systems are \
           refused.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -862,6 +931,7 @@ pub static SPILL_MAX_BYTES: ConfigEntry = ConfigEntry {
     doc: "Most bytes spill files may occupy on disk at once, over all queries of the process. \
           A spill that would exceed it fails with `KRISHIV_SPILL_CAP_EXCEEDED`.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -875,6 +945,7 @@ pub static SPILL_COMPRESSION: ConfigEntry = ConfigEntry {
           (smaller files, more CPU) or `none`. Files are self-describing, so the setting \
           only affects files written afterwards.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -888,6 +959,7 @@ pub static SPILL_ZSTD_LEVEL: ConfigEntry = ConfigEntry {
           `zstd`: 1 is fastest; higher levels (up to 22) give smaller files and cost more CPU. \
           Levels from -131072 (ultra-fast) are accepted.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -903,6 +975,7 @@ pub static SPILL_DROP_BEHIND_BYTES: ConfigEntry = ConfigEntry {
           query can push its cgroup into the OOM killer. A finished file is written back and \
           dropped too. `0` disables it; other platforms ignore it.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -914,6 +987,7 @@ pub static EXPERIMENTAL_IVM: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Bool(false)),
     doc: "Experimental: incremental maintenance of materialized views.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -925,6 +999,7 @@ pub static EXPERIMENTAL_UNALIGNED_CHECKPOINTS: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Bool(false)),
     doc: "Experimental: allow unaligned checkpoints under sustained backpressure.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -938,6 +1013,7 @@ pub static IO_STRICT_OPTIONS: ConfigEntry = ConfigEntry {
           (`KRISHIV_UNKNOWN_FORMAT_OPTION`). When false (the default, as in Spark), it is \
           ignored with a warning that suggests the closest known option.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -949,6 +1025,7 @@ pub static FILES_MAX_PARTITION_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(128 * MIB)),
     doc: "Most bytes packed into one file-scan partition (Spark's split planning).",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.files.maxPartitionBytes"),
 };
@@ -961,6 +1038,7 @@ pub static FILES_OPEN_COST_IN_BYTES: ConfigEntry = ConfigEntry {
     doc: "Estimated cost of opening a file, in bytes that could be scanned in the same time; \
           added per file when files are packed into scan partitions.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.files.openCostInBytes"),
 };
@@ -973,6 +1051,7 @@ pub static FILES_MIN_PARTITION_NUM: ConfigEntry = ConfigEntry {
     doc: "Suggested minimum number of file-scan partitions. When unset: \
           `krishiv.sql.leafNodeDefaultParallelism`, else the number of worker slots.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.files.minPartitionNum"),
 };
@@ -985,6 +1064,7 @@ pub static FILES_MAX_PARTITION_NUM: ConfigEntry = ConfigEntry {
     doc: "Suggested maximum number of file-scan partitions: when splitting yields more, the \
           split size is raised so that about this many remain. Unset: no maximum.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.files.maxPartitionNum"),
 };
@@ -997,6 +1077,7 @@ pub static BUCKETING_MAX_BUCKETS: ConfigEntry = ConfigEntry {
     doc: "Maximum `CLUSTERED BY ... INTO n BUCKETS` bucket count: a count above it fails \
           with `INVALID_BUCKET_COUNT`.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.sources.bucketing.maxBuckets"),
 };
@@ -1009,6 +1090,7 @@ pub static LEAF_NODE_DEFAULT_PARALLELISM: ConfigEntry = ConfigEntry {
     doc: "Default parallelism of leaf scans (used when `krishiv.sql.files.minPartitionNum` is \
           unset). When unset: the number of worker slots.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.leafNodeDefaultParallelism"),
 };
@@ -1022,6 +1104,7 @@ pub static IO_MAX_CONCURRENT_REQUESTS: ConfigEntry = ConfigEntry {
           The local file store also runs each request on a blocking thread of the I/O runtime, so \
           at most `krishiv.io.blockingThreads` of them run at once.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1037,6 +1120,7 @@ pub static IO_BLOCKING_THREADS: ConfigEntry = ConfigEntry {
           allocator cache, so the bound also bounds that memory. Read when the session starts its \
           executor.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1050,6 +1134,7 @@ pub static IO_COALESCE_BYTES: ConfigEntry = ConfigEntry {
           the request reads few enough bytes outside the ranges \
           (`krishiv.io.coalesceWasteBytes`, `krishiv.io.coalesceWasteDivisor`).",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1064,6 +1149,7 @@ pub static IO_COALESCE_WASTE_BYTES: ConfigEntry = ConfigEntry {
           in flight, so this trades bytes read for fewer requests. When unset: 64 KiB for local \
           files, 1 MiB for object stores and HTTP, where a request costs latency.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1076,6 +1162,7 @@ pub static IO_COALESCE_WASTE_DIVISOR: ConfigEntry = ConfigEntry {
     doc: "A coalesced read may fetch up to 1/this of its bytes outside the requested ranges \
           (or `krishiv.io.coalesceWasteBytes`, whichever is larger).",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1088,6 +1175,7 @@ pub static IO_MAX_REQUEST_BYTES: ConfigEntry = ConfigEntry {
     doc: "Ranges are not coalesced into requests larger than this (a single larger range is \
           still fetched whole).",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1100,6 +1188,7 @@ pub static IO_PREFETCH_BYTES: ConfigEntry = ConfigEntry {
     doc: "Bytes a file scan may fetch ahead of decoding, per scan driver. Prefetched bytes are \
           reserved from the query's memory pool and dropped first under memory pressure.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1114,6 +1203,7 @@ pub static IO_PARQUET_PAGE_INDEX_ENABLED: ConfigEntry = ConfigEntry {
           either way: the index only prunes, and an index that fails a check is ignored. Files \
           without a page index pay nothing.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1128,6 +1218,7 @@ pub static IO_PARQUET_BLOOM_FILTER_ENABLED: ConfigEntry = ConfigEntry {
           in it. Returned rows are the same either way: the filter only prunes, and a filter \
           that fails a check is ignored. Files without Bloom filters pay nothing.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1143,6 +1234,7 @@ pub static IO_LATE_MATERIALIZATION: ConfigEntry = ConfigEntry {
           the same either way; with the filter, decode errors confined to rows it rejects \
           (a corrupt page or invalid UTF-8 in a column it does not read) are not raised.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1155,6 +1247,7 @@ pub static IO_FOOTER_READ_BYTES: ConfigEntry = ConfigEntry {
     doc: "Size of the speculative read at the end of a file that fetches its footer in one \
           request; a format may ask for more (up to 1 MiB).",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1167,6 +1260,7 @@ pub static IO_METADATA_CACHE_BYTES: ConfigEntry = ConfigEntry {
     doc: "Size of the in-memory cache of decoded file footers and metadata (least recently used \
           entries are evicted). `0` disables it.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1178,6 +1272,7 @@ pub static IO_CACHE_ENABLED: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Bool(false)),
     doc: "Cache the byte ranges read from remote object stores (data pages, footers and page indexes alike) in aligned blocks on local disk, with a small in-memory tier in front. A block is keyed by the store, the path, the object's version (ETag or modification time) and the block index, so an overwritten object never serves old bytes. The disk part starts empty and is removed when the session ends. Any cache failure falls back to the store. Local files are never cached.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1189,6 +1284,7 @@ pub static IO_CACHE_PATH: ConfigEntry = ConfigEntry {
     default: None,
     doc: "Directory of the block cache's disk part (a local SSD). Each cache uses a subdirectory of its own, empties it when created and removes it when dropped; subdirectories no running cache holds any longer are removed too. When unset: `krishiv-block-cache-<uid>` under the system temp directory (a directory this user does not own is refused).",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1200,6 +1296,7 @@ pub static IO_CACHE_DISK_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(10 * 1024 * MIB)),
     doc: "Size cap of the block cache's disk part; the least recently used blocks are removed to stay under it (it may exceed the cap by one block while a block is written).",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1211,6 +1308,7 @@ pub static IO_CACHE_BLOCK_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(MIB)),
     doc: "Size of the aligned blocks the cache stores and fetches; a read is served from the blocks it overlaps.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1222,6 +1320,7 @@ pub static IO_CACHE_MEMORY_BYTES: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Size(64 * MIB)),
     doc: "Size of the block cache's in-memory tier (least recently used blocks). `0` keeps blocks on disk only.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1234,6 +1333,7 @@ pub static IO_MULTIPART_PART_BYTES: ConfigEntry = ConfigEntry {
     doc: "Part size of multipart uploads (at least 5 MiB; doubled every 1,000 parts so a file \
           never needs more than the 10,000 parts object stores allow).",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1246,6 +1346,7 @@ pub static IO_MAX_RETRIES: ConfigEntry = ConfigEntry {
     doc: "Retries of an object-store request that failed transiently (throttling, unavailable, \
           timeout), with jittered exponential backoff honouring `Retry-After`.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1257,6 +1358,7 @@ pub static IO_REQUEST_TIMEOUT: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Duration(Duration::from_secs(30))),
     doc: "Timeout of one object-store request attempt; a timed-out attempt is retried.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1271,6 +1373,7 @@ pub static IO_CREDENTIALS_REFRESH_SKEW: ConfigEntry = ConfigEntry {
           new credential first; an expired credential is never used. `0s` refreshes only at \
           expiry.",
     scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1285,6 +1388,7 @@ pub static RUNTIME_FILTER_ENABLED: ConfigEntry = ConfigEntry {
           feeding the probe side, which skip splits, row groups and rows no build key can match. \
           Results are the same either way.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1298,6 +1402,7 @@ pub static RUNTIME_FILTER_BLOOM_ENABLED: ConfigEntry = ConfigEntry {
           sets are not affected). Krishiv's cost model decides when one is built; Spark's creation \
           and application size thresholds are not used.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.runtime.bloomFilter.enabled"),
 };
@@ -1310,6 +1415,7 @@ pub static RUNTIME_FILTER_IN_LIST_MAX_VALUES: ConfigEntry = ConfigEntry {
     doc: "Most distinct build keys a runtime filter keeps as a value set; with more, a Bloom \
           filter (when planned) or only the min/max range is published.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1323,6 +1429,7 @@ pub static RUNTIME_FILTER_EXACT_SET_MAX_VALUES: ConfigEntry = ConfigEntry {
           a hash set); with more, a Bloom filter (when planned) or only the min/max range is \
           used on rows.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1335,6 +1442,7 @@ pub static RUNTIME_FILTER_BLOOM_MAX_ITEMS: ConfigEntry = ConfigEntry {
     doc: "Most build keys a runtime Bloom filter is built for: a build estimated larger plans \
           none, and one that turns out larger publishes none.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1347,6 +1455,7 @@ pub static RUNTIME_FILTER_BLOOM_MAX_BYTES: ConfigEntry = ConfigEntry {
     doc: "Largest runtime Bloom filter. A filter capped below its 1% false-positive size is still \
           built unless its expected false-positive rate exceeds 5%.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1359,6 +1468,7 @@ pub static RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS: ConfigEntry = ConfigEntry 
     doc: "A runtime Bloom filter is planned only for a scan estimated at this many rows or more \
           (and at least four times the build).",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1371,6 +1481,7 @@ pub static RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT: ConfigEntry = ConfigEntry {
     doc: "A scan driver stops evaluating a runtime filter on rows once it passes more than this \
           percentage of a measurement window (pruning splits and row groups with it continues).",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1382,6 +1493,7 @@ pub static RUNTIME_FILTER_ADAPTIVE_MIN_ROWS: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Int(65_536)),
     doc: "Rows per window over which a scan driver measures a runtime filter's pass rate.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1395,6 +1507,7 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
           in each window partition to be dropped before the window is evaluated (Spark's window \
           group limit); -1 turns it off. Results are the same either way.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
 };
@@ -1408,6 +1521,7 @@ pub static LATE_FETCH_MAX_ROWS: ConfigEntry = ConfigEntry {
           reading only the sort keys and filter columns, fetching the other columns for the rows \
           kept; 0 turns it off. Results are the same either way.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1421,6 +1535,7 @@ pub static CTE_RECURSION_LEVEL_LIMIT: ConfigEntry = ConfigEntry {
           RECURSION_LEVEL_LIMIT_EXCEEDED; -1 removes the limit. A MAX RECURSION LEVEL clause on \
           the expression overrides it.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.cteRecursionLevelLimit"),
 };
@@ -1433,6 +1548,7 @@ pub static CTE_RECURSION_ROW_LIMIT: ConfigEntry = ConfigEntry {
     doc: "Most rows a recursive common table expression may produce in all rounds before the \
           query fails with RECURSION_ROW_LIMIT_EXCEEDED; -1 removes the limit.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.cteRecursionRowLimit"),
 };
@@ -1446,6 +1562,7 @@ pub static LEGACY_CODING_ERROR_ACTION: ConfigEntry = ConfigEntry {
           reads malformed input as U+FFFD; when false both raise \
           `MALFORMED_CHARACTER_CODING`.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.legacy.codingErrorAction"),
 };
@@ -1459,6 +1576,7 @@ pub static LEGACY_JAVA_CHARSETS: ConfigEntry = ConfigEntry {
           under Java's names; other Java charsets are not supported. When false they accept \
           only Spark's default seven.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.legacy.javaCharsets"),
 };
@@ -1475,6 +1593,7 @@ pub static LEGACY_TIME_PARSER_POLICY: ConfigEntry = ConfigEntry {
           fields of the JSON, CSV and XML functions; `CORRECTED` and `EXCEPTION` use the \
           `DateTimeFormatter` patterns.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.legacy.timeParserPolicy"),
 };
@@ -1488,6 +1607,7 @@ pub static LEGACY_STATISTICAL_AGGREGATE: ConfigEntry = ConfigEntry {
           `skewness` and `kurtosis` of values without variance, return NaN; when false they \
           return NULL, as Spark 4 does.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.legacy.statisticalAggregate"),
 };
@@ -1503,6 +1623,7 @@ pub static LEGACY_VIEW_SCHEMA_BINDING_MODE: ConfigEntry = ConfigEntry {
           `BINDING`. When false, the clause is `FEATURE_NOT_ENABLED` and every view reads as \
           before the modes existed (see `viewSchemaCompensation`).",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.legacy.viewSchemaBindingMode"),
 };
@@ -1517,6 +1638,7 @@ pub static LEGACY_VIEW_SCHEMA_COMPENSATION: ConfigEntry = ConfigEntry {
           when `viewSchemaBindingMode` is false; when false, such views are `BINDING` (only \
           up-casts are allowed).",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.legacy.viewSchemaCompensation"),
 };
@@ -1531,6 +1653,7 @@ pub static METRICS_ENABLED: ConfigEntry = ConfigEntry {
           when false the fold is skipped entirely. Engine gauges (memory, spill disk, \
           metadata cache size, build info) are evaluated when the snapshot is read either way.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1550,6 +1673,7 @@ pub static AVRO_COMPRESSION_CODEC: ConfigEntry = ConfigEntry {
     doc: "The block codec of Avro files written without a `compression` option. Writing with \
           `bzip2`, `xz` or `zstandard` is refused.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.avro.compression.codec"),
 };
@@ -1564,6 +1688,7 @@ pub static AVRO_DATETIME_REBASE_MODE_IN_READ: ConfigEntry = ConfigEntry {
           `EXCEPTION` fails, `CORRECTED` reads the stored values, `LEGACY` is refused. Used when \
           the `datetimeRebaseMode` option is not given.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.avro.datetimeRebaseModeInRead"),
 };
@@ -1577,6 +1702,7 @@ pub static PARTITION_OVERWRITE_MODE: ConfigEntry = ConfigEntry {
           as in Spark) replaces the whole output directory once the new files are complete; \
           `DYNAMIC` replaces only the partition directories the write produced.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.sources.partitionOverwriteMode"),
 };
@@ -1594,6 +1720,7 @@ pub static FILES_COMMIT_PROTOCOL: ConfigEntry = ConfigEntry {
           does not. A directory that already has a `_krishiv_log/` keeps being written through \
           it, whatever this is set to (`NONE` does not switch an existing log off).",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1608,6 +1735,7 @@ pub static AGENT_GATE_BYTES: ConfigEntry = ConfigEntry {
           outline, and the caller repeats it with `--allow-heavy` to run it anyway. A statement whose \
           tables report no statistics runs. 0 turns the gate off.",
     scope: Scope::Session,
+    settable_by: SettableBy::Admin,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1622,6 +1750,7 @@ pub static EAGER_AGGREGATION: ConfigEntry = ConfigEntry {
           result cannot depend on row order or raise on a row the join would drop are moved. \
           Results are the same either way.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };
@@ -1638,6 +1767,7 @@ pub static SHARE_CTE_INSTANCES: ConfigEntry = ConfigEntry {
           are the same either way. Nondeterministic CTE bodies referenced twice or more are \
           always computed once, as Spark does: this switch does not affect them.",
     scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };

@@ -6,6 +6,8 @@ pub use krishiv::DataFrame
 pub use krishiv::DataFrameReader
 pub use krishiv::DataFrameWriter
 pub use krishiv::DataType
+pub use krishiv::EngineRuntime
+pub use krishiv::EngineRuntimeBuilder
 pub use krishiv::Error
 pub use krishiv::Estimate
 pub use krishiv::ExplainMode
@@ -21,6 +23,8 @@ pub use krishiv::MetricDict
 pub use krishiv::MetricsSnapshot
 pub use krishiv::NullHandling
 pub use krishiv::OptimizerStep
+pub use krishiv::QueryId
+pub use krishiv::QueryOptions
 pub use krishiv::QueryProfile
 pub use krishiv::RecordBatchStream
 pub use krishiv::ReturnField

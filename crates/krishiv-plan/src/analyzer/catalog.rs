@@ -341,83 +341,7 @@ impl TableFunctionRegistry for BuiltinTableFunctions {
     }
 }
 
-/// Who runs a query. Build it with [`Principal::new`]; more attributes
-/// arrive with authentication (P2-T136).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub struct Principal {
-    /// The user or service name.
-    pub name: String,
-    /// Group memberships.
-    pub groups: Vec<String>,
-    /// The tenant, in multi-tenant servers.
-    pub tenant: Option<String>,
-    /// User or service principal.
-    pub kind: PrincipalKind,
-}
-
-/// The kind of a principal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum PrincipalKind {
-    /// A person.
-    User,
-    /// A service principal.
-    Service,
-}
-
-impl Principal {
-    /// A principal of `kind` named `name`, without groups or tenant.
-    #[must_use]
-    pub fn new(name: impl Into<String>, kind: PrincipalKind) -> Self {
-        Self {
-            name: name.into(),
-            groups: Vec::new(),
-            tenant: None,
-            kind,
-        }
-    }
-
-    /// The embedded default: the local OS user.
-    #[must_use]
-    pub fn local_user() -> Self {
-        let name = ["USER", "USERNAME"]
-            .iter()
-            .find_map(|k| std::env::var(k).ok())
-            .unwrap_or_else(|| "unknown".to_owned());
-        Self {
-            name,
-            groups: Vec::new(),
-            tenant: None,
-            kind: PrincipalKind::User,
-        }
-    }
-
-    /// The identity that enters the context fingerprint: kind, tenant,
-    /// name and the sorted groups (a policy may decide by group).
-    #[must_use]
-    pub fn id(&self) -> String {
-        let kind = match self.kind {
-            PrincipalKind::User => "user",
-            PrincipalKind::Service => "service",
-        };
-        let mut groups = self.groups.clone();
-        groups.sort();
-        groups.dedup();
-        format!(
-            "{kind}:{}/{}{}",
-            quoted(std::slice::from_ref(
-                &self.tenant.clone().unwrap_or_default()
-            )),
-            quoted(std::slice::from_ref(&self.name)),
-            if groups.is_empty() {
-                String::new()
-            } else {
-                format!("[{}]", quoted(&groups))
-            }
-        )
-    }
-}
+pub use krishiv_common::{Principal, PrincipalKind};
 
 /// Something a privilege is granted on (ADR 0036 R2).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -441,6 +365,15 @@ pub enum Securable {
     /// principals' rows), or `cluster` for the cluster-scope statements
     /// of the `ADMIN` class.
     System(String),
+    /// A secret, named by the scope of its `secret('scope', 'key')`
+    /// reference: a principal may make the engine resolve it only with
+    /// [`Privilege::Usage`] on it (E12).
+    Secret {
+        /// The secret's scope.
+        scope: String,
+    },
+    /// A named connection (credentials plus endpoint) a statement uses.
+    Connection(String),
 }
 
 impl fmt::Display for Securable {
@@ -452,6 +385,8 @@ impl fmt::Display for Securable {
             Self::Path(p) => write!(f, "path '{p}'"),
             Self::Namespace(n) => write!(f, "namespace {}", quoted(n)),
             Self::System(n) => write!(f, "system {}", quoted(std::slice::from_ref(n))),
+            Self::Secret { scope } => write!(f, "secret {}", quoted(std::slice::from_ref(scope))),
+            Self::Connection(n) => write!(f, "connection {}", quoted(std::slice::from_ref(n))),
         }
     }
 }
@@ -471,6 +406,9 @@ pub enum Privilege {
     /// Read other principals' rows in `system.*` tables, and run the
     /// cluster-scope statements of the `ADMIN` class.
     Monitor,
+    /// Use a secret or connection without reading its value: the engine
+    /// resolves it on the principal's behalf (E12).
+    Usage,
 }
 
 impl Privilege {
@@ -491,6 +429,7 @@ impl fmt::Display for Privilege {
             Self::Create => "CREATE",
             Self::Drop => "DROP",
             Self::Monitor => "MONITOR",
+            Self::Usage => "USAGE",
         })
     }
 }

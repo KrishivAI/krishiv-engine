@@ -5,15 +5,11 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::task::{Context, Poll};
-use std::time::Instant;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
-use futures::Stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use krishiv_common::config::{Config, ConfigValue, METRICS_ENABLED, PARTITION_OVERWRITE_MODE};
@@ -25,21 +21,15 @@ use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::files::{FileReads, LocalPaths, ObjectPaths, PathLocator as _};
 use krishiv_exec::physical::{SpillScopes, WorkerContext, WritePlan};
-use krishiv_exec::planner::{
-    DefaultPlanner, PhysicalPlan, PhysicalPlanner, PlanningContext, ProviderStatistics,
-};
+use krishiv_exec::planner::{PhysicalPlan, PhysicalPlanner, PlanningContext, ProviderStatistics};
 use krishiv_exec::{
-    ExecConfig, Executor, ExecutorConfig, MetricsRegistry, MetricsSnapshot, QueryContext, QueryId,
-    QueryOutcome, QueryRunner, Scheduler, Status, TokioExecutor, WorkloadClass,
+    ExecConfig, Executor, MetricsSnapshot, QueryContext, QueryId, Scheduler, WorkloadClass,
 };
 use krishiv_io::{
-    DirectoryWrite, FormatRegistry, IoConfig, IoCounters, IoScheduler, SaveMode, StoreId,
-    is_spark_file_source, parse_object_url,
+    DirectoryWrite, IoScheduler, SaveMode, StoreId, StoreRegistry, is_spark_file_source,
+    parse_object_url,
 };
-use krishiv_memory::{
-    ArbitrationStats, MemoryConfig, MemoryPool, RelationStore, SpillConfig, SpillManager,
-    SpillScope, TreePool,
-};
+use krishiv_memory::{MemoryPool, RelationStore, SpillConfig, SpillManager, SpillScope};
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
     AccessPolicy, AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
@@ -56,17 +46,20 @@ use object_store::ObjectStore;
 #[cfg(not(unix))]
 use object_store::local::LocalFileSystem;
 
+use crate::admission::AdmissionController;
 use crate::cache::RelationCache;
 use crate::catalog::{FileScans, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
 use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
+use crate::query_fold::{Admitted, MetricStream, PendingFold, QueryFold, QueryStart};
+use crate::runtime::EngineRuntime;
 use crate::sql_functions::{QueryFunctions, SqlFunctions};
-use crate::udfs::SessionFunctions;
 use crate::variables::SessionVariables;
 
 mod context;
+mod lifecycle;
 
 /// The store id of the local file system.
 const LOCAL_STORE: &str = "file";
@@ -111,6 +104,9 @@ pub struct Session {
     /// session a user holds: only the handle a script's statements run on has frames, so no other
     /// query on the session ever sees them (`locals.rs`).
     pub(crate) locals: Arc<[krishiv_plan::analyzer::LocalFrame]>,
+    /// The operation the queries this handle starts belong to
+    /// ([`Session::sql_with`]); `None` for a handle a user holds.
+    pub(crate) operation: Option<Arc<crate::history::Operation>>,
 }
 
 impl fmt::Debug for Session {
@@ -131,30 +127,30 @@ pub(crate) struct SessionState {
     /// Fixed for the session's life: caches and fingerprints never mix
     /// identities (a new identity gets a new session).
     pub(crate) principal: Arc<Principal>,
+    /// Decides when each query may start (E5); the default admits at once.
+    pub(crate) admission: Arc<dyn AdmissionController>,
     pub(crate) policy: Arc<dyn AccessPolicy>,
     pub(crate) functions: Arc<dyn FunctionRegistry>,
+    /// The registry the builder supplied, if any (child sessions use it too).
+    base_functions: Option<Arc<dyn FunctionRegistry>>,
     /// The session's registered UDFs, shared with the registry above and
     /// the workers running its plans.
     udfs: Arc<UdfLibrary>,
     /// The SQL-bodied functions the session defines.
     pub(crate) sql_functions: SqlFunctions,
-    executor: Arc<dyn Executor>,
-    runner: QueryRunner,
+    /// The process-wide part of the engine this session runs on.
+    pub(crate) runtime: Arc<EngineRuntime>,
+    /// The session's number on its runtime.
+    pub(crate) number: u64,
+    /// Set by [`Session::close`]: the session takes no new statement.
+    closed: lifecycle::Closing,
+    /// The session's memory pool: the runtime's root, or a pool of its own
+    /// under the root (`krishiv.session.memoryLimit`).
     memory: Arc<dyn MemoryPool>,
-    /// The concrete pool tree behind [`Self::memory`]: its arbitration
-    /// counters feed the metrics fold.
-    memory_tree: Arc<TreePool>,
-    /// The engine's metrics registry: every query that reaches execution
-    /// folds into it once at query end (when `krishiv.metrics.enabled`).
-    metrics: Arc<MetricsRegistry>,
-    /// The spill directory, opened by the first query that plans for
-    /// execution (`krishiv.spill.*` are build-time keys).
-    spill: Arc<Mutex<Option<SpillManager>>>,
     /// Whether a store creates objects only if absent (the commit log's
     /// probe), by store id; per session, never process-wide.
     commit_log_probes: Mutex<HashMap<String, bool>>,
-    io: Arc<IoScheduler>,
-    formats: Arc<FormatRegistry>,
+    pub(crate) io: Arc<IoScheduler>,
     /// The session's content-addressed relations: every memory table's
     /// batches as Arrow IPC, so workers resolve a batch range through it
     /// instead of reading rows from the plan.
@@ -162,7 +158,6 @@ pub(crate) struct SessionState {
     cwd: String,
     planner: Arc<dyn PhysicalPlanner>,
     plan_ids: AtomicI64,
-    query_ids: AtomicU64,
     /// The queries `system.queries` lists.
     pub(crate) queries: Arc<crate::system::QueryLog>,
     /// The session's id on spans and logs (`telemetry.rs`), and the count of its statements.
@@ -173,6 +168,12 @@ pub(crate) struct SessionState {
     /// while expanding a view point into the view's text, not the outer
     /// statement's (`SourceId(0)` stays the outer statement's).
     sql_sources: AtomicU32,
+}
+
+impl Drop for SessionState {
+    fn drop(&mut self) {
+        self.runtime.forget_session(self.number);
+    }
 }
 
 /// Builds a [`Session`].
@@ -195,6 +196,8 @@ pub struct SessionBuilder {
     policy: Option<Arc<dyn AccessPolicy>>,
     executor: Option<Arc<dyn Executor>>,
     functions: Option<Arc<dyn FunctionRegistry>>,
+    runtime: Option<Arc<EngineRuntime>>,
+    admission: Option<Arc<dyn AdmissionController>>,
 }
 
 impl fmt::Debug for SessionBuilder {
@@ -245,6 +248,21 @@ impl SessionBuilder {
         self
     }
 
+    /// The admission controller every query asks for a permit before it
+    /// runs (default: [`Unlimited`](crate::Unlimited), which admits at once). While it
+    /// waits the query's `system.queries` state is `queued`.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use krishiv_session::{Session, Unlimited};
+    /// let s = Session::builder().admission_controller(Arc::new(Unlimited)).build()?;
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn admission_controller(mut self, controller: Arc<dyn AdmissionController>) -> Self {
+        self.admission = Some(controller);
+        self
+    }
+
     /// The access policy every statement is checked against (default:
     /// [`AllowAll`]): reads during analysis, writes and DDL before they
     /// change anything, all failing closed with
@@ -266,7 +284,7 @@ impl SessionBuilder {
     }
 
     /// Runs queries on `executor`, shared with other sessions (default: a
-    /// [`TokioExecutor`] of the session's own).
+    /// [`TokioExecutor`](krishiv_exec::TokioExecutor) of the session's own).
     ///
     /// ```
     /// use krishiv_exec::{ExecutorConfig, TokioExecutor};
@@ -277,6 +295,31 @@ impl SessionBuilder {
     /// ```
     pub fn executor(mut self, executor: Arc<dyn Executor>) -> Self {
         self.executor = Some(executor);
+        self
+    }
+
+    /// Builds the session on `runtime`, shared with its other sessions:
+    /// one executor, memory root, spill directory and metrics registry for
+    /// all of them. Without it the session builds a private runtime of its
+    /// own from its configuration.
+    ///
+    /// The session starts from the runtime's configuration. Runtime-owned
+    /// keys (cluster scope, `krishiv.memory.*`, `krishiv.spill.*`,
+    /// `krishiv.io.*`) are the runtime's: setting one here fails with
+    /// `CANNOT_MODIFY_STATIC_CONFIG`, as `SET` of one does, and so does
+    /// [`Self::executor`].
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use krishiv_session::{EngineRuntime, Session};
+    /// let rt = EngineRuntime::builder().build()?;
+    /// let s = Session::builder().runtime(Arc::clone(&rt)).build()?;
+    /// let e = Session::builder().runtime(rt).config("krishiv.memory.limit", "1g").build().unwrap_err();
+    /// assert_eq!(e.error_class().name(), "CANNOT_MODIFY_STATIC_CONFIG");
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn runtime(mut self, runtime: Arc<EngineRuntime>) -> Self {
+        self.runtime = Some(runtime);
         self
     }
 
@@ -301,145 +344,42 @@ impl SessionBuilder {
     /// Configuration errors; `INTERNAL_ERROR` if the executor's runtimes
     /// cannot start.
     pub fn build(self) -> Result<Session, KrishivError> {
-        // Diagnostics first: installs the tokio-console subscriber when the
-        // feature is on and `KRISHIV_TOKIO_CONSOLE=1`, a no-op otherwise.
-        krishiv_exec::maybe_init_tokio_console();
-        let (config, _) = Config::from_pairs(self.pairs)?;
-        let executor: Arc<dyn Executor> = match self.executor {
-            Some(e) => e,
-            None => TokioExecutor::new(&ExecutorConfig::default().with_config(&config))?,
+        let (runtime, config) = match self.runtime {
+            Some(runtime) => {
+                if self.executor.is_some() {
+                    return Err(krishiv_common::error::CannotModifyStaticConfig {
+                        key: "\"executor\"".to_owned(),
+                    }
+                    .into());
+                }
+                let config = runtime.session_config(self.pairs)?;
+                (runtime, config)
+            }
+            None => {
+                let runtime = EngineRuntime::private(self.pairs, self.executor)?;
+                let config = runtime.session_config(Vec::new())?;
+                (runtime, config)
+            }
         };
-        let memory_tree = TreePool::new(&MemoryConfig::from_config(&config));
-        let memory: Arc<dyn MemoryPool> = Arc::<TreePool>::clone(&memory_tree);
-        let cache = Arc::new(RelationCache::new(&memory));
-        let io =
-            IoScheduler::with_runtime(IoConfig::from_config(&config), executor.io_handle().clone());
-        io.attach_memory(&memory);
-        #[cfg(unix)]
-        io.register_whole_listing_store(
-            StoreId::new(LOCAL_STORE),
-            Arc::new(krishiv_io::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
-        );
-        #[cfg(not(unix))]
-        io.register_store(
-            StoreId::new(LOCAL_STORE),
-            Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
-        );
-        let metrics = Arc::new(MetricsRegistry::new());
-        register_gauges(&metrics, &memory, &io)?;
-        let cwd = std::env::current_dir()
-            .ok()
-            .and_then(|d| d.to_str().map(str::to_owned))
-            .unwrap_or_else(|| "/".to_owned());
-        let spill = Arc::new(Mutex::new(None));
-        {
-            let spill = Arc::clone(&spill);
-            metrics.add_gauge("krishiv.spill.disk.used", Vec::new(), move || {
-                let slot = spill.lock().unwrap_or_else(PoisonError::into_inner);
-                Some(slot.as_ref().map_or(0, SpillManager::used_bytes))
-            })?;
-        }
-        let udfs = Arc::new(UdfLibrary::new());
-        let functions = match self.functions {
-            Some(f) => Arc::new(SessionFunctions::with_registry(f, Arc::clone(&udfs)))
-                as Arc<dyn FunctionRegistry>,
-            None => Arc::new(SessionFunctions::new(Arc::clone(&udfs))) as Arc<dyn FunctionRegistry>,
+        let parts = SessionParts {
+            profile: self.profile,
+            principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
+            policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
+            functions: self.functions,
+            admission: self.admission,
         };
-        let principal = Arc::new(self.principal.unwrap_or_else(Principal::local_user));
-        let queries = Arc::new(crate::system::QueryLog::new(&principal.name));
-        Ok(Session {
-            locals: Arc::from([]),
-            state: Arc::new(SessionState {
-                conf: Arc::new(ConfStore::new(config)),
-                catalog: Arc::new(SessionCatalog::default()),
-                cache,
-                variables: Arc::new(SessionVariables::default()),
-                profile: self.profile,
-                principal,
-                policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
-                functions,
-                udfs,
-                sql_functions: SqlFunctions::default(),
-                commit_log_probes: Mutex::new(HashMap::new()),
-                runner: QueryRunner::new(Arc::clone(&executor)),
-                executor,
-                memory,
-                memory_tree,
-                metrics,
-                relations: RelationStore::new(),
-                spill,
-                io,
-                formats: Arc::new(FormatRegistry::with_defaults()),
-                cwd,
-                planner: Arc::new(DefaultPlanner),
-                plan_ids: AtomicI64::new(0),
-                query_ids: AtomicU64::new(0),
-                queries,
-                session_id: crate::telemetry::new_session_id(),
-                statements: AtomicU64::new(0),
-                sql_sources: AtomicU32::new(1),
-            }),
-        })
+        Ok(Session::on_runtime(runtime, config, parts))
     }
 }
 
-/// Registers the engine gauges on `metrics`: closures over the owning
-/// components, evaluated at scrape time, never pushed.
-fn register_gauges(
-    metrics: &Arc<MetricsRegistry>,
-    memory: &Arc<dyn MemoryPool>,
-    io: &Arc<IoScheduler>,
-) -> Result<(), KrishivError> {
-    {
-        let memory = Arc::clone(memory);
-        metrics.add_gauge("krishiv.memory.reserved", Vec::new(), move || {
-            u64::try_from(memory.reserved()).ok()
-        })?;
-    }
-    {
-        let memory = Arc::clone(memory);
-        metrics.add_gauge("krishiv.memory.limit", Vec::new(), move || {
-            memory.effective_limit().and_then(|l| u64::try_from(l).ok())
-        })?;
-    }
-    {
-        let io = Arc::clone(io);
-        metrics.add_gauge(
-            "krishiv.cache.size",
-            vec![("cache".to_owned(), "metadata".to_owned())],
-            move || Some(io.cache().bytes()),
-        )?;
-    }
-    metrics.add_gauge(
-        "krishiv.build.info",
-        vec![
-            ("version".to_owned(), env!("CARGO_PKG_VERSION").to_owned()),
-            (
-                "git_sha".to_owned(),
-                option_env!("KRISHIV_GIT_SHA")
-                    .unwrap_or("unknown")
-                    .to_owned(),
-            ),
-        ],
-        || Some(1),
-    )?;
-    for class in [
-        WorkloadClass::Interactive,
-        WorkloadClass::Batch,
-        WorkloadClass::Background,
-        WorkloadClass::Agent,
-    ] {
-        // A weak handle: a strong one would cycle the registry through its
-        // own gauges and leak every session's registry (and its spill
-        // manager) forever.
-        let registry = Arc::downgrade(metrics);
-        metrics.add_gauge(
-            "krishiv.query.active",
-            vec![("class".to_owned(), class.as_str().to_owned())],
-            move || registry.upgrade().map(|r| r.active_queries(class)),
-        )?;
-    }
-    Ok(())
+/// What a session keeps from its builder, and a child session from its
+/// parent ([`Session::new_session`]).
+struct SessionParts {
+    profile: SparkProfile,
+    principal: Arc<Principal>,
+    policy: Arc<dyn AccessPolicy>,
+    functions: Option<Arc<dyn FunctionRegistry>>,
+    admission: Option<Arc<dyn AdmissionController>>,
 }
 
 /// Whether queries fold into the metrics registry: `krishiv.metrics.enabled`
@@ -466,6 +406,8 @@ impl Session {
             policy: None,
             executor: None,
             functions: None,
+            runtime: None,
+            admission: None,
         }
     }
 
@@ -521,6 +463,7 @@ impl Session {
     /// Spark's parse and analysis errors; `KRISHIV_UNSUPPORTED_FEATURE`
     /// for statements other than queries and commands.
     pub async fn sql(&self, query: &str) -> Result<DataFrame, KrishivError> {
+        self.check_open()?;
         let (session, text) = (self.clone(), query.to_owned());
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         let marker = Arc::clone(&row);
@@ -548,6 +491,7 @@ impl Session {
                 Some(krishiv_sql::redact_sql(query).as_str()),
                 None,
                 error,
+                self.operation_id(),
             );
         }
         result
@@ -1100,7 +1044,7 @@ impl Session {
         work: impl Future<Output = Result<T, KrishivError>> + Send + 'static,
     ) -> Result<T, KrishivError> {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let task = self.state.executor.spawn(
+        let task = self.state.runtime.executor.spawn(
             WorkloadClass::Interactive,
             Box::pin(async move {
                 // The caller may be gone; its result is then not needed.
@@ -1122,6 +1066,29 @@ impl Session {
         SourceId(self.state.sql_sources.fetch_add(1, Ordering::Relaxed))
     }
 
+    /// The block-cache scope of this session's stores: its principal. The session's storage
+    /// credentials come from its own configuration, so one principal's queries may share blocks
+    /// and no other principal's may (E15).
+    pub(crate) fn credential_scope(&self) -> krishiv_io::CacheScope {
+        krishiv_io::CacheScope::Principal(self.state.principal.id())
+    }
+
+    /// The I/O context of this session's principal (E15, E12).
+    fn scoped_io(&self) -> krishiv_io::IoContext {
+        self.state
+            .io
+            .context()
+            .with_principal(Arc::clone(&self.state.principal))
+    }
+
+    /// A store registry reading with this session's credential scope (E15).
+    fn scoped_stores(&self, config: &Arc<Config>) -> Arc<StoreRegistry> {
+        Arc::new(
+            krishiv_io::query_registry(Arc::clone(config), &self.state.io)
+                .with_cache_scope(self.credential_scope()),
+        )
+    }
+
     /// The analysis inputs of one query.
     pub(crate) fn query_env(&self) -> QueryEnv {
         // Before any analysis loads a table: a fill is refused if an
@@ -1131,13 +1098,10 @@ impl Session {
         // Cloud stores are built from this snapshot, lazily per query:
         // plans carry only path strings, and the worker resolves the store
         // at listing from the read's option values (P2-T084).
-        let stores = Arc::new(krishiv_io::query_registry(
-            Arc::clone(&config),
-            &self.state.io,
-        ));
+        let stores = self.scoped_stores(&config);
         let files = Arc::new(FileReads::new(
-            self.state.io.context(),
-            Arc::clone(&self.state.formats),
+            self.scoped_io(),
+            Arc::clone(&self.state.runtime.formats),
             Arc::new(ObjectPaths::new(
                 StoreId::new(LOCAL_STORE),
                 self.state.cwd.clone(),
@@ -1147,10 +1111,10 @@ impl Session {
             Arc::clone(&config),
         ));
         let scans = FileScans {
-            io: self.state.io.context(),
+            io: self.scoped_io(),
             config: Arc::clone(&config),
-            slots: u64::try_from(self.state.executor.parallelism().max(1)).unwrap_or(1),
-            runtime: self.state.executor.io_handle().clone(),
+            slots: u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1),
+            runtime: self.state.runtime.executor.io_handle().clone(),
         };
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
@@ -1166,7 +1130,11 @@ impl Session {
                 queries: Arc::clone(&self.state.queries),
                 io: Arc::clone(&self.state.io),
                 relations: Arc::clone(&self.state.cache),
-                metrics: Arc::clone(&self.state.metrics),
+                metrics: Arc::clone(&self.state.runtime.metrics),
+                monitor: Arc::new(crate::system::Monitor::new(
+                    Arc::clone(&self.state.principal),
+                    Arc::clone(&self.state.policy),
+                )),
             },
         ));
         let resolution = {
@@ -1519,7 +1487,7 @@ impl Session {
         let state = Arc::clone(&self.state);
         let config = Arc::clone(&env.config);
         self.on_executor(async move {
-            let id = QueryId(state.query_ids.fetch_add(1, Ordering::Relaxed));
+            let id = QueryId(state.runtime.next_query_index());
             let pool = state.memory.child(&format!("query-task-{}", id.0), None);
             let query = QueryContext::new(
                 id,
@@ -1527,7 +1495,11 @@ impl Session {
                 ExecConfig::from_config(&config),
                 pool,
             );
-            let mut stream = state.runner.execute(node, Arc::clone(&query)).await?;
+            let mut stream = state
+                .runtime
+                .runner
+                .execute(node, Arc::clone(&query))
+                .await?;
             let mut out = Vec::new();
             while let Some(batch) = stream.next().await {
                 out.push(batch?.into_parts().0);
@@ -1554,9 +1526,25 @@ impl Session {
         detailed: bool,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
         let (stream, query, _) = self
-            .run_on_query_logged(physical, worker, env, detailed)
+            .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
         Ok((stream, query))
+    }
+
+    /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
+    /// that is about to change something (a write replacing files) takes the permit first and
+    /// passes it on, so a refused or cancelled query has changed nothing.
+    pub(crate) async fn admit_query(&self, env: &QueryEnv) -> Result<Admitted, KrishivError> {
+        // Before anything changes: a writer calls this before it replaces data.
+        self.check_open()?;
+        let log_id = self.state.queries.begin_as(
+            env.text.as_deref(),
+            env.statement_class,
+            self.operation_id(),
+        )?;
+        *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        let permit = self.admit(&log_id).await?;
+        Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 
     /// As [`Self::run_on_query`], also returning the id of the `system.queries` row this execution
@@ -1568,19 +1556,21 @@ impl Session {
         worker: WorkerContext,
         env: &QueryEnv,
         detailed: bool,
+        admitted: Option<Admitted>,
     ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
-        // The history row first: its id names the query's memory pool, so `system.memory.query_id`
-        // joins `system.queries.query_id`.
-        let log_id = self
-            .state
-            .queries
-            .begin(env.text.as_deref(), env.statement_class);
-        *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
-        let id = QueryId(self.state.query_ids.fetch_add(1, Ordering::Relaxed));
+        self.check_open()?;
+        // The history row and the permit first (unless the caller took them already, before it
+        // changed anything): the row's id names the query's memory pool, so
+        // `system.memory.query_id` joins `system.queries.query_id`.
+        let (log_id, permit) = match admitted {
+            Some(admitted) => admitted.into_parts(),
+            None => self.admit_query(env).await?.into_parts(),
+        };
+        let id = QueryId(self.state.runtime.next_query_index());
         let pool = self
             .state
             .memory
-            .child(&crate::system::pool_name(&log_id), None);
+            .child(&crate::system::pool_name(&log_id), permit.memory_budget());
         let query = QueryContext::new(
             id,
             WorkloadClass::Interactive,
@@ -1595,25 +1585,59 @@ impl Session {
         // fails or is dropped.
         let metrics_on = metrics_enabled(&env.config);
         if metrics_on {
-            self.state.metrics.query_begin(query.class());
+            self.state.runtime.metrics.query_begin(query.class());
         }
         let row_id = log_id.clone();
-        let mut pending = PendingFold(Some(QueryFold {
-            query: Arc::clone(&query),
-            state: Arc::clone(&self.state),
-            start: QueryStart::capture(&self.state),
-            metrics_on,
-            log_id,
-        }));
+        let mut pending = PendingFold(
+            Some(QueryFold {
+                query: Arc::clone(&query),
+                state: Arc::clone(&self.state),
+                start: QueryStart::capture(&self.state),
+                metrics_on,
+                log_id,
+                _permit: permit,
+                _operation: self.operation.clone(),
+            }),
+            None,
+        );
+        if !self.state.runtime.track(self.state.number, &row_id, &query) {
+            // Closed after `check_open`: the pending fold cancels the query
+            // and records it as it drops.
+            return Err(self.closed_error());
+        }
         // A plan the wire format cannot carry fails as a submit failure does:
         // its row records the error.
         let submitted = match crate::plan_round_trip::round_trip(physical, &env.config) {
             Ok(decoded) => {
                 let physical = decoded.as_ref().unwrap_or(physical);
-                self.state
-                    .runner
-                    .submit(physical.clone(), worker, Arc::clone(&query))
+                // Submitted from a task of its own: instantiation runs on the blocking pool and
+                // goes on when the caller gives up, so the admission permit must outlive it
+                // (see `PendingFold`). The task hands the stream over, or cancels it if the
+                // caller is gone.
+                let submit =
+                    self.state
+                        .runtime
+                        .runner
+                        .submit(physical.clone(), worker, Arc::clone(&query));
+                let (stream_tx, stream_rx) = tokio::sync::oneshot::channel();
+                let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
+                pending.1 = Some(done_rx);
+                let abandoned = Arc::clone(&query);
+                drop(self.state.runtime.executor.spawn(
+                    WorkloadClass::Interactive,
+                    Box::pin(async move {
+                        let result = submit.await;
+                        let started = result.is_ok();
+                        if let Err(Ok(stream)) = stream_tx.send(result) {
+                            abandoned.cancel();
+                            drop(stream);
+                        }
+                        let _ = done_tx.send(started);
+                    }),
+                ));
+                stream_rx
                     .await
+                    .unwrap_or_else(|_| Err(internal("a query ended during its setup".to_owned())))
             }
             Err(error) => Err(error),
         };
@@ -1652,208 +1676,7 @@ impl Session {
     /// ```
     #[must_use]
     pub fn metrics(&self) -> MetricsSnapshot {
-        self.state.metrics.snapshot()
-    }
-}
-
-/// The process counters a query-end fold attributes, and when the query
-/// started: read at query start so the fold records the deltas.
-struct QueryStart {
-    started: Instant,
-    arbitration: ArbitrationStats,
-    cache_hits: u64,
-    cache_misses: u64,
-    bytes_read: u64,
-    bytes_written: u64,
-}
-
-impl QueryStart {
-    fn capture(state: &SessionState) -> Self {
-        let totals = state.io.totals();
-        Self {
-            started: Instant::now(),
-            arbitration: state.memory_tree.stats(),
-            cache_hits: IoCounters::get(&totals.cache_hits),
-            cache_misses: IoCounters::get(&totals.cache_misses),
-            bytes_read: IoCounters::get(&totals.bytes_read),
-            bytes_written: IoCounters::get(&totals.bytes_written),
-        }
-    }
-
-    /// Folds the query's metrics with the deltas since [`Self::capture`]:
-    /// the one fold of this query. `error` is the stream's terminal error,
-    /// if any; otherwise the query's own error decides the outcome (none is
-    /// success). A zero wall time means the query never finished (a
-    /// cancelled stream dropped early): the duration then runs to now.
-    fn fold(
-        self,
-        state: &SessionState,
-        query: &QueryContext,
-        error: Option<&KrishivError>,
-        metrics_on: bool,
-        log_id: &str,
-    ) {
-        let stored = query.error();
-        let (status, error_class) = Status::from_error(error.or(stored.as_ref()));
-        let metrics = query.metrics();
-        let wall = metrics.wall_time;
-        // A zero wall time means the query never finished (a cancelled
-        // stream dropped early): the duration then runs from query start
-        // to the fold.
-        let duration = if wall.is_zero() {
-            self.started.elapsed()
-        } else {
-            wall
-        };
-        state.queries.finish(
-            log_id,
-            &crate::system::Finished {
-                state: match status {
-                    Status::Succeeded => "finished",
-                    Status::Failed => "failed",
-                    Status::Cancelled => "cancelled",
-                    Status::Denied => "denied",
-                },
-                wall_ns: i64::try_from(duration.as_nanos()).unwrap_or(i64::MAX),
-                peak_memory_bytes: i64::try_from(metrics.memory.peak_reserved).unwrap_or(i64::MAX),
-                error_class: error_class.as_deref(),
-                // The most operators one query keeps.
-                operators: metrics
-                    .operators
-                    .iter()
-                    .take(500)
-                    .map(|(id, e)| crate::system::OperatorRow::of(log_id, *id, e, metrics.workers))
-                    .collect(),
-                totals: Some(crate::system::Totals {
-                    rows_produced: metrics
-                        .operators
-                        .values()
-                        .filter(|e| e.node.is_none() && e.role == krishiv_exec::OperatorRole::Sink)
-                        .map(|e| i64::try_from(e.metrics.rows_in).unwrap_or(i64::MAX))
-                        .max(),
-                    // Process-wide deltas: concurrent queries see each other's I/O.
-                    bytes_read: i64::try_from(
-                        IoCounters::get(&state.io.totals().bytes_read)
-                            .saturating_sub(self.bytes_read),
-                    )
-                    .unwrap_or(i64::MAX),
-                    bytes_written: i64::try_from(
-                        IoCounters::get(&state.io.totals().bytes_written)
-                            .saturating_sub(self.bytes_written),
-                    )
-                    .unwrap_or(i64::MAX),
-                    workload_class: query.class().as_str(),
-                    cpu_ns: i64::try_from(metrics.drivers.busy.as_nanos()).unwrap_or(i64::MAX),
-                    spill_bytes: metrics
-                        .operators
-                        .values()
-                        .map(|e| i64::try_from(e.metrics.spill_write_bytes).unwrap_or(i64::MAX))
-                        .fold(0, i64::saturating_add),
-                    spill_files: metrics
-                        .operators
-                        .values()
-                        .map(|e| i64::try_from(e.metrics.spill_files).unwrap_or(i64::MAX))
-                        .fold(0, i64::saturating_add),
-                    pipelines: i64::try_from(metrics.pipelines.len()).unwrap_or(i64::MAX),
-                    workers: i64::try_from(metrics.workers).unwrap_or(i64::MAX),
-                }),
-            },
-        );
-        if !metrics_on {
-            return;
-        }
-        let totals = state.io.totals();
-        let arbitration = state.memory_tree.stats();
-        state.metrics.fold(&QueryOutcome {
-            class: query.class(),
-            status,
-            error_class: error_class.as_deref(),
-            duration_secs: duration.as_secs_f64(),
-            metrics: &metrics,
-            arbitration_spills: arbitration
-                .spill_requests
-                .saturating_sub(self.arbitration.spill_requests),
-            arbitration_aborts: arbitration.aborts.saturating_sub(self.arbitration.aborts),
-            cache_hits: IoCounters::get(&totals.cache_hits).saturating_sub(self.cache_hits),
-            cache_misses: IoCounters::get(&totals.cache_misses).saturating_sub(self.cache_misses),
-        });
-    }
-}
-
-/// The one fold of a running query, taken when its stream ends.
-struct QueryFold {
-    query: Arc<QueryContext>,
-    state: Arc<SessionState>,
-    start: QueryStart,
-    /// `krishiv.metrics.enabled` as the query started.
-    metrics_on: bool,
-    /// The query's id in `system.queries`.
-    log_id: String,
-}
-
-impl QueryFold {
-    fn finish(self, error: Option<&KrishivError>) {
-        self.start.fold(
-            &self.state,
-            &self.query,
-            error,
-            self.metrics_on,
-            &self.log_id,
-        );
-    }
-}
-
-/// The fold of a query whose stream does not exist yet: dropped while still
-/// holding it (the caller cancelled), it cancels the query and folds it.
-struct PendingFold(Option<QueryFold>);
-
-impl Drop for PendingFold {
-    fn drop(&mut self) {
-        if let Some(fold) = self.0.take() {
-            fold.query.cancel();
-            fold.finish(None);
-        }
-    }
-}
-
-/// The result stream with the query's fold attached: the stream's end
-/// (batches, the query's error, or a drop) folds the query's metrics once.
-struct MetricStream {
-    inner: BoxStream<'static, Result<Batch, KrishivError>>,
-    fold: Option<QueryFold>,
-}
-
-impl Stream for MetricStream {
-    type Item = Result<Batch, KrishivError>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.inner.as_mut().poll_next(cx) {
-            Poll::Ready(None) => {
-                if let Some(fold) = self.fold.take() {
-                    fold.finish(None);
-                }
-                Poll::Ready(None)
-            }
-            Poll::Ready(Some(Err(error))) => {
-                if let Some(fold) = self.fold.take() {
-                    fold.finish(Some(&error));
-                }
-                Poll::Ready(Some(Err(error)))
-            }
-            Poll::Ready(Some(Ok(batch))) => Poll::Ready(Some(Ok(batch))),
-            Poll::Pending => Poll::Pending,
-        }
-    }
-}
-
-impl Drop for MetricStream {
-    fn drop(&mut self) {
-        if let Some(fold) = self.fold.take() {
-            // The caller went away: cancel first (a recorded error wins),
-            // then fold what the drivers merged so far.
-            fold.query.cancel();
-            fold.finish(None);
-        }
+        self.state.runtime.metrics.snapshot()
     }
 }
 
@@ -1870,10 +1693,7 @@ impl Session {
         options: &BTreeMap<String, OptionValue>,
         env: &QueryEnv,
     ) -> Result<krishiv_exec::files::LocatedPath, KrishivError> {
-        let stores = Arc::new(krishiv_io::query_registry(
-            Arc::clone(&env.config),
-            &self.state.io,
-        ));
+        let stores = self.scoped_stores(&env.config);
         let at = ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
             self.state.cwd.clone(),
@@ -1890,7 +1710,16 @@ impl Session {
     pub(crate) async fn authorize_write_path(
         &self,
         at: &krishiv_exec::files::LocatedPath,
+        options: &BTreeMap<String, OptionValue>,
     ) -> Result<(), KrishivError> {
+        // The encoder resolves secret options (`encryptionKey`) for this principal: USAGE first.
+        let r = krishiv_plan::analyzer::authorize_secret_refs(
+            &*self.state.policy,
+            &self.state.principal,
+            options.values(),
+        )
+        .await;
+        crate::access::audit(self, StatementClass::Write, r)?;
         let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
         for privilege in [Privilege::Modify, Privilege::Create] {
             let r = authorize(
@@ -1912,7 +1741,7 @@ impl Session {
         &self,
         format: &str,
     ) -> Result<Arc<dyn krishiv_io::FileFormat>, KrishivError> {
-        match self.state.formats.get(format) {
+        match self.state.runtime.formats.get(format) {
             Ok(found) => Ok(found),
             Err(e) => {
                 if is_spark_file_source(format) {
@@ -1967,6 +1796,7 @@ impl Session {
         env: &QueryEnv,
         target: WriteTarget,
         types: &[DataType],
+        pre: &mut Option<Admitted>,
     ) -> Result<Vec<String>, KrishivError> {
         let WriteTarget {
             format,
@@ -2007,18 +1837,25 @@ impl Session {
             !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
         let max_records = max_records_per_file(&options, format.name())?;
         let at = self.locate_write_path(text, &options, env)?;
-        let io = self.state.io.context();
-        self.authorize_write_path(&at).await?;
+        let io = self.scoped_io();
+        self.authorize_write_path(&at, &options).await?;
         // A link swapped into the checked path since fails the write
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.
         crate::access::still_physical(self, &at)?;
-        let job = job_uuid();
-        // Every name of the write is resolved relative to the directory
-        // opened here, never through a link (P2-T199). The registration
-        // lives until the write is over.
-        let (store, _registration) = self.anchor_local_write(&at, &job)?;
+        // The admission permit before anything is replaced: `DirectoryWrite::begin` deletes what
+        // an overwrite replaces, which a refused or cancelled query must not have done.
+        // Admitted by the caller already (it changed something before this write), else here.
+        let mut admitted = Some(match pre.take() {
+            Some(admitted) => admitted,
+            None => self.admit_query(env).await?,
+        });
         let written = async {
+            let job = job_uuid();
+            // Every name of the write is resolved relative to the directory
+            // opened here, never through a link (P2-T199). The registration
+            // lives until the write is over.
+            let (store, _registration) = self.anchor_local_write(&at, &job)?;
             let Some(write) = DirectoryWrite::begin(
                 &io,
                 store.clone(),
@@ -2060,7 +1897,9 @@ impl Session {
                 column_types,
             })?;
             let worker = self.worker(env);
-            let (mut rows, _, row_id) = self.run_on_query_logged(&plan, worker, env, false).await?;
+            let (mut rows, _, row_id) = self
+                .run_on_query_logged(&plan, worker, env, false, admitted.take())
+                .await?;
             let mut batches = Vec::new();
             while let Some(batch) = rows.next().await {
                 batches.push(batch?);
@@ -2114,6 +1953,14 @@ impl Session {
             Ok(dirs.into_iter().collect())
         }
         .await;
+        // A statement that ended before its query ran (an `ignore` that found its path, or an
+        // error in the preparation) settles its row with that outcome.
+        if let Some(unrun) = admitted.take() {
+            match &written {
+                Ok(_) => unrun.finish_ok(),
+                Err(error) => unrun.fail(error),
+            }
+        }
         // A store error after the anchor is open may be a link swapped into
         // the path: the audited denial is what the caller sees then.
         if written.is_err()
@@ -2498,21 +2345,20 @@ impl Session {
         .with_relations(Arc::clone(&self.state.relations))
         .with_spill_scopes(Arc::new(QuerySpill {
             state: Arc::clone(&self.state),
-            config: Arc::clone(&env.config),
         }))
-        .with_io(self.state.io.context())
-        .with_formats(Arc::clone(&self.state.formats))
+        .with_io(self.scoped_io())
+        .with_formats(Arc::clone(&self.state.runtime.formats))
         .with_config(Arc::clone(&env.config))
     }
 }
 
-/// The spill scope of one query: its own directory under the session's
-/// spill directory (opened by the first query that runs; `krishiv.spill.*`
-/// are build-time keys), removed when the query's operators and streams
-/// are dropped (cancellation included).
+/// The spill scope of one query: its own directory under the runtime's
+/// spill directory (opened from the runtime's configuration by the first
+/// query that spills; `krishiv.spill.*` are runtime keys, so every session
+/// shares one directory and one `krishiv.spill.maxBytes`), removed when the
+/// query's operators and streams are dropped (cancellation included).
 struct QuerySpill {
     state: Arc<SessionState>,
-    config: Arc<Config>,
 }
 
 impl fmt::Debug for QuerySpill {
@@ -2525,11 +2371,12 @@ impl SpillScopes for QuerySpill {
     fn scope(&self) -> krishiv_exec::Result<SpillScope> {
         let mut slot = self
             .state
+            .runtime
             .spill
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if slot.is_none() {
-            let manager = SpillManager::open(&SpillConfig::from_config(&self.config))
+            let manager = SpillManager::open(&SpillConfig::from_config(&self.state.runtime.config))
                 .map_err(|e| internal(format!("cannot set up the spill directory: {e}")))?;
             *slot = Some(manager);
         }
