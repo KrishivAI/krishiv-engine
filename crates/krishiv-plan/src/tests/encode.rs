@@ -47,6 +47,22 @@ fn self_join(ids: (i64, i64), refs: (i64, i64)) -> LogicalPlan {
     )
 }
 
+/// A column written `IDENTIFIER(..)` is named differently, so it must not share a cache key with
+/// the same name written plainly.
+#[test]
+fn a_column_marked_by_identifier_has_its_own_key() {
+    let project = |by_identifier: bool| {
+        let col = Expr::new(ExprNode::Column(ColumnRef {
+            name: vec!["c1".to_owned(), "c2".to_owned()],
+            plan_id: None,
+            by_identifier,
+        }));
+        LogicalPlan::table(["t"]).project(vec![col])
+    };
+    assert_ne!(key(project(true)), key(project(false)));
+    assert_eq!(key(project(true)), key(project(true)));
+}
+
 #[test]
 fn plan_id_references_encode_their_target_not_their_value() {
     let base = key(self_join((1, 2), (1, 2)));

@@ -300,4 +300,27 @@ fn a_select_item_written_identifier_is_named_by_what_it_resolves_to() {
         names(&s, "SELECT IDENTIFIER('a') FROM VALUES (1) AS T(a)"),
         ["a"]
     );
+    // a multibyte literal before the clause, two clauses in one item list, and a clause in a
+    // derived table: each substituted name is found at its own byte span
+    assert_eq!(
+        names(
+            &s,
+            &format!("SELECT 'é—x' AS k, IDENTIFIER('c1.c2'), IDENTIFIER('c1') {structs}")
+        ),
+        ["k", "c1.c2", "c1"]
+    );
+    assert_eq!(
+        names(
+            &s,
+            &format!("SELECT * FROM (SELECT IDENTIFIER('c1.c2'), c1.c2 {structs})")
+        ),
+        ["c1.c2", "c2"]
+    );
+    assert_eq!(
+        names(
+            &s,
+            &format!("WITH w AS (SELECT IDENTIFIER('c1.c2') {structs}) SELECT * FROM w")
+        ),
+        ["c1.c2"]
+    );
 }

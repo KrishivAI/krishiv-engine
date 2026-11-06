@@ -11,8 +11,9 @@ use crate::ast::{Query, Span};
 
 /// [`lower_with`] for a statement whose `IDENTIFIER(..)` clauses the caller substituted before
 /// parsing: a column whose span is one of `identifier_spans` (the substituted names, in the
-/// parsed text) is marked [`ColumnRef::by_identifier`](krishiv_plan::ColumnRef::by_identifier), so the analyzer names it as Spark names
-/// the clause.
+/// parsed text) is marked
+/// [`ColumnRef::by_identifier`](krishiv_plan::ColumnRef::by_identifier), so the analyzer names
+/// it as Spark names the clause.
 ///
 /// # Errors
 /// As for [`lower`].
@@ -39,14 +40,12 @@ impl Lowerer {
         case_sensitive: bool,
         identifier_spans: Vec<Span>,
     ) -> Self {
-        let windows = Vec::new();
-        let (depth, recursive) = (0, 0);
         Self {
             source,
-            depth,
+            depth: 0,
             root,
-            windows,
-            recursive,
+            windows: Vec::new(),
+            recursive: 0,
             case_sensitive,
             identifier_spans,
         }

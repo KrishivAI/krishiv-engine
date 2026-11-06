@@ -112,7 +112,7 @@ impl Session {
         env: &QueryEnv,
         redacted: &krishiv_common::redact::RedactedSql,
     ) -> Result<krishiv_plan::Plan, KrishivError> {
-        let cs = self.parser_options().case_sensitive;
+        let cs = env.parser.case_sensitive;
         krishiv_sql::lower_identified(query, SourceId(0), cs, &env.identifier_spans)
             .map_err(|e| crate::session::sql_context(e.error, redacted, e.span.start, e.span.end))
     }
