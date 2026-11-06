@@ -111,6 +111,18 @@
     ],
     "sqlState" : "53200"
   },
+  "KRISHIV_QUERY_KILLED" : {
+    "message" : [
+      "The query <queryId> was stopped by the engine: <reason>."
+    ],
+    "sqlState" : "HY008"
+  },
+  "KRISHIV_QUERY_TIMEOUT" : {
+    "message" : [
+      "The query <queryId> ran longer than its limit of <limit> and was cancelled. Raise \"krishiv.query.maxExecutionTime\", or make the query cheaper."
+    ],
+    "sqlState" : "HY008"
+  },
   "KRISHIV_REGEXP_BACKTRACK_LIMIT_EXCEEDED" : {
     "message" : [
       "Matching the pattern <pattern> in <functionName> exceeded the backtracking limit of <limit> steps on one input, so the query was stopped. Simplify the pattern (nested or overlapping quantifiers such as `(a+)+` backtrack exponentially). Spark on the JVM has no such limit and would keep running."

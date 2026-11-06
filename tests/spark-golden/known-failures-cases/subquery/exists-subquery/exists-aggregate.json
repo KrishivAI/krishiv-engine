@@ -1,8 +1,7 @@
 {
   "cases": {
     "subqueries": [
-      11,
-      17
+      11
     ]
   },
   "file": "subquery/exists-subquery/exists-aggregate",

@@ -747,6 +747,40 @@ fn caches_never_share_or_empty_a_directory() {
     drop((first, second));
 }
 
+/// One cache per engine runtime (design P2-E1 R3): a second runtime in the
+/// process makes a directory of its own, and the sweep at start removes a
+/// dead cache's directory (lock free, older than a minute) while both live
+/// ones stay.
+#[test]
+fn a_dead_directory_goes_and_live_ones_stay() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = || BlockCacheConfig {
+        dir: tmp.path().to_path_buf(),
+        disk_bytes: 1 << 20,
+        memory_bytes: 0,
+        block_bytes: BLOCK,
+    };
+    // A crashed cache: its lock file is free and ten minutes old.
+    let dead = tmp.path().join("p1-7-00000000000000ab");
+    std::fs::create_dir_all(&dead).unwrap();
+    std::fs::write(dead.join("x.blk"), b"old").unwrap();
+    let lock = std::fs::File::create(dead.join(".lock")).unwrap();
+    lock.set_modified(std::time::SystemTime::now() - Duration::from_secs(600))
+        .unwrap();
+    drop(lock);
+    let first = BlockCache::new(config()).unwrap();
+    assert!(!dead.exists(), "the dead directory was swept");
+    let second = BlockCache::new(config()).unwrap();
+    let live: Vec<_> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(live.len(), 2, "{live:?}");
+    assert!(live.iter().all(|d| d.join(".lock").exists()));
+    drop((first, second));
+}
+
 /// A failure of the store is the store's answer, once: it is not asked again by the plain read.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_store_failure_is_returned_not_retried() {

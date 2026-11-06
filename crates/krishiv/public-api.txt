@@ -2,6 +2,7 @@ pub mod krishiv
 pub use krishiv::AggregateProperties
 pub use krishiv::AggregateUdf
 pub use krishiv::ArgField
+pub use krishiv::CancelReason
 pub use krishiv::Column
 pub use krishiv::CounterSample
 pub use krishiv::DataFrame
