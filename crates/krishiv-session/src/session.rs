@@ -606,9 +606,8 @@ impl Session {
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        // Spark refuses a database on a temporary function named by an
-        // `IDENTIFIER(...)` clause when it drops it; the parser sees only the
-        // evaluated name.
+        // Spark refuses a database on a temporary function named by an `IDENTIFIER(...)`
+        // clause when it drops it; the parser sees only the evaluated name.
         if named_by_clause
             && let Statement::DropFunction(f) = &statement
             && f.temporary
