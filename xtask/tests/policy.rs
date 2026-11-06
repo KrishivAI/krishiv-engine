@@ -259,12 +259,15 @@ fn ci_policy_wiring() {
         );
     }
     assert!(!main_measure.contains("pull_request"));
-    for label in ["budget-approved", "unsafe-reviewed", "size-approved"] {
-        assert!(
-            !ci.contains(&format!("approval-label.sh {label}")),
-            "ci.yml must not resolve the {label} label (labels do not re-run it)"
-        );
-    }
+    // Labels do not start ci.yml; only the gates read them, live from the API
+    // (a re-run from pr-policy.yml `regate` must not see a stale payload).
+    assert!(!ci.contains("approval-label.sh size-approved"));
+    assert!(
+        !ci.contains("pull_request.labels"),
+        "ci.yml reads labels live"
+    );
+    let policy_only = policy;
+    let policy = ci.clone();
     for needle in [
         "  budgets:\n",
         ".github/scripts/budgets-measurement.sh",
@@ -274,7 +277,28 @@ fn ci_policy_wiring() {
         "approval-label.sh unsafe-reviewed",
         "cargo xtask budgets --compare \"$MEASURED\" --baseline \"$BASELINE\"",
     ] {
-        assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
+        assert!(policy.contains(needle), "ci.yml lacks {needle:?}");
+    }
+    // No gate may hold a runner polling for a measurement: pr-policy.yml has none
+    // of them, and the ones in ci.yml start after the job they judge and look once.
+    assert!(
+        !policy_only.contains("budgets-measurement.sh") && !policy_only.contains("WAIT_SECS"),
+        "pr-policy.yml must not wait for measurements"
+    );
+    assert!(
+        !policy.contains("WAIT_SECS: 4200") && !policy.contains("WAIT_SECS: 6000"),
+        "the gates must not wait for CI"
+    );
+    assert_eq!(policy.matches("NO_WAIT: \"1\"").count(), 2);
+    for needle in [
+        "needs: [changes, budgets-measure]",
+        "needs: [changes, wheels-targets]",
+        "  regate:\n",
+    ] {
+        assert!(
+            policy.contains(needle) || policy_only.contains(needle),
+            "lacks {needle:?}"
+        );
     }
     // The baseline is main's measurement: the gates never take it from the PR's
     // checkout (a PR must not raise its own baseline), and the selection reads
@@ -299,9 +323,10 @@ fn ci_policy_wiring() {
     // can list and download artifacts (`actions: read`).
     let at = |job: &str| policy.find(job).unwrap();
     let (budgets_at, wheels_at) = (at("  budgets:\n"), at("  wheel-sizes:\n"));
+    let wheels_end = at("  nightly-failure-notice:\n");
     for (job, body) in [
         ("budgets", &policy[budgets_at..wheels_at]),
-        ("wheel-sizes", &policy[wheels_at..]),
+        ("wheel-sizes", &policy[wheels_at..wheels_end]),
     ] {
         assert!(body.contains("fetch-depth: 0"), "{job} needs full history");
         // The gate runs the base commit's scripts and xtask, never the PR's:
@@ -459,7 +484,7 @@ fn approval_labels_survive_pushes_within_the_recorded_margin() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let policy = read(".github/workflows/pr-policy.yml");
+    let policy = read(".github/workflows/pr-policy.yml") + &read(".github/workflows/ci.yml");
     for needle in [
         "cargo xtask pr-size-value --base",
         "VALUES_FILE: ${{ runner.temp }}/size.values",

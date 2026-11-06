@@ -80,6 +80,17 @@ case_ "failed measurement fails" fail 7 "completed${tab}failure"
 case_ "no run before the deadline fails" fail "" "" 0
 case_ "unfinished job at the deadline fails" fail 7 "in_progress${tab}" 0
 
+# NO_WAIT=1 never waits (the caller holds no runner while CI works): anything
+# unfinished is `pending`, finished results are as before.
+export NO_WAIT=1
+case_ "no wait: finished measurement" measured 7 "completed${tab}success"
+case_ "no wait: running job is pending" pending 7 "in_progress${tab}" 0
+case_ "no wait: no run yet is pending" pending "" "" 0
+case_ "no wait: cancelled run is pending" pending 7 "completed${tab}cancelled" 0
+case_ "no wait: failed measurement still fails" fail 7 "completed${tab}failure" 0
+case_ "no wait: skipped measurement" skipped 7 "completed${tab}skipped" 0
+unset NO_WAIT
+
 # Transient gh failures are retried; real errors are not.
 err=$(mktemp)
 retry_case() {
