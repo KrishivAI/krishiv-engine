@@ -821,6 +821,7 @@ impl Window {
                 self.env.ansi,
                 &self.env.zone,
                 self.env.udafs.as_ref(),
+                Some(&mut l.reservation),
             )?
         };
         // One output batch per slice: its input columns, then the slice of

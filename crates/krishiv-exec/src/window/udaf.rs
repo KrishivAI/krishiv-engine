@@ -19,6 +19,7 @@
 
 use arrow_array::{Array, ArrayRef, UInt32Array};
 use arrow_schema::DataType;
+use krishiv_memory::Reservation;
 use krishiv_types::batch::Weights;
 
 use super::eval::{Unit, id, take, width};
@@ -50,6 +51,46 @@ pub(super) fn cost(
     Ok(rows * 8 + parts * 4 + chunk + 2 * width(out, rows))
 }
 
+/// The bytes an accumulator's state holds beyond the cost the window
+/// reserved up front, charged to the window's reservation as the state
+/// grows (a UDF reports its size only after folding) and released when the
+/// state is dropped.
+pub(super) struct Charge<'a> {
+    pool: Option<&'a mut Reservation>,
+    held: usize,
+}
+
+impl<'a> Charge<'a> {
+    pub(super) const fn new(pool: Option<&'a mut Reservation>) -> Self {
+        Self { pool, held: 0 }
+    }
+
+    /// Brings the charge to `size`.
+    ///
+    /// # Errors
+    /// The memory class when the pool refuses the growth.
+    fn to(&mut self, size: usize) -> Result<()> {
+        let Some(pool) = self.pool.as_deref_mut() else {
+            return Ok(());
+        };
+        if size > self.held {
+            pool.try_grow(size - self.held)?;
+        } else {
+            pool.shrink(self.held - size);
+        }
+        self.held = size;
+        Ok(())
+    }
+}
+
+impl Drop for Charge<'_> {
+    fn drop(&mut self) {
+        if let Some(pool) = self.pool.as_deref_mut() {
+            pool.shrink(self.held);
+        }
+    }
+}
+
 /// `a` over the frames of `f` in `u`.
 ///
 /// # Errors
@@ -61,6 +102,7 @@ pub(super) fn aggregate(
     u: &Unit<'_>,
     ansi: bool,
     udafs: Option<&UdafEnv>,
+    charge: &mut Charge<'_>,
 ) -> Result<ArrayRef> {
     // The argument columns are the unit's, in order; the window filters.
     let local = AggregateExpr {
@@ -88,6 +130,7 @@ pub(super) fn aggregate(
             } else {
                 acc.update(&u.part_of, &args, &one)?;
             }
+            charge.to(acc.size())?;
             let ids: Vec<u32> = (0..parts).map(id).collect::<Result<_>>()?;
             take(&acc.evaluate(&ids)?, &u.part_of)
         }
@@ -107,6 +150,7 @@ pub(super) fn aggregate(
                     let g = u.part_of[start];
                     let cols = gather(&args, &kept)?;
                     acc.update(&vec![g; kept.len()], &cols, &one)?;
+                    charge.to(acc.size())?;
                 }
                 values.push(acc.evaluate(&[u.part_of[start]])?);
             }
@@ -126,7 +170,7 @@ pub(super) fn aggregate(
                 order: u.order.as_ref(),
             };
             let frames = super::frames::frames(f.frame, &rows)?;
-            sliding(&local, ansi, udafs, &args, &passes, &frames)
+            sliding(&local, ansi, udafs, &args, &passes, &frames, charge)
         }
     }
 }
@@ -152,7 +196,15 @@ pub(super) fn frames_aggregate(
     };
     let (args, mask) = super::frames::unit_inputs(a, f, slices)?;
     let passes = |i: usize| mask.as_ref().is_none_or(|m| m.is_valid(i) && m.value(i));
-    sliding(&local, env.ansi, env.udafs.as_ref(), &args, &passes, frames)
+    sliding(
+        &local,
+        env.ansi,
+        env.udafs.as_ref(),
+        &args,
+        &passes,
+        frames,
+        &mut Charge::new(None),
+    )
 }
 
 /// Each row's frame folded into a group of its own, in chunks.
@@ -163,6 +215,7 @@ fn sliding(
     args: &[ArrayRef],
     passes: &dyn Fn(usize) -> bool,
     frames: &[(u32, u32)],
+    charge: &mut Charge<'_>,
 ) -> Result<ArrayRef> {
     let one = Weights::Const(1);
     let mut values: Vec<ArrayRef> = Vec::new();
@@ -192,8 +245,10 @@ fn sliding(
         if !members.is_empty() {
             acc.update(&groups, &gather(args, &members)?, &one)?;
         }
+        charge.to(acc.size())?;
         let ids: Vec<u32> = (0..last - first).map(id).collect::<Result<_>>()?;
         values.push(acc.evaluate(&ids)?);
+        charge.to(0)?;
         first = last;
     }
     concat(&values)

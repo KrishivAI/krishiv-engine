@@ -151,16 +151,18 @@ pub(super) fn evaluate(
     ansi: bool,
     zone: &krishiv_kernels::datetime::ZoneRef,
 ) -> Result<Vec<ArrayRef>> {
-    evaluate_with(plan, slices, ansi, zone, None)
+    evaluate_with(plan, slices, ansi, zone, None, None)
 }
 
-/// [`evaluate`] with the session's aggregate UDFs (ADR 0045).
+/// [`evaluate`] with the session's aggregate UDFs (ADR 0045), whose state is charged to
+/// `pool` as it grows.
 pub(super) fn evaluate_with(
     plan: &WindowPlan,
     slices: &[Slice<'_>],
     ansi: bool,
     zone: &krishiv_kernels::datetime::ZoneRef,
     udafs: Option<&crate::aggregate::UdafEnv>,
+    mut pool: Option<&mut krishiv_memory::Reservation>,
 ) -> Result<Vec<ArrayRef>> {
     let mut unit = Unit::new(slices)?;
     if has_range_offsets(plan)
@@ -175,15 +177,19 @@ pub(super) fn evaluate_with(
             zone,
         )?;
     }
-    plan.functions
-        .iter()
-        .map(|f| match &f.function {
+    let mut columns = Vec::with_capacity(plan.functions.len());
+    for f in &plan.functions {
+        columns.push(match &f.function {
             WindowFunction::Aggregate(a) if super::udaf::is_udf(a) => {
-                super::udaf::aggregate(a, f, &unit, ansi, udafs)
+                // A UDF's state is charged as it grows, and released with
+                // the function's evaluation.
+                let mut charge = super::udaf::Charge::new(pool.as_deref_mut());
+                super::udaf::aggregate(a, f, &unit, ansi, udafs, &mut charge)?
             }
-            _ => function(f, &unit, ansi),
-        })
-        .collect()
+            _ => function(f, &unit, ansi)?,
+        });
+    }
+    Ok(columns)
 }
 
 /// Whether a function of `plan` has a `RANGE` frame with a value bound.

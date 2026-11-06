@@ -714,6 +714,39 @@ fn a_udaf_state_folded_from_disk_is_charged_to_the_pool() {
 }
 
 #[test]
+fn a_udaf_state_folded_in_memory_is_charged_to_the_pool() {
+    let dir = tempfile::tempdir().unwrap();
+    let spill = dir.path().join("spill");
+    // The input fits the limit, so the window evaluates in memory; the
+    // state it grows (~100 MB reported) does not.
+    let s = session_with(
+        &[
+            ("krishiv.spill.dir", spill.to_str().unwrap()),
+            ("krishiv.memory.limit", "24m"),
+        ],
+        Fault::None,
+    );
+    s.register_udaf(UdSum::new("bloat", Fault::Bloat)).unwrap();
+    s.register_udaf(UdSum::new("plain", Fault::None)).unwrap();
+    register_t(&s, 1);
+    for frame in [
+        "PARTITION BY k",
+        "PARTITION BY k ORDER BY v",
+        "PARTITION BY k ORDER BY v ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
+    ] {
+        let q =
+            |f: &str| format!("SELECT count(c) FROM (SELECT {f}(v) OVER ({frame}) AS c FROM t)");
+        // The same shape with an honest state runs.
+        run(&s, &q("plain"));
+        let e = error_of(&s, &q("bloat"));
+        assert!(
+            e.to_string().to_lowercase().contains("memory"),
+            "{frame}: {e}"
+        );
+    }
+}
+
+#[test]
 fn a_udaf_named_like_a_whole_partition_builtin_takes_any_frame() {
     let s = session_with(&[], Fault::None);
     s.register_udaf(UdSum::new("median", Fault::None)).unwrap();
