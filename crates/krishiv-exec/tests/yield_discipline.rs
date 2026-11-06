@@ -6,6 +6,8 @@
 //! `fail_on_stall` mode: any non-yielding poll fails the query, so the
 //! assertions below rest on the stall counters, not on wall-clock timing
 //! (the wall-clock bounds are generous multiples of the injected delay).
+//! The two tests that count stalls over long runs excuse a stall when the machine's load
+//! is above twice its cores (`overloaded`).
 #![cfg(not(loom))]
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 
@@ -151,7 +153,9 @@ fn assert_released(pool: &TreePool) {
 /// Whether the machine is too busy for a wall-clock bound to mean anything: the 1-minute load
 /// average is above twice the cores. A poll that only needs 8 ms of CPU runs for 18 ms there (cache
 /// and SMT contention that no per-thread counter reports), so a stall seen on such a machine says
-/// nothing about the driver. Where the load cannot be read, the machine is taken as quiet.
+/// nothing about the driver. Where the load cannot be read, the machine is taken as quiet. (The load
+/// average is host-wide while the core count follows a container's CPU quota, and the 1-minute average
+/// lags a spike: the guard is a heuristic for build boxes, not a measurement.)
 fn overloaded() -> bool {
     let Ok(text) = std::fs::read_to_string("/proc/loadavg") else {
         return false;
@@ -168,11 +172,11 @@ fn overloaded() -> bool {
     load > 2.0 * cores
 }
 
+/// Reports a stall in `what` as excused (and says why) when the machine is [`overloaded`].
 #[expect(
     clippy::print_stderr,
     reason = "a skipped bound is said aloud in the test output"
 )]
-/// Reports a stall in `what` as excused (and says why) when the machine is [`overloaded`].
 fn excused_by_load(what: &str) -> bool {
     let excused = overloaded();
     if excused {
@@ -737,17 +741,19 @@ fn tpch_suite_counts_no_stalls() {
                 if e.to_string().contains("without yielding")
                     && excused_by_load(&format!("q{q:02}")) =>
             {
-                return;
+                // The failed run left the query unfinished: wait for its tasks to release their
+                // memory, then go on with the next query.
+                rt.block_on(query.finished());
+                continue;
             }
             Err(e) => panic!("q{q:02}: {e}"),
         };
         let elapsed = start.elapsed();
         let got: usize = out.iter().map(RecordBatch::num_rows).sum();
         eprintln!("q{q:02}: {got} rows in {elapsed:.2?}");
-        if query.metrics().drivers.stalls > 0 && excused_by_load(&format!("q{q:02}")) {
-            return;
+        if query.metrics().drivers.stalls == 0 || !excused_by_load(&format!("q{q:02}")) {
+            assert_no_stalls(&query, &format!("q{q:02}"));
         }
-        assert_no_stalls(&query, &format!("q{q:02}"));
     }
     assert_released(&pool);
 }
@@ -869,15 +875,16 @@ async fn a_very_large_batch_is_processed_in_chunks() {
             if e.to_string().contains("without yielding")
                 && excused_by_load("the chunked operator") =>
         {
+            // `run` has finished the query: nothing else is checkable, but its memory is back.
+            assert_released(&pool);
             return;
         }
         Err(e) => panic!("{e}"),
     };
     assert_eq!(rows(&out), ROWS);
-    if q.metrics().drivers.stalls > 0 && excused_by_load("the chunked operator") {
-        return;
+    if q.metrics().drivers.stalls == 0 || !excused_by_load("the chunked operator") {
+        assert_no_stalls(&q, "the chunked operator");
     }
-    assert_no_stalls(&q, "the chunked operator");
     let yields = q.metrics().drivers.yields;
     assert!(
         yields >= 20,
