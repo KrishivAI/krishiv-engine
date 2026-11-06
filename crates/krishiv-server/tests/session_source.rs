@@ -72,8 +72,49 @@ async fn memory_and_caches_come_through_with_numbers_and_flags() {
     assert!(memory[0]["spillable"].is_boolean());
     let caches = source.rows(SystemTable::Caches).await.unwrap();
     assert!(caches.iter().all(|r| r["hits"].is_i64()));
+}
+
+#[tokio::test]
+async fn a_populated_operator_row_converts_every_allowlisted_column() {
+    let rt = runtime();
+    let user = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    user.sql("SELECT id % 3 AS k, sum(id) FROM range(1000) GROUP BY id % 3")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let source = SessionSource::new(rt).unwrap();
     let operators = source.rows(SystemTable::Operators).await.unwrap();
-    assert!(operators.iter().all(|r| r["operator_id"].is_i64()));
+    assert!(!operators.is_empty(), "the query recorded no operators");
+    let sink = operators.iter().find(|r| r["name"] == "Result").unwrap();
+    assert!(
+        sink["query_id"].as_str().is_some_and(|q| q.len() == 36),
+        "{sink:?}"
+    );
+    assert_eq!(sink["role"], "sink");
+    for column in [
+        "operator_id",
+        "drivers",
+        "rows_in",
+        "compute_ns",
+        "max_driver_compute_ns",
+        "blocked_io_ns",
+        "blocked_memory_ns",
+        "blocked_sink_ns",
+        "peak_reserved_bytes",
+        "spilled_bytes",
+    ] {
+        // A column the engine has not filled yet is null; every filled one converts to a number.
+        assert!(
+            sink[column].is_i64() || sink[column].is_null(),
+            "{column}: {sink:?}"
+        );
+    }
+    assert_eq!(
+        sink["rows_in"], 3,
+        "the three groups reached the sink: {sink:?}"
+    );
 }
 
 #[tokio::test]
