@@ -129,15 +129,23 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          run=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=1" \
-            --jq '.workflow_runs[0] | select(.status == "completed") | .id')
-          if [ -z "$run" ]; then
-            echo "CI has not finished for $HEAD_SHA; the gates will read the labels when they run."
+          read -r run status < <(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=1" \
+            --jq '.workflow_runs[0] | [.id, .status] | @tsv')
+          if [ -z "${run:-}" ]; then
+            echo "No CI run for $HEAD_SHA yet; the gates will read the labels when they run."
             exit 0
           fi
-          for job in budgets wheel-sizes; do
-            id=$(gh api "repos/$REPO/actions/runs/$run/jobs?filter=latest&per_page=100" \
-              --jq ".jobs[] | select(.name == \"$job\") | .id")
-            [ -n "$id" ] || continue
-            gh api -X POST "repos/$REPO/actions/jobs/$id/rerun" || echo "could not re-run $job"
-          done
+          jobs=$(gh api "repos/$REPO/actions/runs/$run/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | select(.name == "gates-ready" or .name == "budgets" or .name == "wheel-sizes") | [.name, .status, .id] | @tsv')
+          # The gates have not started: they will read the labels themselves.
+          if ! printf '%s\n' "$jobs" | grep -qP '^(budgets|wheel-sizes)\tcompleted\t'; then
+            echo "The gates have not finished; they read the labels when they run."
+            exit 0
+          fi
+          if [ "$status" != completed ]; then
+            echo "::error::The gates already ran and CI is still running, so they cannot be re-run yet. Re-run the failed jobs of CI run $run when it finishes." >&2
+            exit 1
+          fi
+          id=$(printf '%s\n' "$jobs" | awk -F'\t' '$1 == "gates-ready" {print $3}')
+          # Re-running the parent re-runs both gates with it.
+          gh api -X POST "repos/$REPO/actions/jobs/$id/rerun"

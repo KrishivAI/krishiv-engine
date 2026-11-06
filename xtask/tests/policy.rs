@@ -291,8 +291,8 @@ fn ci_policy_wiring() {
     );
     assert_eq!(policy.matches("NO_WAIT: \"1\"").count(), 2);
     for needle in [
-        "needs: [changes, budgets-measure]",
-        "needs: [changes, wheels-targets]",
+        "needs: [changes, budgets-measure, wheels-targets, wheels-ok]",
+        "  gates-ready:\n",
         "  regate:\n",
     ] {
         assert!(

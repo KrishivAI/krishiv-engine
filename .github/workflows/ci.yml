@@ -777,10 +777,26 @@ jobs:
   # re-runs only this job; it waits for the measurement while CI is still
   # running. Nothing needs recording after a merge: main's next measurement
   # is the next baseline.
+  # Starts the two gates below once every measurement has finished, and is the one
+  # job `regate` (pr-policy.yml) re-runs after a label change: re-running it
+  # re-runs both gates with it. It does nothing itself.
+  gates-ready:
+    needs: [changes, budgets-measure, wheels-targets, wheels-ok]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - run: echo "Measurements finished; the budget and wheel-size gates follow."
+
   budgets:
     # Starts when the measurement has finished (never before), so no runner polls for it.
-    needs: [changes, budgets-measure]
-    if: always() && github.event_name == 'pull_request' && needs.changes.result == 'success'
+    needs: [changes, gates-ready]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -930,8 +946,8 @@ jobs:
   # which read the label from the stale event payload of the CI run.
   wheel-sizes:
     # Starts when the measurement has finished (never before), so no runner polls for it.
-    needs: [changes, wheels-targets]
-    if: always() && github.event_name == 'pull_request' && needs.changes.result == 'success'
+    needs: [changes, gates-ready]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
