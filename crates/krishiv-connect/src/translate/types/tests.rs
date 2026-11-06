@@ -65,10 +65,24 @@ fn string_collation() {
             "{name}"
         );
     }
-    assert!(matches!(
-        data_type(&string("UTF8_LCASE")).expect("lcase"),
-        DataType::CollatedString(_)
-    ));
+    // Independent of the parser the translator uses: the type is a collated string and prints
+    // its canonical name; a binary collation with `_RTRIM` is not the plain `STRING`.
+    for (written, canonical) in [
+        ("UTF8_LCASE", "UTF8_LCASE"),
+        ("utf8_lcase", "UTF8_LCASE"),
+        ("UTF8_BINARY_RTRIM", "UTF8_BINARY_RTRIM"),
+        ("SYSTEM.BUILTIN.UTF8_LCASE", "UTF8_LCASE"),
+    ] {
+        let DataType::CollatedString(c) = data_type(&string(written)).expect(written) else {
+            panic!("{written} is not a collated string");
+        };
+        assert_eq!(c.name(), canonical, "{written}");
+    }
+    // A qualified name of the default collation is the plain `STRING` as well.
+    assert_eq!(
+        data_type(&string("SYSTEM.BUILTIN.UTF8_BINARY")).expect("default"),
+        DataType::String
+    );
     // Inside a nested type too.
     let array = proto_type(Kind::Array(Box::new(dt::Array {
         element_type: Some(Box::new(Proto {
