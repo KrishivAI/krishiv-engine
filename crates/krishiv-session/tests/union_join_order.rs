@@ -167,3 +167,38 @@ fn a_recursive_cte_anchor_keeps_its_width_after_common_subexpressions() -> R {
     assert_eq!(got, sorted(&["0", "1", "1", "2", "2", "2", "3"]));
     Ok(())
 }
+
+/// A branch that repeats a column (`SELECT x, x`) still has two columns:
+/// the union's second column reads the other branches' second column
+/// (Spark's `DeduplicateUnionChildOutput`, SPARK-37865). The name `x`
+/// above the union is the first copy, not ambiguous. Answers from a Spark
+/// 4.2.0 run.
+#[test]
+fn a_branch_that_repeats_a_column_keeps_both_positions() -> R {
+    let s = Session::new()?;
+    for (sql, want) in [
+        (
+            "SELECT * FROM (SELECT x, x FROM VALUES (1) t(x) UNION ALL SELECT 5, 6) u(a, b)",
+            vec!["1|1", "5|6"],
+        ),
+        (
+            "SELECT * FROM (SELECT x, x AS y FROM VALUES (1) t(x) UNION ALL SELECT 5, 6)",
+            vec!["1|1", "5|6"],
+        ),
+        (
+            "SELECT x FROM (SELECT x, x FROM VALUES (1) t(x) UNION ALL SELECT 5, 6)",
+            vec!["1", "5"],
+        ),
+        (
+            "SELECT * FROM (SELECT x, x FROM VALUES (1) t(x) UNION SELECT 5, 6)",
+            vec!["1|1", "5|6"],
+        ),
+        (
+            "SELECT * FROM (SELECT 5, 6 UNION ALL SELECT x, x FROM VALUES (1) t(x))",
+            vec!["1|1", "5|6"],
+        ),
+    ] {
+        assert_eq!(run(&s, sql)?, want, "{sql}");
+    }
+    Ok(())
+}

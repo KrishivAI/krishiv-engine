@@ -77,7 +77,11 @@ impl Resolver<'_> {
         if by_name {
             kids = self.by_name(&kids, allow_missing_columns, o)?;
         }
-        let kids = self.widen_inputs(&kids, "UNION", o)?;
+        let kids: Vec<Rel> = self
+            .widen_inputs(&kids, "UNION", o)?
+            .iter()
+            .map(|k| self.distinct_output_ids(k))
+            .collect();
         let mut out: Vec<Attr> = kids[0]
             .out
             .iter()
@@ -772,6 +776,49 @@ impl Resolver<'_> {
             });
         }
         Ok(self.projection(k.plan.origin, k, exprs, out))
+    }
+
+    /// `k` with every column that repeats an earlier column's attribute
+    /// re-aliased to a new attribute (Spark's `DeduplicateUnionChildOutput`,
+    /// SPARK-37865). A union's output is its first input's attributes and
+    /// its inputs are matched by position, so `SELECT x, x ... UNION ALL
+    /// SELECT 5, 6` would otherwise read `5` for both columns of the second
+    /// row. The new attributes are recorded in `Resolver::duplicates`.
+    pub(super) fn distinct_output_ids(&mut self, k: &Rel) -> Rel {
+        let mut seen = HashSet::new();
+        if k.out.iter().all(|a| seen.insert(a.col.id)) {
+            return k.clone();
+        }
+        seen.clear();
+        let mut exprs = Vec::with_capacity(k.out.len());
+        let mut out = Vec::with_capacity(k.out.len());
+        for a in k.out.iter() {
+            let column = col_expr(&a.col, Origin::UNKNOWN);
+            if seen.insert(a.col.id) {
+                exprs.push(column);
+                out.push(a.clone());
+                continue;
+            }
+            let ty = ArgType {
+                data_type: Some(a.col.data_type.clone()),
+                nullable: a.col.nullable,
+            };
+            let output = self.attr(&a.col.name, &ty);
+            self.duplicates.insert(output.id);
+            exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Alias {
+                    expr: column,
+                    output: output.clone(),
+                },
+            ))));
+            // An alias's attribute has no qualifier.
+            out.push(Attr {
+                col: output,
+                qual: Arc::from(Vec::new()),
+                source: None,
+            });
+        }
+        self.projection(k.plan.origin, k, exprs, out)
     }
 
     pub(super) fn distinct(

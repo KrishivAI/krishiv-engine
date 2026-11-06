@@ -205,6 +205,11 @@ pub(super) struct Resolver<'a> {
     /// The first aggregate over a nondeterministic argument: Spark checks
     /// it after the operators' other rules, so any other error wins.
     pub(super) pending_nondeterministic: Option<AnalysisError>,
+    /// The attributes a union input re-aliased because they repeat an
+    /// earlier column of that input (`Resolver::distinct_output_ids`):
+    /// Spark's `__is_duplicate` metadata, so a name that also matches the
+    /// first copy resolves to it instead of being ambiguous.
+    pub(super) duplicates: std::collections::HashSet<AttrId>,
 }
 
 type Resolved = (
@@ -244,6 +249,7 @@ pub(super) fn resolve(
         fn_path: Vec::new(),
         sql_calls: 0,
         pending_nondeterministic: None,
+        duplicates: std::collections::HashSet::new(),
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).

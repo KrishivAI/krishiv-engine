@@ -65,7 +65,13 @@ impl Resolver<'_> {
         {
             check_places(input, &def.name, o)?;
         }
-        let kids = self.widen_inputs(&[a, r], "UNION", o)?;
+        // Each term's columns feed the loop by position, so a term that
+        // repeats a column needs distinct attributes, as a union's inputs do.
+        let kids: Vec<Rel> = self
+            .widen_inputs(&[a, r], "UNION", o)?
+            .iter()
+            .map(|k| self.distinct_output_ids(k))
+            .collect();
         // The reference was typed by the anchor, so rows of another type
         // cannot feed back. Spark refuses a recursive term that is not the
         // anchor's type (`CANNOT_MERGE_INCOMPATIBLE_DATA_TYPE`); a term of a

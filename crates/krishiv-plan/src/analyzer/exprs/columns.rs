@@ -585,6 +585,11 @@ impl Resolver<'_> {
                     hits.push(a);
                 }
             }
+            // Spark's `getCandidatesForResolution`: among several matches,
+            // a union input's re-aliased repeat of a column does not count.
+            if hits.len() > 1 {
+                hits.retain(|a| !self.duplicates.contains(&a.col.id));
+            }
             match hits[..] {
                 [] => continue,
                 [a] if parts.len() > q + 1 => {
