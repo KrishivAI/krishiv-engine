@@ -427,6 +427,42 @@ fn pivot_count_star_counts_matching_rows() {
 }
 
 #[test]
+fn binary_pivot_values_name_columns_as_strings() {
+    // Spark 4.2.0: a binary value, alone or inside an array or a struct, is
+    // named by its cast to a string (`a`, `[a]`, `{ab}`), not its SQL text.
+    let s = session().unwrap();
+    for (sql, schema) in [
+        (
+            "SELECT * FROM (SELECT X'61' AS k, 2 AS v) PIVOT (sum(v) FOR k IN (X'61'))",
+            "struct<a:bigint>",
+        ),
+        (
+            "SELECT * FROM (SELECT array(X'61') AS k, 2 AS v) PIVOT (sum(v) FOR k IN (array(X'61')))",
+            "struct<[a]:bigint>",
+        ),
+        (
+            "SELECT * FROM (SELECT named_struct('p', X'6162') AS k, 2 AS v) \
+             PIVOT (sum(v) FOR k IN (named_struct('p', X'6162')))",
+            "struct<{ab}:bigint>",
+        ),
+    ] {
+        let (got, batches) = block_on(async {
+            let df = s.sql(sql).await.unwrap();
+            let schema = df.schema().await.unwrap();
+            let batches = df.collect().await.unwrap();
+            Ok::<_, Box<dyn std::error::Error>>((schema, batches))
+        })
+        .unwrap();
+        let (got, rows) = render(&got, &batches);
+        assert_eq!(
+            (got.as_str(), rows),
+            (schema, vec!["2".to_owned()]),
+            "{sql}"
+        );
+    }
+}
+
+#[test]
 fn pivot_first_returns_the_first_matching_row() {
     // `first` flips to ignoring nulls for the nulls the `if` introduces:
     // for 2012 the Java row follows a dotNET row, so without the flip the

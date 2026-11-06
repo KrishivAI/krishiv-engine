@@ -1933,9 +1933,14 @@ impl Resolver<'_> {
         // item's place in the aggregate, the generator runs above it.
         // A written alias of the generator (the analyzer names every item,
         // so the written one is read from the unresolved list).
+        // A pipe `AGGREGATE` item is wrapped (`Alias(Pipe(generator))`).
+        let unpiped = |e: &Arc<Expr>| match &e.node {
+            ExprNode::Pipe { expr, .. } => Arc::clone(expr),
+            _ => Arc::clone(e),
+        };
         if let Some(name) = aggregates.iter().find_map(|e| match &e.node {
             ExprNode::Alias { name, expr }
-                if matches!(&expr.node, ExprNode::Function(f)
+                if matches!(&unpiped(expr).node, ExprNode::Function(f)
                 if super::generate::is_generator_name(&f.name)) =>
             {
                 Some(name.clone())

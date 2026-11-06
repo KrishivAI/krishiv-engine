@@ -611,6 +611,8 @@ fn part_name(b: &Bound, r: &Resolver<'_>) -> String {
                 crate::spark_fmt::timestamp_value(SessionZone::local_micros(zone, *us))
             }
             Literal::TimestampNtz(us) => crate::spark_fmt::timestamp_value(*us),
+            // Spark's cast of a binary to a string: the bytes as UTF-8.
+            Literal::Binary(bytes) => String::from_utf8_lossy(bytes).into_owned(),
             _ => pretty(&b.expr, zone),
         };
     }

@@ -236,3 +236,17 @@ fn pipe_items_check_their_aggregate_functions() {
         ["1", "2"]
     );
 }
+
+/// A generator's written alias in `AGGREGATE` names its column (Spark 4.2.0:
+/// `y`, so the next operator reads `y`).
+#[test]
+fn an_aggregate_generator_keeps_its_alias() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT 1 AS x |> AGGREGATE explode(collect_list(x)) AS y |> SELECT y"
+        ),
+        ["1"]
+    );
+}
