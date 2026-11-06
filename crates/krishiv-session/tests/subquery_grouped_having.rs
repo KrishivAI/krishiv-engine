@@ -106,3 +106,67 @@ fn the_legacy_count_flag_refuses_a_count_value() -> R {
     assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{e}");
     Ok(())
 }
+
+/// The explicit left-join form of `select k, (select <value> from u where
+/// u.k = t.k group by <keys> having <having>) from t`.
+fn joined(value: &str, having: &str) -> String {
+    format!(
+        "select t.k, m.v from t left join \
+         (select k, {value} as v from u group by k having {having}) m on t.k = m.k"
+    )
+}
+
+#[test]
+fn a_constant_group_key_is_fixed_like_the_correlated_one() -> R {
+    let s = session()?;
+    let sub = "select k, (select max(y) from u where u.k = t.k group by u.k, 'x' \
+               having count(*) >= 1) from t";
+    assert_eq!(
+        run(&s, sub)?,
+        run(&s, &joined("max(y)", "count(*) >= 1"))?,
+        "{sub}"
+    );
+    Ok(())
+}
+
+/// Spark's legacy flag changes only a value that is not NULL over no rows, so a
+/// `max` value answers as it does by default.
+#[test]
+fn the_legacy_count_flag_leaves_a_null_over_no_rows_value_alone() -> R {
+    let s = session()?;
+    let sub = "select k, (select max(y) from u where u.k = t.k group by u.k \
+               having count(*) >= 1) from t";
+    let default = run(&s, sub)?;
+    run(
+        &s,
+        "set spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled=true",
+    )?;
+    assert_eq!(run(&s, sub)?, default, "{sub}");
+    assert_eq!(
+        default,
+        run(&s, &joined("max(y)", "count(*) >= 1"))?,
+        "{sub}"
+    );
+    Ok(())
+}
+
+/// A HAVING that reads the outer query or holds a subquery, and a correlation
+/// that is not an equality, are not the fixed-key shape: refused as before.
+#[test]
+fn the_other_having_shapes_stay_refused() -> R {
+    let s = session()?;
+    for q in [
+        "select k, (select max(y) from u where u.k = t.k group by u.k having count(*) > t.a) from t",
+        "select k, (select max(y) from u where u.k = t.k group by u.k \
+         having count(*) >= (select 1)) from t",
+        "select k, (select max(y) from u where u.k < t.k group by u.k having count(*) >= 1) from t",
+    ] {
+        let e = run(&s, q).expect_err(q).to_string();
+        assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{q}: {e}");
+        assert!(
+            e.contains("a correlated scalar subquery of this shape"),
+            "{q}: {e}"
+        );
+    }
+    Ok(())
+}
