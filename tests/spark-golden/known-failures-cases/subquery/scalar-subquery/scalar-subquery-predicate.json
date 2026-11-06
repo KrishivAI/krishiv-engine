@@ -3,19 +3,12 @@
     "depends-on-command": [
       18,
       19,
-      27,
-      28,
-      29,
-      30,
-      31,
-      33,
       36,
       37,
       38
     ],
     "subqueries": [
-      58,
-      59
+      58
     ]
   },
   "file": "subquery/scalar-subquery/scalar-subquery-predicate",

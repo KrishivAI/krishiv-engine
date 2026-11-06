@@ -580,10 +580,11 @@ impl Resolver<'_> {
             && a.0 <= b.1
             && b.0 <= a.1
         {
-            if r.outer.is_some_and(|k| k < env.outer.len()) {
-                return Err(unsupported("a self-join of a correlated subtree", o));
-            }
-            r = self.instance(&r)?;
+            r = if r.outer.is_some_and(|k| k < env.outer.len()) {
+                self.correlated_instance(&r)?
+            } else {
+                self.instance(&r)?
+            };
         }
         let kids = self.widen_inputs(&[l, r], op.sql(all), o)?;
         let (l, r) = (&kids[0], &kids[1]);
