@@ -74,6 +74,9 @@ impl Resolver<'_> {
         if kids.is_empty() {
             return Err(unsupported("a union without inputs", o));
         }
+        for (k, input) in kids.iter_mut().zip(inputs) {
+            mark_repeats(input, k);
+        }
         if by_name {
             kids = self.by_name(&kids, allow_missing_columns, o)?;
         }
@@ -1051,6 +1054,48 @@ fn no_map_columns(k: &Rel, origin: Origin) -> Result<(), AnalysisError> {
         )),
         None => Ok(()),
     }
+}
+
+/// A union input analyzed before (a DataFrame temporary view stores the
+/// analyzed plan) is already the projection [`Resolver::distinct_output_ids`]
+/// built, whose resolved IR holds no mark: an alias of a column the same
+/// projection outputs bare, under the column's own name, is that
+/// projection's re-aliased repeat, and is marked [`Attr::duplicate`] again.
+/// SQL and DataFrame aliases reach the analyzer unresolved, so only
+/// re-analysis takes this path.
+fn mark_repeats(input: &LogicalPlan, k: &mut Rel) {
+    let PlanNode::Project { exprs, .. } = &input.node else {
+        return;
+    };
+    let mut bare = HashSet::new();
+    let mut repeats = HashSet::new();
+    for e in exprs {
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                bare.insert(c.id);
+            }
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
+                if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &expr.node
+                    && bare.contains(&c.id)
+                    && c.name == output.name
+                {
+                    repeats.insert(output.id);
+                }
+            }
+            _ => {}
+        }
+    }
+    if repeats.is_empty() {
+        return;
+    }
+    k.out = k
+        .out
+        .iter()
+        .map(|a| Attr {
+            duplicate: a.duplicate || repeats.contains(&a.col.id),
+            ..a.clone()
+        })
+        .collect();
 }
 
 fn no_duplicates(k: &Rel, cs: bool) -> Result<(), AnalysisError> {

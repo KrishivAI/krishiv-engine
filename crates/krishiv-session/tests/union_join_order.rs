@@ -279,5 +279,9 @@ fn dataframe_references_to_a_repeated_column() -> R {
         rows(&joined.select([krishiv_session::functions::col("a.x")]))?,
         ["1", "1", "5", "5"]
     );
+    // A temporary view of the DataFrame stores its analyzed plan, which is
+    // analyzed again under the query that reads it.
+    block_on(df.create_or_replace_temp_view("v"))?;
+    assert_eq!(run(&s, "SELECT x FROM v")?, ["1", "5"]);
     Ok(())
 }

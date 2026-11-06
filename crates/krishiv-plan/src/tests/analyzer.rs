@@ -5390,38 +5390,3 @@ fn integral_columns_compared_with_decimal_literals_narrow() {
     let plan = LogicalPlan::table(["t"]).project(vec![gt(c("a"), dec("0.5"))]);
     assert_eq!(datatypes(&run(plan, &ctx).unwrap()), [DataType::Boolean]);
 }
-
-/// A union input that repeats a column gets a projection re-aliasing the
-/// repeat (Spark's `DeduplicateUnionChildOutput`: `Project [a#1, a#1 AS
-/// a#n]`), the union's two columns are two attributes, `a` above it is the
-/// first copy, and re-analysis changes nothing.
-#[test]
-fn a_union_input_that_repeats_a_column_gets_distinct_attributes() {
-    let union = |first: LogicalPlan, second: LogicalPlan| {
-        LogicalPlan::new(PlanNode::Union {
-            inputs: vec![Arc::new(first), Arc::new(second)],
-            by_name: false,
-            allow_missing_columns: false,
-        })
-    };
-    let plan = union(
-        LogicalPlan::table(["t"]).project(vec![c("a"), c("a")]),
-        // Both `INT`: no widening cast replaces the repeat.
-        LogicalPlan::table(["u"]).project(vec![c("a"), c("a")]),
-    )
-    .project(vec![c("a")]);
-    let a = run(plan, &ctx()).unwrap();
-    assert_eq!(a.output.len(), 1);
-    let text = a.plan.root().to_string();
-    let union_ids: Vec<&str> = text
-        .lines()
-        .filter(|l| l.trim_start().starts_with(":- Project [a#"))
-        .collect();
-    assert!(
-        union_ids.iter().any(|l| l.contains(" AS a#")),
-        "the repeat is re-aliased:\n{text}"
-    );
-    let again = block_on(DefaultAnalyzer.analyze(&a.plan, &ctx())).unwrap();
-    assert!(again.plan.structurally_eq(&a.plan), "a fixed point");
-    assert_eq!(again.output, a.output);
-}
