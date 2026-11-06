@@ -961,6 +961,7 @@ impl Rewriter {
         keys: &[Arc<Expr>],
         aggregates: &[Arc<Expr>],
     ) -> R<Arc<LogicalPlan>> {
+        let aggregates = &split::share_keys(keys, aggregates);
         let all: Vec<Arc<Expr>> = keys.iter().chain(aggregates).cloned().collect();
         if !all
             .iter()

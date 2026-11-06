@@ -81,6 +81,16 @@ fn subqueries_over_grouping_keys_group_by_their_existence_column() -> R {
     assert_eq!(run(&s, q)?, rows(&["NULL|1", "true|3"]), "{q}");
     let q = "select not (k > 1 or k in (select k from b)) as f, count(*) from a group by 1";
     assert_eq!(run(&s, q)?, rows(&["false|4"]), "{q}");
+    // So does a separately written copy of that key in the output: its
+    // existence column is not another key (k = 1 and k = 2 stay one group).
+    let q = "select k > 1 or k in (select k from b) as f, count(*) from a \
+             group by k > 1 or k in (select k from b)";
+    assert_eq!(run(&s, q)?, rows(&["NULL|1", "true|3"]), "{q}");
+    // A subquery only inside a key that is not one-to-one is not grouped:
+    // the key is true for k = 1 and k = 2, whose `exists` differ.
+    let q = "select exists (select 1 from b where b.k = a.k), count(*) from a \
+             group by a.k > 0 or exists (select 1 from b where b.k = a.k)";
+    assert!(run(&s, q).is_err(), "{q}");
     // A subquery over a column that is not grouped: Spark raises
     // MISSING_AGGREGATION; refused here, never answered per input row.
     let q = "select k, exists (select 1 from b where b.k = a.v) from a group by k";

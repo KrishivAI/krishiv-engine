@@ -537,7 +537,8 @@ impl Rewriter {
 /// added (an existence join's `exists`, a scalar subquery's value) that
 /// `aggregates` read outside an aggregate call and outside a grouping key
 /// (a key that holds the column already decides it:
-/// `GROUP BY k > 1 OR k IN (..)` must not group by the `IN` alone too).
+/// `GROUP BY k > 1 OR k IN (..)` must not group by the `IN` alone too;
+/// [`share_keys`] made a separately resolved copy of a key that key).
 /// [`check_grouped_reads`] made sure such a subquery reads only grouped
 /// columns, so its column is fixed within a group and grouping by it
 /// changes no group.
@@ -600,25 +601,18 @@ pub(super) fn check_grouped_reads(
 ) -> R<()> {
     // Spark matches the output to the grouping expressions with
     // `semanticEquals`: a column is grouped when a key is that column
-    // (`GROUP BY k % 2` does not group `k`), and a subquery when a key holds
-    // the same subquery (a key and an output hold separately resolved copies
-    // of it, `GROUP BY cast(t1a in (..) as int) + 1`), never merely one over
-    // the same columns.
-    let mut key_cols: Vec<crate::AttrId> = Vec::new();
-    let mut key_subqueries: Vec<u128> = Vec::new();
-    for k in keys {
-        if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &k.node {
-            key_cols.push(c.id);
-        }
-        let mut stack = vec![Arc::clone(k)];
-        while let Some(x) = stack.pop() {
-            if matches!(x.node, ExprNode::Subquery { .. }) {
-                key_subqueries.extend(fingerprint(&x));
-                continue;
-            }
-            x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
-        }
-    }
+    // (`GROUP BY k % 2` does not group `k`), and an expression holding a
+    // subquery when it is a whole key ([`share_keys`] made a separately
+    // resolved copy the key itself). A subquery merely inside a key is not
+    // grouped: `GROUP BY a.k > 0 OR exists(..)` does not fix the `exists`
+    // within a group.
+    let key_cols: Vec<crate::AttrId> = keys
+        .iter()
+        .filter_map(|k| match &k.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+            _ => None,
+        })
+        .collect();
     let from_input = |id: crate::AttrId| input.iter().any(|c| c.id == id);
     let mut stack: Vec<Arc<Expr>> = aggregates.to_vec();
     while let Some(x) = stack.pop() {
@@ -628,8 +622,7 @@ pub(super) fn check_grouped_reads(
         if matches!(x.node, ExprNode::Subquery { .. }) {
             let grouped = subquery_reads(&x)
                 .iter()
-                .all(|id| !from_input(*id) || key_cols.contains(id))
-                || fingerprint(&x).is_some_and(|f| key_subqueries.contains(&f));
+                .all(|id| !from_input(*id) || key_cols.contains(id));
             if !grouped {
                 return Err(super::unsupported(
                     "a subquery in an aggregate's output that reads a column not grouped by",
@@ -643,20 +636,67 @@ pub(super) fn check_grouped_reads(
     Ok(())
 }
 
-/// The subquery expression `x` as a structural hash (its kind, its `IN`
-/// values and its plan) with its own attribute ids normalized, so two copies
-/// resolved apart from one written subquery hash equal, and the ids of the
-/// enclosing query's columns it reads kept as they are, which both copies
-/// share (`a.k` and `c.k` differ). `None` for a nondeterministic subquery,
-/// whose copies are not the same value.
-fn fingerprint(x: &Expr) -> Option<u128> {
-    let ExprNode::Subquery { plan, .. } = &x.node else {
-        return None;
-    };
-    if !super::plan_is_deterministic(plan) {
+/// `aggregates` with each part outside an aggregate call that is a
+/// separately resolved copy of a whole grouping key holding a subquery (the
+/// same fingerprint) replaced by that key, as Spark matches it with
+/// `semanticEquals` (`SELECT cast(t1a IN (..) AS int) + 1 .. GROUP BY
+/// cast(t1a IN (..) AS int) + 1`): the output then reads the key's value,
+/// and the key's subquery is joined once.
+pub(super) fn share_keys(keys: &[Arc<Expr>], aggregates: &[Arc<Expr>]) -> Vec<Arc<Expr>> {
+    fn share(x: Arc<Expr>, keys: &[(u128, &Arc<Expr>)]) -> Arc<Expr> {
+        if is_call(&x) || !has_subquery(Node::Expr(&x)) {
+            return x;
+        }
+        if let Some(f) = fingerprint(&x)
+            && let Some((_, k)) = keys.iter().find(|(kf, _)| *kf == f)
+        {
+            return Arc::clone(k);
+        }
+        let shared: Result<_, std::convert::Infallible> = x.map_children(|c| Ok(share(c, keys)));
+        match shared {
+            Ok(e) => e,
+        }
+    }
+    let matched: Vec<(u128, &Arc<Expr>)> = keys
+        .iter()
+        .filter(|k| has_subquery(Node::Expr(k)))
+        .filter_map(|k| fingerprint(k).map(|f| (f, k)))
+        .collect();
+    if matched.is_empty() {
+        return aggregates.to_vec();
+    }
+    aggregates
+        .iter()
+        .map(|a| share(Arc::clone(a), &matched))
+        .collect()
+}
+
+/// The expression `x` as a structural hash with the attribute ids its
+/// subqueries define normalized, so two copies resolved apart from one
+/// written expression hash equal, and the ids of the enclosing query's
+/// columns it reads (outside its subqueries, and the outer references and
+/// `IN` values of each) kept as they are, which both copies share (`a.k` and
+/// `c.k` differ). `None` for a nondeterministic expression, whose copies are
+/// not the same value.
+fn fingerprint(x: &Arc<Expr>) -> Option<u128> {
+    if !crate::raises::is_deterministic(x) {
         return None;
     }
-    let reads = subquery_reads(x).iter().map(|id| id.0).collect();
+    let mut reads = std::collections::HashSet::new();
+    let mut stack = vec![Arc::clone(x)];
+    while let Some(e) = stack.pop() {
+        match &e.node {
+            ExprNode::Subquery { .. } => {
+                reads.extend(subquery_reads(&e).iter().map(|id| id.0));
+                continue;
+            }
+            ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
+                reads.insert(c.id.0);
+            }
+            _ => {}
+        }
+        e.for_each_child(&mut |k| stack.push(Arc::clone(k)));
+    }
     Some(crate::cache::pinned_expr_hash(x, reads))
 }
 
