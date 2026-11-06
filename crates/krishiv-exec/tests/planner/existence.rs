@@ -147,7 +147,8 @@ fn a_user_column_named_exists_never_collides() {
 fn forms_spark_folds_before_any_join_are_refused() {
     let env = env();
     for sql in [
-        "SELECT a FROM t WHERE a IN (SELECT 1) OR s = 's0'",
+        // One value over one row is an equality now (Spark folds it); several are not yet.
+        "SELECT a FROM t WHERE (a, s) IN (SELECT 1, 's1') OR s = 's0'",
         "SELECT a FROM t x WHERE NOT (x.a NOT IN (SELECT a FROM t)) OR s = 's0'",
     ] {
         let plan =
