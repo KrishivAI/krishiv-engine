@@ -223,6 +223,8 @@ pub fn decode_task(bytes: &[u8]) -> Result<(TaskSpec, ExecConfig), KrishivError>
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
@@ -268,5 +270,60 @@ mod tests {
     #[test]
     fn garbage_is_refused() {
         assert!(decode_task(&[0xff, 0xff, 0xff]).is_err());
+    }
+
+    #[test]
+    fn a_task_with_scan_splits_is_not_shipped() {
+        let mut task = TaskSpec::whole();
+        task.scans.insert(
+            krishiv_exec::physical::ScanId(1),
+            krishiv_exec::physical::splits::ScanSplits::Files {
+                files: Arc::from(Vec::new()),
+                partitions: Vec::new(),
+            },
+        );
+        let e = encode_task(&task, &ExecConfig::default()).unwrap_err();
+        assert!(
+            e.message().contains("scan splits are not shipped"),
+            "{}",
+            e.message()
+        );
+    }
+
+    #[test]
+    fn a_descriptor_reading_one_exchange_twice_is_refused() {
+        let input = || Input {
+            exchange: 7,
+            stage_attempt: 0,
+            maps: 1,
+            reduce: vec![0],
+        };
+        let message = Task {
+            stage: 1,
+            stage_attempt: 0,
+            partition: 0,
+            partitions: 1,
+            attempt: 0,
+            exchanges: vec![input(), input()],
+            output: None,
+            settings: Some(Settings::of(&ExecConfig::default())),
+        };
+        let e = decode_task(&message.encode_to_vec()).unwrap_err();
+        assert!(e.message().contains("exchange 7 twice"), "{}", e.message());
+    }
+
+    #[test]
+    fn a_descriptor_without_settings_is_refused() {
+        let message = Task {
+            stage: 1,
+            stage_attempt: 0,
+            partition: 0,
+            partitions: 1,
+            attempt: 0,
+            exchanges: Vec::new(),
+            output: None,
+            settings: None,
+        };
+        assert!(decode_task(&message.encode_to_vec()).is_err());
     }
 }
