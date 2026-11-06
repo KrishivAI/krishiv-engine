@@ -125,6 +125,22 @@ fn subqueries_over_grouping_keys_group_by_their_existence_column() -> R {
              from a cross join d \
              group by exists (select 1 from bs where bs.k = a.k and bs.k = d.k + 1)";
     assert!(run(&s, q).is_err(), "{q}");
+    // A nondeterministic IN value reads no column, yet is not fixed within a
+    // group: answered below the aggregate it would split `k = 1` (Spark 4.2
+    // fails it at run time). Refused; a nondeterministic part outside the
+    // subquery is evaluated above the aggregate and answered.
+    let q = "select k, cast(rand(0) * 2 as int) in (select k from b), count(*) from a group by k";
+    assert!(run(&s, q).is_err(), "{q}");
+    let q = "select k, exists (select 1 from b where b.k = a.k and rand(0) > 0.5), count(*) \
+             from a group by k";
+    assert!(run(&s, q).is_err(), "{q}");
+    let q = "select k, rand(0) < 2 and exists (select 1 from b where b.k = a.k), count(*) \
+             from a group by k";
+    assert_eq!(
+        run(&s, q)?,
+        rows(&["1|true|2", "2|false|1", "NULL|false|1"]),
+        "{q}"
+    );
     Ok(())
 }
 
