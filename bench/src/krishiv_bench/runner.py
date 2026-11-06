@@ -320,11 +320,14 @@ def run_suite(
                                 raise MemoryError(f"MemAvailable stayed below {mem_floor} bytes; host memory not free")
                         if cold:
                             evict_page_cache(root)
-                        sampler = memguard.MemSampler()
+                        # No sampler when the guard is off: opting out restores uninstrumented runs
+                        # (its /proc reads would show in in-process adapters' rchar/syscr).
+                        sampler = memguard.MemSampler() if mem_floor else None
                         eng.begin_measure()
                         m = None
+                        failure: Exception | None = None
                         try:
-                            with sampler:
+                            with sampler if sampler is not None else contextlib.nullcontext():
                                 t0 = time.perf_counter()
                                 fut = pool.submit(eng.run, q)
                                 try:
@@ -337,19 +340,23 @@ def run_suite(
                                     pool = cf.ThreadPoolExecutor(max_workers=1)
                                     raise TimeoutError(f"query exceeded {timeout_s}s") from None
                                 dtm = time.perf_counter() - t0
+                        except Exception as e:
+                            failure = e  # decided below: memory reclaimed (retry) or a real failure
                         finally:
                             m = eng.end_measure()
-                        low = sampler.min_available
+                        low = sampler.min_available if sampler is not None else None
                         if mem_floor and low is not None and memguard.is_invalid(low, mem_floor):
                             invalid.append(memguard.InvalidSample(i, attempt, low, mem_floor).as_dict())
                             continue
+                        if failure is not None:
+                            raise failure
                         if i >= warmup:
                             times.append(dtm)
                             meas.append(m)
                         break
                     else:
-                        if i >= warmup:
-                            raise MemoryError(f"{memguard.INVALID_REASON} in all {mem_retries + 1} attempts of run {i}")
+                        # Warm-up too: timings must not follow a warm-up done under memory pressure.
+                        raise MemoryError(f"{memguard.INVALID_REASON} in all {mem_retries + 1} attempts of run {i}")
             except Exception as e:  # record, keep going
                 entry.update(error_fields(e))
                 if invalid:

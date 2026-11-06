@@ -101,8 +101,11 @@ def test_report_lists_invalid_samples_and_is_silent_without_them():
 # ---- run_suite: invalid runs are retried and reported
 
 
-def _suite(monkeypatch, tmp_path, avail_per_run, retries=2):
-    """Run a fake one-query suite; ``avail_per_run[i]`` is the MemAvailable (kB) the i-th engine run sees."""
+def _suite(monkeypatch, tmp_path, avail_per_run, retries=2, warmup=0, guard=0.75, raises=()):
+    """Run a fake one-query suite; ``avail_per_run[i]`` is the MemAvailable (kB) the i-th engine run sees.
+
+    ``raises`` lists the engine-call indexes that raise after the dip (a query killed by reclaimed memory).
+    """
     from krishiv_bench import runner
     from krishiv_bench.adapters.base import Engine, Query
 
@@ -127,6 +130,8 @@ def _suite(monkeypatch, tmp_path, avail_per_run, retries=2):
             meminfo(info, 1000, avail)
             memguard_sampler_tick()
             meminfo(info, 1000, 900)
+            if len(calls) - 1 in raises:
+                raise RuntimeError("killed")
             return [(1,)]
 
         def end_measure(self):
@@ -139,15 +144,23 @@ def _suite(monkeypatch, tmp_path, avail_per_run, retries=2):
 
     monkeypatch.setattr(memguard, "MEMINFO", info)
     real_sampler = memguard.MemSampler
-    monkeypatch.setattr(memguard, "MemSampler", lambda: real_sampler(info, 0.01))
+    built = []
+
+    def make_sampler():
+        built.append(1)
+        return real_sampler(info, 0.01)
+
+    monkeypatch.setattr(memguard, "MemSampler", make_sampler)
     real_wait = memguard.wait_for_memory
     monkeypatch.setattr(memguard, "wait_for_memory", lambda t: real_wait(t, info, sleep=lambda s: None))
     monkeypatch.setattr(memguard, "threshold_bytes", lambda f: int(1000 * 1024 * f))
     monkeypatch.setattr(runner, "make_engine", lambda *a, **k: _Fake())
     monkeypatch.setattr(runner, "load_queries", lambda *a, **k: [Query("q01", "select 1", "tpch")])
     monkeypatch.setattr(runner, "dataset_provenance", lambda *a, **k: {})
-    out = runner.run_suite("fake", "tpch", 1, iterations=2, warmup=0, min_mem_avail=0.75, mem_retries=retries)
-    return json.loads(out.read_text()), calls
+    out = runner.run_suite("fake", "tpch", 1, iterations=2, warmup=warmup, min_mem_avail=guard, mem_retries=retries)
+    rec = json.loads(out.read_text())
+    rec["_samplers_built"] = len(built)
+    return rec, calls
 
 
 def test_run_suite_retries_a_run_that_dipped_and_records_it(tmp_path, monkeypatch):
@@ -166,6 +179,37 @@ def test_run_suite_fails_the_query_when_every_attempt_dips(tmp_path, monkeypatch
     assert "memory reclaimed" in q["error"]
     assert len(q["invalid_samples"]) == 2
     assert len(calls) == 2
+
+
+def test_run_suite_fails_the_query_when_every_warmup_attempt_dips(tmp_path, monkeypatch):
+    rec, calls = _suite(monkeypatch, tmp_path, [100], retries=1, warmup=1)
+    q = rec["queries"]["q01"]
+    assert "memory reclaimed" in q["error"]
+    assert "times_s" not in q
+    assert len(calls) == 2  # the warm-up's two attempts; no timed run follows
+
+
+def test_run_suite_retries_a_query_that_raised_while_memory_was_reclaimed(tmp_path, monkeypatch):
+    rec, calls = _suite(monkeypatch, tmp_path, [100, 900], raises={0})
+    q = rec["queries"]["q01"]
+    assert "error" not in q
+    assert len(q["times_s"]) == 2
+    assert [i["reason"] for i in q["invalid_samples"]] == ["memory reclaimed"]
+    assert len(calls) == 3
+
+
+def test_run_suite_still_fails_a_query_that_raised_with_memory_free(tmp_path, monkeypatch):
+    rec, calls = _suite(monkeypatch, tmp_path, [900], raises={0})
+    q = rec["queries"]["q01"]
+    assert "killed" in q["error"]
+    assert "invalid_samples" not in q
+    assert len(calls) == 1
+
+
+def test_run_suite_starts_no_sampler_when_the_guard_is_off(tmp_path, monkeypatch):
+    rec, _ = _suite(monkeypatch, tmp_path, [100], guard=0)
+    assert rec["_samplers_built"] == 0
+    assert "invalid_samples" not in rec["queries"]["q01"]
 
 
 def test_run_suite_clean_run_has_no_invalid_samples(tmp_path, monkeypatch):
