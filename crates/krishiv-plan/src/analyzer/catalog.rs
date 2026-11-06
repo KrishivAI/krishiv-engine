@@ -265,6 +265,13 @@ pub trait FunctionRegistry: Send + Sync {
     ) -> Option<Arc<dyn krishiv_udf_sdk::ScalarUdf>> {
         None
     }
+    /// Whether the session aggregate UDF named `name` (already
+    /// lower-case) refuses `DISTINCT` (ADR 0045: its
+    /// `AggregateProperties::distinct` is `false`). The default refuses
+    /// nothing.
+    fn rejects_distinct(&self, _name: &str) -> bool {
+        false
+    }
     /// Changes whenever a lookup could answer differently (temporary and
     /// session functions); part of the context fingerprint.
     fn version(&self) -> u64;

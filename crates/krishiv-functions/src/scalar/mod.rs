@@ -52,6 +52,7 @@ mod predicate;
 mod random;
 mod regex;
 mod session;
+mod shuffle;
 mod string;
 mod r#struct;
 mod udf;
@@ -478,7 +479,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 34] = [
+const FAMILIES: &[(&[&str], Binder)] = &[
     (array::NAMES, array::bind),
     (collection::NAMES, collection::bind),
     (string::NAMES, string::bind),
@@ -498,6 +499,7 @@ const FAMILIES: [(&[&str], Binder); 34] = [
     (number::NAMES, number::bind),
     (misc::NAMES, misc::bind),
     (random::NAMES, random::bind),
+    (shuffle::NAMES, shuffle::bind),
     (chars::NAMES, chars::bind),
     (codec::NAMES, codec::bind),
     (r#struct::NAMES, r#struct::bind),
