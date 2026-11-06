@@ -629,3 +629,129 @@ fn pipe_operators_lower_left_to_right() {
         "FROM t |> TABLESAMPLE (3 ROWS)",
     ]));
 }
+
+/// The plan line of `sql`, or its error, for exact comparisons.
+fn line(sql: &str) -> String {
+    match lower(sql) {
+        Ok(p) => p.root().to_string().replace('\n', " | "),
+        Err(e) => format!("ERR {}", e.error),
+    }
+}
+
+#[test]
+fn cube_and_rollup_list_their_grouping_sets_in_spark_order() {
+    assert_eq!(
+        line("SELECT a, b FROM t GROUP BY CUBE (a, b)"),
+        "Aggregate [a, b] GROUPING SETS ((a, b), (a), (b), ()), [a, b] | +- Read t | "
+    );
+    assert_eq!(
+        line("SELECT a, b, c FROM t GROUP BY CUBE (a, b, c)"),
+        "Aggregate [a, b, c] GROUPING SETS ((a, b, c), (a, b), (a, c), (a), (b, c), (b), (c), ()), [a, b, c] \
+         | +- Read t | "
+    );
+    assert_eq!(
+        line("SELECT a, b FROM t GROUP BY ROLLUP (a, b)"),
+        "Aggregate [a, b] GROUPING SETS ((a, b), (a), ()), [a, b] | +- Read t | "
+    );
+}
+
+#[test]
+fn only_inner_cross_and_left_joins_may_be_lateral() {
+    let lateral = |kind: &str| line(&format!("SELECT * FROM t {kind} JOIN LATERAL (SELECT a) s"));
+    for (kind, name) in [
+        ("RIGHT", "RIGHT OUTER"),
+        ("FULL", "FULL OUTER"),
+        ("LEFT SEMI", "LEFT SEMI"),
+        ("LEFT ANTI", "LEFT ANTI"),
+    ] {
+        let got = lateral(kind);
+        assert!(
+            got.starts_with(&format!(
+                "ERR [INVALID_LATERAL_JOIN_TYPE] The {name} JOIN with LATERAL correlation is not allowed"
+            )),
+            "{kind}: {got}"
+        );
+    }
+    assert!(lateral("LEFT").contains("Join LateralLeft"));
+    assert!(lateral("").contains("Join LateralInner"));
+    assert!(lateral("CROSS").contains("Join LateralInner"));
+    // without LATERAL the same kinds are ordinary joins
+    assert!(!line("SELECT * FROM t RIGHT JOIN u ON t.a = u.a").starts_with("ERR"));
+}
+
+#[test]
+fn generators_in_from_are_generate_nodes_and_other_table_functions_are_not() {
+    for (sql, node) in [
+        (
+            "SELECT * FROM explode(array(1, 2))",
+            "Generate explode(array(1, 2)), false, []",
+        ),
+        (
+            "SELECT * FROM posexplode(array(1, 2))",
+            "Generate posexplode(array(1, 2)), false, []",
+        ),
+        (
+            "SELECT * FROM inline(array(struct(1, 2)))",
+            "Generate inline(array(struct(1, 2))), false, []",
+        ),
+        (
+            "SELECT * FROM stack(2, 1, 2)",
+            "Generate inline(stack(2, 1, 2)), false, []",
+        ),
+        (
+            "SELECT * FROM explode_outer(array(1, 2))",
+            "Generate explode_outer(array(1, 2)), true, []",
+        ),
+    ] {
+        assert_eq!(
+            line(sql),
+            format!("Project [*] | +- {node} |    +- OneRowRelation | "),
+            "{sql}"
+        );
+    }
+    // `stack_outer` is not a generator; it stays a table function
+    assert_eq!(
+        line("SELECT * FROM stack_outer(2, 1, 2)"),
+        "Project [*] | +- TableFunction stack_outer [2, 1, 2] | "
+    );
+    // a table argument and a four-part name are refused
+    for sql in ["SELECT * FROM f(TABLE(t))", "SELECT * FROM a.b.c.d(1)"] {
+        assert!(
+            line(sql).contains("table-valued functions"),
+            "{sql}: {}",
+            line(sql)
+        );
+    }
+}
+
+#[test]
+fn inline_tables_name_their_columns_and_paths_are_told_from_names() {
+    assert_eq!(
+        line("SELECT * FROM VALUES (1, 2) AS v"),
+        "Project [*] | +- SubqueryAlias v |    +- InlineTable [col1, col2] (1 rows) | "
+    );
+    assert_eq!(
+        line("SELECT * FROM VALUES (1, 2) AS v (x, y)"),
+        "Project [*] | +- SubqueryAlias v (x, y) |    +- InlineTable [x, y] (1 rows) | "
+    );
+    // a quoted path is read as files; a quoted name that is not a path stays a table name
+    assert_eq!(
+        line("SELECT * FROM parquet.`s3://b/p`"),
+        "Project [*] | +- Read parquet [s3://b/p] | "
+    );
+    assert_eq!(
+        line("SELECT * FROM parquet.`not a path`"),
+        "Project [*] | +- Read parquet.`not a path` | "
+    );
+}
+
+#[test]
+fn a_statement_nested_past_the_inline_limit_still_parses() {
+    // 16 levels is the limit for the calling thread's stack; 900 is below the engine's 1,000 and needs the big one
+    let deep = format!("SELECT {}1{} FROM t", "(".repeat(900), ")".repeat(900));
+    assert!(
+        lower(&deep).is_ok(),
+        "{}",
+        line(&deep).chars().take(200).collect::<String>()
+    );
+}

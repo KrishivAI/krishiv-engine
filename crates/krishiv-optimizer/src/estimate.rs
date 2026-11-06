@@ -27,8 +27,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use krishiv_plan::{
-    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionKind, Grouping, JoinCondition, JoinKind,
-    Literal, LogicalPlan, PlanNode, ResolvedExpr, Scan,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Grouping,
+    JoinCondition, JoinKind, Literal, LogicalPlan, PlanNode, ResolvedExpr, Scan,
 };
 use krishiv_types::{DataType, DecimalType};
 
@@ -115,7 +115,11 @@ fn derived(e: &Expr, input: &RelStats, rows: f64) -> Option<AttrStats> {
             }
             Some(s)
         }
-        ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
+        // A session UDF may share a built-in's name: only registry
+        // aggregates are known.
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.kind == FunctionKind::Aggregate && matches!(f.id, FunctionId::Registry { .. }) =>
+        {
             let mut s = AttrStats::guess(rows);
             match (f.id.name(), f.args.as_slice()) {
                 ("min" | "max", [arg]) => {
