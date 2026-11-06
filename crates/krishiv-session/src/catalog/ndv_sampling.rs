@@ -19,6 +19,9 @@ impl QueryCatalog {
         use krishiv_common::config::{
             NDV_SAMPLING_ENABLED, NDV_SAMPLING_ROWS, NDV_SAMPLING_TIMEOUT,
         };
+        if scans.is_empty() {
+            return;
+        }
         let config = &self.scans.config;
         if config
             .get(&NDV_SAMPLING_ENABLED)
@@ -68,6 +71,19 @@ impl QueryCatalog {
 /// reads no column: the columns whose distinct count decides the
 /// comparison's selectivity (P2-T164 U6).
 fn compared_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
+    // Plans and expressions are DAGs: every node is visited once.
+    walk(plan, out, &mut std::collections::HashSet::new());
+}
+
+/// [`compared_columns`] over the plan nodes not in `seen`.
+fn walk(
+    plan: &LogicalPlan,
+    out: &mut std::collections::HashSet<krishiv_plan::AttrId>,
+    seen: &mut std::collections::HashSet<*const LogicalPlan>,
+) {
+    if !seen.insert(std::ptr::from_ref(plan)) {
+        return;
+    }
     use krishiv_plan::{Builtin, FunctionId, ResolvedExpr, ResolvedFunction};
     fn column(e: &Expr) -> Option<krishiv_plan::AttrId> {
         match &e.node {
@@ -80,7 +96,11 @@ fn compared_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<kris
     /// deterministic.
     fn is_value(e: &Arc<Expr>) -> bool {
         let mut stack = vec![Arc::clone(e)];
+        let mut seen = std::collections::HashSet::new();
         while let Some(x) = stack.pop() {
+            if !seen.insert(Arc::as_ptr(&x)) {
+                continue;
+            }
             match &x.node {
                 ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_))
                 | ExprNode::Subquery { .. } => return false,
@@ -124,11 +144,20 @@ fn compared_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<kris
         }
     }
     /// Subquery plans inside any expression of a node.
-    fn subqueries(e: &Arc<Expr>, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
+    fn subqueries(
+        e: &Arc<Expr>,
+        out: &mut std::collections::HashSet<krishiv_plan::AttrId>,
+        plans: &mut std::collections::HashSet<*const LogicalPlan>,
+    ) {
+        // Expressions are DAGs: a shared subtree is walked once.
         let mut stack = vec![Arc::clone(e)];
+        let mut seen = std::collections::HashSet::new();
         while let Some(x) = stack.pop() {
+            if !seen.insert(Arc::as_ptr(&x)) {
+                continue;
+            }
             if let ExprNode::Subquery { plan, .. } = &x.node {
-                compared_columns(plan, out);
+                walk(plan, out, plans);
             }
             x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
         }
@@ -136,6 +165,6 @@ fn compared_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<kris
     if let PlanNode::Filter { predicate, .. } = &plan.node {
         in_predicate(predicate, out);
     }
-    plan.for_each_expr(&mut |e| subqueries(e, out));
-    plan.for_each_child(&mut |c| compared_columns(c, out));
+    plan.for_each_expr(&mut |e| subqueries(e, out, seen));
+    plan.for_each_child(&mut |c| walk(c, out, seen));
 }
