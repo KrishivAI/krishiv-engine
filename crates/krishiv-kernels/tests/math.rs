@@ -1006,3 +1006,48 @@ proptest! {
         );
     }
 }
+
+#[test]
+fn reciprocal_trig_functions_divide_one_by_the_ratio() {
+    // cot(1) = 1/tan(1), csc(1) = 1/sin(1), sec(1) = 1/cos(1): a `*` or `%` in place of the `/` changes these.
+    let c = ctx(SparkVersion::V4_2);
+    for (f, want) in [
+        (UnaryFn::Cot, 0.642_092_615_934_330_7),
+        (UnaryFn::Csc, 1.188_395_105_778_121_2),
+        (UnaryFn::Sec, 1.850_815_717_680_925_6),
+    ] {
+        let got = unary(f, &f64s(&[Some(1.0)]), &c);
+        assert!(
+            (got.value(0) - want).abs() < 1e-12,
+            "{f:?}(1) = {}",
+            got.value(0)
+        );
+    }
+    assert!(
+        (unary(UnaryFn::Cot, &f64s(&[Some(2.0)]), &c).value(0) + 0.457_657_554_360_285_8).abs()
+            < 1e-12
+    );
+    assert!(
+        (unary(UnaryFn::Csc, &f64s(&[Some(2.0)]), &c).value(0) - 1.099_750_170_294_617).abs()
+            < 1e-12
+    );
+    assert!(
+        (unary(UnaryFn::Sec, &f64s(&[Some(2.0)]), &c).value(0) + 2.402_997_961_722_381).abs()
+            < 1e-12
+    );
+}
+
+#[test]
+fn java_pow_is_nan_only_for_a_unit_base_with_an_infinite_exponent() {
+    let pow = |x: f64, y: f64| BinaryFn::Pow.apply(x, y).unwrap();
+    // `|x| == 1` with a finite exponent, and an infinite exponent with another base, are ordinary powers.
+    assert_eq!(
+        (pow(1.0, 2.0), pow(-1.0, 3.0), pow(1.0, 0.5)),
+        (1.0, -1.0, 1.0)
+    );
+    assert_eq!(
+        (pow(2.0, f64::INFINITY), pow(0.5, f64::INFINITY)),
+        (f64::INFINITY, 0.0)
+    );
+    assert_eq!(pow(2.0, f64::NEG_INFINITY), 0.0);
+}

@@ -42,7 +42,9 @@
 #![forbid(unsafe_code)]
 
 mod access;
+mod admission;
 mod cache;
+mod cancel;
 mod carrier;
 mod catalog;
 mod column;
@@ -53,6 +55,7 @@ mod execute_immediate;
 mod explain;
 mod explain_graph;
 pub mod functions;
+mod history;
 mod identifier_clause;
 mod introspection;
 mod locals;
@@ -61,8 +64,10 @@ pub mod otlp;
 mod partitions;
 mod plan_round_trip;
 mod profile;
+mod query_fold;
 mod recursion;
 mod result_cache;
+mod runtime;
 mod scripting;
 mod session;
 mod sql_functions;
@@ -78,10 +83,12 @@ mod view_schema;
 mod window;
 
 pub use access::{PathPrefixPolicy, ReadOnlyPolicy, StatementInfo};
+pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use system::register_build_features;
 
 pub mod agent;
 
+pub use cancel::CancelReason;
 pub use column::Column;
 pub use conf::RuntimeConf;
 pub use dataframe::{
@@ -92,6 +99,7 @@ pub use explain::Estimate;
 pub use explain_graph::{
     GraphFormat, dot_of_plan, dot_of_profile, mermaid_of_plan, mermaid_of_profile,
 };
+pub use history::{QueryId, QueryOptions};
 pub use krishiv_exec::profile::{QueryProfile, TextOptions};
 pub use krishiv_exec::{
     CounterSample, GaugeSample, HistogramBucket, HistogramSample, MetricDict, MetricsSnapshot,
@@ -106,6 +114,7 @@ pub use krishiv_udf_sdk::{
     UdfInputType, UdfLibrary, UdfProperties,
 };
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
+pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
 pub use session::{RecordBatchStream, Session, SessionBuilder};
 /// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,
 /// for [`Session::register_udf`].

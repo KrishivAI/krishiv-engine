@@ -106,7 +106,8 @@ use crate::credentials::{CredentialCache, two_credential_sources};
 use crate::error::store_failed;
 use crate::error::{Result, unsupported};
 use crate::{
-    CredentialScope, CredentialSource, DEFAULT_REFRESH_SKEW, StoreId, StorePolicy, StoreSettings,
+    CacheScope, CredentialScope, CredentialSource, DEFAULT_REFRESH_SKEW, StoreId, StorePolicy,
+    StoreSettings,
 };
 #[cfg(feature = "cloud")]
 use crate::{RefreshingProvider, RefreshingStore};
@@ -367,6 +368,8 @@ fn parse_hf(scheme: &str, rest: &str) -> Result<ParsedUrl> {
 pub struct StoreRegistry {
     config: Arc<dyn StoreSettings>,
     stores: Mutex<HashMap<StoreId, Arc<dyn ObjectStore>>>,
+    /// Whose credentials the stores read with; the block-cache scope they register under (E15).
+    cache_scope: CacheScope,
     /// Locations with credentials of their own (see [`Self::with_source`]).
     scopes: Vec<ScopeEntry>,
     /// Refresh skew of the sources added next.
@@ -374,6 +377,9 @@ pub struct StoreRegistry {
     /// Every scoped store id this registry handed out, for [`Self::on_release`].
     scoped_ids: Mutex<HashSet<StoreId>>,
     release: Mutex<Vec<ReleaseHook>>,
+    /// The hash of every `fs.*` setting of [`Self::config`], computed once:
+    /// `None` when there is none.
+    settings_hash: std::sync::OnceLock<Option<u64>>,
 }
 
 /// Called with each scoped store id when the registry is dropped.
@@ -420,7 +426,18 @@ impl StoreRegistry {
             skew: DEFAULT_REFRESH_SKEW,
             scoped_ids: Mutex::new(HashSet::new()),
             release: Mutex::new(Vec::new()),
+            settings_hash: std::sync::OnceLock::new(),
+            cache_scope: CacheScope::Isolated,
         }
+    }
+
+    /// This registry registering its stores under `scope`, so blocks are reused across the
+    /// queries of one scope (a session passes its principal's) and never across scopes. A
+    /// registry built by [`Self {:new`] is isolated: it shares nothing.
+    #[must_use]
+    pub fn with_cache_scope(mut self, scope: CacheScope) -> Self {
+        self.cache_scope = scope;
+        self
     }
 
     /// Sets how long before their expiry the credentials of the sources added *after* this
@@ -542,7 +559,16 @@ impl StoreRegistry {
     }
 
     /// The id of `url`'s store under `options`: the URL's store id (with the `#scope:` nonce
-    /// of its credential scope, if any) plus the non-secret hash of the per-read options.
+    /// of its credential scope, if any, else with a `#cfg:` hash of every `fs.*` setting the
+    /// registry builds from) plus the non-secret hash of the per-read options.
+    ///
+    /// The `#cfg:` part (and `#p:`, a hash of the principal of a [`CacheScope::Principal`]
+    /// registry) lets one `IoScheduler` serve many sessions (one engine runtime): stores of
+    /// sessions whose `fs.*` settings differ in anything (a key, an endpoint, a region), or whose
+    /// principals differ, get different ids, so a query's registration never replaces another session's store and
+    /// cache entries keyed by the id are never shared between them. Sessions with equal
+    /// settings, or none, share the store. Secret values enter the hash through their keyed
+    /// fingerprint (ADR 0038), so the id carries no secret.
     fn id_of(
         &self,
         url: &ParsedUrl,
@@ -554,8 +580,47 @@ impl StoreRegistry {
                 &StoreId::new(format!("{}#scope:{}", url.store_id.key(), entry.nonce)),
                 options,
             ),
-            None => effective_store_id(&url.store_id, options),
+            None => {
+                let mut key = url.store_id.key().to_owned();
+                if let Some(hash) = self.settings_hash() {
+                    key.push_str(&format!("#cfg:{hash:016x}"));
+                }
+                // One scheduler serves many principals (an engine runtime): a principal's
+                // registration must never replace another's, whose block-cache scope differs.
+                if let CacheScope::Principal(p) = &self.cache_scope {
+                    let principal = OptionValue::Plain(p.clone());
+                    key.push_str(&format!(
+                        "#p:{:016x}",
+                        options_hash(&[("principal", &principal)])
+                    ));
+                }
+                effective_store_id(&StoreId::new(key), options)
+            }
         }
+    }
+
+    /// The hash of every `fs.*` setting this registry builds from, or `None` without one.
+    fn settings_hash(&self) -> Option<u64> {
+        *self.settings_hash.get_or_init(|| {
+            let mut settings: Vec<(String, OptionValue)> = self
+                .config
+                .keys()
+                .into_iter()
+                .filter(|k| is_store_option(k))
+                .filter_map(|k| self.config.get(&k).map(|v| (k, v)))
+                .collect();
+            if settings.is_empty() {
+                return None;
+            }
+            settings.sort_by(|a, b| {
+                a.0.to_ascii_lowercase()
+                    .cmp(&b.0.to_ascii_lowercase())
+                    .then_with(|| a.0.cmp(&b.0))
+            });
+            let relevant: Vec<(&str, &OptionValue)> =
+                settings.iter().map(|(k, v)| (k.as_str(), v)).collect();
+            Some(options_hash(&relevant))
+        })
     }
 
     /// Parses `text` and builds its store: the id to register it under, the store, the key within
@@ -585,6 +650,7 @@ impl StoreRegistry {
             key: url.key,
             display: url.display,
             policy: policy_for(url.scheme),
+            scope: self.cache_scope.clone(),
         })
     }
 }
@@ -653,6 +719,8 @@ pub struct OpenedStore {
     pub display: String,
     /// The pacing policy of the URL's scheme.
     pub policy: StorePolicy,
+    /// Whose credentials the store reads with: the block-cache scope to register it under (E15).
+    pub scope: CacheScope,
 }
 
 impl fmt::Debug for OpenedStore {
@@ -850,7 +918,7 @@ fn effective_store_id(base: &StoreId, options: &BTreeMap<String, OptionValue>) -
     if relevant.is_empty() {
         return base.clone();
     }
-    StoreId::new(format!("{base}#{:016x}", options_hash(&relevant)))
+    StoreId::new(format!("{}#{:016x}", base.key(), options_hash(&relevant)))
 }
 
 /// The `fs.*` entries of `options` (Spark's store configuration keys),

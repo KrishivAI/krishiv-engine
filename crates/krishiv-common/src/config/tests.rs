@@ -503,11 +503,15 @@ fn registry_is_well_formed() {
 fn docs_markdown_lists_every_entry_deterministically() {
     let md = docs_markdown();
     assert!(md.starts_with("# Krishiv configuration reference\n"));
-    assert!(md.contains("| Key | Type | Default | Scope | Since | Spark alias | Description |"));
+    assert!(md.contains(
+        "| Key | Type | Default | Scope | Settable by | Since | Spark alias | Description |"
+    ));
     for e in REGISTRY {
         assert!(md.contains(&format!("| `{}` |", e.key)), "{}", e.key);
     }
-    assert!(md.contains("| `krishiv.exec.targetPartitionBytes` | size | `128MB` | session |"));
+    assert!(
+        md.contains("| `krishiv.exec.targetPartitionBytes` | size | `128MB` | session | admin |")
+    );
     assert!(md.contains("`spark.sql.ansi.enabled`"));
     assert!(md.contains("enum (`ANSI`, `LEGACY`, `STRICT`)"));
     let rows: Vec<&str> = md.lines().filter(|l| l.starts_with("| `")).collect();
@@ -858,6 +862,54 @@ fn deterministic_order_is_off_by_default_and_parses() {
 }
 
 #[test]
+fn settable_by_agrees_with_scope() {
+    for e in REGISTRY {
+        // Cluster scope is fixed at startup; nothing else is.
+        assert_eq!(
+            e.scope == Scope::Cluster,
+            e.settable_by == SettableBy::Startup,
+            "{}: scope {:?} but settable_by {:?}",
+            e.key,
+            e.scope,
+            e.settable_by
+        );
+    }
+}
+
+#[test]
+fn settable_by_is_set_for_the_limits_a_user_must_not_raise() {
+    for key in [
+        "krishiv.memory.limit",
+        "krishiv.spill.dir",
+        "krishiv.io.cache.path",
+        // One cap for the runtime's one shared store (design P2-E1 R6).
+        "krishiv.resultCache.maxBytes",
+    ] {
+        assert_eq!(
+            lookup(key).map(|e| e.settable_by),
+            Some(SettableBy::Startup),
+            "{key}"
+        );
+    }
+    for key in ["krishiv.cache.maxBytes", "krishiv.experimental.ivm"] {
+        assert_eq!(
+            lookup(key).map(|e| e.settable_by),
+            Some(SettableBy::Admin),
+            "{key}"
+        );
+    }
+    for key in ["krishiv.sql.ansi.enabled", "krishiv.sql.session.timeZone"] {
+        assert_eq!(
+            lookup(key).map(|e| e.settable_by),
+            Some(SettableBy::User),
+            "{key}"
+        );
+    }
+    // Layers are ordered narrowest (startup) to widest (user).
+    assert!(SettableBy::Startup < SettableBy::Admin && SettableBy::Admin < SettableBy::User);
+}
+
+#[test]
 fn plan_round_trip_is_off_by_default_and_parses() {
     let mut c = Config::new();
     assert_eq!(
@@ -873,4 +925,30 @@ fn plan_round_trip_is_off_by_default_and_parses() {
         c.set("krishiv.exec.debug.planRoundTrip", "sometimes")
             .is_err()
     );
+}
+
+#[test]
+fn engine_runtime_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(c.get(&SESSION_MEMORY_LIMIT), None);
+    assert_eq!(
+        c.get(&SYSTEM_QUERIES_CAPACITY)
+            .and_then(ConfigValue::as_int),
+        Some(10_000)
+    );
+    c.set("krishiv.session.memoryLimit", "48m").unwrap();
+    c.set("krishiv.system.queries.capacity", "50").unwrap();
+    assert_eq!(
+        c.get(&SESSION_MEMORY_LIMIT).and_then(ConfigValue::as_size),
+        Some(48 << 20)
+    );
+    assert_eq!(
+        c.get(&SYSTEM_QUERIES_CAPACITY)
+            .and_then(ConfigValue::as_int),
+        Some(50)
+    );
+    assert!(c.set("krishiv.session.memoryLimit", "lots").is_err());
+    assert!(c.set("krishiv.system.queries.capacity", "0").is_err());
+    assert_eq!(SESSION_MEMORY_LIMIT.scope, Scope::Session);
+    assert_eq!(SYSTEM_QUERIES_CAPACITY.scope, Scope::Cluster);
 }
