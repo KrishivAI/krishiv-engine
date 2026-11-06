@@ -1928,6 +1928,22 @@ impl Resolver<'_> {
         self.check_star_ordinals(keys, aggregates)?;
         // Spark resolves the select list first, then ordinals, then the
         // other keys.
+        // Spark wraps a pipe item in `pipeexpression(..)`, so a generator
+        // with several names (`AS (p, y)`) is nested in it there (4.2.0).
+        for e in aggregates {
+            if let ExprNode::Pipe { expr, .. } = &e.node
+                && let ExprNode::MultiAlias { expr: g, .. } = &expr.node
+                && matches!(&g.node, ExprNode::Function(f) if super::generate::is_generator_name(&f.name))
+            {
+                let zone = self.ctx.conf.session_zone;
+                return Err(AnalysisError::new(
+                    UnsupportedGeneratorNestedInExpressions {
+                        expression: format!("\"pipeexpression(multialias({}))\"", pretty(g, zone)),
+                    },
+                    e.origin,
+                ));
+            }
+        }
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
         // Spark's `ExtractGenerator`: the generator's argument takes the
         // item's place in the aggregate, the generator runs above it.

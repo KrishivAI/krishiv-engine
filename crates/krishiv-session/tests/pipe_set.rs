@@ -250,3 +250,20 @@ fn an_aggregate_generator_keeps_its_alias() {
         ["1"]
     );
 }
+
+/// A generator with several names in `AGGREGATE` is nested in Spark's
+/// `pipeexpression(..)` wrapper, so it is refused (Spark 4.2.0).
+#[test]
+fn an_aggregate_generator_with_several_names_is_nested() {
+    let s = Session::new().unwrap();
+    let (class, params) = error(
+        &s,
+        "SELECT 1 AS x |> AGGREGATE posexplode(collect_list(x)) AS (p, y)",
+    );
+    assert_eq!(class, "UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS");
+    assert!(
+        params.iter().any(|(k, v)| k == "expression"
+            && v == "\"pipeexpression(multialias(posexplode(collect_list(x))))\""),
+        "{params:?}"
+    );
+}
