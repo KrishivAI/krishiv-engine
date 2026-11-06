@@ -350,7 +350,7 @@ impl BlockCache {
     }
 
     /// Reserves `bytes` for a fetch in flight; `false` when an attached pool refuses.
-    fn reserve_fetch(&self, bytes: usize) -> bool {
+    pub(super) fn reserve_fetch(&self, bytes: usize) -> bool {
         match lock(&self.fetch_memory).as_mut() {
             Some(r) => r.try_grow(bytes).is_ok(),
             None => true,
@@ -359,7 +359,7 @@ impl BlockCache {
 
     /// Reserves `bytes` for blocks a read holds; while an attached pool refuses, the least recently
     /// used blocks of the memory tier leave to make room, and `false` only when none is left.
-    fn reserve_held(&self, bytes: usize) -> bool {
+    pub(super) fn reserve_held(&self, bytes: usize) -> bool {
         loop {
             if self.reserve_fetch(bytes) {
                 return true;
@@ -380,7 +380,7 @@ impl BlockCache {
     }
 
     /// Returns the bytes reserved by [`Self::reserve_fetch`].
-    fn release_fetch(&self, bytes: usize) {
+    pub(super) fn release_fetch(&self, bytes: usize) {
         if let Some(r) = lock(&self.fetch_memory).as_mut() {
             r.shrink(bytes.min(r.size()));
         }
@@ -453,7 +453,7 @@ impl BlockCache {
 
     /// Puts `bytes` in the memory tier (least recently used blocks leave); `false` when the block
     /// was not kept there (no tier, too large, or the pool granted no room).
-    fn remember(&self, name: u128, bytes: &Bytes) -> bool {
+    pub(super) fn remember(&self, name: u128, bytes: &Bytes) -> bool {
         let cap = self.cfg.memory_bytes;
         let size = bytes.len() as u64;
         if cap == 0 || size > cap {
@@ -484,20 +484,17 @@ impl BlockCache {
                 }
             }
         }
-        let mut kept = true;
+        // The block is no larger than the tier (checked above) and the newest, so trimming to the
+        // cap removes older blocks only and the block stays.
         while st.memory.used > cap {
-            let Some((key, old)) = st.memory.pop_oldest() else {
+            let Some((_, old)) = st.memory.pop_oldest() else {
                 break;
             };
-            if key != name {
-                bump(&self.counters.evictions, 1);
-            } else {
-                kept = false;
-            }
+            bump(&self.counters.evictions, 1);
             st.memory.used = st.memory.used.saturating_sub(old.len() as u64);
             Self::release(&mut st, old.len());
         }
-        kept
+        true
     }
 
     /// Writes the block to disk, removing the least recently used ones to stay under the cap.
