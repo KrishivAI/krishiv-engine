@@ -20,7 +20,14 @@ from playwright.sync_api import sync_playwright
 sys.path.insert(0, str(Path(__file__).parent))
 import fixture_server
 
-VIEWPORTS = [("phone", 390, 844), ("tablet", 820, 1180), ("desktop", 1440, 900)]
+# "small" is the narrowest width the spec names (360 px); it is checked but not photographed.
+VIEWPORTS = [
+    ("small", 360, 740),
+    ("phone", 390, 844),
+    ("tablet", 820, 1180),
+    ("desktop", 1440, 900),
+]
+PHONES = ("small", "phone")
 PAGES = [
     ("health", "#/health", ["Health", "Caches", "hit rate", "Uptime"]),
     ("queries", "#/queries", ["Queries", "SELECT l_returnflag", "Cancel"]),
@@ -54,7 +61,7 @@ def check(shots: Path | None) -> list[str]:
                     color_scheme=scheme,
                     viewport={"width": width, "height": height},
                     has_touch=label != "desktop",
-                    is_mobile=label == "phone",
+                    is_mobile=label in PHONES,
                 )
                 page = ctx.new_page()
                 errors: list[str] = []
@@ -92,12 +99,12 @@ def check(shots: Path | None) -> list[str]:
                         for t in texts
                         if t.lower() not in body.lower()
                     ]
-                    if label == "phone":
+                    if label in PHONES:
                         small = page.evaluate(SMALL_TARGETS)
                         problems += [
                             f"{view}: touch target under 40 px: {s}" for s in small
                         ]
-                    if shots is not None:
+                    if shots is not None and label != "small":
                         shots.mkdir(parents=True, exist_ok=True)
                         page.screenshot(
                             path=str(shots / f"{name}-{label}-{scheme}.png"),
@@ -112,12 +119,7 @@ def check(shots: Path | None) -> list[str]:
                     problems.append(
                         f"{label} {scheme}: a Red Hat font did not load: {fonts}"
                     )
-                problems += [f"{label} {scheme}: console error: {e}" for e in errors]
-                problems += [
-                    f"{label} {scheme}: request outside the page's origin: {u}"
-                    for u in foreign
-                ]
-                if label == "phone":
+                if label in PHONES:
                     page.evaluate("window.location.hash = '#/health'")
                     page.wait_for_timeout(200)
                     if page.get_by_role("dialog").count() != 0:
@@ -144,6 +146,12 @@ def check(shots: Path | None) -> list[str]:
                             problems.append(
                                 f"phone {scheme}: choosing a page does not close the menu and go there"
                             )
+                # Collected last, so an error the menu (or anything above) raises is reported too.
+                problems += [f"{label} {scheme}: console error: {e}" for e in errors]
+                problems += [
+                    f"{label} {scheme}: request outside the page's origin: {u}"
+                    for u in foreign
+                ]
                 ctx.close()
         browser.close()
     return problems
@@ -152,6 +160,6 @@ def check(shots: Path | None) -> list[str]:
 if __name__ == "__main__":
     found = check(Path(sys.argv[1]) if len(sys.argv) > 1 else None)
     print(
-        "\n".join(found) if found else "ui pages: ok (5 pages x 3 widths x dark/light)"
+        "\n".join(found) if found else "ui pages: ok (5 pages x 4 widths x dark/light)"
     )
     sys.exit(1 if found else 0)

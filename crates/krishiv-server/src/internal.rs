@@ -645,3 +645,19 @@ async fn events(
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::human_bytes;
+
+    #[test]
+    fn byte_sizes_read_like_the_pages_write_them() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(1023), "1023 B");
+        assert_eq!(human_bytes(1024), "1.0 KiB");
+        assert_eq!(human_bytes(1536), "1.5 KiB");
+        assert_eq!(human_bytes(134_217_728), "128.0 MiB");
+        assert_eq!(human_bytes(-2048), "-2.0 KiB");
+        assert_eq!(human_bytes(i64::MAX), "8388608.0 TiB");
+    }
+}

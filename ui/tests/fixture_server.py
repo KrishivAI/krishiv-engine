@@ -4,7 +4,7 @@
     python ui/tests/fixture_server.py [--port 0]    # prints the port; the token is `fixture`
 
 The routes and JSON shapes are those of `krishiv_server::internal`; the data is `fixtures.json`. The event stream
-sends the live list once and then holds the connection open, as the real one does.
+sends the live list once a second, as the real one does.
 """
 
 from __future__ import annotations

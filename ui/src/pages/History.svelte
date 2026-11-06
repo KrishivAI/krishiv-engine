@@ -85,8 +85,8 @@
       <thead>
         <tr class="text-xs font-bold tracking-[0.06em] text-muted-foreground uppercase">
           <th class="bg-muted px-3.5 py-2.5 text-left"></th>
-          <th class="bg-muted px-3.5 py-2.5 text-right">A <span class="mono">{compared.a.query_id.slice(0, 8)}</span></th>
-          <th class="bg-muted px-3.5 py-2.5 text-right">B <span class="mono">{compared.b.query_id.slice(0, 8)}</span></th>
+          <th class="bg-muted px-3.5 py-2.5 text-right">A <span class="mono">…{compared.a.query_id.slice(-8)}</span></th>
+          <th class="bg-muted px-3.5 py-2.5 text-right">B <span class="mono">…{compared.b.query_id.slice(-8)}</span></th>
           <th class="bg-muted px-3.5 py-2.5 text-right">B − A</th>
         </tr>
       </thead>
@@ -116,7 +116,7 @@
     {#snippet cell(r, c)}
       {#if c.key === "query"}
         <label class="mr-2 inline-flex min-h-10 min-w-10 items-center justify-center align-middle">
-          <input class="size-5 accent-primary" type="checkbox" checked={picked.includes(r.query_id)} onchange={() => toggle(r.query_id)} aria-label="select for comparison" />
+          <input class="size-5 accent-primary" type="checkbox" checked={picked.includes(r.query_id)} onchange={() => toggle(r.query_id)} aria-label={`Select ${oneLine(r.query_text, 40)} (${r.query_id.slice(-8)}) for comparison`} />
         </label>
         <a class="inline-block min-h-10 py-2 align-middle underline underline-offset-4" href={`#/queries/${encodeURIComponent(r.query_id)}`}>{oneLine(r.query_text, 90)}</a>
         <div><Id id={r.query_id} /></div>
