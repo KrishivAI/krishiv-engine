@@ -13,14 +13,14 @@ use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
-    Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, NullOrdering, PlanId,
+    Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, Literal, NullOrdering, PlanId,
     SortDirection, SortOrder, Star,
 };
 
 use super::errors::{
     expression_not_set, field_empty, not_set, unsupported, unsupported_field, unsupported_variant,
 };
-use super::literal::literal;
+use super::literal::literal_node;
 use super::names::parse_attribute_name;
 use super::types::data_type;
 use super::{Result, Translator};
@@ -62,7 +62,7 @@ impl Translator<'_> {
             return Err(expression_not_set());
         };
         let node = match kind {
-            ExprType::Literal(l) => ExprNode::Literal(literal(l)?),
+            ExprType::Literal(l) => literal_node(l)?,
             ExprType::UnresolvedAttribute(a) => {
                 if a.is_metadata_column == Some(true) {
                     return Err(unsupported_field(
@@ -105,9 +105,7 @@ impl Translator<'_> {
             ExprType::Cast(c) => {
                 let to = match &c.cast_to_type {
                     Some(CastToType::Type(t)) => data_type(t)?,
-                    Some(CastToType::TypeStr(s)) => {
-                        krishiv_types::parse_data_type(s)?.refuse_collations()?
-                    }
+                    Some(CastToType::TypeStr(s)) => krishiv_types::parse_data_type(s)?,
                     None => {
                         return Err(not_set(
                             "spark.connect.Expression.Cast",
@@ -186,6 +184,18 @@ impl Translator<'_> {
                     vec![Arc::new(equal)],
                     f.is_distinct,
                 ))
+            }
+            // `F.collate(col, "name")` / `Column.collate`: the function form of `expr COLLATE name`.
+            _ if name.eq_ignore_ascii_case("collate")
+                && !f.is_distinct
+                && let [value, collation] = args.as_slice()
+                && let ExprNode::Literal(Literal::String(text)) = &collation.node =>
+            {
+                ExprNode::Collate {
+                    expr: Arc::clone(value),
+                    collation: krishiv_types::Collation::parse(text)?,
+                    name: text.clone(),
+                }
             }
             _ => {
                 let canonical = Builtin::from_name(name)

@@ -52,13 +52,45 @@ fn string_collation() {
         data_type(&string("utf8_binary")).expect("default"),
         DataType::String
     );
-    let e = data_type(&string("UTF8_LCASE")).expect_err("collated");
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(
-        e.message().contains("DataType.String.collation"),
-        "{}",
-        e.message()
+    // Any other collation is a collated string; names are case-insensitive, `_RTRIM` is kept.
+    for name in [
+        "UTF8_LCASE",
+        "utf8_lcase",
+        "UNICODE_CI",
+        "UTF8_BINARY_RTRIM",
+    ] {
+        assert_eq!(
+            data_type(&string(name)).expect(name),
+            DataType::collated_string(Collation::parse(name).expect(name)),
+            "{name}"
+        );
+    }
+    assert!(matches!(
+        data_type(&string("UTF8_LCASE")).expect("lcase"),
+        DataType::CollatedString(_)
+    ));
+    // Inside a nested type too.
+    let array = proto_type(Kind::Array(Box::new(dt::Array {
+        element_type: Some(Box::new(Proto {
+            kind: Some(Kind::String(dt::String {
+                collation: "UTF8_LCASE".to_owned(),
+                ..dt::String::default()
+            })),
+        })),
+        contains_null: true,
+        ..dt::Array::default()
+    })));
+    assert_eq!(
+        data_type(&array).expect("array"),
+        ArrayType::new(
+            DataType::collated_string(Collation::parse("UTF8_LCASE").expect("lcase")),
+            true
+        )
+        .into()
     );
+    // An unknown name is Spark's COLLATION_INVALID_NAME.
+    let e = data_type(&string("NO_SUCH_COLLATION")).expect_err("unknown");
+    assert_eq!(e.error_class(), ErrorClass::CollationInvalidName);
 }
 
 #[test]

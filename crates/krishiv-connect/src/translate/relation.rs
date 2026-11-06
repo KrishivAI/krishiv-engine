@@ -13,8 +13,8 @@ use std::sync::Arc;
 
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
-    Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId,
-    PlanNode, ReadSource, SqlArgs,
+    Expr, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode,
+    ReadSource, SqlArgs,
 };
 
 use super::errors::{
@@ -223,9 +223,7 @@ impl Translator<'_> {
 
     fn literal_expression(&mut self, l: &pb::expression::Literal) -> Result<Arc<Expr>> {
         self.count()?;
-        Ok(Arc::new(Expr::new(ExprNode::Literal(
-            super::literal::literal(l)?,
-        ))))
+        Ok(Arc::new(Expr::new(super::literal::literal_node(l)?)))
     }
 
     fn join(&mut self, j: &pb::Join) -> Result<PlanNode> {

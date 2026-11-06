@@ -7,8 +7,10 @@
 //! `INCOMPATIBLE_LITERAL_DATA_TYPE`. `NULL` is compatible with any type.
 
 use krishiv_common::error::{KrishivError, NumericValueOutOfRangeWithSuggestion};
-use krishiv_plan::{DayTimeField, Literal, YearMonthField};
-use krishiv_types::DecimalType;
+use std::sync::Arc;
+
+use krishiv_plan::{DayTimeField, Expr, ExprNode, Literal, YearMonthField};
+use krishiv_types::{Collation, DecimalType};
 
 use super::errors::{
     assertion, incompatible_literal, not_set, unsupported_literal_type, unsupported_variant,
@@ -21,6 +23,33 @@ use expression::literal::{Decimal, LiteralType};
 pub(super) const DAY_TIME_DEFAULT: (i32, i32) = (0, 3);
 /// Spark's default for `YearMonthIntervalType()`: `YEAR TO MONTH`.
 pub(super) const YEAR_MONTH_DEFAULT: (i32, i32) = (0, 1);
+
+/// A literal as an expression node: a string literal declared with a non-default collation is that
+/// string under an explicit `COLLATE` (as `'x' COLLATE name` lowers), every other literal is itself.
+///
+/// # Errors
+/// As [`literal`]; `COLLATION_INVALID_NAME` for an unknown collation.
+pub(crate) fn literal_node(lit: &expression::Literal) -> Result<ExprNode, KrishivError> {
+    let value = literal(lit)?;
+    if let (
+        Literal::String(_),
+        Some(ProtoType {
+            kind: Some(Kind::String(s)),
+        }),
+    ) = (&value, &lit.data_type)
+        && !s.collation.is_empty()
+    {
+        let collation = Collation::parse(&s.collation)?;
+        if !collation.is_utf8_binary() {
+            return Ok(ExprNode::Collate {
+                expr: Arc::new(Expr::new(ExprNode::Literal(value))),
+                collation,
+                name: s.collation.clone(),
+            });
+        }
+    }
+    Ok(ExprNode::Literal(value))
+}
 
 /// Translates a literal.
 ///
@@ -66,7 +95,7 @@ pub(crate) fn literal(lit: &expression::Literal) -> Result<Literal, KrishivError
         LiteralType::Decimal(d) => decimal(d, declared_kind)?,
         LiteralType::String(v) => {
             if let Some(Kind::String(s)) = declared_kind {
-                // Only the default collation is a plain `STRING`.
+                // The collation must be a known one (the caller wraps the value in `COLLATE`).
                 data_type(&ProtoType {
                     kind: Some(Kind::String(s.clone())),
                 })?;

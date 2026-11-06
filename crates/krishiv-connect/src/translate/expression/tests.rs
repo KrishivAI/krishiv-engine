@@ -321,6 +321,59 @@ fn cast_errors() {
     );
 }
 
+#[test]
+fn collate_and_collated_casts() {
+    // `F.collate(col, "name")` and `Column.collate("name")` arrive as the function `collate`.
+    let collate = |name: &str| {
+        func(
+            "collate",
+            vec![attr("a"), lit(LiteralType::String(name.into()))],
+        )
+    };
+    let e = translate_expression(&collate("utf8_lcase"), &conf()).unwrap();
+    let ExprNode::Collate {
+        expr,
+        collation,
+        name,
+    } = &e.node
+    else {
+        panic!("not a COLLATE: {e:?}");
+    };
+    assert!(matches!(&expr.node, ExprNode::Column(c) if c.name == ["a"]));
+    assert_eq!(
+        *collation,
+        krishiv_types::Collation::parse("UTF8_LCASE").unwrap()
+    );
+    assert_eq!(name, "utf8_lcase");
+    assert_eq!(
+        err(&collate("NO_SUCH_COLLATION")).error_class(),
+        ErrorClass::CollationInvalidName
+    );
+    // A collation that is not a string literal stays an ordinary call.
+    let e = translate_expression(&func("collate", vec![attr("a"), attr("b")]), &conf()).unwrap();
+    assert_eq!(function(&e).name, "collate");
+    // A cast to a collated string, by type and by DDL string.
+    let lcase = || {
+        krishiv_types::DataType::collated_string(
+            krishiv_types::Collation::parse("UTF8_LCASE").unwrap(),
+        )
+    };
+    let by_type = CastToType::Type(proto_type(dt::Kind::String(dt::String {
+        collation: "UTF8_LCASE".into(),
+        ..dt::String::default()
+    })));
+    for to in [
+        by_type,
+        CastToType::TypeStr("string collate UTF8_LCASE".into()),
+    ] {
+        let e = translate_expression(&cast(Some(to), 0), &conf()).unwrap();
+        let ExprNode::Cast { to, .. } = &e.node else {
+            panic!("not a cast: {e:?}");
+        };
+        assert_eq!(*to, lcase());
+    }
+}
+
 fn star(target: Option<&str>, plan_id: Option<i64>) -> Expression {
     expr(ExprType::UnresolvedStar(expression::UnresolvedStar {
         unparsed_target: target.map(str::to_owned),

@@ -450,10 +450,44 @@ fn string_collation_in_the_declared_type() {
         Literal::String("x".into())
     );
     assert_eq!(collated("").unwrap(), Literal::String("x".into()));
+    // The value is the same; a non-default collation is carried by `literal_node` as `COLLATE`.
+    assert_eq!(collated("UTF8_LCASE").unwrap(), Literal::String("x".into()));
     assert_eq!(
-        collated("UTF8_LCASE").unwrap_err().error_class(),
-        ErrorClass::KrishivUnsupportedFeature
+        collated("NO_SUCH_COLLATION").unwrap_err().error_class(),
+        ErrorClass::CollationInvalidName
     );
+}
+
+#[test]
+fn a_collated_string_literal_is_an_explicit_collate() {
+    let node = |collation: &str| {
+        literal_node(&typed(
+            LiteralType::String("x".into()),
+            Kind::String(dt::String {
+                collation: collation.into(),
+                ..dt::String::default()
+            }),
+        ))
+    };
+    let ExprNode::Collate {
+        expr,
+        collation,
+        name,
+    } = node("utf8_lcase").unwrap()
+    else {
+        panic!("not a COLLATE");
+    };
+    assert_eq!(expr.node, ExprNode::Literal(Literal::String("x".into())));
+    assert_eq!(collation, Collation::parse("UTF8_LCASE").unwrap());
+    assert_eq!(name, "utf8_lcase");
+    // The default collation is the plain literal.
+    for default in ["", "UTF8_BINARY", "utf8_binary"] {
+        assert_eq!(
+            node(default).unwrap(),
+            ExprNode::Literal(Literal::String("x".into())),
+            "{default:?}"
+        );
+    }
 }
 
 #[test]
