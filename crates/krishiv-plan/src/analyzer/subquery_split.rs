@@ -645,8 +645,11 @@ pub(super) fn check_grouped_reads(
 
 /// The subquery expression `x` as text with its attribute ids left out
 /// (`#12`), so two copies resolved apart from one written subquery read the
-/// same: its kind, its `IN` values and its plan. `None` for a
-/// nondeterministic subquery, whose copies are not the same value.
+/// same: its kind, its `IN` values and its plan, then the ids of the
+/// enclosing query's columns it reads, which both copies share (outer
+/// references print without their table, so `a.k` and `c.k` would read the
+/// same otherwise). `None` for a nondeterministic subquery, whose copies are
+/// not the same value.
 fn fingerprint(x: &Expr) -> Option<String> {
     let ExprNode::Subquery { kind, plan } = &x.node else {
         return None;
@@ -673,6 +676,12 @@ fn fingerprint(x: &Expr) -> Option<String> {
             }
         }
     }
+    let mut reads: Vec<u64> = subquery_reads(x).iter().map(|id| id.0).collect();
+    reads.sort_unstable();
+    reads.dedup();
+    let reads: Vec<String> = reads.iter().map(u64::to_string).collect();
+    out.push_str(" reads ");
+    out.push_str(&reads.join(","));
     Some(out)
 }
 
