@@ -974,6 +974,29 @@ fn a_class_with_two_columns_of_one_input_filters_that_input() {
     insta::assert_snapshot!(text);
 }
 
+/// Nested columns form no class: two columns of one input equal to a third
+/// stay two join keys, as written, instead of a key and a filter of that
+/// input (the executor's `=` cannot compare a struct holding an array, which
+/// its join keys can).
+#[test]
+fn nested_equalities_stay_as_written() {
+    let ty = krishiv_types::parse_data_type("struct<x: array<int>>").unwrap();
+    let col = |name: &str| krishiv_plan::analyzer::TableColumn {
+        name: name.to_owned(),
+        data_type: ty.clone(),
+        nullable: true,
+    };
+    let cat = support::catalog()
+        .with_table(&["default"], "n1", vec![col("a"), col("b")], None)
+        .with_table(&["default"], "n2", vec![col("c")], None);
+    let sql = "SELECT 1 FROM n1 t JOIN n2 u ON t.a = u.c AND t.b = u.c";
+    let plan = support::resolve(sql, &support::ctx_over(cat));
+    let optimized = optimize(&plan).unwrap();
+    let text = optimized.root().to_string();
+    assert!(!text.contains("Filter"), "{text}");
+    assert_eq!(text.matches(" == ").count(), 2, "{text}");
+}
+
 /// A written equality the others imply is left out of the plan, and the
 /// rows stay those of the written plan.
 #[test]
