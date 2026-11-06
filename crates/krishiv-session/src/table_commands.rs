@@ -1319,7 +1319,7 @@ impl Session {
             }
             .into());
         }
-        refuse_secret_options(&t.options, original)?;
+        crate::access::refuse_secret_options(&t.options, original)?;
         let mut options = options_of(&t.options, original);
         let properties = options_of(&t.tblproperties, original);
         // A `path` option is the table's location, as in Spark.
@@ -3070,26 +3070,6 @@ fn options_of(options: &[TableOption], original: &str) -> BTreeMap<String, Strin
             (key, value)
         })
         .collect()
-}
-
-/// Table options are stored as text and never resolved, so a `secret('scope', 'key')` value would
-/// be kept as that literal text; it is refused as it is for `writeTo` (use a read or write option).
-fn refuse_secret_options(options: &[TableOption], original: &str) -> Result<(), KrishivError> {
-    let is_secret = |o: &TableOption| {
-        o.value.as_ref().is_some_and(|v| {
-            original.get(v.span.start..v.span.end).is_some_and(|t| {
-                let t = t.trim_start();
-                t.len() > 6
-                    && t.is_char_boundary(6)
-                    && t[..6].eq_ignore_ascii_case("secret")
-                    && t[6..].trim_start().starts_with('(')
-            })
-        })
-    };
-    if options.iter().any(is_secret) {
-        return Err(unsupported("secret table options"));
-    }
-    Ok(())
 }
 
 /// A literal's text without its quotes.
