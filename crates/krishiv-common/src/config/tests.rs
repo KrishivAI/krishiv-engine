@@ -969,4 +969,10 @@ fn binary_output_style_parses_and_has_no_default() {
         Some("UTF-8")
     );
     assert!(c.set("spark.sql.binaryOutputStyle", "ROT13").is_err());
+    // The Krishiv key names the same entry.
+    c.set("krishiv.sql.binaryOutputStyle", "Base64").unwrap();
+    assert_eq!(
+        c.get(&BINARY_OUTPUT_STYLE).and_then(ConfigValue::as_str),
+        Some("BASE64")
+    );
 }

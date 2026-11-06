@@ -96,6 +96,13 @@ fn from_xml_reads_a_binary_field_as_the_text_bytes() {
 }
 
 #[test]
+fn the_krishiv_key_sets_the_style_too() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET krishiv.sql.binaryOutputStyle=HEX")).unwrap();
+    assert_eq!(text(&s, CSV), "1,4561736F6E");
+}
+
+#[test]
 fn an_unknown_style_is_refused() {
     let s = Session::new().unwrap();
     assert!(block_on(s.sql("SET spark.sql.binaryOutputStyle=ROT13")).is_err());

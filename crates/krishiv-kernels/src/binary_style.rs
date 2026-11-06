@@ -11,7 +11,8 @@ use std::fmt::Write as _;
 /// A value of `spark.sql.binaryOutputStyle`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinaryStyle {
-    /// The bytes as UTF-8 text (malformed sequences become U+FFFD).
+    /// The bytes as UTF-8 text, each malformed unit replaced by U+FFFD as Java's decoder does
+    /// (an encoded surrogate is one unit).
     Utf8,
     /// Signed byte values, `[69, 97]`.
     Basic,
@@ -53,7 +54,7 @@ impl BinaryStyle {
     /// Appends `bytes` as the style prints them.
     pub fn write(self, bytes: &[u8], out: &mut String) {
         match self {
-            Self::Utf8 => out.push_str(&String::from_utf8_lossy(bytes)),
+            Self::Utf8 => crate::string::codec::utf8_replacing(bytes, out),
             Self::Basic => {
                 out.push('[');
                 for (i, b) in bytes.iter().enumerate() {
@@ -134,6 +135,15 @@ mod tests {
         assert_eq!(BinaryStyle::Hex.render(&edge), "00FF");
         assert_eq!(BinaryStyle::HexDiscrete.render(&edge), "[00 FF]");
         assert_eq!(BinaryStyle::default(), BinaryStyle::HexDiscrete);
+    }
+
+    /// Spark 4.2.0, UTF-8 style: `to_csv(named_struct('a', X'EDA080'))` is one U+FFFD and
+    /// `X'FF41'` is U+FFFD then `A`.
+    #[test]
+    fn malformed_utf8_is_replaced_as_java_does() {
+        assert_eq!(BinaryStyle::Utf8.render(&[0xED, 0xA0, 0x80]), "\u{FFFD}");
+        assert_eq!(BinaryStyle::Utf8.render(&[0xFF, 0x41]), "\u{FFFD}A");
+        assert_eq!(BinaryStyle::Utf8.render(&[0xC3]), "\u{FFFD}");
     }
 
     #[test]
