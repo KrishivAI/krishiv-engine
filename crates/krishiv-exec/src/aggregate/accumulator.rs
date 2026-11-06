@@ -3170,7 +3170,7 @@ fn narrow(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<ArrayR
 /// `a` with the string and binary views it holds copied out of the shared
 /// buffers of the batch it was taken from: a one-row winner would otherwise
 /// keep every buffer of that batch alive, and the reservation would count
-/// them once per group. Nested structs are compacted field by field; other
+/// them once per group. Nested structs and arrays are compacted field by field; other
 /// types already own what `take` copied.
 fn compact_views(a: ArrayRef) -> ArrayRef {
     match a.data_type() {
@@ -3180,6 +3180,19 @@ fn compact_views(a: ArrayRef) -> ArrayRef {
             let s = a.as_struct();
             let children: Vec<ArrayRef> = s.columns().iter().cloned().map(compact_views).collect();
             match arrow_array::StructArray::try_new(fields.clone(), children, s.nulls().cloned()) {
+                Ok(compacted) => Arc::new(compacted),
+                Err(_) => a,
+            }
+        }
+        DataType::List(field) => {
+            let l = a.as_list::<i32>();
+            let values = compact_views(Arc::clone(l.values()));
+            match arrow_array::ListArray::try_new(
+                Arc::clone(field),
+                l.offsets().clone(),
+                values,
+                l.nulls().cloned(),
+            ) {
                 Ok(compacted) => Arc::new(compacted),
                 Err(_) => a,
             }

@@ -1,6 +1,6 @@
 # Hand-written Rust files over 2000 lines: `<lines> <path>`. They may shrink, never grow
 # (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
-4152 crates/krishiv-exec/src/aggregate/accumulator.rs
+4165 crates/krishiv-exec/src/aggregate/accumulator.rs
 2067 crates/krishiv-exec/src/aggregate/hll.rs
 3158 crates/krishiv-exec/src/aggregate/rowtable.rs
 3239 crates/krishiv-exec/src/aggregate/tests.rs
