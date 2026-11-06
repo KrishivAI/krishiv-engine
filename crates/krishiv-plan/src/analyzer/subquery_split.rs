@@ -225,9 +225,15 @@ impl Rewriter {
                 }
             }
         }
-        // Each call becomes its own subquery over the input: a
-        // nondeterministic input would give each call different rows.
-        if !super::plan_is_deterministic(&c.input) {
+        // Each call becomes its own subquery over the input, and the value
+        // is read again by the `HAVING`: a nondeterministic input or value
+        // would give each its own rows or draws.
+        if !super::plan_is_deterministic(&c.input)
+            || !super::super::sqlfn::is_deterministic(&c.value)
+            || c.having
+                .as_ref()
+                .is_some_and(|h| !super::super::sqlfn::is_deterministic(h))
+        {
             return Err(super::unsupported(
                 "a correlated scalar subquery of several aggregates over a nondeterministic input",
                 c.origin,
@@ -266,7 +272,10 @@ impl Rewriter {
         let c = composite(plan)?;
         let having = c.having.clone()?;
         // The value and the `HAVING` each become a subquery over the input.
-        if !super::plan_is_deterministic(&c.input) {
+        if !super::plan_is_deterministic(&c.input)
+            || !super::super::sqlfn::is_deterministic(&c.value)
+            || !super::super::sqlfn::is_deterministic(&having)
+        {
             return None;
         }
         let scalar = |p: Arc<LogicalPlan>| {
@@ -589,27 +598,27 @@ pub(super) fn check_grouped_reads(
     input: &[BoundColumn],
     origin: Origin,
 ) -> R<()> {
-    // The grouped columns: a key that is the column itself (Spark matches
-    // an outer reference to the grouping expressions with `semanticEquals`,
-    // so `GROUP BY k % 2` does not group `k`), and the columns a subquery in
-    // a key reads (a key and an output may hold separately resolved copies
-    // of one subquery, `GROUP BY cast(t1a in (..) as int) + 1`, which Spark
-    // matches as a whole).
-    let mut key_reads: Vec<crate::AttrId> = Vec::new();
+    // Spark matches the output to the grouping expressions with
+    // `semanticEquals`: a column is grouped when a key is that column
+    // (`GROUP BY k % 2` does not group `k`), and a subquery when a key holds
+    // the same subquery (a key and an output hold separately resolved copies
+    // of it, `GROUP BY cast(t1a in (..) as int) + 1`), never merely one over
+    // the same columns.
+    let mut key_cols: Vec<crate::AttrId> = Vec::new();
+    let mut key_subqueries: Vec<String> = Vec::new();
     for k in keys {
         if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &k.node {
-            key_reads.push(c.id);
+            key_cols.push(c.id);
         }
         let mut stack = vec![Arc::clone(k)];
         while let Some(x) = stack.pop() {
             if matches!(x.node, ExprNode::Subquery { .. }) {
-                key_reads.extend(subquery_reads(&x));
+                key_subqueries.extend(fingerprint(&x));
                 continue;
             }
             x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
         }
     }
-    let grouped = |id: crate::AttrId| key_reads.contains(&id);
     let from_input = |id: crate::AttrId| input.iter().any(|c| c.id == id);
     let mut stack: Vec<Arc<Expr>> = aggregates.to_vec();
     while let Some(x) = stack.pop() {
@@ -617,8 +626,11 @@ pub(super) fn check_grouped_reads(
             continue;
         }
         if matches!(x.node, ExprNode::Subquery { .. }) {
-            let reads = subquery_reads(&x);
-            if reads.iter().any(|id| from_input(*id) && !grouped(*id)) {
+            let grouped = subquery_reads(&x)
+                .iter()
+                .all(|id| !from_input(*id) || key_cols.contains(id))
+                || fingerprint(&x).is_some_and(|f| key_subqueries.contains(&f));
+            if !grouped {
                 return Err(super::unsupported(
                     "a subquery in an aggregate's output that reads a column not grouped by",
                     origin,
@@ -629,6 +641,39 @@ pub(super) fn check_grouped_reads(
         x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
     }
     Ok(())
+}
+
+/// The subquery expression `x` as text with its attribute ids left out
+/// (`#12`), so two copies resolved apart from one written subquery read the
+/// same: its kind, its `IN` values and its plan. `None` for a
+/// nondeterministic subquery, whose copies are not the same value.
+fn fingerprint(x: &Expr) -> Option<String> {
+    let ExprNode::Subquery { kind, plan } = &x.node else {
+        return None;
+    };
+    if !super::plan_is_deterministic(plan) {
+        return None;
+    }
+    let head = match kind {
+        SubqueryKind::Scalar => "scalar".to_owned(),
+        SubqueryKind::Exists => "exists".to_owned(),
+        SubqueryKind::In(values) => {
+            let values: Vec<String> = values.iter().map(|v| pretty(v, None)).collect();
+            format!("in({})", values.join(","))
+        }
+    };
+    let text = format!("{head} {plan}");
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        out.push(c);
+        if c == '#' {
+            while chars.peek().is_some_and(char::is_ascii_digit) {
+                chars.next();
+            }
+        }
+    }
+    Some(out)
 }
 
 /// `e` with every `NOT` above an `AND`, an `OR` or another `NOT` that holds

@@ -90,6 +90,12 @@ fn subqueries_over_grouping_keys_group_by_their_existence_column() -> R {
     // together, so `k` is not fixed within the group.
     let q = "select exists (select 1 from b where b.k = a.k), count(*) from a group by a.k % 2";
     assert!(run(&s, q).is_err(), "{q}");
+    // A key's subquery groups that subquery, not every subquery over the
+    // same column: `c` differs from `b`, so its EXISTS is not grouped.
+    run(&s, "create temporary view c(k) as values (1)")?;
+    let q = "select exists (select 1 from c where c.k = a.k), count(*) from a \
+             group by exists (select 1 from b where b.k = a.k)";
+    assert!(run(&s, q).is_err(), "{q}");
     Ok(())
 }
 

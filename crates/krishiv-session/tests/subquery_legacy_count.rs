@@ -239,5 +239,10 @@ fn legacy_shapes_not_reproduced_are_refused() -> R {
     // nondeterministic filter they would read different rows.
     let q = "select a, (select count(*) = count(d) from r where r.c = l.a and rand() < 0.5) from l";
     assert!(run(&s, q).is_err(), "{q}");
+    // The value is read again by the HAVING: a nondeterministic value
+    // would be drawn twice.
+    let q =
+        "select a, (select count(*) + rand() as v from r where r.c = l.a having v < 0.5) from l";
+    assert!(run(&s, q).is_err(), "{q}");
     Ok(())
 }
