@@ -2144,6 +2144,13 @@ impl Session {
             Some(source) => i.clauses.iter().map(|c| from_source(source, c)).collect(),
         };
         if clauses.len() > 1 {
+            // Spark resolves every target before any clause's columns: a missing table is the
+            // error even when an earlier clause names an unknown column.
+            let env = self.query_env();
+            for clause in &clauses {
+                let name = self.table_name(&clause.name, &env)?;
+                self.table_for_write(&name, "INSERT", &env)?;
+            }
             for clause in &clauses {
                 self.insert_clause(clause, original, true).await?;
             }
@@ -2329,9 +2336,8 @@ impl Session {
         }
         let df = base.select(select);
         if dry {
-            // Everything but the write: the rows to write resolve.
-            df.analyzed_in(self.query_env()).await?;
-            return Ok(());
+            // Every check of the write, without writing.
+            return self.check_table_write(table, &df, overwrite).await;
         }
         let mode = if overwrite { "overwrite" } else { "append" };
         let written = self.write_table_rows(table, &df, mode, &mut None).await;
@@ -2729,18 +2735,21 @@ impl Session {
         mode: &str,
         pre: &mut Option<Admitted>,
     ) -> Result<Vec<String>, KrishivError> {
-        if table.layout.bucket.is_some() {
-            return Err(unsupported("writes to bucketed tables"));
-        }
-        let mut writer = df.write().format(&table.provider).mode(mode);
-        if table.is_partitioned() {
-            writer = writer.partition_by(&table.layout.partition_columns);
-        }
-        for (k, v) in &table.options {
-            writer = writer.option(k, v);
-        }
-        writer
+        table_writer(table, df, mode)?
             .save_reporting(&table.location.display().to_string(), pre.take())
+            .await
+    }
+
+    /// The checks [`Self::write_table_rows`] makes before it writes, without writing.
+    async fn check_table_write(
+        &self,
+        table: &CatalogTable,
+        df: &DataFrame,
+        overwrite: bool,
+    ) -> Result<(), KrishivError> {
+        let mode = if overwrite { "overwrite" } else { "append" };
+        table_writer(table, df, mode)?
+            .check_save(&table.location.display().to_string())
             .await
     }
 }
@@ -2752,6 +2761,25 @@ enum ColumnChange {
     Position,
     Nullability,
     DropDefault,
+}
+
+/// The writer of `df` into `table` with `mode` (bucketed tables refused).
+fn table_writer(
+    table: &CatalogTable,
+    df: &DataFrame,
+    mode: &str,
+) -> Result<crate::dataframe::DataFrameWriter, KrishivError> {
+    if table.layout.bucket.is_some() {
+        return Err(unsupported("writes to bucketed tables"));
+    }
+    let mut writer = df.write().format(&table.provider).mode(mode);
+    if table.is_partitioned() {
+        writer = writer.partition_by(&table.layout.partition_columns);
+    }
+    for (k, v) in &table.options {
+        writer = writer.option(k, v);
+    }
+    Ok(writer)
 }
 
 /// `UNSUPPORTED_FEATURE.TABLE_OPERATION` for `operation` on the table `name`.
