@@ -1984,6 +1984,8 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
             false,
         ),
     ];
+    let mut variants = file_scan();
+    variants.scan.output = vec![column(3, "v", DataType::Variant, true)];
     let geometry = col(
         5,
         "g3857",
@@ -2121,6 +2123,7 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ("time_project", times),
         ("geo_scan", PhysNode::Scan(spatial)),
         ("geo_join_residual", residual_join),
+        ("variant_scan", PhysNode::Scan(variants)),
         ("collated_scan", PhysNode::Scan(collated_columns)),
         ("collated_nested", collated_nested),
     ]

@@ -761,6 +761,15 @@ impl Resolver<'_> {
             {
                 pretty(expr, zone)
             }
+            // A cast of an alias (`v:a::int`) keeps the alias's name.
+            ExprNode::Cast { expr, .. }
+                if matches!(expr.node, ExprNode::Resolved(ResolvedExpr::Alias { .. })) =>
+            {
+                match &expr.node {
+                    ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
+                    _ => pretty(expr, zone),
+                }
+            }
             // A higher-order call names its output from the bound call:
             // lambdas read `namedlambdavariable()`, and a three-argument
             // `aggregate`/`reduce` shows the identity `finish` (see `hof`

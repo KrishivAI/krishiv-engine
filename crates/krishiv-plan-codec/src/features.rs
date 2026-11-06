@@ -155,6 +155,7 @@ registry! {
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
+    (variant_type, VariantType, POST_MIGRATION_READER_VERSION, Semantic, "The `VARIANT` type (Parquet Variant v1 values, unshredded in memory)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -239,6 +240,7 @@ fn type_feature(t: &DataType) -> Option<Feature> {
         | DataType::DayTimeInterval { .. }
         | DataType::CalendarInterval => Some(Feature::IntervalTypes),
         DataType::CollatedString(_) => Some(Feature::CollatedStrings),
+        DataType::Variant => Some(Feature::VariantType),
         _ => t.is_nested().then_some(Feature::NestedTypes),
     }
 }
@@ -450,6 +452,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                 Some(Feature::TimeType)
             } else if arrow_interval(t) {
                 Some(Feature::IntervalTypes)
+            } else if krishiv_types::arrow::is_variant_struct(t) {
+                // A variant's carrier is one value, not a struct.
+                Some(Feature::VariantType)
             } else {
                 arrow_nested(t).then_some(Feature::NestedTypes)
             }
