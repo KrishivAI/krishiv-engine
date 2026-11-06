@@ -125,3 +125,44 @@ fn describe_formatted_of_a_column_shows_its_declared_type_and_statistics() {
     assert_eq!(rows("describe formatted t c"), 10);
     assert_eq!(text_at(&s, "describe formatted t c", 1), "c");
 }
+
+#[test]
+fn view_properties_serde_properties_and_partition_locations() {
+    let s = fresh();
+    run(&s, "create view tv as select * from t").unwrap();
+    run(&s, "alter view tv set tblproperties('yes'='no')").unwrap();
+    run(&s, "alter view tv unset tblproperties('yes')").unwrap();
+    run(&s, "alter table t set serdeproperties('yes'='no')").unwrap();
+    let described = text_at(&s, "describe table extended t", 1);
+    assert!(!described.is_empty());
+    run(&s, "drop table if exists tp").unwrap();
+    run(
+        &s,
+        "create table tp(a string, v varchar(2), c char(2)) using parquet partitioned by (v, c)",
+    )
+    .unwrap();
+    // A relative location is made absolute; a partition that is not there is PARTITIONS_NOT_FOUND.
+    run(
+        &s,
+        "alter table tp add partition (v='ke', c='nt') location 'loc1'",
+    )
+    .unwrap();
+    run(
+        &s,
+        "alter table tp partition (v='ke', c='nt') set location 'loc2'",
+    )
+    .unwrap();
+    let e = run(
+        &s,
+        "alter table tp partition (v='no', c='pe') set location 'loc3'",
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "PARTITIONS_NOT_FOUND");
+    // Renaming needs every partition column in both specs (_LEGACY_ERROR_TEMP_1232).
+    let e = run(
+        &s,
+        "alter table tp partition (v='ke') rename to partition (v='nt')",
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "_LEGACY_ERROR_TEMP_1232");
+}

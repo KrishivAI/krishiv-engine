@@ -928,6 +928,11 @@ impl Session {
             AlterViewAction::SetTblProperties(props) => {
                 changed.properties.extend(options_of(props, original));
             }
+            AlterViewAction::UnsetTblProperties { keys, .. } => {
+                for key in options_of(keys, original).keys() {
+                    changed.properties.remove(key);
+                }
+            }
             _ => return Err(unsupported("this ALTER VIEW")),
         }
         if !self.state.catalog.store.replace_table(&existing, changed) {
@@ -1052,6 +1057,18 @@ impl Session {
                     .add_partitions(&table, parts, *if_not_exists, original)
                     .await?;
             }
+            AlterTableAction::SetPartitionLocation {
+                partition,
+                location,
+                ..
+            } => {
+                changed = self
+                    .set_partition_location(&table, partition, location, original)
+                    .await?;
+            }
+            AlterTableAction::RenamePartition { from, to, .. } => {
+                changed = self.rename_partition(&table, [from, to], original).await?;
+            }
             AlterTableAction::SetTblProperties(props) => {
                 // The `comment` property is the table comment (`AlterTableSetPropertiesCommand`); the
                 // catalog shows it as `Comment`, not among the properties (Spark 4.2 golden
@@ -1075,6 +1092,10 @@ impl Session {
                         changed.comment = None;
                     }
                 }
+            }
+            AlterTableAction::SetSerdeProperties(props) => {
+                // The storage properties are the table's options (what the reader and writer get).
+                changed.options.extend(options_of(props, original));
             }
             AlterTableAction::RenameTo { name: to, .. } => {
                 return self.rename_table(&table, &self.table_name(to, &env)?).await;

@@ -338,6 +338,23 @@ fn exact_spec(
     }
 }
 
+/// A partition `LOCATION` as the catalog stores it: Spark makes a relative path qualified against the
+/// working directory of the process (`makeQualified`).
+fn qualified(location: &str) -> Result<PathBuf, KrishivError> {
+    let path = PathBuf::from(location.strip_prefix("file:").unwrap_or(location));
+    if path.is_absolute() {
+        return Ok(path);
+    }
+    std::env::current_dir()
+        .map(|dir| dir.join(path))
+        .map_err(|e| {
+            InternalError {
+                message: format!("the working directory is unknown: {e}"),
+            }
+            .into()
+        })
+}
+
 /// `spec` in partition-column order.
 fn ordered(table: &CatalogTable, spec: &[(String, String)]) -> Vec<(String, String)> {
     table
@@ -515,6 +532,53 @@ impl Session {
             .collect())
     }
 
+    /// `ALTER TABLE name PARTITION (...) SET LOCATION '...'`: only the catalog entry changes.
+    pub(crate) async fn set_partition_location(
+        &self,
+        table: &Arc<CatalogTable>,
+        partition: &PartitionSpec,
+        location: &str,
+        original: &str,
+    ) -> Result<CatalogTable, KrishivError> {
+        require_partition_provider(table, "ALTER TABLE SET LOCATION")?;
+        let case_sensitive = self.query_env().analysis.conf.case_sensitive;
+        let written = self.written_spec(partition, original).await?;
+        let spec = exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
+        let mut changed = (**table).clone();
+        let path = qualified(location)?;
+        let Some(found) = changed
+            .layout
+            .partitions
+            .iter_mut()
+            .find(|p| spec.iter().all(|kv| p.spec.contains(kv)))
+        else {
+            return Err(PartitionsNotFound {
+                partition_list: spec_text(&spec),
+                table_name: db_table(table),
+            }
+            .into());
+        };
+        found.location = path;
+        Ok(changed)
+    }
+
+    /// `ALTER TABLE name PARTITION (...) RENAME TO PARTITION (...)`: both specs must name every partition
+    /// column (`_LEGACY_ERROR_TEMP_1232`); the rename itself (it moves the directory) is not supported yet.
+    pub(crate) async fn rename_partition(
+        &self,
+        table: &Arc<CatalogTable>,
+        specs: [&PartitionSpec; 2],
+        original: &str,
+    ) -> Result<CatalogTable, KrishivError> {
+        require_partition_provider(table, "ALTER TABLE RENAME PARTITION")?;
+        let case_sensitive = self.query_env().analysis.conf.case_sensitive;
+        for spec in specs {
+            let written = self.written_spec(spec, original).await?;
+            exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
+        }
+        Err(unsupported("ALTER TABLE ... RENAME PARTITION"))
+    }
+
     /// `ALTER TABLE name ADD [IF NOT EXISTS] PARTITION (...) [LOCATION '...'] ...`.
     pub(crate) async fn add_partitions(
         &self,
@@ -532,13 +596,7 @@ impl Session {
             let written = self.written_spec(&part.spec, original).await?;
             let spec = exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
             let location = match &part.location {
-                Some(l) => {
-                    let path = PathBuf::from(l.strip_prefix("file:").unwrap_or(l));
-                    if !path.is_absolute() {
-                        return Err(unsupported("a relative partition LOCATION"));
-                    }
-                    path
-                }
+                Some(l) => qualified(l)?,
                 None => partition_path(&table.location, &ordered(table, &spec)),
             };
             if find_partition(&changed, &spec).is_some()
