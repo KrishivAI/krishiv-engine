@@ -92,6 +92,12 @@ fn an_outer_aggregate_in_a_having_subquery_is_computed_per_group() -> R {
         rows(&["10|3", "100|2", "20|1", "30|1", "70|1", "NULL|1"]),
         "{q}"
     );
+    // A threshold only some groups pass: min(salary) + 700 is 800 for dept 10,
+    // 850 for dept 70 and 1000 or more for the others, against a top bonus of
+    // 1000. A min over all rows (100) would let every group through.
+    let q = "SELECT dept_id, count(*) FROM emp GROUP BY dept_id \
+             HAVING EXISTS (SELECT 1 FROM bonus WHERE bonus_amt > min(emp.salary) + 700)";
+    assert_eq!(run(&s, q)?, rows(&["10|3", "70|1"]), "{q}");
     // Under an EXISTS of the outer query, correlated to it.
     let q = "SELECT * FROM dept WHERE EXISTS (SELECT dept_id, count(emp.dept_id) FROM emp \
              WHERE dept.dept_id = dept_id GROUP BY dept_id \

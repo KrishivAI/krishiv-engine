@@ -268,8 +268,9 @@ fn a_having_subquery_over_an_ungrouped_column_is_missing_from_the_input() -> R {
              having k in (select max(b.k) from b group by b.w having b.w > a.v)";
     let e = run(&s, q).err().ok_or("expected an error")?;
     assert!(
-        format!("{e:?}").contains("MissingAttributesResolvedAttributeMissingFromInput"),
-        "{q}: {e:?}"
+        e.to_string()
+            .contains("MISSING_ATTRIBUTES.RESOLVED_ATTRIBUTE_MISSING_FROM_INPUT"),
+        "{q}: {e}"
     );
     // Over a grouped column the same shape is answered: b.w > a.k holds
     // for (k 1, w 5) and (k 2, w 5), whose max(b.k) is 2.

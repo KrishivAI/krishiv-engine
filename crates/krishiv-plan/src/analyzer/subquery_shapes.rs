@@ -217,8 +217,28 @@ fn in_reads(s: &Arc<Expr>, values: &[Arc<Expr>]) -> HashSet<AttrId> {
 /// (EXISTS (q WHERE (c = v) IS NULL) AND NULL)`, both uncorrelated. A
 /// multi-value `IN` of this kind, or one under
 /// `spark.sql.legacy.nullInEmptyListBehavior` (NULL over no rows), is
-/// refused. A NULL literal value is left to [`check_in`].
+/// refused where NULL and false differ (below `NOT`, `OR` and the like); as a
+/// conjunct of its own it is a plain join. A NULL literal value is left to
+/// [`check_in`].
 pub(super) fn three_valued_ins(on: &Arc<Expr>, legacy: bool) -> R<Arc<Expr>> {
+    // A conjunct that is itself such an `IN` keeps a row only when it is
+    // true, so NULL and false agree: it stays an ordinary join. Only an `IN`
+    // under `NOT`, `OR`, `IS NULL` and the like tells them apart.
+    let kept: Vec<Arc<Expr>> = super::subquery::conjuncts(on)
+        .into_iter()
+        .map(|c| match &c.node {
+            ExprNode::Subquery {
+                kind: SubqueryKind::In(_),
+                ..
+            } => Ok(c),
+            _ => three_valued_nested(&c, legacy),
+        })
+        .collect::<R<_>>()?;
+    Ok(super::subquery::and_all(kept).unwrap_or_else(|| Arc::clone(on)))
+}
+
+/// [`three_valued_ins`] for every `IN` in `on`, whatever its position.
+fn three_valued_nested(on: &Arc<Expr>, legacy: bool) -> R<Arc<Expr>> {
     Arc::clone(on).transform_down(&mut |x: Arc<Expr>| {
         let ExprNode::Subquery {
             kind: SubqueryKind::In(values),

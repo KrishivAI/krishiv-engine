@@ -169,6 +169,62 @@ fn a_nondeterministic_with_read_twice_stays_refused() -> R {
     )
     .err()
     .ok_or("a nondeterministic CTE read twice was inlined")?;
-    assert!(err.to_string().contains("not supported"), "{err}");
+    let msg = err.to_string();
+    assert!(msg.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{msg}");
+    assert!(
+        msg.contains("a CTE read twice in a correlated subquery"),
+        "{msg}"
+    );
+    Ok(())
+}
+
+/// A closed definition holding an `IN` subquery, read more than once in a
+/// correlated subquery, gets fresh ids for the subquery's plan too: it answers
+/// like the same query with the definition written out at each read.
+#[test]
+fn a_closed_definition_with_an_in_subquery_read_again_matches_its_expansion() -> R {
+    let s = session()?;
+    let d = "select y2 from y where y2 in (select y1 from y)";
+    let cases = [
+        (
+            format!(
+                "select x1, (with t as ({d}) select count(*) from t a join t b \
+                 on a.y2 = b.y2 where a.y2 = x1) from x"
+            ),
+            format!(
+                "select x1, (select count(*) from ({d}) a join ({d}) b \
+                 on a.y2 = b.y2 where a.y2 = x1) from x"
+            ),
+            &["1|1", "2|1", "3|1"][..],
+        ),
+        (
+            format!(
+                "select x1, (with t as ({d}) select count(*) from t a join t b \
+                 on a.y2 <= b.y2 join t c on b.y2 <= c.y2 where a.y2 = x1) from x"
+            ),
+            format!(
+                "select x1, (select count(*) from ({d}) a join ({d}) b on a.y2 <= b.y2 \
+                 join ({d}) c on b.y2 <= c.y2 where a.y2 = x1) from x"
+            ),
+            &["1|6", "2|3", "3|1"][..],
+        ),
+        (
+            format!(
+                "select x1, (with t as ({d}), u as (select a.y2 from t a join t b \
+                 on a.y2 = b.y2) select count(*) from u p join u q on p.y2 = q.y2 \
+                 where p.y2 = x1) from x"
+            ),
+            format!(
+                "select x1, (select count(*) from (select a.y2 from ({d}) a join ({d}) b \
+                 on a.y2 = b.y2) p join (select a.y2 from ({d}) a join ({d}) b \
+                 on a.y2 = b.y2) q on p.y2 = q.y2 where p.y2 = x1) from x"
+            ),
+            &["1|1", "2|1", "3|1"][..],
+        ),
+    ];
+    for (cte, expanded, want) in &cases {
+        assert_eq!(run(&s, expanded)?, rows(want), "{expanded}");
+        assert_eq!(run(&s, cte)?, rows(want), "{cte}");
+    }
     Ok(())
 }
