@@ -50,3 +50,11 @@ repeated values raise `INVALID_ARRAY_INDEX` with ANSI on and leave NULL cells wi
   not by the collation;
 - a NULL pivot value for a binary or collated pivot column: Spark 4.2 compares it with the other values in a sorted
   map (and fails), earlier versions look it up in a hash map.
+
+## A multi-table `INSERT` that fails while it runs keeps the clauses written before
+
+`FROM source INSERT INTO a SELECT ... INSERT INTO b SELECT ...` writes each clause's rows of the shared source. Every
+clause is resolved and checked first, so a missing table, an unknown column or a column count mismatch in any clause
+writes nothing, as in Spark. Spark plans the clauses as one statement, so a failure while one of them runs (a cast of a
+malformed value under ANSI, say) also leaves the other targets unwritten; Krishiv writes the clauses in order, and the
+ones before the failing clause stay written.
