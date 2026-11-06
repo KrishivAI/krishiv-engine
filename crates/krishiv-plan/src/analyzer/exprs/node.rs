@@ -1560,11 +1560,13 @@ impl Resolver<'_> {
         };
         let [value] = &values[..] else { return e };
         // One row of values (`x IN (SELECT 1)`) is the same equality: Spark
-        // folds it before any join (`OptimizeOneRowRelationSubquery`).
-        let one_row = (matches!(plan.node, crate::PlanNode::Aggregate { .. })
-            && crate::analyzer::subquery::one_row_aggregate(plan))
-            || crate::analyzer::subquery::one_row_literals(plan);
-        if !one_row {
+        // folds it before any join (`OptimizeOneRowRelationSubquery`). Over a
+        // global aggregate, Spark's legacy rule (`subquery_legacy.rs`) answers
+        // it otherwise.
+        let aggregate = !self.ctx.conf.legacy_exists_in_count
+            && matches!(plan.node, crate::PlanNode::Aggregate { .. })
+            && crate::analyzer::subquery::one_row_aggregate(plan);
+        if !aggregate && !crate::analyzer::subquery::one_row_literals(plan) {
             return e;
         }
         let scalar = Arc::new(

@@ -6,7 +6,6 @@
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::task::Poll;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -14,24 +13,18 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64};
 
 use krishiv_common::config::{Config, ConfigValue, SESSION_MEMORY_LIMIT};
 use krishiv_common::error::KrishivError;
-use krishiv_exec::WorkloadClass;
 use krishiv_exec::planner::DefaultPlanner;
-use krishiv_io::{IoConfig, IoScheduler, StoreId};
 use krishiv_memory::{MemoryPool, RelationStore};
 use krishiv_plan::analyzer::FunctionRegistry;
 use krishiv_udf_sdk::UdfLibrary;
-use object_store::ObjectStore;
-#[cfg(not(unix))]
-use object_store::local::LocalFileSystem;
 
-use super::{LOCAL_STORE, Session, SessionParts, SessionState};
-use crate::admission::{QueryRequest, Unlimited};
+use super::{Session, SessionParts, SessionState};
+use crate::admission::Unlimited;
 use crate::cache::RelationCache;
 use crate::catalog::SessionCatalog;
 use crate::conf::ConfStore;
 use crate::dataframe::DataFrame;
-use crate::query_fold::QueuedRow;
-use crate::runtime::EngineRuntime;
+use crate::runtime::{Attached, EngineRuntime};
 use crate::sql_functions::SqlFunctions;
 use crate::udfs::SessionFunctions;
 use crate::variables::SessionVariables;
@@ -59,23 +52,8 @@ impl Session {
             ),
             None => runtime.memory(),
         };
-        let cache = Arc::new(RelationCache::new(&memory));
-        let io = IoScheduler::with_runtime(
-            IoConfig::from_config(&runtime.config),
-            runtime.executor.io_handle().clone(),
-        );
-        io.attach_memory(&memory);
-        #[cfg(unix)]
-        io.register_whole_listing_store(
-            StoreId::new(LOCAL_STORE),
-            Arc::new(krishiv_io::SettledLocalFileSystem::new()) as Arc<dyn ObjectStore>,
-        );
-        #[cfg(not(unix))]
-        io.register_store(
-            StoreId::new(LOCAL_STORE),
-            Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
-        );
-        runtime.add_io(&io);
+        let cache = RelationCache::on(&memory, &runtime.invalidation);
+        let io = Arc::clone(&runtime.io);
         let cwd = std::env::current_dir()
             .ok()
             .and_then(|d| d.to_str().map(str::to_owned))
@@ -90,9 +68,13 @@ impl Session {
         Session {
             locals: Arc::from([]),
             operation: None,
+            deadline: None,
             state: Arc::new(SessionState {
                 conf: Arc::new(ConfStore::new(config)),
-                catalog: Arc::new(SessionCatalog::default()),
+                catalog: Arc::new(SessionCatalog::over(
+                    Arc::clone(&runtime.catalog_store),
+                    Arc::clone(&runtime.warehouse),
+                )),
                 cache,
                 variables: Arc::new(SessionVariables::default()),
                 profile: parts.profile,
@@ -104,7 +86,7 @@ impl Session {
                 sql_functions: SqlFunctions::default(),
                 commit_log_probes: Mutex::new(HashMap::new()),
                 number: runtime.next_session(),
-                closed: Closing::default(),
+                closed: AtomicBool::new(false),
                 runtime,
                 memory,
                 relations: RelationStore::new(),
@@ -177,13 +159,11 @@ impl Session {
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     pub fn close(&self) -> usize {
-        if self.state.closed.flag.swap(true, Ordering::AcqRel) {
+        if self.state.closed.swap(true, Ordering::AcqRel) {
             return 0;
         }
-        // Queries waiting for admission stop waiting.
-        self.state.closed.wake.notify_waiters();
         // Under the runtime's registry lock: a query that registers after
-        // this is refused there (`EngineRuntime::track`), so none slips
+        // this is refused there (`EngineRuntime::attach`), so none slips
         // between the flag and the cancellation.
         self.state.runtime.cancel_session(self.state.number)
     }
@@ -198,7 +178,7 @@ impl Session {
 
     /// `INVALID_HANDLE.SESSION_CLOSED` once [`Self::close`] ran.
     pub(crate) fn check_open(&self) -> Result<(), KrishivError> {
-        if self.state.closed.flag.load(Ordering::Acquire) {
+        if self.state.closed.load(Ordering::Acquire) {
             return Err(self.closed_error());
         }
         Ok(())
@@ -245,6 +225,7 @@ impl Session {
             state: Arc::clone(&self.state),
             locals: Arc::clone(&self.locals),
             operation,
+            deadline: options.deadline.or(self.deadline),
         };
         handle.sql(query).await
     }
@@ -253,6 +234,78 @@ impl Session {
     /// gave one.
     pub(crate) fn operation_id(&self) -> Option<&crate::QueryId> {
         self.operation.as_deref().map(crate::history::Operation::id)
+    }
+
+    /// Attaches the query reserved for row `id` to the runtime's registry,
+    /// with its time limit: the shorter of `krishiv.query.maxExecutionTime`
+    /// and the statement's [`crate::QueryOptions::deadline`]. A cancellation
+    /// that arrived before the query's context existed is applied now.
+    ///
+    /// # Errors
+    /// `INVALID_HANDLE.SESSION_CLOSED` when the session closed meanwhile.
+    pub(crate) fn attach(
+        &self,
+        query: &Arc<krishiv_exec::QueryContext>,
+        id: &str,
+        config: &Config,
+    ) -> Result<(), KrishivError> {
+        let configured = config
+            .get(&krishiv_common::config::QUERY_MAX_EXECUTION_TIME)
+            .and_then(krishiv_common::config::ConfigValue::as_duration);
+        let limit = match (configured, self.deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let runtime = &self.state.runtime;
+        match runtime.attach(query.id().0, query, limit) {
+            Attached::Run => Ok(()),
+            Attached::Closed => Err(self.closed_error()),
+            Attached::Cancelled(reason) => {
+                crate::cancel::apply(
+                    query,
+                    reason,
+                    None,
+                    &runtime.history,
+                    self.state.queries.session_id(),
+                    id,
+                );
+                Ok(())
+            }
+        }
+    }
+
+    /// Cancels the running query `id` of this session (Spark Connect's
+    /// `Interrupt` by operation id): its stream ends with
+    /// `OPERATION_CANCELED` at its next batch boundary (a query whose
+    /// execution has not begun fails as it begins), and
+    /// `system.queries.cancel_reason` shows `user`. Whether a running query
+    /// was cancelled: `false` for an unknown id, a query that ended or one
+    /// of another session.
+    ///
+    /// ```
+    /// let s = krishiv_session::Session::new()?;
+    /// let id = krishiv_session::QueryId::parse("00112233-4455-6677-8899-aabbccddeeff")?;
+    /// assert!(!s.cancel(&id));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn cancel(&self, id: &crate::QueryId) -> bool {
+        let number = self.state.number;
+        !self
+            .state
+            .runtime
+            .cancel_where(crate::CancelReason::User, |s, q| {
+                s == number && q == id.as_str()
+            })
+            .is_empty()
+    }
+
+    /// Cancels every running query of this session (Spark Connect's
+    /// `Interrupt` of type `ALL`) and returns their ids.
+    pub fn interrupt_all(&self) -> Vec<crate::QueryId> {
+        let number = self.state.number;
+        self.state
+            .runtime
+            .cancel_where(crate::CancelReason::User, |s, _| s == number)
     }
 }
 
@@ -271,66 +324,53 @@ impl Session {
     }
 }
 
-/// Whether a session was closed ([`Session::close`]), and the wake-up of its
-/// queries waiting for admission.
-#[derive(Debug, Default)]
-pub(crate) struct Closing {
-    pub(crate) flag: AtomicBool,
-    pub(crate) wake: tokio::sync::Notify,
-}
+#[cfg(test)]
+mod tests {
+    use krishiv_exec::{ExecConfig, QueryContext, QueryId, WorkloadClass};
 
-impl Session {
-    /// Asks the admission controller for a permit for the query whose
-    /// `system.queries` row is `log_id`. A controller that answers at once
-    /// leaves the row `running`; one that waits shows it `queued`. A refusal
-    /// closes the row as failed with the controller's error class, and a
-    /// caller that drops the query while it is queued closes it `cancelled`.
-    pub(super) async fn admit(
-        &self,
-        log_id: &str,
-    ) -> Result<crate::admission::Permit, KrishivError> {
-        let request = QueryRequest {
-            principal: Arc::clone(&self.state.principal),
-            tags: self.state.queries.tags_now(),
-            class: WorkloadClass::Interactive,
-            estimate: None,
-        };
-        let controller = Arc::clone(&self.state.admission);
-        let mut admit = std::pin::pin!(controller.admit(&request));
-        let mut queued = QueuedRow {
-            state: Arc::clone(&self.state),
-            id: log_id,
-            open: true,
-        };
-        let admitted = match std::future::poll_fn(|cx| Poll::Ready(admit.as_mut().poll(cx))).await {
-            Poll::Ready(done) => done,
-            Poll::Pending => {
-                self.state.queries.set_state(log_id, "queued");
-                // A session that closes while its query waits ends the wait.
-                let closing = self.state.closed.wake.notified();
-                let mut closing = std::pin::pin!(closing);
-                closing.as_mut().enable();
-                let done = if self.state.closed.flag.load(Ordering::Acquire) {
-                    Err(self.closed_error())
-                } else {
-                    match futures::future::select(admit, closing).await {
-                        futures::future::Either::Left((done, _)) => done,
-                        futures::future::Either::Right(_) => Err(self.closed_error()),
-                    }
-                };
-                if done.is_ok() {
-                    self.state.queries.set_state(log_id, "running");
-                }
-                done
-            }
-        };
-        queued.open = false;
-        match admitted {
-            Ok(permit) => Ok(permit),
-            Err(error) => {
-                self.state.queries.record_failed_row(log_id, &error);
-                Err(error)
-            }
-        }
+    use super::*;
+
+    /// A cancel that arrives after a query's row exists and before its
+    /// context does is applied as the context attaches: the query fails at
+    /// once with the reason's error, and its row names the reason.
+    #[test]
+    fn a_cancel_before_the_context_fails_the_query_at_once() {
+        let s = Session::new().unwrap();
+        let id = s.state.queries.begin_as(Some("q"), None, None).unwrap();
+        let runtime = &s.state.runtime;
+        let index = runtime.reserve(s.state.number, s.state.queries.session_id(), &id);
+        let ids = runtime.cancel_where(crate::CancelReason::User, |_, q| q == id);
+        assert_eq!(ids.len(), 1);
+        let query = QueryContext::new(
+            QueryId(index),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            s.state.memory.child("q", None),
+        );
+        s.attach(&query, &id, &Config::new()).unwrap();
+        assert_eq!(
+            query.check_cancelled().unwrap_err().error_class().name(),
+            "OPERATION_CANCELED"
+        );
+        let row = s
+            .state
+            .queries
+            .snapshot(false)
+            .into_iter()
+            .find(|r| r.id == id)
+            .unwrap();
+        assert_eq!(row.cancel_reason, Some("user"));
+        // Attaching on a closed session is refused.
+        let late = s.state.queries.begin_as(Some("late"), None, None).unwrap();
+        let index = runtime.reserve(s.state.number, s.state.queries.session_id(), &late);
+        s.close();
+        let query = QueryContext::new(
+            QueryId(index),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            s.state.memory.child("late", None),
+        );
+        let e = s.attach(&query, &late, &Config::new()).unwrap_err();
+        assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_CLOSED");
     }
 }

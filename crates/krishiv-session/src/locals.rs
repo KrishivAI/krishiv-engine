@@ -22,6 +22,7 @@ impl Session {
             state: Arc::clone(&self.state),
             locals: locals.into(),
             operation: self.operation.clone(),
+            deadline: self.deadline,
         }
     }
 }

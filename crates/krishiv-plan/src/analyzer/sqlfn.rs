@@ -409,6 +409,7 @@ impl Resolver<'_> {
                 },
                 qual: Arc::from([def.name.clone()]),
                 source: None,
+                duplicate: false,
             })
             .collect();
         // A body that is one scalar subquery is the function's query, as

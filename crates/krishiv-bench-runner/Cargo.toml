@@ -15,6 +15,8 @@ doc = false
 
 [dependencies]
 arrow-array.workspace = true
+arrow-row.workspace = true
+arrow-schema.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-exec = { path = "../krishiv-exec" }
@@ -36,7 +38,6 @@ cloud = ["krishiv-session/cloud"]
 heap-stats = ["krishiv-alloc/heap-stats"]
 
 [dev-dependencies]
-arrow-schema.workspace = true
 parquet = { workspace = true, features = ["arrow"] }
 proptest = { workspace = true, features = ["std"] }
 tempfile.workspace = true
