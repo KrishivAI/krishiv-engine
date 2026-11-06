@@ -613,6 +613,17 @@ pub(super) fn rows() -> Vec<Row> {
             "col: ColumnOrName, schema: Column | str, options: dict[str, str] = None",
         ),
         Row::new("get_json_object", "col: ColumnOrName, path: str"),
+        Row::new("parse_json", "col: ColumnOrName"),
+        Row::new("try_parse_json", "col: ColumnOrName"),
+        Row::new("is_variant_null", "v: ColumnOrName"),
+        Row::new(
+            "variant_get",
+            "v: ColumnOrName, path: Column | str, targetType: str",
+        ),
+        Row::new(
+            "try_variant_get",
+            "v: ColumnOrName, path: Column | str, targetType: str",
+        ),
         Row::new("greatest", "*cols: ColumnOrName").at_least(2),
         Row::new("least", "*cols: ColumnOrName").at_least(2),
         Row::new(

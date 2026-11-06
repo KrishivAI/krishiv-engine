@@ -57,6 +57,7 @@ mod string;
 mod r#struct;
 mod udf;
 mod url;
+mod variant;
 mod vector;
 mod xml;
 
@@ -504,6 +505,7 @@ const FAMILIES: [(&[&str], Binder); 34] = [
     (r#struct::NAMES, r#struct::bind),
     (url::NAMES, url::bind),
     (geo::NAMES, geo::bind),
+    (variant::NAMES, variant::bind),
     (csv::NAMES, csv::bind),
     (format::NAMES, format::bind),
     (xml::NAMES, xml::bind),

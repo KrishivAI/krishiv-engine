@@ -214,6 +214,10 @@ class TimestampNTZType(AtomicType):
         return "timestamp_ntz"
 
 
+class VariantType(AtomicType):
+    """Semi-structured values (``parse_json``); ``pyspark.sql.types.VariantType``."""
+
+
 class DayTimeIntervalType(AtomicType):
     """An ANSI day-time interval, ``interval day to second`` by default."""
 
@@ -376,6 +380,7 @@ _SIMPLE: dict[type[DataType], str] = {
     TimestampType: "timestamp",
     TimestampNTZType: "timestamp_ntz",
     CalendarIntervalType: "interval",
+    VariantType: "variant",
 }
 _BY_SIMPLE: dict[str, type[DataType]] = {v: k for k, v in _SIMPLE.items()}
 _COLLATED = re.compile(r"string collate (\S+)", re.IGNORECASE)
@@ -654,6 +659,7 @@ _DDL_ATOMS = {
     "timestamp_ltz": TimestampType,
     "timestamp_ntz": TimestampNTZType,
     "interval": CalendarIntervalType,
+    "variant": VariantType,
 }
 
 
