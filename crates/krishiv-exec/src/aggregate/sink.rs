@@ -10,9 +10,10 @@
 //!   per step, and each merged table is freed. If memory runs out (or a
 //!   spill request arrives) midway, everything left is spilled to runs.
 //! - **Runs:** each partition is a *task*: its files merge into one table,
-//!   whose results go to an output spill file. A task whose table does not
+//!   whose results go to an output spill file of its own. Tasks run in
+//!   parallel on the blocking pool ([`disk`]). A task whose table does not
 //!   fit is split: the table and the rest of its input are re-partitioned by
-//!   the next hash bits into new tasks (up to [`MAX_LEVEL`]).
+//!   the next hash bits into new tasks (up to `MAX_LEVEL`).
 //!
 //! `finalize` keeps all of this in the global state between steps and
 //! yields after each, so [`Sink::spill_global`] can free memory at any
@@ -27,8 +28,7 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock, Weak};
 
-use arrow_array::{RecordBatch, UInt32Array};
-use arrow_select::take::take_record_batch;
+use arrow_array::RecordBatch;
 use futures::future::BoxFuture;
 use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
 use krishiv_memory::{
@@ -43,11 +43,12 @@ use crate::ExchangeStats;
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, run_blocking};
-use crate::hash::{HashSeed, MAX_LEVEL, PARTITIONS, ProbeTotals};
+use crate::hash::{HashSeed, PARTITIONS, ProbeTotals};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::output_spill::{OutputSpill, SpillUnread, Unfinished, refused};
 use crate::sync::{Event, Mutex, lock};
 
+mod disk;
 mod parallel;
 
 /// Groups per state batch when spilling and merging (one finalize step).
@@ -99,6 +100,18 @@ struct Counters {
     /// Times the final phase wrote its finished partitions' groups to the
     /// output file to free memory.
     row_final_flushes: AtomicU64,
+    /// Partition tasks of the disk phase (splits' children included).
+    disk_tasks: AtomicU64,
+    /// Most disk tasks running at once.
+    disk_peak: AtomicU64,
+    /// Disk tasks refused memory while others ran (they waited).
+    disk_waits: AtomicU64,
+    /// Tests: disk jobs on the blocking pool now (`+1` a task, `+SPLIT` a
+    /// split), and the splits that started beside another job.
+    #[cfg(test)]
+    disk_active: AtomicUsize,
+    #[cfg(test)]
+    disk_split_overlaps: AtomicU64,
 }
 
 fn bump(c: &AtomicU64, n: u64) {
@@ -128,6 +141,10 @@ pub struct HashAggregate {
     /// query during the spill).
     #[cfg(test)]
     output_gate: Option<Arc<crate::testing::BlockingGate>>,
+    /// A gate every disk task's job waits at before it returns, holding
+    /// its table (tests cancel a query during the disk phase).
+    #[cfg(test)]
+    disk_gate: Option<Arc<crate::testing::BlockingGate>>,
 }
 
 impl HashAggregate {
@@ -146,6 +163,8 @@ impl HashAggregate {
             stall_after: None,
             #[cfg(test)]
             output_gate: None,
+            #[cfg(test)]
+            disk_gate: None,
         }))
     }
 
@@ -166,6 +185,8 @@ impl HashAggregate {
             stall_after: None,
             #[cfg(test)]
             output_gate: None,
+            #[cfg(test)]
+            disk_gate: None,
         }))
     }
 
@@ -189,6 +210,7 @@ impl HashAggregate {
             exchange: None,
             stall_after: None,
             output_gate: None,
+            disk_gate: None,
         }))
     }
 
@@ -209,6 +231,7 @@ impl HashAggregate {
             exchange: None,
             stall_after: Some(finished),
             output_gate: None,
+            disk_gate: None,
         }))
     }
 
@@ -227,7 +250,36 @@ impl HashAggregate {
             exchange: None,
             stall_after: None,
             output_gate: Some(gate),
+            disk_gate: None,
         }))
+    }
+
+    /// [`new`](Self::new) whose disk tasks' jobs wait at `gate` before
+    /// they return.
+    #[cfg(test)]
+    pub(crate) fn with_disk_gate(
+        spec: AggregateSpec,
+        gate: Arc<crate::testing::BlockingGate>,
+    ) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self {
+            core: Arc::new(AggCore::new(spec)?),
+            counters: Arc::default(),
+            row_mode: None,
+            widen_at: WIDEN_GROUPS,
+            exchange: None,
+            stall_after: None,
+            output_gate: None,
+            disk_gate: Some(gate),
+        }))
+    }
+
+    /// Splits of the disk phase that started while another disk job ran
+    /// on the blocking pool (never, by design).
+    #[cfg(test)]
+    pub(crate) fn disk_split_overlaps(&self) -> u64 {
+        self.counters
+            .disk_split_overlaps
+            .load(AtomicOrdering::Relaxed)
     }
 
     /// The counters so far (complete once the query finished).
@@ -303,12 +355,6 @@ struct Spiller {
 }
 
 impl Spiller {
-    fn writer(&self) -> Result<SpillWriter> {
-        let schema = Arc::clone(&self.core.state_schema);
-        let w = self.scope.writer(schema, self.consumer.reservation());
-        w.map_err(KrishivError::from)
-    }
-
     /// A writer for one spill run, finished before the spill returns: its
     /// scratch may use the pool's spill-scratch floor, so a spill of a full
     /// pool does not fail for want of its writer's buffers.
@@ -521,19 +567,6 @@ struct Local {
     exchange: Option<ExchangeStats>,
 }
 
-/// A partition being merged from disk.
-struct Current {
-    level: u32,
-    table: Table,
-    reservation: Reservation,
-    files: Vec<SpillFile>,
-    reader: Option<SpillReader>,
-    /// A batch read but not yet applied (its memory was refused).
-    pending: Option<Batch>,
-    /// Re-partitioning at `level + 1`: finished runs and open writers.
-    split: Option<(Vec<Run>, Vec<Option<SpillWriter>>)>,
-}
-
 #[derive(Default)]
 struct Inner {
     /// Combined driver tables (in-memory phase; `tables[0]` is the target),
@@ -545,10 +578,9 @@ struct Inner {
     /// The disk phase has started.
     disk: bool,
     tasks: Vec<(u32, Vec<SpillFile>)>,
-    current: Option<Current>,
+    /// The output file the row tables' final phase started before it
+    /// spilled: the disk phase's first file.
     out: Option<SpillWriter>,
-    /// The finished output file.
-    out_file: Option<SpillFile>,
     /// A blocking job owns part of the state: `spill_global` frees nothing.
     busy: bool,
     /// Memory granted by arbitration for the in-memory merge target (no
@@ -560,6 +592,9 @@ struct Inner {
     /// A spill request arrived during the row tables' merge: it stops
     /// starting tasks and spills what is left once the running ones end.
     spill_asked: bool,
+    /// The disk phase's parallel tasks run: `spill_global` asks them
+    /// through `spill_asked`.
+    disk_merge: bool,
 }
 
 /// Whether the row tables' parallel merge is running (tests time spill
@@ -572,7 +607,8 @@ pub(super) fn row_merge_running(g: &GlobalState) -> bool {
 /// The finalized output, read by the source side.
 struct Final {
     out: Arc<Output>,
-    /// Chunks of an in-memory result: the source side's parallelism.
+    /// Chunks of an in-memory result, or files of one on disk: the source
+    /// side's parallelism.
     chunks: usize,
 }
 
@@ -648,10 +684,11 @@ struct Output {
 }
 
 impl Output {
-    fn on_disk(file: Option<SpillFile>, executor: Arc<dyn Executor>) -> Self {
+    /// A result on disk, read from `files` in order.
+    fn on_disk(files: impl IntoIterator<Item = SpillFile>, executor: Arc<dyn Executor>) -> Self {
         Self {
             state: Mutex::new(Out::Files {
-                files: file.into_iter().collect(),
+                files: files.into_iter().collect(),
                 active: 0,
             }),
             changed: Event::default(),
@@ -897,7 +934,6 @@ enum Step {
 /// Bytes the finalize state holds in tables.
 fn held(inner: &Inner) -> usize {
     inner.tables.iter().map(|(_, _, r)| r.size()).sum::<usize>()
-        + inner.current.as_ref().map_or(0, |c| c.reservation.size())
 }
 
 /// Makes the per-partition tasks of `runs` at `level`: runs of one
@@ -923,70 +959,37 @@ fn tasks_of(mut runs: Vec<Run>, level: u32, tasks: &mut Vec<(u32, Vec<SpillFile>
 
 impl HashAggregate {
     /// A blocking job that frees the in-memory finalize state, if any: spill
-    /// the tables (in-memory phase) or split the current partition.
-    fn free_job(&self, g: &Global, inner: &mut Inner, ctx: &TaskContext) -> Result<Option<Job>> {
-        let Some(s) = self.spiller(ctx) else {
-            return Ok(None);
-        };
-        if !inner.disk {
-            inner.busy = true;
-            let tables = std::mem::take(&mut inner.tables);
-            let merged = std::mem::take(&mut inner.merged);
-            return Ok(Some(Box::new(move || {
-                let mut runs = Vec::new();
-                for (i, (p, t, mut r)) in tables.into_iter().enumerate() {
-                    lend_headroom(&mut r);
-                    runs.push(s.write_run(&t, if i == 1 { merged } else { 0 }, 0, p)?);
-                }
-                Ok(Box::new(move |inner: &mut Inner| {
-                    inner.disk = true;
-                    // Runs merge grouped by driver partition (stable, so
-                    // each partition's runs stay in arrival order): the
-                    // drivers' earlier spills, then the tables.
-                    let mut all = std::mem::take(&mut inner.runs);
-                    all.extend(runs);
-                    tasks_of(all, 0, &mut inner.tasks);
-                    Ok(())
-                }) as Apply)
-            })));
-        }
-        let Some(cur) = inner.current.as_mut() else {
-            return Ok(None);
-        };
-        if cur.split.is_some() || cur.table.not_worth_spilling() {
-            return Ok(None);
-        }
-        if cur.level >= MAX_LEVEL {
-            return Err(no_memory(cur.reservation.size()));
+    /// the tables (in-memory phase; the disk phase frees its own).
+    fn free_job(&self, inner: &mut Inner, ctx: &TaskContext) -> Option<Job> {
+        let s = self.spiller(ctx)?;
+        if inner.disk {
+            return None;
         }
         inner.busy = true;
-        let fresh = self.new_table(g, false)?;
-        let table = std::mem::replace(&mut cur.table, fresh);
-        let mut held = std::mem::replace(&mut cur.reservation, s.consumer.reservation());
-        let level = cur.level + 1;
-        bump(&self.counters.repartitions, 1);
-        Ok(Some(Box::new(move || {
-            lend_headroom(&mut held);
-            let run = s.write_run(&table, 0, level, u32::MAX)?;
-            drop((table, held));
+        let tables = std::mem::take(&mut inner.tables);
+        let merged = std::mem::take(&mut inner.merged);
+        Some(Box::new(move || {
+            let mut runs = Vec::new();
+            for (i, (p, t, mut r)) in tables.into_iter().enumerate() {
+                lend_headroom(&mut r);
+                runs.push(s.write_run(&t, if i == 1 { merged } else { 0 }, 0, p)?);
+            }
             Ok(Box::new(move |inner: &mut Inner| {
-                if let Some(cur) = inner.current.as_mut() {
-                    cur.split = Some((vec![run], (0..PARTITIONS).map(|_| None).collect()));
-                }
+                inner.disk = true;
+                // Runs merge grouped by driver partition (stable, so
+                // each partition's runs stay in arrival order): the
+                // drivers' earlier spills, then the tables.
+                let mut all = std::mem::take(&mut inner.runs);
+                all.extend(runs);
+                tasks_of(all, 0, &mut inner.tasks);
                 Ok(())
             }) as Apply)
-        })))
+        }))
     }
 
     /// A job to free memory, or the error that none can be freed.
-    fn must_free(
-        &self,
-        g: &Global,
-        inner: &mut Inner,
-        ctx: &TaskContext,
-        want: usize,
-    ) -> Result<Step> {
-        self.free_job(g, inner, ctx)?
+    fn must_free(&self, inner: &mut Inner, ctx: &TaskContext, want: usize) -> Result<Step> {
+        self.free_job(inner, ctx)
             .map(Step::Job)
             .ok_or_else(|| no_memory(want))
     }
@@ -995,11 +998,7 @@ impl HashAggregate {
     fn step(&self, g: &Global, ctx: &TaskContext) -> Result<Step> {
         let mut guard = lock(&g.inner);
         let inner = &mut *guard;
-        let step = if inner.disk {
-            self.disk_step(g, inner, ctx)?
-        } else {
-            self.memory_step(g, inner, ctx)?
-        };
+        let step = self.memory_step(g, inner, ctx)?;
         ctx.consumer()
             .signal()
             .set_spillable_bytes(if self.core.spec.spill.is_some() {
@@ -1012,7 +1011,7 @@ impl HashAggregate {
 
     fn memory_step(&self, g: &Global, inner: &mut Inner, ctx: &TaskContext) -> Result<Step> {
         if !inner.runs.is_empty() {
-            return self.must_free(g, inner, ctx, 0);
+            return self.must_free(inner, ctx, 0);
         }
         let tables = &mut inner.tables;
         // Order-sensitive aggregates merge in driver-partition order (see
@@ -1062,166 +1061,11 @@ impl HashAggregate {
             if self.core.spec.spill.is_none() {
                 return Ok(Step::Grow(need));
             }
-            return self.must_free(g, inner, ctx, want);
+            return self.must_free(inner, ctx, want);
         }
         dst.apply(&p)?;
         inner.merged = end;
         Ok(Step::Yield)
-    }
-
-    fn disk_step(&self, g: &Global, inner: &mut Inner, ctx: &TaskContext) -> Result<Step> {
-        let s = self
-            .spiller(ctx)
-            .ok_or_else(|| internal("disk phase without spill".to_owned()))?;
-        let Some(cur) = inner.current.as_mut() else {
-            let Some((level, mut files)) = inner.tasks.pop() else {
-                if let Some(w) = inner.out.take() {
-                    inner.busy = true;
-                    return Ok(Step::Job(Box::new(move || {
-                        let f = s.finish(w)?;
-                        Ok(Box::new(move |inner: &mut Inner| {
-                            inner.out_file = Some(f);
-                            Ok(())
-                        }) as Apply)
-                    })));
-                }
-                let out = Output::on_disk(inner.out_file.take(), Arc::clone(ctx.executor()));
-                let _ = g.done.set(Final {
-                    out: Arc::new(out),
-                    chunks: 1,
-                });
-                return Ok(Step::Done);
-            };
-            // Files are taken from the back: reverse them so they merge in
-            // run order (the order their rows arrived; `first`/`last`).
-            files.reverse();
-            inner.current = Some(Current {
-                level,
-                table: self.new_table(g, false)?,
-                reservation: ctx.consumer().reservation(),
-                files,
-                reader: None,
-                pending: None,
-                split: None,
-            });
-            return Ok(Step::Yield);
-        };
-        let Some(batch) = cur.pending.take() else {
-            if cur.reader.is_none() && cur.files.is_empty() {
-                return self.finish_task(inner, ctx);
-            }
-            // Open the next file if needed and read a batch, off the worker.
-            let reader = cur.reader.take();
-            let file = if reader.is_none() {
-                cur.files.pop()
-            } else {
-                None
-            };
-            let lent = lend_headroom(&mut cur.reservation);
-            inner.busy = true;
-            return Ok(Step::Job(Box::new(move || {
-                let mut reader = match (reader, file) {
-                    (Some(r), _) => r,
-                    (None, Some(f)) => f
-                        .reader(s.consumer.reservation())
-                        .map_err(KrishivError::from)?,
-                    (None, None) => return Err(internal("no spill file to read".to_owned())),
-                };
-                let next = reader.next().transpose().map_err(KrishivError::from)?;
-                Ok(Box::new(move |inner: &mut Inner| {
-                    if let Some(cur) = inner.current.as_mut() {
-                        regrow(&mut cur.reservation, lent);
-                        cur.reader = next.is_some().then_some(reader);
-                        cur.pending = next;
-                    }
-                    Ok(())
-                }) as Apply)
-            })));
-        };
-        if let Some((_, writers)) = cur.split.as_mut() {
-            let parts = cur.table.partitions_of(batch.data(), cur.level + 1)?;
-            let mut picked = Vec::new();
-            for (p, rows) in parts.into_iter().enumerate() {
-                if !rows.is_empty() {
-                    let b = take_record_batch(batch.data(), &UInt32Array::from(rows))
-                        .map_err(|e| internal(e.to_string()))?;
-                    picked.push((p, Batch::new(b)));
-                }
-            }
-            let mut writers = std::mem::take(writers);
-            let lent = lend_headroom(&mut cur.reservation);
-            inner.busy = true;
-            return Ok(Step::Job(Box::new(move || {
-                for (p, b) in &picked {
-                    let w = match &mut writers[*p] {
-                        Some(w) => w,
-                        slot => slot.insert(s.writer()?),
-                    };
-                    w.write(b).map_err(KrishivError::from)?;
-                }
-                Ok(Box::new(move |inner: &mut Inner| {
-                    if let Some(cur) = inner.current.as_mut() {
-                        regrow(&mut cur.reservation, lent);
-                        if let Some((_, slot)) = cur.split.as_mut() {
-                            *slot = writers;
-                        }
-                    }
-                    Ok(())
-                }) as Apply)
-            })));
-        }
-        let p = cur.table.prepare(&batch, true)?;
-        let want = cur.table.projected(&p)? + HEADROOM.max(cur.table.transient(&p));
-        if reserve_to(&mut cur.reservation, want).is_err() {
-            cur.pending = Some(batch);
-            return self.must_free(g, inner, ctx, want);
-        }
-        cur.table.apply(&p)?;
-        Ok(Step::Yield)
-    }
-
-    /// The current partition's input is exhausted: emit its groups, or turn
-    /// its split into tasks of the next level (on the blocking pool).
-    fn finish_task(&self, inner: &mut Inner, ctx: &TaskContext) -> Result<Step> {
-        let s = self
-            .spiller(ctx)
-            .ok_or_else(|| internal("disk phase without spill".to_owned()))?;
-        let Some(mut cur) = inner.current.take() else {
-            return Ok(Step::Yield);
-        };
-        inner.busy = true;
-        if let Some((mut runs, writers)) = cur.split.take() {
-            let level = cur.level + 1;
-            drop(cur);
-            return Ok(Step::Job(Box::new(move || {
-                let mut files: Vec<Option<SpillFile>> = Vec::with_capacity(PARTITIONS);
-                for w in writers {
-                    files.push(w.map(|w| s.finish(w)).transpose()?);
-                }
-                runs.push(Run::new(files, u32::MAX));
-                Ok(Box::new(move |inner: &mut Inner| {
-                    tasks_of(runs, level, &mut inner.tasks);
-                    Ok(())
-                }) as Apply)
-            })));
-        }
-        let out = inner.out.take();
-        Ok(Step::Job(Box::new(move || {
-            lend_headroom(&mut cur.reservation);
-            let mut out = match out {
-                Some(w) => w,
-                None => s
-                    .scope
-                    .writer(Arc::clone(&s.core.output_schema), s.consumer.reservation())
-                    .map_err(KrishivError::from)?,
-            };
-            s.write_output(&cur.table, &mut out)?;
-            drop(cur);
-            Ok(Box::new(move |inner: &mut Inner| {
-                inner.out = Some(out);
-                Ok(())
-            }) as Apply)
-        })))
     }
 
     /// Publishes an in-memory result: `tables` read in chunks of a batch
@@ -1444,6 +1288,9 @@ impl Sink for HashAggregate {
             }
             loop {
                 ctx.query().check_cancelled()?;
+                if lock(&g.inner).disk {
+                    return self.finalize_disk(g, ctx).await;
+                }
                 match self.step(g, ctx)? {
                     Step::Done => return Ok(()),
                     Step::Grow(bytes) => {
@@ -1533,7 +1380,7 @@ impl Sink for HashAggregate {
             let g = global(g)?;
             let (job, before) = {
                 let mut inner = lock(&g.inner);
-                if inner.row_merge {
+                if inner.row_merge || inner.disk_merge {
                     // Freed by the merge itself, between its tasks.
                     inner.spill_asked = true;
                     return Ok(0);
@@ -1542,7 +1389,7 @@ impl Sink for HashAggregate {
                     return Ok(0);
                 }
                 let before = held(&inner);
-                match self.free_job(g, &mut inner, ctx)? {
+                match self.free_job(&mut inner, ctx) {
                     Some(job) => (job, before),
                     None => return Ok(0),
                 }
@@ -1590,6 +1437,17 @@ impl Sink for HashAggregate {
             out.push((
                 std::borrow::Cow::Borrowed("table_layout"),
                 crate::metrics::Metric::Text("rows".to_owned()),
+            ));
+        }
+        let disk_tasks = c.disk_tasks.load(AtomicOrdering::Relaxed);
+        if disk_tasks > 0 {
+            out.extend(crate::metrics::counts([
+                ("disk_tasks", disk_tasks),
+                ("disk_waits", c.disk_waits.load(AtomicOrdering::Relaxed)),
+            ]));
+            out.push((
+                std::borrow::Cow::Borrowed("disk_peak_tasks"),
+                crate::metrics::Metric::Max(c.disk_peak.load(AtomicOrdering::Relaxed)),
             ));
         }
         out.extend(crate::metrics::probe_metrics(&c.probes.get()));

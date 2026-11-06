@@ -990,7 +990,7 @@ async fn spill_global_during_finalize() {
         assert_eq!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap(), 0);
         let src = ctx(1, "src").with_dependency(Arc::clone(&g));
         let sg = Source::global_state(&*agg, &src).unwrap();
-        assert_eq!(agg.max_parallelism(&sg), 1);
+        assert!(agg.max_parallelism(&sg) > 1, "a file per disk task");
         let mut sl = Source::local_state(&*agg, &src, &sg).unwrap();
         let mut out = Vec::new();
         while let Some(b) = agg.get_data(&mut sl, &sg).await.unwrap() {
@@ -1612,8 +1612,8 @@ async fn first_and_last_pick_rows_in_input_order() {
         ["NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL"]
     );
 }
-
 mod collect;
+mod disk;
 mod misc;
 mod simple;
 mod structs;
@@ -2015,7 +2015,7 @@ async fn row_final_phase_parallel_and_spill_fallback() {
         assert_eq!(rows(&out), expected, "hog {hog}");
         if hog {
             assert!(agg.metrics().spill_runs > 0);
-            assert_eq!(parallel, 1);
+            assert!(parallel > 1, "{parallel}");
         } else {
             assert_eq!(agg.metrics().spill_runs, 0);
             assert!(parallel > 1, "{parallel}");
