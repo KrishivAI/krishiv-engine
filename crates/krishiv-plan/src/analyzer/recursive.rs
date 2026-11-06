@@ -22,7 +22,7 @@ use krishiv_types::DataType;
 
 use super::coerce::quoted_type;
 
-use crate::{BoundColumn, ExprNode, JoinKind, LogicalPlan, Origin, PlanNode};
+use crate::{BoundColumn, ExprNode, JoinKind, LogicalPlan, Origin, PlanNode, ReadSource};
 
 impl Resolver<'_> {
     #[expect(
@@ -54,6 +54,15 @@ impl Resolver<'_> {
                 source: None,
             })
             .collect();
+        // Spark checks where the reference sits while it resolves the
+        // term, before an unresolvable column is reported (`cte-recursion`
+        // 27: a reference under an aggregate whose output names no `n`).
+        if let PlanNode::WithCte { input, ctes } = &recursive.node
+            && let [def] = ctes.as_slice()
+        {
+            let holds = |e: &Arc<crate::Expr>| self.holds_aggregate(e);
+            check_places(input, &def.name, o, &holds)?;
+        }
         self.loops.push((id, refs.clone()));
         let r = self.rel(recursive, env);
         self.loops.pop();
@@ -63,7 +72,7 @@ impl Resolver<'_> {
         if let PlanNode::WithCte { input, ctes } = &r.plan.node
             && let [def] = ctes.as_slice()
         {
-            check_places(input, &def.name, o)?;
+            check_places(input, &def.name, o, &|_| false)?;
         }
         let kids = self.widen_inputs(&[a, r], "UNION", o)?;
         // The reference was typed by the anchor, so rows of another type
@@ -167,7 +176,30 @@ fn lookup(defs: &Defs, name: &str) -> Option<(Arc<LogicalPlan>, Defs)> {
 /// aggregate, a window or a sort, inside a subquery expression, on the right
 /// side of a left outer, semi or anti join, the left side of a right outer
 /// join, or in a full outer join.
-fn check_places(plan: &Arc<LogicalPlan>, name: &str, o: Origin) -> Result<(), AnalysisError> {
+impl Resolver<'_> {
+    /// Whether `e` holds an aggregate call outside windows and subqueries:
+    /// an unresolved `Project` that is an aggregate in disguise
+    /// (`SELECT max(n) FROM t`), which the analyzer turns into one later.
+    fn holds_aggregate(&self, e: &Arc<crate::Expr>) -> bool {
+        if self.is_aggregate(e) {
+            return true;
+        }
+        if matches!(e.node, ExprNode::Window(_) | ExprNode::Subquery { .. }) {
+            return false;
+        }
+        let mut found = false;
+        e.for_each_child(&mut |c| found |= self.holds_aggregate(c));
+        found
+    }
+}
+
+/// `holds_aggregate` says which unresolved projections are aggregates.
+fn check_places(
+    plan: &Arc<LogicalPlan>,
+    name: &str,
+    o: Origin,
+    holds_aggregate: &dyn Fn(&Arc<crate::Expr>) -> bool,
+) -> Result<(), AnalysisError> {
     type Memo = HashMap<usize, bool>;
     fn has(p: &Arc<LogicalPlan>, name: &str, defs: &Defs, memo: &mut Memo) -> bool {
         let key = Arc::as_ptr(p) as usize;
@@ -182,6 +214,13 @@ fn check_places(plan: &Arc<LogicalPlan>, name: &str, o: Origin) -> Result<(), An
                     Some((plan, outer)) => has(&plan, name, &outer, memo),
                     // None inside: the recursive reference, if it is the name.
                     None => r.name.eq_ignore_ascii_case(name),
+                };
+            }
+            // The same before resolution: a read of the bare name.
+            PlanNode::Read(ReadSource::Table { name: parts, .. }) if parts.len() == 1 => {
+                found = match lookup(defs, &parts[0]) {
+                    Some((plan, outer)) => has(&plan, name, &outer, memo),
+                    None => parts[0].eq_ignore_ascii_case(name),
                 };
             }
             PlanNode::WithCte { input, ctes } => {
@@ -226,6 +265,11 @@ fn check_places(plan: &Arc<LogicalPlan>, name: &str, o: Origin) -> Result<(), An
             | PlanNode::Window { input, .. }
             | PlanNode::Sort { input, .. }
                 if has(input, name, &defs, &mut memo) =>
+            {
+                return Err(bad());
+            }
+            PlanNode::Project { input, exprs }
+                if exprs.iter().any(holds_aggregate) && has(input, name, &defs, &mut memo) =>
             {
                 return Err(bad());
             }

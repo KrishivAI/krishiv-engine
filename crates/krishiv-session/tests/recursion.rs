@@ -709,3 +709,20 @@ fn a_seeded_random_draws_every_small_round_in_row_order() {
         ]
     );
 }
+
+/// Spark 4.2.0 `cte-recursion.sql` case 27: a reference under an aggregate
+/// is a misplaced reference, reported before the outer `n` (which the
+/// aggregate's output does not name) is found unresolved.
+#[test]
+fn a_reference_under_an_aggregate_is_misplaced_before_columns_resolve() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        class_of(
+            &s,
+            "WITH t1 AS (SELECT 1 as n), t2(n) AS (WITH RECURSIVE t3(n) AS (SELECT 1 \
+             UNION ALL SELECT n+1 FROM (SELECT MAX(n) FROM t3)) SELECT * FROM t3) \
+             SELECT * FROM t2"
+        ),
+        ErrorClass::InvalidRecursiveReferencePlace
+    );
+}
