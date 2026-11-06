@@ -574,6 +574,16 @@ impl Resolver<'_> {
         window_fn: bool,
         cx: &Cx<'_>,
     ) -> Result<Option<Bound>, AnalysisError> {
+        // The keys are for string-to-string comparisons. Against a timestamp, a number or a binary
+        // the other operand is cast to the string's type, and a lowered or trimmed key would be
+        // cast instead of the text (`ts = '2020-01-01T10:00:00' COLLATE UTF8_LCASE`): those stay
+        // with the execution guard. An untyped NULL is no obstacle.
+        if !kids[..n]
+            .iter()
+            .all(|k| k.ty.data_type.is_none() || is_string(k.ty.data_type.as_ref()))
+        {
+            return Ok(None);
+        }
         let (chosen, _) = self.choose_collation(e, kids, n, name)?;
         let Some(c) = chosen else {
             return Ok(None);

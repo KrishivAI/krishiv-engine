@@ -605,16 +605,35 @@ fn tables_filter_and_join_on_collation_keys() {
     ] {
         block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
     }
-    let count = |sql: &str| -> String {
-        let b = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
-        let c = &b[0].columns()[0];
-        format!("{c:?}")
-    };
-    assert!(count("select count(*) from c1 where a = 'aaa' collate utf8_lcase").contains('2'));
-    assert!(count("select count(*) from c1 where a = 'AAA'").contains('2'));
-    assert!(count("select count(*) from c1 where a < 'bbb'").contains('2'));
-    assert!(count("select count(*) from c1 join c2 on c1.a = c2.a").contains('2'));
-    assert!(count("select count(*) from c1 where a in ('BBB', 'zzz')").contains('2'));
+    let count = |sql: &str| value_of(&s, &format!("select cast(count(*) as string) from {sql}"));
+    assert_eq!(count("c1 where a = 'aaa' collate utf8_lcase"), "2");
+    assert_eq!(count("c1 where a = 'AAA'"), "2");
+    assert_eq!(count("c1 where a < 'bbb'"), "2");
+    assert_eq!(count("c1 join c2 on c1.a = c2.a"), "2");
+    assert_eq!(count("c1 where a in ('BBB', 'zzz')"), "2");
+    // An explicit `UTF8_BINARY` beats the column's implicit `UTF8_LCASE`: bytes.
+    assert_eq!(count("c1 where a = 'AAA' collate utf8_binary"), "1");
+    // Two different explicit collations never compare.
+    assert_eq!(
+        class_of(
+            &s,
+            "select 1 where 'a' collate utf8_lcase = 'a' collate utf8_binary"
+        ),
+        ErrorClass::CollationMismatchExplicit
+    );
+    // Opus review of #530: against a timestamp, number or binary the other operand is cast to the
+    // string's type, so the lowered key must never be cast instead of the text: those comparisons
+    // stay with the guard.
+    for sql in [
+        "select count(*) from (select timestamp '2020-01-01 10:00:00' as ts) where ts = '2020-01-01T10:00:00' collate utf8_lcase",
+        "select count(*) from c1 where n = '1' collate utf8_lcase",
+    ] {
+        assert_eq!(
+            class_of(&s, sql),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+    }
     for sql in [
         "select count(*) from c1 where a = 'aaa' collate unicode_ci",
         "select count(*) from c1 group by a",
