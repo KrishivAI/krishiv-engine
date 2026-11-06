@@ -74,3 +74,12 @@ fn seed_must_be_a_literal() {
     }
     assert!(err("SELECT shuffle(1)").contains("UNEXPECTED_INPUT_TYPE"));
 }
+
+#[test]
+fn an_untyped_null_array_is_a_null_array() {
+    let r = first(
+        "SELECT cast(shuffle(null) AS STRING), cast(shuffle(null, 42) AS STRING), \
+                typeof(shuffle(null, 42))",
+    );
+    assert_eq!(r, ["NULL", "NULL", "array<void>"]);
+}

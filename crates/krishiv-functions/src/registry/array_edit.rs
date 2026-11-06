@@ -140,6 +140,11 @@ pub(super) fn specs() -> Vec<Spec> {
         &Inputs::Expects(vec![InputType::Array]),
         compact,
     ));
-    out.extend(scalar(&["shuffle"], &Inputs::Any, shuffle));
+    // The array argument takes an untyped NULL as `array<void>`; the seed stays as written.
+    out.extend(scalar(
+        &["shuffle"],
+        &Inputs::Expects(vec![InputType::Array, InputType::Any]),
+        shuffle,
+    ));
     out
 }
