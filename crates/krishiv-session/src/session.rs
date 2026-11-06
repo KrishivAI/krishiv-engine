@@ -5,9 +5,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::task::Poll;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -47,14 +46,14 @@ use object_store::ObjectStore;
 #[cfg(not(unix))]
 use object_store::local::LocalFileSystem;
 
-use crate::admission::{AdmissionController, QueryRequest};
+use crate::admission::AdmissionController;
 use crate::cache::RelationCache;
 use crate::catalog::{FileScans, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
 use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
-use crate::query_fold::{Admitted, MetricStream, PendingFold, QueryFold, QueryStart, QueuedRow};
+use crate::query_fold::{Admitted, MetricStream, PendingFold, QueryFold, QueryStart};
 use crate::runtime::EngineRuntime;
 use crate::sql_functions::{QueryFunctions, SqlFunctions};
 use crate::variables::SessionVariables;
@@ -144,7 +143,7 @@ pub(crate) struct SessionState {
     /// The session's number on its runtime.
     pub(crate) number: u64,
     /// Set by [`Session::close`]: the session takes no new statement.
-    closed: AtomicBool,
+    closed: lifecycle::Closing,
     /// The session's memory pool: the runtime's root, or a pool of its own
     /// under the root (`krishiv.session.memoryLimit`).
     memory: Arc<dyn MemoryPool>,
@@ -1532,50 +1531,12 @@ impl Session {
         Ok((stream, query))
     }
 
-    /// Asks the admission controller for a permit for the query whose
-    /// `system.queries` row is `log_id`. A controller that answers at once
-    /// leaves the row `running`; one that waits shows it `queued`. A refusal
-    /// closes the row as failed with the controller's error class, and a
-    /// caller that drops the query while it is queued closes it `cancelled`.
-    async fn admit(&self, log_id: &str) -> Result<crate::admission::Permit, KrishivError> {
-        let request = QueryRequest {
-            principal: Arc::clone(&self.state.principal),
-            tags: self.state.queries.tags_now(),
-            class: WorkloadClass::Interactive,
-            estimate: None,
-        };
-        let controller = Arc::clone(&self.state.admission);
-        let mut admit = std::pin::pin!(controller.admit(&request));
-        let mut queued = QueuedRow {
-            state: Arc::clone(&self.state),
-            id: log_id,
-            open: true,
-        };
-        let admitted = match std::future::poll_fn(|cx| Poll::Ready(admit.as_mut().poll(cx))).await {
-            Poll::Ready(done) => done,
-            Poll::Pending => {
-                self.state.queries.set_state(log_id, "queued");
-                let done = admit.await;
-                if done.is_ok() {
-                    self.state.queries.set_state(log_id, "running");
-                }
-                done
-            }
-        };
-        queued.open = false;
-        match admitted {
-            Ok(permit) => Ok(permit),
-            Err(error) => {
-                self.state.queries.record_failed_row(log_id, &error);
-                Err(error)
-            }
-        }
-    }
-
     /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
     /// that is about to change something (a write replacing files) takes the permit first and
     /// passes it on, so a refused or cancelled query has changed nothing.
     pub(crate) async fn admit_query(&self, env: &QueryEnv) -> Result<Admitted, KrishivError> {
+        // Before anything changes: a writer calls this before it replaces data.
+        self.check_open()?;
         let log_id = self.state.queries.begin_as(
             env.text.as_deref(),
             env.statement_class,

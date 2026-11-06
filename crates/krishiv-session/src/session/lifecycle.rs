@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::task::Poll;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -13,6 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64};
 
 use krishiv_common::config::{Config, ConfigValue, SESSION_MEMORY_LIMIT};
 use krishiv_common::error::KrishivError;
+use krishiv_exec::WorkloadClass;
 use krishiv_exec::planner::DefaultPlanner;
 use krishiv_io::{IoConfig, IoScheduler, StoreId};
 use krishiv_memory::{MemoryPool, RelationStore};
@@ -23,11 +25,12 @@ use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
 use super::{LOCAL_STORE, Session, SessionParts, SessionState};
-use crate::admission::Unlimited;
+use crate::admission::{QueryRequest, Unlimited};
 use crate::cache::RelationCache;
 use crate::catalog::SessionCatalog;
 use crate::conf::ConfStore;
 use crate::dataframe::DataFrame;
+use crate::query_fold::QueuedRow;
 use crate::runtime::EngineRuntime;
 use crate::sql_functions::SqlFunctions;
 use crate::udfs::SessionFunctions;
@@ -101,7 +104,7 @@ impl Session {
                 sql_functions: SqlFunctions::default(),
                 commit_log_probes: Mutex::new(HashMap::new()),
                 number: runtime.next_session(),
-                closed: AtomicBool::new(false),
+                closed: Closing::default(),
                 runtime,
                 memory,
                 relations: RelationStore::new(),
@@ -174,9 +177,11 @@ impl Session {
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     pub fn close(&self) -> usize {
-        if self.state.closed.swap(true, Ordering::AcqRel) {
+        if self.state.closed.flag.swap(true, Ordering::AcqRel) {
             return 0;
         }
+        // Queries waiting for admission stop waiting.
+        self.state.closed.wake.notify_waiters();
         // Under the runtime's registry lock: a query that registers after
         // this is refused there (`EngineRuntime::track`), so none slips
         // between the flag and the cancellation.
@@ -193,7 +198,7 @@ impl Session {
 
     /// `INVALID_HANDLE.SESSION_CLOSED` once [`Self::close`] ran.
     pub(crate) fn check_open(&self) -> Result<(), KrishivError> {
-        if self.state.closed.load(Ordering::Acquire) {
+        if self.state.closed.flag.load(Ordering::Acquire) {
             return Err(self.closed_error());
         }
         Ok(())
@@ -263,5 +268,69 @@ impl Session {
         self.state
             .queries
             .record_refused(text, class, error, self.operation_id())
+    }
+}
+
+/// Whether a session was closed ([`Session::close`]), and the wake-up of its
+/// queries waiting for admission.
+#[derive(Debug, Default)]
+pub(crate) struct Closing {
+    pub(crate) flag: AtomicBool,
+    pub(crate) wake: tokio::sync::Notify,
+}
+
+impl Session {
+    /// Asks the admission controller for a permit for the query whose
+    /// `system.queries` row is `log_id`. A controller that answers at once
+    /// leaves the row `running`; one that waits shows it `queued`. A refusal
+    /// closes the row as failed with the controller's error class, and a
+    /// caller that drops the query while it is queued closes it `cancelled`.
+    pub(super) async fn admit(
+        &self,
+        log_id: &str,
+    ) -> Result<crate::admission::Permit, KrishivError> {
+        let request = QueryRequest {
+            principal: Arc::clone(&self.state.principal),
+            tags: self.state.queries.tags_now(),
+            class: WorkloadClass::Interactive,
+            estimate: None,
+        };
+        let controller = Arc::clone(&self.state.admission);
+        let mut admit = std::pin::pin!(controller.admit(&request));
+        let mut queued = QueuedRow {
+            state: Arc::clone(&self.state),
+            id: log_id,
+            open: true,
+        };
+        let admitted = match std::future::poll_fn(|cx| Poll::Ready(admit.as_mut().poll(cx))).await {
+            Poll::Ready(done) => done,
+            Poll::Pending => {
+                self.state.queries.set_state(log_id, "queued");
+                // A session that closes while its query waits ends the wait.
+                let closing = self.state.closed.wake.notified();
+                let mut closing = std::pin::pin!(closing);
+                closing.as_mut().enable();
+                let done = if self.state.closed.flag.load(Ordering::Acquire) {
+                    Err(self.closed_error())
+                } else {
+                    match futures::future::select(admit, closing).await {
+                        futures::future::Either::Left((done, _)) => done,
+                        futures::future::Either::Right(_) => Err(self.closed_error()),
+                    }
+                };
+                if done.is_ok() {
+                    self.state.queries.set_state(log_id, "running");
+                }
+                done
+            }
+        };
+        queued.open = false;
+        match admitted {
+            Ok(permit) => Ok(permit),
+            Err(error) => {
+                self.state.queries.record_failed_row(log_id, &error);
+                Err(error)
+            }
+        }
     }
 }

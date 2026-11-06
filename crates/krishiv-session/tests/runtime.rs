@@ -224,3 +224,90 @@ fn a_closed_session_is_not_served_from_the_result_cache() {
     let e = block_on(df.collect()).unwrap_err();
     assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_CLOSED");
 }
+
+/// Admits nothing: every query waits until it is dropped.
+#[derive(Debug)]
+struct Never;
+
+impl krishiv_session::AdmissionController for Never {
+    fn admit<'a>(
+        &'a self,
+        _: &'a krishiv_session::QueryRequest,
+    ) -> krishiv_plan::analyzer::BoxFuture<
+        'a,
+        Result<krishiv_session::Permit, krishiv_common::error::KrishivError>,
+    > {
+        Box::pin(std::future::pending())
+    }
+}
+
+/// Closing a session ends the wait of its queries queued for admission.
+#[test]
+fn closing_a_session_wakes_its_queued_queries() {
+    let rt = EngineRuntime::builder().build().unwrap();
+    let s = Session::builder()
+        .runtime(Arc::clone(&rt))
+        .admission_controller(Arc::new(Never))
+        .build()
+        .unwrap();
+    let df = block_on(s.sql("SELECT 1 AS queued")).unwrap();
+    let waiter = std::thread::spawn(move || block_on(df.collect()));
+    // The query shows as queued before the session closes, seen from a
+    // session of the runtime that admits at once.
+    let watcher = Session::builder().runtime(rt).build().unwrap();
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let df =
+            block_on(watcher.sql("SELECT count(*) FROM system.queries WHERE state = 'queued'"))
+                .unwrap();
+        let n = block_on(df.collect()).unwrap()[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int64Array>()
+            .unwrap()
+            .value(0);
+        if n == 1 {
+            break;
+        }
+        assert!(std::time::Instant::now() < until, "never queued");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    s.close();
+    let e = waiter.join().unwrap().unwrap_err();
+    assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_CLOSED");
+}
+
+/// A writer kept from before the session closed changes nothing.
+#[test]
+fn a_retained_writer_on_a_closed_session_changes_nothing() {
+    let warehouse = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .config(
+            "spark.sql.warehouse.dir",
+            warehouse.path().to_str().unwrap(),
+        )
+        .build()
+        .unwrap();
+    block_on(
+        block_on(s.sql("CREATE TABLE kept USING parquet AS SELECT 1 AS a"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    let files = || {
+        let mut f: Vec<_> = std::fs::read_dir(warehouse.path().join("kept"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| (e.file_name(), e.metadata().unwrap().len()))
+            .collect();
+        f.sort();
+        f
+    };
+    let before = files();
+    assert!(!before.is_empty());
+    let df = block_on(s.sql("SELECT 2 AS a")).unwrap();
+    s.close();
+    let e = block_on(df.write().mode("overwrite").save_as_table("kept")).unwrap_err();
+    assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_CLOSED");
+    assert_eq!(files(), before, "the table's files are untouched");
+}
