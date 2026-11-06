@@ -803,16 +803,16 @@ fn add_partition_locations() {
         location("p = 'y'"),
         format!("Location\tfile:{}", other.display())
     );
-    // A relative location is refused, and nothing of the command is left behind.
+    // A relative location is made absolute against the working directory (Spark's `makeQualified`).
+    run(&s, "ALTER TABLE t ADD PARTITION (p = 'z') LOCATION 'rel'");
     assert_eq!(
-        class(
-            &s,
-            "ALTER TABLE t ADD PARTITION (p = 'z') PARTITION (p = 'w') LOCATION 'rel'"
-        ),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        location("p = 'z'"),
+        format!(
+            "Location\tfile:{}",
+            std::env::current_dir().unwrap().join("rel").display()
+        )
     );
-    assert!(!dir.path().join("t/p=z").exists());
-    assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=x", "p=y"]);
+    assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=x", "p=y", "p=z"]);
 }
 
 /// Denies `CREATE` on any path with `outside` in it.

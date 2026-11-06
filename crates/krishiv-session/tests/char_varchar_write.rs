@@ -166,3 +166,33 @@ fn view_properties_serde_properties_and_partition_locations() {
     .unwrap_err();
     assert_eq!(e.error_class().name(), "_LEGACY_ERROR_TEMP_1232");
 }
+
+#[test]
+fn msck_repair_registers_the_partition_directories_it_finds() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    run(&s, "drop table if exists pr").unwrap();
+    run(
+        &s,
+        &format!(
+            "create table pr(a string, v varchar(2), c char(2)) using parquet partitioned by (v, c) location '{}'",
+            dir.path().display()
+        ),
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join("v=ke").join("c=nt")).unwrap();
+    std::fs::create_dir_all(dir.path().join("_hidden").join("c=x")).unwrap();
+    std::fs::create_dir_all(dir.path().join("v=zz")).unwrap();
+    let rows = |sql: &str| {
+        let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+        b.iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>()
+    };
+    assert_eq!(rows("show partitions pr"), 0);
+    run(&s, "msck repair table pr").unwrap();
+    assert_eq!(first_text(&s, "show partitions pr"), "v=ke/c=nt");
+    assert_eq!(rows("show partitions pr"), 1);
+    let e = run(&s, "msck repair table pr sync partitions").unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}

@@ -338,6 +338,35 @@ fn exact_spec(
     }
 }
 
+/// The `col=value/...` directories `depth` levels below `dir` (hidden and `_` entries are skipped, as the
+/// partition listing of `RepairTableCommand` does), as paths relative to the table location.
+fn list_partition_dirs(dir: &std::path::Path, depth: usize, prefix: &str, out: &mut Vec<String>) {
+    if depth == 0 {
+        if !prefix.is_empty() {
+            out.push(prefix.to_owned());
+        }
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut names: Vec<(String, PathBuf)> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .filter_map(|e| Some((e.file_name().into_string().ok()?, e.path())))
+        .filter(|(n, _)| n.contains('=') && !n.starts_with(['.', '_']))
+        .collect();
+    names.sort();
+    for (n, path) in names {
+        let next = if prefix.is_empty() {
+            n
+        } else {
+            format!("{prefix}/{n}")
+        };
+        list_partition_dirs(&path, depth - 1, &next, out);
+    }
+}
+
 /// A partition `LOCATION` as the catalog stores it: Spark makes a relative path qualified against the
 /// working directory of the process (`makeQualified`).
 fn qualified(location: &str) -> Result<PathBuf, KrishivError> {
@@ -530,6 +559,32 @@ impl Session {
             .into_iter()
             .filter_map(|(k, v)| v.map(|v| (k, v)))
             .collect())
+    }
+
+    /// `MSCK REPAIR TABLE name [ADD PARTITIONS]` (`RepairTableCommand`): the `col=value/...` directories of the
+    /// table's location that the catalog does not know are registered, with their file statistics.
+    /// `DROP` and `SYNC PARTITIONS` (which forget partitions whose directory is gone) are not supported yet.
+    pub(crate) async fn exec_repair(
+        &self,
+        r: &krishiv_sql::ast::Repair,
+    ) -> Result<DataFrame, KrishivError> {
+        use krishiv_sql::ast::RepairAction;
+        let env = self.query_env();
+        let name = self.table_name(&r.table, &env)?;
+        let table = self.table_for_write(&name, "MSCK REPAIR TABLE", &env)?;
+        require_partition_provider(&table, "MSCK REPAIR TABLE")?;
+        if matches!(r.action, Some(RepairAction::Drop | RepairAction::Sync)) {
+            return Err(unsupported("MSCK REPAIR TABLE ... DROP | SYNC PARTITIONS"));
+        }
+        let mut dirs = Vec::new();
+        list_partition_dirs(
+            &table.location,
+            table.layout.partition_columns.len(),
+            "",
+            &mut dirs,
+        );
+        self.register_partitions(&name, &dirs, true);
+        self.empty_frame().await
     }
 
     /// `ALTER TABLE name PARTITION (...) SET LOCATION '...'`: only the catalog entry changes.

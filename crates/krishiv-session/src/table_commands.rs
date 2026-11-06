@@ -2035,7 +2035,7 @@ impl Session {
     }
 
     /// The permanent table `name` for a command that writes it.
-    fn table_for_write(
+    pub(crate) fn table_for_write(
         &self,
         name: &TableName,
         operation: &str,
