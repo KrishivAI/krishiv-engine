@@ -3879,8 +3879,12 @@ impl Resolver<'_> {
         };
         // A generator between the sort and the aggregate: the aggregate
         // cannot grow through it, so Spark leaves the call in the sort and
-        // refuses it there.
-        if bounds.iter().any(|b| b.agg.is_some()) && Self::holds_generator(&c.plan) {
+        // refuses it there. The same for windows over the aggregate: an
+        // aggregate call in the `ORDER BY` stays in the sort, which no
+        // aggregate may be in (Spark 4.2.0, `window-with-aggregates`).
+        if bounds.iter().any(|b| b.agg.is_some())
+            && (Self::holds_generator(&c.plan) || c.agg.as_ref().is_some_and(|i| i.has_windows()))
+        {
             let calls: Vec<String> = bounds
                 .iter()
                 .flat_map(|b| {
