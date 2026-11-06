@@ -32,7 +32,7 @@ const STATUSES: [&str; 3] = ["supported", "partial", "not yet"];
 ///
 /// # Errors
 /// Returns a message when either input does not parse, a status is not one of
-/// [`STATUSES`], or the report lacks a number.
+/// `supported`, `partial` or `not yet`, or the report lacks a number.
 pub fn render(data: &str, report: &str) -> Result<String, String> {
     let data: Data = toml::from_str(data).map_err(|e| format!("compatibility data: {e}"))?;
     let report: serde_json::Value =
@@ -194,5 +194,48 @@ note = "later"
         let data = std::fs::read_to_string(root.join("docs/compatibility.toml"))
             .map_err(|e| e.to_string())?;
         render(&data, REPORT).map(|_| ())
+    }
+
+    fn scratch(name: &str) -> Result<PathBuf, String> {
+        let dir = std::env::temp_dir().join(format!("xtask-compat-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        Ok(dir)
+    }
+
+    #[test]
+    fn run_writes_the_page_to_a_file() -> Result<(), String> {
+        let dir = scratch("write")?;
+        let (data, report, page) = (dir.join("d.toml"), dir.join("r.json"), dir.join("out/p.md"));
+        std::fs::write(&data, DATA).map_err(|e| e.to_string())?;
+        std::fs::write(&report, REPORT).map_err(|e| e.to_string())?;
+        let flags = [
+            "--data",
+            data.to_str().ok_or("path")?,
+            "--report",
+            report.to_str().ok_or("path")?,
+            page.to_str().ok_or("path")?,
+        ];
+        run(&dir, &flags)?;
+        let text = std::fs::read_to_string(&page).map_err(|e| e.to_string())?;
+        assert!(text.contains("| Parse | 9 | 10 | 90.0% |"), "{text}");
+        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn run_names_the_fix_for_a_missing_report() -> Result<(), String> {
+        let dir = scratch("missing")?;
+        let data = dir.join("d.toml");
+        std::fs::write(&data, DATA).map_err(|e| e.to_string())?;
+        let err = run(&dir, &["--data", data.to_str().ok_or("path")?]).expect_err("no report");
+        assert!(err.contains("cargo xtask golden --engine session"), "{err}");
+        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn run_refuses_bad_flags() {
+        let root = Path::new(".");
+        assert!(run(root, &["--bogus"]).is_err());
+        assert!(run(root, &["--report"]).is_err());
+        assert!(run(root, &["--data"]).is_err());
     }
 }
