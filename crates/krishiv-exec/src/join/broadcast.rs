@@ -164,8 +164,18 @@ impl BroadcastTables {
         let (slot, start) = {
             let mut builds = lock(&self.builds);
             match builds.get(&key) {
-                Some(s) => (Arc::clone(s), false),
+                Some(s) => (Arc::clone(s), None),
                 None => {
+                    // This task handed its job over already, and its slot is
+                    // gone: a newer attempt of the writing stage replaced it.
+                    // The task reads rows nobody keeps; no slot is made for
+                    // them (it would stand for that attempt from now on).
+                    let Some(job) = job() else {
+                        return Err(internal(format!(
+                            "the broadcast of exchange {} attempt {} was superseded by a newer attempt",
+                            key.exchange.0, key.stage_attempt
+                        )));
+                    };
                     // A newer attempt of the stage that wrote the exchange:
                     // no task reads an older attempt's rows any more, so
                     // its table goes (a retry never doubles the memory).
@@ -179,18 +189,12 @@ impl BroadcastTables {
                     });
                     let s = Arc::new(Slot::default());
                     builds.insert(key, Arc::clone(&s));
-                    (s, true)
+                    (s, Some(job))
                 }
             }
         };
-        if start {
-            match job() {
-                Some(job) => self.start(key, &slot, job, query.config(), query.class()),
-                None => slot.finish(Err(internal(format!(
-                    "the broadcast build of exchange {} was started twice by one task",
-                    key.exchange.0
-                )))),
-            }
+        if let Some(job) = start {
+            self.start(key, &slot, job, query.config(), query.class());
         }
         loop {
             let listener = slot.done.listen();
@@ -590,7 +594,12 @@ impl PrebuiltSink {
 /// A [`PrebuiltSink`]'s global state: the shared build once it finished.
 pub(crate) struct Prebuilt {
     pub(crate) build: OnceLock<Arc<BuildGlobal>>,
-    /// The task's own build state (fed only after a fallback).
+    /// The task's own build state (fed only after a fallback). On the
+    /// shared path it is dropped unfinalized, and its drop publishes
+    /// `Disabled` for the task's filters: ignored only because `finalize`
+    /// republished the shared build's filters first and the value service
+    /// keeps a producer's first partial. A change to that rule must keep
+    /// this path publishing first.
     own: GlobalState,
     filters: Vec<FilterId>,
     publisher: Option<FilterPublisher>,
@@ -788,8 +797,18 @@ impl Source for SharedOrOwnRows {
         local: &'a mut LocalState,
         global: &'a GlobalState,
     ) -> BoxFuture<'a, Result<Option<Batch>>> {
+        let g = match gate(global) {
+            Ok(g) => g,
+            Err(e) => return Box::pin(std::future::ready(Err(e))),
+        };
+        // Once chosen, a call costs what the rows' own read costs.
+        match self.decision.chosen.get() {
+            Some(Ok(Choice::Own)) => return self.rows.get_data(local, &g.rows),
+            Some(Ok(Choice::Shared(_))) => return Box::pin(std::future::ready(Ok(None))),
+            Some(Err(e)) => return Box::pin(std::future::ready(Err(e.clone()))),
+            None => {}
+        }
         Box::pin(async move {
-            let g = gate(global)?;
             match self.decision.choose(&g.query).await? {
                 Choice::Shared(_) => Ok(None),
                 Choice::Own => self.rows.get_data(local, &g.rows).await,
