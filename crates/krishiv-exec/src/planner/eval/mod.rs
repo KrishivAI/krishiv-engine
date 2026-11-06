@@ -546,7 +546,28 @@ fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: 
                 | Builtin::Multiply
         ),
         FunctionId::Registry { name, .. } => {
-            matches!(name.as_str(), "nullif" | "date_add" | "date_sub")
+            matches!(
+                name.as_str(),
+                "nullif"
+                    | "date_add"
+                    | "date_sub"
+                    | "&"
+                    | "|"
+                    | "^"
+                    | "<<"
+                    | ">>"
+                    | ">>>"
+                    | "shiftleft"
+                    | "shiftright"
+                    | "shiftrightunsigned"
+                    | "instr"
+                    | "contains"
+                    | "startswith"
+                    | "endswith"
+                    | "add_months"
+                    | "datediff"
+                    | "date_diff"
+            )
         }
         _ => false,
     };
