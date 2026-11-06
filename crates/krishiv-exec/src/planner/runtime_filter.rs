@@ -43,7 +43,12 @@
 //! estimated at most `krishiv.runtimeFilter.bloom.maxItems` rows, and the
 //! scan at least four times the build and at least
 //! `krishiv.runtimeFilter.bloom.minApplicationRows`. The build decides with
-//! the actual key count at finalize. Spark's size guards are not used:
+//! the actual key count at finalize. A build whose estimate is a selectivity
+//! guess over an aggregate's output (a `HAVING`, or a filter on a grouped
+//! subquery: `filtered_aggregate`) counts as at most `bloom.maxItems`
+//! rows for both tests, so its Bloom form is planned and its actual keys
+//! decide (TPC-H q18; DuckDB also picks the form from the built table's
+//! count, `JoinFilterPushdownInfo::FinalizeFilters`). Spark's size guards are not used:
 //! they are tuned for clusters.
 
 use std::sync::Arc;
@@ -208,10 +213,22 @@ impl Planner<'_> {
             // Every scan the key reaches gets its own filter (the branches
             // of a union, both inputs of an inner join below).
             for site in probe.sites.iter().filter(|s| s.attr == source) {
+                // A build whose estimate is a guess over an aggregate's
+                // output (`HAVING`) plans its Bloom filter anyway: the build
+                // decides from the keys it holds, as it does for any planned
+                // Bloom (TPC-H q18: estimated 150M, holds 6,398 at SF100).
+                // Past `bloom.maxItems` it publishes none, so the guess is
+                // capped there for the scan-size test and the planned size.
+                #[expect(clippy::cast_precision_loss, reason = "estimates")]
+                let rows = if s.bloom_max_items > 0 && filtered_aggregate(build) {
+                    build_rows.min(s.bloom_max_items as f64)
+                } else {
+                    build_rows
+                };
                 #[expect(clippy::cast_precision_loss, reason = "estimates")]
                 let bloom = s.bloom
-                    && build_rows <= s.bloom_max_items as f64
-                    && site.scan_rows >= (4.0 * build_rows).max(s.min_application_rows as f64);
+                    && rows <= s.bloom_max_items as f64
+                    && site.scan_rows >= (4.0 * rows).max(s.min_application_rows as f64);
                 let reads_scan_table = reads_source(build, &site.source);
                 let id = FilterId(self.next_filter);
                 self.next_filter += 1;
@@ -239,9 +256,8 @@ impl Planner<'_> {
                     ..KeyFilterOptions::default()
                 };
                 // Sized at the false-positive rate the producers build with.
-                options.bloom_bytes = (bloom && partitioned).then(|| {
-                    planned_bloom_bytes(build_rows, options.bloom_fpp, options.bloom_max_bytes)
-                });
+                options.bloom_bytes = (bloom && partitioned)
+                    .then(|| planned_bloom_bytes(rows, options.bloom_fpp, options.bloom_max_bytes));
                 out.filters.push(JoinFilterPlan { id, key, options });
             }
         }
@@ -260,6 +276,27 @@ fn planned_bloom_bytes(build_rows: f64, fpp: f64, max_bytes: usize) -> u32 {
     let keys = build_rows.max(1.0).ceil() as u64;
     let bytes = RuntimeBloom::bytes_for(keys, fpp).min(max_bytes);
     u32::try_from(bytes).unwrap_or(u32::MAX)
+}
+
+/// Whether `node`'s rows are an aggregate's output cut by a filter (a
+/// `HAVING`, or a filter on a grouped subquery), looking down through
+/// projections and exchanges: the estimate of such a build is a selectivity
+/// guess, so it must not keep a runtime filter's Bloom form out of the plan.
+fn filtered_aggregate(node: &PhysNode) -> bool {
+    let mut filtered = false;
+    let mut n = node;
+    loop {
+        match n {
+            PhysNode::Filter { input, .. } => {
+                filtered = true;
+                n = input;
+            }
+            PhysNode::Project { input, .. } => n = input,
+            PhysNode::Exchange(e) => n = &e.input,
+            PhysNode::Aggregate { .. } => return filtered,
+            _ => return false,
+        }
+    }
 }
 
 /// How many times the build must be smaller than a scan of the build's own

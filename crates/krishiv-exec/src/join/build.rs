@@ -202,6 +202,21 @@ impl Partials {
         };
         let held = memory.size();
         if want > held && memory.try_grow(want - held).is_err() {
+            // The Bloom hashes go first; the exact keys only if the
+            // reservation still fails without them.
+            for b in self.builders.iter_mut().flatten() {
+                b.drop_hashes();
+            }
+            let want = self.heap_bytes();
+            let Some(memory) = self.memory.first_mut() else {
+                return;
+            };
+            if want <= held || memory.try_grow(want - held).is_ok() {
+                if want < held {
+                    memory.shrink(held - want);
+                }
+                return;
+            }
             for b in self.builders.iter_mut().flatten() {
                 b.drop_bloom();
             }
