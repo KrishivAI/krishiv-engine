@@ -2262,7 +2262,8 @@ impl Session {
                     None => lit_null().cast(column.data_type.clone()),
                 },
             };
-            select.push(value.alias(&column.name));
+            let checked = crate::char_write::checked(value, column, &env.analysis.conf);
+            select.push(checked.alias(&column.name));
         }
         let df = base.select(select);
         let mode = if overwrite { "overwrite" } else { "append" };
@@ -3008,6 +3009,7 @@ fn overflow_in_table_insert(
     output: &[TableColumn],
     assignment: &[Source],
 ) -> KrishivError {
+    let e = crate::char_write::map_error(e);
     if e.error_class() != ErrorClass::CastOverflow {
         return e;
     }
