@@ -2468,15 +2468,16 @@ fn typed_literals_resolve_with_the_session_zone() {
         let a = project(kind, value, utc).unwrap();
         assert_eq!(a.output[0].data_type.simple_string(), ty, "{value}");
     }
-    // A bare time of day needs the clock too, which is not supported yet.
+    // A bare time of day is that time on the query clock's date, in the session zone.
     for (kind, value) in [
         (TypedLiteralKind::TimestampLtz, "10:00"),
         (TypedLiteralKind::Timestamp, "10:00"),
+        (TypedLiteralKind::Timestamp, "T10:00:30.5"),
     ] {
-        let e = project(kind, value, utc).unwrap_err();
+        let a = project(kind, value, utc).unwrap();
         assert_eq!(
-            e.error.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
+            a.output[0].data_type.simple_string(),
+            "timestamp",
             "{value}"
         );
     }

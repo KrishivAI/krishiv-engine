@@ -2,6 +2,7 @@
 //! Literal types, typed literals (`DATE '...'` and friends) and the cast errors Spark raises for them.
 
 use super::*;
+use krishiv_kernels::cast::{TimestampText, timestamp_text};
 
 pub(in crate::analyzer) fn literal_type(v: &Literal) -> Option<DataType> {
     Some(match v {
@@ -269,6 +270,61 @@ pub(super) fn special_clock(special: &str, kind: SpecialKind) -> Expr {
         (SpecialKind::Instant, d) => cast(day(d), DataType::Timestamp),
         (SpecialKind::Local, d) => cast(day(d), DataType::TimestampNtz),
     }
+}
+
+/// A bare time of day (`10:00`, `T10:00:30.5`, no zone) of an instant type: Spark reads it as that time
+/// today, in the session zone. It binds as the cast of the query-start date and the time, so a
+/// `TIMESTAMP '11:00'` is `CAST(CONCAT(CAST(current_date() AS STRING), 'T', '11:00') AS TIMESTAMP)`.
+/// `None` for any other value (a zone in the value moves the date to that zone's today, which the
+/// session-zone clock cannot give; those stay `KRISHIV_UNSUPPORTED_FEATURE`).
+pub(super) fn time_only_today(
+    kind: TypedLiteralKind,
+    value: &str,
+    timestamp_ntz: bool,
+) -> Option<Expr> {
+    let instant = match kind {
+        TypedLiteralKind::TimestampLtz => true,
+        TypedLiteralKind::Timestamp => !timestamp_ntz,
+        _ => false,
+    };
+    let time = value.trim();
+    let time = time.strip_prefix('T').unwrap_or(time);
+    let mut parts = time.splitn(3, ':');
+    let digits = |p: Option<&str>, max: usize| {
+        p.is_some_and(|p| (1..=max).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let seconds_ok = |p: Option<&str>| {
+        p.is_none_or(|p| {
+            let (whole, fraction) = p.split_once('.').map_or((p, None), |(w, f)| (w, Some(f)));
+            digits(Some(whole), 2)
+                && fraction.is_none_or(|f| {
+                    (1..=9).contains(&f.len()) && f.bytes().all(|b| b.is_ascii_digit())
+                })
+        })
+    };
+    let (hours, minutes, seconds) = (parts.next(), parts.next(), parts.next());
+    if !instant
+        || !digits(hours, 2)
+        || !digits(minutes, 2)
+        || !seconds_ok(seconds)
+        || timestamp_text(value) != TimestampText::TimeOnly
+    {
+        return None;
+    }
+    let today = Expr::new(ExprNode::Cast {
+        expr: Arc::new(Expr::function("current_date", Vec::new())),
+        to: DataType::String,
+        mode: CastMode::Ansi,
+    });
+    let text = Expr::function(
+        "concat",
+        vec![today, Expr::literal(Literal::String(format!("T{time}")))],
+    );
+    Some(Expr::new(ExprNode::Cast {
+        expr: Arc::new(text),
+        to: DataType::Timestamp,
+        mode: CastMode::Ansi,
+    }))
 }
 
 pub(super) fn is_special(value: &str) -> bool {
