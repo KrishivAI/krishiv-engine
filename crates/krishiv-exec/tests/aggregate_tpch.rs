@@ -208,6 +208,7 @@ fn spec(s: &SchemaRef, group_by: Vec<usize>, aggregates: Vec<AggregateExpr>) -> 
         spill: None,
         require_unit_weights: false,
         legacy_statistical: false,
+        udafs: None,
     }
 }
 
