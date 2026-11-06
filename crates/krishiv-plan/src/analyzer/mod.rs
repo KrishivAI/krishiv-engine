@@ -671,6 +671,8 @@ pub struct AnalyzedPlan {
     pub plan: Plan,
     /// Its output columns.
     pub output: Vec<BoundColumn>,
+    /// Per output column, the `CHAR(n)` / `VARCHAR(n)` string it was declared with (see `char_varchar`).
+    pub output_declared: Vec<Option<String>>,
     /// The version pinned per table.
     pub pins: BTreeMap<TableIdent, TableVersion>,
     /// The securables read, in first-use order.
@@ -859,7 +861,8 @@ impl Analyzer for DefaultAnalyzer {
             let bindings = bind::bind(plan, ctx).await?;
             let metadata = started.elapsed();
             let resolving = std::time::Instant::now();
-            let (root, output, securables, warnings) = resolve::resolve(plan, ctx, &bindings)?;
+            let (root, output, securables, warnings, output_declared) =
+                resolve::resolve(plan, ctx, &bindings)?;
             unexecutable::check(&root, ctx.conf.time_type)?;
             let resolved =
                 Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
@@ -873,6 +876,7 @@ impl Analyzer for DefaultAnalyzer {
             Ok(AnalyzedPlan {
                 plan: resolved,
                 output,
+                output_declared,
                 pins,
                 securables,
                 input_key: input.structural_hash(),

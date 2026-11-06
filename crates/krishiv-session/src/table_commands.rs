@@ -503,18 +503,7 @@ impl Session {
             .iter()
             .map(|c| c.name.clone())
             .collect();
-        let mut columns: Vec<StoreColumn> = analysis
-            .analyzed
-            .output
-            .iter()
-            .map(|c| {
-                StoreColumn::plain(
-                    c.name.clone(),
-                    krishiv_plan::without_generated_marker(&c.data_type),
-                    c.nullable,
-                )
-            })
-            .collect();
+        let mut columns = crate::char_write::output_columns(&analysis.analyzed, None);
         if !v.columns.is_empty() {
             let mut declared = Vec::with_capacity(v.columns.len());
             for alias in &v.columns {
@@ -903,18 +892,7 @@ impl Session {
                 }
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 let analysis = df.analyzed_in(env).await?;
-                changed.columns = analysis
-                    .analyzed
-                    .output
-                    .iter()
-                    .map(|c| {
-                        StoreColumn::plain(
-                            c.name.clone(),
-                            krishiv_plan::without_generated_marker(&c.data_type),
-                            c.nullable,
-                        )
-                    })
-                    .collect();
+                changed.columns = crate::char_write::output_columns(&analysis.analyzed, None);
                 let query_columns = analysis
                     .analyzed
                     .output
@@ -1633,18 +1611,7 @@ impl Session {
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
         let analysis = df.analyzed_in(self.query_env()).await?;
-        table.columns = analysis
-            .analyzed
-            .output
-            .iter()
-            .map(|c| {
-                StoreColumn::plain(
-                    c.name.clone(),
-                    krishiv_plan::without_generated_marker(&c.data_type),
-                    true,
-                )
-            })
-            .collect();
+        table.columns = crate::char_write::output_columns(&analysis.analyzed, Some(true));
         let name = TableName {
             namespace: table.namespace.clone(),
             name: table.name.clone(),

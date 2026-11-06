@@ -7,7 +7,7 @@
 //! has failed, so the check needs no kernel of its own.
 
 use krishiv_common::error::{ErrorClass, ExceedLimitLength, KrishivError};
-use krishiv_plan::analyzer::ResolutionConf;
+use krishiv_plan::analyzer::{AnalyzedPlan, ResolutionConf};
 
 use crate::column::Column;
 use crate::functions::{call_function, lit};
@@ -47,6 +47,25 @@ pub(crate) fn checked(value: Column, column: &StoreColumn, conf: &ResolutionConf
             call_function("substring", [value, lit(1), lit(n)]),
         ],
     )
+}
+
+/// The stored columns of a table or view made from a query: its output columns, each keeping the
+/// `CHAR(n)` / `VARCHAR(n)` it was declared with (Spark carries it on the attribute); `nullable`
+/// overrides the query's nullability (CTAS columns are nullable).
+pub(crate) fn output_columns(a: &AnalyzedPlan, nullable: Option<bool>) -> Vec<StoreColumn> {
+    a.output
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let mut column = StoreColumn::plain(
+                c.name.clone(),
+                krishiv_plan::without_generated_marker(&c.data_type),
+                nullable.unwrap_or(c.nullable),
+            );
+            column.char_varchar = a.output_declared.get(i).cloned().flatten();
+            column
+        })
+        .collect()
 }
 
 /// A failed check as `EXCEED_LIMIT_LENGTH`; any other error as it is.

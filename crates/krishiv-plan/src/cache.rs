@@ -1649,6 +1649,7 @@ mod tests {
         let analyzed = |principal: &str, policy: u64| crate::analyzer::AnalyzedPlan {
             plan: plan.clone(),
             output: vec![bound(1, "a")],
+            output_declared: Vec::new(),
             pins: BTreeMap::new(),
             securables: Vec::new(),
             input_key: plan.structural_hash(),

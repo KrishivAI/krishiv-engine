@@ -215,6 +215,7 @@ type Resolved = (
     Vec<BoundColumn>,
     Vec<SecurableUse>,
     Vec<String>,
+    Vec<Option<String>>,
 );
 
 pub(super) fn resolve(
@@ -263,6 +264,15 @@ pub(super) fn resolve(
     // Subqueries to joins, after everything resolved (P2-T071c).
     let root = super::subquery::rewrite(&root, &mut r.next_id, &*ctx.functions, ctx.profile)?;
     let output = rel.out.iter().map(|a| a.col.clone()).collect();
+    // The output columns that are `CHAR(n)` / `VARCHAR(n)` columns (none under `charVarcharAsString`).
+    let declared = rel
+        .out
+        .iter()
+        .map(|a| {
+            let kept = (!ctx.conf.char_varchar_as_string).then(|| r.declared.get(&a.col.id));
+            kept.flatten().map(ToString::to_string)
+        })
+        .collect();
     let uses = b
         .securables
         .iter()
@@ -273,7 +283,7 @@ pub(super) fn resolve(
             columns,
         })
         .collect();
-    Ok((root, output, uses, warnings))
+    Ok((root, output, uses, warnings, declared))
 }
 
 /// One past the largest attribute id in `root` (a `Shift` counted at its

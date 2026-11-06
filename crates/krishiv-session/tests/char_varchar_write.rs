@@ -62,3 +62,40 @@ fn the_legacy_flag_turns_the_check_off() {
     run(&s, "insert into t values ('abcdef', 'xyz')").unwrap();
     assert_eq!(lengths(&s), vec!["abcdef|xyz"]);
 }
+
+fn first_text(s: &Session, sql: &str) -> String {
+    text_at(s, sql, 0)
+}
+
+fn text_at(s: &Session, sql: &str, column: usize) -> String {
+    let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    let a = b[0].column(column);
+    a.as_string_opt::<i32>().map_or_else(
+        || a.as_string_view().value(0).to_owned(),
+        |x| x.value(0).to_owned(),
+    )
+}
+
+#[test]
+fn a_table_or_view_made_from_a_query_keeps_the_declared_type() {
+    let s = fresh();
+    run(&s, "drop table if exists t2").unwrap();
+    run(&s, "drop view if exists tv").unwrap();
+    run(&s, "create table t2 using parquet as select * from t").unwrap();
+    let ddl = first_text(&s, "show create table t2");
+    assert!(
+        ddl.contains("CHAR(3)") && ddl.contains("VARCHAR(2)"),
+        "{ddl}"
+    );
+    run(&s, "create view tv as select * from t").unwrap();
+    let described = text_at(&s, "describe table tv", 1);
+    assert_eq!(described, "char(3)");
+    // An expression over the column is a plain string.
+    run(&s, "drop table if exists t3").unwrap();
+    run(
+        &s,
+        "create table t3 using parquet as select concat(c, 'x') as c from t",
+    )
+    .unwrap();
+    assert!(!first_text(&s, "show create table t3").contains("CHAR"));
+}
