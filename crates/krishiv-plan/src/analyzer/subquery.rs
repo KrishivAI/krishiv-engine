@@ -416,11 +416,9 @@ pub(super) fn one_row_literals(p: &LogicalPlan) -> bool {
     }
 }
 
-/// The `IN` forms Spark folds before any join (`NullPropagation`, the
-/// one-row literal rewrite) that reach this check: one value of several NULL,
-/// or several values over a one-row literal relation (one value over one row
-/// is already an equality, `in_global_aggregate`). They are refused rather
-/// than answered two-valued.
+/// `IN` forms Spark folds before any join (`NullPropagation`, one-row literals)
+/// left here: a NULL among several values, or several over one literal row
+/// (one value over one row is an equality). Refused, not answered two-valued.
 fn check_in(values: &[Arc<Expr>], plan: &Arc<LogicalPlan>, origin: Origin) -> R<()> {
     if values.iter().any(|v| null_literal(v)) {
         return Err(unsupported("IN (subquery) with a NULL value", origin));

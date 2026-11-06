@@ -10,12 +10,14 @@
 //! Spark's semantics: a scalar subquery with no row is NULL, with more
 //! than one row it fails with `SCALAR_SUBQUERY_TOO_MANY_ROWS`.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, new_null_array};
 use arrow_schema::DataType as ArrowType;
 use futures::future::BoxFuture;
-use krishiv_common::error::ScalarSubqueryTooManyRows;
+use krishiv_common::error::{KrishivError, ScalarSubqueryTooManyRows};
+use krishiv_plan::{BoundColumn, Expr, ExprNode, LogicalPlan, ResolvedExpr, SubqueryKind};
 use krishiv_types::batch::Batch;
 
 use super::build::internal;
@@ -23,7 +25,7 @@ use super::eval::{PhysExpr, Value};
 use crate::context::TaskContext;
 use crate::error::Result;
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
-use crate::physical::{SubqueryId, ValueId, Version};
+use crate::physical::{SubqueryId, SubqueryValueKind, ValueId, Version};
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::values::{self, Partial, Producer, Subscription, ValueService};
 
@@ -193,4 +195,46 @@ impl ExecNode for WithSubqueries {
         b.push_operator(Arc::clone(&self.op));
         Ok(())
     }
+}
+
+/// The uncorrelated subqueries `e` reads (not inside subquery plans).
+pub(super) fn subqueries(e: &Expr, out: &mut Vec<(SubqueryValueKind, Arc<LogicalPlan>)>) {
+    if let ExprNode::Subquery { kind, plan } = &e.node {
+        match kind {
+            SubqueryKind::Scalar => out.push((SubqueryValueKind::Scalar, Arc::clone(plan))),
+            SubqueryKind::Exists => out.push((SubqueryValueKind::Exists, Arc::clone(plan))),
+            // `IN (subquery)` is a semi join after analysis; one left here
+            // fails when compiled.
+            _ => {}
+        }
+    }
+    e.for_each_child(&mut |c| subqueries(c, out));
+}
+
+/// Prepared subquery columns by kind (scalar or not) and plan address:
+/// `NULL IN (q)` and `v IN (q)` over one row read one plan as both.
+pub(super) type ByPlan = HashMap<(bool, usize), BoundColumn>;
+
+/// `e` with each subquery of `columns` replaced by the column of its value.
+pub(super) fn with_subquery_columns(e: Arc<Expr>, columns: &ByPlan) -> Result<Arc<Expr>> {
+    e.transform_down(&mut |x: Arc<Expr>| {
+        if let ExprNode::Subquery { kind, plan } = &x.node
+            && let Some(c) = columns.get(&(
+                matches!(kind, SubqueryKind::Scalar),
+                Arc::as_ptr(plan) as usize,
+            ))
+        {
+            return Ok::<_, KrishivError>(Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Column(c.clone()),
+            ))));
+        }
+        Ok(x)
+    })
+}
+
+/// Whether `e` reads an uncorrelated subquery.
+pub(crate) fn has_subquery(e: &Expr) -> bool {
+    let mut found = Vec::new();
+    subqueries(e, &mut found);
+    !found.is_empty()
 }
