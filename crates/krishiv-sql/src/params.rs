@@ -31,8 +31,11 @@ pub struct ParameterMarker {
 /// operator (`col:field`). After a string literal, or a marker that
 /// continues one, it is a marker again: Spark 4.2's `stringLit` is a run of
 /// string literals and markers (`'a' '.' :b`), and the run is greedy.
+/// A double-quoted token is a string only when `double_quoted_identifiers`
+/// (`spark.sql.ansi.doubleQuotedIdentifiers`) is off; otherwise it is an
+/// identifier, so `"v":field` is a variant path.
 #[must_use]
-pub fn parameter_markers(sql: &str) -> Vec<ParameterMarker> {
+pub fn parameter_markers(sql: &str, double_quoted_identifiers: bool) -> Vec<ParameterMarker> {
     let toks: Vec<_> = tokenize(sql)
         .into_iter()
         .filter(|t| !t.kind.is_trivia())
@@ -57,8 +60,10 @@ pub fn parameter_markers(sql: &str) -> Vec<ParameterMarker> {
                 let prev = i.checked_sub(1);
                 let continues_string = prev.is_some_and(|p| {
                     run_marker_end == Some(p)
-                        || toks.get(p).is_some_and(|t| {
-                            matches!(t.kind, TokenKind::String | TokenKind::DoubleQuoted)
+                        || toks.get(p).is_some_and(|t| match t.kind {
+                            TokenKind::String => true,
+                            TokenKind::DoubleQuoted => !double_quoted_identifiers,
+                            _ => false,
                         })
                 });
                 if continues_string {
@@ -109,7 +114,7 @@ mod tests {
     use super::*;
 
     fn found(sql: &str) -> Vec<(usize, usize, Option<String>)> {
-        parameter_markers(sql)
+        parameter_markers(sql, false)
             .into_iter()
             .map(|m| (m.start, m.end, m.name))
             .collect()
@@ -155,6 +160,17 @@ mod tests {
                 (35, 37, Some("u".into())),
                 (38, 40, Some("v".into())),
             ]
+        );
+    }
+
+    #[test]
+    fn a_double_quoted_identifier_ends_an_expression() {
+        // With doubleQuotedIdentifiers, `"v"` is a column, so `:field` is a variant path.
+        assert!(parameter_markers(r#"SELECT "v":field FROM t"#, true).is_empty());
+        // Without it, `"v"` is a string literal and the run takes the marker.
+        assert_eq!(
+            found(r#"SELECT "v":field FROM t"#),
+            vec![(10, 16, Some("field".into()))]
         );
     }
 
