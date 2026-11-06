@@ -503,6 +503,14 @@ included (no root needed; only clean pages are dropped), and records `"cold": {"
 I/O-bound gaps that show at SF1000. `reproduce` (the `ours` method) and `abba` take `--cold` too and evict before every
 timed run; `ab` and the `theirs` method of `reproduce` do not.
 
+**Memory guard (`krishiv-bench run`).** Before every run, warm-up included, the harness waits until `MemAvailable` in
+`/proc/meminfo` is at least `--min-mem-avail` of `MemTotal` (default 0.75; 0 turns it off; it gives up after 10
+minutes and fails the query). A sampler tracks the lowest `MemAvailable` during the run; if it dips below the
+threshold (a host balloon took the memory) the run is discarded, recorded under the query's `invalid_samples` with
+`"reason": "memory reclaimed"`, and retried up to `--mem-retries` times (default 2). If every attempt dips, the
+query fails. `report` lists the invalid runs in an "Invalid samples" section. The h2o suites, `ab`, `abba` and
+`reproduce` do not use the guard yet.
+
 `krishiv-bench report --suite tpch --ladder [result.json ...]` takes results at two or more scale factors (newest per
 scale factor and engine) and flags each query whose engine / `duckdb` ratio grows by more than 1.5x between
 consecutive scale factors; it warns when cold and warm results are mixed. It writes `ladder_<suite>.md`.
