@@ -222,30 +222,50 @@ fn sliding(
     let mut values: Vec<ArrayRef> = Vec::new();
     let mut first = 0;
     while first < frames.len() {
-        // Rows of the chunk, and the frame rows each folds.
-        let mut members: Vec<usize> = Vec::new();
-        let mut groups: Vec<u32> = Vec::new();
+        // The frames of the chunk: whole frames up to `CHUNK` rows, except
+        // that one frame larger than that is the chunk on its own.
         let mut last = first;
+        let mut rows = 0;
         while last < frames.len() {
             let (start, end) = frames[last];
             let len = (end.saturating_sub(start)) as usize;
-            if last > first && members.len() + len > CHUNK {
+            if last > first && rows + len > CHUNK {
                 break;
             }
-            let g = id(last - first)?;
-            for m in start as usize..end as usize {
-                if passes(m) {
-                    members.push(m);
-                    groups.push(g);
-                }
-            }
+            rows += len;
             last += 1;
         }
         let mut acc = accumulator_of(local, ansi, udafs)?;
         acc.resize(last - first);
-        if !members.is_empty() {
-            acc.update(&groups, &gather(args, &members)?, &one)?;
+        // Their rows fold in updates of at most `CHUNK` rows (a frame larger
+        // than that updates its group more than once), so the gathered
+        // arguments stay what `cost` budgets.
+        let mut members: Vec<usize> = Vec::new();
+        let mut groups: Vec<u32> = Vec::new();
+        let flush = |acc: &mut crate::aggregate::Accumulator,
+                     members: &mut Vec<usize>,
+                     groups: &mut Vec<u32>|
+         -> Result<()> {
+            if !members.is_empty() {
+                acc.update(groups, &gather(args, members)?, &one)?;
+                members.clear();
+                groups.clear();
+            }
+            Ok(())
+        };
+        for (k, &(start, end)) in frames[first..last].iter().enumerate() {
+            let g = id(k)?;
+            for m in start as usize..end as usize {
+                if passes(m) {
+                    members.push(m);
+                    groups.push(g);
+                    if members.len() >= CHUNK {
+                        flush(&mut acc, &mut members, &mut groups)?;
+                    }
+                }
+            }
         }
+        flush(&mut acc, &mut members, &mut groups)?;
         charge.to(acc.size())?;
         let ids: Vec<u32> = (0..last - first).map(id).collect::<Result<_>>()?;
         values.push(acc.evaluate(&ids)?);
