@@ -1762,7 +1762,14 @@ impl Session {
                 .clone_from(&s.layout.partition_columns);
             layout.bucket.clone_from(&s.layout.bucket);
             options.clone_from(&s.options);
-            (s.columns.clone(), s.provider.clone())
+            // A view has no provider of its own: Spark gives the new table
+            // `spark.sql.sources.default` (`CreateTableLikeCommand`, `isViewLike`).
+            let provider = if s.view.is_some() {
+                self.provider_of(None)?
+            } else {
+                s.provider.clone()
+            };
+            (s.columns.clone(), provider)
         } else if self.temp_entry_of(&source, &env)
             && let Some(entry) = self
                 .state
@@ -1785,7 +1792,7 @@ impl Session {
                         comment: None,
                     })
                     .collect(),
-                "parquet".to_owned(),
+                self.provider_of(None)?,
             )
         } else {
             return Err(source.not_found());

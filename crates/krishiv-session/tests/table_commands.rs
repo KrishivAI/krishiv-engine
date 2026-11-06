@@ -132,19 +132,21 @@ fn csv_tables_read_files_without_a_header_line() {
 }
 
 /// What a CSV table writes is Spark's text: no header line by default, and one when the table asks for it.
+/// The text of the `part-*` files in `dir`.
+fn part_text(dir: &std::path::Path) -> String {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("part-"))
+        })
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect()
+}
+
 #[test]
 fn csv_tables_write_a_header_line_only_when_asked() {
-    fn part_text(dir: &std::path::Path) -> String {
-        std::fs::read_dir(dir)
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .filter(|p| {
-                p.file_name()
-                    .is_some_and(|n| n.to_string_lossy().starts_with("part-"))
-            })
-            .map(|p| std::fs::read_to_string(p).unwrap())
-            .collect()
-    }
     let dir = tempfile::tempdir().unwrap();
     let wh = dir.path().join("wh");
     let s = session(&wh);
@@ -326,6 +328,29 @@ fn create_table_like_copies_columns() {
         class(&s, "CREATE TABLE d LIKE nope"),
         "TABLE_OR_VIEW_NOT_FOUND"
     );
+}
+
+#[test]
+fn create_table_like_a_view_takes_the_default_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let wh = dir.path().join("wh");
+    let s = session(&wh);
+    // A view has no provider: Spark 4.2.0's `CreateTableLikeCommand` uses
+    // `spark.sql.sources.default` for a view-like source.
+    run(&s, "SET spark.sql.sources.default=csv");
+    run(&s, "CREATE TEMPORARY VIEW v AS SELECT 1 AS p, 'q' AS r");
+    run(&s, "CREATE TABLE c LIKE v");
+    run(&s, "INSERT INTO c VALUES (2, 'r')");
+    assert_eq!(part_text(&wh.join("c")), "2,r\n");
+    run(&s, "CREATE VIEW pv AS SELECT 1 AS p, 'q' AS r");
+    run(&s, "CREATE TABLE d LIKE pv");
+    run(&s, "INSERT INTO d VALUES (3, 's')");
+    assert_eq!(part_text(&wh.join("d")), "3,s\n");
+    // A table keeps its own provider.
+    run(&s, "CREATE TABLE j (a INT) USING json");
+    run(&s, "CREATE TABLE k LIKE j");
+    run(&s, "INSERT INTO k VALUES (4)");
+    assert_eq!(part_text(&wh.join("k")), "{\"a\":4}\n");
 }
 
 #[test]
