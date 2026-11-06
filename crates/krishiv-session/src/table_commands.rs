@@ -2220,7 +2220,7 @@ impl Session {
             .map(|i| format!("__krishiv_c{i}"))
             .collect();
         let base = source.to_df(renamed.iter());
-        let mut select = Vec::with_capacity(table.columns.len());
+        let mut values = Vec::with_capacity(table.columns.len());
         let mut assigned_columns = assigned.columns.iter().zip(&assignment);
         for column in &table.columns {
             if let Some((_, value)) = statics.iter().find(|(k, _)| *k == column.name) {
@@ -2229,8 +2229,7 @@ impl Session {
                 } else {
                     crate::functions::lit(value.as_str()).cast_ansi(column.data_type.clone())
                 };
-                let checked = crate::char_write::checked(value, column, &env.analysis.conf)?;
-                select.push(checked.alias(&column.name));
+                values.push((value, column));
                 continue;
             }
             let Some((column, from)) = assigned_columns.next() else {
@@ -2251,10 +2250,26 @@ impl Session {
                     None => lit_null().cast(column.data_type.clone()),
                 },
             };
-            let checked = crate::char_write::checked(value, column, &env.analysis.conf)?;
+            values.push((value, column));
+        }
+        // The values are computed in one projection and checked in the next, so a check that reads its value
+        // several times never evaluates a non-deterministic default (or query column) more than once.
+        let staged: Vec<String> = (0..values.len())
+            .map(|i| format!("__krishiv_v{i}"))
+            .collect();
+        let computed = base.select(
+            values
+                .iter()
+                .zip(&staged)
+                .map(|((value, _), name)| value.clone().alias(name))
+                .collect::<Vec<_>>(),
+        );
+        let mut select = Vec::with_capacity(values.len());
+        for ((_, column), name) in values.iter().zip(&staged) {
+            let checked = crate::char_write::checked(col(name), column, &env.analysis.conf)?;
             select.push(checked.alias(&column.name));
         }
-        let df = base.select(select);
+        let df = computed.select(select);
         let mode = if overwrite { "overwrite" } else { "append" };
         let written = self.write_table_rows(table, &df, mode, &mut None).await;
         // Data may have changed even when the write failed late.

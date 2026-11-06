@@ -114,16 +114,47 @@ fn a_cast_to_char_or_varchar_is_a_string_cast() {
 
 #[test]
 fn describe_formatted_of_a_column_shows_its_declared_type_and_statistics() {
+    // Spark 4.2.0 `charvarchar.sql` (`desc formatted char_tbl c`): the declared type, then the statistics rows,
+    // all NULL before `ANALYZE`.
     let s = fresh();
-    let rows = |sql: &str| {
+    let rows = |sql: &str| -> Vec<String> {
         let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+        let text = |a: &arrow_array::ArrayRef, i: usize| {
+            if a.is_null(i) {
+                return "NULL".to_owned();
+            }
+            a.as_string_opt::<i32>().map_or_else(
+                || a.as_string_view().value(i).to_owned(),
+                |x| x.value(i).to_owned(),
+            )
+        };
         b.iter()
-            .map(arrow_array::RecordBatch::num_rows)
-            .sum::<usize>()
+            .flat_map(|batch| {
+                (0..batch.num_rows())
+                    .map(|i| format!("{}\t{}", text(batch.column(0), i), text(batch.column(1), i)))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
     };
-    assert_eq!(rows("describe t c"), 3);
-    assert_eq!(rows("describe formatted t c"), 10);
-    assert_eq!(text_at(&s, "describe formatted t c", 1), "c");
+    assert_eq!(
+        rows("describe t c"),
+        ["col_name\tc", "data_type\tchar(3)", "comment\tNULL"]
+    );
+    assert_eq!(
+        rows("describe formatted t c"),
+        [
+            "col_name\tc",
+            "data_type\tchar(3)",
+            "comment\tNULL",
+            "min\tNULL",
+            "max\tNULL",
+            "num_nulls\tNULL",
+            "distinct_count\tNULL",
+            "avg_col_len\tNULL",
+            "max_col_len\tNULL",
+            "histogram\tNULL",
+        ]
+    );
 }
 
 #[test]
@@ -523,4 +554,31 @@ fn between_over_a_char_column_does_not_pad_its_bounds() {
         "a  \t"
     );
     assert_eq!(count(&s, "select * from t where c between 'a' and 'a'"), 0);
+}
+
+#[test]
+fn review_cases_grouped_aliases_user_rpad_and_oversized_lengths() {
+    let s = fresh();
+    run(&s, "insert into t values ('a', 'x')").unwrap();
+    // An explicit GROUP BY keeps the declared type on its select-list alias.
+    assert_eq!(
+        count(
+            &s,
+            "select * from (select c as x from t group by c) q where x = 'a'"
+        ),
+        1
+    );
+    // A user's rpad over the column is a plain string in a DataFrame temp view.
+    block_on(async {
+        s.sql("select rpad(c, greatest(length(v), 1), '*') as z from t")
+            .await?
+            .create_or_replace_temp_view("rp")
+            .await
+    })
+    .unwrap();
+    // `rpad('a  ', 1, '*')` is `'a'`; as a string it equals `'a'` unpadded.
+    assert_eq!(count(&s, "select * from rp where z = 'a'"), 1);
+    // A length past `INT` is refused (Spark: an unclassified NumberFormatException).
+    let e = run(&s, "create table tbig(c varchar(2147483648)) using parquet").unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
 }

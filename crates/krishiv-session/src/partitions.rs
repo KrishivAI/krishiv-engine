@@ -340,22 +340,33 @@ fn exact_spec(
 
 /// The `col=value/...` directories `depth` levels below `dir` (hidden and `_` entries are skipped, as the
 /// partition listing of `RepairTableCommand` does), as paths relative to the table location.
-fn list_partition_dirs(dir: &std::path::Path, depth: usize, prefix: &str, out: &mut Vec<String>) {
+fn list_partition_dirs(
+    dir: &std::path::Path,
+    depth: usize,
+    prefix: &str,
+    out: &mut Vec<String>,
+) -> Result<(), KrishivError> {
     if depth == 0 {
         if !prefix.is_empty() {
             out.push(prefix.to_owned());
         }
-        return;
+        return Ok(());
     }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut names: Vec<(String, PathBuf)> = entries
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
-        .filter_map(|e| Some((e.file_name().into_string().ok()?, e.path())))
-        .filter(|(n, _)| n.contains('=') && !n.starts_with(['.', '_']))
-        .collect();
+    let listing = |e: std::io::Error| internal(format!("cannot list {}: {e}", dir.display()));
+    let mut names: Vec<(String, PathBuf)> = Vec::new();
+    for entry in std::fs::read_dir(dir).map_err(listing)? {
+        let entry = entry.map_err(listing)?;
+        // `file_type` does not follow symbolic links, so a linked directory is skipped.
+        if !entry.file_type().map_err(listing)?.is_dir() {
+            continue;
+        }
+        let Ok(n) = entry.file_name().into_string() else {
+            continue;
+        };
+        if n.contains('=') && !n.starts_with(['.', '_']) {
+            names.push((n, entry.path()));
+        }
+    }
     names.sort();
     for (n, path) in names {
         let next = if prefix.is_empty() {
@@ -363,8 +374,9 @@ fn list_partition_dirs(dir: &std::path::Path, depth: usize, prefix: &str, out: &
         } else {
             format!("{prefix}/{n}")
         };
-        list_partition_dirs(&path, depth - 1, &next, out);
+        list_partition_dirs(&path, depth - 1, &next, out)?;
     }
+    Ok(())
 }
 
 /// A partition `LOCATION` as the catalog stores it: Spark makes a relative path qualified against the
@@ -452,21 +464,25 @@ fn listed_files(dir: &Path) -> Vec<(String, u64)> {
 
 /// Whether `dir` or a directory below it holds a file, skipping names that start with `_` or `.` as
 /// [`location_size`] does.
-fn holds_files(dir: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return false;
+fn holds_files(dir: &Path) -> Result<bool, KrishivError> {
+    let listing = |e: std::io::Error| internal(format!("cannot list {}: {e}", dir.display()));
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(listing(e)),
     };
-    entries.filter_map(Result::ok).any(|e| {
-        let name = e.file_name();
+    for entry in entries {
+        let entry = entry.map_err(listing)?;
+        let name = entry.file_name();
         let name = name.to_string_lossy();
         if name.starts_with('_') || name.starts_with('.') {
-            return false;
+            continue;
         }
-        match e.file_type() {
-            Ok(t) if t.is_dir() => holds_files(&e.path()),
-            _ => true,
+        if !entry.file_type().map_err(listing)?.is_dir() || holds_files(&entry.path())? {
+            return Ok(true);
         }
-    })
+    }
+    Ok(false)
 }
 
 /// The size of the data under `dir` as `CommandUtils.calculateSingleLocationSize` sums it: files and
@@ -618,7 +634,7 @@ impl Session {
             table.layout.partition_columns.len(),
             "",
             &mut dirs,
-        );
+        )?;
         self.register_partitions(&name, &dirs, true);
         self.empty_frame().await
     }
@@ -639,7 +655,7 @@ impl Session {
         let path = qualified(location)?;
         // Reads and writes of the table follow the table root, not a partition's own location, so a location
         // that already holds data would be reported as set and then ignored.
-        if path.is_file() || holds_files(&path) {
+        if path.is_file() || holds_files(&path)? {
             return Err(unsupported(
                 "ALTER TABLE ... PARTITION ... SET LOCATION onto existing files",
             ));

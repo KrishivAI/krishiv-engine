@@ -134,25 +134,40 @@ fn bare_column(e: &Expr, internal_cast: bool) -> Option<&BoundColumn> {
     }
 }
 
-/// The column `c` of the read-side padding call `rpad(c, greatest(char_length(c), n), ' ')`.
-fn read_padded_column(e: &Expr) -> Option<&BoundColumn> {
-    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
-        return None;
-    };
-    let registry = |id: &crate::FunctionId, name: &str| {
-        matches!(id, crate::FunctionId::Registry { .. }) && id.name() == name
-    };
-    if !registry(&f.id, "rpad") || f.args.len() != 3 {
-        return None;
+/// The column `c` and length `n` of the read-side padding call `rpad(c, greatest(char_length(c), n), ' ')`,
+/// matched whole: a user's `rpad` of another shape is a plain string.
+fn read_padded_column(e: &Expr) -> Option<(&BoundColumn, i32)> {
+    fn call<'e>(e: &'e Expr, name: &str, arity: usize) -> Option<&'e [Arc<Expr>]> {
+        let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+            return None;
+        };
+        (matches!(f.id, crate::FunctionId::Registry { .. })
+            && f.id.name() == name
+            && f.args.len() == arity)
+            .then_some(f.args.as_slice())
     }
-    let ExprNode::Resolved(ResolvedExpr::Function(len)) = &f.args[1].node else {
+    fn column(e: &Expr) -> Option<&BoundColumn> {
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+            _ => None,
+        }
+    }
+    let [arg, len, blank] = call(e, "rpad", 3)? else {
         return None;
     };
-    if !registry(&len.id, "greatest") {
+    let [chars, n] = call(len, "greatest", 2)? else {
         return None;
-    }
-    match &f.args[0].node {
-        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+    };
+    let [counted] = call(chars, "char_length", 1)? else {
+        return None;
+    };
+    let (c, counted) = (column(arg)?, column(counted)?);
+    match (&n.node, &blank.node) {
+        (ExprNode::Literal(Literal::Integer(n)), ExprNode::Literal(Literal::String(b)))
+            if c.id == counted.id && b == " " =>
+        {
+            Some((c, *n))
+        }
         _ => None,
     }
 }
@@ -272,8 +287,10 @@ impl Resolver<'_> {
             // read-side padding call stands for the padded column.
             let stored = aligned && matches!(written[i].node, ExprNode::Resolved(_));
             if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &b.expr.node
-                && let Some(c) = bare_column(expr, internal_cast)
-                    .or_else(|| stored.then(|| read_padded_column(expr)).flatten())
+                && let Some(c) = bare_column(expr, internal_cast).or_else(|| {
+                    let (c, n) = read_padded_column(expr).filter(|_| stored)?;
+                    (self.declared.get(&c.id).and_then(|d| char_length(d)) == Some(n)).then_some(c)
+                })
                 && let Some(d) = self.declared.get(&c.id).cloned()
             {
                 self.declared.insert(output.id, d);

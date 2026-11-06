@@ -1937,6 +1937,8 @@ impl Resolver<'_> {
         // Spark resolves the select list first, then ordinals, then the
         // other keys.
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
+        // The declared `CHAR`/`VARCHAR` types follow the aliases of an explicit `GROUP BY` too.
+        self.carry_declared(&items, aggregates);
         // Spark's `ExtractGenerator`: the generator's argument takes the
         // item's place in the aggregate, the generator runs above it.
         // A written alias of the generator (the analyzer names every item,
