@@ -8,7 +8,23 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["svelte", "vite/client"]
+    "types": [
+      "svelte",
+      "vite/client"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "$lib": [
+        "src/lib"
+      ],
+      "$lib/*": [
+        "src/lib/*"
+      ]
+    }
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte", "vite.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.svelte",
+    "vite.config.ts"
+  ]
 }

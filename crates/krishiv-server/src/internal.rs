@@ -430,6 +430,22 @@ async fn queries(State(s): State<UiState>) -> Response {
     }
 }
 
+/// A byte count for people: `128.0 MiB`, as the pages write them.
+fn human_bytes(n: i64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    if n.unsigned_abs() < 1024 {
+        return format!("{n} B");
+    }
+    #[expect(clippy::cast_precision_loss, reason = "a size for display")]
+    let mut v = n as f64;
+    let mut i = 0;
+    while v.abs() >= 1024.0 && i < UNITS.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    format!("{v:.1} {}", UNITS[i])
+}
+
 /// A plain-language hint per operator that spilled, was skewed, or waited on memory.
 fn warnings(operators: &[Row]) -> Vec<Value> {
     let mut out = Vec::new();
@@ -439,7 +455,7 @@ fn warnings(operators: &[Row]) -> Vec<Value> {
         if spilled > 0 {
             out.push(json!({
                 "operator_id": int(op, "operator_id"), "operator": name, "kind": "spill",
-                "hint": format!("{name} spilled {spilled} bytes to disk. Give the query more memory, or reduce the rows it holds at once (a filter or an earlier aggregation)."),
+                "hint": format!("{name} spilled {} to disk. Give the query more memory, or reduce the rows it holds at once (a filter or an earlier aggregation).", human_bytes(spilled)),
             }));
         }
         let (drivers, total, slowest) = (

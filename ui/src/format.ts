@@ -10,12 +10,17 @@ export function bytes(n: number | null | undefined): string {
   return `${i === 0 ? v : v.toFixed(1)} ${units[i]}`;
 }
 
+/** A duration given in nanoseconds: `820 ms`, `4.2 s`, `4m 12s`, `2h 29m`. */
 export function nanos(n: number | null | undefined): string {
   if (n === null || n === undefined) return "–";
   if (n < 1_000) return `${n} ns`;
   if (n < 1_000_000) return `${(n / 1_000).toFixed(1)} µs`;
-  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)} ms`;
-  return `${(n / 1_000_000_000).toFixed(2)} s`;
+  if (n < 1_000_000_000) return `${Math.round(n / 1_000_000)} ms`;
+  const s = n / 1_000_000_000;
+  if (s < 60) return `${s.toFixed(1)} s`;
+  const total = Math.floor(s);
+  if (total < 3600) return `${Math.floor(total / 60)}m ${total % 60}s`;
+  return `${Math.floor(total / 3600)}h ${Math.floor((total % 3600) / 60)}m`;
 }
 
 export function count(n: number | null | undefined): string {
@@ -27,9 +32,7 @@ export function percent(r: number | null | undefined): string {
 }
 
 export function seconds(s: number): string {
-  if (s < 60) return `${s} s`;
-  if (s < 3600) return `${Math.floor(s / 60)} min ${s % 60} s`;
-  return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+  return nanos(s * 1_000_000_000);
 }
 
 /** Microseconds since the epoch, as the system tables hold them. */
