@@ -386,6 +386,13 @@ pub struct ResolutionConf {
     /// with the single join off, a grouped scalar subquery on columns the
     /// correlation does not fix runs as an outer join (a row per group).
     pub legacy_group_by_non_equality: bool,
+    /// `spark.sql.optimizer.decorrelateLimit.enabled` (Spark 4.0+, default
+    /// on): a correlation below a `LIMIT` decorrelates; off, analysis
+    /// refuses it (`ACCESSING_OUTER_QUERY_COLUMN_IS_NOT_ALLOWED`).
+    pub decorrelate_limit: bool,
+    /// `spark.sql.optimizer.decorrelateOffset.enabled` (Spark 4.0+, default
+    /// on): the same for an `OFFSET`.
+    pub decorrelate_offset: bool,
 }
 
 impl Default for ResolutionConf {
@@ -420,13 +427,15 @@ impl Default for ResolutionConf {
             legacy_scalar_count: false,
             scalar_single_join: true,
             legacy_group_by_non_equality: false,
+            decorrelate_limit: true,
+            decorrelate_offset: true,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 28] = [
+    pub const KEYS: [&'static str; 30] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -455,6 +464,8 @@ impl ResolutionConf {
         "spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled",
         "spark.sql.optimizer.scalarSubqueryUseSingleJoin",
         "spark.sql.legacy.scalarSubqueryAllowGroupByNonEqualityCorrelatedPredicate",
+        "spark.sql.optimizer.decorrelateLimit.enabled",
+        "spark.sql.optimizer.decorrelateOffset.enabled",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -518,6 +529,10 @@ impl ResolutionConf {
             scalar_single_join: conf(Self::KEYS[26])
                 .is_none_or(|s| s.trim().eq_ignore_ascii_case("true")),
             legacy_group_by_non_equality: on(Self::KEYS[27]),
+            decorrelate_limit: conf(Self::KEYS[28])
+                .is_none_or(|s| s.trim().eq_ignore_ascii_case("true")),
+            decorrelate_offset: conf(Self::KEYS[29])
+                .is_none_or(|s| s.trim().eq_ignore_ascii_case("true")),
         }
     }
 }

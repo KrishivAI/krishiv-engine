@@ -14,8 +14,7 @@
       38
     ],
     "subqueries": [
-      58,
-      59
+      58
     ]
   },
   "file": "subquery/scalar-subquery/scalar-subquery-predicate",

@@ -43,7 +43,7 @@ use super::bind::{addr, unsupported};
 use super::catalog::{FunctionLookup, FunctionRegistry};
 use super::exprs::{literal_type, pretty};
 use super::ops::{MAX_ID, col_expr};
-use super::subquery_shapes::{aggregates_below, check_in, positive_literal};
+use super::subquery_shapes::{Bounded, aggregates_below, bounded, check_in, fold_one_row_bounds};
 pub(super) use super::subquery_shapes::{null_literal, one_row_aggregate};
 use super::{AnalysisError, ResolutionConf, SparkProfile};
 use crate::walk::{Node, visit_distinct};
@@ -88,6 +88,8 @@ pub(super) fn rewrite(
         legacy_scalar_count: conf.legacy_scalar_count,
         single_join: conf.scalar_single_join && profile != SparkProfile::V3_5,
         legacy_group_by: conf.legacy_group_by_non_equality,
+        decorrelate_limit: conf.decorrelate_limit && profile != SparkProfile::V3_5,
+        decorrelate_offset: conf.decorrelate_offset && profile != SparkProfile::V3_5,
         row_number: match functions.lookup(&["row_number".to_owned()], profile) {
             FunctionLookup::Found(entry) => Some((entry.id, entry.kind)),
             _ => None,
@@ -119,6 +121,11 @@ struct Rewriter {
     single_join: bool,
     /// `spark.sql.legacy.scalarSubqueryAllowGroupByNonEqualityCorrelatedPredicate`.
     legacy_group_by: bool,
+    /// `spark.sql.optimizer.decorrelateLimit.enabled` (always off for 3.5,
+    /// which has no correlation below a `LIMIT`).
+    decorrelate_limit: bool,
+    /// `spark.sql.optimizer.decorrelateOffset.enabled` (likewise).
+    decorrelate_offset: bool,
 }
 
 /// A predicate subquery conjunct, as a join.
@@ -566,12 +573,14 @@ impl Rewriter {
         }
         e.transform_up(&mut |x: Arc<Expr>| match &x.node {
             ExprNode::Subquery { kind, plan } => {
+                self.check_bounds(plan)?;
                 let mut rewritten = self.plan(plan)?;
                 if self.legacy_exists_in_count
                     && matches!(kind, SubqueryKind::Exists | SubqueryKind::In(_))
                 {
                     rewritten = super::subquery_legacy::legacy_shape(&rewritten, x.origin)?;
                 }
+                rewritten = fold_one_row_bounds(&rewritten);
                 if Arc::ptr_eq(&rewritten, plan) {
                     return Ok(x);
                 }
@@ -583,6 +592,41 @@ impl Rewriter {
             }
             _ => Ok(x),
         })
+    }
+
+    /// Spark's check of a `LIMIT` / `OFFSET` on a correlation path when its
+    /// decorrelation is off (`spark.sql.optimizer.decorrelateLimit.enabled`,
+    /// `decorrelateOffset.enabled`, and always on Spark 3.5): the first
+    /// operator below it that reads the outer query is refused
+    /// (`ACCESSING_OUTER_QUERY_COLUMN_IS_NOT_ALLOWED`).
+    fn check_bounds(&self, plan: &Arc<LogicalPlan>) -> R<()> {
+        if self.decorrelate_limit && self.decorrelate_offset {
+            return Ok(());
+        }
+        let mut seen = HashSet::new();
+        let mut stack = vec![Arc::clone(plan)];
+        while let Some(p) = stack.pop() {
+            if !seen.insert(addr(&*p)) {
+                continue;
+            }
+            let below = match &p.node {
+                PlanNode::Limit { input, .. } if !self.decorrelate_limit => Some(input),
+                PlanNode::Offset { input, .. } if !self.decorrelate_offset => Some(input),
+                _ => None,
+            };
+            if let Some(input) = below
+                && let Some(host) = outer_host(input)
+            {
+                return Err(AnalysisError::new(
+                    UnsupportedSubqueryExpressionCategoryAccessingOuterQueryColumnIsNotAllowed {
+                        tree_node: host.to_string(),
+                    },
+                    host.origin,
+                ));
+            }
+            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
+        Ok(())
     }
 
     /// A predicate subquery conjunct this rewrite turns into a join.
@@ -839,6 +883,7 @@ impl Rewriter {
         kind: JoinKind,
         condition: &JoinCondition,
     ) -> R<Arc<LogicalPlan>> {
+        self.check_bounds(right)?;
         let out = output(p)?;
         // A right side that is a select list over no relation is one row per
         // left row: the expressions read over the left side's own columns. No
@@ -1133,7 +1178,7 @@ impl Rewriter {
         let keep = !pred.values.is_empty();
         // EXISTS asks only whether a row exists: a positive LIMIT is pulled
         // away, not ranked through the domain.
-        let hit: fn(&LogicalPlan) -> bool = if keep { split::limit_hit } else { needs_domain };
+        let hit: fn(&LogicalPlan) -> bool = if keep { split::limit_hit } else { exists_hit };
         let (inner, corr) = if on_path(&pred.plan, hit) {
             let (inner, inner_keys, outer_keys) = self.domain(&left, &pred.plan)?;
             let corr = inner_keys
@@ -1343,20 +1388,22 @@ impl Rewriter {
                 };
                 Ok((node(agg, plan.origin), corr))
             }
-            // EXISTS asks only whether a row exists: a positive LIMIT keeps
-            // that answer (an OFFSET or `LIMIT 0` would not).
-            PlanNode::Limit { input, limit }
-                if !keep && positive_literal(limit) && !has_outer(Node::Expr(limit)) =>
-            {
-                self.pull(input, false)
-            }
-            // `IN (... WHERE k = o LIMIT n)` limits the rows per outer row:
-            // the first `n` of each `k` by the subquery's order, so a
-            // `row_number()` over `k` that keeps ranks up to `n`.
-            PlanNode::Limit { input, limit }
-                if keep && positive_literal(limit) && !has_outer(Node::Expr(limit)) =>
-            {
-                self.limited(plan, input, limit)
+            PlanNode::Limit { .. } | PlanNode::Offset { .. } if bounded(plan).is_some() => {
+                let Some(b) = bounded(plan) else {
+                    return Err(unsupported(
+                        "outer references below a join, aggregate, limit or set operation",
+                        plan.origin,
+                    ));
+                };
+                // EXISTS asks only whether a row exists: a positive LIMIT
+                // keeps that answer (an OFFSET or `LIMIT 0` would not).
+                if !keep && b.offset == 0 && b.limit.is_some_and(|l| l > 0) {
+                    return self.pull(&b.below, false);
+                }
+                // `IN (... WHERE k = o LIMIT n OFFSET m)` limits the rows per
+                // outer row: ranks `m + 1` to `m + n` of each `k` by the
+                // subquery's order, a `row_number()` over `k`.
+                self.limited(plan, &b)
             }
             _ => Err(unsupported(
                 "outer references below a join, aggregate, limit or set operation",
@@ -1371,12 +1418,11 @@ impl Rewriter {
     fn limited(
         &mut self,
         plan: &Arc<LogicalPlan>,
-        input: &Arc<LogicalPlan>,
-        limit: &Arc<Expr>,
+        b: &Bounded,
     ) -> R<(Arc<LogicalPlan>, Vec<Arc<Expr>>)> {
         let unsupported_limit =
             || unsupported("a correlated subquery's LIMIT of this form", plan.origin);
-        let (below, order, layers) = peel_limit(plan, input)?;
+        let (below, order, layers) = peel_limit(plan, &b.below)?;
         let (inner, corr) = self.pull(&below, true)?;
         let mut partition_by = Vec::new();
         for c in &corr {
@@ -1398,7 +1444,7 @@ impl Rewriter {
             }
         }
         let extra: Vec<BoundColumn> = corr.iter().flat_map(inner_columns).collect();
-        let out_plan = self.rank(plan, inner, partition_by, order, limit, &layers, &extra)?;
+        let out_plan = self.rank(plan, inner, partition_by, order, b, &layers, &extra)?;
         Ok((out_plan, corr))
     }
 
@@ -1408,16 +1454,15 @@ impl Rewriter {
     fn limited_domain(
         &mut self,
         plan: &Arc<LogicalPlan>,
-        input: &Arc<LogicalPlan>,
-        limit: &Arc<Expr>,
+        b: &Bounded,
         distinct: &Arc<LogicalPlan>,
         domain: &[BoundColumn],
     ) -> R<(Arc<LogicalPlan>, Renumber)> {
-        let (below, order, layers) = peel_limit(plan, input)?;
+        let (below, order, layers) = peel_limit(plan, &b.below)?;
         let (inner, renumber) = self.domained(&below, distinct, domain)?;
         let extra = domain_columns(domain, renumber);
         let partition_by = extra.iter().map(|c| col_expr(c, Origin::UNKNOWN)).collect();
-        let out_plan = self.rank(plan, inner, partition_by, order, limit, &layers, &extra)?;
+        let out_plan = self.rank(plan, inner, partition_by, order, b, &layers, &extra)?;
         Ok((out_plan, renumber))
     }
 
@@ -1431,7 +1476,7 @@ impl Rewriter {
         inner: Arc<LogicalPlan>,
         partition_by: Vec<Arc<Expr>>,
         order: Vec<SortOrder>,
-        limit: &Arc<Expr>,
+        b: &Bounded,
         layers: &[Arc<LogicalPlan>],
         extra: &[BoundColumn],
     ) -> R<Arc<LogicalPlan>> {
@@ -1481,10 +1526,28 @@ impl Rewriter {
             },
             plan.origin,
         );
-        let keep = boolean(
-            Builtin::LtEq,
-            vec![col_expr(&rank, Origin::UNKNOWN), Arc::clone(limit)],
-        );
+        // Ranks `offset + 1` to `offset + limit` (Spark: `rn > offset AND
+        // rn <= offset + limit`); `row_number` is an INT, so a bound past
+        // its range is the range's end.
+        let bound = |n: i64| {
+            Arc::new(Expr::literal(Literal::Integer(
+                i32::try_from(n).unwrap_or(i32::MAX),
+            )))
+        };
+        let rn = || col_expr(&rank, Origin::UNKNOWN);
+        let mut bounds = Vec::new();
+        if b.offset > 0 {
+            bounds.push(boolean(Builtin::Gt, vec![rn(), bound(b.offset)]));
+        }
+        if let Some(l) = b.limit {
+            bounds.push(boolean(
+                Builtin::LtEq,
+                vec![rn(), bound(b.offset.saturating_add(l))],
+            ));
+        }
+        let Some(keep) = and_all(bounds) else {
+            return Err(unsupported_limit());
+        };
         let filtered = node(
             PlanNode::Filter {
                 input: ranked,
@@ -2147,12 +2210,17 @@ impl Rewriter {
                 };
                 Ok((node(generate, plan.origin), renumber))
             }
-            PlanNode::Limit { input, limit }
-                if (self.lateral || non_equality_correlation(input))
-                    && positive_literal(limit)
-                    && !has_outer(Node::Expr(limit)) =>
+            PlanNode::Limit { .. } | PlanNode::Offset { .. }
+                if bounded(plan)
+                    .is_some_and(|b| self.lateral || non_equality_correlation(&b.below)) =>
             {
-                self.limited_domain(plan, input, limit, distinct, domain)
+                let Some(b) = bounded(plan) else {
+                    return Err(unsupported(
+                        "outer references below a join, aggregate, limit or set operation",
+                        plan.origin,
+                    ));
+                };
+                self.limited_domain(plan, &b, distinct, domain)
             }
             PlanNode::ReplicateRows { input, count } => {
                 let (inner, renumber) = self.domained(input, distinct, domain)?;
@@ -2507,13 +2575,42 @@ pub(super) fn needs_domain(p: &LogicalPlan) -> bool {
             if exprs.iter().any(|e| has_outer(Node::Expr(e))))
 }
 
+/// What sends an `EXISTS` through the domain: [`needs_domain`], or a
+/// `LIMIT 0` / `OFFSET` over a correlation that is not an equality (a
+/// positive `LIMIT` alone is pulled away, the answer is the same).
+fn exists_hit(p: &LogicalPlan) -> bool {
+    needs_domain(p)
+        || (split::limit_hit(p) && bounded(p).is_some_and(|b| b.offset > 0 || b.limit == Some(0)))
+}
+
+/// The first operator of `p`, from the top, whose own expressions read the
+/// outer query (Spark's `failOnOuterReferenceInPlan` walk).
+fn outer_host(p: &Arc<LogicalPlan>) -> Option<Arc<LogicalPlan>> {
+    let mut seen = HashSet::new();
+    let mut stack = vec![Arc::clone(p)];
+    while let Some(x) = stack.pop() {
+        if !seen.insert(addr(&*x)) {
+            continue;
+        }
+        let mut reads = false;
+        x.for_each_expr(&mut |e| reads |= has_outer(Node::Expr(e)));
+        if reads {
+            return Some(x);
+        }
+        let mut kids = Vec::new();
+        x.for_each_child(&mut |c| kids.push(Arc::clone(c)));
+        stack.extend(kids.into_iter().rev());
+    }
+    None
+}
+
 /// [`needs_domain`], a limit (ranked within each domain value), a global
 /// aggregate (one row for every outer row, matches or not) or a grouped
 /// aggregate over a correlation that is not an equality (`pull` would group
 /// by the correlated column, which only an equality allows).
 fn lateral_hit(p: &LogicalPlan) -> bool {
     needs_domain(p)
-        || matches!(&p.node, PlanNode::Limit { .. })
+        || matches!(&p.node, PlanNode::Limit { .. } | PlanNode::Offset { .. })
         || matches!(&p.node, PlanNode::Aggregate { grouping: Grouping::GroupBy(keys), input, .. }
             if keys.is_empty() || non_equality_correlation(input))
 }
@@ -2610,7 +2707,9 @@ fn on_path_through(p: &Arc<LogicalPlan>, hit: fn(&LogicalPlan) -> bool, global: 
         | PlanNode::Filter { input, .. }
         | PlanNode::Generate { input, .. }
         | PlanNode::Sort { input, .. } => on_path_through(input, hit, global),
-        PlanNode::Limit { input, .. } if global => on_path_through(input, hit, global),
+        PlanNode::Limit { input, .. } | PlanNode::Offset { input, .. } if global => {
+            on_path_through(input, hit, global)
+        }
         PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
             on_path_through(input, hit, global)
         }

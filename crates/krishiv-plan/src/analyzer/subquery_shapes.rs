@@ -24,19 +24,106 @@ pub(super) fn null_literal(e: &Expr) -> bool {
     }
 }
 
-/// Whether `e` is an integer literal above zero.
-pub(super) fn positive_literal(e: &Expr) -> bool {
-    match &e.node {
+/// The value of `e` when it is a non-negative integer literal (or a cast of
+/// one): a `LIMIT` or `OFFSET` count.
+pub(super) fn count_literal(e: &Expr) -> Option<i64> {
+    let n = match &e.node {
         ExprNode::Literal(v) => match v {
-            Literal::Byte(n) => *n > 0,
-            Literal::Short(n) => *n > 0,
-            Literal::Integer(n) => *n > 0,
-            Literal::Long(n) => *n > 0,
-            _ => false,
+            Literal::Byte(n) => i64::from(*n),
+            Literal::Short(n) => i64::from(*n),
+            Literal::Integer(n) => i64::from(*n),
+            Literal::Long(n) => *n,
+            _ => return None,
         },
-        ExprNode::Cast { expr, .. } => positive_literal(expr),
-        _ => false,
+        ExprNode::Cast { expr, .. } => return count_literal(expr),
+        _ => return None,
+    };
+    (n >= 0).then_some(n)
+}
+
+/// A `LIMIT`, a `LIMIT .. OFFSET` or an `OFFSET` (Spark's `Limit` over an
+/// `Offset`) over `below`, with literal counts that read no outer column.
+pub(super) struct Bounded {
+    /// What the counts apply to.
+    pub(super) below: Arc<LogicalPlan>,
+    /// The `LIMIT`, if any.
+    pub(super) limit: Option<i64>,
+    /// The `OFFSET`, 0 if none.
+    pub(super) offset: i64,
+}
+
+/// `p` as a [`Bounded`], if it is one.
+pub(super) fn bounded(p: &LogicalPlan) -> Option<Bounded> {
+    let count = |e: &Arc<Expr>| {
+        if has_outer(Node::Expr(e)) {
+            None
+        } else {
+            count_literal(e)
+        }
+    };
+    match &p.node {
+        PlanNode::Limit { input, limit } => {
+            let limit = count(limit)?;
+            match &input.node {
+                PlanNode::Offset { input, offset } => Some(Bounded {
+                    below: Arc::clone(input),
+                    limit: Some(limit),
+                    offset: count(offset)?,
+                }),
+                _ => Some(Bounded {
+                    below: Arc::clone(input),
+                    limit: Some(limit),
+                    offset: 0,
+                }),
+            }
+        }
+        PlanNode::Offset { input, offset } => Some(Bounded {
+            below: Arc::clone(input),
+            limit: None,
+            offset: count(offset)?,
+        }),
+        _ => None,
     }
+}
+
+/// `p` without a `LIMIT` / `OFFSET` over a correlated global aggregate (one
+/// row per outer row): a positive `LIMIT` alone keeps that row, so it goes;
+/// an `OFFSET` or `LIMIT 0` drops it, so the subquery has no row for any
+/// outer row and becomes an uncorrelated empty relation with the same
+/// output (NULL for a scalar, false for `EXISTS` and `IN`). Spark
+/// decorrelates it to the same rows (`DecorrelateInnerQuery`: a row number
+/// per correlation value, which is 1).
+pub(super) fn fold_one_row_bounds(p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    let Some(b) = bounded(p) else {
+        return Arc::clone(p);
+    };
+    if !one_row_aggregate(&b.below) {
+        return Arc::clone(p);
+    }
+    if b.offset == 0 && b.limit.is_none_or(|l| l > 0) {
+        return b.below;
+    }
+    let Some(out) = b.below.resolved_output() else {
+        return Arc::clone(p);
+    };
+    let none = super::subquery::node(
+        PlanNode::Filter {
+            input: super::subquery::node(PlanNode::OneRowRelation, p.origin),
+            predicate: Arc::new(Expr::literal(Literal::Boolean(false))),
+        },
+        p.origin,
+    );
+    let exprs = out
+        .into_iter()
+        .map(|c| {
+            let null = Arc::new(Expr::literal(Literal::Null(Some(c.data_type.clone()))));
+            Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                expr: null,
+                output: c,
+            })))
+        })
+        .collect();
+    super::subquery::node(PlanNode::Project { input: none, exprs }, p.origin)
 }
 
 /// Whether `p` reads the outer query and is one row for each outer row:

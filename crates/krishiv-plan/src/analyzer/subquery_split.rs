@@ -759,7 +759,7 @@ pub(super) fn push_not(e: &Arc<Expr>) -> Arc<Expr> {
     out.unwrap_or_else(|never| match never {})
 }
 
-/// [`super::needs_domain`], or a positive `LIMIT` over a correlation that
+/// [`super::needs_domain`], or a `LIMIT` and / or `OFFSET` over a correlation that
 /// is not an equality (`WHERE t2b <= t1d LIMIT 2`): its rows are ranked
 /// within each value of the outer columns, which only the domain gives (an
 /// equality's keys partition the ranking without it).
@@ -770,11 +770,8 @@ pub(super) fn push_not(e: &Arc<Expr>) -> Arc<Expr> {
 /// stays refused rather than answered differently.
 pub(super) fn limit_hit(p: &LogicalPlan) -> bool {
     super::needs_domain(p)
-        || matches!(&p.node, PlanNode::Limit { input, limit }
-            if super::non_equality_correlation(input)
-                && reads_inner(input)
-                && super::positive_literal(limit)
-                && !has_outer(Node::Expr(limit)))
+        || super::bounded(p)
+            .is_some_and(|b| super::non_equality_correlation(&b.below) && reads_inner(&b.below))
 }
 
 /// Whether every correlated conjunct of the filters on `p`'s path down
