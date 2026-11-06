@@ -719,3 +719,45 @@ fn the_planners_exchange_schemas_are_the_instantiated_ones() {
         }
     }
 }
+
+/// A full outer join on an inequality plans a nested loop over a broadcast
+/// build, with the probe columns in the plan: the stages split it from
+/// the plan's own schemas (no instantiation) and return one worker's rows.
+#[test]
+fn a_planned_full_outer_nested_loop_splits_from_the_plans_schemas() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let plain = QueryRunner::new(Arc::clone(&executor) as _);
+    let stages = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_splits(Arc::new(dealer(&tpch.files)));
+    let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let worker = WorkerContext::new(Arc::clone(&tpch.tables) as _);
+    let sql = "SELECT o_orderkey, r_name FROM orders FULL OUTER JOIN region \
+               ON o_orderkey < r_regionkey";
+    let plan = tpch.plan_sql(sql, Arc::clone(&tpch.config)).unwrap();
+    let mut planned = krishiv_scheduler::plan_data_schemas(&plan).unwrap();
+    let built = krishiv_exec::physical::plan_schemas(&plan, &worker).unwrap();
+    assert_eq!(
+        planned.nested_loop_probes.keys().collect::<Vec<_>>(),
+        built.nested_loop_probes.keys().collect::<Vec<_>>()
+    );
+    assert_eq!(planned.nested_loop_probes.len(), 1, "{plan}");
+    for (id, schema) in &planned.nested_loop_probes {
+        assert_eq!(schema.fields(), built.nested_loop_probes[id].fields());
+    }
+    let split = krishiv_scheduler::split_nested_loops(&plan, &mut planned).unwrap();
+    assert_ne!(split, plan, "the join was not split");
+    let mut want = run(&plain, &plan, &worker, &root, 1).unwrap();
+    let mut got = run(&stages, &plan, &worker, &root, 2).unwrap();
+    want.sort();
+    got.sort();
+    // Orders 1-3 match regions above them; regions 0 and 1 match none.
+    assert!(want.len() > 1000);
+    assert_eq!(got, want);
+    assert_eq!(root.reserved(), 0);
+}
