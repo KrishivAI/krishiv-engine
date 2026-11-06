@@ -32,6 +32,7 @@ mod interval;
 pub(crate) mod logic;
 mod nested_cast;
 mod strings;
+mod variant_cast;
 
 pub(crate) use cast::canonical_carrier;
 
@@ -423,6 +424,9 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                     .and_then(|from| nested_cast::rendered_part(&from, to))
                 {
                     child = nested_cast::interval_leaves(child, part);
+                }
+                if variant_cast::is_variant_cast(child.data_type(), to) {
+                    return variant_cast::compile(child, to, *mode, input.env);
                 }
                 Ok(nested_cast::narrowed(
                     cast::compile(child, to, *mode, input)?,

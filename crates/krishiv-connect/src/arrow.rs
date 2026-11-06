@@ -9,6 +9,11 @@
 //!   children non-null, the `wkb` child tagged `geometry: "true"` (or
 //!   `geography: "true"`) and `srid: "<SRID of the type>"`, -1 for `ANY`.
 //!   In memory the WKB child is a `BinaryView`, without the tags.
+//! - `variant`: `Struct<value: Binary, metadata: Binary>` (that order), both
+//!   children non-null, the struct field tagged `variant: "true"`, without
+//!   the Arrow extension name (oracle, `df.toArrow()` on Spark 4.2.0,
+//!   design P2-T001c section 6). In memory the children are `metadata`
+//!   then `value`, `BinaryView`, marked by `krishiv.variant`.
 //!
 //! The other result conversions (time zones, strings) belong to the result
 //! path of the Connect server, which uses these.
@@ -19,7 +24,9 @@ use std::sync::Arc;
 use arrow_array::{Array, ArrayRef, BinaryArray, BinaryViewArray, StructArray};
 use arrow_schema::{DataType as ArrowType, Field, Fields};
 use krishiv_common::error::{InternalError, KrishivError};
-use krishiv_types::arrow::{SPATIAL_SRID_FIELD, SPATIAL_WKB_FIELD};
+use krishiv_types::arrow::{
+    SPATIAL_SRID_FIELD, SPATIAL_WKB_FIELD, VARIANT_METADATA_FIELD, VARIANT_VALUE_FIELD,
+};
 use krishiv_types::{DataType, Srid};
 
 /// The children of a spatial column of type `data_type` as Spark Connect
@@ -93,6 +100,62 @@ pub fn spatial_column(column: &ArrayRef, data_type: &DataType) -> Result<ArrayRe
     let out = StructArray::try_new(
         children,
         vec![Arc::clone(srid), Arc::new(wkb)],
+        input.nulls().cloned(),
+    )
+    .map_err(|e| internal(&format!("that Arrow refuses: {e}")))?;
+    Ok(Arc::new(out))
+}
+
+/// The children of a variant column as Spark Connect sends them.
+fn variant_children() -> Fields {
+    Fields::from(vec![
+        Field::new(VARIANT_VALUE_FIELD, ArrowType::Binary, false),
+        Field::new(VARIANT_METADATA_FIELD, ArrowType::Binary, false),
+    ])
+}
+
+/// The result field Spark Connect sends for a `variant` column `name`.
+#[must_use]
+pub fn variant_field(name: &str, nullable: bool) -> Field {
+    Field::new(name, ArrowType::Struct(variant_children()), nullable)
+        .with_metadata(HashMap::from([("variant".to_owned(), "true".to_owned())]))
+}
+
+/// Converts a variant column from its in-memory form to the form Spark
+/// Connect sends (see the module docs): the same rows and nulls, the
+/// children swapped into `value, metadata` order and copied to `Binary`.
+///
+/// # Errors
+/// `INTERNAL_ERROR` when `column` is not an in-memory variant column (an
+/// engine bug), or holds more than 2 GiB of bytes in one batch.
+pub fn variant_column(column: &ArrayRef) -> Result<ArrayRef, KrishivError> {
+    let internal = |what: &str| -> KrishivError {
+        InternalError {
+            message: format!("a variant result column {what}"),
+        }
+        .into()
+    };
+    let input = column
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .filter(|s| krishiv_types::arrow::is_variant_struct(s.data_type()))
+        .ok_or_else(|| internal("that is not a variant struct"))?;
+    let child = |name: &str| -> Result<BinaryArray, KrishivError> {
+        let view = input
+            .column_by_name(name)
+            .and_then(|c| c.as_any().downcast_ref::<BinaryViewArray>())
+            .ok_or_else(|| internal("without binary view children"))?;
+        let bytes: usize = view.iter().map(|v| v.map_or(0, <[u8]>::len)).sum();
+        if i32::try_from(bytes).is_err() {
+            return Err(internal("with more than 2 GiB in one batch"));
+        }
+        Ok(view.iter().map(|v| Some(v.unwrap_or_default())).collect())
+    };
+    let value = child(VARIANT_VALUE_FIELD)?;
+    let metadata = child(VARIANT_METADATA_FIELD)?;
+    let out = StructArray::try_new(
+        variant_children(),
+        vec![Arc::new(value), Arc::new(metadata)],
         input.nulls().cloned(),
     )
     .map_err(|e| internal(&format!("that Arrow refuses: {e}")))?;
