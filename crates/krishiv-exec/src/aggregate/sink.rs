@@ -554,9 +554,10 @@ struct Local {
     /// its tables spilled so far.
     exchange: Option<ExchangeStats>,
     /// The input batch being applied in slices (see [`MIN_SLICE_ROWS`]):
-    /// its row count and the rows applied before a slice's memory was
-    /// refused. The driver retries the same batch after `NeedMemory`.
-    applied: Option<(usize, usize)>,
+    /// its identity ([`batch_id`]) and the rows applied before a slice's
+    /// memory was refused. The driver retries the same batch after
+    /// `NeedMemory`; any other batch is an internal error.
+    applied: Option<(BatchId, usize)>,
     /// Rows applied at once since a whole batch's memory was refused
     /// (doubled after each slice that fit, `None` again at a whole batch).
     slice: Option<usize>,
@@ -881,6 +882,19 @@ fn global(state: &GlobalState) -> Result<&Global> {
     state
         .downcast_ref::<Global>()
         .ok_or_else(|| internal("wrong global state for HashAggregate".to_owned()))
+}
+
+/// What tells the batch a sink retries from another: its row count and
+/// its first column's buffer (the retry shares the buffers).
+type BatchId = (usize, Option<usize>);
+
+fn batch_id(b: &Batch) -> BatchId {
+    let first = b
+        .data()
+        .columns()
+        .first()
+        .map(|c| Arc::as_ptr(c).cast::<()>() as usize);
+    (b.num_rows(), first)
 }
 
 /// The rows of the batch in hand a driver's table applied before a
@@ -1408,20 +1422,30 @@ impl Sink for HashAggregate {
             ));
         }
         let rows = input.num_rows();
-        let mut at = l
-            .applied
-            .take()
-            .filter(|&(n, _)| n == rows)
-            .map_or(0, |(_, at)| at);
+        // A mismatch keeps the state: `combine` refuses the abandoned batch.
+        let mut at = match l.applied {
+            Some((id, at)) if id == batch_id(&input) => {
+                l.applied = None;
+                at
+            }
+            Some(_) => {
+                return Err(internal(
+                    "HashAggregate: a batch other than the one refused memory part-way".to_owned(),
+                ));
+            }
+            None => 0,
+        };
         while at < rows {
             let mut len = l.slice.map_or(rows - at, |s| s.min(rows - at));
             loop {
+                let sliced;
                 let part = if len == rows {
-                    input.clone()
+                    &input
                 } else {
-                    input.slice(at, len)?
+                    sliced = input.slice(at, len)?;
+                    &sliced
                 };
-                match self.apply_slice(&part, l)? {
+                match self.apply_slice(part, l)? {
                     None => break,
                     // The worst case of fewer rows may fit: every row of
                     // the batch counts as a new group, which few are once
@@ -1432,7 +1456,7 @@ impl Sink for HashAggregate {
                     }
                     Some(bytes) => {
                         if at > 0 {
-                            l.applied = Some((rows, at));
+                            l.applied = Some((batch_id(&input), at));
                         }
                         return Ok(SinkStatus::NeedMemory { bytes });
                     }
@@ -1449,6 +1473,11 @@ impl Sink for HashAggregate {
         let l = l
             .downcast::<Local>()
             .map_err(|_| internal("wrong local state for HashAggregate".to_owned()))?;
+        if l.applied.is_some() {
+            return Err(internal(
+                "HashAggregate: input ended with a batch applied part-way".to_owned(),
+            ));
+        }
         let Local {
             mut table,
             mut reservation,
