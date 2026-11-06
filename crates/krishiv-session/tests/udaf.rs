@@ -574,7 +574,9 @@ fn window_frames_of_a_udaf_match_the_builtin() {
             "PARTITION BY k ORDER BY v ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING",
             "PARTITION BY k ORDER BY v ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING",
             "PARTITION BY k ORDER BY v RANGE BETWEEN 10 PRECEDING AND 5 FOLLOWING",
-            "ORDER BY v ROWS BETWEEN 3 PRECEDING AND 3 PRECEDING",
+            // Ordered by `v, k`: tied rows are then identical, so which of them a
+            // frame of offsets reads cannot change the rows of the result.
+            "ORDER BY v, k ROWS BETWEEN 3 PRECEDING AND 3 PRECEDING",
         ] {
             let q = |f: &str| {
                 format!("SELECT k, v, {f} OVER ({frame}) FROM t WHERE v < 60 ORDER BY k, v, 3")
