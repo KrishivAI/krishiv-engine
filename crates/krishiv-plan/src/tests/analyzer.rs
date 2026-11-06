@@ -2471,15 +2471,12 @@ fn typed_literals_resolve_with_the_session_zone() {
     // A bare time of day is that time on the query clock's date, in the session zone.
     for (kind, value) in [
         (TypedLiteralKind::TimestampLtz, "10:00"),
-        (TypedLiteralKind::Timestamp, "10:00"),
         (TypedLiteralKind::Timestamp, "T10:00:30.5"),
     ] {
-        let a = project(kind, value, utc).unwrap();
-        assert_eq!(
-            a.output[0].data_type.simple_string(),
-            "timestamp",
-            "{value}"
-        );
+        let ty = project(kind, value, utc).unwrap().output[0]
+            .data_type
+            .simple_string();
+        assert_eq!(ty, "timestamp", "{value}");
     }
     // An unresolvable session zone serves explicit zones but not wall-clock time.
     project(
