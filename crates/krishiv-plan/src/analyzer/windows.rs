@@ -1363,10 +1363,20 @@ impl Resolver<'_> {
         // casts the interval to its type, as the numeric bound is.
         let is_interval =
             |t: &T| matches!(t, T::YearMonthInterval { .. } | T::DayTimeInterval { .. });
+        // A number beside an interval is cast to the key's type, which is what the message names for it.
+        let as_cast = |t: &T| {
+            if matches!(key, T::Float | T::Double) && !is_interval(t) {
+                key.clone()
+            } else {
+                t.clone()
+            }
+        };
         if let [Some(lt), Some(ut)] = &bound_types[..]
-            && (matches!(key, T::Date | T::Timestamp | T::TimestampNtz)
-                || (matches!(key, T::Float | T::Double) && is_interval(lt) != is_interval(ut)))
-            && lt != ut
+            && matches!(
+                key,
+                T::Date | T::Timestamp | T::TimestampNtz | T::Float | T::Double
+            )
+            && as_cast(lt) != as_cast(ut)
             && let (Some(FrameBound::Offset(l)), Some(FrameBound::Offset(u))) = (
                 shown.frame.as_ref().map(|f| &f.lower),
                 shown.frame.as_ref().map(|f| &f.upper),
@@ -1377,8 +1387,8 @@ impl Resolver<'_> {
                     sql_expr: frame_sql(shown),
                     lower: bound_sql(l),
                     upper: bound_sql(u),
-                    lower_type: quoted(lt),
-                    upper_type: quoted(ut),
+                    lower_type: quoted(&as_cast(lt)),
+                    upper_type: quoted(&as_cast(ut)),
                 },
                 origin,
             ));
@@ -1465,6 +1475,14 @@ impl Resolver<'_> {
                             }
                         }
                     }
+                }
+                // A numeric bound beside an interval on a BOOLEAN key is the one Spark reports
+                // (`SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE`, with its own location), so this interval bound waits.
+                T::Boolean
+                    if matches!(bt, T::YearMonthInterval { .. })
+                        && bound_types.iter().flatten().any(|t| !is_interval(t)) =>
+                {
+                    continue;
                 }
                 T::Boolean if matches!(bt, T::YearMonthInterval { .. }) => {
                     return Err(AnalysisError::new(

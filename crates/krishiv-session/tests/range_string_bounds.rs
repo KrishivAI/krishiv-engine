@@ -219,8 +219,8 @@ fn a_hopeless_string_bound_raises_the_cast_error_only_under_ansi() {
 fn text_that_spark_reads_is_never_reported_as_a_cast_error() {
     let d = tempfile::tempdir().unwrap();
     let s = session(d.path());
-    // Spark 4.2.0 reads all of these: '1d' as a double (Java accepts the suffix), a decimal cast, '1.5' on an INT
-    // key. The engine may refuse some, but must not raise a cast error for them.
+    // Spark 4.2.0 reads '1d' (Java accepts the suffix) and a decimal cast; it rejects '1.2.3'. The engine may refuse
+    // any of these, but must not invent a cast error for text it cannot decide.
     for (key, bounds) in [
         ("f_float8", "'1d' preceding and 1 following"),
         (
@@ -236,25 +236,55 @@ fn text_that_spark_reads_is_never_reported_as_a_cast_error() {
 }
 
 #[test]
-fn an_interval_beside_a_number_differs_in_type_on_a_float_key_only() {
-    let d = tempfile::tempdir().unwrap();
-    let s = session(d.path());
-    // Spark 4.2.0: DOUBLE key -> SPECIFIED_WINDOW_FRAME_DIFF_TYPES; INT key -> the interval is cast to the key's
-    // type and the frame runs.
-    let err = frames(
-        &s,
-        "f_float8",
-        "interval '1' month preceding and 1 following",
-    )
-    .unwrap_err();
-    assert!(err.contains("SPECIFIED_WINDOW_FRAME_DIFF_TYPES"), "{err}");
-    assert!(
-        frames(
-            &s,
-            "f_numeric",
-            "interval '1' month preceding and 1 following"
+fn mixed_bounds_on_a_float_key_differ_in_type_and_the_message_names_the_key_type() {
+    // Spark 4.2.0 (local run), DOUBLE and FLOAT keys: the number is cast to the key's type in the message.
+    for ty in ["double", "float"] {
+        let err = lists(ty, "interval '1' month preceding and 1 following").unwrap_err();
+        assert!(
+            err.contains("SPECIFIED_WINDOW_FRAME_DIFF_TYPES"),
+            "{ty}: {err}"
+        );
+        let want = format!("\"INTERVAL MONTH\" <> \"{}\"", ty.to_uppercase());
+        assert!(err.contains(&want), "{ty}: {err}");
+        // Two different interval types differ too; the same interval type twice is RANGE_FRAME_INVALID_TYPE.
+        for bounds in [
+            "interval '1' year preceding and interval '1' month following",
+            "interval '1' month preceding and interval '1' day following",
+        ] {
+            let err = lists(ty, bounds).unwrap_err();
+            assert!(
+                err.contains("SPECIFIED_WINDOW_FRAME_DIFF_TYPES"),
+                "{ty} {bounds}: {err}"
+            );
+        }
+        let err = lists(
+            ty,
+            "interval '1' month preceding and interval '2' month following",
         )
-        .is_ok(),
-        "an INT key casts the interval"
+        .unwrap_err();
+        assert!(err.contains("RANGE_FRAME_INVALID_TYPE"), "{ty}: {err}");
+    }
+    // An INT key casts the interval to its own type, and the frame runs (Spark 4.2.0 gave [1, 2], [1, 2, 3], [2, 3]
+    // for the keys 1 to 3).
+    assert_eq!(
+        lists("int", "interval '1' month preceding and 1 following").unwrap(),
+        ["[1, 2]", "[1, 2, 3]", "[2, 3, 4]", "[3, 4, 5]", "[4, 5]"]
     );
+}
+
+#[test]
+fn a_boolean_key_reports_the_numeric_bound_beside_an_interval() {
+    // Spark 4.2.0 (local run): the numeric bound, cast to BOOLEAN, is the unacceptable one; its location is named.
+    let err = lists("boolean", "interval '1' month preceding and 1 following").unwrap_err();
+    assert!(
+        err.contains("SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE"),
+        "{err}"
+    );
+    assert!(err.contains("upper bound"), "{err}");
+    let err = lists("boolean", "1 preceding and interval '1' month following").unwrap_err();
+    assert!(
+        err.contains("SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE"),
+        "{err}"
+    );
+    assert!(err.contains("lower bound"), "{err}");
 }
