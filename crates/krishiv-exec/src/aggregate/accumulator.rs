@@ -82,11 +82,13 @@ pub(crate) fn min_max_supported(t: &DataType) -> bool {
     )
 }
 
-/// Whether `min`/`max` take structs of Arrow type `t`: the same field-wise
-/// comparator the comparison operators use accepts them
-/// ([`krishiv_kernels::r#struct::comparable`]).
+/// Whether `min`/`max` take structs and arrays of Arrow type `t`: the same comparator the
+/// comparison operators use accepts them ([`krishiv_kernels::r#struct::comparable`]).
 pub(crate) fn struct_min_max_supported(t: &DataType) -> bool {
-    matches!(t, DataType::Struct(_)) && krishiv_kernels::r#struct::comparable(t)
+    matches!(
+        t,
+        DataType::Struct(_) | DataType::List(_) | DataType::LargeList(_)
+    ) && krishiv_kernels::r#struct::comparable(t)
 }
 
 /// `min`/`max` values, by physical kind.
@@ -1064,7 +1066,10 @@ impl Accumulator {
                 count: Vec::new(),
                 overflow: Vec::new(),
             },
-            (f @ (F::Min | F::Max), DataType::Struct(_)) => Kind::MinMaxStruct {
+            (
+                f @ (F::Min | F::Max),
+                DataType::Struct(_) | DataType::List(_) | DataType::LargeList(_),
+            ) => Kind::MinMaxStruct {
                 max: *f == F::Max,
                 values: Vec::new(),
                 bytes: Vec::new(),
@@ -2097,7 +2102,7 @@ impl Accumulator {
                         "a struct extremum of another length than the group ids".to_owned(),
                     ));
                 }
-                if !matches!(a.data_type(), DataType::Struct(_)) {
+                if !struct_min_max_supported(a.data_type()) {
                     return Err(internal(format!("a struct extremum of {}", a.data_type())));
                 }
                 let order = if *max {
