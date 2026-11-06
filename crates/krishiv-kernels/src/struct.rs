@@ -298,7 +298,8 @@ mod tests {
             Field::new("a", ArrowType::Int32, true),
             Field::new("b", ArrowType::Utf8, true),
         ])));
-        // A non-orderable field makes the struct incomparable, at any depth.
+        // A field these kernels cannot order (arrays, for now: Spark can order them) makes the
+        // struct incomparable here, at any depth.
         assert!(!comparable(&struct_of(vec![
             Field::new("a", ArrowType::Int32, true),
             Field::new("l", list_of_int(), true),
