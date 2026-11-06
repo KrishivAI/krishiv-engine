@@ -303,3 +303,84 @@ impl Stream for Releasing {
         self.inner.as_mut().poll_next(cx)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use krishiv_exec::TokioExecutor;
+
+    use super::*;
+    use crate::testing;
+
+    /// Runs one task against a fake worker `srv` that answers with `reply`,
+    /// and returns the task's error and the coordinator's trace.
+    fn run_one(reply: fn() -> Reply, host: &'static str) -> (String, Vec<String>) {
+        let mut sim = testing::sim();
+        testing::answering(&mut sim, "srv", reply);
+        let out = Arc::new(Mutex::new((String::new(), Vec::new())));
+        let seen = Arc::clone(&out);
+        sim.client("coordinator", async move {
+            let coordinator = Coordinator::new(
+                TokioExecutor::deterministic(1)?,
+                testing::workers(&[host]),
+                1,
+            );
+            let e = coordinator
+                .inner
+                .run_task(
+                    0,
+                    Arc::from(Vec::new()),
+                    TaskSpec::whole(),
+                    &ExecConfig::default(),
+                )
+                .await
+                .unwrap_err();
+            *seen.lock().unwrap() = (e.message().to_owned(), coordinator.trace());
+            Ok::<(), Box<dyn std::error::Error>>(())
+        });
+        sim.run().unwrap();
+        out.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn a_task_that_always_fails_ends_the_run_after_its_attempts() {
+        let (message, trace) = run_one(|| Reply::Failed("INTERNAL_ERROR: boom".to_owned()), "srv");
+        assert!(
+            message.contains("attempt 2") && message.contains("boom"),
+            "{message}"
+        );
+        assert_eq!(trace.len(), Coordinator::MAX_ATTEMPTS as usize, "{trace:?}");
+        assert!(
+            trace[0].ends_with("failed: INTERNAL_ERROR: boom"),
+            "{trace:?}"
+        );
+    }
+
+    #[test]
+    fn a_reply_that_is_not_an_answer_to_a_run_is_refused() {
+        let (message, _) = run_one(|| Reply::End, "srv");
+        assert!(message.contains("answered End"), "{message}");
+    }
+
+    #[test]
+    fn an_unreachable_worker_fails_the_task() {
+        let (message, trace) = run_one(|| Reply::Done, "ghost");
+        assert!(message.contains("connect to ghost"), "{message}");
+        assert!(trace.is_empty(), "{trace:?}");
+    }
+
+    #[tokio::test]
+    async fn a_coordinator_prints_its_shape_and_ignores_a_cancel_of_an_unknown_query() {
+        let coordinator = Coordinator::new(
+            TokioExecutor::deterministic(1).unwrap(),
+            testing::workers(&["a", "b"]),
+            4,
+        );
+        let text = format!("{coordinator:?}");
+        assert!(
+            text.contains("Coordinator") && text.contains("partitions: 4"),
+            "{text}"
+        );
+        coordinator.cancel(QueryId(99));
+        assert!(coordinator.trace().is_empty());
+    }
+}
