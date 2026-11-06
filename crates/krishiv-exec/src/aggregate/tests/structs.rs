@@ -297,10 +297,11 @@ fn structs_with_unorderable_fields_are_rejected() {
     ));
     let struct_of = |t: DataType| DataType::Struct(vec![Field::new("f", t, true)].into());
     let unordered = [
-        struct_of(DataType::Map(entries, false)),
+        struct_of(DataType::Map(Arc::clone(&entries), false)),
+        // An array is orderable (element-wise); an array of maps is not.
         struct_of(DataType::List(Arc::new(Field::new(
             "item",
-            DataType::Int32,
+            DataType::Map(Arc::clone(&entries), false),
             true,
         )))),
         struct_of(struct_of(DataType::Map(
