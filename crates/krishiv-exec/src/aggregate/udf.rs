@@ -74,13 +74,24 @@ impl UdafEnv {
 /// `KRISHIV_UDF_NOT_AVAILABLE` when the library holds no aggregate UDF of
 /// that name and version (or there is no library).
 pub(crate) fn resolve(call: &UdafCall, env: Option<&UdafEnv>) -> Result<Arc<dyn AggregateUdf>> {
-    env.and_then(|e| e.library.get_aggregate_versioned(&call.name, call.version))
+    let udf = env
+        .and_then(|e| e.library.get_aggregate_versioned(&call.name, call.version))
         .ok_or_else(|| {
             KrishivError::from(KrishivUdfNotAvailable {
                 name: call.name.clone(),
                 version: call.version.to_string(),
             })
-        })
+        })?;
+    // The library lets a panicking `version` through so that binding reports
+    // it: report it here, before the implementation runs.
+    match guard_call(&call.name, "version", || udf.version()) {
+        Ok(v) if v == call.version => Ok(udf),
+        Ok(v) => Err(early(
+            &call.name,
+            &UdfError::new(format!("version {v} where the plan has {}", call.version)),
+        )),
+        Err(e) => Err(early(&call.name, &e)),
+    }
 }
 
 /// The argument fields the UDF is typed with: the call's columns as Spark

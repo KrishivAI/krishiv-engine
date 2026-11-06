@@ -835,7 +835,7 @@ impl Resolver<'_> {
                     ));
                     return Ok(b);
                 }
-                if entry.id.name() == "count" && n == 0 {
+                if is_builtin_entry(&entry) && entry.id.name() == "count" && n == 0 {
                     return self.parameterless_count(e, &entry, &kids, agg, window_fn);
                 }
                 // `assert_true(c)` is `assert_true(c, '<c>' is not true!)`:

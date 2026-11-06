@@ -26,7 +26,8 @@ use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::quoted_type;
 use super::exprs::{
-    Bound, Cx, WindowUse, names, pretty, semantic_key, synth_call, synth_call_of, unresolved,
+    Bound, Cx, WindowUse, builtin_name, names, pretty, semantic_key, synth_call, synth_call_of,
+    unresolved,
 };
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, FileMetadata, TableKind};
@@ -1640,7 +1641,7 @@ impl Resolver<'_> {
                         Some((_, a)) => a.clone(),
                         None if info.distinct_rewritten
                             && !f.distinct
-                            && !matches!(f.id.name(), "min" | "max") =>
+                            && !matches!(builtin_name(f), "min" | "max") =>
                         {
                             // Spark rewrites this call with the select list's. Planned over the
                             // rewrite's own rows (one per distinct set) it would count each group

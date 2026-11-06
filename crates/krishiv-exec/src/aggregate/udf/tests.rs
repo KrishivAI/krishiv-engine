@@ -27,6 +27,7 @@ enum Mode {
     Panic,
     Retract,
     WideState,
+    PanicVersion,
 }
 
 #[derive(Debug)]
@@ -41,6 +42,7 @@ impl AggregateUdf for Probe {
         "probe"
     }
     fn version(&self) -> u32 {
+        assert!(self.mode != Mode::PanicVersion, "no version");
         1
     }
     fn signature(&self) -> &Signature {
@@ -203,6 +205,11 @@ fn a_missing_udf_or_another_state_refuses_the_plan() {
     let e = check_state(&udf, &c).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::FailedExecuteUdf);
     check_state(&resolve(&c, Some(&lib)).unwrap(), &c).unwrap();
+    // A `version` that panics is reported before the implementation runs.
+    let broken = env(Mode::PanicVersion, NullHandling::Strict);
+    let e = resolve(&c, Some(&broken)).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::FailedExecuteUdf);
+    assert!(e.message().contains("no version"), "{}", e.message());
 }
 
 #[test]

@@ -401,6 +401,102 @@ fn a_distinct_rewrite_never_merges_or_loses_a_udaf() {
     );
 }
 
+/// `name()`: the number of rows, with no argument.
+#[derive(Debug)]
+struct Rows(Signature);
+
+impl AggregateUdf for Rows {
+    fn name(&self) -> &str {
+        "count"
+    }
+    fn version(&self) -> u32 {
+        1
+    }
+    fn signature(&self) -> &Signature {
+        &self.0
+    }
+    fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+        Ok(ReturnField {
+            data_type: DataType::Long,
+            nullable: true,
+        })
+    }
+    fn state_fields(&self, _: &[ArgField]) -> Result<Vec<StateField>, UdfError> {
+        Ok(vec![StateField {
+            name: "sum".to_owned(),
+            data_type: DataType::Long,
+            nullable: true,
+        }])
+    }
+    fn accumulator(
+        &self,
+        _: &[ArgField],
+        _: &InvokeContext,
+    ) -> Result<Box<dyn GroupsAccumulator>, UdfError> {
+        Ok(Box::new(RowCount(Vec::new())))
+    }
+}
+
+#[derive(Debug)]
+struct RowCount(Vec<i64>);
+
+impl GroupsAccumulator for RowCount {
+    fn resize(&mut self, groups: usize) {
+        self.0.resize(groups, 0);
+    }
+    fn update(&mut self, _: &[UdfArg<'_>], groups: &[u32]) -> Result<(), UdfError> {
+        for &g in groups {
+            self.0[g as usize] += 1;
+        }
+        Ok(())
+    }
+    fn merge(&mut self, states: &[ArrayRef], groups: &[u32]) -> Result<(), UdfError> {
+        let s = states[0].as_primitive::<Int64Type>();
+        for (i, &g) in groups.iter().enumerate() {
+            self.0[g as usize] += s.value(i);
+        }
+        Ok(())
+    }
+    fn state(&self, groups: &[u32]) -> Result<Vec<ArrayRef>, UdfError> {
+        Ok(vec![self.evaluate(groups)?])
+    }
+    fn evaluate(&self, groups: &[u32]) -> Result<ArrayRef, UdfError> {
+        Ok(Arc::new(Int64Array::from_iter_values(
+            groups.iter().map(|&g| self.0[g as usize]),
+        )))
+    }
+    fn size(&self) -> usize {
+        self.0.capacity() * 8
+    }
+}
+
+#[test]
+fn built_in_special_cases_skip_a_same_name_udaf() {
+    let s = session_with(&[], Fault::None);
+    s.register_udaf(Rows(Signature::Exact(Vec::new()))).unwrap();
+    s.register_udaf(UdSum::new("max", Fault::None)).unwrap();
+    register_t(&s, 5);
+    // `count()` with no argument is the built-in's error; the UDF's
+    // signature takes none.
+    let got = run(&s, "SELECT k, session.count() FROM t GROUP BY k ORDER BY k");
+    let want = run(&s, "SELECT k, count(*) FROM t GROUP BY k ORDER BY k");
+    assert_eq!(pairs(&got), pairs(&want));
+    // A HAVING aggregate next to a DISTINCT rewrite: only the built-in
+    // extrema may run over the rewrite's deduplicated rows; the UDF is
+    // refused, as the built-in `sum` is there, never computed over them.
+    for sql in [
+        "SELECT k, sum(DISTINCT v) FILTER (WHERE v > 0) FROM t GROUP BY k HAVING session.max(k) > 10",
+        "SELECT k, sum(DISTINCT v) FILTER (WHERE v > 0) FROM t GROUP BY k HAVING sum(k) > 10",
+    ] {
+        let e = error_of(&s, sql);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}: {e}"
+        );
+    }
+}
+
 #[test]
 fn a_correlated_subquery_never_invents_a_udafs_empty_result() {
     let s = session_with(&[], Fault::None);
