@@ -899,11 +899,13 @@ impl Resolver<'_> {
         let mut c = self.child(input, env)?;
         // An aggregate below is no aggregate to a filter above: its `WHERE
         // sum(..)` is not a `HAVING`.
-        // Past a `USING` join the merged-away columns stay reachable (its projection is the only
-        // thing below, and it drops nothing else), so the widening stays for them.
-        if c.hidden.is_empty() {
-            c.widen = None;
-        }
+        // Past the boundary only hidden columns come back (a `USING` join's merged-away keys, a
+        // file table's `_metadata`), never a column an earlier step dropped.
+        c.widen = if c.hidden.is_empty() || c.widen.is_none() {
+            None
+        } else {
+            Some(Arc::new(Widen::Hidden { child: c.clone() }))
+        };
         c.agg = None;
         c.generated_from = None;
         Ok(c)

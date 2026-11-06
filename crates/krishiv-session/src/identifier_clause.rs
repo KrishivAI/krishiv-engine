@@ -33,10 +33,11 @@ const NON_DETERMINISTIC: &[&str] = &[
     "input_file_name",
 ];
 
-/// Whether `sql` is `CREATE [OR REPLACE] [TEMP[ORARY]] FUNCTION IDENTIFIER(` or
-/// `DROP [TEMP[ORARY]] FUNCTION [IF EXISTS] IDENTIFIER(`: a routine name is an identifier
-/// reference in both modes.
-fn names_a_function(sql: &str) -> bool {
+/// Whether `sql` names its routine or session variable by `IDENTIFIER(`: `CREATE [OR REPLACE]
+/// [TEMP[ORARY]] FUNCTION IDENTIFIER(`, `DROP [TEMP[ORARY]] FUNCTION [IF EXISTS] IDENTIFIER(`,
+/// `DECLARE ... IDENTIFIER(` or `DROP TEMPORARY VARIABLE [IF EXISTS] IDENTIFIER(`. Those names are
+/// identifier references (`IDENTIFIER(expression)`) in both modes.
+fn names_by_reference(sql: &str) -> bool {
     let words: Vec<&str> = tokenize(sql)
         .into_iter()
         .filter(|t| !t.kind.is_trivia())
@@ -44,6 +45,24 @@ fn names_a_function(sql: &str) -> bool {
         .filter_map(|t| sql.get(t.span.start..t.span.end))
         .collect();
     let at = |i: usize, w: &str| words.get(i).is_some_and(|x| x.eq_ignore_ascii_case(w));
+    let clause_at = |i: usize| at(i, "IDENTIFIER") && at(i + 1, "(");
+    // A session variable's name is an identifier reference too (Spark 4.2 `createVariable`,
+    // `dropVariable`): `DECLARE [OR REPLACE] [VARIABLE | VAR] IDENTIFIER(` and
+    // `DROP TEMPORARY {VARIABLE | VAR} [IF EXISTS] IDENTIFIER(`.
+    if at(0, "DECLARE") {
+        let mut k = 1;
+        if at(k, "OR") && at(k + 1, "REPLACE") {
+            k += 2;
+        }
+        if at(k, "VARIABLE") || at(k, "VAR") {
+            k += 1;
+        }
+        return clause_at(k);
+    }
+    if at(0, "DROP") && at(1, "TEMPORARY") && (at(2, "VARIABLE") || at(2, "VAR")) {
+        let k = if at(3, "IF") && at(4, "EXISTS") { 5 } else { 3 };
+        return clause_at(k);
+    }
     let Some(f) = words
         .iter()
         .position(|w| w.eq_ignore_ascii_case("FUNCTION"))
@@ -75,7 +94,8 @@ impl Session {
         // The legacy mode reads `IDENTIFIER(expr)` as a function, which the grammar accepts only
         // where a table or an expression may stand: a statement that does not parse as written
         // (a column list, a rename target) keeps the parser's error.
-        if legacy && !names_a_function(sql) && krishiv_sql::parse_statement(sql, options).is_err() {
+        if legacy && !names_by_reference(sql) && krishiv_sql::parse_statement(sql, options).is_err()
+        {
             return Ok(Cow::Borrowed(sql));
         }
         let tokens: Vec<_> = tokenize(sql)
@@ -171,11 +191,18 @@ impl Session {
                 i = close + 1;
                 continue;
             }
-            if legacy
-                && tokens
-                    .get(close + 1)
-                    .is_some_and(|n| n.kind == TokenKind::Sym(Sym::Dot))
-            {
+            let dotted = tokens
+                .get(close + 1)
+                .is_some_and(|n| n.kind == TokenKind::Sym(Sym::Dot));
+            // An identifier literal followed by `.` is left to the parser: it is the first part
+            // of a dotted name where a name stands, but in an expression a column whose field
+            // is taken (`IDENTIFIER('t').c1` is `t`'s field `c1`, never the column `t.c1`),
+            // which the substituted text could not tell apart.
+            // A run of string literals is one literal (`'ta' 'b'`).
+            let literal = tokens
+                .get(i + 2..close)
+                .is_some_and(|run| run.iter().all(|t| t.kind == TokenKind::String));
+            if dotted && (legacy || literal) {
                 i = close + 1;
                 continue;
             }
@@ -191,9 +218,11 @@ impl Session {
                 i = close + 1;
                 continue;
             };
-            // An alias or a window name is one part.
+            // An alias, a window name or a column of an alias's column list is one part.
             if parts > 1
-                && (prev(1).eq_ignore_ascii_case("AS") || prev(1).eq_ignore_ascii_case("OVER"))
+                && (prev(1).eq_ignore_ascii_case("AS")
+                    || prev(1).eq_ignore_ascii_case("OVER")
+                    || in_alias_column_list(&tokens, sql, i))
             {
                 return Err(IdentifierTooManyNameParts {
                     identifier: name,
@@ -265,6 +294,66 @@ impl Session {
             .join(".");
         Ok(Some((name, parsed.parts.len())))
     }
+}
+
+/// Whether the clause starting at token `i` is an item of the column list of an alias
+/// (`AS t(a, IDENTIFIER(..))`, `AS IDENTIFIER(..)(IDENTIFIER(..))`), where each name is one part.
+fn in_alias_column_list(tokens: &[krishiv_sql::lexer::Token], sql: &str, i: usize) -> bool {
+    let is = |k: usize, s: Sym| tokens.get(k).is_some_and(|t| t.kind == TokenKind::Sym(s));
+    let is_word = |k: usize, w: &str| {
+        tokens.get(k).is_some_and(|t| {
+            t.kind == TokenKind::Word
+                && sql
+                    .get(t.span.start..t.span.end)
+                    .is_some_and(|x| x.eq_ignore_ascii_case(w))
+        })
+    };
+    // The `(` that opens the list: back over the earlier items at depth 0.
+    let mut depth = 0_usize;
+    let mut k = i;
+    let open = loop {
+        let Some(j) = k.checked_sub(1) else {
+            return false;
+        };
+        k = j;
+        if is(k, Sym::RParen) {
+            depth += 1;
+        } else if is(k, Sym::LParen) {
+            if depth == 0 {
+                break k;
+            }
+            depth -= 1;
+        }
+    };
+    let Some(before) = open.checked_sub(1) else {
+        return false;
+    };
+    // `AS name (`
+    if tokens
+        .get(before)
+        .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
+        && before.checked_sub(1).is_some_and(|b| is_word(b, "AS"))
+    {
+        return true;
+    }
+    // `AS IDENTIFIER(...) (`: back to the clause's `(`.
+    if !is(before, Sym::RParen) {
+        return false;
+    }
+    let mut depth = 0_usize;
+    let mut k = before + 1;
+    while let Some(j) = k.checked_sub(1) {
+        k = j;
+        if is(k, Sym::RParen) {
+            depth += 1;
+        } else if is(k, Sym::LParen) {
+            depth -= 1;
+            if depth == 0 {
+                return k >= 2 && is_word(k - 1, "IDENTIFIER") && is_word(k - 2, "AS");
+            }
+        }
+    }
+    false
 }
 
 /// Whether the expression is constant for `IDENTIFIER`: no column, subquery or non-deterministic
