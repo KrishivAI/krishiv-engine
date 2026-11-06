@@ -1025,7 +1025,10 @@ impl Session {
                 ..
             } => {
                 let change = match action {
-                    ChangeColumnAction::Type(t) => ColumnChange::Type(t.to_data_type()?),
+                    ChangeColumnAction::Type(t) => {
+                        let (ty, declared) = t.to_column_type()?;
+                        ColumnChange::Type(ty, declared)
+                    }
                     ChangeColumnAction::Comment(c) => ColumnChange::Comment(c.clone()),
                     ChangeColumnAction::First | ChangeColumnAction::After(_) => {
                         ColumnChange::Position
@@ -1149,17 +1152,10 @@ impl Session {
         }
         let current = &mut table.columns[at];
         match change {
-            ColumnChange::Type(t) if t != current.data_type => {
-                let sql = |t: &DataType| format!("\"{}\"", t.sql());
-                let id = format!("`{}`", current.name.replace('`', "``"));
-                return Err(krishiv_common::error::NotSupportedChangeColumn {
-                    table: name.quoted(),
-                    origin_name: id.clone(),
-                    origin_type: sql(&current.data_type),
-                    new_name: id,
-                    new_type: sql(&t),
-                }
-                .into());
+            ColumnChange::Type(t, declared)
+                if t != current.data_type || declared != current.char_varchar =>
+            {
+                return Err(current.change_type_error(name.quoted(), &t, declared.as_deref()));
             }
             ColumnChange::Comment(c) => current.comment = Some(c),
             ColumnChange::DropDefault => current.default = None,
@@ -2677,7 +2673,8 @@ impl Session {
 
 /// What an `ALTER TABLE ... CHANGE | ALTER COLUMN` asks for.
 enum ColumnChange {
-    Type(DataType),
+    /// The type and the `CHAR(n)` / `VARCHAR(n)` string the new type was written with.
+    Type(DataType, Option<String>),
     Comment(String),
     Position,
     Nullability,

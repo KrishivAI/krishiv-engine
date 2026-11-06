@@ -50,6 +50,32 @@ pub(crate) struct StoreColumn {
 }
 
 impl StoreColumn {
+    /// `NOT_SUPPORTED_CHANGE_COLUMN`: `CHANGE COLUMN .. TYPE` to a type other than this column's own (a session
+    /// catalog table takes only the identical type, a `CHAR(n)` length included). `to_declared` is the
+    /// `CHAR(n)` / `VARCHAR(n)` string the new type was written with.
+    pub(crate) fn change_type_error(
+        &self,
+        table: String,
+        to: &DataType,
+        to_declared: Option<&str>,
+    ) -> KrishivError {
+        let sql = |t: &DataType, declared: Option<&str>| {
+            format!(
+                "\"{}\"",
+                declared.map_or_else(|| t.sql(), str::to_uppercase)
+            )
+        };
+        let id = format!("`{}`", self.name.replace('`', "``"));
+        krishiv_common::error::NotSupportedChangeColumn {
+            table,
+            origin_name: id.clone(),
+            origin_type: sql(&self.data_type, self.char_varchar.as_deref()),
+            new_name: id,
+            new_type: sql(to, to_declared),
+        }
+        .into()
+    }
+
     /// A nullable column as DDL declares it: `CHAR`/`VARCHAR` read as `STRING`, the length kept in `char_varchar`.
     pub(crate) fn declared(
         name: String,

@@ -140,6 +140,19 @@ fn type_sql(t: &DataType) -> Result<String, KrishivError> {
     Ok(text.to_uppercase())
 }
 
+/// The type `DESCRIBE` shows for column `name`: its declared `CHAR(n)` / `VARCHAR(n)` string when it has one
+/// (`declared` maps a lower-cased column name to it), else the catalog string of its type.
+fn shown_type(
+    declared: &std::collections::HashMap<String, String>,
+    name: &str,
+    t: &DataType,
+) -> String {
+    declared
+        .get(&name.to_lowercase())
+        .cloned()
+        .unwrap_or_else(|| t.catalog_string())
+}
+
 /// A name as Spark's `quoteIfNeeded` writes it: bare when it is word characters
 /// and not all digits, else in backquotes.
 pub(crate) fn quote_if_needed(name: &str) -> String {
@@ -163,6 +176,26 @@ fn is_global_namespace(ns: &str) -> bool {
 }
 
 impl Session {
+    /// The declared `CHAR(n)` / `VARCHAR(n)` strings of the stored table `name`'s columns, by lower-cased column
+    /// name; none for a temporary view or a name that is not a stored relation.
+    fn declared_char_varchars(
+        &self,
+        name: &TableName,
+        temp: bool,
+    ) -> std::collections::HashMap<String, String> {
+        if temp {
+            return std::collections::HashMap::new();
+        }
+        self.stored_relation(name)
+            .map(|t| {
+                t.columns
+                    .iter()
+                    .filter_map(|c| Some((c.name.to_lowercase(), c.char_varchar.clone()?)))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// `SHOW TABLES | VIEWS IN global_temp`: the global temporary views.
     async fn global_views_frame(
         &self,
@@ -573,14 +606,22 @@ impl Session {
                         // Spark adds statistics rows; the engine keeps none.
                         return Err(unsupported("DESCRIBE EXTENDED | FORMATTED ... column"));
                     }
-                    return self.describe_column(&columns, column, false).await;
+                    return self
+                        .describe_column(
+                            &columns,
+                            column,
+                            &self.declared_char_varchars(&name, temp),
+                        )
+                        .await;
                 }
+                // `CHAR(n)` / `VARCHAR(n)` columns show their declared type, not `string`.
+                let declared = self.declared_char_varchars(&name, temp);
                 let mut rows: Vec<Vec<Cell>> = columns
                     .iter()
                     .map(|(n, t, c)| {
                         vec![
                             s(n),
-                            s(t.catalog_string()),
+                            s(shown_type(&declared, n, t)),
                             s(c.clone().unwrap_or_default()),
                         ]
                     })
@@ -597,7 +638,9 @@ impl Session {
                     rows.extend(t.partition_schema().into_iter().map(|c| {
                         vec![
                             s(&c.name),
-                            s(c.data_type.catalog_string()),
+                            s(c.char_varchar
+                                .clone()
+                                .unwrap_or_else(|| c.data_type.catalog_string())),
                             s(c.comment.clone().unwrap_or_default()),
                         ]
                     }));
@@ -701,7 +744,7 @@ impl Session {
         &self,
         columns: &[(String, DataType, Option<String>)],
         column: &[krishiv_sql::ast::ColumnName],
-        _extended: bool,
+        declared: &std::collections::HashMap<String, String>,
     ) -> Result<DataFrame, KrishivError> {
         let wanted = match column {
             [krishiv_sql::ast::ColumnName::Ident(i)] => i.value.clone(),
@@ -721,7 +764,7 @@ impl Session {
         };
         let rows = vec![
             vec![s("col_name"), s(name)],
-            vec![s("data_type"), s(data_type.catalog_string())],
+            vec![s("data_type"), s(shown_type(declared, name, data_type))],
             vec![
                 s("comment"),
                 s(comment.clone().unwrap_or_else(|| "NULL".to_owned())),
@@ -1097,7 +1140,13 @@ fn partition_details(t: &CatalogTable, p: &CatalogPartition) -> Vec<(String, Str
 /// `spark.sql.legacy.viewSchemaBindingMode` (a view's `WITH SCHEMA` line).
 fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, KrishivError> {
     let column = |c: &crate::store::StoreColumn| -> Result<String, KrishivError> {
-        let mut out = format!("  {} {}", quote_if_needed(&c.name), type_sql(&c.data_type)?);
+        // A `CHAR(n)` / `VARCHAR(n)` column prints its declared type (`CHAR(5)`); nested ones are refused like the
+        // other nested types.
+        let shown = match &c.char_varchar {
+            Some(cv) if !cv.contains('<') => cv.to_uppercase(),
+            _ => type_sql(&c.data_type)?,
+        };
+        let mut out = format!("  {} {}", quote_if_needed(&c.name), shown);
         if !c.nullable {
             out.push_str(" NOT NULL");
         }
