@@ -415,6 +415,25 @@ impl Session {
             ShowKind::Tables {
                 namespace, pattern, ..
             } => {
+                // `SHOW TABLES IN system`: the tables of the reserved read-only catalog (it has no
+                // namespace, so the namespace column is empty).
+                if let Some(n) = namespace
+                    && let Ok(name) = self.namespace_name(n, &self.query_env())
+                    && crate::system::is_system(&name)
+                {
+                    let rows = crate::system::table_names()
+                        .iter()
+                        .filter(|t| keep(pattern.as_ref(), t))
+                        .map(|t| vec![s(""), s(*t), s("false")])
+                        .collect();
+                    return self
+                        .ordered_frame(
+                            &["namespace", "tableName", "isTemporary"],
+                            &["isTemporary"],
+                            rows,
+                        )
+                        .await;
+                }
                 let ns = self.show_namespace(namespace.as_ref())?;
                 if is_global_namespace(&ns) {
                     return self

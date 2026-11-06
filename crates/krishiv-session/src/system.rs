@@ -52,6 +52,11 @@ const TABLES: [&str; 6] = [
     "queries",
 ];
 
+/// The names of the tables of the catalog.
+pub(crate) fn table_names() -> &'static [&'static str] {
+    &TABLES
+}
+
 /// Whether `name` is the reserved catalog name, in any letter case.
 pub(crate) fn is_system(name: &str) -> bool {
     name.eq_ignore_ascii_case(SYSTEM)
