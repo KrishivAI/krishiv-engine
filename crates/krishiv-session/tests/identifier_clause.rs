@@ -324,3 +324,68 @@ fn a_select_item_written_identifier_is_named_by_what_it_resolves_to() {
         ["c1.c2"]
     );
 }
+
+/// Spark 4.2.0 (`research/spark/identifier-names-outside-query.md`): the name of a select item
+/// written `IDENTIFIER(..)` depends only on the expression, so commands that take a query name
+/// it as a query does.
+#[test]
+fn commands_over_a_query_name_identifier_items_as_the_query_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    let structs = "FROM VALUES (named_struct('c2', 42)) AS T(c1)";
+    let items = format!("SELECT IDENTIFIER('c1.c2'), c1.c2 AS x {structs}");
+    // CTAS
+    run(&s, &format!("CREATE TABLE t1 USING parquet AS {items}"));
+    assert_eq!(names(&s, "SELECT * FROM t1"), ["c1.c2", "x"]);
+    // INSERT ... BY NAME matches the item to the column `c1.c2`
+    run(
+        &s,
+        &format!("INSERT INTO t1 BY NAME SELECT c1.c2 AS x, IDENTIFIER('c1.c2') {structs}"),
+    );
+    assert_eq!(first(&s, "SELECT count(*) FROM t1 WHERE `c1.c2` = 42"), "2");
+    // views: temporary, permanent, and a column list that renames
+    run(&s, &format!("CREATE TEMPORARY VIEW v AS {items}"));
+    assert_eq!(names(&s, "SELECT * FROM v"), ["c1.c2", "x"]);
+    run(&s, &format!("CREATE VIEW pv AS {items}"));
+    assert_eq!(names(&s, "SELECT * FROM pv"), ["c1.c2", "x"]);
+    run(
+        &s,
+        &format!("ALTER VIEW pv AS SELECT IDENTIFIER('c1.c2') {structs}"),
+    );
+    assert_eq!(names(&s, "SELECT * FROM pv"), ["c1.c2"]);
+    run(
+        &s,
+        &format!("CREATE VIEW pv3 (a) AS SELECT IDENTIFIER('c1.c2') {structs}"),
+    );
+    assert_eq!(names(&s, "SELECT * FROM pv3"), ["a"]);
+    // DESCRIBE QUERY and EXPLAIN show the analyzed name
+    let described = first(&s, &format!("DESCRIBE QUERY {items}"));
+    assert_eq!(described, "c1.c2");
+    let explained = first(&s, &format!("EXPLAIN EXTENDED {items}"));
+    assert!(explained.contains("c1.c2: int"), "{explained}");
+    // two unaliased items: a query keeps both, CTAS refuses the duplicate
+    let twice = format!("SELECT IDENTIFIER('c1.c2'), IDENTIFIER('c1.c2') {structs}");
+    assert_eq!(names(&s, &twice), ["c1.c2", "c1.c2"]);
+    assert_eq!(
+        class(&s, &format!("CREATE TABLE t2 USING parquet AS {twice}")),
+        "COLUMN_ALREADY_EXISTS"
+    );
+    // a permanent view with the duplicate is refused as CTAS is
+    assert_eq!(
+        class(&s, &format!("CREATE VIEW pv4 AS {twice}")),
+        "COLUMN_ALREADY_EXISTS"
+    );
+    // global temporary views, CACHE TABLE ... AS and EXECUTE IMMEDIATE CTAS
+    run(&s, &format!("CREATE GLOBAL TEMPORARY VIEW g AS {items}"));
+    assert_eq!(names(&s, "SELECT * FROM global_temp.g"), ["c1.c2", "x"]);
+    run(&s, &format!("CACHE TABLE cached AS {items}"));
+    assert_eq!(names(&s, "SELECT * FROM cached"), ["c1.c2", "x"]);
+    run(
+        &s,
+        &format!(
+            "EXECUTE IMMEDIATE 'CREATE TABLE t3 USING parquet AS SELECT IDENTIFIER(:c ''.c2'') {}' USING 'c1' AS c",
+            structs.replace('\'', "''")
+        ),
+    );
+    assert_eq!(names(&s, "SELECT * FROM t3"), ["c1.c2"]);
+}

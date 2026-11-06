@@ -434,10 +434,11 @@ impl Session {
         &self,
         v: &CreatePermanentView,
         original: &str,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         if v.global && v.using.is_none() {
-            return self.create_global_temp_view(v, &env).await;
+            return self.create_global_temp_view(v, &env, ids).await;
         }
         let frozen_path = env.catalog.sql_path_snapshot();
         let frozen_namespace = env
@@ -491,10 +492,11 @@ impl Session {
             .get(query.span.start..query.span.end)
             .unwrap_or_default()
             .to_owned();
-        let plan = krishiv_sql::lower_with(
+        let plan = krishiv_sql::lower_identified(
             query,
             self.next_source_id(),
             self.parser_options().case_sensitive,
+            ids,
         )
         .map_err(|e| e.error)?;
         if let Some(temp) = crate::catalog::reads_temporary(
@@ -613,6 +615,7 @@ impl Session {
                 path: frozen_path,
                 query_columns,
                 schema_mode,
+                identifier_spans: crate::identifier_clause::spans_within(ids, query.span),
             }),
             layout: TableLayout::default(),
         };
@@ -642,6 +645,7 @@ impl Session {
         &self,
         v: &CreatePermanentView,
         env: &QueryEnv,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let parts = crate::access::ddl_parts(&v.name, env)?;
         let (Some(query), [name]) = (&v.query, parts.as_slice()) else {
@@ -672,7 +676,7 @@ impl Session {
             query: query.clone(),
             span: v.span,
         };
-        self.create_temp_view(&view, true).await
+        self.create_temp_view(&view, true, ids).await
     }
 
     /// `CREATE TEMPORARY VIEW name (col type, ...) USING format [OPTIONS (...)]`: a read of the
@@ -864,6 +868,7 @@ impl Session {
         &self,
         a: &AlterView,
         original: &str,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let frozen_path = env.catalog.sql_path_snapshot();
@@ -899,10 +904,11 @@ impl Session {
                 schema_binding: None,
                 ..
             } => {
-                let plan = krishiv_sql::lower_with(
+                let plan = krishiv_sql::lower_identified(
                     query,
                     self.next_source_id(),
                     self.parser_options().case_sensitive,
+                    ids,
                 )
                 .map_err(|e| e.error)?;
                 if let Some(temp) = crate::catalog::reads_temporary(
@@ -949,6 +955,7 @@ impl Session {
                     path: frozen_path,
                     query_columns,
                     schema_mode,
+                    identifier_spans: crate::identifier_clause::spans_within(ids, query.span),
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {
@@ -1268,6 +1275,7 @@ impl Session {
         &self,
         t: &CreateTable,
         original: &str,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let warehouse = self.warehouse_dir()?;
@@ -1382,7 +1390,10 @@ impl Session {
             bucket: t.bucket.as_ref(),
         };
         match &t.as_query {
-            Some(query) => self.create_table_as(table, query, mode, &layout).await?,
+            Some(query) => {
+                self.create_table_as(table, query, mode, &layout, ids)
+                    .await?;
+            }
             None => {
                 table.columns = self.columns_of(t, original)?;
                 for c in &typed_partitions {
@@ -1645,11 +1656,13 @@ impl Session {
         query: &Query,
         mode: CreateMode,
         layout: &LayoutRequest<'_>,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<(), KrishivError> {
-        let plan = krishiv_sql::lower_with(
+        let plan = krishiv_sql::lower_identified(
             query,
             self.next_source_id(),
             self.parser_options().case_sensitive,
+            ids,
         )
         .map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
@@ -2130,17 +2143,23 @@ impl Session {
         &self,
         i: &Insert,
         original: &str,
+        ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         if i.source.is_some() || i.clauses.len() != 1 {
             return Err(unsupported("multi-table INSERT"));
         }
         for clause in &i.clauses {
-            self.insert_clause(clause, original).await?;
+            self.insert_clause(clause, original, ids).await?;
         }
         self.empty_frame().await
     }
 
-    async fn insert_clause(&self, c: &InsertClause, original: &str) -> Result<(), KrishivError> {
+    async fn insert_clause(
+        &self,
+        c: &InsertClause,
+        original: &str,
+        ids: &[krishiv_sql::ast::Span],
+    ) -> Result<(), KrishivError> {
         let env = self.query_env();
         if c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some() {
             return Err(unsupported("INSERT ... REPLACE"));
@@ -2166,10 +2185,11 @@ impl Session {
                 .iter()
                 .for_each(|r| scalar_subqueries(r, &mut subqueries));
             for query in &subqueries {
-                let plan = krishiv_sql::lower_with(
+                let plan = krishiv_sql::lower_identified(
                     query,
                     self.next_source_id(),
                     self.parser_options().case_sensitive,
+                    ids,
                 )
                 .map_err(|e| e.error)?;
                 DataFrame::new(self.clone(), Arc::clone(plan.root()))
@@ -2183,10 +2203,11 @@ impl Session {
                 );
             }
         }
-        let plan = krishiv_sql::lower_with(
+        let plan = krishiv_sql::lower_identified(
             &c.query,
             self.next_source_id(),
             self.parser_options().case_sensitive,
+            ids,
         )
         .map_err(|e| e.error)?;
         let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
