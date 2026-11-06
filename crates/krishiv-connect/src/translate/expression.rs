@@ -20,7 +20,7 @@ use krishiv_plan::{
 use super::errors::{
     expression_not_set, field_empty, not_set, unsupported, unsupported_field, unsupported_variant,
 };
-use super::literal::literal_node;
+use super::literal::literal;
 use super::names::parse_attribute_name;
 use super::types::data_type;
 use super::{Result, Translator};
@@ -62,7 +62,7 @@ impl Translator<'_> {
             return Err(expression_not_set());
         };
         let node = match kind {
-            ExprType::Literal(l) => literal_node(l)?,
+            ExprType::Literal(l) => ExprNode::Literal(literal(l)?),
             ExprType::UnresolvedAttribute(a) => {
                 if a.is_metadata_column == Some(true) {
                     return Err(unsupported_field(
@@ -104,8 +104,10 @@ impl Translator<'_> {
             }
             ExprType::Cast(c) => {
                 let to = match &c.cast_to_type {
-                    Some(CastToType::Type(t)) => data_type(t)?,
-                    Some(CastToType::TypeStr(s)) => krishiv_types::parse_data_type(s)?,
+                    Some(CastToType::Type(t)) => data_type(t)?.refuse_collations()?,
+                    Some(CastToType::TypeStr(s)) => {
+                        krishiv_types::parse_data_type(s)?.refuse_collations()?
+                    }
                     None => {
                         return Err(not_set(
                             "spark.connect.Expression.Cast",

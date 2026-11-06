@@ -332,14 +332,14 @@ fn collate_and_collated_casts() {
     };
     let e = translate_expression(&collate("utf8_lcase"), &conf()).unwrap();
     let ExprNode::Collate {
-        expr,
+        expr: value,
         collation,
         name,
     } = &e.node
     else {
         panic!("not a COLLATE: {e:?}");
     };
-    assert!(matches!(&expr.node, ExprNode::Column(c) if c.name == ["a"]));
+    assert!(matches!(&value.node, ExprNode::Column(c) if c.name == ["a"]));
     assert_eq!(
         *collation,
         krishiv_types::Collation::parse("UTF8_LCASE").unwrap()
@@ -352,25 +352,31 @@ fn collate_and_collated_casts() {
     // A collation that is not a string literal stays an ordinary call.
     let e = translate_expression(&func("collate", vec![attr("a"), attr("b")]), &conf()).unwrap();
     assert_eq!(function(&e).name, "collate");
-    // A cast to a collated string, by type and by DDL string.
-    let lcase = || {
-        krishiv_types::DataType::collated_string(
-            krishiv_types::Collation::parse("UTF8_LCASE").unwrap(),
-        )
-    };
-    let by_type = CastToType::Type(proto_type(dt::Kind::String(dt::String {
-        collation: "UTF8_LCASE".into(),
-        ..dt::String::default()
-    })));
+    // `collate` with DISTINCT is an ordinary call, not the COLLATE form.
+    let distinct = expr(ExprType::UnresolvedFunction(
+        expression::UnresolvedFunction {
+            function_name: "collate".into(),
+            arguments: vec![attr("a"), lit(LiteralType::String("utf8_lcase".into()))],
+            is_distinct: true,
+            is_user_defined_function: false,
+            is_internal: None,
+        },
+    ));
+    let e = translate_expression(&distinct, &conf()).unwrap();
+    assert_eq!(function(&e).name, "collate");
+    // A cast to a collated string, by type or by DDL string, stays refused until Connect types
+    // are gated by profile and backed by a golden (Opus review of #531).
     for to in [
-        by_type,
+        CastToType::Type(proto_type(dt::Kind::String(dt::String {
+            collation: "UTF8_LCASE".into(),
+            ..dt::String::default()
+        }))),
         CastToType::TypeStr("string collate UTF8_LCASE".into()),
     ] {
-        let e = translate_expression(&cast(Some(to), 0), &conf()).unwrap();
-        let ExprNode::Cast { to, .. } = &e.node else {
-            panic!("not a cast: {e:?}");
-        };
-        assert_eq!(*to, lcase());
+        assert_eq!(
+            err(&cast(Some(to), 0)).error_class(),
+            ErrorClass::KrishivUnsupportedFeature
+        );
     }
 }
 
