@@ -270,9 +270,9 @@ pub fn builtins() -> &'static Registry {
 
 /// Whether `name` is one Spark's grammar owns (`TIMESTAMPADD` and `TIMESTAMPDIFF`): it has
 /// a definition but no row in Spark's function catalog, and the lowering
-/// reaches it through the keyword-unit forms. A call spelled as an ordinary
-/// function (`timestampadd(col, 1, ts)`) also resolves here, where Spark says
-/// `UNRESOLVED_ROUTINE`: a known divergence.
+/// reaches it through the keyword-unit forms. The analyzer refuses a call
+/// spelled as an ordinary function (`timestampadd(col, 1, ts)`: a unit that
+/// is not a string literal) with `UNRESOLVED_ROUTINE`, as Spark does.
 #[must_use]
 pub fn is_grammar_only(name: &str) -> bool {
     grammar_row(name).is_some()
