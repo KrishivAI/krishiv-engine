@@ -288,8 +288,30 @@ fn range_value_signed(
     if let Some(inner) = crate::expr::negated(x) {
         return range_value_signed(inner, key, !negate);
     }
-    let ExprNode::Literal(l) = &x.node else {
-        return None;
+    // `CAST('inf' AS FLOAT)` (written, or the analyzer's implicit cast of a string bound) is the string read as that
+    // float type, for a float or double key.
+    let cast_text;
+    let l = match &x.node {
+        ExprNode::Literal(l) => l,
+        ExprNode::Cast {
+            expr,
+            to: to @ (T::Float | T::Double),
+            ..
+        } if matches!(key, T::Float | T::Double)
+            && matches!(&expr.node, ExprNode::Literal(Literal::String(_))) =>
+        {
+            let ExprNode::Literal(Literal::String(text)) = &expr.node else {
+                return None;
+            };
+            let v = parse_float_text(text)?;
+            cast_text = if matches!(to, T::Float) {
+                Literal::Float(v as f32)
+            } else {
+                Literal::Double(v)
+            };
+            &cast_text
+        }
+        _ => return None,
     };
     // A day-time interval bound over a date (ending in DAY, so whole days) or a timestamp key
     // (microseconds).
@@ -323,6 +345,11 @@ fn range_value_signed(
         Double(f64),
     }
     let lit = match l {
+        // A string bound is cast to a FLOAT or DOUBLE key's type (Spark's `Cast` of the string: `'inf'` and `'NaN'`
+        // are values). Text this parser does not know stays unsupported rather than guessed.
+        Literal::String(text) if matches!(key, T::Float | T::Double) => {
+            Lit::Double(parse_float_text(text)?)
+        }
         Literal::Byte(v) => Lit::Exact(i128::from(*v), 0),
         Literal::Short(v) => Lit::Exact(i128::from(*v), 0),
         Literal::Integer(v) => Lit::Exact(i128::from(*v), 0),
@@ -374,6 +401,37 @@ fn range_value_signed(
         },
         _ => None,
     }
+}
+
+/// A string cast to `DOUBLE` as Spark's cast reads it: surrounding whitespace is trimmed, `NaN`, `Inf`, `Infinity`
+/// (any case, optionally signed) are the special values, and plain decimal text parses. `None` for anything else
+/// (Java also accepts `1d`, `1f` and hexadecimal floats; those stay unsupported here).
+fn parse_float_text(text: &str) -> Option<f64> {
+    let t = text.trim();
+    let (sign, body) = match t.strip_prefix('-') {
+        Some(rest) => (-1.0, rest),
+        None => (1.0, t.strip_prefix('+').unwrap_or(t)),
+    };
+    if body.eq_ignore_ascii_case("nan") {
+        return Some(f64::NAN);
+    }
+    if body.eq_ignore_ascii_case("inf") || body.eq_ignore_ascii_case("infinity") {
+        return Some(sign * f64::INFINITY);
+    }
+    if body.is_empty()
+        || !body
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-'))
+    {
+        return None;
+    }
+    body.parse::<f64>().ok().map(|v| sign * v)
+}
+
+/// Whether the `RANGE` bound `x` (or the negation of one) is a string literal.
+fn is_string_bound(x: &Arc<Expr>) -> bool {
+    let x = crate::expr::negated(x).unwrap_or(x);
+    matches!(&x.node, ExprNode::Literal(Literal::String(_)))
 }
 
 /// The value of a frame offset: a constant, or the negation of one (`n
@@ -1258,10 +1316,32 @@ impl Resolver<'_> {
             match &key {
                 t if numeric(t) => {
                     if !numeric(&bt) {
-                        return Err(unsupported(
-                            "a non-numeric RANGE window frame bound",
-                            origin,
-                        ));
+                        // A string literal is cast to the key's type: a float key reads `'inf'`/`'NaN'`
+                        // (`range_value` below); any other numeric key raises what the cast raises.
+                        if !(matches!(bt, T::String) && is_string_bound(x)) {
+                            return Err(unsupported(
+                                "a non-numeric RANGE window frame bound",
+                                origin,
+                            ));
+                        }
+                        if !matches!(key, T::Float | T::Double) {
+                            let cast = Arc::new(Expr::new(ExprNode::Cast {
+                                expr: Arc::clone(crate::expr::negated(x).unwrap_or(x)),
+                                to: key.clone(),
+                                mode: crate::expr::CastMode::Default,
+                            }));
+                            match self.fold(&cast, self.ctx.conf.ansi) {
+                                Some(Constant::Error(e)) => {
+                                    return Err(AnalysisError::new(e, origin));
+                                }
+                                _ => {
+                                    return Err(unsupported(
+                                        "a string RANGE window frame bound",
+                                        origin,
+                                    ));
+                                }
+                            }
+                        }
                     }
                 }
                 T::String | T::Boolean => {
