@@ -51,4 +51,22 @@ write("unannotated", Seq("spark.sql.parquet.variant.annotateLogicalType.enabled"
 write("shredded", Seq("spark.sql.variant.forceShreddingSchemaForTest" -> "a bigint, b string"))
 write("shredded-nested", Seq("spark.sql.variant.forceShreddingSchemaForTest" ->
   "a bigint, b string, e struct<f double, g array<boolean>>, c array<variant>"))
+// The row-6 objects shred these types (dates, timestamps, decimals, floats, binary, ints).
+write("shredded-types", Seq("spark.sql.variant.forceShreddingSchemaForTest" ->
+  "a int, b string, d date, t timestamp, n timestamp_ntz, dec decimal(20, 3), f float, bin binary, flag boolean"))
+// Variants inside a struct, an array and a map value: found through the footer's Spark schema.
+def nestedColumns(): Unit = {
+  val dir = "/tmp/variant-nested-columns"
+  spark.sql(rowsSql).selectExpr("id", "named_struct('x', v, 'n', id) AS s", "array(v, NULL) AS a",
+    "map('k', v) AS m").coalesce(1).write.mode("overwrite").parquet(dir)
+  val part = new java.io.File(dir).listFiles().filter(_.getName.endsWith(".parquet")).head
+  Files.copy(part.toPath, Paths.get("/out/nested-columns.parquet"), StandardCopyOption.REPLACE_EXISTING)
+  val back = spark.read.parquet("/out/nested-columns.parquet").selectExpr("id",
+    "to_json(s.x) AS sx", "to_json(a[0]) AS a0", "to_json(m['k']) AS mk").orderBy("id").collect()
+  def q(x: Any): String = if (x == null) "null" else "\"" + x.toString.flatMap {
+    case '"' => "\\\""; case '\\' => "\\\\"; case c => c.toString } + "\""
+  val lines = back.map(r => s"""  {"id": ${r.getLong(0)}, "sx": ${q(r.get(1))}, "a0": ${q(r.get(2))}, "mk": ${q(r.get(3))}}""")
+  Files.write(Paths.get("/out/nested-columns.json"), ("[\n" + lines.mkString(",\n") + "\n]\n").getBytes("UTF-8"))
+}
+nestedColumns()
 System.exit(0)

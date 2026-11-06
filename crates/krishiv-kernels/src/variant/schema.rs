@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `schema_of_variant` and `schema_of_variant_agg` (Spark 4.2.0
-//! `SchemaOfVariant`): the type of a variant value, merged over the
-//! elements of an array (and over rows by the aggregate) with
+//! `schema_of_variant` (Spark 4.2.0 `SchemaOfVariant`): the type of a
+//! variant value, merged over the elements of an array with
 //! `JsonInferSchema.compatibleType(_, _, VariantType)`, printed as
 //! `DataType.sql` with objects as `OBJECT<name: type, ...>`.
 //!
@@ -13,6 +12,10 @@
 //! wider range and scale (`DOUBLE` past 38 digits), `BIGINT` as
 //! `DECIMAL(20,0)`, `DATE` and the timestamps widen, objects merge field by
 //! field (sorted names), arrays by element, and anything else is `VARIANT`.
+//! [`Schema::merge`] is also the merge `schema_of_variant_agg` needs. Known
+//! gap: Spark first merges two objects of the same size whose names match
+//! case-insensitively as one object (`findTypeForComplex`); here they keep
+//! both spellings.
 
 use krishiv_common::error::{KrishivError, MalformedVariant};
 use krishiv_types::variant::{VariantKind, VariantRef, digits, strip_trailing_zeros};

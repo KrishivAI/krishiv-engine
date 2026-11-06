@@ -84,7 +84,7 @@ pub struct ParquetMetadata {
     pub(crate) legacy_writer: bool,
     /// The top-level columns that are variants (see [`super::variant`]):
     /// the decoder turns their physical groups into the in-memory form.
-    pub(crate) variants: std::collections::HashSet<String>,
+    pub(crate) variants: super::variant::Variants,
     statistics: FileStatistics,
     heap: usize,
 }
@@ -256,21 +256,22 @@ fn describe_checked(
     let reader_options = ArrowReaderOptions::new().with_schema(Arc::clone(&hint));
     let reader = ArrowReaderMetadata::try_new(Arc::clone(meta), reader_options.clone())
         .map_err(footer_error)?;
-    let variants =
-        super::variant::variant_columns(descr, meta.file_metadata().key_value_metadata());
+    let typed = super::intervals::typed(
+        reader
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| Arc::new(spark_read_field(f)))
+            .collect::<Vec<FieldRef>>(),
+        meta.file_metadata().key_value_metadata(),
+    );
+    let (fields, variants) = super::variant::Variants::engine_fields(
+        descr,
+        meta.file_metadata().key_value_metadata(),
+        &typed,
+    );
     let schema = Arc::new(Schema::new_with_metadata(
-        super::intervals::typed(
-            reader
-                .schema()
-                .fields()
-                .iter()
-                .map(|f| Arc::new(spark_read_field(f)))
-                .collect::<Vec<FieldRef>>(),
-            meta.file_metadata().key_value_metadata(),
-        )
-        .iter()
-        .map(|f| super::variant::engine_field(f, &variants))
-        .collect::<Vec<FieldRef>>(),
+        fields,
         reader.schema().metadata().clone(),
     ));
     let legacy_writer = legacy_binary_stats(meta.file_metadata().created_by());

@@ -13,8 +13,12 @@
 //! as the specification's `construct_variant` does: a missing `typed_value`
 //! and `value` is a missing field (a variant null at the top), an object
 //! merges its shredded fields with the residual object in `value`, an array
-//! rebuilds each element. Rebuilt values get a fresh dictionary, so they are
-//! equal to the stored ones by `to_json`, not by bytes.
+//! rebuilds each element. Rebuilt values get a fresh dictionary (and
+//! integers their smallest width), so they are equal to the stored ones by
+//! `to_json`, not by bytes. Variants nested in structs, arrays and map values
+//! are found through the footer's Spark schema ([`Variants`]). A field both
+//! shredded and in the residual object is corrupt, as is a nanosecond
+//! timestamp (Spark 4.2.0 reads neither).
 //!
 //! **Writing** is unshredded, as Spark 4.2 writes by default: the group
 //! `{metadata, value}` (both required binary) annotated `VARIANT(1)`
@@ -27,7 +31,6 @@ use arrow_array::cast::AsArray as _;
 use arrow_array::types::{
     Date32Type, Decimal32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
     Int16Type, Int32Type, Int64Type, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType,
 };
 use arrow_array::{Array, ArrayRef, StructArray};
 use arrow_schema::{DataType, FieldRef, TimeUnit};
@@ -52,38 +55,72 @@ fn other(e: KrishivError) -> FormatError {
     FormatError::Other(e)
 }
 
-/// The names of the top-level fields of the file that are variants.
-pub(super) fn variant_columns(
-    descr: &SchemaDescriptor,
-    footer: Option<&Vec<KeyValue>>,
-) -> HashSet<String> {
-    let spark = footer
+/// The footer's Spark schema, when it has one that parses.
+fn spark_schema(footer: Option<&Vec<KeyValue>>) -> Option<SparkType> {
+    footer
         .into_iter()
         .flatten()
         .find(|kv| kv.key == ROW_METADATA_KEY)
         .and_then(|kv| kv.value.as_deref())
-        .and_then(|json| SparkType::from_json(json).ok());
-    let spark_variant = |name: &str| match &spark {
-        Some(SparkType::Struct(s)) => s
-            .fields()
+        .and_then(|json| SparkType::from_json(json).ok())
+}
+
+/// The file's variants: what the decoder needs to turn decoded groups into
+/// the in-memory form.
+#[derive(Debug, Default)]
+pub(crate) struct Variants {
+    /// The top-level columns that hold a variant at any depth (read whole:
+    /// their shredded leaves are not in the engine schema).
+    pub(crate) roots: HashSet<String>,
+}
+
+impl Variants {
+    /// The engine fields for `fields` (the reader's top-level fields) of a
+    /// file with `descr` and `footer`: a group annotated `VARIANT`, or typed
+    /// `variant` by the footer's Spark schema at any depth (inside structs,
+    /// arrays and map values), becomes the in-memory variant.
+    pub(super) fn engine_fields(
+        descr: &SchemaDescriptor,
+        footer: Option<&Vec<KeyValue>>,
+        fields: &[FieldRef],
+    ) -> (Vec<FieldRef>, Self) {
+        let spark = spark_schema(footer);
+        let annotated: HashSet<&str> = descr
+            .root_schema()
+            .get_fields()
             .iter()
-            .any(|f| f.name() == name && *f.data_type() == SparkType::Variant),
-        _ => false,
-    };
-    descr
-        .root_schema()
-        .get_fields()
-        .iter()
-        .filter(|t| {
-            t.is_group()
-                && has_children(t)
-                && (matches!(
-                    t.get_basic_info().logical_type_ref(),
-                    Some(LogicalType::Variant(_))
-                ) || spark_variant(t.name()))
-        })
-        .map(|t| t.name().to_owned())
-        .collect()
+            .filter(|t| {
+                t.is_group()
+                    && has_children(t)
+                    && matches!(
+                        t.get_basic_info().logical_type_ref(),
+                        Some(LogicalType::Variant(_))
+                    )
+            })
+            .map(|t| t.name())
+            .collect();
+        let mut roots = HashSet::new();
+        let out = fields
+            .iter()
+            .map(|f| {
+                let declared = match &spark {
+                    _ if annotated.contains(f.name().as_str()) => Some(SparkType::Variant),
+                    Some(SparkType::Struct(s)) => s
+                        .fields()
+                        .iter()
+                        .find(|x| x.name() == f.name())
+                        .map(|x| x.data_type().clone()),
+                    _ => None,
+                };
+                let engine = engine_field(f, declared.as_ref());
+                if engine.data_type() != f.data_type() {
+                    roots.insert(f.name().clone());
+                }
+                engine
+            })
+            .collect();
+        (out, Self { roots })
+    }
 }
 
 /// Whether a group has the `metadata` and `value` (or `typed_value`)
@@ -93,13 +130,143 @@ fn has_children(t: &TypePtr) -> bool {
     names.contains(&"metadata") && (names.contains(&"value") || names.contains(&"typed_value"))
 }
 
-/// `field` as the engine's variant field, when `variants` names it.
-pub(super) fn engine_field(field: &FieldRef, variants: &HashSet<String>) -> FieldRef {
-    if variants.contains(field.name()) {
-        Arc::new(SparkType::Variant.to_arrow_field(field.name(), field.is_nullable()))
-    } else {
-        Arc::clone(field)
+/// Whether an Arrow struct has a variant's children.
+fn variant_shaped(children: &arrow_schema::Fields) -> bool {
+    let has = |n: &str| children.iter().any(|c| c.name() == n);
+    has("metadata") && (has("value") || has("typed_value"))
+}
+
+/// `field` with its variants (as `spark` declares them) in the in-memory form.
+fn engine_field(field: &FieldRef, spark: Option<&SparkType>) -> FieldRef {
+    let t = engine_type(field.data_type(), spark);
+    if &t == field.data_type() {
+        return Arc::clone(field);
     }
+    if krishiv_types::arrow::is_variant_struct(&t) {
+        return Arc::new(SparkType::Variant.to_arrow_field(field.name(), field.is_nullable()));
+    }
+    Arc::new(field.as_ref().clone().with_data_type(t))
+}
+
+fn engine_type(arrow: &DataType, spark: Option<&SparkType>) -> DataType {
+    match (arrow, spark) {
+        (DataType::Struct(c), Some(SparkType::Variant)) if variant_shaped(c) => {
+            SparkType::Variant.to_arrow()
+        }
+        (DataType::Struct(children), Some(SparkType::Struct(s))) => DataType::Struct(
+            children
+                .iter()
+                .map(|c| {
+                    let declared = s.fields().iter().find(|x| x.name() == c.name());
+                    engine_field(c, declared.map(krishiv_types::StructField::data_type))
+                })
+                .collect(),
+        ),
+        (DataType::List(e), Some(SparkType::Array(a))) => {
+            DataType::List(engine_field(e, Some(a.element_type())))
+        }
+        (DataType::LargeList(e), Some(SparkType::Array(a))) => {
+            DataType::LargeList(engine_field(e, Some(a.element_type())))
+        }
+        (DataType::Map(entries, sorted), Some(SparkType::Map(m))) => match entries.data_type() {
+            DataType::Struct(kv) if kv.len() == 2 => {
+                let kv: arrow_schema::Fields = vec![
+                    Arc::clone(&kv[0]),
+                    engine_field(&kv[1], Some(m.value_type())),
+                ]
+                .into();
+                DataType::Map(
+                    Arc::new(
+                        entries
+                            .as_ref()
+                            .clone()
+                            .with_data_type(DataType::Struct(kv)),
+                    ),
+                    *sorted,
+                )
+            }
+            _ => arrow.clone(),
+        },
+        _ => arrow.clone(),
+    }
+}
+
+/// `a` (decoded with the file's physical types) as `target`, its engine
+/// type: every variant group inside converted with [`to_memory`].
+///
+/// # Errors
+/// As [`to_memory`]; `Corrupt` when the shapes do not match.
+pub(super) fn to_engine(a: &ArrayRef, target: &DataType) -> FormatResult<ArrayRef> {
+    if a.data_type() == target {
+        return Ok(Arc::clone(a));
+    }
+    if krishiv_types::arrow::is_variant_struct(target) {
+        return to_memory(a);
+    }
+    let shape = || corrupt("inside a column of another shape");
+    Ok(match (a.data_type(), target) {
+        (DataType::Struct(_), DataType::Struct(fields)) => {
+            let s = a.as_struct();
+            let children = s
+                .columns()
+                .iter()
+                .zip(fields.iter())
+                .map(|(c, f)| to_engine(c, f.data_type()))
+                .collect::<FormatResult<Vec<_>>>()?;
+            Arc::new(
+                StructArray::try_new(fields.clone(), children, s.nulls().cloned())
+                    .map_err(|_| shape())?,
+            )
+        }
+        (DataType::List(_), DataType::List(f)) => {
+            let l = a.as_list::<i32>();
+            Arc::new(
+                arrow_array::ListArray::try_new(
+                    Arc::clone(f),
+                    l.offsets().clone(),
+                    to_engine(l.values(), f.data_type())?,
+                    l.nulls().cloned(),
+                )
+                .map_err(|_| shape())?,
+            )
+        }
+        (DataType::LargeList(_), DataType::LargeList(f)) => {
+            let l = a.as_list::<i64>();
+            Arc::new(
+                arrow_array::LargeListArray::try_new(
+                    Arc::clone(f),
+                    l.offsets().clone(),
+                    to_engine(l.values(), f.data_type())?,
+                    l.nulls().cloned(),
+                )
+                .map_err(|_| shape())?,
+            )
+        }
+        (DataType::Map(..), DataType::Map(entries, sorted)) => {
+            let m = a.as_map();
+            let DataType::Struct(kv) = entries.data_type() else {
+                return Err(shape());
+            };
+            let values = to_engine(m.values(), kv[1].data_type())?;
+            let entry = StructArray::try_new(
+                kv.clone(),
+                vec![Arc::clone(m.keys()), values],
+                m.entries().nulls().cloned(),
+            )
+            .map_err(|_| shape())?;
+            Arc::new(
+                arrow_array::MapArray::try_new(
+                    Arc::clone(entries),
+                    m.offsets().clone(),
+                    entry,
+                    m.nulls().cloned(),
+                    *sorted,
+                )
+                .map_err(|_| shape())?,
+            )
+        }
+        _ => return Err(shape()),
+    })
 }
 
 /// The child `name` of `s`, if any.
@@ -135,6 +302,36 @@ pub(super) fn to_memory(col: &ArrayRef) -> FormatResult<ArrayRef> {
     let metadata = child(s, "metadata").ok_or_else(|| corrupt("without metadata"))?;
     let value = child(s, "value");
     let typed = child(s, "typed_value");
+    // Unshredded with every value present (Spark's default writes): the
+    // children as they are, on the in-memory carrier.
+    if typed.is_none()
+        && let Some(value) = value
+        && metadata.null_count() == 0
+        && value.null_count() == 0
+    {
+        let view = |a: &ArrayRef| -> FormatResult<ArrayRef> {
+            Ok(match a.data_type() {
+                DataType::BinaryView => Arc::clone(a),
+                DataType::Binary => {
+                    Arc::new(arrow_array::BinaryViewArray::from(a.as_binary::<i32>()))
+                }
+                DataType::LargeBinary => {
+                    Arc::new(arrow_array::BinaryViewArray::from(a.as_binary::<i64>()))
+                }
+                other => return Err(corrupt(&format!("with a {other} binary child"))),
+            })
+        };
+        let DataType::Struct(fields) = SparkType::Variant.to_arrow() else {
+            return Err(corrupt("type that is not a struct"));
+        };
+        return StructArray::try_new(
+            fields,
+            vec![view(metadata)?, view(value)?],
+            s.nulls().cloned(),
+        )
+        .map(|a| Arc::new(a) as ArrayRef)
+        .map_err(|e| corrupt(&e.to_string()));
+    }
     let mut out = VariantColumnBuilder::with_capacity(s.len());
     for i in 0..s.len() {
         if s.is_null(i) {
@@ -201,7 +398,7 @@ fn rebuild(
                 let pair = column
                     .as_struct_opt()
                     .ok_or_else(|| corrupt("with a shredded field that is not a group"))?;
-                let entry = w.field(start, f.name()).map_err(other)?;
+                let at = w.position() - start;
                 if rebuild(
                     w,
                     metadata,
@@ -209,8 +406,8 @@ fn rebuild(
                     child(pair, "typed_value"),
                     i,
                 )? {
-                    // A missing field writes nothing and has no entry.
-                    entries.push(entry);
+                    // A missing field writes nothing and has no key.
+                    entries.push(w.field_at(f.name(), at).map_err(other)?);
                 }
             }
             // A partially shredded object: the residual holds the rest.
@@ -221,7 +418,8 @@ fn rebuild(
                 for k in 0..r.len().map_err(other)? {
                     let key = r.field_key_at(k).map_err(other)?;
                     if shredded.contains(key) {
-                        continue;
+                        // The specification forbids it; Spark's reader fails.
+                        return Err(corrupt("with a field both shredded and in its value"));
                     }
                     entries.push(w.field(start, key).map_err(other)?);
                     w.append_variant(&r.field_at(k).map_err(other)?)
@@ -304,11 +502,9 @@ fn primitive(w: &mut VariantWriter, a: &ArrayRef, i: usize) -> FormatResult<()> 
                     .value(i)
                     .checked_mul(1000)
                     .ok_or_else(|| corrupt("with a timestamp past the range"))?,
-                TimeUnit::Nanosecond => a
-                    .as_primitive::<TimestampNanosecondType>()
-                    .value(i)
-                    .div_euclid(1000),
-                TimeUnit::Second => return Err(bad(a.data_type())),
+                // Nanoseconds are the nanosecond variant types, which
+                // Spark 4.2.0 does not read: refused, never truncated.
+                TimeUnit::Nanosecond | TimeUnit::Second => return Err(bad(a.data_type())),
             };
             if tz.is_some() {
                 w.timestamp(micros);
@@ -323,6 +519,7 @@ fn primitive(w: &mut VariantWriter, a: &ArrayRef, i: usize) -> FormatResult<()> 
             let b = bytes(a, i)?.ok_or_else(|| corrupt("with a NULL typed binary"))?;
             w.binary(b).map_err(other)?;
         }
+        // `FIXED_LEN_BYTE_ARRAY(16)`: the only 16-byte shredded type is UUID.
         DataType::FixedSizeBinary(16) => {
             let b: [u8; 16] = a
                 .as_fixed_size_binary()

@@ -247,6 +247,19 @@ impl VariantWriter {
         })
     }
 
+    /// A field entry for `key` whose value was written at `offset` (relative
+    /// to its object's start): for a value written before it is known to
+    /// exist, so an absent field adds no key.
+    ///
+    /// # Errors
+    /// As [`Self::add_key`].
+    pub fn field_at(&mut self, key: &str, offset: usize) -> Result<FieldEntry, KrishivError> {
+        Ok(FieldEntry {
+            id: self.add_key(key)?,
+            offset,
+        })
+    }
+
     /// Turns the values written since `start` into an array whose elements
     /// begin at `offsets` (relative to `start`).
     ///

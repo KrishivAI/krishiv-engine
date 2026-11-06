@@ -23,6 +23,7 @@ const FILES: &[&str] = &[
     "unannotated",
     "shredded",
     "shredded-nested",
+    "shredded-types",
 ];
 
 fn fixtures() -> PathBuf {
@@ -221,4 +222,39 @@ fn to_variant_object_builds_objects() {
     let e = block_on(async { s.sql("SELECT to_variant_object(1)").await?.collect().await })
         .unwrap_err();
     assert!(e.to_string().contains("CAST_WITHOUT_SUGGESTION"), "{e}");
+}
+
+/// Variants nested in a struct, an array and a map value (found through the
+/// footer's Spark schema) read as Spark reads them.
+#[test]
+fn nested_variant_columns_read_as_spark_reads_them() {
+    let s = session();
+    let path = fixtures().join("nested-columns.parquet");
+    let df = s.read().parquet([path.to_str().unwrap().to_owned()]);
+    block_on(df.create_or_replace_temp_view("t")).unwrap();
+    let out = block_on(async {
+        s.sql("SELECT to_json(s.x), to_json(a[0]), to_json(m['k']) FROM t ORDER BY id")
+            .await?
+            .collect()
+            .await
+    })
+    .unwrap();
+    let mut got = vec![];
+    for b in &out {
+        for i in 0..b.num_rows() {
+            let text = |c: usize| {
+                let a = b.column(c);
+                (!a.is_null(i)).then(|| a.as_string_view().value(i).to_owned())
+            };
+            got.push((text(0), text(1), text(2)));
+        }
+    }
+    let text = std::fs::read_to_string(fixtures().join("nested-columns.json")).unwrap();
+    let rows: Vec<Value> = serde_json::from_str(&text).unwrap();
+    let s = |v: &Value| v.as_str().map(str::to_owned);
+    let want: Vec<_> = rows
+        .iter()
+        .map(|r| (s(&r["sx"]), s(&r["a0"]), s(&r["mk"])))
+        .collect();
+    assert_eq!(got, want);
 }

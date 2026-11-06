@@ -191,7 +191,7 @@ fn projection_mask(meta: &ParquetMetadata, paths: &[ColumnPath]) -> (ProjectionM
     for p in paths {
         // A variant is read whole: its shredded `typed_value` leaves are not
         // in the engine schema the paths come from.
-        let whole = meta.variants.contains(p.root());
+        let whole = meta.variants.roots.contains(p.root());
         let mut hits: Vec<usize> = (0..leaves.len())
             .filter(|&i| leaves[i].starts_with(&p.0) && !whole)
             .collect();
@@ -467,8 +467,8 @@ impl ParquetDecoder {
             )
             .map_err(|e| FormatError::Corrupt(e.to_string()))?;
         }
-        if !self.meta.variants.is_empty() {
-            batch = variant_columns(&batch, &self.meta.variants)?;
+        if !self.meta.variants.roots.is_empty() {
+            batch = variant_columns(&batch, &self.meta.schema, &self.meta.variants.roots)?;
         }
         let projected = project_batch(&batch, &self.projection).map_err(FormatError::Other)?;
         let mut columns = projected
@@ -1081,21 +1081,26 @@ fn predicate_mask(
     (mask, worth)
 }
 
-/// `batch` with its variant columns in the in-memory form.
+/// `batch` with its variant columns (top level or nested in the `roots`)
+/// in the in-memory form of `engine`, the file's engine schema.
 fn variant_columns(
     batch: &RecordBatch,
-    variants: &std::collections::HashSet<String>,
+    engine: &arrow_schema::Schema,
+    roots: &std::collections::HashSet<String>,
 ) -> FormatResult<RecordBatch> {
     let schema = batch.schema();
     let mut fields = Vec::with_capacity(batch.num_columns());
     let mut columns = Vec::with_capacity(batch.num_columns());
     for (f, c) in schema.fields().iter().zip(batch.columns()) {
-        if variants.contains(f.name()) {
-            columns.push(super::variant::to_memory(c)?);
-            fields.push(super::variant::engine_field(f, variants));
-        } else {
-            columns.push(Arc::clone(c));
-            fields.push(Arc::clone(f));
+        match engine.field_with_name(f.name()) {
+            Ok(target) if roots.contains(f.name()) => {
+                columns.push(super::variant::to_engine(c, target.data_type())?);
+                fields.push(Arc::new(target.clone()));
+            }
+            _ => {
+                columns.push(Arc::clone(c));
+                fields.push(Arc::clone(f));
+            }
         }
     }
     RecordBatch::try_new_with_options(
