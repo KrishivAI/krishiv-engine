@@ -348,7 +348,7 @@ def test_a_query_report_names_the_top_gap_the_flags_the_remainder_and_the_load()
     for part in (
         "## q03",
         "Process CPU: Krishiv 24.000 s, DuckDB 8.000 s, ratio 3.00x, gap +16.000 s.",
-        "Krishiv: process CPU 24.000 s, operator seconds 32.220 s, not attributed to any operator -8.220 s",
+        "Krishiv: process CPU 24.000 s, operator seconds 32.220 s, not attributed to any operator -8.220 s (negative:",
         "DuckDB: process CPU 8.000 s, operator seconds 8.600 s",
         "load average (1 min) 2.5 at start, 30.0 at end, bound 16: **INDICATIVE ONLY**",
         "load average (1 min) 1.5 at start, 2.5 at end, bound 16: within bound",
@@ -391,7 +391,7 @@ def test_summary_format_golden():
 def test_the_geomean_covers_only_the_queries_that_ran():
     text = gd.summary_table(_results(), "tpch", 100, 12)
     # 3.0x and 3.0625x: geomean sqrt(3 * 3.0625) = 3.03x over the 2 queries that ran, not the failed one.
-    assert "over 2 queries: 3.03x" in text
+    assert "over 2 queries on process CPU: 3.03x" in text
     assert "not compared: RunnerError" in text
 
 
@@ -497,3 +497,13 @@ def test_perf_samples_after_the_profiling_engines_are_shut_down(tmp_path: Path, 
     gd.run_gapdiff("tpch", 1, ["q01"], dataset="tpch-duckdb", threads=1, out_dir=out2, perf=True)
     assert (out2 / "q01.md").exists()
     assert not (out2 / "perf").exists()
+
+
+def test_the_geomean_is_kept_per_basis():
+    rs = [
+        gd.QueryResult("q01", 9.0, 3.0, "cpu", "scan", 0),
+        gd.QueryResult("q02", 40.0, 10.0, "operator seconds", "scan", 0),
+    ]
+    text = gd.summary_table(rs, "tpch", 1, 4)
+    assert "over 1 queries on process CPU: 3.00x." in text
+    assert "over 1 queries on operator seconds: 4.00x. Not comparable with the process CPU ratios." in text

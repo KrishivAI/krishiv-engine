@@ -40,7 +40,10 @@ kinds in proportion to their operator seconds, which is a guess for the kind tha
 seconds and say so. Scan time is not like for like either: DuckDB's includes waiting for reads, Krishiv's excludes it
 (its IO wait is printed beside the scan row), so both engines get ``--warmup`` unprofiled runs first (default 1) and the
 second engine does not read a page cache the first one warmed. The seconds are profile numbers, not benchmark timings
-(use ``abba`` for those). Each query prints the 1-minute load average at its start and end and is marked indicative
+(use ``abba`` for those). The process-CPU window covers the ``PLAN`` command (planning, execution and writing the
+profile JSON, with detailed metrics on) for Krishiv and the ``EXPLAIN ANALYZE`` call for DuckDB, read from ``/proc`` at
+clock-tick resolution (10 ms), so a query of a few tens of milliseconds has a coarse CPU figure. Each query prints the
+1-minute load average at its start and end and is marked indicative
 when it passes the harness bound (``abba.load_bound``).
 
 **Rows.** Krishiv rows in are summed over the operators that consume (not the source half of a breaker) and rows out
@@ -70,7 +73,8 @@ folded stacks ``perf/<query>.folded`` (and ``.svg`` when ``inferno-flamegraph`` 
 runner builds go straight into ``inferno-diff-folded`` (or use ``flamediff``, which runs both).
 
 Not here yet (recorded on the queue item): hardware counters per kind (``perf stat`` events, IPC, instructions per
-row) and the module split per kind from perf's leaf frames.
+row), the module split per kind from perf's leaf frames, CPU split by kind from perf samples (not scaled operator
+seconds), blocked time per pipeline, and a real multi-driver profile as a fixture for the ``busy`` and ``skew`` flags.
 """
 
 from __future__ import annotations
@@ -136,7 +140,7 @@ ROWS = [
     ("join_other", "other joins", True),
     ("aggregate", "aggregate (total)", False),
     ("agg_partial", "partial", True),
-    ("agg_final", "final / fused", True),
+    ("agg_final", "final (emit, if fused)", True),
     ("sort", "sort / top-n", False),
     ("exchange", "exchange", False),
     ("other", "other", False),
@@ -436,6 +440,8 @@ class Basis:
 def _basis_line(name: str, b: Basis) -> str:
     cpu = "no process CPU reading" if b.process_cpu is None else f"process CPU {b.process_cpu:.3f} s"
     rest = "" if b.unattributed is None else f", not attributed to any operator {b.unattributed:+.3f} s"
+    if b.unattributed is not None and b.unattributed < 0:
+        rest += " (negative: threads waited for a CPU, so operator seconds exceed CPU; the load inflates them)"
     return f"{name}: {cpu}, operator seconds {b.operator_secs:.3f} s{rest}"
 
 
@@ -630,13 +636,17 @@ def summary_table(results: list[QueryResult], suite: str, sf: float, threads: in
             f"| {r.krishiv_cpu - r.duckdb_cpu:+.3f} | {r.basis} | {r.top_gap_kind or '-'} | {r.flagged_pipelines} "
             f"| {'INDICATIVE' if r.indicative else 'ok'} |"
         )
-    if ok:
+    for basis, what in (("cpu", "process CPU"), ("operator seconds", "operator seconds")):
+        mine = [r for r in ok if r.basis == basis]
+        if not mine:
+            continue
         geo = 1.0
-        for r in ok:
+        for r in mine:
             geo *= (r.krishiv_cpu or 0.0) / (r.duckdb_cpu or 1.0)
         lines += [
             "",
-            f"Geometric mean of the ratios over {len(ok)} queries: {_ratio(geo ** (1 / len(ok)))}.",
+            f"Geometric mean of the ratios over {len(mine)} queries on {what}: {_ratio(geo ** (1 / len(mine)))}."
+            + (" Not comparable with the process CPU ratios." if basis != "cpu" else ""),
         ]
     return "\n".join(lines) + "\n"
 

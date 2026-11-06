@@ -8,4 +8,4 @@ Process CPU seconds of the profiled run for each engine (`basis` says when a que
 | q13 | 24.500 | 8.000 | 3.06x | +16.500 | cpu | join | 2 | INDICATIVE |
 | q15 | - | - | - | - | - | not compared: RunnerError: [KRISHIV_UNSUPPORTED_FEATURE] a view over a CTE | - | - |
 
-Geometric mean of the ratios over 2 queries: 3.03x.
+Geometric mean of the ratios over 2 queries on process CPU: 3.03x.
