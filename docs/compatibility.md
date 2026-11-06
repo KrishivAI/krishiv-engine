@@ -50,5 +50,5 @@ Measured against Apache Spark v4.2.0's own SQL test files (19284 statements in 3
 | Check | Passed | Total | Rate |
 | --- | --- | --- | --- |
 | Parse | 18796 | 18827 | 99.8% |
-| Error class of negative cases | 3449 | 3857 | 89.4% |
-| Result rows | 13636 | 15363 | 88.7% |
+| Error class of negative cases | 3458 | 3857 | 89.6% |
+| Result rows | 13674 | 15363 | 89.0% |
