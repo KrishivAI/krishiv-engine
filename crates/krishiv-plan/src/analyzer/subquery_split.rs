@@ -619,7 +619,23 @@ pub(super) fn check_grouped_reads(
         if is_call(&x) || keys.iter().any(|k| **k == *x) {
             continue;
         }
-        if matches!(x.node, ExprNode::Subquery { .. }) {
+        if let ExprNode::Subquery { kind, plan } = &x.node {
+            // The existence join runs below the aggregate, once per input
+            // row: a nondeterministic value or subquery is not fixed within
+            // a group even when it reads only grouped columns, and would
+            // split it (Spark 4.2 fails such a query at run time).
+            let values_deterministic = match kind {
+                SubqueryKind::In(values) => {
+                    values.iter().all(super::super::sqlfn::is_deterministic)
+                }
+                _ => true,
+            };
+            if !values_deterministic || !super::plan_is_deterministic(plan) {
+                return Err(super::unsupported(
+                    "a nondeterministic subquery in an aggregate's output",
+                    origin,
+                ));
+            }
             let grouped = subquery_reads(&x)
                 .iter()
                 .all(|id| !from_input(*id) || key_cols.contains(id));
