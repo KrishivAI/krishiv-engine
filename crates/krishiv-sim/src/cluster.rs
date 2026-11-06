@@ -267,7 +267,7 @@ impl Inner {
         let inner = self.roots.execute(node, query).await?;
         Ok(Box::pin(Releasing {
             inner,
-            _release: release,
+            release: Some(release),
         }))
     }
 }
@@ -338,17 +338,24 @@ impl Drop for Release {
     }
 }
 
-/// The root stage's rows, releasing the job once dropped.
+/// The root stage's rows, releasing the job as soon as they end (the workers
+/// drop its map outputs while the caller may still hold the stream), or once
+/// dropped before that.
 struct Releasing {
     inner: BoxStream<'static, Result<Batch>>,
-    _release: Release,
+    release: Option<Release>,
 }
 
 impl Stream for Releasing {
     type Item = Result<Batch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.inner.as_mut().poll_next(cx)
+        let next = self.inner.as_mut().poll_next(cx);
+        if matches!(next, Poll::Ready(None)) {
+            // `Release` sends from its `Drop`, on this host's runtime.
+            self.release = None;
+        }
+        next
     }
 }
 
