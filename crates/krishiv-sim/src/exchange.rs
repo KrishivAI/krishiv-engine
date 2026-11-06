@@ -315,7 +315,7 @@ mod tests {
 
     #[test]
     fn a_fetch_answered_done_is_refused() {
-        let message = fetch_error(|| Reply::Done);
+        let message = fetch_error(|| Reply::Done(Vec::new()));
         assert!(message.contains("a fetch answered Done"), "{message}");
     }
 }

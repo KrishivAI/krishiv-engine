@@ -363,7 +363,10 @@ mod tests {
                 "{reply:?}"
             );
             // Releasing a job it does not hold is fine.
-            assert_eq!(ask(Request::Release { job: 99 }).await, Reply::Done);
+            assert_eq!(
+                ask(Request::Release { job: 99 }).await,
+                Reply::Done(Vec::new())
+            );
             Ok::<(), Box<dyn std::error::Error>>(())
         });
         sim.run().unwrap();
@@ -386,8 +389,10 @@ mod tests {
         };
         assert!(format!("{host:?}").starts_with("Host"));
         assert!(host.existing(5).is_none());
-        // A job's exchange is made once and reused.
-        assert!(Arc::ptr_eq(&host.exchange(5), &host.exchange(5)));
+        // A job's exchange and broadcast tables are made once and reused.
+        let (first, second) = (host.job(5), host.job(5));
+        assert!(Arc::ptr_eq(&first.0, &second.0));
+        assert!(Arc::ptr_eq(&first.1, &second.1));
         assert!(host.existing(5).is_some());
     }
 }

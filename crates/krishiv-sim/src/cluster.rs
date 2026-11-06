@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn an_unreachable_worker_fails_the_task() {
-        let (message, trace) = run_one(|| Reply::Done, "ghost");
+        let (message, trace) = run_one(|| Reply::Done(Vec::new()), "ghost");
         assert!(message.contains("connect to ghost"), "{message}");
         assert!(trace.is_empty(), "{trace:?}");
     }
