@@ -1000,17 +1000,19 @@ impl Session {
     /// The partition a `DESCRIBE ... PARTITION (...)` names (`DescribeTableCommand
     /// .describeDetailedPartitionInfo`): views refuse it, the table must be partitioned, the spec must name
     /// every partition column and the partition must exist.
+    /// `statement` names the command in errors (`DESC PARTITION`, `SHOW TABLE EXTENDED`).
     pub(crate) async fn described_partition(
         &self,
         name: &TableName,
         temp: bool,
         spec: &PartitionSpec,
         original: &str,
+        statement: &str,
     ) -> Result<CatalogPartition, KrishivError> {
         let written = self.written_spec(spec, original).await?;
         let forbidden = |object_type: &str| -> KrishivError {
             ForbiddenOperation {
-                statement: "DESC PARTITION".to_owned(),
+                statement: statement.to_owned(),
                 object_type: object_type.to_owned(),
                 object_name: quote_identifier(&name.name),
             }
@@ -1028,7 +1030,7 @@ impl Session {
         if table.view.is_some() {
             return Err(forbidden("VIEW"));
         }
-        require_partition_provider(&table, "DESC PARTITION")?;
+        require_partition_provider(&table, statement)?;
         let case_sensitive = self.query_env().analysis.conf.case_sensitive;
         let spec = exact_spec(&table, &normalize_spec(&table, &written, case_sensitive)?)?;
         find_partition(&table, &spec).cloned().ok_or_else(|| {

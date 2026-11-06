@@ -1386,12 +1386,20 @@ fn describing_a_view_needs_the_view_securable() {
         "DESCRIBE TABLE pv",
         "DESCRIBE TABLE EXTENDED pv",
         "SHOW COLUMNS IN pv",
+        "SHOW TABLE EXTENDED LIKE 'pv'",
     ];
     let results: Vec<_> = denied
         .iter()
         .map(|sql| class(block_on(s.sql(sql))))
         .collect();
-    let table_ok = block_on(async { s.sql("SHOW CREATE TABLE pt").await?.collect().await }).is_ok();
+    let table_ok = block_on(async { s.sql("SHOW CREATE TABLE pt").await?.collect().await }).is_ok()
+        && block_on(async {
+            s.sql("SHOW TABLE EXTENDED LIKE 'pt'")
+                .await?
+                .collect()
+                .await
+        })
+        .is_ok();
     DENY_VIEWS.store(false, std::sync::atomic::Ordering::SeqCst);
     for (sql, c) in denied.iter().zip(&results) {
         assert_eq!(c, DENIED, "{sql}");

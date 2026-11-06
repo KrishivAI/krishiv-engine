@@ -24,16 +24,16 @@
 5392 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 3020 crates/krishiv-session/src/catalog.rs
-2527 crates/krishiv-session/src/command.rs
+2286 crates/krishiv-session/src/command.rs
 2630 crates/krishiv-session/src/dataframe.rs
 2790 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
-# +1 over main: the CTAS/view column lists moved to char_write.rs, net of the ALTER VIEW UNSET, SET SERDEPROPERTIES and partition SET LOCATION / RENAME arms and the two-step INSERT projection that checks each CHAR/VARCHAR value once (T001b)
-3292 crates/krishiv-session/src/table_commands.rs
+# +1 over main: the two-step INSERT projection that checks each CHAR/VARCHAR value once, net of the moved CTAS/view column lists (T001b)
+3269 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
 # +1: CAST(x AS CHAR(n)) lowers as a string cast (T001b)
 2775 crates/krishiv-sql/src/lower.rs
-5263 crates/krishiv-sql/src/parser.rs
+5225 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs
 2153 crates/krishiv-testkit/src/file_format/mod.rs
