@@ -14,7 +14,7 @@
 //! root stage runs on the caller's context with it, and map tasks derive
 //! theirs from it.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
@@ -26,10 +26,12 @@ use futures::future::BoxFuture;
 use futures::stream::{BoxStream, FuturesUnordered};
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_exec::physical::{
-    PhysicalPlan, TaskSpec, WorkerContext, exchange_schemas, instantiate_task,
+    PhysicalPlan, TaskSpec, WorkerContext, instantiate_task, plan_schemas,
 };
 use krishiv_exec::{ExecConfig, Executor, QueryContext, QueryId, QueryRunner, Scheduler};
-use krishiv_scheduler::{Partials, StageSplits, fragment, merge_partials, stage_tasks};
+use krishiv_scheduler::{
+    Partials, StageSplits, StageValues, fragment, merge_partials, split_nested_loops, stage_tasks,
+};
 use krishiv_types::batch::Batch;
 use turmoil::net::TcpStream;
 
@@ -196,8 +198,9 @@ impl Inner {
             job,
             workers: self.workers.clone(),
         };
-        let schemas = exchange_schemas(&plan, &worker)?;
-        let stages = fragment(&plan, &schemas)?;
+        let mut schemas = plan_schemas(&plan, &worker)?;
+        let plan = split_nested_loops(&plan, &mut schemas)?;
+        let stages = fragment(&plan, &schemas.exchanges)?;
         let splits = self
             .splits
             .lock()
@@ -207,9 +210,9 @@ impl Inner {
         let (root, maps) = stages
             .split_last()
             .ok_or_else(|| internal("a plan without stages".to_owned()))?;
-        // The filters earlier stages collected (cross-stage filters), merged
-        // here and shipped in the later tasks' descriptors.
-        let mut filters = BTreeMap::new();
+        // The filters and bitmaps earlier stages computed, merged here and
+        // shipped in the later tasks' descriptors.
+        let mut values = StageValues::default();
         for stage in maps {
             let bytes: Arc<[u8]> = krishiv_plan_codec::encode(&stage.plan)
                 .map_err(|e| internal(format!("stage {}: {e}", stage.id)))?
@@ -218,7 +221,7 @@ impl Inner {
             let mut runs: FuturesUnordered<_> = specs
                 .into_iter()
                 .map(|mut spec| {
-                    spec.filters.clone_from(&filters);
+                    values.give(&mut spec);
                     self.run_task(job, Arc::clone(&bytes), spec, query.config())
                 })
                 .collect();
@@ -235,7 +238,7 @@ impl Inner {
             if let Some(e) = failed {
                 return Err(e);
             }
-            filters.extend(merge_partials(&stage.plan, &partials));
+            values.extend(merge_partials(&stage.plan, &partials)?);
             query.check_cancelled()?;
         }
         let mut spec = tasks
@@ -243,7 +246,7 @@ impl Inner {
             .and_then(|t| t.first())
             .cloned()
             .ok_or_else(|| internal("a root stage without a task".to_owned()))?;
-        spec.filters = filters;
+        values.give(&mut spec);
         let worker = worker.with_exchange(Arc::new(HostExchange::coordinator(
             job,
             self.workers.clone(),

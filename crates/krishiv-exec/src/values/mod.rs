@@ -42,6 +42,10 @@ use krishiv_io::{
     RuntimeFilter,
 };
 
+mod marks;
+
+pub use marks::BuildMarks;
+
 use crate::error::{Result, internal};
 pub use crate::physical::{ValueId, Version};
 use crate::pipeline::ExecNode;
@@ -67,6 +71,8 @@ pub enum Value {
     Subquery(ArrayRef),
     /// A broadcast exchange's build input, as instantiated on this worker.
     Broadcast(BroadcastBuild),
+    /// The build rows one task of a split nested-loop join matched.
+    Marks(BuildMarks),
 }
 
 impl Value {
@@ -76,6 +82,7 @@ impl Value {
             (Self::Filter(_), ValueId::Filter(_))
                 | (Self::Subquery(_), ValueId::Subquery(_))
                 | (Self::Broadcast(_), ValueId::Broadcast(_))
+                | (Self::Marks(_), ValueId::Marks(_))
         )
     }
 }
@@ -401,6 +408,21 @@ fn merge(id: ValueId, mut parts: Vec<Value>, options: &KeyFilterOptions) -> Resu
                 })
                 .collect(),
         })),
+        ValueId::Marks(_) => {
+            let mut merged: Option<BuildMarks> = None;
+            for p in parts {
+                let Value::Marks(m) = p else {
+                    return Err(internal(format!("{id}: a partial of another kind")));
+                };
+                merged = Some(match merged {
+                    None => m,
+                    Some(acc) => acc.or(&m)?,
+                });
+            }
+            merged
+                .map(Value::Marks)
+                .ok_or_else(|| internal(format!("{id} without partials")))
+        }
     }
 }
 

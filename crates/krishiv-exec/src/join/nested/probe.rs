@@ -343,12 +343,19 @@ impl Operator for ProbeOp {
             let Some(marks) = &l.ready.marks else {
                 return Ok(FlushOutput::Done);
             };
+            if !self.0.emits_build() {
+                // Every driver passed the barrier: the bitmap is complete.
+                if !l.ready.published.swap(true, Ordering::AcqRel) {
+                    self.0.publish_marks(marks)?;
+                }
+                return Ok(FlushOutput::Done);
+            }
             let i = l.ready.claim.fetch_add(1, Ordering::Relaxed);
             let (Some(b), Some(&base)) = (l.ready.memory.get(i), l.ready.memory_bases.get(i))
             else {
                 return Ok(FlushOutput::Done);
             };
-            Ok(match self.0.build_rows(b, base, marks)? {
+            Ok(match self.0.build_rows(b, base, &|r| marks.get(r))? {
                 Some(out) => FlushOutput::Batch(Batch::new(out)),
                 None => FlushOutput::Continue,
             })
@@ -453,7 +460,7 @@ impl ProbeOp {
                     None => FlushOutput::Continue,
                 })
             }
-            Phase::Build => Ok(Self::finish_chunks(d, &ready)),
+            Phase::Build => self.finish_chunks(d, &ready),
             Phase::Emit => self.emit_build(d, &ready, ctx).await,
             Phase::Done => Ok(FlushOutput::Done),
         }
@@ -527,20 +534,26 @@ impl ProbeOp {
     /// After a driver's chunks: the last driver to get here goes on to
     /// emit the build rows of a build-side join (every match is in the
     /// bitmap by then); the others are done.
-    fn finish_chunks(d: &mut Disk, ready: &Ready) -> FlushOutput {
-        if ready.marks.is_none() {
+    /// The local half of a split join publishes the bitmap there instead.
+    fn finish_chunks(&self, d: &mut Disk, ready: &Ready) -> Result<FlushOutput> {
+        let Some(marks) = &ready.marks else {
             d.phase = Phase::Done;
-            return FlushOutput::Done;
-        }
+            return Ok(FlushOutput::Done);
+        };
         let finished = ready.finished.fetch_add(1, Ordering::AcqRel) + 1;
         if finished < ready.drivers.load(Ordering::Acquire) {
             d.phase = Phase::Done;
-            return FlushOutput::Done;
+            return Ok(FlushOutput::Done);
+        }
+        if !self.0.emits_build() {
+            self.0.publish_marks(marks)?;
+            d.phase = Phase::Done;
+            return Ok(FlushOutput::Done);
         }
         d.build_reader = None;
         (d.next_file, d.next_base, d.emitted) = (0, 0, 0);
         d.phase = Phase::Emit;
-        FlushOutput::Continue
+        Ok(FlushOutput::Continue)
     }
 
     /// One batch of the build rows a build-side join returns: the build's
@@ -563,7 +576,7 @@ impl ProbeOp {
             ready.memory_bases.get(d.emitted),
         ) {
             d.emitted += 1;
-            return Ok(emit(self.0.build_rows(b, base, marks)?));
+            return Ok(emit(self.0.build_rows(b, base, &|r| marks.get(r))?));
         }
         let Some((file, base)) = ready.files.get(d.next_file).cloned() else {
             d.phase = Phase::Done;
@@ -578,7 +591,7 @@ impl ProbeOp {
         };
         let base = d.next_base;
         d.next_base += b.num_rows() as u64;
-        Ok(emit(self.0.build_rows(&b, base, marks)?))
+        Ok(emit(self.0.build_rows(&b, base, &|r| marks.get(r))?))
     }
 }
 

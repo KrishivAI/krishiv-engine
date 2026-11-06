@@ -71,8 +71,8 @@ pub(crate) use instantiate::{
     replicate_op, scan_filter, sort_merge_join, sort_op, top_n_op,
 };
 pub use instantiate::{
-    ExchangeInput, SpillScopes, TaskSpec, WorkerContext, exchange_schemas, instantiate,
-    instantiate_task,
+    ExchangeInput, PlanSchemas, SpillScopes, TaskSpec, WorkerContext, exchange_schemas,
+    instantiate, instantiate_task, plan_schemas,
 };
 pub use krishiv_memory::{RelationLease, RelationRef, RelationStore};
 pub use splits::{
@@ -115,6 +115,13 @@ pub struct ExchangeId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SharedId(pub u64);
 
+/// The build-match bitmap of a split nested-loop join (design P2-T052b,
+/// 2026-11-06), numbered by the fragmenter: each task of the join's local
+/// stage publishes one, and the stage emitting the build rows reads their
+/// OR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MarksId(pub u64);
+
 /// A subplan run once per query instantiation and read in full by each
 /// [`PhysNode::SharedRead`]: a CTE body several references would otherwise
 /// compute separately.
@@ -146,6 +153,8 @@ pub enum ValueId {
     Subquery(SubqueryId),
     /// The rows of a broadcast exchange.
     Broadcast(ExchangeId),
+    /// The build rows a split nested-loop join matched.
+    Marks(MarksId),
 }
 
 impl fmt::Display for ValueId {
@@ -154,6 +163,7 @@ impl fmt::Display for ValueId {
             Self::Filter(id) => write!(f, "runtime filter {id}"),
             Self::Subquery(id) => write!(f, "subquery #{}", id.0),
             Self::Broadcast(id) => write!(f, "broadcast exchange #{}", id.0),
+            Self::Marks(id) => write!(f, "nested-loop marks #{}", id.0),
         }
     }
 }
@@ -518,6 +528,8 @@ pub enum PhysNode {
     },
     /// Moves rows between partitions.
     Exchange(ExchangePlan),
+    /// The build rows of a split nested-loop join ([`UnmatchedBuildPlan`]).
+    UnmatchedBuild(UnmatchedBuildPlan),
     /// The rows a task reads from the exchange `id`, written by the tasks
     /// of another stage: a leaf of a plan fragment, where the fragmenter
     /// cut the plan (design P2-T176 §2.1). Which reduce partitions a task
@@ -813,6 +825,35 @@ pub struct NestedLoopPlan {
     pub join_type: JoinType,
     /// The join condition.
     pub residual: Option<Residual>,
+    /// The local half of a split join (design P2-T052b, 2026-11-06): the
+    /// build rows are not emitted here; once every probe row met them, the
+    /// task publishes which ones matched as this value, and a
+    /// [`PhysNode::UnmatchedBuild`] in a later stage emits them. `None`
+    /// emits them here (one task, or one worker). Set only by the
+    /// fragmenter, on a join that returns build rows over a broadcast.
+    pub marks: Option<MarksId>,
+}
+
+/// The second half of a split nested-loop join (design P2-T052b,
+/// 2026-11-06): the build rows the join returns, read again from its
+/// broadcast exchange in exchange order and chosen by the OR of the
+/// bitmaps every task of the join's local stage published (task data,
+/// [`TaskSpec::marks`](crate::physical::TaskSpec::marks)). Never matched
+/// for right outer, full outer and right anti, matched for right semi;
+/// padded with NULL probe columns for the outer joins. A leaf: the
+/// exchange is cut once, for the join.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnmatchedBuildPlan {
+    /// The bitmap.
+    pub marks: MarksId,
+    /// The join's type: right outer, full outer, right semi or right anti.
+    pub join_type: JoinType,
+    /// The join's broadcast build exchange.
+    pub exchange: ExchangeId,
+    /// The join's probe columns (the NULL padding of the outer joins).
+    pub probe_schema: SchemaRef,
+    /// The exchange's columns.
+    pub build_schema: SchemaRef,
 }
 
 /// What a [`PhysNode::WriteFiles`] writes: the file format and its options
@@ -877,6 +918,7 @@ plan_data!(
         Filter(id),
         Subquery(id),
         Broadcast(id),
+        Marks(id),
     }
 );
 plan_data!(struct Version { epoch });
@@ -935,6 +977,7 @@ plan_data!(enum PhysNode {
     Union { inputs },
     WriteFiles { input, write },
     Exchange(exchange),
+    UnmatchedBuild(build),
     ExchangeSource { id, partitioning, schema },
     SharedRead { id, layout },
     UnionLoop { id, anchor, recursive, layout, nullable, limits },
@@ -980,7 +1023,33 @@ plan_data!(struct HashJoinPlan {
 plan_data!(struct SortMergeJoinPlan {
     probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match
 });
-plan_data!(struct NestedLoopPlan { probe, build, join_type, residual });
+impl UnmatchedBuildPlan {
+    /// Its output columns: the join's.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a join type that returns no build rows.
+    pub fn schema(&self) -> crate::error::Result<SchemaRef> {
+        if !self.join_type.builds_preserved() {
+            return Err(crate::error::internal(format!(
+                "the build rows of a nested-loop {:?} join, which returns none",
+                self.join_type
+            )));
+        }
+        crate::join::NestedLoopJoin::try_new(crate::join::NestedLoopSpec {
+            join_type: self.join_type,
+            probe_schema: Arc::clone(&self.probe_schema),
+            build_schema: Arc::clone(&self.build_schema),
+            filter: None,
+            spill: None,
+            publish: None,
+        })
+        .map(|j| j.schema())
+    }
+}
+
+plan_data!(struct NestedLoopPlan { probe, build, join_type, residual, marks });
+plan_data!(tuple MarksId(id));
+plan_data!(struct UnmatchedBuildPlan { marks, join_type, exchange, probe_schema, build_schema });
 plan_data!(struct PhysicalPlan { root, shared, schema, explain, warnings, env });
 
 impl PhysNode {
@@ -993,6 +1062,7 @@ impl PhysNode {
             | Self::Range(_)
             | Self::SharedRead { .. }
             | Self::ExchangeSource { .. }
+            | Self::UnmatchedBuild(_)
             | Self::LoopRef { .. } => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
@@ -1038,6 +1108,7 @@ impl PhysNode {
             | Self::Range(_)
             | Self::SharedRead { .. }
             | Self::ExchangeSource { .. }
+            | Self::UnmatchedBuild(_)
             | Self::LoopRef { .. } => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
@@ -1253,7 +1324,10 @@ impl PhysicalPlan {
         while let Some(n) = stack.pop() {
             match n {
                 PhysNode::Exchange(e) => next = next.max(e.id.0.saturating_add(1)),
-                PhysNode::ExchangeSource { id, .. } => next = next.max(id.0.saturating_add(1)),
+                PhysNode::ExchangeSource { id, .. }
+                | PhysNode::UnmatchedBuild(UnmatchedBuildPlan { exchange: id, .. }) => {
+                    next = next.max(id.0.saturating_add(1));
+                }
                 _ => {}
             }
             stack.extend(n.children());

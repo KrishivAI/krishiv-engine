@@ -3,7 +3,7 @@
 //! under memory pressure, and at finalize numbers them for the build-match
 //! bitmap ([`Ready`]).
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use arrow_array::RecordBatch;
@@ -58,6 +58,9 @@ pub(super) struct Ready {
     /// (a spilled build: the last one emits the build rows).
     pub(super) drivers: AtomicUsize,
     pub(super) finished: AtomicUsize,
+    /// The local half of a split join published the bitmap (a build in
+    /// memory: the first driver to flush does).
+    pub(super) published: AtomicBool,
     /// What `memory` and `marks` are charged to.
     _memory: Vec<Reservation>,
 }
@@ -301,6 +304,7 @@ impl Sink for BuildSink {
                 claim: AtomicUsize::new(0),
                 drivers: AtomicUsize::new(0),
                 finished: AtomicUsize::new(0),
+                published: AtomicBool::new(false),
                 _memory: reservations,
             });
             g.ready

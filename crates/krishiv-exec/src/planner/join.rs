@@ -482,9 +482,10 @@ impl Planner<'_> {
         } else {
             format!("{join_type:?}, {}", r.join(" AND "))
         };
-        // Rows stay where the probe placed them; a full outer join's
-        // unmatched build rows come out of whichever driver emits them.
-        let placement = if join_type == JoinType::FullOuter {
+        // Rows stay where the probe placed them; the build rows of a join
+        // that returns them come out of whichever driver (or, split across
+        // tasks, whichever stage) emits them.
+        let placement = if join_type.builds_preserved() {
             Placement::Unknown
         } else {
             probe.placement.clone().restrict(&layout)
@@ -495,9 +496,10 @@ impl Planner<'_> {
             build: Box::new(build.node),
             join_type,
             residual: filter,
+            marks: None,
         };
         let schema =
-            nested_loop_join(&probe_schema, &build_schema, &plan, &self.env, None)?.schema();
+            nested_loop_join(&probe_schema, &build_schema, &plan, &self.env, None, None)?.schema();
         Ok(Planned {
             ordering: Vec::new(),
             schema,

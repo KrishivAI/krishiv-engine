@@ -24,6 +24,12 @@
 //!   matched, or for right semi matched), padded with NULL probe columns
 //!   for the outer joins. On one worker the drivers OR into one bitmap: the
 //!   fused lowering of the note's local → `Exchange(Single)` → final split.
+//!   Split across tasks (the fragmenter's rewrite, design P2-T052b
+//!   2026-11-06), the local half publishes its bitmap instead
+//!   ([`MarksPublisher`]) and [`NestedLoopJoin::unmatched_build`] emits
+//!   the build rows in a later stage from the OR of every task's bitmap.
+//!   Both read the broadcast build with one driver in exchange order, so
+//!   every task numbers the build rows alike.
 //!
 //! **Spilled build** (block nested loop, `probe.rs`): when the build spilled,
 //! the probe drivers buffer their input and spill it too; after the barrier
@@ -50,10 +56,14 @@ use krishiv_memory::SpillScope;
 use krishiv_types::batch::{Batch, Weights};
 
 use super::{JoinType, unsupported};
+use crate::context::TaskContext;
 use crate::error::{Result, internal};
-use crate::operator::{Operator, Sink};
+use crate::operator::{LocalState, Operator, OperatorOutput, Sink};
 use crate::operators::Predicate;
+use crate::operators::local_mut;
+use crate::physical::{MarksId, Version};
 use crate::pipeline::{ExecNode, PipelineBuilder};
+use crate::values::{BuildMarks, Partial, Producer, Value, ValueService};
 
 /// The most (probe row, build row) pairs one call evaluates.
 pub(crate) const TARGET_PAIRS: usize = 8192;
@@ -74,6 +84,22 @@ pub struct NestedLoopSpec {
     /// Where the build and, once it spilled, the probe rows spill; without
     /// one the build stays in memory.
     pub spill: Option<SpillScope>,
+    /// The local half of a split join: the build rows are not emitted;
+    /// the bitmap is published instead. Needs a join that returns build
+    /// rows, and a build read by one driver in exchange order.
+    pub publish: Option<MarksPublisher>,
+}
+
+/// Where the local half of a split nested-loop join publishes its
+/// build-match bitmap.
+#[derive(Debug, Clone)]
+pub struct MarksPublisher {
+    /// The value.
+    pub id: MarksId,
+    /// The task's value service.
+    pub values: Arc<dyn ValueService>,
+    /// The task's place among the producers.
+    pub producer: Producer,
 }
 
 /// Operator counters for `EXPLAIN ANALYZE`.
@@ -114,6 +140,28 @@ impl Shared {
         )
     }
 
+    /// Whether build rows are emitted here: a join returning them, unless
+    /// it is the local half of a split one.
+    fn emits_build(&self) -> bool {
+        self.join_type().builds_preserved() && self.spec.publish.is_none()
+    }
+
+    /// The local half of a split join: publishes `marks` once every probe
+    /// row met every build row.
+    fn publish_marks(&self, marks: &Marks) -> Result<()> {
+        let Some(p) = &self.spec.publish else {
+            return Ok(());
+        };
+        p.values
+            .publish(Partial {
+                value: crate::physical::ValueId::Marks(p.id),
+                version: Version::BATCH,
+                producer: p.producer,
+                payload: Value::Marks(marks.snapshot()?),
+            })
+            .map(drop)
+    }
+
     /// Whether matching pairs are output rows.
     fn emits_pairs(&self) -> bool {
         matches!(
@@ -136,6 +184,12 @@ impl NestedLoopJoin {
     pub fn try_new(spec: NestedLoopSpec) -> Result<Self> {
         if spec.join_type == JoinType::NullAwareAnti {
             return Err(unsupported("a null-aware anti join without a key"));
+        }
+        if spec.publish.is_some() && !spec.join_type.builds_preserved() {
+            return Err(internal(format!(
+                "a split nested-loop {:?} join, which returns no build rows",
+                spec.join_type
+            )));
         }
         let fields = |probe_nullable: bool, build_nullable: bool| -> Vec<Field> {
             let nullable =
@@ -184,6 +238,82 @@ impl NestedLoopJoin {
     pub fn probe(&self) -> Arc<dyn Operator> {
         Arc::new(probe::ProbeOp(Arc::clone(&self.0)))
     }
+
+    /// The second half of a split join: an operator over the join's build
+    /// rows, read again by one driver in the order the local half numbered
+    /// them, emitting those the join returns by `marks` (the OR of every
+    /// local task's bitmap).
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a join that returns no build rows.
+    pub fn unmatched_build(&self, marks: BuildMarks) -> Result<Arc<dyn Operator>> {
+        if !self.0.join_type().builds_preserved() {
+            return Err(internal(format!(
+                "the build rows of a nested-loop {:?} join, which returns none",
+                self.0.join_type()
+            )));
+        }
+        Ok(Arc::new(UnmatchedBuildOp {
+            join: Arc::clone(&self.0),
+            marks,
+        }))
+    }
+}
+
+/// [`NestedLoopJoin::unmatched_build`]'s operator.
+struct UnmatchedBuildOp {
+    join: Arc<Shared>,
+    marks: BuildMarks,
+}
+
+/// The number of the next build row the driver reads.
+struct NextRow(u64);
+
+impl Operator for UnmatchedBuildOp {
+    fn name(&self) -> &'static str {
+        "UnmatchedBuild"
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.join.schema)
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(NextRow(0)))
+    }
+
+    fn execute(&self, input: &Batch, local: &mut LocalState) -> Result<OperatorOutput> {
+        let next = local_mut::<NextRow>(local, "UnmatchedBuild")?;
+        let base = next.0;
+        next.0 += input.num_rows() as u64;
+        if next.0 > self.marks.rows() {
+            return Err(internal(format!(
+                "a split nested-loop join read {} build rows where its tasks marked {}",
+                next.0,
+                self.marks.rows()
+            )));
+        }
+        if input.num_rows() == 0 {
+            return Ok(OperatorOutput::NeedMoreInput(None));
+        }
+        unit_weights(input)?;
+        let out = self
+            .join
+            .build_rows(input.data(), base, &|row| self.marks.get(row))?;
+        Ok(OperatorOutput::NeedMoreInput(out.map(Batch::new)))
+    }
+
+    fn finish(&self, local: &mut LocalState) -> Result<Option<Batch>> {
+        let next = local_mut::<NextRow>(local, "UnmatchedBuild")?;
+        if next.0 != self.marks.rows() {
+            return Err(internal(format!(
+                "a split nested-loop join read {} build rows where its tasks marked {}",
+                next.0,
+                self.marks.rows()
+            )));
+        }
+        Ok(None)
+    }
 }
 
 fn unit_weights(b: &Batch) -> Result<()> {
@@ -197,11 +327,28 @@ fn unit_weights(b: &Batch) -> Result<()> {
 /// set bits as they match; the flush phase reads them once every driver's
 /// input ended.
 #[derive(Debug)]
-struct Marks(Box<[AtomicU64]>);
+struct Marks {
+    words: Box<[AtomicU64]>,
+    rows: u64,
+}
 
 impl Marks {
     fn new(rows: u64) -> Self {
-        Self((0..rows.div_ceil(64)).map(|_| AtomicU64::new(0)).collect())
+        Self {
+            words: (0..rows.div_ceil(64)).map(|_| AtomicU64::new(0)).collect(),
+            rows,
+        }
+    }
+
+    /// The bits as they stand, once no driver sets any more.
+    fn snapshot(&self) -> Result<BuildMarks> {
+        BuildMarks::new(
+            self.rows,
+            self.words
+                .iter()
+                .map(|w| w.load(Ordering::Acquire))
+                .collect(),
+        )
     }
 
     /// The bytes it holds for `rows` build rows.
@@ -212,7 +359,7 @@ impl Marks {
     }
 
     fn word(&self, row: u64) -> Option<(&AtomicU64, u64)> {
-        let w = self.0.get(usize::try_from(row / 64).ok()?)?;
+        let w = self.words.get(usize::try_from(row / 64).ok()?)?;
         Some((w, 1 << (row % 64)))
     }
 
@@ -487,11 +634,11 @@ impl Shared {
         &self,
         build: &RecordBatch,
         base: u64,
-        marks: &Marks,
+        matched: &dyn Fn(u64) -> bool,
     ) -> Result<Option<RecordBatch>> {
         let want = self.join_type() == JoinType::RightSemi;
         let keep: Vec<u32> = (0..build.num_rows())
-            .filter(|&i| marks.get(base + i as u64) == want)
+            .filter(|&i| matched(base + i as u64) == want)
             .map(|i| u32::try_from(i).map_err(|_| internal("batch too large".to_owned())))
             .collect::<Result<_>>()?;
         if keep.is_empty() {

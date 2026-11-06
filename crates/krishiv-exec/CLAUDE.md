@@ -73,7 +73,10 @@ nondeterministic enclosing CTE is evaluated once per round. `EXPLAIN ANALYZE` re
 `physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
 `PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the
 worker that runs it; the planner validates nodes with the same builders). `instantiate/distributed.rs`: what only a task of a cut plan
-uses (exchange write with its collected filters, exchange reads, `TaskSpec::filters`, broadcasts shared per worker). `PhysicalPlan::shared` (P2-T198): subplans
+uses (exchange write with its collected filters, exchange reads, `TaskSpec::filters`, broadcasts shared per worker,
+the halves of a split nested-loop join: `NestedLoopPlan::marks` publishes a `values::BuildMarks` bitmap instead of build
+rows and `PhysNode::UnmatchedBuild` emits them from `TaskSpec::marks`, both reading the broadcast by one driver in
+exchange order so every task numbers the build rows alike; `plan_schemas` gives a fragmenter the probe columns). `PhysicalPlan::shared` (P2-T198): subplans
 read by `PhysNode::SharedRead`; a walk over a plan starts at `PhysicalPlan::roots`. `shared.rs` runs them: `SharedSink`
 ends the body's pipeline (built once through `PipelineBuilder::shared_pipeline`, so pipeline dependencies are a DAG),
 keeps the batches as segments (memory or spill file) under a consumer of its own whose `OutputSpill` hook writes every

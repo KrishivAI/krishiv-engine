@@ -61,6 +61,7 @@ variants!(
     LateFetch,
     UnionLoop,
     LoopRef,
+    UnmatchedBuild,
 );
 
 fn variant_of(node: &PhysNode) -> Variant {
@@ -88,6 +89,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::WriteFiles { .. } => Variant::WriteFiles,
         PhysNode::Exchange(_) => Variant::Exchange,
         PhysNode::ExchangeSource { .. } => Variant::ExchangeSource,
+        PhysNode::UnmatchedBuild(_) => Variant::UnmatchedBuild,
         PhysNode::SharedRead { .. } => Variant::SharedRead,
         PhysNode::LateFetch { .. } => Variant::LateFetch,
     }
@@ -570,6 +572,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "nested_loop_existence"
             | "exchange_hash_key_group"
             | "exchange_filters"
+            | "nested_loop_split"
+            | "unmatched_build"
             | "window_frames"
             | "window_offset_values"
             | "window_range_values"

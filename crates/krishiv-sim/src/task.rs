@@ -13,9 +13,11 @@ use std::time::Duration;
 
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_exec::ExecConfig;
+use krishiv_exec::physical::MarksId;
 use krishiv_exec::physical::{
     ExchangeId, ExchangeInput, ScanId, ScanSplits, SplitFileRef, TaskSpec,
 };
+use krishiv_exec::values::BuildMarks;
 use krishiv_io::split::{FilePartition, FileSplit};
 use krishiv_io::{ByteRange, StoreId, VersionToken};
 use krishiv_io::{DisabledReason, FilterId, FilterSnapshot, KeyFilter};
@@ -47,6 +49,20 @@ struct Task {
     scans: Vec<Scan>,
     #[prost(message, repeated, tag = "10")]
     filters: Vec<FilterValue>,
+    #[prost(message, repeated, tag = "11")]
+    marks: Vec<MarksValue>,
+}
+
+/// `krishiv.task.v1alpha.MarksValue`: the build-match bitmap of a split
+/// nested-loop join (an entry of [`TaskSpec::marks`]) or one task's
+/// partial of it.
+#[derive(Clone, PartialEq, prost::Message)]
+struct MarksValue {
+    #[prost(uint64, tag = "1")]
+    id: u64,
+    /// `BuildMarks` v1 bytes.
+    #[prost(bytes = "vec", tag = "2")]
+    bits: Vec<u8>,
 }
 
 /// `krishiv.task.v1alpha.FilterValue`: a runtime filter's value (an entry
@@ -66,13 +82,24 @@ struct FilterValue {
 struct PartialList {
     #[prost(message, repeated, tag = "1")]
     partials: Vec<FilterValue>,
+    #[prost(message, repeated, tag = "2")]
+    marks: Vec<MarksValue>,
 }
 
-/// One map task's filter partials as the bytes its reply carries.
+/// One map task's partials as the bytes its reply carries.
 #[must_use]
 pub fn encode_partials(partials: &Partials) -> Vec<u8> {
     PartialList {
+        marks: partials
+            .marks
+            .iter()
+            .map(|(id, m)| MarksValue {
+                id: id.0,
+                bits: m.encode(),
+            })
+            .collect(),
         partials: partials
+            .filters
             .iter()
             .map(|(id, s)| FilterValue {
                 id: id.0,
@@ -90,10 +117,16 @@ pub fn encode_partials(partials: &Partials) -> Vec<u8> {
 ///
 /// # Errors
 /// `INTERNAL_ERROR` for bytes that are not partials, or a filter's bytes
-/// that are not a `KeyFilter`.
+/// that are not a `KeyFilter`, or a bitmap's that are not `BuildMarks`.
 pub fn decode_partials(bytes: &[u8]) -> Result<Partials, KrishivError> {
     let list = PartialList::decode(bytes).map_err(|e| internal(format!("partials: {e}")))?;
-    list.partials
+    let marks = list
+        .marks
+        .into_iter()
+        .map(|m| Ok((MarksId(m.id), BuildMarks::decode(&m.bits)?)))
+        .collect::<Result<_, KrishivError>>()?;
+    let filters = list
+        .partials
         .into_iter()
         .map(|p| {
             let snapshot = match p.keys {
@@ -104,7 +137,8 @@ pub fn decode_partials(bytes: &[u8]) -> Result<Partials, KrishivError> {
             };
             Ok((FilterId(p.id), snapshot))
         })
-        .collect()
+        .collect::<Result<_, KrishivError>>()?;
+    Ok(Partials { filters, marks })
 }
 
 /// `krishiv.task.v1alpha.Scan`: one entry of [`TaskSpec::scans`], file
@@ -412,6 +446,14 @@ pub fn encode_task(task: &TaskSpec, settings: &ExecConfig) -> Result<Vec<u8>, Kr
                 keys: Some(keys.clone()),
             })
             .collect(),
+        marks: task
+            .marks
+            .iter()
+            .map(|(id, bits)| MarksValue {
+                id: id.0,
+                bits: bits.clone(),
+            })
+            .collect(),
     };
     Ok(message.encode_to_vec())
 }
@@ -467,6 +509,15 @@ pub fn decode_task(bytes: &[u8]) -> Result<(TaskSpec, ExecConfig), KrishivError>
             )));
         }
     }
+    let mut marks = BTreeMap::new();
+    for m in message.marks {
+        if marks.insert(MarksId(m.id), m.bits).is_some() {
+            return Err(internal(format!(
+                "a task descriptor carries marks {} twice",
+                m.id
+            )));
+        }
+    }
     let task = TaskSpec {
         stage: message.stage,
         stage_attempt: message.stage_attempt,
@@ -477,6 +528,7 @@ pub fn decode_task(bytes: &[u8]) -> Result<(TaskSpec, ExecConfig), KrishivError>
         exchanges,
         output: message.output,
         filters,
+        marks,
     };
     Ok((task, settings))
 }
@@ -486,6 +538,31 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn partials_round_trip_with_bitmaps() {
+        let partials = Partials {
+            filters: BTreeMap::from([(
+                FilterId(2),
+                FilterSnapshot::Disabled(DisabledReason::ProducerFailed),
+            )]),
+            marks: BTreeMap::from([(MarksId(4), BuildMarks::new(66, vec![1, 0b10]).unwrap())]),
+        };
+        let back = decode_partials(&encode_partials(&partials)).unwrap();
+        assert_eq!(back.marks, partials.marks);
+        assert!(matches!(
+            back.filters.get(&FilterId(2)),
+            Some(FilterSnapshot::Disabled(_))
+        ));
+        let bad = PartialList {
+            partials: Vec::new(),
+            marks: vec![MarksValue {
+                id: 1,
+                bits: vec![9],
+            }],
+        };
+        assert!(decode_partials(&bad.encode_to_vec()).is_err());
+    }
 
     #[test]
     fn a_task_round_trips() {
@@ -506,6 +583,10 @@ mod tests {
             )]),
             output: Some(4),
             filters: BTreeMap::from([(FilterId(5), vec![1, 2, 3])]),
+            marks: BTreeMap::from([(
+                MarksId(1),
+                BuildMarks::new(3, vec![0b101]).unwrap().encode(),
+            )]),
         };
         let settings = ExecConfig {
             batch_size: 77,
@@ -633,6 +714,7 @@ mod tests {
             settings: Some(Settings::of(&ExecConfig::default())),
             scans: Vec::new(),
             filters: Vec::new(),
+            marks: Vec::new(),
         };
         let e = decode_task(&message.encode_to_vec()).unwrap_err();
         assert!(e.message().contains("exchange 7 twice"), "{}", e.message());
@@ -651,6 +733,7 @@ mod tests {
             settings: None,
             scans: Vec::new(),
             filters: Vec::new(),
+            marks: Vec::new(),
         };
         assert!(decode_task(&message.encode_to_vec()).is_err());
     }

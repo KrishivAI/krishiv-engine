@@ -1302,6 +1302,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 probe: boxed(scan()),
                 build: boxed(PhysNode::OneRow),
                 join_type: JoinType::Existence,
+                marks: None,
                 residual: Some(residual()),
             }),
         ),
@@ -1311,6 +1312,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 probe: boxed(scan()),
                 build: boxed(PhysNode::OneRow),
                 join_type: JoinType::LeftSemi,
+                marks: None,
                 residual: Some(residual()),
             }),
         ),
@@ -1448,6 +1450,30 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 partitioning: Partitioning::Single,
                 schema: schema(),
             },
+        ),
+        (
+            "nested_loop_split",
+            PhysNode::NestedLoopJoin(NestedLoopPlan {
+                probe: boxed(scan()),
+                build: boxed(PhysNode::ExchangeSource {
+                    id: ExchangeId(19),
+                    partitioning: Partitioning::Broadcast,
+                    schema: schema(),
+                }),
+                join_type: JoinType::FullOuter,
+                marks: Some(krishiv_exec::physical::MarksId(2)),
+                residual: Some(residual()),
+            }),
+        ),
+        (
+            "unmatched_build",
+            PhysNode::UnmatchedBuild(krishiv_exec::physical::UnmatchedBuildPlan {
+                marks: krishiv_exec::physical::MarksId(2),
+                join_type: JoinType::RightOuter,
+                exchange: ExchangeId(19),
+                probe_schema: schema(),
+                build_schema: schema(),
+            }),
         ),
     ]
 }
@@ -1974,6 +2000,7 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         probe: boxed(scan()),
         build: boxed(PhysNode::OneRow),
         join_type: JoinType::Inner,
+        marks: None,
         residual: Some(Residual {
             layout: vec![AttrId(1), AttrId(5)],
             conjuncts: vec![call(Builtin::IsNull, vec![geometry], DataType::Boolean)],

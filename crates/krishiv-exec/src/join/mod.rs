@@ -180,7 +180,7 @@ pub use broadcast::{BroadcastKey, BroadcastTables, SharedBuildJoinNode};
 pub(crate) use broadcast::{BuildJob, PrebuiltSink};
 pub(crate) use merge::MergeEnv;
 pub use merge::{SortMergeJoin, SortMergeJoinNode, merge_join_supported};
-pub use nested::{NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec};
+pub use nested::{MarksPublisher, NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec};
 
 use crate::error::{Result, internal};
 use crate::metrics::Metric;

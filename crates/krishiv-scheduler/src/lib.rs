@@ -9,11 +9,15 @@
 
 mod deal;
 mod fragment;
+mod split;
 mod stages;
 
 pub use deal::TableDealer;
 pub use fragment::{Stage, StageInput, fragment, streaming_scans};
-pub use stages::{Partials, StageRunner, StageSplits, merge_partials, produced, stage_tasks};
+pub use split::{published_marks, split_nested_loops};
+pub use stages::{
+    Partials, StageRunner, StageSplits, StageValues, merge_partials, produced, stage_tasks,
+};
 
 #[cfg(test)]
 mod tests;

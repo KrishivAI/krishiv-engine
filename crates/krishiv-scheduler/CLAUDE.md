@@ -14,8 +14,13 @@ Paths are relative to this crate.
   whole; a stage holding one, a `range`, a gather read by its rows, or a build-emitting join over a broadcast is
   `single`. A runtime filter whose producer and scan are in different fragments is dropped on both sides until
   P2-T177 unit 2 carries values across stages. Refuses unpinned hash exchanges and a nondeterministic shared plan read
-  by several stages. `Stage::dealable` lists the scans its tasks may split (`streaming_scans`: probe sides only);
+  by several stages. A `PhysNode::UnmatchedBuild` reads the broadcast exchange its join's stage cut (one task). `Stage::dealable` lists the scans its tasks may split (`streaming_scans`: probe sides only);
   `stage_tasks` refuses splits dealt for any other scan.
+- `src/split.rs` `split_nested_loops` (design P2-T052b, 2026-11-06): before fragmenting, a nested-loop join returning
+  build rows over a broadcast becomes `Union[Exchange(RoundRobin)(NLJ{marks}), Exchange(RoundRobin)(UnmatchedBuild)]`;
+  its local stage runs N tasks, each publishing a build-match bitmap; the runner ORs them (`merge_partials`, a missing one
+  fails the query) and ships them in `TaskSpec::marks` to the one-task `UnmatchedBuild` stage. Needs `plan_schemas`
+  (probe columns); a join whose output round-robin cannot route (nested columns) stays whole. `tests/nested_split.rs`.
 - `src/deal.rs` `TableDealer`: a `StageSplits` dealing the listed files of named tables (P2-T178), used by the tests
   and the simulation's coordinator.
 - `src/stages.rs` `StageRunner`: a `krishiv_exec::Scheduler` running the stages bottom-up over a `LocalShuffle`

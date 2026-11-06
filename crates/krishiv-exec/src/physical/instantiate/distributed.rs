@@ -114,6 +114,82 @@ impl Instantiation<'_> {
         Ok(built)
     }
 
+    /// The build of a split nested-loop join's half (design P2-T052b,
+    /// 2026-11-06): its cut broadcast exchange read by one driver in
+    /// exchange order (map partition, frame, row), so every task numbers
+    /// the build rows alike. Not published as a broadcast value: nothing
+    /// shares it.
+    pub(super) fn ordered_broadcast(&mut self, build: &PhysNode) -> Result<Built> {
+        let PhysNode::ExchangeSource {
+            id,
+            partitioning: Partitioning::Broadcast,
+            schema,
+        } = build
+        else {
+            return Err(internal(
+                "a split nested-loop join whose build is not a cut broadcast exchange".to_owned(),
+            ));
+        };
+        self.ordered_read(*id, schema)
+    }
+
+    /// Every reduce partition this task reads of the exchange `id`, by one
+    /// driver in `(reduce, map)` order.
+    fn ordered_read(&self, id: crate::physical::ExchangeId, schema: &SchemaRef) -> Result<Built> {
+        let exchange = self.exchange()?;
+        let input = self.task.exchanges.get(&id).ok_or_else(|| {
+            internal(format!(
+                "exchange {} is read by a task that names no input of it",
+                id.0
+            ))
+        })?;
+        let source = Arc::new(ExchangeRead::new(
+            exchange,
+            id,
+            input.stage_attempt,
+            &input.reduce,
+            input.maps,
+            Arc::clone(schema),
+            true,
+        ));
+        Ok(Built {
+            schema: Arc::clone(schema),
+            node: Arc::new(OrderedNode {
+                inner: Arc::new(SourceNode(source)),
+            }),
+        })
+    }
+
+    /// The build rows of a split nested-loop join (its second half): the
+    /// broadcast read again in exchange order, chosen by the bitmap the
+    /// task brings ([`TaskSpec::marks`]).
+    pub(super) fn unmatched_build(&mut self, u: &UnmatchedBuildPlan) -> Result<Built> {
+        let bytes = self.task.marks.get(&u.marks).ok_or_else(|| {
+            internal(format!(
+                "nested-loop marks #{} are read by a task that brings none",
+                u.marks.0
+            ))
+        })?;
+        let marks = BuildMarks::decode(bytes)?;
+        let input = self.ordered_read(u.exchange, &u.build_schema)?;
+        let join = NestedLoopJoin::try_new(NestedLoopSpec {
+            join_type: u.join_type,
+            probe_schema: Arc::clone(&u.probe_schema),
+            build_schema: Arc::clone(&u.build_schema),
+            filter: None,
+            spill: None,
+            publish: None,
+        })?;
+        let op = join.unmatched_build(marks)?;
+        Ok(Built {
+            schema: join.schema(),
+            node: Arc::new(OperatorNode {
+                input: input.node,
+                op,
+            }),
+        })
+    }
+
     pub(super) fn exchange(&self) -> Result<Arc<dyn Exchange>> {
         self.worker
             .exchange

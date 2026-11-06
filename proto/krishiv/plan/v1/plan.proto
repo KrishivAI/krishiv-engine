@@ -165,7 +165,24 @@ message Node {
     LateFetchNode late_fetch = 24;
     // feature: exchange_source
     ExchangeSourceNode exchange_source = 25;
+    // feature: nested_loop_split
+    UnmatchedBuildNode unmatched_build = 26;
   }
+}
+
+// feature: nested_loop_split
+// The build rows of a split nested-loop join, chosen by the OR of the
+// bitmaps its local tasks published: a leaf reading the join's broadcast
+// exchange again, in exchange order.
+message UnmatchedBuildNode {
+  uint64 marks = 1;
+  JoinType join_type = 2;
+  // The join's broadcast build exchange.
+  uint64 exchange = 3;
+  // The join's probe columns (Arrow IPC `Schema` flatbuffer).
+  bytes probe_schema = 4;
+  // The exchange's columns (Arrow IPC `Schema` flatbuffer).
+  bytes build_schema = 5;
 }
 
 // feature: exchange_source
@@ -722,6 +739,10 @@ message NestedLoopJoinNode {
   uint32 build = 2;
   JoinType join_type = 3;
   optional Residual residual = 4;
+  // feature: nested_loop_split
+  // The local half of a split join: the build-match bitmap it publishes
+  // instead of emitting build rows.
+  optional uint64 marks = 5;
 }
 
 message JoinFilter {

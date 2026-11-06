@@ -881,7 +881,8 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             PhysNode::OneRow
             | PhysNode::SharedRead { .. }
             | PhysNode::LoopRef { .. }
-            | PhysNode::ExchangeSource { .. } => {}
+            | PhysNode::ExchangeSource { .. }
+            | PhysNode::UnmatchedBuild(_) => {}
             PhysNode::UnionLoop {
                 anchor, recursive, ..
             } => {

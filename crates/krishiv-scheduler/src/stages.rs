@@ -33,17 +33,18 @@ use futures::stream::FuturesUnordered;
 use krishiv_common::error::{InternalError, KrishivError, OperationCanceled};
 use krishiv_exec::exchange::reduce_partitions;
 use krishiv_exec::physical::{
-    ExchangeInput, PhysicalPlan, ScanId, ScanSplits, TaskSpec, WorkerContext, exchange_schemas,
-    instantiate_task,
+    ExchangeInput, MarksId, PhysicalPlan, ScanId, ScanSplits, TaskSpec, ValueId, WorkerContext,
+    instantiate_task, plan_schemas,
 };
 use krishiv_exec::physical::{Partitioning, PhysNode};
-use krishiv_exec::values::{LocalValues, ValueService};
+use krishiv_exec::values::{BuildMarks, LocalValues, Value, ValueService};
 use krishiv_exec::{BroadcastTables, Executor, QueryContext, QueryId, QueryRunner, Scheduler};
 use krishiv_io::{FilterId, FilterSnapshot, KeyFilter};
 use krishiv_shuffle::LocalShuffle;
 use krishiv_types::batch::Batch;
 
 use crate::fragment::{Stage, fragment};
+use crate::split::{published_marks, split_nested_loops};
 
 /// The map tasks of each running query, by query (the query itself first).
 type Running = Mutex<HashMap<QueryId, Vec<Weak<QueryContext>>>>;
@@ -274,6 +275,7 @@ fn spec(stage: &Stage, plans: &[Plan], partition: u32) -> Result<TaskSpec> {
         exchanges,
         output: stage.output.as_ref().map(|_| plan.writes),
         filters: BTreeMap::new(),
+        marks: BTreeMap::new(),
     })
 }
 
@@ -381,7 +383,7 @@ impl StageRunner {
             self.executor
                 .spawn_blocking(Box::new(move || {
                     *slot.lock().unwrap_or_else(PoisonError::into_inner) =
-                        Some(exchange_schemas(&plan, &worker));
+                        Some(plan_schemas(&plan, &worker));
                 }))
                 .await?;
             let schemas = out
@@ -391,7 +393,9 @@ impl StageRunner {
                 .ok_or_else(|| internal("exchange schemas without a result".to_owned()))?;
             schemas?
         };
-        let stages = fragment(&plan, &schemas)?;
+        let mut schemas = schemas;
+        let plan = split_nested_loops(&plan, &mut schemas)?;
+        let stages = fragment(&plan, &schemas.exchanges)?;
         let tasks = stage_tasks(&stages, self.partitions, self.splits.as_deref())?;
         // One worker: the query's broadcast builds are shared by all its
         // tasks, reserving from its pool (design P2-T177 unit 3).
@@ -411,13 +415,13 @@ impl StageRunner {
                 .cloned()
                 .ok_or_else(|| internal("a stage without tasks".to_owned()))
         };
-        // The filters earlier stages collected (cross-stage filters).
-        let mut filters = BTreeMap::new();
+        // The filters and bitmaps earlier stages computed.
+        let mut values = StageValues::default();
         for stage in maps {
             let mut runs = specs(stage)?
                 .into_iter()
                 .map(|mut spec| {
-                    spec.filters.clone_from(&filters);
+                    values.give(&mut spec);
                     let worker = worker.clone();
                     let query = &query;
                     async move { self.map_task(stage, worker, spec, query).await }
@@ -440,12 +444,12 @@ impl StageRunner {
             if let Some(e) = failed {
                 return Err(e);
             }
-            let values = merge_partials(&stage.plan, &partials);
+            let merged = merge_partials(&stage.plan, &partials)?;
             self.cross_stage.fetch_add(
-                u64::try_from(values.len()).unwrap_or(u64::MAX),
+                u64::try_from(merged.filters.len()).unwrap_or(u64::MAX),
                 Ordering::Relaxed,
             );
-            filters.extend(values);
+            values.extend(merged);
             query.check_cancelled()?;
         }
         let built = u64::try_from(broadcasts.builds()).unwrap_or(u64::MAX);
@@ -455,7 +459,7 @@ impl StageRunner {
             .into_iter()
             .next()
             .ok_or_else(|| internal("a root stage without a task".to_owned()))?;
-        spec.filters = filters;
+        values.give(&mut spec);
         let node = Self::instantiate(&self.executor, root.plan.clone(), worker, spec).await?;
         query.check_cancelled()?;
         self.roots.execute(node, query).await
@@ -570,47 +574,118 @@ fn canceled() -> KrishivError {
     OperationCanceled {}.into()
 }
 
-/// One map task's partials of the filters its exchange collects (design
-/// P2-T177, cross-stage filters).
-pub type Partials = BTreeMap<FilterId, FilterSnapshot>;
-
-/// The filters the root exchange of `fragment` collects, as one task
-/// published them into its `values` (a filter not published counts as
-/// lost).
-#[must_use]
-pub fn produced(fragment: &PhysicalPlan, values: &dyn ValueService) -> Partials {
-    let PhysNode::Exchange(e) = fragment.root() else {
-        return Partials::new();
-    };
-    e.filters
-        .iter()
-        .filter_map(|f| {
-            let cell = values.filter(f.id).ok()?;
-            Some((f.id, cell.published().snapshot.clone()))
-        })
-        .collect()
+/// What one map task computed for later stages: its partials of the
+/// filters its exchange collects (design P2-T177, cross-stage filters) and
+/// the bitmaps of its split nested-loop joins (design P2-T052b,
+/// 2026-11-06).
+#[derive(Debug, Clone, Default)]
+pub struct Partials {
+    /// By filter.
+    pub filters: BTreeMap<FilterId, FilterSnapshot>,
+    /// By bitmap.
+    pub marks: BTreeMap<MarksId, BuildMarks>,
 }
 
-/// The values of the filters the root exchange of `fragment` collects,
-/// from the partials of every task of its stage (`partials`, one map per
-/// task), as
-/// `KeyFilter` v1 bytes: the merge of every task's partial within the
-/// filter's options. A filter some task lost (disabled, or not published)
-/// has no value: its scans apply nothing.
+/// What one task published into its `values` of the filters the root
+/// exchange of `fragment` collects (a filter not published counts as lost)
+/// and of the bitmaps its split joins publish (one not published is
+/// missing, which fails the merge).
 #[must_use]
-pub fn merge_partials(
-    fragment: &PhysicalPlan,
-    partials: &[Partials],
-) -> BTreeMap<FilterId, Vec<u8>> {
-    let PhysNode::Exchange(e) = fragment.root() else {
-        return BTreeMap::new();
+pub fn produced(fragment: &PhysicalPlan, values: &dyn ValueService) -> Partials {
+    let filters = match fragment.root() {
+        PhysNode::Exchange(e) => e
+            .filters
+            .iter()
+            .filter_map(|f| {
+                let cell = values.filter(f.id).ok()?;
+                Some((f.id, cell.published().snapshot.clone()))
+            })
+            .collect(),
+        _ => BTreeMap::new(),
     };
-    let mut out = BTreeMap::new();
+    let marks = published_marks(fragment)
+        .into_iter()
+        .filter_map(|id| {
+            let (_, value) = values.subscribe(ValueId::Marks(id)).ok()?.current()?;
+            match &*value {
+                Value::Marks(m) => Some((id, m.clone())),
+                _ => None,
+            }
+        })
+        .collect();
+    Partials { filters, marks }
+}
+
+/// The values a stage's tasks computed for later stages, merged from
+/// every task's [`Partials`], as the bytes a [`TaskSpec`] carries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StageValues {
+    /// Runtime filters, as `KeyFilter` v1 bytes ([`TaskSpec::filters`]).
+    pub filters: BTreeMap<FilterId, Vec<u8>>,
+    /// Bitmaps, as [`BuildMarks`] bytes ([`TaskSpec::marks`]).
+    pub marks: BTreeMap<MarksId, Vec<u8>>,
+}
+
+impl StageValues {
+    /// Adds a later stage's values.
+    pub fn extend(&mut self, other: Self) {
+        self.filters.extend(other.filters);
+        self.marks.extend(other.marks);
+    }
+
+    /// Gives a task of a later stage these values.
+    pub fn give(&self, spec: &mut TaskSpec) {
+        spec.filters.clone_from(&self.filters);
+        spec.marks.clone_from(&self.marks);
+    }
+}
+
+/// The values `fragment`'s stage computed, from the partials of every task
+/// of the stage (`partials`, one per task).
+///
+/// The filters its root exchange collects, as `KeyFilter` v1 bytes: the
+/// merge of every task's partial within the filter's options. A filter
+/// some task lost (disabled, or not published) has no value: its scans
+/// apply nothing.
+///
+/// The bitmaps its split nested-loop joins publish, as [`BuildMarks`]
+/// bytes: the OR of every task's.
+///
+/// # Errors
+/// `INTERNAL_ERROR` when some task did not publish a bitmap, or bitmaps
+/// number different builds: the build rows depend on every task's.
+pub fn merge_partials(fragment: &PhysicalPlan, partials: &[Partials]) -> Result<StageValues> {
+    let mut out = StageValues::default();
+    for id in published_marks(fragment) {
+        let mut merged: Option<BuildMarks> = None;
+        for (task, p) in partials.iter().enumerate() {
+            let m = p.marks.get(&id).ok_or_else(|| {
+                internal(format!(
+                    "task {task} of a split nested-loop join did not publish marks #{}",
+                    id.0
+                ))
+            })?;
+            merged = Some(match merged {
+                None => m.clone(),
+                Some(acc) => acc.or(m)?,
+            });
+        }
+        let merged = merged.ok_or_else(|| {
+            internal(format!(
+                "marks #{} of a split nested-loop join without tasks",
+                id.0
+            ))
+        })?;
+        out.marks.insert(id, merged.encode());
+    }
+    let PhysNode::Exchange(e) = fragment.root() else {
+        return Ok(out);
+    };
     for f in &e.filters {
         let mut merged: Option<KeyFilter> = None;
         let mut complete = !partials.is_empty();
         for p in partials {
-            let Some(FilterSnapshot::Final(keys)) = p.get(&f.id) else {
+            let Some(FilterSnapshot::Final(keys)) = p.filters.get(&f.id) else {
                 complete = false;
                 break;
             };
@@ -627,8 +702,8 @@ pub fn merge_partials(
             }
         }
         if complete && let Some(m) = merged {
-            out.insert(f.id, m.encode());
+            out.filters.insert(f.id, m.encode());
         }
     }
-    out
+    Ok(out)
 }

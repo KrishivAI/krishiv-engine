@@ -54,7 +54,8 @@ use object_store::path::Path;
 use super::{
     AggregatePlan, ExchangeId, ExchangePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode,
     PhysicalPlan, ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SharedPlan,
-    SortMergeJoinPlan, SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
+    SortMergeJoinPlan, SubqueryPlan, UnmatchedBuildPlan, ValueId, Version, WritePlan, files_of,
+    partitions_of,
 };
 use crate::aggregate::{
     AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, HashAggregate,
@@ -64,8 +65,8 @@ use crate::error::{Result, internal};
 use crate::exchange::{Exchange, ExchangeRead, ExchangeSink, ExchangeWrite, MapOutputId};
 use crate::join::{
     BroadcastKey, BroadcastTables, BuildJob, HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec,
-    NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec, PrebuiltSink, SharedBuildJoinNode,
-    SortMergeJoin, SortMergeJoinNode,
+    MarksPublisher, NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec, PrebuiltSink,
+    SharedBuildJoinNode, SortMergeJoin, SortMergeJoinNode,
 };
 use crate::loops::UnionLoopSource;
 use crate::operator::{Operator, Sink, Source};
@@ -81,7 +82,7 @@ use crate::planner::nodes::{BreakerNode, FanInNode, OperatorNode, OrderedNode, S
 use crate::planner::subquery::{SubquerySink, SubqueryValue, WithSubqueries};
 use crate::shared::{Output, SharedSink, SharedSource};
 use crate::values::{
-    BroadcastBuild, LocalValues, Partial, Producer, Publication, Value, ValueService,
+    BroadcastBuild, BuildMarks, LocalValues, Partial, Producer, Publication, Value, ValueService,
 };
 use crate::window::{GroupLimitPlan, WindowGroupLimit};
 
@@ -164,6 +165,12 @@ pub struct TaskSpec {
     /// partition of the task's value service, so that service must count
     /// one producer for it (the default).
     pub filters: BTreeMap<FilterId, Vec<u8>>,
+    /// The build-match bitmaps of split nested-loop joins the fragment's
+    /// [`PhysNode::UnmatchedBuild`]s read, as [`BuildMarks`] bytes: the
+    /// OR of every task of the join's local stage (design P2-T052b,
+    /// 2026-11-06). Unlike a filter, a bitmap is never optional: the rows
+    /// depend on it, so a missing one fails the instantiation.
+    pub marks: BTreeMap<crate::physical::MarksId, Vec<u8>>,
 }
 
 /// What one task reads from one exchange of another stage.
@@ -192,6 +199,7 @@ impl TaskSpec {
             exchanges: BTreeMap::new(),
             output: None,
             filters: BTreeMap::new(),
+            marks: BTreeMap::new(),
         }
     }
 }
@@ -391,6 +399,26 @@ pub fn exchange_schemas(
     plan: &PhysicalPlan,
     worker: &WorkerContext,
 ) -> Result<BTreeMap<ExchangeId, SchemaRef>> {
+    Ok(plan_schemas(plan, worker)?.exchanges)
+}
+
+/// What a fragmenter needs to know of a plan's columns.
+#[derive(Debug, Clone, Default)]
+pub struct PlanSchemas {
+    /// The columns of each exchange's input ([`exchange_schemas`]).
+    pub exchanges: BTreeMap<ExchangeId, SchemaRef>,
+    /// The probe columns of each nested-loop join that returns build rows
+    /// over a broadcast exchange, by that exchange: what a split of the
+    /// join pads its build rows with (design P2-T052b, 2026-11-06).
+    pub nested_loop_probes: BTreeMap<ExchangeId, SchemaRef>,
+}
+
+/// [`exchange_schemas`], with the probe columns of the nested-loop joins
+/// a fragmenter may split.
+///
+/// # Errors
+/// As [`instantiate_task`].
+pub fn plan_schemas(plan: &PhysicalPlan, worker: &WorkerContext) -> Result<PlanSchemas> {
     // A fused aggregate never builds the exchange between its phases, which
     // a fragmenter cuts like any other.
     let written = worker.clone().with_fused_aggregates(false);
@@ -402,7 +430,7 @@ fn instantiate_with_schemas(
     plan: &PhysicalPlan,
     worker: &WorkerContext,
     task: &TaskSpec,
-) -> Result<(Arc<dyn ExecNode>, BTreeMap<ExchangeId, SchemaRef>)> {
+) -> Result<(Arc<dyn ExecNode>, PlanSchemas)> {
     let run = || {
         let spill = worker.spill_scope()?;
         let mut env = EvalEnv::from_plan(plan.env());
@@ -422,6 +450,7 @@ fn instantiate_with_schemas(
             shared_plans: Arc::from(plan.shared()),
             loops: HashMap::new(),
             schemas: BTreeMap::new(),
+            probes: BTreeMap::new(),
             unit_weights: HashSet::new(),
         };
         for root in plan.roots() {
@@ -454,7 +483,13 @@ fn instantiate_with_schemas(
         } else {
             built.node
         };
-        Ok((node, cx.schemas))
+        Ok((
+            node,
+            PlanSchemas {
+                exchanges: cx.schemas,
+                nested_loop_probes: cx.probes,
+            },
+        ))
     };
     // Instantiation recurses once per node, as planning does.
     krishiv_common::stack::on_big_stack(run)
@@ -493,6 +528,8 @@ struct Instantiation<'a> {
     loops: HashMap<u32, Arc<Output>>,
     /// The columns of each exchange's input built so far.
     schemas: BTreeMap<ExchangeId, SchemaRef>,
+    /// [`PlanSchemas::nested_loop_probes`] built so far.
+    probes: BTreeMap<ExchangeId, SchemaRef>,
     /// Aggregate nodes (by address) that refuse weights other than 1: the
     /// partial phase of a written-out `DISTINCT` aggregation.
     unit_weights: HashSet<usize>,
@@ -548,6 +585,7 @@ impl Detached {
                 shared_plans: Arc::clone(&self.shared_plans),
                 loops,
                 schemas: BTreeMap::new(),
+                probes: BTreeMap::new(),
                 unit_weights: HashSet::new(),
             };
             cx.declare_filters(node)?;
@@ -1230,13 +1268,30 @@ impl Instantiation<'_> {
             PhysNode::SortMergeJoin(j) => self.merge_join(j),
             PhysNode::NestedLoopJoin(j) => {
                 let probe = self.node(&j.probe)?;
-                let build = self.node(&j.build)?;
+                if let PhysNode::Exchange(e) = &*j.build
+                    && e.partitioning == Partitioning::Broadcast
+                    && j.join_type.builds_preserved()
+                {
+                    self.probes.insert(e.id, Arc::clone(&probe.schema));
+                }
+                let (build, publish) = match j.marks {
+                    None => (self.node(&j.build)?, None),
+                    Some(id) => (
+                        self.ordered_broadcast(&j.build)?,
+                        Some(MarksPublisher {
+                            id,
+                            values: Arc::clone(&self.values),
+                            producer: self.worker.producer,
+                        }),
+                    ),
+                };
                 let join = nested_loop_join(
                     &probe.schema,
                     &build.schema,
                     j,
                     &self.env,
                     self.spill.clone(),
+                    publish,
                 )?;
                 Ok(Built {
                     schema: join.schema(),
@@ -1284,6 +1339,7 @@ impl Instantiation<'_> {
                 partitioning,
                 schema,
             } => self.exchange_source(*id, partitioning, schema),
+            PhysNode::UnmatchedBuild(u) => self.unmatched_build(u),
         }
     }
 
@@ -1947,6 +2003,7 @@ pub(crate) fn nested_loop_join(
     j: &NestedLoopPlan,
     env: &EvalEnv,
     spill: Option<SpillScope>,
+    publish: Option<MarksPublisher>,
 ) -> Result<NestedLoopJoin> {
     NestedLoopJoin::try_new(NestedLoopSpec {
         join_type: j.join_type,
@@ -1954,6 +2011,7 @@ pub(crate) fn nested_loop_join(
         build_schema: Arc::clone(build),
         filter: residual(probe, build, j.residual.as_ref(), env)?,
         spill,
+        publish,
     })
 }
 
