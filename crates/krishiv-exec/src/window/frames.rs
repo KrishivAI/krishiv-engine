@@ -680,7 +680,7 @@ fn concat(slices: &[Slice<'_>], make: impl Fn(&Slice<'_>) -> Result<ArrayRef>) -
 }
 
 /// The unit's argument columns of `a` and its filter mask.
-fn unit_inputs(
+pub(super) fn unit_inputs(
     a: &AggregateExpr,
     f: &WindowFunctionPlan,
     slices: &[Slice<'_>],
@@ -1061,6 +1061,9 @@ fn bytes(
 /// holds at most: the frames, the unit's argument columns (strings as
 /// views), and the method's states and scratch (see [`CHUNK`]).
 pub(super) fn cost(a: &AggregateExpr, f: &WindowFunctionPlan, rows: usize) -> Result<usize> {
+    if super::udaf::is_udf(a) {
+        return super::udaf::cost(f, rows, 1, &f.output()?.0);
+    }
     let (out, _) = f.output()?;
     let arg = |t: &DataType| width(t, rows).max(rows * 16 + rows.div_ceil(8));
     let inputs: usize = a.args.iter().map(|_| arg(&a.arg_type)).sum::<usize>() + rows.div_ceil(8);

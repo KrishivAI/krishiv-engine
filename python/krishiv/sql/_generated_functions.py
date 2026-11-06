@@ -286,6 +286,7 @@ __all__ = [
     "shiftleft",
     "shiftright",
     "shiftrightunsigned",
+    "shuffle",
     "sign",
     "signum",
     "sin",
@@ -1791,6 +1792,11 @@ def shiftright(col: ColumnOrName, numBits: int) -> Column:
 def shiftrightunsigned(col: ColumnOrName, numBits: int) -> Column:
     """Calls the registry function ``shiftrightunsigned``."""
     return _call("shiftrightunsigned", _named(col, "col"), _lit(numBits, "numBits"))
+
+
+def shuffle(col: ColumnOrName, seed: int | Column | None = None) -> Column:
+    """Calls the registry function ``shuffle``."""
+    return _call("shuffle", _named(col, "col"), *_opt(_lit, seed, "seed"))
 
 
 def sign(col: ColumnOrName) -> Column:
