@@ -501,7 +501,7 @@ impl IoScheduler {
         let store: Arc<dyn ObjectStore> = match &self.block_cache {
             Some(cache) if id.is_remote() => Arc::new(CachingStore::with_scope(
                 store,
-                id.to_string(),
+                id.redacted_key(),
                 Arc::clone(cache),
                 scope,
             )),

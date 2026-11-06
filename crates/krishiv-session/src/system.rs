@@ -856,7 +856,7 @@ pub(crate) struct Totals {
     pub(crate) workload_class: &'static str,
     pub(crate) cpu_ns: i64,
     pub(crate) rows_produced: Option<i64>,
-    /// Process-wide I/O since the query started (concurrent queries share it).
+    /// The query's own I/O since it started (its I/O context; design P2-E1 R3).
     pub(crate) bytes_read: i64,
     pub(crate) bytes_written: i64,
     pub(crate) spill_bytes: i64,

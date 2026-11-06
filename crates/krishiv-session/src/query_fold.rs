@@ -99,7 +99,7 @@ impl QueryStart {
                         .filter(|e| e.node.is_none() && e.role == krishiv_exec::OperatorRole::Sink)
                         .map(|e| i64::try_from(e.metrics.rows_in).unwrap_or(i64::MAX))
                         .max(),
-                    // Process-wide deltas: concurrent queries see each other's I/O.
+                    // The query's own counters (its I/O context), since it started.
                     bytes_read: i64::try_from(
                         IoCounters::get(&self.io.counters().bytes_read)
                             .saturating_sub(self.bytes_read),

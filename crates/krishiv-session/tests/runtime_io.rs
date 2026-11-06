@@ -45,7 +45,7 @@ fn a_querys_bytes_are_its_own() {
         let df = block_on(a.sql(&format!("SELECT id, id * 7 AS v FROM range(0, {rows})"))).unwrap();
         block_on(df.write().format("parquet").save(path.to_str().unwrap())).unwrap();
     };
-    write(4_000_000, &big);
+    write(1_000_000, &big);
     write(1_000, &small);
     let size = |p: &std::path::Path| -> u64 {
         std::fs::read_dir(p)
@@ -79,4 +79,33 @@ fn a_querys_bytes_are_its_own() {
     );
     let theirs = u64::try_from(bytes_read(&b, &big_sql)).unwrap();
     assert!(theirs >= big_bytes / 2, "{theirs} of {big_bytes}");
+}
+
+/// A write query counts the bytes it wrote (its own I/O context).
+#[test]
+fn a_write_counts_its_bytes_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT id FROM range(0, 100000)")).unwrap();
+    block_on(df.write().format("parquet").save(out.to_str().unwrap())).unwrap();
+    let written: u64 = std::fs::read_dir(&out)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.metadata().unwrap().len())
+        .sum();
+    let got = run(
+        &s,
+        "SELECT bytes_written FROM system.queries WHERE query_text = 'SELECT id FROM range(0, 100000)'",
+    );
+    let c = got[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    let counted = u64::try_from(c.value(0)).unwrap();
+    assert!(
+        counted > 0 && counted <= written + 4096,
+        "{counted} of {written}"
+    );
 }

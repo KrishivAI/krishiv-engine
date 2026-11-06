@@ -562,9 +562,10 @@ impl StoreRegistry {
     /// of its credential scope, if any, else with a `#cfg:` hash of every `fs.*` setting the
     /// registry builds from) plus the non-secret hash of the per-read options.
     ///
-    /// The `#cfg:` part lets one `IoScheduler` serve many sessions (one engine runtime): stores
-    /// of sessions whose `fs.*` settings differ in anything (a key, an endpoint, a region) get
-    /// different ids, so a query's registration never replaces another session's store and
+    /// The `#cfg:` part (and `#p:`, a hash of the principal of a [`CacheScope::Principal`]
+    /// registry) lets one `IoScheduler` serve many sessions (one engine runtime): stores of
+    /// sessions whose `fs.*` settings differ in anything (a key, an endpoint, a region), or whose
+    /// principals differ, get different ids, so a query's registration never replaces another session's store and
     /// cache entries keyed by the id are never shared between them. Sessions with equal
     /// settings, or none, share the store. Secret values enter the hash through their keyed
     /// fingerprint (ADR 0038), so the id carries no secret.
@@ -579,13 +580,22 @@ impl StoreRegistry {
                 &StoreId::new(format!("{}#scope:{}", url.store_id.key(), entry.nonce)),
                 options,
             ),
-            None => match self.settings_hash() {
-                Some(hash) => effective_store_id(
-                    &StoreId::new(format!("{}#cfg:{hash:016x}", url.store_id.key())),
-                    options,
-                ),
-                None => effective_store_id(&url.store_id, options),
-            },
+            None => {
+                let mut key = url.store_id.key().to_owned();
+                if let Some(hash) = self.settings_hash() {
+                    key.push_str(&format!("#cfg:{hash:016x}"));
+                }
+                // One scheduler serves many principals (an engine runtime): a principal's
+                // registration must never replace another's, whose block-cache scope differs.
+                if let CacheScope::Principal(p) = &self.cache_scope {
+                    let principal = OptionValue::Plain(p.clone());
+                    key.push_str(&format!(
+                        "#p:{:016x}",
+                        options_hash(&[("principal", &principal)])
+                    ));
+                }
+                effective_store_id(&StoreId::new(key), options)
+            }
         }
     }
 
@@ -908,7 +918,7 @@ fn effective_store_id(base: &StoreId, options: &BTreeMap<String, OptionValue>) -
     if relevant.is_empty() {
         return base.clone();
     }
-    StoreId::new(format!("{base}#{:016x}", options_hash(&relevant)))
+    StoreId::new(format!("{}#{:016x}", base.key(), options_hash(&relevant)))
 }
 
 /// The `fs.*` entries of `options` (Spark's store configuration keys),

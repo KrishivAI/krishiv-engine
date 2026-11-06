@@ -637,7 +637,9 @@ fn per_read_options_isolate_store_ids_without_leaking_values() {
     );
     let id = |pairs: &[(&str, &str)]| effective_store_id(&base, &read_options(pairs));
     let plain = id(&[(S3_ENDPOINT, "http://a:9000")]);
-    assert!(plain.to_string().starts_with("s3://bucket#"));
+    assert!(plain.key().starts_with("s3://bucket#"));
+    // Messages name the location only.
+    assert_eq!(plain.to_string(), "s3://bucket");
     assert_eq!(plain, id(&[(S3_ENDPOINT, "http://a:9000")]));
     assert_ne!(plain, id(&[(S3_ENDPOINT, "http://b:9000")]));
     assert_eq!(
@@ -768,6 +770,21 @@ fn store_ids_carry_a_hash_of_every_fs_setting() {
     assert_ne!(s1, s2);
     assert!(!s1.key().contains(canary));
     assert!(!format!("{s1} {s1:?}").contains(canary));
+    // Messages show the location only: no hash, no fingerprint.
+    assert_eq!(a.to_string(), "s3://bucket");
+    // One scheduler serves many principals: equal settings, different
+    // principals, different ids (a registration never replaces another
+    // principal's, whose block-cache scope differs); the same principal shares.
+    let as_principal = |who: &str| {
+        StoreRegistry::new(config(&[("fs.s3a.endpoint", "http://a:9000")]))
+            .with_cache_scope(CacheScope::Principal(who.to_owned()))
+            .id_of(&url, None, &none)
+    };
+    assert_ne!(as_principal("alice"), as_principal("bob"));
+    assert_eq!(as_principal("alice"), as_principal("alice"));
+    assert!(as_principal("alice").key().contains("#p:"));
+    assert!(!as_principal("alice").key().contains("alice"));
+    assert_eq!(as_principal("alice").to_string(), "s3://bucket");
     // Per-read options still add their own hash.
     let mut options = BTreeMap::new();
     options.insert(
