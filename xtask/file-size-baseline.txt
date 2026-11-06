@@ -19,7 +19,8 @@
 2429 crates/krishiv-kernels/src/map.rs
 2468 crates/krishiv-plan/src/analyzer/coerce.rs
 # +9 lines over main: a cast of an alias (`v:a::int`) keeps the alias's name (T001c, PR #491)
-4588 crates/krishiv-plan/src/analyzer/ops.rs
+# +67 lines over main: USING-join keys through projections, windows and pipe boundaries (Widen::Hidden, P2b row 11)
+4655 crates/krishiv-plan/src/analyzer/ops.rs
 3098 crates/krishiv-plan/src/analyzer/subquery.rs
 5392 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
