@@ -58,6 +58,26 @@ pub fn krishiv_udf_sdk::UdfInputType::eq(&self, &krishiv_udf_sdk::UdfInputType) 
 impl core::fmt::Debug for krishiv_udf_sdk::UdfInputType
 pub fn krishiv_udf_sdk::UdfInputType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_udf_sdk::UdfInputType
+#[non_exhaustive] pub struct krishiv_udf_sdk::AggregateProperties
+pub krishiv_udf_sdk::AggregateProperties::deterministic: bool
+pub krishiv_udf_sdk::AggregateProperties::distinct: bool
+pub krishiv_udf_sdk::AggregateProperties::null_handling: krishiv_udf_sdk::NullHandling
+impl krishiv_udf_sdk::AggregateProperties
+pub const krishiv_udf_sdk::AggregateProperties::DEFAULT: Self
+pub const fn krishiv_udf_sdk::AggregateProperties::with_deterministic(self, bool) -> Self
+pub const fn krishiv_udf_sdk::AggregateProperties::with_distinct(self, bool) -> Self
+pub const fn krishiv_udf_sdk::AggregateProperties::with_null_handling(self, krishiv_udf_sdk::NullHandling) -> Self
+impl core::clone::Clone for krishiv_udf_sdk::AggregateProperties
+pub fn krishiv_udf_sdk::AggregateProperties::clone(&self) -> krishiv_udf_sdk::AggregateProperties
+impl core::cmp::Eq for krishiv_udf_sdk::AggregateProperties
+impl core::cmp::PartialEq for krishiv_udf_sdk::AggregateProperties
+pub fn krishiv_udf_sdk::AggregateProperties::eq(&self, &krishiv_udf_sdk::AggregateProperties) -> bool
+impl core::default::Default for krishiv_udf_sdk::AggregateProperties
+pub fn krishiv_udf_sdk::AggregateProperties::default() -> Self
+impl core::fmt::Debug for krishiv_udf_sdk::AggregateProperties
+pub fn krishiv_udf_sdk::AggregateProperties::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_udf_sdk::AggregateProperties
+impl core::marker::StructuralPartialEq for krishiv_udf_sdk::AggregateProperties
 pub struct krishiv_udf_sdk::ArgField
 pub krishiv_udf_sdk::ArgField::data_type: core::option::Option<krishiv_types::data_type::DataType>
 pub krishiv_udf_sdk::ArgField::nullable: bool
@@ -93,6 +113,18 @@ pub fn krishiv_udf_sdk::ReturnField::eq(&self, &krishiv_udf_sdk::ReturnField) ->
 impl core::fmt::Debug for krishiv_udf_sdk::ReturnField
 pub fn krishiv_udf_sdk::ReturnField::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_udf_sdk::ReturnField
+pub struct krishiv_udf_sdk::StateField
+pub krishiv_udf_sdk::StateField::data_type: krishiv_types::data_type::DataType
+pub krishiv_udf_sdk::StateField::name: alloc::string::String
+pub krishiv_udf_sdk::StateField::nullable: bool
+impl core::clone::Clone for krishiv_udf_sdk::StateField
+pub fn krishiv_udf_sdk::StateField::clone(&self) -> krishiv_udf_sdk::StateField
+impl core::cmp::Eq for krishiv_udf_sdk::StateField
+impl core::cmp::PartialEq for krishiv_udf_sdk::StateField
+pub fn krishiv_udf_sdk::StateField::eq(&self, &krishiv_udf_sdk::StateField) -> bool
+impl core::fmt::Debug for krishiv_udf_sdk::StateField
+pub fn krishiv_udf_sdk::StateField::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_udf_sdk::StateField
 pub struct krishiv_udf_sdk::UdfError
 impl krishiv_udf_sdk::UdfError
 pub fn krishiv_udf_sdk::UdfError::message(&self) -> &str
@@ -115,10 +147,13 @@ impl core::marker::StructuralPartialEq for krishiv_udf_sdk::UdfError
 pub struct krishiv_udf_sdk::UdfLibrary
 impl krishiv_udf_sdk::UdfLibrary
 pub fn krishiv_udf_sdk::UdfLibrary::get(&self, &str) -> core::option::Option<alloc::sync::Arc<dyn krishiv_udf_sdk::ScalarUdf>>
+pub fn krishiv_udf_sdk::UdfLibrary::get_aggregate(&self, &str) -> core::option::Option<alloc::sync::Arc<dyn krishiv_udf_sdk::AggregateUdf>>
+pub fn krishiv_udf_sdk::UdfLibrary::get_aggregate_versioned(&self, &str, u32) -> core::option::Option<alloc::sync::Arc<dyn krishiv_udf_sdk::AggregateUdf>>
 pub fn krishiv_udf_sdk::UdfLibrary::get_versioned(&self, &str, u32) -> core::option::Option<alloc::sync::Arc<dyn krishiv_udf_sdk::ScalarUdf>>
 pub fn krishiv_udf_sdk::UdfLibrary::is_empty(&self) -> bool
 pub fn krishiv_udf_sdk::UdfLibrary::new() -> Self
 pub fn krishiv_udf_sdk::UdfLibrary::register(&self, alloc::sync::Arc<dyn krishiv_udf_sdk::ScalarUdf>) -> core::result::Result<(), krishiv_udf_sdk::UdfError>
+pub fn krishiv_udf_sdk::UdfLibrary::register_aggregate(&self, alloc::sync::Arc<dyn krishiv_udf_sdk::AggregateUdf>) -> core::result::Result<(), krishiv_udf_sdk::UdfError>
 pub fn krishiv_udf_sdk::UdfLibrary::version(&self) -> u64
 impl core::default::Default for krishiv_udf_sdk::UdfLibrary
 pub fn krishiv_udf_sdk::UdfLibrary::default() -> Self
@@ -138,6 +173,22 @@ impl core::fmt::Debug for krishiv_udf_sdk::UdfProperties
 pub fn krishiv_udf_sdk::UdfProperties::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_udf_sdk::UdfProperties
 impl core::marker::StructuralPartialEq for krishiv_udf_sdk::UdfProperties
+pub trait krishiv_udf_sdk::AggregateUdf: core::marker::Send + core::marker::Sync + core::fmt::Debug + 'static
+pub fn krishiv_udf_sdk::AggregateUdf::accumulator(&self, &[krishiv_udf_sdk::ArgField], &krishiv_udf_sdk::InvokeContext) -> core::result::Result<alloc::boxed::Box<dyn krishiv_udf_sdk::GroupsAccumulator>, krishiv_udf_sdk::UdfError>
+pub fn krishiv_udf_sdk::AggregateUdf::name(&self) -> &str
+pub fn krishiv_udf_sdk::AggregateUdf::properties(&self) -> krishiv_udf_sdk::AggregateProperties
+pub fn krishiv_udf_sdk::AggregateUdf::return_field(&self, &[krishiv_udf_sdk::ArgField]) -> core::result::Result<krishiv_udf_sdk::ReturnField, krishiv_udf_sdk::UdfError>
+pub fn krishiv_udf_sdk::AggregateUdf::signature(&self) -> &krishiv_udf_sdk::Signature
+pub fn krishiv_udf_sdk::AggregateUdf::state_fields(&self, &[krishiv_udf_sdk::ArgField]) -> core::result::Result<alloc::vec::Vec<krishiv_udf_sdk::StateField>, krishiv_udf_sdk::UdfError>
+pub fn krishiv_udf_sdk::AggregateUdf::version(&self) -> u32
+pub trait krishiv_udf_sdk::GroupsAccumulator: core::marker::Send + core::fmt::Debug
+pub fn krishiv_udf_sdk::GroupsAccumulator::evaluate(&self, &[u32]) -> core::result::Result<arrow_array::array::ArrayRef, krishiv_udf_sdk::UdfError>
+pub fn krishiv_udf_sdk::GroupsAccumulator::merge(&mut self, &[arrow_array::array::ArrayRef], &[u32]) -> core::result::Result<(), krishiv_udf_sdk::UdfError>
+pub fn krishiv_udf_sdk::GroupsAccumulator::resize(&mut self, usize)
+pub fn krishiv_udf_sdk::GroupsAccumulator::retract(&mut self, &[krishiv_udf_sdk::UdfArg<'_>], &[u32]) -> core::result::Result<bool, krishiv_udf_sdk::UdfError>
+pub fn krishiv_udf_sdk::GroupsAccumulator::size(&self) -> usize
+pub fn krishiv_udf_sdk::GroupsAccumulator::state(&self, &[u32]) -> core::result::Result<alloc::vec::Vec<arrow_array::array::ArrayRef>, krishiv_udf_sdk::UdfError>
+pub fn krishiv_udf_sdk::GroupsAccumulator::update(&mut self, &[krishiv_udf_sdk::UdfArg<'_>], &[u32]) -> core::result::Result<(), krishiv_udf_sdk::UdfError>
 pub trait krishiv_udf_sdk::ScalarUdf: core::marker::Send + core::marker::Sync + core::fmt::Debug + 'static
 pub fn krishiv_udf_sdk::ScalarUdf::invoke(&self, &[krishiv_udf_sdk::UdfArg<'_>], usize, &krishiv_udf_sdk::InvokeContext) -> core::result::Result<arrow_array::array::ArrayRef, krishiv_udf_sdk::UdfError>
 pub fn krishiv_udf_sdk::ScalarUdf::name(&self) -> &str

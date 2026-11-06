@@ -1,4 +1,6 @@
 pub mod krishiv
+pub use krishiv::AggregateProperties
+pub use krishiv::AggregateUdf
 pub use krishiv::ArgField
 pub use krishiv::Column
 pub use krishiv::CounterSample
@@ -13,6 +15,7 @@ pub use krishiv::ExplainVerbose
 pub use krishiv::GaugeSample
 pub use krishiv::GraphFormat
 pub use krishiv::GroupedData
+pub use krishiv::GroupsAccumulator
 pub use krishiv::HistogramBucket
 pub use krishiv::HistogramSample
 pub use krishiv::InvokeContext
@@ -29,6 +32,7 @@ pub use krishiv::ScalarUdf
 pub use krishiv::Session
 pub use krishiv::SessionBuilder
 pub use krishiv::Signature
+pub use krishiv::StateField
 pub use krishiv::StorageLevel
 pub use krishiv::TextOptions
 pub use krishiv::UdfArg
