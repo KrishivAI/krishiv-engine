@@ -33,6 +33,30 @@ and releasing the stream cancels it.
 the PyCapsule interface do not). `toPandas` also needs pandas (`pip install krishiv[pandas]`). SQL expression strings
 are supported (`F.expr`, `selectExpr`, `filter`/`where` with a string).
 
+## Run your PySpark tests locally
+
+Tests that build a `SparkSession` can run on Krishiv in-process, without a JVM. `krishiv.testing` has
+`assertDataFrameEqual` and `assertSchemaEqual` (behaviour of `pyspark.testing`: row-order flag, float tolerance `rtol` and `atol`,
+nullability check, a readable diff of the rows that differ) and a pytest fixture:
+
+```python
+# conftest.py
+pytest_plugins = ["krishiv.testing.pytest_plugin"]
+```
+
+```python
+# test_orders.py
+from krishiv.sql import Row
+from krishiv.testing import assertDataFrameEqual
+
+
+def test_totals(krishiv_session):
+    df = krishiv_session.sql("SELECT * FROM VALUES (1, 2), (1, 3) AS t(k, v)")
+    assertDataFrameEqual(df.groupBy("k").sum("v"), [Row(k=1, **{"sum(v)": 5})])
+```
+
+`krishiv_session` is one session for the whole run; nothing registers the fixture unless you list the plugin.
+
 ## Develop
 
 ```sh
