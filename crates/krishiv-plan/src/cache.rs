@@ -373,6 +373,11 @@ impl Encoder {
                 self.expr(expr, bias);
                 self.text(name);
             }
+            ExprNode::Pipe { expr, clause } => {
+                self.tag("pipe");
+                self.expr(expr, bias);
+                self.debug(clause);
+            }
             ExprNode::MultiAlias { expr, names } => {
                 self.tag("multi-alias");
                 self.expr(expr, bias);

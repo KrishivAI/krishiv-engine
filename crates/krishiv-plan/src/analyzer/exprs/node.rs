@@ -1439,6 +1439,31 @@ impl Resolver<'_> {
                     ..keep(arg_type(to.clone(), nullable))
                 }
             }
+            // Spark's `ValidateAndStripPipeExpressions`: the item itself,
+            // once its aggregate functions fit the operator.
+            ExprNode::Pipe { clause, .. } => {
+                let first = first_aggregate(&kids[0].expr);
+                match (clause, first) {
+                    (crate::PipeClause::Aggregate, None) => {
+                        return Err(AnalysisError::new(
+                            krishiv_common::error::PipeOperatorAggregateExpressionContainsNoAggregateFunction {
+                                expr: kids[0].expr.to_string(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    (crate::PipeClause::Extend | crate::PipeClause::Set, Some(a)) => {
+                        return Err(AnalysisError::new(
+                            krishiv_common::error::PipeOperatorContainsAggregateFunction {
+                                expr: a.to_string(),
+                                clause: clause.name().to_owned(),
+                            },
+                            a.origin,
+                        ));
+                    }
+                    _ => kids[0].clone(),
+                }
+            }
             // Generators take their several names before this point
             // (`extract_generator`, lowering): any other expression with
             // a multi-part alias is an error.
@@ -1660,4 +1685,25 @@ fn make_nullable(mut b: Bound) -> Bound {
         );
     }
     b
+}
+
+/// The first aggregate call in `e`, in Spark's order (a node before its
+/// children); window expressions are not entered, as Spark's
+/// `findFirstAggregate` does not enter them.
+fn first_aggregate(e: &Arc<Expr>) -> Option<Arc<Expr>> {
+    let mut stack = vec![Arc::clone(e)];
+    while let Some(x) = stack.pop() {
+        match &x.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
+                return Some(x);
+            }
+            ExprNode::Window(_) => {}
+            _ => {
+                let mut kids = Vec::new();
+                x.for_each_child(&mut |k| kids.push(Arc::clone(k)));
+                stack.extend(kids.into_iter().rev());
+            }
+        }
+    }
+    None
 }

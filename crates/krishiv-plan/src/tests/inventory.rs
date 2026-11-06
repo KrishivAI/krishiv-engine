@@ -71,6 +71,7 @@ fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
         ExprNode::Cast { .. } => "ExprNode::Cast",
         ExprNode::Alias { .. } => "ExprNode::Alias",
         ExprNode::MultiAlias { .. } => "ExprNode::MultiAlias",
+        ExprNode::Pipe { .. } => "ExprNode::Pipe",
         ExprNode::Subquery { .. } => "ExprNode::Subquery",
         ExprNode::Window(_) => "ExprNode::Window",
         ExprNode::Lambda { .. } => "ExprNode::Lambda",

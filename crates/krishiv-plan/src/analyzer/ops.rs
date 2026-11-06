@@ -4171,7 +4171,7 @@ fn is_generator(e: &Arc<Expr>) -> bool {
 fn is_json_tuple_call(e: &Arc<Expr>) -> bool {
     match &e.node {
         ExprNode::Function(f) => f.name.eq_ignore_ascii_case("json_tuple"),
-        ExprNode::Alias { expr, .. } => is_json_tuple_call(expr),
+        ExprNode::Alias { expr, .. } | ExprNode::Pipe { expr, .. } => is_json_tuple_call(expr),
         _ => false,
     }
 }

@@ -450,6 +450,19 @@ impl Resolver<'_> {
                         });
                     }
                     let mask = |err: AnalysisError| mask_if(is_secret, err);
+                    // A star item of a pipe operator (`|> EXTEND *`): Spark's
+                    // star sits under its `PipeExpression`.
+                    if let ExprNode::Pipe { expr, .. } = &x.node
+                        && matches!(expr.node, ExprNode::Star(_))
+                    {
+                        return Err(AnalysisError::new(
+                            InvalidUsageOfStarOrRegex {
+                                elem: "'*'".to_owned(),
+                                pretty_name: "expression `pipeexpression`".to_owned(),
+                            },
+                            x.origin,
+                        ));
+                    }
                     if let Some(rewritten) = self.star_args(&x, cx).map_err(mask)? {
                         rewritten_calls.push(Arc::clone(&rewritten));
                         if is_secret {

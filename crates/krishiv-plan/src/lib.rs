@@ -140,8 +140,9 @@ pub use display::identity_string;
 pub use encode::{ENCODING_VERSION, StructuralHash};
 pub use expr::{
     AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FieldOp, FrameBound, FrameUnits,
-    FunctionCall, NullOrdering, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star,
-    SubqueryKind, TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec, WindowSpecRef,
+    FunctionCall, NullOrdering, PipeClause, ResolvedExpr, ResolvedFunction, SortDirection,
+    SortOrder, Star, SubqueryKind, TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec,
+    WindowSpecRef,
 };
 pub use function::{Builtin, FunctionId, FunctionKind, QuantifiedLike};
 pub use literal::{DayTimeField, Literal, YearMonthField};

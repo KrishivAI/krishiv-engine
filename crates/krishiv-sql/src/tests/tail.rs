@@ -233,7 +233,8 @@ fn tablesample_positions() {
     ] {
         assert_eq!(class(sql), "PARSE_SYNTAX_ERROR", "{sql}");
     }
-    assert!(unsupported("SELECT * FROM t TABLESAMPLE (1 ROWS)").contains("TABLESAMPLE"));
+    // A partial fraction is the one sample that does not lower.
+    assert!(unsupported("SELECT * FROM t TABLESAMPLE (50 PERCENT)").contains("TABLESAMPLE"));
 }
 
 #[test]
@@ -523,7 +524,7 @@ fn pipe_operator_checks() {
 
 #[test]
 fn pipelines_cap_their_depth() {
-    assert!(unsupported("TABLE t |> TABLESAMPLE (1 ROWS)").contains("TABLESAMPLE"));
+    assert!(unsupported("TABLE t |> TABLESAMPLE (50 PERCENT)").contains("TABLESAMPLE"));
     // Operators of one pipeline are a list: a long chain costs no depth.
     let chain = format!("TABLE t{}", " |> WHERE a".repeat(5000));
     assert_eq!(pipe_ops(&chain).len(), 5000);

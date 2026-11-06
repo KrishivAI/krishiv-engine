@@ -821,6 +821,18 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
         ExprNode::MultiAlias { expr, names } => {
             names.iter_mut().any(|n| m_string(n, w)) || m_expr(expr, w)
         }
+        ExprNode::Pipe { expr, clause } => {
+            site!(
+                w,
+                *clause = match clause {
+                    crate::PipeClause::Aggregate => crate::PipeClause::Extend,
+                    crate::PipeClause::Extend | crate::PipeClause::Set => {
+                        crate::PipeClause::Aggregate
+                    }
+                }
+            );
+            m_expr(expr, w)
+        }
         ExprNode::Lambda { params, body } => {
             site!(
                 w,

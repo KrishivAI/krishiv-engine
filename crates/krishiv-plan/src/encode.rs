@@ -1209,6 +1209,15 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.str(name);
                 self.expr(expr);
             }
+            ExprNode::Pipe { expr, clause } => {
+                self.u8(34);
+                self.u8(match clause {
+                    crate::PipeClause::Extend => 0,
+                    crate::PipeClause::Set => 1,
+                    crate::PipeClause::Aggregate => 2,
+                });
+                self.expr(expr);
+            }
             ExprNode::MultiAlias { expr, names } => {
                 self.u8(33);
                 self.len(names.len());

@@ -28,9 +28,9 @@ use krishiv_common::stack::{STEP, on_big_stack};
 use krishiv_plan::{
     Builtin, CastMode, ColumnRef, Cte, Expr as IrExpr, ExprNode, FrameBound as IrFrameBound,
     FrameUnits as IrFrameUnits, FunctionCall, Grouping, JoinCondition, JoinKind as IrJoin,
-    Literal as IrLiteral, LogicalPlan, Origin, PivotValue, Plan, PlanNode, ReadSource, SortOrder,
-    SourceId, Star, SubqueryKind, TypedLiteralKind as IrTypedKind, UnpivotColumnSet, WindowExpr,
-    WindowFrame as IrWindowFrame, WindowSpec as IrWindowSpec, WindowSpecRef,
+    Literal as IrLiteral, LogicalPlan, Origin, PipeClause, PivotValue, Plan, PlanNode, ReadSource,
+    SortOrder, SourceId, Star, SubqueryKind, TypedLiteralKind as IrTypedKind, UnpivotColumnSet,
+    WindowExpr, WindowFrame as IrWindowFrame, WindowSpec as IrWindowSpec, WindowSpecRef,
 };
 use krishiv_types::DecimalType;
 
@@ -174,6 +174,26 @@ fn reject_organization(q: &Query) -> R<()> {
         }
     }
     Ok(())
+}
+
+/// `item` of a pipe operator under its [`ExprNode::Pipe`] check (Spark's
+/// `PipeExpression`): inside the alias when the item has one, as Spark's
+/// `AstBuilder` puts it.
+fn pipe_item(item: Arc<IrExpr>, clause: PipeClause) -> Arc<IrExpr> {
+    let wrap = |expr: Arc<IrExpr>| {
+        let origin = expr.origin;
+        Arc::new(IrExpr::new(ExprNode::Pipe { expr, clause }).with_origin(origin))
+    };
+    match &item.node {
+        ExprNode::Alias { expr, name } => Arc::new(
+            IrExpr::new(ExprNode::Alias {
+                expr: wrap(Arc::clone(expr)),
+                name: name.clone(),
+            })
+            .with_origin(item.origin),
+        ),
+        _ => wrap(item),
+    }
 }
 
 fn unsupported(feature: &str, span: Span) -> ParseError {
@@ -811,7 +831,8 @@ impl Lowerer {
             PipeOpKind::Extend(items) => {
                 let mut exprs = vec![star(self, Vec::new())];
                 for item in items {
-                    exprs.push(self.select_item(item)?);
+                    let item = self.select_item(item)?;
+                    exprs.push(pipe_item(item, PipeClause::Extend));
                 }
                 self.node(
                     PlanNode::Project {
@@ -891,7 +912,7 @@ impl Lowerer {
                 for a in assignments {
                     // Validation rejects multi-part keys.
                     let Some(name) = a.key.last() else { continue };
-                    let value = arc(self.expr(&a.value)?);
+                    let value = pipe_item(arc(self.expr(&a.value)?), PipeClause::Set);
                     let star = self.ex(
                         ExprNode::Star(Star {
                             regex: None,
@@ -969,7 +990,8 @@ impl Lowerer {
             }
         }
         for item in &a.aggregates {
-            items.push(self.select_item(item)?);
+            let item = self.select_item(item)?;
+            items.push(pipe_item(item, PipeClause::Aggregate));
         }
         Ok(self.node(
             PlanNode::Aggregate {
