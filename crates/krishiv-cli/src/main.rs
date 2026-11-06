@@ -152,6 +152,12 @@ fn run_server(addr: std::net::SocketAddr, conf: &[(String, String)]) -> Result<(
     let token = krishiv_server::internal::random_token().map_err(|e| e.to_string())?;
     let app = krishiv_server::internal::router_with_ui(std::sync::Arc::new(source), &token);
     krishiv_server::run_blocking_with(addr, app, |a| {
+        if !a.ip().is_loopback() {
+            eprintln!(
+                "warning: {a} is not a loopback address; the server speaks plain HTTP, so the token can be read \
+                 by anyone on the path. Put a TLS proxy or an authenticated tunnel in front of it."
+            );
+        }
         println!("krishiv server listening on http://{a}");
         println!("open http://{a}/?token={token}");
     })

@@ -39,7 +39,11 @@ impl UiSource for Fake {
         let fail = self.fail;
         Box::pin(async move {
             if fail {
-                return Err(UiError("system.queries is unavailable".to_owned()));
+                return Err(UiError::with_class(
+                    "system.queries is unavailable",
+                    "KRISHIV_TEST_FAILURE",
+                    Some("XX000"),
+                ));
             }
             Ok(match table {
                 SystemTable::Queries => rows(json!([
@@ -51,7 +55,9 @@ impl UiSource for Fake {
                     {"query_id": "q-b", "state": "finished", "principal": "ann", "submitted_at": 200,
                      "wall_ns": 1_500, "peak_memory_bytes": 30, "rows_produced": 5, "spill_bytes": 7},
                     {"query_id": "q-bad", "state": "failed", "principal": "bob", "submitted_at": 300,
-                     "error_class": "DIVIDE_BY_ZERO"}
+                     "error_class": "DIVIDE_BY_ZERO"},
+                    {"query_id": "q-min", "state": "finished", "principal": "cy", "submitted_at": 50, "wall_ns": -9_223_372_036_854_775_807_i64},
+                    {"query_id": "q-max", "state": "finished", "principal": "cy", "submitted_at": 60, "wall_ns": 9_223_372_036_854_775_807_i64}
                 ])),
                 SystemTable::Operators => rows(json!([
                     {"query_id": "q-b", "operator_id": 1, "name": "Scan", "drivers": 1, "compute_ns": 100,
@@ -65,12 +71,15 @@ impl UiSource for Fake {
                 SystemTable::Memory => rows(json!([
                     {"worker_id": "local", "path": "root", "parent": null, "kind": "root",
                      "reserved_bytes": 100, "peak_bytes": 200, "limit_bytes": 1000, "spillable": false},
+                    {"worker_id": "w2", "path": "root", "parent": null, "kind": "root",
+                     "reserved_bytes": 20, "peak_bytes": 30, "limit_bytes": 500, "spillable": false},
                     {"worker_id": "local", "path": "root/q", "parent": "root", "kind": "query",
                      "reserved_bytes": 50, "peak_bytes": 60, "limit_bytes": null, "spillable": true}
                 ])),
                 SystemTable::Caches => rows(json!([
                     {"worker_id": "local", "cache": "metadata", "entries": 3, "bytes": 30, "hits": 3, "misses": 1},
-                    {"worker_id": "local", "cache": "block", "entries": 0, "bytes": 0, "hits": 0, "misses": 0}
+                    {"worker_id": "local", "cache": "block", "entries": 0, "bytes": 0, "hits": 0, "misses": 0},
+                    {"worker_id": "local", "cache": "huge", "entries": 1, "bytes": 1, "hits": 9_223_372_036_854_775_807_i64, "misses": 5}
                 ])),
             })
         })
@@ -153,6 +162,26 @@ async fn every_internal_endpoint_needs_the_token() {
     assert!(out.starts_with("HTTP/1.1 200"), "{out}");
     let (status, ..) = request(addr, "GET", "/api/internal/queries?token=wrong", false).await;
     assert_eq!(status, 401);
+    for (cookie, expected) in [
+        (format!("a=b; krishiv_ui_token={TOKEN}"), "HTTP/1.1 200"),
+        ("a=b; krishiv_ui_token=wrong".to_owned(), "HTTP/1.1 401"),
+    ] {
+        let mut s = TcpStream::connect(addr).await.unwrap();
+        s.write_all(
+            format!("GET /api/internal/queries HTTP/1.1\r\nHost: l\r\nCookie: {cookie}\r\nConnection: close\r\n\r\n").as_bytes(),
+        )
+        .await
+        .unwrap();
+        let mut out = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            s.read_to_string(&mut out),
+        )
+        .await
+        .expect("read timed out")
+        .unwrap();
+        assert!(out.starts_with(expected), "{cookie}: {out}");
+    }
     // The public version route and the SPA stay open.
     let (status, ..) = request(addr, "GET", "/api/v1/version", false).await;
     assert_eq!(status, 200);
@@ -231,7 +260,7 @@ async fn history_lists_finished_queries_newest_first_with_filters_and_a_limit() 
         .collect();
     assert_eq!(
         ids,
-        ["q-bad", "q-b", "q-a"],
+        ["q-bad", "q-b", "q-a", "q-max", "q-min"],
         "running and queued queries are not history"
     );
     let failed = get(addr, "/api/internal/history?state=failed").await;
@@ -249,6 +278,11 @@ async fn compare_gives_both_runs_and_the_change_in_each_number() {
     assert_eq!(body["delta"]["peak_memory_bytes"], 20);
     assert_eq!(body["delta"]["spill_bytes"], 7);
     assert_eq!(body["a"]["query_id"], "q-a");
+    let big = get(addr, "/api/internal/compare?a=q-min&b=q-max").await;
+    assert!(
+        big["delta"].get("wall_ns").is_none(),
+        "an overflowing difference is left out: {big}"
+    );
     let (status, ..) = request(addr, "GET", "/api/internal/compare?a=q-a", true).await;
     assert_eq!(status, 400);
     let (status, ..) = request(addr, "GET", "/api/internal/compare?a=q-a&b=zzz", true).await;
@@ -259,11 +293,15 @@ async fn compare_gives_both_runs_and_the_change_in_each_number() {
 async fn health_and_resources_report_memory_and_cache_hit_rates() {
     let (addr, _) = start(false).await;
     let h = get(addr, "/api/internal/health").await;
-    assert_eq!(h["workers"], 1);
     assert_eq!(h["running_queries"], 1);
     assert_eq!(h["queued_queries"], 1);
-    assert_eq!(h["memory"]["reserved_bytes"], 100);
-    assert_eq!(h["memory"]["limit_bytes"], 1000);
+    assert_eq!(h["workers"], 2, "two worker ids in the memory table");
+    assert_eq!(
+        h["memory"]["reserved_bytes"], 120,
+        "every worker's root pool is added up"
+    );
+    assert_eq!(h["memory"]["peak_bytes"], 230);
+    assert_eq!(h["memory"]["limit_bytes"], 1500);
     assert_eq!(h["spill_bytes_total"], 7);
     assert_eq!(h["caches"][0]["hit_rate"], 0.75);
     assert_eq!(
@@ -272,7 +310,7 @@ async fn health_and_resources_report_memory_and_cache_hit_rates() {
         "no lookups yet is not a 0% hit rate"
     );
     let r = get(addr, "/api/internal/resources").await;
-    assert_eq!(r["memory"].as_array().unwrap().len(), 2);
+    assert_eq!(r["memory"].as_array().unwrap().len(), 3);
     assert_eq!(r["caches"][0]["cache"], "metadata");
 }
 
@@ -295,6 +333,8 @@ async fn a_failing_source_is_a_json_500_not_a_hang() {
     let (status, _, body) = request(addr, "GET", "/api/internal/queries", true).await;
     assert_eq!(status, 500);
     assert_eq!(body["error"], "source_failed");
+    assert_eq!(body["error_class"], "KRISHIV_TEST_FAILURE");
+    assert_eq!(body["sql_state"], "XX000");
     assert!(body["message"].as_str().unwrap().contains("unavailable"));
 }
 
@@ -310,23 +350,27 @@ async fn the_event_stream_sends_the_live_list_about_once_a_second() {
     )
     .await
     .unwrap();
-    let started = std::time::Instant::now();
     let mut seen = String::new();
+    let mut arrivals = Vec::new();
     let mut buf = [0_u8; 4096];
-    // Two events, then stop: they must be at least roughly a second apart.
-    while seen.matches("event: queries").count() < 2 {
-        let n = tokio::time::timeout(std::time::Duration::from_secs(5), s.read(&mut buf))
+    // Two events: the first comes at once, the second must follow about a second later.
+    while arrivals.len() < 2 {
+        let n = tokio::time::timeout(std::time::Duration::from_secs(20), s.read(&mut buf))
             .await
-            .expect("no event in 5 s")
+            .expect("no event in 20 s")
             .unwrap();
         assert!(n > 0, "stream closed: {seen}");
         seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+        while arrivals.len() < seen.matches("event: queries").count() {
+            arrivals.push(std::time::Instant::now());
+        }
     }
     let lower = seen.to_lowercase();
     assert!(lower.contains("content-type: text/event-stream"), "{seen}");
     assert!(seen.contains("\"query_id\":\"q-run\""), "{seen}");
+    let gap = arrivals[1] - arrivals[0];
     assert!(
-        started.elapsed() >= std::time::Duration::from_millis(900),
-        "events came faster than once a second"
+        gap >= std::time::Duration::from_millis(900),
+        "events {gap:?} apart, faster than once a second"
     );
 }

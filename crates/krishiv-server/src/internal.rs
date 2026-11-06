@@ -44,13 +44,46 @@ pub enum SystemTable {
     Caches,
 }
 
-/// A source failed to read a table or act on a query.
+/// A source failed to read a table or act on a query. Carries the engine's Spark error class and SQLSTATE
+/// when the failure came from the engine, so an operator sees the same class a client would.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UiError(pub String);
+pub struct UiError {
+    /// What went wrong.
+    pub message: String,
+    /// The Spark error class, when the engine raised one.
+    pub error_class: Option<String>,
+    /// The SQLSTATE of that class, when Spark defines one.
+    pub sql_state: Option<String>,
+}
+
+impl UiError {
+    /// A failure with no engine error class (a transport or set-up problem).
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            error_class: None,
+            sql_state: None,
+        }
+    }
+
+    /// A failure the engine raised, with its class and SQLSTATE.
+    #[must_use]
+    pub fn with_class(message: impl Into<String>, class: &str, sql_state: Option<&str>) -> Self {
+        Self {
+            message: message.into(),
+            error_class: Some(class.to_owned()),
+            sql_state: sql_state.map(str::to_owned),
+        }
+    }
+}
 
 impl std::fmt::Display for UiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        match &self.error_class {
+            Some(c) => write!(f, "[{c}] {}", self.message),
+            None => f.write_str(&self.message),
+        }
     }
 }
 
@@ -60,7 +93,8 @@ impl std::error::Error for UiError {}
 pub trait UiSource: Send + Sync + 'static {
     /// Every row of `table`, a snapshot.
     fn rows(&self, table: SystemTable) -> UiFuture<'_, Vec<Row>>;
-    /// Cancels the query (`user` reason); `false` when it is not running.
+    /// Cancels the query as an operator's kill (the `admin` reason: the query fails with
+    /// `KRISHIV_QUERY_KILLED`); `false` when it is not running.
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool>;
 }
 
@@ -77,7 +111,7 @@ struct UiState {
 /// Returns an error when the system has no random source.
 pub fn random_token() -> Result<String, UiError> {
     let mut bytes = [0_u8; 32];
-    getrandom::fill(&mut bytes).map_err(|e| UiError(format!("no random source: {e}")))?;
+    getrandom::fill(&mut bytes).map_err(|e| UiError::new(format!("no random source: {e}")))?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
@@ -144,7 +178,15 @@ fn error(status: StatusCode, code: &str, message: &str) -> Response {
 }
 
 fn source_error(e: &UiError) -> Response {
-    error(StatusCode::INTERNAL_SERVER_ERROR, "source_failed", &e.0)
+    json_response(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        &json!({
+            "error": "source_failed",
+            "message": e.message,
+            "error_class": e.error_class,
+            "sql_state": e.sql_state,
+        }),
+    )
 }
 
 /// Constant-time equality of two tokens.
@@ -311,13 +353,41 @@ async fn table(s: &UiState, t: SystemTable) -> Result<Vec<Row>, Box<Response>> {
 /// `hits / (hits + misses)`, `null` before the first lookup.
 fn hit_rate(row: &Row) -> Value {
     let (h, m) = (int(row, "hits"), int(row, "misses"));
-    if h + m == 0 {
-        Value::Null
-    } else {
-        #[expect(clippy::cast_precision_loss, reason = "a ratio for display")]
-        let r = h as f64 / (h + m) as f64;
-        json!(r)
+    match h.checked_add(m) {
+        None | Some(0) => Value::Null,
+        Some(total) => {
+            #[expect(clippy::cast_precision_loss, reason = "a ratio for display")]
+            let r = h as f64 / total as f64;
+            json!(r)
+        }
     }
+}
+
+/// The memory of every worker's root pool added up. With several workers, `peak_bytes` is the sum of the
+/// workers' own peaks (an upper bound of the cluster's peak, since they need not coincide) and `limit_bytes`
+/// is `null` unless every root has a limit.
+fn memory_total(memory: &[Row]) -> Value {
+    let roots: Vec<&Row> = memory
+        .iter()
+        .filter(|r| r.get("parent").is_none_or(Value::is_null))
+        .collect();
+    if roots.is_empty() {
+        return Value::Null;
+    }
+    let sum = |column: &str| {
+        roots
+            .iter()
+            .fold(0_i64, |acc, r| acc.saturating_add(int(r, column)))
+    };
+    let limits: Option<Vec<i64>> = roots
+        .iter()
+        .map(|r| r.get("limit_bytes").and_then(Value::as_i64))
+        .collect();
+    json!({
+        "reserved_bytes": sum("reserved_bytes"),
+        "peak_bytes": sum("peak_bytes"),
+        "limit_bytes": limits.map_or(Value::Null, |l| json!(l.iter().fold(0_i64, |a, b| a.saturating_add(*b)))),
+    })
 }
 
 async fn health(State(s): State<UiState>) -> Response {
@@ -329,12 +399,11 @@ async fn health(State(s): State<UiState>) -> Response {
         (Ok(m), Ok(c), Ok(q)) => (m, c, q),
         (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => return *e,
     };
-    let root = memory
-        .iter()
-        .find(|r| r.get("parent").is_none_or(Value::is_null));
     let workers: std::collections::BTreeSet<&str> =
         memory.iter().map(|r| text(r, "worker_id")).collect();
-    let spill_bytes: i64 = queries.iter().map(|r| int(r, "spill_bytes")).sum();
+    let spill_bytes = queries
+        .iter()
+        .fold(0_i64, |acc, r| acc.saturating_add(int(r, "spill_bytes")));
     json_response(
         StatusCode::OK,
         &json!({
@@ -343,11 +412,7 @@ async fn health(State(s): State<UiState>) -> Response {
             "workers": workers.len().max(1),
             "running_queries": queries.iter().filter(|r| text(r, "state") == "running").count(),
             "queued_queries": queries.iter().filter(|r| text(r, "state") == "queued").count(),
-            "memory": root.map_or(Value::Null, |r| json!({
-                "reserved_bytes": int(r, "reserved_bytes"),
-                "peak_bytes": int(r, "peak_bytes"),
-                "limit_bytes": r.get("limit_bytes").cloned().unwrap_or(Value::Null),
-            })),
+            "memory": memory_total(&memory),
             "spill_bytes_total": spill_bytes,
             "caches": caches.iter().map(|r| {
                 let mut c = pick(r, &["cache", "entries", "bytes", "capacity_bytes", "hits", "misses"]);
@@ -511,8 +576,9 @@ async fn compare(State(s): State<UiState>, uri: Uri) -> Response {
         if let (Some(x), Some(y)) = (
             ra.get(c).and_then(Value::as_i64),
             rb.get(c).and_then(Value::as_i64),
-        ) {
-            delta.insert(c, y - x);
+        ) && let Some(d) = y.checked_sub(x)
+        {
+            delta.insert(c, d);
         }
     }
     json_response(
@@ -554,9 +620,11 @@ async fn events(
         ticker.tick().await;
         let body = match s.source.rows(SystemTable::Queries).await {
             Ok(rows) => json!({"queries": live_queries(&rows)}),
-            Err(e) => json!({"error": e.0}),
+            Err(e) => json!({"error": e.message, "error_class": e.error_class}),
         };
         let event = Event::default().event("queries").data(body.to_string());
+        // A slow snapshot must not make the next ticks fire back to back: the period restarts here.
+        ticker.reset();
         Some((Ok(event), (ticker, s)))
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
