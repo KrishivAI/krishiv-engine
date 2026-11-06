@@ -25,8 +25,8 @@
 2630 crates/krishiv-session/src/dataframe.rs
 2773 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
-# +21 over the T001b carrier baseline: the ALTER VIEW UNSET, SET SERDEPROPERTIES and partition SET LOCATION / RENAME arms (T001b)
-3276 crates/krishiv-session/src/table_commands.rs
+# 14 below main: the CTAS/view column lists moved to char_write.rs (T001b), net of the ALTER VIEW UNSET, SET SERDEPROPERTIES and partition SET LOCATION / RENAME arms
+3277 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
 # +1: CAST(x AS CHAR(n)) lowers as a string cast (T001b)
 2775 crates/krishiv-sql/src/lower.rs
