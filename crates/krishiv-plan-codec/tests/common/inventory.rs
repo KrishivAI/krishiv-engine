@@ -1606,6 +1606,7 @@ pub(crate) fn udaf_call() -> PhysNode {
         name: "my_udaf".to_owned(),
         version: 3,
         args: vec![Field::new("arg0", ArrowType::Int32, true)],
+        arg_types: vec![DataType::Integer],
         result: DataType::Integer,
         nullable: false,
         state: vec![Field::new("count", ArrowType::Int64, false)],

@@ -440,6 +440,7 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
             name: name.clone(),
             version: *version,
             args: Vec::new(),
+            arg_types: Vec::new(),
             result: f.data_type.clone(),
             nullable: f.nullable,
             state: Vec::new(),
@@ -790,6 +791,14 @@ pub(super) fn aggregate_expr(
 ) -> Result<AggregateExpr> {
     let typed = |a: &usize| view_type(schema.field(*a).data_type());
     if let AggregateFunction::Udf(mut call) = function {
+        call.arg_types = args
+            .iter()
+            .map(|a| {
+                krishiv_types::DataType::from_arrow_field(schema.field(*a)).map_err(|e| {
+                    internal(&format!("aggregate UDF argument {}: {e}", schema.field(*a)))
+                })
+            })
+            .collect::<Result<_>>()?;
         call.args = args
             .iter()
             .enumerate()

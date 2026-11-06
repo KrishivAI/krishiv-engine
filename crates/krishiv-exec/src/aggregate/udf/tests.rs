@@ -162,6 +162,7 @@ fn call(result: krishiv_types::DataType) -> UdafCall {
             Field::new("arg0", DataType::Int64, true),
             Field::new("arg1", DataType::Int64, true),
         ],
+        arg_types: vec![krishiv_types::DataType::Long; 2],
         result,
         nullable: false,
         state: vec![Field::new("rows", DataType::Int64, false)],
