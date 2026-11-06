@@ -249,4 +249,15 @@ mod tests {
         let mut a = Nothing;
         assert_eq!(a.retract(&[], &[]), Ok(false));
     }
+
+    #[test]
+    fn a_do_nothing_accumulator_follows_the_contract() {
+        let mut a = Nothing;
+        a.resize(3);
+        assert_eq!(a.update(&[], &[]), Ok(()));
+        assert_eq!(a.merge(&[], &[]), Ok(()));
+        assert!(a.state(&[]).unwrap().is_empty());
+        assert_eq!(a.evaluate(&[]).unwrap_err(), UdfError::new("none"));
+        assert_eq!(a.size(), 0);
+    }
 }

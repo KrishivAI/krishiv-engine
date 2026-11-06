@@ -486,4 +486,80 @@ mod tests {
         assert!(lib.get_versioned("panic_version", 999).is_some());
         assert!(lib.get_versioned("nosuch", 1).is_none());
     }
+
+    #[derive(Debug)]
+    struct CountAgg;
+
+    impl AggregateUdf for CountAgg {
+        fn name(&self) -> &str {
+            "count_agg"
+        }
+
+        fn version(&self) -> u32 {
+            2
+        }
+
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(Vec::new()))
+        }
+
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Long,
+                nullable: false,
+            })
+        }
+
+        fn state_fields(&self, _: &[ArgField]) -> Result<Vec<crate::StateField>, UdfError> {
+            Ok(Vec::new())
+        }
+
+        fn accumulator(
+            &self,
+            _: &[ArgField],
+            _: &InvokeContext,
+        ) -> Result<Box<dyn crate::GroupsAccumulator>, UdfError> {
+            Err(UdfError::new("test only"))
+        }
+    }
+
+    #[test]
+    fn the_debug_listing_names_scalars_and_aggregates_with_their_versions() {
+        let lib = UdfLibrary::new();
+        lib.register(Arc::new(Identity { version: 3 })).unwrap();
+        lib.register(Arc::new(PanicVersion)).unwrap();
+        lib.register_aggregate(Arc::new(CountAgg)).unwrap();
+        let text = format!("{lib:?}");
+        assert!(text.contains("my_identity@3"), "{text}");
+        assert!(text.contains("panic_version@<panicking>"), "{text}");
+        assert!(text.contains("count_agg@2"), "{text}");
+        assert!(text.contains("aggregates"), "{text}");
+    }
+
+    #[test]
+    fn the_test_doubles_answer_every_method() {
+        let ctx = InvokeContext {
+            partition: 0,
+            ansi: false,
+            time_zone: None,
+        };
+        let udf = PanicVersion;
+        assert_eq!(udf.name(), "panic_version");
+        assert_eq!(udf.signature(), &Signature::Exact(Vec::new()));
+        assert_eq!(udf.return_field(&[]).unwrap().data_type, DataType::Integer);
+        assert_eq!(
+            udf.invoke(&[], 0, &ctx).unwrap_err(),
+            UdfError::new("test only")
+        );
+        let agg = CountAgg;
+        assert_eq!(agg.signature(), &Signature::Exact(Vec::new()));
+        assert_eq!(agg.return_field(&[]).unwrap().data_type, DataType::Long);
+        assert!(agg.state_fields(&[]).unwrap().is_empty());
+        assert_eq!(
+            agg.accumulator(&[], &ctx).unwrap_err(),
+            UdfError::new("test only")
+        );
+    }
 }

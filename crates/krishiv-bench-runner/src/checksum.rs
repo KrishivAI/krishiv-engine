@@ -521,4 +521,62 @@ mod tests {
             proptest::prop_assert_eq!(strip(&whole), strip(&split));
         }
     }
+
+    #[test]
+    fn infinities_print_with_their_sign() {
+        assert_eq!(json_float(f64::INFINITY), "Infinity");
+        assert_eq!(json_float(f64::NEG_INFINITY), "-Infinity");
+        assert_eq!(json_float(f64::NAN), "NaN");
+        assert_eq!(json_float(1.5), "1.5");
+        let got = json(&[batch(&[1], &[Some("a")], &[Some(f64::INFINITY)])]);
+        assert!(got.contains("Infinity"), "{got}");
+    }
+
+    #[test]
+    fn a_later_batch_with_more_columns_than_the_schema_is_refused() {
+        let first = batch(&[1], &[Some("a")], &[Some(1.0)]);
+        let wide = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("k", DataType::Int64, false),
+                Field::new("s", DataType::Utf8, true),
+                Field::new("m", DataType::Float64, true),
+                Field::new("extra", DataType::Int64, true),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![2])),
+                Arc::new(StringArray::from(vec![Some("b")])),
+                Arc::new(Float64Array::from(vec![Some(2.0)])),
+                Arc::new(Int64Array::from(vec![Some(3)])),
+            ],
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        let err = of(&[first, wide], &Schema::empty()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("a batch has 4 columns, the schema 3"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_later_batch_with_another_column_type_is_an_error_not_a_checksum() {
+        let first = batch(&[1], &[Some("a")], &[Some(1.0)]);
+        // Same shape, but the key column is now text: the row encoder built for
+        // the first batch's types cannot encode it.
+        let other = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("k", DataType::Utf8, false),
+                Field::new("s", DataType::Utf8, true),
+                Field::new("m", DataType::Float64, true),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["x"])),
+                Arc::new(StringArray::from(vec![Some("a")])),
+                Arc::new(Float64Array::from(vec![Some(1.0)])),
+            ],
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        let err = of(&[first, other], &Schema::empty()).unwrap_err();
+        assert!(err.to_string().contains("result checksum"), "{err}");
+    }
 }
