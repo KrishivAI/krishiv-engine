@@ -3246,6 +3246,19 @@ fn compact_views(a: ArrayRef) -> ArrayRef {
                 Err(_) => a,
             }
         }
+        DataType::LargeList(field) => {
+            let l = a.as_list::<i64>();
+            let values = compact_views(Arc::clone(l.values()));
+            match arrow_array::LargeListArray::try_new(
+                Arc::clone(field),
+                l.offsets().clone(),
+                values,
+                l.nulls().cloned(),
+            ) {
+                Ok(compacted) => Arc::new(compacted),
+                Err(_) => a,
+            }
+        }
         _ => a,
     }
 }

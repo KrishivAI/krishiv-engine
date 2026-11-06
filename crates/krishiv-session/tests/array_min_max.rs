@@ -119,3 +119,14 @@ fn structs_holding_arrays_compare() {
         assert_eq!(t(sql), want, "{sql}");
     }
 }
+
+/// Arrays inside structs compare whatever the element nullability (Spark 4.2.0: false, true, true).
+#[test]
+fn structs_holding_arrays_of_differing_element_nullability_compare() {
+    let r = one(
+        "SELECT cast(named_struct('a', array(1)) = named_struct('a', array(CAST(NULL AS INT))) AS STRING), \
+                cast(named_struct('a', array(1, 2)) = named_struct('a', array(1, 2)) AS STRING), \
+                cast(named_struct('a', array(1)) < named_struct('a', array(1, 2)) AS STRING)",
+    );
+    assert_eq!(r, ["false", "true", "true"]);
+}

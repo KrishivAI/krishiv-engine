@@ -644,7 +644,13 @@ fn struct_compatible(l: &ArrowType, r: &ArrowType) -> bool {
                     .zip(r.iter())
                     .all(|(a, b)| struct_compatible(a.data_type(), b.data_type()))
         }
-        (a, b) => a == b,
+        // An array field compares element by element whatever its element's nullability or
+        // string carrier; anything else must be the same Arrow type.
+        (ArrowType::List(a), ArrowType::List(b))
+        | (ArrowType::LargeList(a), ArrowType::LargeList(b)) => {
+            struct_compatible(a.data_type(), b.data_type())
+        }
+        (a, b) => a == b || krishiv_kernels::order::same_modulo_carrier(a, b),
     }
 }
 
