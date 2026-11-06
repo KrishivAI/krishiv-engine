@@ -184,6 +184,7 @@ pub(super) fn frames_aggregate(
     f: &WindowFunctionPlan,
     slices: &[super::eval::Slice<'_>],
     frames: &[(u32, u32)],
+    charge: &mut Charge<'_>,
 ) -> Result<ArrayRef> {
     if !is_udf(a) {
         return super::frames::aggregate(a, f, slices, frames, env.ansi);
@@ -203,7 +204,7 @@ pub(super) fn frames_aggregate(
         &args,
         &passes,
         frames,
-        &mut Charge::new(None),
+        charge,
     )
 }
 

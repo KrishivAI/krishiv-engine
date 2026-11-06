@@ -701,7 +701,12 @@ fn a_udaf_state_folded_from_disk_is_charged_to_the_pool() {
     // Two partitions of 100,000 rows, read back from disk: the state
     // reports ~100 MB, far past the limit.
     register_t(&s, 2);
-    for frame in ["PARTITION BY k", "PARTITION BY k ORDER BY v"] {
+    for frame in [
+        "PARTITION BY k",
+        "PARTITION BY k ORDER BY v",
+        "PARTITION BY k ORDER BY v ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING",
+        "PARTITION BY k ORDER BY v ROWS BETWEEN 40000 PRECEDING AND 1 FOLLOWING",
+    ] {
         let e = error_of(
             &s,
             &format!("SELECT count(c) FROM (SELECT bloat(v) OVER ({frame}) AS c FROM t)"),

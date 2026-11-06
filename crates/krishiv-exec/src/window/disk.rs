@@ -582,9 +582,10 @@ impl Held {
         Ok(true)
     }
 
-    fn slices(&self, lo: usize, hi: usize) -> Vec<Slice<'_>> {
-        self.held
-            .iter()
+    /// The held rows `[lo, hi)`, as slices (the field alone, so the charge
+    /// stays free to borrow).
+    fn slices(held: &VecDeque<(usize, RecordBatch)>, lo: usize, hi: usize) -> Vec<Slice<'_>> {
+        held.iter()
             .filter_map(|(s, b)| {
                 let from = lo.max(*s);
                 let to = hi.min(s + b.num_rows());
@@ -632,7 +633,13 @@ fn fold_from_file(
     shed.grow(&mut charge, state.saturating_mul(frames.len()))?;
     let mut folds = Vec::with_capacity(frames.len());
     for _ in frames {
-        folds.push(Fold::new(a, env.ansi, env.udafs.as_ref())?);
+        let fold = Fold::new(a, env.ansi, env.udafs.as_ref())?;
+        // An aggregate UDF's state is opaque: each frame's fold charges it.
+        folds.push(if super::udaf::is_udf(a) {
+            fold.charged(a, consumer)
+        } else {
+            fold
+        });
     }
     let live = || frames.iter().filter(|(s, e)| s < e);
     if let (Some(lo), Some(hi)) = (live().map(|f| f.0).min(), live().map(|f| f.1).max()) {
@@ -822,7 +829,11 @@ impl Framed {
                 Self::Prefix(Box::new(Prefix {
                     edges: Edges::open(env, f, file, consumer)?,
                     stream: Stream::open(file, consumer)?,
-                    fold: Fold::new(a, env.ansi, env.udafs.as_ref())?,
+                    fold: if super::udaf::is_udf(a) {
+                        Fold::new(a, env.ansi, env.udafs.as_ref())?.charged(a, consumer)
+                    } else {
+                        Fold::new(a, env.ansi, env.udafs.as_ref())?
+                    },
                     folded: 0,
                 }))
             }
@@ -1013,8 +1024,17 @@ impl Held {
                     }
                 })
                 .collect::<Result<_>>()?;
-            let out = super::udaf::frames_aggregate(env, a, f, &self.slices(lo, hi), &rebased)?;
+            let slices = Self::slices(&self.held, lo, hi);
+            let out = super::udaf::frames_aggregate(
+                env,
+                a,
+                f,
+                &slices,
+                &rebased,
+                &mut super::udaf::Charge::new(Some(&mut self.charge)),
+            );
             self.charge.shrink(eval);
+            let out = out?;
             return Ok(out);
         }
         self.release();
@@ -1049,7 +1069,14 @@ impl Held {
             part_start: &[],
             peer_start: &[],
         };
-        let out = super::udaf::frames_aggregate(env, a, f, &[row], &vec![(0, 0); frames.len()]);
+        let out = super::udaf::frames_aggregate(
+            env,
+            a,
+            f,
+            &[row],
+            &vec![(0, 0); frames.len()],
+            &mut super::udaf::Charge::new(Some(&mut self.charge)),
+        );
         self.charge.shrink(eval);
         out
     }
