@@ -44,3 +44,5 @@ pub use options::{JsonOptions, ParseMode};
 pub use path::{get_json_object, json_array_length, json_object_keys};
 pub use read::read_json;
 pub use write::write_json;
+
+pub(crate) use base64::encode as base64_encode;

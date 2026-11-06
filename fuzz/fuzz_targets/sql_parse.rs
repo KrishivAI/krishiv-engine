@@ -47,9 +47,12 @@ fuzz_target!(|data: &[u8]| {
         Ok(q) => {
             // The checker re-parses every expression and renders the tree
             // with `Debug`, which costs more than linear time in the depth;
-            // check statements of a typical size and nesting only.
+            // check statements of a typical size and nesting only. A chain of
+            // binary operators nests as deep as it is long (`a***...***2`), so
+            // the number of operators is bounded too.
             if sql.len() <= 4096
                 && nesting(&sql) <= 32
+                && operators(&sql) <= 32
                 && let Err(e) = check_spans(&sql, &q, &options)
             {
                 panic!("{e}");
@@ -112,6 +115,20 @@ fn redaction_oracle(data: &[u8]) {
             assert!(!format!("{e} {e:?}").contains(&secret), "{sql}");
         }
     }
+}
+
+/// The number of operator symbols in `sql` (everything but brackets, commas, dots and semicolons): a
+/// chain of them is an expression nested as deep.
+fn operators(sql: &str) -> usize {
+    tokenize(sql)
+        .iter()
+        .filter(|t| {
+            matches!(t.kind, TokenKind::Sym(s) if !matches!(
+                s,
+                Sym::LParen | Sym::RParen | Sym::LBracket | Sym::RBracket | Sym::Comma | Sym::Dot | Sym::Semi
+            ))
+        })
+        .count()
 }
 
 /// The deepest parenthesis nesting of `sql`, plus its longest run of

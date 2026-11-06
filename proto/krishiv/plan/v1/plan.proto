@@ -1037,6 +1037,8 @@ message DataType {
     KIND_CALENDAR_INTERVAL = 21;
     // feature: collated_strings
     KIND_COLLATED_STRING = 22;
+    // feature: variant_type
+    KIND_VARIANT = 23;
   }
   Kind kind = 1;
   // `KIND_DECIMAL` and `KIND_TIME` only.
