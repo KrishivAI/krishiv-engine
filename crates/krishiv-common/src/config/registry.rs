@@ -39,6 +39,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_RESIDENT_GUARD,
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
+    &SYSTEM_QUERY_TEXT_MAX_BYTES,
+    &SYSTEM_QUERY_TEXT_LITERALS,
     &QUERY_MAX_EXECUTION_TIME,
     &QUERY_MAX_QUEUED_TIME,
     &CACHE_MAX_BYTES,
@@ -229,6 +231,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.storeAssignmentPolicy",
         &STORE_ASSIGNMENT_POLICY,
+    ),
+    (
+        "krishiv.system.queryText.literals",
+        &SYSTEM_QUERY_TEXT_LITERALS,
+    ),
+    (
+        "krishiv.system.queryText.maxBytes",
+        &SYSTEM_QUERY_TEXT_MAX_BYTES,
     ),
     (
         "spark.sql.files.maxPartitionBytes",
@@ -811,6 +821,33 @@ pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
     version_added: "0.2.0",
     spark_alias: None,
     settable_by: SettableBy::Startup,
+};
+
+/// Most bytes of a statement's text `system.queries` shows.
+pub static SYSTEM_QUERY_TEXT_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.system.queryText.maxBytes",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(4096)),
+    doc: "Most bytes of a statement's redacted text `system.queries.query_text` shows; a longer \
+          text is cut at a character boundary and `query_text_truncated` is true.",
+    scope: Scope::Session,
+    version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::User,
+};
+
+/// Whether `system.queries` shows a statement's literals or masks them.
+pub static SYSTEM_QUERY_TEXT_LITERALS: ConfigEntry = ConfigEntry {
+    key: "krishiv.system.queryText.literals",
+    value_type: ValueType::Enum(&["keep", "mask"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("keep"))),
+    doc: "`keep` shows the literals of a statement in `system.queries.query_text` (credentials \
+          are redacted either way); `mask` replaces every string and number literal with `?`, so \
+          a server can hide data values from the text without waiting for tracing.",
+    scope: Scope::Session,
+    version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::User,
 };
 
 /// The longest a query may run before it is cancelled (design P2-E1 §4).

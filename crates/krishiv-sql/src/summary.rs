@@ -25,7 +25,18 @@ const MAX_TEXT: usize = 4096;
 /// literal. The result is cut at 4 KiB (`MAX_TEXT`) with a trailing `...`.
 #[must_use]
 pub fn sanitize_query_text(sql: &str) -> String {
-    let mut out = String::with_capacity(sql.len().min(MAX_TEXT));
+    sanitized(sql, MAX_TEXT)
+}
+
+/// [`sanitize_query_text`] without the cut: every string and number literal is `?` and comments
+/// are dropped, whatever the length (`system.queries.query_text` applies its own limit).
+#[must_use]
+pub fn mask_literals(sql: &str) -> String {
+    sanitized(sql, usize::MAX)
+}
+
+fn sanitized(sql: &str, limit: usize) -> String {
+    let mut out = String::with_capacity(sql.len().min(limit));
     let mut pending_space = false;
     for t in tokenize(sql) {
         let text = t.span.text(sql);
@@ -42,7 +53,7 @@ pub fn sanitize_query_text(sql: &str) -> String {
             pending_space = true;
             continue;
         }
-        if out.len() + piece.len() + 1 > MAX_TEXT {
+        if out.len().saturating_add(piece.len()).saturating_add(1) > limit {
             out.push_str("...");
             return out;
         }
@@ -177,6 +188,15 @@ mod tests {
         for leak in ["bob", "123-45", "42", "secret", "hint"] {
             assert!(!text.contains(leak), "{text}");
         }
+    }
+
+    #[test]
+    fn mask_literals_does_not_cut_a_long_text() {
+        let long = format!("SELECT {}", vec!["'x'"; 3000].join(", "));
+        let masked = mask_literals(&long);
+        assert_eq!(masked.matches('?').count(), 3000);
+        assert!(!masked.ends_with("..."), "{}", &masked[masked.len() - 10..]);
+        assert!(sanitize_query_text(&long).ends_with("..."));
     }
 
     #[test]

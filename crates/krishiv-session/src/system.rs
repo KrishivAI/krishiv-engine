@@ -718,6 +718,64 @@ pub(crate) const MAX_TAG_VALUE: usize = 256;
 /// (`query_text_truncated` says when it cut).
 const TEXT_BYTES: usize = 4096;
 
+/// How `system.queries.query_text` shows a statement: its most bytes
+/// (`krishiv.system.queryText.maxBytes`) and whether its literals are masked
+/// (`krishiv.system.queryText.literals = mask`). Read from the session's
+/// configuration when a statement starts.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TextPolicy {
+    max_bytes: usize,
+    mask: bool,
+}
+
+impl Default for TextPolicy {
+    fn default() -> Self {
+        Self {
+            max_bytes: TEXT_BYTES,
+            mask: false,
+        }
+    }
+}
+
+impl TextPolicy {
+    /// The policy `config` sets.
+    pub(crate) fn from_config(config: &krishiv_common::config::Config) -> Self {
+        use krishiv_common::config::{
+            ConfigValue, SYSTEM_QUERY_TEXT_LITERALS, SYSTEM_QUERY_TEXT_MAX_BYTES,
+        };
+        Self {
+            max_bytes: config
+                .get(&SYSTEM_QUERY_TEXT_MAX_BYTES)
+                .and_then(ConfigValue::as_int)
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(TEXT_BYTES),
+            mask: config
+                .get(&SYSTEM_QUERY_TEXT_LITERALS)
+                .and_then(ConfigValue::as_str)
+                == Some("mask"),
+        }
+    }
+
+    /// `text` as the table shows it, and whether it was cut.
+    fn apply(self, text: &str) -> (String, bool) {
+        let masked;
+        let text = if self.mask {
+            masked = krishiv_sql::mask_literals(text);
+            masked.as_str()
+        } else {
+            text
+        };
+        if text.len() <= self.max_bytes {
+            return (text.to_owned(), false);
+        }
+        let mut end = self.max_bytes;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        (text[..end].to_owned(), true)
+    }
+}
+
 /// One query of `system.queries`.
 #[derive(Debug, Clone)]
 pub(crate) struct QueryRow {
@@ -880,6 +938,8 @@ pub(crate) struct QueryLog {
     trace_id: Mutex<Option<String>>,
     /// The session's tags, by key.
     tags: Mutex<std::collections::BTreeMap<String, String>>,
+    /// How the next rows show their text.
+    text: Mutex<TextPolicy>,
 }
 
 pub(crate) fn now_ms() -> i64 {
@@ -898,6 +958,11 @@ impl QueryLog {
             history,
             ..Self::default()
         }
+    }
+
+    /// Sets how the rows recorded from now show their text.
+    pub(crate) fn set_text_policy(&self, policy: TextPolicy) {
+        *self.text.lock().unwrap_or_else(PoisonError::into_inner) = policy;
     }
 
     /// The session's id (UUIDv7).
@@ -956,15 +1021,12 @@ impl QueryLog {
         text: Option<&str>,
         class: Option<&'static str>,
     ) -> QueryRow {
+        let policy = *self.text.lock().unwrap_or_else(PoisonError::into_inner);
         let (text, truncated) = match text {
             None => (None, false),
-            Some(t) if t.len() <= TEXT_BYTES => (Some(t.to_owned()), false),
             Some(t) => {
-                let mut end = TEXT_BYTES;
-                while !t.is_char_boundary(end) {
-                    end -= 1;
-                }
-                (Some(t[..end].to_owned()), true)
+                let (shown, cut) = policy.apply(t);
+                (Some(shown), cut)
             }
         };
         QueryRow {
