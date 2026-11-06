@@ -423,6 +423,55 @@ mod tests {
         assert!(trace.is_empty(), "{trace:?}");
     }
 
+    /// The workers get a job's `Release` as soon as its root stream ends,
+    /// while the caller still holds the stream (30b review m10; Fable
+    /// review m3 of row 30c): a worker `srv` records the requests it gets.
+    #[test]
+    fn a_job_is_released_when_its_rows_end_before_the_stream_is_dropped() {
+        let mut sim = testing::sim();
+        let seen: Arc<Mutex<Vec<Request>>> = Arc::default();
+        let log = Arc::clone(&seen);
+        sim.host("srv", move || {
+            let log = Arc::clone(&log);
+            async move {
+                let listener = turmoil::net::TcpListener::bind(("0.0.0.0", testing::PORT)).await?;
+                loop {
+                    let (mut stream, _) = listener.accept().await?;
+                    let request = Request::read(&mut stream).await?;
+                    log.lock().unwrap().push(request);
+                    Reply::Done(Vec::new()).write(&mut stream).await?;
+                }
+            }
+        });
+        let observed = Arc::clone(&seen);
+        sim.client("coordinator", async move {
+            let mut rows = Releasing {
+                inner: futures::stream::empty().boxed(),
+                release: Some(Release {
+                    job: 7,
+                    workers: testing::workers(&["srv"]),
+                }),
+            };
+            assert!(rows.next().await.is_none());
+            // The rows ended; the stream is still held.
+            for _ in 0..100 {
+                if !observed.lock().unwrap().is_empty() {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            assert_eq!(
+                *observed.lock().unwrap(),
+                [Request::Release { job: 7 }],
+                "the job was not released before the stream was dropped"
+            );
+            drop(rows);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        });
+        sim.run().unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
     #[tokio::test]
     async fn a_coordinator_prints_its_shape_and_ignores_a_cancel_of_an_unknown_query() {
         let coordinator = Coordinator::new(
