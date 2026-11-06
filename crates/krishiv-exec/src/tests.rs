@@ -180,7 +180,7 @@ fn metrics_report_the_limit_the_query_runs_under() {
 /// reason's error; the first cancellation or failure wins, and a finished
 /// query is never cancelled.
 #[test]
-fn a_cancellation_with_a_reason_is_the_querys_error() {
+fn a_cancellation_with_a_reason_is_the_error_of_the_query() {
     use krishiv_common::error::{InternalError, KrishivError};
     let root = TreePool::new(&MemoryConfig::default());
     let query = |n| {

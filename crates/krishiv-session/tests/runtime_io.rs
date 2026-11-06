@@ -34,7 +34,7 @@ fn bytes_read(s: &Session, text: &str) -> i64 {
 }
 
 #[test]
-fn a_querys_bytes_are_its_own() {
+fn the_bytes_of_a_query_are_its_own() {
     let dir = tempfile::tempdir().unwrap();
     let big = dir.path().join("big");
     let small = dir.path().join("small");

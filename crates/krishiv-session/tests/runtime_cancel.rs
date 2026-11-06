@@ -344,3 +344,15 @@ fn a_dropped_stream_is_not_a_timed_cancellation() {
         .sum();
     assert_eq!(samples, 0);
 }
+
+/// `krishiv.query.maxQueuedTime` is reserved for admission: a duration is
+/// accepted and changes nothing (no admission queue exists yet).
+#[test]
+fn the_reserved_queue_time_is_accepted_and_has_no_effect() {
+    let s = Session::new().unwrap();
+    s.conf().set("krishiv.query.maxQueuedTime", "1ms").unwrap();
+    let rows = block_on(async { s.sql("SELECT 41 + 1").await?.collect().await }).unwrap();
+    assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    assert_eq!(settled(&s, "SELECT 41 + 1"), ["finished|-"]);
+    assert!(s.conf().set("krishiv.query.maxQueuedTime", "soon").is_err());
+}
