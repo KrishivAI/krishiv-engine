@@ -320,6 +320,11 @@ impl Session {
     ) -> String {
         self.state
             .queries
+            .set_text_policy(crate::system::TextPolicy::from_config(
+                &self.state.conf.snapshot(),
+            ));
+        self.state
+            .queries
             .record_refused(text, class, error, self.operation_id())
     }
 }
