@@ -1005,3 +1005,80 @@ fn a_class_over_many_inputs_plans_quickly() {
     let eqs = optimized.root().to_string().matches(" == ").count();
     assert_eq!(eqs, 29, "{}", optimized.root());
 }
+
+/// The right side of the semi join restricting the aggregate in `text`
+/// (the lines under its `Shift`), or `None` without one.
+fn restriction_domain(text: &str) -> Option<String> {
+    let start = text.lines().position(|l| l.contains("Join LeftSemi"))?;
+    let lines: Vec<&str> = text.lines().skip(start + 1).collect();
+    let shift = lines.iter().position(|l| l.contains("Shift +"))?;
+    let indent = lines[shift].find("Shift").unwrap_or(0);
+    let mut out = vec![lines[shift]];
+    out.extend(lines[shift + 1..].iter().take_while(|l| {
+        l.find(|c: char| c.is_alphanumeric())
+            .is_some_and(|i| i > indent)
+    }));
+    Some(out.join("\n"))
+}
+
+/// An aggregate joined to `partsupp ⋈ filtered part` on partsupp's key is
+/// restricted by the filtered parts alone: the domain follows the inner
+/// join's `ps_partkey = p_partkey` into part, which scans far fewer rows
+/// than partsupp joined to it (without that step the domain is the join,
+/// reading all of partsupp again).
+#[test]
+fn a_restriction_domain_follows_an_inner_join_equality() {
+    let sql = "SELECT x.ps_partkey, g.m FROM \
+               (SELECT ps_partkey, ps_suppkey FROM partsupp JOIN part ON ps_partkey = p_partkey \
+                WHERE p_size = 15 AND p_type LIKE '%BRASS') x \
+               LEFT JOIN (SELECT l_partkey AS k, sum(l_quantity) AS m FROM lineitem GROUP BY l_partkey) g \
+               ON g.k = x.ps_partkey";
+    let ctx = support::ctx();
+    let plan = support::resolve(sql, &ctx);
+    let optimized = optimize_with(&plan, &fixture()).unwrap();
+    let text = optimized.root().to_string();
+    let domain = restriction_domain(&text).unwrap_or_else(|| panic!("not restricted:\n{text}"));
+    assert!(domain.contains("p_partkey"), "{text}");
+    assert!(
+        !domain.contains("partsupp"),
+        "the domain reads partsupp:\n{text}"
+    );
+    assert!(
+        optimize_with(&optimized, &fixture())
+            .unwrap()
+            .structurally_eq(&optimized)
+    );
+    let db = data::tpch(7, 150);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root())
+    );
+}
+
+/// Through an outer join the equality does not hold of every row (the
+/// preserved side keeps its unmatched keys), so the domain never moves
+/// across it.
+#[test]
+fn a_restriction_domain_does_not_follow_an_outer_join_equality() {
+    let sql = "SELECT x.ps_partkey, g.m FROM \
+               (SELECT ps_partkey, ps_suppkey FROM partsupp LEFT JOIN \
+                (SELECT p_partkey FROM part WHERE p_size = 15 AND p_type LIKE '%BRASS') p \
+                ON ps_partkey = p_partkey) x \
+               LEFT JOIN (SELECT l_partkey AS k, sum(l_quantity) AS m FROM lineitem GROUP BY l_partkey) g \
+               ON g.k = x.ps_partkey";
+    let ctx = support::ctx();
+    let plan = support::resolve(sql, &ctx);
+    let optimized = optimize_with(&plan, &fixture()).unwrap();
+    let text = optimized.root().to_string();
+    if let Some(domain) = restriction_domain(&text) {
+        assert!(
+            !domain.contains("p_partkey"),
+            "the domain crossed an outer join:\n{text}"
+        );
+    }
+    let db = data::tpch(7, 150);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root())
+    );
+}

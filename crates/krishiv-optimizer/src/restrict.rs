@@ -406,8 +406,10 @@ impl Restrict<'_> {
     }
 
     /// The deepest subtree of `p` that holds every value the attributes
-    /// `want` take in `p`, while its estimated distinct keys stay within
-    /// [`DESCEND`] times `p`'s.
+    /// `want` take in `p` (under the columns an inner join's equalities
+    /// rename them to), while its estimated distinct keys stay within
+    /// [`DESCEND`] times `p`'s; of several such subtrees at a step, the one
+    /// scanning fewest rows.
     fn domain(&mut self, p: &Arc<LogicalPlan>, want: &Attrs) -> Option<Domain> {
         let mut at = Arc::clone(p);
         let mut want = want.clone();
