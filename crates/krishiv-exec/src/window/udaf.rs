@@ -58,23 +58,38 @@ pub(super) fn cost(
 pub(super) struct Charge<'a> {
     pool: Option<&'a mut Reservation>,
     held: usize,
+    /// The state the pool may refuse without failing the query: what the
+    /// window already reserved for this evaluation. A refusal of more is a
+    /// memory error; a refusal of less is the pool being briefly full (the
+    /// rows leave with the output), and the state runs unaccounted, as it
+    /// did before it was charged.
+    slack: usize,
 }
 
 impl<'a> Charge<'a> {
-    pub(super) const fn new(pool: Option<&'a mut Reservation>) -> Self {
-        Self { pool, held: 0 }
+    pub(super) fn new(pool: Option<&'a mut Reservation>) -> Self {
+        let slack = pool.as_deref().map_or(0, Reservation::size);
+        Self {
+            pool,
+            held: 0,
+            slack,
+        }
     }
 
     /// Brings the charge to `size`.
     ///
     /// # Errors
-    /// The memory class when the pool refuses the growth.
+    /// The memory class when the pool refuses a state larger than the slack.
     fn to(&mut self, size: usize) -> Result<()> {
         let Some(pool) = self.pool.as_deref_mut() else {
             return Ok(());
         };
         if size > self.held {
-            pool.try_grow(size - self.held)?;
+            match pool.try_grow(size - self.held) {
+                Ok(()) => {}
+                Err(_) if size <= self.slack => return Ok(()),
+                Err(e) => return Err(e.into()),
+            }
         } else {
             pool.shrink(self.held - size);
         }
