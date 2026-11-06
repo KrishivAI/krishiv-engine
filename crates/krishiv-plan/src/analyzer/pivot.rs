@@ -677,6 +677,11 @@ fn nested_string(e: &Arc<Expr>, r: &Resolver<'_>) -> Option<String> {
 /// output name does, `array(1, 2)`, `map(1, 2)`, `named_struct(p, 1)` and
 /// `struct(col1, 1, col2, q)`, strings without quotes.
 fn value_text(e: &Arc<Expr>, r: &Resolver<'_>) -> String {
+    if let ExprNode::Cast { expr, to, mode } = &e.node
+        && *mode != CastMode::Try
+    {
+        return format!("cast({} as {})", value_text(expr, r), to.simple_string());
+    }
     let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
         if let ExprNode::Literal(Literal::Null(_)) = &e.node {
             return "null".to_owned();
@@ -729,6 +734,11 @@ fn value_render(
         let value = v.alias.clone().unwrap_or_else(|| match &b.expr.node {
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
             _ if collection(&t.expr) => value_text(&t.expr, r),
+            // An explicit cast of one prints as Spark's `Cast.toString`
+            // does: `cast(array(1) as array<int>)`.
+            _ if matches!(&t.expr.node, ExprNode::Cast { expr, .. } if collection(expr)) => {
+                value_text(&t.expr, r)
+            }
             // A scalar prints as its output name does (as written, before
             // implicit casts, when it does not fold).
             _ => part_name(t, r),

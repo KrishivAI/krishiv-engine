@@ -507,6 +507,22 @@ fn pivot_error_parameters_match_spark() {
             "struct<col1:int,col2:string>",
             "int",
         ),
+        // Spark refuses a cast collection even of the column's own type,
+        // and prints the cast as `Cast.toString` does.
+        (
+            "SELECT * FROM (SELECT array(1) AS k, 2 AS v) \
+             PIVOT (sum(v) FOR k IN (CAST(array(1) AS ARRAY<INT>)))",
+            "cast(array(1) as array<int>)",
+            "array<int>",
+            "array<int>",
+        ),
+        (
+            "SELECT * FROM (SELECT named_struct('a', 1) AS k, 2 AS v) \
+             PIVOT (sum(v) FOR k IN (CAST(named_struct('a', 1) AS STRUCT<a: BIGINT>)))",
+            "cast(named_struct(a, 1) as struct<a:bigint>)",
+            "struct<a:bigint>",
+            "struct<a:int>",
+        ),
         (
             "SELECT * FROM t PIVOT (sum(b) FOR (a, c) IN ((array(1), 'x')))",
             "named_struct(col1, array(1), col2, x)",
