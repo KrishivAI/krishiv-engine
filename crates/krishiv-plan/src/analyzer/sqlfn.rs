@@ -464,10 +464,11 @@ impl Resolver<'_> {
                 }
             })
             .collect();
+        // An argument reads the enclosing queries: the left side of a
+        // `LATERAL` join (`FROM t, LATERAL f(t.c)`) or an outer query.
         let mut kids = Vec::with_capacity(args.len());
         for a in &args {
-            let mut cx = Self::cx(&[], &[], env, "Project");
-            cx.outer = false;
+            let cx = Self::cx(&[], &[], env, "Project");
             kids.push(self.bind(a, &cx)?);
         }
         let call = FunctionCall {
@@ -533,7 +534,7 @@ impl Resolver<'_> {
             }
         }
         if columns.is_empty() {
-            return Ok(rel);
+            return Ok(qualified(rel, &def.name));
         }
         if rel.out.len() != columns.len() {
             return Err(AnalysisError::new(
@@ -553,7 +554,8 @@ impl Resolver<'_> {
                 name: name.clone(),
             })));
         }
-        self.project_items(p, &rel, &exprs, env)
+        let out = self.project_items(p, &rel, &exprs, env)?;
+        Ok(qualified(out, &def.name))
     }
 
     /// Resolves the body in its own scope and casts it to the return type.
@@ -921,4 +923,20 @@ fn cyclic(path: &[String], origin: Origin) -> AnalysisError {
         },
         origin,
     )
+}
+
+/// `rel` with its columns qualified by the function's name, as Spark names a
+/// table function's output (`FROM t, LATERAL f(t.c)` then reads `f.a`); an
+/// alias written after the call replaces it.
+fn qualified(mut rel: super::resolve::Rel, name: &str) -> super::resolve::Rel {
+    let qual: Arc<[String]> = Arc::from(vec![name.to_owned()]);
+    rel.out = rel
+        .out
+        .iter()
+        .map(|a| super::resolve::Attr {
+            qual: Arc::clone(&qual),
+            ..a.clone()
+        })
+        .collect();
+    rel
 }

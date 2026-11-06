@@ -662,7 +662,16 @@ impl Resolver<'_> {
                 ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => outer_column_name_of(&c.name),
                 ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
                 ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
-                _ => format!("col{}", i + 1),
+                // A column written in the call names its field even when it
+                // binds to a value (a SQL function's parameter, `STRUCT(a, b)`).
+                _ => match f.args.get(i).map(|a| &a.node) {
+                    Some(ExprNode::Column(c)) => c
+                        .name
+                        .last()
+                        .cloned()
+                        .unwrap_or_else(|| format!("col{}", i + 1)),
+                    _ => format!("col{}", i + 1),
+                },
             };
             names.push(name);
         }
