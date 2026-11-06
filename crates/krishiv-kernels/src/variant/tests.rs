@@ -338,3 +338,18 @@ fn a_string_casts_to_time() {
         36_001_500_000_000
     );
 }
+
+#[test]
+fn types_spark_does_not_read_are_unknown_primitives() {
+    // A TIME value (primitive id 17): defined by the encoding, but Spark
+    // 4.2.0 neither prints nor casts it.
+    let metadata = [0x01, 0x00, 0x00];
+    let mut value = vec![17 << 2];
+    value.extend_from_slice(&3_600_000_000_i64.to_le_bytes());
+    let v = VariantRef::new(&metadata, &value).unwrap();
+    let mut s = String::new();
+    let e = write_json(&v, &utc(), &mut s).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnknownPrimitiveTypeInVariant);
+    let e = cast_values(&[Some(v)], &DataType::String, true, &utc()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnknownPrimitiveTypeInVariant);
+}
