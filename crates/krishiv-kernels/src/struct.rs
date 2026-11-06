@@ -123,13 +123,13 @@ fn leaf_orderable(t: &ArrowType) -> bool {
     )
 }
 
-/// Whether structs of Arrow type `t` can be compared field-wise.
+/// Whether structs and lists of Arrow type `t` can be compared in Spark's order: field by field
+/// for a struct, element by element for an array, whose fields and elements are orderable
+/// themselves (a struct of arrays, an array of structs).
 pub fn comparable(t: &ArrowType) -> bool {
     match t {
-        ArrowType::Struct(fields) => fields.iter().all(|f| {
-            let dt = f.data_type();
-            drilled_orderable(dt)
-        }),
+        ArrowType::Struct(fields) => fields.iter().all(|f| drilled_orderable(f.data_type())),
+        ArrowType::List(f) | ArrowType::LargeList(f) => drilled_orderable(f.data_type()),
         _ => false,
     }
 }
@@ -138,6 +138,7 @@ pub fn comparable(t: &ArrowType) -> bool {
 fn drilled_orderable(t: &ArrowType) -> bool {
     match t {
         ArrowType::Struct(fields) => fields.iter().all(|f| drilled_orderable(f.data_type())),
+        ArrowType::List(f) | ArrowType::LargeList(f) => drilled_orderable(f.data_type()),
         other => leaf_orderable(other),
     }
 }
