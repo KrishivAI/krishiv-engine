@@ -155,8 +155,8 @@ session.sql("SELECT k, total(v) FROM t GROUP BY k").await?;
   evaluated after each, which is why `evaluate` must not consume the state; any other frame folds each row's
   frame on its own, so its cost is the sum of the frame lengths. `retract` is never needed. `DISTINCT` is
   refused, as for built-ins.
-- **Not yet.** A window partition too large for memory (evaluated from disk) is `KRISHIV_UNSUPPORTED_FEATURE` for an
-  aggregate UDF. `retract` (rows of weight −1, incremental maintenance only) defaults to unsupported.
+  A partition too large for memory is read back from disk, as for a built-in.
+- **Not yet.** `retract` (rows of weight −1, incremental maintenance only) defaults to unsupported.
 
 ## Stability
 

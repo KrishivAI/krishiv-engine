@@ -12,8 +12,10 @@
 //!   lengths; `retract` is not used, so a UDF need not support it).
 //!
 //! The window applies the call's `FILTER` itself; the UDF's null handling
-//! is its accumulator's. A partition too large for memory, evaluated from
-//! disk, is `KRISHIV_UNSUPPORTED_FEATURE` for a UDF.
+//! is its accumulator's. A partition too large for memory is read from disk
+//! as for a built-in ([`stream`](super::stream), [`disk`](super::disk)):
+//! the whole-partition and running folds go through [`fold_rows`], and each
+//! frame read from disk folds into an accumulator of its own.
 
 use arrow_array::{Array, ArrayRef, UInt32Array};
 use arrow_schema::DataType;
@@ -123,6 +125,30 @@ pub(super) fn aggregate(
     }
 }
 
+/// `a` over `frames` of the rows of `slices` (frames read back from disk):
+/// a UDF's sliding frames here, a built-in's through
+/// [`frames::aggregate`](super::frames::aggregate).
+pub(super) fn frames_aggregate(
+    env: &super::Env,
+    a: &AggregateExpr,
+    f: &WindowFunctionPlan,
+    slices: &[super::eval::Slice<'_>],
+    frames: &[(u32, u32)],
+) -> Result<ArrayRef> {
+    if !is_udf(a) {
+        return super::frames::aggregate(a, f, slices, frames, env.ansi);
+    }
+    let local = AggregateExpr {
+        args: (0..a.args.len()).collect(),
+        input: AggInput::Raw,
+        mask: None,
+        ..a.clone()
+    };
+    let (args, mask) = super::frames::unit_inputs(a, f, slices)?;
+    let passes = |i: usize| mask.as_ref().is_none_or(|m| m.is_valid(i) && m.value(i));
+    sliding(&local, env.ansi, env.udafs.as_ref(), &args, &passes, frames)
+}
+
 /// Each row's frame folded into a group of its own, in chunks.
 fn sliding(
     local: &AggregateExpr,
@@ -163,6 +189,42 @@ fn sliding(
         let ids: Vec<u32> = (0..last - first).map(id).collect::<Result<_>>()?;
         values.push(acc.evaluate(&ids)?);
         first = last;
+    }
+    concat(&values)
+}
+
+/// Folds `rows` rows of `args` (those `mask` passes) into group 0 of
+/// `acc`, in order, and evaluates the group after each row `i` with
+/// `snap[i]`: a running frame read from disk.
+pub(super) fn fold_rows(
+    acc: &mut crate::aggregate::Accumulator,
+    args: &[ArrayRef],
+    mask: Option<&arrow_array::BooleanArray>,
+    rows: usize,
+    snap: &[bool],
+) -> Result<ArrayRef> {
+    let one = Weights::Const(1);
+    let mut values: Vec<ArrayRef> = Vec::new();
+    let mut pending: Vec<usize> = Vec::new();
+    let flush = |acc: &mut crate::aggregate::Accumulator, pending: &mut Vec<usize>| -> Result<()> {
+        if !pending.is_empty() {
+            acc.update(&vec![0; pending.len()], &gather(args, pending)?, &one)?;
+            pending.clear();
+        }
+        Ok(())
+    };
+    for (i, &s) in snap.iter().enumerate().take(rows) {
+        if mask.is_none_or(|m| m.is_valid(i) && m.value(i)) {
+            pending.push(i);
+        }
+        if s {
+            flush(acc, &mut pending)?;
+            values.push(acc.evaluate(&[0])?);
+        }
+    }
+    flush(acc, &mut pending)?;
+    if values.is_empty() {
+        return acc.evaluate(&[]);
     }
     concat(&values)
 }

@@ -594,6 +594,44 @@ fn window_frames_of_a_udaf_match_the_builtin() {
 }
 
 #[test]
+fn window_partitions_read_back_from_disk_keep_the_udaf_results() {
+    let dir = tempfile::tempdir().unwrap();
+    let spill = dir.path().join("spill");
+    let s = session_with(
+        &[
+            ("krishiv.spill.dir", spill.to_str().unwrap()),
+            ("krishiv.memory.limit", "6m"),
+        ],
+        Fault::None,
+    );
+    // Two partitions of 100,000 rows: neither fits in memory.
+    register_t(&s, 2);
+    for frame in [
+        "PARTITION BY k",
+        "PARTITION BY k ORDER BY v",
+        "PARTITION BY k ORDER BY v ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW",
+        "PARTITION BY k ORDER BY v ROWS BETWEEN 2 PRECEDING AND 1 FOLLOWING",
+    ] {
+        let q = |f: &str| {
+            format!(
+                "SELECT count(*), sum(c), count(c) FROM (SELECT {f} OVER ({frame}) AS c FROM t)"
+            )
+        };
+        let df = block_on(s.sql(&q("udsum(v)"))).unwrap();
+        let (got, profile) = block_on(df.collect_with_profile()).unwrap();
+        let spilled: u64 = profile
+            .metrics
+            .operators
+            .values()
+            .map(|e| e.metrics.spill_files)
+            .sum();
+        assert!(spilled > 0, "{frame}: the window did not spill");
+        let want = run(&s, &q("sum(v)"));
+        assert_eq!(triples(&got), triples(&want), "{frame}");
+    }
+}
+
+#[test]
 fn a_window_udaf_refuses_distinct_and_reports_its_failures() {
     let s = session_with(&[], Fault::None);
     register_t(&s, 4);

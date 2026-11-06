@@ -1149,11 +1149,11 @@ impl Accumulator {
                 values: Values::empty(t),
                 set: Vec::new(),
             },
-            // Built by `accumulator_of` with the session's library; a window
-            // partition evaluated from disk has none yet.
+            // Built by `accumulator_of` with the session's library; a path
+            // that reaches here has none.
             (F::Udf(_), _) => {
                 return Err(unsupported(
-                    "an aggregate UDF over a window partition too large for memory".to_owned(),
+                    "an aggregate UDF where the session's UDFs are not available".to_owned(),
                 ));
             }
             (f @ (F::Mode | F::ModeMin | F::ModeMax), _) => {

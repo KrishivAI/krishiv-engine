@@ -70,10 +70,28 @@ pub(super) enum Fold {
         picked: Option<bool>,
         buf: Vec<u8>,
     },
+    /// An aggregate UDF (ADR 0045): group 0 holds the state; a snapshot is
+    /// an evaluation of it, which does not consume.
+    Udf { acc: Box<Accumulator> },
 }
 
 impl Fold {
-    pub(super) fn new(a: &AggregateExpr, ansi: bool) -> Result<Self> {
+    pub(super) fn new(
+        a: &AggregateExpr,
+        ansi: bool,
+        udafs: Option<&crate::aggregate::UdafEnv>,
+    ) -> Result<Self> {
+        if super::udaf::is_udf(a) {
+            let local = AggregateExpr {
+                args: (0..a.args.len()).collect(),
+                input: AggInput::Raw,
+                mask: None,
+                ..a.clone()
+            };
+            let mut acc = crate::aggregate::accumulator_of(&local, ansi, udafs)?;
+            acc.resize(1);
+            return Ok(Self::Udf { acc: Box::new(acc) });
+        }
         if exact_decimal(a) {
             return Ok(Self::Decimal {
                 a: Box::new(a.clone()),
@@ -134,6 +152,7 @@ impl Fold {
             ));
         }
         match self {
+            Self::Udf { acc } => super::udaf::fold_rows(acc, args, mask, rows, snap),
             Self::Rows { acc, charge } => {
                 let groups: Vec<u32> = (0..rows).map(|i| u32::from(!passes(mask, i))).collect();
                 let parts = vec![0_u32; rows];
@@ -236,7 +255,7 @@ impl Fold {
     /// The value over every row folded so far.
     pub(super) fn value(&mut self) -> Result<ArrayRef> {
         match self {
-            Self::Rows { acc, .. } => acc.evaluate(&[0]),
+            Self::Rows { acc, .. } | Self::Udf { acc } => acc.evaluate(&[0]),
             Self::Decimal {
                 a,
                 sum,
@@ -401,7 +420,7 @@ pub(super) fn copy_partition(
     for f in &env.plan.functions {
         whole.push(match &f.function {
             WindowFunction::Aggregate(a) if f.shape()? == Shape::Whole => {
-                Some(Fold::new(a, env.ansi)?.charged(a, consumer))
+                Some(Fold::new(a, env.ansi, env.udafs.as_ref())?.charged(a, consumer))
             }
             _ => None,
         });
@@ -615,12 +634,14 @@ impl Emit {
             let (r, l) = match &f.function {
                 WindowFunction::Aggregate(a) => match f.shape()? {
                     Shape::Whole | Shape::Frame => (None, None),
-                    Shape::RunningRows => {
-                        (Some(Fold::new(a, env.ansi)?.charged(a, consumer)), None)
-                    }
-                    Shape::RunningPeers => {
-                        (None, Some(Fold::new(a, env.ansi)?.charged(a, consumer)))
-                    }
+                    Shape::RunningRows => (
+                        Some(Fold::new(a, env.ansi, env.udafs.as_ref())?.charged(a, consumer)),
+                        None,
+                    ),
+                    Shape::RunningPeers => (
+                        None,
+                        Some(Fold::new(a, env.ansi, env.udafs.as_ref())?.charged(a, consumer)),
+                    ),
                 },
                 WindowFunction::CumeDist => {
                     lead = true;

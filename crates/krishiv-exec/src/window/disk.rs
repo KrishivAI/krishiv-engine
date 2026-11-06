@@ -621,14 +621,18 @@ fn fold_from_file(
     let (file, consumer, query) = (c.file, c.consumer, c.query);
     let a = aggregate_of(&env.plan.functions[j])?;
     let mut charge = direct(consumer).unguarded();
-    let state = crate::aggregate::Accumulator::new(a, env.ansi)?
-        .group_bytes()
-        .max(64)
-        .saturating_add(size_of::<Fold>());
+    // An aggregate UDF's state is its own: counted after it folds.
+    let state = if super::udaf::is_udf(a) {
+        64
+    } else {
+        crate::aggregate::Accumulator::new(a, env.ansi)?.group_bytes()
+    }
+    .max(64)
+    .saturating_add(size_of::<Fold>());
     shed.grow(&mut charge, state.saturating_mul(frames.len()))?;
     let mut folds = Vec::with_capacity(frames.len());
     for _ in frames {
-        folds.push(Fold::new(a, env.ansi)?);
+        folds.push(Fold::new(a, env.ansi, env.udafs.as_ref())?);
     }
     let live = || frames.iter().filter(|(s, e)| s < e);
     if let (Some(lo), Some(hi)) = (live().map(|f| f.0).min(), live().map(|f| f.1).max()) {
@@ -818,7 +822,7 @@ impl Framed {
                 Self::Prefix(Box::new(Prefix {
                     edges: Edges::open(env, f, file, consumer)?,
                     stream: Stream::open(file, consumer)?,
-                    fold: Fold::new(a, env.ansi)?,
+                    fold: Fold::new(a, env.ansi, env.udafs.as_ref())?,
                     folded: 0,
                 }))
             }
@@ -1009,7 +1013,7 @@ impl Held {
                     }
                 })
                 .collect::<Result<_>>()?;
-            let out = frames::aggregate(a, f, &self.slices(lo, hi), &rebased, env.ansi)?;
+            let out = super::udaf::frames_aggregate(env, a, f, &self.slices(lo, hi), &rebased)?;
             self.charge.shrink(eval);
             return Ok(out);
         }
@@ -1045,7 +1049,7 @@ impl Held {
             part_start: &[],
             peer_start: &[],
         };
-        let out = frames::aggregate(a, f, &[row], &vec![(0, 0); frames.len()], env.ansi);
+        let out = super::udaf::frames_aggregate(env, a, f, &[row], &vec![(0, 0); frames.len()]);
         self.charge.shrink(eval);
         out
     }
