@@ -83,4 +83,4 @@ Paths are relative to this crate.
 (today `v4.3.0`) against its committed baseline `tests/spark-golden/profiles/<tag>/` (same split layout as the 4.2 baseline, with its own
 `s43-*` categories); the goldens themselves are fetched by `tests/scripts/import_spark_golden.sh <tag>` in the nightly `golden-profiles` job
 (the test is `#[ignore]`d locally). Refresh with `golden-report --engine session --tag <tag> --ratchet update --known-failures
-tests/spark-golden/profiles/<tag>/known-failures.json`; new failures need a rule in that directory's categories first.
+tests/spark-golden/profiles/<tag>/known-failures.json`; a new failure needs a rule in that directory's categories first (`s43-other` has cases but no rule, on purpose). `--ignored` fails locally until the tag is fetched.
