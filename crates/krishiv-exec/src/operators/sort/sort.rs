@@ -1257,7 +1257,10 @@ pub(super) async fn merge_budget(
         {
             Ok(()) => return Ok((budget, fan_in)),
             // That round spilled what it could: smaller fan-ins only take
-            // what is free now, and arbitration runs again at 2.
+            // what is free now, and arbitration runs again at 2. A refusal
+            // by the resident-set guard (not spill exhaustion) also lands
+            // here, so it too is only re-arbitrated at fan-in 2: correct,
+            // only slower.
             Err(MemoryError::Exhausted { .. }) => {}
             // An abort (this query was chosen by another request) ends the merge.
             Err(e) => return Err(e.into()),

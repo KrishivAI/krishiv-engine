@@ -212,7 +212,8 @@ fn explain_analyze_shows_spill_files_and_memory() {
 
 /// A join feeding a sort of every joined row spills under 8 MiB instead of
 /// aborting the query: the only query holds about half of its limit, so
-/// arbitration has room to spill (queue item, kB3 2026-11-05).
+/// arbitration has room to spill (the sort merge falls back to a smaller
+/// fan-in through `Reservation::grow_without_abort` instead of aborting).
 #[test]
 fn a_join_feeding_a_full_sort_spills_under_eight_mib() {
     let dir = tempfile::tempdir().unwrap();

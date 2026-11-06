@@ -209,6 +209,11 @@ mod init {
     /// Applies [`super::GLIBC_OPTIONS`] unless the environment already sets
     /// glibc's malloc: its `MALLOC_*_` variable, or any `glibc.malloc.`
     /// tunable in `GLIBC_TUNABLES`.
+    ///
+    /// The decision is taken once, at process start, from the limit the
+    /// process starts with. A tighter limit set later (a session setting)
+    /// does not undo it: freed C memory up to the trim threshold (64 MiB) can
+    /// then stay with each glibc arena, outside the memory pools' accounting.
     fn keep_freed_c_memory() {
         let tuned = with_var(c"GLIBC_TUNABLES", |v| {
             v.is_some_and(|v| v.windows(13).any(|w| w == b"glibc.malloc."))
@@ -220,7 +225,9 @@ mod init {
             if !is_set(var) {
                 // SAFETY: `mallopt` takes glibc's arena lock and only stores
                 // the value in its malloc parameters (it initialises malloc
-                // first if needed); it may run on any thread. Its result is
+                // first if needed, and may run `malloc_consolidate` on the
+                // main arena, which only merges free chunks); it may run on
+                // any thread. Its result is
                 // ignored: both values are within glibc's bounds (the mmap
                 // threshold's cap is 32 MiB on 64-bit targets).
                 unsafe { mallopt(param, value) };
