@@ -19,7 +19,7 @@ use krishiv_common::error::{
     DatatypeMismatchNonFoldableInput, DatatypeMismatchNonStringType,
     DatatypeMismatchUnexpectedInputType, DatatypeMismatchUnexpectedNull,
     InvalidOptionsNonMapFunction, InvalidOptionsNonStringType, InvalidSchemaNonStringLiteral,
-    KrishivError,
+    KrishivError, KrishivUnsupportedFeature,
 };
 use krishiv_types::{ArrayType, DataType, StructField, StructType, parse_data_type};
 
@@ -150,6 +150,13 @@ fn from_json(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         }
     };
     let parsed = parse_json_schema(&schema)?;
+    if holds_variant(&parsed) {
+        // Spark reads a JSON value as a variant there; the reader does not yet.
+        return Err(KrishivUnsupportedFeature {
+            feature: format!("from_json into {}", parsed.sql()),
+        }
+        .into());
+    }
     let sql_expr = || format!("\"from_json({})\"", c.sql(0).unwrap_or_default());
     if !matches!(
         parsed,
@@ -175,6 +182,17 @@ fn from_json(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     }
     check_options(c, 2)?;
     Ok(ArgType::new(parsed, true))
+}
+
+/// Whether `t` is or holds a variant at any depth.
+fn holds_variant(t: &DataType) -> bool {
+    match t {
+        DataType::Variant => true,
+        DataType::Array(a) => holds_variant(a.element_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| holds_variant(f.data_type())),
+        DataType::Map(m) => holds_variant(m.key_type()) || holds_variant(m.value_type()),
+        _ => false,
+    }
 }
 
 /// Whether any map in `t` has a key that is not a string.

@@ -233,15 +233,24 @@ def _checksummed(q: Query) -> bool:
 def check_description(name: str, baseline: dict | None, q: Query | None = None) -> str:
     """How the timed runs of ``name`` were checked against the verified answer, recorded with its timings.
 
-    Only an adapter that returns a result checksum compares more than the row count; Krishiv's ``RUN`` returns only
-    rows and seconds, so its checksum is that of a separate, untimed ``DUMP`` of the query.
+    Only an adapter that returns a result checksum compares more than the row count. Krishiv's runner answers
+    ``RUN_CHECKED`` with the checksum of the timed run's own result (taken after the clock stops; ``source`` ``run``);
+    an older runner answers only ``RUN``, and the checksum is then that of a separate, untimed ``DUMP`` (``dump``).
     """
     if q is not None and not _checksummed(q):
         return "row count only: the query's LIMIT may cut a tie differently from run to run"
     if baseline is None:
         return "row count only: the adapter returns no result checksum"
-    if name == "krishiv":
-        return "row count of the timed run; checksum of a separate untimed DUMP run (RUN returns only rows and seconds)"
+    if baseline.get("source") == "dump":
+        return (
+            "row count of the timed run; checksum of a separate untimed DUMP run "
+            "(this runner's RUN returns only rows and seconds)"
+        )
+    if baseline.get("source") == "run":
+        return (
+            "row count and order-independent checksum of the timed run's own result, "
+            "taken by the runner after the clock stops"
+        )
     return "row count and order-independent checksum of the timed run's own result"
 
 
@@ -405,7 +414,9 @@ def sequential_query(
                     except (EngineError, EngineTimeout, EngineCrashed, NotImplementedError) as e:
                         verdicts[name]["profile_error"] = str(e)[:300]
                 if attempt:
-                    verdicts[name]["engine_mode"] = "streaming (the default engine ran out of memory)"
+                    verdicts[name]["engine_mode"] = (
+                        "streaming (the default engine's worker died, usually out of memory)"
+                    )
             except (EngineError, EngineTimeout, EngineCrashed) as e:
                 crashed = isinstance(e, EngineCrashed)
                 status = _answer_status(name, e) if phase == "answer" else _status_of(e)

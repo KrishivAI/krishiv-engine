@@ -19,10 +19,13 @@ use krishiv_types::batch::Batch;
 use crate::admission::Permit;
 use crate::session::SessionState;
 
-/// The process counters a query-end fold attributes, and when the query
-/// started: read at query start so the fold records the deltas.
+/// The counters a query-end fold attributes, and when the query started:
+/// read at query start so the fold records the deltas. Bytes read and
+/// written come from the query's own I/O context (design P2-E1 R3: the
+/// scheduler's totals are the whole runtime's, every session's I/O).
 pub(crate) struct QueryStart {
     started: Instant,
+    io: krishiv_io::IoContext,
     arbitration: ArbitrationStats,
     cache_hits: u64,
     cache_misses: u64,
@@ -31,15 +34,17 @@ pub(crate) struct QueryStart {
 }
 
 impl QueryStart {
-    pub(crate) fn capture(state: &SessionState) -> Self {
+    pub(crate) fn capture(state: &SessionState, io: &krishiv_io::IoContext) -> Self {
         let totals = state.io.totals();
+        let own = io.counters();
         Self {
             started: Instant::now(),
-            arbitration: state.memory_tree.stats(),
+            io: io.clone(),
+            arbitration: state.runtime.memory_tree.stats(),
             cache_hits: IoCounters::get(&totals.cache_hits),
             cache_misses: IoCounters::get(&totals.cache_misses),
-            bytes_read: IoCounters::get(&totals.bytes_read),
-            bytes_written: IoCounters::get(&totals.bytes_written),
+            bytes_read: IoCounters::get(&own.bytes_read),
+            bytes_written: IoCounters::get(&own.bytes_written),
         }
     }
 
@@ -94,14 +99,14 @@ impl QueryStart {
                         .filter(|e| e.node.is_none() && e.role == krishiv_exec::OperatorRole::Sink)
                         .map(|e| i64::try_from(e.metrics.rows_in).unwrap_or(i64::MAX))
                         .max(),
-                    // Process-wide deltas: concurrent queries see each other's I/O.
+                    // The query's own counters (its I/O context), since it started.
                     bytes_read: i64::try_from(
-                        IoCounters::get(&state.io.totals().bytes_read)
+                        IoCounters::get(&self.io.counters().bytes_read)
                             .saturating_sub(self.bytes_read),
                     )
                     .unwrap_or(i64::MAX),
                     bytes_written: i64::try_from(
-                        IoCounters::get(&state.io.totals().bytes_written)
+                        IoCounters::get(&self.io.counters().bytes_written)
                             .saturating_sub(self.bytes_written),
                     )
                     .unwrap_or(i64::MAX),
@@ -126,8 +131,8 @@ impl QueryStart {
             return;
         }
         let totals = state.io.totals();
-        let arbitration = state.memory_tree.stats();
-        state.metrics.fold(&QueryOutcome {
+        let arbitration = state.runtime.memory_tree.stats();
+        state.runtime.metrics.fold(&QueryOutcome {
             class: query.class(),
             status,
             error_class: error_class.as_deref(),
@@ -139,6 +144,10 @@ impl QueryStart {
             arbitration_aborts: arbitration.aborts.saturating_sub(self.arbitration.aborts),
             cache_hits: IoCounters::get(&totals.cache_hits).saturating_sub(self.cache_hits),
             cache_misses: IoCounters::get(&totals.cache_misses).saturating_sub(self.cache_misses),
+            cancel_latency_secs: query
+                .cancelled_at()
+                .filter(|_| status == Status::Cancelled)
+                .map(|at| at.elapsed().as_secs_f64()),
         });
     }
 }
@@ -155,6 +164,9 @@ pub(crate) struct QueryFold {
     /// The admission slot, given back when the fold is consumed (the
     /// stream ended, failed or was dropped).
     pub(crate) _permit: crate::admission::Permit,
+    /// The statement's operation id, held until the query's stream ends, so
+    /// a running query keeps its id taken even after its DataFrame drops.
+    pub(crate) _operation: Option<Arc<crate::history::Operation>>,
 }
 
 impl QueryFold {
@@ -172,7 +184,7 @@ impl QueryFold {
             return;
         }
         // Detached: dropping the handle leaves the task running; it ends with the query.
-        drop(state.executor.spawn(
+        drop(state.runtime.executor.spawn(
             krishiv_exec::WorkloadClass::Interactive,
             Box::pin(async move {
                 query.finished().await;
@@ -188,7 +200,7 @@ impl QueryFold {
         let query = Arc::clone(&self.query);
         let state = Arc::clone(&self.state);
         self.finish(None);
-        drop(state.executor.spawn(
+        drop(state.runtime.executor.spawn(
             krishiv_exec::WorkloadClass::Interactive,
             Box::pin(async move {
                 if setup.await.unwrap_or(false) {

@@ -175,3 +175,49 @@ fn metrics_report_the_limit_the_query_runs_under() {
     );
     assert_eq!(q.metrics().memory.limit, None);
 }
+
+/// A cancellation with a reason ends the query and its drivers with the
+/// reason's error; the first cancellation or failure wins, and a finished
+/// query is never cancelled.
+#[test]
+fn a_cancellation_with_a_reason_is_the_error_of_the_query() {
+    use krishiv_common::error::{InternalError, KrishivError};
+    let root = TreePool::new(&MemoryConfig::default());
+    let query = |n| {
+        QueryContext::new(
+            QueryId(n),
+            WorkloadClass::Interactive,
+            ExecConfig::default(),
+            root.child("q", None),
+        )
+    };
+    let reason = |m: &str| -> KrishivError {
+        InternalError {
+            message: m.to_owned(),
+        }
+        .into()
+    };
+    let q = query(1);
+    assert!(q.check_cancelled().is_ok());
+    assert!(q.cancel_with(reason("first")));
+    assert!(!q.cancel_with(reason("second")), "the first reason wins");
+    q.cancel();
+    let seen = q.check_cancelled().unwrap_err();
+    assert!(seen.to_string().contains("first"), "{seen}");
+    assert_eq!(q.cancellation().to_string(), seen.to_string());
+    assert!(q.error().unwrap().to_string().contains("first"));
+    // A plain cancel first: drivers see OPERATION_CANCELED, and a later
+    // reason changes nothing.
+    let q = query(2);
+    q.cancel();
+    assert!(!q.cancel_with(reason("late")));
+    assert_eq!(
+        q.check_cancelled().unwrap_err().error_class().name(),
+        "OPERATION_CANCELED"
+    );
+    // Finished: nothing to cancel.
+    let q = query(3);
+    q.mark_finished();
+    assert!(!q.cancel_with(reason("after")));
+    assert!(q.error().is_none());
+}

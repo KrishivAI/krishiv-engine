@@ -71,7 +71,7 @@ fn size_limit() -> KrishivError {
 
 /// Java's `String.compareTo`: UTF-16 code-unit order.
 fn java_order(a: &str, b: &str) -> Ordering {
-    a.encode_utf16().cmp(b.encode_utf16())
+    super::key_order(a.as_bytes(), b.as_bytes())
 }
 
 /// One field of an object being written: its key id and where its value

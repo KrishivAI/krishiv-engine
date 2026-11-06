@@ -1566,7 +1566,9 @@ impl Resolver<'_> {
             return e;
         };
         let [value] = &values[..] else { return e };
-        if !matches!(plan.node, crate::PlanNode::Aggregate { .. })
+        // Spark's legacy rule (`subquery_legacy.rs`) answers it otherwise.
+        if self.ctx.conf.legacy_exists_in_count
+            || !matches!(plan.node, crate::PlanNode::Aggregate { .. })
             || !crate::analyzer::subquery::one_row_aggregate(plan)
         {
             return e;

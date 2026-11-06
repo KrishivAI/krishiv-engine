@@ -12,8 +12,6 @@
 //! operator, cache and metric tables arrive with their recorders (units 2
 //! and 3).
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -27,8 +25,11 @@ use krishiv_exec::planner::MemoryTable;
 use krishiv_memory::MemoryPool;
 use krishiv_plan::TableVersion;
 use krishiv_plan::analyzer::{
-    BoxFuture, Catalog, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
+    AccessDecision, AccessPolicy, BoxFuture, Catalog, NameForm, Principal, Privilege, Securable,
+    TableColumn, TableIdent, TableKind, TableMeta,
 };
+
+use crate::history::QueryHistory;
 use krishiv_types::DataType;
 use krishiv_types::batch::Batch;
 
@@ -226,6 +227,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("spill_files", Long, true),
             ("pipelines", Long, true),
             ("workers", Long, true),
+            ("cancel_reason", Text, true),
         ],
         _ => return None,
     })
@@ -374,13 +376,18 @@ pub(crate) fn pool_name(query_id: &str) -> String {
     format!("query-{query_id}")
 }
 
-/// The query a memory path belongs to: `process/query-<id>/...` names the pool of query `<id>`, or a
-/// consumer below it.
+/// The query a memory path belongs to: `process/query-<id>/...` (or
+/// `process/session:<s>/query-<id>/...` under a session limit) names the pool of query `<id>`,
+/// or a consumer below it.
 fn query_of_path(path: &str) -> Option<String> {
-    path.split('/')
-        .nth(1)
-        .and_then(|p| p.strip_prefix("query-"))
-        .map(str::to_owned)
+    let mut parts = path.split('/').skip(1);
+    let first = parts.next()?;
+    let pool = if first.starts_with("session:") {
+        parts.next()?
+    } else {
+        first
+    };
+    pool.strip_prefix("query-").map(str::to_owned)
 }
 
 /// The columns' values for `table` now.
@@ -503,7 +510,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
         ];
     }
     if table.eq_ignore_ascii_case("operators") {
-        let rows = sources.queries.operators();
+        let rows = sources.queries.operators(sources.monitor.sees_all());
         let l = |f: fn(&OperatorRow) -> i64| long(rows.iter().map(move |r| Some(f(r))));
         return vec![
             text(rows.iter().map(|r| Some(r.query_id.as_str()))),
@@ -539,7 +546,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
         ];
     }
     if table.eq_ignore_ascii_case("queries") {
-        let rows = sources.queries.snapshot();
+        let rows = sources.queries.snapshot(sources.monitor.sees_all());
         let micros = |ms: Option<i64>| ms.map(|m| m.saturating_mul(1000));
         return vec![
             text(rows.iter().map(|r| Some(r.id.as_str()))),
@@ -575,6 +582,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             long(rows.iter().map(|r| r.spill_files)),
             long(rows.iter().map(|r| r.pipelines)),
             long(rows.iter().map(|r| r.workers)),
+            text(rows.iter().map(|r| r.cancel_reason)),
         ];
     }
     let rows = capability_rows();
@@ -648,10 +656,58 @@ pub(crate) struct Sources {
     pub(crate) relations: Arc<crate::cache::RelationCache>,
     /// The engine's metrics.
     pub(crate) metrics: Arc<krishiv_exec::MetricsRegistry>,
+    /// Whether the query's principal sees every principal's queries.
+    pub(crate) monitor: Arc<Monitor>,
 }
 
-/// Most queries `system.queries` remembers; the oldest finished go first.
-const HISTORY_ROWS: usize = 1000;
+/// Whether one query's principal holds `MONITOR` on the `system` securable,
+/// which shows every principal's rows in `system.queries` and
+/// `system.operators` (ADR 0036 update 2026-11-05). Asked once per query,
+/// when analysis loads one of those tables; until then, and when the policy
+/// says anything but a plain allow, the principal sees its own rows only.
+pub(crate) struct Monitor {
+    principal: Arc<Principal>,
+    policy: Arc<dyn AccessPolicy>,
+    decided: OnceLock<bool>,
+}
+
+impl std::fmt::Debug for Monitor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Monitor")
+            .field("decided", &self.decided.get())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Monitor {
+    pub(crate) fn new(principal: Arc<Principal>, policy: Arc<dyn AccessPolicy>) -> Self {
+        Self {
+            principal,
+            policy,
+            decided: OnceLock::new(),
+        }
+    }
+
+    /// Asks the policy, once.
+    async fn decide(&self) {
+        if self.decided.get().is_some() {
+            return;
+        }
+        let securable = Securable::System(SYSTEM.to_owned());
+        let allowed = matches!(
+            self.policy
+                .check(&self.principal, &securable, Privilege::Monitor)
+                .await,
+            Ok(AccessDecision::Allow)
+        );
+        let _ = self.decided.set(allowed);
+    }
+
+    /// Whether every principal's rows show.
+    pub(crate) fn sees_all(&self) -> bool {
+        self.decided.get().copied().unwrap_or(false)
+    }
+}
 
 /// Most tags a session carries, and the longest key and value.
 pub(crate) const MAX_TAGS: usize = 32;
@@ -694,6 +750,9 @@ pub(crate) struct QueryRow {
     pub(crate) spill_files: Option<i64>,
     pub(crate) pipelines: Option<i64>,
     pub(crate) workers: Option<i64>,
+    /// Why the query was cancelled ([`crate::CancelReason::as_str`]), for a
+    /// query cancelled with a reason; `state` stays `cancelled`.
+    pub(crate) cancel_reason: Option<&'static str>,
 }
 
 /// One operator of a finished query, as `system.operators` lists it.
@@ -797,7 +856,7 @@ pub(crate) struct Totals {
     pub(crate) workload_class: &'static str,
     pub(crate) cpu_ns: i64,
     pub(crate) rows_produced: Option<i64>,
-    /// Process-wide I/O since the query started (concurrent queries share it).
+    /// The query's own I/O since it started (its I/O context; design P2-E1 R3).
     pub(crate) bytes_read: i64,
     pub(crate) bytes_written: i64,
     pub(crate) spill_bytes: i64,
@@ -806,12 +865,14 @@ pub(crate) struct Totals {
     pub(crate) workers: i64,
 }
 
-/// The queries of one session, bounded: live ones and the recent finished
-/// ones (P2-T126 unit 2). The lock is held only to push, update or copy.
+/// The `system.queries` view of one session: its rows go into its runtime's
+/// [`QueryHistory`] with its session id, principal, tags and trace id
+/// (P2-T126 unit 2, design P2-E1 §5).
 #[derive(Debug, Default)]
 pub(crate) struct QueryLog {
-    rows: Mutex<VecDeque<QueryRow>>,
-    counter: AtomicU64,
+    history: Arc<QueryHistory>,
+    /// The session's operation ids ([`crate::QueryOptions::operation_id`]).
+    operations: Arc<crate::history::Operations>,
     /// The session this log belongs to, and its principal (fixed for life).
     session_id: String,
     principal: String,
@@ -821,21 +882,27 @@ pub(crate) struct QueryLog {
     tags: Mutex<std::collections::BTreeMap<String, String>>,
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
 impl QueryLog {
-    /// The log of a new session run by `principal`.
-    pub(crate) fn new(principal: &str) -> Self {
-        let log = Self {
+    /// The log of a new session of the runtime that keeps `history`, run by
+    /// `principal`.
+    pub(crate) fn new(history: Arc<QueryHistory>, principal: &str) -> Self {
+        Self {
+            session_id: history.mint(now_ms()),
             principal: principal.to_owned(),
+            history,
             ..Self::default()
-        };
-        let session_id = log.next_id(now_ms());
-        Self { session_id, ..log }
+        }
+    }
+
+    /// The session's id (UUIDv7).
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     /// Removes the tag `key`, if there is one.
@@ -881,34 +948,14 @@ impl QueryLog {
             .clone()
     }
 
-    /// A UUIDv7 (RFC 9562): 48 bits of milliseconds, then version, then bits
-    /// that are unique per call. The tail comes from a per-process random
-    /// hasher key and a counter, not from a CSPRNG: it names queries, it
-    /// guards nothing.
-    fn next_id(&self, ms: i64) -> String {
-        use std::hash::{BuildHasher, Hasher, RandomState};
-        let n = self.counter.fetch_add(1, Ordering::Relaxed);
-        let mut h = RandomState::new().build_hasher();
-        h.write_u64(n);
-        let rand = h.finish();
-        let ms = u64::try_from(ms).unwrap_or(0) & 0xFFFF_FFFF_FFFF;
-        // 12 bits after the version, then the variant and 62 more bits.
-        let rand_a = (rand >> 52) & 0xFFF;
-        let rand_b = (rand ^ n.rotate_left(32)) & 0x3FFF_FFFF_FFFF_FFFF;
-        format!(
-            "{:08x}-{:04x}-7{:03x}-{:04x}-{:012x}",
-            ms >> 16,
-            ms & 0xFFFF,
-            rand_a,
-            0x8000 | ((rand_b >> 48) & 0x3FFF),
-            rand_b & 0xFFFF_FFFF_FFFF
-        )
-    }
-
-    /// Records a query that started now and returns its id.
-    pub(crate) fn begin(&self, text: Option<&str>, class: Option<&'static str>) -> String {
-        let ms = now_ms();
-        let id = self.next_id(ms);
+    /// A row for a query that starts now, named `id`.
+    fn row(
+        &self,
+        id: String,
+        ms: i64,
+        text: Option<&str>,
+        class: Option<&'static str>,
+    ) -> QueryRow {
         let (text, truncated) = match text {
             None => (None, false),
             Some(t) if t.len() <= TEXT_BYTES => (Some(t.to_owned()), false),
@@ -920,28 +967,12 @@ impl QueryLog {
                 (Some(t[..end].to_owned()), true)
             }
         };
-        let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
-        if rows.len() >= HISTORY_ROWS {
-            // The oldest finished query; if every row is live, the oldest.
-            let at = rows.iter().position(|r| r.ended_ms.is_some()).unwrap_or(0);
-            rows.remove(at);
-        }
-        rows.push_back(QueryRow {
-            id: id.clone(),
+        QueryRow {
+            id,
             session_id: self.session_id.clone(),
             principal: self.principal.clone(),
-            tags: self
-                .tags
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-            trace_id: self
-                .trace_id
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .clone(),
+            tags: self.tags(),
+            trace_id: self.trace_id(),
             statement_class: class,
             state: "running",
             text,
@@ -961,7 +992,60 @@ impl QueryLog {
             spill_files: None,
             pipelines: None,
             workers: None,
-        });
+            cancel_reason: None,
+        }
+    }
+
+    /// A running row named `id` (tests of the history).
+    #[cfg(test)]
+    pub(crate) fn snapshot_row_for_tests(&self, id: &str) -> QueryRow {
+        self.row(id.to_owned(), 0, None, None)
+    }
+
+    /// The session's operation ids.
+    pub(crate) fn operations(&self) -> &Arc<crate::history::Operations> {
+        &self.operations
+    }
+
+    /// Records a query that started now under a minted id and returns it.
+    #[cfg(test)]
+    pub(crate) fn begin(&self, text: Option<&str>, class: Option<&'static str>) -> String {
+        self.record(text, class, None)
+    }
+
+    /// Records a query that started now, named `operation` when the caller
+    /// gave the statement an id ([`crate::QueryOptions::operation_id`]), else
+    /// a minted id, and returns the id.
+    ///
+    /// # Errors
+    /// `INVALID_HANDLE.OPERATION_ALREADY_EXISTS` while another execution of
+    /// this session runs under the same operation id.
+    pub(crate) fn begin_as(
+        &self,
+        text: Option<&str>,
+        class: Option<&'static str>,
+        operation: Option<&crate::QueryId>,
+    ) -> Result<String, KrishivError> {
+        let Some(operation) = operation else {
+            return Ok(self.record(text, class, None));
+        };
+        let id = operation.as_str().to_owned();
+        self.history
+            .push_given(self.row(id.clone(), now_ms(), text, class))?;
+        Ok(id)
+    }
+
+    /// Records a row without the live-id check (a statement that never runs:
+    /// refused, or answered from the result cache).
+    fn record(
+        &self,
+        text: Option<&str>,
+        class: Option<&'static str>,
+        operation: Option<&crate::QueryId>,
+    ) -> String {
+        let ms = now_ms();
+        let id = operation.map_or_else(|| self.history.mint(ms), |o| o.as_str().to_owned());
+        self.history.push(self.row(id.clone(), ms, text, class));
         id
     }
 
@@ -985,20 +1069,13 @@ impl QueryLog {
     /// Sets the state of the live row `id` (`queued` while admission waits,
     /// `running` once it is admitted).
     pub(crate) fn set_state(&self, id: &str, state: &'static str) {
-        let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(row) = rows.iter_mut().find(|r| r.id == id) {
-            row.state = state;
-        }
+        self.history
+            .update(&self.session_id, id, |row| row.state = state);
     }
 
     /// The session's tags now.
     pub(crate) fn tags_now(&self) -> Vec<(String, String)> {
-        self.tags
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
+        self.tags()
     }
 
     /// Records a query answered from the result cache: a finished row of its own (with the
@@ -1007,8 +1084,9 @@ impl QueryLog {
         &self,
         text: Option<&str>,
         class: Option<&'static str>,
+        operation: Option<&crate::QueryId>,
     ) -> String {
-        let id = self.begin(text, class);
+        let id = self.record(text, class, operation);
         self.finish(
             &id,
             &Finished {
@@ -1031,8 +1109,9 @@ impl QueryLog {
         text: Option<&str>,
         class: Option<&'static str>,
         error: &KrishivError,
+        operation: Option<&crate::QueryId>,
     ) -> String {
-        let id = self.begin(text, class);
+        let id = self.record(text, class, operation);
         let class = error.error_class().name();
         let state = outcome_state(class);
         self.finish(
@@ -1055,58 +1134,29 @@ impl QueryLog {
     pub(crate) fn fail(&self, id: &str, error: &KrishivError) {
         let class = error.error_class().name();
         let state = outcome_state(class);
-        let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(row) = rows.iter_mut().find(|r| r.id == id) {
+        self.history.update(&self.session_id, id, |row| {
             row.state = state;
             row.error_class = (state != "cancelled").then(|| class.to_owned());
-        }
+        });
     }
 
     /// Marks the query `id` finished (a row evicted meanwhile is gone).
     pub(crate) fn finish(&self, id: &str, done: &Finished<'_>) {
-        let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(row) = rows.iter_mut().find(|r| r.id == id) {
-            row.state = done.state;
-            row.ended_ms = Some(now_ms());
-            row.wall_ns = Some(done.wall_ns);
-            row.peak_memory_bytes = Some(done.peak_memory_bytes);
-            row.error_class = done.error_class.map(str::to_owned);
-            row.operators = Arc::from(done.operators.as_slice());
-            if let Some(t) = done.totals {
-                row.workload_class = Some(t.workload_class);
-                row.cpu_ns = Some(t.cpu_ns);
-                row.rows_produced = t.rows_produced;
-                row.bytes_read = Some(t.bytes_read);
-                row.bytes_written = Some(t.bytes_written);
-                row.spill_bytes = Some(t.spill_bytes);
-                row.spill_files = Some(t.spill_files);
-                row.pipelines = Some(t.pipelines);
-                row.workers = Some(t.workers);
-            }
-        }
+        self.history.finish(&self.session_id, id, done);
     }
 
-    /// The operators of every remembered query, oldest query first (copied
-    /// after the lock is released).
-    pub(crate) fn operators(&self) -> Vec<OperatorRow> {
-        let shared: Vec<Arc<[OperatorRow]>> = self
-            .rows
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .map(|r| Arc::clone(&r.operators))
-            .collect();
-        shared.iter().flat_map(|o| o.iter().cloned()).collect()
+    /// The operators of the remembered queries of this session's principal,
+    /// or of every principal when `all`, oldest query first.
+    pub(crate) fn operators(&self, all: bool) -> Vec<OperatorRow> {
+        self.history
+            .operators((!all).then_some(self.principal.as_str()))
     }
 
-    /// The rows now, oldest first.
-    pub(crate) fn snapshot(&self) -> Vec<QueryRow> {
-        self.rows
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .cloned()
-            .collect()
+    /// The rows of this session's principal, or of every principal when
+    /// `all`, oldest first.
+    pub(crate) fn snapshot(&self, all: bool) -> Vec<QueryRow> {
+        self.history
+            .snapshot((!all).then_some(self.principal.as_str()))
     }
 }
 
@@ -1114,7 +1164,7 @@ impl QueryLog {
 fn outcome_state(class: &str) -> &'static str {
     match class {
         "KRISHIV_INSUFFICIENT_PERMISSIONS" => "denied",
-        "OPERATION_CANCELED" => "cancelled",
+        "OPERATION_CANCELED" | "KRISHIV_QUERY_TIMEOUT" | "KRISHIV_QUERY_KILLED" => "cancelled",
         _ => "failed",
     }
 }
@@ -1162,7 +1212,19 @@ pub(crate) fn provider(
 
 /// The `system` catalog: metadata only; the rows come from [`provider`].
 #[derive(Debug)]
-pub(crate) struct SystemCatalog;
+pub(crate) struct SystemCatalog {
+    /// The query's `MONITOR` decision, made when a per-principal table loads.
+    monitor: Arc<Monitor>,
+}
+
+impl SystemCatalog {
+    /// The `system` catalog of the query that reads `sources`.
+    pub(crate) fn of(sources: &Sources) -> Self {
+        Self {
+            monitor: Arc::clone(&sources.monitor),
+        }
+    }
+}
 
 impl Catalog for SystemCatalog {
     fn name(&self) -> &str {
@@ -1183,6 +1245,12 @@ impl Catalog for SystemCatalog {
             // Two-part names only: `system.<table>`, with no namespace.
             if !id.namespace.is_empty() {
                 return Ok(None);
+            }
+            if ["queries", "operators"]
+                .iter()
+                .any(|t| id.name.eq_ignore_ascii_case(t))
+            {
+                self.monitor.decide().await;
             }
             Ok(columns(&id.name).map(|columns| TableMeta {
                 ident: TableIdent {
@@ -1213,9 +1281,13 @@ mod tests {
         let sources = Sources {
             queries: Arc::new(QueryLog::default()),
             io: krishiv_io::IoScheduler::new(krishiv_io::IoConfig::default()),
-            relations: Arc::new(crate::cache::RelationCache::new(&memory)),
+            relations: crate::cache::RelationCache::new(&memory),
             metrics: Arc::new(krishiv_exec::MetricsRegistry::new()),
             memory,
+            monitor: Arc::new(Monitor::new(
+                Arc::new(Principal::local_user()),
+                Arc::new(krishiv_plan::analyzer::AllowAll),
+            )),
         };
         assert!(provider("capabilities", &sources).unwrap().is_some());
         assert!(provider("nope", &sources).unwrap().is_none());
@@ -1241,7 +1313,7 @@ mod tests {
         }
         .into();
         log.fail(&id, &error);
-        let row = &log.snapshot()[0];
+        let row = &log.snapshot(false)[0];
         assert_eq!(row.state, "failed");
         assert_eq!(row.error_class.as_deref(), Some("PATH_NOT_FOUND"));
         assert_eq!(row.wall_ns, Some(5));
@@ -1249,7 +1321,7 @@ mod tests {
         log.fail("unknown", &error);
         let cancelled: KrishivError = krishiv_common::error::OperationCanceled {}.into();
         log.fail(&id, &cancelled);
-        let row = &log.snapshot()[0];
+        let row = &log.snapshot(false)[0];
         assert_eq!(row.state, "cancelled");
         assert_eq!(row.error_class, None);
     }
@@ -1284,8 +1356,8 @@ mod tests {
         let log = QueryLog::default();
         log.set_trace_id(Some("trace".to_owned()));
         assert!(log.try_set_tag("team", "etl"));
-        let id = log.record_replayed(Some("SELECT 1"), Some("READ"));
-        let row = &log.snapshot()[0];
+        let id = log.record_replayed(Some("SELECT 1"), Some("READ"), None);
+        let row = &log.snapshot(false)[0];
         assert_eq!(row.id, id);
         assert_eq!(row.state, "finished");
         assert_eq!(row.statement_class, Some("READ"));
@@ -1303,6 +1375,11 @@ mod tests {
             query_of_path(&format!("process/{pool}/hash-join")),
             Some(id)
         );
+        assert_eq!(
+            query_of_path(&format!("process/session:abc/{pool}/sort")),
+            query_of_path(&format!("process/{pool}"))
+        );
+        assert_eq!(query_of_path("process/session:abc"), None);
         assert_eq!(query_of_path("process/shuffle"), None);
         assert_eq!(query_of_path("process"), None);
     }
@@ -1333,7 +1410,7 @@ mod tests {
                 totals: None,
             },
         );
-        let rows = log.snapshot();
+        let rows = log.snapshot(false);
         assert_eq!((rows[0].state, rows[1].state), ("finished", "running"));
     }
 
@@ -1377,16 +1454,16 @@ mod tests {
                 totals: None,
             },
         );
-        let (a, b) = (log.snapshot(), log.snapshot());
+        let (a, b) = (log.snapshot(false), log.snapshot(false));
         assert!(Arc::ptr_eq(&a[0].operators, &b[0].operators));
-        let ops = log.operators();
+        let ops = log.operators(false);
         assert_eq!((ops.len(), ops[0].rows_out), (1, 3));
     }
 
     #[test]
     fn history_is_bounded_and_long_text_is_cut_on_a_char() {
         let log = QueryLog::default();
-        for _ in 0..(HISTORY_ROWS + 5) {
+        for _ in 0..(crate::history::PRINCIPAL_ROWS + 5) {
             let id = log.begin(None, None);
             log.finish(
                 &id,
@@ -1400,10 +1477,10 @@ mod tests {
                 },
             );
         }
-        assert_eq!(log.snapshot().len(), HISTORY_ROWS);
+        assert_eq!(log.snapshot(false).len(), crate::history::PRINCIPAL_ROWS);
         let long = "é".repeat(TEXT_BYTES);
         log.begin(Some(&long), None);
-        let last = log.snapshot().pop().unwrap();
+        let last = log.snapshot(false).pop().unwrap();
         assert!(last.truncated && last.text.unwrap().len() <= TEXT_BYTES);
     }
 

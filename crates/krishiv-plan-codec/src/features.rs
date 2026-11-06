@@ -460,6 +460,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                 Some(Feature::TimeType)
             } else if arrow_interval(t) {
                 Some(Feature::IntervalTypes)
+            } else if krishiv_types::arrow::is_variant_struct(t) {
+                // A variant's carrier is one value, not a struct.
+                Some(Feature::VariantType)
             } else {
                 arrow_nested(t).then_some(Feature::NestedTypes)
             }

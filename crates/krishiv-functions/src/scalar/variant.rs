@@ -148,7 +148,11 @@ fn variant_get(
         };
         found.push(extract(v, steps)?);
     }
-    cast_values(&found, to, fail, opts.time_zone.as_ref())
+    let zone = krishiv_kernels::datetime::Clocked {
+        inner: opts.time_zone.as_ref(),
+        query_start: opts.query_start_micros,
+    };
+    cast_values(&found, to, fail, &zone)
 }
 
 /// Binds the variant function `name`.
@@ -189,7 +193,9 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             };
             // The analyzer checked the type literal.
             let to = match string_literal(args, 2) {
-                Some(Some(t)) => krishiv_types::parse_data_type(&t).ok(),
+                Some(Some(t)) => krishiv_types::parse_data_type(&t)
+                    .ok()
+                    .map(|t| t.as_nullable()),
                 None if rest.is_empty() => Some(SparkType::Variant),
                 _ => None,
             };

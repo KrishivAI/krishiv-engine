@@ -74,11 +74,17 @@ fn the_longest_prefix_wins_on_segment_boundaries() {
     assert_ne!(wide.id.key(), narrow.id.key());
     // `t1/` does not cover `t10/`: it falls to the wide scope.
     assert_eq!(wide.id, t10.id);
-    // Outside every scope the plain bucket id is used.
+    // Outside every scope the bucket id is used, with the hash of the
+    // registry's own `fs.*` settings (no scope nonce).
     let outside = r.open("s3://b/elsewhere/f").unwrap();
-    assert_eq!(outside.id.key(), "s3://b");
+    assert!(
+        outside.id.key().starts_with("s3://b#cfg:"),
+        "{}",
+        outside.id.key()
+    );
+    assert!(!outside.id.key().contains("#scope:"));
     let other_bucket = r.open("s3://other/warehouse/t1/f").unwrap();
-    assert_eq!(other_bucket.id.key(), "s3://other");
+    assert!(other_bucket.id.key().starts_with("s3://other#cfg:"));
 }
 
 #[test]
