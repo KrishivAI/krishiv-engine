@@ -396,3 +396,48 @@ async fn a_refused_table_overwrite_keeps_the_old_table() {
         "the table survived"
     );
 }
+
+/// A query cancelled while it waits for admission reports the time it waited as its wall time.
+#[tokio::test]
+async fn a_cancelled_queued_query_counts_its_queue_time_in_wall_ns() {
+    let gate = Gate::new();
+    let s = Session::builder()
+        .admission_controller(Arc::<Gate>::clone(&gate))
+        .build()
+        .unwrap();
+    let runner = s.clone();
+    let query = tokio::spawn(async move {
+        let _ = runner
+            .sql("SELECT 5 AS five")
+            .await
+            .unwrap()
+            .collect()
+            .await;
+    });
+    first_request_seen(&gate).await;
+    wait_for(&s, "SELECT 5 AS five", "queued").await;
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    query.abort();
+    let _ = query.await;
+    wait_for(&s, "SELECT 5 AS five", "cancelled").await;
+    let df = s
+        .sql("SELECT wall_ns FROM system.queries WHERE query_text = 'SELECT 5 AS five'")
+        .await
+        .unwrap();
+    let wall: i64 = df
+        .collect()
+        .await
+        .unwrap()
+        .iter()
+        .map(|b| {
+            b.column(0)
+                .as_primitive::<arrow_array::types::Int64Type>()
+                .value(0)
+        })
+        .next()
+        .expect("one row");
+    assert!(
+        wall >= 50_000_000,
+        "the 60 ms in the queue count: {wall} ns"
+    );
+}
