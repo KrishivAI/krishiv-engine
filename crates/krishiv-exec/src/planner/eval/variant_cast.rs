@@ -166,11 +166,15 @@ impl VariantCast {
         if *from == DataType::Variant {
             // A missing field or a variant null is NULL even under a NOT NULL
             // target field (Spark reads its NULL through the slot as 0 there).
+            let zone = krishiv_kernels::datetime::Clocked {
+                inner: &self.zone,
+                query_start: self.env.query_start_micros,
+            };
             return cast_from_variant(
                 a.as_ref(),
                 &to.as_nullable(),
                 self.mode != CastMode::Try,
-                &self.zone,
+                &zone,
             );
         }
         if *to == DataType::Variant {

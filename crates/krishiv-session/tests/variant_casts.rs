@@ -79,3 +79,55 @@ fn review_cases_match_spark() {
     .unwrap_err();
     assert!(e.to_string().contains("INVALID_ORDERING_TYPE"), "{e}");
 }
+
+fn error_class(sql: &str) -> String {
+    let s = Session::new().unwrap();
+    let e = block_on(async { s.sql(sql).await?.collect().await }).unwrap_err();
+    e.error_class().name().to_owned()
+}
+
+/// Spark 4.2.0 (oracle), third review round: intervals beside a variant print
+/// as intervals, a time of day out of a variant is on the query's date, no
+/// map key holds a variant.
+#[test]
+fn third_review_cases_match_spark() {
+    assert_eq!(
+        one("CAST(named_struct('v', parse_json('1'), 'i', INTERVAL '1' YEAR) AS STRING)"),
+        "{1, INTERVAL '1' YEAR}"
+    );
+    let today = "timestamp(concat(current_date(), ' 10:11:12'))";
+    assert_eq!(
+        one(&format!(
+            "CAST(parse_json('\"10:11:12\"') AS TIMESTAMP) = {today}"
+        )),
+        "true"
+    );
+    assert_eq!(
+        one(&format!(
+            "try_cast(parse_json('\"10:11:12\"') AS TIMESTAMP) = {today}"
+        )),
+        "true"
+    );
+    assert_eq!(
+        one(&format!(
+            "variant_get(parse_json('\"10:11:12\"'), '$', 'timestamp') = {today}"
+        )),
+        "true"
+    );
+    for key in [
+        "parse_json('1')",
+        "named_struct('v', parse_json('1'))",
+        "array(parse_json('1'))",
+    ] {
+        assert_eq!(
+            error_class(&format!("SELECT map({key}, 'a')")),
+            "DATATYPE_MISMATCH.INVALID_MAP_KEY_TYPE",
+            "{key}"
+        );
+    }
+    // Spark reads these; the JSON reader has no variant leaves yet.
+    assert_eq!(
+        error_class("SELECT from_json('{\"v\":{\"a\":1}}', 'v variant')"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+}

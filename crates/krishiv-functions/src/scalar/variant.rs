@@ -130,7 +130,11 @@ fn variant_get(
         };
         found.push(extract(v, steps)?);
     }
-    cast_values(&found, to, fail, opts.time_zone.as_ref())
+    let zone = krishiv_kernels::datetime::Clocked {
+        inner: opts.time_zone.as_ref(),
+        query_start: opts.query_start_micros,
+    };
+    cast_values(&found, to, fail, &zone)
 }
 
 /// Binds the variant function `name`.

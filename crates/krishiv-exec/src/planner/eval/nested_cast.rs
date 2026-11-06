@@ -272,7 +272,15 @@ impl PhysExpr for Narrowed {
 
 /// `field`, carrying `t`.
 fn retyped(field: &Field, t: ArrowType) -> Field {
-    field.clone().with_data_type(t)
+    // A rendered interval is a plain string: its interval marker goes.
+    let rendered = t == ArrowType::Utf8View && *field.data_type() != ArrowType::Utf8View;
+    let mut field = field.clone().with_data_type(t);
+    if rendered {
+        let mut metadata = field.metadata().clone();
+        metadata.remove(krishiv_types::arrow::SPARK_TYPE_METADATA_KEY);
+        field = field.with_metadata(metadata);
+    }
+    field
 }
 
 /// The fields of a map's entries as a key and a value type.
