@@ -17,8 +17,8 @@
 2215 crates/krishiv-kernels/src/csv.rs
 2429 crates/krishiv-kernels/src/map.rs
 2468 crates/krishiv-plan/src/analyzer/coerce.rs
-# +20 lines over main: char comparison padding at the comparison and set-operation sites (T001b)
-4602 crates/krishiv-plan/src/analyzer/ops.rs
+# +22 lines over main: char comparison padding at the comparison and set-operation sites, declared types through GROUP BY aliases (T001b)
+4604 crates/krishiv-plan/src/analyzer/ops.rs
 3098 crates/krishiv-plan/src/analyzer/subquery.rs
 5392 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
@@ -27,8 +27,8 @@
 2630 crates/krishiv-session/src/dataframe.rs
 2790 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
-# 14 below main: the CTAS/view column lists moved to char_write.rs (T001b), net of the ALTER VIEW UNSET, SET SERDEPROPERTIES and partition SET LOCATION / RENAME arms
-3277 crates/krishiv-session/src/table_commands.rs
+# +1 over main: the CTAS/view column lists moved to char_write.rs, net of the ALTER VIEW UNSET, SET SERDEPROPERTIES and partition SET LOCATION / RENAME arms and the two-step INSERT projection that checks each CHAR/VARCHAR value once (T001b)
+3292 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
 # +1: CAST(x AS CHAR(n)) lowers as a string cast (T001b)
 2775 crates/krishiv-sql/src/lower.rs
