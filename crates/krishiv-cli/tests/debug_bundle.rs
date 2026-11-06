@@ -148,7 +148,10 @@ fn a_krishiv_directory_in_a_table_path_leaves_the_version_line_alone() {
     assert!(o.status.success(), "{}", err(&o));
     let files = read_bundle(&out);
     let version = std::str::from_utf8(&files["version.txt"]).expect("utf-8");
-    assert!(version.starts_with("krishiv "), "{version}");
+    // The program name and the package version are intact; the allocator line follows (its name depends on the features).
+    let head = concat!("krishiv ", env!("CARGO_PKG_VERSION"), "\nallocator=");
+    assert!(version.starts_with(head), "{version}");
+    assert!(version.ends_with('\n'), "{version}");
 }
 
 #[test]
