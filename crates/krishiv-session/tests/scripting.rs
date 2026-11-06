@@ -727,12 +727,13 @@ fn a_result_of_a_type_literals_cannot_hold_fails_where_it_is_produced() {
     let s = Session::new().unwrap();
     rows(
         &s,
-        "CREATE TEMPORARY VIEW arrays AS SELECT array(1, 2) AS a",
+        "CREATE TEMPORARY VIEW spans AS SELECT INTERVAL '1' DAY AS a",
     );
     rows(&s, "DECLARE ran INT DEFAULT 0");
     // The error comes from the query, before the statements that follow it.
+    // (Arrays, structs and maps are returned: `nested_variables.rs`.)
     assert_eq!(
-        class(&s, "BEGIN SELECT a FROM arrays; SET session.ran = 1; END"),
+        class(&s, "BEGIN SELECT a FROM spans; SET session.ran = 1; END"),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
     assert_eq!(rows(&s, "SELECT ran"), ok(&[&["0"]]));
