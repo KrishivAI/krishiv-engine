@@ -142,6 +142,10 @@ fn a_recursive_cte_feeds_every_clause() {
 #[test]
 fn a_clause_that_does_not_resolve_writes_nothing() {
     let (s, _dir) = session();
+    run(
+        &s,
+        "CREATE TABLE bk(level INT) USING parquet CLUSTERED BY (level) INTO 2 BUCKETS",
+    );
     for (sql, want) in [
         (
             "FROM src INSERT INTO a SELECT k INSERT INTO nope SELECT k",
@@ -155,8 +159,53 @@ fn a_clause_that_does_not_resolve_writes_nothing() {
             "FROM src INSERT INTO a SELECT k INSERT INTO b SELECT k, v",
             "INSERT_COLUMN_ARITY_MISMATCH.TOO_MANY_DATA_COLUMNS",
         ),
+        // Every target resolves before any clause's columns.
+        (
+            "FROM src INSERT INTO a SELECT zz INSERT INTO nope SELECT k",
+            "TABLE_OR_VIEW_NOT_FOUND",
+        ),
+        (
+            "FROM src INSERT INTO a SELECT k, k INSERT INTO b SELECT zz",
+            "INSERT_COLUMN_ARITY_MISMATCH.TOO_MANY_DATA_COLUMNS",
+        ),
+        // A write the engine refuses before writing (Spark writes bucketed tables; Krishiv does not
+        // yet) refuses the statement before an earlier clause writes.
+        (
+            "FROM src INSERT INTO a SELECT k INSERT INTO bk SELECT k",
+            "KRISHIV_UNSUPPORTED_FEATURE",
+        ),
     ] {
         assert_eq!(class(&s, sql), want, "{sql}");
         assert_eq!(rows(&s, "SELECT count(*) FROM a"), ["0"], "{sql}");
     }
+}
+
+/// Spark 4.2.0: the clauses run in order, each reading the source as it is when it runs, so a clause after one that
+/// wrote the source table reads the new rows; of two overwrites of one table the last wins.
+#[test]
+fn clauses_run_in_order() {
+    let (s, _dir) = session();
+    run(&s, "INSERT INTO a VALUES (1), (2)");
+    run(&s, "FROM a INSERT INTO a SELECT * INSERT INTO b SELECT *");
+    assert_eq!(rows(&s, "SELECT * FROM a ORDER BY 1"), ["1", "1", "2", "2"]);
+    assert_eq!(rows(&s, "SELECT * FROM b ORDER BY 1"), ["1", "1", "2", "2"]);
+    run(
+        &s,
+        "FROM src INSERT OVERWRITE TABLE c SELECT k, v WHERE k = 1 \
+         INSERT OVERWRITE TABLE c SELECT k, v WHERE k > 1",
+    );
+    assert_eq!(rows(&s, "SELECT x FROM c ORDER BY 1"), ["2", "3"]);
+    run(
+        &s,
+        "FROM src INSERT OVERWRITE TABLE c SELECT k, v WHERE k = 1 INSERT INTO c SELECT k + 10, v",
+    );
+    assert_eq!(
+        rows(&s, "SELECT x FROM c ORDER BY 1"),
+        ["1", "11", "12", "13"]
+    );
+    run(
+        &s,
+        "FROM src INSERT INTO c SELECT k + 20, v INSERT OVERWRITE TABLE c SELECT k, v WHERE k = 3",
+    );
+    assert_eq!(rows(&s, "SELECT x FROM c ORDER BY 1"), ["3"]);
 }
