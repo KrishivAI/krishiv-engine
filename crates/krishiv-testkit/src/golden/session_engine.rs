@@ -320,7 +320,12 @@ impl Engine for SessionEngine {
     }
 
     fn parse(&mut self, sql: &str) -> Result<(), EngineError> {
-        krishiv_sql::parse_statement(sql, &self.options())
+        // As Spark's `SparkSqlParser`: `${name}` references are replaced before parsing.
+        let text = self
+            .session
+            .as_ref()
+            .map_or_else(|| sql.to_owned(), |s| s.substitute_variables(sql));
+        krishiv_sql::parse_statement(&text, &self.options())
             .map(drop)
             .map_err(|e| engine_error(&e.error))
     }

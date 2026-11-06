@@ -33,10 +33,11 @@ const NON_DETERMINISTIC: &[&str] = &[
     "input_file_name",
 ];
 
-/// Whether `sql` is `CREATE [OR REPLACE] [TEMP[ORARY]] FUNCTION IDENTIFIER(` or
-/// `DROP [TEMP[ORARY]] FUNCTION [IF EXISTS] IDENTIFIER(`: a routine name is an identifier
-/// reference in both modes.
-fn names_a_function(sql: &str) -> bool {
+/// Whether `sql` names its routine or session variable by `IDENTIFIER(`: `CREATE [OR REPLACE]
+/// [TEMP[ORARY]] FUNCTION IDENTIFIER(`, `DROP [TEMP[ORARY]] FUNCTION [IF EXISTS] IDENTIFIER(`,
+/// `DECLARE ... IDENTIFIER(` or `DROP TEMPORARY VARIABLE [IF EXISTS] IDENTIFIER(`. Those names are
+/// identifier references (`IDENTIFIER(expression)`) in both modes.
+fn names_by_reference(sql: &str) -> bool {
     let words: Vec<&str> = tokenize(sql)
         .into_iter()
         .filter(|t| !t.kind.is_trivia())
@@ -44,6 +45,24 @@ fn names_a_function(sql: &str) -> bool {
         .filter_map(|t| sql.get(t.span.start..t.span.end))
         .collect();
     let at = |i: usize, w: &str| words.get(i).is_some_and(|x| x.eq_ignore_ascii_case(w));
+    let clause_at = |i: usize| at(i, "IDENTIFIER") && at(i + 1, "(");
+    // A session variable's name is an identifier reference too (Spark 4.2 `createVariable`,
+    // `dropVariable`): `DECLARE [OR REPLACE] [VARIABLE | VAR] IDENTIFIER(` and
+    // `DROP TEMPORARY {VARIABLE | VAR} [IF EXISTS] IDENTIFIER(`.
+    if at(0, "DECLARE") {
+        let mut k = 1;
+        if at(k, "OR") && at(k + 1, "REPLACE") {
+            k += 2;
+        }
+        if at(k, "VARIABLE") || at(k, "VAR") {
+            k += 1;
+        }
+        return clause_at(k);
+    }
+    if at(0, "DROP") && at(1, "TEMPORARY") && (at(2, "VARIABLE") || at(2, "VAR")) {
+        let k = if at(3, "IF") && at(4, "EXISTS") { 5 } else { 3 };
+        return clause_at(k);
+    }
     let Some(f) = words
         .iter()
         .position(|w| w.eq_ignore_ascii_case("FUNCTION"))
@@ -75,7 +94,8 @@ impl Session {
         // The legacy mode reads `IDENTIFIER(expr)` as a function, which the grammar accepts only
         // where a table or an expression may stand: a statement that does not parse as written
         // (a column list, a rename target) keeps the parser's error.
-        if legacy && !names_a_function(sql) && krishiv_sql::parse_statement(sql, options).is_err() {
+        if legacy && !names_by_reference(sql) && krishiv_sql::parse_statement(sql, options).is_err()
+        {
             return Ok(Cow::Borrowed(sql));
         }
         let tokens: Vec<_> = tokenize(sql)

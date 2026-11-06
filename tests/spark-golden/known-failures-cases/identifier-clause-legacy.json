@@ -3,9 +3,6 @@
     "depends-on-command": [
       177
     ],
-    "parser-tail": [
-      1
-    ],
     "query-features": [
       186
     ],
@@ -15,9 +12,7 @@
       71,
       73,
       75,
-      76,
-      175,
-      178
+      76
     ]
   },
   "file": "identifier-clause-legacy",

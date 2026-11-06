@@ -1401,6 +1401,20 @@ impl<'s> Parser<'s> {
         })
     }
 
+    /// A session variable name in `DECLARE` or `DROP TEMPORARY VARIABLE`,
+    /// which Spark 4.2's grammar reads as an `identifierReference`
+    /// (`createVariable`, `dropVariable`): `IDENTIFIER('name')` names the
+    /// variable even with only the legacy function syntax on, where the
+    /// clause takes an expression (the session evaluates any other
+    /// expression before parsing).
+    fn variable_reference(&mut self) -> PR<ObjectName> {
+        let legacy = self.opts.legacy_identifier_clause;
+        self.opts.legacy_identifier_clause = false;
+        let name = self.variable_name();
+        self.opts.legacy_identifier_clause = legacy;
+        name
+    }
+
     /// A table name. Unless keywords are enforced, any keyword names a
     /// table here (`FROM order`, `FROM from t`), as Spark's grammar allows.
     fn table_name(&mut self) -> PR<ObjectName> {
@@ -1988,9 +2002,9 @@ impl<'s> Parser<'s> {
                 p.pos += 2;
                 return p.fail();
             }
-            let mut names = vec![p.variable_name()?];
+            let mut names = vec![p.variable_reference()?];
             while p.eat_sym(Sym::Comma) {
-                names.push(p.variable_name()?);
+                names.push(p.variable_reference()?);
             }
             // A type follows unless the names end here: `DEFAULT`, `=`,
             // `;` or the end of input (anything else fails after the
@@ -2522,7 +2536,7 @@ impl<'s> Parser<'s> {
         } else {
             false
         };
-        let name = self.variable_name()?;
+        let name = self.variable_reference()?;
         let span = self.span_from(start);
         self.command_end()?;
         Ok(Statement::DropVariable(DropVariable {

@@ -115,3 +115,28 @@ fn alias_column_lists_and_literal_runs_follow_spark() {
         "INVALID_EXTRACT_BASE_FIELD_TYPE"
     );
 }
+
+/// Under `spark.sql.legacy.identifierClause` a session variable's name is
+/// still an identifier reference (Spark 4.2 `createVariable`, `dropVariable`):
+/// `DECLARE IDENTIFIER(..)` and `DROP TEMPORARY VARIABLE IDENTIFIER(..)` run
+/// (identifier-clause-legacy 175, 178); `SET VAR IDENTIFIER(..)` stays a
+/// syntax error, as in both modes.
+#[test]
+fn legacy_mode_names_session_variables_by_identifier() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("SET spark.sql.legacy.identifierClause = true")).unwrap();
+    block_on(s.sql("DECLARE IDENTIFIER('my_var') = 'value'")).unwrap();
+    let df = block_on(s.sql("SELECT my_var")).unwrap();
+    assert_eq!(block_on(df.collect()).unwrap()[0].num_rows(), 1);
+    assert_eq!(
+        class_of(&s, "SET VAR IDENTIFIER('my_var') = 'new_value'"),
+        "PARSE_SYNTAX_ERROR"
+    );
+    block_on(s.sql("DROP TEMPORARY VARIABLE IF EXISTS IDENTIFIER('my_var')")).unwrap();
+    assert_eq!(
+        class_of(&s, "SELECT my_var"),
+        "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION"
+    );
+    block_on(s.sql("DECLARE OR REPLACE VAR IDENTIFIER('v2') INT")).unwrap();
+    block_on(s.sql("DROP TEMPORARY VAR IDENTIFIER('v2')")).unwrap();
+}
