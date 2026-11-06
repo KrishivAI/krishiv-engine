@@ -75,17 +75,20 @@ impl fmt::Display for DataTypeSpec {
     }
 }
 
+/// Whether a primitive type name is `CHAR`, `CHARACTER` or `VARCHAR` (a collation may follow the name).
+fn is_char_name(name: &str) -> bool {
+    matches!(
+        name.split(' ').next().unwrap_or(name),
+        "char" | "character" | "varchar"
+    )
+}
+
 impl DataTypeSpec {
     /// Whether `CHAR(n)`, `CHARACTER(n)` or `VARCHAR(n)` occurs at any depth.
     #[must_use]
     pub fn has_char_or_varchar(&self) -> bool {
         match &self.kind {
-            DataTypeKind::Primitive { name, .. } => {
-                matches!(
-                    name.split(' ').next().unwrap_or(name),
-                    "char" | "character" | "varchar"
-                )
-            }
+            DataTypeKind::Primitive { name, .. } => is_char_name(name),
             DataTypeKind::Array(Some(e)) => e.has_char_or_varchar(),
             DataTypeKind::Map(Some(kv)) => kv.0.has_char_or_varchar() || kv.1.has_char_or_varchar(),
             DataTypeKind::Struct(Some(fields)) => {
@@ -100,17 +103,10 @@ impl DataTypeSpec {
     #[must_use]
     pub fn without_char_varchar(&self) -> Self {
         let kind = match &self.kind {
-            DataTypeKind::Primitive { name, .. }
-                if matches!(
-                    name.split(' ').next().unwrap_or(name),
-                    "char" | "character" | "varchar"
-                ) =>
-            {
-                DataTypeKind::Primitive {
-                    name: "string".to_owned(),
-                    args: Vec::new(),
-                }
-            }
+            DataTypeKind::Primitive { name, .. } if is_char_name(name) => DataTypeKind::Primitive {
+                name: "string".to_owned(),
+                args: Vec::new(),
+            },
             DataTypeKind::Array(Some(e)) => {
                 DataTypeKind::Array(Some(Box::new(e.without_char_varchar())))
             }
