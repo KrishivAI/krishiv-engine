@@ -25,15 +25,15 @@ steps below.
 Enabling a release is therefore always a reviewed change that edits those
 guards, made by the maintainer.
 
-## Current state: `0.2.0-alpha`
+## Current state: `0.2.0`
 
-- The version is `[workspace.package] version = "0.2.0-alpha"` in `Cargo.toml`,
-  inherited by every crate. Python gets the PEP 440 form (`0.2.0a0`) from
+- The version is `[workspace.package] version = "0.2.0"` in `Cargo.toml`,
+  inherited by every crate. Python gets the same version from
   maturin.
 - `CHANGELOG.md` holds the notes. Later entries come from
   `release-plz update` (Conventional Commits; edits a local checkout only) and
   are edited by hand.
-- The first alpha has not been published anywhere.
+- The first release has not been published anywhere.
 
 ## Dry runs (safe, run in CI)
 
@@ -71,7 +71,7 @@ To publish after the owner's go: confirm `CHANGELOG.md` and the version, then
 Actions, "Publish to TestPyPI", "Run workflow" on `main` (or the tag), and
 approve the `testpypi` deployment. Verify the install from TestPyPI in a clean
 venv: `pip install --index-url https://test.pypi.org/simple/ --extra-index-url
-https://pypi.org/simple/ "krishiv[pyarrow]==0.2.0a0"`.
+https://pypi.org/simple/ "krishiv[pyarrow]==0.2.0"`.
 
 ## crates.io and PyPI (not set up)
 
