@@ -38,6 +38,7 @@ const UNSUPPORTED_COLLATION_SWITCHES: &[&str] = &[
     "spark.sql.legacy.collationAwareHashFunctions",
     "spark.sql.collation.allowInMapKeys",
     "spark.sql.collation.schemaLevel.enabled",
+    "spark.sql.schemaLevelCollations.enabled",
 ];
 
 impl ConfStore {

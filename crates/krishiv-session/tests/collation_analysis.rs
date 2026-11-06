@@ -307,7 +307,10 @@ fn indeterminate_string_results_are_refused() {
     }
     let e = block_on(s.sql("select concat(a, b) from t1")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(block_on(s.sql("select length(concat(a, b)) from t1")).is_err());
+    assert_eq!(
+        class_of(&s, "select length(concat(a, b)) from t1"),
+        ErrorClass::KrishivUnsupportedFeature
+    );
     assert!(block_on(s.sql("select levenshtein(a, b) from t1")).is_ok());
 }
 
@@ -380,4 +383,64 @@ fn unsupported_collation_defaults_and_switches_are_refused() {
 
 fn class_of(s: &Session, sql: &str) -> ErrorClass {
     block_on(s.sql(sql)).unwrap_err().error_class()
+}
+
+/// Operands the strength pass does not read through (subqueries, variables, fields, elements)
+/// count as implicit, never as absent; a collated scalar against a plain array is refused.
+#[test]
+fn unusual_operands_and_array_functions_do_not_compare_bytes() {
+    for sql in [
+        "SELECT contains((SELECT 'Ab' COLLATE utf8_lcase), 'a')",
+        "SELECT (SELECT 'Ab' COLLATE utf8_lcase) LIKE 'a%'",
+        "SELECT replace(CAST(array('aAb') AS ARRAY<STRING COLLATE utf8_lcase>)[0], 'a', 'x')",
+        "SELECT contains(CAST(named_struct('f','Ab') AS STRUCT<f: STRING COLLATE utf8_lcase>).f, 'a')",
+        "SELECT array_contains(array('a', 'b'), 'A' COLLATE utf8_lcase)",
+        "SELECT array_position(array('a'), 'A' COLLATE unicode_ci)",
+        "SELECT map_contains_key(map('a', 1), 'A' COLLATE utf8_lcase)",
+    ] {
+        assert_eq!(class(sql), ErrorClass::KrishivUnsupportedFeature, "{sql}");
+    }
+    // Plain arrays with plain needles are untouched.
+    assert_eq!(
+        one("SELECT CAST(array_contains(array('a', 'b'), 'a') AS STRING)"),
+        "true"
+    );
+}
+
+/// A value window function over a collated column is refused with the engine's class (the
+/// re-tag cast would otherwise hide the window from the binder).
+#[test]
+fn value_window_functions_over_collated_columns_are_refused() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create table w1(a string collate utf8_lcase, c int) using parquet",
+        "insert into w1 values('x', 1), ('y', 2)",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    assert_eq!(
+        class_of(&s, "select lag(a) over (order by c) from w1"),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    // A window over a plain column is as before.
+    assert!(block_on(s.sql("select lag(c) over (order by c) from w1")).is_ok());
+}
+
+/// A collated map key is refused in `ALTER TABLE ... ADD COLUMNS` as in `CREATE TABLE`.
+#[test]
+fn alter_table_refuses_collated_map_keys() {
+    let s = Session::new().unwrap();
+    block_on(
+        block_on(s.sql("create table am(a int) using parquet"))
+            .unwrap()
+            .collect(),
+    )
+    .unwrap();
+    assert_eq!(
+        class_of(
+            &s,
+            "ALTER TABLE am ADD COLUMNS (m MAP<STRING COLLATE UTF8_LCASE, INT>)"
+        ),
+        ErrorClass::UnsupportedFeatureCollationsInMapKeys
+    );
 }

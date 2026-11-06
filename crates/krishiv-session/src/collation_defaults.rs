@@ -7,7 +7,7 @@ use krishiv_common::error::{
     KrishivError, KrishivUnsupportedFeature, UnsupportedFeatureCollationsInMapKeys,
     UnsupportedFeatureObjectLevelCollations, UnsupportedFeatureSchemaLevelCollations,
 };
-use krishiv_sql::ast::{Statement, TableElement};
+use krishiv_sql::ast::{AlterTableAction, Statement, TableElement};
 use krishiv_types::{Collation, DataType};
 
 /// A view's `DEFAULT COLLATION`: `UTF8_BINARY` is the plain default and changes nothing; any other
@@ -21,6 +21,11 @@ fn view_default(parts: &[&str]) -> Result<(), KrishivError> {
         feature: "DEFAULT COLLATION on a view".to_owned(),
     }
     .into())
+}
+
+/// Whether `dt` holds a map whose key holds a collated string.
+fn collated_map_key(dt: &DataType) -> bool {
+    dt.any_type(&|x| matches!(x, DataType::Map(m) if m.key_type().contains_collation()))
 }
 
 /// Fails for a default collation or collated map key the engine would silently ignore.
@@ -41,15 +46,26 @@ pub(crate) fn refuse_unhonoured(statement: &Statement) -> Result<(), KrishivErro
             for element in &t.elements {
                 if let TableElement::Column(c) = element
                     && let Ok(dt) = c.data_type.to_data_type()
-                    && dt.any_type(
-                        &|x| matches!(x, DataType::Map(m) if m.key_type().contains_collation()),
-                    )
+                    && collated_map_key(&dt)
                 {
                     return Err(UnsupportedFeatureCollationsInMapKeys {}.into());
                 }
             }
             Ok(())
         }
+        Statement::AlterTable(a) => match &a.action {
+            AlterTableAction::AddColumns(columns) => {
+                for c in columns {
+                    if let Ok(dt) = c.data_type.to_data_type()
+                        && collated_map_key(&dt)
+                    {
+                        return Err(UnsupportedFeatureCollationsInMapKeys {}.into());
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        },
         Statement::CreateView(v) => match &v.collation {
             Some(c) => view_default(&[c.value.as_str()]),
             None => Ok(()),

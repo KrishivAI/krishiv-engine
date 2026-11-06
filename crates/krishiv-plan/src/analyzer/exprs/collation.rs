@@ -262,10 +262,35 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
+        // A collated string against a plain array or map (`array_contains(arr, c)`) is a
+        // comparison the array functions would make as bytes.
+        if !NESTED_OK.contains(&name.as_str())
+            && kids[..n]
+                .iter()
+                .any(|k| matches!(k.ty.data_type, Some(DataType::CollatedString(_))))
+            && kids[..n].iter().any(|k| {
+                k.ty.data_type.as_ref().is_some_and(|t| {
+                    !matches!(t, DataType::String | DataType::CollatedString(_))
+                        && t.any_type(&|x| matches!(x, DataType::String))
+                })
+            })
+        {
+            return Err(unsupported(
+                "a collated string against a nested value",
+                e.origin,
+            ));
+        }
         let items: Vec<(Collation, Strength)> = kids[..n]
             .iter()
             .filter(|k| is_string(k.ty.data_type.as_ref()))
-            .filter_map(|k| strength_of(&k.shown()))
+            .filter_map(|k| {
+                // A subquery, variable, field or element: not a shape the pass reads through,
+                // but Spark counts it as implicit, so it is never skipped.
+                strength_of(&k.shown()).or(match &k.ty.data_type {
+                    Some(DataType::CollatedString(c)) => Some((*c, Strength::Implicit)),
+                    _ => Some((Collation::UTF8_BINARY, Strength::Implicit)),
+                })
+            })
             .collect();
         let mut indeterminate = false;
         let chosen = match merge(&items) {
@@ -378,6 +403,17 @@ impl Resolver<'_> {
                     e.origin,
                 ));
             }
+        }
+        if let Some(c) = chosen
+            && !c.is_utf8_binary()
+            && bound.ty.data_type == Some(DataType::String)
+            && window_fn
+        {
+            // The re-tag cast would hide the window function from the window binder.
+            return Err(unsupported(
+                "a window function over a collated string",
+                e.origin,
+            ));
         }
         if let Some(c) = chosen
             && !c.is_utf8_binary()
