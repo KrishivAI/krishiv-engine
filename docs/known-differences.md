@@ -33,3 +33,11 @@ A Spark key that Krishiv maps to a typed setting (for example
 that does not parse fails the `SET` with `KRISHIV_INVALID_CONFIG_VALUE`.
 Spark stores the string and fails when a query reads it, with
 `INVALID_CONF_VALUE.TYPE_MISMATCH` (SQLSTATE 22022).
+
+## `schema_of_variant` with `spark.sql.caseSensitive=true`
+
+Spark's `schema_of_variant` merges two objects of the same size whose sorted field names match under the session's
+name resolver (`findTypeForComplex`), keeping the first object's names: `[{"A":1},{"a":2}]` is
+`ARRAY<OBJECT<A: BIGINT>>` with the default `spark.sql.caseSensitive=false`, and Krishiv gives the same. The function
+does not read the setting: with it on, Spark keeps both spellings (`ARRAY<OBJECT<A: BIGINT, a: BIGINT>>`) and Krishiv
+still merges them.

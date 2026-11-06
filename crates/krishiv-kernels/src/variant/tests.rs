@@ -605,3 +605,43 @@ fn every_lane_casts_as_spark() {
     // Paths raise on bad text.
     assert!(parse_path_or_raise("$.a", "variant_get").is_ok());
 }
+
+/// Spark 4.2.0 (`spark.sql.caseSensitive=false`): two objects of one size whose
+/// sorted names match ignoring case, each pair with a tightest type, are one
+/// object with the first's names (`findTypeForComplex`); otherwise fields merge.
+#[test]
+fn objects_matching_ignoring_case_merge_as_one() {
+    for (json, want) in [
+        (r#"[{"A":1},{"a":2}]"#, "ARRAY<OBJECT<A: BIGINT>>"),
+        (
+            r#"[{"A":1},{"a":"x"}]"#,
+            "ARRAY<OBJECT<A: BIGINT, a: STRING>>",
+        ),
+        (
+            r#"[{"A":1,"b":1},{"a":2}]"#,
+            "ARRAY<OBJECT<A: BIGINT, a: BIGINT, b: BIGINT>>",
+        ),
+        (
+            r#"[{"A":1,"b":1},{"a":2,"B":3}]"#,
+            "ARRAY<OBJECT<A: BIGINT, B: BIGINT, a: BIGINT, b: BIGINT>>",
+        ),
+        (
+            r#"[{"A":1,"b":1},{"b":2,"a":3}]"#,
+            "ARRAY<OBJECT<A: BIGINT, b: BIGINT>>",
+        ),
+        (
+            r#"[{"A":1},{"a":2.5}]"#,
+            "ARRAY<OBJECT<A: BIGINT, a: DECIMAL(2,1)>>",
+        ),
+        (
+            r#"[{"A":{"x":1}},{"a":{"X":2}}]"#,
+            "ARRAY<OBJECT<A: OBJECT<x: BIGINT>>>",
+        ),
+        (
+            r#"[{"b":1,"A":1},{"a":2,"B":2}]"#,
+            "ARRAY<OBJECT<A: BIGINT, B: BIGINT, a: BIGINT, b: BIGINT>>",
+        ),
+    ] {
+        assert_eq!(schema_of(json), want, "{json}");
+    }
+}

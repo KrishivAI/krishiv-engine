@@ -12,10 +12,13 @@
 //! wider range and scale (`DOUBLE` past 38 digits), `BIGINT` as
 //! `DECIMAL(20,0)`, `DATE` and the timestamps widen, objects merge field by
 //! field (sorted names), arrays by element, and anything else is `VARIANT`.
-//! [`Schema::merge`] is also the merge `schema_of_variant_agg` needs. Known
-//! gap: Spark first merges two objects of the same size whose names match
-//! case-insensitively as one object (`findTypeForComplex`); here they keep
-//! both spellings.
+//! First, as Spark's `findTightestCommonType`, two objects of the same size
+//! whose sorted names match ignoring case, with a tightest type per field,
+//! are one object with the first's names (`findTypeForComplex`). The names
+//! always compare ignoring case: Spark's default, `spark.sql.caseSensitive`
+//! is not read here (with it on Spark keeps both spellings;
+//! `docs/known-differences.md`). [`Schema::merge`] is also the merge
+//! `schema_of_variant_agg` needs.
 
 use krishiv_common::error::{KrishivError, MalformedVariant};
 use krishiv_types::variant::{VariantKind, VariantRef, digits, strip_trailing_zeros};
@@ -115,10 +118,51 @@ impl Schema {
         })
     }
 
+    /// `findTightestCommonType(self, other)`, `None` where Spark's has no
+    /// answer. Two objects meet through `findTypeForComplex`: of equal size,
+    /// their fields (both sorted by key) pairwise named alike ignoring case
+    /// (the default `spark.sql.caseSensitive=false`) with a tightest type
+    /// each, they keep the first object's names (`[{"A":1},{"a":2}]` is
+    /// `ARRAY<OBJECT<A: BIGINT>>`).
+    fn tightest(a: &Self, b: &Self) -> Option<Self> {
+        use Schema as S;
+        Some(match (a, b) {
+            (a, b) if a == b => a.clone(),
+            (S::Null, t) | (t, S::Null) => t.clone(),
+            (S::Long, S::Decimal(p, s)) | (S::Decimal(p, s), S::Long)
+                if p.saturating_sub(*s) >= 20 =>
+            {
+                S::Decimal(*p, *s)
+            }
+            (S::Long, S::Float) | (S::Float, S::Long) => S::Float,
+            (S::Long | S::Float, S::Double) | (S::Double, S::Long | S::Float) => S::Double,
+            (S::Date | S::TimestampNtz, S::Timestamp)
+            | (S::Timestamp, S::Date | S::TimestampNtz) => S::Timestamp,
+            (S::Date, S::TimestampNtz) | (S::TimestampNtz, S::Date) => S::TimestampNtz,
+            (S::Array(x), S::Array(y)) => S::Array(Box::new(Self::tightest(x, y)?)),
+            (S::Object(x), S::Object(y)) if x.len() == y.len() => {
+                let mut fields = Vec::with_capacity(x.len());
+                for ((kx, tx), (ky, ty)) in x.iter().zip(y) {
+                    if !krishiv_types::equals_ignore_case(kx, ky) {
+                        return None;
+                    }
+                    fields.push((kx.clone(), Self::tightest(tx, ty)?));
+                }
+                S::Object(fields)
+            }
+            _ => return None,
+        })
+    }
+
     /// `compatibleType(self, other, VariantType)`.
     #[must_use]
     pub fn merge(self, other: Self) -> Self {
         use Schema as S;
+        if let (S::Object(_) | S::Array(_), S::Object(_) | S::Array(_)) = (&self, &other)
+            && let Some(t) = Self::tightest(&self, &other)
+        {
+            return t;
+        }
         match (self, other) {
             (a, b) if a == b => a,
             (S::Null, t) | (t, S::Null) => t,
