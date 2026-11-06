@@ -557,8 +557,9 @@ fn column_refs(e: &Arc<Expr>, refs: &mut HashSet<AttrId>) {
 /// Spark's `toSQLExpr` prints it (double-quoted), keeping an alias as
 /// Spark's `Alias.sql` does (the alias field, or an `Alias` node).
 fn value_sql(e: &Arc<Expr>, alias: &Option<String>, zone: Option<SessionZone>) -> String {
+    // A resolved alias prints its own `AS name`.
     let name = match &e.node {
-        ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => Some(output.name.clone()),
+        ExprNode::Resolved(ResolvedExpr::Alias { .. }) => None,
         _ => alias.clone(),
     };
     let inner = match name {
@@ -570,7 +571,7 @@ fn value_sql(e: &Arc<Expr>, alias: &Option<String>, zone: Option<SessionZone>) -
 
 /// Spark's `quoteIfNeeded`: a name of letters, digits and `_` (not all
 /// digits) stays bare.
-fn quote_if_needed(name: &str) -> String {
+pub(super) fn quote_if_needed(name: &str) -> String {
     let bare = !name.is_empty()
         && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         && !name.chars().all(|c| c.is_ascii_digit());

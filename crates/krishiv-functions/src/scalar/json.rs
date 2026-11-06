@@ -256,6 +256,16 @@ fn to(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
         [value, options] => (value, Some(options)),
         _ => return Err(bad_types("to_json", args)),
     };
+    if krishiv_types::arrow::is_variant_struct(&value.data_type()) {
+        // A variant prints itself; the options do not apply.
+        let zone = Arc::clone(&opts.time_zone);
+        return Ok(Binding::new(
+            ArrowDataType::Utf8View,
+            move |x: &Inputs<'_>| {
+                krishiv_kernels::variant::to_json(x.column(0)?.as_ref(), zone.as_ref())
+            },
+        ));
+    }
     if !matches!(
         value.data_type(),
         ArrowDataType::Struct(_)

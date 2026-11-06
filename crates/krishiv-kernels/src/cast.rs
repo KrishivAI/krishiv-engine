@@ -38,7 +38,7 @@ use arrow_array::{
 use arrow_buffer::{NullBuffer, ScalarBuffer, i256};
 use arrow_schema::{DataType, TimeUnit};
 
-pub use datetime::{FixedOffset, TimeZoneRules};
+pub use datetime::{Clocked, FixedOffset, TimeZoneRules};
 pub use time::{
     TimeTruncUnit, format_time, make_time, parse_time, time_diff, time_from_units, time_to_units,
     time_trunc, to_time,

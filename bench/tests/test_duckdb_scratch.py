@@ -31,3 +31,22 @@ def test_scratch_removed_when_setup_fails(tmp_path, monkeypatch):
     with pytest.raises(duckdb.Error):
         eng.setup(Dataset(name="t", sf=1, root=tmp_path, tables=["missing"]))
     assert not _scratch(tmp_path / "data").exists()
+
+
+def test_a_quote_in_the_data_path_does_not_break_the_views(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from krishiv_bench.adapters import Dataset, Query
+    from krishiv_bench.adapters.duckdb_engine import DuckDBEngine, sql_string
+
+    assert sql_string("/d/it's") == "'/d/it''s'"
+    root = tmp_path / "it's data"
+    root.mkdir()
+    pq.write_table(pa.table({"a": [1, 2, 3]}), root / "t.parquet")
+    eng = DuckDBEngine(threads=1)
+    eng.setup(Dataset("quoted", 1, root, ["t"]))
+    try:
+        assert eng.run(Query("q", "SELECT sum(a) FROM t", "tpch")) == [(6,)]
+    finally:
+        eng.teardown()

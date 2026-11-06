@@ -179,3 +179,52 @@ fn a_column_that_is_not_spatial_is_an_engine_error() {
         ErrorClass::InternalError
     );
 }
+
+#[test]
+fn variant_columns_convert_to_the_connect_form() {
+    use krishiv_types::variant::VariantBuilder;
+    let (m, v) = VariantBuilder::from_json(r#"{"a":1}"#).unwrap();
+    let ArrowType::Struct(fields) = DataType::Variant.to_arrow() else {
+        unreachable!()
+    };
+    let column: ArrayRef = Arc::new(
+        StructArray::try_new(
+            fields,
+            vec![
+                Arc::new(BinaryViewArray::from(vec![&m[..], &[][..]])),
+                Arc::new(BinaryViewArray::from(vec![&v[..], &[][..]])),
+            ],
+            Some(vec![true, false].into()),
+        )
+        .unwrap(),
+    );
+    let out = super::variant_column(&column).unwrap();
+    let field = super::variant_field("v", true);
+    assert_eq!(out.data_type(), field.data_type());
+    assert_eq!(
+        field.metadata().get("variant").map(String::as_str),
+        Some("true")
+    );
+    let s = out.as_any().downcast_ref::<StructArray>().unwrap();
+    let names: Vec<&str> = s.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names, ["value", "metadata"]);
+    assert_eq!(
+        s.column(0)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap()
+            .value(0),
+        v
+    );
+    assert_eq!(
+        s.column(1)
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .unwrap()
+            .value(0),
+        m
+    );
+    assert!(s.is_null(1));
+    let not_variant: ArrayRef = Arc::new(BinaryArray::from(vec![&b"x"[..]]));
+    assert!(super::variant_column(&not_variant).is_err());
+}

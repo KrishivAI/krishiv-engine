@@ -46,6 +46,34 @@ pub trait TimeZoneRules: Send + Sync + std::fmt::Debug {
     }
 }
 
+/// `inner` with the query start instant: a time of day cast to `TIMESTAMP`
+/// is on that instant's date ([`TimeZoneRules::query_start_micros`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Clocked<'a> {
+    /// The session zone.
+    pub inner: &'a dyn TimeZoneRules,
+    /// The query start instant, in microseconds since the epoch.
+    pub query_start: i64,
+}
+
+impl TimeZoneRules for Clocked<'_> {
+    fn offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        self.inner.offset_at_utc(utc_seconds)
+    }
+    fn offset_for_local(&self, local_seconds: i64) -> i32 {
+        self.inner.offset_for_local(local_seconds)
+    }
+    fn legacy_offset_at_utc(&self, utc_seconds: i64) -> i32 {
+        self.inner.legacy_offset_at_utc(utc_seconds)
+    }
+    fn region_id(&self) -> Option<&str> {
+        self.inner.region_id()
+    }
+    fn query_start_micros(&self) -> Option<i64> {
+        Some(self.query_start)
+    }
+}
+
 /// A zone with one fixed offset (`UTC` is `FixedOffset(0)`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FixedOffset(pub i32);

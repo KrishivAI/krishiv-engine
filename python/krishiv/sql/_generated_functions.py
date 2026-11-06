@@ -161,6 +161,7 @@ __all__ = [
     "input_file_name",
     "instr",
     "is_valid_utf8",
+    "is_variant_null",
     "isnan",
     "isnotnull",
     "isnull",
@@ -225,6 +226,7 @@ __all__ = [
     "nvl2",
     "octet_length",
     "overlay",
+    "parse_json",
     "parse_url",
     "percent_rank",
     "percentile",
@@ -338,6 +340,7 @@ __all__ = [
     "try_make_timestamp_ntz",
     "try_mod",
     "try_multiply",
+    "try_parse_json",
     "try_parse_url",
     "try_subtract",
     "try_sum",
@@ -347,6 +350,7 @@ __all__ = [
     "try_to_timestamp",
     "try_url_decode",
     "try_validate_utf8",
+    "try_variant_get",
     "typeof",
     "ucase",
     "unbase64",
@@ -365,6 +369,7 @@ __all__ = [
     "var_pop",
     "var_samp",
     "variance",
+    "variant_get",
     "version",
     "weekday",
     "weekofyear",
@@ -1093,6 +1098,11 @@ def is_valid_utf8(str: ColumnOrName) -> Column:
     return _call("is_valid_utf8", _named(str, "str"))
 
 
+def is_variant_null(v: ColumnOrName) -> Column:
+    """Calls the registry function ``is_variant_null``."""
+    return _call("is_variant_null", _named(v, "v"))
+
+
 def isnan(col: ColumnOrName) -> Column:
     """Calls the registry function ``isnan``."""
     return _call("isnan", _named(col, "col"))
@@ -1476,6 +1486,11 @@ def overlay(src: ColumnOrName, replace: ColumnOrName, pos: ColumnOrName | int, l
     return _call(
         "overlay", _named(src, "src"), _named(replace, "replace"), _int_or_col(pos, "pos"), _int_or_col(len, "len")
     )
+
+
+def parse_json(col: ColumnOrName) -> Column:
+    """Calls the registry function ``parse_json``."""
+    return _call("parse_json", _named(col, "col"))
 
 
 def parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None = None) -> Column:
@@ -2123,6 +2138,11 @@ def try_multiply(left: ColumnOrName, right: ColumnOrName) -> Column:
     return _call("try_multiply", _named(left, "left"), _named(right, "right"))
 
 
+def try_parse_json(col: ColumnOrName) -> Column:
+    """Calls the registry function ``try_parse_json``."""
+    return _call("try_parse_json", _named(col, "col"))
+
+
 def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None = None) -> Column:
     """Calls the registry function ``try_parse_url``."""
     return _call("try_parse_url", _named(url, "url"), _named(partToExtract, "partToExtract"), *_opt(_named, key, "key"))
@@ -2166,6 +2186,11 @@ def try_url_decode(str: ColumnOrName) -> Column:
 def try_validate_utf8(str: ColumnOrName) -> Column:
     """Calls the registry function ``try_validate_utf8``."""
     return _call("try_validate_utf8", _named(str, "str"))
+
+
+def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column:
+    """Calls the registry function ``try_variant_get``."""
+    return _call("try_variant_get", _named(v, "v"), _lit(path, "path"), _lit(targetType, "targetType"))
 
 
 def typeof(col: ColumnOrName) -> Column:
@@ -2256,6 +2281,11 @@ def var_samp(col: ColumnOrName) -> Column:
 def variance(col: ColumnOrName) -> Column:
     """Calls the registry function ``variance``."""
     return _call("variance", _named(col, "col"))
+
+
+def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column:
+    """Calls the registry function ``variant_get``."""
+    return _call("variant_get", _named(v, "v"), _lit(path, "path"), _lit(targetType, "targetType"))
 
 
 def version() -> Column:
