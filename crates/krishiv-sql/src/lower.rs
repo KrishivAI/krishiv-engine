@@ -38,9 +38,10 @@ use crate::ast::{
     Alias, BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, FromClause,
     FromStatement, GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Hint, Ident, Join,
     JoinConstraint, JoinKind, LateralView, Limit, Literal, NamedWindow, NullTreatment, NumKind,
-    Pipe, PipeAggregate, PipeOp, PipeOpKind, Pivot, Query, Relation, RelationExt, Select,
-    SelectItem, SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem, Span, TableAlias,
-    TableFactor, TableFactorKind, Truth, UnaryOp, Unpivot, WindowRef, WindowSpec,
+    Pipe, PipeAggregate, PipeOp, PipeOpKind, Pivot, Query, Relation, RelationExt, SampleMethodKind,
+    SampleType, Select, SelectItem, SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem,
+    Span, TableAlias, TableFactor, TableFactorKind, TableSample, Truth, UnaryOp, Unpivot,
+    WindowRef, WindowSpec,
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
@@ -912,7 +913,7 @@ impl Lowerer {
                 }
                 plan
             }
-            PipeOpKind::Sample(t) => return Err(unsupported("TABLESAMPLE", t.span)),
+            PipeOpKind::Sample(t) => self.sample(plan, t)?,
             PipeOpKind::Pivot(_, Some(_)) | PipeOpKind::Unpivot(_, Some(_)) => {
                 return Err(unsupported("PIVOT with UNPIVOT", op.span));
             }
@@ -1828,10 +1829,80 @@ impl Lowerer {
         })
     }
 
-    fn factor(&mut self, tf: &TableFactor) -> R<LogicalPlan> {
-        if let Some(sample) = &tf.sample {
-            return Err(unsupported("TABLESAMPLE", sample.span));
+    /// `TABLESAMPLE` over `plan`, as Spark's `AstBuilder.withSample` builds
+    /// it (its checks are in `validate/sample.rs`): `n ROWS` is `LIMIT n`;
+    /// `PERCENT` and `BUCKET x OUT OF y` are a Bernoulli sample of a
+    /// fraction, which keeps every row at a fraction of 1 or more and none
+    /// at 0 or less (Spark's `BernoulliCellSampler`). A fraction in between
+    /// keeps rows by a random draw per row seeded by Spark's partition
+    /// index, which Krishiv's partitions do not reproduce, so it stays
+    /// unsupported, as does `SYSTEM` (block) sampling.
+    fn sample(&mut self, plan: LogicalPlan, s: &TableSample) -> R<LogicalPlan> {
+        if s.sample_type == Some(SampleType::System) {
+            return Err(unsupported("TABLESAMPLE SYSTEM", s.span));
         }
+        let Some(method) = &s.method else {
+            return Err(unsupported("TABLESAMPLE", s.span));
+        };
+        let limit = |l: &mut Self, plan: LogicalPlan, limit: Arc<IrExpr>| {
+            l.node(
+                PlanNode::Limit {
+                    input: arc(plan),
+                    limit,
+                },
+                s.span,
+            )
+        };
+        let fraction = match &method.kind {
+            SampleMethodKind::Rows(e) => {
+                let n = arc(self.expr(e)?);
+                return Ok(limit(self, plan, n));
+            }
+            SampleMethodKind::Percent { negative, value } => {
+                let sign = if *negative { -1.0 } else { 1.0 };
+                sign * value.parse::<f64>().unwrap_or(f64::NAN) / 100.0
+            }
+            SampleMethodKind::Bucket {
+                numerator,
+                denominator,
+                on: None,
+            } => {
+                numerator.parse::<f64>().unwrap_or(f64::NAN)
+                    / denominator.parse::<f64>().unwrap_or(f64::NAN)
+            }
+            // Validation refuses these.
+            _ => return Err(unsupported("TABLESAMPLE", s.span)),
+        };
+        if fraction >= 1.0 {
+            Ok(plan)
+        } else if fraction <= 0.0 {
+            Ok(limit(
+                self,
+                plan,
+                arc(IrExpr::literal(IrLiteral::Integer(0))),
+            ))
+        } else {
+            Err(unsupported(
+                "TABLESAMPLE of a fraction between 0 and 1",
+                s.span,
+            ))
+        }
+    }
+
+    fn factor(&mut self, tf: &TableFactor) -> R<LogicalPlan> {
+        let plan = self.factor_relation(tf)?;
+        let plan = match &tf.sample {
+            Some(sample) => self.sample(plan, sample)?,
+            None => plan,
+        };
+        Ok(match &tf.alias {
+            None => plan,
+            Some(a) => self.with_alias(plan, a, tf.span),
+        })
+    }
+
+    /// The relation of `tf`, before its sample and alias.
+    fn factor_relation(&mut self, tf: &TableFactor) -> R<LogicalPlan> {
         let plan = match &tf.kind {
             TableFactorKind::Table {
                 name,
@@ -1978,10 +2049,7 @@ impl Lowerer {
                 }
             }
         };
-        Ok(match &tf.alias {
-            None => plan,
-            Some(a) => self.with_alias(plan, a, tf.span),
-        })
+        Ok(plan)
     }
 
     /// `plan` under the `SubqueryAlias` of `a` (the one wrapper both the
