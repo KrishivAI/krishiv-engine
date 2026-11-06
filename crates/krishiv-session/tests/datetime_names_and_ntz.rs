@@ -164,3 +164,62 @@ fn time_trunc_reads_a_string_as_time() {
         "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     );
 }
+
+/// The first value of `sql`'s result as text.
+fn text(s: &Session, sql: &str) -> Option<String> {
+    use arrow_array::cast::AsArray;
+    let b = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    let a = b[0].column(0);
+    if a.is_null(0) {
+        return None;
+    }
+    Some(a.as_string_opt::<i32>().map_or_else(
+        || a.as_string_view().value(0).to_owned(),
+        |x| x.value(0).to_owned(),
+    ))
+}
+
+#[test]
+fn date_difference_under_legacy_intervals_is_whole_months_and_days() {
+    // `spark.sql.legacy.interval.enabled`: `date - date` is a calendar interval of
+    // `Period.between(start, end)` (Spark 4.2.0 local run, 2026-11-06; `postgreSQL/date` #46-53).
+    let s = session(&["spark.sql.legacy.interval.enabled=true"]);
+    for (end, start, expected) in [
+        ("2000-03-30", "2000-01-31", "1 months 30 days"),
+        ("2000-02-29", "2000-01-31", "29 days"),
+        ("2000-01-31", "2000-03-30", "-1 months -30 days"),
+        ("2000-01-15", "2000-03-20", "-2 months -5 days"),
+        ("2000-01-31", "2000-02-29", "-29 days"),
+        ("1957-04-09", "2000-01-01", "-42 years -8 months -22 days"),
+        ("2039-04-10", "2000-01-01", "39 years 3 months 9 days"),
+        ("2000-01-01", "2000-01-01", "0 seconds"),
+        ("2001-02-28", "2000-02-29", "11 months 30 days"),
+        ("1999-12-31", "2000-03-01", "-2 months -1 days"),
+    ] {
+        let sql = format!("select cast(date '{end}' - date '{start}' as string)");
+        assert_eq!(text(&s, &sql).as_deref(), Some(expected), "{sql}");
+    }
+    assert_eq!(
+        text(&s, "select typeof(date '2000-01-02' - date '2000-01-01')").as_deref(),
+        Some("interval")
+    );
+    assert_eq!(
+        text(
+            &s,
+            "select cast(date '2000-01-02' - cast(null as date) as string)"
+        ),
+        None
+    );
+    assert_eq!(
+        text(
+            &s,
+            "select cast(date '2000-01-02' - '2000-01-01' as string)"
+        )
+        .as_deref(),
+        Some("1 days")
+    );
+    assert_eq!(
+        names(&s, "select date '2000-01-02' - date '2000-01-01'"),
+        ["(DATE '2000-01-02' - DATE '2000-01-01')"]
+    );
+}

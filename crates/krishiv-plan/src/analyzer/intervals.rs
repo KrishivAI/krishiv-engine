@@ -435,7 +435,7 @@ impl Resolver<'_> {
                 return Err(self.string_days("date_sub", origin, l, r));
             }
             (_, Kind::Date) | (Kind::Date, Kind::Null | Kind::String) => {
-                self.date_difference(origin, l, r)?
+                self.date_difference(origin, l, r, cx)?
             }
             _ => return Ok(None),
         }))
@@ -722,13 +722,16 @@ impl Resolver<'_> {
         origin: Origin,
         l: &Bound,
         r: &Bound,
+        cx: &Cx<'_>,
     ) -> Result<Bound, AnalysisError> {
-        if self.ctx.conf.legacy_interval {
-            return Err(legacy_difference(origin));
-        }
-        let out = DataType::DayTimeInterval {
-            start: DayTimeField::Day,
-            end: DayTimeField::Day,
+        let legacy = self.ctx.conf.legacy_interval;
+        let out = if legacy {
+            DataType::CalendarInterval
+        } else {
+            DataType::DayTimeInterval {
+                start: DayTimeField::Day,
+                end: DayTimeField::Day,
+            }
         };
         let kids = [l.clone(), r.clone()];
         let name = shown(Builtin::Subtract, out.clone(), [l, r], origin);
@@ -749,6 +752,12 @@ impl Resolver<'_> {
         );
         // With ANSI off, a string that doesn't read as a date is NULL.
         let nullable = a.ty.nullable || b.ty.nullable;
+        if legacy {
+            let between = self.bind(&legacy_date_difference(&a.expr, &b.expr, origin), cx)?;
+            let mut difference = bound(between.expr, out, name, &kids);
+            difference.ty.nullable = nullable;
+            return Ok(difference);
+        }
         let expr = call(
             Builtin::SubtractDates,
             vec![Arc::clone(&a.expr), Arc::clone(&b.expr)],
@@ -935,6 +944,105 @@ fn legacy_difference(origin: Origin) -> AnalysisError {
     unsupported(
         "a date or timestamp difference with spark.sql.legacy.interval.enabled",
         origin,
+    )
+}
+
+/// `end - start` of dates under `spark.sql.legacy.interval.enabled`: Spark's `subtractDates`, a calendar
+/// interval of `java.time.Period.between(start, end)`'s whole months and remaining days (no microseconds):
+///
+/// ```text
+/// months = month index of end - month index of start;  days = day(end) - day(start)
+/// months > 0 and days < 0:  months - 1, days = datediff(end, add_months(start, months - 1))
+/// months < 0 and days > 0:  months + 1, days = days - day(last_day(end))
+/// ```
+///
+/// built from the registry's functions (`add_months` clamps to the month's end as `plusMonths` does).
+fn legacy_date_difference(end: &Arc<Expr>, start: &Arc<Expr>, origin: Origin) -> Arc<Expr> {
+    let f = |name: &str, args: Vec<Arc<Expr>>| {
+        Arc::new(
+            Expr::new(ExprNode::Function(crate::FunctionCall {
+                name: name.to_owned(),
+                qualifier: Vec::new(),
+                args,
+                arg_names: Vec::new(),
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+            }))
+            .with_origin(origin),
+        )
+    };
+    let int = |n: i32| Arc::new(Expr::literal(Literal::Integer(n)));
+    let op = |b: Builtin, x: Arc<Expr>, y: Arc<Expr>| f(b.name(), vec![x, y]);
+    let month_index = |d: &Arc<Expr>| {
+        op(
+            Builtin::Add,
+            op(Builtin::Multiply, f("year", vec![Arc::clone(d)]), int(12)),
+            f("month", vec![Arc::clone(d)]),
+        )
+    };
+    let months = op(Builtin::Subtract, month_index(end), month_index(start));
+    let days = op(
+        Builtin::Subtract,
+        f("day", vec![Arc::clone(end)]),
+        f("day", vec![Arc::clone(start)]),
+    );
+    let gt0 = |x: &Arc<Expr>| op(Builtin::Gt, Arc::clone(x), int(0));
+    let lt0 = |x: &Arc<Expr>| op(Builtin::Lt, Arc::clone(x), int(0));
+    let forward = op(Builtin::And, gt0(&months), lt0(&days));
+    let backward = op(Builtin::And, lt0(&months), gt0(&days));
+    let months_less = op(Builtin::Subtract, Arc::clone(&months), int(1));
+    let whole_months = f(
+        "if",
+        vec![
+            Arc::clone(&forward),
+            Arc::clone(&months_less),
+            f(
+                "if",
+                vec![
+                    Arc::clone(&backward),
+                    op(Builtin::Add, Arc::clone(&months), int(1)),
+                    months,
+                ],
+            ),
+        ],
+    );
+    let rest_days = f(
+        "if",
+        vec![
+            forward,
+            f(
+                "datediff",
+                vec![
+                    Arc::clone(end),
+                    f("add_months", vec![Arc::clone(start), months_less]),
+                ],
+            ),
+            f(
+                "if",
+                vec![
+                    backward,
+                    op(
+                        Builtin::Subtract,
+                        Arc::clone(&days),
+                        f("day", vec![f("last_day", vec![Arc::clone(end)])]),
+                    ),
+                    days,
+                ],
+            ),
+        ],
+    );
+    f(
+        "make_interval",
+        vec![
+            int(0),
+            whole_months,
+            int(0),
+            rest_days,
+            int(0),
+            int(0),
+            int(0),
+        ],
     )
 }
 
