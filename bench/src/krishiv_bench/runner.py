@@ -199,7 +199,8 @@ def cold_record(cold: bool) -> dict:
         return {"enabled": False}
     return {
         "enabled": True,
-        "method": "posix_fadvise(POSIX_FADV_DONTNEED) on every dataset file before each run, warm-up included",
+        "method": "posix_fadvise(POSIX_FADV_DONTNEED) on every dataset file before each run "
+        "(run, h2o: warm-up included; reproduce, abba: each timed run)",
     }
 
 
