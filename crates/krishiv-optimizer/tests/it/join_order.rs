@@ -10,8 +10,8 @@ use krishiv_optimizer::{
     optimize_with_options,
 };
 use krishiv_plan::{
-    Builtin, Expr, ExprNode, FunctionId, JoinCondition, Literal, LogicalPlan, PlanNode, ReadSource,
-    ResolvedExpr, Scan,
+    BoundColumn, Builtin, Expr, ExprNode, FunctionId, JoinCondition, Literal, LogicalPlan,
+    PlanNode, ReadSource, ResolvedExpr, Scan,
 };
 use serde_json::Value;
 
@@ -183,6 +183,9 @@ fn q02_keeps_the_composite_key_at_sf1000() {
         let keys = l.split(" and ").filter(|c| c.contains("partkey")).count();
         assert!(keys <= 1, "a join repeats the partkey class: {l}\n{text}");
     }
+    // The minimum groups only the filtered parts' partsupp rows (its
+    // input is reduced by a semi join with them), not all 200M parts'.
+    assert!(text.contains("Join LeftSemi"), "{text}");
     let db = data::tpch(7, 150);
     assert_eq!(
         eval::rows(&db, optimized.root()),
@@ -853,4 +856,152 @@ fn a_union_keeps_its_column_statistics() {
     let optimized = optimize_with(&plan, &TpcdsFooters).unwrap();
     no_union_build(optimized.root(), "q05 shape");
     insta::assert_snapshot!(optimized.root().to_string());
+}
+
+/// A composite key whose columns are also equal to a third input's (q09:
+/// lineitem and partsupp on part and supplier keys, part and supplier on
+/// each) is planned the same however its equalities are written, and the
+/// plan is a fixed point: the key's selectivity sits on the same conjunct
+/// whichever the query wrote first.
+#[test]
+fn composite_keys_over_a_class_do_not_depend_on_the_written_order() {
+    let ctx = support::ctx();
+    let written = support::tpch_sql(9);
+    let swapped = written.replace(
+        "AND ps_suppkey = l_suppkey\n        AND ps_partkey = l_partkey",
+        "AND ps_partkey = l_partkey\n        AND ps_suppkey = l_suppkey",
+    );
+    assert_ne!(written, swapped);
+    for stats in [fixture(), footers(1000)] {
+        let plans: Vec<_> = [&written, &swapped]
+            .into_iter()
+            .map(|sql| {
+                let plan = support::resolve(sql, &ctx);
+                let optimized = optimize_with(&plan, &stats).unwrap();
+                let again = optimize_with(&optimized, &stats).unwrap();
+                assert!(
+                    again.structurally_eq(&optimized),
+                    "q09 is a fixed point:\n{}\n{}",
+                    optimized.root(),
+                    again.root()
+                );
+                // Conjuncts keep the order the query wrote them in.
+                let text = optimized.root().to_string();
+                let sorted = text.lines().map(|l| match l.split_once("Join Inner, ") {
+                    Some((head, cond)) => {
+                        let cond = cond.replace(['(', ')'], "");
+                        let mut parts: Vec<&str> = cond.split(" and ").collect();
+                        parts.sort_unstable();
+                        format!("{head}Join Inner, {}", parts.join(" and "))
+                    }
+                    None => l.to_owned(),
+                });
+                sorted.collect::<Vec<_>>().join("\n")
+            })
+            .collect();
+        assert_eq!(plans[0], plans[1]);
+    }
+}
+
+/// The columns of each column equality in `e`'s conjuncts.
+fn equalities(e: &Expr) -> Vec<[&BoundColumn; 2]> {
+    fn col(a: &Expr) -> Option<&BoundColumn> {
+        match &a.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+            _ => None,
+        }
+    }
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        return Vec::new();
+    };
+    match (&f.id, f.args.as_slice()) {
+        (FunctionId::Builtin(Builtin::And), args) => {
+            args.iter().flat_map(|a| equalities(a)).collect()
+        }
+        (FunctionId::Builtin(Builtin::Eq), [a, b]) => match (col(a), col(b)) {
+            (Some(a), Some(b)) => vec![[a, b]],
+            _ => Vec::new(),
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// Panics on a join holding two equalities over one column (a key the
+/// joins below already imply).
+fn no_repeated_key(root: &LogicalPlan, what: &str) {
+    let mut stack = vec![root];
+    while let Some(p) = stack.pop() {
+        p.for_each_child(&mut |c| stack.push(c));
+        if let PlanNode::Join {
+            condition: JoinCondition::On(c),
+            ..
+        } = &p.node
+        {
+            let mut ids: Vec<_> = equalities(c).iter().flatten().map(|c| c.id).collect();
+            let n = ids.len();
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(ids.len(), n, "{what} repeats a join key:\n{root}");
+        }
+    }
+}
+
+/// Inputs the query relates only through a third one join on the implied
+/// equality, each join holds one equality of the class, and nulls (which
+/// `=` never matches) keep the rows the written plan keeps.
+#[test]
+fn implied_equalities_join_inputs_related_through_a_third() {
+    let sql = "SELECT t1.b, t2.b, t3.b FROM t t1 JOIN t t2 ON t1.a = t2.a \
+               JOIN t t3 ON t3.a = t1.a JOIN u ON u.a = t2.a";
+    let optimized = same_rows(sql);
+    no_cross_product(optimized.root(), sql);
+    no_repeated_key(optimized.root(), sql);
+    assert!(optimize(&optimized).unwrap().structurally_eq(&optimized));
+    insta::assert_snapshot!(optimized.root().to_string());
+}
+
+/// Two columns of one input in a class: the input is filtered on their
+/// equality, and the join takes one of them.
+#[test]
+fn a_class_with_two_columns_of_one_input_filters_that_input() {
+    let sql = "SELECT t1.b, s.b FROM t t1 JOIN (SELECT a AS x, a AS y, b FROM t) s \
+               ON t1.a = s.x AND t1.a = s.y";
+    let optimized = same_rows(sql);
+    no_repeated_key(optimized.root(), sql);
+    assert!(optimize(&optimized).unwrap().structurally_eq(&optimized));
+    let text = optimized.root().to_string();
+    assert_eq!(text.matches(" == ").count(), 2, "{text}");
+    insta::assert_snapshot!(text);
+}
+
+/// A written equality the others imply is left out of the plan, and the
+/// rows stay those of the written plan.
+#[test]
+fn a_written_equality_the_others_imply_is_left_out() {
+    let sql = "SELECT t1.b FROM t t1 JOIN t t2 ON t1.a = t2.a JOIN t t3 \
+               ON t2.a = t3.a AND t1.a = t3.a";
+    let optimized = same_rows(sql);
+    no_repeated_key(optimized.root(), sql);
+    let joins = optimized.root().to_string().matches("Join Inner").count();
+    let eqs = optimized.root().to_string().matches(" == ").count();
+    assert_eq!((joins, eqs), (2, 2), "{}", optimized.root());
+}
+
+/// One class over many inputs (every input joined on the same column)
+/// derives an equality per pair of inputs; planning stays fast, every join
+/// holds one of them and the rows are the written plan's.
+#[test]
+fn a_class_over_many_inputs_plans_quickly() {
+    let mut sql = "SELECT t1.b FROM t t1".to_owned();
+    for i in 2..=30 {
+        sql.push_str(&format!(" JOIN t t{i} ON t{i}.a = t{}.a", i - 1));
+    }
+    let plan = support::resolve(&sql, &support::ctx());
+    let started = std::time::Instant::now();
+    let optimized = optimize(&plan).unwrap();
+    assert!(started.elapsed().as_secs() < 10, "{:?}", started.elapsed());
+    no_cross_product(optimized.root(), "the class");
+    no_repeated_key(optimized.root(), "the class");
+    let eqs = optimized.root().to_string().matches(" == ").count();
+    assert_eq!(eqs, 29, "{}", optimized.root());
 }

@@ -313,8 +313,25 @@ fn composite_keys(
         }
         let side = |k: usize, leaf: usize| cols[k].values().product::<f64>().min(rows[leaf]);
         let sel = 1.0 / side(0, x).min(side(1, y)).max(1.0);
-        for (k, &i) in members.iter().enumerate() {
-            preds[i].sel = if k == 0 { sel } else { 1.0 };
+        // The key's selectivity goes on one conjunct, the same however the
+        // query wrote the key (so planning a plan again gives it again):
+        // one outside a column class where there is one, else the class
+        // equality of the smallest columns. `Graph::independent` takes a
+        // carrier before the other equalities, so it is not the one left out.
+        let carrier = members
+            .iter()
+            .copied()
+            .find(|&i| preds[i].class.is_none())
+            .or_else(|| {
+                members
+                    .iter()
+                    .copied()
+                    .min_by_key(|&i| preds[i].class.map(|[a, b]| (a.min(b), a.max(b))))
+            });
+        for &i in &members {
+            let carries = Some(i) == carrier;
+            preds[i].sel = if carries { sel } else { 1.0 };
+            preds[i].carrier = Some(carries);
         }
     }
 }
@@ -380,6 +397,9 @@ struct Pred {
     sel: f64,
     edge: bool,
     class: Option<[AttrId; 2]>,
+    /// For a member of a composite key ([`composite_keys`]): whether it
+    /// carries the key's selectivity (the others count 1).
+    carrier: Option<bool>,
 }
 
 /// The columns of `a = b` over two plain columns of the same type, which
@@ -584,6 +604,7 @@ impl Graph {
                 sel,
                 edge,
                 class,
+                carrier: None,
             });
         }
         composite_keys(&mut kept, &all, &owner, &at, &rows);
@@ -680,10 +701,24 @@ impl Graph {
         }
         // Equalities are chosen in the order of their columns, not of the
         // conjuncts, so the choice does not depend on how the query (or a
-        // previous planning) wrote them.
-        let mut eqs: Vec<(AttrId, AttrId, usize)> = cands
+        // previous planning) wrote them. A composite key's members come
+        // first (the one carrying its selectivity, then the others): the
+        // key's selectivity already counts them, so a class joined through
+        // a composite key counts it there and leaves out the other
+        // equalities it implies (q02: partsupp's partkey equality with the
+        // minimum's is in the cost key, so part joins on one of the two
+        // partkeys, not both).
+        let mut eqs: Vec<(u8, AttrId, AttrId, usize)> = cands
             .iter()
-            .filter_map(|&i| self.preds[i].class.map(|[a, b]| (a.min(b), a.max(b), i)))
+            .filter_map(|&i| {
+                let p = &self.preds[i];
+                let rank = match p.carrier {
+                    Some(true) => 0,
+                    Some(false) => 1,
+                    None => 2,
+                };
+                p.class.map(|[a, b]| (rank, a.min(b), a.max(b), i))
+            })
             .collect();
         if eqs.is_empty() {
             return cands.to_vec();
@@ -691,8 +726,8 @@ impl Graph {
         eqs.sort_unstable();
         let kept: Vec<usize> = eqs
             .into_iter()
-            .filter(|&(a, b, _)| classes.union([a, b]))
-            .map(|(_, _, i)| i)
+            .filter(|&(_, a, b, _)| classes.union([a, b]))
+            .map(|(_, _, _, i)| i)
             .collect();
         cands
             .iter()
@@ -836,14 +871,25 @@ impl Graph {
                 }
             }
             // Each pair counts and joins on the equalities its parts do
-            // not already hold.
+            // not already hold (each part's, found once a round).
+            let mut held: HashMap<usize, Vec<usize>> = HashMap::new();
+            for (k, p) in self.preds.iter().enumerate() {
+                if p.class.is_some()
+                    && let Some((&first, rest)) = p.on.split_first()
+                    && rest.iter().all(|&x| part_of[x] == part_of[first])
+                {
+                    held.entry(part_of[first]).or_default().push(k);
+                }
+            }
             for (&(a, b), (sel, _, on)) in &mut pairs {
                 if !on.iter().any(|&k| self.preds[k].class.is_some()) {
                     continue;
                 }
-                let mut held = self.held(&|x| part_of[x] == a);
-                held.extend(self.held(&|x| part_of[x] == b));
-                *on = self.independent(&held, on);
+                let both: Vec<usize> = [a, b]
+                    .iter()
+                    .flat_map(|x| held.get(x).into_iter().flatten().copied())
+                    .collect();
+                *on = self.independent(&both, on);
                 *sel = on.iter().map(|&k| self.preds[k].sel).product();
             }
             let mut pick: Option<((usize, usize), f64)> = None;
@@ -942,8 +988,10 @@ impl Graph {
 /// the same input (a filter of that input). Which of them a join takes is
 /// [`Graph::independent`]'s choice. The result does not depend on how the
 /// query wrote the class, so re-planning a planned tree gives the same
-/// plan. Other conjuncts come first, in their order; the equalities follow
-/// in the order of their columns.
+/// plan. Other conjuncts and the written canonical equalities keep their
+/// places; a written equality that is not canonical is left out (the
+/// canonical ones imply it), and the derived ones follow in the order of
+/// their columns.
 fn canonical_equalities(preds: Vec<Arc<Expr>>, owner: &HashMap<AttrId, usize>) -> Vec<Arc<Expr>> {
     let mut classes = Classes::default();
     let mut cols: BTreeMap<AttrId, BoundColumn> = BTreeMap::new();

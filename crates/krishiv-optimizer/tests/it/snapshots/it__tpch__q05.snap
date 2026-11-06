@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpch.rs
-assertion_line: 27
 expression: optimized.root().to_string()
 ---
 Sort [revenue#47 DESC NULLS LAST], true

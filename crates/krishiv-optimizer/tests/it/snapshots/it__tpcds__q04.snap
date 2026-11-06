@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
-assertion_line: 101
 expression: optimized.root().to_string()
 ---
 Limit 100

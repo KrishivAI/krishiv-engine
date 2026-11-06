@@ -1,6 +1,5 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
-assertion_line: 101
 expression: optimized.root().to_string()
 ---
 Sort [ca_county#141 ASC NULLS FIRST], true

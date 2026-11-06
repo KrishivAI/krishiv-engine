@@ -15,7 +15,13 @@
 //! ```
 //!
 //! where `D` is `A` or a subtree of it that holds every value of `o` that
-//! `A` does (a superset of the domain is enough). Each kept group sees all
+//! `A` does (a superset of the domain is enough). Through an inner join of
+//! `A` with a plain `o = y` (one type), `D` may be the subtree holding `y`
+//! instead, the semi join then on `g = y`: each row of the join has `o` equal
+//! to `y`. Of the subtrees that keep about as few keys, the domain is the one
+//! scanning fewest rows, so how join ordering placed the aggregate does not
+//! decide it (TPC-H q02's minimum is restricted to the filtered parts
+//! whether it joins part or partsupp joined to part). Each kept group sees all
 //! of its rows, so its value is unchanged; groups no row of `A` asks for
 //! are never formed. This is how a decorrelated scalar subquery such as
 //! TPC-H q17's `(select 0.2 * avg(l_quantity) from lineitem where
@@ -309,7 +315,11 @@ impl Restrict<'_> {
         for p in &kept {
             want.extend(references(p.other));
         }
-        let domain = self.domain(other, &want)?;
+        let Domain {
+            plan: domain,
+            want,
+            rename,
+        } = self.domain(other, &want)?;
         if !repeatable(&domain) {
             return None;
         }
@@ -352,8 +362,13 @@ impl Restrict<'_> {
             offset,
         }));
         let eqs = kept.iter().zip(inner);
-        let cond =
-            and_all(eqs.map(|(p, i)| recall(p.eq, Builtin::Eq, vec![i, shift(p.other, offset)])))?;
+        let cond = and_all(eqs.map(|(p, i)| {
+            recall(
+                p.eq,
+                Builtin::Eq,
+                vec![i, shift(&substitute(p.other, &rename), offset)],
+            )
+        }))?;
         let semi = Arc::new(LogicalPlan::new(PlanNode::Join {
             left: Arc::clone(input),
             right: shifted,
@@ -393,11 +408,19 @@ impl Restrict<'_> {
     /// The deepest subtree of `p` that holds every value the attributes
     /// `want` take in `p`, while its estimated distinct keys stay within
     /// [`DESCEND`] times `p`'s.
-    fn domain(&mut self, p: &Arc<LogicalPlan>, want: &Attrs) -> Option<Arc<LogicalPlan>> {
+    fn domain(&mut self, p: &Arc<LogicalPlan>, want: &Attrs) -> Option<Domain> {
         let mut at = Arc::clone(p);
+        let mut want = want.clone();
+        // Each wanted column as `other` reads it, the column it is read as
+        // now, and that column where an equality moved it to another input.
+        let mut track: Vec<(AttrId, AttrId, Option<BoundColumn>)> =
+            want.iter().map(|&id| (id, id, None)).collect();
         loop {
-            let next = match &at.node {
-                PlanNode::Filter { input, .. } => Some(Arc::clone(input)),
+            // The subtrees the domain may move into, each with the columns
+            // an equality of the join renames `want` to there.
+            let mut next: Vec<(Arc<LogicalPlan>, HashMap<AttrId, BoundColumn>)> = Vec::new();
+            match &at.node {
+                PlanNode::Filter { input, .. } => next.push((Arc::clone(input), HashMap::new())),
                 // Only columns passed through unchanged.
                 PlanNode::Project { input, exprs } => {
                     let through: Attrs = exprs
@@ -407,12 +430,17 @@ impl Restrict<'_> {
                             _ => None,
                         })
                         .collect();
-                    want.is_subset(&through).then(|| Arc::clone(input))
+                    if want.is_subset(&through) {
+                        next.push((Arc::clone(input), HashMap::new()));
+                    }
                 }
                 // A side's columns hold its values or NULL, which matches
                 // nothing.
                 PlanNode::Join {
-                    left, right, kind, ..
+                    left,
+                    right,
+                    kind,
+                    condition,
                 } => {
                     let in_left = output_ids(left).is_some_and(|o| want.is_subset(&o));
                     let in_right = !matches!(
@@ -420,24 +448,64 @@ impl Restrict<'_> {
                         JoinKind::LeftSemi | JoinKind::LeftAnti | JoinKind::Existence(_)
                     ) && output_ids(right).is_some_and(|o| want.is_subset(&o));
                     if in_left {
-                        Some(Arc::clone(left))
+                        next.push((Arc::clone(left), HashMap::new()));
                     } else if in_right {
-                        Some(Arc::clone(right))
-                    } else {
-                        None
+                        next.push((Arc::clone(right), HashMap::new()));
+                    }
+                    // Through an inner join's equalities into the other
+                    // input: a row of the join has `w = y`, so the join's
+                    // values of `w` are among that input's values of `y`
+                    // (TPC-H q02: partsupp's partkey is part's, so the
+                    // filtered parts are the domain, not partsupp joined
+                    // to them).
+                    if let (JoinKind::Inner, JoinCondition::On(cond)) = (kind, condition) {
+                        for side in [right, left] {
+                            if let Some(map) = partners(cond, &want, side) {
+                                next.push((Arc::clone(side), map));
+                            }
+                        }
                     }
                 }
-                _ => None,
-            };
-            let Some(next) = next else {
-                return Some(at);
-            };
-            let here = key_ndv(&self.est.plan(&at), want);
-            let there = key_ndv(&self.est.plan(&next), want);
-            if there > here * DESCEND {
-                return Some(at);
+                _ => {}
             }
-            at = next;
+            let here = key_ndv(&self.est.plan(&at), &want);
+            // Of the subtrees whose keys grow by at most `DESCEND`, the one
+            // that scans the fewest rows (the first on a tie).
+            let mut best: Option<(f64, usize, Attrs)> = None;
+            for (k, (c, map)) in next.iter().enumerate() {
+                let moved: Attrs = want
+                    .iter()
+                    .map(|id| map.get(id).map_or(*id, |b| b.id))
+                    .collect();
+                let there = key_ndv(&self.est.plan(c), &moved);
+                if there > here * DESCEND {
+                    continue;
+                }
+                let cost = self.scanned(c);
+                if best.as_ref().is_none_or(|(b, _, _)| cost < *b) {
+                    best = Some((cost, k, moved));
+                }
+            }
+            let Some((_, k, moved)) = best else {
+                let rename = track
+                    .into_iter()
+                    .filter_map(|(id, _, c)| Some((id, column(&c?))))
+                    .collect();
+                return Some(Domain {
+                    plan: at,
+                    want,
+                    rename,
+                });
+            };
+            let (c, map) = next.swap_remove(k);
+            for t in &mut track {
+                if let Some(b) = map.get(&t.1) {
+                    t.1 = b.id;
+                    t.2 = Some(b.clone());
+                }
+            }
+            want = moved;
+            at = c;
         }
     }
 
@@ -456,6 +524,52 @@ impl Restrict<'_> {
         }
         total
     }
+}
+
+/// The domain of a restriction: the subtree, the columns it holds the keys
+/// in, and the columns `other` reads that it holds as others (moved by
+/// join equalities, `w` to `y` of `w = y`).
+struct Domain {
+    plan: Arc<LogicalPlan>,
+    want: Attrs,
+    rename: HashMap<AttrId, Arc<Expr>>,
+}
+
+/// For every column of `want` (none of them in `side`), a column of `side`
+/// it equals under a conjunct of `cond`: a plain `=` of two columns of one
+/// type that groups as it compares (a row of the join then holds both, and
+/// one value).
+fn partners(
+    cond: &Arc<Expr>,
+    want: &Attrs,
+    side: &Arc<LogicalPlan>,
+) -> Option<HashMap<AttrId, BoundColumn>> {
+    let cols = output(side)?;
+    if want.iter().any(|w| cols.iter().any(|c| c.id == *w)) {
+        return None;
+    }
+    let col = |e: &Arc<Expr>| match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.clone()),
+        _ => None,
+    };
+    let mut map = HashMap::new();
+    for c in conjuncts(cond) {
+        let Some((Builtin::Eq, [a, b], _)) = builtin(&c) else {
+            continue;
+        };
+        let (Some(a), Some(b)) = (col(a), col(b)) else {
+            continue;
+        };
+        if a.data_type != b.data_type || !key_type(&a.data_type) {
+            continue;
+        }
+        for (w, y) in [(&a, &b), (&b, &a)] {
+            if want.contains(&w.id) && cols.iter().any(|c| c.id == y.id) {
+                map.entry(w.id).or_insert_with(|| y.clone());
+            }
+        }
+    }
+    (map.len() == want.len()).then_some(map)
 }
 
 /// The estimated distinct values of the attributes `want` together.
