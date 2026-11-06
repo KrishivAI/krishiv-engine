@@ -311,6 +311,38 @@ fn analyze_tpch_q1_on_the_fixture() {
     assert!(text.contains("groups=3"), "{text}");
 }
 
+/// A file scan reports what its reads cost: ranges read, bytes, time waited
+/// and time outstanding (mean reads in flight is the last over the span).
+#[test]
+fn a_file_scan_reports_its_read_costs() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/tpch/q1-lineitem.parquet"
+    );
+    let s = session(2);
+    block_on(
+        s.read()
+            .parquet([path])
+            .create_or_replace_temp_view("lineitem"),
+    )
+    .unwrap();
+    let df = block_on(s.sql("SELECT count(*) FROM lineitem WHERE l_quantity > 10")).unwrap();
+    let (_, profile) = block_on(df.collect_with_profile()).unwrap();
+    let scan = profile
+        .metrics
+        .operators
+        .values()
+        .find(|e| e.extra("scan_reads").is_some())
+        .expect("a scan operator reports scan_reads");
+    let get = |name: &str| scan.extra(name).and_then(Metric::value).unwrap();
+    assert!(get("scan_reads") > 0);
+    assert!(get("scan_read_bytes") > 0);
+    // A wait happens inside the span a read is outstanding.
+    assert!(get("scan_read_inflight_ns") >= get("scan_read_wait_ns"));
+    // The file was read through the scheduler: at least what the decoder took.
+    assert!(get("scan_read_bytes") >= get("scan_bytes"));
+}
+
 #[test]
 fn row_layout_joins_report_their_index() {
     let s = session(2);

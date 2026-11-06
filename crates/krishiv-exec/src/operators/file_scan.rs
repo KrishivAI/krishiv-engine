@@ -351,6 +351,9 @@ pub struct FileScanMetrics {
     pub row_filter_rows: u64,
     /// Rows it kept.
     pub row_filter_kept: u64,
+    /// What the splits' reads cost (byte ranges read, bytes, time waited,
+    /// time outstanding).
+    pub reads: krishiv_io::ReadStats,
 }
 
 impl FileScanMetrics {
@@ -390,6 +393,16 @@ impl FileScanMetrics {
                 ("bloom_rejected", self.bloom_rejected),
             ]));
         }
+        if self.reads.reads > 0 {
+            // Mean reads in flight over a span is `scan_read_inflight_ns`
+            // divided by that span (the scan's wall time in the profile).
+            out.extend(crate::metrics::counts([
+                ("scan_reads", self.reads.reads),
+                ("scan_read_bytes", self.reads.bytes),
+                ("scan_read_wait_ns", self.reads.wait_ns),
+                ("scan_read_inflight_ns", self.reads.inflight_ns),
+            ]));
+        }
         if self.decode_overcommit_bytes > 0 {
             out.extend(crate::metrics::counts([(
                 "decode_overcommit_bytes",
@@ -397,6 +410,10 @@ impl FileScanMetrics {
             )]));
         }
         out
+    }
+
+    pub(super) fn add_reads(&mut self, r: &krishiv_io::ReadStats) {
+        self.reads.add(r);
     }
 
     pub(super) fn add(&mut self, m: &ScanUnitMetrics, overcommitted: u64) {
@@ -792,10 +809,9 @@ impl FileScanSource {
     }
 
     fn end_split(&self, current: &Current) {
-        self.metrics
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .add(&current.stream.metrics(), current.stream.overcommitted());
+        let mut metrics = self.metrics.lock().unwrap_or_else(PoisonError::into_inner);
+        metrics.add(&current.stream.metrics(), current.stream.overcommitted());
+        metrics.add_reads(&current.stream.read_stats());
     }
 
     /// The morsels the drivers of `ctx`'s executor claim: whole splits
@@ -1536,6 +1552,29 @@ mod tests {
 
     /// The scan counters are summed over splits; the row filter's appear
     /// only where it ran.
+    #[test]
+    fn read_costs_are_reported_once_a_read_was_made_and_sum_over_splits() {
+        let mut m = FileScanMetrics::default();
+        assert_eq!(value(&m.extra(), "scan_reads"), None);
+        let mut a = krishiv_io::ReadStats::default();
+        a.reads = 3;
+        a.bytes = 3_000;
+        a.wait_ns = 500;
+        a.inflight_ns = 1_500;
+        m.add_reads(&a);
+        m.add_reads(&a);
+        // Reads without a decoded split still show, so the I/O is never hidden.
+        let extra = m.extra();
+        for (name, want) in [
+            ("scan_reads", 6),
+            ("scan_read_bytes", 6_000),
+            ("scan_read_wait_ns", 1_000),
+            ("scan_read_inflight_ns", 3_000),
+        ] {
+            assert_eq!(value(&extra, name), Some(want), "{name}");
+        }
+    }
+
     #[test]
     fn scan_counters_sum_over_splits() {
         let mut m = FileScanMetrics::default();
