@@ -2173,6 +2173,7 @@ mod tests {
             spill: None,
             require_unit_weights: false,
             legacy_statistical: false,
+            udafs: None,
         };
         Arc::new(AggCore::new(spec).unwrap())
     }
@@ -2207,6 +2208,7 @@ mod tests {
             spill: None,
             require_unit_weights: false,
             legacy_statistical: false,
+            udafs: None,
         };
         Arc::new(AggCore::new(spec).unwrap())
     }
@@ -3086,6 +3088,7 @@ mod tests {
             spill: None,
             require_unit_weights: false,
             legacy_statistical: false,
+            udafs: None,
         };
         let core = Arc::new(AggCore::new(spec).unwrap());
         let seed = HashSeed::new(Some(6));

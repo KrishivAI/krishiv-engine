@@ -227,6 +227,8 @@ impl<'a> Col<'a> {
 #[derive(Debug)]
 enum Kind {
     Count(Vec<i64>),
+    /// A session aggregate UDF's accumulator (ADR 0045).
+    Udf(Box<super::udf::UdfAcc>),
     SumInt {
         sum: Vec<i64>,
         seen: Vec<bool>,
@@ -1147,6 +1149,9 @@ impl Accumulator {
                 values: Values::empty(t),
                 set: Vec::new(),
             },
+            (F::Udf(_), _) => {
+                return Err(internal("an aggregate UDF without its library".to_owned()));
+            }
             (f @ (F::Mode | F::ModeMin | F::ModeMax), _) => {
                 Kind::Mode(ModeAcc::new(expr.arg_type.clone(), f)?)
             }
@@ -1187,6 +1192,19 @@ impl Accumulator {
             sum_bound,
             max_sum: 0,
             proofs: true,
+        })
+    }
+
+    /// The accumulator of an aggregate UDF call `expr` over `acc`.
+    pub(crate) fn udf(expr: &AggregateExpr, acc: super::udf::UdfAcc) -> Result<Self> {
+        Ok(Self {
+            kind: Kind::Udf(Box::new(acc)),
+            expr: expr.clone(),
+            result: expr.result_type()?,
+            ansi: false,
+            sum_bound: None,
+            max_sum: 0,
+            proofs: false,
         })
     }
 
@@ -1251,7 +1269,7 @@ impl Accumulator {
             Kind::ListAgg(l) => l.vecs(),
             // The quantile and HLL states are maps and buffers, not
             // plain vectors; `size` counts them exactly.
-            Kind::Exact(_) | Kind::Approx(_) | Kind::Hll(_) => Vec::new(),
+            Kind::Exact(_) | Kind::Approx(_) | Kind::Hll(_) | Kind::Udf(_) => Vec::new(),
         }
     }
 
@@ -1265,6 +1283,7 @@ impl Accumulator {
             Kind::Exact(e) => e.size(),
             Kind::Approx(g) => g.size(),
             Kind::Hll(h) => h.size(),
+            Kind::Udf(u) => u.size(),
             _ => {
                 let heap = match &self.kind {
                     Kind::MinMax { heap, .. }
@@ -1302,6 +1321,11 @@ impl Accumulator {
         }
         if let Kind::ListAgg(l) = &self.kind {
             return l.projected(new, arg);
+        }
+        // A UDF's growth is unknown until it folds: reserved after (one
+        // batch of overshoot, ADR 0045).
+        if let Kind::Udf(u) = &self.kind {
+            return u.size();
         }
         let vecs: usize = self
             .vecs()
@@ -1412,6 +1436,7 @@ impl Accumulator {
             Kind::Exact(e) => e.resize(n),
             Kind::Approx(g) => g.resize(n),
             Kind::Hll(h) => h.resize(n),
+            Kind::Udf(u) => u.resize(n),
             Kind::By {
                 values,
                 keys,
@@ -1493,6 +1518,7 @@ impl Accumulator {
             Kind::Exact(e) => e.reserve(new),
             Kind::Approx(g) => g.reserve(new),
             Kind::Hll(h) => h.reserve(new),
+            Kind::Udf(_) => {}
             Kind::By {
                 values,
                 keys,
@@ -1670,6 +1696,16 @@ impl Accumulator {
             mask.is_none() || !state,
             "a merge over partial states carries no mask"
         );
+        if let Kind::Udf(u) = &mut self.kind {
+            if run.is_some() {
+                return Err(internal("a running fold of an aggregate UDF".to_owned()));
+            }
+            if state {
+                let states: Vec<ArrayRef> = args.iter().map(|a| Arc::clone(a)).collect();
+                return u.merge(groups, &states);
+            }
+            return u.update(groups, args, mask, w);
+        }
         let want = if state {
             self.state_len()
         } else {
@@ -1770,6 +1806,8 @@ impl Accumulator {
             )));
         }
         match (&mut self.kind, state) {
+            // Handled at the top of `fold`.
+            (Kind::Udf(_), _) => return Err(internal("an aggregate UDF fold".to_owned())),
             (Kind::Count(c), false) => {
                 for (i, &g) in groups.iter().enumerate() {
                     if active(i)
@@ -2554,6 +2592,7 @@ impl Accumulator {
             | Kind::Exact(_) => 2,
             Kind::ListAgg(_) => self.expr.listagg_types().map_or(1, |(_, k)| k.len() + 1),
             Kind::Moments(ref m) => m.width(),
+            Kind::Udf(ref u) => u.state_len(),
         }
     }
 
@@ -2655,6 +2694,7 @@ impl Accumulator {
                 gk.state(ids, 1.0 / *accuracy as f64)
             }
             Kind::Hll(h) => h.state(ids),
+            Kind::Udf(u) => u.state(ids)?,
             Kind::By {
                 values,
                 keys,
@@ -2909,6 +2949,7 @@ impl Accumulator {
             Kind::Hll(h) => Arc::new(Int64Array::from_iter_values(
                 ids.iter().map(|i| h.estimate(at(i))),
             )) as ArrayRef,
+            Kind::Udf(u) => u.evaluate(ids)?,
             // Only the value: the ordering key is state, not a result.
             Kind::By {
                 values, set, null, ..
@@ -4048,100 +4089,4 @@ mod tests {
 /// at a time (the row-at-a-time fold the batch path replaces).
 #[cfg(test)]
 #[cfg(not(loom))]
-mod struct_extremum_tests {
-    use super::*;
-    use arrow_array::{Float64Array, Int32Array, StringArray, StructArray};
-    use arrow_schema::Field;
-    use proptest::prelude::*;
-
-    type Cell = Option<(Option<i32>, Option<&'static str>, f64)>;
-
-    fn column(rows: &[(u32, Cell)]) -> ArrayRef {
-        let fields: arrow_schema::Fields = vec![
-            Field::new("a", DataType::Int32, true),
-            Field::new("b", DataType::Utf8, true),
-            Field::new("c", DataType::Float64, true),
-        ]
-        .into();
-        let a = Int32Array::from_iter(rows.iter().map(|(_, c)| c.and_then(|c| c.0)));
-        let b = StringArray::from_iter(rows.iter().map(|(_, c)| c.and_then(|c| c.1)));
-        let c = Float64Array::from_iter(rows.iter().map(|(_, c)| c.map(|c| c.2)));
-        let nulls = NullBuffer::from_iter(rows.iter().map(|(_, c)| c.is_some()));
-        Arc::new(StructArray::new(
-            fields,
-            vec![Arc::new(a) as ArrayRef, Arc::new(b), Arc::new(c)],
-            Some(nulls),
-        ))
-    }
-
-    fn struct_type() -> DataType {
-        column(&[]).data_type().clone()
-    }
-
-    fn run(f: AggregateFunction, batches: &[Vec<(u32, Cell)>]) -> String {
-        run_groups(f, batches, 5)
-    }
-
-    fn run_groups(f: AggregateFunction, batches: &[Vec<(u32, Cell)>], groups: u32) -> String {
-        let t = struct_type();
-        let mut acc = Accumulator::new(&AggregateExpr::new(f, 0, t, "a"), true).unwrap();
-        acc.resize(groups as usize);
-        for rows in batches {
-            let groups: Vec<u32> = rows.iter().map(|r| r.0).collect();
-            acc.update(&groups, &[column(rows)], &Weights::Const(1))
-                .unwrap();
-        }
-        let ids: Vec<u32> = (0..groups).collect();
-        format!("{:?}", acc.evaluate(&ids).unwrap())
-    }
-
-    fn cell() -> impl Strategy<Value = Cell> {
-        let a = prop_oneof![Just(None), (0..3).prop_map(Some)];
-        let b = prop_oneof![Just(None), Just(Some("x")), Just(Some("y")), Just(Some(""))];
-        let c = prop_oneof![Just(f64::NAN), Just(-0.0), Just(0.0), Just(1.0), Just(-1.0)];
-        prop_oneof![1 => Just(None), 4 => (a, b, c).prop_map(Some)]
-    }
-
-    /// Timing note (run with `--ignored --nocapture`): 200,000 rows over 100
-    /// groups folded in batches of 4,096 against one row per batch (the cost
-    /// profile of the row-at-a-time fold).
-    #[test]
-    #[ignore = "timing note, not a check"]
-    fn batch_fold_timing() {
-        let rows: Vec<(u32, Cell)> = (0..200_000u32)
-            .map(|i| {
-                let v = i32::try_from(i.wrapping_mul(2_654_435_761) % 1000).unwrap_or(0);
-                (i % 100, Some((Some(v), Some("x"), f64::from(v))))
-            })
-            .collect();
-        let batched: Vec<Vec<(u32, Cell)>> = rows.chunks(4096).map(<[_]>::to_vec).collect();
-        let single: Vec<Vec<(u32, Cell)>> = rows.iter().map(|r| vec![*r]).collect();
-        let t = std::time::Instant::now();
-        let a = run_groups(AggregateFunction::Max, &batched, 100);
-        let batch_time = t.elapsed();
-        let t = std::time::Instant::now();
-        let b = run_groups(AggregateFunction::Max, &single, 100);
-        let single_time = t.elapsed();
-        assert_eq!(a, b);
-        println!("TIMING batches of 4096: {batch_time:?}; one row per batch: {single_time:?}");
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
-
-        #[test]
-        fn batch_fold_equals_row_at_a_time(
-            rows in proptest::collection::vec((0u32..5, cell()), 0..48),
-            split in 1usize..6,
-        ) {
-            for f in [AggregateFunction::Max, AggregateFunction::Min] {
-                // Whole batches of `split` rows against one row per batch.
-                let batched: Vec<Vec<(u32, Cell)>> =
-                    rows.chunks(split).map(<[_]>::to_vec).collect();
-                let single: Vec<Vec<(u32, Cell)>> =
-                    rows.iter().map(|r| vec![*r]).collect();
-                prop_assert_eq!(run(f.clone(), &batched), run(f, &single));
-            }
-        }
-    }
-}
+mod struct_extremum_tests;

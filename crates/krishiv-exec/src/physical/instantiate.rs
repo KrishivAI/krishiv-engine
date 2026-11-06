@@ -1898,6 +1898,10 @@ pub(crate) fn aggregate_spec(
         spill,
         require_unit_weights: false,
         legacy_statistical: env.legacy_statistical_aggregate,
+        udafs: env.udfs.clone().map(|library| crate::aggregate::UdafEnv {
+            library,
+            time_zone: env.zone,
+        }),
     }
 }
 

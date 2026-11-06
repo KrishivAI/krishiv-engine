@@ -148,6 +148,7 @@ registry! {
     (percentile_aggregates, PercentileAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The percentile family and `approx_count_distinct` aggregates (`percentile`, `percentile_approx`, `percentile_disc`, `approx_count_distinct` with their folded parameters)."),
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
+    (rust_udaf, RustUdaf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust aggregate UDF (`UdafCall`, by name and version, with its argument and state columns)."),
     (session_zone_name, SessionZoneName, POST_MIGRATION_READER_VERSION, Semantic, "The configured session time zone name (`spark.sql.session.timeZone`) where it differs from the rendered offset; without it a worker shows the offset in `current_timezone()` and `VV`/`z` patterns."),
     (shared_subplan, SharedSubplan, POST_MIGRATION_READER_VERSION, Semantic, "Subplans run once per query and read by several `SharedRead` nodes (`WITH` bodies computed once)."),
     (sort_merge_join, SortMergeJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `SortMergeJoin` node: a join of its inputs sorted on the keys (a `MERGE` hint or `krishiv.exec.join.strategy`)."),
@@ -542,6 +543,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::PercentileApprox { .. }
             | AggregateFunction::PercentileDisc { .. }
             | AggregateFunction::ApproxCountDistinct { .. } => Some(Feature::PercentileAggregates),
+            AggregateFunction::Udf(_) => Some(Feature::RustUdaf),
         },
         // Built-ins and registry functions travel by name; only a
         // session UDF (by name and version) needs a reader with it.
@@ -562,6 +564,13 @@ fn aggregate_constructs<'a>(a: &'a AggregateExpr, f: &mut impl FnMut(Construct<'
     f(Construct::AggregateFunction(&a.function));
     if let Some(element) = &a.element {
         visit_arrow_field(element, f);
+    }
+    if let AggregateFunction::Udf(call) = &a.function {
+        call.args
+            .iter()
+            .chain(&call.state)
+            .for_each(|x| visit_arrow_field(x, f));
+        visit_type(&call.result, f);
     }
 }
 

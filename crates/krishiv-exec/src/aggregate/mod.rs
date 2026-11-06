@@ -76,6 +76,7 @@ mod quantile;
 mod rowtable;
 mod sink;
 mod table;
+mod udf;
 
 #[cfg(test)]
 mod tests;
@@ -101,6 +102,8 @@ pub(crate) use quantile::decimal_to_double;
 #[cfg(test)]
 use sink::row_merge_running;
 pub use sink::{AggregateMetrics, HashAggregate};
+pub use udf::UdafEnv;
+pub(crate) use udf::plan_udaf_state;
 
 use crate::error::{Result, internal};
 
@@ -307,6 +310,31 @@ pub enum AggregateFunction {
         /// The addressing bits `p`.
         p: u32,
     },
+    /// A session aggregate UDF (ADR 0045), by name and version: the worker
+    /// runs the implementation its library holds under both, or refuses
+    /// the plan with `KRISHIV_UDF_NOT_AVAILABLE`.
+    Udf(Box<UdafCall>),
+}
+
+/// The call of a session aggregate UDF as plan data: what the analyzer and
+/// the planner fixed, so every worker agrees on the columns without the
+/// implementation (see [`AggregateFunction::Udf`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UdafCall {
+    /// The function name (lower case).
+    pub name: String,
+    /// The implementation version.
+    pub version: u32,
+    /// The argument columns after the analyzer's casts, as the UDF reads
+    /// them (decimals on `Decimal128`).
+    pub args: Vec<Field>,
+    /// The result type, as the analyzer typed it.
+    pub result: krishiv_types::DataType,
+    /// Whether the result may be NULL.
+    pub nullable: bool,
+    /// The partial state's columns as the UDF declares them for these
+    /// arguments (names unprefixed, types in the carriers the UDF returns).
+    pub state: Vec<Field>,
 }
 
 /// Where an aggregate's arguments come from.
@@ -499,6 +527,7 @@ impl AggregateExpr {
         let t = &self.arg_type;
         Ok(match (&self.function, t) {
             (F::Count, _) => DataType::Int64,
+            (F::Udf(call), _) => call.result.to_arrow(),
             // The Arrow type holds no fields, so `sum` and `avg` agree here;
             // the analyzer gives `avg` the family's default fields.
             (F::Sum | F::TrySum | F::Avg | F::TryAvg, t) if is_ansi_interval(t) => t.clone(),
@@ -605,6 +634,11 @@ impl AggregateExpr {
         let n = |suffix: &str| format!("{}#{suffix}", self.name);
         Ok(match (&self.function, &out) {
             (F::Count, _) => vec![Field::new(n("count"), DataType::Int64, false)],
+            (F::Udf(call), _) => call
+                .state
+                .iter()
+                .map(|f| Field::new(n(f.name()), f.data_type().clone(), f.is_nullable()))
+                .collect(),
             // `try_sum` of integers sticks overflow in its state, like a
             // decimal `sum` does.
             (F::Sum | F::TrySum, t) if is_ansi_interval(t) => vec![
@@ -878,6 +912,10 @@ pub struct AggregateSpec {
     /// the sample moment aggregates (`stddev_samp`, `var_samp`, `covar_samp`,
     /// `corr`, `skewness`, `kurtosis`) give NaN instead of NULL.
     pub legacy_statistical: bool,
+    /// The session's aggregate UDFs, for [`AggregateFunction::Udf`]
+    /// aggregates (`None`: a plan calling one is refused with
+    /// `KRISHIV_UDF_NOT_AVAILABLE`).
+    pub udafs: Option<UdafEnv>,
 }
 
 impl AggregateSpec {
@@ -896,7 +934,11 @@ impl AggregateSpec {
         for a in &self.aggregates {
             match self.output {
                 AggregateOutput::Final => {
-                    let nullable = a.function != AggregateFunction::Count;
+                    let nullable = match &a.function {
+                        AggregateFunction::Count => false,
+                        AggregateFunction::Udf(call) => call.nullable,
+                        _ => true,
+                    };
                     fields.push(Field::new(&a.name, a.result_type()?, nullable));
                 }
                 AggregateOutput::Partial => fields.extend(a.state_fields()?),
