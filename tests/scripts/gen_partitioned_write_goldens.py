@@ -53,7 +53,7 @@ def partition_dirs(root: Path) -> list[str]:
     return sorted(out)
 
 
-def read_back(spark, case: dict, path: Path) -> dict:  # noqa: ANN001 (a SparkSession; PySpark is optional here)
+def read_back(spark, case: dict, path: Path) -> dict:
     df = spark.read.format(case["format"]).options(**case["options"]).load(str(path))
     parts = [f"coalesce(CAST(`{f.name}` AS STRING), 'NULL')" for f in df.schema.fields]
     rows = sorted(r[0] for r in df.selectExpr(f"concat_ws('|', {', '.join(parts)}) AS row").collect())
