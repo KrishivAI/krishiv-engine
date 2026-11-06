@@ -2091,6 +2091,10 @@ pub struct Query {
     pub limit: Option<Limit>,
     /// `OFFSET`.
     pub offset: Option<Expr>,
+    /// The query-organization clauses (`ORDER BY` to `OFFSET`), as Spark's
+    /// errors cite a `SORT BY`, `DISTRIBUTE BY` or `CLUSTER BY`; `None`
+    /// without any.
+    pub organization_span: Option<Span>,
     /// Source text.
     pub span: Span,
 }

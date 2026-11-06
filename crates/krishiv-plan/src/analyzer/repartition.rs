@@ -45,7 +45,7 @@ impl Resolver<'_> {
         if let Some(b) = bounds.iter().find(|b| has_generator(&b.expr)) {
             return Err(AnalysisError::new(
                 UnsupportedGeneratorOutsideSelect {
-                    plan: format!("'{OPERATOR} [{}]'", pretty(&b.shown(), None)),
+                    plan: format!("{OPERATOR} [{}]", pretty(&b.shown(), None)),
                 },
                 o,
             ));

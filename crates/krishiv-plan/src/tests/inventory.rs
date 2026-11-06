@@ -66,7 +66,16 @@ fn kinds_of_node(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
 }
 
 fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
-    out.insert(match &expr.node {
+    out.insert(expr_kind(expr));
+    if let ExprNode::Subquery { plan, .. } = &expr.node {
+        kinds(plan, out);
+    }
+    expr.for_each_child(&mut |c| expr_kinds(c, out));
+}
+
+/// The kind of `expr`'s own node.
+fn expr_kind(expr: &Expr) -> &'static str {
+    match &expr.node {
         ExprNode::Column(_) => "ExprNode::Column",
         ExprNode::Literal(_) => "ExprNode::Literal",
         ExprNode::TypedLiteral { .. } => "ExprNode::TypedLiteral",
@@ -88,11 +97,7 @@ fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
         ExprNode::Resolved(ResolvedExpr::Alias { .. }) => "ResolvedExpr::Alias",
         ExprNode::Resolved(ResolvedExpr::Field { .. }) => "ResolvedExpr::Field",
         ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => "ResolvedExpr::StateInput",
-    });
-    if let ExprNode::Subquery { plan, .. } = &expr.node {
-        kinds(plan, out);
     }
-    expr.for_each_child(&mut |c| expr_kinds(c, out));
 }
 
 /// The inventory rows: node, TPC-H cell, DataFrame-slice cell.
@@ -297,6 +302,42 @@ fn plan_tags_are_unique() {
         .filter(|k| k.starts_with("PlanNode::"))
         .count();
     assert_eq!(out.len(), plan_kinds, "every plan node kind is generated");
+    let mut by_tag: BTreeMap<u8, &str> = BTreeMap::new();
+    for (kind, tag) in out {
+        if let Some(other) = by_tag.insert(tag, kind) {
+            panic!("{kind} and {other} share the tag {tag}");
+        }
+    }
+}
+
+/// Every expression node kind starts its canonical encoding with its own
+/// tag (`Lambda` and the resolved `Field` once shared one).
+#[test]
+fn expr_tags_are_unique() {
+    fn in_expr(e: &Expr, out: &mut BTreeMap<&'static str, u8>) {
+        let (k, tag) = (expr_kind(e), crate::encode::expr_tag(&e.node));
+        assert_eq!(*out.entry(k).or_insert(tag), tag, "{k} has one tag");
+        if let ExprNode::Subquery { plan, .. } = &e.node {
+            in_plan(plan, out);
+        }
+        e.for_each_child(&mut |c| in_expr(c, out));
+    }
+    fn in_plan(plan: &LogicalPlan, out: &mut BTreeMap<&'static str, u8>) {
+        plan.for_each_expr(&mut |e| in_expr(e, out));
+        plan.for_each_child(&mut |c| in_plan(c, out));
+    }
+    let mut out = BTreeMap::new();
+    for seed in 0..4000_u32 {
+        let bytes: Vec<u8> = (0..400_u32)
+            .map(|j| u8::try_from((seed * 7919 + j * 104_729 + j * j) % 251).unwrap())
+            .collect();
+        in_plan(super::props::build(&bytes, false).root(), &mut out);
+    }
+    let expr_kinds = generated_kinds()
+        .into_iter()
+        .filter(|k| !k.starts_with("PlanNode::"))
+        .count();
+    assert_eq!(out.len(), expr_kinds, "every expression kind is generated");
     let mut by_tag: BTreeMap<u8, &str> = BTreeMap::new();
     for (kind, tag) in out {
         if let Some(other) = by_tag.insert(tag, kind) {

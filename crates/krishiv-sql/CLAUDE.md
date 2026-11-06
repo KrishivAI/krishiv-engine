@@ -46,10 +46,12 @@ Paths are relative to this crate.
 - Type errors follow ANTLR's prediction: a complex type whose `<...>` fails falls back to the bare
   type when that reads on (error at the `<`; after `::` the statement is re-parsed with the bare
   type when the complex one fails later); optional type parts are taken only when complete.
-- Spark 4.2's query-syntax tail parses into the tree and lowers to `KRISHIV_UNSUPPORTED_FEATURE`: pipe operators
-  (`SetExprKind::Pipe`: input plus a flat `PipeOp` list; pipes bind below set operators), `COLLATE`, `TABLESAMPLE`,
-  `NEAREST BY`, `TABLE(...)` arguments, `IDENTIFIER(...)` (names, function names, identifier literals unless
-  `legacy_identifier_clause`), variant paths and `TRANSFORM`. Their `AstBuilder` errors are in `validate/`.
+- Spark 4.2's query-syntax tail parses into the tree; their `AstBuilder` errors are in `validate/`. Pipe operators
+  (`SetExprKind::Pipe`: input plus a flat `PipeOp` list; pipes bind below set operators; `lower/pipe.rs`) lower,
+  each behind a `PipeOperator` boundary. `TABLESAMPLE` lowers for `n ROWS` and for fractions that keep every row or
+  none; other fractions and `SYSTEM` are `KRISHIV_UNSUPPORTED_FEATURE`, as are `COLLATE`, `NEAREST BY`, `TABLE(...)` arguments,
+  `IDENTIFIER(...)` (names, function names, identifier literals unless `legacy_identifier_clause`), variant paths
+  and `TRANSFORM`.
 - `FROM ... SELECT ...` stores its `FROM` once (`FromStatement`); never copy subtrees per use.
 - Ambiguities ANTLR resolves by prediction are decided deterministically; every decision is checked
   against a real Spark run (`tests/fixtures/spark-4.2.0/sql-parse-probe.json`,

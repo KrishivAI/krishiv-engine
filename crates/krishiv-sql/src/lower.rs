@@ -750,7 +750,7 @@ impl Lowerer {
                 order_span: q.order_span,
                 offset: q.offset.as_ref(),
                 limit: q.limit.as_ref(),
-                span: q.span,
+                span: q.organization_span.unwrap_or(q.span),
             },
         )
     }
@@ -762,14 +762,24 @@ impl Lowerer {
         // sorts each partition by the same expressions, ascending (Spark's
         // `withQueryResultClauses`). Validation allowed one of them only.
         for (exprs, sorts) in [(q.distribute_by, false), (q.cluster_by, true)] {
-            let (Some(first), Some(last)) = (exprs.first(), exprs.last()) else {
+            if exprs.is_empty() {
                 continue;
-            };
-            let span = Span::new(first.span.start, last.span.end);
+            }
+            // Spark's errors cite the clauses (`queryOrganization`).
+            let span = q.span;
             let lowered = exprs
                 .iter()
                 .map(|e| self.expr(e).map(arc))
                 .collect::<R<Vec<_>>>()?;
+            // `CLUSTER BY` sorts by the same expressions, lowered once.
+            let order: Vec<SortOrder> = if sorts {
+                lowered
+                    .iter()
+                    .map(|x| SortOrder::asc(Arc::clone(x)))
+                    .collect()
+            } else {
+                Vec::new()
+            };
             plan = self.node(
                 PlanNode::Repartition {
                     input: arc(plan),
@@ -778,10 +788,6 @@ impl Lowerer {
                 span,
             );
             if sorts {
-                let order = exprs
-                    .iter()
-                    .map(|e| self.expr(e).map(|x| SortOrder::asc(arc(x))))
-                    .collect::<R<_>>()?;
                 plan = self.node(
                     PlanNode::Sort {
                         input: arc(plan),

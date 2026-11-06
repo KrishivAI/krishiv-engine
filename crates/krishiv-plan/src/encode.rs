@@ -116,6 +116,35 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
     }
 }
 
+/// The tag that starts an expression node's encoding: one per node kind,
+/// never reused (`expr_tags_are_unique`). A new kind takes the next unused
+/// number; a changed number bumps [`ENCODING_VERSION`].
+pub(crate) fn expr_tag(node: &ExprNode) -> u8 {
+    match node {
+        ExprNode::Column(_) => 1,
+        ExprNode::Literal(_) => 2,
+        ExprNode::Star(_) => 3,
+        ExprNode::Function(_) => 4,
+        ExprNode::Cast { .. } => 5,
+        ExprNode::Alias { .. } => 6,
+        ExprNode::Subquery { .. } => 7,
+        ExprNode::Resolved(ResolvedExpr::Column(_)) => 8,
+        ExprNode::Resolved(ResolvedExpr::OuterColumn(_)) => 9,
+        ExprNode::Resolved(ResolvedExpr::Function(_)) => 10,
+        ExprNode::Resolved(ResolvedExpr::Alias { .. }) => 11,
+        ExprNode::Window(_) => 12,
+        ExprNode::TypedLiteral { .. } => 13,
+        ExprNode::Field { .. } => 14,
+        ExprNode::Lambda { .. } => 15,
+        ExprNode::Resolved(ResolvedExpr::LambdaVar(_)) => 16,
+        ExprNode::UpdateFields { .. } => 17,
+        ExprNode::Resolved(ResolvedExpr::Field { .. }) => 18,
+        ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => 30,
+        ExprNode::MultiAlias { .. } => 33,
+        ExprNode::Pipe { .. } => 34,
+    }
+}
+
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
 /// have equal keys in every process and on every platform, except plans
@@ -673,7 +702,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
     #[inline(never)]
     fn update_fields(&mut self, e: &'a Expr) {
         if let ExprNode::UpdateFields { base, ops } = &e.node {
-            self.u8(17);
             self.expr(base);
             self.len(ops.len());
             for op in ops {
@@ -1147,14 +1175,13 @@ impl<'k, 'a> Encoder<'k, 'a> {
     }
 
     fn expr_fields(&mut self, e: &'a Expr) {
+        self.u8(expr_tag(&e.node));
         match &e.node {
             ExprNode::Column(ColumnRef { name, plan_id }) => {
-                self.u8(1);
                 self.strs(name);
                 self.plan_ref(*plan_id);
             }
             ExprNode::Literal(v) => {
-                self.u8(2);
                 self.literal(v);
             }
             ExprNode::Star(Star {
@@ -1165,7 +1192,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 regex,
                 plan_id,
             }) => {
-                self.u8(3);
                 self.strs(qualifier);
                 self.len(except.len());
                 except.iter().for_each(|path| self.strs(path));
@@ -1192,7 +1218,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 filter,
                 ..
             }) => {
-                self.u8(4);
                 self.str(name);
                 self.strs(qualifier);
                 self.len(arg_names.len());
@@ -1209,7 +1234,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.call_within_group(e);
             }
             ExprNode::Cast { expr, to, mode } => {
-                self.u8(5);
                 self.data_type(to);
                 self.u8(match mode {
                     CastMode::Default => 1,
@@ -1220,12 +1244,10 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.expr(expr);
             }
             ExprNode::Alias { expr, name } => {
-                self.u8(6);
                 self.str(name);
                 self.expr(expr);
             }
             ExprNode::Pipe { expr, clause } => {
-                self.u8(34);
                 self.u8(match clause {
                     crate::PipeClause::Extend => 0,
                     crate::PipeClause::Set => 1,
@@ -1234,13 +1256,11 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.expr(expr);
             }
             ExprNode::MultiAlias { expr, names } => {
-                self.u8(33);
                 self.len(names.len());
                 names.iter().for_each(|n| self.str(n));
                 self.expr(expr);
             }
             ExprNode::Subquery { kind, plan } => {
-                self.u8(7);
                 match kind {
                     SubqueryKind::Scalar => self.u8(1),
                     SubqueryKind::Exists => self.u8(2),
@@ -1259,12 +1279,10 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 let key = self.keys.plan(plan, &outer, ctx);
                 self.child(key);
             }
-            ExprNode::Resolved(ResolvedExpr::Column(c)) => {
-                self.u8(8);
-                self.bound(c);
-            }
-            ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => {
-                self.u8(9);
+            // The tag tells the two apart.
+            ExprNode::Resolved(
+                ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) | ResolvedExpr::LambdaVar(c),
+            ) => {
                 self.bound(c);
             }
             ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
@@ -1278,7 +1296,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 // Follows from the identity (see `ResolvedFunction`).
                 ..
             })) => {
-                self.u8(10);
                 self.function_id(id);
                 self.u8(kind.code());
                 self.data_type(data_type);
@@ -1287,22 +1304,15 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.call_within_group(e);
             }
             ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
-                self.u8(11);
                 self.bound(output);
                 self.expr(expr);
             }
             ExprNode::Lambda { params, body } => {
-                self.u8(15);
                 self.len(params.len());
                 params.iter().for_each(|c| self.bound(c));
                 self.expr(body);
             }
-            ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => {
-                self.u8(16);
-                self.bound(c);
-            }
             ExprNode::Window(crate::WindowExpr { function, window }) => {
-                self.u8(12);
                 self.expr(function);
                 match window {
                     crate::WindowSpecRef::Named(name) => {
@@ -1328,7 +1338,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
             }
             ExprNode::TypedLiteral { kind, value } => {
-                self.u8(13);
                 self.u8(match kind {
                     crate::TypedLiteralKind::Date => 1,
                     crate::TypedLiteralKind::Timestamp => 2,
@@ -1339,12 +1348,10 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.str(value);
             }
             ExprNode::Field { base, name } => {
-                self.u8(14);
                 self.str(name);
                 self.expr(base);
             }
             ExprNode::Resolved(ResolvedExpr::StateInput { columns, raw_type }) => {
-                self.u8(30);
                 self.data_type(raw_type);
                 self.exprs(columns);
             }
@@ -1355,7 +1362,6 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 data_type,
                 nullable,
             }) => {
-                self.u8(15);
                 self.str(name);
                 self.len(*ordinal);
                 self.data_type(data_type);

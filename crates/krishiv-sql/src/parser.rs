@@ -3664,12 +3664,21 @@ impl<'s> Parser<'s> {
             windows: vec![],
             limit: None,
             offset: None,
+            organization_span: None,
         }
     }
 
     /// `queryOrganization`, onto `q`.
     fn organization(&mut self, q: &mut Query) -> PR<()> {
         let o = self.query_organization()?;
+        let any = !(o.order_by.is_empty()
+            && o.cluster_by.is_empty()
+            && o.distribute_by.is_empty()
+            && o.sort_by.is_empty()
+            && o.windows.is_empty()
+            && o.limit.is_none()
+            && o.offset.is_none());
+        q.organization_span = any.then_some(o.span);
         q.order_by = o.order_by;
         q.order_span = o.order_span;
         q.cluster_by = o.cluster_by;

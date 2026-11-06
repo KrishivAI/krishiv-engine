@@ -353,11 +353,11 @@ impl Resolver<'_> {
 /// `struct(c1, c2, ...)` column and a value of several parts one
 /// `struct(v1, v2, ...)` value (`CreateStruct`).
 fn as_structs(columns: &[Arc<Expr>], values: &[PivotValue]) -> (Vec<Arc<Expr>>, Vec<PivotValue>) {
-    let call = |args: &[Arc<Expr>]| {
+    let call = |name: &str, args: &[Arc<Expr>]| {
         let origin = args.first().map_or(Origin::UNKNOWN, |a| a.origin);
         Arc::new(
             Expr::new(ExprNode::Function(FunctionCall {
-                name: "struct".to_owned(),
+                name: name.to_owned(),
                 qualifier: Vec::new(),
                 args: args.to_vec(),
                 arg_names: Vec::new(),
@@ -369,7 +369,7 @@ fn as_structs(columns: &[Arc<Expr>], values: &[PivotValue]) -> (Vec<Arc<Expr>>, 
         )
     };
     let columns = if columns.len() > 1 {
-        vec![call(columns)]
+        vec![call("struct", columns)]
     } else {
         columns.to_vec()
     };
@@ -377,8 +377,26 @@ fn as_structs(columns: &[Arc<Expr>], values: &[PivotValue]) -> (Vec<Arc<Expr>>, 
         .iter()
         .map(|v| {
             if v.exprs.len() > 1 {
+                // Spark's row constructor (`CreateStruct`): a column part
+                // is named as the column (an alias as itself), any other
+                // `col<i>`; the type `struct(a, ...)` has, and its text.
+                let args: Vec<Arc<Expr>> = v
+                    .exprs
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, e)| {
+                        let field = match &e.node {
+                            ExprNode::Column(c) if let Some(last) = c.name.last() => last.clone(),
+                            ExprNode::Alias { name, .. } => name.clone(),
+                            _ => format!("col{}", i + 1),
+                        };
+                        let name = Expr::new(ExprNode::Literal(Literal::String(field)))
+                            .with_origin(e.origin);
+                        [Arc::new(name), Arc::clone(e)]
+                    })
+                    .collect();
                 PivotValue {
-                    exprs: vec![call(&v.exprs)],
+                    exprs: vec![call("named_struct", &args)],
                     alias: v.alias.clone(),
                 }
             } else {
@@ -398,18 +416,24 @@ fn incomparable_name(e: &Arc<Expr>, scope: &[Attr]) -> String {
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => quote(&c.name),
         ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+            // `named_struct` arguments come in (name literal, value) pairs.
             let fields: Vec<String> = f
                 .args
-                .iter()
-                .map(|a| match &a.node {
-                    ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                .chunks(2)
+                .map(|pair| match pair {
+                    [_, v] if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &v.node => {
                         let sql = scope
                             .iter()
                             .find(|x| x.col.id == c.id)
                             .map_or_else(|| c.name.clone(), attr_sql);
                         format!("'{}', {sql}", c.name)
                     }
-                    _ => pretty(a, None),
+                    [k, v] => format!("{}, {}", pretty(k, None), pretty(v, None)),
+                    other => other
+                        .iter()
+                        .map(|a| pretty(a, None))
+                        .collect::<Vec<_>>()
+                        .join(", "),
                 })
                 .collect();
             let sql = format!("named_struct({})", fields.join(", "));
@@ -648,8 +672,49 @@ fn nested_string(e: &Arc<Expr>, r: &Resolver<'_>) -> Option<String> {
     }
 }
 
+/// A value as Spark's `Expression.toString` prints it in
+/// `PIVOT_VALUE_DATA_TYPE_MISMATCH` (checked against 4.2.0): a scalar as its
+/// output name does, `array(1, 2)`, `map(1, 2)`, `named_struct(p, 1)` and
+/// `struct(col1, 1, col2, q)`, strings without quotes.
+fn value_text(e: &Arc<Expr>, r: &Resolver<'_>) -> String {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        if let ExprNode::Literal(Literal::Null(_)) = &e.node {
+            return "null".to_owned();
+        }
+        let bound = Bound {
+            expr: Arc::clone(e),
+            ty: super::catalog::ArgType {
+                data_type: None,
+                nullable: true,
+            },
+            agg: None,
+            win: None,
+            outer: None,
+            lateral: Vec::new(),
+            shown: None,
+        };
+        return part_name(&bound, r);
+    };
+    let args: Vec<String> = match f.id.name() {
+        "array" | "map" | "named_struct" => f.args.iter().map(|a| value_text(a, r)).collect(),
+        "struct" => f
+            .args
+            .iter()
+            .enumerate()
+            .flat_map(|(i, a)| [format!("col{}", i + 1), value_text(a, r)])
+            .collect(),
+        _ => return pretty(e, r.ctx.conf.session_zone),
+    };
+    format!("{}({})", f.id.name(), args.join(", "))
+}
+
 /// A whole value and its type for `PIVOT_VALUE_DATA_TYPE_MISMATCH`: one
-/// part prints as itself, several as a struct.
+/// part prints as itself, several as `named_struct(col1, .., col2, ..)`.
+///
+/// A value tuple `(a, b)` arrives as Spark's row constructor
+/// (`as_structs`), which prints as `named_struct(col1, a, col2, b)`; a
+/// written `struct(a, b)` prints as `struct(col1, a, col2, b)` (checked
+/// against 4.2.0).
 fn value_render(
     v: &PivotValue,
     parts: &[Bound],
@@ -657,8 +722,15 @@ fn value_render(
     r: &Resolver<'_>,
 ) -> (String, String) {
     if let ([b], [t]) = (parts, trimmed) {
+        let collection = |e: &Expr| {
+            matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Function(f))
+                if matches!(f.id.name(), "array" | "map" | "struct" | "named_struct"))
+        };
         let value = v.alias.clone().unwrap_or_else(|| match &b.expr.node {
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
+            _ if collection(&t.expr) => value_text(&t.expr, r),
+            // A scalar prints as its output name does (as written, before
+            // implicit casts, when it does not fold).
             _ => part_name(t, r),
         });
         let ty =
@@ -670,10 +742,11 @@ fn value_render(
     }
     let value = v.alias.clone().unwrap_or_else(|| {
         format!(
-            "{{{}}}",
+            "named_struct({})",
             trimmed
                 .iter()
-                .map(|b| part_name(b, r))
+                .enumerate()
+                .map(|(i, b)| format!("col{}, {}", i + 1, value_text(&b.expr, r)))
                 .collect::<Vec<_>>()
                 .join(", ")
         )

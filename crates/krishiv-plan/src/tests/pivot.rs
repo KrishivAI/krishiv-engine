@@ -723,7 +723,7 @@ fn pivot_rejects_a_multi_part_value_for_one_column() {
             "PIVOT_VALUE_DATA_TYPE_MISMATCH",
             {
                 "pivotType": "int",
-                "value": "{2012, 2013}",
+                "value": "named_struct(col1, 2012, col2, 2013)",
                 "valueType": "struct<col1:int,col2:int>",
             },
         ])

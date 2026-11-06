@@ -462,3 +462,83 @@ fn unpivot_matches_spark() {
     );
     assert_eq!(skipped.len(), 2, "{skipped:?}");
 }
+
+/// The message parameters of the pivot errors for complex values and
+/// several pivot columns, as a Spark 4.2.0 run prints them: a value as
+/// Spark's `toString` shows it (`array(1, 2)`, a tuple as
+/// `named_struct(col1, ..)`), the struct pivot column as `toSQLId` of its
+/// `named_struct` SQL.
+#[test]
+fn pivot_error_parameters_match_spark() {
+    let s = Session::new().unwrap();
+    let setup = [
+        "CREATE TEMPORARY VIEW t AS SELECT * FROM VALUES (1, 2, 'x') AS t(a, b, c)",
+        "CREATE TEMPORARY VIEW cs AS SELECT * FROM VALUES ('Java', map(1, 2), 3) AS cs(course, m, e)",
+    ];
+    for sql in setup {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let error = |sql: &str| match block_on(async { s.sql(sql).await?.collect().await }) {
+        Ok(_) => panic!("{sql}: no error"),
+        Err(e) => (e.error_class().name().to_owned(), error_params(&e)),
+    };
+    for (sql, value, value_type, pivot_type) in [
+        (
+            "SELECT * FROM t PIVOT (sum(b) FOR a IN (array(1, 2)))",
+            "array(1, 2)",
+            "array<int>",
+            "int",
+        ),
+        (
+            "SELECT * FROM t PIVOT (sum(b) FOR a IN (map(1, 2)))",
+            "map(1, 2)",
+            "map<int,int>",
+            "int",
+        ),
+        (
+            "SELECT * FROM t PIVOT (sum(b) FOR a IN (named_struct('p', 1)))",
+            "named_struct(p, 1)",
+            "struct<p:int>",
+            "int",
+        ),
+        (
+            "SELECT * FROM t PIVOT (sum(b) FOR a IN (struct(1, 'q')))",
+            "struct(col1, 1, col2, q)",
+            "struct<col1:int,col2:string>",
+            "int",
+        ),
+        (
+            "SELECT * FROM t PIVOT (sum(b) FOR (a, c) IN ((array(1), 'x')))",
+            "named_struct(col1, array(1), col2, x)",
+            "struct<col1:array<int>,col2:string>",
+            "struct<a:int,c:string>",
+        ),
+    ] {
+        let expected: BTreeMap<String, String> = [
+            ("pivotType", pivot_type),
+            ("value", value),
+            ("valueType", value_type),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect();
+        assert_eq!(
+            error(sql),
+            ("PIVOT_VALUE_DATA_TYPE_MISMATCH".to_owned(), expected),
+            "{sql}"
+        );
+    }
+    let sql = "SELECT * FROM (SELECT course, m, e FROM cs) \
+               PIVOT (sum(e) FOR (course, m) IN (('Java', map(1, 2))))";
+    let column = "`named_struct('course', __auto_generated_subquery_name`.`course, 'm', \
+                  __auto_generated_subquery_name`.`m)`";
+    assert_eq!(
+        error(sql),
+        (
+            "INCOMPARABLE_PIVOT_COLUMN".to_owned(),
+            [("columnName".to_owned(), column.to_owned())]
+                .into_iter()
+                .collect()
+        )
+    );
+}

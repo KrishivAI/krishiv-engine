@@ -67,6 +67,35 @@ fn error(s: &Session, sql: &str) -> (String, String) {
     }
 }
 
+/// The error class of `sql` and its message parameters, `key=value` sorted.
+fn params(s: &Session, sql: &str) -> (String, Vec<String>) {
+    match block_on(async { s.sql(sql).await?.collect().await }) {
+        Ok(_) => panic!("{sql}: no error"),
+        Err(e) => {
+            let mut p: Vec<String> = e
+                .message_parameters()
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect();
+            p.sort();
+            (e.error_class().name().to_owned(), p)
+        }
+    }
+}
+
+/// A recorded difference (`docs/known-differences.md`): Spark evaluates the
+/// partitioning expressions while it shuffles, so `x + 'a'` fails there
+/// with `CAST_INVALID_INPUT`; the repartition is dropped here and the rows
+/// come back. Remove with the exchange queued for the execution lane.
+#[test]
+fn the_expressions_are_not_evaluated() {
+    let s = session();
+    assert_eq!(
+        sorted(&s, "SELECT x FROM t DISTRIBUTE BY x + 'a'"),
+        ["0", "1"]
+    );
+}
+
 /// Any expression a projection allows partitions: a column the select list
 /// dropped, a map, an array, a literal, `rand()`.
 #[test]
@@ -110,20 +139,27 @@ fn sort_by_after_distribute_by_sorts() {
 #[test]
 fn an_unknown_name_is_unresolved() {
     let s = session();
-    for (sql, proposal) in [
-        ("SELECT x AS z FROM t DISTRIBUTE BY zz", "[`z`]"),
+    for (sql, name, proposal) in [
+        ("SELECT x AS z FROM t DISTRIBUTE BY zz", "`zz`", "`z`"),
         (
             "SELECT count(*) AS c FROM t GROUP BY y DISTRIBUTE BY x",
-            "[`c`]",
+            "`x`",
+            "`c`",
         ),
         (
             "TABLE t |> SELECT 1 + 2 AS result |> DISTRIBUTE BY x",
-            "[`result`]",
+            "`x`",
+            "`result`",
         ),
     ] {
-        let (class, message) = error(&s, sql);
-        assert_eq!(class, "UNRESOLVED_COLUMN.WITH_SUGGESTION", "{sql}");
-        assert!(message.contains(proposal), "{sql}: {message}");
+        assert_eq!(
+            params(&s, sql),
+            (
+                "UNRESOLVED_COLUMN.WITH_SUGGESTION".to_owned(),
+                vec![format!("objectName={name}"), format!("proposal={proposal}")]
+            ),
+            "{sql}"
+        );
     }
 }
 
@@ -133,46 +169,50 @@ fn an_unknown_name_is_unresolved() {
 #[test]
 fn aggregates_windows_and_generators_are_refused() {
     let s = session();
-    for (sql, class, shown) in [
+    // The parameters of a Spark 4.2.0 run; the generator's plan text has
+    // no attribute ids here (Spark: `explode(array(x#11))`).
+    for (sql, class, param) in [
         (
             "SELECT x FROM t DISTRIBUTE BY sum(x)",
             "UNSUPPORTED_EXPR_FOR_OPERATOR",
-            "\"sum(x)\"",
+            "invalidExprSqls=\"sum(x)\"",
         ),
         (
             "SELECT x FROM t DISTRIBUTE BY x + sum(x) + max(x)",
             "UNSUPPORTED_EXPR_FOR_OPERATOR",
-            "[\"sum(x)\", \"max(x)\"]",
+            "invalidExprSqls=\"sum(x)\", \"max(x)\"",
         ),
         (
             "SELECT x FROM t DISTRIBUTE BY row_number() OVER (ORDER BY x)",
             "UNSUPPORTED_EXPR_FOR_OPERATOR",
-            "row_number()",
+            "invalidExprSqls=\"row_number() OVER (ORDER BY x ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)\"",
         ),
         (
             "SELECT y, count(*) AS c FROM t GROUP BY y DISTRIBUTE BY y SORT BY count(*)",
             "UNSUPPORTED_EXPR_FOR_OPERATOR",
-            "count(1)",
+            "invalidExprSqls=\"count(1)\"",
         ),
         (
             "SELECT x FROM t ORDER BY sum(x)",
             "UNSUPPORTED_EXPR_FOR_OPERATOR",
-            "\"sum(x)\"",
+            "invalidExprSqls=\"sum(x)\"",
         ),
         (
             "SELECT x FROM t SORT BY sum(x)",
             "UNSUPPORTED_EXPR_FOR_OPERATOR",
-            "\"sum(x)\"",
+            "invalidExprSqls=\"sum(x)\"",
         ),
         (
             "SELECT x FROM t DISTRIBUTE BY explode(array(x))",
             "UNSUPPORTED_GENERATOR.OUTSIDE_SELECT",
-            "explode",
+            "plan=RepartitionByExpression [explode(array(x))]",
         ),
     ] {
-        let (got, message) = error(&s, sql);
-        assert_eq!(got, class, "{sql}: {message}");
-        assert!(message.contains(shown), "{sql}: {message}");
+        assert_eq!(
+            params(&s, sql),
+            (class.to_owned(), vec![param.to_owned()]),
+            "{sql}"
+        );
     }
 }
 
@@ -188,13 +228,15 @@ fn cluster_by_a_map_does_not_order() {
 #[test]
 fn an_outer_reference_is_refused() {
     let s = session();
-    let (class, message) = error(
-        &s,
-        "SELECT x FROM t WHERE x > (SELECT max(x) FROM t t2 DISTRIBUTE BY t.y)",
-    );
     assert_eq!(
-        class, "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE",
-        "{message}"
+        params(
+            &s,
+            "SELECT x FROM t WHERE x > (SELECT max(x) FROM t t2 DISTRIBUTE BY t.y)",
+        ),
+        (
+            "UNSUPPORTED_SUBQUERY_EXPRESSION_CATEGORY.CORRELATED_REFERENCE".to_owned(),
+            vec!["sqlExprs=\"y\"".to_owned()]
+        )
     );
 }
 
