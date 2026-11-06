@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "depends-on-command": [
+      127
+    ],
+    "s43-other": [
+      128
+    ]
+  },
+  "file": "extract",
+  "format_version": 1
+}

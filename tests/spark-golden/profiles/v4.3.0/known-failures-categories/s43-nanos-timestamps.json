@@ -1,0 +1,13 @@
+{
+  "category": "s43-nanos-timestamps",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "TIMESTAMP_(NTZ|LTZ)\\(\\d\\)|timestamp_nanos|unix_nanos|UNSUPPORTED_TIME_PRECISION",
+      "order": 9000
+    }
+  ],
+  "summary": "Spark 4.3 nanosecond TIMESTAMP_NTZ(n)/TIMESTAMP_LTZ(n) types, timestamp_nanos, unix_nanos",
+  "task": "P3-T090"
+}

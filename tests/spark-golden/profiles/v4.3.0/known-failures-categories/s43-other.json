@@ -1,0 +1,13 @@
+{
+  "category": "s43-other",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": ".*",
+      "order": 9990
+    }
+  ],
+  "summary": "everything else that fails on the Spark 4.3 goldens and has not been classified yet",
+  "task": "P3-T090"
+}
