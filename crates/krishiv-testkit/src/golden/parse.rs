@@ -69,6 +69,7 @@ impl Statement {
     /// Text fallback for "is the result order significant", used only when the engine does not
     /// report [`super::run::QueryOutput::sorted`]. Spark decides on the analyzed plan
     /// (`isSemanticallySorted`); this approximation says "sorted" for a leading `DESC`/`DESCRIBE`
+    /// of a table, column, partition or query (not of a namespace, function or catalog)
     /// and for an `ORDER BY` at parenthesis depth 0, after dropping comments, string literals and
     /// quoted identifiers. An `ORDER BY` inside `OVER (...)` does not count, as in Spark. Known
     /// divergence: Spark also finds a sort in a subquery unless a join, aggregate, distinct,
@@ -132,7 +133,13 @@ pub fn text_sorted(query: &str) -> bool {
         .filter(|w| !w.is_empty())
         .peekable();
     if matches!(words.peek(), Some(&"desc" | &"describe")) {
-        return true;
+        words.next();
+        // Spark 4.2's `DescribeCommandBase`, `DescribeRelation`, `DescribeTablePartition` and
+        // `DescribeColumn` are sorted; `DESCRIBE NAMESPACE`, `FUNCTION` and `CATALOG` are not.
+        return !matches!(
+            words.peek(),
+            Some(&"schema" | &"database" | &"namespace" | &"function" | &"catalog")
+        );
     }
     while let Some(w) = words.next() {
         if w == "order" && words.peek() == Some(&"by") {
@@ -281,6 +288,14 @@ org.apache.spark.sql.catalyst.parser.ParseException\n{\n  \"errorClass\" : \"PAR
     fn text_fallback_counts_only_top_level_order_by() {
         assert!(text_sorted("select * from t order by a"));
         assert!(text_sorted("DESCRIBE EXTENDED t"));
+        assert!(text_sorted("DESC t PARTITION (p = 1)"));
+        assert!(text_sorted("DESCRIBE QUERY SELECT 1"));
+        // Spark sorts the rows of the other describe commands before comparing.
+        assert!(!text_sorted("DESCRIBE SCHEMA s"));
+        assert!(!text_sorted("desc database extended s"));
+        assert!(!text_sorted("DESCRIBE FUNCTION EXTENDED abs"));
+        assert!(!text_sorted("DESCRIBE CATALOG spark_catalog"));
+        assert!(text_sorted("DESCRIBE schema_table"));
         assert!(text_sorted(
             "with c as (select 1) select * from c -- x\n order by 1"
         ));
