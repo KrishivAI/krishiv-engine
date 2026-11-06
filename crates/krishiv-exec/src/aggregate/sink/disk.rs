@@ -25,8 +25,18 @@
 //!   mean as many re-partition rewrites at once.
 //!
 //! A spill request ([`Sink::spill_global`](crate::Sink::spill_global))
-//! stops new tasks; once the running ones ended, the largest waiting task
-//! is split. Finished tasks hold no memory (their files are final).
+//! stops new tasks; once the running ones ended, a waiting task with all
+//! its input merged runs if its write fits (writing frees its table, and a
+//! split would rewrite it three times), else the largest waiting task is
+//! split. Finished tasks hold no memory (their files are final).
+//!
+//! A lone task that cannot split (too few groups to be worth it, or the
+//! hash bits used up) waits through arbitration with nothing of its own published as
+//! spillable: only other consumers can free its memory, and when none can
+//! the query fails with `UNABLE_TO_ACQUIRE_MEMORY`, as the serial phase did.
+//!
+//! The groups' order across partitions is the tasks' key order, not the
+//! order the serial phase produced; inside a partition it is unchanged.
 //!
 //! **Cancellation and errors.** The driver checks for cancellation between
 //! task completions and each task between batches; a task's error fails
@@ -126,6 +136,12 @@ impl DiskTask {
     /// emitting them, and the hash bits are not used up.
     fn splittable(&self) -> bool {
         self.emit.is_none() && self.level < MAX_LEVEL && !self.table.not_worth_spilling()
+    }
+
+    /// Whether all its input is merged: what is left is writing its groups,
+    /// which frees its table.
+    fn merged(&self) -> bool {
+        self.files.is_empty() && self.reader.is_none() && self.pending.is_none()
     }
 
     /// Merges and then writes its groups until done, or until memory is
@@ -313,10 +329,13 @@ fn next_of(
 }
 
 /// Lends up to `bytes` of `r` to spill I/O of the same consumer (see
-/// `lend_headroom`).
+/// `lend_headroom`). The bytes go to the consumer's credit, not back to
+/// the pool, so the I/O's own reservation takes them without racing other
+/// consumers for them (review m3); a sibling task of the same consumer may
+/// still take them first, and [`regrow`] draws back what is left.
 fn lend(r: &mut Reservation, bytes: usize) -> usize {
     let lent = bytes.min(r.size());
-    r.shrink(lent);
+    r.shrink_to_credit(lent);
     lent
 }
 
@@ -378,6 +397,8 @@ impl HashAggregate {
         inner.spill_asked = false;
         drop(inner);
         ctx.consumer().signal().set_spillable_bytes(0);
+        // Bytes `lend` left as credit go back to the pool.
+        ctx.consumer().consumer().release_credit();
         let files = result?;
         let chunks = files.len().max(1);
         let out = Output::on_disk(files, Arc::clone(ctx.executor()));
@@ -459,8 +480,22 @@ impl HashAggregate {
             if running.is_empty() {
                 if asked {
                     lock(&g.inner).spill_asked = false;
+                    // A merged task frees its table by writing it: run it
+                    // when its write fits, rather than split (rewrite) it
+                    // (review M2). Without a request the retry pass above
+                    // already tried every waiting task.
+                    if let Some(i) = waiting
+                        .iter_mut()
+                        .position(|t| t.merged() && t.reservation.try_grow(t.need).is_ok())
+                        && let Some(mut t) = waiting.remove(i)
+                    {
+                        t.need = 0;
+                        running.push(self.launch(ctx, s, t));
+                    }
                 }
-                if let Some(mut t) = take_largest(&mut waiting) {
+                if !running.is_empty() {
+                    // Launched above: wait for it below.
+                } else if let Some(mut t) = take_largest(&mut waiting) {
                     if t.splittable() {
                         // Alone and still refused (or asked to free
                         // memory): split it, alone too.
@@ -469,13 +504,18 @@ impl HashAggregate {
                         let fresh = self.new_table(g, false)?;
                         running.push(self.launch_split(ctx, s, t, fresh));
                     } else {
-                        // Nothing to split (writing its groups, no groups,
-                        // or the hash bits used up): wait for the memory
-                        // through arbitration.
-                        t.reservation
-                            .grow(t.need)
-                            .await
-                            .map_err(KrishivError::from)?;
+                        // Nothing to split (too few groups, or the hash
+                        // bits used up): wait for the memory through
+                        // arbitration. Nothing of this consumer can be
+                        // freed meanwhile (every waiting task is
+                        // unsplittable, or it would have been taken), so it
+                        // publishes nothing as spillable (review m1).
+                        ctx.consumer().signal().set_spillable_bytes(0);
+                        let grown = t.reservation.grow(t.need).await;
+                        // A request taken while it waited asked this
+                        // consumer for nothing it could free.
+                        lock(&g.inner).spill_asked = false;
+                        grown.map_err(KrishivError::from)?;
                         t.need = 0;
                         running.push(self.launch(ctx, s, t));
                     }

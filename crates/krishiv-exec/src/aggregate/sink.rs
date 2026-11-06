@@ -104,7 +104,9 @@ struct Counters {
     disk_tasks: AtomicU64,
     /// Most disk tasks running at once.
     disk_peak: AtomicU64,
-    /// Disk tasks refused memory while others ran (they waited).
+    /// Times a disk task was refused memory while others ran (it waited);
+    /// a task refused several times counts each time, so this counts
+    /// stalls, not tasks (review m5).
     disk_waits: AtomicU64,
     /// Tests: disk jobs on the blocking pool now (`+1` a task, `+SPLIT` a
     /// split), and the splits that started beside another job.
