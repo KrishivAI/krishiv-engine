@@ -44,7 +44,7 @@ use krishiv_shuffle::LocalShuffle;
 use krishiv_types::batch::Batch;
 
 use crate::fragment::{Stage, fragment};
-use crate::split::{published_marks, split_nested_loops};
+use crate::split::{plan_data_schemas, published_marks, split_nested_loops};
 
 /// The map tasks of each running query, by query (the query itself first).
 type Running = Mutex<HashMap<QueryId, Vec<Weak<QueryContext>>>>;
@@ -392,7 +392,11 @@ impl StageRunner {
             ),
             None => (worker, LocalShuffle::in_memory()),
         };
-        let schemas = {
+        // The plan's own schemas; a plan written without them is
+        // instantiated, unrun, to learn them.
+        let schemas = if let Some(s) = plan_data_schemas(&plan) {
+            s
+        } else {
             let (plan, worker) = (plan.clone(), worker.clone());
             let out = Arc::new(Mutex::new(None));
             let slot = Arc::clone(&out);
@@ -410,7 +414,12 @@ impl StageRunner {
             schemas?
         };
         let mut schemas = schemas;
-        let plan = split_nested_loops(&plan, &mut schemas)?;
+        // One task per stage: nothing to split.
+        let plan = if self.partitions > 1 {
+            split_nested_loops(&plan, &mut schemas)?
+        } else {
+            plan
+        };
         let stages = fragment(&plan, &schemas.exchanges)?;
         let tasks = stage_tasks(&stages, self.partitions, self.splits.as_deref())?;
         // One worker: the query's broadcast builds are shared by all its
@@ -687,10 +696,10 @@ pub fn merge_partials(fragment: &PhysicalPlan, partials: &[Partials]) -> Result<
     let mut out = StageValues::default();
     for id in published_marks(fragment) {
         let mut merged: Option<BuildMarks> = None;
-        for (task, p) in partials.iter().enumerate() {
+        for p in partials {
             let m = p.marks.get(&id).ok_or_else(|| {
                 internal(format!(
-                    "task {task} of a split nested-loop join did not publish marks #{}",
+                    "a task of a split nested-loop join did not publish marks #{}",
                     id.0
                 ))
             })?;

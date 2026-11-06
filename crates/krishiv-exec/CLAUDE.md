@@ -78,7 +78,9 @@ worker that runs it; the planner validates nodes with the same builders). `insta
 uses (exchange write with its collected filters, exchange reads, `TaskSpec::filters`, broadcasts shared per worker,
 the halves of a split nested-loop join: `NestedLoopPlan::marks` publishes a `values::BuildMarks` bitmap instead of build
 rows and `PhysNode::UnmatchedBuild` emits them from `TaskSpec::marks`, both reading the broadcast by one driver in
-exchange order so every task numbers the build rows alike; `plan_schemas` gives a fragmenter the probe columns). `PhysicalPlan::shared` (P2-T198): subplans
+exchange order so every task numbers the build rows alike; `plan_schemas` gives a fragmenter the probe columns by
+instantiating, unrun, a plan written without `ExchangePlan::schema` / `NestedLoopPlan::probe_schema`, which the planner
+sets). `PhysicalPlan::shared` (P2-T198): subplans
 read by `PhysNode::SharedRead`; a walk over a plan starts at `PhysicalPlan::roots`. `shared.rs` runs them: `SharedSink`
 ends the body's pipeline (built once through `PipelineBuilder::shared_pipeline`, so pipeline dependencies are a DAG),
 keeps the batches as segments (memory or spill file) under a consumer of its own whose `OutputSpill` hook writes every

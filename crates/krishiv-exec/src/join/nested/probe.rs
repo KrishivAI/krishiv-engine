@@ -359,7 +359,7 @@ impl Operator for ProbeOp {
             else {
                 return Ok(FlushOutput::Done);
             };
-            Ok(match self.0.build_rows(b, base, &|r| marks.get(r))? {
+            Ok(match self.0.build_rows(b, base, |r| marks.get(r))? {
                 Some(out) => FlushOutput::Batch(Batch::new(out)),
                 None => FlushOutput::Continue,
             })
@@ -587,7 +587,7 @@ impl ProbeOp {
             ready.memory_bases.get(d.emitted),
         ) {
             d.emitted += 1;
-            return Ok(emit(self.0.build_rows(b, base, &|r| marks.get(r))?));
+            return Ok(emit(self.0.build_rows(b, base, |r| marks.get(r))?));
         }
         let Some((file, base)) = ready.files.get(d.next_file).cloned() else {
             d.phase = Phase::Done;
@@ -602,7 +602,7 @@ impl ProbeOp {
         };
         let base = d.next_base;
         d.next_base += b.num_rows() as u64;
-        Ok(emit(self.0.build_rows(&b, base, &|r| marks.get(r))?))
+        Ok(emit(self.0.build_rows(&b, base, |r| marks.get(r))?))
     }
 }
 

@@ -497,6 +497,9 @@ impl Planner<'_> {
             join_type,
             residual: filter,
             marks: None,
+            probe_schema: join_type
+                .builds_preserved()
+                .then(|| Arc::clone(&probe_schema)),
         };
         let schema =
             nested_loop_join(&probe_schema, &build_schema, &plan, &self.env, None, None)?.schema();

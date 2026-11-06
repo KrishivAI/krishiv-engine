@@ -44,6 +44,7 @@ fn range() -> PhysNode {
 
 fn exchange(id: u64, input: PhysNode, partitioning: Partitioning) -> PhysNode {
     PhysNode::Exchange(ExchangePlan {
+        schema: None,
         id: ExchangeId(id),
         input: Box::new(input),
         partitioning,
@@ -346,6 +347,7 @@ fn streaming_scans_follow_every_join_kind_to_its_probe() {
         join_type: krishiv_exec::JoinType::Inner,
         residual: None,
         marks: None,
+        probe_schema: None,
     });
     let merge = PhysNode::SortMergeJoin(SortMergeJoinPlan {
         probe: Box::new(nested),
@@ -381,6 +383,7 @@ fn a_build_preserving_nested_loop_runs_as_one_task() {
             join_type,
             residual: None,
             marks: None,
+            probe_schema: None,
         });
         let root = exchange(3, nested, Partitioning::Single);
         let stages = fragment(&plan(root), &schemas(&[1, 2, 3])).unwrap();

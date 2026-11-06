@@ -827,6 +827,11 @@ pub struct NestedLoopJoinNode {
     /// instead of emitting build rows.
     #[prost(uint64, optional, tag = "5")]
     pub marks: ::core::option::Option<u64>,
+    /// ignorable: the planner's probe columns of a join that returns build
+    /// rows (Arrow IPC `Schema` flatbuffer); a reader without it learns them
+    /// by instantiating.
+    #[prost(bytes = "vec", optional, tag = "6")]
+    pub probe_schema: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct JoinFilter {
@@ -928,6 +933,10 @@ pub struct ExchangeNode {
     /// feature: exchange_filters
     #[prost(message, repeated, tag = "4")]
     pub filters: ::prost::alloc::vec::Vec<ExchangeFilter>,
+    /// ignorable: the planner's columns of its input (Arrow IPC `Schema`
+    /// flatbuffer); a reader without it learns them by instantiating.
+    #[prost(bytes = "vec", optional, tag = "5")]
+    pub schema: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 /// feature: exchange_filters
 #[derive(Clone, PartialEq, ::prost::Message)]

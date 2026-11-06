@@ -1301,6 +1301,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         (
             "nested_loop_existence",
             PhysNode::NestedLoopJoin(NestedLoopPlan {
+                probe_schema: None,
                 probe: boxed(scan()),
                 build: boxed(PhysNode::OneRow),
                 join_type: JoinType::Existence,
@@ -1311,6 +1312,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         (
             "nested_loop_join",
             PhysNode::NestedLoopJoin(NestedLoopPlan {
+                probe_schema: None,
                 probe: boxed(scan()),
                 build: boxed(PhysNode::OneRow),
                 join_type: JoinType::LeftSemi,
@@ -1367,6 +1369,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         (
             "exchange_hash",
             PhysNode::Exchange(ExchangePlan {
+                schema: None,
                 id: ExchangeId(11),
                 input: boxed(scan()),
                 // A plan from before the routing hash was named.
@@ -1380,6 +1383,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         (
             "exchange_hash_key_group",
             PhysNode::Exchange(ExchangePlan {
+                schema: None,
                 id: ExchangeId(16),
                 input: boxed(scan()),
                 partitioning: Partitioning::Hash {
@@ -1392,6 +1396,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         (
             "exchange_single",
             PhysNode::Exchange(ExchangePlan {
+                schema: None,
                 id: ExchangeId(12),
                 input: boxed(scan()),
                 partitioning: Partitioning::Single,
@@ -1401,6 +1406,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         (
             "exchange_broadcast",
             PhysNode::Exchange(ExchangePlan {
+                schema: None,
                 id: ExchangeId(13),
                 input: boxed(scan()),
                 partitioning: Partitioning::Broadcast,
@@ -1410,6 +1416,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         (
             "exchange_round_robin",
             PhysNode::Exchange(ExchangePlan {
+                schema: None,
                 id: ExchangeId(14),
                 input: boxed(scan()),
                 partitioning: Partitioning::RoundRobin,
@@ -1419,6 +1426,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         (
             "exchange_range",
             PhysNode::Exchange(ExchangePlan {
+                schema: None,
                 id: ExchangeId(15),
                 input: boxed(scan()),
                 partitioning: Partitioning::Range {
@@ -1430,6 +1438,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         (
             "exchange_filters",
             PhysNode::Exchange(ExchangePlan {
+                schema: None,
                 id: ExchangeId(18),
                 input: boxed(scan()),
                 partitioning: Partitioning::Single,
@@ -1456,6 +1465,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         (
             "nested_loop_split",
             PhysNode::NestedLoopJoin(NestedLoopPlan {
+                probe_schema: None,
                 probe: boxed(scan()),
                 build: boxed(PhysNode::ExchangeSource {
                     id: ExchangeId(19),
@@ -2044,6 +2054,7 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         },
     );
     let residual_join = PhysNode::NestedLoopJoin(NestedLoopPlan {
+        probe_schema: None,
         probe: boxed(scan()),
         build: boxed(PhysNode::OneRow),
         join_type: JoinType::Inner,
