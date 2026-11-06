@@ -44,7 +44,7 @@ use crate::ast::{
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
-
+mod variant;
 type R<T> = Result<T, ParseError>;
 
 /// The most grouping sets one `GROUP BY` expands to.
@@ -2525,7 +2525,7 @@ impl Lowerer {
                 self.call("__subscript", args, sp)
             }
             ExprKind::Collate(..) => return Err(unsupported("COLLATE", sp)),
-            ExprKind::VariantGet(..) => return Err(unsupported("variant paths", sp)),
+            ExprKind::VariantGet(base, path) => self.variant_get(base, path, sp)?,
             ExprKind::TableArgument(_) => return Err(unsupported("TABLE arguments", sp)),
             ExprKind::Lambda { params, body } => {
                 let params = params.iter().map(|p| p.value.clone()).collect();

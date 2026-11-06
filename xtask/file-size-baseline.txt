@@ -17,8 +17,8 @@
 2215 crates/krishiv-kernels/src/csv.rs
 2429 crates/krishiv-kernels/src/map.rs
 2468 crates/krishiv-plan/src/analyzer/coerce.rs
-# +22 lines over main: char comparison padding at the comparison and set-operation sites, declared types through GROUP BY aliases (T001b)
-4604 crates/krishiv-plan/src/analyzer/ops.rs
+# over main: a cast of an alias keeps the alias's name (T001c, PR #491); char comparison padding and declared types through GROUP BY aliases (T001b)
+4613 crates/krishiv-plan/src/analyzer/ops.rs
 3098 crates/krishiv-plan/src/analyzer/subquery.rs
 5392 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)

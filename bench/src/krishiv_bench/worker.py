@@ -55,7 +55,9 @@ def main(argv: list[str]) -> None:
     from .adapters import make_engine
 
     mem = f"{memory_gb}GiB" if name == "duckdb" else f"{memory_gb}g"
-    eng = make_engine(name, threads=int(threads), memory_limit=mem)
+    # Krishiv's runner checksums the result it timed (`RUN_CHECKED`), so the timed run itself is verified.
+    options = {"checksum_in_run": True} if name == "krishiv" else {}
+    eng = make_engine(name, threads=int(threads), memory_limit=mem, **options)
     while True:
         try:
             req = recv(inp)
