@@ -47,4 +47,6 @@ repeated values raise `INVALID_ARRAY_INDEX` with ANSI on and leave NULL cells wi
   a literal of the pivot column's type, for example `IN (TIMESTAMP'2020-01-01 00:00:00', '2021-01-01 00:00:00')`:
   Krishiv cannot tell whether two of them are the same value, which decides Spark's result;
 - a collated pivot column with Spark 4.0 or 4.1 compatibility: those versions match the values by their bytes,
-  not by the collation.
+  not by the collation;
+- a NULL pivot value for a binary or collated pivot column: Spark 4.2 compares it with the other values in a sorted
+  map (and fails), earlier versions look it up in a hash map.

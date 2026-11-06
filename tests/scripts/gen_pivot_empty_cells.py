@@ -260,6 +260,12 @@ CASES = [
         "a value whose cast to the pivot type fails, empty input",
     ),
     (
+        "fb-cast-error-value",
+        "SELECT * FROM (SELECT * FROM g WHERE g > 100) PIVOT (max(s) FOR p IN ('abc'))",
+        {},
+        "the If fallback also evaluates the values at analysis",
+    ),
+    (
         "pf-binary-pivot-col",
         "SELECT * FROM b PIVOT (sum(v) FOR p IN (X'01', X'03'))",
         {},
@@ -278,7 +284,7 @@ def err_class(e: Exception) -> dict:
     c = getattr(e, "getCondition", None) or getattr(e, "getErrorClass", None)
     return {
         "error_class": c() if c else type(e).__name__,
-        "sql_state": (e.getSqlState() if hasattr(e, "getSqlState") else None),
+        "sql_state": state() if callable(state := getattr(e, "getSqlState", None)) else None,
     }
 
 

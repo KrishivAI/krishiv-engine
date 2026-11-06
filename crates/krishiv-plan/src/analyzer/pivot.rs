@@ -164,6 +164,14 @@ impl Resolver<'_> {
             };
             casts.push((value_name(v, b, t, self), value));
         }
+        // Spark evaluates every value cast to the pivot type at analysis, on
+        // both paths: a cast that raises fails the query on any input.
+        for (_, value) in &casts {
+            let bound = self.bind(value, &cx)?;
+            if let Some(Err(e)) = self.fold_array(&bound.expr, ansi) {
+                return Err(AnalysisError::new(e, value.origin));
+            }
+        }
         // The aggregates, bound by the existing machinery (which rejects a
         // nested aggregate, as Spark's `CheckAnalysis` does), then checked
         // to be aggregates at all, as Spark's
@@ -272,11 +280,32 @@ impl Resolver<'_> {
         // Before 4.2 a binary key is an array compared by identity: no value
         // equals another, and no row matches.
         let by_identity = before_4_2 && matches!(pivot_type, DataType::Binary);
+        // A NULL value of a binary or collated pivot column: before 4.2 the
+        // `HashMap` finds the NULL rows, in 4.2 the `TreeMap` compares the
+        // NULL key with the others (and fails); neither is reproduced.
+        if matches!(pivot_type, DataType::Binary | DataType::CollatedString(_)) {
+            for (_, value) in casts {
+                let bound = self.bind(value, cx)?;
+                let null = matches!(bound.expr.node, ExprNode::Literal(Literal::Null(_)))
+                    || matches!(
+                        self.fold_array(&bound.expr, ansi),
+                        Some(Ok(a)) if arrow_array::Array::null_count(&a) > 0
+                    );
+                if null {
+                    return Err(unsupported(
+                        format!(
+                            "a NULL PIVOT value for a {} pivot column",
+                            pivot_type.catalog_string()
+                        ),
+                        value.origin,
+                    ));
+                }
+            }
+        }
         let mut keys: Vec<SlotKey> = Vec::with_capacity(casts.len());
         for (_, value) in casts {
             let bound = self.bind(value, cx)?;
-            // Spark evaluates every value cast to the pivot type at
-            // analysis: a cast that raises fails the query on any input.
+            // A value whose cast raises was refused in `pivot`.
             let key = match self.fold_array(&bound.expr, ansi) {
                 Some(Err(e)) => return Err(AnalysisError::new(e, value.origin)),
                 _ if by_identity => SlotKey::Never,

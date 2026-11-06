@@ -345,3 +345,22 @@ fn duplicate_values_with_ansi_off_and_several_aggregates_are_refused() {
     .unwrap_err();
     assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
 }
+
+/// A NULL value for a binary pivot column: Spark 4.2 compares it with the other values in its `TreeMap` (a
+/// `NullPointerException` from source), earlier versions find the NULL rows in their `HashMap` while matching no
+/// other binary value by content. Neither is reproduced: the engine refuses it on every profile.
+#[test]
+fn a_null_value_for_a_binary_pivot_column_is_refused() {
+    use krishiv_plan::analyzer::SparkProfile;
+    for profile in SparkProfile::ALL {
+        let e = rows_on(
+            profile,
+            "SELECT * FROM b PIVOT (sum(v) FOR p IN (X'01', NULL))",
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("KRISHIV_UNSUPPORTED_FEATURE"),
+            "{profile:?}: {e}"
+        );
+    }
+}

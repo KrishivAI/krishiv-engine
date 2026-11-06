@@ -2030,6 +2030,15 @@
    "sql_state": "22018"
   },
   {
+   "id": "fb-cast-error-value",
+   "sql": "SELECT * FROM (SELECT * FROM g WHERE g > 100) PIVOT (max(s) FOR p IN ('abc'))",
+   "conf": {},
+   "note": "the If fallback also evaluates the values at analysis",
+   "ok": false,
+   "error_class": "CAST_INVALID_INPUT",
+   "sql_state": "22018"
+  },
+  {
    "id": "pf-binary-pivot-col",
    "sql": "SELECT * FROM b PIVOT (sum(v) FOR p IN (X'01', X'03'))",
    "conf": {},
