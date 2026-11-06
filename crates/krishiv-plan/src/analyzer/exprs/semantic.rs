@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Semantic keys of resolved expressions (`semantic_key`): equality up to Spark's canonicalization.
+//! Semantic keys of resolved expressions (`semantic_key`): equality up to Spark's canonicalization; and a call's identity when it is written again (`synth_call_of`, `builtin_name`).
 
 use super::*;
 
@@ -63,9 +63,13 @@ pub(in crate::analyzer) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128
             ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => format!("o{}", c.id.0),
             ExprNode::Resolved(ResolvedExpr::Function(f)) => {
                 order = canon(f);
-                let id = match order {
-                    Canon::Flipped(to) => to.name(),
-                    _ => f.id.name(),
+                // A session UDF may share a built-in's name.
+                let id = match (&f.id, order) {
+                    (_, Canon::Flipped(to)) => to.name().to_owned(),
+                    (crate::FunctionId::Udf { name, version }, _) => {
+                        format!("system.session@{version}.{name}")
+                    }
+                    _ => f.id.name().to_owned(),
                 };
                 name = Some(f);
                 // The ordering keys are children; their directions are not.
@@ -187,4 +191,55 @@ pub(super) const fn frame_shape(b: &crate::FrameBound) -> u8 {
         crate::FrameBound::UnboundedFollowing => 2,
         crate::FrameBound::Offset(_) => 3,
     }
+}
+
+/// The name of a built-in or registry function, for the rules that know a
+/// built-in's value over no rows; empty for a session UDF, which may share
+/// a built-in's name but not its semantics (its empty-group value is
+/// unknown at analysis).
+pub(in crate::analyzer) fn builtin_name(f: &crate::ResolvedFunction) -> &str {
+    match f.id {
+        crate::FunctionId::Udf { .. } => "",
+        _ => f.id.name(),
+    }
+}
+
+/// A call of the function `f` resolved to, written again: a session UDF
+/// under `system.session`, so it binds to the UDF and not to a built-in of
+/// the same name.
+pub(in crate::analyzer) fn synth_call_of(
+    f: &ResolvedFunction,
+    args: Vec<Arc<Expr>>,
+    filter: Option<Arc<Expr>>,
+    origin: Origin,
+) -> Arc<Expr> {
+    let mut call = synth_call(f.id.name(), args, filter, origin);
+    if let (crate::FunctionId::Udf { .. }, ExprNode::Function(c)) =
+        (&f.id, &mut Arc::make_mut(&mut call).node)
+    {
+        c.qualifier = vec!["system".to_owned(), "session".to_owned()];
+    }
+    call
+}
+
+/// An unresolved call of `name` to `args` (with `filter`), for the
+/// analyzer to bind over already-resolved columns.
+pub(in crate::analyzer) fn synth_call(
+    name: &str,
+    args: Vec<Arc<Expr>>,
+    filter: Option<Arc<Expr>>,
+    origin: Origin,
+) -> Arc<Expr> {
+    Arc::new(
+        Expr::new(ExprNode::Function(FunctionCall {
+            within_group: Vec::new(),
+            name: name.to_owned(),
+            qualifier: Vec::new(),
+            arg_names: Vec::new(),
+            args,
+            distinct: false,
+            filter,
+        }))
+        .with_origin(origin),
+    )
 }

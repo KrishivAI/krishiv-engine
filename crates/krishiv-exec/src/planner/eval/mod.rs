@@ -550,11 +550,34 @@ fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: 
                 | Builtin::Multiply
         ),
         FunctionId::Registry { name, .. } => {
-            // `nullif`, `date_add`/`date_sub` and Spark's `BinaryMathExpression`s (`power`, `atan2`, `hypot`): all
-            // plain `BinaryExpression`s that return NULL on a NULL left value before looking at the right one.
+            // `nullif`, `date_add`/`date_sub`, Spark's `BinaryMathExpression`s (`power`, `atan2`, `hypot`), the bitwise
+            // and shift operators, and the string and date `BinaryExpression`s: all return NULL on a NULL left value
+            // before looking at the right one.
             matches!(
                 name.as_str(),
-                "nullif" | "date_add" | "date_sub" | "power" | "pow" | "atan2" | "hypot"
+                "nullif"
+                    | "date_add"
+                    | "date_sub"
+                    | "power"
+                    | "pow"
+                    | "atan2"
+                    | "hypot"
+                    | "&"
+                    | "|"
+                    | "^"
+                    | "<<"
+                    | ">>"
+                    | ">>>"
+                    | "shiftleft"
+                    | "shiftright"
+                    | "shiftrightunsigned"
+                    | "instr"
+                    | "contains"
+                    | "startswith"
+                    | "endswith"
+                    | "add_months"
+                    | "datediff"
+                    | "date_diff"
             )
         }
         _ => false,
