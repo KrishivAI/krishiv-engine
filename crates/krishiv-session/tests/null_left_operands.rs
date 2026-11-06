@@ -94,3 +94,30 @@ fn division_evaluates_the_divisor_first_as_spark_does() {
         assert!(err.contains("BY_ZERO"), "{op}: {err}");
     }
 }
+
+#[test]
+fn try_divide_and_try_mod_are_null_for_a_zero_or_null_divisor_with_ansi_on() {
+    // Spark: `try_divide`/`try_mod` are NULL wherever the plain operator would raise or the divisor is NULL.
+    let got = strings("select cast(try_divide(10, id) as string) from range(3) order by id");
+    assert_eq!(got.unwrap(), some(&[None, Some("10.0"), Some("5.0")]));
+    let got = strings("select cast(try_mod(10, id) as string) from range(3) order by id");
+    assert_eq!(got.unwrap(), some(&[None, Some("0"), Some("0")]));
+    let got =
+        strings("select cast(try_divide(10, nullif(id, 1)) as string) from range(3) order by id");
+    assert_eq!(got.unwrap(), some(&[None, None, Some("5.0")]));
+    let got = strings(
+        "select cast(try_mod(cast(id as bigint) + 9223372036854775800, nullif(id, 2)) as string) from range(3) order by id",
+    );
+    assert_eq!(got.unwrap().len(), 3);
+}
+
+#[test]
+fn try_arithmetic_keeps_its_overflow_as_null_when_the_operands_are_ordered() {
+    // The interval is NULL on row 0 and the right operand can raise, so the operator runs behind
+    // `LeftThenRight`; `try_multiply` still turns the overflow of rows 1 and 2 into NULL.
+    let got = strings(
+        "select cast(try_multiply(if(id = 0, cast(null as interval year to month), interval '178956970' year), \
+         cast('2' as int)) as string) from range(3) order by id",
+    );
+    assert_eq!(got.unwrap(), some(&[None, None, None]));
+}

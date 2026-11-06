@@ -152,6 +152,17 @@ pub(super) fn left_then_right(
 }
 
 impl PhysExpr for LeftThenRight {
+    /// `op` with its overflow as NULL; the operands still raise (`TryEval` only catches the operator's own errors).
+    fn null_on_overflow(&self) -> Option<Arc<dyn PhysExpr>> {
+        let op = self.op.null_on_overflow()?;
+        Some(Arc::new(LeftThenRight {
+            left: Arc::clone(&self.left),
+            right: Arc::clone(&self.right),
+            op,
+            schema: Arc::clone(&self.schema),
+        }))
+    }
+
     fn data_type(&self) -> &ArrowType {
         self.op.data_type()
     }
@@ -278,6 +289,18 @@ fn left_is_reached(divisor: &Value, rows: usize, ansi: bool) -> Option<BooleanBu
 }
 
 impl PhysExpr for RightThenLeft {
+    /// `op` with its overflow as NULL; the operands still raise (`TryEval` only catches the operator's own errors).
+    fn null_on_overflow(&self) -> Option<Arc<dyn PhysExpr>> {
+        let op = self.op.null_on_overflow()?;
+        Some(Arc::new(RightThenLeft {
+            left: Arc::clone(&self.left),
+            right: Arc::clone(&self.right),
+            op,
+            ansi: self.ansi,
+            schema: Arc::clone(&self.schema),
+        }))
+    }
+
     fn data_type(&self) -> &ArrowType {
         self.op.data_type()
     }
