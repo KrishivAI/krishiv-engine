@@ -80,13 +80,15 @@ fn collate_checks_its_input_and_its_name() {
 #[test]
 fn comparing_positions_refuse_a_collated_value() {
     let c = "('a' COLLATE utf8_lcase)";
+    // ICU collations have no key yet (unit 6): their scalar comparisons and joins are refused.
+    let ci = "('a' COLLATE unicode_ci)";
     for sql in [
         // scalar comparisons
-        format!("SELECT {c} = 'A'"),
-        format!("SELECT {c} <=> 'A'"),
-        format!("SELECT {c} < 'A'"),
-        format!("SELECT {c} BETWEEN 'a' AND 'b'"),
-        format!("SELECT {c} IN ('A', 'b')"),
+        format!("SELECT {ci} = 'A'"),
+        format!("SELECT {ci} <=> 'A'"),
+        format!("SELECT {ci} < 'A'"),
+        format!("SELECT {ci} BETWEEN 'a' AND 'b'"),
+        format!("SELECT {ci} IN ('A', 'b')"),
         // keys
         format!("SELECT col1 FROM (SELECT {c} AS col1) GROUP BY col1"),
         format!("SELECT DISTINCT {c}"),
@@ -97,7 +99,7 @@ fn comparing_positions_refuse_a_collated_value() {
         format!("SELECT {c} UNION SELECT {c}"),
         format!("SELECT {c} INTERSECT SELECT {c}"),
         format!("SELECT {c} EXCEPT SELECT {c}"),
-        format!("SELECT * FROM (SELECT {c} AS c) a JOIN (SELECT {c} AS c) b ON a.c = b.c"),
+        format!("SELECT * FROM (SELECT {ci} AS c) a JOIN (SELECT {ci} AS c) b ON a.c = b.c"),
     ] {
         assert_eq!(
             class(&sql),
@@ -513,4 +515,77 @@ fn nvl2_selector_does_not_unify() {
         ),
         "string collate UNICODE_CI"
     );
+}
+
+/// Unit 3a: comparisons of `UTF8_LCASE` / `_RTRIM` strings compare collation keys, with the
+/// answers of the Spark 4.2 runs in design `P2-collations.md` section 2.4.
+#[test]
+fn lcase_and_rtrim_comparisons_compare_keys() {
+    let t = |sql: &str| one(&format!("SELECT CAST(({sql}) AS STRING)"));
+    for (sql, want) in [
+        ("'a' COLLATE utf8_lcase = 'A'", "true"),
+        ("'A' = 'a' COLLATE utf8_lcase", "true"),
+        ("'a' COLLATE utf8_lcase = 'b'", "false"),
+        ("'a' COLLATE utf8_lcase < 'B'", "true"),
+        ("'b' COLLATE utf8_lcase < 'A'", "false"),
+        ("'B' COLLATE utf8_lcase >= 'a'", "true"),
+        ("'a' COLLATE utf8_lcase <=> 'A'", "true"),
+        ("CAST(NULL AS STRING) COLLATE utf8_lcase <=> 'A'", "false"),
+        // The special cases of `lowerCaseCodePoints`.
+        ("'\u{3c2}' COLLATE utf8_lcase = '\u{3c3}'", "true"),
+        ("'\u{130}' COLLATE utf8_lcase = 'i\u{307}'", "true"),
+        ("'\u{df}' COLLATE utf8_lcase = 'ss'", "false"),
+        // RTRIM drops trailing spaces only.
+        ("'a ' COLLATE utf8_binary_rtrim = 'a'", "true"),
+        ("' a' COLLATE utf8_binary_rtrim = 'a'", "false"),
+        ("'A ' COLLATE utf8_lcase_rtrim = 'a'", "true"),
+        ("'a' COLLATE utf8_lcase IN ('B', 'A')", "true"),
+        ("'a' COLLATE utf8_lcase IN ('B', 'C')", "false"),
+        ("'b' COLLATE utf8_lcase BETWEEN 'A' AND 'C'", "true"),
+        ("'d' COLLATE utf8_lcase BETWEEN 'A' AND 'C'", "false"),
+    ] {
+        assert_eq!(t(sql), want, "{sql}");
+    }
+    // The column name is the call as written.
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT 'a' COLLATE utf8_lcase = 'A'")).unwrap();
+    assert_eq!(
+        block_on(df.schema()).unwrap().field(0).name(),
+        "(collate(a, utf8_lcase) = A)"
+    );
+}
+
+/// Filters, joins and projections over collated columns use the keys; ICU collations, which have
+/// no key yet, stay refused, as do `greatest` and the keyed positions of unit 3b.
+#[test]
+fn tables_filter_and_join_on_collation_keys() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create table c1(a string collate utf8_lcase, n int) using parquet",
+        "insert into c1 values('aaa', 1), ('AAA', 2), ('bbb', 3), ('BBB', 4)",
+        "create table c2(a string collate utf8_lcase) using parquet",
+        "insert into c2 values('aaa'), ('ccc')",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    let count = |sql: &str| -> String {
+        let b = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+        let c = &b[0].columns()[0];
+        format!("{c:?}")
+    };
+    assert!(count("select count(*) from c1 where a = 'aaa' collate utf8_lcase").contains('2'));
+    assert!(count("select count(*) from c1 where a = 'AAA'").contains('2'));
+    assert!(count("select count(*) from c1 where a < 'bbb'").contains('2'));
+    assert!(count("select count(*) from c1 join c2 on c1.a = c2.a").contains('2'));
+    assert!(count("select count(*) from c1 where a in ('BBB', 'zzz')").contains('2'));
+    for sql in [
+        "select count(*) from c1 where a = 'aaa' collate unicode_ci",
+        "select count(*) from c1 group by a",
+    ] {
+        assert_eq!(
+            class_of(&s, sql),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+    }
 }
