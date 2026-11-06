@@ -20,7 +20,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use crate::store::{CatalogStore, CatalogTable, InMemoryCatalogStore, ViewDef, Warehouse};
-use arrow_schema::{Schema, SchemaRef};
 use krishiv_common::config::Config;
 use krishiv_common::error::{
     InternalError, KrishivError, KrishivReservedTempViewName, KrishivUnsupportedFeature,
@@ -44,6 +43,11 @@ use krishiv_plan::{
 };
 
 use crate::cache::{RelationCache, is_cache_name};
+
+mod file_tables;
+mod ndv_sampling;
+
+use self::file_tables::FileScanOf;
 
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
@@ -477,152 +481,6 @@ impl QueryCatalog {
             .cloned()
     }
 
-    /// Lists the files of every read by path and file view that the
-    /// analyzed `plan` scans (subqueries included), and opens them as file
-    /// tables for the planner. A read the analyzer listed keeps that
-    /// listing; a view lists its files now.
-    ///
-    /// # Errors
-    /// Listing errors (`PATH_NOT_FOUND` once a view's files are gone, ...)
-    /// and errors reading the files' footers.
-    pub(crate) async fn open_files(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
-        let scans = self.file_scans(plan);
-        for (key, source, table, _) in &scans {
-            if self.opened(key).is_some() {
-                continue;
-            }
-            let ReadSource::Files {
-                format,
-                paths,
-                options,
-            } = source
-            else {
-                continue;
-            };
-            let listing = match key {
-                FilesKey::Table(_) => {
-                    self.files
-                        .listing_known(format, paths, options, Arc::clone(table))
-                        .await?
-                }
-                _ => self.files.listing(format, paths, options).await?,
-            };
-            let opened = open_table(
-                Arc::clone(&listing.format),
-                self.scans.clone(),
-                Arc::clone(table),
-                listing.files.to_vec(),
-                listing.options.clone(),
-            )
-            .await?
-            .with_partition_columns(listing.partition_columns.to_vec());
-            self.opened
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push((key.clone(), Arc::new(opened)));
-        }
-        // Boxed: the sample's future would otherwise nest inside every
-        // caller's state machine (the MCP server's overflows the layout depth).
-        Box::pin(self.sample_distinct(plan, &scans)).await;
-        Ok(())
-    }
-
-    /// Samples the distinct values of the scanned file columns an equality or
-    /// `IN` in `plan` compares with values (P2-T164 U6), so the optimizer
-    /// reads a distinct count where the files store none. Off with
-    /// `krishiv.optimizer.ndvSampling.enabled`; a failed or slow sample keeps
-    /// the default estimates and never fails the query.
-    async fn sample_distinct(&self, plan: &LogicalPlan, scans: &[FileScanOf]) {
-        use krishiv_common::config::{
-            NDV_SAMPLING_ENABLED, NDV_SAMPLING_ROWS, NDV_SAMPLING_TIMEOUT,
-        };
-        let config = &self.scans.config;
-        if config
-            .get(&NDV_SAMPLING_ENABLED)
-            .and_then(krishiv_common::config::ConfigValue::as_bool)
-            != Some(true)
-        {
-            return;
-        }
-        let options = krishiv_exec::planner::SampleOptions {
-            rows: config
-                .get(&NDV_SAMPLING_ROWS)
-                .and_then(krishiv_common::config::ConfigValue::as_int)
-                .and_then(|n| u64::try_from(n).ok())
-                .unwrap_or(0),
-            timeout: config
-                .get(&NDV_SAMPLING_TIMEOUT)
-                .and_then(krishiv_common::config::ConfigValue::as_duration)
-                .unwrap_or_default(),
-        };
-        let mut compared = std::collections::HashSet::new();
-        compared_columns(plan, &mut compared);
-        if compared.is_empty() {
-            return;
-        }
-        for (key, _, _, ids) in scans {
-            let names: Vec<String> = ids
-                .iter()
-                .filter(|(id, _)| compared.contains(id))
-                .map(|(_, name)| name.clone())
-                .collect();
-            let Some(table) = (!names.is_empty()).then(|| self.opened(key)).flatten() else {
-                continue;
-            };
-            let sampled = run_on(&self.scans.runtime, async move {
-                table.sample_distinct(&names, options).await
-            })
-            .await;
-            if let Err(e) = sampled {
-                tracing::debug!("distinct-value sample skipped: {e}");
-            }
-        }
-    }
-
-    /// The scans of files in `plan`: what each reads, and the columns the
-    /// analyzer bound (the view's, for a view), which the files map to by
-    /// name.
-    fn file_scans(&self, plan: &LogicalPlan) -> Vec<FileScanOf> {
-        let mut scans = Vec::new();
-        collect_scans(plan, &mut scans);
-        scans
-            .into_iter()
-            .filter_map(|scan| {
-                let (key, source) = match &scan.source {
-                    ReadSource::Table { name, .. } => {
-                        let (key, table) = self.entry_of(name)?;
-                        let TempTable::Files { source, known, .. } = &*table else {
-                            return None;
-                        };
-                        let key = if *known {
-                            FilesKey::Table(key)
-                        } else {
-                            FilesKey::View(key)
-                        };
-                        (key, source.clone())
-                    }
-                    source @ ReadSource::Files { .. } => {
-                        (FilesKey::Read(source.clone()), source.clone())
-                    }
-                    _ => return None,
-                };
-                // The hidden `_metadata` column is the scan's, not the table's.
-                let columns = scan.output.len() - usize::from(scan.metadata_column().is_some());
-                let table = Arc::new(Schema::new(
-                    scan.output[..columns]
-                        .iter()
-                        .map(|c| c.data_type.to_arrow_field(c.name.clone(), c.nullable))
-                        .collect::<Vec<_>>(),
-                ));
-                let ids = scan.output[..columns]
-                    .iter()
-                    .map(|c| (c.id, c.name.clone()))
-                    .collect();
-                Some((key, source, table, ids))
-            })
-            .collect()
-    }
-
     /// Whether this query loaded a file view: its files are listed again
     /// by the next query, so an analysis that did must not be reused.
     pub(crate) fn loaded_file_views(&self) -> bool {
@@ -857,32 +715,6 @@ enum ScanSplitsKind {
     },
 }
 
-/// [`FileTable::open`] on the executor's I/O runtime: footer reads are
-/// object-store requests, which belong there and not on the compute
-/// runtime. Dropping the returned future aborts the open.
-async fn open_table(
-    format: Arc<dyn krishiv_io::FileFormat>,
-    scans: FileScans,
-    table: SchemaRef,
-    files: Vec<krishiv_io::FileRef>,
-    options: krishiv_io::FormatOptions,
-) -> Result<FileTable, KrishivError> {
-    let runtime = scans.runtime.clone();
-    run_on(&runtime, async move {
-        FileTable::open(
-            format,
-            scans.io,
-            table,
-            files,
-            options,
-            &scans.config,
-            scans.slots,
-        )
-        .await
-    })
-    .await
-}
-
 /// Aborts its task when dropped.
 struct AbortGuard<T>(tokio::task::JoinHandle<T>);
 
@@ -943,92 +775,6 @@ fn collect_scans<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>) {
     }
     plan.for_each_expr(&mut |e| in_expr(e, out));
     plan.for_each_child(&mut |c| collect_scans(c, out));
-}
-
-/// A scan of files in an analyzed plan: what it reads, the table's columns
-/// and the scan's column ids with their names.
-type FileScanOf = (
-    FilesKey,
-    ReadSource,
-    SchemaRef,
-    Vec<(krishiv_plan::AttrId, String)>,
-);
-
-/// The attribute ids an equality or `IN` in a `Filter` condition of `plan`
-/// (subquery plans included) compares with a deterministic expression that
-/// reads no column: the columns whose distinct count decides the
-/// comparison's selectivity (P2-T164 U6).
-fn compared_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
-    use krishiv_plan::{Builtin, FunctionId, ResolvedExpr, ResolvedFunction};
-    fn column(e: &Expr) -> Option<krishiv_plan::AttrId> {
-        match &e.node {
-            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
-            ExprNode::Cast { expr, .. } => column(expr),
-            _ => None,
-        }
-    }
-    /// A value the comparison is with: no column, no subquery, every call
-    /// deterministic.
-    fn is_value(e: &Arc<Expr>) -> bool {
-        let mut stack = vec![Arc::clone(e)];
-        while let Some(x) = stack.pop() {
-            match &x.node {
-                ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_))
-                | ExprNode::Subquery { .. } => return false,
-                ExprNode::Resolved(ResolvedExpr::Function(f)) if !f.deterministic => return false,
-                _ => x.for_each_child(&mut |c| stack.push(Arc::clone(c))),
-            }
-        }
-        true
-    }
-    /// The compared columns of a filter's `predicate`.
-    fn in_predicate(e: &Arc<Expr>, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
-        let mut stack = vec![Arc::clone(e)];
-        let mut seen = std::collections::HashSet::new();
-        while let Some(x) = stack.pop() {
-            if !seen.insert(Arc::as_ptr(&x)) {
-                continue;
-            }
-            if let ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
-                id: FunctionId::Builtin(b),
-                args,
-                ..
-            })) = &x.node
-            {
-                match (b, args.as_slice()) {
-                    (Builtin::Eq | Builtin::EqNullSafe, [a, c]) => {
-                        for (col, value) in [(a, c), (c, a)] {
-                            if let Some(id) = column(col).filter(|_| is_value(value)) {
-                                out.insert(id);
-                            }
-                        }
-                    }
-                    (Builtin::In, [x, list @ ..]) if list.iter().all(is_value) => {
-                        if let Some(id) = column(x) {
-                            out.insert(id);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
-        }
-    }
-    /// Subquery plans inside any expression of a node.
-    fn subqueries(e: &Arc<Expr>, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
-        let mut stack = vec![Arc::clone(e)];
-        while let Some(x) = stack.pop() {
-            if let ExprNode::Subquery { plan, .. } = &x.node {
-                compared_columns(plan, out);
-            }
-            x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
-        }
-    }
-    if let PlanNode::Filter { predicate, .. } = &plan.node {
-        in_predicate(predicate, out);
-    }
-    plan.for_each_expr(&mut |e| subqueries(e, out));
-    plan.for_each_child(&mut |c| compared_columns(c, out));
 }
 
 /// The scans of the streaming pipeline of `root`: those a task splits.
@@ -2270,6 +2016,7 @@ mod tests {
     use arrow_array::Array as _;
     use arrow_array::{Int32Array, RecordBatch};
     use arrow_schema::Field;
+    use arrow_schema::Schema;
     use futures::executor::block_on;
     use krishiv_common::error::ErrorClass;
     use krishiv_types::DataType;

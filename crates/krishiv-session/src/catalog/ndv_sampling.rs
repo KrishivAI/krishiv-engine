@@ -1,0 +1,141 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Plan-time distinct-value samples of the file columns a query compares
+//! with values (P2-T164 unit U6): which columns ([`compared_columns`]) and
+//! the call into each opened [`FileTable`](krishiv_exec::planner::FileTable).
+
+use std::sync::Arc;
+
+use krishiv_plan::{Expr, ExprNode, LogicalPlan, PlanNode};
+
+use super::{FileScanOf, QueryCatalog, run_on};
+
+impl QueryCatalog {
+    /// Samples the distinct values of the scanned file columns an equality or
+    /// `IN` in `plan` compares with values (P2-T164 U6), so the optimizer
+    /// reads a distinct count where the files store none. Off with
+    /// `krishiv.optimizer.ndvSampling.enabled`; a failed or slow sample keeps
+    /// the default estimates and never fails the query.
+    pub(super) async fn sample_distinct(&self, plan: &LogicalPlan, scans: &[FileScanOf]) {
+        use krishiv_common::config::{
+            NDV_SAMPLING_ENABLED, NDV_SAMPLING_ROWS, NDV_SAMPLING_TIMEOUT,
+        };
+        let config = &self.scans.config;
+        if config
+            .get(&NDV_SAMPLING_ENABLED)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            != Some(true)
+        {
+            return;
+        }
+        let options = krishiv_exec::planner::SampleOptions {
+            rows: config
+                .get(&NDV_SAMPLING_ROWS)
+                .and_then(krishiv_common::config::ConfigValue::as_int)
+                .and_then(|n| u64::try_from(n).ok())
+                .unwrap_or(0),
+            timeout: config
+                .get(&NDV_SAMPLING_TIMEOUT)
+                .and_then(krishiv_common::config::ConfigValue::as_duration)
+                .unwrap_or_default(),
+        };
+        let mut compared = std::collections::HashSet::new();
+        compared_columns(plan, &mut compared);
+        if compared.is_empty() {
+            return;
+        }
+        for (key, _, _, ids) in scans {
+            let names: Vec<String> = ids
+                .iter()
+                .filter(|(id, _)| compared.contains(id))
+                .map(|(_, name)| name.clone())
+                .collect();
+            let Some(table) = (!names.is_empty()).then(|| self.opened(key)).flatten() else {
+                continue;
+            };
+            let sampled = run_on(&self.scans.runtime, async move {
+                table.sample_distinct(&names, options).await
+            })
+            .await;
+            if let Err(e) = sampled {
+                tracing::debug!("distinct-value sample skipped: {e}");
+            }
+        }
+    }
+}
+
+/// The attribute ids an equality or `IN` in a `Filter` condition of `plan`
+/// (subquery plans included) compares with a deterministic expression that
+/// reads no column: the columns whose distinct count decides the
+/// comparison's selectivity (P2-T164 U6).
+fn compared_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
+    use krishiv_plan::{Builtin, FunctionId, ResolvedExpr, ResolvedFunction};
+    fn column(e: &Expr) -> Option<krishiv_plan::AttrId> {
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+            ExprNode::Cast { expr, .. } => column(expr),
+            _ => None,
+        }
+    }
+    /// A value the comparison is with: no column, no subquery, every call
+    /// deterministic.
+    fn is_value(e: &Arc<Expr>) -> bool {
+        let mut stack = vec![Arc::clone(e)];
+        while let Some(x) = stack.pop() {
+            match &x.node {
+                ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_))
+                | ExprNode::Subquery { .. } => return false,
+                ExprNode::Resolved(ResolvedExpr::Function(f)) if !f.deterministic => return false,
+                _ => x.for_each_child(&mut |c| stack.push(Arc::clone(c))),
+            }
+        }
+        true
+    }
+    /// The compared columns of a filter's `predicate`.
+    fn in_predicate(e: &Arc<Expr>, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
+        let mut stack = vec![Arc::clone(e)];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(x) = stack.pop() {
+            if !seen.insert(Arc::as_ptr(&x)) {
+                continue;
+            }
+            if let ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
+                id: FunctionId::Builtin(b),
+                args,
+                ..
+            })) = &x.node
+            {
+                match (b, args.as_slice()) {
+                    (Builtin::Eq | Builtin::EqNullSafe, [a, c]) => {
+                        for (col, value) in [(a, c), (c, a)] {
+                            if let Some(id) = column(col).filter(|_| is_value(value)) {
+                                out.insert(id);
+                            }
+                        }
+                    }
+                    (Builtin::In, [x, list @ ..]) if list.iter().all(is_value) => {
+                        if let Some(id) = column(x) {
+                            out.insert(id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
+    }
+    /// Subquery plans inside any expression of a node.
+    fn subqueries(e: &Arc<Expr>, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
+        let mut stack = vec![Arc::clone(e)];
+        while let Some(x) = stack.pop() {
+            if let ExprNode::Subquery { plan, .. } = &x.node {
+                compared_columns(plan, out);
+            }
+            x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
+    }
+    if let PlanNode::Filter { predicate, .. } = &plan.node {
+        in_predicate(predicate, out);
+    }
+    plan.for_each_expr(&mut |e| subqueries(e, out));
+    plan.for_each_child(&mut |c| compared_columns(c, out));
+}
