@@ -401,8 +401,10 @@ fn the_other_forbidden_places_are_refused() {
         "SELECT n + 1, row_number() OVER (ORDER BY n) FROM r",
         "SELECT r.n + 1 FROM r FULL OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k",
         "SELECT r.n + 1 FROM r RIGHT OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k",
-        "SELECT r.n + 1 FROM r LEFT OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k \
-         WHERE EXISTS (SELECT 1 FROM r)",
+        // A forbidden place inside a subquery expression.
+        "SELECT n + 1 FROM r WHERE n < 3 AND EXISTS \
+         (SELECT 1 FROM (SELECT 1 k) a LEFT JOIN r ON a.k = r.n)",
+        "SELECT n + 1 FROM r WHERE n < (SELECT max(n) + 5 FROM r)",
     ] {
         let sql =
             format!("WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL {term}) SELECT * FROM r LIMIT 3");
@@ -784,4 +786,34 @@ fn recursive_term_columns_read_the_previous_round() {
     .map(|r| r.iter().map(ToString::to_string).collect())
     .collect();
     assert_eq!(got, want);
+}
+
+#[test]
+fn a_reference_inside_a_subquery_expression_recurses() {
+    // Spark 4.2.0 (`cte-recursion` 28 and probes): a subquery is no
+    // forbidden place of its own.
+    let s = Session::new().unwrap();
+    for (term, want) in [
+        (
+            "SELECT (SELECT n + 1 FROM r WHERE n < 5)",
+            vec!["1", "2", "3", "4", "5"],
+        ),
+        (
+            "SELECT n + 1 FROM r WHERE n IN (SELECT n FROM r WHERE n < 4)",
+            vec!["1", "2", "3", "4"],
+        ),
+        (
+            "SELECT 2 WHERE EXISTS (SELECT * FROM r WHERE n < 2)",
+            vec!["1", "2"],
+        ),
+        (
+            "SELECT r.n + 1 FROM r LEFT OUTER JOIN (SELECT 1 AS k) x ON r.n = x.k \
+             WHERE EXISTS (SELECT 1 FROM r)",
+            vec!["1", "2", "3", "4", "5"],
+        ),
+    ] {
+        let sql =
+            format!("WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL {term}) SELECT * FROM r LIMIT 5");
+        assert_eq!(column(rows(&s, &sql)), want, "{sql}");
+    }
 }

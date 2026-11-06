@@ -181,7 +181,7 @@ fn lookup(defs: &Defs, name: &str, cs: bool) -> Option<(Arc<LogicalPlan>, Defs)>
 /// Spark's `INVALID_RECURSIVE_REFERENCE.PLACE`: the recursive reference
 /// (a `CteRef` of `name` that no definition inside the term answers, or a
 /// CTE defined inside the term that reads it) may not sit under an
-/// aggregate, a window or a sort, inside a subquery expression, on the right
+/// aggregate, a window or a sort (also inside a subquery expression), on the right
 /// side of a left outer, semi or anti join, the left side of a right outer
 /// join, or in a full outer join.
 impl Resolver<'_> {
@@ -266,11 +266,20 @@ fn check_places(
         if !seen.insert(Arc::as_ptr(&p) as usize) {
             continue;
         }
-        let mut in_expr = false;
-        p.for_each_expr(&mut |e| in_expr |= expr_has(e, name, cs, &defs, &mut memo));
-        if in_expr {
-            return Err(bad());
-        }
+        // A subquery expression is no forbidden place of its own (Spark
+        // 4.2.0: `SELECT (SELECT n + 1 FROM r WHERE n < 5)` recurses), but
+        // the places inside it are checked like the term's.
+        p.for_each_expr(&mut |e| {
+            let mut kids = vec![Arc::clone(e)];
+            while let Some(x) = kids.pop() {
+                if let ExprNode::Subquery { plan, .. } = &x.node
+                    && expr_has(&x, name, cs, &defs, &mut memo)
+                {
+                    stack.push((Arc::clone(plan), defs.clone()));
+                }
+                x.for_each_child(&mut |c| kids.push(Arc::clone(c)));
+            }
+        });
         match &p.node {
             PlanNode::Aggregate { input, .. }
             | PlanNode::Window { input, .. }
