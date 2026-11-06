@@ -275,6 +275,34 @@ lists flags, a join table, a scan table, the operators with the most time and bo
 Operator seconds are summed over threads in both engines; the Krishiv run has detailed metrics on, so use `abba` for
 timings. DuckDB's estimated cardinalities appear in its tree; Krishiv's profile has no per-operator estimates yet.
 
+## CPU by operator kind against DuckDB (`gapdiff`)
+
+```bash
+uv run krishiv-bench gapdiff --suite tpch --sf 100 --query q18 --threads 12 --memory-limit 24g
+uv run krishiv-bench gapdiff --suite tpch --sf 100 --all --perf --runner /path/to/krishiv-bench-runner
+```
+
+Profiles the query once on each engine (as `explain-diff` does: the runner's `PLAN` command and DuckDB's
+`EXPLAIN (ANALYZE, FORMAT json)`, same Parquet files, under the bench lock) and maps both operator lists to common
+kinds: scan / decode, filter, project, hash join, aggregate, sort / top-n, exchange and other. Per kind it prints CPU
+seconds for each engine (summed over threads), the ratio, the gap in seconds (the kind with the largest gap is marked)
+and rows in and out. Krishiv also shows the split DuckDB does not give: join build vs probe and partial vs final
+aggregate (a fused aggregate is all "final"); those sub-rows have no DuckDB side. The mapping table is in the module
+docstring (`gapdiff.py`).
+
+The **parallelism** section lists every Krishiv pipeline with its drivers, threads, CPU, wall time and the share of its
+CPU the busiest driver does. The share is an upper bound (the sum of each operator's own busiest driver over the
+pipeline's CPU): 1/N for N balanced drivers, 100% for one driver. A pipeline is flagged when the share is over
+`--busy-share` (default 0.5) and the pipeline has at least `--min-cpu-share` (default 0.02) of the query's CPU: the
+single-driver merges behind q13/q16/q18. Operators spanning several pipelines are reported as unattributed CPU.
+
+`--all` runs every query of the suite (a failing query is recorded and the run goes on) and writes a summary table with
+the geometric mean of the CPU ratios. Output goes to `$KRISHIV_DATA/results/gapdiff/<ts>_<suite>_sf<N>/`: `summary.md`,
+`gapdiff.json`, one `<query>.md` per query. `--perf` also samples the Krishiv run under `perf record -g` (build the runner
+with frame pointers, see `ledger`) and writes `perf/<query>.folded` (and `.svg` with `inferno-flamegraph`). Folded files
+of two runner builds go into `inferno-diff-folded`; `flamediff` runs both builds itself. The seconds are profile
+timings, not benchmark timings: use `abba` for those.
+
 ## Build vs build, interleaved ABBA (`ab`)
 Compares two Krishiv builds (for example `main` against a PR branch), or two configs of one build, with the `abba` protocol.
 `--runner PATH` (on `run`, `abba`, `reproduce`) picks the runner binary and wins over `$KRISHIV_BENCH_RUNNER`.
