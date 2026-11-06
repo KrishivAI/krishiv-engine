@@ -249,4 +249,15 @@ mod tests {
         let mut a = Nothing;
         assert_eq!(a.retract(&[], &[]), Ok(false));
     }
+
+    #[test]
+    fn the_empty_accumulator_does_nothing_and_holds_nothing() {
+        let mut a = Nothing;
+        a.resize(3);
+        assert_eq!(a.update(&[], &[]), Ok(()));
+        assert_eq!(a.merge(&[], &[]), Ok(()));
+        assert!(a.state(&[]).is_ok_and(|s| s.is_empty()));
+        assert!(a.evaluate(&[]).is_err());
+        assert_eq!(a.size(), 0);
+    }
 }
