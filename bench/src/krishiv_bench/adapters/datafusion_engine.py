@@ -10,6 +10,7 @@ import time
 from typing import Any
 
 from .base import Dataset, Engine, Query, table_path
+from .proc_mem import SelfTreeMeasure
 
 
 def parse_bytes(text: str) -> int:
@@ -18,7 +19,7 @@ def parse_bytes(text: str) -> int:
     return int(float(t[:-1]) * units[t[-1]]) if t and t[-1] in units else int(t)
 
 
-class DataFusionEngine(Engine):
+class DataFusionEngine(SelfTreeMeasure, Engine):
     name = "datafusion"
 
     def __init__(self, threads: int | None = None, memory_limit: str = "32g"):

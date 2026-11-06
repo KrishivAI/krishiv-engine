@@ -316,24 +316,27 @@ impl QueryHistory {
     /// evicted.
     pub(crate) fn push(&self, row: QueryRow) {
         let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
-        let own = rows.held.get(&row.principal).copied().unwrap_or_default();
-        if own.total >= PRINCIPAL_ROWS && own.finished > 0 {
-            rows.evict_oldest_finished(&row.principal);
+        rows.trim(&row.principal, 1, self.capacity);
+        rows.add(row);
+    }
+
+    /// Adds `row` under a caller's operation id: refused
+    /// (`INVALID_HANDLE.OPERATION_ALREADY_EXISTS`) while an execution of the
+    /// same session under that id is live (Spark Connect runs one execution
+    /// per operation id, so an action run twice at once is refused). The
+    /// check and the insertion happen under one lock.
+    pub(crate) fn push_given(&self, row: QueryRow) -> Result<(), KrishivError> {
+        let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
+        if rows
+            .rows
+            .iter()
+            .any(|r| r.ended_ms.is_none() && r.id == row.id && r.session_id == row.session_id)
+        {
+            return Err(InvalidHandleOperationAlreadyExists { handle: row.id }.into());
         }
-        if rows.rows.len() >= self.capacity {
-            // Ties go to the principal named first, so the choice is stable.
-            let heaviest = rows
-                .held
-                .iter()
-                .filter(|(_, h)| h.finished > 0)
-                .max_by(|a, b| a.1.finished.cmp(&b.1.finished).then_with(|| b.0.cmp(a.0)))
-                .map(|(p, _)| p.clone());
-            if let Some(p) = heaviest {
-                rows.evict_oldest_finished(&p);
-            }
-        }
-        rows.held.entry(row.principal.clone()).or_default().total += 1;
-        rows.rows.push_back(row);
+        rows.trim(&row.principal, 1, self.capacity);
+        rows.add(row);
+        Ok(())
     }
 
     /// Applies `f` to the row `id` of session `session`, if it is still
@@ -351,6 +354,10 @@ impl QueryHistory {
             f(row);
             if was_running && row.ended_ms.is_some() {
                 held.entry(row.principal.clone()).or_default().finished += 1;
+                // Rows added while everything was running may have gone past
+                // the bounds: a finished row can now go.
+                let principal = row.principal.clone();
+                Rows::trim_parts(rows, held, &principal, 0, self.capacity);
             }
         }
     }
@@ -408,22 +415,72 @@ impl QueryHistory {
 }
 
 impl Rows {
-    /// Removes the oldest finished row of `principal`, if it has one.
-    fn evict_oldest_finished(&mut self, principal: &str) {
-        if let Some(at) = self
-            .rows
-            .iter()
-            .position(|r| r.ended_ms.is_some() && r.principal == principal)
+    /// Appends `row`, counting it for its principal.
+    fn add(&mut self, row: QueryRow) {
+        self.held.entry(row.principal.clone()).or_default().total += 1;
+        self.rows.push_back(row);
+    }
+
+    /// Makes room for `incoming` more rows of `principal` (0 after a row
+    /// finished): its oldest finished rows while it holds [`PRINCIPAL_ROWS`]
+    /// or more, then, while the history is at `capacity`, the oldest finished
+    /// row of the principal holding the most finished rows. Running rows are
+    /// never evicted, so the bounds may be passed while everything runs.
+    fn trim(&mut self, principal: &str, incoming: usize, capacity: usize) {
+        let Self { rows, held } = self;
+        Self::trim_parts(rows, held, principal, incoming, capacity);
+    }
+
+    fn trim_parts(
+        rows: &mut VecDeque<QueryRow>,
+        held: &mut HashMap<String, Held>,
+        principal: &str,
+        incoming: usize,
+        capacity: usize,
+    ) {
+        while held
+            .get(principal)
+            .is_some_and(|h| h.finished > 0 && h.total + incoming > PRINCIPAL_ROWS)
         {
-            self.rows.remove(at);
-            if let Some(h) = self.held.get_mut(principal) {
-                h.total = h.total.saturating_sub(1);
-                h.finished = h.finished.saturating_sub(1);
-                if h.total == 0 {
-                    self.held.remove(principal);
-                }
+            if !Self::evict_oldest_finished(rows, held, principal) {
+                break;
             }
         }
+        while rows.len() + incoming > capacity {
+            // Ties go to the principal named first, so the choice is stable.
+            let heaviest = held
+                .iter()
+                .filter(|(_, h)| h.finished > 0)
+                .max_by(|a, b| a.1.finished.cmp(&b.1.finished).then_with(|| b.0.cmp(a.0)))
+                .map(|(p, _)| p.clone());
+            let Some(p) = heaviest else { break };
+            if !Self::evict_oldest_finished(rows, held, &p) {
+                break;
+            }
+        }
+    }
+
+    /// Removes the oldest finished row of `principal`; whether there was one.
+    fn evict_oldest_finished(
+        rows: &mut VecDeque<QueryRow>,
+        held: &mut HashMap<String, Held>,
+        principal: &str,
+    ) -> bool {
+        let Some(at) = rows
+            .iter()
+            .position(|r| r.ended_ms.is_some() && r.principal == principal)
+        else {
+            return false;
+        };
+        rows.remove(at);
+        if let Some(h) = held.get_mut(principal) {
+            h.total = h.total.saturating_sub(1);
+            h.finished = h.finished.saturating_sub(1);
+            if h.total == 0 {
+                held.remove(principal);
+            }
+        }
+        true
     }
 }
 
@@ -536,12 +593,35 @@ mod tests {
         for id in ["0", "1", "2"] {
             history.update("s", id, |r| r.ended_ms = Some(1));
         }
-        // At capacity: `a` holds the most finished rows and loses its oldest.
+        // `0` finished first and went at once (four rows, capacity three).
+        let ids: Vec<String> = history.snapshot(None).into_iter().map(|r| r.id).collect();
+        assert_eq!(ids, ["1", "2", "3"]);
+        // At capacity: `a` and `b` hold one finished row each; the tie goes
+        // to `a`, which loses its oldest.
         history.push(row("4", "b"));
         let ids: Vec<String> = history.snapshot(None).into_iter().map(|r| r.id).collect();
-        assert_eq!(ids, ["1", "2", "3", "4"]);
+        assert_eq!(ids, ["2", "3", "4"]);
         let held = history.rows.lock().unwrap().held.clone();
-        assert_eq!((held["a"].total, held["a"].finished), (2, 1));
+        assert_eq!((held["a"].total, held["a"].finished), (1, 0));
         assert_eq!((held["b"].total, held["b"].finished), (2, 1));
+    }
+
+    /// Rows added past the capacity while everything ran are trimmed as
+    /// they finish.
+    #[test]
+    fn finishing_rows_trims_the_history_back_to_capacity() {
+        let history = QueryHistory::new(2);
+        let log = crate::system::QueryLog::default();
+        for id in ["0", "1", "2", "3"] {
+            let mut r = log.snapshot_row_for_tests(id);
+            r.session_id = "s".to_owned();
+            history.push(r);
+        }
+        assert_eq!(history.snapshot(None).len(), 4, "running rows stay");
+        for id in ["0", "1", "2", "3"] {
+            history.update("s", id, |r| r.ended_ms = Some(1));
+        }
+        let ids: Vec<String> = history.snapshot(None).into_iter().map(|r| r.id).collect();
+        assert_eq!(ids, ["2", "3"]);
     }
 }

@@ -12,7 +12,7 @@ use std::sync::Arc;
 use krishiv_plan::{
     AttrId, Builtin, CastMode, Expr, ExprNode, FunctionId, FunctionKind, Grouping, JoinCondition,
     JoinKind, Literal, LogicalPlan, NullOrdering, PlanNode, ReadSource, ResolvedExpr,
-    SortDirection, SubqueryKind,
+    ResolvedFunction, SortDirection, SubqueryKind,
 };
 use krishiv_types::DataType;
 
@@ -255,6 +255,43 @@ impl Interp<'_> {
                     .collect();
                 Rel {
                     cols: aggregates.iter().map(|e| output(e)).collect(),
+                    rows,
+                }
+            }
+            PlanNode::PartialAggregate {
+                input,
+                keys,
+                aggregates,
+                states,
+            } => {
+                let rel = self.plan(input, outer);
+                let ix = index(&rel.cols);
+                let mut groups: Vec<(Vec<V>, Vec<Vec<V>>)> = Vec::new();
+                let mut at: HashMap<Vec<V>, usize> = HashMap::new();
+                for r in rel.rows {
+                    let k: Vec<V> = keys.iter().map(|e| self.eval(e, &ix, &r, outer)).collect();
+                    let g = *at.entry(k.clone()).or_insert_with(|| {
+                        groups.push((k, Vec::new()));
+                        groups.len() - 1
+                    });
+                    groups[g].1.push(r);
+                }
+                let rows = groups
+                    .iter()
+                    .map(|(k, g)| {
+                        let mut row = k.clone();
+                        for e in aggregates {
+                            row.extend(self.states(e, &ix, g, outer));
+                        }
+                        row
+                    })
+                    .collect();
+                Rel {
+                    cols: keys
+                        .iter()
+                        .map(|e| output(e))
+                        .chain(states.iter().map(|c| c.id))
+                        .collect(),
                     rows,
                 }
             }
@@ -512,8 +549,92 @@ impl Interp<'_> {
     }
 
     /// An aggregate output entry over one group's rows.
+    /// The state values of the call `e` over the rows `g` of a partial aggregate.
+    fn states(
+        &mut self,
+        e: &Expr,
+        ix: &HashMap<AttrId, usize>,
+        g: &[Vec<V>],
+        outer: &Env,
+    ) -> Vec<V> {
+        let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+            panic!("not a partial aggregate call: {e}")
+        };
+        let as_call = |this: &mut Self, name: &str| {
+            let mut c = f.clone();
+            c.id = FunctionId::Registry {
+                name: name.to_owned(),
+                id: 0,
+            };
+            this.aggregate(
+                &Expr::new(ExprNode::Resolved(ResolvedExpr::Function(c))),
+                ix,
+                g,
+                outer,
+            )
+        };
+        match f.id.name() {
+            "avg" => vec![as_call(self, "sum"), as_call(self, "count")],
+            "sum" if matches!(f.data_type, krishiv_types::DataType::Decimal(_)) => {
+                let sum = as_call(self, "sum");
+                let nonempty = V::Bool(sum != V::Null);
+                vec![sum, nonempty]
+            }
+            name => vec![as_call(self, name)],
+        }
+    }
+
+    /// `f` merging the state `columns` over the rows `g`. A NULL state is empty.
+    fn merge(
+        &mut self,
+        f: &ResolvedFunction,
+        columns: &[Arc<Expr>],
+        ix: &HashMap<AttrId, usize>,
+        g: &[Vec<V>],
+        outer: &Env,
+    ) -> V {
+        let of = |this: &mut Self, at: usize| -> Vec<V> {
+            g.iter()
+                .map(|r| this.eval(&columns[at], ix, r, outer))
+                .filter(|v| *v != V::Null)
+                .collect()
+        };
+        let total = |vals: &[V]| -> i128 {
+            vals.iter()
+                .map(|v| match v {
+                    V::Num(n) => *n,
+                    v => panic!("not a number: {v:?}"),
+                })
+                .sum()
+        };
+        let first = of(self, 0);
+        match f.id.name() {
+            "count" => V::Num(total(&first)),
+            _ if first.is_empty() => V::Null,
+            "sum" => V::Num(total(&first)),
+            "avg" => V::Num(total(&first) / total(&of(self, 1))),
+            "min" => first.iter().min().unwrap().clone(),
+            "max" => first.iter().max().unwrap().clone(),
+            other => panic!("merging {other}"),
+        }
+    }
+
     fn aggregate(&mut self, e: &Expr, ix: &HashMap<AttrId, usize>, g: &[Vec<V>], outer: &Env) -> V {
         match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f))
+                if f.kind == FunctionKind::Aggregate
+                    && matches!(
+                        f.args.first().map(|a| &a.node),
+                        Some(ExprNode::Resolved(ResolvedExpr::StateInput { .. }))
+                    ) =>
+            {
+                let Some(ExprNode::Resolved(ResolvedExpr::StateInput { columns, .. })) =
+                    f.args.first().map(|a| &a.node)
+                else {
+                    panic!("not a state input")
+                };
+                self.merge(f, columns, ix, g, outer)
+            }
             ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
                 let mut vals: Vec<V> = Vec::new();
                 for r in g {

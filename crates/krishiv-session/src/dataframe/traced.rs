@@ -19,6 +19,8 @@ impl DataFrame {
         use tracing::Instrument as _;
         let span = self.span();
         async {
+            // A closed session answers nothing, not even from the result cache.
+            self.session.check_open()?;
             // Before the query is analyzed, so an invalidation that runs while it executes keeps
             // its rows out of the result cache.
             let generation = self.session.state.runtime.results.generation();

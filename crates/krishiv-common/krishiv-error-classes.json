@@ -9,13 +9,15 @@
     "message" : [
       "The commit log of <root> cannot be read: <reason>. Nothing was changed; a missing or damaged entry under \"_krishiv_log\" needs the directory restored from a copy."
     ],
-    "sqlState" : "58030"
+    "sqlState" : "58030",
+    "audience" : "operator"
   },
   "KRISHIV_CONCURRENT_COMMIT" : {
     "message" : [
       "The write to <root> conflicts with a commit made after it started (log version <version>). Another writer changed the directory; retry the write."
     ],
-    "sqlState" : "40001"
+    "sqlState" : "40001",
+    "audience" : "operator"
   },
   "KRISHIV_DECIMAL_REMAINDER_IMPOSSIBLE" : {
     "message" : [
@@ -27,7 +29,8 @@
     "message" : [
       "The file <path> changed while it was being read: it no longer matches the version <version> seen when the scan was planned. Run REFRESH TABLE, or re-run the query to read the new version."
     ],
-    "sqlState" : "KD001"
+    "sqlState" : "KD001",
+    "audience" : "operator"
   },
   "KRISHIV_INSUFFICIENT_PERMISSIONS" : {
     "message" : [
@@ -99,7 +102,8 @@
     "message" : [
       "Reading the file <path> failed: the object store did not complete the request after <attempts> attempt(s): <reason>. This is a storage failure, not a corrupt file, so it is never skipped by \"ignoreCorruptFiles\". Retry the query, or check the store's availability and permissions."
     ],
-    "sqlState" : "58030"
+    "sqlState" : "58030",
+    "audience" : "operator"
   },
   "KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY" : {
     "message" : [
@@ -141,19 +145,22 @@
     "message" : [
       "Spilling <requestedBytes> more bytes would exceed the spill limit of <capBytes> bytes (<usedBytes> bytes are in use). Increase \"krishiv.spill.maxBytes\" or run fewer spilling queries at once."
     ],
-    "sqlState" : "53100"
+    "sqlState" : "53100",
+    "audience" : "operator"
   },
   "KRISHIV_SPILL_FILE_CORRUPT" : {
     "message" : [
       "The spill file <path> is corrupt or truncated: <reason>."
     ],
-    "sqlState" : "XX001"
+    "sqlState" : "XX001",
+    "audience" : "operator"
   },
   "KRISHIV_SPILL_IO_ERROR" : {
     "message" : [
       "Spill I/O failed while trying to <operation> <path>: <reason>."
     ],
-    "sqlState" : "58030"
+    "sqlState" : "58030",
+    "audience" : "operator"
   },
   "KRISHIV_UNKNOWN_CONFIG" : {
     "message" : [
@@ -165,7 +172,8 @@
     "message" : [
       "The user-defined function <name>@<version> is not available on this worker: register it on the executing session before running the plan."
     ],
-    "sqlState" : "39000"
+    "sqlState" : "39000",
+    "audience" : "operator"
   },
   "KRISHIV_UNKNOWN_FORMAT_OPTION" : {
     "message" : [

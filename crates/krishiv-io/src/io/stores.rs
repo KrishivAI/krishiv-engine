@@ -49,7 +49,12 @@ pub fn register_with_options(
     options: &BTreeMap<String, OptionValue>,
 ) -> Result<(StoreId, Path, String)> {
     let opened = registry.open_with_options(text, options)?;
-    sched.register_store_with(opened.id.clone(), opened.store, opened.policy);
+    sched.register_store_scoped(
+        opened.id.clone(),
+        opened.store,
+        opened.policy,
+        &opened.scope,
+    );
     Ok((opened.id, opened.key, opened.display))
 }
 
