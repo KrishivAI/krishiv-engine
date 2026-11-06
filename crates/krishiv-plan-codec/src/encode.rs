@@ -1269,6 +1269,7 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         DataType::Time { precision } => (Kind::Time, u32::from(*precision), 0, 0),
         DataType::Geometry { srid } => (Kind::Geometry, 0, 0, srid.to_i32()),
         DataType::Geography { srid } => (Kind::Geography, 0, 0, srid.to_i32()),
+        DataType::Variant => (Kind::Variant, 0, 0, 0),
         DataType::YearMonthInterval { start, end } => {
             return Ok(pb::DataType {
                 kind: Kind::YearMonthInterval as i32,

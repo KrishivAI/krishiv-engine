@@ -288,6 +288,9 @@ def test_atomic_types() -> None:
     assert T.IntegerType.typeName() == "integer"
     assert T.TimestampNTZType.typeName() == "timestamp_ntz"
     assert T.CalendarIntervalType.typeName() == "interval"
+    assert T.VariantType.typeName() == T.VariantType().simpleString() == "variant"
+    assert isinstance(T.VariantType(), T.AtomicType)
+    assert T._parse_datatype_string("variant") == T.VariantType()
     assert T.IntegerType() == T.IntegerType()
     assert T.IntegerType() != T.LongType()
     assert hash(T.DecimalType(5, 2)) == hash(T.DecimalType(5, 2))
