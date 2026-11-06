@@ -218,3 +218,51 @@ fn legacy_null_in_an_empty_list_is_null_where_the_in_stays() -> R {
     assert_eq!(run(&s, q)?, rows(&["1|NULL", "NULL|NULL"]), "{q}");
     Ok(())
 }
+
+/// A neither-side `IN` that is a conjunct of its own keeps a row only when it
+/// is true, so NULL and false agree and it stays a plain join, whatever its
+/// width or the legacy flag; nested under `NOT` or `IS NULL` the two differ
+/// and the multi-value and legacy forms stay refused. The answers follow from
+/// `5 IN (5, NULL)` being true (hand-worked; Spark runs are requested).
+#[test]
+fn a_neither_side_in_conjunct_stays_a_join_in_every_width_and_mode() -> R {
+    let s = session()?;
+    for legacy in [false, true] {
+        set(&s, LEGACY, legacy)?;
+        for q in [
+            "select count(*) from t join t2 on 5 in (select e from t3)",
+            "select count(*) from t join t2 on (5, 5) in (select e, e from t3)",
+        ] {
+            assert_eq!(run(&s, q)?, rows(&["2"]), "legacy {legacy}: {q}");
+        }
+        let q = "select count(*) from t join t2 on 3 in (select e from t3)";
+        assert_eq!(run(&s, q)?, rows(&["0"]), "legacy {legacy}: {q}");
+    }
+    for q in [
+        "select count(*) from t join t2 on not ((5, 5) in (select e, e from t3))",
+        "select count(*) from t join t2 on (5 in (select e from t3)) is null",
+    ] {
+        let e = error_class(&s, q);
+        assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{q}: {e}");
+    }
+    Ok(())
+}
+
+/// A correlation that stays inside a `LIMIT`'s own input is not an access to
+/// the outer query, even with the limit's decorrelation off.
+#[test]
+fn a_nested_correlation_inside_the_limit_input_is_not_refused() -> R {
+    let s = session()?;
+    set(&s, "optimizer.decorrelateLimit.enabled", false)?;
+    let q = "select exists (select 1 from (select * from t2 where exists \
+             (select 1 from t3 where t3.e is null or t3.e = t2.d)) limit 1)";
+    assert_eq!(run(&s, q)?, rows(&["true"]), "{q}");
+    // A correlation that does escape the limit's input is still refused.
+    let q = "select t.c, exists (select 1 from t2 where t2.d = t.c limit 1) from t";
+    let e = error_class(&s, q);
+    assert!(
+        e.contains("ACCESSING_OUTER_QUERY_COLUMN_IS_NOT_ALLOWED"),
+        "{q}: {e}"
+    );
+    Ok(())
+}

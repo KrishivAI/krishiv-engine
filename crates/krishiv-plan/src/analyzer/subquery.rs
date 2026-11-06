@@ -222,6 +222,19 @@ pub(super) fn has_outer(node: Node<'_>) -> bool {
     .is_break()
 }
 
+/// Whether `e` reads an outer attribute that is not in `defined`.
+fn escapes(e: &Arc<Expr>, defined: &HashSet<AttrId>) -> bool {
+    visit_distinct(Node::Expr(e), |n| match n {
+        Node::Expr(x)
+            if matches!(&x.node, ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) if !defined.contains(&c.id)) =>
+        {
+            ControlFlow::Break(())
+        }
+        _ => ControlFlow::Continue(()),
+    })
+    .is_break()
+}
+
 fn has_subquery(node: Node<'_>) -> bool {
     visit_distinct(node, |n| match n {
         Node::Expr(e) if matches!(e.node, ExprNode::Subquery { .. }) => ControlFlow::Break(()),
@@ -2467,6 +2480,15 @@ fn exists_hit(p: &LogicalPlan) -> bool {
 /// The first operator of `p`, from the top, whose own expressions read the
 /// outer query (Spark's `failOnOuterReferenceInPlan` walk).
 fn outer_host(p: &Arc<LogicalPlan>) -> Option<Arc<LogicalPlan>> {
+    // A nested subquery's reference to a column `p` itself defines stays
+    // inside `p`: only references to attributes `p` does not define escape.
+    let mut defined: HashSet<AttrId> = HashSet::new();
+    let _ = visit_distinct(Node::Plan(p), |n| {
+        if let Node::Plan(q) = n {
+            defined.extend(q.resolved_output().unwrap_or_default().iter().map(|c| c.id));
+        }
+        ControlFlow::<()>::Continue(())
+    });
     let mut seen = HashSet::new();
     let mut stack = vec![Arc::clone(p)];
     while let Some(x) = stack.pop() {
@@ -2474,7 +2496,7 @@ fn outer_host(p: &Arc<LogicalPlan>) -> Option<Arc<LogicalPlan>> {
             continue;
         }
         let mut reads = false;
-        x.for_each_expr(&mut |e| reads |= has_outer(Node::Expr(e)));
+        x.for_each_expr(&mut |e| reads |= escapes(e, &defined));
         if reads {
             return Some(x);
         }
