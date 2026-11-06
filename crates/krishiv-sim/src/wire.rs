@@ -283,5 +283,24 @@ mod tests {
         assert!(Request::read(&mut input).await.is_err());
         let mut input: &[u8] = &[2, 0, 0, 0, 9, 0];
         assert!(Reply::read(&mut input).await.is_err());
+        let mut input: &[u8] = &[2, 0, 0, 0, 9, 0];
+        let e = Request::read(&mut input).await.unwrap_err();
+        assert!(
+            e.message().contains("a request of kind 9"),
+            "{}",
+            e.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_closed_stream_is_a_simulated_network_error() {
+        let mut input: &[u8] = &[];
+        let e = Reply::read(&mut input).await.unwrap_err();
+        assert!(e.message().contains("simulated network"), "{}", e.message());
+        // A writer whose peer is gone: the length prefix cannot be written.
+        let (mut out, peer) = tokio::io::duplex(8);
+        drop(peer);
+        let e = Reply::End.write(&mut out).await.unwrap_err();
+        assert!(e.message().contains("simulated network"), "{}", e.message());
     }
 }

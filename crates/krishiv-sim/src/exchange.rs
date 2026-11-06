@@ -229,3 +229,93 @@ impl ExchangeReader for Remote {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use arrow_schema::Schema;
+    use krishiv_exec::physical::ExchangeId;
+
+    use super::*;
+    use crate::testing;
+
+    fn fetch() -> Request {
+        Request::Fetch {
+            job: 0,
+            exchange: 1,
+            stage_attempt: 0,
+            map: 0,
+            reduce: 0,
+        }
+    }
+
+    fn remote(host: &str) -> Remote {
+        Remote {
+            host: host.to_owned(),
+            port: testing::PORT,
+            request: fetch(),
+            stream: None,
+            ended: false,
+        }
+    }
+
+    #[test]
+    fn the_coordinator_writes_no_map_output() {
+        let exchange = HostExchange::coordinator(0, testing::workers(&["a"]));
+        let output = MapOutputId {
+            exchange: ExchangeId(1),
+            stage_attempt: 0,
+            map: 0,
+            attempt: 0,
+        };
+        let e = exchange
+            .writer(output, 1, Arc::new(Schema::empty()))
+            .err()
+            .unwrap();
+        assert!(
+            e.message().contains("writes no map output"),
+            "{}",
+            e.message()
+        );
+    }
+
+    #[test]
+    fn a_cluster_without_workers_has_no_owner() {
+        assert!(testing::workers(&[]).owner(3).is_err());
+    }
+
+    #[tokio::test]
+    async fn a_reader_that_ended_stays_ended() {
+        let mut reader = remote("nowhere");
+        reader.ended = true;
+        assert!(matches!(reader.next().await.unwrap(), ExchangeFrame::End));
+    }
+
+    fn fetch_error(reply: fn() -> Reply) -> String {
+        let mut sim = testing::sim();
+        testing::answering(&mut sim, "srv", reply);
+        let out = Arc::new(std::sync::Mutex::new(String::new()));
+        let seen = Arc::clone(&out);
+        sim.client("coordinator", async move {
+            let e = remote("srv").next().await.err().unwrap();
+            *seen.lock().unwrap() = e.message().to_owned();
+            Ok::<(), Box<dyn std::error::Error>>(())
+        });
+        sim.run().unwrap();
+        out.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn a_failed_fetch_names_the_host() {
+        let message = fetch_error(|| Reply::Failed("INTERNAL_ERROR: gone".to_owned()));
+        assert!(
+            message.starts_with("srv: ") && message.contains("gone"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn a_fetch_answered_done_is_refused() {
+        let message = fetch_error(|| Reply::Done);
+        assert!(message.contains("a fetch answered Done"), "{message}");
+    }
+}
