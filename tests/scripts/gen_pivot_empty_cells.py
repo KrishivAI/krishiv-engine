@@ -26,7 +26,8 @@ VIEWS = {
     "f": "SELECT * FROM VALUES (1,CAST(0.0 AS DOUBLE),1),(1,CAST('NaN' AS DOUBLE),2),(1,CAST(-0.0 AS DOUBLE),3),"
     "(2,CAST(1.5 AS DOUBLE),4),(2,CAST(NULL AS DOUBLE),5) AS f(g,p,v)",
     "s": "SELECT * FROM VALUES (1,'a',1),(1,'b',2),(1,NULL,3),(2,'a',4),(2,'B',5) AS s(g,p,v)",
-    "d": "SELECT * FROM VALUES (1,10,CAST(1.25 AS DECIMAL(10,2)),DATE'2020-01-01'),(1,20,CAST(2.50 AS DECIMAL(10,2)),DATE'2021-02-03'),"
+    "d": "SELECT * FROM VALUES (1,10,CAST(1.25 AS DECIMAL(10,2)),DATE'2020-01-01'),"
+    "(1,20,CAST(2.50 AS DECIMAL(10,2)),DATE'2021-02-03'),"
     "(2,10,CAST(NULL AS DECIMAL(10,2)),CAST(NULL AS DATE)) AS d(g,p,x,dt)",
     "n": "SELECT * FROM VALUES (1,1,1.0),(1,1,1.0) AS n(g,p,v)",
     "tt": "SELECT * FROM VALUES (1,TIMESTAMP'2020-01-01 00:00:00',1),(2,TIMESTAMP'2020-01-01 00:00:00',2) AS tt(g,p,v)",
@@ -41,51 +42,170 @@ CASES = [
     ("pf-count-if", "SELECT * FROM g PIVOT (count_if(v > 4) FOR p IN (10, 20, 99))", {}, ""),
     ("pf-sum", "SELECT * FROM g PIVOT (sum(v) FOR p IN (10, 20, 99))", {}, "sum of all-NULL cell is NULL both paths"),
     ("pf-approx-count-distinct", "SELECT * FROM g PIVOT (approx_count_distinct(v) FOR p IN (10, 20, 99))", {}, ""),
-    ("pf-mix-count-sum", "SELECT * FROM g PIVOT (count(v) AS c, sum(v) AS s FOR p IN (10 AS x, 20 AS y, 99 AS z))", {},
-     "multiple aggregates with aliases"),
-    ("pf-mix-count-no-alias", "SELECT * FROM g PIVOT (count(v), sum(v) FOR p IN (10, 20))", {}, "names without aliases"),
-    ("pf-null-pivot-value", "SELECT * FROM g PIVOT (count(v) FOR p IN (10, NULL))", {}, "IN (NULL): matches NULL pivot column rows?"),
+    (
+        "pf-mix-count-sum",
+        "SELECT * FROM g PIVOT (count(v) AS c, sum(v) AS s FOR p IN (10 AS x, 20 AS y, 99 AS z))",
+        {},
+        "multiple aggregates with aliases",
+    ),
+    (
+        "pf-mix-count-no-alias",
+        "SELECT * FROM g PIVOT (count(v), sum(v) FOR p IN (10, 20))",
+        {},
+        "names without aliases",
+    ),
+    (
+        "pf-null-pivot-value",
+        "SELECT * FROM g PIVOT (count(v) FOR p IN (10, NULL))",
+        {},
+        "IN (NULL): matches NULL pivot column rows?",
+    ),
     ("pf-null-pivot-value-sum", "SELECT * FROM g PIVOT (sum(v) FOR p IN (NULL, 10))", {}, ""),
-    ("pf-cast-pivot-value", "SELECT * FROM g PIVOT (count(v) FOR p IN ('10', 20.0, 99))", {}, "values cast to the column type"),
-    ("pf-empty-input", "SELECT * FROM (SELECT * FROM g WHERE g > 100) PIVOT (count(v) FOR p IN (10, 20))", {}, "no rows at all"),
+    (
+        "pf-cast-pivot-value",
+        "SELECT * FROM g PIVOT (count(v) FOR p IN ('10', 20.0, 99))",
+        {},
+        "values cast to the column type",
+    ),
+    (
+        "pf-empty-input",
+        "SELECT * FROM (SELECT * FROM g WHERE g > 100) PIVOT (count(v) FOR p IN (10, 20))",
+        {},
+        "no rows at all",
+    ),
     ("pf-ungrouped-single-group", "SELECT * FROM (SELECT p, v FROM g) PIVOT (count(v) FOR p IN (10, 99))", {}, ""),
     ("pf-decimal-sum", "SELECT * FROM d PIVOT (sum(x) FOR p IN (10, 20, 99))", {}, "decimal is PivotFirst-eligible"),
     ("pf-decimal-count", "SELECT * FROM d PIVOT (count(x) FOR p IN (10, 20, 99))", {}, ""),
     ("pf-bool", "SELECT * FROM g PIVOT (bool_or(v > 4) FOR p IN (10, 20, 99))", {}, "boolean aggregate"),
-    ("pf-float-pivot-col", "SELECT * FROM f PIVOT (sum(v) FOR p IN (0.0D, CAST('NaN' AS DOUBLE), 1.5D))", {},
-     "PivotFirst, float pivot column: 0.0 value matches the -0.0 row?"),
+    (
+        "pf-float-pivot-col",
+        "SELECT * FROM f PIVOT (sum(v) FOR p IN (0.0D, CAST('NaN' AS DOUBLE), 1.5D))",
+        {},
+        "PivotFirst, float pivot column: 0.0 value matches the -0.0 row?",
+    ),
     ("pf-float-negzero-value", "SELECT * FROM f PIVOT (sum(v) FOR p IN (-0.0D, 1.5D))", {}, "-0.0 pivot value"),
-    ("pf-float-nan-value", "SELECT * FROM f PIVOT (sum(v) FOR p IN (CAST('NaN' AS DOUBLE), 1.5D))", {}, "NaN pivot value"),
-    ("pf-float-both-zeros", "SELECT * FROM f PIVOT (sum(v) FOR p IN (0.0D, -0.0D, 1.5D))", {}, "both zeros as pivot values (collapse into one HashMap key?)"),
+    (
+        "pf-float-nan-value",
+        "SELECT * FROM f PIVOT (sum(v) FOR p IN (CAST('NaN' AS DOUBLE), 1.5D))",
+        {},
+        "NaN pivot value",
+    ),
+    (
+        "pf-float-both-zeros",
+        "SELECT * FROM f PIVOT (sum(v) FOR p IN (0.0D, -0.0D, 1.5D))",
+        {},
+        "both zeros as pivot values (collapse into one HashMap key?)",
+    ),
     ("pf-float-dup-values", "SELECT * FROM f PIVOT (sum(v) FOR p IN (1.5D, 1.5D))", {}, "duplicate pivot values"),
-    ("fb-float-dup-values", "SELECT * FROM f PIVOT (sum(v) AS s, collect_list(v) AS l FOR p IN (1.5D, 1.5D))", {}, "duplicate pivot values on fallback"),
+    (
+        "fb-float-dup-values",
+        "SELECT * FROM f PIVOT (sum(v) AS s, collect_list(v) AS l FOR p IN (1.5D, 1.5D))",
+        {},
+        "duplicate pivot values on fallback",
+    ),
     ("pf-int-dup-values", "SELECT * FROM g PIVOT (sum(v) FOR p IN (10, 10))", {}, "duplicate pivot values, int"),
-    ("fb-float-pivot-col", "SELECT * FROM f PIVOT (sum(v) AS s, collect_list(v) AS l FOR p IN (0.0D, -0.0D, CAST('NaN' AS DOUBLE), 1.5D))", {},
-     "same on the fallback path (<=>)"),
-    ("pf-string-pivot-col", "SELECT * FROM s PIVOT (count(v) FOR p IN ('a', 'b', 'A'))", {}, "string pivot col, default collation"),
+    (
+        "fb-float-pivot-col",
+        "SELECT * FROM f PIVOT (sum(v) AS s, collect_list(v) AS l FOR p IN (0.0D, -0.0D, CAST('NaN' AS DOUBLE), 1.5D))",
+        {},
+        "same on the fallback path (<=>)",
+    ),
+    (
+        "pf-string-pivot-col",
+        "SELECT * FROM s PIVOT (count(v) FOR p IN ('a', 'b', 'A'))",
+        {},
+        "string pivot col, default collation",
+    ),
     ("pf-string-pivot-col-null", "SELECT * FROM s PIVOT (count(v) FOR p IN ('a', NULL))", {}, ""),
-    ("fb-string-max", "SELECT * FROM g PIVOT (count(v) AS c, max(s) AS m FOR p IN (10, 20, 99))", {},
-     "string-typed aggregate forces ifExpr path for ALL aggregates; count becomes 0"),
-    ("fb-collect-list-alone", "SELECT * FROM g PIVOT (collect_list(v) FOR p IN (10, 20, 99))", {}, "array aggregate: fallback"),
-    ("fb-count-with-collect-list", "SELECT * FROM g PIVOT (count(v) AS c, collect_list(v) AS l FOR p IN (10, 20, 99))", {}, ""),
-    ("fb-count-star-with-collect-list", "SELECT * FROM g PIVOT (count(*) AS c, collect_list(v) AS l FOR p IN (10, 20, 99))", {}, ""),
-    ("fb-null-pivot-value", "SELECT * FROM g PIVOT (count(v) AS c, max(s) AS m FOR p IN (10, NULL))", {}, "NULL pivot value on fallback"),
+    (
+        "fb-string-max",
+        "SELECT * FROM g PIVOT (count(v) AS c, max(s) AS m FOR p IN (10, 20, 99))",
+        {},
+        "string-typed aggregate forces ifExpr path for ALL aggregates; count becomes 0",
+    ),
+    (
+        "fb-collect-list-alone",
+        "SELECT * FROM g PIVOT (collect_list(v) FOR p IN (10, 20, 99))",
+        {},
+        "array aggregate: fallback",
+    ),
+    (
+        "fb-count-with-collect-list",
+        "SELECT * FROM g PIVOT (count(v) AS c, collect_list(v) AS l FOR p IN (10, 20, 99))",
+        {},
+        "",
+    ),
+    (
+        "fb-count-star-with-collect-list",
+        "SELECT * FROM g PIVOT (count(*) AS c, collect_list(v) AS l FOR p IN (10, 20, 99))",
+        {},
+        "",
+    ),
+    (
+        "fb-null-pivot-value",
+        "SELECT * FROM g PIVOT (count(v) AS c, max(s) AS m FOR p IN (10, NULL))",
+        {},
+        "NULL pivot value on fallback",
+    ),
     ("fb-max-string-alone", "SELECT * FROM g PIVOT (max(s) FOR p IN (10, 20, 99))", {}, ""),
     ("fb-date-max", "SELECT * FROM d PIVOT (max(dt) FOR p IN (10, 20, 99))", {}, "date is NOT PivotFirst-eligible"),
     ("fb-date-count", "SELECT * FROM d PIVOT (count(dt) AS c, max(dt) AS m FOR p IN (10, 20, 99))", {}, ""),
-    ("fb-timestamp-pivot-col-count", "SELECT * FROM tt PIVOT (count(v) AS c, first(v) AS f FOR p IN (TIMESTAMP'2020-01-01 00:00:00', TIMESTAMP'2030-01-01 00:00:00'))", {}, "first() is int: eligible; kept as control"),
-    ("fb-interval-max", "SELECT * FROM (SELECT g, p, make_interval(0,0,0,v) AS iv FROM g) PIVOT (max(iv) FOR p IN (10, 99))", {}, "interval not eligible"),
-    ("fb-first", "SELECT * FROM g PIVOT (first(s) FOR p IN (10, 20, 99))", {}, "First/Last special-cased with ignoreNulls"),
+    (
+        "fb-timestamp-pivot-col-count",
+        "SELECT * FROM tt PIVOT (count(v) AS c, first(v) AS f FOR p IN "
+        "(TIMESTAMP'2020-01-01 00:00:00', TIMESTAMP'2030-01-01 00:00:00'))",
+        {},
+        "first() is int: eligible; kept as control",
+    ),
+    (
+        "fb-interval-max",
+        "SELECT * FROM (SELECT g, p, make_interval(0,0,0,v) AS iv FROM g) PIVOT (max(iv) FOR p IN (10, 99))",
+        {},
+        "interval not eligible",
+    ),
+    (
+        "fb-first",
+        "SELECT * FROM g PIVOT (first(s) FOR p IN (10, 20, 99))",
+        {},
+        "First/Last special-cased with ignoreNulls",
+    ),
     ("pf-first-int", "SELECT * FROM g PIVOT (first(v) FOR p IN (10, 20, 99))", {}, "first on int is PivotFirst"),
-    ("pf-nonmatching-arg-error", "SELECT * FROM g PIVOT (sum(1 / (v - 5)) FOR p IN (10, 20))", {"spark.sql.ansi.enabled": "true"},
-     "arg error on rows of another pivot value: PivotFirst evaluates all rows in stage 1"),
-    ("fb-nonmatching-arg-error", "SELECT * FROM g PIVOT (sum(1 / (v - 5)) AS s, collect_list(v) AS l FOR p IN (10, 20))", {"spark.sql.ansi.enabled": "true"},
-     "same arg on the fallback path: error only on matching rows (ifExpr)"),
-    ("pf-ansi-off-div", "SELECT * FROM g PIVOT (sum(1 / (v - 5)) FOR p IN (10, 20))", {"spark.sql.ansi.enabled": "false"}, ""),
-    ("err-unorderable-pivot-col", "SELECT * FROM (SELECT g, map(1,2) AS m, v FROM g) PIVOT (sum(v) FOR m IN (1))", {}, "error class"),
-    ("pf-array-pivot-col", "SELECT * FROM (SELECT g, array(p) AS ap, v FROM g) PIVOT (count(v) FOR ap IN (array(10), array(99)))", {},
-     "TreeMap path (non-atomic pivot column), null elements"),
-    ("pf-byte-short-long", "SELECT * FROM (SELECT g, p, CAST(v AS TINYINT) AS bv FROM g) PIVOT (sum(bv) FOR p IN (10, 99))", {}, "sum->bigint"),
+    (
+        "pf-nonmatching-arg-error",
+        "SELECT * FROM g PIVOT (sum(1 / (v - 5)) FOR p IN (10, 20))",
+        {"spark.sql.ansi.enabled": "true"},
+        "arg error on rows of another pivot value: PivotFirst evaluates all rows in stage 1",
+    ),
+    (
+        "fb-nonmatching-arg-error",
+        "SELECT * FROM g PIVOT (sum(1 / (v - 5)) AS s, collect_list(v) AS l FOR p IN (10, 20))",
+        {"spark.sql.ansi.enabled": "true"},
+        "same arg on the fallback path: error only on matching rows (ifExpr)",
+    ),
+    (
+        "pf-ansi-off-div",
+        "SELECT * FROM g PIVOT (sum(1 / (v - 5)) FOR p IN (10, 20))",
+        {"spark.sql.ansi.enabled": "false"},
+        "",
+    ),
+    (
+        "err-unorderable-pivot-col",
+        "SELECT * FROM (SELECT g, map(1,2) AS m, v FROM g) PIVOT (sum(v) FOR m IN (1))",
+        {},
+        "error class",
+    ),
+    (
+        "pf-array-pivot-col",
+        "SELECT * FROM (SELECT g, array(p) AS ap, v FROM g) PIVOT (count(v) FOR ap IN (array(10), array(99)))",
+        {},
+        "TreeMap path (non-atomic pivot column), null elements",
+    ),
+    (
+        "pf-byte-short-long",
+        "SELECT * FROM (SELECT g, p, CAST(v AS TINYINT) AS bv FROM g) PIVOT (sum(bv) FOR p IN (10, 99))",
+        {},
+        "sum->bigint",
+    ),
     ("pf-max-int-null-cell", "SELECT * FROM g PIVOT (max(v) FOR p IN (10, 20, 99))", {}, ""),
     ("pf-avg", "SELECT * FROM g PIVOT (avg(v) FOR p IN (10, 20, 99))", {}, "double"),
 ]
@@ -93,7 +213,10 @@ CASES = [
 
 def err_class(e: Exception) -> dict:
     c = getattr(e, "getCondition", None) or getattr(e, "getErrorClass", None)
-    return {"error_class": c() if c else type(e).__name__, "sql_state": (e.getSqlState() if hasattr(e, "getSqlState") else None)}
+    return {
+        "error_class": c() if c else type(e).__name__,
+        "sql_state": (e.getSqlState() if hasattr(e, "getSqlState") else None),
+    }
 
 
 def main() -> None:
@@ -102,9 +225,14 @@ def main() -> None:
     args = ap.parse_args()
     from pyspark.sql import SparkSession
 
-    spark = (SparkSession.builder.master("local[2]").appName("pivot-empty-cells")
-             .config("spark.sql.catalogImplementation", "in-memory").config("spark.sql.session.timeZone", "UTC")
-             .config("spark.ui.enabled", "false").getOrCreate())
+    spark = (
+        SparkSession.builder.master("local[2]")
+        .appName("pivot-empty-cells")
+        .config("spark.sql.catalogImplementation", "in-memory")
+        .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.ui.enabled", "false")
+        .getOrCreate()
+    )
     spark.sparkContext.setLogLevel("OFF")
     assert spark.version == "4.2.0", spark.version
     for name, sql in VIEWS.items():
@@ -118,11 +246,13 @@ def main() -> None:
             df = spark.sql(sql)
             analyzed = df._jdf.queryExecution().analyzed().toString()
             rec["path"] = "pivot_first" if "pivotfirst" in analyzed.lower() else "if_fallback"
-            rec["output"] = [{"name": f.name, "type": f.dataType.simpleString(), "nullable": f.nullable} for f in df.schema.fields]
+            rec["output"] = [
+                {"name": f.name, "type": f.dataType.simpleString(), "nullable": f.nullable} for f in df.schema.fields
+            ]
             rows = df.collect()
             rec["ok"] = True
             rec["rows"] = sorted("|".join("NULL" if v is None else str(v) for v in r) for r in rows)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             rec["ok"] = False
             rec.update(err_class(e))
         out.append(rec)
@@ -134,7 +264,8 @@ def main() -> None:
         "spark_version": "4.2.0",
         "generator": "tests/scripts/gen_pivot_empty_cells.py",
         "notes": "PIVOT cells with no matching row: PivotFirst path (all aggregates byte/short/int/long/float/double/"
-        "boolean/decimal) vs the If(pivot <=> value) fallback. Rows are `|`-joined strings, sorted; `views` are temp views.",
+        "boolean/decimal) vs the If(pivot <=> value) fallback. Rows are `|`-joined strings, sorted; "
+        "`views` are temp views.",
         "views": VIEWS,
         "cases": out,
     }
