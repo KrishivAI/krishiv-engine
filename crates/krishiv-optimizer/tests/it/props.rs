@@ -604,3 +604,59 @@ fn restriction_after_join_ordering_reaches_a_fixed_point() {
         );
     }
 }
+
+/// Seed 18345891200138869054 of `random_queries_reach_the_lowest_operator`:
+/// pruning put a projection above the aggregate's filter to drop the group
+/// key `c0`; common-subexpression elimination then read the key's cast as a
+/// `cse_*` column, and the prune after it dropped `c0` from the aggregate, so
+/// the projection was left dropping only that column. The next run's join
+/// ordering dissolved it and pruning (which never narrows for a `cse_*` column
+/// alone) did not rebuild it, so the plan was not a fixed point. Pruning now
+/// removes such a selection.
+#[test]
+fn a_selection_left_dropping_only_a_cse_column_goes() {
+    let seed = 18_345_891_200_138_869_054_u64;
+    let sql = Gen::new(seed).top();
+    let plan = support::resolve(&sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "{sql}: not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    let db = data::small(seed);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root()),
+        "{sql}"
+    );
+}
+
+/// Seed 2091781642927400886 of `random_queries_reach_the_lowest_operator`:
+/// join ordering derived the class equality `c0 = c1` above a projection of
+/// `a#2 AS c0, a#0 AS c1`; the filter pushdown after it took the equality
+/// through the projection as `a#2 = a#0` into a join holding `a#0 = a#2`, and
+/// the next run's join ordering dropped the copy. A pushed conjunct equal to a
+/// held one with its sides swapped is now dropped as a repeat.
+#[test]
+fn a_swapped_equality_pushed_into_a_join_is_a_repeat() {
+    let seed = 2_091_781_642_927_400_886_u64;
+    let sql = Gen::new(seed).top();
+    let plan = support::resolve(&sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "{sql}: not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+    let db = data::small(seed);
+    assert_eq!(
+        eval::rows(&db, optimized.root()),
+        eval::rows(&db, plan.root()),
+        "{sql}"
+    );
+}

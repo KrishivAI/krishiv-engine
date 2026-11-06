@@ -371,7 +371,15 @@ fn replace(like: &LogicalPlan, node: PlanNode) -> Arc<LogicalPlan> {
 /// Common-subexpression columns do not count toward the width: they were
 /// added after column pruning ran, and narrowing for them alone would come
 /// apart again on the next run.
+///
+/// For the same reason, a column selection over `input` that drops only
+/// common-subexpression columns (left behind when the columns it was made to
+/// drop were pruned after CSE) gives way to its input: the next run's join
+/// ordering dissolves such a selection, and this function would not rebuild it.
 fn narrow(input: &Arc<LogicalPlan>, need: &Attrs) -> Arc<LogicalPlan> {
+    if let Some(below) = selection_of_cse_only(input, need) {
+        return below;
+    }
     let Some(out) = input.resolved_output() else {
         return Arc::clone(input);
     };
@@ -394,6 +402,28 @@ fn narrow(input: &Arc<LogicalPlan>, need: &Attrs) -> Arc<LogicalPlan> {
         input: Arc::clone(input),
         exprs,
     }))
+}
+
+/// The input of `p` when `p` is a projection of plain columns whose input
+/// outputs, apart from common-subexpression columns, only columns in `need`,
+/// each of them kept by `p`.
+fn selection_of_cse_only(p: &LogicalPlan, need: &Attrs) -> Option<Arc<LogicalPlan>> {
+    let PlanNode::Project { input, exprs } = &p.node else {
+        return None;
+    };
+    let mut kept = Attrs::default();
+    for e in exprs {
+        let ExprNode::Resolved(ResolvedExpr::Column(c)) = &e.node else {
+            return None;
+        };
+        kept.insert(c.id);
+    }
+    let below = input.resolved_output()?;
+    let drops_only_cse = below
+        .iter()
+        .filter(|c| !crate::cse::is_cse_column(c))
+        .all(|c| kept.contains(&c.id) && need.contains(&c.id));
+    (drops_only_cse && below.len() > exprs.len()).then(|| Arc::clone(input))
 }
 
 /// Whether `p` holds a common-subexpression projection (an alias named
