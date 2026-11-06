@@ -1291,8 +1291,14 @@ mod tests {
                 StoreId::new(store).to_string(),
                 "{input}"
             );
-            if store != "file" {
-                assert_ne!(at.store, StoreId::new(store), "{input}");
+            if store == "file" {
+                assert_eq!(at.store, StoreId::new(store), "{input}");
+            } else {
+                assert!(
+                    at.store.key().contains("#cfg:"),
+                    "{input}: {}",
+                    at.store.key()
+                );
             }
             assert_eq!(at.path.as_ref(), path, "{input}");
             assert_eq!(at.display, display, "{input}");
