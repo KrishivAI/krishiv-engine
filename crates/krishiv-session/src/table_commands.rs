@@ -1839,10 +1839,8 @@ impl Session {
             // is looked up only here, so an explicit `USING` never depends on it.
             None => match source_provider {
                 Some(p) => p,
-                None => {
-                    let p = self.provider_of(None)?;
-                    (p.clone(), p)
-                }
+                // Validated, and written as the setting has it (`CSV`).
+                None => (self.provider_of(None)?, self.written_provider(None)),
             },
         };
         let external = t.location.is_some();

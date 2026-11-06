@@ -131,7 +131,6 @@ fn csv_tables_read_files_without_a_header_line() {
     );
 }
 
-/// What a CSV table writes is Spark's text: no header line by default, and one when the table asks for it.
 /// The text of the `part-*` files in `dir`.
 fn part_text(dir: &std::path::Path) -> String {
     std::fs::read_dir(dir)
@@ -145,6 +144,7 @@ fn part_text(dir: &std::path::Path) -> String {
         .collect()
 }
 
+/// What a CSV table writes is Spark's text: no header line by default, and one when the table asks for it.
 #[test]
 fn csv_tables_write_a_header_line_only_when_asked() {
     let dir = tempfile::tempdir().unwrap();
@@ -349,6 +349,8 @@ fn create_table_like_a_view_takes_the_default_source() {
     // An explicit USING never consults the default.
     run(&s, "SET spark.sql.sources.default=nonexistent");
     run(&s, "CREATE TABLE e LIKE v USING csv");
+    run(&s, "INSERT INTO e VALUES (5, 't')");
+    assert_eq!(part_text(&wh.join("e")), "5,t\n");
     run(&s, "SET spark.sql.sources.default=csv");
     // A table keeps its own provider.
     run(&s, "CREATE TABLE j (a INT) USING json");
