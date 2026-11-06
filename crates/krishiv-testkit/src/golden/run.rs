@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use krishiv_common::error::ErrorClass;
 
 use super::manifest::{ExclusionManifest, ManifestError};
-use super::normalise::{Masker, normalize_test_results};
+use super::normalise::{Masker, normalize_test_results, unpad_masked_statistics};
 use super::parse::{Expected, ExpectedError, ParseError, Statement, parse_results};
 use super::setup::{FileSetup, SessionSetup};
 use super::{GoldenPair, GoldenSet, Jdk};
@@ -594,8 +594,8 @@ fn result_mismatch(
     }
     // `normalizeTestResults` on both sides.
     let (got, want) = (
-        normalize_test_results(&rows.join("\n")),
-        normalize_test_results(expected_output),
+        unpad_masked_statistics(&normalize_test_results(&rows.join("\n"))),
+        unpad_masked_statistics(&normalize_test_results(expected_output)),
     );
     if got == want {
         return None;
