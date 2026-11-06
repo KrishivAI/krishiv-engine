@@ -584,7 +584,12 @@ impl<'a> VariantRef<'a> {
     pub fn new(metadata: &'a [u8], value: &'a [u8]) -> Result<Self, KrishivError> {
         let meta = parse_metadata(metadata)?;
         let kind = validate_exact(value, 0, value.len(), &meta)?;
-        if matches!(kind, VariantKind::Object | VariantKind::Array) {
+        // Every level of nesting takes at least 4 bytes before its child
+        // (header, count, two offsets), so a shorter value cannot pass the
+        // cap and is not walked: the walk is for large values only.
+        if matches!(kind, VariantKind::Object | VariantKind::Array)
+            && value.len() > 4 * super::builder::MAX_NESTING_DEPTH
+        {
             check_depth(value)?;
         }
         let container = match kind {

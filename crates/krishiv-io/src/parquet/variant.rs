@@ -159,8 +159,11 @@ fn is_variant_group(t: &TypePtr) -> bool {
 /// a repeated variant group).
 fn list_element(t: &TypePtr) -> Option<&TypePtr> {
     let repeated = t.get_fields().first()?;
+    // parquet-format's backward-compatibility rules: a one-field group
+    // named `array` or `<list>_tuple` is the element itself.
+    let legacy = repeated.name() == "array" || repeated.name() == format!("{}_tuple", t.name());
     match repeated.get_fields() {
-        [element] if repeated.is_group() && !is_variant_group(repeated) => Some(element),
+        [element] if repeated.is_group() && !is_variant_group(repeated) && !legacy => Some(element),
         _ => Some(repeated),
     }
 }
