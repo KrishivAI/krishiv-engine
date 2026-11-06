@@ -533,6 +533,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "shared_subplan"
             | "exchange_source"
             | "rust_udf"
+            | "rust_udaf"
             | "nested_types"
             | "struct_field"
             | "lambda_functions"
