@@ -6,6 +6,7 @@
 //! [`BroadcastTables`].
 
 use super::*;
+use crate::join::{Decision, SharedOrOwnRows};
 
 impl Instantiation<'_> {
     /// Publishes the values of the task's cross-stage filters (computed by
@@ -194,7 +195,10 @@ impl Instantiation<'_> {
             exchange: *id,
             stage_attempt: input.stage_attempt,
         };
-        let rows: Arc<dyn ExecNode> = Arc::new(SourceNode(Arc::new(ExchangeRead::new(
+        // One reader of the broadcast for the shared build and, when that
+        // does not fit, for this task's own build (spilling as needed;
+        // owner decision 2026-11-06). Its state is per pipeline.
+        let read: Arc<dyn Source> = Arc::new(ExchangeRead::new(
             exchange,
             *id,
             input.stage_attempt,
@@ -202,7 +206,8 @@ impl Instantiation<'_> {
             input.maps,
             Arc::clone(schema),
             false,
-        ))));
+        ));
+        let rows: Arc<dyn ExecNode> = Arc::new(SourceNode(Arc::clone(&read)));
         // The shared build's filters publish into a service of its own; the
         // task republishes them (see `BroadcastTables`).
         let own = LocalValues::new();
@@ -230,18 +235,15 @@ impl Instantiation<'_> {
             &self.values,
             self.worker.producer,
         )?;
-        let sink = Arc::new(PrebuiltSink::new(
-            &join,
-            tables,
-            key,
-            BuildJob::new(shared, rows),
-        ));
+        let decision = Arc::new(Decision::new(tables, key, BuildJob::new(shared, rows)));
+        let own_rows = Arc::new(SharedOrOwnRows::new(Arc::clone(&decision), read));
+        let sink = Arc::new(PrebuiltSink::new(&join, decision));
         Ok(Some(Built {
             schema: join.schema(),
             node: Arc::new(SharedBuildJoinNode {
                 join,
                 sink,
-                build_schema: Arc::clone(schema),
+                rows: own_rows,
                 probe: probe.node,
             }),
         }))

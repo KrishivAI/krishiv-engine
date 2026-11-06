@@ -606,3 +606,62 @@ fn an_unsplittable_file_is_dealt_whole() {
         "{whole:?}"
     );
 }
+
+/// A shared broadcast build that does not fit in the query's memory falls
+/// back to one build per task (owner decision 2026-11-06, row 30c (b)):
+/// each task builds its own table under its own spill scope, and the rows
+/// match. With room, the same plan shares the build.
+#[test]
+fn a_broadcast_that_does_not_fit_is_built_by_each_task() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let plain = QueryRunner::new(Arc::clone(&executor) as _);
+    // The query's shared broadcast tables may hold 256 KiB: the build of
+    // `orders` (about 1 MiB) does not fit, the tasks' own builds do.
+    let capped = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_splits(Arc::new(dealer(&tpch.files)))
+        .with_broadcast_limit(256 << 10);
+    let split = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_splits(Arc::new(dealer(&tpch.files)));
+    let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let dir = tempfile::tempdir().unwrap();
+    let spill = SpillManager::open(&SpillConfig {
+        dir: dir.path().join("spill"),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let worker =
+        WorkerContext::new(Arc::clone(&tpch.tables) as _).with_spill(spill.scope().unwrap());
+    let mut config = Config::clone(&tpch.config);
+    config
+        .set("spark.sql.autoBroadcastJoinThreshold", "1g")
+        .unwrap();
+    let sql = "SELECT o_orderpriority, count(*), sum(l_quantity), max(o_comment) \
+               FROM lineitem JOIN orders ON l_orderkey = o_orderkey GROUP BY o_orderpriority";
+    let plan = tpch.plan_sql(sql, Arc::new(config)).unwrap();
+    let sorted = |mut rows: Vec<String>| {
+        rows.sort();
+        rows
+    };
+    let want = sorted(run(&plain, &plan, &worker, &root, 1).unwrap());
+    assert_eq!(want.len(), 5, "{want:?}");
+    let got = sorted(run(&capped, &plan, &worker, &root, 2).unwrap());
+    assert_eq!(got, want);
+    assert_eq!(
+        capped.broadcast_fallbacks(),
+        1,
+        "the shared build fit:\n{plan}"
+    );
+    assert_eq!(root.reserved(), 0, "memory still held after a fallback");
+    // Uncapped, the same plan shares its build.
+    assert_eq!(sorted(run(&split, &plan, &worker, &root, 3).unwrap()), want);
+    assert_eq!(split.broadcast_fallbacks(), 0);
+    assert_eq!(split.shared_builds(), 1);
+    assert_eq!(root.reserved(), 0);
+}

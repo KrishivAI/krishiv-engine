@@ -22,7 +22,8 @@ Paths are relative to this crate.
   (on disk in the worker's spill scope), each task its own instantiation from a `TaskSpec`; the root stage is one
   task on the caller's query context. `StageSplits` deals leaf scans to tasks (the session's split planning plugs in
   here). One `BroadcastTables` per query: a broadcast join's table is built once and shared by the query's tasks
-  (P2-T177 unit 3; `StageRunner::shared_builds` counts them).
+  (P2-T177 unit 3; `StageRunner::shared_builds` counts them). `with_broadcast_limit` caps their pool; a build past
+  it falls back to one build per task (`broadcast_fallbacks` counts those).
 - `tests/tpch_stages.rs` TPC-H SF0.01 on stages (4 partitions, whole and dealt scans; 8 partitions under a 16 MiB
   pool) equals one worker.
 

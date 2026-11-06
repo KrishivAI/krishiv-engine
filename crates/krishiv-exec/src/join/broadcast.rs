@@ -15,10 +15,14 @@
 //!   worker, I11), with the first task's settings. Its table and memory stay
 //!   until the resource is dropped (at the job's end); the tasks' own pools
 //!   hold none of it.
-//! - **No spill.** As in Spark, a broadcast relation must fit in memory: the
-//!   shared build has no spill scope, so a build that does not fit fails
-//!   every task waiting on it. (A spilled build's grace state holds one
-//!   task's probe rows and cannot be shared.)
+//! - **No spill; per-task fallback.** The shared build has no spill scope
+//!   (a spilled build's grace state holds one task's probe rows and cannot
+//!   be shared), and its reservations never abort a query: when it does not
+//!   fit (`UNABLE_TO_ACQUIRE_MEMORY`), every
+//!   task of the job on the worker builds its own table from the broadcast's
+//!   rows instead, with its own spill scope, as one task always did (owner
+//!   decision 2026-11-06, row 30c (b)). Any other failure of the shared build
+//!   fails the tasks waiting on it.
 //! - **Immutable.** After `finalize` a build's tables are only read; joins
 //!   that mark build rows (those that build their preserved side) never
 //!   share one.
@@ -37,8 +41,9 @@ use std::sync::{Arc, OnceLock};
 use arrow_schema::SchemaRef;
 use futures::StreamExt as _;
 use futures::future::BoxFuture;
+use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_io::{DisabledReason, FilterId, FilterSnapshot};
-use krishiv_memory::MemoryPool;
+use krishiv_memory::{ConsumerId, MemoryError, MemoryPool, PoolSnapshot, Spillable};
 use krishiv_types::batch::Batch;
 
 use super::build::BuildGlobal;
@@ -139,6 +144,15 @@ impl BroadcastTables {
         lock(&self.builds).len()
     }
 
+    /// The builds that did not fit, so each task built its own table.
+    #[must_use]
+    pub fn fallbacks(&self) -> usize {
+        lock(&self.builds)
+            .values()
+            .filter(|s| matches!(&*lock(&s.outcome), Some(Err(e)) if does_not_fit(e)))
+            .count()
+    }
+
     /// The build `key`, started from `job` with `query`'s settings and
     /// class unless a task started it already, once it finished.
     async fn get(
@@ -201,8 +215,10 @@ impl BroadcastTables {
             QueryId(u64::MAX - n),
             class,
             config.clone(),
-            self.pool
-                .child(&format!("broadcast-{}", key.exchange.0), None),
+            Arc::new(NoAbortPool(
+                self.pool
+                    .child(&format!("broadcast-{}", key.exchange.0), None),
+            )),
         );
         *lock(&slot.query) = Some(Arc::clone(&query));
         let runner = QueryRunner::new(Arc::clone(&self.executor));
@@ -224,6 +240,150 @@ impl Drop for BroadcastTables {
                 q.cancel();
             }
         }
+    }
+}
+
+/// Whether a shared build failed only because it did not fit in memory (its
+/// pool never aborts, [`NoAbortPool`]): the tasks then build their own
+/// tables. An abort of the user's query is not a fallback.
+fn does_not_fit(e: &KrishivError) -> bool {
+    e.error_class() == ErrorClass::UnableToAcquireMemory
+}
+
+/// How a task's join gets its table.
+#[derive(Clone)]
+enum Choice {
+    /// The worker's shared build.
+    Shared(Arc<SharedBuild>),
+    /// The shared build did not fit: the task builds its own.
+    Own,
+}
+
+/// A task's view of one shared build: started by the first of its readers
+/// (a driver of the build pipeline or the sink's `finalize`) unless another
+/// task started it, and the task's choice once it finished.
+pub(crate) struct Decision {
+    tables: Arc<BroadcastTables>,
+    key: BroadcastKey,
+    /// Handed over if this task starts the build.
+    job: std::sync::Mutex<Option<BuildJob>>,
+    chosen: OnceLock<Result<Choice>>,
+}
+
+impl Decision {
+    pub(crate) fn new(tables: Arc<BroadcastTables>, key: BroadcastKey, job: BuildJob) -> Self {
+        Self {
+            tables,
+            key,
+            job: std::sync::Mutex::new(Some(job)),
+            chosen: OnceLock::new(),
+        }
+    }
+
+    async fn choose(&self, query: &QueryContext) -> Result<Choice> {
+        if let Some(c) = self.chosen.get() {
+            return c.clone();
+        }
+        let job = || {
+            self.job
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+        };
+        let choice = match self.tables.get(self.key, job, query).await {
+            Ok(built) => Ok(Choice::Shared(built)),
+            Err(e) if does_not_fit(&e) => Ok(Choice::Own),
+            Err(e) => Err(e),
+        };
+        // Every reader of one task sees the outcome of the same slot.
+        self.chosen.get_or_init(|| choice).clone()
+    }
+}
+
+/// The shared build's pool: `pool` whose slow-path reservations never abort
+/// a query. The build cannot spill, and its tasks have a cheaper fallback
+/// than an abort (their own builds), so a request spills others and then
+/// fails with `UNABLE_TO_ACQUIRE_MEMORY` ([`MemoryPool::reserve_without_abort`]).
+/// Without this the arbitrator would abort the query holding the build:
+/// the user's query, whose pool contains it.
+#[derive(Debug)]
+struct NoAbortPool(Arc<dyn MemoryPool>);
+
+impl MemoryPool for NoAbortPool {
+    fn child(&self, name: &str, limit: Option<usize>) -> Arc<dyn MemoryPool> {
+        Arc::new(Self(self.0.child(name, limit)))
+    }
+
+    fn register(&self, name: &str, spill: Option<Arc<dyn Spillable>>) -> ConsumerId {
+        self.0.register(name, spill)
+    }
+
+    fn unregister(&self, id: ConsumerId) {
+        self.0.unregister(id);
+    }
+
+    fn try_reserve(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
+        self.0.try_reserve(id, bytes)
+    }
+
+    fn try_reserve_scratch(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
+        self.0.try_reserve_scratch(id, bytes)
+    }
+
+    fn try_reserve_unguarded(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
+        self.0.try_reserve_unguarded(id, bytes)
+    }
+
+    fn reserve<'a>(
+        &'a self,
+        id: ConsumerId,
+        bytes: usize,
+    ) -> BoxFuture<'a, Result<(), MemoryError>> {
+        self.0.reserve_without_abort(id, bytes)
+    }
+
+    fn reserve_without_abort<'a>(
+        &'a self,
+        id: ConsumerId,
+        bytes: usize,
+    ) -> BoxFuture<'a, Result<(), MemoryError>> {
+        self.0.reserve_without_abort(id, bytes)
+    }
+
+    fn release(&self, id: ConsumerId, bytes: usize) {
+        self.0.release(id, bytes);
+    }
+
+    fn transfer(&self, from: ConsumerId, to: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
+        self.0.transfer(from, to, bytes)
+    }
+
+    fn reserved(&self) -> usize {
+        self.0.reserved()
+    }
+
+    fn snapshot(&self) -> PoolSnapshot {
+        self.0.snapshot()
+    }
+
+    fn peak_reserved(&self) -> usize {
+        self.0.peak_reserved()
+    }
+
+    fn limit(&self) -> Option<usize> {
+        self.0.limit()
+    }
+
+    fn effective_limit(&self) -> Option<usize> {
+        self.0.effective_limit()
+    }
+
+    fn check_aborted(&self) -> Result<(), MemoryError> {
+        self.0.check_aborted()
+    }
+
+    fn aborted(&self) -> BoxFuture<'_, MemoryError> {
+        self.0.aborted()
     }
 }
 
@@ -412,24 +572,17 @@ impl Source for Capture {
 pub(crate) struct PrebuiltSink {
     /// The task's join (its filters and where it publishes them).
     shared: Arc<Shared>,
-    tables: Arc<BroadcastTables>,
-    key: BroadcastKey,
-    /// Handed over if this task starts the build.
-    job: std::sync::Mutex<Option<BuildJob>>,
+    /// The task's own build, used when the shared one did not fit.
+    own: Arc<dyn Sink>,
+    decision: Arc<Decision>,
 }
 
 impl PrebuiltSink {
-    pub(crate) fn new(
-        join: &HashJoin,
-        tables: Arc<BroadcastTables>,
-        key: BroadcastKey,
-        job: BuildJob,
-    ) -> Self {
+    pub(crate) fn new(join: &HashJoin, decision: Arc<Decision>) -> Self {
         Self {
             shared: Arc::clone(&join.0),
-            tables,
-            key,
-            job: std::sync::Mutex::new(Some(job)),
+            own: join.build_sink(),
+            decision,
         }
     }
 }
@@ -437,6 +590,8 @@ impl PrebuiltSink {
 /// A [`PrebuiltSink`]'s global state: the shared build once it finished.
 pub(crate) struct Prebuilt {
     pub(crate) build: OnceLock<Arc<BuildGlobal>>,
+    /// The task's own build state (fed only after a fallback).
+    own: GlobalState,
     filters: Vec<FilterId>,
     publisher: Option<FilterPublisher>,
     published: AtomicBool,
@@ -482,32 +637,57 @@ impl Sink for PrebuiltSink {
             .collect()
     }
 
-    fn global_state(&self, _ctx: &TaskContext) -> Result<GlobalState> {
+    fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         Ok(Arc::new(Prebuilt {
             build: OnceLock::new(),
+            own: self.own.global_state(ctx)?,
             filters: self.shared.runtime.iter().map(|f| f.filter.id()).collect(),
             publisher: self.shared.publisher.clone(),
             published: AtomicBool::new(false),
         }))
     }
 
-    fn local_state(&self, _ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
-        Ok(Box::new(()))
+    fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
+        self.own.local_state(ctx, &prebuilt(global)?.own)
     }
 
+    // Rows arrive only after a fallback (`SharedOrOwnRows`).
     fn sink(
         &self,
-        _input: Batch,
-        _local: &mut LocalState,
-        _global: &GlobalState,
+        input: Batch,
+        local: &mut LocalState,
+        global: &GlobalState,
     ) -> Result<SinkStatus> {
-        Err(internal(
-            "rows sunk into a shared broadcast build".to_owned(),
-        ))
+        self.own.sink(input, local, &prebuilt(global)?.own)
     }
 
-    fn combine(&self, _local: LocalState, _global: &GlobalState) -> Result<()> {
-        Ok(())
+    fn combine(&self, local: LocalState, global: &GlobalState) -> Result<()> {
+        self.own.combine(local, &prebuilt(global)?.own)
+    }
+
+    fn spill<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        target: usize,
+        ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<usize>> {
+        self.own.spill(local, target, ctx)
+    }
+
+    fn spill_global<'a>(
+        &'a self,
+        global: &'a GlobalState,
+        target: usize,
+        ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<usize>> {
+        Box::pin(async move {
+            let g = prebuilt(global)?;
+            self.own.spill_global(&g.own, target, ctx).await
+        })
+    }
+
+    fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
+        self.own.extra_metrics()
     }
 
     fn finalize<'a>(
@@ -516,16 +696,17 @@ impl Sink for PrebuiltSink {
         ctx: &'a TaskContext,
     ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
-            let g = global
-                .downcast_ref::<Prebuilt>()
-                .ok_or_else(|| internal("wrong state for a shared broadcast build".to_owned()))?;
-            let job = || {
-                self.job
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .take()
+            let g = prebuilt(global)?;
+            let built = match self.decision.choose(ctx.query()).await? {
+                Choice::Shared(built) => built,
+                Choice::Own => {
+                    // The task's own build publishes its own filters.
+                    self.own.finalize(&g.own, ctx).await?;
+                    let _ = g.build.set(build_of(&g.own)?);
+                    g.published.store(true, Ordering::Release);
+                    return Ok(());
+                }
             };
-            let built = self.tables.get(self.key, job, ctx.query()).await?;
             let _ = g.build.set(Arc::clone(&built.build));
             if let Some(p) = &g.publisher {
                 for (id, snapshot) in &built.filters {
@@ -543,36 +724,81 @@ impl Sink for PrebuiltSink {
     }
 }
 
-/// A source of no rows: the input of a [`PrebuiltSink`].
-pub(crate) struct NoRows(pub(crate) SchemaRef);
+fn prebuilt(global: &GlobalState) -> Result<&Prebuilt> {
+    global
+        .downcast_ref::<Prebuilt>()
+        .ok_or_else(|| internal("wrong state for a shared broadcast build".to_owned()))
+}
 
-impl Source for NoRows {
+/// The input of a [`PrebuiltSink`]: no rows while the worker's shared build
+/// serves the task, the broadcast's rows (read by this task) once the shared
+/// build did not fit. Each driver waits for the choice on its first call.
+pub(crate) struct SharedOrOwnRows {
+    decision: Arc<Decision>,
+    rows: Arc<dyn Source>,
+}
+
+impl SharedOrOwnRows {
+    pub(crate) fn new(decision: Arc<Decision>, rows: Arc<dyn Source>) -> Self {
+        Self { decision, rows }
+    }
+}
+
+/// [`SharedOrOwnRows`]' global state: the task's query (whose settings a
+/// build it starts takes) and the rows' state.
+struct GateGlobal {
+    query: Arc<QueryContext>,
+    rows: GlobalState,
+}
+
+fn gate(global: &GlobalState) -> Result<&GateGlobal> {
+    global
+        .downcast_ref::<GateGlobal>()
+        .ok_or_else(|| internal("wrong state for a shared broadcast's rows".to_owned()))
+}
+
+impl Source for SharedOrOwnRows {
     fn name(&self) -> &'static str {
         "SharedBroadcast"
     }
 
     fn schema(&self) -> SchemaRef {
-        Arc::clone(&self.0)
+        self.rows.schema()
     }
 
-    fn global_state(&self, _ctx: &TaskContext) -> Result<GlobalState> {
-        Ok(Arc::new(()))
+    fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
+        Ok(Arc::new(GateGlobal {
+            query: Arc::clone(ctx.query()),
+            rows: self.rows.global_state(ctx)?,
+        }))
     }
 
-    fn max_parallelism(&self, _global: &GlobalState) -> usize {
-        1
+    fn max_parallelism(&self, global: &GlobalState) -> usize {
+        global
+            .downcast_ref::<GateGlobal>()
+            .map_or(1, |g| self.rows.max_parallelism(&g.rows))
     }
 
-    fn local_state(&self, _ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
-        Ok(Box::new(()))
+    fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
+        self.rows.local_state(ctx, &gate(global)?.rows)
     }
 
     fn get_data<'a>(
         &'a self,
-        _local: &'a mut LocalState,
-        _global: &'a GlobalState,
+        local: &'a mut LocalState,
+        global: &'a GlobalState,
     ) -> BoxFuture<'a, Result<Option<Batch>>> {
-        Box::pin(std::future::ready(Ok(None)))
+        Box::pin(async move {
+            let g = gate(global)?;
+            match self.decision.choose(&g.query).await? {
+                Choice::Shared(_) => Ok(None),
+                Choice::Own => self.rows.get_data(local, &g.rows).await,
+            }
+        })
+    }
+
+    fn morsels_claimed(&self, local: &LocalState) -> u64 {
+        self.rows.morsels_claimed(local)
     }
 }
 
@@ -580,7 +806,7 @@ impl Source for NoRows {
 pub struct SharedBuildJoinNode {
     pub(crate) join: HashJoin,
     pub(crate) sink: Arc<PrebuiltSink>,
-    pub(crate) build_schema: SchemaRef,
+    pub(crate) rows: Arc<SharedOrOwnRows>,
     pub(crate) probe: Arc<dyn ExecNode>,
 }
 
@@ -588,16 +814,16 @@ impl fmt::Debug for SharedBuildJoinNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SharedBuildJoinNode")
             .field("join", &self.join)
-            .field("key", &self.sink.key)
+            .field("key", &self.sink.decision.key)
             .finish_non_exhaustive()
     }
 }
 
-struct NoRowsNode(SchemaRef);
+struct RowsNode(Arc<SharedOrOwnRows>);
 
-impl ExecNode for NoRowsNode {
+impl ExecNode for RowsNode {
     fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
-        b.set_source(Arc::new(NoRows(Arc::clone(&self.0))))
+        b.set_source(Arc::clone(&self.0) as Arc<dyn Source>)
             .map(drop)
     }
 }
@@ -606,7 +832,7 @@ impl ExecNode for SharedBuildJoinNode {
     fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
         let sink = b.child_pipeline(
             Arc::clone(&self.sink) as Arc<dyn Sink>,
-            Arc::new(NoRowsNode(Arc::clone(&self.build_schema))),
+            Arc::new(RowsNode(Arc::clone(&self.rows))),
         )?;
         Arc::clone(&self.probe).build_pipelines(b)?;
         b.push_operator_reading(self.join.probe(), sink).map(drop)

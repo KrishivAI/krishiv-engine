@@ -83,9 +83,14 @@ pub struct StageRunner {
     roots: Arc<QueryRunner>,
     partitions: u32,
     splits: Option<Arc<dyn StageSplits>>,
+    /// The most the shared broadcast tables of one query may hold.
+    broadcast_limit: Option<usize>,
     next_task: Arc<AtomicU64>,
     /// Broadcast builds shared by the map tasks of a query, summed.
     shared_builds: Arc<AtomicU64>,
+    /// Shared broadcast builds that did not fit, so each task built its
+    /// own table (owner decision 2026-11-06), summed.
+    broadcast_fallbacks: Arc<AtomicU64>,
     /// Filter values carried from one stage to a later one, summed.
     cross_stage: Arc<AtomicU64>,
     /// The map tasks running for each query, cancelled with it.
@@ -127,8 +132,10 @@ impl StageRunner {
             executor,
             partitions,
             splits: None,
+            broadcast_limit: None,
             next_task: Arc::default(),
             shared_builds: Arc::default(),
+            broadcast_fallbacks: Arc::default(),
             cross_stage: Arc::default(),
             running: Arc::default(),
         })
@@ -138,6 +145,15 @@ impl StageRunner {
     #[must_use]
     pub fn with_splits(mut self, splits: Arc<dyn StageSplits>) -> Self {
         self.splits = Some(splits);
+        self
+    }
+
+    /// The same runner capping what the shared broadcast tables of one
+    /// query may hold at `bytes`: a build past it falls back to one build
+    /// per task, each spilling as needed (owner decision 2026-11-06).
+    #[must_use]
+    pub fn with_broadcast_limit(mut self, bytes: usize) -> Self {
+        self.broadcast_limit = Some(bytes);
         self
     }
 }
@@ -397,7 +413,7 @@ impl StageRunner {
         // tasks, reserving from its pool (design P2-T177 unit 3).
         let broadcasts = Arc::new(BroadcastTables::new(
             Arc::clone(&self.executor),
-            query.pool().child("broadcasts", None),
+            query.pool().child("broadcasts", self.broadcast_limit),
         ));
         let worker = worker
             .with_exchange(Arc::new(shuffle))
@@ -450,6 +466,9 @@ impl StageRunner {
         }
         let built = u64::try_from(broadcasts.builds()).unwrap_or(u64::MAX);
         self.shared_builds.fetch_add(built, Ordering::Relaxed);
+        let fell_back = u64::try_from(broadcasts.fallbacks()).unwrap_or(u64::MAX);
+        self.broadcast_fallbacks
+            .fetch_add(fell_back, Ordering::Relaxed);
         drop(broadcasts);
         let mut spec = specs(root)?
             .into_iter()
@@ -478,6 +497,14 @@ impl StageRunner {
     #[must_use]
     pub fn shared_builds(&self) -> u64 {
         self.shared_builds.load(Ordering::Relaxed)
+    }
+
+    /// The shared broadcast builds that did not fit in memory, so each
+    /// task of the job built its own table instead (owner decision
+    /// 2026-11-06), summed over the queries.
+    #[must_use]
+    pub fn broadcast_fallbacks(&self) -> u64 {
+        self.broadcast_fallbacks.load(Ordering::Relaxed)
     }
 
     /// The runtime filter values an exchange collected in one stage and
@@ -532,8 +559,10 @@ impl Scheduler for StageRunner {
             roots: Arc::clone(&self.roots),
             partitions: self.partitions,
             splits: self.splits.clone(),
+            broadcast_limit: self.broadcast_limit,
             next_task: Arc::clone(&self.next_task),
             shared_builds: Arc::clone(&self.shared_builds),
+            broadcast_fallbacks: Arc::clone(&self.broadcast_fallbacks),
             cross_stage: Arc::clone(&self.cross_stage),
             running: Arc::clone(&self.running),
         };
