@@ -47,6 +47,7 @@ const COMPARING: &[&str] = &[
     "greatest",
     "least",
     "nullif",
+    "equal_null",
     "min",
     "max",
     "min_by",
@@ -154,6 +155,29 @@ const NESTED_OK: &[&str] = &[
     "get",
 ];
 
+/// String functions whose result is an ordinary binary string whatever the collation of their
+/// arguments (checked against the Spark 4.2 `collations-*` goldens).
+const BINARY_RESULT: &[&str] = &[
+    "soundex",
+    "format_number",
+    "base64",
+    "decode",
+    "chr",
+    "char",
+    "hex",
+    "md5",
+    "sha",
+    "sha1",
+    "sha2",
+    "uuid",
+    "date_format",
+    "to_json",
+    "to_csv",
+    "to_xml",
+    "listagg",
+    "string_agg",
+];
+
 /// Calls that read the type of their argument: it stays collated.
 const INSPECTS: &[&str] = &["collation", "typeof"];
 
@@ -209,6 +233,19 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
             mode,
             ..
         } if *mode != CastMode::Default => Some((*c, Strength::Explicit)),
+        // A written cast to plain `STRING` ends the inherited collation: the result is a binary
+        // string, implicit when the child is a string and default otherwise.
+        ExprNode::Cast {
+            expr,
+            to: DataType::String,
+            mode,
+        } if *mode != CastMode::Default => Some((
+            Collation::UTF8_BINARY,
+            match strength_of(expr, memo) {
+                Some(_) => Strength::Implicit,
+                None => Strength::Default,
+            },
+        )),
         ExprNode::Cast { expr, to, .. } if is_string(Some(to)) => strength_of(expr, memo),
         ExprNode::Function(f) if INSPECTS.contains(&f.name.to_ascii_lowercase().as_str()) => {
             // `collation(x)` and `typeof(x)` return an ordinary string: the collation of the
@@ -446,6 +483,7 @@ impl Resolver<'_> {
         if let Some(c) = chosen
             && !c.is_utf8_binary()
             && bound.ty.data_type == Some(DataType::String)
+            && !BINARY_RESULT.contains(&name.as_str())
             && window_fn
         {
             // The re-tag cast would hide the window function from the window binder.
@@ -457,6 +495,7 @@ impl Resolver<'_> {
         if let Some(c) = chosen
             && !c.is_utf8_binary()
             && bound.ty.data_type == Some(DataType::String)
+            && !BINARY_RESULT.contains(&name.as_str())
         {
             let to = DataType::collated_string(c);
             let shown = bound.shown();

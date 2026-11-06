@@ -89,6 +89,7 @@ fn collated_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
                 | "greatest"
                 | "least"
                 | "nullif"
+                | "equal_null"
         )
         && f.args.iter().any(|a| is_collated(expr_type(a)))
     {

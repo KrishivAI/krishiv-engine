@@ -469,3 +469,28 @@ fn map_key_lookups_boundaries_and_builder_switches() {
         .build();
     assert!(built.is_err());
 }
+
+/// Codex review of #493 (second round): binary-result functions keep a plain `STRING`, a written
+/// cast to `STRING` ends the inherited collation, and `equal_null` is guarded like `<=>`.
+#[test]
+fn result_boundaries_and_equal_null() {
+    assert_eq!(
+        one("SELECT typeof(soundex('Robert' COLLATE UTF8_LCASE))"),
+        "string"
+    );
+    assert_eq!(
+        one("SELECT typeof(format_number(123, '###' COLLATE UTF8_LCASE))"),
+        "string"
+    );
+    // A cast back to plain STRING: the other operand decides, with no false mismatch.
+    assert_eq!(
+        one(
+            "SELECT typeof(concat(CAST('a' COLLATE UTF8_LCASE AS STRING), 'b' COLLATE UNICODE_CI))"
+        ),
+        "string collate UNICODE_CI"
+    );
+    assert_eq!(
+        class("SELECT equal_null('a' COLLATE UTF8_LCASE, 'A' COLLATE UTF8_LCASE)"),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+}
