@@ -28,8 +28,9 @@
 //!    `UNABLE_TO_ACQUIRE_MEMORY` and its other tasks see
 //!    `KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY`; another victim is aborted and
 //!    the round waits for its release. The phase is bounded by
-//!    `abortReleaseTimeout`. A task- or operator-level limit (depth ≥ 2)
-//!    fails only the request, never the whole query. A request made with
+//!    `abortReleaseTimeout`. A task- or operator-level limit (below the top
+//!    of a query) fails only the request, never the whole query; a tenant
+//!    pool's limit ([`crate::TreePool::tenant`]) aborts one of its queries. A request made with
 //!    [`Escalation::SpillOnly`] skips this phase and fails instead: its
 //!    caller has a cheaper fallback than aborting a query.
 
@@ -139,7 +140,8 @@ enum Waited {
     Deadline,
 }
 
-/// The depth-1 subtrees involved in a round and their fair shares.
+/// The groups (queries, external pools) involved in a round and their fair
+/// shares.
 struct Plan {
     groups: Vec<Arc<Node>>,
     fair_share: usize,
@@ -336,7 +338,7 @@ impl Round {
                     Waited::TicketsDone => continue,
                 }
             }
-            if binding.depth >= 2 {
+            if binding.is_inside_group() {
                 return Err(self.exhausted(&binding));
             }
             let own = self.node.group_node();

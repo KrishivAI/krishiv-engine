@@ -1158,11 +1158,9 @@ impl DataFrame {
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
         if let Some(a) = cached {
-            let id = self.session.state.queries.record_refused(
-                a.env.text.as_deref(),
-                a.env.statement_class,
-                &error,
-            );
+            let id =
+                self.session
+                    .record_refused(a.env.text.as_deref(), a.env.statement_class, &error);
             // Shared with the statement's marker, so `sql` adds no second row.
             *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
         }
@@ -1322,7 +1320,7 @@ impl DataFrame {
             Err(error) => {
                 // The query analyzed but never ran: an action's planning failure is a row of
                 // `system.queries` too (no execution began, so it has no other row).
-                let id = self.session.state.queries.record_refused(
+                let id = self.session.record_refused(
                     a.env.text.as_deref(),
                     a.env.statement_class,
                     &error,

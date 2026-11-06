@@ -19,6 +19,8 @@ impl DataFrame {
         use tracing::Instrument as _;
         let span = self.span();
         async {
+            // A closed session answers nothing, not even from the result cache.
+            self.session.check_open()?;
             // Before the query is analyzed, so an invalidation that runs while it executes keeps
             // its rows out of the result cache.
             let generation = crate::result_cache::global().generation();
@@ -47,11 +49,11 @@ impl DataFrame {
             {
                 // A hit is a request answered, so it has its row in `system.queries` too; it is not a
                 // physical execution, so the metrics registry does not count it.
-                let id = self
-                    .session
-                    .state
-                    .queries
-                    .record_replayed(a.env.text.as_deref(), a.env.statement_class);
+                let id = self.session.state.queries.record_replayed(
+                    a.env.text.as_deref(),
+                    a.env.statement_class,
+                    self.session.operation_id(),
+                );
                 *a.env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(id);
                 return Ok(crate::carrier::client_stream(crate::result_cache::replay(
                     batches,
