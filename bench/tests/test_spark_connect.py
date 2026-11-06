@@ -100,7 +100,7 @@ def test_cli_passes_the_host_server_options(monkeypatch):
 
     got = {}
 
-    def fake(engine, suite, sf, it, wu, only, kw, *rest):
+    def fake(engine, suite, sf, it, wu, only, kw, *rest, **_kwargs):
         got.update(kw)
         from pathlib import Path
 
