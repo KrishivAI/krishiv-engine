@@ -94,3 +94,20 @@ fn division_evaluates_the_divisor_first_as_spark_does() {
         assert!(err.contains("BY_ZERO"), "{op}: {err}");
     }
 }
+
+#[test]
+fn binary_math_functions_do_not_evaluate_the_right_side_on_null_left_rows() {
+    // Found by the nightly expression differential (2026-11-06): `power(NULL, x)` is NULL
+    // in Spark's `BinaryMathExpression` (a `BinaryExpression`), whatever `x` raises.
+    for f in ["power", "pow", "atan2", "hypot", "log"] {
+        let got = strings(&format!(
+            "select cast({f}(cast(nullif(id, 0) as double), 1 / id) is null as string) \
+             from range(3) order by id"
+        ));
+        assert_eq!(
+            got.unwrap(),
+            some(&[Some("true"), Some("false"), Some("false")]),
+            "{f}"
+        );
+    }
+}

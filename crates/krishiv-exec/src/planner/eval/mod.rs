@@ -546,7 +546,11 @@ fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: 
                 | Builtin::Multiply
         ),
         FunctionId::Registry { name, .. } => {
-            matches!(name.as_str(), "nullif" | "date_add" | "date_sub")
+            // `BinaryMathExpression` (`pow`, `atan2`, `hypot`, `log(base, x)`) is a plain `BinaryExpression` too.
+            matches!(
+                name.as_str(),
+                "nullif" | "date_add" | "date_sub" | "power" | "pow" | "atan2" | "hypot" | "log"
+            )
         }
         _ => false,
     };
