@@ -52,6 +52,7 @@ impl Resolver<'_> {
                 },
                 qual: Arc::from(Vec::new()),
                 source: None,
+                duplicate: false,
             })
             .collect();
         self.loops.push((id, refs.clone()));

@@ -173,32 +173,107 @@ fn a_recursive_cte_anchor_keeps_its_width_after_common_subexpressions() -> R {
 /// (Spark's `DeduplicateUnionChildOutput`, SPARK-37865). The name `x`
 /// above the union is the first copy, not ambiguous. Answers from a Spark
 /// 4.2.0 run.
+/// A union whose first branch repeats its column.
+const U: &str = "SELECT x, x FROM VALUES (1) t(x) UNION ALL SELECT 5, 6";
+/// A relation that repeats its column.
+const REPEAT: &str = "SELECT x, x FROM VALUES (1) t(x)";
+
 #[test]
 fn a_branch_that_repeats_a_column_keeps_both_positions() -> R {
     let s = Session::new()?;
     for (sql, want) in [
         (
-            "SELECT * FROM (SELECT x, x FROM VALUES (1) t(x) UNION ALL SELECT 5, 6) u(a, b)",
+            "SELECT * FROM (SELECT x, x FROM VALUES (1) t(x) UNION ALL SELECT 5, 6) u(a, b)"
+                .to_owned(),
             vec!["1|1", "5|6"],
         ),
         (
-            "SELECT * FROM (SELECT x, x AS y FROM VALUES (1) t(x) UNION ALL SELECT 5, 6)",
+            "SELECT * FROM (SELECT x, x AS y FROM VALUES (1) t(x) UNION ALL SELECT 5, 6)"
+                .to_owned(),
             vec!["1|1", "5|6"],
         ),
         (
-            "SELECT x FROM (SELECT x, x FROM VALUES (1) t(x) UNION ALL SELECT 5, 6)",
+            "SELECT x FROM (SELECT x, x FROM VALUES (1) t(x) UNION ALL SELECT 5, 6)".to_owned(),
             vec!["1", "5"],
         ),
         (
-            "SELECT * FROM (SELECT x, x FROM VALUES (1) t(x) UNION SELECT 5, 6)",
+            "SELECT * FROM (SELECT x, x FROM VALUES (1) t(x) UNION SELECT 5, 6)".to_owned(),
             vec!["1|1", "5|6"],
         ),
         (
-            "SELECT * FROM (SELECT 5, 6 UNION ALL SELECT x, x FROM VALUES (1) t(x))",
+            "SELECT * FROM (SELECT 5, 6 UNION ALL SELECT x, x FROM VALUES (1) t(x))".to_owned(),
             vec!["1|1", "5|6"],
         ),
+        // The repeat stays a repeat through column aliases, CTE references,
+        // `USING` keys and `* EXCEPT`, as Spark's attribute metadata does.
+        (format!("SELECT a FROM ({U}) u(a, a)"), vec!["1", "5"]),
+        (
+            format!("WITH u AS ({U}) SELECT x FROM u WHERE x IN (SELECT x FROM u)"),
+            vec!["1", "5"],
+        ),
+        (
+            format!("WITH u AS ({U}) SELECT a.x, b.x FROM u a JOIN u b ON a.x = b.x"),
+            vec!["1|1", "5|5"],
+        ),
+        (
+            format!("SELECT * FROM ({U}) a JOIN (SELECT 1 AS x) b USING (x)"),
+            vec!["1|1"],
+        ),
+        (format!("SELECT * EXCEPT (x) FROM ({U})"), vec!["1", "6"]),
+        (format!("SELECT * FROM ({U}) WHERE x = 5"), vec!["5|6"]),
+        (
+            format!("SELECT x, count(*) FROM ({U}) GROUP BY x"),
+            vec!["1|1", "5|1"],
+        ),
+        // Spark fails these two with an internal error; the rows are the
+        // multiset difference and intersection.
+        (
+            format!("SELECT * FROM ({REPEAT} EXCEPT ALL SELECT 1, 2)"),
+            vec!["1|1"],
+        ),
+        (
+            format!("SELECT * FROM ({REPEAT} INTERSECT ALL SELECT 1, 2)"),
+            vec![],
+        ),
     ] {
-        assert_eq!(run(&s, sql)?, want, "{sql}");
+        assert_eq!(run(&s, &sql)?, want, "{sql}");
     }
+    Ok(())
+}
+
+/// `df["x"]` and a self-join of such a union resolve `x` to the first copy
+/// (Spark 4.2.0: `[1, 5]`, `[1, 5, 7]` and `[1, 1, 5, 5]`).
+#[test]
+fn dataframe_references_to_a_repeated_column() -> R {
+    let s = Session::new()?;
+    let df = block_on(s.sql(U))?;
+    let other = block_on(s.sql("SELECT 7 AS x, 8 AS y"))?;
+    let rows = |d: &krishiv_session::DataFrame| -> R<Vec<String>> {
+        let mut out: Vec<String> = block_on(d.collect())?
+            .iter()
+            .flat_map(|b| {
+                let c = b.column(0).as_primitive::<Int32Type>();
+                (0..c.len())
+                    .map(|i| c.value(i).to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        out.sort();
+        Ok(out)
+    };
+    assert_eq!(rows(&df.select([df.col("x")]))?, ["1", "5"]);
+    assert_eq!(
+        rows(&df.union(&other).select([df.col("x")]))?,
+        ["1", "5", "7"]
+    );
+    let joined = df.alias("a").cross_join(&df.alias("b"));
+    assert_eq!(
+        rows(&joined.select([krishiv_session::functions::col("b.x")]))?,
+        ["1", "1", "5", "5"]
+    );
+    assert_eq!(
+        rows(&joined.select([krishiv_session::functions::col("a.x")]))?,
+        ["1", "1", "5", "5"]
+    );
     Ok(())
 }

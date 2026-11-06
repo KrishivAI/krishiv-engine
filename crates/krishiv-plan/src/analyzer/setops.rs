@@ -90,6 +90,7 @@ impl Resolver<'_> {
                 // The first input's attributes, qualifier included (Spark).
                 qual: Arc::clone(&a.qual),
                 source: None,
+                duplicate: a.duplicate,
             })
             .collect();
         for k in &kids[1..] {
@@ -238,6 +239,7 @@ impl Resolver<'_> {
                     col: output,
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 });
             }
             let one = Arc::new(LogicalPlan::new(PlanNode::OneRowRelation).with_origin(o));
@@ -282,6 +284,7 @@ impl Resolver<'_> {
                 col: col.clone(),
                 qual: no_qual(),
                 source: None,
+                duplicate: false,
             })
             .collect();
         let node = PlanNode::Expand {
@@ -547,6 +550,7 @@ impl Resolver<'_> {
                         col: output,
                         qual: Arc::from(Vec::new()),
                         source: None,
+                        duplicate: false,
                     });
                 }
             }
@@ -666,8 +670,12 @@ impl Resolver<'_> {
             let items = this.select_items(k, &exprs, env, "Project")?;
             Ok::<_, AnalysisError>(this.lateral_project(Origin::UNKNOWN, k, &items, &[]))
         };
+        // The union below matches its inputs by position, so an input that
+        // repeats a column needs distinct attributes (`distinct_output_ids`).
         let lt = tagged(self, l, [1, 0])?;
+        let lt = self.distinct_output_ids(&lt);
         let rt = tagged(self, r, [0, 1])?;
+        let rt = self.distinct_output_ids(&rt);
         let n = l.out.len();
         let mut uout = lt.out.to_vec();
         for (a, b) in uout.iter_mut().zip(rt.out.iter()) {
@@ -773,6 +781,7 @@ impl Resolver<'_> {
                 col: output,
                 qual: Arc::from(Vec::new()),
                 source: None,
+                duplicate: false,
             });
         }
         Ok(self.projection(k.plan.origin, k, exprs, out))
@@ -783,7 +792,7 @@ impl Resolver<'_> {
     /// SPARK-37865). A union's output is its first input's attributes and
     /// its inputs are matched by position, so `SELECT x, x ... UNION ALL
     /// SELECT 5, 6` would otherwise read `5` for both columns of the second
-    /// row. The new attributes are recorded in `Resolver::duplicates`.
+    /// row. The new attributes are marked [`Attr::duplicate`].
     pub(super) fn distinct_output_ids(&mut self, k: &Rel) -> Rel {
         let mut seen = HashSet::new();
         if k.out.iter().all(|a| seen.insert(a.col.id)) {
@@ -804,7 +813,6 @@ impl Resolver<'_> {
                 nullable: a.col.nullable,
             };
             let output = self.attr(&a.col.name, &ty);
-            self.duplicates.insert(output.id);
             exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
                 ResolvedExpr::Alias {
                     expr: column,
@@ -816,6 +824,7 @@ impl Resolver<'_> {
                 col: output,
                 qual: Arc::from(Vec::new()),
                 source: None,
+                duplicate: true,
             });
         }
         self.projection(k.plan.origin, k, exprs, out)

@@ -104,10 +104,14 @@ impl Resolver<'_> {
             let qual: Arc<[String]> = Arc::from(vec![n.clone()]);
             let out = output
                 .iter()
-                .map(|c| Attr {
+                .zip(def.out.iter())
+                .map(|(c, a)| Attr {
                     col: c.clone(),
                     qual: Arc::clone(&qual),
                     source: None,
+                    // Spark's `CTERelationRef` keeps the definition's
+                    // attribute metadata.
+                    duplicate: a.duplicate,
                 })
                 .collect();
             let node = PlanNode::CteRef(CteRef {
@@ -146,6 +150,7 @@ impl Resolver<'_> {
                 col,
                 qual: Arc::clone(&qual),
                 source: Some((*securable, Arc::from(c.name.as_str()))),
+                duplicate: false,
             });
         }
         let node = PlanNode::Scan(Scan {
@@ -188,6 +193,7 @@ impl Resolver<'_> {
             },
             qual: Arc::clone(qual),
             source: None,
+            duplicate: false,
         };
         rel.hidden = Arc::from(vec![attr]);
         rel.widen = Some(Arc::new(Widen::Scan));
@@ -210,6 +216,7 @@ impl Resolver<'_> {
                 },
                 qual: no_qual(),
                 source: None,
+                duplicate: false,
             })
             .collect();
         let node = PlanNode::Scan(Scan {
@@ -502,6 +509,7 @@ impl Resolver<'_> {
             col: compute.clone(),
             qual: no_qual(),
             source: None,
+            duplicate: false,
         });
         let inner = self.projection(Origin::UNKNOWN, base, inner_exprs, inner_out);
         let mut outer_exprs = Vec::with_capacity(items.len() + outputs - 1);
@@ -546,6 +554,7 @@ impl Resolver<'_> {
                     col: output,
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 });
             }
         }
@@ -597,6 +606,7 @@ impl Resolver<'_> {
                                 col: output.clone(),
                                 qual: no_qual(),
                                 source: None,
+                                duplicate: false,
                             });
                         }
                         items.push(bound);
@@ -632,6 +642,7 @@ impl Resolver<'_> {
                                 col: output.clone(),
                                 qual: no_qual(),
                                 source: None,
+                                duplicate: false,
                             });
                         }
                         items.push(bound);
@@ -672,6 +683,7 @@ impl Resolver<'_> {
                             col: output.clone(),
                             qual: no_qual(),
                             source: None,
+                            duplicate: false,
                         });
                     }
                     items.push(bound);
@@ -692,6 +704,7 @@ impl Resolver<'_> {
                     col: output.clone(),
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 });
             }
             items.push(b);
@@ -1665,7 +1678,7 @@ impl Resolver<'_> {
                             let a = Attr {
                                 col: output,
                                 qual: no_qual(),
-                                source: None,
+                                source: None, duplicate: false,
                             };
                             grown.out.push(a.clone());
                             known.push((k, a.clone()));
@@ -1805,6 +1818,7 @@ impl Resolver<'_> {
                             col: output,
                             qual: no_qual(),
                             source: None,
+                            duplicate: false,
                         };
                         st.grown.out.push(a.clone());
                         st.known.push((key, a.clone()));
@@ -2382,6 +2396,7 @@ impl Resolver<'_> {
                 col,
                 qual: no_qual(),
                 source: None,
+                duplicate: false,
             });
         }
         let gid_attr = Attr {
@@ -2391,6 +2406,7 @@ impl Resolver<'_> {
             ),
             qual: no_qual(),
             source: None,
+            duplicate: false,
         };
         // The grouping expressions that are not plain input columns, once
         // each: computed below the expansion so every projection groups
@@ -2419,6 +2435,7 @@ impl Resolver<'_> {
                     col,
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 },
             ));
         }
@@ -2445,6 +2462,7 @@ impl Resolver<'_> {
                 col,
                 qual: no_qual(),
                 source: None,
+                duplicate: false,
             };
             computed.push((k, Arc::clone(filter), attr.clone()));
             filter_cols.push((k, attr));
@@ -2469,6 +2487,7 @@ impl Resolver<'_> {
                     col,
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 },
             ));
         }
@@ -2503,6 +2522,7 @@ impl Resolver<'_> {
                     col,
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 },
             ));
         }
@@ -2923,6 +2943,7 @@ impl Resolver<'_> {
                     col: output,
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 };
                 info.out.push(a.clone());
                 a
@@ -3073,6 +3094,7 @@ impl Resolver<'_> {
                 col: JoinKind::existence_column(id),
                 qual: Arc::from(Vec::new()),
                 source: None,
+                duplicate: false,
             });
         } else if !matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
             out.extend(r.out.iter().map(|a| nullable(a, rn)));
@@ -3348,11 +3370,17 @@ impl Resolver<'_> {
     ) -> Result<(Arc<Expr>, Vec<Keys>), AnalysisError> {
         let cs = self.ctx.conf.case_sensitive;
         let side = |rel: &Rel, which: &str, name: &String| {
-            let hits: Vec<&Attr> = rel
-                .out
-                .iter()
-                .filter(|a| same(&a.col.name, name, cs))
-                .collect();
+            let mut hits: Vec<&Attr> = Vec::new();
+            for a in rel.out.iter() {
+                if same(&a.col.name, name, cs) && !hits.iter().any(|h| h.col.id == a.col.id) {
+                    hits.push(a);
+                }
+            }
+            // Spark resolves the key through `getCandidatesForResolution`:
+            // a union input's repeat of a column does not count.
+            if hits.len() > 1 {
+                hits.retain(|a| !a.duplicate);
+            }
             match hits[..] {
                 [a] => Ok(a.clone()),
                 [a, ..] if lenient => Ok(a.clone()),
@@ -3870,6 +3898,8 @@ impl Resolver<'_> {
                     col: output,
                     qual: no_qual(),
                     source: a.source.clone(),
+                    // Spark's `Alias` keeps its child's metadata.
+                    duplicate: a.duplicate,
                 });
             }
             let node = PlanNode::Project {
@@ -4129,6 +4159,7 @@ pub(super) fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
                     col: c.clone(),
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 },
             }
         }
@@ -4136,6 +4167,7 @@ pub(super) fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
             col: output.clone(),
             qual: no_qual(),
             source: None,
+            duplicate: false,
         },
         _ => Attr {
             col: BoundColumn {
@@ -4146,6 +4178,7 @@ pub(super) fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
             },
             qual: no_qual(),
             source: None,
+            duplicate: false,
         },
     }
 }
