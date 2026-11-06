@@ -88,6 +88,7 @@ pub(crate) fn is_aes_function(name: &str) -> bool {
 mod fold;
 mod fold_ops;
 mod generate;
+mod having_subquery;
 mod hints;
 mod hof;
 mod instance;

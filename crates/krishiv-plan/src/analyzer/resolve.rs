@@ -140,6 +140,10 @@ pub(super) struct Level {
     /// output does not carry, searched first: Spark binds an outer name to the
     /// aggregate input before an output alias of the same name.
     pub(super) fallback: Arc<[Attr]>,
+    /// The input of the aggregate whose `HAVING` the subquery sits in: an
+    /// aggregate call of the subquery's `WHERE` over only these columns is
+    /// that aggregate's (Spark's outer aggregate), not the subquery's.
+    pub(super) having: Option<Arc<[Attr]>>,
 }
 
 /// A scope environment: the CTEs visible and the enclosing queries.
