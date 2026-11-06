@@ -8,6 +8,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
+use tracing::Instrument as _;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -1637,18 +1638,23 @@ impl Session {
                 let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
                 pending.1 = Some(done_rx);
                 let abandoned = Arc::clone(&query);
-                drop(self.state.runtime.executor.spawn(
-                    WorkloadClass::Interactive,
-                    Box::pin(async move {
-                        let result = submit.await;
-                        let started = result.is_ok();
-                        if let Err(Ok(stream)) = stream_tx.send(result) {
-                            abandoned.cancel();
-                            drop(stream);
-                        }
-                        let _ = done_tx.send(started);
-                    }),
-                ));
+                drop(
+                    self.state.runtime.executor.spawn(
+                        WorkloadClass::Interactive,
+                        Box::pin(
+                            async move {
+                                let result = submit.await;
+                                let started = result.is_ok();
+                                if let Err(Ok(stream)) = stream_tx.send(result) {
+                                    abandoned.cancel();
+                                    drop(stream);
+                                }
+                                let _ = done_tx.send(started);
+                            }
+                            .instrument(tracing::Span::current()),
+                        ),
+                    ),
+                );
                 stream_rx
                     .await
                     .unwrap_or_else(|_| Err(internal("a query ended during its setup".to_owned())))
