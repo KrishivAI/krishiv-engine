@@ -227,6 +227,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("spill_files", Long, true),
             ("pipelines", Long, true),
             ("workers", Long, true),
+            ("cancel_reason", Text, true),
         ],
         _ => return None,
     })
@@ -582,6 +583,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             long(rows.iter().map(|r| r.spill_files)),
             long(rows.iter().map(|r| r.pipelines)),
             long(rows.iter().map(|r| r.workers)),
+            text(rows.iter().map(|r| r.cancel_reason)),
         ];
     }
     let rows = capability_rows();
@@ -749,6 +751,9 @@ pub(crate) struct QueryRow {
     pub(crate) spill_files: Option<i64>,
     pub(crate) pipelines: Option<i64>,
     pub(crate) workers: Option<i64>,
+    /// Why the query was cancelled ([`crate::CancelReason::as_str`]), for a
+    /// query cancelled with a reason; `state` stays `cancelled`.
+    pub(crate) cancel_reason: Option<&'static str>,
 }
 
 /// One operator of a finished query, as `system.operators` lists it.
@@ -852,7 +857,7 @@ pub(crate) struct Totals {
     pub(crate) workload_class: &'static str,
     pub(crate) cpu_ns: i64,
     pub(crate) rows_produced: Option<i64>,
-    /// Process-wide I/O since the query started (concurrent queries share it).
+    /// The query's own I/O since it started (its I/O context; design P2-E1 R3).
     pub(crate) bytes_read: i64,
     pub(crate) bytes_written: i64,
     pub(crate) spill_bytes: i64,
@@ -988,6 +993,7 @@ impl QueryLog {
             spill_files: None,
             pipelines: None,
             workers: None,
+            cancel_reason: None,
         }
     }
 
@@ -1159,7 +1165,7 @@ impl QueryLog {
 fn outcome_state(class: &str) -> &'static str {
     match class {
         "KRISHIV_INSUFFICIENT_PERMISSIONS" => "denied",
-        "OPERATION_CANCELED" => "cancelled",
+        "OPERATION_CANCELED" | "KRISHIV_QUERY_TIMEOUT" | "KRISHIV_QUERY_KILLED" => "cancelled",
         _ => "failed",
     }
 }
@@ -1276,7 +1282,7 @@ mod tests {
         let sources = Sources {
             queries: Arc::new(QueryLog::default()),
             io: krishiv_io::IoScheduler::new(krishiv_io::IoConfig::default()),
-            relations: Arc::new(crate::cache::RelationCache::new(&memory)),
+            relations: crate::cache::RelationCache::new(&memory),
             metrics: Arc::new(krishiv_exec::MetricsRegistry::new()),
             memory,
             monitor: Arc::new(Monitor::new(

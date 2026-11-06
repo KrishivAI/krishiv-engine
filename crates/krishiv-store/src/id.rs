@@ -44,20 +44,29 @@ impl StoreId {
         Self::new(format!("{}{PRIVATE_MARK}{job}", self.0))
     }
 
-    /// The full registry key: [`Display`](fmt::Display) hides the alias of
-    /// [`Self::private_to`] and redacts credentials.
+    /// The full registry key, every suffix included: what caches and the
+    /// scheduler key by. [`Display`](fmt::Display) shows only the location
+    /// (no `#` suffix) and redacts credentials.
     #[must_use]
     pub fn key(&self) -> &str {
         &self.0
+    }
+
+    /// The full key with credentials redacted, every `#` suffix kept: the
+    /// identity a cache stores beside its entries (it may be written to disk,
+    /// so never [`Self::key`] itself).
+    #[must_use]
+    pub fn redacted_key(&self) -> String {
+        OptionValue::from_user("path", &*self.0).to_string()
     }
 }
 
 impl fmt::Display for StoreId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let shown = self
-            .0
-            .split_once(PRIVATE_MARK)
-            .map_or(&*self.0, |(name, _)| name);
+        // Every `#` suffix is registry bookkeeping (a write's private alias, a credential
+        // scope's nonce, the `#cfg:` settings hash, a per-read options hash), never part of the
+        // location a message names: shown without it. Identity is `Self::key`.
+        let shown = self.0.split_once('#').map_or(&*self.0, |(name, _)| name);
         // Typed redaction (ADR 0038): URL credentials never print.
         OptionValue::from_user("path", shown).fmt(f)
     }

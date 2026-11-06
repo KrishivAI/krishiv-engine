@@ -130,10 +130,12 @@ pub(crate) struct SessionCatalog {
     epoch: AtomicU64,
     /// Hidden names handed out for snapshot pins (see [`SessionCatalog::put_view`]).
     hidden: AtomicU64,
-    /// The permanent tables, apart from the temporary views above.
-    pub(crate) store: InMemoryCatalogStore,
-    /// Where managed tables live.
-    pub(crate) warehouse: Warehouse,
+    /// The permanent tables, apart from the temporary views above: the
+    /// runtime's, shared by all its sessions as Spark's `newSession()`
+    /// shares the external catalog.
+    pub(crate) store: Arc<InMemoryCatalogStore>,
+    /// Where managed tables live (the runtime's).
+    pub(crate) warehouse: Arc<Warehouse>,
     /// The namespace bare table names resolve in (`USE`).
     current_namespace: RwLock<String>,
     /// The entries `SET PATH` stored; `None` is the default path.
@@ -141,6 +143,20 @@ pub(crate) struct SessionCatalog {
 }
 
 impl SessionCatalog {
+    /// A session's catalog over the runtime's permanent `store` and
+    /// `warehouse`.
+    pub(crate) fn over(store: Arc<InMemoryCatalogStore>, warehouse: Arc<Warehouse>) -> Self {
+        Self {
+            tables: RwLock::default(),
+            epoch: AtomicU64::new(0),
+            hidden: AtomicU64::new(0),
+            store,
+            warehouse,
+            current_namespace: RwLock::default(),
+            path: RwLock::default(),
+        }
+    }
+
     /// Adds or replaces `name`, removing the snapshot pins the old entry
     /// owned that no other live view still owns.
     pub(crate) fn put(&self, name: &str, table: TempTable) {

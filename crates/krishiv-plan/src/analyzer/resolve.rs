@@ -36,6 +36,13 @@ pub(super) struct Attr {
     pub(super) col: BoundColumn,
     pub(super) qual: Arc<[String]>,
     pub(super) source: Option<(usize, Arc<str>)>,
+    /// A union input's re-aliased repeat of an earlier column of that input
+    /// (`Resolver::distinct_output_ids`): Spark's `__is_duplicate`
+    /// metadata. A name that matches it and another column resolves to the
+    /// other. It follows the attribute wherever the attribute is copied
+    /// (instances, CTE references, column aliases, an alias of the bare
+    /// column); a new attribute computed from it does not have it.
+    pub(super) duplicate: bool,
 }
 
 /// What an aggregate needs to resolve `HAVING` / `ORDER BY` over it.
@@ -262,7 +269,13 @@ pub(super) fn resolve(
     // Hints name relations of their resolved subtree.
     let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
     // Subqueries to joins, after everything resolved (P2-T071c).
-    let root = super::subquery::rewrite(&root, &mut r.next_id, &*ctx.functions, ctx.profile)?;
+    let root = super::subquery::rewrite(
+        &root,
+        &mut r.next_id,
+        &*ctx.functions,
+        ctx.profile,
+        &ctx.conf,
+    )?;
     let output = rel.out.iter().map(|a| a.col.clone()).collect();
     // The output columns that are `CHAR(n)` / `VARCHAR(n)` columns (none under `charVarcharAsString`).
     let declared = rel
@@ -875,6 +888,7 @@ impl Resolver<'_> {
                         col: c.clone(),
                         qual: Arc::clone(&qual),
                         source: source.map(|i| (i, Arc::from(c.name.as_str()))),
+                        duplicate: false,
                     })
                     .collect();
                 Ok(self.wrap(Arc::clone(p), o.plan_id, out, &[]))
@@ -888,6 +902,7 @@ impl Resolver<'_> {
                         col: c.clone(),
                         qual: Arc::clone(&qual),
                         source: None,
+                        duplicate: false,
                     })
                     .collect();
                 Ok(self.wrap(Arc::clone(p), o.plan_id, out, &[]))
@@ -959,6 +974,7 @@ impl Resolver<'_> {
                     col,
                     qual,
                     source: None,
+                    duplicate: false,
                 }];
                 let leaf = Arc::new(LogicalPlan::new(node).with_origin(o));
                 Ok(self.wrap(leaf, o.plan_id, out, &[]))

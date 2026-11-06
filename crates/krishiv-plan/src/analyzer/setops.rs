@@ -74,10 +74,17 @@ impl Resolver<'_> {
         if kids.is_empty() {
             return Err(unsupported("a union without inputs", o));
         }
+        for (k, input) in kids.iter_mut().zip(inputs) {
+            mark_repeats(input, k);
+        }
         if by_name {
             kids = self.by_name(&kids, allow_missing_columns, o)?;
         }
-        let kids = self.widen_inputs(&kids, "UNION", o)?;
+        let kids: Vec<Rel> = self
+            .widen_inputs(&kids, "UNION", o)?
+            .iter()
+            .map(|k| self.distinct_output_ids(k))
+            .collect();
         let mut out: Vec<Attr> = kids[0]
             .out
             .iter()
@@ -86,6 +93,7 @@ impl Resolver<'_> {
                 // The first input's attributes, qualifier included (Spark).
                 qual: Arc::clone(&a.qual),
                 source: None,
+                duplicate: a.duplicate,
             })
             .collect();
         for k in &kids[1..] {
@@ -234,6 +242,7 @@ impl Resolver<'_> {
                     col: output,
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 });
             }
             let one = Arc::new(LogicalPlan::new(PlanNode::OneRowRelation).with_origin(o));
@@ -278,6 +287,7 @@ impl Resolver<'_> {
                 col: col.clone(),
                 qual: no_qual(),
                 source: None,
+                duplicate: false,
             })
             .collect();
         let node = PlanNode::Expand {
@@ -543,6 +553,7 @@ impl Resolver<'_> {
                         col: output,
                         qual: Arc::from(Vec::new()),
                         source: None,
+                        duplicate: false,
                     });
                 }
             }
@@ -662,8 +673,12 @@ impl Resolver<'_> {
             let items = this.select_items(k, &exprs, env, "Project")?;
             Ok::<_, AnalysisError>(this.lateral_project(Origin::UNKNOWN, k, &items, &[]))
         };
+        // The union below matches its inputs by position, so an input that
+        // repeats a column needs distinct attributes (`distinct_output_ids`).
         let lt = tagged(self, l, [1, 0])?;
+        let lt = self.distinct_output_ids(&lt);
         let rt = tagged(self, r, [0, 1])?;
+        let rt = self.distinct_output_ids(&rt);
         let n = l.out.len();
         let mut uout = lt.out.to_vec();
         for (a, b) in uout.iter_mut().zip(rt.out.iter()) {
@@ -769,9 +784,53 @@ impl Resolver<'_> {
                 col: output,
                 qual: Arc::from(Vec::new()),
                 source: None,
+                duplicate: false,
             });
         }
         Ok(self.projection(k.plan.origin, k, exprs, out))
+    }
+
+    /// `k` with every column that repeats an earlier column's attribute
+    /// re-aliased to a new attribute (Spark's `DeduplicateUnionChildOutput`,
+    /// SPARK-37865). A union's output is its first input's attributes and
+    /// its inputs are matched by position, so `SELECT x, x ... UNION ALL
+    /// SELECT 5, 6` would otherwise read `5` for both columns of the second
+    /// row. The new attributes are marked [`Attr::duplicate`].
+    pub(super) fn distinct_output_ids(&mut self, k: &Rel) -> Rel {
+        let mut seen = HashSet::new();
+        if k.out.iter().all(|a| seen.insert(a.col.id)) {
+            return k.clone();
+        }
+        seen.clear();
+        let mut exprs = Vec::with_capacity(k.out.len());
+        let mut out = Vec::with_capacity(k.out.len());
+        for a in k.out.iter() {
+            let column = col_expr(&a.col, Origin::UNKNOWN);
+            if seen.insert(a.col.id) {
+                exprs.push(column);
+                out.push(a.clone());
+                continue;
+            }
+            let ty = ArgType {
+                data_type: Some(a.col.data_type.clone()),
+                nullable: a.col.nullable,
+            };
+            let output = self.attr(&a.col.name, &ty);
+            exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Alias {
+                    expr: column,
+                    output: output.clone(),
+                },
+            ))));
+            // An alias's attribute has no qualifier.
+            out.push(Attr {
+                col: output,
+                qual: Arc::from(Vec::new()),
+                source: None,
+                duplicate: true,
+            });
+        }
+        self.projection(k.plan.origin, k, exprs, out)
     }
 
     pub(super) fn distinct(
@@ -995,6 +1054,48 @@ fn no_map_columns(k: &Rel, origin: Origin) -> Result<(), AnalysisError> {
         )),
         None => Ok(()),
     }
+}
+
+/// A union input analyzed before (a DataFrame temporary view stores the
+/// analyzed plan) is already the projection [`Resolver::distinct_output_ids`]
+/// built, whose resolved IR holds no mark: an alias of a column the same
+/// projection outputs bare, under the column's own name, is that
+/// projection's re-aliased repeat, and is marked [`Attr::duplicate`] again.
+/// SQL and DataFrame aliases reach the analyzer unresolved, so only
+/// re-analysis takes this path.
+fn mark_repeats(input: &LogicalPlan, k: &mut Rel) {
+    let PlanNode::Project { exprs, .. } = &input.node else {
+        return;
+    };
+    let mut bare = HashSet::new();
+    let mut repeats = HashSet::new();
+    for e in exprs {
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                bare.insert(c.id);
+            }
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
+                if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &expr.node
+                    && bare.contains(&c.id)
+                    && c.name == output.name
+                {
+                    repeats.insert(output.id);
+                }
+            }
+            _ => {}
+        }
+    }
+    if repeats.is_empty() {
+        return;
+    }
+    k.out = k
+        .out
+        .iter()
+        .map(|a| Attr {
+            duplicate: a.duplicate || repeats.contains(&a.col.id),
+            ..a.clone()
+        })
+        .collect();
 }
 
 fn no_duplicates(k: &Rel, cs: bool) -> Result<(), AnalysisError> {

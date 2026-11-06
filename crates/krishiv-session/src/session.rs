@@ -5,8 +5,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::Future;
-use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::task::Poll;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -46,23 +47,25 @@ use object_store::ObjectStore;
 #[cfg(not(unix))]
 use object_store::local::LocalFileSystem;
 
-use crate::admission::AdmissionController;
+use crate::admission::{AdmissionController, QueryRequest};
 use crate::cache::RelationCache;
 use crate::catalog::{FileScans, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
 use crate::catalog::{is_global_key, is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
-use crate::query_fold::{Admitted, MetricStream, PendingFold, QueryFold, QueryStart};
+use crate::query_fold::{Admitted, MetricStream, PendingFold, QueryFold, QueryStart, QueuedRow};
 use crate::runtime::EngineRuntime;
 use crate::sql_functions::{QueryFunctions, SqlFunctions};
 use crate::variables::SessionVariables;
 
 mod context;
 mod lifecycle;
+#[cfg(test)]
+mod run_task;
 
 /// The store id of the local file system.
-const LOCAL_STORE: &str = "file";
+pub(crate) const LOCAL_STORE: &str = "file";
 
 /// Now, as microseconds since the epoch.
 fn query_start_micros() -> i64 {
@@ -107,6 +110,8 @@ pub struct Session {
     /// The operation the queries this handle starts belong to
     /// ([`Session::sql_with`]); `None` for a handle a user holds.
     pub(crate) operation: Option<Arc<crate::history::Operation>>,
+    /// The statement's own time limit ([`crate::QueryOptions::deadline`]).
+    pub(crate) deadline: Option<std::time::Duration>,
 }
 
 impl fmt::Debug for Session {
@@ -143,7 +148,7 @@ pub(crate) struct SessionState {
     /// The session's number on its runtime.
     pub(crate) number: u64,
     /// Set by [`Session::close`]: the session takes no new statement.
-    closed: lifecycle::Closing,
+    closed: AtomicBool,
     /// The session's memory pool: the runtime's root, or a pool of its own
     /// under the root (`krishiv.session.memoryLimit`).
     memory: Arc<dyn MemoryPool>,
@@ -1100,8 +1105,11 @@ impl Session {
         // plans carry only path strings, and the worker resolves the store
         // at listing from the read's option values (P2-T084).
         let stores = self.scoped_stores(&config);
+        // One I/O context for the query's reads, scans and writes: its
+        // counters are the query's own bytes (`system.queries`).
+        let io = self.scoped_io();
         let files = Arc::new(FileReads::new(
-            self.scoped_io(),
+            io.clone(),
             Arc::clone(&self.state.runtime.formats),
             Arc::new(ObjectPaths::new(
                 StoreId::new(LOCAL_STORE),
@@ -1112,7 +1120,7 @@ impl Session {
             Arc::clone(&config),
         ));
         let scans = FileScans {
-            io: self.scoped_io(),
+            io: io.clone(),
             config: Arc::clone(&config),
             slots: u64::try_from(self.state.runtime.executor.parallelism().max(1)).unwrap_or(1),
             runtime: self.state.runtime.executor.io_handle().clone(),
@@ -1192,6 +1200,7 @@ impl Session {
         // least as new.
         let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
         QueryEnv {
+            io,
             config,
             parser,
             analysis,
@@ -1280,7 +1289,7 @@ impl Session {
         // Spark's `ViewSyncSchemaToMetaStore`: once the query analyzed, evolved views store their new schema. A
         // concurrent change of the view wins (its entry is no longer the one the read found).
         for (found, changed) in synced {
-            crate::store::CatalogStore::replace_table(&self.state.catalog.store, &found, changed);
+            crate::store::CatalogStore::replace_table(&*self.state.catalog.store, &found, changed);
         }
         for view in views {
             let securable = krishiv_plan::analyzer::Securable::View(view);
@@ -1472,45 +1481,6 @@ impl Session {
             .await
     }
 
-    /// Runs `physical` as `task` in this process (tests): the worker of
-    /// [`Self::worker`] instantiating with the task's scan splits, executed
-    /// on the session's executor (I/O needs its runtime).
-    #[cfg(test)]
-    pub(crate) async fn run_task(
-        &self,
-        physical: &PhysicalPlan,
-        env: &QueryEnv,
-        task: &krishiv_exec::physical::TaskSpec,
-    ) -> Result<Vec<RecordBatch>, KrishivError> {
-        use krishiv_exec::physical::instantiate_task;
-        let worker = self.worker(env);
-        let node = instantiate_task(physical, &worker, task)?;
-        let state = Arc::clone(&self.state);
-        let config = Arc::clone(&env.config);
-        self.on_executor(async move {
-            let id = QueryId(state.runtime.next_query_index());
-            let pool = state.memory.child(&format!("query-task-{}", id.0), None);
-            let query = QueryContext::new(
-                id,
-                WorkloadClass::Interactive,
-                ExecConfig::from_config(&config),
-                pool,
-            );
-            let mut stream = state
-                .runtime
-                .runner
-                .execute(node, Arc::clone(&query))
-                .await?;
-            let mut out = Vec::new();
-            while let Some(batch) = stream.next().await {
-                out.push(batch?.into_parts().0);
-            }
-            query.finished().await;
-            Ok(out)
-        })
-        .await
-    }
-
     /// The session's relation store (tests): every registered memory
     /// table's batches as content-addressed IPC.
     #[cfg(test)]
@@ -1532,12 +1502,50 @@ impl Session {
         Ok((stream, query))
     }
 
+    /// Asks the admission controller for a permit for the query whose
+    /// `system.queries` row is `log_id`. A controller that answers at once
+    /// leaves the row `running`; one that waits shows it `queued`. A refusal
+    /// closes the row as failed with the controller's error class, and a
+    /// caller that drops the query while it is queued closes it `cancelled`.
+    async fn admit(&self, log_id: &str) -> Result<crate::admission::Permit, KrishivError> {
+        let request = QueryRequest {
+            principal: Arc::clone(&self.state.principal),
+            tags: self.state.queries.tags_now(),
+            class: WorkloadClass::Interactive,
+            estimate: None,
+        };
+        let controller = Arc::clone(&self.state.admission);
+        let mut admit = std::pin::pin!(controller.admit(&request));
+        let mut queued = QueuedRow {
+            state: Arc::clone(&self.state),
+            id: log_id,
+            open: true,
+        };
+        let admitted = match std::future::poll_fn(|cx| Poll::Ready(admit.as_mut().poll(cx))).await {
+            Poll::Ready(done) => done,
+            Poll::Pending => {
+                self.state.queries.set_state(log_id, "queued");
+                let done = admit.await;
+                if done.is_ok() {
+                    self.state.queries.set_state(log_id, "running");
+                }
+                done
+            }
+        };
+        queued.open = false;
+        match admitted {
+            Ok(permit) => Ok(permit),
+            Err(error) => {
+                self.state.queries.record_failed_row(log_id, &error);
+                Err(error)
+            }
+        }
+    }
+
     /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
     /// that is about to change something (a write replacing files) takes the permit first and
     /// passes it on, so a refused or cancelled query has changed nothing.
     pub(crate) async fn admit_query(&self, env: &QueryEnv) -> Result<Admitted, KrishivError> {
-        // Before anything changes: a writer calls this before it replaces data.
-        self.check_open()?;
         let log_id = self.state.queries.begin_as(
             env.text.as_deref(),
             env.statement_class,
@@ -1567,7 +1575,11 @@ impl Session {
             Some(admitted) => admitted.into_parts(),
             None => self.admit_query(env).await?.into_parts(),
         };
-        let id = QueryId(self.state.runtime.next_query_index());
+        let id = QueryId(self.state.runtime.reserve(
+            self.state.number,
+            self.state.queries.session_id(),
+            &log_id,
+        ));
         let pool = self
             .state
             .memory
@@ -1593,7 +1605,7 @@ impl Session {
             Some(QueryFold {
                 query: Arc::clone(&query),
                 state: Arc::clone(&self.state),
-                start: QueryStart::capture(&self.state),
+                start: QueryStart::capture(&self.state, &env.io),
                 metrics_on,
                 log_id,
                 _permit: permit,
@@ -1601,11 +1613,9 @@ impl Session {
             }),
             None,
         );
-        if !self.state.runtime.track(self.state.number, &row_id, &query) {
-            // Closed after `check_open`: the pending fold cancels the query
-            // and records it as it drops.
-            return Err(self.closed_error());
-        }
+        // Closed after `check_open`: the pending fold cancels the query
+        // and records it as it drops.
+        self.attach(&query, &row_id, &env.config)?;
         // A plan the wire format cannot carry fails as a submit failure does:
         // its row records the error.
         let submitted = match crate::plan_round_trip::round_trip(physical, &env.config) {
@@ -1838,7 +1848,8 @@ impl Session {
             !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
         let max_records = max_records_per_file(&options, format.name())?;
         let at = self.locate_write_path(text, &options, env)?;
-        let io = self.scoped_io();
+        // The query's own context: its counters are the write's bytes.
+        let io = env.io.clone();
         self.authorize_write_path(&at, &options).await?;
         // A link swapped into the checked path since fails the write
         // before anything is replaced, and again before the commit deletes
@@ -1936,7 +1947,10 @@ impl Session {
             self.refresh_files();
             // A write by path into a table's directory changes what the table reads.
             if let Some(local) = at.display.strip_prefix("file:") {
-                crate::result_cache::global().invalidate_path(std::path::Path::new(local));
+                self.state
+                    .runtime
+                    .results
+                    .invalidate_path(std::path::Path::new(local));
             }
             let mut dirs = std::collections::BTreeSet::new();
             for f in &committed {
@@ -2347,7 +2361,7 @@ impl Session {
         .with_spill_scopes(Arc::new(QuerySpill {
             state: Arc::clone(&self.state),
         }))
-        .with_io(self.scoped_io())
+        .with_io(env.io.clone())
         .with_formats(Arc::clone(&self.state.runtime.formats))
         .with_config(Arc::clone(&env.config))
     }
@@ -2549,6 +2563,9 @@ fn conf_values<'k>(config: &Config, keys: &[&'k str]) -> BTreeMap<&'k str, Strin
 #[derive(Clone)]
 pub(crate) struct QueryEnv {
     pub(crate) config: Arc<Config>,
+    /// The query's I/O context: every read, scan and write of the query goes
+    /// through it, so its counters are the query's own.
+    pub(crate) io: krishiv_io::IoContext,
     pub(crate) parser: ParserOptions,
     pub(crate) analysis: AnalysisContext,
     pub(crate) catalog: Arc<QueryCatalog>,

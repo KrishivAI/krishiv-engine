@@ -106,6 +106,7 @@ impl Resolver<'_> {
                 col,
                 qual: Arc::clone(&a.qual),
                 source: a.source.clone(),
+                duplicate: a.duplicate,
             });
         }
         let mut padded = self.projection(origin, &rel, exprs, out);
