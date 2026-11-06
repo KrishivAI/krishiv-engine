@@ -412,12 +412,12 @@ impl ParquetEncoder {
         // also gets back what Parquet cannot say (extension tags).
         let properties = tweak(settings.properties()).build();
         let mut options = ArrowWriterOptions::new();
-        // A variant group gets its `VARIANT(1)` annotation, which arrow-rs
-        // does not write on its own.
+        // A variant group (at any depth) gets its `VARIANT(1)` annotation,
+        // which arrow-rs does not write on its own.
         if schema
             .fields()
             .iter()
-            .any(|f| krishiv_types::arrow::is_variant_struct(f.data_type()))
+            .any(|f| super::variant::holds_variant(f.data_type()))
         {
             let descr = parquet::arrow::ArrowSchemaConverter::new()
                 .with_coerce_types(properties.coerce_types())

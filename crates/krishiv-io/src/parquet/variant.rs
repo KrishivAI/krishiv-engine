@@ -16,13 +16,15 @@
 //! rebuilds each element. Rebuilt values get a fresh dictionary (and
 //! integers their smallest width), so they are equal to the stored ones by
 //! `to_json`, not by bytes. Variants nested in structs, arrays and map values
-//! are found through the footer's Spark schema ([`Variants`]). A field both
+//! are found through the footer's Spark schema ([`Variants`]) or, without
+//! one, through their `VARIANT` annotation at any depth, as Spark's
+//! `ParquetSchemaConverter` reads it (files of parquet-java, Iceberg). A field both
 //! shredded and in the residual object is corrupt, as is a nanosecond
 //! timestamp (Spark 4.2.0 reads neither).
 //!
 //! **Writing** is unshredded, as Spark 4.2 writes by default: the group
-//! `{metadata, value}` (both required binary) annotated `VARIANT(1)`
-//! ([`annotate`]); the footer's Spark schema says `variant` too.
+//! `{metadata, value}` (both required binary) annotated `VARIANT(1)` at any
+//! depth ([`annotate`]); the footer's Spark schema says `variant` too.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -110,7 +112,15 @@ impl Variants {
                         .iter()
                         .find(|x| x.name() == f.name())
                         .map(|x| x.data_type().clone()),
-                    _ => None,
+                    // No Spark schema: a `VARIANT` annotation at any depth
+                    // (parquet-java, Iceberg, DuckDB), as Spark's
+                    // `ParquetSchemaConverter` honours it.
+                    _ => descr
+                        .root_schema()
+                        .get_fields()
+                        .iter()
+                        .find(|t| t.name() == f.name())
+                        .map(|t| parquet_declared(f.data_type(), t)),
                 };
                 let engine = engine_field(f, declared.as_ref());
                 if engine.data_type() != f.data_type() {
@@ -120,6 +130,76 @@ impl Variants {
             })
             .collect();
         (out, Self { roots })
+    }
+}
+
+/// Whether `t` is a group annotated `VARIANT` with a variant's children.
+fn is_variant_group(t: &TypePtr) -> bool {
+    t.is_group()
+        && has_children(t)
+        && matches!(
+            t.get_basic_info().logical_type_ref(),
+            Some(LogicalType::Variant(_))
+        )
+}
+
+/// The element of a Parquet list group: the repeated child's one field
+/// (three levels), or the repeated child itself (the legacy two levels, or
+/// a repeated variant group).
+fn list_element(t: &TypePtr) -> Option<&TypePtr> {
+    let repeated = t.get_fields().first()?;
+    match repeated.get_fields() {
+        [element] if repeated.is_group() && !is_variant_group(repeated) => Some(element),
+        _ => Some(repeated),
+    }
+}
+
+/// What the Parquet schema `t` of a field decoded as `arrow` declares, in
+/// the shape [`engine_type`] reads: `VARIANT` for an annotated group at any
+/// depth, the nesting around it, and `NULL` for every other leaf (which
+/// [`engine_type`] keeps as decoded).
+fn parquet_declared(arrow: &DataType, t: &TypePtr) -> SparkType {
+    if is_variant_group(t) {
+        return SparkType::Variant;
+    }
+    if !t.is_group() {
+        return SparkType::Null;
+    }
+    match arrow {
+        DataType::Struct(children) => {
+            SparkType::Struct(krishiv_types::StructType::new(children.iter().map(|c| {
+                let declared = t
+                    .get_fields()
+                    .iter()
+                    .find(|x| x.name() == c.name())
+                    .map_or(SparkType::Null, |x| parquet_declared(c.data_type(), x));
+                krishiv_types::StructField::new(c.name().clone(), declared, true)
+            })))
+        }
+        DataType::List(e) | DataType::LargeList(e) => {
+            let declared =
+                list_element(t).map_or(SparkType::Null, |x| parquet_declared(e.data_type(), x));
+            SparkType::Array(Arc::new(krishiv_types::ArrayType::new(declared, true)))
+        }
+        DataType::Map(entries, _) => {
+            let value = t
+                .get_fields()
+                .first()
+                .and_then(|kv| kv.get_fields().get(1))
+                .zip(match entries.data_type() {
+                    DataType::Struct(kv) if kv.len() == 2 => Some(Arc::clone(&kv[1])),
+                    _ => None,
+                })
+                .map_or(SparkType::Null, |(pq, field)| {
+                    parquet_declared(field.data_type(), pq)
+                });
+            SparkType::Map(Arc::new(krishiv_types::MapType::new(
+                SparkType::Null,
+                value,
+                true,
+            )))
+        }
+        _ => SparkType::Null,
     }
 }
 
@@ -538,47 +618,185 @@ fn scale(s: i8) -> FormatResult<u8> {
 }
 
 /// The Parquet schema of `fields` as arrow-rs converts it, with each
-/// top-level variant group annotated `VARIANT(1)`.
+/// variant group annotated `VARIANT(1)` at any depth (inside structs,
+/// lists and map values), as Spark 4.2 writes it.
 ///
 /// # Errors
-/// `WriteFailed` when the schema cannot be converted or rebuilt.
+/// `WriteFailed` when the schema cannot be rebuilt.
 pub(super) fn annotate(
     descr: SchemaDescriptor,
     fields: &[FieldRef],
 ) -> FormatResult<SchemaDescriptor> {
-    let variants: HashSet<&str> = fields
-        .iter()
-        .filter(|f| krishiv_types::arrow::is_variant_struct(f.data_type()))
-        .map(|f| f.name().as_str())
-        .collect();
-    if variants.is_empty() {
+    if !fields.iter().any(|f| holds_variant(f.data_type())) {
         return Ok(descr);
     }
-    let fail = |e: parquet::errors::ParquetError| FormatError::WriteFailed(e.to_string());
     let root = descr.root_schema();
     let children = root
         .get_fields()
         .iter()
-        .map(|t| {
-            if !variants.contains(t.name()) {
-                return Ok(Arc::clone(t));
-            }
-            let info = t.get_basic_info();
-            let mut b = Type::group_type_builder(t.name())
-                .with_fields(t.get_fields().to_vec())
-                .with_logical_type(Some(LogicalType::variant(Some(1))));
-            if info.has_repetition() {
-                b = b.with_repetition(info.repetition());
-            }
-            if info.has_id() {
-                b = b.with_id(Some(info.id()));
-            }
-            b.build().map(Arc::new).map_err(fail)
+        .map(|t| match fields.iter().find(|f| f.name() == t.name()) {
+            Some(f) => annotate_type(t, f.data_type()),
+            None => Ok(Arc::clone(t)),
         })
         .collect::<FormatResult<Vec<_>>>()?;
     let root = Type::group_type_builder(root.name())
         .with_fields(children)
         .build()
-        .map_err(fail)?;
+        .map_err(|e| write_failed(&e))?;
     Ok(SchemaDescriptor::new(Arc::new(root)))
+}
+
+fn write_failed(e: &parquet::errors::ParquetError) -> FormatError {
+    FormatError::WriteFailed(e.to_string())
+}
+
+/// Whether an Arrow type holds a variant at any depth.
+pub(super) fn holds_variant(t: &DataType) -> bool {
+    if krishiv_types::arrow::is_variant_struct(t) {
+        return true;
+    }
+    match t {
+        DataType::Struct(c) => c.iter().any(|f| holds_variant(f.data_type())),
+        DataType::List(e) | DataType::LargeList(e) | DataType::Map(e, _) => {
+            holds_variant(e.data_type())
+        }
+        _ => false,
+    }
+}
+
+/// `t` (the Parquet type of a field of type `arrow`) with its variant
+/// groups annotated.
+fn annotate_type(t: &TypePtr, arrow: &DataType) -> FormatResult<TypePtr> {
+    if !t.is_group() || !holds_variant(arrow) {
+        return Ok(Arc::clone(t));
+    }
+    if krishiv_types::arrow::is_variant_struct(arrow) {
+        return rebuild_group(
+            t,
+            t.get_fields().to_vec(),
+            Some(LogicalType::variant(Some(1))),
+        );
+    }
+    let fields = match arrow {
+        DataType::Struct(children) => t
+            .get_fields()
+            .iter()
+            .map(|x| match children.iter().find(|c| c.name() == x.name()) {
+                Some(c) => annotate_type(x, c.data_type()),
+                None => Ok(Arc::clone(x)),
+            })
+            .collect::<FormatResult<Vec<_>>>()?,
+        // `LIST`: the repeated group, around the element.
+        DataType::List(e) | DataType::LargeList(e) => t
+            .get_fields()
+            .iter()
+            .map(|repeated| match repeated.get_fields() {
+                [element] if repeated.is_group() => {
+                    let element = annotate_type(element, e.data_type())?;
+                    rebuild_group(repeated, vec![element], None)
+                }
+                _ => annotate_type(repeated, e.data_type()),
+            })
+            .collect::<FormatResult<Vec<_>>>()?,
+        // `MAP`: the repeated `key_value` group; the value is the second.
+        DataType::Map(entries, _) => t
+            .get_fields()
+            .iter()
+            .map(|kv| annotate_type(kv, entries.data_type()))
+            .collect::<FormatResult<Vec<_>>>()?,
+        _ => return Ok(Arc::clone(t)),
+    };
+    rebuild_group(t, fields, None)
+}
+
+/// The group `t` with `fields`, its repetition, id and annotation kept
+/// (or `logical` instead).
+fn rebuild_group(
+    t: &TypePtr,
+    fields: Vec<TypePtr>,
+    logical: Option<LogicalType>,
+) -> FormatResult<TypePtr> {
+    let info = t.get_basic_info();
+    let mut b = Type::group_type_builder(t.name()).with_fields(fields);
+    b = match logical {
+        Some(l) => b.with_logical_type(Some(l)),
+        None => b
+            .with_logical_type(info.logical_type_ref().cloned())
+            .with_converted_type(info.converted_type()),
+    };
+    if info.has_repetition() {
+        b = b.with_repetition(info.repetition());
+    }
+    if info.has_id() {
+        b = b.with_id(Some(info.id()));
+    }
+    b.build().map(Arc::new).map_err(|e| write_failed(&e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_schema::{Field, Schema};
+
+    /// Whether the Parquet type at `path` (child names from the root) is
+    /// annotated `VARIANT`.
+    fn annotated_at(descr: &SchemaDescriptor, path: &[&str]) -> bool {
+        let mut t = descr.root_schema_ptr();
+        for name in path {
+            let Some(next) = t.get_fields().iter().find(|c| c.name() == *name).cloned() else {
+                return false;
+            };
+            t = next;
+        }
+        is_variant_group(&t)
+    }
+
+    /// A variant inside a struct, a list and a map value: annotated on write,
+    /// and read back as a variant from the annotation alone (no Spark schema
+    /// in the footer, as parquet-java or Iceberg write it).
+    #[test]
+    fn nested_variants_are_annotated_and_read_without_a_spark_schema() {
+        let variant = |name: &str| Arc::new(SparkType::Variant.to_arrow_field(name, true));
+        let fields: Vec<FieldRef> = vec![
+            Arc::new(Field::new(
+                "s",
+                DataType::Struct(vec![variant("x")].into()),
+                true,
+            )),
+            Arc::new(Field::new("l", DataType::List(variant("element")), true)),
+            Arc::new(Field::new(
+                "m",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "key_value",
+                        DataType::Struct(
+                            vec![
+                                Arc::new(Field::new("key", DataType::Utf8, false)),
+                                variant("value"),
+                            ]
+                            .into(),
+                        ),
+                        false,
+                    )),
+                    false,
+                ),
+                true,
+            )),
+        ];
+        let schema = Schema::new(fields.clone());
+        let descr = parquet::arrow::ArrowSchemaConverter::new()
+            .convert(&schema)
+            .unwrap();
+        let descr = annotate(descr, &fields).unwrap();
+        assert!(annotated_at(&descr, &["s", "x"]));
+        assert!(annotated_at(&descr, &["l", "list", "element"]));
+        assert!(annotated_at(&descr, &["m", "key_value", "value"]));
+        // Decoded as plain structs, then the annotation alone makes them variants.
+        let decoded = parquet::arrow::parquet_to_arrow_schema(&descr, None).unwrap();
+        let (engine, variants) = Variants::engine_fields(&descr, None, decoded.fields());
+        for (got, want) in engine.iter().zip(&fields) {
+            assert_eq!(got.data_type(), want.data_type(), "{}", want.name());
+        }
+        assert_eq!(variants.roots.len(), 3);
+    }
 }
