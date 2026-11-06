@@ -57,3 +57,57 @@ def test_values_print_as_spark() -> None:
     assert ts.toJson() == '"1970-01-01 00:00:01.5+00:00"'
     assert ts.toJson("+05:30") == '"1970-01-01 05:30:01.5+05:30"'
     assert ts.toPython() == datetime.datetime(1970, 1, 1, 0, 0, 1, 500000, tzinfo=datetime.UTC)
+
+
+# Values built from their bytes (empty dictionary), checked against PySpark 4.2.0's ``VariantVal``.
+_META = b"\x01\x00\x00"
+
+
+def _primitive(type_id: int, body: bytes) -> T.VariantVal:
+    return T.VariantVal(bytes([type_id << 2]) + body, _META)
+
+
+def test_primitive_variants_match_pyspark() -> None:
+    ntz = _primitive(13, struct.pack("<q", 1_700_000_000_123_456))
+    assert ntz.toJson() == '"2023-11-14 22:13:20.123456"'
+    assert ntz.toPython() == datetime.datetime(2023, 11, 14, 22, 13, 20, 123456)
+    binary = _primitive(15, struct.pack("<I", 3) + b"\x00\xffa")
+    assert binary.toJson() == '"AP9h"'
+    assert binary.toPython() == b"\x00\xffa"
+    text = _primitive(16, struct.pack("<I", 5) + b"hello")
+    assert text.toJson() == '"hello"'
+    assert text.toPython() == "hello"
+    assert _primitive(7, struct.pack("<d", 1.5)).toPython() == 1.5
+    assert _primitive(7, struct.pack("<d", 1.5)).toJson() == "1.5"
+    assert _primitive(14, struct.pack("<f", 2.5)).toPython() == 2.5
+    assert _primitive(14, struct.pack("<f", 2.5)).toJson() == "2.5"
+
+
+def test_string_escapes_match_pyspark() -> None:
+    raw = b'a"b\\c\n\x01'
+    v = T.VariantVal(bytes([(len(raw) << 2) | 1]) + raw, _META)
+    assert v.toJson() == '"a\\"b\\\\c\\n\\u0001"'
+    assert v.toPython() == 'a"b\\c\n\x01'
+
+
+def test_uuid_and_identity() -> None:
+    import uuid
+
+    u = uuid.UUID("12345678-1234-5678-1234-567812345678")
+    v = _primitive(20, u.bytes)
+    assert v.toPython() == u
+    assert v.toJson() == '"12345678-1234-5678-1234-567812345678"'
+    same = _primitive(20, u.bytes)
+    assert v == same
+    assert hash(v) == hash(same)
+    assert repr(v) == f"VariantVal({v.value!r}, {v.metadata!r})"
+    assert str(v) == v.toJson()
+
+
+def test_bad_metadata_and_unknown_types_raise() -> None:
+    with pytest.raises(ValueError, match="MALFORMED_VARIANT"):
+        T.VariantVal(_primitive(1, b"").value, b"\x02\x00\x00").toJson()
+    with pytest.raises(ValueError, match="UNKNOWN_PRIMITIVE_TYPE_IN_VARIANT"):
+        _primitive(21, b"").toJson()
+    with pytest.raises(ValueError, match="UNKNOWN_PRIMITIVE_TYPE_IN_VARIANT"):
+        _primitive(21, b"").toPython()
