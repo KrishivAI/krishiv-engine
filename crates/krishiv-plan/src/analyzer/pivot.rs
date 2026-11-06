@@ -325,7 +325,7 @@ impl Resolver<'_> {
                 Some(Err(e)) => return Err(AnalysisError::new(e, value.origin)),
                 _ if by_identity => SlotKey::Never,
                 Some(Ok(a)) => SlotKey::of(&a),
-                None => self.struct_key(&bound.expr, ansi),
+                None => self.struct_key(&bound.expr, &pivot_type, ansi),
             };
             keys.push(key);
         }
@@ -749,52 +749,90 @@ impl SlotKey {
 }
 
 impl Resolver<'_> {
-    /// The key of a struct value of several pivot columns (`('Java', 2013)`,
-    /// a `named_struct` cast to the pivot column's struct type), which the
-    /// folder does not value whole: each field cast to its field's type and
-    /// folded. Opaque when a field cannot be compared exactly (a NaN field,
-    /// a field the folder does not value), so such values are refused.
-    fn struct_key(&self, e: &Arc<Expr>, ansi: bool) -> SlotKey {
-        let ExprNode::Cast {
-            expr,
-            to: DataType::Struct(fields),
-            mode,
-        } = &e.node
-        else {
-            return SlotKey::literal(e);
-        };
-        let ExprNode::Resolved(ResolvedExpr::Function(f)) = &trim_value_alias(expr).node else {
-            return SlotKey::Opaque;
-        };
-        let parts: Vec<&Arc<Expr>> = match f.id.name() {
-            "named_struct" => f.args.iter().skip(1).step_by(2).collect(),
-            "struct" => f.args.iter().collect(),
-            _ => return SlotKey::Opaque,
-        };
-        if parts.len() != fields.fields().len() {
-            return SlotKey::Opaque;
-        }
-        let mut keys = Vec::with_capacity(parts.len());
-        for (part, field) in parts.into_iter().zip(fields.fields()) {
-            let cast = Arc::new(Expr::new(ExprNode::Cast {
-                expr: Arc::clone(part),
-                to: field.data_type().clone(),
-                mode: *mode,
-            }));
-            let key = match self.fold_array(&cast, ansi) {
-                Some(Ok(a)) => SlotKey::of(&a),
-                Some(Err(_)) => SlotKey::Opaque,
-                None => SlotKey::literal(part),
-            };
-            if !matches!(
-                key,
-                SlotKey::Float(_) | SlotKey::Value(_) | SlotKey::Literal(_)
-            ) {
-                return SlotKey::Opaque;
+    /// The key of a pivot value the folder does not value whole: a
+    /// constant array or struct (`array(1, 2)`, several pivot columns'
+    /// `('Java', 2013)`), cast to the pivot column's type. Keyed part by
+    /// part, each part cast to its type in the pivot column's type and
+    /// folded; opaque when a part cannot be compared exactly (a NaN, a part
+    /// the folder does not value), so such values are refused.
+    fn struct_key(&self, e: &Arc<Expr>, pivot_type: &DataType, ansi: bool) -> SlotKey {
+        match &e.node {
+            ExprNode::Cast { expr, to, mode } => self.part_key(expr, to, *mode, ansi),
+            // A value of the pivot column's own type is not cast.
+            _ => {
+                let mode = if ansi {
+                    CastMode::Ansi
+                } else {
+                    CastMode::Legacy
+                };
+                self.part_key(e, pivot_type, mode, ansi)
             }
-            keys.push(key);
         }
-        SlotKey::Parts(keys)
+    }
+
+    fn part_key(&self, e: &Arc<Expr>, to: &DataType, mode: CastMode, ansi: bool) -> SlotKey {
+        let inner = trim_value_alias(e);
+        let inner = match &inner.node {
+            ExprNode::Cast { expr, .. } => Arc::clone(expr),
+            _ => inner,
+        };
+        if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &inner.node {
+            let parts: Option<Vec<(&Arc<Expr>, DataType)>> = match (f.id.name(), to) {
+                ("named_struct", DataType::Struct(st)) => {
+                    let values: Vec<&Arc<Expr>> = f.args.iter().skip(1).step_by(2).collect();
+                    (values.len() == st.fields().len()).then(|| {
+                        values
+                            .into_iter()
+                            .zip(st.fields())
+                            .map(|(v, fl)| (v, fl.data_type().clone()))
+                            .collect()
+                    })
+                }
+                ("struct", DataType::Struct(st)) => {
+                    (f.args.len() == st.fields().len()).then(|| {
+                        f.args
+                            .iter()
+                            .zip(st.fields())
+                            .map(|(v, fl)| (v, fl.data_type().clone()))
+                            .collect()
+                    })
+                }
+                ("array", DataType::Array(at)) => Some(
+                    f.args
+                        .iter()
+                        .map(|v| (v, at.element_type().clone()))
+                        .collect(),
+                ),
+                _ => None,
+            };
+            if let Some(parts) = parts {
+                let mut keys = Vec::with_capacity(parts.len());
+                for (part, ty) in parts {
+                    let key = self.part_key(part, &ty, mode, ansi);
+                    if !matches!(
+                        key,
+                        SlotKey::Float(_)
+                            | SlotKey::Value(_)
+                            | SlotKey::Literal(_)
+                            | SlotKey::Parts(_)
+                    ) {
+                        return SlotKey::Opaque;
+                    }
+                    keys.push(key);
+                }
+                return SlotKey::Parts(keys);
+            }
+        }
+        let cast = Arc::new(Expr::new(ExprNode::Cast {
+            expr: Arc::clone(&inner),
+            to: to.clone(),
+            mode,
+        }));
+        match self.fold_array(&cast, ansi) {
+            Some(Ok(a)) => SlotKey::of(&a),
+            Some(Err(_)) => SlotKey::Opaque,
+            None => SlotKey::literal(&inner),
+        }
     }
 }
 
