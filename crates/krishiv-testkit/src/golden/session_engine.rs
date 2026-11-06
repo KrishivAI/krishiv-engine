@@ -680,6 +680,12 @@ fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, Engine
         (DataType::String | DataType::CollatedString(_), ArrowType::LargeUtf8) => {
             Cell::Str(col.as_string::<i64>().value(row).to_owned())
         }
+        // As at the top level: a binary-safe STRING holding bytes that are not UTF-8 (Spark's
+        // `UTF8String.toString` replaces the malformed sequences), and BINARY in any carrier.
+        (DataType::String | DataType::CollatedString(_), _) => Cell::Str(
+            String::from_utf8_lossy(&binary_value(col, row).ok_or_else(unexpected)?).into_owned(),
+        ),
+        (DataType::Binary, _) => Cell::Binary(binary_value(col, row).ok_or_else(unexpected)?),
         (DataType::Date, ArrowType::Date32) => {
             Cell::Date(col.as_primitive::<Date32Type>().value(row))
         }
