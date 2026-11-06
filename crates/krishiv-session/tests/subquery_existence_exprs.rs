@@ -217,3 +217,28 @@ fn a_limit_over_a_non_equality_correlation_ranks_per_outer_row() -> R {
     assert_eq!(run(&s, q)?, rows(&["2"]), "{q}");
     Ok(())
 }
+
+/// A subquery in `HAVING` that reads a column of the aggregate's input
+/// that is not grouped: Spark 4.2.0 raises
+/// `MISSING_ATTRIBUTES.RESOLVED_ATTRIBUTE_MISSING_FROM_INPUT`
+/// (`negative-cases/invalid-correlation` statement 4), never an internal
+/// error at planning.
+#[test]
+fn a_having_subquery_over_an_ungrouped_column_is_missing_from_the_input() -> R {
+    let s = Session::new()?;
+    run(&s, "create temporary view a(k, v) as values (1, 1), (2, 2)")?;
+    run(&s, "create temporary view b(k, w) as values (1, 1), (2, 5)")?;
+    let q = "select k from a group by k \
+             having k in (select max(b.k) from b group by b.w having b.w > a.v)";
+    let e = run(&s, q).err().ok_or("expected an error")?;
+    assert!(
+        format!("{e:?}").contains("MissingAttributesResolvedAttributeMissingFromInput"),
+        "{q}: {e:?}"
+    );
+    // Over a grouped column the same shape is answered: b.w > a.k holds
+    // for (k 1, w 5) and (k 2, w 5), whose max(b.k) is 2.
+    let q = "select k from a group by k \
+             having k in (select max(b.k) from b group by b.w having b.w > a.k)";
+    assert_eq!(run(&s, q)?, rows(&["2"]), "{q}");
+    Ok(())
+}

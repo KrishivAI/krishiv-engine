@@ -10,11 +10,11 @@ use krishiv_common::error::{
     DatatypeMismatchInvalidOrderingType, FailedToParseTooComplex, GroupByAggregate,
     GroupByPosAggregate, GroupByPosOutOfRange, InvalidLimitLikeExpressionDataType,
     InvalidNonDeterministicExpressions, InvalidWhereCondition, JoinConditionIsNotBooleanType,
-    MissingAggregation, MissingGroupBy, NumTableValueAliasesMismatch, OrderByPosOutOfRange,
-    QualifyAggregateNotAllowed, QualifyRequiresWindowFunction, StarGroupByPos,
-    SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound, UdtfAliasNumberMismatch,
-    UnresolvedUsingColumnForJoin, UnsupportedExprForOperator,
-    UnsupportedFeatureLateralColumnAliasInAggregateFunc,
+    MissingAggregation, MissingAttributesResolvedAttributeMissingFromInput, MissingGroupBy,
+    NumTableValueAliasesMismatch, OrderByPosOutOfRange, QualifyAggregateNotAllowed,
+    QualifyRequiresWindowFunction, StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt,
+    TableOrViewNotFound, UdtfAliasNumberMismatch, UnresolvedUsingColumnForJoin,
+    UnsupportedExprForOperator, UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy, UnsupportedGeneratorNestedInExpressions,
     UnsupportedSubqueryExpressionCategoryLateralJoinConditionNonDeterministic,
     UnsupportedSubqueryExpressionCategoryNonDeterministicLateralSubqueries,
@@ -1701,23 +1701,70 @@ impl Resolver<'_> {
         // An aggregate call over a merged-away `USING` column
         // (`ORDER BY max(t2.k)`) reads it from the input.
         grown.input = self.reveal_exprs(&grown.input, grown.aggregates.iter())?;
-        // Grouping attributes a subquery reads from here.
+        // Grouping attributes a subquery reads from here. A column of the
+        // aggregate's input that is neither grouped nor visible is not in the
+        // filter's input: Spark's `MISSING_ATTRIBUTES` (`HAVING t2c IN
+        // (SELECT .. HAVING t3b > t2b)` grouped by `t2c`).
+        // An outer column inside an aggregate call of the subquery
+        // (`EXISTS (SELECT first(t1.col2) = 0)`) is Spark's
+        // `CORRELATED_REFERENCE` instead, raised later.
+        let mut aggregated: HashSet<AttrId> = HashSet::new();
+        for b in &bounds {
+            let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(&b.expr), |n| {
+                if let crate::walk::Node::Expr(e) = n
+                    && matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate)
+                {
+                    let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |m| {
+                        if let crate::walk::Node::Expr(x) = m
+                            && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &x.node
+                        {
+                            aggregated.insert(c.id);
+                        }
+                        std::ops::ControlFlow::Continue(())
+                    });
+                }
+                std::ops::ControlFlow::Continue(())
+            });
+        }
+        let mut missing: Option<String> = None;
         for b in &bounds {
             let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(&b.expr), |n| {
                 if let crate::walk::Node::Expr(e) = n
                     && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
                     && !visible.contains(&c.id)
                     && !pass.iter().any(|a| a.col.id == c.id)
-                    && let Some(k) = info.keys.iter().find(|k| k.col.id == c.id)
                 {
-                    if !grown.out.iter().any(|o| o.col.id == c.id) {
-                        grown.aggregates.push(col_expr(&k.col, Origin::UNKNOWN));
-                        grown.out.push(k.clone());
+                    if let Some(k) = info.keys.iter().find(|k| k.col.id == c.id) {
+                        if !grown.out.iter().any(|o| o.col.id == c.id) {
+                            grown.aggregates.push(col_expr(&k.col, Origin::UNKNOWN));
+                            grown.out.push(k.clone());
+                        }
+                        pass.push(k.clone());
+                    } else if missing.is_none()
+                        && !aggregated.contains(&c.id)
+                        && info.input.out.iter().any(|a| a.col.id == c.id)
+                    {
+                        missing = Some(c.name.clone());
                     }
-                    pass.push(k.clone());
                 }
                 std::ops::ControlFlow::Continue(())
             });
+        }
+        if let Some(name) = missing {
+            let input = info
+                .out
+                .iter()
+                .map(|a| format!("\"{}\"", a.col.name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(AnalysisError::new(
+                MissingAttributesResolvedAttributeMissingFromInput {
+                    missing_attributes: format!("\"{name}\""),
+                    input,
+                    operator: "Filter".to_owned(),
+                },
+                agg.plan.origin,
+            ));
         }
         if pass.is_empty() {
             return Ok((bounds, agg.clone(), false));
