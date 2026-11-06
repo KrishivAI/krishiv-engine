@@ -18,7 +18,7 @@ use krishiv_types::DataType;
 use crate::command::arrow_value;
 
 /// Whether `t` is a nested Arrow carrier this module rebuilds.
-fn is_nested(t: &ArrowType) -> bool {
+pub(crate) fn is_nested(t: &ArrowType) -> bool {
     matches!(
         t,
         ArrowType::List(_) | ArrowType::LargeList(_) | ArrowType::Struct(_) | ArrowType::Map(..)

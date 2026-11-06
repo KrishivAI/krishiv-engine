@@ -225,6 +225,7 @@ fn shifted(e: &Arc<Expr>) -> Option<Shifted<'_>> {
         return None;
     };
     if sum.id.name() != "sum"
+        || !matches!(sum.id, FunctionId::Registry { .. })
         || sum.kind != FunctionKind::Aggregate
         || sum.distinct
         || sum.filter.is_some()
@@ -345,6 +346,7 @@ fn plain_sum<'a>(aggregates: &'a [Arc<Expr>], x: &Arc<Expr>) -> Option<&'a Bound
             return None;
         };
         let plain = f.id.name() == "sum"
+            && matches!(f.id, FunctionId::Registry { .. })
             && f.kind == FunctionKind::Aggregate
             && !f.distinct
             && f.filter.is_none()

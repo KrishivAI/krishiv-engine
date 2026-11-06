@@ -115,3 +115,51 @@ fn script_variables_hold_nested_values() {
     );
     assert_eq!(out[0].column(0).as_string_view().value(0), "manager:2");
 }
+
+#[test]
+fn a_script_returns_and_row_assigns_nested_values() {
+    // Spark 4.2.0: a script's last query returns nested variables as they
+    // are, and `SET (a, b) = (SELECT ...)` assigns an ARRAY.
+    let s = Session::new().unwrap();
+    let int_of = |sql: &str| {
+        let out = run(&s, sql);
+        out[0]
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>()
+            .value(0)
+    };
+    let out = run(
+        &s,
+        "BEGIN DECLARE a ARRAY<INT> DEFAULT array(1, 2); SELECT a; END",
+    );
+    let list = out[0].column(0).as_list::<i32>().value(0);
+    let items: Vec<i32> = list
+        .as_primitive::<arrow_array::types::Int32Type>()
+        .values()
+        .to_vec();
+    assert_eq!(items, [1, 2]);
+    let out = run(
+        &s,
+        "BEGIN DECLARE st STRUCT<x: INT> DEFAULT named_struct('x', 3); SELECT st; END",
+    );
+    assert_eq!(out[0].column(0).as_struct().num_columns(), 1);
+    assert_eq!(
+        int_of("BEGIN DECLARE st STRUCT<x: INT> DEFAULT named_struct('x', 3); SELECT st.x; END"),
+        3
+    );
+    assert_eq!(
+        int_of("BEGIN DECLARE m MAP<STRING, INT> DEFAULT map('k', 1); SELECT m['k']; END"),
+        1
+    );
+    assert_eq!(
+        int_of("BEGIN DECLARE a ARRAY<INT>; SET (a) = (SELECT array(1, 2)); SELECT size(a); END"),
+        2
+    );
+    assert_eq!(
+        int_of(
+            "BEGIN DECLARE a ARRAY<INT>; DECLARE b INT; SET (a, b) = (SELECT array(3), 4); \
+             SELECT a[0] + b; END"
+        ),
+        7
+    );
+}

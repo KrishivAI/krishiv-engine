@@ -437,8 +437,13 @@ impl Run<'_> {
             let schema = frame.schema().await?;
             // A script's result is returned as literal rows: refuse a type they cannot hold now, not
             // after the rest of the script has run.
+            // Nested columns (ARRAY, STRUCT, MAP) are returned through their constructors.
             for field in schema.fields() {
-                crate::command::arrow_krishiv_type(field.data_type())?;
+                if crate::nested_value::is_nested(field.data_type()) {
+                    DataType::from_arrow(field.data_type())?;
+                } else {
+                    crate::command::arrow_krishiv_type(field.data_type())?;
+                }
             }
             if !schema.fields().is_empty() {
                 // One row more than the cap shows that it was exceeded; no more is read.
@@ -839,13 +844,18 @@ impl Run<'_> {
                 if rows > 1 {
                     return Err(RowSubqueryTooManyRows {}.into());
                 }
-                let values: Vec<Literal> = match batches.iter().find(|b| b.num_rows() > 0) {
+                // Nested values (an ARRAY, STRUCT or MAP variable) are held as
+                // their constructors, as the session-level row assignment does.
+                let values: Vec<VariableValue> = match batches.iter().find(|b| b.num_rows() > 0) {
                     Some(batch) => (0..types.len())
-                        .map(|i| arrow_value(batch.column(i), 0).map(|(_, v)| v))
+                        .map(|i| {
+                            crate::nested_value::arrow_variable_value(batch.column(i), 0)
+                                .map(|(_, v)| v)
+                        })
                         .collect::<Result<_, _>>()?,
                     None => types
                         .iter()
-                        .map(|t| Literal::Null(Some(t.clone())))
+                        .map(|t| Literal::Null(Some(t.clone())).into())
                         .collect(),
                 };
                 for (target, value) in resolved.iter().zip(values) {
@@ -880,10 +890,15 @@ impl Run<'_> {
             for row in 0..batch.num_rows() {
                 let mut columns = Vec::with_capacity(batch.num_columns());
                 for (i, field) in schema.fields().iter().enumerate() {
-                    let (_, literal) = arrow_value(batch.column(i), row)?;
-                    columns.push(
-                        Column::new(PlanExpr::new(ExprNode::Literal(literal))).alias(field.name()),
-                    );
+                    // A nested value is returned through its constructor.
+                    let expr =
+                        match crate::nested_value::arrow_variable_value(batch.column(i), row)?.1 {
+                            VariableValue::Scalar(literal) => {
+                                PlanExpr::new(ExprNode::Literal(literal))
+                            }
+                            VariableValue::Nested(e) => Arc::unwrap_or_clone(e),
+                        };
+                    columns.push(Column::new(expr).alias(field.name()));
                 }
                 frames.push(one().select(columns));
             }

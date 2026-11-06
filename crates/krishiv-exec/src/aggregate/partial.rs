@@ -227,6 +227,15 @@ impl Operator for PartialAggregate {
         }
         l.table.apply(&p)?;
         let keep = l.table.memory_size();
+        // A fold that outgrew its projection (an aggregate UDF reports its
+        // size only after it folds) is charged now, or the table flushes.
+        let over = keep.saturating_sub(l.reservation.size());
+        if over > 0 && l.reservation.try_grow(over).is_err() {
+            // The input is folded: the flush drains from the next call on.
+            l.rows += input.num_rows() as u64;
+            self.start_drain(l)?;
+            return Ok(OperatorOutput::NeedMoreInput(None));
+        }
         l.reservation
             .shrink(l.reservation.size().saturating_sub(keep));
         l.rows += input.num_rows() as u64;
