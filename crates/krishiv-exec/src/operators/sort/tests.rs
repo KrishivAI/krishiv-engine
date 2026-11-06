@@ -653,8 +653,8 @@ async fn a_late_spill_request_leaves_the_spilled_run_to_the_reader() {
 /// not just the run frames and the output batch.
 #[tokio::test(start_paused = true)]
 async fn merge_budget_covers_per_source_metadata() {
+    use super::budget::merge_budget;
     use super::merge::{SpillRun, metadata_bytes};
-    use super::sort::merge_budget;
 
     assert_eq!(metadata_bytes(3), 3 * (8 + 4));
 
