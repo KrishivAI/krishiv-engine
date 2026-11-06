@@ -92,6 +92,29 @@ fn projections_and_windows_keep_the_merged_keys() {
     assert_eq!(rows(&s, sql), [row(&["0", "NULL"]), row(&["1", "1"])]);
 }
 
+/// A key read after a window the window itself did not read: the window widens its input.
+#[test]
+fn a_key_read_after_a_window_widens_through_it() {
+    let s = Session::new().unwrap();
+    let j = "VALUES (0), (1), (2) lhs(a) |> INNER JOIN VALUES (1), (2), (3) rhs(a) USING (a) ";
+    assert_eq!(
+        rows(
+            &s,
+            &format!(
+                "{j}|> EXTEND row_number() OVER (ORDER BY a) AS r |> SELECT rhs.a, r |> ORDER BY r"
+            )
+        ),
+        [row(&["1", "1"]), row(&["2", "2"])]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            &format!("{j}|> EXTEND sum(a) OVER () AS t |> SELECT lhs.a, rhs.a, t |> ORDER BY 1")
+        ),
+        [row(&["1", "1", "3"]), row(&["2", "2", "3"])]
+    );
+}
+
 /// An alias, an aggregate and a union end the hidden output, as does a subquery in `FROM`.
 #[test]
 fn an_alias_aggregate_or_union_ends_the_merged_keys() {
