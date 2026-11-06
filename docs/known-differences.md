@@ -33,3 +33,20 @@ A Spark key that Krishiv maps to a typed setting (for example
 that does not parse fails the `SET` with `KRISHIV_INVALID_CONFIG_VALUE`.
 Spark stores the string and fails when a query reads it, with
 `INVALID_CONF_VALUE.TYPE_MISMATCH` (SQLSTATE 22022).
+
+## `PIVOT` cases Spark answers from undefined state are refused
+
+When every aggregate of a `PIVOT` has a numeric, boolean or decimal type, Spark takes its `PivotFirst` path and
+Krishiv reproduces it, including Spark's slot map (a NaN value never matches, `0.0` and `-0.0` are one value,
+repeated values raise `INVALID_ARRAY_INDEX` with ANSI on and leave NULL cells with ANSI off). A few cases fail with
+`KRISHIV_UNSUPPORTED_FEATURE` instead of returning a result:
+
+- repeated pivot values with ANSI off and several aggregates: Spark writes the repeated value's result into the
+  next aggregate's cells;
+- several pivot values of a type the analyzer does not evaluate (timestamp, interval, time) when one of them is not
+  a literal of the pivot column's type, for example `IN (TIMESTAMP'2020-01-01 00:00:00', '2021-01-01 00:00:00')`:
+  Krishiv cannot tell whether two of them are the same value, which decides Spark's result;
+- a collated pivot column with Spark 4.0 or 4.1 compatibility: those versions match the values by their bytes,
+  not by the collation;
+- a NULL pivot value for a binary or collated pivot column: Spark 4.2 compares it with the other values in a sorted
+  map (and fails), earlier versions look it up in a hash map.
