@@ -1687,3 +1687,12 @@ async fn settling_a_grant_with_a_sub_quantum_remainder_wakes_waiting_rounds() {
     );
     drop(r);
 }
+
+#[test]
+fn a_grant_credit_debug_shows_its_bytes_and_unsettled_grants() {
+    let credit = GrantCredit::default();
+    let shown = format!("{credit:?}");
+    assert!(shown.starts_with("GrantCredit {"), "{shown}");
+    assert!(shown.contains("bytes: 0"), "{shown}");
+    assert!(shown.contains("unsettled: 0"), "{shown}");
+}
