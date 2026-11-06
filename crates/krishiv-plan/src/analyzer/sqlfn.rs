@@ -494,12 +494,20 @@ impl Resolver<'_> {
         let outer = self.frame.replace(Arc::clone(&frame));
         let body_env = self.isolated_env();
         let hop = self.fn_path.len().is_multiple_of(STEP);
+        // The body resolves under the ANSI mode captured at creation.
+        let flip = def.ansi.is_some_and(|a| a != self.ctx.conf.ansi);
+        if flip {
+            std::mem::swap(&mut self.ctx, &mut self.flipped);
+        }
         let resolved = if hop {
             on_big_stack(|| self.rel(plan, &body_env))
                 .unwrap_or_else(|| Err(AnalysisError::new(FailedToParseTooComplex {}, o)))
         } else {
             self.rel(plan, &body_env)
         };
+        if flip {
+            std::mem::swap(&mut self.ctx, &mut self.flipped);
+        }
         self.frame = outer;
         self.lambdas = outer_lambdas;
         self.fn_path.pop();

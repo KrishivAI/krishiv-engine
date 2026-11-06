@@ -110,3 +110,22 @@ fn in_over_one_row_of_values_is_an_equality() {
     assert!(b.column(0).as_boolean().value(0));
     assert!(!b.column(1).as_boolean().value(0));
 }
+
+/// Spark 4.2.0 (`sql-udf.sql` 772-787): a table function's body keeps the
+/// ANSI mode it was created under, as a scalar function's does.
+#[test]
+fn table_functions_keep_their_creation_ansi_mode() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "SET spark.sql.ansi.enabled=false",
+        "CREATE TEMPORARY FUNCTION ct() RETURNS TABLE (a INT) RETURN SELECT CAST('a' AS INT)",
+        "CREATE TEMPORARY FUNCTION dt() RETURNS TABLE (a INT) RETURN SELECT 'a' + 1",
+        "SET spark.sql.ansi.enabled=true",
+    ] {
+        run(&s, sql);
+    }
+    for f in ["ct", "dt"] {
+        let out = run(&s, &format!("SELECT * FROM {f}()"));
+        assert!(out[0].column(0).is_null(0), "{f}");
+    }
+}
