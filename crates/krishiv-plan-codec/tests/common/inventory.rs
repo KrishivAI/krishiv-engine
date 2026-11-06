@@ -9,7 +9,9 @@ use std::sync::Arc;
 use arrow_schema::{DataType as ArrowType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::JoinType;
-use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
+use krishiv_exec::aggregate::{
+    AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
+};
 use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
@@ -1606,6 +1608,48 @@ pub(crate) fn udf_call() -> PhysNode {
     }
 }
 
+/// A call of a session-registered native Rust aggregate UDF
+/// (`rust_udaf`): by name and version, with the argument and state
+/// columns the planner fixed, in a final aggregate and the merge of its
+/// states (a filtered raw call, then the same call over its states).
+pub(crate) fn udaf_call() -> PhysNode {
+    let call = UdafCall {
+        name: "my_udaf".to_owned(),
+        version: 3,
+        args: vec![Field::new("arg0", ArrowType::Int32, true)],
+        result: DataType::Integer,
+        nullable: false,
+        state: vec![Field::new("count", ArrowType::Int64, false)],
+    };
+    let raw = AggregateExpr {
+        function: AggregateFunction::Udf(Box::new(call)),
+        args: vec![1],
+        input: AggInput::Raw,
+        arg_type: ArrowType::Null,
+        name: "my_udaf(a)".to_owned(),
+        mask: Some(2),
+        element: None,
+    };
+    let merged = raw.merging(1);
+    PhysNode::Aggregate {
+        input: boxed(PhysNode::Aggregate {
+            input: boxed(scan()),
+            aggregate: AggregatePlan {
+                group_by: vec![0],
+                distinct: vec![false],
+                aggregates: vec![raw],
+                output: AggregateOutput::Partial,
+            },
+        }),
+        aggregate: AggregatePlan {
+            group_by: vec![0],
+            distinct: vec![false],
+            aggregates: vec![merged],
+            output: AggregateOutput::Final,
+        },
+    }
+}
+
 /// Lambda expressions and variables: a `transform` over an array column
 /// (`transform(xs, x -> x * 2)`). The array type needs `nested_types` too.
 pub(crate) fn lambda_functions() -> PhysNode {
@@ -1714,6 +1758,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         .collect();
     out.push(("expressions".to_owned(), plan_of(expressions())));
     out.push(("rust_udf".to_owned(), plan_of(udf_call())));
+    out.push(("rust_udaf".to_owned(), plan_of(udaf_call())));
     // The expression environment flag the `legacy_statistical_aggregate`
     // feature is about: the same root as `one_row`, under a session with
     // `spark.sql.legacy.statisticalAggregate` set. With no moment aggregate

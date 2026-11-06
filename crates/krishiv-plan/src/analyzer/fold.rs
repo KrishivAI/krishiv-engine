@@ -193,6 +193,18 @@ pub(super) fn constant(
     })
 }
 
+/// `e` as a one-row array, exactly as folding evaluates it (no
+/// truncation to a [`Constant`]): `None` when it is not foldable here,
+/// `Some(Err)` when evaluating it raises.
+pub(super) fn array(
+    e: &Arc<Expr>,
+    conf: Conf,
+    memo: &mut Memo,
+    functions: &dyn FunctionRegistry,
+) -> Folded {
+    fold(e, conf, memo, functions)
+}
+
 /// A folded array as a constant. A fractional value is what the implicit
 /// cast to `INT` of an integral argument gives (the scale of `round`).
 fn value(a: &ArrayRef, ansi: bool) -> Result<Constant, KrishivError> {

@@ -939,6 +939,34 @@ fn features_of_refuses_what_it_cannot_interpret() {
 }
 
 #[test]
+fn only_udaf_plans_need_rust_udaf_and_a_reader_without_it_refuses() {
+    for (name, plan) in cases() {
+        assert_eq!(
+            plan_features(&plan).contains(&Feature::RustUdaf),
+            name == "rust_udaf",
+            "{name}"
+        );
+    }
+    let plan = cases()
+        .into_iter()
+        .find(|(n, _)| n == "rust_udaf")
+        .map(|(_, p)| p)
+        .unwrap();
+    let bytes = encode(&plan).unwrap();
+    let others: Vec<Feature> = plan_features(&plan)
+        .into_iter()
+        .filter(|f| *f != Feature::RustUdaf)
+        .collect();
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &ReaderFeatures::only(others)).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["rust_udaf".to_owned()]
+        }
+    );
+    assert_eq!(decode(&bytes).unwrap(), plan);
+}
+
+#[test]
 fn only_udf_plans_need_rust_udf_and_every_expression_position_counts() {
     // Negative: no inventory case but `rust_udf` uses it, and the
     // `expressions` case (a registry call) does not.
