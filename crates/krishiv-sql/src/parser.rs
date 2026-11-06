@@ -455,7 +455,7 @@ const INLINE_NESTING: usize = 16;
 
 /// An upper bound of the bracket nesting of `toks`, plus one per lambda
 /// arrow: every recursion of the parser is inside one of them.
-fn nesting_bound(src: &str, toks: &[Token]) -> usize {
+pub(crate) fn nesting_bound(src: &str, toks: &[Token]) -> usize {
     let (mut depth, mut angles, mut max, mut arrows) = (0_usize, 0_usize, 0_usize, 0_usize);
     let mut prev_complex = false;
     for t in toks {
