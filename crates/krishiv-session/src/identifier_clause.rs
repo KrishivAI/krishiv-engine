@@ -13,13 +13,13 @@ use krishiv_common::error::{
     IdentifierTooManyNameParts, KrishivError, NotAConstantStringNotConstant,
     NotAConstantStringNull, NotAConstantStringWrongType,
 };
-use krishiv_plan::Literal;
-use krishiv_sql::ast::{Expr, ExprKind};
+use krishiv_plan::{Literal, SourceId};
+use krishiv_sql::ast::{Expr, ExprKind, Span};
 use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
 use krishiv_sql::{ParserOptions, parse_multipart_identifier, parse_named_expression};
 
 use crate::command::padded_select;
-use crate::session::Session;
+use crate::session::{QueryEnv, Session};
 
 /// Functions whose value can change between calls: not constant, as Spark's `foldable` sees them.
 const NON_DETERMINISTIC: &[&str] = &[
@@ -90,13 +90,48 @@ impl Session {
         sql: &'a str,
         options: &ParserOptions,
     ) -> Result<Cow<'a, str>, KrishivError> {
+        Ok(self.substitute_identifier_clauses(sql, options).await?.0)
+    }
+
+    /// [`Self::resolve_identifier_clauses`] for the statement `env` runs: the spans of the
+    /// substituted names go to `env.identifier_spans`, for [`Self::lower_identified`].
+    pub(crate) async fn identifier_clauses_into<'a>(
+        &self,
+        sql: &'a str,
+        env: &mut QueryEnv,
+    ) -> Result<Cow<'a, str>, KrishivError> {
+        let (text, spans) = self.substitute_identifier_clauses(sql, &env.parser).await?;
+        env.identifier_spans = spans.into();
+        Ok(text)
+    }
+
+    /// The plan of the query statement `env` runs, its `IDENTIFIER(..)` columns marked.
+    pub(crate) fn lower_identified(
+        &self,
+        query: &krishiv_sql::ast::Query,
+        env: &QueryEnv,
+        redacted: &krishiv_common::redact::RedactedSql,
+    ) -> Result<krishiv_plan::Plan, KrishivError> {
+        let cs = self.parser_options().case_sensitive;
+        krishiv_sql::lower_identified(query, SourceId(0), cs, &env.identifier_spans)
+            .map_err(|e| crate::session::sql_context(e.error, redacted, e.span.start, e.span.end))
+    }
+
+    /// [`Self::resolve_identifier_clauses`], with the span of each substituted name in the
+    /// returned text (in order), for `krishiv_sql::lower_identified`.
+    pub(crate) async fn substitute_identifier_clauses<'a>(
+        &self,
+        sql: &'a str,
+        options: &ParserOptions,
+    ) -> Result<(Cow<'a, str>, Vec<Span>), KrishivError> {
+        let mut spans = Vec::new();
         let legacy = options.legacy_identifier_clause;
         // The legacy mode reads `IDENTIFIER(expr)` as a function, which the grammar accepts only
         // where a table or an expression may stand: a statement that does not parse as written
         // (a column list, a rename target) keeps the parser's error.
         if legacy && !names_by_reference(sql) && krishiv_sql::parse_statement(sql, options).is_err()
         {
-            return Ok(Cow::Borrowed(sql));
+            return Ok((Cow::Borrowed(sql), spans));
         }
         let tokens: Vec<_> = tokenize(sql)
             .into_iter()
@@ -115,7 +150,7 @@ impl Session {
                 .is_some_and(|t| t.kind == TokenKind::Sym(Sym::Colon))
                 && word(2).eq_ignore_ascii_case("BEGIN"))
         {
-            return Ok(Cow::Borrowed(sql));
+            return Ok((Cow::Borrowed(sql), spans));
         }
         let mut out = String::new();
         let mut copied = 0;
@@ -231,15 +266,16 @@ impl Session {
                 .into());
             }
             out.push_str(sql.get(copied..t.span.start).unwrap_or_default());
+            spans.push(Span::new(out.len(), out.len() + name.len()));
             out.push_str(&name);
             copied = last.span.end;
             i = close + 1;
         }
         if copied == 0 {
-            return Ok(Cow::Borrowed(sql));
+            return Ok((Cow::Borrowed(sql), spans));
         }
         out.push_str(sql.get(copied..).unwrap_or_default());
-        Ok(Cow::Owned(out))
+        Ok((Cow::Owned(out), spans))
     }
 
     /// The identifier the constant string expression `inner` names, quoted part by part.

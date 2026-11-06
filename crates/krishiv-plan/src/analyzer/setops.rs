@@ -959,10 +959,9 @@ impl Resolver<'_> {
         let column = |e: &Expr| match &e.node {
             ExprNode::Column(_) => Some(Arc::new(e.clone())),
             ExprNode::Literal(Literal::String(s)) => Some(Arc::new(
-                Expr::new(ExprNode::Column(ColumnRef {
-                    name: s.split('.').map(str::to_owned).collect(),
-                    plan_id: None,
-                }))
+                Expr::new(ExprNode::Column(ColumnRef::new(
+                    s.split('.').map(str::to_owned).collect(),
+                )))
                 .with_origin(e.origin),
             )),
             _ => None,

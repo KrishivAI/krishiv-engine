@@ -44,7 +44,10 @@ use crate::ast::{
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
+mod identified;
 mod variant;
+
+pub use identified::lower_identified;
 type R<T> = Result<T, ParseError>;
 
 /// The most grouping sets one `GROUP BY` expands to.
@@ -80,16 +83,7 @@ pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
 /// # Errors
 /// As for [`lower`].
 pub fn lower_with(query: &Query, source: SourceId, case_sensitive: bool) -> R<Plan> {
-    let mut l = Lowerer {
-        source,
-        depth: 0,
-        root: query.span,
-        windows: Vec::new(),
-        recursive: 0,
-        case_sensitive,
-    };
-    let plan = l.query(query)?;
-    Plan::try_new(plan).map_err(|e| err(e, query.span))
+    lower_identified(query, source, case_sensitive, &[])
 }
 
 /// Lowers one parsed expression into the IR `Session::sql` builds for
@@ -101,14 +95,7 @@ pub fn lower_with(query: &Query, source: SourceId, case_sensitive: bool) -> R<Pl
 /// `KRISHIV_UNSUPPORTED_FEATURE` for constructs the IR lacks and Spark's
 /// literal errors, as for [`lower`].
 pub fn lower_expression(expr: &Expr, source: SourceId) -> R<IrExpr> {
-    let mut l = Lowerer {
-        source,
-        depth: 0,
-        root: expr.span,
-        windows: Vec::new(),
-        recursive: 0,
-        case_sensitive: false,
-    };
+    let mut l = Lowerer::new(source, expr.span, false, Vec::new());
     l.expr(expr)
 }
 
@@ -118,14 +105,7 @@ pub fn lower_expression(expr: &Expr, source: SourceId) -> R<IrExpr> {
 /// # Errors
 /// As for [`lower_expression`].
 pub fn lower_select_item(item: &SelectItem, source: SourceId) -> R<Arc<IrExpr>> {
-    let mut l = Lowerer {
-        source,
-        depth: 0,
-        root: item.span,
-        windows: Vec::new(),
-        recursive: 0,
-        case_sensitive: false,
-    };
+    let mut l = Lowerer::new(source, item.span, false, Vec::new());
     l.select_item(item)
 }
 
@@ -259,6 +239,9 @@ struct Lowerer {
     recursive: usize,
     /// `spark.sql.caseSensitive`: a CTE name matches its references exactly.
     case_sensitive: bool,
+    /// The names the session substituted for `IDENTIFIER(..)` clauses: a column at one of these
+    /// spans is [`ColumnRef::by_identifier`].
+    identifier_spans: Vec<Span>,
 }
 
 /// A `WINDOW` clause: each name's specification, references to other
@@ -2550,6 +2533,7 @@ impl Lowerer {
             ExprNode::Column(ColumnRef {
                 name,
                 plan_id: None,
+                by_identifier: self.by_identifier(sp),
             }),
             sp,
         )

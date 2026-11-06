@@ -2462,10 +2462,9 @@ impl Session {
                 // Built directly: a name with dots or a star is one plain column.
                 let by_name = df.select(order.iter().map(|h| {
                     crate::column::Column::new(krishiv_plan::Expr::new(
-                        krishiv_plan::ExprNode::Column(krishiv_plan::ColumnRef {
-                            name: vec![h.clone()],
-                            plan_id: None,
-                        }),
+                        krishiv_plan::ExprNode::Column(krishiv_plan::ColumnRef::new(vec![
+                            h.clone(),
+                        ])),
                     ))
                 }));
                 self.exec_write_v2(&by_name, spec, V2Mode::Append, &mut None)

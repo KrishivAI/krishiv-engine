@@ -256,3 +256,48 @@ fn braces_substitute_configuration_values_before_parsing() {
     run(&s, "SET spark.sql.variable.substitute = FALSE");
     assert_eq!(first(&s, "SELECT '${colname}'"), "${colname}");
 }
+
+fn names(s: &Session, sql: &str) -> Vec<String> {
+    block_on(async { s.sql(sql).await?.schema().await })
+        .unwrap_or_else(|e| panic!("{sql}: {e}"))
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect()
+}
+
+/// identifier-clause 177 and 186: a select item written `IDENTIFIER(..)` is named by the SQL of
+/// what it resolves to; the same name written plainly keeps its short name, and an attribute
+/// keeps its own name either way.
+#[test]
+fn a_select_item_written_identifier_is_named_by_what_it_resolves_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "DECLARE my_var = 'new_value'");
+    assert_eq!(
+        names(&s, "SELECT IDENTIFIER('my_var'), my_var"),
+        [
+            "variablereference(system.session.my_var='new_value')",
+            "my_var"
+        ]
+    );
+    let structs = "FROM VALUES (named_struct('c2', 42)) AS T(c1)";
+    assert_eq!(
+        names(&s, &format!("SELECT IDENTIFIER('c1.c2'), c1.c2 {structs}")),
+        ["c1.c2", "c2"]
+    );
+    assert_eq!(
+        names(
+            &s,
+            &format!(
+                "EXECUTE IMMEDIATE 'SELECT IDENTIFIER(:col1 ''.c2'') {}' USING 'c1' AS col1",
+                structs.replace('\'', "''")
+            )
+        ),
+        ["c1.c2"]
+    );
+    assert_eq!(
+        names(&s, "SELECT IDENTIFIER('a') FROM VALUES (1) AS T(a)"),
+        ["a"]
+    );
+}

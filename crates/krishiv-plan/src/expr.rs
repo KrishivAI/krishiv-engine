@@ -157,6 +157,24 @@ pub struct ColumnRef {
     /// encoding records all of those carriers, so plans with equal keys
     /// resolve the reference alike, whichever rule picks among them.
     pub plan_id: Option<PlanId>,
+    /// Written as `IDENTIFIER(..)` (the session substituted the name before
+    /// parsing): a bare select item of it is named by the resolved
+    /// expression's SQL, as Spark names an `ExpressionWithUnresolvedIdentifier`
+    /// (`variablereference(system.session.v='x')`, `c1.c2` for a field),
+    /// while an attribute keeps its own name.
+    pub by_identifier: bool,
+}
+
+impl ColumnRef {
+    /// A reference by `name` alone: no DataFrame, not written as `IDENTIFIER(..)`.
+    #[must_use]
+    pub const fn new(name: Vec<String>) -> Self {
+        Self {
+            name,
+            plan_id: None,
+            by_identifier: false,
+        }
+    }
 }
 
 /// One field update of an unresolved [`ExprNode::UpdateFields`] (Spark's
@@ -590,6 +608,7 @@ impl Expr {
         Self::new(ExprNode::Column(ColumnRef {
             name: parts.into_iter().map(Into::into).collect(),
             plan_id: None,
+            by_identifier: false,
         }))
     }
 
