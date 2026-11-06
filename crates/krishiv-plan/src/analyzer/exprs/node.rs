@@ -231,6 +231,7 @@ impl Resolver<'_> {
                         return self.sql_call(&def, e, f, kids, cx.op);
                     }
                 }
+                super::super::bind::check_function_namespace(self.ctx, f, e.origin)?;
                 let (parts, builtin) = qualified_parts(f, &self.b.search_path, e.origin)?;
                 let session_qualified = super::super::bind::is_session_qualifier(&f.qualifier);
                 let lookup_name = builtin.as_deref().unwrap_or(&f.name);
