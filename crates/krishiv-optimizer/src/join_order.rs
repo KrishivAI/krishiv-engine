@@ -104,7 +104,8 @@ fn tops_tree(p: &LogicalPlan) -> bool {
 
 impl Reorder<'_> {
     /// `p` reordered for a consumer that reads its columns by position
-    /// (the query result, a subquery, a CTE definition, a renaming alias):
+    /// (the query result, a subquery, a CTE definition, a renaming alias,
+    /// the inputs of a union and the terms of a recursive CTE):
     /// a reordered tree may output more columns, in another order, so a
     /// projection restores the original ones.
     fn positional(&mut self, p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
@@ -150,10 +151,17 @@ impl Reorder<'_> {
 
     /// `p` with its inputs and subquery plans reordered.
     fn children(&mut self, p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
-        // CTE definitions (named by their exact columns) and the input of a
-        // renaming alias are read by position; every other input by id.
+        // CTE definitions (named by their exact columns), the input of a
+        // renaming alias and the inputs of a union or the terms of a
+        // recursive CTE (their output is the first input's columns, and the
+        // others are matched to them in order) are read by position; every
+        // other input by id. The analyzer rewrites every `SetOp` before
+        // optimization; it is listed in case a plan ever keeps one.
         let (by_position, ctes) = match &p.node {
             PlanNode::SubqueryAlias { columns, .. } => (!columns.is_empty(), 0),
+            PlanNode::Union { .. } | PlanNode::SetOp { .. } | PlanNode::UnionLoop { .. } => {
+                (true, 0)
+            }
             PlanNode::WithCte { ctes, .. } => (false, ctes.len()),
             _ => (false, 0),
         };

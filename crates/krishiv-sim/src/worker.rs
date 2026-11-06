@@ -277,3 +277,92 @@ impl std::fmt::Debug for Host {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use krishiv_exec::planner::MemoryTables;
+    use turmoil::net::TcpStream;
+
+    use super::*;
+    use crate::testing;
+
+    /// Worker hosts with no tables at all.
+    struct Empty;
+
+    impl HostSetup for Empty {
+        fn worker(&self) -> BoxFuture<'static, Result<WorkerContext>> {
+            Box::pin(async { Ok(WorkerContext::new(Arc::new(MemoryTables::new()))) })
+        }
+    }
+
+    async fn ask(request: Request) -> Reply {
+        let mut stream = TcpStream::connect(("worker-0", testing::PORT))
+            .await
+            .unwrap();
+        request.write(&mut stream).await.unwrap();
+        Reply::read(&mut stream).await.unwrap()
+    }
+
+    #[test]
+    fn a_worker_refuses_what_it_cannot_serve_and_prints_its_shape() {
+        let mut sim = testing::sim();
+        sim.host("worker-0", || async {
+            let workers = testing::workers(&["worker-0"]);
+            serve(1, 0, workers, None, Arc::new(Empty), 1)
+                .await
+                .map_err(Into::into)
+        });
+        sim.client("coordinator", async {
+            // A fetch of a job this host never ran.
+            let reply = ask(Request::Fetch {
+                job: 99,
+                exchange: 1,
+                stage_attempt: 0,
+                map: 0,
+                reduce: 0,
+            })
+            .await;
+            assert!(
+                matches!(&reply, Reply::Failed(m) if m.contains("job 99 holds no map output here")),
+                "{reply:?}"
+            );
+            // A fragment that is no plan.
+            let reply = ask(Request::Run {
+                job: 1,
+                fragment: vec![1, 2, 3],
+                task: Vec::new(),
+            })
+            .await;
+            assert!(
+                matches!(&reply, Reply::Failed(m) if m.contains("a fragment")),
+                "{reply:?}"
+            );
+            // Releasing a job it does not hold is fine.
+            assert_eq!(ask(Request::Release { job: 99 }).await, Reply::Done);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        });
+        sim.run().unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_host_prints_its_executor() {
+        let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+        let host = Host {
+            seed: 1,
+            index: 0,
+            workers: testing::workers(&["worker-0"]),
+            fault: None,
+            runner: QueryRunner::new(Arc::clone(&executor)),
+            executor,
+            pool: TreePool::with_clock(&MemoryConfig::default(), Arc::new(TokioClock)),
+            jobs: Mutex::default(),
+            worker: Empty.worker().await.unwrap(),
+            next_query: AtomicU64::new(0),
+        };
+        assert!(format!("{host:?}").starts_with("Host"));
+        assert!(host.existing(5).is_none());
+        // A job's exchange is made once and reused.
+        assert!(Arc::ptr_eq(&host.exchange(5), &host.exchange(5)));
+        assert!(host.existing(5).is_some());
+    }
+}

@@ -37,6 +37,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_ABORT_RELEASE_TIMEOUT,
     &MEMORY_SPILL_SCRATCH_RESERVE,
     &MEMORY_RESIDENT_GUARD,
+    &SESSION_MEMORY_LIMIT,
+    &SYSTEM_QUERIES_CAPACITY,
     &CACHE_MAX_BYTES,
     &DETERMINISTIC_ORDER,
     &RESULT_CACHE_ENABLED,
@@ -152,6 +154,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
     ("krishiv.io.cache.blockBytes", &IO_CACHE_BLOCK_BYTES),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
+    ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
@@ -178,6 +181,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &MEMORY_SPILL_WAIT_TIMEOUT,
     ),
     ("krishiv.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
+    ("krishiv.system.queries.capacity", &SYSTEM_QUERIES_CAPACITY),
     ("spark.sql.files.maxPartitionNum", &FILES_MAX_PARTITION_NUM),
     ("spark.sql.files.minPartitionNum", &FILES_MIN_PARTITION_NUM),
     ("spark.sql.files.openCostInBytes", &FILES_OPEN_COST_IN_BYTES),
@@ -771,6 +775,38 @@ pub static MEMORY_RESIDENT_GUARD: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
     spark_alias: None,
+};
+
+/// The memory one session's queries may hold together, under the process
+/// limit (design P2-E1).
+pub static SESSION_MEMORY_LIMIT: ConfigEntry = ConfigEntry {
+    key: "krishiv.session.memoryLimit",
+    value_type: ValueType::Size,
+    default: None,
+    doc: "Memory the queries of one session may hold together: the limit of the session's own \
+          pool under the process root (`krishiv.memory.limit` still bounds the process). A \
+          request over it spills, then cancels one of the session's own queries, never another \
+          session's. Fixed when the session is built. When unset, a session's queries are \
+          bounded by the process limit only.",
+    scope: Scope::Session,
+    version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::Admin,
+};
+
+/// Most `system.queries` rows one engine runtime keeps (design P2-E1 §5).
+pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
+    key: "krishiv.system.queries.capacity",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(10_000)),
+    doc: "Most rows `system.queries` keeps for all the sessions of one engine runtime. A \
+          principal holding 1000 rows loses its oldest finished row first; at this capacity the \
+          oldest finished row of the principal holding the most finished rows goes. Running \
+          queries are never dropped.",
+    scope: Scope::Cluster,
+    version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::Startup,
 };
 
 /// How long a request waits for aborted queries to release memory.
