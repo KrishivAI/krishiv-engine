@@ -967,13 +967,24 @@ fn min_max_signatures_order_structs_field_by_field() {
                 "{name}"
             );
         }
-        // Spark orders an array field, the struct comparator does not take it:
-        // an unsupported feature, not an ordering mismatch.
+        // Spark orders an array field (element by element), and so does the struct comparator.
         let array = DataType::Array(krishiv_types::ArrayType::new(DataType::Integer, true).into());
-        let err = result(name, &[struct_of(array)], &[]).unwrap_err();
+        assert!(
+            result(name, &[struct_of(array.clone())], &[]).is_ok(),
+            "{name}"
+        );
+        // An array of maps does not order.
+        let maps = DataType::Array(
+            krishiv_types::ArrayType::new(
+                DataType::Map(MapType::new(DataType::String, DataType::Integer, true).into()),
+                true,
+            )
+            .into(),
+        );
+        let err = result(name, &[struct_of(maps)], &[]).unwrap_err();
         assert_eq!(
             err.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
+            ErrorClass::DatatypeMismatchInvalidOrderingType,
             "{name}"
         );
         // `first`/`last` keep their old rule (any type, no ordering check).
