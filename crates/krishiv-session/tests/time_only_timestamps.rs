@@ -69,3 +69,17 @@ fn a_malformed_timestamp_cast_in_an_inline_table_is_a_failed_cell() {
         }
     }
 }
+
+#[test]
+fn a_clock_literal_as_a_pivot_value_is_unsupported_not_non_literal() {
+    let s = Session::new().unwrap();
+    let sql = "SELECT * FROM (SELECT 1 AS a, TIMESTAMP '10:00' AS t) PIVOT (sum(a) FOR t IN (TIMESTAMP '11:00'))";
+    let e = block_on(s.sql(sql))
+        .and_then(|df| block_on(df.collect()))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+}

@@ -274,7 +274,7 @@ pub(super) fn special_clock(special: &str, kind: SpecialKind) -> Expr {
 
 /// A bare time of day (`10:00`, `T10:00:30.5`, no zone) of an instant type: Spark reads it as that time
 /// today, in the session zone. It binds as the cast of the query-start date and the time, so a
-/// `TIMESTAMP '11:00'` is `CAST(CONCAT(CAST(current_date() AS STRING), 'T', '11:00') AS TIMESTAMP)`.
+/// `TIMESTAMP '11:00'` is `CAST(CONCAT(CAST(current_date() AS STRING), 'T11:00') AS TIMESTAMP)`.
 /// `None` for any other value (a zone in the value moves the date to that zone's today, which the
 /// session-zone clock cannot give; those stay `KRISHIV_UNSUPPORTED_FEATURE`).
 pub(super) fn time_only_today(
