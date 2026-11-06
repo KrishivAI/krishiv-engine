@@ -23,7 +23,8 @@
 3004 crates/krishiv-session/src/catalog.rs
 2527 crates/krishiv-session/src/command.rs
 2630 crates/krishiv-session/src/dataframe.rs
-2867 crates/krishiv-session/src/session.rs
+# +1: the Statement::Repair dispatch arm (MSCK REPAIR TABLE, T001b)
+2868 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +21 over the T001b carrier baseline: the ALTER VIEW UNSET, SET SERDEPROPERTIES and partition SET LOCATION / RENAME arms (T001b)
 3276 crates/krishiv-session/src/table_commands.rs
