@@ -1034,8 +1034,14 @@ impl Held {
                 &mut super::udaf::Charge::new(Some(&mut self.charge)),
             );
             self.charge.shrink(eval);
-            let out = out?;
-            return Ok(out);
+            match out {
+                // A UDF's state the pool refuses: give the held batches up
+                // and fold from the file, where growth may shed others'.
+                Err(e)
+                    if e.error_class()
+                        == krishiv_common::error::ErrorClass::UnableToAcquireMemory => {}
+                out => return out,
+            }
         }
         self.release();
         c.counters.file_folds.fetch_add(1, Ordering::Relaxed);

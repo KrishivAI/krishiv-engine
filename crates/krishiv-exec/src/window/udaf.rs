@@ -239,7 +239,9 @@ fn sliding(
         acc.resize(last - first);
         // Their rows fold in updates of at most `CHUNK` rows (a frame larger
         // than that updates its group more than once), so the gathered
-        // arguments stay what `cost` budgets.
+        // arguments and group ids are bounded by the chunk, as `cost`'s
+        // scratch term assumes (it counts the member indices; the gathered
+        // columns add the argument widths).
         let mut members: Vec<usize> = Vec::new();
         let mut groups: Vec<u32> = Vec::new();
         let flush = |acc: &mut crate::aggregate::Accumulator,
