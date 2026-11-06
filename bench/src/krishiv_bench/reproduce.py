@@ -95,8 +95,17 @@ def _status_of(e: Exception) -> str:
     return "timeout" if isinstance(e, EngineTimeout) else "error"
 
 
-# Polars' SQL front end does not run every query; these are its errors for a query it cannot plan or execute. Such a
-# query is reported "unsupported" with the error, never rewritten.
+# Polars' SQL front end does not run every query; these are its errors for a query it cannot plan. Such a query is
+# reported "unsupported" with the error, never rewritten.
+#
+# `ComputeError` and `InvalidOperationError` are deliberately not here. Probed on Polars 2.0.0 (all 22 TPC-H and
+# 99 TPC-DS queries at SF1 raised neither: 121 of 121 ran), they are raised at run time for SQL Polars does plan: a
+# failed cast (`CAST('x' AS INT)`), a narrowing cast out of range, a string compared with a number, arithmetic on a
+# string, a scalar subquery returning several rows, an invalid regex. Those are errors in the query or the data (or a
+# coercion Polars does not do), which the other engines report as errors too; calling them "unsupported" would hide a
+# failure to investigate. The planning errors that stay: recursive CTEs, LATERAL, unknown functions and tables and
+# window frames Polars lacks are `SQLInterfaceError`; a parse error is `SQLInterfaceError` as well; an unknown column is
+# `ColumnNotFoundError`.
 POLARS_UNSUPPORTED = frozenset(
     {
         "SQLInterfaceError",
@@ -104,8 +113,6 @@ POLARS_UNSUPPORTED = frozenset(
         "UnsuitableSQLError",
         "ColumnNotFoundError",
         "SchemaFieldNotFoundError",
-        "InvalidOperationError",
-        "ComputeError",
         "SchemaError",
     }
 )
