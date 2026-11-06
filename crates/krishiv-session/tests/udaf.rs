@@ -26,6 +26,9 @@ enum Fault {
     PanicInUpdate,
     WrongResultType,
     ShortState,
+    /// Reports 1 KiB of state per row it was given (a state that keeps its
+    /// rows).
+    Bloat,
 }
 
 /// `name(x BIGINT)`: the sum of the non-NULL `x`, NULL for none (as
@@ -87,6 +90,7 @@ impl AggregateUdf for UdSum {
         Ok(Box::new(Sums {
             sums: Vec::new(),
             fault: self.fault,
+            seen: 0,
         }))
     }
 }
@@ -95,6 +99,8 @@ impl AggregateUdf for UdSum {
 struct Sums {
     sums: Vec<Option<i64>>,
     fault: Fault,
+    /// Rows given to `update`.
+    seen: usize,
 }
 
 impl Sums {
@@ -122,6 +128,7 @@ impl GroupsAccumulator for Sums {
         if values.null_count() > 0 {
             return Err(UdfError::new("got a NULL row"));
         }
+        self.seen += groups.len();
         for (i, &g) in groups.iter().enumerate() {
             self.add(g, values.value(i))?;
         }
@@ -156,7 +163,12 @@ impl GroupsAccumulator for Sums {
     }
 
     fn size(&self) -> usize {
-        self.sums.capacity() * size_of::<Option<i64>>()
+        let bloat = if self.fault == Fault::Bloat {
+            self.seen * 1024
+        } else {
+            0
+        };
+        self.sums.capacity() * size_of::<Option<i64>>() + bloat
     }
 }
 
@@ -652,4 +664,76 @@ fn a_window_udaf_refuses_distinct_and_reports_its_failures() {
         "SELECT udsum(v) OVER (PARTITION BY k ORDER BY v) FROM t",
     );
     assert_eq!(e.error_class(), ErrorClass::FailedExecuteUdf, "{e}");
+}
+
+#[test]
+fn a_whole_partition_filter_keeps_rejected_rows_from_the_udaf() {
+    let s = session_with(&[], Fault::None);
+    // `udsum` overflows on the two rejected rows if they reach `update`.
+    let got = run(
+        &s,
+        "SELECT v, udsum(v) FILTER (WHERE v = 1) OVER () \
+         FROM VALUES (1L), (9223372036854775807L), (9223372036854775807L) AS t(v) \
+         ORDER BY v",
+    );
+    assert_eq!(
+        pairs(&got),
+        vec![
+            (Some(1), Some(1)),
+            (Some(i64::MAX), Some(1)),
+            (Some(i64::MAX), Some(1)),
+        ]
+    );
+}
+
+#[test]
+fn a_udaf_state_folded_from_disk_is_charged_to_the_pool() {
+    let dir = tempfile::tempdir().unwrap();
+    let spill = dir.path().join("spill");
+    let s = session_with(
+        &[
+            ("krishiv.spill.dir", spill.to_str().unwrap()),
+            ("krishiv.memory.limit", "6m"),
+        ],
+        Fault::None,
+    );
+    s.register_udaf(UdSum::new("bloat", Fault::Bloat)).unwrap();
+    // Two partitions of 100,000 rows, read back from disk: the state
+    // reports ~100 MB, far past the limit.
+    register_t(&s, 2);
+    for frame in ["PARTITION BY k", "PARTITION BY k ORDER BY v"] {
+        let e = error_of(
+            &s,
+            &format!("SELECT count(c) FROM (SELECT bloat(v) OVER ({frame}) AS c FROM t)"),
+        );
+        assert!(
+            e.to_string().to_lowercase().contains("memory"),
+            "{frame}: {e}"
+        );
+    }
+}
+
+#[test]
+fn a_udaf_named_like_a_whole_partition_builtin_takes_any_frame() {
+    let s = session_with(&[], Fault::None);
+    s.register_udaf(UdSum::new("median", Fault::None)).unwrap();
+    register_t(&s, 7);
+    let q = |f: &str| {
+        format!(
+            "SELECT k, v, {f}(v) OVER (PARTITION BY k ORDER BY v, k \
+             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) \
+             FROM t WHERE v < 60 ORDER BY k, v, 3"
+        )
+    };
+    assert_eq!(
+        triples(&run(&s, &q("session.median"))),
+        triples(&run(&s, &q("sum")))
+    );
+    // The built-in keeps its restriction.
+    let e = error_of(&s, &q("median"));
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::InvalidWindowSpecForAggregationFunc,
+        "{e}"
+    );
 }

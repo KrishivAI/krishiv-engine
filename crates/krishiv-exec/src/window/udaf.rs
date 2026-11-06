@@ -76,12 +76,18 @@ pub(super) fn aggregate(
     match f.shape()? {
         Shape::Whole => {
             let mut acc = accumulator_of(&local, ansi, udafs)?;
-            let trash = id(parts)?;
-            acc.resize(parts + 1);
-            let groups: Vec<u32> = (0..u.rows)
-                .map(|i| if passes(i) { u.part_of[i] } else { trash })
-                .collect();
-            acc.update(&groups, &args, &one)?;
+            acc.resize(parts);
+            // Rows the FILTER rejects never reach `update`: a UDF's
+            // `update` sees only the rows it aggregates.
+            if mask.is_some() {
+                let kept: Vec<usize> = (0..u.rows).filter(|&i| passes(i)).collect();
+                if !kept.is_empty() {
+                    let groups: Vec<u32> = kept.iter().map(|&i| u.part_of[i]).collect();
+                    acc.update(&groups, &gather(&args, &kept)?, &one)?;
+                }
+            } else {
+                acc.update(&u.part_of, &args, &one)?;
+            }
             let ids: Vec<u32> = (0..parts).map(id).collect::<Result<_>>()?;
             take(&acc.evaluate(&ids)?, &u.part_of)
         }

@@ -71,8 +71,21 @@ pub(super) enum Fold {
         buf: Vec<u8>,
     },
     /// An aggregate UDF (ADR 0045): group 0 holds the state; a snapshot is
-    /// an evaluation of it, which does not consume.
-    Udf { acc: Box<Accumulator> },
+    /// an evaluation of it, which does not consume. Its state may grow with
+    /// every row (`charge`, reconciled with `Accumulator::size` after each
+    /// fold).
+    Udf {
+        acc: Box<Accumulator>,
+        charge: Option<Reservation>,
+    },
+}
+
+/// Brings `charge` to `size`: grows it through `shed` (which may spill
+/// others), shrinks it when the state got smaller.
+fn reconcile(charge: &mut Reservation, size: usize, shed: &mut Shed<'_>) -> Result<()> {
+    shed.grow(charge, size.saturating_sub(charge.size()))?;
+    charge.shrink(charge.size().saturating_sub(size));
+    Ok(())
 }
 
 impl Fold {
@@ -90,7 +103,10 @@ impl Fold {
             };
             let mut acc = crate::aggregate::accumulator_of(&local, ansi, udafs)?;
             acc.resize(1);
-            return Ok(Self::Udf { acc: Box::new(acc) });
+            return Ok(Self::Udf {
+                acc: Box::new(acc),
+                charge: None,
+            });
         }
         if exact_decimal(a) {
             return Ok(Self::Decimal {
@@ -125,12 +141,14 @@ impl Fold {
     }
 
     /// Charges a state that grows with its rows to `consumer`, from the pool.
+    /// A UDF's state is opaque, so it is always charged.
     pub(super) fn charged(mut self, a: &AggregateExpr, consumer: &ConsumerHandle) -> Self {
-        if let Self::Rows { charge, .. } = &mut self
-            && keeps_values(a)
-        {
-            *charge =
-                Some(Reservation::new(Arc::clone(consumer.pool()), consumer.id()).unguarded());
+        let reservation =
+            || Some(Reservation::new(Arc::clone(consumer.pool()), consumer.id()).unguarded());
+        match &mut self {
+            Self::Rows { charge, .. } if keeps_values(a) => *charge = reservation(),
+            Self::Udf { charge, .. } => *charge = reservation(),
+            _ => {}
         }
         self
     }
@@ -152,7 +170,13 @@ impl Fold {
             ));
         }
         match self {
-            Self::Udf { acc } => super::udaf::fold_rows(acc, args, mask, rows, snap),
+            Self::Udf { acc, charge } => {
+                let values = super::udaf::fold_rows(acc, args, mask, rows, snap)?;
+                if let Some(charge) = charge {
+                    reconcile(charge, acc.size(), shed)?;
+                }
+                Ok(values)
+            }
             Self::Rows { acc, charge } => {
                 let groups: Vec<u32> = (0..rows).map(|i| u32::from(!passes(mask, i))).collect();
                 let parts = vec![0_u32; rows];
@@ -181,9 +205,7 @@ impl Fold {
                 // What the batch's rows add while they fold is in a batch's
                 // evaluation cost (`eval::cost`); what stays is charged here.
                 if let Some(charge) = charge {
-                    let size = acc.size();
-                    shed.grow(charge, size.saturating_sub(charge.size()))?;
-                    charge.shrink(charge.size().saturating_sub(size));
+                    reconcile(charge, acc.size(), shed)?;
                 }
                 let ids: Vec<u32> = (2..next).collect();
                 acc.evaluate(&ids)
@@ -255,7 +277,7 @@ impl Fold {
     /// The value over every row folded so far.
     pub(super) fn value(&mut self) -> Result<ArrayRef> {
         match self {
-            Self::Rows { acc, .. } | Self::Udf { acc } => acc.evaluate(&[0]),
+            Self::Rows { acc, .. } | Self::Udf { acc, .. } => acc.evaluate(&[0]),
             Self::Decimal {
                 a,
                 sum,
