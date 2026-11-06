@@ -32,6 +32,31 @@ pub(crate) struct ConfStore {
     local_zone: Arc<str>,
 }
 
+/// Fails when `key` is one of the collation switches the engine refuses and `value` turns it on.
+fn refuse_unsupported_switch(key: &str, value: &str) -> Result<(), KrishivError> {
+    if UNSUPPORTED_COLLATION_SWITCHES
+        .iter()
+        .any(|k| k.eq_ignore_ascii_case(key))
+        && value.trim().eq_ignore_ascii_case("true")
+    {
+        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: format!("{key} = true"),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// The builder's initial settings, checked as `SET` checks a runtime one.
+pub(crate) fn checked_pairs(
+    pairs: Vec<(String, String)>,
+) -> Result<Vec<(String, String)>, KrishivError> {
+    for (k, v) in &pairs {
+        refuse_unsupported_switch(k, v)?;
+    }
+    Ok(pairs)
+}
+
 /// Spark switches for collation features the engine refuses (ADR 0043 Decision 7 and 9): the
 /// collation-aware hash functions, collated map keys and schema-level default collations.
 const UNSUPPORTED_COLLATION_SWITCHES: &[&str] = &[
@@ -296,16 +321,7 @@ impl RuntimeConf {
         }
         // Collation switches the engine does not honour yet (ADR 0043): turning one on would
         // change results silently, so it is refused.
-        if UNSUPPORTED_COLLATION_SWITCHES
-            .iter()
-            .any(|k| k.eq_ignore_ascii_case(key))
-            && value.trim().eq_ignore_ascii_case("true")
-        {
-            return Err(krishiv_common::error::KrishivUnsupportedFeature {
-                feature: format!("{key} = true"),
-            }
-            .into());
-        }
+        refuse_unsupported_switch(key, value)?;
         // A time zone setting (under its canonical key or the Spark alias)
         // is resolved against the time zone database, which `krishiv-common`
         // has not: the text as given, as Spark's `ZoneId.of` takes it.

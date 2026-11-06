@@ -444,3 +444,28 @@ fn alter_table_refuses_collated_map_keys() {
         ErrorClass::UnsupportedFeatureCollationsInMapKeys
     );
 }
+
+/// Codex review of #493: a lookup in a map with collated keys compares bytes, a function that
+/// reads a collation does not pass it on, and the builder checks the switches like `SET`.
+#[test]
+fn map_key_lookups_boundaries_and_builder_switches() {
+    let nested = "STRUCT<k: STRING COLLATE UTF8_LCASE>";
+    let sql = format!(
+        "SELECT CAST(map(named_struct('k', 'a'), 1) AS MAP<{nested}, INT>)\
+         [CAST(named_struct('k', 'A') AS {nested})]"
+    );
+    assert_eq!(class(&sql), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(
+        class("SELECT map('a', 1)['A' COLLATE utf8_lcase]"),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    // `collation()` returns a plain string: it brings no explicit collation of its own.
+    assert_eq!(
+        one("SELECT typeof(concat(collation('a' COLLATE UTF8_LCASE), 'b' COLLATE UNICODE_CI))"),
+        "string collate UNICODE_CI"
+    );
+    let built = Session::builder()
+        .config("spark.sql.legacy.collationAwareHashFunctions", "true")
+        .build();
+    assert!(built.is_err());
+}

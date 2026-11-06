@@ -157,12 +157,39 @@ const NESTED_OK: &[&str] = &[
 /// Calls that read the type of their argument: it stays collated.
 const INSPECTS: &[&str] = &["collation", "typeof"];
 
+/// Whether a lookup in a map compares keys of a collated type (`m[k]`, `element_at`): the
+/// key compare is bytes until unit 3b, so only array indexing and plain-key maps are exempt.
+fn map_lookup_compares_collation(kids: &[Bound]) -> bool {
+    kids.iter().any(
+        |k| matches!(&k.ty.data_type, Some(DataType::Map(m)) if m.key_type().contains_collation()),
+    ) || (kids
+        .iter()
+        .any(|k| matches!(k.ty.data_type, Some(DataType::Map(_))))
+        && kids
+            .iter()
+            .any(|k| matches!(k.ty.data_type, Some(DataType::CollatedString(_)))))
+}
+
 fn is_string(t: Option<&DataType>) -> bool {
     matches!(t, Some(DataType::String | DataType::CollatedString(_)))
 }
 
+/// Strengths already computed, by expression address: plans are DAGs, and a shared child must
+/// not be walked once per parent (`shared_expressions_stay_linear`).
+type Memo = std::collections::HashMap<usize, Option<(Collation, Strength)>>;
+
 /// The collation and strength `e` carries, when it is a string.
-fn strength_of(e: &Expr) -> Option<(Collation, Strength)> {
+fn strength_of(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strength)> {
+    let key = std::ptr::from_ref(e) as usize;
+    if let Some(done) = memo.get(&key) {
+        return *done;
+    }
+    let out = strength_of_uncached(e, memo);
+    memo.insert(key, out);
+    out
+}
+
+fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strength)> {
     match &e.node {
         ExprNode::Collate { collation, .. } => Some((*collation, Strength::Explicit)),
         ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
@@ -173,7 +200,7 @@ fn strength_of(e: &Expr) -> Option<(Collation, Strength)> {
             }
         }
         ExprNode::Literal(Literal::String(_)) => Some((Collation::UTF8_BINARY, Strength::Default)),
-        ExprNode::Alias { expr, .. } => strength_of(expr),
+        ExprNode::Alias { expr, .. } => strength_of(expr, memo),
         // A written `CAST(x AS STRING COLLATE c)` (bound, so never in `Default` mode) is
         // explicit; the analyzer's own implicit cast, shown in `Default` mode, takes its
         // child's strength.
@@ -182,10 +209,18 @@ fn strength_of(e: &Expr) -> Option<(Collation, Strength)> {
             mode,
             ..
         } if *mode != CastMode::Default => Some((*c, Strength::Explicit)),
-        ExprNode::Cast { expr, to, .. } if is_string(Some(to)) => strength_of(expr),
+        ExprNode::Cast { expr, to, .. } if is_string(Some(to)) => strength_of(expr, memo),
+        ExprNode::Function(f) if INSPECTS.contains(&f.name.to_ascii_lowercase().as_str()) => {
+            // `collation(x)` and `typeof(x)` return an ordinary string: the collation of the
+            // argument stops here.
+            Some((Collation::UTF8_BINARY, Strength::Default))
+        }
+        ExprNode::Resolved(ResolvedExpr::Function(f)) if INSPECTS.contains(&f.id.name()) => {
+            Some((Collation::UTF8_BINARY, Strength::Default))
+        }
         ExprNode::Function(_) | ExprNode::Resolved(ResolvedExpr::Function(_)) => {
             let mut kids = Vec::new();
-            e.for_each_child(&mut |k| kids.extend(strength_of(k)));
+            e.for_each_child(&mut |k| kids.extend(strength_of(k, memo)));
             merge(&kids).ok().flatten()
         }
         _ => None,
@@ -250,7 +285,7 @@ impl Resolver<'_> {
         }
         // A collated string inside an array, map or struct is read by field or element only:
         // the nested compare, key and array functions are not collation-aware yet.
-        if !NESTED_OK.contains(&name.as_str())
+        if (!NESTED_OK.contains(&name.as_str()) || map_lookup_compares_collation(&kids[..n]))
             && kids[..n].iter().any(|k| {
                 k.ty.data_type.as_ref().is_some_and(|t| {
                     !matches!(t, DataType::CollatedString(_)) && t.contains_collation()
@@ -264,7 +299,7 @@ impl Resolver<'_> {
         }
         // A collated string against a plain array or map (`array_contains(arr, c)`) is a
         // comparison the array functions would make as bytes.
-        if !NESTED_OK.contains(&name.as_str())
+        if (!NESTED_OK.contains(&name.as_str()) || map_lookup_compares_collation(&kids[..n]))
             && kids[..n]
                 .iter()
                 .any(|k| matches!(k.ty.data_type, Some(DataType::CollatedString(_))))
@@ -280,13 +315,14 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
+        let mut memo = Memo::new();
         let items: Vec<(Collation, Strength)> = kids[..n]
             .iter()
             .filter(|k| is_string(k.ty.data_type.as_ref()))
             .filter_map(|k| {
                 // A subquery, variable, field or element: not a shape the pass reads through,
                 // but Spark counts it as implicit, so it is never skipped.
-                strength_of(&k.shown()).or(match &k.ty.data_type {
+                strength_of(&k.shown(), &mut memo).or(match &k.ty.data_type {
                     Some(DataType::CollatedString(c)) => Some((*c, Strength::Implicit)),
                     _ => Some((Collation::UTF8_BINARY, Strength::Implicit)),
                 })
@@ -367,7 +403,10 @@ impl Resolver<'_> {
                 // A string of another collation is shown cast to the call's.
                 // Only a literal is shown cast (a column's implicit cast is not), and the charset
                 // of `encode`/`decode`/`to_binary` is no collated operand.
-                let literal = matches!(strength_of(&k.shown()), Some((_, Strength::Default)));
+                let literal = matches!(
+                    strength_of(&k.shown(), &mut memo),
+                    Some((_, Strength::Default))
+                );
                 if let (Some(own), Some(want)) = (own, chosen)
                     && own != want
                     && literal
@@ -433,5 +472,57 @@ impl Resolver<'_> {
             bound.ty.data_type = Some(to);
         }
         Ok(bound)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AttrId;
+
+    fn leaf(c: Collation) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+            crate::BoundColumn {
+                id: AttrId(1),
+                name: "c".to_owned(),
+                data_type: DataType::collated_string(c),
+                nullable: true,
+            },
+        ))))
+    }
+
+    /// `e = concat(e, e)` sixty times shares one child per level: a walk that expands the
+    /// sharing would visit 2^60 nodes.
+    #[test]
+    fn strength_of_a_shared_expression_dag_is_linear() {
+        let lcase = Collation::parse("UTF8_LCASE").unwrap();
+        let mut e = leaf(lcase);
+        for _ in 0..60 {
+            e = Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
+                name: "concat".to_owned(),
+                qualifier: Vec::new(),
+                args: vec![Arc::clone(&e), Arc::clone(&e)],
+                arg_names: Vec::new(),
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+            })));
+        }
+        let got = strength_of(&e, &mut Memo::new());
+        assert_eq!(got, Some((lcase, Strength::Implicit)));
+    }
+
+    #[test]
+    fn collation_and_typeof_end_the_propagation() {
+        let lcase = Collation::parse("UTF8_LCASE").unwrap();
+        for name in ["collation", "typeof"] {
+            let call = Expr::function(name, vec![Expr::clone(&leaf(lcase))]);
+            let got = strength_of(&call, &mut Memo::new());
+            assert_eq!(
+                got,
+                Some((Collation::UTF8_BINARY, Strength::Default)),
+                "{name}"
+            );
+        }
     }
 }

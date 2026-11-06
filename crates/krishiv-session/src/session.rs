@@ -320,7 +320,7 @@ impl SessionBuilder {
         // Diagnostics first: installs the tokio-console subscriber when the
         // feature is on and `KRISHIV_TOKIO_CONSOLE=1`, a no-op otherwise.
         krishiv_exec::maybe_init_tokio_console();
-        let (config, _) = Config::from_pairs(self.pairs)?;
+        let (config, _) = Config::from_pairs(crate::conf::checked_pairs(self.pairs)?)?;
         let executor: Arc<dyn Executor> = match self.executor {
             Some(e) => e,
             None => TokioExecutor::new(&ExecutorConfig::default().with_config(&config))?,
