@@ -98,6 +98,9 @@ pub(crate) struct CatalogTable {
     pub(crate) managed: bool,
     /// The file format: `parquet`, `csv`, `json` or `text`.
     pub(crate) provider: String,
+    /// The provider as written (`USING CSV`), which `DESCRIBE` and
+    /// `SHOW CREATE TABLE` print: Spark keeps its case.
+    pub(crate) provider_written: String,
     /// The directory the table's files live in.
     pub(crate) location: PathBuf,
     pub(crate) columns: Vec<StoreColumn>,
@@ -603,6 +606,7 @@ mod tests {
             name: name.to_owned(),
             managed: true,
             provider: "parquet".to_owned(),
+            provider_written: "parquet".to_owned(),
             location: PathBuf::from("/w").join(name),
             columns: vec![StoreColumn {
                 name: "a".to_owned(),
