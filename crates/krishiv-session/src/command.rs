@@ -788,7 +788,7 @@ impl Session {
                     crate::session::internal("a row assignment returned no batches".to_owned())
                 })?;
                 for ((key, var), i) in keys.iter().zip(&stored).zip(0..) {
-                    let (_, value) = arrow_value(batch.column(i), 0)?;
+                    let (_, value) = arrow_field_value(batch, i, 0)?;
                     self.state.variables.put(
                         key.clone(),
                         StoredVariable {
@@ -1820,7 +1820,8 @@ impl Session {
                 "a variable expression returned more than one column".to_owned(),
             ));
         }
-        arrow_value(batch.column(0), 0)
+        let declared = analysis.analyzed.output.first().map(|c| &c.data_type);
+        declared_value(batch.column(0), 0, declared)
     }
 }
 
@@ -1858,11 +1859,48 @@ pub(crate) fn arrow_value(
     array: &arrow_array::ArrayRef,
     row: usize,
 ) -> Result<(DataType, Literal), KrishivError> {
+    typed_value(array, row, arrow_krishiv_type(array.data_type())?)
+}
+
+/// [`arrow_value`] of column `column` of `batch`, whose field also says an interval's fields
+/// (`INTERVAL '3' DAY` is a `Duration` tagged `interval day`).
+pub(crate) fn arrow_field_value(
+    batch: &RecordBatch,
+    column: usize,
+    row: usize,
+) -> Result<(DataType, Literal), KrishivError> {
+    let tagged = DataType::from_arrow_field(batch.schema().field(column)).ok();
+    declared_value(batch.column(column), row, tagged.as_ref())
+}
+
+/// [`arrow_value`] with an interval's fields from `declared` (the analyzed column's type), when
+/// it is an interval of the array's kind.
+pub(crate) fn declared_value(
+    array: &arrow_array::ArrayRef,
+    row: usize,
+    declared: Option<&DataType>,
+) -> Result<(DataType, Literal), KrishivError> {
+    let mut data_type = arrow_krishiv_type(array.data_type())?;
+    match (&data_type, declared) {
+        (DataType::YearMonthInterval { .. }, Some(d @ DataType::YearMonthInterval { .. }))
+        | (DataType::DayTimeInterval { .. }, Some(d @ DataType::DayTimeInterval { .. })) => {
+            data_type = d.clone();
+        }
+        _ => {}
+    }
+    typed_value(array, row, data_type)
+}
+
+/// The value of `array` at `row` as a literal of `data_type` (the array's Krishiv type).
+fn typed_value(
+    array: &arrow_array::ArrayRef,
+    row: usize,
+    data_type: DataType,
+) -> Result<(DataType, Literal), KrishivError> {
     use arrow_array::types::{
-        Date32Type, Decimal64Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
-        TimestampMicrosecondType,
+        Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Int8Type, Int16Type,
+        Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
     };
-    let data_type = arrow_krishiv_type(array.data_type())?;
     // A `NULL` array holds no validity bitmap (`is_null` is false), but
     // every slot is logically NULL.
     if matches!(array.data_type(), ArrowType::Null) || array.is_null(row) {
@@ -1922,6 +1960,30 @@ pub(crate) fn arrow_value(
                 }
             }
         }
+        ArrowType::Interval(arrow_schema::IntervalUnit::YearMonth) => {
+            let DataType::YearMonthInterval { start, end } = data_type else {
+                return Err(crate::session::internal(
+                    "a variable interval changed type".to_owned(),
+                ));
+            };
+            Literal::YearMonthInterval {
+                months: array.as_primitive::<IntervalYearMonthType>().value(row),
+                start,
+                end,
+            }
+        }
+        ArrowType::Duration(arrow_schema::TimeUnit::Microsecond) => {
+            let DataType::DayTimeInterval { start, end } = data_type else {
+                return Err(crate::session::internal(
+                    "a variable interval changed type".to_owned(),
+                ));
+            };
+            Literal::DayTimeInterval {
+                micros: array.as_primitive::<DurationMicrosecondType>().value(row),
+                start,
+                end,
+            }
+        }
         // `arrow_krishiv_type` above already failed on any other type.
         _ => {
             return Err(crate::session::internal(
@@ -1955,6 +2017,13 @@ pub(crate) fn arrow_krishiv_type(data_type: &ArrowType) -> Result<DataType, Kris
         }
         ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, None) => {
             Ok(DataType::TimestampNtz)
+        }
+        // The fields are the field tag's ([`arrow_field_value`]); bare, Spark's defaults.
+        ArrowType::Interval(arrow_schema::IntervalUnit::YearMonth) => {
+            Ok(DataType::DEFAULT_YEAR_MONTH_INTERVAL)
+        }
+        ArrowType::Duration(arrow_schema::TimeUnit::Microsecond) => {
+            Ok(DataType::DEFAULT_DAY_TIME_INTERVAL)
         }
         other => Err(KrishivUnsupportedFeature {
             feature: format!("session variable values of type {other}"),

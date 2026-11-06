@@ -23,7 +23,7 @@ use krishiv_plan::Literal;
 use krishiv_sql::ast::{ExecuteImmediate, Expr, ExprKind, Statement};
 use krishiv_types::DataType;
 
-use crate::command::{arrow_value, padded_select};
+use crate::command::{arrow_field_value, padded_select};
 use crate::dataframe::DataFrame;
 use crate::session::{Session, sql_context};
 use crate::variables::{StoredVariable, quote_normalized, variable_key};
@@ -201,7 +201,7 @@ impl Session {
             return Ok(None);
         };
         (0..width)
-            .map(|i| arrow_value(batch.column(i), 0).map(|(_, v)| v))
+            .map(|i| arrow_field_value(batch, i, 0).map(|(_, v)| v))
             .collect::<Result<Vec<_>, _>>()
             .map(Some)
     }
@@ -484,7 +484,10 @@ fn render_literal(value: &Literal, escaped_strings: bool) -> Result<String, Kris
         | Literal::Long(_)
         | Literal::Float(_)
         | Literal::Double(_)
-        | Literal::Date(_) => Ok(value.to_string()),
+        | Literal::Date(_)
+        // `INTERVAL '3' DAY`: the literal's own SQL keeps the interval's fields.
+        | Literal::YearMonthInterval { .. }
+        | Literal::DayTimeInterval { .. } => Ok(value.to_string()),
         _ => Err(unsupported("this type")),
     }
 }
@@ -595,13 +598,26 @@ mod tests {
             r(Literal::TimestampNtz(-1)),
             "TIMESTAMP_NTZ '1969-12-31 23:59:59.999999'"
         );
-        // Types the text cannot carry exactly are refused, never guessed.
+        // ANSI intervals keep their fields.
         let interval = Literal::YearMonthInterval {
             months: 14,
             start: krishiv_plan::YearMonthField::Year,
             end: krishiv_plan::YearMonthField::Month,
         };
-        assert!(render_literal(&interval, false).is_err());
+        assert_eq!(r(interval), "INTERVAL '1-2' YEAR TO MONTH");
+        let day = Literal::DayTimeInterval {
+            micros: 3 * 86_400_000_000,
+            start: krishiv_plan::DayTimeField::Day,
+            end: krishiv_plan::DayTimeField::Day,
+        };
+        assert_eq!(r(day), "INTERVAL '3' DAY");
+        // Types the text cannot carry exactly are refused, never guessed.
+        let calendar = Literal::CalendarInterval {
+            months: 1,
+            days: 2,
+            micros: 3,
+        };
+        assert!(render_literal(&calendar, false).is_err());
         // With escapedStringLiterals a quote or backslash cannot be written back.
         assert!(render_literal(&Literal::String("a'b".into()), true).is_err());
         assert!(render_literal(&Literal::String("plain".into()), true).is_ok());
