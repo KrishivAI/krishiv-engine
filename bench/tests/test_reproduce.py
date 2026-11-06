@@ -793,7 +793,7 @@ def test_krishiv_checksums_a_separate_dump_of_the_query(tmp_path, monkeypatch):
         ("SELECT * FROM t, LATERAL (SELECT * FROM t) x", "unsupported"),
         ("SELECT no_such_function(a) FROM t", "unsupported"),
         ("SELECT zzz FROM t", "unsupported"),
-        ("SELEC a FROM t", "unsupported"),
+        ("SELECT FROM WHERE", "unsupported"),
         ("SELECT CAST(b AS INT) FROM t", "error"),
         ("SELECT * FROM t WHERE a = b", "error"),
         ("SELECT b + 1 FROM t", "error"),
