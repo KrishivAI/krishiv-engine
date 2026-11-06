@@ -1530,8 +1530,15 @@ impl Resolver<'_> {
                 order_by,
             };
             // No widening through a window: the select list above it sees
-            // every column of its input already.
-            cur = self.make(Origin::UNKNOWN, node, out, &[&cur]);
+            // every column of its input already. Only the columns a `USING`
+            // join merged away come back through it (Spark's `Window` keeps
+            // its child's hidden output).
+            let below = cur;
+            cur = self.make(Origin::UNKNOWN, node, out, &[&below]);
+            if !below.hidden.is_empty() && below.widen.is_some() {
+                cur.hidden = Arc::clone(&below.hidden);
+                cur.widen = Some(Arc::new(super::resolve::Widen::Hidden { child: below }));
+            }
         }
         // The select list over the windows' columns.
         let mut out = Vec::with_capacity(exprs.len());

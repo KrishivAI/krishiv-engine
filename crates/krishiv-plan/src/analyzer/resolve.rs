@@ -88,6 +88,10 @@ pub(super) enum Widen {
     Project { input: Rel, exprs: Vec<Arc<Expr>> },
     /// A filter, sort or limit over `child`: its columns pass through.
     Through { child: Rel },
+    /// A pipe boundary over `child` (the same plan): only `child`'s hidden
+    /// columns (a `USING` join's merged keys, a `_metadata`) come back
+    /// through it, never a column a projection below dropped.
+    Hidden { child: Rel },
     /// An aggregate (under the projections of its lateral aliases): it
     /// adds grouping attributes to its output.
     Aggregate(Arc<AggInfo>),
