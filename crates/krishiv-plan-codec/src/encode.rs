@@ -233,6 +233,13 @@ impl Encoder {
                 partitioning: Some(partitioning(p)),
                 schema: schema_bytes(schema),
             }),
+            PhysNode::UnmatchedBuild(u) => Kind::UnmatchedBuild(pb::UnmatchedBuildNode {
+                marks: u.marks.0,
+                join_type: join_type(u.join_type) as i32,
+                exchange: u.exchange.0,
+                probe_schema: schema_bytes(&u.probe_schema),
+                build_schema: schema_bytes(&u.build_schema),
+            }),
             PhysNode::SharedRead { id, layout } => Kind::SharedRead(pb::SharedReadNode {
                 id: id.0,
                 layout: layout.iter().map(|a| a.0).collect(),
@@ -512,6 +519,7 @@ impl Encoder {
             build: self.node_index(&join.build)?,
             join_type: join_type(join.join_type) as i32,
             residual: self.residual(join.residual.as_ref())?,
+            marks: join.marks.map(|m| m.0),
         })
     }
 

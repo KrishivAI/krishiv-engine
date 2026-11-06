@@ -81,6 +81,14 @@ fn the_header_lists_exactly_the_features_in_use() {
         ["legacy_time_parser"]
     );
     assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
+    assert_eq!(
+        message("nested_loop_split").features,
+        ["exchange_source", "join_full_outer", "nested_loop_split"]
+    );
+    assert_eq!(
+        message("unmatched_build").features,
+        ["join_build_preserved", "nested_loop_split"]
+    );
     // The exchange's schema alone names the collation.
     assert_eq!(
         message("collated_exchange_source").features,
@@ -588,6 +596,24 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
         }
     );
     assert_eq!(ReaderFeatures::default(), ReaderFeatures::all());
+    // A reader without `nested_loop_split` refuses either half of a split
+    // nested-loop join.
+    for name in ["nested_loop_split", "unmatched_build"] {
+        let bytes = encode(&cases().into_iter().find(|(n, _)| n == name).unwrap().1).unwrap();
+        let reader = ReaderFeatures::only([
+            Feature::ExchangeSource,
+            Feature::JoinFullOuter,
+            Feature::JoinBuildPreserved,
+        ]);
+        let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+        assert_eq!(
+            err,
+            CodecError::UnsupportedFeatures {
+                missing: vec!["nested_loop_split".to_owned()]
+            },
+            "{name}"
+        );
+    }
     // A reader without `partial_aggregate` refuses states computed below a
     // join.
     let bytes = encode(

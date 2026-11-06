@@ -345,6 +345,7 @@ fn streaming_scans_follow_every_join_kind_to_its_probe() {
         build: Box::new(scan(2)),
         join_type: krishiv_exec::JoinType::Inner,
         residual: None,
+        marks: None,
     });
     let merge = PhysNode::SortMergeJoin(SortMergeJoinPlan {
         probe: Box::new(nested),
@@ -379,6 +380,7 @@ fn a_build_preserving_nested_loop_runs_as_one_task() {
             build: Box::new(exchange(2, range(), Partitioning::Broadcast)),
             join_type,
             residual: None,
+            marks: None,
         });
         let root = exchange(3, nested, Partitioning::Single);
         let stages = fragment(&plan(root), &schemas(&[1, 2, 3])).unwrap();

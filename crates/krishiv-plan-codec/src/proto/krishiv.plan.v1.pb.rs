@@ -139,7 +139,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -208,7 +208,30 @@ pub mod node {
         /// feature: exchange_source
         #[prost(message, tag = "25")]
         ExchangeSource(super::ExchangeSourceNode),
+        /// feature: nested_loop_split
+        #[prost(message, tag = "26")]
+        UnmatchedBuild(super::UnmatchedBuildNode),
     }
+}
+/// feature: nested_loop_split
+/// The build rows of a split nested-loop join, chosen by the OR of the
+/// bitmaps its local tasks published: a leaf reading the join's broadcast
+/// exchange again, in exchange order.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UnmatchedBuildNode {
+    #[prost(uint64, tag = "1")]
+    pub marks: u64,
+    #[prost(enumeration = "JoinType", tag = "2")]
+    pub join_type: i32,
+    /// The join's broadcast build exchange.
+    #[prost(uint64, tag = "3")]
+    pub exchange: u64,
+    /// The join's probe columns (Arrow IPC `Schema` flatbuffer).
+    #[prost(bytes = "vec", tag = "4")]
+    pub probe_schema: ::prost::alloc::vec::Vec<u8>,
+    /// The exchange's columns (Arrow IPC `Schema` flatbuffer).
+    #[prost(bytes = "vec", tag = "5")]
+    pub build_schema: ::prost::alloc::vec::Vec<u8>,
 }
 /// feature: exchange_source
 /// The rows a task reads from an exchange another stage wrote: a leaf of a
@@ -799,6 +822,11 @@ pub struct NestedLoopJoinNode {
     pub join_type: i32,
     #[prost(message, optional, tag = "4")]
     pub residual: ::core::option::Option<Residual>,
+    /// feature: nested_loop_split
+    /// The local half of a split join: the build-match bitmap it publishes
+    /// instead of emitting build rows.
+    #[prost(uint64, optional, tag = "5")]
+    pub marks: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct JoinFilter {

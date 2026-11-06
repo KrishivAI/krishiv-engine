@@ -18,6 +18,8 @@ Paths are relative to this crate.
   (with the file splits the coordinator dealt, `Coordinator::deal_scans`; relation batches are refused)
 - `tests/tpch_sim.rs` TPC-H on two workers with dealt scans equals one worker; same seed, same trace; a killed map
   task reruns; a two-worker write names files as Spark does and commits once; a file changed after listing fails
+- `tests/nested_split_sim.rs` split nested-loop joins (right/full outer, right semi/anti) on two workers equal one
+  worker, and a killed task of the join's local stage reruns with the same rows
 
 ## Extension points
 - New scenario: a test calling `simulate` with its own `HostSetup` (which must share nothing between hosts but the object store).

@@ -119,8 +119,8 @@ pub use executor::{
 };
 pub use join::{
     BroadcastKey, BroadcastTables, HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, JoinType,
-    NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec, SharedBuildJoinNode, SkewSplit,
-    SortMergeJoin, SortMergeJoinNode, merge_join_supported, skew_split_sides,
+    MarksPublisher, NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec, SharedBuildJoinNode,
+    SkewSplit, SortMergeJoin, SortMergeJoinNode, merge_join_supported, skew_split_sides,
 };
 pub use metrics::prometheus;
 pub use metrics::registry::{

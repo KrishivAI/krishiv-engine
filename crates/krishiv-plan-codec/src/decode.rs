@@ -18,7 +18,9 @@ use krishiv_exec::physical::{
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId,
     SubqueryPlan, SubqueryValueKind, WritePlan,
 };
-use krishiv_exec::physical::{ExchangeFilterPlan, SharedId, SharedPlan};
+use krishiv_exec::physical::{
+    ExchangeFilterPlan, MarksId, SharedId, SharedPlan, UnmatchedBuildPlan,
+};
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
@@ -462,6 +464,13 @@ impl Decoder {
                 partitioning: partitioning(required(&e.partitioning, "the partitioning")?)?,
                 schema: schema_from(&e.schema)?,
             },
+            Kind::UnmatchedBuild(u) => PhysNode::UnmatchedBuild(UnmatchedBuildPlan {
+                marks: MarksId(u.marks),
+                join_type: join_type(u.join_type)?,
+                exchange: ExchangeId(u.exchange),
+                probe_schema: schema_from(&u.probe_schema)?,
+                build_schema: schema_from(&u.build_schema)?,
+            }),
             Kind::SharedRead(s) => PhysNode::SharedRead {
                 id: SharedId(s.id),
                 layout: layout(&s.layout),
@@ -589,6 +598,7 @@ impl Decoder {
                 build: self.boxed(j.build)?,
                 join_type: join_type(j.join_type)?,
                 residual: self.residual(j.residual.as_ref())?,
+                marks: j.marks.map(MarksId),
             }),
             Kind::Union(u) => PhysNode::Union {
                 inputs: u

@@ -142,6 +142,7 @@ registry! {
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (mode_regr_bit_listagg_aggs, ModeRegrBitListaggAggs, POST_MIGRATION_READER_VERSION, Semantic, "The `mode`, regression (`regr_*`), bitwise (`bit_and`, `bit_or`, `bit_xor`), `listagg`/`string_agg` and `try_sum`/`try_avg` aggregates."),
     (moment_aggregates, MomentAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The moment aggregates (`stddev_samp`, `stddev_pop`, `var_samp`, `var_pop`, `skewness`, `kurtosis`, `corr`, `covar_samp`, `covar_pop`)."),
+    (nested_loop_split, NestedLoopSplit, POST_MIGRATION_READER_VERSION, Semantic, "A nested-loop join that returns build rows split across tasks (distributed stages): its local half publishes a build-match bitmap (`NestedLoopJoinNode.marks`) and the `UnmatchedBuild` node emits the build rows from the OR of every task's bitmap."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
     (options_map_literals, OptionsMapLiterals, POST_MIGRATION_READER_VERSION, Semantic, "A `MAP<STRING, STRING>` literal: the options of one call (`from_json`, `from_csv`, `from_xml`). Entries are classified as source options are: a sensitive key or a URL with credentials does not encode (ADR 0038)."),
     (partial_aggregate, PartialAggregate, POST_MIGRATION_READER_VERSION, Optimization, "Partial aggregates below a join, whose states a later aggregate merges (eager aggregation)."),
@@ -375,6 +376,8 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::Range(_) => Some(Feature::Range),
             PhysNode::SharedRead { .. } => Some(Feature::SharedSubplan),
             PhysNode::ExchangeSource { .. } => Some(Feature::ExchangeSource),
+            PhysNode::UnmatchedBuild(_) => Some(Feature::NestedLoopSplit),
+            PhysNode::NestedLoopJoin(j) if j.marks.is_some() => Some(Feature::NestedLoopSplit),
             PhysNode::UnionLoop { .. } | PhysNode::LoopRef { .. } => Some(Feature::UnionLoop),
             PhysNode::SortMergeJoin(_) => Some(Feature::SortMergeJoin),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
@@ -622,6 +625,14 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                 .iter()
                 .for_each(|field| visit_arrow_field(field, f));
         }
+        PhysNode::UnmatchedBuild(u) => {
+            f(Construct::Join(u.join_type));
+            u.probe_schema
+                .fields()
+                .iter()
+                .chain(u.build_schema.fields().iter())
+                .for_each(|field| visit_arrow_field(field, f));
+        }
         PhysNode::Scan(_)
         | PhysNode::LateFetch { .. }
         | PhysNode::OneRow
@@ -768,7 +779,8 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         | PhysNode::Union { .. }
         | PhysNode::WriteFiles { .. }
         | PhysNode::Exchange(_)
-        | PhysNode::ExchangeSource { .. } => {}
+        | PhysNode::ExchangeSource { .. }
+        | PhysNode::UnmatchedBuild(_) => {}
     }
     // Expressions share subtrees: each is visited once.
     let mut seen = std::collections::HashSet::new();

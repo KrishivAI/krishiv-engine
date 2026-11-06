@@ -4,7 +4,7 @@ use std::sync::Arc;
 use arrow_array::{Array, Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 
-use super::{reduce_partitions, route, split};
+use super::{reduce_partitions, round_robin_routes, route, split};
 use crate::operators::SortKey;
 use crate::physical::{HashScheme, Partitioning};
 
@@ -556,4 +556,15 @@ fn an_exchange_filter_that_does_not_fit_is_published_as_its_range() {
     let (form, held) = published_filter_form(Some(1));
     assert_eq!(form, krishiv_io::FilterForm::Range);
     assert_eq!(held, 0);
+}
+
+#[test]
+fn round_robin_routes_flat_columns_only() {
+    assert!(round_robin_routes(&batch(0).schema()));
+    assert!(round_robin_routes(&Arc::new(Schema::empty())));
+    let list = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+    assert!(!round_robin_routes(&Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("l", list, true),
+    ]))));
 }

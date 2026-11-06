@@ -182,6 +182,15 @@ pub fn route(
     HashScheme::KeyGroupV1.partitions(&columns, partitions, out)
 }
 
+/// Whether a round-robin exchange can route rows of `schema`: the routing
+/// hash covers every column's type (it covers no nested type).
+#[must_use]
+pub fn round_robin_routes(schema: &SchemaRef) -> bool {
+    let batch = RecordBatch::new_empty(Arc::clone(schema));
+    let mut out = Vec::new();
+    route(&Partitioning::RoundRobin, &batch, 2, &mut out).is_ok()
+}
+
 /// The number of reduce partitions an exchange of `partitioning` writes
 /// when its readers run `tasks` tasks: one for a gather or a broadcast.
 #[must_use]

@@ -159,6 +159,7 @@ fn run_beside(
         build_schema: schema("b"),
         filter,
         spill: limit.map(|_| scope.clone()),
+        publish: None,
     })?;
     let plan = Arc::new(NestedLoopJoinNode {
         join,
@@ -345,6 +346,7 @@ fn null_aware_and_weighted_inputs_are_refused() {
         build_schema: schema("b"),
         filter: None,
         spill: None,
+        publish: None,
     })
     .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
@@ -365,6 +367,7 @@ fn null_aware_and_weighted_inputs_are_refused() {
         build_schema: schema("b"),
         filter: None,
         spill: None,
+        publish: None,
     })
     .unwrap();
     assert!(j.schema().field(1).is_nullable());

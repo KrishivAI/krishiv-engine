@@ -12,7 +12,10 @@
 //! and of recursive CTEs. A stage that holds one, a `range` source, a gather
 //! read by its rows (not by a subquery) or a join that emits build rows
 //! from a broadcast build runs as one task ([`Stage::single`]): several
-//! tasks would each emit those rows.
+//! tasks would each emit those rows. A nested-loop join split by
+//! [`split_nested_loops`](crate::split_nested_loops) is not single: its
+//! [`PhysNode::UnmatchedBuild`] half reads the join's broadcast exchange
+//! (cut once, for the join) in a one-task stage of its own.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -114,6 +117,7 @@ pub fn fragment(
             stages: Vec::new(),
             readers: BTreeMap::new(),
             crossing,
+            writers: BTreeMap::new(),
         };
         cx.stage(&root, None)?;
         for (id, readers) in &cx.readers {
@@ -146,6 +150,8 @@ struct Cutter<'a> {
     /// The filters an exchange collects for scans of other stages
     /// ([`cross_stage_filters`]): their scans keep them.
     crossing: BTreeSet<FilterId>,
+    /// The stage writing each exchange cut so far.
+    writers: BTreeMap<ExchangeId, usize>,
 }
 
 /// What a fragment holds, gathered while it is cut.
@@ -219,6 +225,9 @@ impl Cutter<'_> {
         )
         .with_shared(shared)?;
         let id = self.stages.len();
+        if let Some(e) = output {
+            self.writers.insert(e.id, id);
+        }
         for s in &wanted {
             self.readers.entry(*s).or_default().insert(id);
         }
@@ -305,7 +314,29 @@ impl Cutter<'_> {
             // Its one row comes once: every task of the stage would emit it.
             PhysNode::OneRow if !subquery => holds.single = true,
             PhysNode::Scan(_) | PhysNode::LateFetch { .. } => holds.scans = true,
-            PhysNode::NestedLoopJoin(j) if j.join_type.builds_preserved() => holds.single = true,
+            PhysNode::NestedLoopJoin(j) if j.join_type.builds_preserved() && j.marks.is_none() => {
+                holds.single = true;
+            }
+            PhysNode::UnmatchedBuild(u) => {
+                // Every task would emit the build rows: one task does.
+                holds.single = true;
+                let stage = self.writers.get(&u.exchange).copied().ok_or_else(|| {
+                    KrishivError::from(InternalError {
+                        message: format!(
+                            "the build rows of a split nested-loop join read exchange {}, \
+                             which no earlier stage writes",
+                            u.exchange.0
+                        ),
+                    })
+                })?;
+                holds.inputs.push(StageInput {
+                    exchange: u.exchange,
+                    stage,
+                    partitioning: Partitioning::Broadcast,
+                    subquery,
+                });
+                return Ok(n.clone());
+            }
             PhysNode::HashJoin(j)
                 if j.join_type.builds_preserved()
                     && j.distribution == JoinDistribution::Broadcast =>
