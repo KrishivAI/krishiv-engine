@@ -189,6 +189,20 @@ fn counts(a: &UdfAcc) -> Vec<i64> {
 }
 
 #[test]
+fn argument_types_come_from_the_calls_spark_types() {
+    let mut c = call(krishiv_types::DataType::Long);
+    c.arg_types = vec![krishiv_types::DataType::Long, krishiv_types::DataType::Null];
+    let fields = arg_fields(&c).unwrap();
+    assert_eq!(fields[0].data_type, Some(krishiv_types::DataType::Long));
+    // An untyped `NULL` has no type.
+    assert_eq!(fields[1].data_type, None);
+    // A call whose types and columns differ is an internal error.
+    c.arg_types.pop();
+    let e = arg_fields(&c).unwrap_err();
+    assert!(e.message().contains("1 argument types"), "{}", e.message());
+}
+
+#[test]
 fn a_missing_udf_or_another_state_refuses_the_plan() {
     let c = call(krishiv_types::DataType::Long);
     let e = resolve(&c, None).unwrap_err();

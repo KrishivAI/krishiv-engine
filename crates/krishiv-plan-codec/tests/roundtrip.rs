@@ -794,6 +794,22 @@ fn a_corrupt_listagg_is_refused() {
 }
 
 #[test]
+fn a_udaf_call_whose_argument_types_and_columns_differ_is_refused() {
+    use pb::node::Kind;
+    let mut m = message("rust_udaf");
+    for node in &mut m.nodes {
+        if let Some(Kind::Aggregate(a)) = &mut node.kind {
+            for agg in &mut a.aggregates {
+                if let Some(u) = agg.udaf.as_mut() {
+                    u.arg_types.clear();
+                }
+            }
+        }
+    }
+    corrupt(&m, "argument types and columns differ");
+}
+
+#[test]
 fn a_corrupt_expand_is_refused() {
     use pb::node::Kind;
     let edit = |f: &dyn Fn(&mut pb::ExpandNode)| {

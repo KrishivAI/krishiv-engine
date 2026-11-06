@@ -876,3 +876,50 @@ pub(super) fn udaf_state(
 fn non_null_literal(e: &Expr) -> bool {
     matches!(&e.node, ExprNode::Literal(l) if !matches!(l, krishiv_plan::Literal::Null(_)))
 }
+
+#[cfg(test)]
+mod udaf_arg_type_tests {
+    use super::*;
+    use arrow_schema::{DataType, Schema};
+
+    fn call() -> UdafCall {
+        UdafCall {
+            name: "f".to_owned(),
+            version: 1,
+            args: Vec::new(),
+            arg_types: Vec::new(),
+            result: krishiv_types::DataType::Long,
+            nullable: true,
+            state: Vec::new(),
+        }
+    }
+
+    /// The Spark types of a UDF call's arguments are read from the input
+    /// fields' Spark type tag; a tag that is not a type is an internal error.
+    #[test]
+    fn an_aggregate_udf_reads_its_spark_argument_types_off_the_input() {
+        let tagged = |tag: &str| {
+            Field::new("a", DataType::Int64, true).with_metadata(std::collections::HashMap::from([
+                (
+                    krishiv_types::arrow::SPARK_TYPE_METADATA_KEY.to_owned(),
+                    tag.to_owned(),
+                ),
+            ]))
+        };
+        let build = |tag: &str| {
+            aggregate_expr(
+                AggregateFunction::Udf(Box::new(call())),
+                vec![0],
+                None,
+                &Schema::new(vec![tagged(tag)]),
+                "n".to_owned(),
+            )
+        };
+        let AggregateFunction::Udf(c) = build("bigint").unwrap().function else {
+            panic!("not a UDF call");
+        };
+        assert_eq!(c.arg_types, vec![krishiv_types::DataType::Long]);
+        let e = build("not a type").unwrap_err();
+        assert!(e.to_string().contains("aggregate UDF argument"), "{e}");
+    }
+}
