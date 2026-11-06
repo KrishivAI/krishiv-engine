@@ -304,3 +304,50 @@ fn lengths_count_code_points_and_nulls_pass() {
     assert_eq!(e.error_class().name(), "EXCEED_LIMIT_LENGTH");
     run(&s, "insert into t values ('a', 'x'), ('b', 'y')").unwrap();
 }
+
+#[test]
+fn review_cases_static_partitions_windows_missing_sizes_metadata_and_nested_reads() {
+    let s = fresh();
+    run(&s, "insert into t values ('a', 'x')").unwrap();
+    // A window in the select list keeps the declared type of an aliased column.
+    assert_eq!(
+        count(
+            &s,
+            "select * from (select c as x, count(*) over () as n from t) q where x = 'a'"
+        ),
+        1
+    );
+    // A missing length is DATATYPE_MISSING_SIZE in a cast and in a column definition.
+    for sql in [
+        "select cast('a' as char)",
+        "create table bad(c varchar) using parquet",
+    ] {
+        let e = block_on(async { s.sql(sql).await?.collect().await }).unwrap_err();
+        assert_eq!(e.error_class().name(), "DATATYPE_MISSING_SIZE", "{sql}");
+    }
+    // A static partition value is checked like a dynamic one.
+    run(&s, "drop table if exists sp").unwrap();
+    run(
+        &s,
+        "create table sp(a int, p varchar(2)) using parquet partitioned by (p)",
+    )
+    .unwrap();
+    let e = run(&s, "insert into sp partition (p='abc') select 1").unwrap_err();
+    assert_eq!(e.error_class().name(), "EXCEED_LIMIT_LENGTH");
+    run(&s, "insert into sp partition (p='ab  ') select 1").unwrap();
+    assert_eq!(first_text(&s, "show partitions sp"), "p=ab");
+    // Reads of a nested CHAR column are refused, as the matching writes are.
+    run(&s, "drop table if exists tn").unwrap();
+    run(&s, "create table tn(a array<char(2)>) using parquet").unwrap();
+    let e = block_on(async { s.sql("select * from tn").await?.collect().await }).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+#[test]
+fn hidden_file_metadata_survives_the_padding_projection() {
+    let s = fresh();
+    run(&s, "insert into t values ('a', 'x')").unwrap();
+    let name = first_text(&s, "select _metadata.file_name from t");
+    assert!(name.ends_with(".parquet"), "{name}");
+    assert_eq!(first_text(&s, "select c from t"), "a  ");
+}

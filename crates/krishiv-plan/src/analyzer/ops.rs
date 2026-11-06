@@ -167,7 +167,7 @@ impl Resolver<'_> {
         });
         let mut rel = self.make(p.origin, node, out, &[]);
         self.with_metadata_column(&mut rel, meta.file_metadata, &qual);
-        Ok(self.pad_char_columns(rel, p.origin))
+        self.pad_char_columns(rel, p.origin)
     }
 
     /// `rel`, a scan of a file source, with the hidden `_metadata` column of
@@ -331,6 +331,8 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let items = self.select_items(c, exprs, env, "Aggregate")?;
+        // The declared `CHAR`/`VARCHAR` types follow the aliases whichever projection is built below.
+        self.carry_declared(&items);
         let c = &self.reveal(c, &items)?;
         if items.iter().any(|b| has_generator(&b.expr)) {
             return self.generator_project(p.origin, c, exprs, &items);
@@ -341,9 +343,7 @@ impl Resolver<'_> {
         if items.iter().any(|b| b.win.is_some()) {
             return self.window_project(p.origin, c, &items, &[]);
         }
-        let rel = self.lateral_project(p.origin, c, &items, &[]);
-        self.carry_declared(&items);
-        Ok(rel)
+        Ok(self.lateral_project(p.origin, c, &items, &[]))
     }
 
     /// `c` outputting the merged-away `USING` columns (`c.hidden`) the

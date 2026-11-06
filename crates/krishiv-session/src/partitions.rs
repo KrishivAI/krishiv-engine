@@ -601,6 +601,13 @@ impl Session {
         let spec = exact_spec(table, &normalize_spec(table, &written, case_sensitive)?)?;
         let mut changed = (**table).clone();
         let path = qualified(location)?;
+        // Reads and writes of the table follow the table root, not a partition's own location, so a location
+        // that already holds data would be reported as set and then ignored.
+        if !listed_files(&path).is_empty() {
+            return Err(unsupported(
+                "ALTER TABLE ... PARTITION ... SET LOCATION onto existing files",
+            ));
+        }
         let Some(found) = changed
             .layout
             .partitions

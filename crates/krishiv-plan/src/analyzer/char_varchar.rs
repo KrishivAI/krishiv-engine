@@ -33,9 +33,26 @@ impl Resolver<'_> {
     /// `rel`, a scan, read through `rpad(c, n, ' ')` for each of its `char(n)` columns; `rel` itself when it has
     /// none, when `spark.sql.legacy.charVarcharAsString` is on (the padding rule is off) or when the registry has
     /// no `rpad`.
-    pub(super) fn pad_char_columns(&mut self, rel: Rel, origin: Origin) -> Rel {
+    pub(super) fn pad_char_columns(
+        &mut self,
+        rel: Rel,
+        origin: Origin,
+    ) -> Result<Rel, AnalysisError> {
         if self.ctx.conf.char_varchar_as_string {
-            return rel;
+            return Ok(rel);
+        }
+        // Spark pads `CHAR` inside arrays, maps and structs on read too; that is not implemented, so a scan of
+        // such a column is refused rather than returning unpadded values.
+        let nested = rel.out.iter().any(|a| {
+            self.declared.get(&a.col.id).is_some_and(|d| {
+                char_length(d).is_none() && d.replace("varchar(", "").contains("char(")
+            })
+        });
+        if nested {
+            return Err(super::bind::unsupported(
+                "reads of nested CHAR columns",
+                origin,
+            ));
         }
         let padded: Vec<(usize, i32)> = rel
             .out
@@ -47,13 +64,13 @@ impl Resolver<'_> {
             })
             .collect();
         if padded.is_empty() {
-            return rel;
+            return Ok(rel);
         }
         if ["rpad", "greatest", "char_length"]
             .iter()
             .any(|f| self.function_entry(f).is_none())
         {
-            return rel;
+            return Ok(rel);
         }
         let mut exprs = Vec::with_capacity(rel.out.len());
         let mut out: Vec<Attr> = Vec::with_capacity(rel.out.len());
@@ -68,7 +85,7 @@ impl Resolver<'_> {
                 n,
                 a.col.nullable,
             ) else {
-                return rel;
+                return Ok(rel);
             };
             let col = BoundColumn {
                 id: self.fresh(),
@@ -91,7 +108,10 @@ impl Resolver<'_> {
                 source: a.source.clone(),
             });
         }
-        self.projection(origin, &rel, exprs, out)
+        let mut padded = self.projection(origin, &rel, exprs, out);
+        // The hidden columns (a file table's `_metadata`) stay reachable through the padding projection.
+        padded.hidden = rel.hidden;
+        Ok(padded)
     }
 }
 

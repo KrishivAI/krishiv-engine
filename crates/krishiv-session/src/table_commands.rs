@@ -2229,7 +2229,8 @@ impl Session {
                 } else {
                     crate::functions::lit(value.as_str()).cast_ansi(column.data_type.clone())
                 };
-                select.push(value.alias(&column.name));
+                let checked = crate::char_write::checked(value, column, &env.analysis.conf)?;
+                select.push(checked.alias(&column.name));
                 continue;
             }
             let Some((column, from)) = assigned_columns.next() else {
