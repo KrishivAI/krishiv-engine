@@ -42,6 +42,19 @@ fn matches_the_baseline(tag: &str) -> R {
     let mut engine = SessionEngine::new().map_err(|e| e.message)?;
     let result = run(&mut engine, &set, &manifest)?;
     assert!(result.failed_files.is_empty(), "{:?}", result.failed_files);
+    let timeouts: Vec<String> = result
+        .files
+        .iter()
+        .flat_map(|f| {
+            f.timeouts
+                .iter()
+                .map(move |c| format!("{}#{}: {}", f.name, c.index, c.detail))
+        })
+        .collect();
+    assert!(
+        timeouts.is_empty(),
+        "harness timeouts, not baseline failures: {timeouts:?}"
+    );
     let ratchet = known.check(&result);
     assert!(ratchet.is_clean(), "{}", ratchet.describe());
     Ok(())
