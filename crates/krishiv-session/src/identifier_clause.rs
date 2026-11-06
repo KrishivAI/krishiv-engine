@@ -178,7 +178,10 @@ impl Session {
             // of a dotted name where a name stands, but in an expression a column whose field
             // is taken (`IDENTIFIER('t').c1` is `t`'s field `c1`, never the column `t.c1`),
             // which the substituted text could not tell apart.
-            let literal = close == i + 3 && tokens[i + 2].kind == TokenKind::String;
+            // A run of string literals is one literal (`'ta' 'b'`).
+            let literal = tokens
+                .get(i + 2..close)
+                .is_some_and(|run| run.iter().all(|t| t.kind == TokenKind::String));
             if dotted && (legacy || literal) {
                 i = close + 1;
                 continue;
@@ -195,9 +198,11 @@ impl Session {
                 i = close + 1;
                 continue;
             };
-            // An alias or a window name is one part.
+            // An alias, a window name or a column of an alias's column list is one part.
             if parts > 1
-                && (prev(1).eq_ignore_ascii_case("AS") || prev(1).eq_ignore_ascii_case("OVER"))
+                && (prev(1).eq_ignore_ascii_case("AS")
+                    || prev(1).eq_ignore_ascii_case("OVER")
+                    || in_alias_column_list(&tokens, sql, i))
             {
                 return Err(IdentifierTooManyNameParts {
                     identifier: name,
@@ -269,6 +274,66 @@ impl Session {
             .join(".");
         Ok(Some((name, parsed.parts.len())))
     }
+}
+
+/// Whether the clause starting at token `i` is an item of the column list of an alias
+/// (`AS t(a, IDENTIFIER(..))`, `AS IDENTIFIER(..)(IDENTIFIER(..))`), where each name is one part.
+fn in_alias_column_list(tokens: &[krishiv_sql::lexer::Token], sql: &str, i: usize) -> bool {
+    let is = |k: usize, s: Sym| tokens.get(k).is_some_and(|t| t.kind == TokenKind::Sym(s));
+    let is_word = |k: usize, w: &str| {
+        tokens.get(k).is_some_and(|t| {
+            t.kind == TokenKind::Word
+                && sql
+                    .get(t.span.start..t.span.end)
+                    .is_some_and(|x| x.eq_ignore_ascii_case(w))
+        })
+    };
+    // The `(` that opens the list: back over the earlier items at depth 0.
+    let mut depth = 0_usize;
+    let mut k = i;
+    let open = loop {
+        let Some(j) = k.checked_sub(1) else {
+            return false;
+        };
+        k = j;
+        if is(k, Sym::RParen) {
+            depth += 1;
+        } else if is(k, Sym::LParen) {
+            if depth == 0 {
+                break k;
+            }
+            depth -= 1;
+        }
+    };
+    let Some(before) = open.checked_sub(1) else {
+        return false;
+    };
+    // `AS name (`
+    if tokens
+        .get(before)
+        .is_some_and(|t| matches!(t.kind, TokenKind::Word | TokenKind::QuotedIdent))
+        && before.checked_sub(1).is_some_and(|b| is_word(b, "AS"))
+    {
+        return true;
+    }
+    // `AS IDENTIFIER(...) (`: back to the clause's `(`.
+    if !is(before, Sym::RParen) {
+        return false;
+    }
+    let mut depth = 0_usize;
+    let mut k = before + 1;
+    while let Some(j) = k.checked_sub(1) {
+        k = j;
+        if is(k, Sym::RParen) {
+            depth += 1;
+        } else if is(k, Sym::LParen) {
+            depth -= 1;
+            if depth == 0 {
+                return k >= 2 && is_word(k - 1, "IDENTIFIER") && is_word(k - 2, "AS");
+            }
+        }
+    }
+    false
 }
 
 /// Whether the expression is constant for `IDENTIFIER`: no column, subquery or non-deterministic

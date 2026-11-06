@@ -69,3 +69,49 @@ fn a_field_of_an_identifier_literal_is_not_a_qualified_name() {
     let df = block_on(s.sql("SELECT c1 FROM IDENTIFIER('default').t1")).unwrap();
     assert_eq!(block_on(df.collect()).unwrap().len(), 0);
 }
+
+#[test]
+fn execute_immediate_markers_continue_a_string_run() {
+    // Spark 4.2: `stringLit` is a run of strings and markers, so `:s '.' :t` is one name.
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE SCHEMA ic_s")).unwrap();
+    block_on(s.sql("CREATE TABLE ic_s.ic_t(c1 INT, c2 STRING) USING parquet")).unwrap();
+    block_on(s.sql("INSERT INTO ic_s.ic_t VALUES (1, 'a'), (2, 'b')")).unwrap();
+    let df = block_on(s.sql(
+        "EXECUTE IMMEDIATE 'SELECT IDENTIFIER(:p ''2'') FROM IDENTIFIER(:schema ''.'' :table) \
+         ORDER BY ALL' USING 'c' AS p, 'ic_s' AS schema, 'ic_t' AS table",
+    ))
+    .unwrap();
+    let rows: usize = block_on(df.collect())
+        .unwrap()
+        .iter()
+        .map(arrow_array::RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 2);
+}
+
+#[test]
+fn alias_column_lists_and_literal_runs_follow_spark() {
+    let s = Session::new().unwrap();
+    // A column of an alias's column list is one part.
+    assert_eq!(
+        class_of(
+            &s,
+            "SELECT * FROM VALUES (1) AS IDENTIFIER('t')(IDENTIFIER('a' '.' 'b'))"
+        ),
+        "IDENTIFIER_TOO_MANY_NAME_PARTS"
+    );
+    assert_eq!(
+        class_of(&s, "SELECT * FROM VALUES (1) AS t(c, IDENTIFIER('a.b'))"),
+        "IDENTIFIER_TOO_MANY_NAME_PARTS"
+    );
+    // A run of string literals followed by `.` is a field of the column it names.
+    block_on(s.sql("DECLARE VARIABLE tab STRING DEFAULT 'T'")).unwrap();
+    assert_eq!(
+        class_of(
+            &s,
+            "SELECT IDENTIFIER('ta' 'b').c1 FROM VALUES(1) AS tab(c1)"
+        ),
+        "INVALID_EXTRACT_BASE_FIELD_TYPE"
+    );
+}

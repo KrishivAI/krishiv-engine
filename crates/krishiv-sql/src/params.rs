@@ -26,9 +26,11 @@ pub struct ParameterMarker {
 
 /// The parameter markers of `sql`, in source order.
 ///
-/// A `:` is a named marker when a name follows it with no gap and what
-/// precedes it cannot end an expression; after an expression it is the
-/// variant path operator (`col:field`).
+/// A `:` is a named marker when a name follows it and what precedes it
+/// cannot end an expression; after an expression it is the variant path
+/// operator (`col:field`). After a string literal, or a marker that
+/// continues one, it is a marker again: Spark 4.2's `stringLit` is a run of
+/// string literals and markers (`'a' '.' :b`), and the run is greedy.
 #[must_use]
 pub fn parameter_markers(sql: &str) -> Vec<ParameterMarker> {
     let toks: Vec<_> = tokenize(sql)
@@ -36,6 +38,8 @@ pub fn parameter_markers(sql: &str) -> Vec<ParameterMarker> {
         .filter(|t| !t.kind.is_trivia())
         .collect();
     let mut out = Vec::new();
+    // Index of the name token of the last marker that continued a string run.
+    let mut run_marker_end: Option<usize> = None;
     for (i, t) in toks.iter().enumerate() {
         match t.kind {
             TokenKind::Sym(Sym::Question) => out.push(ParameterMarker {
@@ -50,8 +54,18 @@ pub fn parameter_markers(sql: &str) -> Vec<ParameterMarker> {
                 if !matches!(next.kind, TokenKind::Word | TokenKind::QuotedIdent) {
                     continue;
                 }
-                let ends_expression =
-                    i.checked_sub(1)
+                let prev = i.checked_sub(1);
+                let continues_string = prev.is_some_and(|p| {
+                    run_marker_end == Some(p)
+                        || toks.get(p).is_some_and(|t| {
+                            matches!(t.kind, TokenKind::String | TokenKind::DoubleQuoted)
+                        })
+                });
+                if continues_string {
+                    run_marker_end = Some(i + 1);
+                }
+                let ends_expression = !continues_string
+                    && prev
                         .and_then(|p| toks.get(p))
                         .is_some_and(|p| match p.kind {
                             TokenKind::Word => {
@@ -126,6 +140,21 @@ mod tests {
         assert_eq!(
             found("SELECT v:field, :m"),
             vec![(16, 18, Some("m".into()))]
+        );
+    }
+
+    #[test]
+    fn a_marker_after_a_string_continues_the_string_run() {
+        // Spark 4.2: `stringLit : singleStringLit+`, where a marker is a `singleStringLit`; the
+        // loop is greedy, so `'.' :t` is two parts of one literal, not a variant path.
+        assert_eq!(
+            found("SELECT IDENTIFIER(:s '.' :t), '{}' :u :v"),
+            vec![
+                (18, 20, Some("s".into())),
+                (25, 27, Some("t".into())),
+                (35, 37, Some("u".into())),
+                (38, 40, Some("v".into())),
+            ]
         );
     }
 
