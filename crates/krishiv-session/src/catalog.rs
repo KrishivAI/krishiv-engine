@@ -486,7 +486,8 @@ impl QueryCatalog {
     /// Listing errors (`PATH_NOT_FOUND` once a view's files are gone, ...)
     /// and errors reading the files' footers.
     pub(crate) async fn open_files(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
-        for (key, source, table) in self.file_scans(plan) {
+        let scans = self.file_scans(plan);
+        for (key, source, table, _) in scans.clone() {
             if self.opened(&key).is_some() {
                 continue;
             }
@@ -520,13 +521,68 @@ impl QueryCatalog {
                 .unwrap_or_else(PoisonError::into_inner)
                 .push((key, Arc::new(opened)));
         }
+        // Boxed: the sample's future would otherwise nest inside every
+        // caller's state machine (the MCP server's overflows the layout depth).
+        Box::pin(self.sample_distinct(plan, &scans)).await;
         Ok(())
+    }
+
+    /// Samples the distinct values of the scanned file columns an equality or
+    /// `IN` in `plan` compares with values (P2-T164 U6), so the optimizer
+    /// reads a distinct count where the files store none. Off with
+    /// `krishiv.optimizer.ndvSampling.enabled`; a failed or slow sample keeps
+    /// the default estimates and never fails the query.
+    async fn sample_distinct(&self, plan: &LogicalPlan, scans: &[FileScanOf]) {
+        use krishiv_common::config::{
+            NDV_SAMPLING_ENABLED, NDV_SAMPLING_ROWS, NDV_SAMPLING_TIMEOUT,
+        };
+        let config = &self.scans.config;
+        if config
+            .get(&NDV_SAMPLING_ENABLED)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            != Some(true)
+        {
+            return;
+        }
+        let options = krishiv_exec::planner::SampleOptions {
+            rows: config
+                .get(&NDV_SAMPLING_ROWS)
+                .and_then(krishiv_common::config::ConfigValue::as_int)
+                .and_then(|n| u64::try_from(n).ok())
+                .unwrap_or(0),
+            timeout: config
+                .get(&NDV_SAMPLING_TIMEOUT)
+                .and_then(krishiv_common::config::ConfigValue::as_duration)
+                .unwrap_or_default(),
+        };
+        let mut compared = std::collections::HashSet::new();
+        compared_columns(plan, &mut compared);
+        if compared.is_empty() {
+            return;
+        }
+        for (key, _, _, ids) in scans {
+            let names: Vec<String> = ids
+                .iter()
+                .filter(|(id, _)| compared.contains(id))
+                .map(|(_, name)| name.clone())
+                .collect();
+            let Some(table) = (!names.is_empty()).then(|| self.opened(key)).flatten() else {
+                continue;
+            };
+            let sampled = run_on(&self.scans.runtime, async move {
+                table.sample_distinct(&names, options).await
+            })
+            .await;
+            if let Err(e) = sampled {
+                tracing::debug!("distinct-value sample skipped: {e}");
+            }
+        }
     }
 
     /// The scans of files in `plan`: what each reads, and the columns the
     /// analyzer bound (the view's, for a view), which the files map to by
     /// name.
-    fn file_scans(&self, plan: &LogicalPlan) -> Vec<(FilesKey, ReadSource, SchemaRef)> {
+    fn file_scans(&self, plan: &LogicalPlan) -> Vec<FileScanOf> {
         let mut scans = Vec::new();
         collect_scans(plan, &mut scans);
         scans
@@ -558,7 +614,11 @@ impl QueryCatalog {
                         .map(|c| c.data_type.to_arrow_field(c.name.clone(), c.nullable))
                         .collect::<Vec<_>>(),
                 ));
-                Some((key, source, table))
+                let ids = scan.output[..columns]
+                    .iter()
+                    .map(|c| (c.id, c.name.clone()))
+                    .collect();
+                Some((key, source, table, ids))
             })
             .collect()
     }
@@ -883,6 +943,81 @@ fn collect_scans<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>) {
     }
     plan.for_each_expr(&mut |e| in_expr(e, out));
     plan.for_each_child(&mut |c| collect_scans(c, out));
+}
+
+/// A scan of files in an analyzed plan: what it reads, the table's columns
+/// and the scan's column ids with their names.
+type FileScanOf = (
+    FilesKey,
+    ReadSource,
+    SchemaRef,
+    Vec<(krishiv_plan::AttrId, String)>,
+);
+
+/// The attribute ids an equality or `IN` anywhere in `plan` (subqueries
+/// included) compares with expressions that read no column: the columns
+/// whose distinct count decides the comparison's selectivity.
+fn compared_columns(plan: &LogicalPlan, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
+    use krishiv_plan::{Builtin, FunctionId, ResolvedExpr, ResolvedFunction};
+    fn column(e: &Expr) -> Option<krishiv_plan::AttrId> {
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+            ExprNode::Cast { expr, .. } => column(expr),
+            _ => None,
+        }
+    }
+    fn reads_column(e: &Arc<Expr>) -> bool {
+        let mut found = false;
+        let mut stack = vec![Arc::clone(e)];
+        while let Some(x) = stack.pop() {
+            if found {
+                break;
+            }
+            match &x.node {
+                ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_))
+                | ExprNode::Subquery { .. } => found = true,
+                _ => x.for_each_child(&mut |c| stack.push(Arc::clone(c))),
+            }
+        }
+        found
+    }
+    fn in_expr(e: &Arc<Expr>, out: &mut std::collections::HashSet<krishiv_plan::AttrId>) {
+        let mut stack = vec![Arc::clone(e)];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(x) = stack.pop() {
+            if !seen.insert(Arc::as_ptr(&x)) {
+                continue;
+            }
+            if let ExprNode::Subquery { plan, .. } = &x.node {
+                compared_columns(plan, out);
+            }
+            if let ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
+                id: FunctionId::Builtin(b),
+                args,
+                ..
+            })) = &x.node
+            {
+                match (b, args.as_slice()) {
+                    (Builtin::Eq | Builtin::EqNullSafe, [a, c]) => {
+                        for (col, value) in [(a, c), (c, a)] {
+                            if let Some(id) = column(col).filter(|_| !reads_column(value)) {
+                                out.insert(id);
+                            }
+                        }
+                    }
+                    (Builtin::In, [x, list @ ..]) if !list.iter().any(reads_column) => {
+                        if let Some(id) = column(x) {
+                            out.insert(id);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
+    }
+    plan.for_each_expr(&mut |e| in_expr(e, out));
+    plan.for_each_child(&mut |c| compared_columns(c, out));
 }
 
 /// The scans of the streaming pipeline of `root`: those a task splits.

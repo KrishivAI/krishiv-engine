@@ -3,7 +3,8 @@
 //! from their footers.
 
 use std::cmp::Ordering;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_schema::SchemaRef;
 use futures::{StreamExt as _, TryStreamExt as _, stream};
@@ -34,6 +35,17 @@ pub struct FileTable {
     scan: FileScan,
     statistics: Option<TableStats>,
     units: Option<u64>,
+    /// The I/O the table reads through (footers, samples).
+    io: IoContext,
+    /// The table's columns as the analyzer resolved them.
+    table: SchemaRef,
+    /// Each file's row count from its footer, in listing order.
+    file_rows: Vec<Option<u64>>,
+    /// The names of the columns read from the directories, not the files.
+    partition_columns: Vec<String>,
+    /// Distinct counts estimated from samples (P2-T164 U6), by column name;
+    /// shared by the clones of the table.
+    sampled: Arc<Mutex<HashMap<String, Option<u64>>>>,
 }
 
 impl FileTable {
@@ -69,10 +81,12 @@ impl FileTable {
         let mut stats: Option<FileStatistics> = None;
         let mut known = true;
         let mut units = Some(0_u64);
+        let mut file_rows = Vec::with_capacity(files.len());
         let read = |f| io.read_metadata(format.as_ref(), f, MetadataNeeds::default(), &options);
         in_order(&files, width, read, |meta| {
             let s = meta.statistics();
             known &= s.rows.exact().is_some();
+            file_rows.push(s.rows.exact().copied());
             units = units
                 .zip(meta.unit_count())
                 .map(|(a, b)| a.saturating_add(b));
@@ -87,8 +101,8 @@ impl FileTable {
             .flatten();
         let scan = FileScan::new(
             format,
-            io,
-            table,
+            io.clone(),
+            Arc::clone(&table),
             files,
             options,
             ScanOptions::from_config(config),
@@ -98,6 +112,11 @@ impl FileTable {
             scan,
             statistics,
             units,
+            io,
+            table,
+            file_rows,
+            partition_columns: Vec::new(),
+            sampled: Arc::default(),
         })
     }
 }
@@ -108,7 +127,17 @@ impl TableProvider for FileTable {
     }
 
     fn statistics(&self) -> Option<TableStats> {
-        self.statistics.clone()
+        let mut stats = self.statistics.clone()?;
+        let sampled = self.sampled.lock().unwrap_or_else(PoisonError::into_inner);
+        for (name, distinct) in sampled.iter() {
+            let Some(distinct) = distinct else { continue };
+            let c = stats.columns.entry(name.clone()).or_default();
+            if c.distinct.is_none() {
+                c.distinct = Some(*distinct);
+                c.source = StatSource::Sampled;
+            }
+        }
+        Some(stats)
     }
 
     fn scan_units(&self) -> Option<u64> {
@@ -122,6 +151,7 @@ impl FileTable {
     /// directories above each file.
     #[must_use]
     pub fn with_partition_columns(mut self, columns: Vec<arrow_schema::FieldRef>) -> Self {
+        self.partition_columns = columns.iter().map(|f| f.name().clone()).collect();
         self.scan = self.scan.with_partition_columns(columns);
         self
     }
@@ -143,6 +173,48 @@ impl FileTable {
     #[must_use]
     pub fn options(&self) -> FormatOptions {
         self.scan.format_options().clone()
+    }
+
+    /// The I/O the table reads through.
+    pub(super) fn io(&self) -> &IoContext {
+        &self.io
+    }
+
+    /// The table's columns as the analyzer resolved them.
+    pub(super) fn table_schema(&self) -> &SchemaRef {
+        &self.table
+    }
+
+    /// Each file's footer row count, in listing order.
+    pub(super) fn file_rows(&self) -> &[Option<u64>] {
+        &self.file_rows
+    }
+
+    /// The footer statistics, before any sample.
+    pub(super) fn base_statistics(&self) -> Option<&TableStats> {
+        self.statistics.as_ref()
+    }
+
+    /// Whether `name` is read from the directories.
+    pub(super) fn is_partition_column(&self, name: &str) -> bool {
+        self.partition_columns.iter().any(|c| c == name)
+    }
+
+    /// Whether `name` was sampled already.
+    pub(super) fn has_sample(&self, name: &str) -> bool {
+        self.sampled
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(name)
+    }
+
+    /// Keeps the distinct count `sample` gives `name` in a table of `rows`.
+    pub(super) fn keep_sample(&self, name: &str, sample: &krishiv_io::DistinctSample, rows: u64) {
+        let distinct = super::ndv_sample::estimate(sample, rows);
+        self.sampled
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name.to_owned(), distinct);
     }
 }
 
