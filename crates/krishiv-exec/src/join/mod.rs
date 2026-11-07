@@ -391,23 +391,19 @@ pub(crate) enum Counter {
     ArenaKeyBytes,
     /// The bytes of the finalized indexes (and match bitmaps).
     IndexBytes,
-    /// The most bytes of concatenation copies `finalize` held reserved at
-    /// once (partitions copying in parallel).
-    MaxFinalizeCopyBytes,
     /// The largest run of chunks a build-phase coalesce merged (each merge
     /// reserves the run again while it copies).
     MaxCoalesceCopyBytes,
 }
 
 /// The build sink's counters, by name.
-const BUILD_COUNTERS: [(Counter, &str); 16] = [
+const BUILD_COUNTERS: [(Counter, &str); 15] = [
     (Counter::BuildRows, "build_rows"),
     (Counter::SteadyReservedBytes, "steady_reserved_bytes"),
     (Counter::ArenaBytes, "arena_bytes"),
     (Counter::ArenaHashBytes, "arena_hash_bytes"),
     (Counter::ArenaKeyBytes, "arena_key_bytes"),
     (Counter::IndexBytes, "index_bytes"),
-    (Counter::MaxFinalizeCopyBytes, "max_finalize_copy_bytes"),
     (Counter::MaxCoalesceCopyBytes, "max_coalesce_copy_bytes"),
     (Counter::HashEntries, "hash_entries"),
     (Counter::HashBuckets, "hash_buckets"),
@@ -440,7 +436,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug, Default)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 31]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 30]);
 
 impl Counters {
     pub(crate) fn add(&self, c: Counter, v: u64) {
@@ -468,7 +464,6 @@ impl Counters {
                     Counter::RecursionDepth
                     | Counter::MaxProbeLength
                     | Counter::MaxPartitionNs
-                    | Counter::MaxFinalizeCopyBytes
                     | Counter::MaxCoalesceCopyBytes => Metric::Max(v),
                     _ => Metric::Count(v),
                 };

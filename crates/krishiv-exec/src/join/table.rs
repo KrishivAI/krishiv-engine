@@ -960,6 +960,61 @@ mod tests {
         }
     }
 
+    /// An arena over several chunks (no copy, X3' step 3) reads every row as the one batch of the same rows does:
+    /// with the per-row chunk table (2-256 chunks), past it (the search over chunk starts), with empty chunks
+    /// skipped, and the index built over it chains the same rows.
+    #[test]
+    fn a_chunked_arena_reads_and_indexes_as_one_batch() {
+        let schema =
+            arena_schema(ArenaFormat::Arrow { payload: false }).unwrap_or_else(|e| panic!("{e}"));
+        let n = 600usize;
+        let key = |i: usize| format!("k{}", i % 97).into_bytes();
+        let batch = |rows: std::ops::Range<usize>| {
+            Batch::new(
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(UInt64Array::from_iter_values(
+                            rows.clone().map(|i| (i % 97) as u64),
+                        )),
+                        Arc::new(LargeBinaryArray::from_iter_values(rows.map(key))),
+                    ],
+                )
+                .unwrap_or_else(|e| panic!("{e}")),
+            )
+        };
+        let one = RowArena::concat(&schema, &[batch(0..n)]).unwrap_or_else(|e| panic!("{e}"));
+        // Uneven chunks with empty ones between; then 300 chunks of 2 rows (past the 256-chunk table).
+        let uneven: Vec<Batch> = [0..1, 1..1, 1..250, 250..251, 251..251, 251..n]
+            .into_iter()
+            .map(batch)
+            .collect();
+        let many: Vec<Batch> = (0..n / 2).map(|c| batch(2 * c..2 * c + 2)).collect();
+        for chunks in [uneven, many] {
+            let arena = RowArena::concat(&schema, &chunks).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(arena.len(), n);
+            for row in 0..u32::try_from(n).unwrap_or(0) {
+                assert_eq!(arena.hash(row), one.hash(row), "row {row}");
+                assert_eq!(arena.key_bytes(row), one.key_bytes(row), "row {row}");
+                assert_eq!(arena.weight(row), 1, "row {row}");
+            }
+            // Past the end: nothing, not a panic.
+            let end = u32::try_from(n).unwrap_or(0);
+            assert_eq!(arena.hash(end), 0);
+            assert_eq!(arena.key_bytes(end), None);
+            assert!(arena.memory_split().hash > 0);
+            let chained = JoinTable::build(arena, None, 0).unwrap_or_else(|e| panic!("{e}"));
+            let single = JoinTable::build(
+                RowArena::concat(&schema, &[batch(0..n)]).unwrap_or_else(|e| panic!("{e}")),
+                None,
+                0,
+            )
+            .unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(chained.next(), single.next());
+            assert_eq!(chained.index_size().0, single.index_size().0);
+        }
+    }
+
     #[test]
     fn malformed_arenas_are_internal_errors() {
         let schema = Arc::new(Schema::new(vec![

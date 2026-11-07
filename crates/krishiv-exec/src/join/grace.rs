@@ -1240,24 +1240,20 @@ impl Loading {
             .cloned()
             .collect();
         let rows = chunks.iter().map(Batch::num_rows).sum();
-        let concat = 0;
         let headroom = self.task.probe.read_headroom();
         let marks = if shared.join_type.builds_preserved() {
             JoinTable::marks_bytes(rows)
         } else {
             0
         };
-        let need = JoinTable::index_bytes(rows, key_bytes(&chunks), hashing.rows())
-            + marks
-            + concat
-            + headroom;
+        let need =
+            JoinTable::index_bytes(rows, key_bytes(&chunks), hashing.rows()) + marks + headroom;
         if self.memory.try_grow(need).is_err() {
             return Ok(Loaded::Need(need));
         }
         let arena = RowArena::concat(shared.arena_schema(hashing), &chunks)?;
         drop(chunks);
         self.chunks.clear();
-        self.memory.shrink(concat);
         let layout = shared.keys.layout().filter(|_| hashing.rows());
         let mut table = JoinTable::build(arena, layout, hashing.g_seed())?;
         if shared.join_type.builds_preserved() {
