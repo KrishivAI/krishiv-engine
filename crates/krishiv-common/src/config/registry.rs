@@ -115,6 +115,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &NDV_SAMPLING_ENABLED,
     &NDV_SAMPLING_ROWS,
     &NDV_SAMPLING_TIMEOUT,
+    &JOIN_COST,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -158,6 +159,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.cache.diskBytes", &IO_CACHE_DISK_BYTES),
     ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
     ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
+    ("krishiv.optimizer.joinCost", &JOIN_COST),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("krishiv.exec.join.buildSide", &EXEC_JOIN_BUILD_SIDE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
@@ -1907,6 +1909,23 @@ pub static JOIN_DP_LIMIT: ConfigEntry = ConfigEntry {
     doc: "Most inputs of an inner-join tree the `dpsub` join enumerator plans exactly; larger \
           trees are planned greedily. Values above 14 count as 14: the work grows as 3 to the \
           power of the inputs. Results are the same either way.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+    settable_by: SettableBy::User,
+};
+
+/// `krishiv.optimizer.joinCost`.
+pub static JOIN_COST: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.joinCost",
+    value_type: ValueType::Enum(&["rows", "bytes"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("rows"))),
+    doc: "What the join optimizer minimises when it orders a tree of inner joins, and which input \
+          of each join it builds. `rows`: the rows of the intermediate results; the input with \
+          fewer rows is built. `bytes`: each join's result rows times 48 bytes plus the bytes of \
+          its build input (rows times the estimated width of the columns still read, Spark's \
+          default size per type); the input with fewer rows is built unless it holds more than \
+          twice the other's bytes. Results are the same either way.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

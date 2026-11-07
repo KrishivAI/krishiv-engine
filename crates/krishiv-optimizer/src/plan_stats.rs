@@ -170,7 +170,7 @@ fn subquery_plans<'a>(p: &'a LogicalPlan, f: &mut impl FnMut(&'a Arc<LogicalPlan
 }
 
 /// Spark's `DataType.defaultSize`.
-fn default_size(t: &DataType) -> u64 {
+pub(crate) fn default_size(t: &DataType) -> u64 {
     match t {
         DataType::Null | DataType::Boolean | DataType::Byte => 1,
         DataType::Short => 2,
