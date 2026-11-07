@@ -154,7 +154,7 @@ impl Resolver<'_> {
         ) && kids.iter().any(|k| {
             k.ty.data_type
                 .as_ref()
-                .is_some_and(|t| t.any_type(&|t| matches!(t, DataType::CollatedString(_))))
+                .is_some_and(DataType::contains_collation)
         }) {
             return Err(unsupported("collated comparison", origin));
         }
