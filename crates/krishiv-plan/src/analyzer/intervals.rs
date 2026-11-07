@@ -759,6 +759,13 @@ impl Resolver<'_> {
         // With ANSI off, a string that doesn't read as a date is NULL.
         let nullable = a.ty.nullable || b.ty.nullable;
         if legacy {
+            // The rewrite reads each operand several times (year, month, day,
+            // `datediff`, `last_day`); Spark evaluates each once, so a
+            // non-deterministic operand could mix parts of different dates.
+            if !super::sqlfn::is_deterministic(&a.expr) || !super::sqlfn::is_deterministic(&b.expr)
+            {
+                return Err(legacy_difference(origin));
+            }
             let between = self.bind(&legacy_date_difference(&a.expr, &b.expr, origin), cx)?;
             let mut difference = bound(between.expr, out, name, &kids);
             difference.ty.nullable = nullable;

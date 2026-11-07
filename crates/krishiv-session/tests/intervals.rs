@@ -1096,14 +1096,23 @@ fn legacy_interval_differences_are_refused_by_name() -> R {
         "DATE '2024-02-01' - DATE '2024-01-01'",
         "try_subtract(DATE '2024-02-01', DATE '2024-01-01')",
     ] {
-        assert_eq!(answer(&session, expr).error_class, None, "{expr}");
+        let got = answer(&session, expr);
+        assert_eq!(got.error_class, None, "{expr}");
+        assert_eq!(got.data_type.as_deref(), Some("interval"), "{expr}");
+        assert_eq!(got.value.as_deref(), Some("1 months"), "{expr}");
     }
-    let expr = "TIMESTAMP '2024-02-01' - TIMESTAMP '2024-01-01'";
-    assert_eq!(
-        answer(&session, expr).error_class.as_deref(),
-        Some("KRISHIV_UNSUPPORTED_FEATURE"),
-        "{expr}"
-    );
+    // A timestamp difference, and a date difference over a non-deterministic
+    // operand (the rewrite would read it more than once), are refused by name.
+    for expr in [
+        "TIMESTAMP '2024-02-01' - TIMESTAMP '2024-01-01'",
+        "date_add(DATE '2024-01-01', CAST(rand() * 100 AS INT)) - DATE '2024-01-01'",
+    ] {
+        assert_eq!(
+            answer(&session, expr).error_class.as_deref(),
+            Some("KRISHIV_UNSUPPORTED_FEATURE"),
+            "{expr}"
+        );
+    }
     Ok(())
 }
 
