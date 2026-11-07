@@ -14,7 +14,8 @@
 2139 crates/krishiv-exec/src/planner/build.rs
 2396 crates/krishiv-exec/src/planner/eval/cond.rs
 2626 crates/krishiv-exec/src/planner/eval/hof.rs
-3064 crates/krishiv-exec/src/window/tests.rs
+# +62 lines over main: the external-partition headroom reproducer, batches of 20 and 300/1,500 rows from a full pool (window spill flake)
+3126 crates/krishiv-exec/src/window/tests.rs
 2084 crates/krishiv-functions/src/registry/defs.rs
 3340 crates/krishiv-functions/src/registry/tests.rs
 4186 crates/krishiv-io/src/avro/tests.rs
