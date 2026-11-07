@@ -81,6 +81,10 @@ fn a_temporary_view_shadows_a_table_of_the_same_name() {
     let q = "SHOW TABLE EXTENDED LIKE 'p' PARTITION (b = 1)";
     let e = failure(&s, q);
     assert!(e.contains(&format!("{OP} `p` is a view")), "{q}: {e}");
+    // With an IN the two-part name skips the temporary view and finds the table.
+    let q = "SHOW TABLE EXTENDED IN default LIKE 'p' PARTITION (b = 1)";
+    let e = failure(&s, q);
+    assert!(e.contains("PARTITIONS_NOT_FOUND"), "{q}: {e}");
 }
 
 #[test]
@@ -92,6 +96,8 @@ fn a_name_in_capitals_finds_the_view_too() {
         e.contains("EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE"),
         "{q}: {e}"
     );
+    // A temporary view prints as typed, case included.
+    assert!(e.contains(&format!("{OP} `TV` is a view")), "{q}: {e}");
 }
 
 #[test]
