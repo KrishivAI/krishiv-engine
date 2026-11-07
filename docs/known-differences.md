@@ -86,9 +86,9 @@ ones before the failing clause stay written.
 
 ## Correlated subqueries with `spark.sql.optimizer.decorrelateInnerQuery.enabled` off
 
-With inner-query decorrelation off, Spark refuses more shapes of correlated subquery than it does with the framework
-on. Krishiv reads the setting only for the nested count-bug shape (a correlated global aggregate below another
-operator, as in `SELECT (SELECT sum(c) FROM (SELECT count(*) c FROM t2 WHERE t1.a = t2.b)) FROM t1`), which stays
-refused with `KRISHIV_UNSUPPORTED_FEATURE`, as it does under `spark.sql.legacy.scalarSubqueryCountBugBehavior` and
-`spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled`. Every other correlated shape is
-answered as with the setting on, where Spark would raise an analysis error.
+With inner-query decorrelation off, Spark refuses some shapes of correlated subquery that it answers with the framework
+on (it still answers simple ones). Krishiv reads the setting only for the nested count-bug shape (a correlated global
+aggregate below another operator, as in `SELECT (SELECT sum(c) FROM (SELECT count(*) c FROM t2 WHERE t1.a = t2.b)) FROM t1`),
+which stays refused with `KRISHIV_UNSUPPORTED_FEATURE`, as it does under `spark.sql.legacy.scalarSubqueryCountBugBehavior`
+and `spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled`. Every other correlated shape is answered
+as with the setting on, including those Spark would refuse with an analysis error.
