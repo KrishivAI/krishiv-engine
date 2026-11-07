@@ -107,6 +107,9 @@ struct Counters {
     /// Most threads that wrote one run's partition files at once
     /// (`sink/parts.rs`). Reported as `spill_writers` when above 1.
     spill_writers: AtomicU64,
+    /// Partitions an extra writer handed back for want of scratch, written
+    /// again by the calling thread. Reported as `spill_handbacks` when set.
+    spill_handbacks: AtomicU64,
     /// Times a disk task was refused memory while others ran (it waited);
     /// a task refused several times counts each time, so this counts
     /// stalls, not tasks (review m5). Reported as `disk_stalls`.
@@ -1474,6 +1477,10 @@ impl Sink for HashAggregate {
                 std::borrow::Cow::Borrowed("spill_writers"),
                 crate::metrics::Metric::Max(writers),
             ));
+        }
+        let handbacks = c.spill_handbacks.load(AtomicOrdering::Relaxed);
+        if handbacks > 0 {
+            out.extend(crate::metrics::counts([("spill_handbacks", handbacks)]));
         }
         let disk_tasks = c.disk_tasks.load(AtomicOrdering::Relaxed);
         if disk_tasks > 0 {

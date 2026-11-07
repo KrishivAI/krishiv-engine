@@ -10,14 +10,19 @@
 //! [`Spiller::write_parts`] writes a large run's partitions on up to
 //! [`MAX_WRITERS`] threads. The calling thread writes as before, its
 //! writer's scratch from the pool's spill-scratch floor. Every other
-//! writer runs only on scratch it reserved first: a consumer of its own
+//! writer starts only once it reserved scratch: a consumer of its own
 //! (so no other writer or driver takes that memory) reserves [`HEADROOM`]
 //! with an ordinary `try_grow`, into the consumer's credit, which the
-//! writer's reservation draws from and returns to. When the pool has no
-//! room for that, the run is written by fewer threads, down to the calling
-//! one alone, as before. A write that needs more scratch than the writer
-//! holds is refused by the pool (nothing is written), and the partition
-//! goes back to the calling thread, which writes it after the others.
+//! writer's reservation draws from first and returns to. When the pool has
+//! no room for that, the run is written by fewer threads, down to the
+//! calling one alone, as before. A batch needing more than the credit
+//! takes the rest from the pool (an ordinary reservation, no wait, kept as
+//! that consumer's credit until the run ends, review M1); when the pool
+//! refuses it, nothing of the batch is written and the partition goes back
+//! to the calling thread, which writes it after the others
+//! (`spill_handbacks`). Extra writers of all runs in the process together
+//! stay below `available_parallelism` ([`LIVE_HELPERS`]): the disk phase
+//! spills several runs at once.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -46,12 +51,39 @@ const PARALLEL_MIN_BYTES: usize = 8 << 20;
 #[cfg(test)]
 const PARALLEL_MIN_BYTES: usize = 1;
 
-/// What one extra writer did: the files it wrote and the partitions it
-/// handed back.
+/// Extra writers running in the process, every run's together.
+static LIVE_HELPERS: AtomicUsize = AtomicUsize::new(0);
+
+/// What one extra writer did: the files it wrote and the partition it
+/// handed back (at most one: it stops at its first refusal; disjoint from
+/// `files`).
 #[derive(Default)]
 struct Done {
     files: Vec<(usize, SpillFile)>,
     back: Vec<usize>,
+}
+
+/// The extra writers' consumers of one run, counted in [`LIVE_HELPERS`]
+/// while they live.
+struct Helpers(Vec<Arc<ConsumerHandle>>);
+
+impl Drop for Helpers {
+    fn drop(&mut self) {
+        LIVE_HELPERS.fetch_sub(self.0.len(), Ordering::AcqRel);
+    }
+}
+
+/// Takes one place among the process's extra writers, if fewer than
+/// `max` run.
+fn take_place(max: usize) -> bool {
+    let mut n = LIVE_HELPERS.load(Ordering::Acquire);
+    while n < max {
+        match LIVE_HELPERS.compare_exchange_weak(n, n + 1, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => return true,
+            Err(now) => n = now,
+        }
+    }
+    false
 }
 
 impl Spiller {
@@ -70,10 +102,6 @@ impl Spiller {
         let mut files: Vec<Option<SpillFile>> = (0..PARTITIONS).map(|_| None).collect();
         let todo: Vec<usize> = (0..parts.len()).filter(|&p| !parts[p].is_empty()).collect();
         let helpers = self.helpers(table.memory_size(), todo.len());
-        let writers = u64::try_from(helpers.len() + 1).unwrap_or(u64::MAX);
-        self.counters
-            .spill_writers
-            .fetch_max(writers, Ordering::Relaxed);
         let next = AtomicUsize::new(0);
         let stop = AtomicBool::new(false);
         let claim = || {
@@ -85,7 +113,7 @@ impl Spiller {
         let write = |p: usize, w: SpillWriter| self.write_part(w, &parts[p], chunk, table, state);
         let (mine, done) = std::thread::scope(|s| {
             let mut handles = Vec::new();
-            for h in &helpers {
+            for h in &helpers.0 {
                 let work = || self.help(h, &claim, &write, &stop);
                 // A thread the system refuses is a writer fewer.
                 if let Ok(j) = std::thread::Builder::new()
@@ -95,6 +123,10 @@ impl Spiller {
                     handles.push(j);
                 }
             }
+            let writers = u64::try_from(handles.len() + 1).unwrap_or(u64::MAX);
+            self.counters
+                .spill_writers
+                .fetch_max(writers, Ordering::Relaxed);
             let mine = self.write_own(&claim, &write, &mut files);
             if mine.is_err() {
                 stop.store(true, Ordering::Release);
@@ -109,13 +141,21 @@ impl Spiller {
         mine?;
         let mut back = Vec::new();
         for d in done {
-            let d = d.map_err(|_| internal("a spill writer thread panicked".to_owned()))??;
+            let d = d.map_err(|p| {
+                let what = p
+                    .downcast_ref::<&str>()
+                    .map(|s| (*s).to_owned())
+                    .or_else(|| p.downcast_ref::<String>().cloned())
+                    .unwrap_or_default();
+                internal(format!("a spill writer thread panicked: {what}"))
+            })??;
             for (p, f) in d.files {
                 files[p] = Some(f);
             }
             back.extend(d.back);
         }
         // Handed back for want of scratch: written here, from the floor.
+        bump(&self.counters.spill_handbacks, back.len() as u64);
         for p in back {
             let w = self.run_writer()?;
             files[p] = Some(self.write_part(w, &parts[p], chunk, table, state)??);
@@ -127,20 +167,22 @@ impl Spiller {
     /// Consumers for the extra writers of a run of `parts` partitions from
     /// a table of `bytes`, each holding [`HEADROOM`] of credit; as many as
     /// the pool gives room for at once, without waiting.
-    fn helpers(&self, bytes: usize, parts: usize) -> Vec<Arc<ConsumerHandle>> {
+    fn helpers(&self, bytes: usize, parts: usize) -> Helpers {
+        let mut out = Helpers(Vec::new());
         if bytes < PARALLEL_MIN_BYTES {
-            return Vec::new();
+            return out;
         }
         let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         let want = parts.min(MAX_WRITERS).min(threads).saturating_sub(1);
-        let mut out = Vec::with_capacity(want);
         let pool = self.consumer.pool();
         for _ in 0..want {
             // Leave room for the pool's other consumers: this is optional
-            // memory, taken only while plenty is free.
+            // memory, taken only while plenty is free. Checked, then
+            // reserved, without a lock: a race only makes `try_grow` fail.
             if pool
                 .available()
                 .is_some_and(|free| free < MARGIN * HEADROOM)
+                || !take_place(threads)
             {
                 break;
             }
@@ -150,12 +192,16 @@ impl Spiller {
                 None,
                 Arc::clone(self.consumer.spill_stats()),
             );
-            let mut r = h.reservation();
+            // Counted from here: `out` gives the place back when it drops.
+            out.0.push(h);
+            let mut r = out.0[out.0.len() - 1].reservation();
             if r.try_grow(HEADROOM).is_err() {
+                // No credit: this one writes nothing; drop it now.
+                out.0.pop();
+                LIVE_HELPERS.fetch_sub(1, Ordering::AcqRel);
                 break;
             }
             r.shrink_to_credit(HEADROOM);
-            out.push(h);
         }
         out
     }
