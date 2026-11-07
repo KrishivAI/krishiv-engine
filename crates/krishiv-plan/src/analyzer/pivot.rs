@@ -101,6 +101,18 @@ impl Resolver<'_> {
                 // `INT` here (`CAST('NaN' AS DOUBLE)` is a valid value).
                 let folded = self.fold_array(&t.expr, ansi);
                 if folded.is_none() && !fold::is_literal(&t.expr) {
+                    // A typed literal that reads the query clock (`TIMESTAMP '11:00'`, `DATE 'today'`)
+                    // is a literal to Spark; it binds as a clock expression here, which is not a
+                    // pivot value yet, so say that rather than `NON_LITERAL_PIVOT_VALUES`.
+                    if v.exprs
+                        .iter()
+                        .any(|e| matches!(trim_value_alias(e).node, ExprNode::TypedLiteral { .. }))
+                    {
+                        return Err(unsupported(
+                            "a typed literal that needs the query clock as a pivot value",
+                            b.expr.origin,
+                        ));
+                    }
                     return Err(AnalysisError::new(
                         NonLiteralPivotValues {
                             expression: value_sql(&b.expr, &v.alias, self.ctx.conf.session_zone),

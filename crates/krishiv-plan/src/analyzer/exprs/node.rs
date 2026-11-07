@@ -113,6 +113,13 @@ impl Resolver<'_> {
                         .with_origin(e.origin);
                 return self.expr(&Arc::new(call), cx);
             }
+            // `TIMESTAMP '11:00'`: that time today, in the session zone (Spark reads a time of day alone
+            // against the current date), bound as the clock calls it stands for.
+            ExprNode::TypedLiteral { kind, value }
+                if let Some(clock) = time_only_today(*kind, value, self.ctx.conf.timestamp_ntz) =>
+            {
+                return self.expr(&Arc::new(clock.with_origin(e.origin)), cx);
+            }
             ExprNode::TypedLiteral { kind, value } => {
                 let literal = typed_literal(*kind, value, &self.ctx.conf, e.origin)?;
                 let ty = ArgType {
