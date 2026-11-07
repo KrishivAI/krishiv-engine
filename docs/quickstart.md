@@ -1,8 +1,8 @@
 # Quickstart
 
-<!-- Keep in step with the Quickstart section of the repository README; CI runs these blocks. -->
+<!-- The code blocks equal the Quickstart section of the repository README (a test checks it); CI runs the README's. -->
 
-Install, with pyarrow for the Arrow results:
+Nothing is published to PyPI yet: build the wheel from the repository (`maturin build`) and install it with the same extras. Once released, install with pyarrow for the Arrow results:
 
 ```bash
 pip install "krishiv[pyarrow]"

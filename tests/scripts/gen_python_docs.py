@@ -120,7 +120,14 @@ def functions_of(body: list[ast.stmt], exported: set[str] | None) -> list[ast.Fu
 
 def render_class(cls: ast.ClassDef) -> str:
     bases = ", ".join(ast.unparse(b) for b in cls.bases)
-    lines = [f"## `{cls.name}`", "", "```python", f"class {cls.name}({bases})" if bases else f"class {cls.name}", "```", ""]
+    lines = [
+        f"## `{cls.name}`",
+        "",
+        "```python",
+        f"class {cls.name}({bases})" if bases else f"class {cls.name}",
+        "```",
+        "",
+    ]
     doc = md_doc(ast.get_docstring(cls))
     if doc:
         lines += [doc, ""]
@@ -174,7 +181,9 @@ def main(argv: list[str]) -> int:
     pages = render()
     if "--check" in argv:
         have = {p for p in OUT.glob("*.[mj]*")} if OUT.is_dir() else set()
-        bad = [str(p.relative_to(ROOT)) for p, t in pages.items() if not p.exists() or p.read_text(encoding="utf-8") != t]
+        bad = [
+            str(p.relative_to(ROOT)) for p, t in pages.items() if not p.exists() or p.read_text(encoding="utf-8") != t
+        ]
         bad += [f"{p.relative_to(ROOT)} (extra)" for p in sorted(have - set(pages))]
         if bad:
             print(f"docs/reference/python is stale ({len(bad)} files, first: {bad[0]}); run `cargo xtask docs-python`")

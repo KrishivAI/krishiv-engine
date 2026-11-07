@@ -6,7 +6,7 @@ The public API of the crates users build against. Published versions are also on
 
 | Crate | Summary |
 |---|---|
-| [`krishiv`](krishiv.md) | Krishiv: a Spark-compatible query engine, embedded (layer L7). |
-| [`krishiv-session`](krishiv-session.md) | Krishiv sessions (layer L5): Spark SQL and DataFrames over the engine. |
+| [`krishiv`](krishiv.md) | Krishiv: a Spark-compatible query engine, embedded. |
+| [`krishiv-session`](krishiv-session.md) | Krishiv sessions: Spark SQL and DataFrames over the engine. |
 | [`krishiv-udf-sdk`](krishiv-udf-sdk.md) | Native Rust scalar and aggregate UDFs (layer SDK). |
-| [`krishiv-types`](krishiv-types.md) | Internal type representations (layer L1, ADR 0009). |
+| [`krishiv-types`](krishiv-types.md) | Internal type representations. |

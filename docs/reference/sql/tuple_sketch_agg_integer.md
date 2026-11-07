@@ -15,7 +15,7 @@ the number buckets or slots for the TupleSketch. Default is 12.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.2.0 |

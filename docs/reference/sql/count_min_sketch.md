@@ -13,7 +13,7 @@ cardinality estimation using sub-linear space.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 2.2.0 |

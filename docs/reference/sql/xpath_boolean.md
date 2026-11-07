@@ -10,7 +10,7 @@ Returns true if the XPath expression evaluates to true, or if a matching node is
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `xml_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 2.0.0 |

@@ -10,7 +10,7 @@ Returns a float value, the value zero if no match is found, or NaN if a match is
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `xml_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 2.0.0 |

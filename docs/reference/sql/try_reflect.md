@@ -10,7 +10,7 @@ This is a special version of `reflect` that performs the same operation, but ret
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `misc_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 4.0.0 |

@@ -10,7 +10,7 @@ Returns a short integer value, or the value zero if no match is found, or a matc
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `xml_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 2.0.0 |

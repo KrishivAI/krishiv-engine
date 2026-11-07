@@ -16,7 +16,7 @@ a value between 4 and 26 (defaults to 12) and mode to 'sum', 'min', 'max', or 'a
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `sketch_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.2.0 |

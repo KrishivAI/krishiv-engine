@@ -11,7 +11,7 @@ returns the level of grouping, equals to
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 2.0.0 |

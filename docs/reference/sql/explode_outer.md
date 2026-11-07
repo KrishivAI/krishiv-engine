@@ -12,8 +12,8 @@ Separates the elements of array `expr` into multiple rows, or the elements of ma
 |---|---|
 | Krishiv | Implemented |
 | Group | `generator_funcs` |
-| Kind | generator (table function) |
-| Added in Spark | 3.4.0 |
+| Kind | generator (function) |
+| Added in Spark | 1.0.0 |
 | In Spark profiles | 3.5 and later |
 | Arguments | 1 |
 | Deterministic | yes |
@@ -21,7 +21,7 @@ Separates the elements of array `expr` into multiple rows, or the elements of ma
 ## Examples
 
 ```sql
-SELECT * FROM explode_outer(array(10, 20));
+SELECT explode_outer(array(10, 20));
 ```
 
 Result:
@@ -32,7 +32,7 @@ Result:
 ```
 
 ```sql
-SELECT * FROM explode_outer(collection => array(10, 20));
+SELECT explode_outer(collection => array(10, 20));
 ```
 
 Result:

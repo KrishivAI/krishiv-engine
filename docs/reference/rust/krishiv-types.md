@@ -2,7 +2,7 @@
 
 # Module `krishiv_types`
 
-Internal type representations (layer L1, ADR 0009).
+Internal type representations.
 
 [`DataType`] models Spark SQL data types with Spark's renderings
 (`simpleString`, `catalogString`, `sql`, `typeName`, `json`), maps them to and from
@@ -13,7 +13,7 @@ Arrow ([`arrow`]), and parses Spark DDL type strings ([`parse_data_type`]).
 
 ## Module `arrow`
 
-Spark data type ↔ Arrow mapping (ADR 0009).
+Spark data type ↔ Arrow mapping.
 
 | Spark | Canonical Arrow type | Also accepted as storage |
 |---|---|---|
@@ -50,7 +50,7 @@ and edge round trips.
   is stored as a binary Arrow type, and its field carries the Spark type
   under [`SPARK_TYPE_METADATA_KEY`] so it reads back as `string`.
 - **Decimals.** The carrier follows the declared precision alone
-  ([`DECIMAL64_MAX_PRECISION`], design P2-T160), so one Spark type has one
+  ([`DECIMAL64_MAX_PRECISION`]), so one Spark type has one
   carrier between operators, in spill files and in shuffle. Client edges
   (Connect/Flight, Python, UDFs) widen to `Decimal128`, what Spark sends.
   Arrow rejects precision 0, so `decimal(0,0)` (whose only value is 0) is
@@ -221,7 +221,7 @@ pub const DECIMAL64_MAX_PRECISION: u8 = 18;
 ## Module `batch`
 
 The engine's unit of data: an Arrow [`RecordBatch`] plus per-row
-[`Weights`] (ADR 0006, 0009, 0017).
+[`Weights`].
 
 A [`Batch`] is plain Arrow. There is no selection vector and no parallel
 vector-encoding enum: dictionary and run-end encodings are Arrow's own
@@ -626,7 +626,7 @@ re-encoding `ST_AsBinary` does.
 This is a library only for now: no SQL function calls it yet, so
 `ST_GeomFromWKB` and `ST_GeogFromWKB` do not raise `WKB_PARSE_ERROR`
 from SQL (the `st-functions` golden statements stay in the `time-geo-types`
-known-failure category, P2-T181, until the functions are registered).
+known-failure category, until the functions are registered).
 
 The input is ISO WKB: the seven OGC geometry types (point to geometry
 collection) in XY, XYZ (type + 1000), XYM (+ 2000) or XYZM (+ 3000),
@@ -1291,7 +1291,7 @@ fields fail past the `long` range instead.
 `INVALID_INTERVAL_FORMAT.UNMATCHED_FORMAT_STRING_WITH_NOTICE` for another
 form, and `.INTERVAL_PARSING` for a field or a sum out of range. For most of
 those Spark raises a bare `IllegalArgumentException` or `ArithmeticException`;
-the class is Krishiv's, as named in design P2-T001b.
+the class is Krishiv's.
 
 ```rust
 pub fn cast_to_day_time(input: &str, start: crate::DayTimeField, end: crate::DayTimeField) -> Result<i64, krishiv_common::error::KrishivError> { /* ... */ }

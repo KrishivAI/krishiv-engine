@@ -12,8 +12,8 @@ Separates the elements of array `expr` into multiple rows with positions, or the
 |---|---|
 | Krishiv | Implemented |
 | Group | `generator_funcs` |
-| Kind | generator (table function) |
-| Added in Spark | 3.5.0 |
+| Kind | generator (function) |
+| Added in Spark | 2.0.0 |
 | In Spark profiles | 3.5 and later |
 | Arguments | 1 |
 | Deterministic | yes |
@@ -21,7 +21,7 @@ Separates the elements of array `expr` into multiple rows with positions, or the
 ## Examples
 
 ```sql
-SELECT * FROM posexplode(array(10,20));
+SELECT posexplode(array(10,20));
 ```
 
 Result:
@@ -32,7 +32,7 @@ Result:
 ```
 
 ```sql
-SELECT * FROM posexplode(collection => array(10,20));
+SELECT posexplode(collection => array(10,20));
 ```
 
 Result:

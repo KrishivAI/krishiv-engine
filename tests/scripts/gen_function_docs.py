@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gen_function_registry import ROOT, run_shell  # noqa: E402
+from gen_function_registry import ROOT, run_shell
 
 IMAGE = "apache/spark:4.2.0"
 OUT = ROOT / "crates/krishiv-functions/vendored/spark-function-docs.jsonl"
@@ -28,6 +28,10 @@ def main() -> int:
     for line in run_shell(IMAGE, script):
         if line.startswith("@@FN "):
             r = json.loads(line[5:])
+            # A name in both registries (explode, stack, ...) documents the function: the
+            # table-function registry is dumped last and must not overwrite it.
+            if r["name"] in rows and r["registry"] == "table_function":
+                continue
             rows[r["name"]] = {
                 k: r[k] for k in ("name", "registry", "group", "since", "deprecated", "usage", "examples")
             }

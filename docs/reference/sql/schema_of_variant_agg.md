@@ -10,7 +10,7 @@ Returns the merged schema in the SQL format of a variant column.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `variant_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.0.0 |

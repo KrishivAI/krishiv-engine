@@ -12,7 +12,7 @@ The sketch's summary type must be an integer.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `sketch_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.2.0 |

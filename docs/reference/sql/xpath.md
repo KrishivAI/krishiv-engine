@@ -10,7 +10,7 @@ Returns a string array of values within the nodes of xml that match the XPath ex
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `xml_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 2.0.0 |

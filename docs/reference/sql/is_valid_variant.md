@@ -10,7 +10,7 @@ Returns true if the variant is valid, false if it is malformed, NULL if `v` is N
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `variant_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 4.2.0 |

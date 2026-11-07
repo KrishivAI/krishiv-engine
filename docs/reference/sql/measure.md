@@ -10,7 +10,7 @@ this function is used and can only be used to calculate a measure defined in a m
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `agg_funcs` |
 | Kind | unknown (function) |
 | Added in Spark | 4.2.0 |

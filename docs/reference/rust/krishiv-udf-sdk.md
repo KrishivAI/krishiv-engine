@@ -10,7 +10,7 @@ and DataFrame calls of its name resolve to it, the analyzer inserts the
 implicit casts its [`Signature`] asks for, and the executor invokes it
 once per batch. An aggregate UDF is an [`AggregateUdf`] whose
 [`GroupsAccumulator`] the hash aggregate drives like a built-in
-aggregate (`Session::register_udaf`; ADR 0045).
+aggregate (`Session::register_udaf`).
 
 The boundary is plain data: a UDF sees Arrow arrays and an
 [`InvokeContext`] of plain values (partition index, ANSI flag, session

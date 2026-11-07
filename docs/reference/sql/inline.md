@@ -12,8 +12,8 @@ Explodes an array of structs into a table. Uses column names col1, col2, etc. by
 |---|---|
 | Krishiv | Implemented |
 | Group | `generator_funcs` |
-| Kind | generator (table function) |
-| Added in Spark | 3.4.0 |
+| Kind | generator (function) |
+| Added in Spark | 2.0.0 |
 | In Spark profiles | 3.5 and later |
 | Arguments | 1 |
 | Deterministic | yes |
@@ -21,7 +21,7 @@ Explodes an array of structs into a table. Uses column names col1, col2, etc. by
 ## Examples
 
 ```sql
-SELECT * FROM inline(array(struct(1, 'a'), struct(2, 'b')));
+SELECT inline(array(struct(1, 'a'), struct(2, 'b')));
 ```
 
 Result:
@@ -32,7 +32,7 @@ Result:
 ```
 
 ```sql
-SELECT * FROM inline(input => array(struct(1, 'a'), struct(2, 'b')));
+SELECT inline(input => array(struct(1, 'a'), struct(2, 'b')));
 ```
 
 Result:

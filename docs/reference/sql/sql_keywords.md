@@ -10,7 +10,7 @@ Get Spark SQL keywords
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Implemented |
 | Group | `generator_funcs` |
 | Kind | generator (table function) |
 | Added in Spark | 3.5.0 |

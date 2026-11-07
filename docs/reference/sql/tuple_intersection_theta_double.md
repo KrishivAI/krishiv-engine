@@ -15,7 +15,7 @@ assigned a default double summary value based on the mode: 0.0 for 'sum' mode, +
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `sketch_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.2.0 |

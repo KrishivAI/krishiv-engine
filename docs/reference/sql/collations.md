@@ -10,7 +10,7 @@ Get all of the Spark SQL string collations
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `generator_funcs` |
 | Kind | generator (table function) |
 | Added in Spark | 4.0.0 |

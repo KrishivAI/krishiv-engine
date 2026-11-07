@@ -10,7 +10,7 @@ Calls a method with reflection.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `misc_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 2.0.0 |

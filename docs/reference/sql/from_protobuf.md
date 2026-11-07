@@ -10,7 +10,7 @@ Converts a binary Protobuf value into a Catalyst value.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `protobuf_funcs` |
 | Kind | unknown (function) |
 | Added in Spark | 4.0.0 |

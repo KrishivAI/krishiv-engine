@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Krishiv: a Spark-compatible query engine, embedded (layer L7).
+//! Krishiv: a Spark-compatible query engine, embedded.
 //!
 //! A [`Session`] runs Spark SQL ([`Session::sql`]) and DataFrames
 //! ([`DataFrame`], built with [`functions`] and [`Column`]) in this

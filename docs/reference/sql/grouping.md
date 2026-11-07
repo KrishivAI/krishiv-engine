@@ -11,7 +11,7 @@ not, returns 1 for aggregated or 0 for not aggregated in the result set.",
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 2.0.0 |

@@ -10,7 +10,7 @@ Returns the concatenation of col1, col2, ..., colN.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Implemented |
 | Group | `collection_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 1.5.0 |

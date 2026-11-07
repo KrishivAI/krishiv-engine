@@ -104,12 +104,12 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`character_length`](character_length.md) | scalar | yes | Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros. |
 | [`chr`](chr.md) | scalar | yes | Returns the ASCII character having the binary equivalent to `expr`. If n is larger than 256 the result is equivalent to chr(n % 256) |
 | [`coalesce`](coalesce.md) | scalar | yes | Returns the first non-null argument if exists. Otherwise, null. |
-| [`collate`](collate.md) | scalar | not yet | Marks a given expression with the specified collation. |
+| [`collate`](collate.md) | scalar | yes | Marks a given expression with the specified collation. |
 | [`collation`](collation.md) | scalar | yes | Returns the collation name of a given expression. |
 | [`collations`](collations.md) | generator | not yet | Get all of the Spark SQL string collations |
 | [`collect_list`](collect_list.md) | aggregate | yes | Collects and returns a list of non-unique elements. |
 | [`collect_set`](collect_set.md) | aggregate | yes | Collects and returns a set of unique elements. |
-| [`concat`](concat.md) | scalar | not yet | Returns the concatenation of col1, col2, ..., colN. |
+| [`concat`](concat.md) | scalar | yes | Returns the concatenation of col1, col2, ..., colN. |
 | [`concat_ws`](concat_ws.md) | scalar | yes | Returns the concatenation of the strings separated by `sep`, skipping null values. |
 | [`contains`](contains.md) | scalar | yes | Returns a boolean. The value is True if right is found inside left. |
 | [`conv`](conv.md) | scalar | yes | Convert `num` from `from_base` to `to_base`. |
@@ -156,7 +156,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`decode`](decode.md) | scalar | yes | Decodes the first argument using the second argument character set. If either argument is null, the result will also be null. |
 | [`degrees`](degrees.md) | scalar | yes | Converts radians to degrees. |
 | [`dense_rank`](dense_rank.md) | window | yes | Computes the rank of a value in a group of values. The result is one plus the |
-| [`div`](div.md) | scalar | not yet | Divide `expr1` by `expr2`. It returns NULL if an operand is NULL or `expr2` is 0. The result is casted to long. |
+| [`div`](div.md) | scalar | yes | Divide `expr1` by `expr2`. It returns NULL if an operand is NULL or `expr2` is 0. The result is casted to long. |
 | [`double`](double.md) | scalar | yes | Casts the value `expr` to the target data type `double`. |
 | [`e`](e.md) | scalar | yes | Returns Euler's number, e. |
 | [`element_at`](element_at.md) | scalar | yes | Returns element of array at given (1-based) index. If Index is 0, |
@@ -193,8 +193,8 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`get_json_object`](get_json_object.md) | scalar | yes | Extracts a json object from `path`. |
 | [`getbit`](getbit.md) | scalar | yes | Returns the value of the bit (0 or 1) at the specified position. |
 | [`greatest`](greatest.md) | scalar | yes | Returns the greatest value of all parameters, skipping null values. |
-| [`grouping`](grouping.md) | aggregate | not yet | indicates whether a specified column in a GROUP BY is aggregated or |
-| [`grouping_id`](grouping_id.md) | aggregate | not yet | returns the level of grouping, equals to |
+| [`grouping`](grouping.md) | aggregate | yes | indicates whether a specified column in a GROUP BY is aggregated or |
+| [`grouping_id`](grouping_id.md) | aggregate | yes | returns the level of grouping, equals to |
 | [`hash`](hash.md) | scalar | yes | Returns a hash value of the arguments. |
 | [`hex`](hex.md) | scalar | yes | Converts `expr` to hexadecimal. |
 | [`histogram_numeric`](histogram_numeric.md) | aggregate | not yet | Computes a histogram on numeric 'expr' using nb bins. |
@@ -347,7 +347,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`randn`](randn.md) | scalar | yes | Returns a random value with independent and identically distributed (i.i.d.) values drawn from the standard normal distribution. |
 | [`random`](random.md) | scalar | yes | Returns a random value with independent and identically distributed (i.i.d.) uniformly distributed values in [0, 1). |
 | [`randstr`](randstr.md) | scalar | yes | Returns a string of the specified length whose characters are chosen |
-| [`range`](range.md) | scalar | not yet | Returns a table of values within a specified range. |
+| [`range`](range.md) | scalar | yes | Returns a table of values within a specified range. |
 | [`rank`](rank.md) | window | yes | Computes the rank of a value in a group of values. The result is one plus the number |
 | [`reduce`](reduce.md) | scalar | yes | Applies a binary operator to an initial state and all |
 | [`reflect`](reflect.md) | scalar | not yet | Calls a method with reflection. |
@@ -412,7 +412,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`spark_partition_id`](spark_partition_id.md) | scalar | yes | Returns the current partition id. |
 | [`split`](split.md) | scalar | yes | Splits `str` around occurrences that match `regex` and returns an array with a length of at most `limit` |
 | [`split_part`](split_part.md) | scalar | yes | Splits `str` by delimiter and return |
-| [`sql_keywords`](sql_keywords.md) | generator | not yet | Get Spark SQL keywords |
+| [`sql_keywords`](sql_keywords.md) | generator | yes | Get Spark SQL keywords |
 | [`sqrt`](sqrt.md) | scalar | yes | Returns the square root of `expr`. |
 | [`st_asbinary`](st_asbinary.md) | scalar | yes | Returns the geospatial value (value of type GEOGRAPHY or GEOMETRY) in WKB format using the specified endianness ('NDR' for little-endian, 'XDR' for big-endian), if provided. Defaults to little-endian encoding. |
 | [`st_geogfromwkb`](st_geogfromwkb.md) | scalar | yes | Parses the WKB description of a geography and returns the corresponding GEOGRAPHY value. |
@@ -581,4 +581,4 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`\|\|`](op-pipe-pipe.md) | scalar | yes | Returns the concatenation of `expr1` and `expr2`. |
 | [`~`](op-tilde.md) | scalar | yes | Returns the result of bitwise NOT of `expr`. |
 
-473 of 574 functions are implemented.
+480 of 574 functions are implemented.

@@ -10,7 +10,7 @@ Returns schema in the DDL format of the avro schema in JSON string format.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `avro_funcs` |
 | Kind | unknown (function) |
 | Added in Spark | 4.0.0 |

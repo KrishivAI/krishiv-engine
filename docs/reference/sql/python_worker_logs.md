@@ -10,7 +10,7 @@ Returns a table of logs collected from Python workers.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `table_funcs` |
 | Kind | scalar (table function) |
 | Added in Spark | 4.1.0 |

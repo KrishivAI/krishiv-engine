@@ -11,7 +11,7 @@ of a Datasketches HllSketch.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `sketch_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 3.5.0 |

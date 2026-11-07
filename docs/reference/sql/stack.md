@@ -12,7 +12,7 @@ Separates `expr1`, ..., `exprk` into `n` rows. Uses column names col0, col1, etc
 |---|---|
 | Krishiv | Implemented |
 | Group | `generator_funcs` |
-| Kind | generator (table function) |
+| Kind | generator (function) |
 | Added in Spark | 2.0.0 |
 | In Spark profiles | 3.5 and later |
 | Arguments | > 1 |

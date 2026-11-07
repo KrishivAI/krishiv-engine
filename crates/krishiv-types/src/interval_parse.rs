@@ -151,7 +151,7 @@ fn fraction_micros(fraction: &str) -> Option<i64> {
 /// `INVALID_INTERVAL_FORMAT.UNMATCHED_FORMAT_STRING_WITH_NOTICE` for another
 /// form, and `.INTERVAL_PARSING` for a field or a sum out of range. For most of
 /// those Spark raises a bare `IllegalArgumentException` or `ArithmeticException`;
-/// the class is Krishiv's, as named in design P2-T001b.
+/// the class is Krishiv's.
 pub fn cast_to_day_time(
     input: &str,
     start: DayTimeField,

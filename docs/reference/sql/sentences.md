@@ -10,7 +10,7 @@ Splits `str` into an array of array of words.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `string_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 2.0.0 |

@@ -28,3 +28,20 @@ fn slugs_are_file_safe_and_pages_unique() {
     let page = &pages[Path::new("docs/reference/sql/array_contains.md")];
     assert!(page.contains("SELECT array_contains(array(1, 2, 3), 2);"));
 }
+
+#[test]
+fn functions_the_planner_owns_are_implemented() {
+    let pages = render().unwrap();
+    for name in [
+        "concat",
+        "div",
+        "grouping",
+        "grouping_id",
+        "range",
+        "sql_keywords",
+        "collate",
+    ] {
+        let page = &pages[Path::new(&format!("docs/reference/sql/{name}.md"))];
+        assert!(page.contains("| Krishiv | Implemented"), "{name}: {page}");
+    }
+}

@@ -10,7 +10,7 @@ Returns a table of values within a specified range.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Implemented |
 | Group | `table_funcs` |
 | Kind | scalar (table function) |
 | Added in Spark | 2.0.0 |

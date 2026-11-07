@@ -12,7 +12,7 @@ Returns a tuple like the function get_json_object, but it takes multiple names. 
 |---|---|
 | Krishiv | Implemented |
 | Group | `json_funcs` |
-| Kind | generator (table function) |
+| Kind | generator (function) |
 | Added in Spark | 1.6.0 |
 | In Spark profiles | 3.5 and later |
 | Arguments | > 1 |

@@ -10,7 +10,7 @@ Divide `expr1` by `expr2`. It returns NULL if an operand is NULL or `expr2` is 0
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Implemented |
 | Group | `math_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 3.0.0 |

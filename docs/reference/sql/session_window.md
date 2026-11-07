@@ -11,7 +11,7 @@ See <a href="https://spark.apache.org/docs/latest/structured-streaming-programmi
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `datetime_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 3.2.0 |

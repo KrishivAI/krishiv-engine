@@ -155,10 +155,22 @@ fn is_syntax(name: &str) -> bool {
         )
 }
 
+/// Names implemented outside the function registry: the planner's built-in operators
+/// (`krishiv_plan::Builtin`, e.g. `concat`, `div`), the grouping functions the analyzer lowers,
+/// the table functions `range` and `sql_keywords`, and `collate`, which the SQL lowering handles.
+fn plan_owned(name: &str) -> bool {
+    krishiv_plan::Builtin::from_name(name).is_some()
+        || matches!(
+            name.to_ascii_lowercase().as_str(),
+            "grouping" | "grouping_id" | "range" | "sql_keywords" | "collate"
+        )
+}
+
 fn status(name: &str, def: Option<&FunctionDef>) -> &'static str {
     match def {
         None if is_syntax(name) => "Implemented (SQL syntax)",
-        None => "Not in the function registry yet",
+        None if plan_owned(name) => "Implemented",
+        None => "Not implemented yet",
         Some(d) if matches!(d.execution, Execution::Cast) => "Implemented (rewritten to a `CAST`)",
         Some(_) => "Implemented",
     }
@@ -252,7 +264,7 @@ pub fn render() -> Result<BTreeMap<PathBuf, String>, String> {
             reg.lookup(&doc.name, krishiv_functions::signature::SparkProfile::V4_2),
             krishiv_functions::registry::Lookup::Found(_)
         );
-        let def = def || is_syntax(&doc.name);
+        let def = def || is_syntax(&doc.name) || plan_owned(&doc.name);
         implemented += usize::from(def);
         let (_, desc) = split_usage(&doc.usage);
         let first = desc.lines().next().unwrap_or("").replace('|', "\\|");

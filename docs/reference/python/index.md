@@ -13,7 +13,7 @@
 | [`krishiv.sql.functions`](krishiv.sql.functions.md) | ``pyspark.sql.functions``: column builders. A function resolves by name in the engine's |
 | [`krishiv.sql.group`](krishiv.sql.group.md) | ``GroupedData``: a DataFrame grouped by key columns, as ``pyspark.sql.GroupedData``. |
 | [`krishiv.sql.na`](krishiv.sql.na.md) | ``DataFrameNaFunctions`` (``DataFrame.na``): handling of missing data, as ``pyspark.sql.DataFrameNaFunctions``. |
-| [`krishiv.sql.profile_view`](krishiv.sql.profile_view.md) | An offline viewer for ``krishiv.query-profile`` documents (P2-T096). |
+| [`krishiv.sql.profile_view`](krishiv.sql.profile_view.md) | An offline viewer for ``krishiv.query-profile`` documents. |
 | [`krishiv.sql.readwriter`](krishiv.sql.readwriter.md) | ``DataFrameReader`` (``spark.read``), ``DataFrameWriter`` (``df.write``) |
 | [`krishiv.sql.row`](krishiv.sql.row.md) | ``Row``: a result row, as ``pyspark.sql.Row`` (a tuple with field names). |
 | [`krishiv.sql.session`](krishiv.sql.session.md) | ``SparkSession``: the entry point, as ``pyspark.sql.SparkSession`` (embedded: no server). |

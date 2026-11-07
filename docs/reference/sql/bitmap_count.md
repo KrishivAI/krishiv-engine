@@ -10,7 +10,7 @@ Returns the number of set bits in the child bitmap.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Not implemented yet |
 | Group | `misc_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 3.5.0 |

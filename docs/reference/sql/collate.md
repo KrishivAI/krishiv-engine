@@ -10,7 +10,7 @@ Marks a given expression with the specified collation.
 
 | | |
 |---|---|
-| Krishiv | Not in the function registry yet |
+| Krishiv | Implemented |
 | Group | `string_funcs` |
 | Kind | scalar (function) |
 | Added in Spark | 4.0.0 |
