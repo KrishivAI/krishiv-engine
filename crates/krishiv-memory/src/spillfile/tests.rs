@@ -1723,3 +1723,67 @@ fn a_lock_not_yet_published_is_never_reclaimed_and_a_dead_one_is() {
     );
     drop(manager);
 }
+
+#[test]
+fn a_stale_session_that_is_a_plain_file_is_reclaimed() {
+    let dir = TestDir::new();
+    dir.create();
+    // A session "directory" that is a regular file (damaged or planted): the
+    // unlocked lock lets it go, and both the file and the lock are removed.
+    let id = "9-a-0-0";
+    let session = dir.0.join(format!("{}{id}", dir::PREFIX));
+    let lock = dir
+        .0
+        .join(format!("{}{id}{}", dir::PREFIX, dir::LOCK_SUFFIX));
+    fs::write(&session, b"not a directory").unwrap();
+    fs::write(&lock, b"").unwrap();
+    assert!(dir::reclaim(&dir.0, id, &lock));
+    assert!(!session.exists());
+    assert!(!lock.exists());
+}
+
+#[test]
+fn the_default_candidates_ignore_empty_cache_and_home_values() {
+    use std::ffi::OsString;
+    let os = |s: &str| Some(OsString::from(s));
+    let first = |c: Vec<PathBuf>| c.first().cloned().unwrap();
+    // XDG_CACHE_HOME wins when set.
+    let c = dir::candidates_for("u", os("/x"), os("/h"));
+    assert_eq!(first(c), PathBuf::from("/x/krishiv/spill"));
+    // Empty XDG falls back to HOME/.cache.
+    let c = dir::candidates_for("u", os(""), os("/h"));
+    assert_eq!(first(c), PathBuf::from("/h/.cache/krishiv/spill"));
+    // Both empty or unset: no cache candidate, only the temporary ones.
+    for (xdg, home) in [(os(""), os("")), (None, None)] {
+        let c = dir::candidates_for("u", xdg, home);
+        assert!(c.iter().all(|p| !p.ends_with("krishiv/spill")), "{c:?}");
+        assert!(c.last().unwrap().ends_with("krishiv-spill-u"));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_ram_file_system_is_named_and_a_disk_one_is_not() {
+    // /dev/shm is tmpfs on Linux hosts that have it.
+    let shm = Path::new("/dev/shm");
+    let mounts = fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    let shm_is_tmpfs = shm.is_dir()
+        && dir::mount_type_in(&mounts, &fs::canonicalize(shm).unwrap()).as_deref() == Some("tmpfs");
+    if shm_is_tmpfs {
+        assert_eq!(dir::unsuitable_fs(shm).as_deref(), Some("tmpfs"));
+        // A path below it that does not exist yet is judged by its ancestor.
+        assert_eq!(
+            dir::unsuitable_fs(&shm.join("krishiv-not-yet-created/x")).as_deref(),
+            Some("tmpfs")
+        );
+    }
+    // The build directory is on a disk (overlay or ext4/xfs): not unsuitable,
+    // unless this checkout itself sits on a RAM disk.
+    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ty = dir::mount_type_in(&mounts, &fs::canonicalize(here).unwrap());
+    if !matches!(ty.as_deref(), Some("tmpfs" | "ramfs"))
+        && dir::network_fs_in(&mounts, here).is_none()
+    {
+        assert_eq!(dir::unsuitable_fs(here), None);
+    }
+}
