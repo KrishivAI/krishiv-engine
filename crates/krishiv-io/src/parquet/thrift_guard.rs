@@ -171,10 +171,12 @@ pub(super) fn bloom_header(buf: &[u8]) -> Result<(u32, usize), &'static str> {
     Ok((num_bytes, walked.len))
 }
 
-/// What [`walk_struct`] found: the bytes the struct takes, and the value of
-/// its top-level `i32` field 3 (a page header's `compressed_page_size`).
+/// What [`walk_struct`] found: the bytes the struct takes, and the values of
+/// its top-level `i32` fields 2 and 3 (a page header's
+/// `uncompressed_page_size` and `compressed_page_size`).
 struct Walked {
     len: usize,
+    field_2: Option<u64>,
     field_3: Option<u64>,
 }
 
@@ -194,6 +196,7 @@ fn walk_struct(
         page_header: schema == Schema::Page,
     };
     let mut stack = vec![Frame::Struct { schema, last: 0 }];
+    let mut field_2 = None;
     let mut field_3 = None;
     while let Some(top) = stack.last().copied() {
         let (ty, in_list) = match top {
@@ -230,6 +233,9 @@ fn walk_struct(
                         let raw = walk.varint()?;
                         if schema == Schema::Page && id == 3 {
                             field_3 = Some(raw);
+                        }
+                        if schema == Schema::Page && id == 2 {
+                            field_2 = Some(raw);
                         }
                         continue;
                     }
@@ -303,6 +309,7 @@ fn walk_struct(
     }
     Ok(Walked {
         len: walk.pos,
+        field_2,
         field_3,
     })
 }
@@ -342,6 +349,21 @@ const fn low32(v: i64) -> i32 {
 ///
 /// # Errors
 /// Which of these was found.
+/// The `uncompressed_page_size` the first page header of `page` declares
+/// (`None` when the header does not carry it), walked under the same
+/// bounds as [`check_pages`]: what arrow-rs would allocate to decompress it.
+///
+/// # Errors
+/// A header that does not walk.
+pub(super) fn first_page_uncompressed_size(page: &[u8]) -> Result<Option<usize>, &'static str> {
+    let mut work = 0_usize;
+    let limit = page.len().saturating_mul(8).saturating_add(1024);
+    let walked = walk_struct(page, Schema::Page, &mut work, limit)?;
+    Ok(walked
+        .field_2
+        .and_then(|raw| usize::try_from(low32(unzigzag(raw))).ok()))
+}
+
 pub(super) fn check_pages(chunk: &[u8]) -> Result<(), &'static str> {
     let mut pos = 0_usize;
     let mut work = 0_usize;
@@ -534,7 +556,7 @@ impl Walk<'_> {
 mod tests {
     use super::{
         BINARY_PAST_END, COUNT_TOO_LARGE, ENTRIES_TOO_MANY, HEADER_PAST_END, PAGE_PAST_END,
-        TOO_MUCH_WORK, check, check_pages,
+        TOO_MUCH_WORK, check, check_pages, first_page_uncompressed_size,
     };
 
     #[test]
@@ -799,6 +821,17 @@ mod tests {
         p.push(0x00);
         p.extend(std::iter::repeat_n(0xAB, usize::from(n)));
         p
+    }
+
+    /// The declared decompressed size of the first page (field 2), what
+    /// arrow-rs would allocate; absent when the header has no field 2.
+    #[test]
+    fn reads_the_first_pages_uncompressed_size() {
+        assert_eq!(first_page_uncompressed_size(&page(4, &[])), Ok(Some(4)));
+        // Field 1 then field 3, no field 2.
+        let no_size = [0x15, 0x00, 0x25, 0x08, 0x00, 0xAB, 0xAB, 0xAB, 0xAB];
+        assert_eq!(first_page_uncompressed_size(&no_size), Ok(None));
+        assert!(first_page_uncompressed_size(&[0x15]).is_err());
     }
 
     #[test]
