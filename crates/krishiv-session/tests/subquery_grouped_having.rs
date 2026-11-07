@@ -305,3 +305,45 @@ fn an_expression_key_and_an_unknown_legacy_value_are_refused() -> R {
     );
     Ok(())
 }
+
+/// `SELECT DISTINCT u.k` where `u.k = t.k`: the value is the correlated key
+/// itself, so the grouping column is also the join key. Rows are worked out from
+/// the data (t.k 1, 2, 3, NULL; u has k 1 and 2) and match the explicit form.
+#[test]
+fn a_distinct_of_the_correlated_key_is_the_key_or_null() -> R {
+    let s = session()?;
+    let sub = "select k, (select distinct u.k from u where u.k = t.k) from t";
+    let join = "select t.k, m.k from t left join (select distinct k from u) m on t.k = m.k";
+    assert_eq!(run(&s, sub)?, run(&s, join)?, "{sub}");
+    assert_eq!(
+        run(&s, sub)?,
+        rows(&["1|1", "2|2", "3|NULL", "NULL|NULL"]),
+        "{sub}"
+    );
+    Ok(())
+}
+
+/// Spark's legacy count flag reads a value over no rows as the aggregate's value
+/// over an empty group; a bare grouping column has no such value known here, so
+/// it is refused under the flag (and answered without it).
+#[test]
+fn the_legacy_flag_refuses_a_bare_column_value() -> R {
+    let s = session()?;
+    let q = "select k, (select distinct y from u where u.k = t.k and y > 6) from t";
+    assert_eq!(
+        run(&s, q)?,
+        rows(&["1|7", "2|9", "3|NULL", "NULL|NULL"]),
+        "{q}"
+    );
+    run(
+        &s,
+        "set spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled=true",
+    )?;
+    let e = run(&s, q).expect_err(q).to_string();
+    assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{q}: {e}");
+    assert!(
+        e.contains("whose value over no rows is not NULL or a count"),
+        "{q}: {e}"
+    );
+    Ok(())
+}
