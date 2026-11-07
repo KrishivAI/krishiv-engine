@@ -691,24 +691,5 @@ fn a_swapped_equality_pushed_into_a_join_is_a_repeat() {
 #[test]
 fn a_conjunct_over_a_projection_estimates_as_once_pushed_below_it() {
     let seed = 11_649_424_267_131_205_810_u64;
-    let sql = Gen::new(seed).top();
-    let plan = support::resolve(&sql, &support::ctx());
-    let optimized = optimize(&plan).unwrap();
-    assert_eq!(
-        optimized.root().resolved_output(),
-        plan.root().resolved_output()
-    );
-    let again = optimize(&optimized).unwrap();
-    assert!(
-        again.structurally_eq(&optimized),
-        "{sql}: not a fixed point:\n{}\n{}",
-        optimized.root(),
-        again.root()
-    );
-    let db = data::small(seed);
-    assert_eq!(
-        eval::rows(&db, optimized.root()),
-        eval::rows(&db, plan.root()),
-        "{sql}"
-    );
+    fixed_point_with_rows(seed, &Gen::new(seed).top());
 }
