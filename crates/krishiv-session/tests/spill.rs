@@ -222,7 +222,7 @@ fn a_join_feeding_a_full_sort_spills_under_eight_mib() {
         block_on(s.sql("SELECT f.k, f.v, d.k AS dk FROM f JOIN d ON f.k = d.k ORDER BY f.v, f.k"))
             .unwrap();
     let mut stream = block_on(df.execute_stream()).unwrap();
-    let (mut n, mut last) = (0_i64, (i64::MIN, i64::MIN));
+    let mut got = Vec::new();
     while let Some(batch) = block_on(stream.next()) {
         let batch = batch.unwrap();
         let (k, v, dk) = (
@@ -230,18 +230,18 @@ fn a_join_feeding_a_full_sort_spills_under_eight_mib() {
             batch.column(1).as_primitive::<Int64Type>(),
             batch.column(2).as_primitive::<Int64Type>(),
         );
-        for i in 0..batch.num_rows() {
-            let row = (v.value(i), k.value(i));
-            assert!(
-                row >= last,
-                "out of order at row {n}: {row:?} after {last:?}"
-            );
-            assert_eq!(k.value(i), dk.value(i));
-            last = row;
-            n += 1;
-        }
+        got.extend((0..batch.num_rows()).map(|i| (v.value(i), k.value(i), dk.value(i))));
     }
-    assert_eq!(n, FACT_ROWS);
+    // Every fact row joins its one key; `(v, k)` orders the whole row, so
+    // the complete output, duplicates included, is determined.
+    let mut want: Vec<(i64, i64, i64)> = (0..FACT_ROWS)
+        .map(|i| (i % 1000, i % KEYS, i % KEYS))
+        .collect();
+    want.sort_unstable();
+    assert_eq!(got.len(), want.len());
+    if let Some(at) = got.iter().zip(&want).position(|(g, w)| g != w) {
+        panic!("row {at}: got {:?}, want {:?}", got[at], want[at]);
+    }
     drop(stream);
     wait_until_clean(&root(&dir));
 }

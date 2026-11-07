@@ -699,6 +699,75 @@ async fn merge_budget_covers_per_source_metadata() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// An intermediate merge the pool can't fund at full fan-in halves it
+/// instead of aborting: to the largest fan-in above 2 that fits, else 2.
+/// Without memory even for 2 runs, the merge fails.
+#[tokio::test(start_paused = true)]
+async fn merge_budget_falls_back_to_a_smaller_fan_in() {
+    use super::budget::{merge_budget, merge_need};
+    use super::merge::SpillRun;
+
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!("sort-unit-merge-fallback-{}", std::process::id()));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: dir.clone(),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let scope = manager.scope().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+    let k: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+    let batch = Batch::new(RecordBatch::try_new(Arc::clone(&schema), vec![k]).unwrap());
+    let unlimited = TreePool::new(&MemoryConfig::default());
+    let writer_handle = ConsumerHandle::register(unlimited.child("w", None), "sort", None);
+    let mut runs = Vec::new();
+    for _ in 0..8 {
+        let scratch = writer_handle.reservation().for_spill_scratch();
+        let mut writer = scope.writer(Arc::clone(&schema), scratch).unwrap();
+        writer.write(&batch).unwrap();
+        runs.push(SpillRun {
+            file: writer.finish().unwrap(),
+            max_batch_bytes: 100_000,
+            row_bytes: 8,
+        });
+    }
+    let batch_rows = 100;
+    let need = |fan_in| merge_need(&runs, fan_in, batch_rows, true);
+    assert!(need(2) < need(4) && need(4) < need(8));
+    // (pool limit, the fan-in the merge takes; None: it fails)
+    let cases = [
+        (need(4).midpoint(need(8)), Some(4)),
+        (need(2).midpoint(need(4)), Some(2)),
+        (need(2) / 2, None),
+    ];
+    for (limit, want) in cases {
+        let pool = TreePool::new(&MemoryConfig {
+            limit: Some(limit),
+            ..MemoryConfig::default()
+        });
+        let handle = ConsumerHandle::register(pool.child("q", None), "sort", None);
+        let got = merge_budget(&runs, runs.len(), batch_rows, &handle, true).await;
+        match (got, want) {
+            (Ok((budget, fan_in)), Some(want)) => {
+                assert_eq!(fan_in, want, "limit {limit}");
+                assert_eq!(budget.size(), need(want), "limit {limit}");
+            }
+            (Err(_), None) => {}
+            (got, want) => panic!(
+                "limit {limit}: got {:?}, want fan-in {want:?}",
+                got.map(|(_, f)| f)
+            ),
+        }
+        drop(handle);
+        assert_eq!(pool.reserved(), 0, "limit {limit}");
+    }
+    drop((runs, writer_handle));
+    assert_eq!(unlimited.reserved(), 0);
+    drop(manager);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn bucket_counts_follow_the_drivers() {
     use super::sort::bucket_bits;
