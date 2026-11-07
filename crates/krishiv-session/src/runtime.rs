@@ -212,6 +212,7 @@ impl EngineRuntime {
         // Diagnostics first: installs the tokio-console subscriber when the
         // feature is on and `KRISHIV_TOKIO_CONSOLE=1`, a no-op otherwise.
         krishiv_exec::maybe_init_tokio_console();
+        crate::conf::check_pairs(&pairs)?;
         let (config, _) = Config::from_pairs(pairs.iter().cloned())?;
         let executor: Arc<dyn Executor> = match executor {
             Some(e) => e,
@@ -302,6 +303,7 @@ impl EngineRuntime {
             }
             .into());
         }
+        crate::conf::check_pairs(&session_pairs)?;
         let pairs = self.pairs.iter().cloned().chain(session_pairs);
         Ok(Config::from_pairs(pairs)?.0)
     }
