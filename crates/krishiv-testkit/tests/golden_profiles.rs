@@ -5,7 +5,8 @@
 //! tag with `tests/scripts/import_spark_golden.sh <tag>` and runs this test with `--ignored`. What is
 //! committed is the baseline of failing statements, `tests/spark-golden/profiles/<tag>/` (the same layout as
 //! `tests/spark-golden/known-failures*`): a statement that newly fails is a regression, a listed statement
-//! that passes must leave the list. Refresh with
+//! that passes is only reported, because these baselines are not refreshed by every PR that improves the
+//! engine. Refresh one, any time, with
 //! `cargo run --release -p krishiv-testkit --bin golden-report -- --engine session --tag <tag> --ratchet update
 //!  --known-failures tests/spark-golden/profiles/<tag>/known-failures.json`.
 #![forbid(unsafe_code)]
@@ -57,7 +58,21 @@ fn matches_the_baseline(tag: &str) -> R {
         "harness timeouts, not baseline failures: {timeouts:?}"
     );
     let ratchet = known.check(&result);
-    assert!(ratchet.is_clean(), "{}", ratchet.describe());
+    // Another version's baseline is not refreshed by every PR that improves the engine (the 4.2 baseline is:
+    // its ratchet runs in PR CI). So a listed statement that now passes is a note here, not a failure; a
+    // statement that newly fails, or a listed file that did not run, is a regression and fails.
+    if !ratchet.newly_passing.is_empty() {
+        eprintln!(
+            "note: {} listed statement(s) of {tag} now pass; refresh the baseline with `golden-report --engine session \
+             --tag {tag} --ratchet update --known-failures tests/spark-golden/profiles/{tag}/known-failures.json`",
+            ratchet.newly_passing.len()
+        );
+    }
+    assert!(
+        ratchet.newly_failing.is_empty() && ratchet.missing_files.is_empty(),
+        "{}",
+        ratchet.describe()
+    );
     Ok(())
 }
 

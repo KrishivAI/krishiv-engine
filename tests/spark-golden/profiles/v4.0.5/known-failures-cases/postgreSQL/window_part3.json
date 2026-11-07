@@ -9,9 +9,6 @@
       17,
       21,
       22
-    ],
-    "sql-commands": [
-      4
     ]
   },
   "file": "postgreSQL/window_part3",
