@@ -1632,17 +1632,23 @@ async fn exact_and_string_frames_from_disk() {
 #[tokio::test]
 async fn spilled_batches_of_alternating_sizes_read_back_from_a_full_pool() {
     for large in [300, 1_500] {
-        alternating_sizes_from_a_full_pool(large).await;
+        alternating_sizes_from_a_full_pool(large, functions(), true).await;
     }
+    // Not here yet: offsets and `nth_value` charge the batches they keep past their read to the pool directly,
+    // which a pool taken whole refuses (queue: window fold charges with no fallback).
 }
 
 /// [`spilled_batches_of_alternating_sizes_read_back_from_a_full_pool`] with batches of 20 and `large` rows: the
 /// external partition's whole-batch evaluation does not fit, so it is evaluated in fewer rows per step.
-async fn alternating_sizes_from_a_full_pool(large: usize) {
+async fn alternating_sizes_from_a_full_pool(
+    large: usize,
+    functions: Vec<(WindowFunction, WindowFrame)>,
+    narrows: bool,
+) {
     let rows: Vec<Row> = (0..3_000)
         .map(|i| (Some(0), Some(i), i, Some(i % 1_000)))
         .collect();
-    let window = plan(functions(), false);
+    let window = plan(functions, false);
     // Batches of 20 and 300 rows, alternating (the rows are already in order).
     let mut sorted = Vec::new();
     let (mut at, mut k) = (0, 0);
@@ -1676,13 +1682,15 @@ async fn alternating_sizes_from_a_full_pool(large: usize) {
             > 0,
         "the window spilled"
     );
-    assert!(
-        op.counters
-            .narrowed
-            .load(std::sync::atomic::Ordering::Relaxed)
-            > 0,
-        "the external partition was evaluated in narrower steps ({large} rows)"
-    );
+    if narrows {
+        assert!(
+            op.counters
+                .narrowed
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0,
+            "the external partition was evaluated in narrower steps ({large} rows)"
+        );
+    }
     assert_eq!(outputs(&got, window.functions.len()), want, "{large} rows");
     drop((got, ctx));
     assert_eq!(root.reserved(), 0, "the query pool is empty at the end");

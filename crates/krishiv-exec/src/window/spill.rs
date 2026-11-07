@@ -497,8 +497,14 @@ impl Window {
         let spare = r.headroom.size().saturating_sub(full.max(r.base));
         r.headroom.shrink(spare);
         let mut eval_rows = rows;
-        if r.headroom.size() < full && r.headroom.grow(full - r.headroom.size()).await.is_err() {
-            // Refused: evaluate fewer rows per step, as many as the headroom held covers (the evaluation's need
+        if r.headroom.size() < full
+            && r.headroom
+                .grow_without_abort(full - r.headroom.size())
+                .await
+                .is_err()
+        {
+            // Refused (without aborting any query: this request has a
+            // fallback, ADR 0007): evaluate fewer rows per step, as many as the headroom held covers (the evaluation's need
             // grows with its rows), so the query slows down instead of failing. Only when one row's evaluation
             // does not fit is the refusal the query's error.
             let held = r.headroom.size();
