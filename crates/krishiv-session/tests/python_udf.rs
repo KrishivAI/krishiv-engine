@@ -204,3 +204,77 @@ async fn another_session_does_not_see_the_udf() {
     let other = Session::new().unwrap();
     assert!(other.sql("SELECT py_plus(1)").await.is_err());
 }
+
+/// Rows the fake was called on, over all calls.
+fn rows_called(seen: &Arc<Mutex<Seen>>) -> usize {
+    seen.lock().unwrap().calls.iter().sum()
+}
+
+#[tokio::test]
+async fn a_call_inside_case_runs_on_every_row_as_in_spark() {
+    // Spark's ExtractPythonUDFs evaluates the call below the projection:
+    // the branch not taken still calls the UDF.
+    let (s, seen) = session(None);
+    s.register_python_udf(plus_one_def("py_plus"));
+    let got = longs(
+        &s,
+        "SELECT CASE WHEN id < 3 THEN py_plus(id) ELSE 0L END FROM range(0, 10, 1, 1)",
+    )
+    .await;
+    assert_eq!(got[..3], [Some(1), Some(2), Some(3)]);
+    assert_eq!(rows_called(&seen), 10);
+}
+
+#[tokio::test]
+async fn a_call_over_a_call_stacks_two_nodes() {
+    let (s, seen) = session(None);
+    s.register_python_udf(plus_one_def("py_plus"));
+    let got = longs(&s, "SELECT py_plus(py_plus(id)) FROM range(0, 4, 1, 1)").await;
+    assert_eq!(got, vec![Some(2), Some(3), Some(4), Some(5)]);
+    assert_eq!(rows_called(&seen), 8, "each level runs over every row");
+}
+
+#[tokio::test]
+async fn equal_calls_are_evaluated_once() {
+    let (s, seen) = session(None);
+    s.register_python_udf(plus_one_def("py_plus"));
+    let batches = s
+        .sql("SELECT py_plus(id) AS a, py_plus(id) AS b FROM range(0, 5, 1, 1)")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 5);
+    assert_eq!(rows_called(&seen), 5);
+}
+
+#[tokio::test]
+async fn a_call_in_a_grouping_key_is_evaluated_below_the_aggregate() {
+    let (s, _) = session(None);
+    s.register_python_udf(plus_one_def("py_plus"));
+    let got = longs(
+        &s,
+        "SELECT count(*) FROM range(10) GROUP BY py_plus(id) % 2 ORDER BY 1",
+    )
+    .await;
+    assert_eq!(got, vec![Some(5), Some(5)]);
+}
+
+#[tokio::test]
+async fn a_call_in_an_outer_join_condition_is_refused() {
+    let (s, _) = session(None);
+    s.register_python_udf(plus_one_def("py_plus"));
+    let err = match s
+        .sql("SELECT * FROM range(3) a LEFT JOIN range(3) b ON py_plus(a.id) = b.id")
+        .await
+    {
+        Ok(df) => df.collect().await.unwrap_err(),
+        Err(e) => e,
+    };
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::UnsupportedFeaturePythonUdfInOnClause,
+        "{err}"
+    );
+}
