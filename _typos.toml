@@ -18,6 +18,12 @@ extend-exclude = [
     "python/krishiv/_udf/pandas_utils.py",
     "python/krishiv/_udf/typehints.py",
     "python/krishiv/_udf/loose_version.py",
+    # adapted PySpark 4.2.0 tests and their golden tables (NOTICE)
+    "python/tests/pyspark_udf/test_udf.py",
+    "python/tests/pyspark_udf/test_pandas_udf_scalar.py",
+    "python/tests/pyspark_udf/test_arrow_python_udf.py",
+    "python/tests/pyspark_udf/goldenutils.py",
+    "python/tests/pyspark_udf/coercion/**",
     "crates/krishiv-connect/src/proto/**",
     "tests/sqllogictest/**",
     "crates/krishiv-ui-assets/assets/**",

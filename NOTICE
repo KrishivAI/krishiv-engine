@@ -36,6 +36,11 @@ Apache Spark
   python/krishiv/_udf/worker.py (from pyspark/worker.py, pyspark/util.py and
   sql/pandas/serializers.py), python/krishiv/sql/udf.py (from sql/udf.py) and
   python/krishiv/sql/pandas/functions.py (from sql/pandas/functions.py).
+  python/tests/pyspark_udf/: adapted copies of PySpark v4.2.0's sql/tests/test_udf.py,
+  sql/tests/pandas/test_pandas_udf_scalar.py, sql/tests/arrow/test_arrow_python_udf.py, the four
+  sql/tests/coercion/test_{python,pandas}_udf_{input,return}_type.py harnesses, testing/goldenutils.py
+  and the coercion golden CSVs (Apache-2.0; the CSVs unmodified, the code changed in its imports and
+  where adapt.py says).
 
 --------------------------------------------------------------------------------
 (Further entries: DataFusion, Feldera and others, if code is copied. Currently
