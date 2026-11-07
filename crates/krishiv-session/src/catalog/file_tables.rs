@@ -159,3 +159,35 @@ async fn open_table(
     })
     .await
 }
+
+/// The partitions a read of `table` lists: its partition columns and the
+/// values of the partitions its catalog registered. `None` when a registered
+/// partition is not at its default directory under the table (`ADD PARTITION
+/// ... LOCATION`, `SET LOCATION`): Spark reads it there, a listing of the table
+/// does not.
+pub(super) fn known_partitions(
+    table: &crate::store::CatalogTable,
+) -> Option<krishiv_exec::files::KnownPartitions> {
+    let columns = table.layout.partition_columns.clone();
+    let mut registered = Vec::with_capacity(table.layout.partitions.len());
+    for p in &table.layout.partitions {
+        let mut dir = table.location.clone();
+        let mut values = Vec::with_capacity(p.spec.len());
+        for (k, v) in &p.spec {
+            dir.push(format!(
+                "{}={}",
+                crate::partitions::escape_path_name(k),
+                crate::partitions::escape_path_name(v)
+            ));
+            values.push((v != krishiv_io::DEFAULT_PARTITION).then(|| v.clone()));
+        }
+        if dir != p.location {
+            return None;
+        }
+        registered.push(values);
+    }
+    Some(krishiv_exec::files::KnownPartitions {
+        columns,
+        registered,
+    })
+}
