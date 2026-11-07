@@ -20,8 +20,11 @@ check() {
   avail_kb=$(awk '/^MemAvailable:/ {print $2}' "$meminfo")
   [ -n "$avail_kb" ] && [ "$avail_kb" -lt "$threshold_kb" ] || return 0
   # Largest resident set among the test binaries of this tree.
+  # Only argv[0] counts: rustc and the linker mention target/*/deps in their arguments (--out-dir,
+  # -L dependency=, -o) and are often the largest processes during a build; killing one would
+  # silently drop the mutant (unviable) or end the baseline build.
   read -r pid rss cmd < <(ps -eo pid=,rss=,args= --sort=-rss | awk -v pat="$root/target/" \
-    'index($0, pat) && $0 ~ /\/deps\// {print; exit}')
+    'index($3, pat) == 1 && $3 ~ /\/deps\/[^\/]+$/ {print; exit}')
   if [ -z "${pid:-}" ]; then
     echo "::warning::memory guard: $((avail_kb / 1024)) MB available and no test binary to kill"
     return 0
