@@ -3877,6 +3877,32 @@ impl Resolver<'_> {
                 Err(e) => return Err(reported(e)),
             }
         };
+        // A map does not order (`INVALID_ORDERING_TYPE`, as `SortOrder`).
+        for (o, b) in order.iter().zip(&bounds) {
+            if let Some(t) =
+                b.ty.data_type
+                    .as_ref()
+                    .filter(|t| !super::coerce::orderable(t))
+            {
+                let direction = match o.direction {
+                    crate::SortDirection::Ascending => "ASC",
+                    crate::SortDirection::Descending => "DESC",
+                };
+                let nulls = match o.nulls {
+                    crate::NullOrdering::NullsFirst => "NULLS FIRST",
+                    crate::NullOrdering::NullsLast => "NULLS LAST",
+                };
+                let zone = self.ctx.conf.session_zone;
+                return Err(AnalysisError::new(
+                    DatatypeMismatchInvalidOrderingType {
+                        sql_expr: format!("\"{} {direction} {nulls}\"", pretty(&b.shown(), zone)),
+                        function_name: "`sortorder`".to_owned(),
+                        data_type: quoted_type(Some(t)),
+                    },
+                    o.expr.origin,
+                ));
+            }
+        }
         // A generator between the sort and the aggregate: the aggregate
         // cannot grow through it, so Spark leaves the call in the sort and
         // refuses it there. The same for windows over the aggregate: an
@@ -3912,32 +3938,6 @@ impl Resolver<'_> {
                         invalid_expr_sqls: calls.join(", "),
                     },
                     p.origin,
-                ));
-            }
-        }
-        // A map does not order (`INVALID_ORDERING_TYPE`, as `SortOrder`).
-        for (o, b) in order.iter().zip(&bounds) {
-            if let Some(t) =
-                b.ty.data_type
-                    .as_ref()
-                    .filter(|t| !super::coerce::orderable(t))
-            {
-                let direction = match o.direction {
-                    crate::SortDirection::Ascending => "ASC",
-                    crate::SortDirection::Descending => "DESC",
-                };
-                let nulls = match o.nulls {
-                    crate::NullOrdering::NullsFirst => "NULLS FIRST",
-                    crate::NullOrdering::NullsLast => "NULLS LAST",
-                };
-                let zone = self.ctx.conf.session_zone;
-                return Err(AnalysisError::new(
-                    DatatypeMismatchInvalidOrderingType {
-                        sql_expr: format!("\"{} {direction} {nulls}\"", pretty(&b.shown(), zone)),
-                        function_name: "`sortorder`".to_owned(),
-                        data_type: quoted_type(Some(t)),
-                    },
-                    o.expr.origin,
                 ));
             }
         }

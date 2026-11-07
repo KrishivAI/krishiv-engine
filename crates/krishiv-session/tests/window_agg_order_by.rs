@@ -98,3 +98,15 @@ fn an_unresolved_column_wins_and_select_list_keys_still_sort() {
         assert_eq!(outcome(&s, &sql).0, "OK", "ORDER BY {order}");
     }
 }
+
+#[test]
+fn a_map_valued_sort_key_is_an_ordering_error_before_the_aggregate_refusal() {
+    let s = Session::new().unwrap();
+    // A map does not order: `INVALID_ORDERING_TYPE`, which the sort reports before it looks for aggregate calls.
+    let sql = "SELECT a, SUM(SUM(b)) OVER () AS w FROM VALUES (1, 10), (2, 20) AS t(a, b) GROUP BY a, b \
+               ORDER BY map(SUM(b), 1)";
+    assert_eq!(
+        outcome(&s, sql).0,
+        "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
+    );
+}
