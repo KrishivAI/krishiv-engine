@@ -520,18 +520,7 @@ impl Session {
             .iter()
             .map(|c| c.name.clone())
             .collect();
-        let mut columns: Vec<StoreColumn> = analysis
-            .analyzed
-            .output
-            .iter()
-            .map(|c| StoreColumn {
-                name: c.name.clone(),
-                data_type: krishiv_plan::without_generated_marker(&c.data_type),
-                nullable: c.nullable,
-                default: None,
-                comment: None,
-            })
-            .collect();
+        let mut columns = crate::char_write::output_columns(&analysis.analyzed, None);
         if !v.columns.is_empty() {
             let mut declared = Vec::with_capacity(v.columns.len());
             for alias in &v.columns {
@@ -602,6 +591,7 @@ impl Session {
                 schema_mode,
             }),
             layout: TableLayout::default(),
+            column_stats_requested: false,
         };
         self.state.catalog.store.create_table(view, mode)?;
         self.empty_frame().await
@@ -698,11 +688,11 @@ impl Session {
                         "datasource views without declared column types",
                     ));
                 };
-                Ok(TableColumn {
-                    name: ident.value.clone(),
-                    data_type: spec.to_data_type()?,
-                    nullable: !c.not_null,
-                })
+                Ok(TableColumn::new(
+                    ident.value.clone(),
+                    spec.to_data_type()?,
+                    !c.not_null,
+                ))
             })
             .collect::<Result<Vec<_>, KrishivError>>()?;
         if columns.is_empty() {
@@ -908,18 +898,7 @@ impl Session {
                 }
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 let analysis = df.analyzed_in(env).await?;
-                changed.columns = analysis
-                    .analyzed
-                    .output
-                    .iter()
-                    .map(|c| StoreColumn {
-                        name: c.name.clone(),
-                        data_type: krishiv_plan::without_generated_marker(&c.data_type),
-                        nullable: c.nullable,
-                        default: None,
-                        comment: None,
-                    })
-                    .collect();
+                changed.columns = crate::char_write::output_columns(&analysis.analyzed, None);
                 let query_columns = analysis
                     .analyzed
                     .output
@@ -954,6 +933,11 @@ impl Session {
             }
             AlterViewAction::SetTblProperties(props) => {
                 changed.properties.extend(options_of(props, original));
+            }
+            AlterViewAction::UnsetTblProperties { keys, .. } => {
+                for key in options_of(keys, original).keys() {
+                    changed.properties.remove(key);
+                }
             }
             _ => return Err(unsupported("this ALTER VIEW")),
         }
@@ -1017,17 +1001,14 @@ impl Session {
                 for (def, ident) in defs.iter().zip(added) {
                     // Spark alters the data schema: new columns go before the partition columns.
                     let at = changed.data_columns().count();
-                    changed.columns.insert(
-                        at,
-                        StoreColumn {
-                            name: ident.value.clone(),
-                            data_type: def.data_type.to_data_type()?,
-                            // Existing files have no such column: it reads as NULL.
-                            nullable: true,
-                            default: None,
-                            comment: def.comment.clone(),
-                        },
-                    );
+                    // Existing files have no such column: it reads as NULL.
+                    let column = StoreColumn::declared(
+                        ident.value.clone(),
+                        &def.data_type,
+                        None,
+                        def.comment.clone(),
+                    )?;
+                    changed.columns.insert(at, column);
                 }
             }
             AlterTableAction::ChangeColumn {
@@ -1036,7 +1017,10 @@ impl Session {
                 ..
             } => {
                 let change = match action {
-                    ChangeColumnAction::Type(t) => ColumnChange::Type(t.to_data_type()?),
+                    ChangeColumnAction::Type(t) => {
+                        let (ty, declared) = t.to_column_type()?;
+                        ColumnChange::Type(ty, declared)
+                    }
                     ChangeColumnAction::Comment(c) => ColumnChange::Comment(c.clone()),
                     ChangeColumnAction::First | ChangeColumnAction::After(_) => {
                         ColumnChange::Position
@@ -1082,6 +1066,18 @@ impl Session {
                     .add_partitions(&table, parts, *if_not_exists, original)
                     .await?;
             }
+            AlterTableAction::SetPartitionLocation {
+                partition,
+                location,
+                ..
+            } => {
+                changed = self
+                    .set_partition_location(&table, partition, location, original)
+                    .await?;
+            }
+            AlterTableAction::RenamePartition { from, to, .. } => {
+                changed = self.rename_partition(&table, [from, to], original).await?;
+            }
             AlterTableAction::SetTblProperties(props) => {
                 // The `comment` property is the table comment (`AlterTableSetPropertiesCommand`); the
                 // catalog shows it as `Comment`, not among the properties (Spark 4.2 golden
@@ -1105,6 +1101,10 @@ impl Session {
                         changed.comment = None;
                     }
                 }
+            }
+            AlterTableAction::SetSerdeProperties(props) => {
+                // The storage properties are the table's options (what the reader and writer get).
+                changed.options.extend(options_of(props, original));
             }
             AlterTableAction::RenameTo { name: to, .. } => {
                 return self.rename_table(&table, &self.table_name(to, &env)?).await;
@@ -1160,17 +1160,10 @@ impl Session {
         }
         let current = &mut table.columns[at];
         match change {
-            ColumnChange::Type(t) if t != current.data_type => {
-                let sql = |t: &DataType| format!("\"{}\"", t.sql());
-                let id = format!("`{}`", current.name.replace('`', "``"));
-                return Err(krishiv_common::error::NotSupportedChangeColumn {
-                    table: name.quoted(),
-                    origin_name: id.clone(),
-                    origin_type: sql(&current.data_type),
-                    new_name: id,
-                    new_type: sql(&t),
-                }
-                .into());
+            ColumnChange::Type(t, declared)
+                if t != current.data_type || declared != current.char_varchar =>
+            {
+                return Err(current.change_type_error(name.quoted(), &t, declared.as_deref()));
             }
             ColumnChange::Comment(c) => current.comment = Some(c),
             ColumnChange::DropDefault => current.default = None,
@@ -1367,6 +1360,7 @@ impl Session {
             root: warehouse.clone(),
             view: None,
             layout: TableLayout::default(),
+            column_stats_requested: false,
         };
         let layout = LayoutRequest {
             partition_by: &partition_names,
@@ -1393,13 +1387,12 @@ impl Session {
                     self.query_env().analysis.conf.case_sensitive,
                 )?;
                 for (c, ident) in typed_partitions.iter().zip(typed) {
-                    table.columns.push(StoreColumn {
-                        name: ident.value.clone(),
-                        data_type: c.data_type.to_data_type()?,
-                        nullable: true,
-                        default: None,
-                        comment: c.comment.clone(),
-                    });
+                    table.columns.push(StoreColumn::declared(
+                        ident.value.clone(),
+                        &c.data_type,
+                        None,
+                        c.comment.clone(),
+                    )?);
                 }
                 if table.columns.is_empty() {
                     return Err(unsupported("CREATE TABLE without columns"));
@@ -1478,20 +1471,20 @@ impl Session {
             if def.generated.is_some() {
                 return Err(unsupported("generated columns"));
             }
-            columns.push(StoreColumn {
-                name: ident.value.clone(),
-                data_type: def.data_type.to_data_type()?,
-                // File-source tables are nullable whatever the DDL says (Spark 4.2 verified: NOT NULL is dropped
-                // and NULLs are stored), so nothing is enforced on insert.
-                nullable: true,
-                default: def.default.as_ref().map(|e| {
-                    original
-                        .get(e.span.start..e.span.end)
-                        .unwrap_or_default()
-                        .to_owned()
-                }),
-                comment: def.comment.clone(),
+            // File-source tables are nullable whatever the DDL says (Spark 4.2 verified: NOT NULL is dropped and
+            // NULLs are stored), so nothing is enforced on insert.
+            let default = def.default.as_ref().map(|e| {
+                original
+                    .get(e.span.start..e.span.end)
+                    .unwrap_or_default()
+                    .to_owned()
             });
+            columns.push(StoreColumn::declared(
+                ident.value.clone(),
+                &def.data_type,
+                default,
+                def.comment.clone(),
+            )?);
         }
         check_column_name_duplication(
             columns.iter().map(|c| c.name.as_str()),
@@ -1659,18 +1652,7 @@ impl Session {
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
         let analysis = df.analyzed_in(self.query_env()).await?;
-        table.columns = analysis
-            .analyzed
-            .output
-            .iter()
-            .map(|c| StoreColumn {
-                name: c.name.clone(),
-                data_type: krishiv_plan::without_generated_marker(&c.data_type),
-                nullable: true,
-                default: None,
-                comment: None,
-            })
-            .collect();
+        table.columns = crate::char_write::output_columns(&analysis.analyzed, Some(true));
         let name = TableName {
             namespace: table.namespace.clone(),
             name: table.name.clone(),
@@ -1801,12 +1783,12 @@ impl Session {
             (
                 columns
                     .iter()
-                    .map(|c| StoreColumn {
-                        name: c.name.clone(),
-                        data_type: krishiv_plan::without_generated_marker(&c.data_type),
-                        nullable: c.nullable,
-                        default: None,
-                        comment: None,
+                    .map(|c| {
+                        StoreColumn::plain(
+                            c.name.clone(),
+                            krishiv_plan::without_generated_marker(&c.data_type),
+                            c.nullable,
+                        )
                     })
                     .collect(),
                 None,
@@ -1852,6 +1834,7 @@ impl Session {
             root: warehouse.clone(),
             view: None,
             layout,
+            column_stats_requested: false,
         };
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists
@@ -2014,6 +1997,18 @@ impl Session {
                 );
             }
         }
+        // Nothing is computed, but the table remembers that column statistics were asked for, so that
+        // `DESCRIBE EXTENDED t col` refuses instead of printing NULLs (review of #496 M2).
+        if matches!(
+            a.columns,
+            AnalyzeColumns::ForAll | AnalyzeColumns::ForColumns(_)
+        ) && !table.column_stats_requested
+        {
+            let mut marked = CatalogTable::clone(&table);
+            marked.column_stats_requested = true;
+            // A concurrent change of the table wins; the mark is only a guard.
+            self.state.catalog.store.replace_table(&table, marked);
+        }
         self.empty_frame().await
     }
 
@@ -2088,7 +2083,7 @@ impl Session {
     }
 
     /// The permanent table `name` for a command that writes it.
-    fn table_for_write(
+    pub(crate) fn table_for_write(
         &self,
         name: &TableName,
         operation: &str,
@@ -2274,10 +2269,12 @@ impl Session {
             .analyzed
             .output
             .iter()
-            .map(|c| TableColumn {
-                name: c.name.clone(),
-                data_type: krishiv_plan::without_generated_marker(&c.data_type),
-                nullable: c.nullable,
+            .map(|c| {
+                TableColumn::new(
+                    c.name.clone(),
+                    krishiv_plan::without_generated_marker(&c.data_type),
+                    c.nullable,
+                )
             })
             .collect();
         // The query provides every column but the static partition columns.
@@ -2300,7 +2297,7 @@ impl Session {
             .map(|i| format!("__krishiv_c{i}"))
             .collect();
         let base = source.to_df(renamed.iter());
-        let mut select = Vec::with_capacity(table.columns.len());
+        let mut values = Vec::with_capacity(table.columns.len());
         let mut assigned_columns = assigned.columns.iter().zip(&assignment);
         for column in &table.columns {
             if let Some((_, value)) = statics.iter().find(|(k, _)| *k == column.name) {
@@ -2309,7 +2306,7 @@ impl Session {
                 } else {
                     crate::functions::lit(value.as_str()).cast_ansi(column.data_type.clone())
                 };
-                select.push(value.alias(&column.name));
+                values.push((value, column));
                 continue;
             }
             let Some((column, from)) = assigned_columns.next() else {
@@ -2330,9 +2327,26 @@ impl Session {
                     None => lit_null().cast(column.data_type.clone()),
                 },
             };
-            select.push(value.alias(&column.name));
+            values.push((value, column));
         }
-        let df = base.select(select);
+        // The values are computed in one projection and checked in the next, so a check that reads its value
+        // several times never evaluates a non-deterministic default (or query column) more than once.
+        let staged: Vec<String> = (0..values.len())
+            .map(|i| format!("__krishiv_v{i}"))
+            .collect();
+        let computed = base.select(
+            values
+                .iter()
+                .zip(&staged)
+                .map(|((value, _), name)| value.clone().alias(name))
+                .collect::<Vec<_>>(),
+        );
+        let mut select = Vec::with_capacity(values.len());
+        for ((_, column), name) in values.iter().zip(&staged) {
+            let checked = crate::char_write::checked(col(name), column, &env.analysis.conf)?;
+            select.push(checked.alias(&column.name));
+        }
+        let df = computed.select(select);
         if dry {
             // Every check of the write, without writing.
             return self.check_table_write(table, &df, overwrite).await;
@@ -2713,6 +2727,7 @@ impl Session {
             root: warehouse,
             view: None,
             layout: TableLayout::default(),
+            column_stats_requested: false,
         };
         let layout = LayoutRequest {
             partition_by: &[],
@@ -2753,7 +2768,8 @@ impl Session {
 
 /// What an `ALTER TABLE ... CHANGE | ALTER COLUMN` asks for.
 enum ColumnChange {
-    Type(DataType),
+    /// The type and the `CHAR(n)` / `VARCHAR(n)` string the new type was written with.
+    Type(DataType, Option<String>),
     Comment(String),
     Position,
     Nullability,
@@ -3139,6 +3155,7 @@ fn overflow_in_table_insert(
     output: &[TableColumn],
     assignment: &[Source],
 ) -> KrishivError {
+    let e = crate::char_write::map_error(e);
     if e.error_class() != ErrorClass::CastOverflow {
         return e;
     }

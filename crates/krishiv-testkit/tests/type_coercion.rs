@@ -103,6 +103,7 @@ fn view(sql: &str) -> Option<(String, Vec<TableColumn>)> {
             name: alias.unwrap_or(shown).to_owned(),
             data_type,
             nullable: false,
+            char_varchar: None,
         });
     }
     Some((name.trim().to_owned(), columns))

@@ -812,6 +812,9 @@ message ExchangeNode {
   Partitioning partitioning = 3;
   // feature: exchange_filters
   repeated ExchangeFilter filters = 4;
+  // ignorable: the planner's columns of its input (Arrow IPC `Schema`
+  // flatbuffer); a reader without it learns them by instantiating.
+  optional bytes schema = 5;
 }
 
 // feature: exchange_filters

@@ -35,10 +35,10 @@ use krishiv_plan::{
     Expr as PlanExpr, ExprNode, Literal, LogicalPlan, Origin, PlanNode, SourceId, SubqueryKind,
 };
 use krishiv_sql::ast::{
-    Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeKind,
-    DataTypeSpec, DdlName, DeclareVariable, DropFunction, DropVariable, DropView, Expr, ExprKind,
-    FunctionBodyKind, FunctionReturnsKind, Ident, ObjectName, Query, Refresh, RefreshKind, Reset,
-    Set, SetExprKind, SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TimeZone,
+    Cache, CacheKind, ColumnDef, ColumnName, CreateFunction, CreateView, DataTypeSpec, DdlName,
+    DeclareVariable, DropFunction, DropVariable, DropView, Expr, ExprKind, FunctionBodyKind,
+    FunctionReturnsKind, Ident, ObjectName, Query, Refresh, RefreshKind, Reset, Set, SetExprKind,
+    SetKind, SetVariable, SetVariableKind, Span, SqlDataAccess, TimeZone,
 };
 use krishiv_types::DataType;
 
@@ -304,11 +304,7 @@ impl Session {
             .analyzed
             .output
             .iter()
-            .map(|c| TableColumn {
-                name: c.name.clone(),
-                data_type: c.data_type.clone(),
-                nullable: c.nullable,
-            })
+            .map(|c| TableColumn::new(c.name.clone(), c.data_type.clone(), c.nullable))
             .collect();
         if !v.columns.is_empty() {
             let declared: Vec<String> = v.columns.iter().map(|c| c.name.value.clone()).collect();
@@ -1560,25 +1556,10 @@ fn origin(source: krishiv_plan::SourceId, span: Span) -> Origin {
 /// The type `spec` names. `CHAR` and `VARCHAR` are for table schemas only:
 /// Spark rejects them in a function's signature.
 fn data_type(spec: &DataTypeSpec) -> Result<DataType, KrishivError> {
-    if has_char_or_varchar(spec) {
+    if spec.has_char_or_varchar() {
         return Err(UnsupportedCharOrVarcharAsString {}.into());
     }
     spec.to_data_type()
-}
-
-fn has_char_or_varchar(spec: &DataTypeSpec) -> bool {
-    match &spec.kind {
-        DataTypeKind::Primitive { name, .. } => matches!(
-            name.split(' ').next().unwrap_or(name),
-            "char" | "character" | "varchar"
-        ),
-        DataTypeKind::Array(Some(e)) => has_char_or_varchar(e),
-        DataTypeKind::Map(Some(kv)) => has_char_or_varchar(&kv.0) || has_char_or_varchar(&kv.1),
-        DataTypeKind::Struct(Some(fields)) => {
-            fields.iter().any(|f| has_char_or_varchar(&f.data_type))
-        }
-        _ => false,
-    }
 }
 
 /// Whether `e` holds a subquery.
