@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "other-version": [
+      4,
+      5,
+      22,
+      66,
+      72,
+      73
+    ]
+  },
+  "file": "ansi/date",
+  "format_version": 1
+}

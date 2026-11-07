@@ -293,6 +293,8 @@ struct Settings {
     join_merge_buffer_bytes: u64,
     #[prost(bool, tag = "13")]
     deterministic_order: bool,
+    #[prost(uint64, optional, tag = "14")]
+    shared_broadcast_bytes: Option<u64>,
 }
 
 fn wide(v: usize) -> u64 {
@@ -319,6 +321,7 @@ impl Settings {
             join_radix_bits,
             sort_hash_buckets,
             join_merge_buffer_bytes,
+            shared_broadcast_bytes,
             deterministic_order,
         } = c.clone();
         Self {
@@ -334,6 +337,7 @@ impl Settings {
             join_radix_bits,
             sort_hash_buckets,
             join_merge_buffer_bytes: wide(join_merge_buffer_bytes),
+            shared_broadcast_bytes: shared_broadcast_bytes.map(wide),
             deterministic_order,
         }
     }
@@ -352,6 +356,10 @@ impl Settings {
             join_radix_bits: self.join_radix_bits,
             sort_hash_buckets: self.sort_hash_buckets,
             join_merge_buffer_bytes: narrow(self.join_merge_buffer_bytes, "merge buffer")?,
+            shared_broadcast_bytes: self
+                .shared_broadcast_bytes
+                .map(|n| narrow(n, "shared broadcast bytes"))
+                .transpose()?,
             deterministic_order: self.deterministic_order,
         })
     }
@@ -513,6 +521,7 @@ mod tests {
             detailed_metrics: true,
             join_radix_bits: 3,
             stall_threshold: Duration::from_millis(1_234),
+            shared_broadcast_bytes: Some(256 << 10),
             ..ExecConfig::default()
         };
         let (back, got) = decode_task(&encode_task(&task, &settings).unwrap()).unwrap();

@@ -2303,6 +2303,7 @@ impl Lowerer {
                 try_cast,
             } => {
                 let to = data_type
+                    .without_char_varchar()
                     .to_data_type()
                     .map_err(|e| err(e, data_type.span))?;
                 let mode = if *try_cast {

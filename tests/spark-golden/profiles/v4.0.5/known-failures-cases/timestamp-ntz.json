@@ -1,0 +1,13 @@
+{
+  "cases": {
+    "other-version": [
+      8,
+      22
+    ],
+    "query-features": [
+      5
+    ]
+  },
+  "file": "timestamp-ntz",
+  "format_version": 1
+}

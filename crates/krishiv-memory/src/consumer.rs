@@ -11,13 +11,22 @@
 //! returns credit the retry did not use ([`ConsumerHandle::release_credit`]).
 //!
 //! Credit is touched only by the owning driver's task (grant, retry,
-//! release), so it needs no loom model; the atomics only make the handle
-//! `Sync`. A [`Reservation::new`] on a handle's id neither draws credit nor
-//! keeps the consumer registered: use [`ConsumerHandle::reservation`].
+//! release), so it needs no loom model of its own; the atomics only make the
+//! handle `Sync`. Settling a grant wakes rounds through the pool's
+//! `ReleaseSignal`, which is loom-modelled. A [`Reservation::new`] on a
+//! handle's id neither draws credit nor keeps the consumer registered: use
+//! [`ConsumerHandle::reservation`].
+//!
+//! The pool sees the grant too ([`GrantCredit`],
+//! [`MemoryPool::register_with_credit`]): from the grant until the driver
+//! settles its retry ([`ConsumerHandle::settle_grant`]) the bytes are about
+//! to be used or returned, so an arbitration round that needs them waits for
+//! the retry rather than failing (ADR 0007 update 2026-11-06).
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, Weak};
 
+use crate::pool::Shared;
 use crate::sync::{AtomicU64, AtomicUsize, Ordering};
 use crate::{ConsumerId, MemoryPool, Reservation, Spillable};
 
@@ -49,6 +58,48 @@ impl SpillStats {
     }
 }
 
+/// A consumer's grant credit: bytes reserved in the pool for it and not yet
+/// held by a reservation, and the driver's grant not yet settled. Its
+/// [`ConsumerHandle`] owns it; the pool reads it
+/// ([`MemoryPool::register_with_credit`]) so arbitration can tell memory a
+/// retry is about to use or return from memory in use.
+#[derive(Default)]
+pub struct GrantCredit {
+    bytes: AtomicUsize,
+    /// Bytes granted by [`crate::SpillOwner::reserve_for`] whose retry has
+    /// not ended yet ([`ConsumerHandle::settle_grant`]).
+    unsettled: AtomicUsize,
+    /// The pool tree whose waiting rounds re-plan when a grant settles.
+    shared: OnceLock<Weak<Shared>>,
+}
+
+impl GrantCredit {
+    /// Unused credit, in bytes.
+    pub fn bytes(&self) -> usize {
+        self.bytes.load(Ordering::Acquire)
+    }
+
+    /// Granted bytes whose retry has not ended yet.
+    pub fn unsettled(&self) -> usize {
+        self.unsettled.load(Ordering::Acquire)
+    }
+
+    /// Wakes `shared`'s release waiters when a grant settles. Set once, by
+    /// the pool the consumer registers with.
+    pub(crate) fn notify(&self, shared: Weak<Shared>) {
+        let _ = self.shared.set(shared);
+    }
+}
+
+impl fmt::Debug for GrantCredit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GrantCredit")
+            .field("bytes", &self.bytes())
+            .field("unsettled", &self.unsettled())
+            .finish_non_exhaustive()
+    }
+}
+
 /// A registered consumer that unregisters (returning everything it holds)
 /// once the handle and every [`Reservation`] made from it are dropped, so a
 /// reservation that moves into shared state (a pipeline breaker's combine)
@@ -57,7 +108,7 @@ pub struct ConsumerHandle {
     pool: Arc<dyn MemoryPool>,
     id: ConsumerId,
     /// Bytes reserved for this consumer and not yet held by a reservation.
-    credit: AtomicUsize,
+    credit: Arc<GrantCredit>,
     /// Bytes held by reservations made from this handle, and their peak.
     held: AtomicUsize,
     peak: AtomicUsize,
@@ -83,11 +134,12 @@ impl ConsumerHandle {
         spill: Option<Arc<dyn Spillable>>,
         spill_stats: Arc<SpillStats>,
     ) -> Arc<Self> {
-        let id = pool.register(name, spill);
+        let credit = Arc::new(GrantCredit::default());
+        let id = pool.register_with_credit(name, spill, &credit);
         Arc::new(Self {
             pool,
             id,
-            credit: AtomicUsize::new(0),
+            credit,
             held: AtomicUsize::new(0),
             peak: AtomicUsize::new(0),
             spill_stats,
@@ -119,12 +171,12 @@ impl ConsumerHandle {
     /// for the next `try_grow`. Only [`crate::SpillOwner::reserve_for`]
     /// (and refunds) call this, so credit is always backed by pool bytes.
     pub(crate) fn add_credit(&self, bytes: usize) {
-        self.credit.fetch_add(bytes, Ordering::AcqRel);
+        self.credit.bytes.fetch_add(bytes, Ordering::AcqRel);
     }
 
     /// Unused grant credit.
     pub fn credit(&self) -> usize {
-        self.credit.load(Ordering::Acquire)
+        self.credit.bytes()
     }
 
     /// The bytes reservations made from this handle hold now.
@@ -132,9 +184,40 @@ impl ConsumerHandle {
         self.held.load(Ordering::Relaxed)
     }
 
-    /// Returns unused grant credit to the pool.
+    /// `bytes` were granted to this consumer's driver for a retry
+    /// ([`crate::SpillOwner::reserve_for`]): until
+    /// [`settle_grant`](Self::settle_grant), rounds count them as about to
+    /// be used or returned.
+    pub(crate) fn add_unsettled(&self, bytes: usize) {
+        self.credit.unsettled.fetch_add(bytes, Ordering::AcqRel);
+    }
+
+    /// The retry a grant was for has ended: returns unused credit to the
+    /// pool, and rounds waiting for the grant re-plan.
+    pub fn settle_grant(&self) {
+        // Unused bytes go back before the grant stops counting as unsettled,
+        // so a round planning in between counts them once or twice (it then
+        // waits and re-plans on the wakeup below), never zero times.
+        let unused = self.credit.bytes.swap(0, Ordering::AcqRel);
+        if unused > 0 {
+            self.pool.release(self.id, unused);
+        }
+        let unsettled = self.credit.unsettled.swap(0, Ordering::AcqRel);
+        // Always, not only through the release: a sub-quantum remainder
+        // returns nothing to the pools, and that release notifies no one.
+        if unsettled > 0
+            && let Some(shared) = self.credit.shared.get().and_then(Weak::upgrade)
+        {
+            shared.release.released();
+        }
+    }
+
+    /// Returns unused grant credit to the pool. An unsettled grant stays
+    /// unsettled: only the driver that asked for it settles it
+    /// ([`settle_grant`](Self::settle_grant)); operators managing their own
+    /// credit (flush steps) never hold one.
     pub fn release_credit(&self) {
-        let unused = self.credit.swap(0, Ordering::AcqRel);
+        let unused = self.credit.bytes.swap(0, Ordering::AcqRel);
         if unused > 0 {
             self.pool.release(self.id, unused);
         }
@@ -158,16 +241,18 @@ impl ConsumerHandle {
 
     /// Takes up to `max` bytes of credit.
     pub(crate) fn take_credit(&self, max: usize) -> usize {
-        let mut cur = self.credit.load(Ordering::Acquire);
+        let mut cur = self.credit.bytes.load(Ordering::Acquire);
         loop {
             let take = cur.min(max);
             if take == 0 {
                 return 0;
             }
-            match self
-                .credit
-                .compare_exchange(cur, cur - take, Ordering::AcqRel, Ordering::Acquire)
-            {
+            match self.credit.bytes.compare_exchange(
+                cur,
+                cur - take,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
                 Ok(_) => return take,
                 Err(actual) => cur = actual,
             }

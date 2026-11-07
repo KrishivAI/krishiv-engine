@@ -63,6 +63,12 @@ struct Tpch {
 /// Deals the scans of a stage's streaming pipeline (probe sides, not
 /// builds or subqueries) to its tasks in byte ranges of 64 KiB, as the
 /// coordinator would (P2-T178).
+/// A query pool smaller than a task's own build of `orders`, so that build
+/// spills. One task's build spills at 2 and 3 MiB and fits at 8; at 4 to 6
+/// MiB the query can fail instead (`ops/queue-opus-b1.md`, arbitration
+/// finding of 2026-11-06), and 3 MiB keeps clear of that window.
+const SMALL_POOL: usize = 3 << 20;
+
 fn dealer(files: &BTreeMap<String, Vec<SplitFileRef>>) -> TableDealer {
     TableDealer::new(
         files.clone(),
@@ -117,6 +123,7 @@ fn tpch(rt: &tokio::runtime::Runtime) -> Tpch {
                 name: f.name().clone(),
                 data_type,
                 nullable: f.is_nullable(),
+                char_varchar: None,
             });
         }
         catalog = catalog.with_table(&["default"], t, columns, None);
@@ -175,10 +182,22 @@ fn run(
     pool: &Arc<dyn MemoryPool>,
     id: u64,
 ) -> Result<Vec<String>, KrishivError> {
+    run_with(scheduler, plan, worker, pool, id, ExecConfig::default())
+}
+
+/// [`run`] with the query's settings `config`.
+fn run_with(
+    scheduler: &dyn Scheduler,
+    plan: &PhysicalPlan,
+    worker: &WorkerContext,
+    pool: &Arc<dyn MemoryPool>,
+    id: u64,
+    config: ExecConfig,
+) -> Result<Vec<String>, KrishivError> {
     let query = QueryContext::new(
         QueryId(id),
         WorkloadClass::Interactive,
-        ExecConfig::default(),
+        config,
         pool.child(&format!("q{id}"), None),
     );
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -659,9 +678,138 @@ fn a_broadcast_that_does_not_fit_is_built_by_each_task() {
         "the shared build fit:\n{plan}"
     );
     assert_eq!(root.reserved(), 0, "memory still held after a fallback");
+    // Each task's join says it built its own table.
+    assert!(capped.task_counter("broadcast_fallback") > 0);
+    assert_eq!(capped.task_counter("broadcast_shared"), 0);
     // Uncapped, the same plan shares its build.
     assert_eq!(sorted(run(&split, &plan, &worker, &root, 3).unwrap()), want);
     assert_eq!(split.broadcast_fallbacks(), 0);
     assert_eq!(split.shared_builds(), 1);
+    assert_eq!(
+        split.task_counter("broadcast_shared"),
+        capped.task_counter("broadcast_fallback")
+    );
+    assert_eq!(split.task_counter("broadcast_fallback"), 0);
     assert_eq!(root.reserved(), 0);
+    // The query's `krishiv.exec.join.sharedBroadcastBytes` caps them the
+    // same way when the runner sets no cap.
+    let exec = ExecConfig {
+        shared_broadcast_bytes: Some(256 << 10),
+        ..ExecConfig::default()
+    };
+    assert_eq!(
+        sorted(run_with(&split, &plan, &worker, &root, 4, exec).unwrap()),
+        want
+    );
+    assert_eq!(split.broadcast_fallbacks(), 1);
+    assert_eq!(root.reserved(), 0);
+}
+
+/// The fallback's own build spills when the query's memory is short: the
+/// shared build does not fit, the task's own build of the broadcast then
+/// runs under a query pool smaller than the table, spills, and the rows
+/// still match (Fable review m2 of row 30c). One task (no dealt splits):
+/// several own builds at once under a small pool hit the arbitration
+/// finding named at [`SMALL_POOL`].
+#[test]
+fn a_fallback_build_spills_under_a_small_query_pool() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let plain = QueryRunner::new(Arc::clone(&executor) as _);
+    let capped = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_broadcast_limit(256 << 10);
+    let dir = tempfile::tempdir().unwrap();
+    let spill = SpillManager::open(&SpillConfig {
+        dir: dir.path().join("spill"),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let worker =
+        WorkerContext::new(Arc::clone(&tpch.tables) as _).with_spill(spill.scope().unwrap());
+    let mut config = Config::clone(&tpch.config);
+    config
+        .set("spark.sql.autoBroadcastJoinThreshold", "1g")
+        .unwrap();
+    let sql = "SELECT o_orderpriority, count(*), sum(l_quantity), max(o_comment) \
+               FROM lineitem JOIN orders ON l_orderkey = o_orderkey GROUP BY o_orderpriority";
+    let plan = tpch.plan_sql(sql, Arc::new(config)).unwrap();
+    let sorted = |mut rows: Vec<String>| {
+        rows.sort();
+        rows
+    };
+    let roomy: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let want = sorted(run(&plain, &plan, &worker, &roomy, 1).unwrap());
+    let small: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
+        limit: Some(SMALL_POOL),
+        ..MemoryConfig::default()
+    });
+    let got = sorted(run(&capped, &plan, &worker, &small, 2).unwrap());
+    assert_eq!(got, want);
+    assert_eq!(capped.broadcast_fallbacks(), 1);
+    assert_eq!(capped.task_counter("broadcast_fallback"), 1);
+    // The join build spilled (their counter), not only other operators.
+    assert!(
+        capped.task_counter("spilled_partitions") > 0,
+        "no task's own build spilled:\n{plan}"
+    );
+    assert!(capped.task_spill_bytes() > 0);
+    assert_eq!(small.reserved(), 0, "memory still held after a fallback");
+}
+
+/// A broadcast hash join under a partial aggregate, four drivers, query
+/// pools from "the build spills" to "everything fits": each pool size works.
+/// The table stays in memory from about 5 MiB, and the four aggregates each
+/// reserve a batch's worst case (~790 KB) and give most of it back. A
+/// driver refused while the others hold grants for their retries waits for
+/// those retries rather than failing (6 MiB failed 6/8 before; ADR 0007
+/// update 2026-11-06).
+#[test]
+fn a_join_and_aggregate_run_in_pools_between_spilling_and_fitting() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let runner = QueryRunner::new(Arc::clone(&executor) as _);
+    let dir = tempfile::tempdir().unwrap();
+    let spill = SpillManager::open(&SpillConfig {
+        dir: dir.path().join("spill"),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let worker =
+        WorkerContext::new(Arc::clone(&tpch.tables) as _).with_spill(spill.scope().unwrap());
+    let mut config = Config::clone(&tpch.config);
+    config
+        .set("spark.sql.autoBroadcastJoinThreshold", "1g")
+        .unwrap();
+    let sql = "SELECT o_orderpriority, count(*), sum(l_quantity), max(o_comment) \
+               FROM lineitem JOIN orders ON l_orderkey = o_orderkey GROUP BY o_orderpriority";
+    let plan = tpch.plan_sql(sql, Arc::new(config)).unwrap();
+    let sorted = |mut rows: Vec<String>| {
+        rows.sort();
+        rows
+    };
+    let roomy: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let want = sorted(run(&runner, &plan, &worker, &roomy, 0).unwrap());
+    let mut id = 1;
+    for mib in [3, 4, 6, 8] {
+        for _ in 0..4 {
+            let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
+                limit: Some(mib << 20),
+                ..MemoryConfig::default()
+            });
+            let got = run(&runner, &plan, &worker, &pool, id)
+                .unwrap_or_else(|e| panic!("{mib} MiB, run {id}: {e}"));
+            assert_eq!(sorted(got), want, "{mib} MiB");
+            assert_eq!(pool.reserved(), 0, "{mib} MiB: memory still held");
+            id += 1;
+        }
+    }
 }

@@ -373,9 +373,9 @@ jobs:
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: sccache@0.18.0
-      - name: Fetch the Spark v4.3.0 goldens
-        run: "bash tests/scripts/import_spark_golden.sh v4.3.0"
-      - name: Spark 4.3.0 golden ratchet
+      - name: Fetch the Spark v4.3.0, v4.1.4, v4.0.5 and v3.5.9 goldens
+        run: "for t in v4.3.0 v4.1.4 v4.0.5 v3.5.9; do bash tests/scripts/import_spark_golden.sh $t; done"
+      - name: Golden ratchet per Spark version
         run: "cargo test -p krishiv-testkit --release --locked --test golden_profiles -- --ignored"
 
   # cargo-fuzz targets (`fuzz/`), one hour each: the reusable `fuzz.yml`

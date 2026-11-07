@@ -6,9 +6,6 @@
     "s43-other": [
       6,
       8
-    ],
-    "sql-commands": [
-      4
     ]
   },
   "file": "postgreSQL/window_part3",

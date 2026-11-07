@@ -1,0 +1,19 @@
+{
+  "cases": {
+    "depends-on-command": [
+      6,
+      7
+    ],
+    "test-udfs": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      8,
+      9
+    ]
+  },
+  "file": "udtf/udtf",
+  "format_version": 1
+}
