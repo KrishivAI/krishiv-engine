@@ -382,40 +382,56 @@ fn struct_projected_size_covers_the_size_after_an_update() {
 }
 
 /// `MIN`/`MAX` over arrays of view strings keep only the winning arrays' bytes, not the whole
-/// batch's shared buffers (the winner of each group is compacted like a struct's fields).
+/// batch's shared buffers (the winner of each group is compacted like a struct's fields), for
+/// both list carriers.
 #[test]
 fn array_extrema_do_not_retain_the_batch_buffers() {
-    use arrow_array::ListArray;
+    use arrow_array::{LargeListArray, ListArray};
     use arrow_buffer::{OffsetBuffer, ScalarBuffer};
     let long = "x".repeat(200);
     let rows = 64_usize;
     let texts: Vec<String> = (0..rows * 2).map(|i| format!("{long}{i:03}")).collect();
     let refs: Vec<Option<&str>> = texts.iter().map(|t| Some(t.as_str())).collect();
-    let offsets: Vec<i32> = (0..=rows).map(|i| i32::try_from(i * 2).unwrap()).collect();
-    let item = field("item", DataType::Utf8View);
-    let col: ArrayRef = Arc::new(
-        ListArray::try_new(
-            Arc::new(item),
-            OffsetBuffer::new(ScalarBuffer::from(offsets)),
-            strs(&refs),
-            None,
-        )
-        .unwrap(),
-    );
+    let item = Arc::new(field("item", DataType::Utf8View));
+    let small: Vec<i32> = (0..=rows).map(|i| i32::try_from(i * 2).unwrap()).collect();
+    let large: Vec<i64> = (0..=rows).map(|i| i64::try_from(i * 2).unwrap()).collect();
+    let lists: [ArrayRef; 2] = [
+        Arc::new(
+            ListArray::try_new(
+                Arc::clone(&item),
+                OffsetBuffer::new(ScalarBuffer::from(small)),
+                strs(&refs),
+                None,
+            )
+            .unwrap(),
+        ),
+        Arc::new(
+            LargeListArray::try_new(
+                item,
+                OffsetBuffer::new(ScalarBuffer::from(large)),
+                strs(&refs),
+                None,
+            )
+            .unwrap(),
+        ),
+    ];
     let groups: Vec<u32> = (0..rows).map(|i| u32::try_from(i % 32).unwrap()).collect();
-    for f in [Min, Max] {
-        let expr = AggregateExpr::new(f.clone(), 0, col.data_type().clone(), "m");
-        let mut acc = Accumulator::new(&expr, true).unwrap();
-        acc.reserve(32);
-        acc.resize(32);
-        acc.update(&groups, std::slice::from_ref(&col), &Weights::Const(1))
-            .unwrap();
-        let batch_bytes = col.get_buffer_memory_size();
-        assert!(
-            acc.size() < batch_bytes,
-            "{f:?}: size {} holds the batch's buffers ({batch_bytes})",
-            acc.size()
-        );
+    for col in lists {
+        for f in [Min, Max] {
+            let expr = AggregateExpr::new(f.clone(), 0, col.data_type().clone(), "m");
+            let mut acc = Accumulator::new(&expr, true).unwrap();
+            acc.reserve(32);
+            acc.resize(32);
+            acc.update(&groups, std::slice::from_ref(&col), &Weights::Const(1))
+                .unwrap();
+            let batch_bytes = col.get_buffer_memory_size();
+            assert!(
+                acc.size() < batch_bytes,
+                "{f:?} over {}: size {} holds the batch's buffers ({batch_bytes})",
+                col.data_type(),
+                acc.size()
+            );
+        }
     }
 }
 

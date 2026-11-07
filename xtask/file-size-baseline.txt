@@ -1,6 +1,6 @@
 # Hand-written Rust files over 2000 lines: `<lines> <path>`. They may shrink, never grow
 # (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
-4118 crates/krishiv-exec/src/aggregate/accumulator.rs
+4131 crates/krishiv-exec/src/aggregate/accumulator.rs
 2067 crates/krishiv-exec/src/aggregate/hll.rs
 3156 crates/krishiv-exec/src/aggregate/rowtable.rs
 # +1 line (and in physical/instantiate.rs, window/tests.rs): the `udafs` spec field and the `Udf` aggregate variant (ADR 0045, T060a)
