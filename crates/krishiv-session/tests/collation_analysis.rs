@@ -700,6 +700,11 @@ fn an_explicit_utf8_binary_is_a_display_only_marker() {
         "string collate UTF8_BINARY"
     );
     assert_eq!(ty("select typeof(concat('a', c)) from m limit 1"), "string");
+    // An operand already `UTF8_BINARY` is not cast: the head operand's own type stays.
+    assert_eq!(
+        ty("select typeof(concat(p, c, 'y' collate utf8_binary)) from m limit 1"),
+        "string"
+    );
     // Mixed collations cast to the winner, which is the written type.
     assert_eq!(
         ty("select typeof(concat(c, 'x' collate utf8_lcase)) from m limit 1"),
@@ -736,6 +741,8 @@ fn the_marker_unifies_with_string() {
     assert_eq!(n("select p from u where p in (select c from u)"), 1);
     assert_eq!(n("select c from u where c in (select p from u)"), 1);
     assert_eq!(n("select array_contains(a, 'x') from u"), 1);
+    assert_eq!(n("select c from u where false union all select 1"), 1);
+    assert_eq!(n("select 1 in (select c from u where false) from u"), 1);
     assert_eq!(
         n("select cast(date'2024-01-01' as string collate utf8_binary)"),
         1

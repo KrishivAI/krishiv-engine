@@ -504,10 +504,11 @@ impl Resolver<'_> {
                 k
             })
             .collect();
-        // Spark casts string operands to one collation only when their collations differ;
-        // then the result is the cast target, which for `UTF8_BINARY` is the written type (the
-        // marker). With one collation among the string operands nothing is cast and the result
-        // follows the head string operand (`elt(2, s, c)` with a plain `s` is plain).
+        // Spark casts an operand to the chosen collation only if it has another one; the result
+        // type is the function's own, which for the string functions is the head string
+        // operand's type after that cast. So the head carries the marker if it already had it or
+        // was cast to `UTF8_BINARY` (the cast target is the written type): `elt(2, s, c)` with a
+        // plain `s` is plain, `translate(lcase_col, c COLLATE UTF8_BINARY, ..)` is marked.
         let marked = {
             let skip = selector_args(&name).min(n);
             let own = |k: &Bound| match k.ty.data_type.as_ref() {
@@ -515,15 +516,10 @@ impl Resolver<'_> {
                 Some(DataType::String) => Some(Collation::UTF8_BINARY),
                 _ => None,
             };
-            let strings: Vec<&Bound> = kids[skip..n].iter().filter(|k| own(k).is_some()).collect();
-            let mixed = strings.iter().any(|k| own(k) != own(strings[0]));
-            if mixed {
-                true
-            } else {
-                strings
-                    .first()
-                    .is_some_and(|k| is_marker(k.ty.data_type.as_ref()))
-            }
+            kids[skip..n]
+                .iter()
+                .find(|k| own(k).is_some())
+                .is_some_and(|head| is_marker(head.ty.data_type.as_ref()) || own(head) != chosen)
         };
         let mut bound = self.expr_node_inner(e, &plain, in_agg, window_fn, cx)?;
         if let Some(t) = bound.ty.data_type.as_ref() {

@@ -10,7 +10,7 @@ use krishiv_common::error::KrishivError;
 
 use crate::collation::Collation;
 use crate::error::{self, Result};
-use crate::nested::{ArrayType, MapType, StructType};
+use crate::nested::{ArrayType, MapType, StructField, StructType};
 
 /// A Spark SQL data type.
 ///
@@ -409,6 +409,46 @@ impl DataType {
     #[must_use]
     pub fn is_string_type(&self) -> bool {
         matches!(self, Self::String | Self::CollatedString(_))
+    }
+
+    /// `self` with the display-only `UTF8_BINARY` marker replaced by plain [`Self::String`] at
+    /// any depth: what type unification (set operations, `IN (subquery)`, `UNPIVOT`) works on.
+    #[must_use]
+    pub fn without_binary_marker(&self) -> Self {
+        match self {
+            Self::CollatedString(c) if c.is_utf8_binary() => Self::String,
+            Self::Array(a) if a.element_type().any_type(&Self::is_binary_marker) => {
+                Self::Array(Arc::new(ArrayType::new(
+                    a.element_type().without_binary_marker(),
+                    a.contains_null(),
+                )))
+            }
+            Self::Map(m)
+                if m.key_type().any_type(&Self::is_binary_marker)
+                    || m.value_type().any_type(&Self::is_binary_marker) =>
+            {
+                Self::Map(Arc::new(MapType::new(
+                    m.key_type().without_binary_marker(),
+                    m.value_type().without_binary_marker(),
+                    m.value_contains_null(),
+                )))
+            }
+            Self::Struct(s)
+                if s.fields()
+                    .iter()
+                    .any(|f| f.data_type().any_type(&Self::is_binary_marker)) =>
+            {
+                Self::Struct(StructType::new(s.fields().iter().map(|f| {
+                    StructField::new(
+                        f.name(),
+                        f.data_type().without_binary_marker(),
+                        f.nullable(),
+                    )
+                    .with_metadata(f.metadata().clone())
+                })))
+            }
+            other => other.clone(),
+        }
     }
 
     /// Whether this is the display-only `UTF8_BINARY` marker itself.

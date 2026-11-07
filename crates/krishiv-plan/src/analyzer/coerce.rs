@@ -451,13 +451,33 @@ pub(super) fn common_type(
     b: &Arg<'_>,
     case_sensitive: bool,
 ) -> Option<Option<DataType>> {
-    common(a, b, false, case_sensitive)
+    let (x, y) = (plain(a), plain(b));
+    common(&x.arg(a), &y.arg(b), false, case_sensitive)
+}
+
+/// An argument's type with the display-only `UTF8_BINARY` marker replaced by `STRING` (ADR 0043,
+/// update 2026-11-07): unification works on the plain type the marker equals.
+struct Plain(Option<DataType>);
+
+impl Plain {
+    fn arg<'a>(&'a self, of: &Arg<'_>) -> Arg<'a> {
+        Arg {
+            ty: self.0.as_ref(),
+            nullable: of.nullable,
+            literal: of.literal,
+        }
+    }
+}
+
+fn plain(a: &Arg<'_>) -> Plain {
+    Plain(a.ty.map(DataType::without_binary_marker))
 }
 
 /// The type two set-operation columns meet at (`findWiderTypeForTwo`, the
 /// legacy rules with ANSI off).
 pub(super) fn wider_type(a: &Arg<'_>, b: &Arg<'_>, rules: Rules) -> Option<Option<DataType>> {
-    common_all(&[*a, *b], rules)
+    let (x, y) = (plain(a), plain(b));
+    common_all(&[x.arg(a), y.arg(b)], rules)
 }
 
 /// The type two inline-table values meet at without ANSI
@@ -468,6 +488,8 @@ pub(super) fn wider_type_without_string_promotion(
     b: &Arg<'_>,
     case_sensitive: bool,
 ) -> Option<Option<DataType>> {
+    let (px, py) = (plain(a), plain(b));
+    let (a, b) = (&px.arg(a), &py.arg(b));
     match (a.ty, b.ty) {
         (Some(x), Some(y)) if (x == &DataType::String) != (y == &DataType::String) => None,
         _ => {
