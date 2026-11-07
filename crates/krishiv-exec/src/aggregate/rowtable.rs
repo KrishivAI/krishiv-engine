@@ -2960,6 +2960,8 @@ mod tests {
         // 100 keys of index, 150 keys cycling: a clear every 100 new keys,
         // at varying positions within each 64-row chunk.
         let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 100 }, false, 0).unwrap();
+        // The per-row probe, not the batch-local key map (which a batch of 150 keys would take).
+        t.local_skip = 1;
         apply(&mut t, &batch(&core, (0..5_000).map(|i| i % 150)));
         assert!(!t.is_unique());
         let mut sums = [0_i64; 150];

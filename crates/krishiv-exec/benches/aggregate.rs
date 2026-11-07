@@ -527,7 +527,13 @@ fn bench(c: &mut Criterion) {
         let grouped = match case.as_str() {
             "few" => Some(input(64)),
             "many" => Some(input(1 << 18)),
-            _ => None,
+            other => {
+                assert!(
+                    matches!(other, "" | "q01"),
+                    "AGG_BENCH_REPS_CASE: q01, few or many, not {other}"
+                );
+                None
+            }
         };
         for _ in 0..reps.parse::<usize>().expect("AGG_BENCH_Q01_REPS: a count") {
             let p = grouped

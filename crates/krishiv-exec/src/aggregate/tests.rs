@@ -3239,33 +3239,37 @@ async fn moments_over_distinct_arguments() {
     assert_eq!(got[""][1], Some(6.0));
 }
 
-/// Batches of 4,096 rows over 10 keys take the batch-local key map
-/// (`RowTable::probe_local`, E2 step 2): every index mode, one and three
-/// drivers, one and two phases, a tiny fixed index that clears between rows
-/// of one key, fixed-width and string keys; the rows equal the columnar
-/// tables'.
+/// Batches of 4,096 rows take the batch-local key map (`RowTable::probe_local`, E2 step 2): every
+/// index mode, one and three drivers, one and two phases, a tiny fixed index that clears between rows
+/// of one key; fixed-width and inline string keys, NULL keys, and 1,000 keys (past `LOCAL_MAX`: the
+/// map gives up and backs off). The rows equal the columnar tables'.
 #[test]
 fn few_keys_per_batch_take_the_local_map_and_equal_default() {
-    let data: Vec<RowCase> = (0..8192_i32)
-        .map(|i| {
-            let x = i64::from(i.wrapping_mul(7919) % 1000);
-            (
-                Some(i.wrapping_mul(2_654_435_761_u32 as i32)),
-                u8::try_from(i % 5).ok(),
-                Some(i % 2 == 0),
-                Some(x),
-                Some(x * 3),
-                u16::try_from(i % 7).ok(),
-            )
-        })
-        .collect();
-    for nkeys in 1..=6 {
-        for mode in 0..3 {
-            for slots in [1, 3] {
-                for two in [false, true] {
-                    row_case(&data, 10, nkeys, 4096, slots, mode, 3, two, None).unwrap_or_else(
-                        |e| panic!("nkeys {nkeys} mode {mode} slots {slots} two {two}: {e}"),
-                    );
+    // (keys, every `nulls`th key NULL, strings inline (else 4 in 7 long)).
+    for (keys, nulls, inline) in [(10, 0, false), (10, 11, true), (1000, 0, true)] {
+        let data: Vec<RowCase> = (0..8192_i32)
+            .map(|i| {
+                let x = i64::from(i.wrapping_mul(7919) % 1000);
+                let null = nulls > 0 && i % nulls == 0;
+                let s = if inline { 3 * (i % 7) } else { i % 7 };
+                (
+                    (!null).then(|| i.wrapping_mul(2_654_435_761_u32 as i32)),
+                    u8::try_from(i % 5).ok(),
+                    Some(i % 2 == 0),
+                    Some(x),
+                    Some(x * 3),
+                    (!null).then(|| u16::try_from(s).unwrap_or(0)),
+                )
+            })
+            .collect();
+        for nkeys in 1..=6 {
+            for mode in 0..3 {
+                for slots in [1, 3] {
+                    for two in [false, true] {
+                        row_case(&data, keys, nkeys, 4096, slots, mode, 3, two, None).unwrap_or_else(|e| {
+                            panic!("keys {keys} nulls {nulls} nkeys {nkeys} mode {mode} slots {slots} two {two}: {e}")
+                        });
+                    }
                 }
             }
         }
