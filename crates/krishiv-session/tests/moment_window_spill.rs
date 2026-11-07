@@ -135,7 +135,8 @@ fn counts(function: &str, frame: &str) -> String {
 // QUARANTINED (owner policy 2026-11-07; owner opus-3; deadline 2026-11-10): fails about 1 run in 100 with
 // UNABLE_TO_ACQUIRE_MEMORY in the window flush phase (merge-queue runs 42401250907, 42410371135, after #601).
 // Skipped by the default nextest profile, run by `--profile quarantine` (CI job `test-quarantine`, not required);
-// krishiv-internal `open-issues.md`. Comes back with the root-cause fix.
+// krishiv-internal `open-issues.md`. Comes back with the root-cause fix. To run it: `cargo nextest run -p
+// krishiv-session --test moment_window_spill --profile quarantine` (a plain `-E` or name filter selects nothing).
 #[test]
 fn moment_windows_from_disk_equal_the_in_memory_result() {
     let dir = tempfile::tempdir().unwrap();
