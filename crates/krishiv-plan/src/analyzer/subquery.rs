@@ -100,6 +100,7 @@ pub(super) fn rewrite(
         legacy_group_by: conf.legacy_group_by_non_equality,
         decorrelate_limit: conf.decorrelate_limit && profile != SparkProfile::V3_5,
         decorrelate_offset: conf.decorrelate_offset && profile != SparkProfile::V3_5,
+        decorrelate_window: profile != SparkProfile::V3_5,
         row_number: match functions.lookup(&["row_number".to_owned()], profile) {
             FunctionLookup::Found(entry) => Some((entry.id, entry.kind)),
             _ => None,
@@ -140,6 +141,10 @@ struct Rewriter {
     decorrelate_limit: bool,
     /// `spark.sql.optimizer.decorrelateOffset.enabled` (likewise).
     decorrelate_offset: bool,
+    /// Whether a correlation may sit below a window: not on Spark 3.5, whose
+    /// `CheckAnalysis.checkPlan` has no case for `Window` and so forbids outer
+    /// references below it, as below a `LIMIT`.
+    decorrelate_window: bool,
 }
 
 /// A predicate subquery conjunct, as a join.
@@ -628,7 +633,7 @@ impl Rewriter {
     /// operator below it that reads the outer query is refused
     /// (`ACCESSING_OUTER_QUERY_COLUMN_IS_NOT_ALLOWED`).
     fn check_bounds(&self, plan: &Arc<LogicalPlan>) -> R<()> {
-        if self.decorrelate_limit && self.decorrelate_offset {
+        if self.decorrelate_limit && self.decorrelate_offset && self.decorrelate_window {
             return Ok(());
         }
         let mut seen = HashSet::new();
@@ -640,6 +645,7 @@ impl Rewriter {
             let below = match &p.node {
                 PlanNode::Limit { input, .. } if !self.decorrelate_limit => Some(input),
                 PlanNode::Offset { input, .. } if !self.decorrelate_offset => Some(input),
+                PlanNode::Window { input, .. } if !self.decorrelate_window => Some(input),
                 _ => None,
             };
             if let Some(input) = below
