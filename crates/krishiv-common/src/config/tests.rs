@@ -228,6 +228,46 @@ fn spill_entries_parse_and_default() {
 }
 
 #[test]
+fn ndv_sampling_entries_parse_and_default() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        (
+            c.get(&NDV_SAMPLING_ENABLED).and_then(ConfigValue::as_bool),
+            c.get(&NDV_SAMPLING_ROWS).and_then(ConfigValue::as_int),
+            c.get(&NDV_SAMPLING_TIMEOUT)
+                .and_then(ConfigValue::as_duration),
+        )
+    };
+    assert_eq!(
+        get(&c),
+        (
+            Some(true),
+            Some(131_072),
+            Some(std::time::Duration::from_secs(2))
+        )
+    );
+    c.set("krishiv.optimizer.ndvSampling.enabled", "false")
+        .unwrap();
+    c.set("krishiv.optimizer.ndvSampling.rows", "1000").unwrap();
+    c.set("krishiv.optimizer.ndvSampling.timeout", "1s")
+        .unwrap();
+    assert_eq!(
+        get(&c),
+        (
+            Some(false),
+            Some(1000),
+            Some(std::time::Duration::from_secs(1))
+        )
+    );
+    assert!(c.set("krishiv.optimizer.ndvSampling.rows", "0").is_err());
+    assert!(c.set("krishiv.optimizer.ndvSampling.rows", "many").is_err());
+    assert!(
+        c.set("krishiv.optimizer.ndvSampling.timeout", "soon")
+            .is_err()
+    );
+}
+
+#[test]
 fn avro_entries_parse_and_default() {
     let mut c = Config::new();
     let get = |c: &Config| {

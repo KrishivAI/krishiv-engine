@@ -12,6 +12,31 @@ impl Resolver<'_> {
         window_fn: bool,
         cx: &Cx<'_>,
     ) -> Result<Bound, AnalysisError> {
+        // The display-only `UTF8_BINARY` marker (ADR 0043, update 2026-11-07) is a plain STRING to
+        // every operator and function: only an alias passes it on to the schema (calls re-mark
+        // their result in `expr_node`).
+        let plain_kids: Vec<Bound>;
+        let reads_type = matches!(&e.node, ExprNode::Alias { .. })
+            || matches!(&e.node, ExprNode::Function(f)
+                if f.name.eq_ignore_ascii_case("typeof") || f.name.eq_ignore_ascii_case("collation"));
+        let marked = |k: &Bound| {
+            k.ty.data_type
+                .as_ref()
+                .is_some_and(|t| t.any_type(&DataType::is_binary_marker))
+        };
+        let kids = if !reads_type && kids.iter().any(marked) {
+            plain_kids = kids
+                .iter()
+                .map(|k| {
+                    let mut k = k.clone();
+                    k.ty.data_type = k.ty.data_type.as_ref().map(DataType::without_binary_marker);
+                    k
+                })
+                .collect();
+            &plain_kids[..]
+        } else {
+            kids
+        };
         let outer = kids.iter().filter_map(|k| k.outer).min();
         let agg = kids.iter().find_map(|k| k.agg);
         let win = kids.iter().find_map(|k| k.win);
