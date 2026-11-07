@@ -2156,15 +2156,20 @@ impl DataFrameWriter {
                 let mut admitted = admitted;
                 let written = async {
                     let a = df.action_analysis().await?;
-                    // Files hold a geometry or geography as a WKB column with a
-                    // Parquet logical type (P2-T181 unit U3); until it lands, a
-                    // spatial value is not written as the `{srid, wkb}` struct
-                    // Spark cannot read.
-                    if a.analyzed
-                        .output
-                        .iter()
-                        .any(|c| krishiv_types::geo::holds_spatial(&c.data_type))
-                    {
+                    // Parquet holds a top-level geometry or geography as a WKB column with
+                    // a logical type (P2-T181 unit U3, `krishiv-io` `parquet/geo.rs`). Any
+                    // other format, and a spatial value nested in another type, is not
+                    // written as the `{srid, wkb}` struct Spark cannot read.
+                    let parquet = target.format.eq_ignore_ascii_case("parquet");
+                    if a.analyzed.output.iter().any(|c| {
+                        krishiv_types::geo::holds_spatial(&c.data_type)
+                            && !(parquet
+                                && matches!(
+                                    c.data_type,
+                                    krishiv_types::DataType::Geometry { .. }
+                                        | krishiv_types::DataType::Geography { .. }
+                                ))
+                    }) {
                         return Err(krishiv_common::error::KrishivUnsupportedFeature {
                             feature: "writing GEOMETRY or GEOGRAPHY columns to files".to_owned(),
                         }

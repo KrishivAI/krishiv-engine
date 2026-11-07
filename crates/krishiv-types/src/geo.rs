@@ -367,6 +367,24 @@ pub fn check_geographic_srid(srid: i32) -> Result<()> {
     }
 }
 
+/// The SRID of the CRS string of a Parquet `GEOMETRY` / `GEOGRAPHY` column, as Spark's
+/// `ParquetToSparkSchemaConverter` reads it: no CRS is `OGC:CRS84` (4326); otherwise the string
+/// must be a name of Spark's registry exactly (`OGC:CRS84`, `EPSG:4326`, `EPSG:3857`,
+/// `SRID:0`, ...; case-sensitive, so `srid:0` and PROJJSON are refused), and a geography needs a
+/// geographic system.
+///
+/// # Errors
+/// `ST_INVALID_CRS_VALUE` for any other CRS.
+pub fn srid_of_crs(crs: Option<&str>, geography: bool) -> Result<i32> {
+    let Some(crs) = crs else {
+        return Ok(4326);
+    };
+    match crate::srs::srid_of(crs) {
+        Some(srid) if !geography || crate::srs::is_geographic(srid) => Ok(srid),
+        _ => Err(error::invalid_crs(crs)),
+    }
+}
+
 /// The text Spark prints a spatial value as (extended well-known text):
 /// `POINT(1 2)`, with `SRID=<n>;` in front unless the SRID is 0. Every
 /// geometry type prints, with `Z`/`M`/`ZM` ordinates, empty geometries and

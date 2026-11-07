@@ -46,6 +46,7 @@ parquet = { workspace = true, features = [
     "arrow",
     "brotli",
     "flate2-zlib-rs",
+    "geospatial",
     "lz4",
     "simdutf8",
     "snap",
