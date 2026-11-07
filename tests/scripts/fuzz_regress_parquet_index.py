@@ -9,7 +9,8 @@
 - `hand-offset-index-outside-chunk`: an offset index whose page location points far outside the column chunk;
 - `hand-offset-index-rows-not-increasing`: an offset index whose `first_row_index` does not go up (0, then 0:
   the first page must start at row 0, or that check rejects it before the order is looked at);
-- `hand-bloom-bytes-2p31`: a Bloom filter header declaring a bitset of 2^31 - 1 bytes (`numBytes` is an i32).
+- `hand-bloom-bytes-2p31`: a Bloom filter header declaring a bitset of 2^31 - 32 bytes: whole 32-byte blocks (so
+  the block check passes) and far over the 128 MiB bound (`numBytes` is an i32, so 2^31 itself does not fit).
 
 Each starts from one pyarrow file (page index on, a Bloom filter on column `a`) and replaces one structure in
 place: the crafted struct is written at the structure's offset and the rest of its region is left as it was,
@@ -173,7 +174,10 @@ def base_file() -> bytes:
         use_dictionary=False,
         write_batch_size=64,  # the page size is checked once per batch
         write_page_index=True,
-        row_group_size=1000,
+        # One uncompressed row group: column `a`'s chunk is then more than 8x its Bloom filter, which the page
+        # stage requires before it reads a filter (`page_stage.rs`), so the crafted header is read.
+        row_group_size=2000,
+        compression="none",
         bloom_filter_options={"a": {"ndv": 2000, "fpp": 0.05}},
     )
     return out.getvalue()
@@ -255,7 +259,7 @@ def bloom_patch(data: bytes) -> bytes:
 
     r.struct(skip_all)
     rest = data[rest_start : r.pos]  # fields 2-4 and the stop byte
-    header = bytes([0x15]) + varint(zigzag(2**31 - 1)) + rest
+    header = bytes([0x15]) + varint(zigzag(2**31 - 32)) + rest
     return patch(data, off, length, header)
 
 
