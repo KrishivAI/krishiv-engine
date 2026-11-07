@@ -25,7 +25,10 @@ use super::analytics::Analytics;
 use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::quoted_type;
-use super::exprs::{Bound, Cx, WindowUse, names, pretty, semantic_key, unresolved};
+use super::exprs::{
+    Bound, Cx, WindowUse, builtin_name, names, pretty, semantic_key, synth_call, synth_call_of,
+    unresolved,
+};
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, FileMetadata, TableKind};
 use crate::{
@@ -272,8 +275,13 @@ impl Resolver<'_> {
                 offset,
             }))
         });
-        // A file table's `_metadata` is widened in on demand, in the other instance's ids.
-        let widen = c.hidden.iter().any(is_generated_metadata).then(|| {
+        // Hidden columns are widened in on demand, in the other instance's
+        // ids: a file table's `_metadata`, and the keys a `USING` join
+        // merged (`t1 JOIN (t2 JOIN t3 USING (a)) USING (a)` reading `t3.a`,
+        // where the right side is a second instance of `t1`'s plan).
+        let widen = (c.hidden.iter().any(is_generated_metadata)
+            || (!c.hidden.is_empty() && c.widen.is_some()))
+        .then(|| {
             Arc::new(Widen::Shift {
                 inner: c.clone(),
                 offset,
@@ -876,11 +884,36 @@ impl Resolver<'_> {
             exprs: exprs.clone(),
         };
         let mut r = self.make(origin, node, out, &[input]);
+        // Spark's `Project` keeps its child's hidden output: the columns a
+        // `USING` join merged away stay reachable by a qualified name
+        // through any projection (`|> extend`, `|> select`), up to an
+        // alias, an aggregate or a set operation. A file table's
+        // `_metadata` is not carried (it is widened from the scan).
+        let hidden: Vec<Attr> = input
+            .hidden
+            .iter()
+            .filter(|a| !is_generated_metadata(a) && !r.out.iter().any(|o| o.col.id == a.col.id))
+            .cloned()
+            .collect();
+        if !hidden.is_empty() {
+            r.hidden = hidden.into();
+        }
         r.widen = Some(Arc::new(Widen::Project {
             input: input.clone(),
             exprs,
         }));
         r
+    }
+
+    /// Whether `r` is the projection over a `USING` join that merges its
+    /// keys: one of its hidden columns is an output of its input.
+    fn merges_using_keys(r: &Rel) -> bool {
+        match r.widen.as_deref() {
+            Some(Widen::Project { input, .. }) => r.hidden.iter().any(|h| {
+                !is_generated_metadata(h) && input.out.iter().any(|o| o.col.id == h.col.id)
+            }),
+            _ => false,
+        }
     }
 
     pub(super) fn filter(
@@ -1381,8 +1414,9 @@ impl Resolver<'_> {
         let mut cur = r.clone();
         while let Some(w) = cur.widen.clone() {
             // A `USING` join's own projection: what it merged away is
-            // reached only with `with_hidden`.
-            if !with_hidden && !cur.hidden.is_empty() && !Arc::ptr_eq(&cur.plan, &r.plan) {
+            // reached only with `with_hidden`. (Projections above it carry
+            // the merged columns too, but only this one drops them.)
+            if !with_hidden && Self::merges_using_keys(&cur) && !Arc::ptr_eq(&cur.plan, &r.plan) {
                 break;
             }
             cur = match &*w {
@@ -1391,6 +1425,13 @@ impl Resolver<'_> {
                     break;
                 }
                 Widen::Scan | Widen::Join { .. } | Widen::Shift { .. } => break,
+                // Past a pipe boundary only the hidden columns come back.
+                Widen::Hidden { child } => {
+                    if with_hidden {
+                        child.hidden.iter().for_each(|a| add(a, &mut out));
+                    }
+                    break;
+                }
                 Widen::Through { child } => child.clone(),
                 Widen::Project { input, .. } => {
                     input.out.iter().for_each(|a| add(a, &mut out));
@@ -1417,7 +1458,7 @@ impl Resolver<'_> {
                 Widen::Aggregate(_) | Widen::Scan | Widen::Join { .. } | Widen::Shift { .. } => {
                     None
                 }
-                Widen::Through { child } => Some(child.clone()),
+                Widen::Through { child } | Widen::Hidden { child } => Some(child.clone()),
                 Widen::Project { input, .. } => {
                     need.retain(|a| !input.out.iter().any(|o| o.col.id == a.col.id));
                     (!need.is_empty()).then(|| input.clone())
@@ -1450,6 +1491,35 @@ impl Resolver<'_> {
                     let mut exprs = exprs.clone();
                     exprs.extend(need.iter().map(|a| col_expr(&a.col, Origin::UNKNOWN)));
                     self.projection(rel.plan.origin, &input, exprs, out)
+                }
+                // The same plan as its child: the widened child, still
+                // letting only hidden columns cross.
+                Widen::Hidden { child } => {
+                    let below = built.take().unwrap_or_else(|| child.clone());
+                    if Arc::ptr_eq(&rel.plan, &child.plan) {
+                        let mut wide = below.clone();
+                        wide.widen = Some(Arc::new(Widen::Hidden { child: below }));
+                        wide.agg = None;
+                        wide.generated_from = None;
+                        wide
+                    } else {
+                        // A window over `child`: its input's columns, now
+                        // wider, then the columns it adds.
+                        let plan = Arc::clone(&rel.plan)
+                            .map_children(|_| Ok::<_, Infallible>(Arc::clone(&below.plan)))
+                            .unwrap_or_else(|never| match never {});
+                        let mut out = below.out.to_vec();
+                        out.extend(
+                            rel.out
+                                .iter()
+                                .filter(|a| !child.out.iter().any(|c| c.col.id == a.col.id))
+                                .cloned(),
+                        );
+                        let mut wide = self.wrap(plan, rel.plan.origin.plan_id, out, &[&below]);
+                        wide.hidden = Arc::clone(&rel.hidden);
+                        wide.widen = Some(Arc::new(Widen::Hidden { child: below }));
+                        wide
+                    }
                 }
                 Widen::Through { child } => {
                     let child = built.take().unwrap_or_else(|| child.clone());
@@ -1659,7 +1729,7 @@ impl Resolver<'_> {
                         Some((_, a)) => a.clone(),
                         None if info.distinct_rewritten
                             && !f.distinct
-                            && !matches!(f.id.name(), "min" | "max") =>
+                            && !matches!(builtin_name(f), "min" | "max") =>
                         {
                             // Spark rewrites this call with the select list's. Planned over the
                             // rewrite's own rows (one per distinct set) it would count each group
@@ -2283,7 +2353,9 @@ impl Resolver<'_> {
                     && let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node
                     && f.kind == FunctionKind::Aggregate
                 {
-                    let key = x.to_string();
+                    // The identity, not the display: a session UDF and a
+                    // built-in of its name are two calls.
+                    let key = crate::identity_string(x);
                     if !calls.iter().any(|(k, _)| *k == key) {
                         calls.push((key, f.clone()));
                     }
@@ -2370,6 +2442,20 @@ impl Resolver<'_> {
                 Some((_, v)) => v.push(i),
                 None => sets.push((key, vec![i])),
             }
+        }
+        // A global aggregate over no rows evaluates each call on an empty
+        // group; a regular call becomes `first` of its partial result, which
+        // is NULL there. The count family is coalesced to 0 below, but an
+        // aggregate UDF's empty-group value is unknown at analysis.
+        if global
+            && regular
+                .iter()
+                .any(|&i| matches!(calls[i].1.id, crate::FunctionId::Udf { .. }))
+        {
+            return Err(unsupported(
+                "an aggregate UDF without GROUP BY next to a filtered DISTINCT aggregate or several DISTINCT argument sets",
+                origin,
+            ));
         }
         // Every distinct argument, once (in order of first appearance),
         // with its nullable expansion column.
@@ -2693,7 +2779,7 @@ impl Resolver<'_> {
             // A resolved `listagg` holds its ordering keys after its value
             // and delimiter: written again, they are the `WITHIN GROUP`
             // list. A resolved `mode` encodes its ordering in its arguments.
-            let mut call = synth_call(f.id.name(), Vec::new(), f.filter.clone(), origin);
+            let mut call = synth_call_of(f, Vec::new(), f.filter.clone(), origin);
             if let ExprNode::Function(c) = &mut Arc::make_mut(&mut call).node {
                 let keys = if f.id.name() == "listagg" {
                     f.within_group.len().min(mapped.len())
@@ -2765,7 +2851,7 @@ impl Resolver<'_> {
                         )?
                         .expr;
                 }
-                let b = self.bind(&synth_call(f.id.name(), args, Some(filter), origin), &r1_cx)?;
+                let b = self.bind(&synth_call_of(f, args, Some(filter), origin), &r1_cx)?;
                 new_call.insert(calls[i].0.clone(), b.expr);
             }
         }
@@ -2794,7 +2880,9 @@ impl Resolver<'_> {
             // A global count over no rows is 0, but `first` of the zero
             // partial rows the second phase sees is NULL: the count family
             // is coalesced to 0 (a grouped query always has a row per group).
-            if matches!(calls[i].1.id.name(), "count" | "count_if") {
+            if matches!(calls[i].1.id, crate::FunctionId::Registry { .. })
+                && matches!(calls[i].1.id.name(), "count" | "count_if")
+            {
                 replaced = self
                     .bind(
                         &synth_call(
@@ -4085,30 +4173,6 @@ struct Lift<'a> {
     origin: Origin,
 }
 
-/// The attribute a named item outputs; a column keeps its input
-/// attribute's qualifier and source.
-/// An unresolved call of `name` to `args` (with `filter`), for the
-/// analyzer to bind over already-resolved columns.
-fn synth_call(
-    name: &str,
-    args: Vec<Arc<Expr>>,
-    filter: Option<Arc<Expr>>,
-    origin: Origin,
-) -> Arc<Expr> {
-    Arc::new(
-        Expr::new(ExprNode::Function(FunctionCall {
-            within_group: Vec::new(),
-            name: name.to_owned(),
-            qualifier: Vec::new(),
-            arg_names: Vec::new(),
-            args,
-            distinct: false,
-            filter,
-        }))
-        .with_origin(origin),
-    )
-}
-
 /// The expansion column evaluating `a`: the input column it already is,
 /// or the fresh column computed for its semantic key (`None` when neither
 /// holds, for the caller to leave the rewrite).
@@ -4140,14 +4204,14 @@ fn expand_col(
 
 /// `x` with the rewritten aggregate's calls and grouping expressions
 /// replaced: a call the second aggregate's call (keyed by the original's
-/// text, attribute ids included), a grouping expression its column.
+/// identity string, attribute ids included), a grouping expression its column.
 fn subst_distinct(
     x: &Arc<Expr>,
     new_call: &HashMap<String, Arc<Expr>>,
     key_map: &HashMap<u128, Arc<Expr>>,
     memo: &mut HashMap<usize, u128>,
 ) -> Arc<Expr> {
-    if let Some(n) = new_call.get(&x.to_string()) {
+    if let Some(n) = new_call.get(&crate::identity_string(x)) {
         return Arc::clone(n);
     }
     if let Some(n) = key_map.get(&semantic_key(x, memo)) {

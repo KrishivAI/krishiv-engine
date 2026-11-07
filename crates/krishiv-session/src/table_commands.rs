@@ -58,6 +58,22 @@ use crate::store::{
 /// The file formats a table can have.
 const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
 
+/// Spark's `CatalogUtils.makeQualifiedDBObjectPath` on the local file system: a location with a URI scheme
+/// stays as written; any other is resolved against the warehouse directory (an absolute path stays itself)
+/// and qualified as a `file:` URI.
+fn qualified_namespace_location(location: &str, warehouse: &std::path::Path) -> String {
+    let scheme = location.split_once(':').is_some_and(|(s, _)| {
+        s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    if scheme {
+        location.to_owned()
+    } else {
+        format!("file:{}", warehouse.join(location).display())
+    }
+}
+
 /// The short name of a data source written fully qualified, as Spark maps its built-in classes
 /// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
 fn short_provider(written: &str) -> String {
@@ -318,7 +334,7 @@ impl Session {
                 Box::new(move |m| m.properties.extend(properties.clone()))
             }
             AlterNamespaceAction::SetLocation(l) => {
-                let l = l.clone();
+                let l = qualified_namespace_location(l, &self.warehouse_dir()?);
                 Box::new(move |m| m.location = Some(l.clone()))
             }
             AlterNamespaceAction::SetComment(c) => {
@@ -583,6 +599,7 @@ impl Session {
             name: name.name.clone(),
             managed: false,
             provider: String::new(),
+            provider_written: String::new(),
             location: PathBuf::new(),
             columns,
             options: BTreeMap::new(),
@@ -1272,13 +1289,15 @@ impl Session {
                 "partition column types in CREATE TABLE ... AS SELECT",
             ));
         }
-        let provider = self.provider_of(t.using.as_ref().map(|u| {
+        let using = t.using.as_ref().map(|u| {
             u.parts
                 .iter()
                 .map(|p| p.value.as_str())
                 .collect::<Vec<_>>()
                 .join(".")
-        }))?;
+        });
+        let provider_written = self.written_provider(using.clone());
+        let provider = self.provider_of(using)?;
         let name = self.table_name(&t.name, &env)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
@@ -1347,6 +1366,7 @@ impl Session {
             name: name.name.clone(),
             managed: !external,
             provider,
+            provider_written,
             location,
             columns: Vec::new(),
             options,
@@ -1411,6 +1431,15 @@ impl Session {
             }
         }
         self.empty_frame().await
+    }
+
+    /// The provider as written in `using`, or `spark.sql.sources.default`'s
+    /// value: what a table's metadata prints (Spark keeps the case).
+    fn written_provider(&self, using: Option<String>) -> String {
+        using.unwrap_or_else(|| {
+            crate::conf::get(&self.state.conf.snapshot(), "spark.sql.sources.default")
+                .unwrap_or_else(|| "parquet".to_owned())
+        })
     }
 
     /// The provider named by `using`, or `spark.sql.sources.default`.
@@ -1762,7 +1791,13 @@ impl Session {
                 .clone_from(&s.layout.partition_columns);
             layout.bucket.clone_from(&s.layout.bucket);
             options.clone_from(&s.options);
-            (s.columns.clone(), s.provider.clone())
+            // A view has no provider of its own: Spark gives the new table
+            // `spark.sql.sources.default` (`CreateTableLikeCommand`, `isViewLike`).
+            let provider = s
+                .view
+                .is_none()
+                .then(|| (s.provider.clone(), s.provider_written.clone()));
+            (s.columns.clone(), provider)
         } else if self.temp_entry_of(&source, &env)
             && let Some(entry) = self
                 .state
@@ -1785,20 +1820,28 @@ impl Session {
                         comment: None,
                     })
                     .collect(),
-                "parquet".to_owned(),
+                None,
             )
         } else {
             return Err(source.not_found());
         };
-        let provider = match &t.using {
-            Some(u) => self.provider_of(Some(
-                u.parts
+        let (provider, provider_written) = match &t.using {
+            Some(u) => {
+                let using = u
+                    .parts
                     .iter()
                     .map(|p| p.value.as_str())
                     .collect::<Vec<_>>()
-                    .join("."),
-            ))?,
-            None => source_provider,
+                    .join(".");
+                (self.provider_of(Some(using.clone()))?, using)
+            }
+            // `None`: a view, which has no provider of its own. The default
+            // is looked up only here, so an explicit `USING` never depends on it.
+            None => match source_provider {
+                Some(p) => p,
+                // Validated, and written as the setting has it (`CSV`).
+                None => (self.provider_of(None)?, self.written_provider(None)),
+            },
         };
         let external = t.location.is_some();
         let location = match &t.location {
@@ -1810,6 +1853,7 @@ impl Session {
             name: name.name.clone(),
             managed: !external,
             provider,
+            provider_written,
             location,
             columns,
             options,
@@ -2606,6 +2650,7 @@ impl Session {
             return Err(unsupported("partitioned tables"));
         }
         let warehouse = self.warehouse_dir()?;
+        let provider_written = self.written_provider(spec.provider.clone());
         let provider = self.provider_of(spec.provider)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
@@ -2635,6 +2680,7 @@ impl Session {
             name: name.name.clone(),
             managed: true,
             provider,
+            provider_written,
             location: managed_location(&warehouse, &name.namespace, &name.name),
             columns: Vec::new(),
             options,
@@ -2974,14 +3020,14 @@ fn can_store(from: &DataType, to: &DataType) -> bool {
         )
     };
     // Anything atomic may be stored as a string.
-    let to_string = matches!(to, T::String)
+    let to_string = matches!(to, T::String | T::CollatedString(_))
         && (numeric(from)
             || matches!(
                 from,
                 T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary
             ));
     match (from, to) {
-        (T::Null, _) => true,
+        (T::Null, _) | (T::String | T::CollatedString(_), T::String | T::CollatedString(_)) => true,
         (a, b) if (numeric(a) && numeric(b)) || to_string => true,
         // Dates and timestamps among themselves.
         (T::Date, T::Timestamp | T::TimestampNtz)
@@ -3120,67 +3166,7 @@ fn clear_dir(dir: &Path) -> Result<(), KrishivError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use krishiv_types::{ArrayType, DecimalType};
-
-    #[test]
-    fn an_owned_directory_is_exclusive_and_reports_why_it_cannot_be_made() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("a").join("t");
-        let owned = OwnedDirectory::create(path.clone()).unwrap();
-        assert!(matches!(
-            OwnedDirectory::create(path.clone()),
-            Err(OwnedDirectoryError::Exists)
-        ));
-        drop(owned);
-        assert!(!path.exists(), "a directory not kept is removed again");
-        // A file where the parent should be.
-        let file = tmp.path().join("f");
-        std::fs::write(&file, b"x").unwrap();
-        assert!(matches!(
-            OwnedDirectory::create(file.join("t")),
-            Err(OwnedDirectoryError::Io(m)) if m.contains("cannot create")
-        ));
-        // A parent that exists but takes no new entries.
-        #[cfg(target_os = "linux")]
-        assert!(matches!(
-            OwnedDirectory::create(PathBuf::from("/proc/krishiv-owned-directory")),
-            Err(OwnedDirectoryError::Io(_))
-        ));
-    }
-
-    #[test]
-    fn ansi_store_assignment() {
-        use DataType as T;
-        assert!(can_store(&T::Integer, &T::Integer));
-        assert!(can_store(&T::Null, &T::Date));
-        assert!(can_store(&T::Integer, &T::Byte));
-        assert!(can_store(
-            &T::Long,
-            &T::Decimal(DecimalType::try_new(5, 2).unwrap())
-        ));
-        assert!(can_store(&T::Integer, &T::String));
-        assert!(can_store(&T::Date, &T::String));
-        assert!(can_store(&T::Date, &T::Timestamp));
-        assert!(!can_store(&T::String, &T::Binary));
-        assert!(!can_store(&T::String, &T::Integer));
-        assert!(!can_store(&T::String, &T::Date));
-        assert!(!can_store(&T::Boolean, &T::Integer));
-        assert!(can_store(&T::Timestamp, &T::Date));
-        let a = |t: T| T::Array(Arc::new(ArrayType::new(t, true)));
-        assert!(can_store(&a(T::Integer), &a(T::Long)));
-        assert!(!can_store(&a(T::String), &a(T::Long)));
-    }
-
-    #[test]
-    fn literal_text_strips_one_pair_of_quotes() {
-        assert_eq!(literal_text("'a b'"), "a b");
-        assert_eq!(literal_text("\"x\""), "x");
-        assert_eq!(literal_text(" true "), "true");
-        assert_eq!(literal_text("'"), "'");
-    }
-}
+mod tests;
 
 /// Why an [`OwnedDirectory`] could not be made.
 #[derive(Debug)]

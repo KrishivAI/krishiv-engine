@@ -1,0 +1,13 @@
+{
+  "category": "s43-vector-functions",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "file": "^vector-",
+      "order": 9070
+    }
+  ],
+  "summary": "vector_norm, vector_normalize and the vector distance functions",
+  "task": "P3-T090"
+}

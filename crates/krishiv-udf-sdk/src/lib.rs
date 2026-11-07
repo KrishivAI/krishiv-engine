@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Native Rust scalar UDFs (layer SDK).
+//! Native Rust scalar and aggregate UDFs (layer SDK).
 //!
 //! A scalar UDF is a [`ScalarUdf`] implementation registered on a session
 //! (`Session::register_udf` in `krishiv-session`): SQL
 //! and DataFrame calls of its name resolve to it, the analyzer inserts the
 //! implicit casts its [`Signature`] asks for, and the executor invokes it
-//! once per batch. Aggregate UDFs do not exist yet.
+//! once per batch. An aggregate UDF is an [`AggregateUdf`] whose
+//! [`GroupsAccumulator`] the hash aggregate drives like a built-in
+//! aggregate (`Session::register_udaf`; ADR 0045).
 //!
 //! The boundary is plain data: a UDF sees Arrow arrays and an
 //! [`InvokeContext`] of plain values (partition index, ANSI flag, session
@@ -70,9 +72,11 @@
 
 #![forbid(unsafe_code)]
 
+mod aggregate;
 mod library;
 mod udf;
 
+pub use aggregate::{AggregateProperties, AggregateUdf, GroupsAccumulator, StateField};
 pub use library::UdfLibrary;
 pub use udf::{
     ArgField, InvokeContext, NullHandling, ReturnField, ScalarUdf, Signature, UdfArg, UdfError,

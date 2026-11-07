@@ -94,3 +94,64 @@ fn division_evaluates_the_divisor_first_as_spark_does() {
         assert!(err.contains("BY_ZERO"), "{op}: {err}");
     }
 }
+
+#[test]
+fn bitwise_string_and_date_binaries_skip_the_right_side_on_null_left_rows() {
+    // Row 0: the left is NULL; the right operand would raise on it (DIVIDE_BY_ZERO / CAST_INVALID_INPUT).
+    for (sql, want) in [
+        (
+            "select cast(nullif(id, 0) & cast(1 / id as bigint) as string) from range(3) order by id",
+            some(&[None, Some("1"), Some("0")]),
+        ),
+        (
+            "select cast(nullif(id, 0) | cast(1 / id as bigint) as string) from range(3) order by id",
+            some(&[None, Some("1"), Some("2")]),
+        ),
+        (
+            "select cast(nullif(id, 0) ^ cast(1 / id as bigint) as string) from range(3) order by id",
+            some(&[None, Some("0"), Some("2")]),
+        ),
+        (
+            "select cast(instr(if(id = 0, null, 'abc'), cast(cast(1 / id as int) as string)) as string) from range(3) order by id",
+            some(&[None, Some("0"), Some("0")]),
+        ),
+        (
+            "select cast(startswith(if(id = 0, null, 'abc'), cast(cast(1 / id as int) as string)) as string) from range(3) order by id",
+            some(&[None, Some("false"), Some("false")]),
+        ),
+        (
+            "select cast(datediff(if(id = 0, cast(null as date), date'2000-01-01'), date_add(date'2000-01-01', cast(1 / id as int))) as string) from range(3) order by id",
+            some(&[None, Some("-1"), Some("0")]),
+        ),
+        (
+            "select cast(add_months(if(id = 0, cast(null as date), date'2000-01-31'), cast(1 / id as int)) as string) from range(3) order by id",
+            some(&[None, Some("2000-02-29"), Some("2000-01-31")]),
+        ),
+    ] {
+        assert_eq!(strings(sql).as_ref(), Ok(&want), "{sql}");
+    }
+}
+
+#[test]
+fn bitwise_with_a_set_left_still_raises_on_a_failing_right() {
+    let err = strings("select cast(id & cast(1 / (id - id) as bigint) as string) from range(3)")
+        .unwrap_err();
+    assert!(err.contains("DIVIDE_BY_ZERO"), "{err}");
+}
+
+#[test]
+fn binary_math_functions_do_not_evaluate_the_right_side_on_null_left_rows() {
+    // Found by the nightly expression differential (2026-11-06): `power(NULL, x)` is NULL
+    // in Spark's `BinaryMathExpression` (a `BinaryExpression`), whatever `x` raises.
+    for f in ["power", "pow", "atan2", "hypot", "log"] {
+        let got = strings(&format!(
+            "select cast({f}(cast(nullif(id, 0) as double), 1 / id) is null as string) \
+             from range(3) order by id"
+        ));
+        assert_eq!(
+            got.unwrap_or_else(|e| panic!("{f}: {e}")),
+            some(&[Some("true"), Some("false"), Some("false")]),
+            "{f}"
+        );
+    }
+}

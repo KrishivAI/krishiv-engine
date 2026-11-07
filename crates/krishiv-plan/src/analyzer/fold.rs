@@ -193,6 +193,18 @@ pub(super) fn constant(
     })
 }
 
+/// `e` as a one-row array, exactly as folding evaluates it (no
+/// truncation to a [`Constant`]): `None` when it is not foldable here,
+/// `Some(Err)` when evaluating it raises.
+pub(super) fn array(
+    e: &Arc<Expr>,
+    conf: Conf,
+    memo: &mut Memo,
+    functions: &dyn FunctionRegistry,
+) -> Folded {
+    fold(e, conf, memo, functions)
+}
+
 /// A folded array as a constant. A fractional value is what the implicit
 /// cast to `INT` of an integral argument gives (the scale of `round`).
 fn value(a: &ArrayRef, ansi: bool) -> Result<Constant, KrishivError> {
@@ -412,6 +424,37 @@ fn fold_cast(
     // not cover every target, e.g. arrays of literals).
     if inner.data_type() == &fold_type(to) {
         return Some(Ok(inner));
+    }
+    // A cast to a timestamp reads the session time zone, so a valid string stays unfolded; a string
+    // that is not a timestamp at all fails whatever the zone, and ANSI mode raises it here (an inline
+    // table cell `CAST('1 year' AS TIMESTAMP)` is then a failed cell, not a failure of the query).
+    if matches!(to, DataType::Timestamp | DataType::TimestampNtz) {
+        let kernel_mode = match m {
+            CastMode::Ansi => KernelMode::Ansi,
+            CastMode::Default if conf.ansi => KernelMode::Ansi,
+            _ => return None,
+        };
+        let malformed = {
+            use arrow_array::cast::AsArray as _;
+            inner.data_type() == &ArrowType::Utf8
+                && inner.len() == 1
+                && krishiv_kernels::cast::timestamp_text(inner.as_string::<i32>().value(0))
+                    == krishiv_kernels::cast::TimestampText::Malformed
+        };
+        if !malformed {
+            return None;
+        }
+        return match cast(
+            inner.as_ref(),
+            &fold_type(to),
+            &options(kernel_mode, &FixedOffset(0)),
+        ) {
+            Err(err) => {
+                let err = KrishivError::from(err);
+                (err.error_class() != ErrorClass::KrishivUnsupportedFeature).then_some(Err(err))
+            }
+            Ok(_) => None,
+        };
     }
     // The kernels' targets: booleans, numbers, strings and dates (no
     // timestamp: it reads the session time zone, so a cast to one stays
