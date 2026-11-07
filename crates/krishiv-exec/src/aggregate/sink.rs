@@ -50,6 +50,8 @@ use crate::sync::{Event, Mutex, lock};
 mod disk;
 mod parallel;
 mod parts;
+#[cfg(test)]
+pub(super) use parts::HANDBACKS;
 
 /// Groups per state batch when spilling and merging (one finalize step).
 const CHUNK: usize = 1024;

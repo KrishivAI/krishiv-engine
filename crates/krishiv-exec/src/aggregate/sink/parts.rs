@@ -54,6 +54,14 @@ const PARALLEL_MIN_BYTES: usize = 1;
 /// Extra writers running in the process, every run's together.
 static LIVE_HELPERS: AtomicUsize = AtomicUsize::new(0);
 
+/// Tests (review M3): for each query listed, how many more partitions
+/// its extra writers hand back, one per writer at its next claim, as when
+/// the pool refuses their scratch. Keyed by query, so tests running side
+/// by side in one process do not see each other's setting.
+#[cfg(test)]
+pub(in crate::aggregate) static HANDBACKS: std::sync::Mutex<Vec<(crate::QueryId, usize)>> =
+    std::sync::Mutex::new(Vec::new());
+
 /// What one extra writer did: the files it wrote and the partition it
 /// handed back (at most one: it stops at its first refusal; disjoint from
 /// `files`).
@@ -238,6 +246,10 @@ impl Spiller {
             Err(e)
         };
         while let Some(p) = claim() {
+            if self.refused_in_test() {
+                done.back.push(p);
+                break;
+            }
             let schema = Arc::clone(&self.core.state_schema);
             let w = match self
                 .scope
@@ -261,6 +273,24 @@ impl Spiller {
             }
         }
         Ok(done)
+    }
+
+    /// Whether a test asked this query's extra writers to hand back one
+    /// more partition ([`HANDBACKS`]); takes it from the count.
+    #[cfg(test)]
+    fn refused_in_test(&self) -> bool {
+        let id = self.query.id();
+        HANDBACKS.lock().is_ok_and(|mut v| {
+            v.iter_mut()
+                .find(|(q, left)| *q == id && *left > 0)
+                .map(|(_, left)| *left -= 1)
+                .is_some()
+        })
+    }
+
+    #[cfg(not(test))]
+    fn refused_in_test(&self) -> bool {
+        false
     }
 
     /// Writes the groups `ids` with writer `w` as one partition file. The
