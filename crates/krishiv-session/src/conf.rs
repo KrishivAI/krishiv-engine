@@ -70,12 +70,14 @@ pub(crate) fn check_pairs(pairs: &[(String, String)]) -> Result<(), KrishivError
 }
 
 /// Spark switches for collation features the engine refuses (ADR 0043 Decision 7 and 9): the
-/// collation-aware hash functions, collated map keys and schema-level default collations.
+/// collation-aware hash functions, collated map keys and the older name of schema-level default
+/// collations. `spark.sql.schemaLevelCollations.enabled` is a registered key (owner decision
+/// 2026-11-07): schemas then store and show their default, and refuse tables and views until the
+/// default is applied.
 const UNSUPPORTED_COLLATION_SWITCHES: &[&str] = &[
     "spark.sql.legacy.collationAwareHashFunctions",
     "spark.sql.collation.allowInMapKeys",
     "spark.sql.collation.schemaLevel.enabled",
-    "spark.sql.schemaLevelCollations.enabled",
 ];
 
 impl ConfStore {

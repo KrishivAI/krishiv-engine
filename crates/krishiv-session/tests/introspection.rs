@@ -230,7 +230,8 @@ fn describe_table_query_namespace_and_column() {
     assert_eq!(ns[0], ["Catalog Name", "spark_catalog"]);
     assert_eq!(ns[1], ["Namespace Name", "d1"]);
     assert_eq!(ns[2], ["Comment", "dc"]);
-    assert_eq!(ns[5], ["Properties", "()"]);
+    // Spark 4.2.0 prints nothing for no properties (`schema-collation/probe1.out`).
+    assert_eq!(ns[5], ["Properties", ""]);
     assert_eq!(rows(&s, "DESCRIBE tv"), [["x", "int", ""]]);
     assert_eq!(class(&s, "DESCRIBE missing"), "TABLE_OR_VIEW_NOT_FOUND");
 }
@@ -328,7 +329,7 @@ fn describe_modes_secrets_and_quoting() {
         .map(|r| r[1].clone())
         .unwrap();
     assert!(
-        !props.contains("hunter2") && props.contains("k=v"),
+        !props.contains("hunter2") && props.contains("(k,v)"),
         "{props}"
     );
     // An external location with a quote reads back as one literal.
@@ -342,4 +343,42 @@ fn describe_modes_secrets_and_quoting() {
     );
     let text = table(&s, "SHOW CREATE TABLE e").1[0][0].clone();
     assert!(text.contains("it\\'s'"), "{text}");
+}
+
+/// `spark.sql.schemaLevelCollations.enabled` (owner decision 2026-11-07): off (Spark 4.2's default) a schema's
+/// `DEFAULT COLLATION` is refused; on (a session default), the schema stores and shows it, `ALTER` changes it, and
+/// a table in it is refused, since Krishiv does not apply the default to its columns yet.
+#[test]
+fn schema_level_collations_are_stored_only_when_enabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let off = session(dir.path());
+    assert_eq!(
+        class(&off, "CREATE SCHEMA c DEFAULT COLLATION UNICODE"),
+        "UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS"
+    );
+    let on = Session::builder()
+        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .config("spark.sql.schemaLevelCollations.enabled", "true")
+        .build()
+        .unwrap();
+    run(&on, "CREATE SCHEMA c DEFAULT COLLATION unicode");
+    let shown = rows(&on, "DESCRIBE SCHEMA EXTENDED c");
+    assert!(
+        shown.contains(&vec!["Collation".to_owned(), "UNICODE".to_owned()]),
+        "{shown:?}"
+    );
+    run(&on, "ALTER SCHEMA c DEFAULT COLLATION UTF8_LCASE");
+    let shown = rows(&on, "DESCRIBE SCHEMA EXTENDED c");
+    assert!(
+        shown.contains(&vec!["Collation".to_owned(), "UTF8_LCASE".to_owned()]),
+        "{shown:?}"
+    );
+    assert_eq!(
+        class(&on, "CREATE TABLE c.t (a STRING) USING parquet"),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    assert_eq!(
+        class(&on, "CREATE SCHEMA d DEFAULT COLLATION nope"),
+        "COLLATION_INVALID_NAME"
+    );
 }

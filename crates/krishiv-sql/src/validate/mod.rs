@@ -137,7 +137,7 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                     }
                     // Schema-level collations are off in Spark 4.2
                     // (`spark.sql.schemaLevelCollations.enabled`).
-                    AlterNamespaceAction::DefaultCollation(_) => {
+                    AlterNamespaceAction::DefaultCollation(_) if !opts.schema_level_collations => {
                         return Err(at(UnsupportedFeatureSchemaLevelCollations {}, a.span));
                     }
                     _ => {}

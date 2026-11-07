@@ -566,7 +566,10 @@ impl Session {
         query: &str,
         redacted: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
-        crate::collation_defaults::refuse_unhonoured(&statement)?;
+        crate::collation_defaults::refuse_unhonoured(
+            &statement,
+            self.parser_options().schema_level_collations,
+        )?;
         match statement {
             Statement::Query(q) => {
                 let plan = self.lower_identified(&q, &env, redacted)?;
@@ -2459,7 +2462,7 @@ fn job_uuid() -> String {
 }
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-const PARSER_KEYS: [&str; 14] = [
+const PARSER_KEYS: [&str; 15] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -2474,6 +2477,7 @@ const PARSER_KEYS: [&str; 14] = [
     "spark.sql.caseSensitive",
     "spark.sql.parser.quotedRegexColumnNames",
     "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
+    "spark.sql.schemaLevelCollations.enabled",
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.

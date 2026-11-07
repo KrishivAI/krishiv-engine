@@ -13,6 +13,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &ANSI_ENABLED,
     &SESSION_TIME_ZONE,
     &SQL_PATH_ENABLED,
+    &SCHEMA_LEVEL_COLLATIONS_ENABLED,
     &SQL_DEFAULT_PATH,
     &STORE_ASSIGNMENT_POLICY,
     &CTE_PRECEDENCE_POLICY,
@@ -375,6 +376,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
     ),
     (
+        "spark.sql.schemaLevelCollations.enabled",
+        &SCHEMA_LEVEL_COLLATIONS_ENABLED,
+    ),
+    (
         "krishiv.runtimeFilter.exactSet.maxValues",
         &RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
     ),
@@ -401,6 +406,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.legacy.viewSchemaCompensation",
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
+    ),
+    (
+        "krishiv.sql.schemaLevelCollations.enabled",
+        &SCHEMA_LEVEL_COLLATIONS_ENABLED,
     ),
     (
         "krishiv.sql.sources.partitionOverwriteMode",
@@ -468,6 +477,23 @@ pub static SQL_PATH_ENABLED: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.path.enabled"),
+};
+
+/// Whether schema-level default collations (`CREATE|ALTER SCHEMA .. DEFAULT COLLATION`) are allowed.
+pub static SCHEMA_LEVEL_COLLATIONS_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.schemaLevelCollations.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Whether a schema may have a default collation (`CREATE SCHEMA .. DEFAULT COLLATION`, \
+          `ALTER SCHEMA .. DEFAULT COLLATION`). Off, as in Spark 4.2, the clause is \
+          `UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS`. On, the schema stores it and `DESCRIBE \
+          SCHEMA` shows it; tables and views are not created in such a schema yet (Krishiv does not \
+          apply the default to their columns). Meant as a session default (the session builder or \
+          an administrator); Spark reads it only at startup.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.sql.schemaLevelCollations.enabled"),
 };
 
 /// What `DEFAULT_PATH` expands to.

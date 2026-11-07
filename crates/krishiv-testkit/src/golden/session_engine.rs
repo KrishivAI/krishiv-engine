@@ -42,6 +42,11 @@ use super::run::{Engine, EngineError, QueryOutput};
 use super::setup::SessionSetup;
 use super::sorted::is_semantically_sorted;
 
+/// Settings of Spark's `SQLQueryTestSuite` that its goldens depend on, applied to every file's session (and its
+/// parser) before the file's own: `spark.sql.schemaLevelCollations.enabled` (off by default in Spark 4.2 and in
+/// Krishiv; `describe.sql` creates a schema with a default collation; owner decision 2026-11-07).
+const SUITE_CONF: &[(&str, &str)] = &[("spark.sql.schemaLevelCollations.enabled", "true")];
+
 pub use super::run::TIMEOUT_CLASS;
 
 /// The default per-statement time limit: high enough that only a stuck query
@@ -163,6 +168,12 @@ impl SessionEngine {
             .rev()
             .find(|(k, _)| k.eq_ignore_ascii_case(key))
             .map(|(_, v)| v.as_str())
+            .or_else(|| {
+                SUITE_CONF
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                    .map(|(_, v)| *v)
+            })
     }
 
     fn options(&self) -> ParserOptions {
@@ -321,6 +332,9 @@ impl Engine for SessionEngine {
             .config("spark.sql.warehouse.dir", self.warehouse_text.clone());
         if self.plan_round_trip {
             builder = builder.config("krishiv.exec.debug.planRoundTrip", "true");
+        }
+        for (k, v) in SUITE_CONF {
+            builder = builder.config(*k, *v);
         }
         for (k, v) in &setup.configs {
             if k == "spark.sql.warehouse.dir" {

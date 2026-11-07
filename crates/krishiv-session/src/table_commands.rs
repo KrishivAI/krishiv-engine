@@ -240,6 +240,24 @@ impl Session {
         )
     }
 
+    /// Refuses a table or view in a schema with a default collation (`spark.sql.schemaLevelCollations.enabled`):
+    /// Krishiv does not apply the default to the new columns yet, and would type them `UTF8_BINARY`.
+    fn refuse_collated_namespace(&self, name: &TableName) -> Result<(), KrishivError> {
+        let collated = self
+            .state
+            .catalog
+            .store
+            .namespaces()
+            .into_iter()
+            .any(|(n, m)| n.eq_ignore_ascii_case(&name.namespace) && m.collation.is_some());
+        if collated {
+            return Err(unsupported(
+                "a table or view in a schema with a DEFAULT COLLATION",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn warehouse_dir(&self) -> Result<PathBuf, KrishivError> {
         let configured = crate::conf::get(&self.state.conf.snapshot(), "spark.sql.warehouse.dir");
         self.state
@@ -307,7 +325,15 @@ impl Session {
             }
             .into());
         }
+        let collation = match &n.collation {
+            Some(c) => {
+                let parts: Vec<&str> = c.parts.iter().map(|p| p.value.as_str()).collect();
+                Some(krishiv_types::Collation::parse(&parts.join("."))?.name())
+            }
+            None => None,
+        };
         let meta = NamespaceMeta {
+            collation,
             comment: n.comment.clone(),
             location: n.location.clone(),
             properties: options_of(&n.properties, original),
@@ -341,6 +367,13 @@ impl Session {
             AlterNamespaceAction::SetComment(c) => {
                 let c = c.clone();
                 Box::new(move |m| m.comment.clone_from(&c))
+            }
+            // Reaches here only with `spark.sql.schemaLevelCollations.enabled` (the parser refuses it
+            // otherwise).
+            AlterNamespaceAction::DefaultCollation(c) => {
+                let parts: Vec<&str> = c.parts.iter().map(|p| p.value.as_str()).collect();
+                let c = krishiv_types::Collation::parse(&parts.join("."))?.name();
+                Box::new(move |m| m.collation = Some(c.clone()))
             }
             _ => return Err(unsupported("this ALTER SCHEMA action")),
         };
@@ -462,6 +495,7 @@ impl Session {
             &env.config,
         );
         let name = self.table_name(&v.name, &env)?;
+        self.refuse_collated_namespace(&name)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
         self.check_namespace(&name)?;
@@ -1282,6 +1316,7 @@ impl Session {
         let provider_written = self.written_provider(using.clone());
         let provider = self.provider_of(using)?;
         let name = self.table_name(&t.name, &env)?;
+        self.refuse_collated_namespace(&name)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
         self.check_namespace(&name)?;
@@ -1742,6 +1777,7 @@ impl Session {
             .into());
         }
         let name = self.table_name(&t.name, &env)?;
+        self.refuse_collated_namespace(&name)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
         self.check_namespace(&name)?;

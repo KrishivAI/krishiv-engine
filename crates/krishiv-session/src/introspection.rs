@@ -970,13 +970,20 @@ impl Session {
                     })?;
                 let mut rows = self.namespace_rows(&ns, &meta)?;
                 if *extended {
+                    // Spark 4.2.0 (`research/spark/schema-collation/probe1.out`): the sorted pairs as Scala
+                    // tuples, `((a,1), (b,2))`; nothing for none.
                     let props = meta
                         .properties
                         .iter()
-                        .map(|(k, v)| format!("{k}={}", redact(k, v)))
+                        .map(|(k, v)| format!("({k},{})", redact(k, v)))
                         .collect::<Vec<_>>()
                         .join(", ");
-                    rows.push(vec![s("Properties"), s(format!("({props})"))]);
+                    let shown = if props.is_empty() {
+                        String::new()
+                    } else {
+                        format!("({props})")
+                    };
+                    rows.push(vec![s("Properties"), s(shown)]);
                 }
                 self.ordered_frame(&["info_name", "info_value"], &[], rows)
                     .await
@@ -1002,13 +1009,18 @@ impl Session {
                 format!("file:{}", dir.display())
             }
         };
-        Ok(vec![
+        let mut rows = vec![
             vec![s("Catalog Name"), s(crate::catalog::CATALOG)],
             vec![s("Namespace Name"), s(ns)],
             vec![s("Comment"), s(meta.comment.clone().unwrap_or_default())],
             vec![s("Location"), s(location)],
             vec![s("Owner"), s("spark")],
-        ])
+        ];
+        // `spark.sql.schemaLevelCollations.enabled`: the schema's default collation.
+        if let Some(c) = &meta.collation {
+            rows.push(vec![s("Collation"), s(c.clone())]);
+        }
+        Ok(rows)
     }
 
     /// One column's `info_name`/`info_value` rows.
