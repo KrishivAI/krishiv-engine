@@ -105,6 +105,22 @@ pub trait Exchange: Send + Sync + fmt::Debug {
         map: u32,
         reduce: u32,
     ) -> Result<Box<dyn ExchangeReader>>;
+
+    /// The frame bytes the committed map outputs of `exchange` at
+    /// `stage_attempt` hold for reduce partition `reduce`, summed over the
+    /// map partitions, when this exchange knows them without reading
+    /// (`None` by default, and for outputs held elsewhere). A broadcast join
+    /// reads it to skip a shared build that cannot fit (design
+    /// `P2-row30c-m5-shared-skip`).
+    fn committed_bytes(
+        &self,
+        exchange: ExchangeId,
+        stage_attempt: u32,
+        reduce: u32,
+    ) -> Option<u64> {
+        let _ = (exchange, stage_attempt, reduce);
+        None
+    }
 }
 
 /// One map task's writer. Writes are sync: they run on the writing driver
