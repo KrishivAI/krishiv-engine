@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "s43-other": [
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+    ]
+  },
+  "file": "set-operations-unsupported-types",
+  "format_version": 1
+}

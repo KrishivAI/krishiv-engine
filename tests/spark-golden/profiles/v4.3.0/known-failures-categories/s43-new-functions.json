@@ -1,0 +1,13 @@
+{
+  "category": "s43-new-functions",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "counter_diff|hmac|`instr` requires 2 parameters",
+      "order": 9030
+    }
+  ],
+  "summary": "functions new in Spark 4.3 (counter_diff, hmac, instr with position and occurrence)",
+  "task": "P3-T090"
+}
