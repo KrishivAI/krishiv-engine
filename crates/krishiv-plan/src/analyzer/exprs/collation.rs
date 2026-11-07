@@ -362,6 +362,18 @@ fn merge(items: &[(Collation, Strength)]) -> Result<Option<(Collation, Strength)
         .map(|c| (*c, Strength::Default)))
 }
 
+/// Whether `e` is a string literal (under casts and collate) that cannot begin with U+0307 or end
+/// with `i`/`I`/`İ`, so no lower-cased match of it can split the pair `İ` lower-cases to.
+fn safe_search_pattern(e: &Expr) -> bool {
+    match &e.node {
+        ExprNode::Literal(Literal::String(s)) => {
+            !s.starts_with('\u{307}') && !s.ends_with(['i', 'I', '\u{130}'])
+        }
+        ExprNode::Cast { expr, .. } | ExprNode::Collate { expr, .. } => safe_search_pattern(expr),
+        _ => false,
+    }
+}
+
 impl Resolver<'_> {
     /// `expr_node_inner`, with the collation rule for a function call over collated strings.
     pub(super) fn expr_node(
@@ -634,6 +646,15 @@ impl Resolver<'_> {
             CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
         ) || (KEYED_SEARCH.contains(&name)
             && (c.rtrim() || !matches!(c.family(), CollationFamily::Utf8Lcase)))
+        {
+            return Ok(None);
+        }
+        // Lower-casing `İ` (U+0130) gives `i` + U+0307, and Spark refuses a match that starts or
+        // ends inside that pair (`lowercaseMatchLengthFrom` / `lowercaseMatchUntil`). Only a
+        // literal pattern that cannot start with U+0307 or end with `i` is safe on the key; any
+        // other pattern stays with the execution guard.
+        if KEYED_SEARCH.contains(&name)
+            && !kids.get(1).is_some_and(|k| safe_search_pattern(&k.expr))
         {
             return Ok(None);
         }
