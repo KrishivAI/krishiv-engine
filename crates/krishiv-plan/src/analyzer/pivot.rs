@@ -118,7 +118,7 @@ impl Resolver<'_> {
                 // The exact fold: a fractional value is not truncated to
                 // `INT` here (`CAST('NaN' AS DOUBLE)` is a valid value).
                 let folded = self.fold_array(&t.expr, ansi);
-                if folded.is_none() && !self.foldable(&t.expr) {
+                if folded.is_none() && !fold::is_literal(&t.expr) {
                     // A typed literal that reads the query clock (`TIMESTAMP '11:00'`, `DATE 'today'`)
                     // is a literal to Spark; it binds as a clock expression here, which is not a
                     // pivot value yet, so say that rather than `NON_LITERAL_PIVOT_VALUES`.
@@ -131,6 +131,8 @@ impl Resolver<'_> {
                             b.expr.origin,
                         ));
                     }
+                }
+                if folded.is_none() && !self.foldable(&t.expr) {
                     return Err(AnalysisError::new(
                         NonLiteralPivotValues {
                             expression: value_sql(&b.expr, &v.alias, self.ctx.conf.session_zone),
