@@ -224,6 +224,11 @@ fn positions_that_take_no_clause_are_refused_as_spark_refuses_them() {
     ] {
         assert_eq!(class(&s, q), "IDENTIFIER_TOO_MANY_NAME_PARTS", "{q}");
     }
+    // Extra input at the first byte of a dotted name is a plain syntax error.
+    assert_eq!(
+        class(&s, "DROP TABLE x IDENTIFIER('a.b')"),
+        "PARSE_SYNTAX_ERROR"
+    );
     // Hint arguments, `SHOW <scope> FUNCTIONS` and `EXTRACT(<field> FROM ...)` take no clause.
     for q in [
         "SELECT /*+ IDENTIFIER('BROADCAST')(t) */ 1",

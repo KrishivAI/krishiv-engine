@@ -285,10 +285,10 @@ impl Session {
         // parse changes its error.
         if !dotted_names.is_empty()
             && let Err(e) = krishiv_sql::parse_statement(&out, options)
-            && e.error.to_string().contains("PARSE_SYNTAX_ERROR")
+            && e.error.error_class() == krishiv_common::error::ErrorClass::ParseSyntaxError
             && let Some((_, name)) = dotted_names
                 .iter()
-                .find(|(r, _)| r.start <= e.span.start && e.span.start < r.end)
+                .find(|(r, _)| r.start < e.span.start && e.span.start < r.end)
         {
             return Err(IdentifierTooManyNameParts {
                 identifier: name.clone(),
