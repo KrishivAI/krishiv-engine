@@ -31,6 +31,7 @@ use krishiv_memory::{
 };
 use krishiv_types::batch::Batch;
 
+use super::budget::{merge_budget, merge_need};
 use super::keys::{KeyEncoder, SortKey};
 use super::merge::{
     Bucketing, Merger, ParallelMerge, SortedBatch, SpillRun, data_bytes, interleave_batches,
@@ -472,7 +473,7 @@ fn spill_rows(row_bytes: usize, batch_rows: usize) -> usize {
 /// Headroom to spill one buffer: one merged spill batch of `row_bytes`
 /// data bytes per row (plus its buffers' alignment), the writer's scratch
 /// (twice that) and its write buffer.
-fn headroom(row_bytes: usize, batch_rows: usize) -> usize {
+pub(super) fn headroom(row_bytes: usize, batch_rows: usize) -> usize {
     row_bytes
         .saturating_mul(spill_rows(row_bytes, batch_rows))
         .saturating_add(BATCH_SLACK_BYTES)
@@ -1233,50 +1234,6 @@ impl Sort {
 /// down to the fan-in, and as few bytes as possible are written again.
 pub(super) fn group_size(total: usize, fan_in: usize) -> usize {
     fan_in.min(total.saturating_sub(fan_in) + 1)
-}
-
-/// Reserves (with arbitration) the memory to merge up to `max_fan_in` of
-/// `runs` at once. An intermediate merge (`writing` a run) halves the
-/// fan-in down to 2 while the pool refuses and also reserves the spill
-/// writer's scratch; the final merge needs every run.
-pub(super) async fn merge_budget(
-    runs: &[SpillRun],
-    max_fan_in: usize,
-    batch_rows: usize,
-    handle: &Arc<ConsumerHandle>,
-    writing: bool,
-) -> Result<(Reservation, usize)> {
-    let mut fan_in = max_fan_in.min(runs.len());
-    let mut budget = handle.reservation();
-    loop {
-        match budget
-            .grow(merge_need(runs, fan_in, batch_rows, writing))
-            .await
-        {
-            Ok(()) => return Ok((budget, fan_in)),
-            Err(_) if writing && fan_in > 2 => fan_in = (fan_in / 2).max(2),
-            Err(e) => return Err(e.into()),
-        }
-    }
-}
-
-/// The memory to merge `fan_in` of `runs` at once (see [`merge_budget`]).
-fn merge_need(runs: &[SpillRun], fan_in: usize, batch_rows: usize, writing: bool) -> usize {
-    let per_run = runs.iter().map(SpillRun::merge_bytes).max().unwrap_or(0);
-    let row_bytes = runs.iter().map(|r| r.row_bytes).max().unwrap_or(1);
-    let out = if writing {
-        headroom(row_bytes, batch_rows)
-    } else {
-        row_bytes.saturating_mul(batch_rows)
-    };
-    // The merger's per-source `slot`/`stamp` metadata (see
-    // [`super::merge::metadata_bytes`]): small next to the frames, but
-    // reserved with them so the merge never grows past its budget.
-    let meta = super::merge::metadata_bytes(fan_in);
-    per_run
-        .saturating_mul(fan_in)
-        .saturating_add(out)
-        .saturating_add(meta)
 }
 
 impl Sink for Sort {
