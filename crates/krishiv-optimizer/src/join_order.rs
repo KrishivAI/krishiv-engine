@@ -94,11 +94,24 @@ fn selection(p: &LogicalPlan) -> Option<&Arc<LogicalPlan>> {
 }
 
 /// The outputs of `p`'s projection that compute an expression rather than
-/// pass a column through, by attribute; empty when `p` is no projection.
+/// pass a column through, by attribute. Empty when `p` is no projection, or
+/// one the filter pushdown does not cross (a nondeterministic expression, a
+/// common-subexpression output): a conjunct over it stays above, so it is
+/// estimated as written.
 fn computed_outputs(p: &LogicalPlan) -> HashMap<AttrId, Arc<Expr>> {
     let PlanNode::Project { exprs, .. } = &p.node else {
         return HashMap::new();
     };
+    let crossed = exprs.iter().all(|e| is_deterministic(e))
+        && !exprs.iter().any(|e| match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
+                crate::cse::is_cse_column(output)
+            }
+            _ => false,
+        });
+    if !crossed {
+        return HashMap::new();
+    }
     exprs
         .iter()
         .filter_map(|e| match &e.node {
@@ -592,7 +605,10 @@ impl Graph {
                 // equality join ordering derives over `x + 1 AS c0, x AS c2` is
                 // `x + 1 = x` there, so both places estimate it alike.
                 let resolved = match projected.get(i) {
-                    Some(defs) if !defs.is_empty() => substitute(&resolved, defs),
+                    // A conjunct with a subquery stays above the projection.
+                    Some(defs) if !defs.is_empty() && !has_subquery(&resolved) => {
+                        substitute(&resolved, defs)
+                    }
                     _ => resolved,
                 };
                 rows[i] = (rows[i] * selectivity(&resolved, &ests[order[i]], narrow)).max(1.0);
