@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "depends-on-command": [
+      21,
+      22,
+      23
+    ],
+    "s43-other": [
+      4
+    ]
+  },
+  "file": "distinct-map-aggregates",
+  "format_version": 1
+}

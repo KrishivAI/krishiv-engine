@@ -1,0 +1,19 @@
+{
+  "cases": {
+    "s43-other": [
+      7,
+      8,
+      9,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      20,
+      21
+    ]
+  },
+  "file": "timestamp-ltz",
+  "format_version": 1
+}

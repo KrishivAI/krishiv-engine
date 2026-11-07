@@ -1,0 +1,29 @@
+{
+  "cases": {
+    "depends-on-command": [
+      3,
+      9,
+      13,
+      15,
+      18,
+      22
+    ],
+    "parser-tail": [
+      11
+    ],
+    "s43-asof-join": [
+      10
+    ],
+    "sql-commands": [
+      2,
+      8,
+      12,
+      14,
+      17,
+      21,
+      23
+    ]
+  },
+  "file": "join-asof-containers",
+  "format_version": 1
+}

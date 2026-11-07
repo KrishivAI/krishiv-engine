@@ -388,6 +388,16 @@ impl Encoder {
                 self.debug(to);
                 self.debug(mode);
             }
+            ExprNode::Collate {
+                expr,
+                collation,
+                name,
+            } => {
+                self.tag("collate");
+                self.expr(expr, bias);
+                self.debug(collation);
+                self.text(name);
+            }
             ExprNode::Alias { expr, name } => {
                 self.tag("alias");
                 self.expr(expr, bias);
@@ -1237,14 +1247,12 @@ mod tests {
                 unresolved(ExprNode::Column(ColumnRef {
                     name: vec!["t".into(), "a".into()],
                     plan_id: Some(PlanId(3)),
+                    by_identifier: false,
                 })),
             ),
             (
                 "column-bare",
-                unresolved(ExprNode::Column(ColumnRef {
-                    name: vec!["a".into()],
-                    plan_id: None,
-                })),
+                unresolved(ExprNode::Column(ColumnRef::new(vec!["a".into()]))),
             ),
             ("literal", lit(7)),
             (

@@ -2024,6 +2024,7 @@ dependencies = [
  "krishiv-mcp",
  "krishiv-memory",
  "krishiv-server",
+ "krishiv-session",
  "krishiv-sql",
  "libmimalloc-sys",
  "mimalloc",
@@ -2342,9 +2343,16 @@ dependencies = [
 name = "krishiv-server"
 version = "0.2.0-alpha"
 dependencies = [
+ "arrow-array",
+ "arrow-schema",
  "axum",
+ "futures",
+ "getrandom 0.4.3",
+ "krishiv-common",
  "krishiv-exec",
+ "krishiv-session",
  "krishiv-ui-assets",
+ "serde_json",
  "tokio",
 ]
 
