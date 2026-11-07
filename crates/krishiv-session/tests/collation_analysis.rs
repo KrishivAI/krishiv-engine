@@ -261,13 +261,12 @@ fn search_and_indeterminate_rules_follow_spark() {
 }
 
 /// Calls whose answer depends on the collation refuse a non-binary one instead of matching
-/// bytes (unit 5 brings the collation-aware kernels); binary strings are untouched.
+/// bytes (unit 5 brings the collation-aware kernels; `contains`, `startswith` and `endswith`
+/// over `UTF8_LCASE` are there, unit 5a); binary strings are untouched.
 #[test]
 fn collation_dependent_calls_refuse_instead_of_matching_bytes() {
     let l = "('Ab' COLLATE utf8_lcase)";
     for sql in [
-        format!("SELECT contains({l}, 'a')"),
-        format!("SELECT startswith({l}, 'a')"),
         format!("SELECT instr({l}, 'a')"),
         format!("SELECT replace({l}, 'a', 'x')"),
         format!("SELECT translate({l}, 'a', 'x')"),
@@ -408,15 +407,20 @@ fn class_of(s: &Session, sql: &str) -> ErrorClass {
 #[test]
 fn unusual_operands_and_array_functions_do_not_compare_bytes() {
     for sql in [
-        "SELECT contains((SELECT 'Ab' COLLATE utf8_lcase), 'a')",
         "SELECT (SELECT 'Ab' COLLATE utf8_lcase) LIKE 'a%'",
         "SELECT replace(CAST(array('aAb') AS ARRAY<STRING COLLATE utf8_lcase>)[0], 'a', 'x')",
-        "SELECT contains(CAST(named_struct('f','Ab') AS STRUCT<f: STRING COLLATE utf8_lcase>).f, 'a')",
         "SELECT array_contains(array('a', 'b'), 'A' COLLATE utf8_lcase)",
         "SELECT array_position(array('a'), 'A' COLLATE unicode_ci)",
         "SELECT map_contains_key(map('a', 1), 'A' COLLATE utf8_lcase)",
     ] {
         assert_eq!(class(sql), ErrorClass::KrishivUnsupportedFeature, "{sql}");
+    }
+    // A search over a subquery or a struct field of a collated type reads its key (unit 5a).
+    for sql in [
+        "SELECT CAST(contains((SELECT 'Ab' COLLATE utf8_lcase), 'a') AS STRING)",
+        "SELECT CAST(contains(CAST(named_struct('f','Ab') AS STRUCT<f: STRING COLLATE utf8_lcase>).f, 'a') AS STRING)",
+    ] {
+        assert_eq!(one(sql), "true", "{sql}");
     }
     // Plain arrays with plain needles are untouched.
     assert_eq!(
@@ -751,5 +755,62 @@ fn the_marker_unifies_with_string() {
     assert_eq!(
         n("select from_json('{\"a\":1}', 'map<string collate utf8_binary,int>')"),
         1
+    );
+}
+
+/// `contains`, `startswith` and `endswith` under `UTF8_LCASE` compare the lower-cased text
+/// (Spark's `lowercaseContains` and friends); other collations keep the guard (unit 5a).
+#[test]
+fn searches_under_utf8_lcase_ignore_case() {
+    assert_eq!(
+        one("SELECT CAST(contains('Hello World' COLLATE UTF8_LCASE, 'WORLD') AS STRING)"),
+        "true"
+    );
+    assert_eq!(
+        one("SELECT CAST(startswith('Hello' COLLATE UTF8_LCASE, 'HE') AS STRING)"),
+        "true"
+    );
+    assert_eq!(
+        one("SELECT CAST(endswith('Hello' COLLATE UTF8_LCASE, 'LLO') AS STRING)"),
+        "true"
+    );
+    assert_eq!(
+        one("SELECT CAST(contains('Hello' COLLATE UTF8_LCASE, 'xyz') AS STRING)"),
+        "false"
+    );
+    // The binary collation stays case-sensitive.
+    assert_eq!(
+        one("SELECT CAST(contains('Hello', 'HELLO') AS STRING)"),
+        "false"
+    );
+    // NULL stays NULL.
+    assert_eq!(
+        one("SELECT CAST(contains(CAST(NULL AS STRING) COLLATE UTF8_LCASE, 'a') AS STRING)"),
+        "NULL"
+    );
+    // The rtrim and ICU variants are still refused until their units land.
+    for sql in [
+        "SELECT contains('a ' COLLATE UTF8_LCASE_RTRIM, 'A')",
+        "SELECT startswith('a' COLLATE UNICODE_CI, 'A')",
+    ] {
+        assert_eq!(class(sql), ErrorClass::KrishivUnsupportedFeature, "{sql}");
+    }
+}
+
+/// A string literal under the implicit collation cast is quoted in the column name, as Spark's
+/// `Literal.sql` prints it.
+#[test]
+fn the_implicit_collation_cast_quotes_a_literal_in_the_name() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql("SELECT contains('Ab' COLLATE UTF8_LCASE, 'a')")).unwrap();
+    let names: Vec<String> = block_on(df.schema())
+        .unwrap()
+        .fields()
+        .iter()
+        .map(|f| f.name().to_owned())
+        .collect();
+    assert_eq!(
+        names,
+        ["contains(collate(Ab, UTF8_LCASE), 'a' collate UTF8_LCASE)"]
     );
 }

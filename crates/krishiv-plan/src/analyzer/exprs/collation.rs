@@ -63,6 +63,11 @@ const COMPARING: &[&str] = &[
 /// reuse the operands and wait for unit 3b.
 const KEYED: &[&str] = &["==", "<=>", "<", "<=", ">", ">=", "in", "between"];
 
+/// Searches that see a `UTF8_LCASE` operand through its lower-cased key: Spark's
+/// `lowercaseContains` / `lowercaseStartsWith` / `lowercaseEndsWith` compare the lower-cased
+/// code points (unit 5a). `_RTRIM` and the other searches stay with the guard.
+const KEYED_SEARCH: &[&str] = &["contains", "startswith", "endswith"];
+
 /// Calls that fail on operands without one collation (Spark's `canContainIndeterminateCollation`);
 /// any other call over such operands runs on the plain strings.
 const FAILS_INDETERMINATE: &[&str] = &[
@@ -373,7 +378,7 @@ impl Resolver<'_> {
         let n = f.args.len().min(kids.len());
         let name = f.name.to_ascii_lowercase();
         // Comparisons of `UTF8_LCASE` / `_RTRIM` strings compare their keys (design 3.3, unit 3a).
-        if KEYED.contains(&name.as_str())
+        if (KEYED.contains(&name.as_str()) || KEYED_SEARCH.contains(&name.as_str()))
             && !f.distinct
             && kids[..n]
                 .iter()
@@ -627,7 +632,9 @@ impl Resolver<'_> {
         if !matches!(
             c.family(),
             CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
-        ) {
+        ) || (KEYED_SEARCH.contains(&name)
+            && (c.rtrim() || !matches!(c.family(), CollationFamily::Utf8Lcase)))
+        {
             return Ok(None);
         }
         let mut keyed = Vec::with_capacity(kids.len());
@@ -638,6 +645,23 @@ impl Resolver<'_> {
             }
             let mut b = self.expr(&Arc::new(key_of(&k.expr, c, e.origin)), cx)?;
             b.shown = Some(k.shown());
+            // A literal of another collation is shown cast to the call's, as in the plain path.
+            if KEYED_SEARCH.contains(&name)
+                && matches!(
+                    strength_of(&k.shown(), &mut Memo::new()),
+                    Some((_, Strength::Default))
+                )
+                && k.ty.data_type != Some(DataType::collated_string(c))
+            {
+                b.shown = Some(Arc::new(
+                    Expr::new(ExprNode::Cast {
+                        expr: k.shown(),
+                        to: DataType::collated_string(c),
+                        mode: CastMode::Default,
+                    })
+                    .with_origin(e.origin),
+                ));
+            }
             b.carry_markers(std::slice::from_ref(k));
             keyed.push(b);
         }

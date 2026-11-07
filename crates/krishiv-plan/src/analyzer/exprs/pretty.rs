@@ -108,11 +108,18 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
         // The implicit cast of a string to the collation of its call (`CollationTypeCoercion`),
         // which Spark shows as `' ' collate UTF8_LCASE`; the analyzer builds it in `Default` mode and a
         // bound written `CAST` never has that mode.
+        // A string literal under it is quoted (`'a' collate UTF8_LCASE`), as Spark's `Literal.sql`.
         ExprNode::Cast {
+            expr,
             to: DataType::CollatedString(c),
             mode: CastMode::Default,
-            ..
-        } => format!("{} collate {}", k[0], c.name()),
+        } => {
+            if matches!(expr.node, ExprNode::Literal(Literal::String(_))) {
+                format!("'{}' collate {}", k[0], c.name())
+            } else {
+                format!("{} collate {}", k[0], c.name())
+            }
+        }
         ExprNode::Cast { to, mode, .. } => {
             let cast = if *mode == CastMode::Try {
                 "TRY_CAST"
