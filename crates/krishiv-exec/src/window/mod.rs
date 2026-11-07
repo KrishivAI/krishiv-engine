@@ -1012,6 +1012,10 @@ impl Operator for Window {
                 "frame_file_folds",
                 self.counters.file_folds.load(Ordering::Relaxed),
             ),
+            (
+                "external_narrowed",
+                self.counters.narrowed.load(Ordering::Relaxed),
+            ),
         ])
     }
 }
