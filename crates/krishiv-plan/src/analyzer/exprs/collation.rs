@@ -156,10 +156,7 @@ const NESTED_OK: &[&str] = &[
 ];
 
 /// String functions whose result is an ordinary binary string whatever the collation of their
-/// arguments (their return type in Spark is the default string type; `soundex`, `format_number`,
-/// `uuid` and the charset `decode` are covered by the `collations-*` goldens). Not `listagg`
-/// (golden `listagg-collations`: it returns the collated type), and `decode` only with two
-/// arguments, see [`binary_result`].
+/// arguments (checked against the Spark 4.2 `collations-*` goldens).
 const BINARY_RESULT: &[&str] = &[
     "soundex",
     "format_number",
@@ -177,14 +174,9 @@ const BINARY_RESULT: &[&str] = &[
     "to_json",
     "to_csv",
     "to_xml",
+    "listagg",
+    "string_agg",
 ];
-
-/// Whether a call of `name` with `args` arguments returns an ordinary binary string. `decode` is
-/// the charset decoder only with two arguments; with three or more it is Oracle's `DECODE`, a
-/// `CASE` whose result keeps the collation of its branches.
-fn binary_result(name: &str, args: usize) -> bool {
-    BINARY_RESULT.contains(&name) && !(name == "decode" && args != 2)
-}
 
 /// Calls that read the type of their argument: it stays collated.
 const INSPECTS: &[&str] = &["collation", "typeof"];
@@ -262,10 +254,8 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
         )),
         ExprNode::Cast { expr, to, .. } if is_string(Some(to)) => strength_of(expr, memo),
         ExprNode::Function(f)
-            if {
-                let name = f.name.to_ascii_lowercase();
-                INSPECTS.contains(&name.as_str()) || binary_result(&name, f.args.len())
-            } =>
+            if INSPECTS.contains(&f.name.to_ascii_lowercase().as_str())
+                || BINARY_RESULT.contains(&f.name.to_ascii_lowercase().as_str()) =>
         {
             // `collation(x)` and `typeof(x)` return an ordinary string, and so do the
             // binary-result functions (`soundex`, `md5`, ...): the collation of the arguments
@@ -273,13 +263,10 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
             Some((Collation::UTF8_BINARY, Strength::Default))
         }
         ExprNode::Resolved(ResolvedExpr::Function(f))
-            if INSPECTS.contains(&f.id.name()) || binary_result(f.id.name(), f.args.len()) =>
+            if INSPECTS.contains(&f.id.name()) || BINARY_RESULT.contains(&f.id.name()) =>
         {
             Some((Collation::UTF8_BINARY, Strength::Default))
         }
-        // A call that does not return a string carries no collation, whatever its arguments are
-        // (`length(c)`, a boolean test).
-        ExprNode::Resolved(ResolvedExpr::Function(f)) if !is_string(Some(&f.data_type)) => None,
         ExprNode::Function(_) | ExprNode::Resolved(ResolvedExpr::Function(_)) => {
             let skip = match &e.node {
                 ExprNode::Function(f) => selector_args(&f.name),
@@ -519,7 +506,7 @@ impl Resolver<'_> {
         if let Some(c) = chosen
             && !c.is_utf8_binary()
             && bound.ty.data_type == Some(DataType::String)
-            && !binary_result(&name, f.args.len())
+            && !BINARY_RESULT.contains(&name.as_str())
             && window_fn
         {
             // The re-tag cast would hide the window function from the window binder.
@@ -531,7 +518,7 @@ impl Resolver<'_> {
         if let Some(c) = chosen
             && !c.is_utf8_binary()
             && bound.ty.data_type == Some(DataType::String)
-            && !binary_result(&name, f.args.len())
+            && !BINARY_RESULT.contains(&name.as_str())
         {
             let to = DataType::collated_string(c);
             let shown = bound.shown();

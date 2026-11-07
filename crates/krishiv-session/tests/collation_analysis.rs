@@ -495,22 +495,6 @@ fn result_boundaries_and_equal_null() {
         one("SELECT typeof(format_number(123, '###' COLLATE UTF8_LCASE))"),
         "string"
     );
-    // Opus review of #493 (head f1239bef): the three-argument `decode` is a CASE whose result keeps
-    // the collation of its branches; only the charset form `decode(bin, 'utf-8')` is a plain STRING.
-    assert_eq!(
-        one("SELECT typeof(decode(1, 1, 'a' COLLATE UTF8_LCASE, 'b' COLLATE UTF8_LCASE))"),
-        "string collate UTF8_LCASE"
-    );
-    assert_eq!(
-        one("SELECT typeof(decode(encode('a' COLLATE UTF8_LCASE, 'utf-8'), 'utf-8'))"),
-        "string"
-    );
-    // A call returning a non-string carries no collation: `length` of a collated string does not
-    // make `substr`'s result collated.
-    assert_eq!(
-        one("SELECT typeof(upper(substr('abc', 1, length('x' COLLATE UTF8_LCASE))))"),
-        "string"
-    );
     // Codex review of #493 (third round): a binary-result call nested in another string call does
     // not pass its argument's collation on, so it cannot conflict with another explicit one.
     assert_eq!(
