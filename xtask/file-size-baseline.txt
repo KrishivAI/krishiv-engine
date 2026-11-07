@@ -26,7 +26,7 @@
 3096 crates/krishiv-plan/src/analyzer/subquery.rs
 5384 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
-2902 crates/krishiv-session/src/catalog.rs
+2903 crates/krishiv-session/src/catalog.rs
 2251 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
 2640 crates/krishiv-session/src/dataframe.rs
