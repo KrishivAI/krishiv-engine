@@ -80,6 +80,10 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("legacy_time_parser").features,
         ["legacy_time_parser"]
     );
+    assert_eq!(
+        message("binary_output_style").features,
+        ["binary_output_style"]
+    );
     assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
     // The exchange's schema alone names the collation.
     assert_eq!(

@@ -2029,6 +2029,7 @@ mod tests {
                 legacy_java_charsets: false,
                 legacy_coding_error_action: false,
                 legacy_time_parser: false,
+                binary_output_style: None,
             },
         );
         let worker = super::WorkerContext::new(Arc::new(crate::planner::MemoryTables::new()));
@@ -2094,6 +2095,7 @@ mod tests {
                     legacy_java_charsets: false,
                     legacy_coding_error_action: false,
                     legacy_time_parser: false,
+                    binary_output_style: None,
                 },
             )
         };

@@ -101,6 +101,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &LEGACY_CODING_ERROR_ACTION,
     &LEGACY_JAVA_CHARSETS,
     &LEGACY_STATISTICAL_AGGREGATE,
+    &BINARY_OUTPUT_STYLE,
     &LEGACY_TIME_PARSER_POLICY,
     &LEGACY_VIEW_SCHEMA_BINDING_MODE,
     &LEGACY_VIEW_SCHEMA_COMPENSATION,
@@ -164,6 +165,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.query.maxQueuedTime", &QUERY_MAX_QUEUED_TIME),
     ("krishiv.resultCache.enabled", &RESULT_CACHE_ENABLED),
     ("krishiv.session.memoryLimit", &SESSION_MEMORY_LIMIT),
+    ("spark.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("krishiv.io.cache.memoryBytes", &IO_CACHE_MEMORY_BYTES),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
@@ -176,6 +178,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
     ("krishiv.spill.dropBehindBytes", &SPILL_DROP_BEHIND_BYTES),
+    ("krishiv.sql.binaryOutputStyle", &BINARY_OUTPUT_STYLE),
     ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("spark.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
     ("krishiv.exec.lateFetch.maxRows", &LATE_FETCH_MAX_ROWS),
@@ -1661,6 +1664,21 @@ pub static LEGACY_JAVA_CHARSETS: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.legacy.javaCharsets"),
+};
+
+/// `spark.sql.binaryOutputStyle`.
+pub static BINARY_OUTPUT_STYLE: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.binaryOutputStyle",
+    value_type: ValueType::Enum(&["UTF-8", "BASIC", "BASE64", "HEX", "HEX_DISCRETE"]),
+    default: None,
+    doc: "How `to_csv` and `to_xml` print a `BINARY` value: `UTF-8` text, `BASIC` signed byte \
+          values (`[69, 97]`), `BASE64` without padding, `HEX` (`4561`) or `HEX_DISCRETE` \
+          (`[45 61]`). When unset the values print as `HEX_DISCRETE`, as in Spark. \
+          `CAST(binary AS STRING)` ignores the setting.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
+    spark_alias: Some("spark.sql.binaryOutputStyle"),
 };
 
 /// `spark.sql.legacy.timeParserPolicy`.

@@ -37,7 +37,7 @@
 mod case_table;
 mod chars;
 mod charsets;
-mod codec;
+pub(crate) mod codec;
 mod like;
 mod mask_table;
 mod split;

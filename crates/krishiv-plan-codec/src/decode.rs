@@ -319,6 +319,7 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         legacy_java_charsets: env.legacy_java_charsets.unwrap_or(false),
         legacy_coding_error_action: env.legacy_coding_error_action.unwrap_or(false),
         legacy_time_parser: env.legacy_time_parser.unwrap_or(false),
+        binary_output_style: env.binary_output_style.as_deref().map(std::sync::Arc::from),
     };
     if !env.zone_name_matches_zone() {
         return Err(corrupt("a session zone name that is not its offset"));

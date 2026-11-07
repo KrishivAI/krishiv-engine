@@ -1421,6 +1421,8 @@ pub fn from_csv(
 /// Options of `to_csv` resolved once at bind.
 #[derive(Debug, Clone)]
 pub struct ToCsvOptions {
+    /// How a binary value prints (`spark.sql.binaryOutputStyle`).
+    pub binary: crate::binary_style::BinaryStyle,
     /// Quoting settings (`sep`, `quote`, `escape`, `escape_escape`,
     /// `empty_value`).
     pub syntax: Syntax,
@@ -1745,15 +1747,15 @@ pub fn struct_to_csv(
                         true
                     }
                     (FieldKind::Bin, DataType::BinaryView) => {
-                        binary_text(a.as_binary_view().value(row), &mut cell);
+                        o.binary.write(a.as_binary_view().value(row), &mut cell);
                         true
                     }
                     (FieldKind::Bin, DataType::Binary) => {
-                        binary_text(a.as_binary::<i32>().value(row), &mut cell);
+                        o.binary.write(a.as_binary::<i32>().value(row), &mut cell);
                         true
                     }
                     (FieldKind::Bin, _) => {
-                        binary_text(a.as_binary::<i64>().value(row), &mut cell);
+                        o.binary.write(a.as_binary::<i64>().value(row), &mut cell);
                         true
                     }
                     (FieldKind::Date, _) => {
@@ -1919,6 +1921,7 @@ mod tests {
             None,
         );
         let o = ToCsvOptions {
+            binary: crate::binary_style::BinaryStyle::default(),
             syntax: Syntax::default(),
             quote_all: false,
             escape_quotes: true,
@@ -2039,6 +2042,7 @@ mod tests {
             ..Syntax::default()
         };
         let o = ToCsvOptions {
+            binary: crate::binary_style::BinaryStyle::default(),
             syntax,
             quote_all: false,
             escape_quotes: true,
@@ -2079,6 +2083,7 @@ mod tests {
             None,
         );
         let o = ToCsvOptions {
+            binary: crate::binary_style::BinaryStyle::default(),
             syntax: Syntax::default(),
             quote_all: false,
             escape_quotes: true,
