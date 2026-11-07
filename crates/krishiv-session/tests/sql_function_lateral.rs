@@ -92,29 +92,41 @@ fn calls_are_named_as_spark_names_them() {
 }
 
 /// `x IN (one row of values)` over a column is an existence join, as over any
-/// other relation (main's `check_in`): Spark 4.2.0 answers it two-valued, so
-/// it is never rewritten to an equality (review of #505). A constant NULL is
-/// folded first, to NULL, as Spark's `NullPropagation` does.
+/// other relation, never an equality: Spark 4.2.0 answers it two-valued, so a
+/// NULL `x` gives false, also under `NOT`, and never NULL (review of #505,
+/// checked on PySpark 4.2.0; `ORDER BY` puts the NULL row first). A
+/// constant NULL is folded first, to NULL, as Spark's `NullPropagation` does.
 #[test]
 fn in_over_one_row_of_values() {
     let s = session();
+    run(
+        &s,
+        "CREATE TEMPORARY VIEW tn(c1) AS VALUES (0), (1), (CAST(NULL AS INT))",
+    );
+    let (f, t) = (Some(false), Some(true));
     for (sql, want) in [
+        ("SELECT c1 IN (SELECT 1) FROM tn ORDER BY c1", [f, f, t]),
         (
-            "SELECT c1, CAST(c1 IN (SELECT 1) AS INT) FROM t1",
-            vec![vec![0, 0], vec![0, 0], vec![1, 1]],
+            "SELECT NOT (c1 IN (SELECT 1)) FROM tn ORDER BY c1",
+            [f, t, f],
         ),
         (
-            "SELECT c1, CAST(coalesce(c1 IN (SELECT 1), true) AS INT) FROM t1",
-            vec![vec![0, 0], vec![0, 0], vec![1, 1]],
+            "SELECT coalesce(c1 IN (SELECT 1), true) FROM tn ORDER BY c1",
+            [f, f, t],
         ),
-        ("SELECT c1 FROM t1 WHERE (c1 IN (SELECT 1)) IS NULL", vec![]),
         (
-            "SELECT c1, CAST(NOT (c1 IN (SELECT 1)) AS INT) FROM t1",
-            vec![vec![0, 1], vec![0, 1], vec![1, 0]],
+            "SELECT c1 IN (SELECT CAST(NULL AS INT)) FROM tn ORDER BY c1",
+            [f, f, f],
         ),
     ] {
-        assert_eq!(ints(&run(&s, sql)), want, "{sql}");
+        let got: Vec<Option<bool>> = run(&s, sql)
+            .iter()
+            .flat_map(|b| b.column(0).as_boolean().iter().collect::<Vec<_>>())
+            .collect();
+        assert_eq!(got, want, "{sql}");
     }
+    let none = run(&s, "SELECT c1 FROM tn WHERE (c1 IN (SELECT 1)) IS NULL");
+    assert_eq!(none.iter().map(RecordBatch::num_rows).sum::<usize>(), 0);
     let out = run(&s, "SELECT CAST(NULL AS INT) IN (SELECT 1)");
     assert!(out[0].column(0).is_null(0));
 }

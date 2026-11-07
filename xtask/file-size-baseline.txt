@@ -9,7 +9,7 @@
 2182 crates/krishiv-exec/src/join/grace.rs
 2003 crates/krishiv-exec/src/operators/sort/sort.rs
 2215 crates/krishiv-exec/src/physical/instantiate.rs
-2139 crates/krishiv-exec/src/planner/build.rs
+2108 crates/krishiv-exec/src/planner/build.rs
 2396 crates/krishiv-exec/src/planner/eval/cond.rs
 2626 crates/krishiv-exec/src/planner/eval/hof.rs
 3064 crates/krishiv-exec/src/window/tests.rs
@@ -21,12 +21,13 @@
 2468 crates/krishiv-plan/src/analyzer/coerce.rs
 # +9 lines over main: a cast of an alias (`v:a::int`) keeps the alias's name (T001c, PR #491)
 # +67 lines over main: USING-join keys through projections, windows and pipe boundaries (Widen::Hidden, P2b row 11)
-4655 crates/krishiv-plan/src/analyzer/ops.rs
+4604 crates/krishiv-plan/src/analyzer/ops.rs
 3098 crates/krishiv-plan/src/analyzer/subquery.rs
-5392 crates/krishiv-plan/src/tests/analyzer.rs
+5390 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 3020 crates/krishiv-session/src/catalog.rs
-2286 crates/krishiv-session/src/command.rs
+# +27 lines over main: nested session and script variables (T196, PR #505)
+2313 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
 2644 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)

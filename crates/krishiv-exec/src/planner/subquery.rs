@@ -211,8 +211,9 @@ pub(super) fn subqueries(e: &Expr, out: &mut Vec<(SubqueryValueKind, Arc<Logical
     e.for_each_child(&mut |c| subqueries(c, out));
 }
 
-/// Prepared subquery columns by kind (scalar or not) and plan address:
-/// `NULL IN (q)` and `v IN (q)` over one row read one plan as both.
+/// Prepared subquery columns by kind (scalar or not) and plan address: one
+/// plan can be read both as a scalar value and as an existence test, so the
+/// kind is part of the key.
 pub(super) type ByPlan = HashMap<(bool, usize), BoundColumn>;
 
 /// `e` with each subquery of `columns` replaced by the column of its value.
