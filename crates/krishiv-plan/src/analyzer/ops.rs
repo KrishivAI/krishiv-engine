@@ -984,7 +984,7 @@ impl Resolver<'_> {
             return Err(AnalysisError::new(
                 InvalidWhereCondition {
                     condition: format!("\"{}\"", pretty(&b.shown(), self.ctx.conf.session_zone)),
-                    expression_list: aggregate_sql(&b.expr, &wide.out),
+                    expression_list: super::aggregate_text::aggregate_sql(&b.expr, &wide.out),
                 },
                 p.origin,
             ));
@@ -3839,29 +3839,6 @@ impl Resolver<'_> {
                 Err(e) => return Err(reported(e)),
             }
         };
-        // A generator between the sort and the aggregate: the aggregate
-        // cannot grow through it, so Spark leaves the call in the sort and
-        // refuses it there.
-        if bounds.iter().any(|b| b.agg.is_some()) && Self::holds_generator(&c.plan) {
-            let calls: Vec<String> = bounds
-                .iter()
-                .flat_map(|b| {
-                    aggregate_sql(&b.shown(), &below.out)
-                        .split(", ")
-                        .filter(|c| !c.is_empty())
-                        .map(|c| format!("\"{c}\""))
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-            if !calls.is_empty() {
-                return Err(AnalysisError::new(
-                    UnsupportedExprForOperator {
-                        invalid_expr_sqls: calls.join(", "),
-                    },
-                    p.origin,
-                ));
-            }
-        }
         // A map does not order (`INVALID_ORDERING_TYPE`, as `SortOrder`).
         for (o, b) in order.iter().zip(&bounds) {
             if let Some(t) =
@@ -3885,6 +3862,44 @@ impl Resolver<'_> {
                         data_type: quoted_type(Some(t)),
                     },
                     o.expr.origin,
+                ));
+            }
+        }
+        // A generator between the sort and the aggregate: the aggregate
+        // cannot grow through it, so Spark leaves the call in the sort and
+        // refuses it there. The same for windows over the aggregate: an
+        // aggregate call in the `ORDER BY` stays in the sort, which no
+        // aggregate may be in (Spark 4.2.0, `window-with-aggregates`).
+        let over_windows = c.agg.as_ref().is_some_and(|i| i.has_windows());
+        if bounds.iter().any(|b| b.agg.is_some())
+            && (Self::holds_generator(&c.plan) || over_windows)
+        {
+            let calls: Vec<String> = if Self::holds_generator(&c.plan) {
+                bounds
+                    .iter()
+                    .flat_map(|b| {
+                        super::aggregate_text::aggregate_sql(&b.shown(), &below.out)
+                            .split(", ")
+                            .filter(|c| !c.is_empty())
+                            .map(|c| format!("\"{c}\""))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect()
+            } else {
+                // Over windows, each call as written (columns unqualified, a call with several arguments whole),
+                // in the order the sort keys read them (Spark 4.2.0, `window-with-aggregates`).
+                bounds
+                    .iter()
+                    .flat_map(|b| super::aggregate_text::aggregate_calls(&b.shown()))
+                    .map(|c| format!("\"{c}\""))
+                    .collect()
+            };
+            if !calls.is_empty() {
+                return Err(AnalysisError::new(
+                    UnsupportedExprForOperator {
+                        invalid_expr_sqls: calls.join(", "),
+                    },
+                    p.origin,
                 ));
             }
         }
@@ -4547,27 +4562,6 @@ fn in_aggregate_call(b: &Bound) -> Result<(), AnalysisError> {
         x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
     }
     Ok(())
-}
-
-/// The aggregate calls in `e` as Spark's `sql` prints them, columns fully
-/// qualified (for `INVALID_WHERE_CONDITION`).
-fn aggregate_sql(e: &Arc<Expr>, scope: &[Attr]) -> String {
-    let mut found = Vec::new();
-    let mut seen = HashSet::new();
-    let mut stack = vec![Arc::clone(e)];
-    while let Some(x) = stack.pop() {
-        if !seen.insert(super::bind::addr(&*x)) {
-            continue;
-        }
-        if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node
-            && f.kind == FunctionKind::Aggregate
-        {
-            found.push(pretty(&qualified(&x, scope), None));
-            continue;
-        }
-        x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
-    }
-    found.join(", ")
 }
 
 /// Whether `e` reads a column or calls a non-deterministic function, so it

@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "fn-aggregate": [
+      33,
+      54,
+      55
+    ]
+  },
+  "file": "postgreSQL/aggregates_part1",
+  "format_version": 1
+}

@@ -990,16 +990,22 @@ fn typed_timestamp_literals_resolve_like_spark() {
     // `now` reads the query clock.
     let a = analyze_with("SELECT TIMESTAMP 'now'", false, utc).unwrap();
     assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
-    // A time of day alone still needs the query clock's date.
-    for sql in ["SELECT TIMESTAMP_LTZ '10:00'", "SELECT TIMESTAMP '10:00'"] {
-        let e = analyze_with(sql, false, utc).unwrap_err();
-        assert_eq!(
-            e.error.error_class(),
-            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
-            "{sql}"
-        );
-        assert!(e.error.to_string().contains("query clock"), "{sql}: {e}");
+    // A time of day alone is that time on the query clock's date, in the session zone.
+    for sql in [
+        "SELECT TIMESTAMP_LTZ '10:00'",
+        "SELECT TIMESTAMP '10:00'",
+        "SELECT TIMESTAMP 'T10:00:30.5'",
+    ] {
+        let a = analyze_with(sql, false, utc).unwrap();
+        assert_eq!(a.output[0].data_type.simple_string(), "timestamp", "{sql}");
     }
+    // A time of day with a zone is no timestamp literal.
+    let e = analyze_with("SELECT TIMESTAMP '10:00+05:30'", false, utc).unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        krishiv_common::error::ErrorClass::InvalidTypedLiteral,
+        "{e}"
+    );
     // A region session zone serves explicit offsets but not wall-clock time.
     let e = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'", false, None).unwrap();
     assert_eq!(e.output[0].data_type.simple_string(), "timestamp");
