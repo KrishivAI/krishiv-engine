@@ -58,6 +58,10 @@ pub enum Purpose {
     Format,
     /// `to_timestamp`, reading files.
     Parse,
+    /// A parse whose result is `TIMESTAMP_NTZ`: the same pattern, but Spark never falls back to the legacy
+    /// formatter for it, so a pattern the new one rejects is always `INVALID_DATETIME_PATTERN`
+    /// (`validatePatternString(checkLegacy = !forTimestampNTZ)`).
+    ParseNtz,
 }
 
 /// A zone a timestamp is shown in: its id (for `VV` and `z`) and its rules.
@@ -213,7 +217,7 @@ impl DateTimePattern {
                 feature: format!("the datetime pattern letter {what}"),
             }
             .into()),
-            Err(reject) => Err(spark_error(pattern, &reject)),
+            Err(reject) => Err(spark_error(pattern, &reject, purpose)),
         }
     }
 
@@ -435,8 +439,9 @@ fn unsupported(what: &str) -> KrishivError {
     .into()
 }
 
-fn spark_error(pattern: &str, reject: &Reject) -> KrishivError {
-    if legacy_accepts(pattern) {
+fn spark_error(pattern: &str, reject: &Reject, purpose: Purpose) -> KrishivError {
+    let ntz = purpose == Purpose::ParseNtz;
+    if !ntz && legacy_accepts(pattern) {
         return InconsistentBehaviorCrossVersionDatetimePatternRecognition {
             pattern: format!("'{pattern}'"),
             config: POLICY_CONF.to_owned(),
@@ -447,6 +452,14 @@ fn spark_error(pattern: &str, reject: &Reject) -> KrishivError {
     match *reject {
         Reject::WeekBased(c) => InconsistentBehaviorCrossVersionDatetimeWeekBasedPattern {
             c: format!("'{c}'"),
+        }
+        .into(),
+        // A parse to `TIMESTAMP_NTZ` reports every rejected pattern the same way (Spark 4.2.0 goldens:
+        // `to_timestamp('..', 'dd MM yyyy EEEEE')` under `timestampNTZ`); the letter-specific class is the
+        // formatter's.
+        Reject::IllegalChar(_) if ntz => InvalidDatetimePatternWithSuggestion {
+            pattern: format!("'{pattern}'"),
+            docroot: DOC_ROOT.to_owned(),
         }
         .into(),
         Reject::IllegalChar(c) => InvalidDatetimePatternIllegalCharacter {
@@ -515,7 +528,7 @@ fn compile(pattern: &str, purpose: Purpose) -> Result<Vec<Item>, Reject> {
             'Y' | 'W' | 'w' | 'u' | 'e' | 'c' => return Err(Reject::WeekBased(c)),
             'A' | 'n' | 'N' | 'p' | 'B' => return Err(Reject::IllegalChar(c)),
             // `E` and `F` print but cannot parse; so do `Q` and `q`.
-            'Q' | 'q' | 'E' | 'F' if purpose == Purpose::Parse => {
+            'Q' | 'q' | 'E' | 'F' if matches!(purpose, Purpose::Parse | Purpose::ParseNtz) => {
                 return Err(Reject::IllegalChar(c));
             }
             _ => {}
