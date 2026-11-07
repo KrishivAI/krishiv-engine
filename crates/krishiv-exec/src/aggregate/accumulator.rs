@@ -3922,6 +3922,34 @@ mod tests {
         assert_eq!(decimal_unscaled(f64::NEG_INFINITY, 2), i128::MIN);
     }
 
+    /// `compact_views` copies the views out of a `LargeList` of strings (and keeps its offsets,
+    /// validity and values).
+    #[test]
+    fn compact_views_walks_a_large_list() {
+        use arrow_array::{LargeListArray, StringViewArray};
+        use arrow_schema::Field;
+        let values = StringViewArray::from(vec![
+            Some("a string longer than twelve bytes"),
+            None,
+            Some("short"),
+        ]);
+        let field = Arc::new(Field::new("item", DataType::Utf8View, true));
+        let list = LargeListArray::try_new(
+            field,
+            arrow_buffer::OffsetBuffer::new(vec![0_i64, 2, 3].into()),
+            Arc::new(values),
+            Some(arrow_buffer::NullBuffer::from(vec![true, true])),
+        )
+        .unwrap();
+        let compacted = compact_views(Arc::new(list.clone()));
+        assert_eq!(compacted.to_data(), list.to_data());
+        let inner = compacted.as_list::<i64>();
+        assert_eq!(
+            inner.values().as_string_view().value(0),
+            "a string longer than twelve bytes"
+        );
+    }
+
     #[test]
     fn avg_decimal_rounds_like_spark() {
         // 5 / 3 at decimal(38,22) (Spark: 1.6666666666666666666667).
