@@ -443,19 +443,6 @@ async fn nothing_that_changes_state_accepts_a_token_in_the_address_or_a_cookie()
     );
 }
 
-#[tokio::test]
-async fn the_address_token_works_only_for_a_get() {
-    let (addr, _) = start(false).await;
-    let mut s = TcpStream::connect(addr).await.unwrap();
-    s.write_all(format!("DELETE /api/internal/queries?token={TOKEN} HTTP/1.1\r\nHost: l\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
-    let mut out = String::new();
-    s.read_to_string(&mut out).await.unwrap();
-    assert!(
-        out.starts_with("HTTP/1.1 401") || out.starts_with("HTTP/1.1 405"),
-        "{out}"
-    );
-}
-
 async fn open_stream(addr: std::net::SocketAddr) -> TcpStream {
     let mut s = TcpStream::connect(addr).await.unwrap();
     s.write_all(
