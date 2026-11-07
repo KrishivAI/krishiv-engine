@@ -473,3 +473,54 @@ fn same_in(a: &Expr, b: &Expr, equal: &mut HashSet<(*const Expr, *const Expr)>) 
     }
     result
 }
+
+/// The columns of `a = b` over two plain columns of the same type, which
+/// is transitive (`=`, not `<=>`: a null never matches, so with `a = b`
+/// and `b = c`, `a = c` holds of every row that passes both). Array, map
+/// and struct columns are left out: a class can turn a join key into a
+/// filter of one input, and the executor's scalar `=` does not compare
+/// every nested type its join keys do (a struct holding an array), so
+/// their equalities stay as the query wrote them.
+pub(crate) fn equality(e: &Expr) -> Option<[&BoundColumn; 2]> {
+    let Some((Builtin::Eq, [a, b], _)) = builtin(e) else {
+        return None;
+    };
+    fn col(e: &Expr) -> Option<&BoundColumn> {
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c),
+            _ => None,
+        }
+    }
+    let (a, b) = (col(a)?, col(b)?);
+    (a.id != b.id && a.data_type == b.data_type && !a.data_type.is_nested()).then_some([a, b])
+}
+
+/// Union-find over attributes, for the equalities that a set of joined
+/// inputs already holds.
+#[derive(Default)]
+pub(crate) struct Classes(HashMap<AttrId, AttrId>);
+
+impl Classes {
+    pub(crate) fn find(&mut self, mut x: AttrId) -> AttrId {
+        while let Some(&p) = self.0.get(&x) {
+            if p == x {
+                break;
+            }
+            let gp = self.0.get(&p).copied().unwrap_or(p);
+            self.0.insert(x, gp);
+            x = gp;
+        }
+        x
+    }
+
+    /// Joins the classes of `a` and `b`; false when they were one already.
+    pub(crate) fn union(&mut self, [a, b]: [AttrId; 2]) -> bool {
+        let (ra, rb) = (self.find(a), self.find(b));
+        if ra == rb {
+            return false;
+        }
+        self.0.insert(ra, rb);
+        self.0.entry(rb).or_insert(rb);
+        true
+    }
+}

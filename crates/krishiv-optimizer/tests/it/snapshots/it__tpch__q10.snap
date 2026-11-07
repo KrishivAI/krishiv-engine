@@ -8,14 +8,16 @@ Limit 20
       +- Project [l_extendedprice#22, l_discount#23, n_name#34, c_custkey#0, c_name#1, c_address#2, c_phone#4, c_acctbal#5, c_comment#7]
          +- Join Inner, (l_orderkey#17 == o_orderkey#8)
             :- Project [l_orderkey#17, l_extendedprice#22, l_discount#23]
-            :  +- Filter (l_returnflag#25 == 'R')
+            :  +- Filter ((l_returnflag#25 == 'R') and isnotnull(l_orderkey#17))
             :     +- Scan spark_catalog.default.lineitem [l_orderkey#17, l_extendedprice#22, l_discount#23, l_returnflag#25]
             +- Project [n_name#34, c_custkey#0, c_name#1, c_address#2, c_phone#4, c_acctbal#5, c_comment#7, o_orderkey#8]
                +- Join Inner, (c_nationkey#3 == n_nationkey#33)
-                  :- Scan spark_catalog.default.nation [n_nationkey#33, n_name#34]
+                  :- Filter isnotnull(n_nationkey#33)
+                  :  +- Scan spark_catalog.default.nation [n_nationkey#33, n_name#34]
                   +- Project [c_custkey#0, c_name#1, c_address#2, c_nationkey#3, c_phone#4, c_acctbal#5, c_comment#7, o_orderkey#8]
                      +- Join Inner, (c_custkey#0 == o_custkey#9)
-                        :- Scan spark_catalog.default.customer [c_custkey#0, c_name#1, c_address#2, c_nationkey#3, c_phone#4, c_acctbal#5, c_comment#7]
+                        :- Filter (isnotnull(c_custkey#0) and isnotnull(c_nationkey#3))
+                        :  +- Scan spark_catalog.default.customer [c_custkey#0, c_name#1, c_address#2, c_nationkey#3, c_phone#4, c_acctbal#5, c_comment#7]
                         +- Project [o_orderkey#8, o_custkey#9]
-                           +- Filter ((o_orderdate#12 >= DATE '1993-10-01') and (o_orderdate#12 < DATE '1994-01-01'))
+                           +- Filter ((((o_orderdate#12 >= DATE '1993-10-01') and (o_orderdate#12 < DATE '1994-01-01')) and isnotnull(o_custkey#9)) and isnotnull(o_orderkey#8))
                               +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_orderdate#12]

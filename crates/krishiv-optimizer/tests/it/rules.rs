@@ -252,6 +252,79 @@ const CASES: &[(&str, &str)] = &[
         "push_correlated_join",
         "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE t.c > (SELECT count(*) FROM u u2 WHERE u2.d = t.b AND u2.a = u.a)",
     ),
+    // Inferred join filters (T072b unit 3; Spark 4.2 plans in
+    // tests/fixtures/spark-4.2.0/inferred-join-filters.json).
+    (
+        "infer_inner_literal",
+        "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE u.a = 5",
+    ),
+    (
+        "infer_inner_range_and_in",
+        "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE t.a > 3 AND t.a <= 9 AND u.a IN (4, 5, 6)",
+    ),
+    (
+        // The inner join's key `u.a` is nullable: its inferred `isnotnull`
+        // above the outer join makes it an inner join (no row is lost: a
+        // NULL `u.a` never matches `t2.a`).
+        "infer_outer_to_inner_by_inferred_key",
+        "SELECT t.a FROM t LEFT JOIN u ON t.a = u.a JOIN t t2 ON u.a = t2.a",
+    ),
+    (
+        // Each branch of the union gets the key's filter; a second run finds
+        // it in every branch (`held` over a positional union).
+        "infer_into_union_branches",
+        "SELECT x.a FROM (SELECT a FROM t UNION ALL SELECT a FROM u) x JOIN t t2 ON x.a = t2.a WHERE t2.a = 3",
+    ),
+    (
+        // Through a grouped aggregate's key (pushdown moves the filter below
+        // it; a second run finds it there).
+        "infer_through_aggregate_key",
+        "SELECT g.a FROM (SELECT a, count(*) AS n FROM t GROUP BY a) g JOIN u ON g.a = u.a WHERE u.a < 4",
+    ),
+    (
+        "infer_through_two_joins",
+        "SELECT t.a FROM t JOIN u ON t.a = u.a JOIN t t2 ON u.a = t2.a WHERE t2.a = 7",
+    ),
+    (
+        "infer_left_outer_preserved_side_kept",
+        "SELECT t.a FROM t LEFT JOIN (SELECT a FROM u WHERE a = 5) v ON t.a = v.a",
+    ),
+    (
+        "infer_left_outer_to_null_side",
+        "SELECT t.a FROM t LEFT JOIN u ON t.a = u.a WHERE t.a = 5",
+    ),
+    (
+        "infer_right_outer_to_null_side",
+        "SELECT u.a FROM t RIGHT JOIN u ON t.a = u.a WHERE u.a = 5",
+    ),
+    (
+        "infer_left_semi_both",
+        "SELECT a FROM t LEFT SEMI JOIN u ON t.a = u.a AND u.a < 3",
+    ),
+    (
+        "infer_left_anti_right_only",
+        "SELECT a FROM t LEFT ANTI JOIN (SELECT a FROM u WHERE a = 5) v ON t.a = v.a WHERE t.a > 1",
+    ),
+    (
+        "infer_full_outer_none",
+        "SELECT x.a FROM (SELECT a FROM t WHERE a = 5) x FULL JOIN u ON x.a = u.a",
+    ),
+    (
+        "infer_null_safe_key",
+        "SELECT t.a FROM t JOIN u ON t.a <=> u.a WHERE u.a = 5",
+    ),
+    (
+        "infer_cast_key_no_move",
+        "SELECT t.a FROM t JOIN u ON CAST(t.a AS STRING) = u.d WHERE u.d = '5'",
+    ),
+    (
+        "infer_no_substitution",
+        "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE u.a + 1 > 5 AND (u.a = 1 OR u.a = 2)",
+    ),
+    (
+        "infer_string_key",
+        "SELECT t.a FROM t JOIN u ON t.b = u.d WHERE u.d = 'x'",
+    ),
     // Restricting an aggregate to the keys its join can match.
     (
         "restrict_scalar_avg",
