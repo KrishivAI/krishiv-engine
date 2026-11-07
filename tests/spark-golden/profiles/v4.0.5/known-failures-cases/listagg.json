@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "other-version": [
+      18,
+      19,
+      20
+    ]
+  },
+  "file": "listagg",
+  "format_version": 1
+}
