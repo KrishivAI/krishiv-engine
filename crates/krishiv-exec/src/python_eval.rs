@@ -38,7 +38,9 @@
 //! Dropping the sink's state (query end, cancel, error) drops every pending
 //! call's future and the reservation of its input: nothing stays charged.
 //! What the runtime does with a call whose future was dropped is its own
-//! (the embedded runtime interrupts the Python thread).
+//! (the embedded runtime skips a queued call whose future was dropped; one
+//! already inside Python runs to its end, the interrupt is pending, design
+//! P2-T059 §2.4 "Stuck UDFs").
 
 use std::collections::VecDeque;
 use std::fmt;

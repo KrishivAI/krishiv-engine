@@ -5,10 +5,10 @@
 //!
 //! One pool per process, started by the first UDF call and sized by the
 //! session making it (`krishiv.python.udf.threads`, read when the session
-//! registers its first UDF; 0 is the machine's thread count on a
-//! free-threaded Python, else 1). A call asks for the current pool
-//! ([`current`]) when its runtime has none or holds a fork's copy: after `os.fork` the child's copy of the parent's pool has
-//! no threads (they stayed in the parent), so it is left alone, never
+//! is created; 0 is the machine's thread count on a free-threaded Python,
+//! else 1). A call asks for the current pool ([`current`]) when its runtime
+//! has none or holds a fork's copy: after `os.fork` the child's copy of the
+//! parent's pool has no threads (they stayed in the parent), so it is left alone, never
 //! stopped or joined, and the child starts a pool of its own of the same
 //! size (review B2). After the exit hook ran no pool starts again, so no
 //! Python runs during finalization (review M2).

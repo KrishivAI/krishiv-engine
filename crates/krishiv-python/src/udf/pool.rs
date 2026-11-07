@@ -47,9 +47,12 @@ impl Pin {
     /// Pins the calling thread, which must not hold a Python thread state.
     fn new() -> Self {
         // SAFETY: called once, at the start of a pool thread that has never
-        // been attached to Python, while the interpreter runs (the pool is
-        // started from a Python call, before `atexit`); it creates and
-        // attaches this thread's state.
+        // been attached to Python; it creates and attaches this thread's
+        // state. The interpreter is running: a pool starts only before the
+        // exit hook (`udf::current` reads `SHUT` under the `POOL` lock the
+        // hook takes), and the hook waits, detached, for its threads to pin
+        // and stop. Limit (T098b M1): a thread not yet pinned when the hook's
+        // 5 s deadline passes can still get here during finalization.
         let gil = unsafe { ffi::PyGILState_Ensure() };
         // SAFETY: this thread holds the state `PyGILState_Ensure` just gave
         // it; saving it detaches the thread (releasing the GIL) while keeping
@@ -175,6 +178,9 @@ fn worker(queue: &Mutex<Receiver<Message>>, abandoned: &AtomicBool) {
     loop {
         let next = queue.lock().unwrap_or_else(PoisonError::into_inner).recv();
         match next {
+            // Past the exit deadline no job starts: the interpreter may be
+            // finalizing (T098b I2); dropping it fails its call.
+            Ok(Message::Run(_)) if abandoned.load(Ordering::SeqCst) => break,
             Ok(Message::Run(job)) => {
                 // A panicking job is contained: the thread keeps serving.
                 let _ = catch_unwind(AssertUnwindSafe(|| Python::attach(job)));

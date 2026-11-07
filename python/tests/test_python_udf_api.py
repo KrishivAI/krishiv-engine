@@ -399,7 +399,7 @@ def test_an_arrow_udf_of_the_wrong_length_fails(spark: SparkSession) -> None:
 # --- stream export ---
 
 
-def _read_stream_in_a_child(get_next_type: str, on_thread: bool) -> None:
+def _read_stream_in_a_child(get_next_type: str, on_thread: bool, subinterpreter: bool = False) -> None:
     # Reads a UDF query's C stream through ctypes in a child process (a hang there cannot hang this one), the
     # get_next call typed `get_next_type`, on a second thread while the main thread runs Python if `on_thread`.
     code = (
@@ -430,6 +430,12 @@ def _read_stream_in_a_child(get_next_type: str, on_thread: bool) -> None:
             ("private_data", ctypes.c_void_p),
         ]
 
+        if SUBINTERPRETER:
+            try:
+                import _interpreters as subinterpreters
+            except ImportError:
+                import _xxsubinterpreters as subinterpreters
+            subinterpreters.create()  # from now on PyGILState_Check answers 1 on every thread
         spark = SparkSession.builder.getOrCreate()
         spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", "50")
         plus = F.arrow_udf(lambda a: pc.call_function("add", [a, 1]), "bigint")
@@ -472,6 +478,7 @@ def _read_stream_in_a_child(get_next_type: str, on_thread: bool) -> None:
         )
         .replace("GET_NEXT_TYPE", get_next_type)
         .replace("ON_THREAD", str(on_thread))
+        .replace("SUBINTERPRETER", str(subinterpreter))
     )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=False)
     assert done.returncode == 0, done.stdout + done.stderr
@@ -490,3 +497,12 @@ def test_a_stream_read_with_the_gil_released_while_another_thread_holds_it_finis
     # thread runs Python. The detach must see that this thread is not attached and leave the other thread's
     # state alone (on 3.11 the current thread state is process-global).
     _read_stream_in_a_child("CFUNCTYPE", on_thread=True)
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 12), reason="3.11's probe is PyGILState_Check, which a subinterpreter defeats"
+)
+def test_a_stream_read_with_the_gil_released_after_a_subinterpreter_was_created_finishes() -> None:
+    # T098b I1: once any subinterpreter exists PyGILState_Check answers 1 on every thread (measured on
+    # 3.11-3.14), so the probe must not rely on it where the thread state is per thread (3.12+).
+    _read_stream_in_a_child("CFUNCTYPE", on_thread=True, subinterpreter=True)

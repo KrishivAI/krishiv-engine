@@ -23,6 +23,11 @@ from typing import Any
 # not even the pre-existing ones like `NOT_EXPECTED_TYPE`).
 _TEMPLATES = {
     "NOT_IMPLEMENTED": "<feature> is not implemented.",
+    "CONTEXT_ONLY_VALID_ON_DRIVER": (
+        "It appears that you are attempting to reference SparkContext from a broadcast variable, action, or "
+        "transformation. SparkContext can only be used on the driver, not in code that runs on workers. For more "
+        "information, see SPARK-5063."
+    ),
     "CANNOT_SET_TOGETHER": "<arg_list> should not be set together.",
     "NOT_EXPECTED_TYPE": "Argument `<arg_name>` should be <expected_type>, got <arg_type>.",
     "CANNOT_CONVERT_COLUMN_INTO_BOOL": (

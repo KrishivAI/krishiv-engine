@@ -139,3 +139,31 @@ def test_a_wrapper_returning_no_pyarrow_array_is_refused() -> None:
     spark._native.register_python_udf("py_list", ARROW_BATCHED, "bigint", True, True, lambda x: list(range(len(x))))
     with pytest.raises(Exception, match=r"pyarrow\.Array"):
         spark.sql("SELECT py_list(id) FROM range(3)").collect()
+
+
+def test_a_udf_that_runs_a_query_fails_instead_of_waiting_for_itself() -> None:
+    # T098b B1: the call back into the engine would wait for the pool thread the UDF holds. PySpark raises
+    # CONTEXT_ONLY_VALID_ON_DRIVER for a session used in worker code (pyspark/core/context.py 4.2.0
+    # lines 2636-2647); the query then fails with PYTHON_EXCEPTION carrying it.
+    spark = _spark()
+
+    def nested(x: pa.Array) -> pa.Array:
+        spark.sql("SELECT 1").collect()
+        return pc.call_function("add", [x, 1])
+
+    spark._native.register_python_udf("py_nested", ARROW_BATCHED, "bigint", True, True, nested)
+    out: dict = {}
+
+    def run() -> None:
+        try:
+            spark.sql("SELECT py_nested(id) FROM range(3)").collect()
+        except Exception as e:
+            out["error"] = str(e)
+
+    runner = threading.Thread(target=run, daemon=True)
+    runner.start()
+    runner.join(60)
+    assert not runner.is_alive(), "a UDF running a query hung (no reentrancy refusal)"
+    text = out.get("error", "")
+    assert "PYTHON_EXCEPTION" in text, text
+    assert "CONTEXT_ONLY_VALID_ON_DRIVER" in text, text

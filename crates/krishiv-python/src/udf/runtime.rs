@@ -40,10 +40,8 @@ use crate::stream::ffi::{ARRAY_CAPSULE, SCHEMA_CAPSULE, export_column, import_co
 
 thread_local! {
     /// Set on a pool thread while a UDF's Python code runs: a call back into
-    /// the engine from there must fail, not wait for itself (§2.5
-    /// "Reentrancy"). Read by the session's query entry points once Spark's
-    /// error class for it is checked (pending; until then a reentrant call
-    /// runs, and can only deadlock if it waits on its own pool thread).
+    /// the engine from there fails ([`refuse_inside_udf`]) instead of waiting
+    /// for the pool thread it holds (§2.5 "Reentrancy", T098b B1).
     static IN_UDF: Cell<bool> = const { Cell::new(false) };
     /// The runner conf of the call running on this pool thread.
     static RUNNER: std::cell::RefCell<Option<Arc<RunnerConf>>> = const { std::cell::RefCell::new(None) };
@@ -113,6 +111,27 @@ pub(crate) fn _udf_runner_conf(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     }
     out.set_item("krishiv.python.udf.rows", ROWS.with(Cell::get).to_string())?;
     Ok(out)
+}
+
+/// Raises PySpark's `CONTEXT_ONLY_VALID_ON_DRIVER` (a
+/// `PySparkRuntimeError`) when called from inside a UDF: the engine call
+/// would wait on the pool thread the UDF holds (a 1-thread pool, the GIL
+/// default, or its own `thread_safe=false` lock). PySpark raises the same
+/// class for a session or context used in code running on a worker
+/// (`pyspark/core/context.py` 4.2.0 lines 2636-2647, `_assert_on_driver`;
+/// lines 491-496, pickling the context).
+pub(crate) fn refuse_inside_udf(py: Python<'_>) -> PyResult<()> {
+    if !IN_UDF.with(Cell::get) {
+        return Ok(());
+    }
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("errorClass", "CONTEXT_ONLY_VALID_ON_DRIVER")?;
+    kwargs.set_item("messageParameters", PyDict::new(py))?;
+    let err = py
+        .import("krishiv.errors")?
+        .getattr("PySparkRuntimeError")?
+        .call((), Some(&kwargs))?;
+    Err(PyErr::from_value(err))
 }
 
 /// The runner conf and row count of the call running on this thread, set
@@ -262,6 +281,12 @@ impl PreparedUdf for Prepared {
         let declared = self.declared.clone();
         let runner = Arc::clone(&self.runner);
         pool.submit(Box::new(move |py| {
+            // A call whose future was dropped (its query cancelled or
+            // failed) is skipped: it would hold the pool thread and its input
+            // for a result nobody reads (T098b I2).
+            if done.is_canceled() {
+                return;
+            }
             // Restores the outer call's conf and rows when dropped, also on
             // unwinding: a nested call on this thread (a UDF running a query)
             // must not leave the outer call reading another's (review 2c M2).
