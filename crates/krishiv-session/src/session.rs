@@ -15,9 +15,10 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use krishiv_common::config::{Config, ConfigValue, METRICS_ENABLED, PARTITION_OVERWRITE_MODE};
 use krishiv_common::error::{
-    AllPartitionColumnsNotAllowed, ColumnAlreadyExists, ErrorQueryContext, InternalError,
-    KrishivError, KrishivUnsupportedFeature, PartitionColumnNotFoundInSchema,
+    AllPartitionColumnsNotAllowed, ErrorQueryContext, InternalError, KrishivError,
+    KrishivUnsupportedFeature, PartitionColumnNotFoundInSchema,
 };
+use krishiv_common::names::check_column_name_duplication;
 use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::files::{FileReads, LocalPaths, ObjectPaths, PathLocator as _};
@@ -2273,9 +2274,10 @@ fn committed_files(
 }
 
 /// The `partitionBy` columns as `(index, name)` pairs in `partitionBy`
-/// order, deduplicated.
+/// order.
 ///
 /// # Errors
+/// `COLUMN_ALREADY_EXISTS` for a repeated name (checked first);
 /// `PARTITION_COLUMN_NOT_FOUND_IN_SCHEMA` for a name the schema has no
 /// column for.
 fn resolve_partitions(
@@ -2283,6 +2285,10 @@ fn resolve_partitions(
     partition_by: &[String],
     case_sensitive: bool,
 ) -> Result<Vec<(usize, String)>, KrishivError> {
+    // Spark rejects a repeated partition column before it looks any up
+    // (`PartitioningUtils.validatePartitionColumn`); distinct names then
+    // match distinct columns.
+    check_column_name_duplication(partition_by.iter().map(String::as_str), case_sensitive)?;
     let mut out = Vec::new();
     for name in partition_by {
         let mut matches = schema.fields().iter().enumerate().filter(|(_, f)| {
@@ -2303,14 +2309,6 @@ fn resolve_partitions(
             return Err(internal(format!(
                 "partition column `{name}` matches several columns"
             )));
-        }
-        // Spark rejects a repeated partition column
-        // (`checkColumnNameDuplication`).
-        if out.iter().any(|(i, _)| *i == index) {
-            return Err(ColumnAlreadyExists {
-                column_name: format!("`{}`", field.name().replace('`', "``")),
-            }
-            .into());
         }
         // Checked here so that nothing is started for a column type that
         // has no partition path text.
@@ -2411,24 +2409,12 @@ impl SpillScopes for QuerySpill {
 }
 
 /// Spark's `COLUMN_ALREADY_EXISTS` for a written schema with a repeated
-/// name (ignoring case unless `case_sensitive`, then named in lower case,
-/// as Spark 4.2 reports it).
+/// name (`check_column_name_duplication`).
 fn unique_columns(schema: &SchemaRef, case_sensitive: bool) -> Result<(), KrishivError> {
-    let mut seen = std::collections::HashSet::new();
-    for f in schema.fields() {
-        let name = if case_sensitive {
-            f.name().clone()
-        } else {
-            f.name().to_lowercase()
-        };
-        if !seen.insert(name.clone()) {
-            return Err(ColumnAlreadyExists {
-                column_name: format!("`{}`", name.replace('`', "``")),
-            }
-            .into());
-        }
-    }
-    Ok(())
+    check_column_name_duplication(
+        schema.fields().iter().map(|f| f.name().as_str()),
+        case_sensitive,
+    )
 }
 
 /// Where and how `df.write` writes.

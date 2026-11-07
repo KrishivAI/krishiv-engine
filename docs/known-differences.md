@@ -58,3 +58,12 @@ clause is resolved and checked first, so a missing table, an unknown column or a
 writes nothing, as in Spark. Spark plans the clauses as one statement, so a failure while one of them runs (a cast of a
 malformed value under ANSI, say) also leaves the other targets unwritten; Krishiv writes the clauses in order, and the
 ones before the failing clause stay written.
+
+## Correlated subqueries with `spark.sql.optimizer.decorrelateInnerQuery.enabled` off
+
+With inner-query decorrelation off, Spark refuses more shapes of correlated subquery than it does with the framework
+on. Krishiv reads the setting only for the nested count-bug shape (a correlated global aggregate below another
+operator, as in `SELECT (SELECT sum(c) FROM (SELECT count(*) c FROM t2 WHERE t1.a = t2.b)) FROM t1`), which stays
+refused with `KRISHIV_UNSUPPORTED_FEATURE`, as it does under `spark.sql.legacy.scalarSubqueryCountBugBehavior` and
+`spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled`. Every other correlated shape is
+answered as with the setting on, where Spark would raise an analysis error.
