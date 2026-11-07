@@ -1,9 +1,10 @@
 ---
 source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 607
 expression: SELECT a FROM t LEFT SEMI JOIN u ON t.a = u.a AND u.a < 3
 ---
 Join LeftSemi, (a#0 == a#3)
 :- Filter (isnotnull(a#0) and (a#0 < 3))
 :  +- Scan spark_catalog.default.t [a#0]
-+- Filter (isnotnull(a#3) and (a#3 < 3))
++- Filter (a#3 < 3)
    +- Scan spark_catalog.default.u [a#3]

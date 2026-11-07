@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Project [product_name#360, store_name#362, store_zip#363, b_street_number#364, b_street_name#365, b_city#366, b_zip#367, c_street_number#368, c_street_name#369, c_city#370, c_zip#371, cs1syear#398, cs1cnt#399, s11#400, s21#401, s31#402, s12#403, s22#404, s32#405, syear#391, cnt#394]
@@ -66,7 +67,7 @@ Project [product_name#360, store_name#362, store_zip#363, b_street_number#364, b
          :                                                                                :     +- Shared #7, printed above
          :                                                                                +- Project [c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, c_first_shipto_date_sk#227, c_first_sales_date_sk#228, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
          :                                                                                   +- Join Inner, (ss_customer_sk#66 == c_customer_sk#222)
-         :                                                                                      :- Filter (((((isnotnull(c_customer_sk#222) and isnotnull(c_first_sales_date_sk#228)) and isnotnull(c_first_shipto_date_sk#227)) and isnotnull(c_current_cdemo_sk#224)) and isnotnull(c_current_hdemo_sk#225)) and isnotnull(c_current_addr_sk#226))
+         :                                                                                      :- Filter (((((isnotnull(c_customer_sk#222) and isnotnull(c_first_shipto_date_sk#227)) and isnotnull(c_first_sales_date_sk#228)) and isnotnull(c_current_cdemo_sk#224)) and isnotnull(c_current_hdemo_sk#225)) and isnotnull(c_current_addr_sk#226))
          :                                                                                      :  +- Scan spark_catalog.default.customer [c_customer_sk#222, c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, c_first_shipto_date_sk#227, c_first_sales_date_sk#228] (shared #8)
          :                                                                                      +- Project [s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
          :                                                                                         +- Join Inner, (ss_store_sk#70 == s_store_sk#193)
@@ -155,7 +156,7 @@ Project [product_name#360, store_name#362, store_zip#363, b_street_number#364, b
                                                                                              :     +- Shared #7, printed above
                                                                                              +- Project [c_current_cdemo_sk#224, c_current_hdemo_sk#225, c_current_addr_sk#226, c_first_shipto_date_sk#227, c_first_sales_date_sk#228, s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
                                                                                                 +- Join Inner, (ss_customer_sk#66 == c_customer_sk#222)
-                                                                                                   :- Filter (((((isnotnull(c_customer_sk#222) and isnotnull(c_first_sales_date_sk#228)) and isnotnull(c_first_shipto_date_sk#227)) and isnotnull(c_current_cdemo_sk#224)) and isnotnull(c_current_hdemo_sk#225)) and isnotnull(c_current_addr_sk#226))
+                                                                                                   :- Filter (((((isnotnull(c_customer_sk#222) and isnotnull(c_first_shipto_date_sk#227)) and isnotnull(c_first_sales_date_sk#228)) and isnotnull(c_current_cdemo_sk#224)) and isnotnull(c_current_hdemo_sk#225)) and isnotnull(c_current_addr_sk#226))
                                                                                                    :  +- Shared #8, printed above
                                                                                                    +- Project [s_store_name#198, s_zip#218, d_year#115, ss_item_sk#65, ss_customer_sk#66, ss_cdemo_sk#67, ss_hdemo_sk#68, ss_addr_sk#69, ss_promo_sk#71, ss_wholesale_cost#74, ss_list_price#75, ss_coupon_amt#82]
                                                                                                       +- Join Inner, (ss_store_sk#70 == s_store_sk#193)

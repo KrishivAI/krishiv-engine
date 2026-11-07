@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -15,7 +16,7 @@ Limit 100
                   :  +- Join Inner, (cs_sold_date_sk#0 == d_date_sk#97)
                   :     :- Project [cs_sold_date_sk#0, cs_warehouse_sk#14, cs_item_sk#15, cs_sales_price#21, cr_refunded_cash#57]
                   :     :  +- Join LeftOuter, ((cs_order_number#17 == cr_order_number#50) and (cs_item_sk#15 == cr_item_sk#36))
-                  :     :     :- Filter ((isnotnull(cs_sold_date_sk#0) and isnotnull(cs_item_sk#15)) and isnotnull(cs_warehouse_sk#14))
+                  :     :     :- Filter ((isnotnull(cs_warehouse_sk#14) and isnotnull(cs_item_sk#15)) and isnotnull(cs_sold_date_sk#0))
                   :     :     :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#0, cs_warehouse_sk#14, cs_item_sk#15, cs_order_number#17, cs_sales_price#21]
                   :     :     +- Filter (isnotnull(cr_item_sk#36) and isnotnull(cr_order_number#50))
                   :     :        +- Scan spark_catalog.default.catalog_returns [cr_item_sk#36, cr_order_number#50, cr_refunded_cash#57]

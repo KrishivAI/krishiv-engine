@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 607
 expression: SELECT t.b FROM t JOIN u ON t.a = u.a WHERE t.c > 1
 ---
 Project [b#1]
@@ -7,5 +8,5 @@ Project [b#1]
    :- Filter isnotnull(a#3)
    :  +- Scan spark_catalog.default.u [a#3]
    +- Project [a#0, b#1]
-      +- Filter (isnotnull(a#0) and (c#2 > 1L))
+      +- Filter ((c#2 > 1L) and isnotnull(a#0))
          +- Scan spark_catalog.default.t [a#0, b#1, c#2]

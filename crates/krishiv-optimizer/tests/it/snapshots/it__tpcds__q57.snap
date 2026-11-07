@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -24,7 +25,7 @@ Limit 100
                :                             :  +- Scan spark_catalog.default.item [i_item_sk#0, i_brand#8, i_category#12] (shared #2)
                :                             +- Project [cs_call_center_sk#33, cs_item_sk#37, cs_sales_price#43, d_year#62, d_moy#64]
                :                                +- Join Inner, (cs_sold_date_sk#22 == d_date_sk#56)
-               :                                   :- Filter ((isnotnull(cs_sold_date_sk#22) and isnotnull(cs_item_sk#37)) and isnotnull(cs_call_center_sk#33))
+               :                                   :- Filter ((isnotnull(cs_item_sk#37) and isnotnull(cs_sold_date_sk#22)) and isnotnull(cs_call_center_sk#33))
                :                                   :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#22, cs_call_center_sk#33, cs_item_sk#37, cs_sales_price#43] (shared #3)
                :                                   +- Filter ((((d_year#62 == 1999) or ((d_year#62 == 1998) and (d_moy#64 == 12))) or ((d_year#62 == 2000) and (d_moy#64 == 1))) and isnotnull(d_date_sk#56))
                :                                      +- Scan spark_catalog.default.date_dim [d_date_sk#56, d_year#62, d_moy#64] (shared #4)
@@ -46,7 +47,7 @@ Limit 100
                      :                             :  +- Shared #2, printed above
                      :                             +- Project [cs_call_center_sk#33, cs_item_sk#37, cs_sales_price#43, d_year#62, d_moy#64]
                      :                                +- Join Inner, (cs_sold_date_sk#22 == d_date_sk#56)
-                     :                                   :- Filter ((isnotnull(cs_sold_date_sk#22) and isnotnull(cs_item_sk#37)) and isnotnull(cs_call_center_sk#33))
+                     :                                   :- Filter ((isnotnull(cs_item_sk#37) and isnotnull(cs_sold_date_sk#22)) and isnotnull(cs_call_center_sk#33))
                      :                                   :  +- Shared #3, printed above
                      :                                   +- Filter ((((d_year#62 == 1999) or ((d_year#62 == 1998) and (d_moy#64 == 12))) or ((d_year#62 == 2000) and (d_moy#64 == 1))) and isnotnull(d_date_sk#56))
                      :                                      +- Shared #4, printed above
@@ -67,7 +68,7 @@ Limit 100
                                                       :  +- Shared #2, printed above
                                                       +- Project [cs_call_center_sk#33, cs_item_sk#37, cs_sales_price#43, d_year#62, d_moy#64]
                                                          +- Join Inner, (cs_sold_date_sk#22 == d_date_sk#56)
-                                                            :- Filter ((isnotnull(cs_sold_date_sk#22) and isnotnull(cs_item_sk#37)) and isnotnull(cs_call_center_sk#33))
+                                                            :- Filter ((isnotnull(cs_item_sk#37) and isnotnull(cs_sold_date_sk#22)) and isnotnull(cs_call_center_sk#33))
                                                             :  +- Shared #3, printed above
                                                             +- Filter ((((d_year#62 == 1999) or ((d_year#62 == 1998) and (d_moy#64 == 12))) or ((d_year#62 == 2000) and (d_moy#64 == 1))) and isnotnull(d_date_sk#56))
                                                                +- Shared #4, printed above

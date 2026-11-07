@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Project [ss_sold_year#260, ss_item_sk#261, ss_customer_sk#262, ratio#278, store_qty#279, store_wholesale_cost#280, store_sales_price#281, other_chan_qty#282, other_chan_wholesale_cost#283, other_chan_sales_price#284]
@@ -23,7 +24,7 @@ Project [ss_sold_year#260, ss_item_sk#261, ss_customer_sk#262, ratio#278, store_
                   :     :              :        :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#185, ss_item_sk#187, ss_customer_sk#188, ss_ticket_number#194, ss_quantity#195, ss_wholesale_cost#196, ss_sales_price#198]
                   :     :              :        +- Filter (isnotnull(sr_item_sk#210) and isnotnull(sr_ticket_number#217))
                   :     :              :           +- Scan spark_catalog.default.store_returns [sr_item_sk#210, sr_ticket_number#217]
-                  :     :              +- Filter (isnotnull(d_date_sk#228) and (d_year#234 == 2000))
+                  :     :              +- Filter ((d_year#234 == 2000) and isnotnull(d_date_sk#228))
                   :     :                 +- Scan spark_catalog.default.date_dim [d_date_sk#228, d_year#234]
                   :     +- Project [ws_sold_year#631 AS ws_sold_year#266, ws_item_sk#548 AS ws_item_sk#267, ws_customer_sk#632 AS ws_customer_sk#268, ws_qty#633 AS ws_qty#269, ws_wc#634 AS ws_wc#270, ws_sp#635 AS ws_sp#271]
                   :        +- Shift +545

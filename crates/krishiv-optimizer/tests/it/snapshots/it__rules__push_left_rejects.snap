@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 607
 expression: "SELECT t.a FROM t LEFT JOIN u ON t.a = u.a WHERE u.d = 'y'"
 ---
 Project [a#0]
@@ -7,5 +8,5 @@ Project [a#0]
    :- Filter isnotnull(a#0)
    :  +- Scan spark_catalog.default.t [a#0]
    +- Project [a#3]
-      +- Filter (isnotnull(a#3) and (d#4 == 'y'))
+      +- Filter ((d#4 == 'y') and isnotnull(a#3))
          +- Scan spark_catalog.default.u [a#3, d#4]

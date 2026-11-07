@@ -26,10 +26,15 @@
 //! - A predicate a side already holds is not added again, so `optimize`
 //!   stays a fixed point.
 //!
-//! Runs once before the rewrite batch, so pushdown carries the new filters
-//! into the scans.
+//! Runs after the rewrite batch (which moves `WHERE` equalities into the
+//! joins; the batch runs again to push what it added), then in each round
+//! of join ordering and restriction
+//! (`order_and_restrict`: the joins they form and restriction's semi joins),
+//! and once after restriction when there is no join ordering. What a side
+//! already implies is never added again ([`held`]), so a second `optimize`
+//! adds nothing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use krishiv_plan::{
@@ -39,13 +44,13 @@ use krishiv_plan::{
 use krishiv_types::DataType;
 
 use crate::expr::{
-    Classes, builtin, call_builtin, column, conjuncts, equality, has_aggregate, has_subquery,
-    is_deterministic, references, same, substitute, unshift,
+    Attrs, Classes, builtin, call_builtin, column, conjuncts, equality, has_aggregate,
+    has_subquery, is_deterministic, references, same, substitute, unshift,
 };
-use crate::pushdown::{alias_map, ids, into_side, rebuild_join};
+use crate::pushdown::{alias_map, ids, into_side_new, rebuild_join};
 
 /// The rule at a `Join` (see the module docs).
-pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>, memo: &mut Memo) -> Arc<LogicalPlan> {
     let PlanNode::Join {
         left,
         right,
@@ -73,10 +78,10 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     }
     let mut sources: Vec<Arc<Expr>> = cond.clone();
     if from_left {
-        sources.extend(constraints(left));
+        sources.extend(memo.constraints(left).iter().cloned());
     }
     if from_right {
-        sources.extend(constraints(right));
+        sources.extend(memo.constraints(right).iter().cloned());
     }
     let mut classes = Classes::default();
     let mut members: HashMap<AttrId, Vec<AttrId>> = HashMap::new();
@@ -93,19 +98,12 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     for id in ids_of {
         by_root.entry(classes.find(id)).or_default().push(id);
     }
-    // The inputs' column ids, computed on the first candidate (`ids` walks
-    // the subtree).
-    let (mut lo, mut ro) = (None, None);
+    let (lo, ro) = (memo.ids(left), memo.ids(right));
     let (mut add_left, mut add_right) = (Vec::new(), Vec::new());
     let mut push = |target: AttrId, pred: Arc<Expr>| {
-        let in_left = to_left && lo.get_or_insert_with(|| ids(left)).contains(&target);
-        if in_left && !holds(left, &add_left, &pred) {
+        if to_left && lo.contains(&target) && !holds(left, &add_left, &pred, memo) {
             add_left.push(pred);
-        } else if !in_left
-            && to_right
-            && ro.get_or_insert_with(|| ids(right)).contains(&target)
-            && !holds(right, &add_right, &pred)
-        {
+        } else if to_right && ro.contains(&target) && !holds(right, &add_right, &pred, memo) {
             add_right.push(pred);
         }
     };
@@ -122,22 +120,46 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         .collect();
     keys.sort_by_key(|k| k.id);
     keys.dedup_by_key(|k| k.id);
+    // Each member's `isnotnull` is a candidate once per join: from its key,
+    // or from one `isnotnull` source of its class (a join chain puts every
+    // key in one class, and each of its `isnotnull` filters would otherwise
+    // be moved onto every member).
+    let mut nn_done: HashSet<AttrId> = HashSet::new();
     for k in keys {
+        nn_done.insert(k.id);
         push(k.id, is_not_null_of(k));
     }
+    // The column each class member's `=` writes (once, not per member).
+    let mut cols: HashMap<AttrId, &BoundColumn> = HashMap::new();
+    for s in &sources {
+        if let Some([a, b]) = equality(s) {
+            cols.entry(a.id).or_insert(a);
+            cols.entry(b.id).or_insert(b);
+        }
+    }
+    let mut nn_classes: HashSet<AttrId> = HashSet::new();
     // The class's literal constraints, moved onto its other members.
     for s in &sources {
         let Some(on) = literal_constraint(s) else {
             continue;
         };
-        let Some(class) = by_root.get(&classes.find(on)) else {
+        let root = classes.find(on);
+        let Some(class) = by_root.get(&root) else {
             continue;
         };
+        let nn = is_not_null(s);
+        if nn && !nn_classes.insert(root) {
+            continue;
+        }
         for &m in class.iter().filter(|&&m| m != on) {
-            let Some(to) = class_column(&sources, m) else {
+            let Some(to) = cols.get(&m).copied() else {
                 continue;
             };
-            if !to.nullable && is_not_null(s) {
+            if nn {
+                if !to.nullable || !nn_done.insert(m) {
+                    continue;
+                }
+                push(m, is_not_null_of(to));
                 continue;
             }
             let map = HashMap::from([(on, column(to))]);
@@ -147,13 +169,13 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     if add_left.is_empty() && add_right.is_empty() {
         return node;
     }
-    // A side with nothing to add stays as it is (`into_side` would merge
+    // A side with nothing to add stays as it is (the push would merge
     // its stacked filters, a change that never ends join ordering's loop).
     let side = |s: &Arc<LogicalPlan>, add: Vec<Arc<Expr>>| {
         if add.is_empty() {
             Arc::clone(s)
         } else {
-            into_side(s, add)
+            into_side_new(s, add)
         }
     };
     let new_left = side(left, add_left);
@@ -166,8 +188,8 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
 
 /// Whether `pred` is already queued in `added` or `side`'s rows already
 /// satisfy it ([`held`]).
-fn holds(side: &Arc<LogicalPlan>, added: &[Arc<Expr>], pred: &Arc<Expr>) -> bool {
-    added.iter().any(|k| same(k, pred)) || held(side, pred)
+fn holds(side: &Arc<LogicalPlan>, added: &[Arc<Expr>], pred: &Arc<Expr>, memo: &mut Memo) -> bool {
+    added.iter().any(|k| same(k, pred)) || held(side, pred, memo)
 }
 
 /// A node of [`held`]'s walk, the candidate and the conjuncts met above it,
@@ -184,13 +206,18 @@ type Step<'a> = (&'a Arc<LogicalPlan>, Arc<Expr>, Vec<Arc<Expr>>);
 /// That is what keeps `optimize` a fixed point: later rules (pushdown,
 /// common-subexpression elimination, join ordering) move and respell the
 /// filters this rule added, and a second run must still find them.
-fn held(side: &Arc<LogicalPlan>, pred: &Arc<Expr>) -> bool {
-    held_under(side, Arc::clone(pred), Vec::new())
+fn held(side: &Arc<LogicalPlan>, pred: &Arc<Expr>, memo: &mut Memo) -> bool {
+    held_under(side, Arc::clone(pred), Vec::new(), memo)
 }
 
 /// [`held`] of `pred` at `side`, below conjuncts `known` (spelled over
 /// `side`'s output).
-fn held_under(side: &Arc<LogicalPlan>, pred: Arc<Expr>, known: Vec<Arc<Expr>>) -> bool {
+fn held_under(
+    side: &Arc<LogicalPlan>,
+    pred: Arc<Expr>,
+    known: Vec<Arc<Expr>>,
+    memo: &mut Memo,
+) -> bool {
     let mut stack: Vec<Step<'_>> = vec![(side, pred, known)];
     while let Some((n, p, mut known)) = stack.pop() {
         if implies(&known, &p) {
@@ -257,7 +284,7 @@ fn held_under(side: &Arc<LogicalPlan>, pred: Arc<Expr>, known: Vec<Arc<Expr>>) -
                             .zip(cols)
                             .map(|(o, c)| (o.id, column(c)))
                             .collect();
-                        held_under(input, substitute(&p, &map), Vec::new())
+                        held_under(input, substitute(&p, &map), Vec::new(), memo)
                     });
                 if all {
                     return true;
@@ -295,11 +322,10 @@ fn held_under(side: &Arc<LogicalPlan>, pred: Arc<Expr>, known: Vec<Arc<Expr>>) -
                         return true;
                     }
                 }
-                // Both open inputs: the one without `p`'s columns finds no
-                // conjunct over them (no `ids` here, which walks the
-                // subtree; a false match only drops a redundant filter).
+                // Only the open input that has `p`'s columns (one path down,
+                // ids memoised per pass).
                 for (input, open) in [(left, to_left), (right, to_right)] {
-                    if open {
+                    if open && refs.is_subset(&memo.ids(input)) {
                         stack.push((input, Arc::clone(&p), Vec::new()));
                     }
                 }
@@ -345,14 +371,6 @@ fn implies(known: &[Arc<Expr>], pred: &Arc<Expr>) -> bool {
     })
 }
 
-/// The column of attribute `id` as some source's `=` writes it.
-fn class_column(sources: &[Arc<Expr>], id: AttrId) -> Option<&BoundColumn> {
-    sources.iter().find_map(|s| {
-        let [a, b] = equality(s)?;
-        [a, b].into_iter().find(|c| c.id == id)
-    })
-}
-
 /// `isnotnull(c)` as the analyzer resolves it: never null, whatever `c` is
 /// (a call built with `nullable` from its argument would differ from the
 /// user's own `c IS NOT NULL`, and the plan would not be a fixed point).
@@ -394,21 +412,36 @@ fn literal_constraint(e: &Expr) -> Option<AttrId> {
     }
 }
 
-/// The deterministic conjuncts known to hold of `plan`'s output, found
-/// through filters, inner joins, column-only projections and shifts (the
-/// walk of the implied filters of `pushdown`, plus self-join instances).
-fn constraints(plan: &Arc<LogicalPlan>) -> Vec<Arc<Expr>> {
-    let mut out = Vec::new();
-    let mut stack = vec![plan];
-    while let Some(n) = stack.pop() {
-        match &n.node {
+/// A node's constraints, shared between the memo and its callers.
+type Conjuncts = Arc<[Arc<Expr>]>;
+
+/// What one pass of the rule (`lib.rs` `infer_join_filters`) learns about
+/// relations, memoised by address: each node's constraints and output ids
+/// are computed once from its inputs', not by a walk per join. Every key's
+/// `Arc` is kept in the entry, so an address is never reused while the memo
+/// lives (the plan crate's rule for address-keyed memos).
+#[derive(Default)]
+pub(crate) struct Memo {
+    constraints: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Conjuncts)>,
+    ids: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<Attrs>)>,
+}
+
+impl Memo {
+    /// The deterministic conjuncts known to hold of `plan`'s output, found
+    /// through filters, inner joins, column-only projections and shifts (the
+    /// walk of the implied filters of `pushdown`, plus self-join
+    /// instances), in pre-order: a node's own, then its inputs' left first.
+    fn constraints(&mut self, plan: &Arc<LogicalPlan>) -> Conjuncts {
+        if let Some((_, c)) = self.constraints.get(&Arc::as_ptr(plan)) {
+            return Arc::clone(c);
+        }
+        let deterministic =
+            |e: &Arc<Expr>| conjuncts(e).into_iter().filter(|c| is_deterministic(c));
+        let out: Vec<Arc<Expr>> = match &plan.node {
             PlanNode::Filter { input, predicate } => {
-                out.extend(
-                    conjuncts(predicate)
-                        .into_iter()
-                        .filter(|c| is_deterministic(c)),
-                );
-                stack.push(input);
+                let mut out: Vec<_> = deterministic(predicate).collect();
+                out.extend(self.constraints(input).iter().cloned());
+                out
             }
             PlanNode::Join {
                 left,
@@ -416,27 +449,43 @@ fn constraints(plan: &Arc<LogicalPlan>) -> Vec<Arc<Expr>> {
                 kind: JoinKind::Inner | JoinKind::Cross,
                 condition,
             } => {
-                if let JoinCondition::On(c) = condition {
-                    out.extend(conjuncts(c).into_iter().filter(|c| is_deterministic(c)));
-                }
-                stack.push(right);
-                stack.push(left);
+                let mut out: Vec<_> = match condition {
+                    JoinCondition::On(c) => deterministic(c).collect(),
+                    _ => Vec::new(),
+                };
+                out.extend(self.constraints(left).iter().cloned());
+                out.extend(self.constraints(right).iter().cloned());
+                out
             }
             PlanNode::Project { input, exprs }
                 if exprs
                     .iter()
                     .all(|e| matches!(e.node, ExprNode::Resolved(ResolvedExpr::Column(_)))) =>
             {
-                stack.push(input);
+                self.constraints(input).to_vec()
             }
             // A self-join instance: its constraints, renumbered as it reads.
-            PlanNode::Shift { input, offset } => {
-                out.extend(constraints(input).iter().filter_map(|c| shift(c, *offset)));
-            }
-            _ => {}
-        }
+            PlanNode::Shift { input, offset } => self
+                .constraints(input)
+                .iter()
+                .filter_map(|c| shift(c, *offset))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let out: Conjuncts = out.into();
+        self.constraints
+            .insert(Arc::as_ptr(plan), (Arc::clone(plan), Arc::clone(&out)));
+        out
     }
-    out
+
+    /// `plan`'s output ids (`pushdown::ids`, once per node).
+    fn ids(&mut self, plan: &Arc<LogicalPlan>) -> Arc<Attrs> {
+        let entry = self
+            .ids
+            .entry(Arc::as_ptr(plan))
+            .or_insert_with(|| (Arc::clone(plan), Arc::new(ids(plan))));
+        Arc::clone(&entry.1)
+    }
 }
 
 /// `e` with every column id raised by `offset` (what a [`PlanNode::Shift`]

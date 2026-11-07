@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -26,11 +27,11 @@ Limit 100
                                  +- Join Inner, (sr_returned_date_sk#23 == d_date_sk#105)
                                     :- Project [sr_returned_date_sk#23, sr_item_sk#25, sr_customer_sk#26, sr_ticket_number#32, sr_net_loss#42, cs_net_profit#76]
                                     :  +- Join Inner, ((sr_customer_sk#26 == cs_bill_customer_sk#46) and (sr_item_sk#25 == cs_item_sk#58))
-                                    :     :- Filter (((isnotnull(sr_item_sk#25) and isnotnull(sr_customer_sk#26)) and isnotnull(sr_returned_date_sk#23)) and isnotnull(sr_ticket_number#32))
+                                    :     :- Filter (((isnotnull(sr_item_sk#25) and isnotnull(sr_customer_sk#26)) and isnotnull(sr_ticket_number#32)) and isnotnull(sr_returned_date_sk#23))
                                     :     :  +- Scan spark_catalog.default.store_returns [sr_returned_date_sk#23, sr_item_sk#25, sr_customer_sk#26, sr_ticket_number#32, sr_net_loss#42]
                                     :     +- Project [cs_bill_customer_sk#46, cs_item_sk#58, cs_net_profit#76]
                                     :        +- Join Inner, (cs_sold_date_sk#43 == d_date_sk#133)
-                                    :           :- Filter ((isnotnull(cs_sold_date_sk#43) and isnotnull(cs_bill_customer_sk#46)) and isnotnull(cs_item_sk#58))
+                                    :           :- Filter ((isnotnull(cs_bill_customer_sk#46) and isnotnull(cs_item_sk#58)) and isnotnull(cs_sold_date_sk#43))
                                     :           :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#43, cs_bill_customer_sk#46, cs_item_sk#58, cs_net_profit#76]
                                     :           +- Project [d_date_sk#133]
                                     :              +- Shift +56

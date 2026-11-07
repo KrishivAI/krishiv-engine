@@ -1,10 +1,11 @@
 ---
 source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 607
 expression: SELECT t.a FROM t JOIN u ON t.a = u.a WHERE u.a = 5
 ---
 Project [a#0]
 +- Join Inner, (a#0 == a#3)
    :- Filter (isnotnull(a#0) and (a#0 == 5))
    :  +- Scan spark_catalog.default.t [a#0]
-   +- Filter (isnotnull(a#3) and (a#3 == 5))
+   +- Filter (a#3 == 5)
       +- Scan spark_catalog.default.u [a#3]

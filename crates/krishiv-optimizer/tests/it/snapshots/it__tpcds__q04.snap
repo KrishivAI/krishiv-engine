@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -18,7 +19,7 @@ Limit 100
          :        :  :           :  +- Scan spark_catalog.default.customer [c_customer_sk#0, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16] (shared #1)
          :        :  :           +- Project [ss_customer_sk#21, ss_ext_discount_amt#32, ss_ext_sales_price#33, ss_ext_wholesale_cost#34, ss_ext_list_price#35, d_year#47]
          :        :  :              +- Join Inner, (ss_sold_date_sk#18 == d_date_sk#41)
-         :        :  :                 :- Filter (isnotnull(ss_sold_date_sk#18) and isnotnull(ss_customer_sk#21))
+         :        :  :                 :- Filter (isnotnull(ss_customer_sk#21) and isnotnull(ss_sold_date_sk#18))
          :        :  :                 :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#18, ss_customer_sk#21, ss_ext_discount_amt#32, ss_ext_sales_price#33, ss_ext_wholesale_cost#34, ss_ext_list_price#35] (shared #2)
          :        :  :                 +- Filter ((d_year#47 == 2001) and isnotnull(d_date_sk#41))
          :        :  :                    +- Scan spark_catalog.default.date_dim [d_date_sk#41, d_year#47] (shared #3)
@@ -31,7 +32,7 @@ Limit 100
          :        :              :     +- Shared #3, printed above
          :        :              +- Project [cs_sold_date_sk#79, cs_ext_discount_amt#101, cs_ext_sales_price#102, cs_ext_wholesale_cost#103, cs_ext_list_price#104, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
          :        :                 +- Join Inner, (c_customer_sk#0 == cs_bill_customer_sk#82)
-         :        :                    :- Filter isnotnull(cs_bill_customer_sk#82)
+         :        :                    :- Filter (isnotnull(cs_bill_customer_sk#82) and isnotnull(cs_sold_date_sk#79))
          :        :                    :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#79, cs_bill_customer_sk#82, cs_ext_discount_amt#101, cs_ext_sales_price#102, cs_ext_wholesale_cost#103, cs_ext_list_price#104] (shared #4)
          :        :                    +- Filter false
          :        :                       +- Shared #1, printed above
@@ -44,7 +45,7 @@ Limit 100
          :                    :     +- Shared #3, printed above
          :                    +- Project [ws_sold_date_sk#151, ws_ext_discount_amt#173, ws_ext_sales_price#174, ws_ext_wholesale_cost#175, ws_ext_list_price#176, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
          :                       +- Join Inner, (c_customer_sk#0 == ws_bill_customer_sk#155)
-         :                          :- Filter isnotnull(ws_bill_customer_sk#155)
+         :                          :- Filter (isnotnull(ws_bill_customer_sk#155) and isnotnull(ws_sold_date_sk#151))
          :                          :  +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#151, ws_bill_customer_sk#155, ws_ext_discount_amt#173, ws_ext_sales_price#174, ws_ext_wholesale_cost#175, ws_ext_list_price#176] (shared #5)
          :                          +- Filter false
          :                             +- Shared #1, printed above
@@ -62,7 +63,7 @@ Limit 100
                :           :  :        :  +- Shared #3, printed above
                :           :  :        +- Project [ss_sold_date_sk#18, ss_ext_discount_amt#32, ss_ext_sales_price#33, ss_ext_wholesale_cost#34, ss_ext_list_price#35, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
                :           :  :           +- Join Inner, (c_customer_sk#0 == ss_customer_sk#21)
-               :           :  :              :- Filter isnotnull(ss_customer_sk#21)
+               :           :  :              :- Filter (isnotnull(ss_customer_sk#21) and isnotnull(ss_sold_date_sk#18))
                :           :  :              :  +- Shared #2, printed above
                :           :  :              +- Filter false
                :           :  :                 +- Shared #1, printed above
@@ -73,7 +74,7 @@ Limit 100
                :           :           :  +- Shared #1, printed above
                :           :           +- Project [cs_bill_customer_sk#82, cs_ext_discount_amt#101, cs_ext_sales_price#102, cs_ext_wholesale_cost#103, cs_ext_list_price#104, d_year#119]
                :           :              +- Join Inner, (cs_sold_date_sk#79 == d_date_sk#113)
-               :           :                 :- Filter (isnotnull(cs_sold_date_sk#79) and isnotnull(cs_bill_customer_sk#82))
+               :           :                 :- Filter (isnotnull(cs_bill_customer_sk#82) and isnotnull(cs_sold_date_sk#79))
                :           :                 :  +- Shared #4, printed above
                :           :                 +- Shift +72
                :           :                    +- Filter ((d_year#47 == 2002) and isnotnull(d_date_sk#41))
@@ -86,7 +87,7 @@ Limit 100
                :                    :     +- Shared #3, printed above
                :                    +- Project [ws_sold_date_sk#151, ws_ext_discount_amt#173, ws_ext_sales_price#174, ws_ext_wholesale_cost#175, ws_ext_list_price#176, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
                :                       +- Join Inner, (c_customer_sk#0 == ws_bill_customer_sk#155)
-               :                          :- Filter isnotnull(ws_bill_customer_sk#155)
+               :                          :- Filter (isnotnull(ws_bill_customer_sk#155) and isnotnull(ws_sold_date_sk#151))
                :                          :  +- Shared #5, printed above
                :                          +- Filter false
                :                             +- Shared #1, printed above
@@ -104,7 +105,7 @@ Limit 100
                      :           :  :        :  +- Shared #3, printed above
                      :           :  :        +- Project [ss_sold_date_sk#18, ss_ext_discount_amt#32, ss_ext_sales_price#33, ss_ext_wholesale_cost#34, ss_ext_list_price#35, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
                      :           :  :           +- Join Inner, (c_customer_sk#0 == ss_customer_sk#21)
-                     :           :  :              :- Filter isnotnull(ss_customer_sk#21)
+                     :           :  :              :- Filter (isnotnull(ss_customer_sk#21) and isnotnull(ss_sold_date_sk#18))
                      :           :  :              :  +- Shared #2, printed above
                      :           :  :              +- Filter false
                      :           :  :                 +- Shared #1, printed above
@@ -116,7 +117,7 @@ Limit 100
                      :           :           :     +- Shared #3, printed above
                      :           :           +- Project [cs_sold_date_sk#79, cs_ext_discount_amt#101, cs_ext_sales_price#102, cs_ext_wholesale_cost#103, cs_ext_list_price#104, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
                      :           :              +- Join Inner, (c_customer_sk#0 == cs_bill_customer_sk#82)
-                     :           :                 :- Filter isnotnull(cs_bill_customer_sk#82)
+                     :           :                 :- Filter (isnotnull(cs_bill_customer_sk#82) and isnotnull(cs_sold_date_sk#79))
                      :           :                 :  +- Shared #4, printed above
                      :           :                 +- Filter false
                      :           :                    +- Shared #1, printed above
@@ -127,7 +128,7 @@ Limit 100
                      :                    :  +- Shared #1, printed above
                      :                    +- Project [ws_bill_customer_sk#155, ws_ext_discount_amt#173, ws_ext_sales_price#174, ws_ext_wholesale_cost#175, ws_ext_list_price#176, d_year#191]
                      :                       +- Join Inner, (ws_sold_date_sk#151 == d_date_sk#185)
-                     :                          :- Filter (isnotnull(ws_sold_date_sk#151) and isnotnull(ws_bill_customer_sk#155))
+                     :                          :- Filter (isnotnull(ws_bill_customer_sk#155) and isnotnull(ws_sold_date_sk#151))
                      :                          :  +- Shared #5, printed above
                      :                          +- Shift +144
                      :                             +- Filter ((d_year#47 == 2002) and isnotnull(d_date_sk#41))
@@ -146,7 +147,7 @@ Limit 100
                            :           :  :        :  +- Shared #1, printed above
                            :           :  :        +- Project [ss_customer_sk#21, ss_ext_discount_amt#32, ss_ext_sales_price#33, ss_ext_wholesale_cost#34, ss_ext_list_price#35, d_year#47]
                            :           :  :           +- Join Inner, (ss_sold_date_sk#18 == d_date_sk#41)
-                           :           :  :              :- Filter (isnotnull(ss_sold_date_sk#18) and isnotnull(ss_customer_sk#21))
+                           :           :  :              :- Filter (isnotnull(ss_customer_sk#21) and isnotnull(ss_sold_date_sk#18))
                            :           :  :              :  +- Shared #2, printed above
                            :           :  :              +- Filter ((d_year#47 == 2002) and isnotnull(d_date_sk#41))
                            :           :  :                 +- Shared #3, printed above
@@ -158,7 +159,7 @@ Limit 100
                            :           :           :     +- Shared #3, printed above
                            :           :           +- Project [cs_sold_date_sk#79, cs_ext_discount_amt#101, cs_ext_sales_price#102, cs_ext_wholesale_cost#103, cs_ext_list_price#104, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
                            :           :              +- Join Inner, (c_customer_sk#0 == cs_bill_customer_sk#82)
-                           :           :                 :- Filter isnotnull(cs_bill_customer_sk#82)
+                           :           :                 :- Filter (isnotnull(cs_bill_customer_sk#82) and isnotnull(cs_sold_date_sk#79))
                            :           :                 :  +- Shared #4, printed above
                            :           :                 +- Filter false
                            :           :                    +- Shared #1, printed above
@@ -170,7 +171,7 @@ Limit 100
                            :                    :     +- Shared #3, printed above
                            :                    +- Project [ws_sold_date_sk#151, ws_ext_discount_amt#173, ws_ext_sales_price#174, ws_ext_wholesale_cost#175, ws_ext_list_price#176, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
                            :                       +- Join Inner, (c_customer_sk#0 == ws_bill_customer_sk#155)
-                           :                          :- Filter isnotnull(ws_bill_customer_sk#155)
+                           :                          :- Filter (isnotnull(ws_bill_customer_sk#155) and isnotnull(ws_sold_date_sk#151))
                            :                          :  +- Shared #5, printed above
                            :                          +- Filter false
                            :                             +- Shared #1, printed above
@@ -189,7 +190,7 @@ Limit 100
                                  :           :  :           :  +- Shared #3, printed above
                                  :           :  :           +- Project [ss_sold_date_sk#18, ss_ext_discount_amt#32, ss_ext_sales_price#33, ss_ext_wholesale_cost#34, ss_ext_list_price#35, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
                                  :           :  :              +- Join Inner, (c_customer_sk#0 == ss_customer_sk#21)
-                                 :           :  :                 :- Filter isnotnull(ss_customer_sk#21)
+                                 :           :  :                 :- Filter (isnotnull(ss_customer_sk#21) and isnotnull(ss_sold_date_sk#18))
                                  :           :  :                 :  +- Shared #2, printed above
                                  :           :  :                 +- Filter false
                                  :           :  :                    +- Shared #1, printed above
@@ -201,7 +202,7 @@ Limit 100
                                  :           :              :  +- Shared #1, printed above
                                  :           :              +- Project [cs_bill_customer_sk#82, cs_ext_discount_amt#101, cs_ext_sales_price#102, cs_ext_wholesale_cost#103, cs_ext_list_price#104, d_year#119]
                                  :           :                 +- Join Inner, (cs_sold_date_sk#79 == d_date_sk#113)
-                                 :           :                    :- Filter (isnotnull(cs_sold_date_sk#79) and isnotnull(cs_bill_customer_sk#82))
+                                 :           :                    :- Filter (isnotnull(cs_bill_customer_sk#82) and isnotnull(cs_sold_date_sk#79))
                                  :           :                    :  +- Shared #4, printed above
                                  :           :                    +- Shift +72
                                  :           :                       +- Filter ((d_year#47 == 2001) and isnotnull(d_date_sk#41))
@@ -215,7 +216,7 @@ Limit 100
                                  :                       :     +- Shared #3, printed above
                                  :                       +- Project [ws_sold_date_sk#151, ws_ext_discount_amt#173, ws_ext_sales_price#174, ws_ext_wholesale_cost#175, ws_ext_list_price#176, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
                                  :                          +- Join Inner, (c_customer_sk#0 == ws_bill_customer_sk#155)
-                                 :                             :- Filter isnotnull(ws_bill_customer_sk#155)
+                                 :                             :- Filter (isnotnull(ws_bill_customer_sk#155) and isnotnull(ws_sold_date_sk#151))
                                  :                             :  +- Shared #5, printed above
                                  :                             +- Filter false
                                  :                                +- Shared #1, printed above
@@ -232,7 +233,7 @@ Limit 100
                                              :  :           :  +- Shared #3, printed above
                                              :  :           +- Project [ss_sold_date_sk#18, ss_ext_discount_amt#32, ss_ext_sales_price#33, ss_ext_wholesale_cost#34, ss_ext_list_price#35, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
                                              :  :              +- Join Inner, (c_customer_sk#0 == ss_customer_sk#21)
-                                             :  :                 :- Filter isnotnull(ss_customer_sk#21)
+                                             :  :                 :- Filter (isnotnull(ss_customer_sk#21) and isnotnull(ss_sold_date_sk#18))
                                              :  :                 :  +- Shared #2, printed above
                                              :  :                 +- Filter false
                                              :  :                    +- Shared #1, printed above
@@ -245,7 +246,7 @@ Limit 100
                                              :              :     +- Shared #3, printed above
                                              :              +- Project [cs_sold_date_sk#79, cs_ext_discount_amt#101, cs_ext_sales_price#102, cs_ext_wholesale_cost#103, cs_ext_list_price#104, c_customer_id#1, c_first_name#8, c_last_name#9, c_preferred_cust_flag#10, c_birth_country#14, c_login#15, c_email_address#16]
                                              :                 +- Join Inner, (c_customer_sk#0 == cs_bill_customer_sk#82)
-                                             :                    :- Filter isnotnull(cs_bill_customer_sk#82)
+                                             :                    :- Filter (isnotnull(cs_bill_customer_sk#82) and isnotnull(cs_sold_date_sk#79))
                                              :                    :  +- Shared #4, printed above
                                              :                    +- Filter false
                                              :                       +- Shared #1, printed above
@@ -257,7 +258,7 @@ Limit 100
                                                          :  +- Shared #1, printed above
                                                          +- Project [ws_bill_customer_sk#155, ws_ext_discount_amt#173, ws_ext_sales_price#174, ws_ext_wholesale_cost#175, ws_ext_list_price#176, d_year#191]
                                                             +- Join Inner, (ws_sold_date_sk#151 == d_date_sk#185)
-                                                               :- Filter (isnotnull(ws_sold_date_sk#151) and isnotnull(ws_bill_customer_sk#155))
+                                                               :- Filter (isnotnull(ws_bill_customer_sk#155) and isnotnull(ws_sold_date_sk#151))
                                                                :  +- Shared #5, printed above
                                                                +- Shift +144
                                                                   +- Filter ((d_year#47 == 2001) and isnotnull(d_date_sk#41))

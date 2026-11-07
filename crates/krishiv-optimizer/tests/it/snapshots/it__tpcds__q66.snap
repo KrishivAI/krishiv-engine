@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -23,7 +24,7 @@ Limit 100
             :                    :     +- Scan spark_catalog.default.ship_mode [sm_ship_mode_sk#86, sm_carrier#90] (shared #3)
             :                    +- Project [ws_sold_date_sk#0, ws_ship_mode_sk#14, ws_warehouse_sk#15, ws_quantity#18, ws_ext_sales_price#23, ws_net_paid#29]
             :                       +- Join Inner, (ws_sold_time_sk#1 == t_time_sk#76)
-            :                          :- Filter (((isnotnull(ws_sold_time_sk#1) and isnotnull(ws_ship_mode_sk#14)) and isnotnull(ws_sold_date_sk#0)) and isnotnull(ws_warehouse_sk#15))
+            :                          :- Filter (((isnotnull(ws_warehouse_sk#15) and isnotnull(ws_sold_date_sk#0)) and isnotnull(ws_sold_time_sk#1)) and isnotnull(ws_ship_mode_sk#14))
             :                          :  +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_sold_time_sk#1, ws_ship_mode_sk#14, ws_warehouse_sk#15, ws_quantity#18, ws_ext_sales_price#23, ws_net_paid#29]
             :                          +- Project [t_time_sk#76]
             :                             +- Filter (((t_time#78 >= 30838) and (t_time#78 <= 59638)) and isnotnull(t_time_sk#76))
@@ -46,7 +47,7 @@ Limit 100
                                  :     +- Shared #2, printed above
                                  +- Project [cs_sold_date_sk#118, cs_ship_mode_sk#131, cs_warehouse_sk#132, cs_quantity#136, cs_sales_price#139, cs_net_paid_inc_tax#148]
                                     +- Join Inner, (cs_sold_time_sk#119 == t_time_sk#180)
-                                       :- Filter (((isnotnull(cs_sold_time_sk#119) and isnotnull(cs_sold_date_sk#118)) and isnotnull(cs_ship_mode_sk#131)) and isnotnull(cs_warehouse_sk#132))
+                                       :- Filter (((isnotnull(cs_warehouse_sk#132) and isnotnull(cs_sold_date_sk#118)) and isnotnull(cs_sold_time_sk#119)) and isnotnull(cs_ship_mode_sk#131))
                                        :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#118, cs_sold_time_sk#119, cs_ship_mode_sk#131, cs_warehouse_sk#132, cs_quantity#136, cs_sales_price#139, cs_net_paid_inc_tax#148]
                                        +- Project [t_time_sk#180]
                                           +- Shift +104

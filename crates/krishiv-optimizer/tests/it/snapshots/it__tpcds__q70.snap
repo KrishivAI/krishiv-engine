@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Project [total_sum#165, s_state#168, s_county#169, lochierarchy#166, rank_within_parent#167]
@@ -12,7 +13,7 @@ Project [total_sum#165, s_state#168, s_county#169, lochierarchy#166, rank_within
                   +- Join LeftSemi, (s_state#75 == s_state#160)
                      :- Project [s_county#74, s_state#75, ss_net_profit#22]
                      :  +- Join Inner, (s_store_sk#51 == ss_store_sk#7)
-                     :     :- Filter (isnotnull(s_state#75) and isnotnull(s_store_sk#51))
+                     :     :- Filter (isnotnull(s_store_sk#51) and isnotnull(s_state#75))
                      :     :  +- Scan spark_catalog.default.store [s_store_sk#51, s_county#74, s_state#75] (shared #1)
                      :     +- Project [ss_store_sk#7, ss_net_profit#22]
                      :        +- Join Inner, (d_date_sk#23 == ss_sold_date_sk#0)
@@ -29,12 +30,12 @@ Project [total_sum#165, s_state#168, s_county#169, lochierarchy#166, rank_within
                                     +- Join Inner, (s_store_sk#103 == ss_store_sk#87)
                                        :- Project [s_store_sk#103, s_state#127]
                                        :  +- Shift +52
-                                       :     +- Filter (isnotnull(s_state#75) and isnotnull(s_store_sk#51))
+                                       :     +- Filter (isnotnull(s_store_sk#51) and isnotnull(s_state#75))
                                        :        +- Shared #1, printed above
                                        +- Project [ss_store_sk#87, ss_net_profit#102]
                                           +- Join Inner, (d_date_sk#132 == ss_sold_date_sk#80)
                                              :- Shift +80
-                                             :  +- Filter (isnotnull(ss_sold_date_sk#0) and isnotnull(ss_store_sk#7))
+                                             :  +- Filter (isnotnull(ss_store_sk#7) and isnotnull(ss_sold_date_sk#0))
                                              :     +- Shared #2, printed above
                                              +- Project [d_date_sk#132]
                                                 +- Shift +109

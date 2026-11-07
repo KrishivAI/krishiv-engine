@@ -349,7 +349,6 @@ fn run(
                 Ok(pushdown::imply_join_condition(p))
             })
         })?;
-        let root = t.once("InferJoinFilters", &root, infer_join_filters)?;
         // UDF calls of literals fold with the rewrite batch to a fixed
         // point: folding exposes the constants rewriting folds, and
         // rewriting exposes the literals folding folds (casts, arithmetic
@@ -372,6 +371,15 @@ fn run(
         } else {
             root = batch(root, "Rewrite", &mut t)?;
         }
+        // After the rewrite batch, which moves `WHERE` equalities into the
+        // joins (comma joins are cross joins before it); the batch runs
+        // again to push what the rule added, only when it added something.
+        let inferred = t.once("InferJoinFilters", &root, infer_join_filters)?;
+        let root = if Arc::ptr_eq(&inferred, &root) {
+            root
+        } else {
+            batch(inferred, "Rewrite", &mut t)?
+        };
         let root = t.once("AlgebraicSum", &root, |r| {
             sum_rewrite::rewrite(Arc::clone(r))
         })?;
@@ -494,8 +502,9 @@ fn run(
 
 /// [`constraints::infer_join_filters`] at every join, bottom up.
 fn infer_join_filters(root: &Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
+    let mut memo = constraints::Memo::default();
     dag::rewrite_up(Arc::clone(root), &mut |p| {
-        Ok(constraints::infer_join_filters(p))
+        Ok(constraints::infer_join_filters(p, &mut memo))
     })
 }
 
@@ -507,6 +516,7 @@ fn order_and_restrict(
     t: &mut Trace,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     for round in 1..=MAX_ITERATIONS {
+        let input = Arc::clone(&root);
         let ordered = join_order::reorder(&root, stats, propagate);
         t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
         let restricted = restrict::restrict(Arc::clone(&ordered), stats, propagate)?;
@@ -522,19 +532,36 @@ fn order_and_restrict(
             &restricted,
             &inferred,
         );
-        let done = Arc::ptr_eq(&inferred, &ordered);
+        let mut done = Arc::ptr_eq(&inferred, &ordered);
         // Pushed down and merged before ordering reads them again, so the
         // next round sees the inputs a second `optimize` would see.
         root = if Arc::ptr_eq(&inferred, &restricted) {
             inferred
         } else {
-            batch(inferred, "Tidy", t)?
+            let tidied = batch(inferred, "Tidy", t)?;
+            // Tidying can return the round's input (what the rule added was
+            // already there, spelled another way): nothing to do again.
+            if same_plan(&tidied, &input) {
+                done = true;
+                input
+            } else {
+                tidied
+            }
         };
         if done {
             break;
         }
     }
     Ok(root)
+}
+
+/// Whether two relations are structurally equal (their canonical encodings).
+fn same_plan(a: &Arc<LogicalPlan>, b: &Arc<LogicalPlan>) -> bool {
+    Arc::ptr_eq(a, b)
+        || matches!(
+            (Plan::try_new(LogicalPlan::clone(a)), Plan::try_new(LogicalPlan::clone(b))),
+            (Ok(x), Ok(y)) if x.structurally_eq(&y)
+        )
 }
 
 /// Whether a `Filter` whose predicate is the literal `false` is anywhere in

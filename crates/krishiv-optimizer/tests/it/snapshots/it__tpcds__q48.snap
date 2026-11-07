@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Aggregate [], [sum(ss_quantity#10) AS sum(ss_quantity)#102]
@@ -21,5 +22,5 @@ Aggregate [], [sum(ss_quantity#10) AS sum(ss_quantity)#102]
                         :- Filter (((krishiv_cse_0#4294967296 and (ca_state#69 IN ('CO', 'OH', 'TX'))) or (krishiv_cse_0#4294967296 and (ca_state#69 IN ('OR', 'MN', 'KY')))) or (krishiv_cse_0#4294967296 and (ca_state#69 IN ('VA', 'CA', 'MS'))))
                         :  +- Project [ca_address_sk#61, ca_state#69, ca_country#71, (ca_country#71 == 'United States') AS krishiv_cse_0#4294967296]
                         :     +- Scan spark_catalog.default.customer_address [ca_address_sk#61, ca_state#69, ca_country#71]
-                        +- Filter (((((((ss_sales_price#13 >= 100.00) and (ss_sales_price#13 <= 150.00)) or ((ss_sales_price#13 >= 50.00) and (ss_sales_price#13 <= 100.00))) or ((ss_sales_price#13 >= 150.00) and (ss_sales_price#13 <= 200.00))) and ((((ss_net_profit#22 >= 0.00) and (ss_net_profit#22 <= 2000.00)) or ((ss_net_profit#22 >= 150.00) and (ss_net_profit#22 <= 3000.00))) or ((ss_net_profit#22 >= 50.00) and (ss_net_profit#22 <= 25000.00)))) and isnotnull(ss_sold_date_sk#0)) and isnotnull(ss_store_sk#7))
+                        +- Filter (((((((ss_sales_price#13 >= 100.00) and (ss_sales_price#13 <= 150.00)) or ((ss_sales_price#13 >= 50.00) and (ss_sales_price#13 <= 100.00))) or ((ss_sales_price#13 >= 150.00) and (ss_sales_price#13 <= 200.00))) and ((((ss_net_profit#22 >= 0.00) and (ss_net_profit#22 <= 2000.00)) or ((ss_net_profit#22 >= 150.00) and (ss_net_profit#22 <= 3000.00))) or ((ss_net_profit#22 >= 50.00) and (ss_net_profit#22 <= 25000.00)))) and isnotnull(ss_store_sk#7)) and isnotnull(ss_sold_date_sk#0))
                            +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_cdemo_sk#4, ss_addr_sk#6, ss_store_sk#7, ss_quantity#10, ss_sales_price#13, ss_net_profit#22]

@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -20,7 +21,7 @@ Limit 100
          :     :           :     +- Scan spark_catalog.default.web_site [web_site_sk#75, web_company_name#89]
          :     :           +- Project [ws_ship_addr_sk#11, ws_web_site_sk#13, ws_warehouse_sk#15, ws_order_number#17, ws_ext_ship_cost#28, ws_net_profit#33]
          :     :              +- Join Inner, (ws_ship_date_sk#2 == d_date_sk#34)
-         :     :                 :- Filter (((isnotnull(ws_order_number#17) and isnotnull(ws_ship_date_sk#2)) and isnotnull(ws_web_site_sk#13)) and isnotnull(ws_ship_addr_sk#11))
+         :     :                 :- Filter (((isnotnull(ws_ship_date_sk#2) and isnotnull(ws_ship_addr_sk#11)) and isnotnull(ws_web_site_sk#13)) and isnotnull(ws_order_number#17))
          :     :                 :  +- Scan spark_catalog.default.web_sales [ws_ship_date_sk#2, ws_ship_addr_sk#11, ws_web_site_sk#13, ws_warehouse_sk#15, ws_order_number#17, ws_ext_ship_cost#28, ws_net_profit#33] (shared #1)
          :     :                 +- Project [d_date_sk#34]
          :     :                    +- Filter (((d_date#36 >= DATE '1999-02-01') and (d_date#36 <= DATE '1999-04-02')) and isnotnull(d_date_sk#34))

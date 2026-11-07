@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Sort [c_last_name#95 ASC NULLS FIRST, c_first_name#94 ASC NULLS FIRST, c_salutation#93 ASC NULLS FIRST, c_preferred_cust_flag#96 DESC NULLS FIRST, ss_ticket_number#9 ASC NULLS FIRST], true
@@ -21,7 +22,7 @@ Sort [c_last_name#95 ASC NULLS FIRST, c_first_name#94 ASC NULLS FIRST, c_salutat
                         :     +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_year#29, d_dom#32]
                         +- Project [ss_sold_date_sk#0, ss_customer_sk#3, ss_store_sk#7, ss_ticket_number#9]
                            +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#80)
-                              :- Filter (((isnotnull(ss_hdemo_sk#5) and isnotnull(ss_sold_date_sk#0)) and isnotnull(ss_store_sk#7)) and isnotnull(ss_customer_sk#3))
+                              :- Filter (((isnotnull(ss_sold_date_sk#0) and isnotnull(ss_store_sk#7)) and isnotnull(ss_hdemo_sk#5)) and isnotnull(ss_customer_sk#3))
                               :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_customer_sk#3, ss_hdemo_sk#5, ss_store_sk#7, ss_ticket_number#9]
                               +- Project [hd_demo_sk#80]
                                  +- Filter (((((hd_buy_potential#82 == '>10000') or (hd_buy_potential#82 == 'Unknown')) and (hd_vehicle_count#84 > 0)) and (CASE WHEN (hd_vehicle_count#84 > 0) THEN ((CAST(hd_dep_count#83 AS DECIMAL(10,0)) * 1.000) / CAST(hd_vehicle_count#84 AS DECIMAL(10,0))) ELSE CAST(NULL AS DECIMAL(26,14)) END > 1.20000000000000)) and isnotnull(hd_demo_sk#80))

@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 607
 expression: "WITH r AS (SELECT a, rand() AS x FROM t), v AS (SELECT a FROM u WHERE d = 'z') SELECT p.a FROM r p JOIN r q ON p.a = q.a JOIN v ON v.a = p.a WHERE p.x > 0.5"
 ---
 WithCte [r]
@@ -14,7 +15,7 @@ WithCte [r]
       +- Project [a#6]
          +- Join Inner, (a#10 == a#6)
             :- Project [a#6]
-            :  +- Filter (isnotnull(a#6) and (x#7 > 0.5D))
+            :  +- Filter ((x#7 > 0.5D) and isnotnull(a#6))
             :     +- Shared #1, printed above
             +- Project [a#15 AS a#10]
                +- Shift +11

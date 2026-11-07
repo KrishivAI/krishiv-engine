@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -48,10 +49,10 @@ Limit 100
                                                                   :  +- Join Inner, (sold_date_sk#34 == d_date_sk#96)
                                                                   :     :- Union
                                                                   :     :  :- Project [cs_sold_date_sk#0 AS sold_date_sk#34, cs_bill_customer_sk#3 AS customer_sk#35, cs_item_sk#15 AS item_sk#36]
-                                                                  :     :  :  +- Filter ((isnotnull(cs_sold_date_sk#0) and isnotnull(cs_item_sk#15)) and isnotnull(cs_bill_customer_sk#3))
+                                                                  :     :  :  +- Filter ((isnotnull(cs_item_sk#15) and isnotnull(cs_sold_date_sk#0)) and isnotnull(cs_bill_customer_sk#3))
                                                                   :     :  :     +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#0, cs_bill_customer_sk#3, cs_item_sk#15]
                                                                   :     :  +- Project [ws_sold_date_sk#37 AS sold_date_sk#71, ws_bill_customer_sk#41 AS customer_sk#72, ws_item_sk#40 AS item_sk#73]
-                                                                  :     :     +- Filter ((isnotnull(ws_sold_date_sk#37) and isnotnull(ws_item_sk#40)) and isnotnull(ws_bill_customer_sk#41))
+                                                                  :     :     +- Filter ((isnotnull(ws_item_sk#40) and isnotnull(ws_sold_date_sk#37)) and isnotnull(ws_bill_customer_sk#41))
                                                                   :     :        +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#37, ws_item_sk#40, ws_bill_customer_sk#41]
                                                                   :     +- Project [d_date_sk#96]
                                                                   :        +- Filter (((d_moy#104 == 12) and (d_year#102 == 1998)) and isnotnull(d_date_sk#96))

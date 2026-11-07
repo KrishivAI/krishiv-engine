@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/join_order.rs
+assertion_line: 112
 expression: optimized.root().to_string()
 ---
 Sort [o_year#60 ASC NULLS FIRST], true
@@ -22,7 +23,7 @@ Sort [o_year#60 ASC NULLS FIRST], true
          :           :           :  +- Scan spark_catalog.default.orders [o_orderkey#32, o_custkey#33, o_orderdate#36]
          :           :           +- Project [l_orderkey#16, l_suppkey#18, l_extendedprice#21, l_discount#22]
          :           :              +- Join Inner, (p_partkey#0 == l_partkey#17)
-         :           :                 :- Filter ((isnotnull(l_partkey#17) and isnotnull(l_orderkey#16)) and isnotnull(l_suppkey#18))
+         :           :                 :- Filter ((isnotnull(l_partkey#17) and isnotnull(l_suppkey#18)) and isnotnull(l_orderkey#16))
          :           :                 :  +- Scan spark_catalog.default.lineitem [l_orderkey#16, l_partkey#17, l_suppkey#18, l_extendedprice#21, l_discount#22]
          :           :                 +- Project [p_partkey#0]
          :           :                    +- Filter ((p_type#4 == 'ECONOMY ANODIZED STEEL') and isnotnull(p_partkey#0))
@@ -30,7 +31,7 @@ Sort [o_year#60 ASC NULLS FIRST], true
          :           +- Project [n_nationkey#49]
          :              +- Join Inner, (n_regionkey#51 == r_regionkey#57)
          :                 :- Project [n_nationkey#49, n_regionkey#51]
-         :                 :  +- Filter (isnotnull(n_regionkey#51) and isnotnull(n_nationkey#49))
+         :                 :  +- Filter (isnotnull(n_nationkey#49) and isnotnull(n_regionkey#51))
          :                 :     +- Scan spark_catalog.default.nation [n_nationkey#49, n_name#50, n_regionkey#51] (shared #1)
          :                 +- Project [r_regionkey#57]
          :                    +- Filter ((r_name#58 == 'AMERICA') and isnotnull(r_regionkey#57))

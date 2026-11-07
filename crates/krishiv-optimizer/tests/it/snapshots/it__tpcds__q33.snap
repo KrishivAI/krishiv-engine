@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -14,7 +15,7 @@ Limit 100
          :  :           :- Project [i_manufact_id#77, ss_ext_sales_price#15]
          :  :           :  +- Join Inner, (ss_item_sk#2 == i_item_sk#64)
          :  :           :     :- Project [i_item_sk#64, i_manufact_id#77]
-         :  :           :     :  +- Filter (isnotnull(i_manufact_id#77) and isnotnull(i_item_sk#64))
+         :  :           :     :  +- Filter (isnotnull(i_item_sk#64) and isnotnull(i_manufact_id#77))
          :  :           :     :     +- Scan spark_catalog.default.item [i_item_sk#64, i_category#76, i_manufact_id#77] (shared #1)
          :  :           :     +- Project [ss_item_sk#2, ss_ext_sales_price#15]
          :  :           :        +- Join Inner, (ss_addr_sk#6 == ca_address_sk#51)
@@ -39,7 +40,7 @@ Limit 100
          :              :- Project [i_manufact_id#197, cs_ext_sales_price#132]
          :              :  +- Join Inner, (cs_item_sk#124 == i_item_sk#184)
          :              :     :- Project [i_item_sk#184, i_manufact_id#197]
-         :              :     :  +- Filter (isnotnull(i_manufact_id#197) and isnotnull(i_item_sk#184))
+         :              :     :  +- Filter (isnotnull(i_item_sk#184) and isnotnull(i_manufact_id#197))
          :              :     :     +- Scan spark_catalog.default.item [i_item_sk#184, i_category#196, i_manufact_id#197] (shared #2)
          :              :     +- Project [cs_item_sk#124, cs_ext_sales_price#132]
          :              :        +- Join Inner, (cs_bill_addr_sk#115 == ca_address_sk#171)
@@ -64,7 +65,7 @@ Limit 100
                      :- Project [i_manufact_id#317, ws_ext_sales_price#252]
                      :  +- Join Inner, (ws_item_sk#232 == i_item_sk#304)
                      :     :- Project [i_item_sk#304, i_manufact_id#317]
-                     :     :  +- Filter (isnotnull(i_manufact_id#317) and isnotnull(i_item_sk#304))
+                     :     :  +- Filter (isnotnull(i_item_sk#304) and isnotnull(i_manufact_id#317))
                      :     :     +- Scan spark_catalog.default.item [i_item_sk#304, i_category#316, i_manufact_id#317] (shared #3)
                      :     +- Project [ws_item_sk#232, ws_ext_sales_price#252]
                      :        +- Join Inner, (ws_bill_addr_sk#236 == ca_address_sk#291)

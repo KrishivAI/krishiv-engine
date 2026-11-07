@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -36,7 +37,7 @@ Limit 100
             :     :                             +- Project [cs_ship_date_sk#2, cs_item_sk#15, cs_promo_sk#16, cs_order_number#17, cs_quantity#18, d_date#90, d_week_seq#92]
             :     :                                +- Join Inner, (cs_bill_cdemo_sk#4 == cd_demo_sk#74)
             :     :                                   :- Project [cd_demo_sk#74]
-            :     :                                   :  +- Filter (isnotnull(cd_demo_sk#74) and (cd_marital_status#76 == 'D'))
+            :     :                                   :  +- Filter ((cd_marital_status#76 == 'D') and isnotnull(cd_demo_sk#74))
             :     :                                   :     +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#74, cd_marital_status#76]
             :     :                                   +- Project [cs_ship_date_sk#2, cs_bill_cdemo_sk#4, cs_item_sk#15, cs_promo_sk#16, cs_order_number#17, cs_quantity#18, d_date#90, d_week_seq#92]
             :     :                                      +- Join Inner, (cs_bill_hdemo_sk#5 == hd_demo_sk#83)
@@ -45,10 +46,10 @@ Limit 100
             :     :                                         :     :- Filter ((((isnotnull(cs_item_sk#15) and isnotnull(cs_bill_cdemo_sk#4)) and isnotnull(cs_bill_hdemo_sk#5)) and isnotnull(cs_sold_date_sk#0)) and isnotnull(cs_ship_date_sk#2))
             :     :                                         :     :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#0, cs_ship_date_sk#2, cs_bill_cdemo_sk#4, cs_bill_hdemo_sk#5, cs_item_sk#15, cs_promo_sk#16, cs_order_number#17, cs_quantity#18]
             :     :                                         :     +- Project [d_date_sk#88, d_date#90, d_week_seq#92]
-            :     :                                         :        +- Filter ((isnotnull(d_date_sk#88) and (d_year#94 == 1999)) and isnotnull(d_week_seq#92))
+            :     :                                         :        +- Filter (((d_year#94 == 1999) and isnotnull(d_date_sk#88)) and isnotnull(d_week_seq#92))
             :     :                                         :           +- Shared #1, printed above
             :     :                                         +- Project [hd_demo_sk#83]
-            :     :                                            +- Filter (isnotnull(hd_demo_sk#83) and (hd_buy_potential#85 == '>10000'))
+            :     :                                            +- Filter ((hd_buy_potential#85 == '>10000') and isnotnull(hd_demo_sk#83))
             :     :                                               +- Scan spark_catalog.default.household_demographics [hd_demo_sk#83, hd_buy_potential#85]
             :     +- Filter isnotnull(p_promo_sk#172)
             :        +- Scan spark_catalog.default.promotion [p_promo_sk#172]

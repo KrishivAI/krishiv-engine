@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 607
 expression: "SELECT g.a FROM (SELECT a, count(*) AS n FROM u GROUP BY a) g LEFT JOIN t ON t.a = g.a AND t.b = 'x'"
 ---
 Project [a#0]
@@ -7,5 +8,5 @@ Project [a#0]
    :- Aggregate [a#0], [a#0]
    :  +- Scan spark_catalog.default.u [a#0]
    +- Project [a#3]
-      +- Filter (isnotnull(a#3) and (b#4 == 'x'))
+      +- Filter ((b#4 == 'x') and isnotnull(a#3))
          +- Scan spark_catalog.default.t [a#3, b#4]

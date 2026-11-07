@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpch.rs
+assertion_line: 27
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -12,19 +13,19 @@ Limit 100
          :        :- Project [ps_partkey#28, ps_supplycost#31]
          :        :  +- Join Inner, (s_suppkey#33 == ps_suppkey#29)
          :        :     :- Shift +12
-         :        :     :  +- Filter (isnotnull(ps_partkey#16) and isnotnull(ps_suppkey#17))
+         :        :     :  +- Filter (isnotnull(ps_suppkey#17) and isnotnull(ps_partkey#16))
          :        :     :     +- Scan spark_catalog.default.partsupp [ps_partkey#16, ps_suppkey#17, ps_supplycost#19] (shared #1)
          :        :     +- Project [s_suppkey#33]
          :        :        +- Join Inner, (s_nationkey#36 == n_nationkey#40)
          :        :           :- Project [s_suppkey#33, s_nationkey#36]
          :        :           :  +- Shift +24
-         :        :           :     +- Filter (isnotnull(s_nationkey#12) and isnotnull(s_suppkey#9))
+         :        :           :     +- Filter (isnotnull(s_suppkey#9) and isnotnull(s_nationkey#12))
          :        :           :        +- Scan spark_catalog.default.supplier [s_suppkey#9, s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15] (shared #2)
          :        :           +- Project [n_nationkey#40]
          :        :              +- Join Inner, (n_regionkey#42 == r_regionkey#44)
          :        :                 :- Project [n_nationkey#40, n_regionkey#42]
          :        :                 :  +- Shift +19
-         :        :                 :     +- Filter (isnotnull(n_regionkey#23) and isnotnull(n_nationkey#21))
+         :        :                 :     +- Filter (isnotnull(n_nationkey#21) and isnotnull(n_regionkey#23))
          :        :                 :        +- Scan spark_catalog.default.nation [n_nationkey#21, n_name#22, n_regionkey#23] (shared #3)
          :        :                 +- Project [r_regionkey#44]
          :        :                    +- Shift +19

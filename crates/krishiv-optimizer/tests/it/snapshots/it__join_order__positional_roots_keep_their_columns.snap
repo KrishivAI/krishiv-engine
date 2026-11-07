@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/join_order.rs
+assertion_line: 345
 expression: optimized.root().to_string()
 ---
 Project [a#0, b#1, c#2, a#3, d#4, a#5, b#6, c#7]
@@ -7,7 +8,7 @@ Project [a#0, b#1, c#2, a#3, d#4, a#5, b#6, c#7]
    :- Shift +5
    :  +- Scan spark_catalog.default.t [a#0, b#1, c#2] (shared #1)
    +- Join Inner, (a#0 == a#3)
-      :- Filter (isnotnull(a#0) and (b#1 == 'y'))
+      :- Filter ((b#1 == 'y') and isnotnull(a#0))
       :  +- Shared #1, printed above
-      +- Filter (isnotnull(a#3) and (d#4 == 'z'))
+      +- Filter ((d#4 == 'z') and isnotnull(a#3))
          +- Scan spark_catalog.default.u [a#3, d#4]

@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Sort [c_last_name#126 ASC NULLS FIRST, c_first_name#127 ASC NULLS FIRST, s_store_name#128 ASC NULLS FIRST], true
@@ -19,18 +20,18 @@ Sort [c_last_name#126 ASC NULLS FIRST, c_first_name#127 ASC NULLS FIRST, s_store
    :                             :  +- Scan spark_catalog.default.item [i_item_sk#72, i_current_price#77, i_size#87, i_color#89, i_units#90, i_manager_id#92] (shared #2)
    :                             +- Project [ss_item_sk#2, ss_ticket_number#9, ss_net_paid#20, c_first_name#102, c_last_name#103, ca_state#120, s_store_name#48, s_state#67]
    :                                +- Join Inner, ((ss_customer_sk#3 == c_customer_sk#94) and (ss_store_sk#7 == s_store_sk#43))
-   :                                   :- Filter (((isnotnull(ss_customer_sk#3) and isnotnull(ss_store_sk#7)) and isnotnull(ss_item_sk#2)) and isnotnull(ss_ticket_number#9))
+   :                                   :- Filter (((isnotnull(ss_item_sk#2) and isnotnull(ss_ticket_number#9)) and isnotnull(ss_store_sk#7)) and isnotnull(ss_customer_sk#3))
    :                                   :  +- Scan spark_catalog.default.store_sales [ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_ticket_number#9, ss_net_paid#20] (shared #3)
    :                                   +- Project [c_customer_sk#94, c_first_name#102, c_last_name#103, ca_state#120, s_store_sk#43, s_store_name#48, s_state#67]
    :                                      +- Join Inner, ((c_current_addr_sk#98 == ca_address_sk#112) and (NOT (c_birth_country#108 == upper(ca_country#122))))
-   :                                         :- Filter (isnotnull(c_current_addr_sk#98) and isnotnull(c_customer_sk#94))
+   :                                         :- Filter (isnotnull(c_customer_sk#94) and isnotnull(c_current_addr_sk#98))
    :                                         :  +- Scan spark_catalog.default.customer [c_customer_sk#94, c_current_addr_sk#98, c_first_name#102, c_last_name#103, c_birth_country#108] (shared #4)
    :                                         +- Project [ca_address_sk#112, ca_state#120, ca_country#122, s_store_sk#43, s_store_name#48, s_state#67]
    :                                            +- Join Inner, (s_zip#68 == ca_zip#121)
-   :                                               :- Filter (isnotnull(ca_zip#121) and isnotnull(ca_address_sk#112))
+   :                                               :- Filter (isnotnull(ca_address_sk#112) and isnotnull(ca_zip#121))
    :                                               :  +- Scan spark_catalog.default.customer_address [ca_address_sk#112, ca_state#120, ca_zip#121, ca_country#122] (shared #5)
    :                                               +- Project [s_store_sk#43, s_store_name#48, s_state#67, s_zip#68]
-   :                                                  +- Filter (((s_market_id#53 == 8) and isnotnull(s_zip#68)) and isnotnull(s_store_sk#43))
+   :                                                  +- Filter (((s_market_id#53 == 8) and isnotnull(s_store_sk#43)) and isnotnull(s_zip#68))
    :                                                     +- Scan spark_catalog.default.store [s_store_sk#43, s_store_name#48, s_market_id#53, s_state#67, s_zip#68] (shared #6)
    +- Aggregate [c_last_name#126, c_first_name#127, s_store_name#128], [c_last_name#126, c_first_name#127, s_store_name#128, sum(netpaid#136) AS paid#137]
       +- Project [c_last_name#253 AS c_last_name#126, c_first_name#252 AS c_first_name#127, s_store_name#198 AS s_store_name#128, netpaid#275 AS netpaid#136]
@@ -46,13 +47,13 @@ Sort [c_last_name#126 ASC NULLS FIRST, c_first_name#127 ASC NULLS FIRST, s_store
                            :  +- Shared #4, printed above
                            +- Project [ca_address_sk#112, ca_state#120, ca_country#122, ss_item_sk#2, ss_customer_sk#3, ss_ticket_number#9, ss_net_paid#20, i_current_price#77, i_size#87, i_color#89, i_units#90, i_manager_id#92, s_store_name#48, s_state#67]
                               +- Join Inner, (s_zip#68 == ca_zip#121)
-                                 :- Filter (isnotnull(ca_zip#121) and isnotnull(ca_address_sk#112))
+                                 :- Filter (isnotnull(ca_address_sk#112) and isnotnull(ca_zip#121))
                                  :  +- Shared #5, printed above
                                  +- Project [ss_item_sk#2, ss_customer_sk#3, ss_ticket_number#9, ss_net_paid#20, i_current_price#77, i_size#87, i_color#89, i_units#90, i_manager_id#92, s_store_name#48, s_state#67, s_zip#68]
                                     +- Join Inner, (ss_store_sk#7 == s_store_sk#43)
                                        :- Project [ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_ticket_number#9, ss_net_paid#20, i_current_price#77, i_size#87, i_color#89, i_units#90, i_manager_id#92]
                                        :  +- Join Inner, (ss_item_sk#2 == i_item_sk#72)
-                                       :     :- Filter (((isnotnull(ss_item_sk#2) and isnotnull(ss_store_sk#7)) and isnotnull(ss_customer_sk#3)) and isnotnull(ss_ticket_number#9))
+                                       :     :- Filter (((isnotnull(ss_item_sk#2) and isnotnull(ss_ticket_number#9)) and isnotnull(ss_store_sk#7)) and isnotnull(ss_customer_sk#3))
                                        :     :  +- Shared #3, printed above
                                        :     +- Filter ((i_color#89 == 'peach') and isnotnull(i_item_sk#72))
                                        :        +- Shared #2, printed above

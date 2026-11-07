@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -16,7 +17,7 @@ Limit 100
          :           +- Join Inner, (ws_sold_time_sk#1 == t_time_sk#39)
          :              :- Project [ws_sold_time_sk#1, ws_ship_hdemo_sk#10]
          :              :  +- Join Inner, (ws_web_page_sk#12 == wp_web_page_sk#49)
-         :              :     :- Filter ((isnotnull(ws_web_page_sk#12) and isnotnull(ws_sold_time_sk#1)) and isnotnull(ws_ship_hdemo_sk#10))
+         :              :     :- Filter ((isnotnull(ws_ship_hdemo_sk#10) and isnotnull(ws_sold_time_sk#1)) and isnotnull(ws_web_page_sk#12))
          :              :     :  +- Scan spark_catalog.default.web_sales [ws_sold_time_sk#1, ws_ship_hdemo_sk#10, ws_web_page_sk#12] (shared #2)
          :              :     +- Project [wp_web_page_sk#49]
          :              :        +- Filter (((wp_char_count#59 >= 5000) and (wp_char_count#59 <= 5200)) and isnotnull(wp_web_page_sk#49))
@@ -35,7 +36,7 @@ Limit 100
                         +- Join Inner, (ws_sold_time_sk#1 == t_time_sk#39)
                            :- Project [ws_sold_time_sk#1, ws_ship_hdemo_sk#10]
                            :  +- Join Inner, (ws_web_page_sk#12 == wp_web_page_sk#49)
-                           :     :- Filter ((isnotnull(ws_web_page_sk#12) and isnotnull(ws_sold_time_sk#1)) and isnotnull(ws_ship_hdemo_sk#10))
+                           :     :- Filter ((isnotnull(ws_ship_hdemo_sk#10) and isnotnull(ws_sold_time_sk#1)) and isnotnull(ws_web_page_sk#12))
                            :     :  +- Shared #2, printed above
                            :     +- Project [wp_web_page_sk#49]
                            :        +- Filter (((wp_char_count#59 >= 5000) and (wp_char_count#59 <= 5200)) and isnotnull(wp_web_page_sk#49))

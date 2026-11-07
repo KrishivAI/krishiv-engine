@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -34,7 +35,7 @@ Limit 100
       :              :                                   :  +- Scan spark_catalog.default.customer [c_customer_sk#100]
       :              :                                   +- Project [ss_customer_sk#80, ss_quantity#87, ss_sales_price#90]
       :              :                                      +- Join Inner, (ss_sold_date_sk#77 == d_date_sk#118)
-      :              :                                         :- Filter (isnotnull(ss_sold_date_sk#77) and isnotnull(ss_customer_sk#80))
+      :              :                                         :- Filter (isnotnull(ss_customer_sk#80) and isnotnull(ss_sold_date_sk#77))
       :              :                                         :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#77, ss_customer_sk#80, ss_quantity#87, ss_sales_price#90]
       :              :                                         +- Project [d_date_sk#118]
       :              :                                            +- Filter ((d_year#124 IN (2000, 2001, 2002, 2003)) and isnotnull(d_date_sk#118))
@@ -59,7 +60,7 @@ Limit 100
       :                    :                             +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_date#25, d_year#29]
       :                    +- Project [cs_bill_customer_sk#195, cs_item_sk#207, cs_quantity#210, cs_list_price#212]
       :                       +- Join Inner, (cs_sold_date_sk#192 == d_date_sk#244)
-      :                          :- Filter ((isnotnull(cs_sold_date_sk#192) and isnotnull(cs_item_sk#207)) and isnotnull(cs_bill_customer_sk#195))
+      :                          :- Filter ((isnotnull(cs_bill_customer_sk#195) and isnotnull(cs_sold_date_sk#192)) and isnotnull(cs_item_sk#207))
       :                          :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#192, cs_bill_customer_sk#195, cs_item_sk#207, cs_quantity#210, cs_list_price#212]
       :                          +- Project [d_date_sk#244]
       :                             +- Filter (((d_year#250 == 2000) and (d_moy#252 == 2)) and isnotnull(d_date_sk#244))
@@ -79,7 +80,7 @@ Limit 100
                            :  +- Shared #3, printed above
                            +- Project [ws_item_sk#282, ws_bill_customer_sk#283, ws_quantity#297, ws_list_price#299]
                               +- Join Inner, (ws_sold_date_sk#279 == d_date_sk#313)
-                                 :- Filter ((isnotnull(ws_sold_date_sk#279) and isnotnull(ws_item_sk#282)) and isnotnull(ws_bill_customer_sk#283))
+                                 :- Filter ((isnotnull(ws_bill_customer_sk#283) and isnotnull(ws_sold_date_sk#279)) and isnotnull(ws_item_sk#282))
                                  :  +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#279, ws_item_sk#282, ws_bill_customer_sk#283, ws_quantity#297, ws_list_price#299]
                                  +- Project [d_date_sk#313]
                                     +- Shift +69

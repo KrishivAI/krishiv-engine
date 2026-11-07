@@ -1,11 +1,12 @@
 ---
 source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 607
 expression: "SELECT t.a FROM t RIGHT JOIN u ON t.a = u.a AND t.b = 'x' AND u.d = 'y' WHERE u.a > 1 AND t.c > 1"
 ---
 Project [a#0]
 +- Join Inner, (a#0 == a#3)
    :- Project [a#0]
-   :  +- Filter (((isnotnull(a#0) and (c#2 > 1L)) and (b#1 == 'x')) and (a#0 > 1))
+   :  +- Filter ((((c#2 > 1L) and (b#1 == 'x')) and isnotnull(a#0)) and (a#0 > 1))
    :     +- Scan spark_catalog.default.t [a#0, b#1, c#2]
    +- Project [a#3]
       +- Filter ((a#3 > 1) and (d#4 == 'y'))

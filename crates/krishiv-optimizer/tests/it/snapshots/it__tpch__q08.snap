@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpch.rs
+assertion_line: 27
 expression: optimized.root().to_string()
 ---
 Sort [o_year#60 ASC NULLS FIRST], true
@@ -35,7 +36,7 @@ Sort [o_year#60 ASC NULLS FIRST], true
                                        :     +- Scan spark_catalog.default.part [p_partkey#0, p_type#4]
                                        +- Project [l_partkey#17, l_suppkey#18, l_extendedprice#21, l_discount#22, o_custkey#33, o_orderdate#36]
                                           +- Join Inner, (l_orderkey#16 == o_orderkey#32)
-                                             :- Filter ((isnotnull(l_orderkey#16) and isnotnull(l_partkey#17)) and isnotnull(l_suppkey#18))
+                                             :- Filter ((isnotnull(l_partkey#17) and isnotnull(l_suppkey#18)) and isnotnull(l_orderkey#16))
                                              :  +- Scan spark_catalog.default.lineitem [l_orderkey#16, l_partkey#17, l_suppkey#18, l_extendedprice#21, l_discount#22]
                                              +- Filter ((((o_orderdate#36 >= DATE '1995-01-01') and (o_orderdate#36 <= DATE '1996-12-31')) and isnotnull(o_orderkey#32)) and isnotnull(o_custkey#33))
                                                 +- Scan spark_catalog.default.orders [o_orderkey#32, o_custkey#33, o_orderdate#36]

@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Project [wsk1#85, isk1#86, dmoy1#87, mean1#88, cov1#89, w_warehouse_sk#79, i_item_sk#80, d_moy#81, mean#83, cov#84]
@@ -21,7 +22,7 @@ Project [wsk1#85, isk1#86, dmoy1#87, mean1#88, cov1#89, w_warehouse_sk#79, i_ite
          :                          :  +- Scan spark_catalog.default.warehouse [w_warehouse_sk#26, w_warehouse_name#28] (shared #2)
          :                          +- Project [inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3, d_moy#48]
          :                             +- Join Inner, (inv_date_sk#0 == d_date_sk#40)
-         :                                :- Filter ((isnotnull(inv_date_sk#0) and isnotnull(inv_warehouse_sk#2)) and isnotnull(inv_item_sk#1))
+         :                                :- Filter ((isnotnull(inv_item_sk#1) and isnotnull(inv_warehouse_sk#2)) and isnotnull(inv_date_sk#0))
          :                                :  +- Scan spark_catalog.default.inventory [inv_date_sk#0, inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3] (shared #3)
          :                                +- Project [d_date_sk#40, d_moy#48]
          :                                   +- Filter (((d_year#46 == 2001) and (d_moy#48 == 1)) and isnotnull(d_date_sk#40))
@@ -42,7 +43,7 @@ Project [wsk1#85, isk1#86, dmoy1#87, mean1#88, cov1#89, w_warehouse_sk#79, i_ite
                                        :  +- Shared #2, printed above
                                        +- Project [inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3, d_moy#48]
                                           +- Join Inner, (inv_date_sk#0 == d_date_sk#40)
-                                             :- Filter ((isnotnull(inv_date_sk#0) and isnotnull(inv_warehouse_sk#2)) and isnotnull(inv_item_sk#1))
+                                             :- Filter ((isnotnull(inv_item_sk#1) and isnotnull(inv_warehouse_sk#2)) and isnotnull(inv_date_sk#0))
                                              :  +- Shared #3, printed above
                                              +- Project [d_date_sk#40, d_moy#48]
                                                 +- Filter (((d_year#46 == 2001) and (d_moy#48 == 2)) and isnotnull(d_date_sk#40))

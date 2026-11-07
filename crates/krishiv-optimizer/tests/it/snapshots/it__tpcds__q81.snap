@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -35,7 +36,7 @@ Limit 100
                                  +- Aggregate [cr_returning_customer_sk#7, ca_state#63], [ca_state#63 AS ctr_state#69, sum(cr_return_amt_inc_tax#20) AS ctr_total_return#70]
                                     +- Project [ca_state#63, cr_returning_customer_sk#7, cr_return_amt_inc_tax#20]
                                        +- Join Inner, (cr_returning_addr_sk#10 == ca_address_sk#55)
-                                          :- Filter (isnotnull(ca_state#63) and isnotnull(ca_address_sk#55))
+                                          :- Filter (isnotnull(ca_address_sk#55) and isnotnull(ca_state#63))
                                           :  +- Shared #1, printed above
                                           +- Project [cr_returning_customer_sk#7, cr_returning_addr_sk#10, cr_return_amt_inc_tax#20]
                                              +- Join Inner, (cr_returned_date_sk#0 == d_date_sk#27)

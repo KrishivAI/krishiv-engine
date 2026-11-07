@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 607
 expression: SELECT t.a FROM t JOIN u ON t.a = u.a JOIN t t2 ON u.a = t2.a WHERE t2.a = 7
 ---
 Project [a#0]
@@ -9,7 +10,7 @@ Project [a#0]
    :     :- Filter (isnotnull(a#0) and (a#0 == 7))
    :     :  +- Scan spark_catalog.default.t [a#0] (shared #1)
    :     +- Shift +5
-   :        +- Filter (isnotnull(a#0) and (a#0 == 7))
+   :        +- Filter (a#0 == 7)
    :           +- Shared #1, printed above
    +- Filter (isnotnull(a#3) and (a#3 == 7))
       +- Scan spark_catalog.default.u [a#3]

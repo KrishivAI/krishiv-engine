@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -16,10 +17,10 @@ Limit 100
             :              :  +- Join Inner, (cs_item_sk#146 == i_item_sk#165)
             :              :     :- Project [cs_item_sk#146, cs_ext_sales_price#154, d_date#189]
             :              :     :  +- Join Inner, (cs_sold_date_sk#131 == d_date_sk#187)
-            :              :     :     :- Filter (isnotnull(cs_sold_date_sk#131) and isnotnull(cs_item_sk#146))
+            :              :     :     :- Filter (isnotnull(cs_item_sk#146) and isnotnull(cs_sold_date_sk#131))
             :              :     :     :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#131, cs_item_sk#146, cs_ext_sales_price#154]
             :              :     :     +- Project [d_date_sk#187, d_date#189]
-            :              :     :        +- Filter (isnotnull(d_date#189) and isnotnull(d_date_sk#187))
+            :              :     :        +- Filter (isnotnull(d_date_sk#187) and isnotnull(d_date#189))
             :              :     :           +- Scan spark_catalog.default.date_dim [d_date_sk#187, d_date#189, d_week_seq#191] (shared #1)
             :              :     +- Filter (isnotnull(i_item_sk#165) and isnotnull(i_item_id#166))
             :              :        +- Scan spark_catalog.default.item [i_item_sk#165, i_item_id#166]
@@ -43,10 +44,10 @@ Limit 100
                   :              :  +- Join Inner, (ss_item_sk#2 == i_item_sk#23)
                   :              :     :- Project [ss_item_sk#2, ss_ext_sales_price#15, d_date#47]
                   :              :     :  +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#45)
-                  :              :     :     :- Filter (isnotnull(ss_sold_date_sk#0) and isnotnull(ss_item_sk#2))
+                  :              :     :     :- Filter (isnotnull(ss_item_sk#2) and isnotnull(ss_sold_date_sk#0))
                   :              :     :     :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_ext_sales_price#15]
                   :              :     :     +- Project [d_date_sk#45, d_date#47]
-                  :              :     :        +- Filter (isnotnull(d_date#47) and isnotnull(d_date_sk#45))
+                  :              :     :        +- Filter (isnotnull(d_date_sk#45) and isnotnull(d_date#47))
                   :              :     :           +- Scan spark_catalog.default.date_dim [d_date_sk#45, d_date#47, d_week_seq#49] (shared #2)
                   :              :     +- Filter (isnotnull(i_item_sk#23) and isnotnull(i_item_id#24))
                   :              :        +- Scan spark_catalog.default.item [i_item_sk#23, i_item_id#24]
@@ -68,10 +69,10 @@ Limit 100
                                  :  +- Join Inner, (ws_item_sk#276 == i_item_sk#307)
                                  :     :- Project [ws_item_sk#276, ws_ext_sales_price#296, d_date#331]
                                  :     :  +- Join Inner, (ws_sold_date_sk#273 == d_date_sk#329)
-                                 :     :     :- Filter (isnotnull(ws_sold_date_sk#273) and isnotnull(ws_item_sk#276))
+                                 :     :     :- Filter (isnotnull(ws_item_sk#276) and isnotnull(ws_sold_date_sk#273))
                                  :     :     :  +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#273, ws_item_sk#276, ws_ext_sales_price#296]
                                  :     :     +- Project [d_date_sk#329, d_date#331]
-                                 :     :        +- Filter (isnotnull(d_date#331) and isnotnull(d_date_sk#329))
+                                 :     :        +- Filter (isnotnull(d_date_sk#329) and isnotnull(d_date#331))
                                  :     :           +- Scan spark_catalog.default.date_dim [d_date_sk#329, d_date#331, d_week_seq#333] (shared #3)
                                  :     +- Filter (isnotnull(i_item_sk#307) and isnotnull(i_item_id#308))
                                  :        +- Scan spark_catalog.default.item [i_item_sk#307, i_item_id#308]

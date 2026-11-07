@@ -263,6 +263,25 @@ const CASES: &[(&str, &str)] = &[
         "SELECT t.a FROM t JOIN u ON t.a = u.a WHERE t.a > 3 AND t.a <= 9 AND u.a IN (4, 5, 6)",
     ),
     (
+        // The inner join's key `u.a` is nullable: its inferred `isnotnull`
+        // above the outer join makes it an inner join (no row is lost: a
+        // NULL `u.a` never matches `t2.a`).
+        "infer_outer_to_inner_by_inferred_key",
+        "SELECT t.a FROM t LEFT JOIN u ON t.a = u.a JOIN t t2 ON u.a = t2.a",
+    ),
+    (
+        // Each branch of the union gets the key's filter; a second run finds
+        // it in every branch (`held` over a positional union).
+        "infer_into_union_branches",
+        "SELECT x.a FROM (SELECT a FROM t UNION ALL SELECT a FROM u) x JOIN t t2 ON x.a = t2.a WHERE t2.a = 3",
+    ),
+    (
+        // Through a grouped aggregate's key (pushdown moves the filter below
+        // it; a second run finds it there).
+        "infer_through_aggregate_key",
+        "SELECT g.a FROM (SELECT a, count(*) AS n FROM t GROUP BY a) g JOIN u ON g.a = u.a WHERE u.a < 4",
+    ),
+    (
         "infer_through_two_joins",
         "SELECT t.a FROM t JOIN u ON t.a = u.a JOIN t t2 ON u.a = t2.a WHERE t2.a = 7",
     ),

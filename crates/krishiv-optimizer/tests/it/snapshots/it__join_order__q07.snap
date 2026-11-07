@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/join_order.rs
+assertion_line: 112
 expression: optimized.root().to_string()
 ---
 Sort [supp_nation#48 ASC NULLS FIRST, cust_nation#49 ASC NULLS FIRST, l_year#50 ASC NULLS FIRST], true
@@ -12,17 +13,17 @@ Sort [supp_nation#48 ASC NULLS FIRST, cust_nation#49 ASC NULLS FIRST, l_year#50 
          :     :  +- Scan spark_catalog.default.lineitem [l_orderkey#7, l_suppkey#9, l_extendedprice#12, l_discount#13, l_shipdate#17]
          :     +- Project [s_suppkey#0, n_name#41]
          :        +- Join Inner, (s_nationkey#3 == n_nationkey#40)
-         :           :- Filter (isnotnull(s_nationkey#3) and isnotnull(s_suppkey#0))
+         :           :- Filter (isnotnull(s_suppkey#0) and isnotnull(s_nationkey#3))
          :           :  +- Scan spark_catalog.default.supplier [s_suppkey#0, s_nationkey#3]
          :           +- Filter (((n_name#41 == 'FRANCE') or (n_name#41 == 'GERMANY')) and isnotnull(n_nationkey#40))
          :              +- Scan spark_catalog.default.nation [n_nationkey#40, n_name#41] (shared #1)
          +- Project [o_orderkey#23, n_name#45]
             +- Join Inner, (c_custkey#32 == o_custkey#24)
-               :- Filter (isnotnull(o_custkey#24) and isnotnull(o_orderkey#23))
+               :- Filter (isnotnull(o_orderkey#23) and isnotnull(o_custkey#24))
                :  +- Scan spark_catalog.default.orders [o_orderkey#23, o_custkey#24]
                +- Project [c_custkey#32, n_name#45]
                   +- Join Inner, (c_nationkey#35 == n_nationkey#44)
-                     :- Filter (isnotnull(c_nationkey#35) and isnotnull(c_custkey#32))
+                     :- Filter (isnotnull(c_custkey#32) and isnotnull(c_nationkey#35))
                      :  +- Scan spark_catalog.default.customer [c_custkey#32, c_nationkey#35]
                      +- Shift +4
                         +- Filter (((n_name#41 == 'GERMANY') or (n_name#41 == 'FRANCE')) and isnotnull(n_nationkey#40))

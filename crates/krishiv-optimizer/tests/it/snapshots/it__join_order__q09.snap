@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/join_order.rs
+assertion_line: 112
 expression: optimized.root().to_string()
 ---
 Sort [nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST], true
@@ -23,7 +24,7 @@ Sort [nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST], true
                      :           +- Scan spark_catalog.default.part [p_partkey#0, p_name#1]
                      +- Project [s_suppkey#9, n_name#47]
                         +- Join Inner, (s_nationkey#12 == n_nationkey#46)
-                           :- Filter (isnotnull(s_nationkey#12) and isnotnull(s_suppkey#9))
+                           :- Filter (isnotnull(s_suppkey#9) and isnotnull(s_nationkey#12))
                            :  +- Scan spark_catalog.default.supplier [s_suppkey#9, s_nationkey#12]
                            +- Filter isnotnull(n_nationkey#46)
                               +- Scan spark_catalog.default.nation [n_nationkey#46, n_name#47]

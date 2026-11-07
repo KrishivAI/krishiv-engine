@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpch.rs
+assertion_line: 27
 expression: optimized.root().to_string()
 ---
 Sort [value#16 DESC NULLS LAST], true
@@ -12,7 +13,7 @@ Sort [value#16 DESC NULLS LAST], true
    :              :  +- Scan spark_catalog.default.partsupp [ps_partkey#0, ps_suppkey#1, ps_availqty#2, ps_supplycost#3]
    :              +- Project [s_suppkey#5]
    :                 +- Join Inner, (s_nationkey#8 == n_nationkey#12)
-   :                    :- Filter (isnotnull(s_nationkey#8) and isnotnull(s_suppkey#5))
+   :                    :- Filter (isnotnull(s_suppkey#5) and isnotnull(s_nationkey#8))
    :                    :  +- Scan spark_catalog.default.supplier [s_suppkey#5, s_nationkey#8]
    :                    +- Project [n_nationkey#12]
    :                       +- Filter ((n_name#13 == 'GERMANY') and isnotnull(n_nationkey#12))

@@ -1,5 +1,6 @@
 ---
 source: crates/krishiv-optimizer/tests/it/tpcds.rs
+assertion_line: 106
 expression: optimized.root().to_string()
 ---
 Limit 100
@@ -23,7 +24,7 @@ Limit 100
                            +- Project [ws_item_sk#87, ws_ext_discount_amt#106]
                               +- Join Inner, (d_date_sk#118 == ws_sold_date_sk#84)
                                  :- Shift +84
-                                 :  +- Filter (isnotnull(ws_item_sk#3) and isnotnull(ws_sold_date_sk#0))
+                                 :  +- Filter (isnotnull(ws_sold_date_sk#0) and isnotnull(ws_item_sk#3))
                                  :     +- Shared #2, printed above
                                  +- Project [d_date_sk#118]
                                     +- Shift +62
