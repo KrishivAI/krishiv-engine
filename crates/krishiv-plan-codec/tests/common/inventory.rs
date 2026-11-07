@@ -2119,6 +2119,28 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
                 },
             },
         ),
+        (
+            // A calendar interval column on the struct carrier (ADR 0009
+            // update 2026-11-06): the argument type of a count.
+            "calendar_struct_aggregate",
+            PhysNode::Aggregate {
+                input: Box::new(PhysNode::Scan(file_scan())),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: vec![AggregateExpr {
+                        function: AggregateFunction::Count,
+                        args: vec![1],
+                        input: AggInput::Raw,
+                        arg_type: krishiv_types::arrow::calendar_struct(),
+                        name: "cal".to_owned(),
+                        mask: None,
+                        element: None,
+                    }],
+                    distinct: vec![false],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
         ("time_nested", nested_times),
         ("time_project", times),
         ("geo_scan", PhysNode::Scan(spatial)),
