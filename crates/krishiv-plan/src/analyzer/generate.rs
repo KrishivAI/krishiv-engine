@@ -109,7 +109,25 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
         let rels = [&c];
-        let cx = Self::cx(&c.out, &rels, env, "Generate");
+        // The argument reads an input column before another select-list generator's column of
+        // its name (Spark resolves generators over the lateral aliases only after the input).
+        let generated = |a: &Attr| {
+            a.qual
+                .iter()
+                .any(|q| q.starts_with(crate::GENERATE_QUALIFIER_PREFIX))
+        };
+        let scope: Vec<Attr> = c
+            .out
+            .iter()
+            .filter(|a| {
+                !generated(a)
+                    || !c.out.iter().any(|i| {
+                        !generated(i) && super::bind::same(&i.col.name, &a.col.name, false)
+                    })
+            })
+            .cloned()
+            .collect();
+        let cx = Self::cx(&scope, &rels, env, "Generate");
         let arg = &self.stack_rows(arg, &cx)?;
         let mut b = self.bind(arg, &cx)?;
         // `variant_explode` expects a VARIANT: an untyped NULL is cast to one

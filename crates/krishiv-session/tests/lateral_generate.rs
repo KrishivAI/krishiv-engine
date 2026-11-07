@@ -121,3 +121,26 @@ fn a_generator_reading_a_later_generators_alias_runs_after_it() {
         [2, 3, 4]
     );
 }
+
+#[test]
+fn generators_read_input_columns_before_later_generator_aliases() {
+    // Spark 4.2.0 (local run, 2026-11-07): `arr` is the input column for the first generator,
+    // the second one still runs first and its column is only the output `arr`.
+    let q = "SELECT explode(arr) AS col, explode(array(array(0), array(1))) AS arr \
+             FROM VALUES (array(9, 8)) AS t(arr)";
+    assert_eq!(ints(q, 0), [9, 8, 9, 8]);
+    // A chain of three runs back to front, the match is case-insensitive.
+    assert_eq!(
+        ints(
+            "SELECT explode(ARR2) AS c, explode(arr1) AS arr2, \
+             explode(array(array(array(1)))) AS arr1",
+            0
+        ),
+        [1]
+    );
+    // A cycle has no order: the first read is unresolved, as in Spark.
+    let e = run("SELECT explode(b) AS a, explode(a) AS b")
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("UNRESOLVED_COLUMN"), "{e}");
+}
