@@ -122,6 +122,7 @@ registry! {
     (any_value_by_aggregates, AnyValueByAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The `any_value`, `max_by` and `min_by` aggregates."),
     (collated_strings, CollatedStrings, POST_MIGRATION_READER_VERSION, Semantic, "STRING types with a collation other than UTF8_BINARY, by canonical name."),
     (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
+    (exchange_filters, ExchangeFilters, POST_MIGRATION_READER_VERSION, Optimization, "Runtime filters an exchange collects from the rows it writes, for scans of other stages (`ExchangePlan.filters`, distributed stages); without them the fragmenter drops the filters, which never changes rows."),
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
@@ -395,8 +396,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::TopN { .. }
             | PhysNode::Aggregate { .. }
             | PhysNode::NestedLoopJoin(_)
-            | PhysNode::Union { .. }
-            | PhysNode::Exchange(_) => None,
+            | PhysNode::Union { .. } => None,
+            PhysNode::Exchange(e) if !e.filters.is_empty() => Some(Feature::ExchangeFilters),
+            PhysNode::Exchange(_) => None,
         },
         Construct::Item(item) => match item {
             ProjectItemPlan::Column { .. } | ProjectItemPlan::Expr { .. } => None,
@@ -693,6 +695,7 @@ fn arrow_types_of(node: &PhysNode) -> Vec<&arrow_schema::DataType> {
             out.extend(aggregate.aggregates.iter().map(|a| &a.arg_type));
         }
         PhysNode::Scan(scan) => out.extend(scan.runtime_filters.iter().map(|f| &f.key_type)),
+        PhysNode::Exchange(e) => out.extend(e.filters.iter().map(|f| &f.key_type)),
         _ => {}
     }
     out.extend(subqueries.into_iter().flatten().map(|s| &s.data_type));

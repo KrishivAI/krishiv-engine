@@ -14,17 +14,18 @@ arrow-schema.workspace = true
 futures = { workspace = true, features = ["std"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-exec = { path = "../krishiv-exec" }
+krishiv-io = { path = "../krishiv-io" }
 krishiv-memory = { path = "../krishiv-memory" }
 krishiv-plan-codec = { path = "../krishiv-plan-codec" }
 krishiv-scheduler = { path = "../krishiv-scheduler" }
 krishiv-shuffle = { path = "../krishiv-shuffle" }
 krishiv-types = { path = "../krishiv-types" }
+object_store.workspace = true
 prost = { workspace = true, features = ["derive", "std"] }
 tokio = { workspace = true, features = ["io-util", "rt"] }
 turmoil.workspace = true
 
 [dev-dependencies]
-krishiv-io = { path = "../krishiv-io" }
 krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }
