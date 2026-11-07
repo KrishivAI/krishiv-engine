@@ -199,7 +199,9 @@ fn provider_name(c: Collation) -> String {
 /// `.value` under arrays and maps; a nested struct's fields carry their own).
 fn collect_collations(t: &DataType, path: &str, out: &mut Map<String, Value>) {
     match t {
-        DataType::CollatedString(c) => {
+        // Spark's `StructField.isCollatedString` leaves `UTF8_BINARY` out: the display-only
+        // marker writes no `__COLLATIONS` entry (ADR 0043, update 2026-11-07).
+        DataType::CollatedString(c) if !c.is_utf8_binary() => {
             out.insert(path.to_owned(), Value::String(provider_name(*c)));
         }
         DataType::Array(a) => {

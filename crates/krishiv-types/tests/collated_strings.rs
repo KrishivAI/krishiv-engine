@@ -14,12 +14,23 @@ fn t(ddl: &str) -> DataType {
 }
 
 #[test]
-fn utf8_binary_is_the_plain_string() {
-    assert_eq!(t("string collate utf8_binary"), DataType::String);
-    assert_eq!(
-        t("STRING COLLATE SYSTEM.BUILTIN.UTF8_BINARY"),
-        DataType::String
-    );
+fn an_explicit_utf8_binary_is_a_display_only_marker() {
+    // Written explicitly, it is the display-only marker (ADR 0043, update 2026-11-07): it prints
+    // as Spark prints it and is no collation.
+    for ddl in [
+        "string collate utf8_binary",
+        "STRING COLLATE SYSTEM.BUILTIN.UTF8_BINARY",
+    ] {
+        let ty = t(ddl);
+        assert_eq!(ty.simple_string(), "string collate UTF8_BINARY");
+        assert!(ty.is_string_type() && !ty.contains_collation() && !ty.is_collated_string());
+        assert!(ty.is_binary_marker());
+        // Spark's `StringType.equals` ignores whether the collation was written.
+        assert_eq!(ty, DataType::String);
+        assert_eq!(DataType::String, ty);
+        assert_eq!(hash_of(&ty), hash_of(&DataType::String));
+    }
+    assert_eq!(t("string"), DataType::String);
     assert_ne!(t("string collate utf8_binary_rtrim"), DataType::String);
 }
 
@@ -136,5 +147,137 @@ fn user_facing_entry_points_can_refuse_a_collation_until_the_analyzer_takes_it()
     assert_eq!(
         t("array<string>").refuse_collations(),
         Ok(t("array<string>"))
+    );
+}
+
+fn hash_of(t: &DataType) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    t.hash(&mut h);
+    h.finish()
+}
+
+#[test]
+fn the_marker_equals_string_inside_nested_types_and_no_collation_does() {
+    let marked = t("array<string collate utf8_binary>");
+    let plain = t("array<string>");
+    assert_eq!(marked, plain);
+    assert_eq!(hash_of(&marked), hash_of(&plain));
+    assert_eq!(
+        t("map<string collate utf8_binary, struct<a: string>>"),
+        t("map<string, struct<a: string collate utf8_binary>>")
+    );
+    assert_ne!(t("string collate utf8_lcase"), DataType::String);
+    assert_ne!(
+        t("string collate utf8_lcase"),
+        t("string collate utf8_binary")
+    );
+    assert_ne!(t("array<string collate utf8_lcase>"), plain);
+    // Every other type still equals itself and only itself.
+    assert_eq!(DataType::Integer, DataType::Integer);
+    assert_ne!(DataType::Integer, DataType::Long);
+    assert_eq!(t("decimal(10,2)"), t("decimal(10,2)"));
+    assert_ne!(t("decimal(10,2)"), t("decimal(10,3)"));
+    for ty in [
+        "void",
+        "boolean",
+        "binary",
+        "date",
+        "timestamp",
+        "timestamp_ntz",
+        "variant",
+        "interval",
+    ] {
+        assert_eq!(t(ty), t(ty), "{ty}");
+    }
+}
+
+#[test]
+fn hashing_agrees_with_equality_for_every_payload_type() {
+    let equal_pairs = [
+        ("decimal(10,2)", "decimal(10,2)"),
+        ("time(3)", "time(3)"),
+        ("geometry(4326)", "geometry(4326)"),
+        ("geography(4326)", "geography(4326)"),
+        ("interval year to month", "interval year to month"),
+        ("interval day to second", "interval day to second"),
+        ("array<int>", "array<int>"),
+        ("map<string, int>", "map<string collate utf8_binary, int>"),
+        (
+            "struct<a: int, b: string>",
+            "struct<a: int, b: string collate utf8_binary>",
+        ),
+        ("string collate utf8_lcase", "string collate utf8_lcase"),
+    ];
+    for (a, b) in equal_pairs {
+        let (x, y) = (t(a), t(b));
+        assert_eq!(x, y, "{a} / {b}");
+        assert_eq!(hash_of(&x), hash_of(&y), "{a} / {b}");
+    }
+    assert_ne!(t("time(3)"), t("time(4)"));
+    assert_ne!(t("geometry(4326)"), t("geography(4326)"));
+    assert_ne!(t("interval year to month"), t("interval day to second"));
+}
+
+#[test]
+fn without_the_marker_a_type_is_the_plain_type_at_any_depth() {
+    for (marked, plain) in [
+        ("string collate utf8_binary", "string"),
+        ("array<string collate utf8_binary>", "array<string>"),
+        (
+            "map<string collate utf8_binary, array<string collate utf8_binary>>",
+            "map<string, array<string>>",
+        ),
+        (
+            "struct<a: string collate utf8_binary, b: int>",
+            "struct<a: string, b: int>",
+        ),
+        (
+            "array<string collate utf8_lcase>",
+            "array<string collate utf8_lcase>",
+        ),
+        ("int", "int"),
+    ] {
+        let stripped = t(marked).without_binary_marker();
+        assert_eq!(
+            stripped.simple_string(),
+            t(plain).simple_string(),
+            "{marked}"
+        );
+        assert!(
+            !stripped.any_type(&krishiv_types::DataType::is_binary_marker),
+            "{marked}"
+        );
+    }
+}
+
+#[test]
+fn the_marker_accepts_the_storage_a_plain_string_does() {
+    use arrow_schema::DataType as Arrow;
+    let marker = t("string collate utf8_binary");
+    for storage in [
+        Arrow::Utf8,
+        Arrow::LargeUtf8,
+        Arrow::Utf8View,
+        Arrow::BinaryView,
+        Arrow::Binary,
+    ] {
+        assert!(
+            marker
+                .to_arrow_field_with_storage("c", storage.clone(), true)
+                .is_ok(),
+            "{storage}"
+        );
+    }
+    let lcase = t("string collate utf8_lcase");
+    assert!(
+        lcase
+            .to_arrow_field_with_storage("c", Arrow::Utf8, true)
+            .is_ok()
+    );
+    assert!(
+        lcase
+            .to_arrow_field_with_storage("c", Arrow::BinaryView, true)
+            .is_err()
     );
 }

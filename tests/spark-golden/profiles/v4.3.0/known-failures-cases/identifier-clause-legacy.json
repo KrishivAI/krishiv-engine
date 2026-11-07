@@ -1,8 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      178
-    ],
     "sql-commands": [
       48,
       70,
@@ -10,8 +7,7 @@
       73,
       75,
       76,
-      168,
-      187
+      168
     ]
   },
   "file": "identifier-clause-legacy",

@@ -6,13 +6,16 @@
 //! staying or widening from what the surviving rows hold:
 //!
 //! - **Filter**: see [`crate::narrow`]; every column the predicate does not
-//!   read keeps the fraction of its distinct values that the kept rows are.
+//!   read keeps the distinct values the kept rows are expected to hold
+//!   ([`kept_distinct`]).
 //! - **Join**: each equi-key's distinct count is the smaller of the two
 //!   sides' (an outer join's preserved side keeps its own: all its values
 //!   stay); an inner join's keys intersect their ranges and lose their
 //!   nulls; the null-supplying side of an outer join gains the unmatched
-//!   fraction as nulls; every other column's distinct count scales by the
-//!   fraction of its side that finds a match.
+//!   fraction as nulls; every other column keeps the distinct values the
+//!   matching fraction of its side's rows is expected to hold
+//!   ([`kept_distinct`]: a column of few values over many rows keeps them
+//!   all, a unique column keeps that fraction).
 //! - **Aggregate**: rows are the product of the keys' distinct counts, at
 //!   most the input's; keys keep their statistics; `min`, `max` and `count`
 //!   results get bounds from their input.
@@ -176,8 +179,8 @@ fn kept_rows(rows: f64, sel: f64, empty: bool) -> f64 {
 }
 
 /// `est` filtered by `pred`: rows scaled by its selectivity; with
-/// `propagate`, the columns it reads narrowed and every other column's
-/// distinct count scaled by the fraction of rows kept.
+/// `propagate`, the columns it reads narrowed and every other column keeping
+/// the distinct values the kept rows are expected to hold ([`kept_distinct`]).
 fn filtered(est: &RelStats, pred: &Expr, propagate: bool) -> RelStats {
     let mut v = View::new(&est.cols, propagate);
     let sel = apply(pred, &mut v);
@@ -195,7 +198,7 @@ fn filtered(est: &RelStats, pred: &Expr, propagate: bool) -> RelStats {
             c.ndv = if read.contains(id) {
                 cap(c.ndv, rows)
             } else {
-                cap(c.ndv * kept, rows)
+                cap(kept_distinct(c.ndv, kept, est.rows), rows)
             };
             (*id, c)
         })
@@ -466,8 +469,8 @@ impl<'a> Estimator<'a> {
     /// join kind; with propagation, key columns narrowed by their equality
     /// (an inner join's keys also lose their nulls), the null-supplying
     /// side of an outer join gaining the unmatched fraction as nulls, and
-    /// every other column's distinct count scaled by the fraction of its
-    /// side that finds a match.
+    /// every other column keeping the distinct values the fraction of its
+    /// side that finds a match is expected to hold ([`kept_distinct`]).
     fn join(
         &self,
         p: &LogicalPlan,
@@ -563,7 +566,7 @@ impl<'a> Estimator<'a> {
                         base.clone()
                     };
                     c.ndv = if narrowed && !read.contains(id) {
-                        cap(c.ndv * matched, rows)
+                        cap(kept_distinct(c.ndv, matched, s.rows), rows)
                     } else {
                         cap(c.ndv, rows)
                     };
@@ -817,4 +820,21 @@ fn column_ndv(e: &Expr, est: &RelStats) -> Option<f64> {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => est.cols.get(&c.id).map(|c| c.ndv),
         _ => None,
     }
+}
+
+/// The distinct values expected among a fraction `kept` of `rows` rows that
+/// hold `ndv` equally frequent values: `ndv * (1 - (1 - kept)^(rows / ndv))`
+/// (Cardenas 1975). Each value has `rows / ndv` rows (at least one), and is
+/// lost only when every one of them is: a column of few values over many rows
+/// keeps them all, a unique column keeps the fraction `kept` of them.
+fn kept_distinct(ndv: f64, kept: f64, rows: f64) -> f64 {
+    // NaN inputs keep the count as it was.
+    if ndv.is_nan() || kept.is_nan() || ndv <= 0.0 || kept >= 1.0 {
+        return ndv;
+    }
+    if kept <= 0.0 {
+        return 0.0;
+    }
+    let per_value = (rows / ndv).max(1.0);
+    ndv * (1.0 - (1.0 - kept).powf(per_value))
 }

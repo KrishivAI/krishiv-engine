@@ -35,7 +35,7 @@ Limit 100
                :- Join Inner, (p_partkey#0 == ps_partkey#16)
                :  :- Shared #1, printed above
                :  +- Project [p_partkey#0, p_mfgr#2]
-               :     +- Filter ((p_type#4 like '%BRASS') and (p_size#5 == 15))
+               :     +- Filter ((p_size#5 == 15) and (p_type#4 like '%BRASS'))
                :        +- Shared #5, printed above
                +- Project [s_suppkey#9, s_name#10, s_address#11, s_phone#13, s_acctbal#14, s_comment#15, n_name#22]
                   +- Join Inner, (s_nationkey#12 == n_nationkey#21)
