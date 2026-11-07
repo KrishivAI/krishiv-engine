@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 583b1e57feefc075d7c93a0369bbe058365008def6c118ab46f223f97626edc8 # shrinks to b = [74, 188, 11, 43, 0, 13, 0, 0, 0, 6, 91, 0, 30, 37, 73, 0, 5, 0, 0, 0, 144, 72, 43, 74, 0, 30, 5, 0, 0, 0, 33, 0, 17, 187, 13, 83, 0, 215, 0, 0, 0, 78, 0, 0, 0, 0, 44, 0, 30, 3, 0, 0, 0, 0, 0, 29, 30, 0, 124, 142, 20, 12, 18, 20, 32, 71, 115, 0, 5, 0, 0, 0, 56, 0, 1, 0, 0, 0, 0, 0, 0, 92, 71, 0, 19, 0, 0, 0, 138, 0, 80, 20, 50, 19, 44, 0, 6, 72, 29, 0, 0, 0, 6, 2, 36, 33, 0, 0, 6, 0, 0, 0, 0, 32, 6, 224, 117, 0, 0, 186, 0, 6, 0, 8, 109, 0, 0, 0, 126, 43, 0, 31, 0, 0, 0, 136, 74, 20, 108, 158, 1, 0, 0, 0, 3, 93, 21, 79, 74, 13, 0, 0, 0, 47, 71, 0, 19, 0, 0, 0, 60, 0, 0, 0, 0, 0], at = Index(5781815306685083343)

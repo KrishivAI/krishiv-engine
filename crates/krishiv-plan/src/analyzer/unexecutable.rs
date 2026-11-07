@@ -44,10 +44,83 @@ fn is_spatial(t: Option<&DataType>) -> bool {
     })
 }
 
+fn is_collated(t: Option<&DataType>) -> bool {
+    t.is_some_and(|t| t.any_type(&|x| matches!(x, DataType::CollatedString(_))))
+}
+
 /// The use of a spatial value as a key at `node`, with its origin.
 fn spatial_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
     const KEY: &str =
         "a GEOMETRY or GEOGRAPHY value as a grouping, distinct, window or min/max key";
+    key_use(
+        node,
+        is_spatial,
+        KEY,
+        &["min", "max", "min_by", "max_by", "mode", "collect_set"],
+    )
+}
+
+/// The execution guard of the collation units (ADR 0043, design P2-collations section 3.2):
+/// until the planner rewrites the comparing positions onto collation keys, a collated value
+/// there would be compared as bytes, silently wrong. Unit 3a lifts the scalar comparisons,
+/// unit 3b the keys of aggregates, joins, sorts, windows and set operations.
+fn collated_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
+    const KEY: &str = "a collated string as a grouping, distinct, sort, window or join key, a set \
+                       operation, or a min/max/count(DISTINCT)/collect_set/listagg/mode argument";
+    const COMPARISON: &str = "a comparison of collated strings";
+    if let Node::Plan(p) = node
+        && let PlanNode::Sort { order, .. } = &p.node
+        && order.iter().any(|o| is_collated(expr_type(&o.expr)))
+    {
+        return Some((KEY, p.origin));
+    }
+    if let Node::Expr(e) = node
+        && let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
+        && f.kind != crate::FunctionKind::Aggregate
+        && matches!(
+            f.id.name(),
+            "==" | "<=>"
+                | "<"
+                | "<="
+                | ">"
+                | ">="
+                | "in"
+                | "between"
+                | "greatest"
+                | "least"
+                | "nullif"
+                | "equal_null"
+        )
+        && f.args.iter().any(|a| is_collated(expr_type(a)))
+    {
+        return Some((COMPARISON, e.origin));
+    }
+    key_use(
+        node,
+        is_collated,
+        KEY,
+        &[
+            "min",
+            "max",
+            "min_by",
+            "max_by",
+            "mode",
+            "collect_set",
+            "listagg",
+            "approx_count_distinct",
+        ],
+    )
+}
+
+/// The use of a value of a type `held` accepts as a key at `node`, with its origin: a grouping,
+/// distinct or window key, or an argument of a comparing aggregate (`names`, or any `DISTINCT`
+/// one).
+fn key_use(
+    node: &Node<'_>,
+    held: fn(Option<&DataType>) -> bool,
+    key: &'static str,
+    names: &[&str],
+) -> Option<(&'static str, crate::Origin)> {
     match node {
         Node::Plan(p) => match &p.node {
             PlanNode::Aggregate { grouping, .. } => {
@@ -59,8 +132,8 @@ fn spatial_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
                 };
                 exprs
                     .iter()
-                    .any(|e| is_spatial(expr_type(e)))
-                    .then_some((KEY, p.origin))
+                    .any(|e| held(expr_type(e)))
+                    .then_some((key, p.origin))
             }
             // A window partitions and orders by its keys.
             PlanNode::Window {
@@ -70,13 +143,13 @@ fn spatial_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
             } => partition_by
                 .iter()
                 .chain(order_by.iter().map(|o| &o.expr))
-                .any(|e| is_spatial(expr_type(e)))
-                .then_some((KEY, p.origin)),
+                .any(|e| held(expr_type(e)))
+                .then_some((key, p.origin)),
             PlanNode::Distinct { input } => match &input.node {
                 PlanNode::Project { exprs, .. } => exprs
                     .iter()
-                    .any(|e| is_spatial(expr_type(e)))
-                    .then_some((KEY, p.origin)),
+                    .any(|e| held(expr_type(e)))
+                    .then_some((key, p.origin)),
                 _ => None,
             },
             _ => None,
@@ -84,14 +157,10 @@ fn spatial_key(node: &Node<'_>) -> Option<(&'static str, crate::Origin)> {
         Node::Expr(e) => match &e.node {
             ExprNode::Resolved(ResolvedExpr::Function(f))
                 if f.kind == crate::FunctionKind::Aggregate
-                    && (f.distinct
-                        || matches!(
-                            super::exprs::builtin_name(f),
-                            "min" | "max" | "min_by" | "max_by" | "mode" | "collect_set"
-                        ))
-                    && f.args.iter().any(|a| is_spatial(expr_type(a))) =>
+                    && (f.distinct || names.contains(&super::exprs::builtin_name(f)))
+                    && f.args.iter().any(|a| held(expr_type(a))) =>
             {
-                Some((KEY, e.origin))
+                Some((key, e.origin))
             }
             _ => None,
         },
@@ -122,7 +191,7 @@ pub(super) fn check(root: &LogicalPlan, time_type: bool) -> Result<(), AnalysisE
         // `INVALID_ORDERING_TYPE`), so it is no grouping key, distinct row or
         // `min`/`max` argument; the operators below would compare its
         // internal struct.
-        if let Some((what, origin)) = spatial_key(&node) {
+        if let Some((what, origin)) = spatial_key(&node).or_else(|| collated_key(&node)) {
             error = Some(unsupported(what, origin));
             return ControlFlow::Break(());
         }

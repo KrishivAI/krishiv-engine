@@ -142,6 +142,7 @@ pub(crate) fn expr_tag(node: &ExprNode) -> u8 {
         ExprNode::Resolved(ResolvedExpr::StateInput { .. }) => 30,
         ExprNode::MultiAlias { .. } => 33,
         ExprNode::Pipe { .. } => 34,
+        ExprNode::Collate { .. } => 40,
     }
 }
 
@@ -1232,6 +1233,16 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
                 self.call(args, *distinct, filter.as_ref());
                 self.call_within_group(e);
+            }
+            ExprNode::Collate {
+                expr,
+                collation,
+                name,
+            } => {
+                self.u8(40);
+                self.str(&collation.name());
+                self.str(name);
+                self.expr(expr);
             }
             ExprNode::Cast { expr, to, mode } => {
                 self.data_type(to);

@@ -93,6 +93,23 @@ fn selection(p: &LogicalPlan) -> Option<&Arc<LogicalPlan>> {
     }
 }
 
+/// Whether the column selection `p` over `input` drops only columns common-
+/// subexpression elimination extracted. CSE runs after join ordering, so only a
+/// second optimization meets one: pruning left it when the columns it was made
+/// to drop went after CSE, and it would not rebuild it (it never narrows for a
+/// `cse_*` column alone). Looking through it would lose it and change the plan,
+/// so the tree takes it as an input.
+fn drops_only_cse(p: &LogicalPlan, input: &LogicalPlan) -> bool {
+    let (Some(out), Some(below)) = (p.resolved_output(), input.resolved_output()) else {
+        return false;
+    };
+    let kept = |c: &BoundColumn| out.iter().any(|o| o.id == c.id);
+    below
+        .iter()
+        .all(|c| crate::cse::is_cse_column(c) || kept(c))
+        && below.iter().any(|c| !kept(c))
+}
+
 /// Whether `p` tops an inner-join tree: the join itself, or a deterministic
 /// filter over one (through column selections). A column selection on top
 /// is left in place, so a join tree shared by several consumers is
@@ -248,8 +265,8 @@ impl Reorder<'_> {
                 }
                 _ if Arc::ptr_eq(n, root) => return self.children(root),
                 _ => match selection(n) {
-                    Some(input) => stack.push(input),
-                    None => leaves.push(self.node(n)),
+                    Some(input) if !drops_only_cse(n, input) => stack.push(input),
+                    _ => leaves.push(self.node(n)),
                 },
             }
         }

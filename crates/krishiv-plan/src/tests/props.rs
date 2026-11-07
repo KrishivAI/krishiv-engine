@@ -169,7 +169,7 @@ impl Gen<'_> {
 
     fn expr(&mut self, depth: u8) -> Expr {
         let origin = self.origin();
-        let kinds = if depth == 0 { 5 } else { 18 };
+        let kinds = if depth == 0 { 5 } else { 19 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => ExprNode::Column(ColumnRef {
@@ -303,6 +303,14 @@ impl Gen<'_> {
                 columns: self.exprs(),
                 raw_type: self.data_type(),
             }),
+            18 => ExprNode::Collate {
+                expr: Arc::new(self.expr(d)),
+                collation: krishiv_types::Collation::parse(
+                    ["UTF8_LCASE", "UNICODE_CI"][usize::from(self.pick(2))],
+                )
+                .unwrap(),
+                name: self.name(),
+            },
             _ => ExprNode::Subquery {
                 kind: match self.pick(3) {
                     0 => SubqueryKind::Scalar,
@@ -820,6 +828,18 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
         ExprNode::Cast { expr, to, mode } => {
             site!(w, flip(mode, CastMode::Try, CastMode::Ansi));
             m_type(to, w) || m_expr(expr, w)
+        }
+        ExprNode::Collate {
+            expr,
+            name,
+            collation,
+        } => {
+            let (a, b) = (
+                krishiv_types::Collation::parse("UTF8_LCASE").unwrap(),
+                krishiv_types::Collation::parse("UNICODE_CI").unwrap(),
+            );
+            site!(w, flip(collation, a, b));
+            m_string(name, w) || m_expr(expr, w)
         }
         ExprNode::Alias { expr, name } => m_string(name, w) || m_expr(expr, w),
         ExprNode::MultiAlias { expr, names } => {
