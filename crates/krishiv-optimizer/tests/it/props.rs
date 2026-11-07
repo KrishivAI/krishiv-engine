@@ -702,20 +702,7 @@ fn a_semi_join_under_full_joins_reaches_a_fixed_point() {
     let sql = "SELECT x4.a AS c0, count(*) AS c1 FROM u AS x1 LEFT SEMI JOIN t AS x2 ON x1.a = x2.c \
                FULL JOIN u AS x3 ON x1.a = x3.a FULL JOIN u AS x4 ON x1.a = x4.a \
                WHERE x4.a = x3.a GROUP BY x4.a";
-    let plan = support::resolve(sql, &support::ctx());
-    let optimized = optimize(&plan).unwrap();
-    let again = optimize(&optimized).unwrap();
-    assert!(
-        again.structurally_eq(&optimized),
-        "not a fixed point:\n{}\n{}",
-        optimized.root(),
-        again.root()
-    );
-    for seed in 1..=3 {
-        let db = data::small(seed);
-        assert_eq!(
-            eval::rows(&db, optimized.root()),
-            eval::rows(&db, plan.root())
-        );
+    for seed in [1, 2, 11_116_336_612_244_059_032] {
+        fixed_point_with_rows(seed, sql);
     }
 }
