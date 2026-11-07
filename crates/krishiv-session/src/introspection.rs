@@ -796,6 +796,20 @@ impl Session {
                         .await;
                 }
                 if !column.is_empty() {
+                    // The statistics rows are NULL because the catalog keeps no column statistics; after
+                    // `ANALYZE .. FOR COLUMNS` Spark shows values, so say so rather than print NULLs.
+                    let analyzed = !temp
+                        && self
+                            .state
+                            .catalog
+                            .store
+                            .table(&name.namespace, &name.name)
+                            .is_some_and(|t| t.column_stats_requested);
+                    if mode.is_some() && analyzed {
+                        return Err(unsupported(
+                            "DESCRIBE EXTENDED of a column after ANALYZE TABLE ... FOR COLUMNS (column statistics)",
+                        ));
+                    }
                     return self
                         .describe_column(
                             &columns,

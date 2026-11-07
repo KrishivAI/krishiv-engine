@@ -179,6 +179,9 @@ pub(crate) struct CatalogTable {
     pub(crate) view: Option<ViewDef>,
     /// Partitioning, bucketing and the partitions the catalog tracks.
     pub(crate) layout: TableLayout,
+    /// `ANALYZE TABLE .. FOR COLUMNS` ran on it. The engine stores no column statistics, so
+    /// `DESCRIBE EXTENDED t col` refuses rather than print NULLs where Spark prints values.
+    pub(crate) column_stats_requested: bool,
 }
 
 impl CatalogTable {
@@ -685,6 +688,7 @@ mod tests {
             root: PathBuf::new(),
             view: None,
             layout: TableLayout::default(),
+            column_stats_requested: false,
         }
     }
 

@@ -657,3 +657,24 @@ fn unimplemented_char_varchar_switches_are_refused() {
         assert!(built.is_err(), "{key} on the builder");
     }
 }
+
+/// `DESCRIBE EXTENDED t col` prints NULL statistics while none were asked for. After `ANALYZE
+/// TABLE .. FOR COLUMNS` Spark prints values, and the engine stores none, so it refuses (review of
+/// #496 M2); the plain column form still answers.
+#[test]
+fn column_statistics_after_analyze_are_refused_not_null() {
+    let s = fresh();
+    run(&s, "DESC EXTENDED t c").unwrap();
+    run(&s, "ANALYZE TABLE t COMPUTE STATISTICS").unwrap();
+    run(&s, "DESC EXTENDED t c").unwrap();
+    run(&s, "ANALYZE TABLE t COMPUTE STATISTICS FOR COLUMNS c").unwrap();
+    for sql in ["DESC EXTENDED t c", "DESCRIBE FORMATTED t v"] {
+        let e = run(&s, sql).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_UNSUPPORTED_FEATURE",
+            "{sql}"
+        );
+    }
+    run(&s, "DESC t c").unwrap();
+}

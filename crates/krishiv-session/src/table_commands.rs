@@ -591,6 +591,7 @@ impl Session {
                 schema_mode,
             }),
             layout: TableLayout::default(),
+            column_stats_requested: false,
         };
         self.state.catalog.store.create_table(view, mode)?;
         self.empty_frame().await
@@ -1358,6 +1359,7 @@ impl Session {
             root: warehouse.clone(),
             view: None,
             layout: TableLayout::default(),
+            column_stats_requested: false,
         };
         let layout = LayoutRequest {
             partition_by: &partition_names,
@@ -1831,6 +1833,7 @@ impl Session {
             root: warehouse.clone(),
             view: None,
             layout,
+            column_stats_requested: false,
         };
         let mode = if t.if_not_exists {
             CreateMode::IfNotExists
@@ -1992,6 +1995,18 @@ impl Session {
                     .into(),
                 );
             }
+        }
+        // Nothing is computed, but the table remembers that column statistics were asked for, so that
+        // `DESCRIBE EXTENDED t col` refuses instead of printing NULLs (review of #496 M2).
+        if matches!(
+            a.columns,
+            AnalyzeColumns::ForAll | AnalyzeColumns::ForColumns(_)
+        ) && !table.column_stats_requested
+        {
+            let mut marked = CatalogTable::clone(&table);
+            marked.column_stats_requested = true;
+            // A concurrent change of the table wins; the mark is only a guard.
+            self.state.catalog.store.replace_table(&table, marked);
         }
         self.empty_frame().await
     }
@@ -2677,6 +2692,7 @@ impl Session {
             root: warehouse,
             view: None,
             layout: TableLayout::default(),
+            column_stats_requested: false,
         };
         let layout = LayoutRequest {
             partition_by: &[],
