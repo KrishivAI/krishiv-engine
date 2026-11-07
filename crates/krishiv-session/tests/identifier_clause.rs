@@ -323,6 +323,33 @@ fn a_select_item_written_identifier_is_named_by_what_it_resolves_to() {
         ),
         ["c1.c2"]
     );
+    // a clause followed by fields is named by the whole path, as Spark 4.2.0 names it; the
+    // same path written plainly keeps its last part
+    let nested = "FROM VALUES (named_struct('c2', named_struct('c3', 42))) AS T(c1)";
+    assert_eq!(
+        names(
+            &s,
+            &format!(
+                "SELECT IDENTIFIER('c1').c2, IDENTIFIER('c1').c2.c3, IDENTIFIER('c1.c2').c3, \
+                 IDENTIFIER('T.c1').c2, (c1).c2 {nested}"
+            )
+        ),
+        ["c1.c2", "c1.c2.c3", "c1.c2.c3", "c1.c2", "c2"]
+    );
+    // the legacy clause (`spark.sql.legacy.identifierClause`) names the items the same way
+    // (`research/spark/identifier-names-outside-query.md`)
+    run(&s, "SET spark.sql.legacy.identifierClause = true");
+    assert_eq!(
+        names(&s, &format!("SELECT IDENTIFIER('c1.c2'), c1.c2 {structs}")),
+        ["c1.c2", "c2"]
+    );
+    assert_eq!(
+        names(&s, "SELECT IDENTIFIER('my_var'), my_var"),
+        [
+            "variablereference(system.session.my_var='new_value')",
+            "my_var"
+        ]
+    );
 }
 
 /// Spark 4.2.0 (`research/spark/identifier-names-outside-query.md`): the name of a select item
