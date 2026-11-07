@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "depends-on-command": [
+      12
+    ],
+    "subqueries": [
+      8
+    ]
+  },
+  "file": "subquery/in-subquery/in-order-by",
+  "format_version": 1
+}

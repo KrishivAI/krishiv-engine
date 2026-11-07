@@ -304,6 +304,48 @@ impl Rewriter {
 }
 
 impl Rewriter {
+    /// Whether `input` holds, anywhere below, a global aggregate over a
+    /// correlated input: one row for every outer row, matches or not
+    /// (Spark's count bug; the legacy flags, and a Spark without inner-query
+    /// decorrelation, keep it refused, `ResolutionConf::nested_count_fix`).
+    pub(super) fn nested_global(&self, input: &Arc<LogicalPlan>) -> bool {
+        let mut found = false;
+        let _ = crate::walk::visit_distinct(Node::Plan(input), |n| {
+            if let Node::Plan(q) = n
+                && matches!(&q.node, PlanNode::Aggregate { grouping: Grouping::GroupBy(k), .. } if k.is_empty())
+                && has_outer(Node::Plan(q))
+            {
+                found = true;
+                return std::ops::ControlFlow::Break(());
+            }
+            std::ops::ControlFlow::Continue(())
+        });
+        found && self.nested_count_fix
+    }
+
+    /// Whether a correlated scalar subquery over `input` goes through the
+    /// domain: a shape [`needs_domain`] names, a correlation that is not an
+    /// equality, or (with no grouping) a global aggregate below.
+    pub(super) fn scalar_needs_domain(&self, input: &Arc<LogicalPlan>, global: bool) -> bool {
+        super::on_path(input, super::needs_domain)
+            || (global && self.nested_global(input))
+            || (super::non_equality_correlation(input) && super::deterministic_filters(input))
+    }
+
+    /// [`Rewriter::domain`], with the domain kept for a global aggregate
+    /// below (its row is aggregated per domain value and outer-joined to it).
+    pub(super) fn domain_counting(
+        &mut self,
+        base: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+    ) -> R<super::Lifted> {
+        let global = self.nested_global(input);
+        let lateral = std::mem::replace(&mut self.lateral, global);
+        let domained = self.domain(base, input);
+        self.lateral = lateral;
+        domained
+    }
+
     /// A global aggregate (no `GROUP BY`) over `input` whose output reads a
     /// joined subquery outside its calls (`SELECT 1 IN (..), count(*) FROM
     /// a`): the calls run in a global aggregate, which keeps its one row
@@ -620,6 +662,12 @@ pub(super) fn check_grouped_reads(
             continue;
         }
         if let ExprNode::Subquery { kind, plan } = &x.node {
+            // An uncorrelated scalar or EXISTS stays an expression computed
+            // once ([`Analyzer::existential`] leaves it out): it cannot
+            // split a group, even with `rand`.
+            if !matches!(kind, SubqueryKind::In(_)) && subquery_reads(&x).is_empty() {
+                continue;
+            }
             // The existence join runs below the aggregate, once per input
             // row: a nondeterministic value or subquery is not fixed within
             // a group even when it reads only grouped columns, and would
@@ -790,7 +838,7 @@ pub(super) fn push_not(e: &Arc<Expr>) -> Arc<Expr> {
     out.unwrap_or_else(|never| match never {})
 }
 
-/// [`super::needs_domain`], or a positive `LIMIT` over a correlation that
+/// [`super::needs_domain`], or a `LIMIT` and / or `OFFSET` over a correlation that
 /// is not an equality (`WHERE t2b <= t1d LIMIT 2`): its rows are ranked
 /// within each value of the outer columns, which only the domain gives (an
 /// equality's keys partition the ranking without it).
@@ -801,11 +849,8 @@ pub(super) fn push_not(e: &Arc<Expr>) -> Arc<Expr> {
 /// stays refused rather than answered differently.
 pub(super) fn limit_hit(p: &LogicalPlan) -> bool {
     super::needs_domain(p)
-        || matches!(&p.node, PlanNode::Limit { input, limit }
-            if super::non_equality_correlation(input)
-                && reads_inner(input)
-                && super::positive_literal(limit)
-                && !has_outer(Node::Expr(limit)))
+        || super::bounded(p)
+            .is_some_and(|b| super::non_equality_correlation(&b.below) && reads_inner(&b.below))
 }
 
 /// Whether every correlated conjunct of the filters on `p`'s path down

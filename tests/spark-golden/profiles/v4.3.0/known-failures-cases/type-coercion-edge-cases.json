@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "depends-on-command": [
+      2
+    ],
+    "s43-other": [
+      3
+    ]
+  },
+  "file": "type-coercion-edge-cases",
+  "format_version": 1
+}
