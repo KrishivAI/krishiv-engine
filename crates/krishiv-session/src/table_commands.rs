@@ -758,7 +758,7 @@ impl Session {
                 source,
                 columns,
                 known: true,
-                partition_columns: Vec::new(),
+                partitions: Some(Default::default()),
             },
         );
         // A replaced view must not keep serving the rows of the old one.

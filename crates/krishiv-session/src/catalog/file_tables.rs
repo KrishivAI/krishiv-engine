@@ -21,7 +21,7 @@ pub(super) type FileScanOf = (
     ReadSource,
     SchemaRef,
     Vec<(krishiv_plan::AttrId, String)>,
-    Vec<String>,
+    Option<krishiv_exec::files::KnownPartitions>,
 );
 
 impl QueryCatalog {
@@ -49,6 +49,14 @@ impl QueryCatalog {
             };
             let listing = match key {
                 FilesKey::Table(_) => {
+                    let Some(partitions) = partitions else {
+                        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                            feature: "reading a table with a partition outside its default \
+                                      directory (ADD PARTITION ... LOCATION, SET LOCATION)"
+                                .to_owned(),
+                        }
+                        .into());
+                    };
                     self.files
                         .listing_known(format, paths, options, Arc::clone(table), partitions)
                         .await?
@@ -90,7 +98,7 @@ impl QueryCatalog {
                         let TempTable::Files {
                             source,
                             known,
-                            partition_columns,
+                            partitions,
                             ..
                         } = &*table
                         else {
@@ -101,10 +109,10 @@ impl QueryCatalog {
                         } else {
                             FilesKey::View(key)
                         };
-                        (key, source.clone(), partition_columns.clone())
+                        (key, source.clone(), partitions.clone())
                     }
                     source @ ReadSource::Files { .. } => {
-                        (FilesKey::Read(source.clone()), source.clone(), Vec::new())
+                        (FilesKey::Read(source.clone()), source.clone(), None)
                     }
                     _ => return None,
                 };

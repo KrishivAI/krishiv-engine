@@ -364,24 +364,25 @@ impl FileReads {
 
     /// The listing of a table whose columns are known: the files under
     /// `paths` (none is fine: the table is empty), with `schema` as their
-    /// schema. `partitions` names the table's partition columns (the last
-    /// columns of `schema`, in this order): the `name=value` directories
-    /// above its files must name exactly those, and their values are read
-    /// as the columns' declared types. Nothing is inferred and nothing is
-    /// cached, so every query lists the table afresh.
+    /// schema. `partitions` are the table's partition columns (the last
+    /// columns of `schema`, in this order) and the partitions its catalog
+    /// registered: the `name=value` directories above its files must name
+    /// exactly those columns and hold registered partitions, and their
+    /// values are read as the columns' declared types. Nothing is inferred
+    /// and nothing is cached, so every query lists the table afresh.
     ///
     /// # Errors
     /// The listing errors of [`Self::listing`], except that no files is not
     /// an error; `KRISHIV_UNSUPPORTED_FEATURE` when the directories do not
-    /// match the declared partition columns, or a partition column is a
-    /// timestamp with a time zone.
+    /// match the declared partition columns or the registered partitions,
+    /// or a partition column's type is not read from a directory yet.
     pub async fn listing_known(
         &self,
         format: &str,
         paths: &[OptionValue],
         options: &BTreeMap<String, OptionValue>,
         schema: SchemaRef,
-        partitions: &[String],
+        partitions: &KnownPartitions,
     ) -> Result<Arc<FileListing>> {
         let listing = Box::pin(self.list_with(
             &format.to_ascii_lowercase(),
@@ -417,7 +418,7 @@ impl FileReads {
         format: &str,
         paths: &[OptionValue],
         options: &BTreeMap<String, OptionValue>,
-        known: Option<(SchemaRef, &[String])>,
+        known: Option<(SchemaRef, &KnownPartitions)>,
     ) -> Result<FileListing> {
         let mode = self.list_mode(options)?;
         // Spark checks the paths before the format.
@@ -470,7 +471,8 @@ impl FileReads {
         let infer = known.is_none() && self.infers_partition_types();
         let partition_columns = partition_columns(&discovered, infer)?;
         if let Some((schema, declared)) = known {
-            let partition_columns = declared_partitions(&schema, declared, &partition_columns)?;
+            let partition_columns =
+                declared_partitions(&schema, declared, &partition_columns, &discovered)?;
             return Ok(FileListing {
                 format,
                 files: files.into(),
@@ -1055,47 +1057,75 @@ struct ListMode {
     )>,
 }
 
-/// The partition columns of a known table: its declared `declared`
-/// columns, the last of `schema`, typed as declared, when the directories
-/// above its files name exactly those (`discovered`, in order, names
-/// compared case-insensitively as Spark's resolution does); none when
-/// there are no partition directories (an empty or unpartitioned table).
+/// The partition columns of a permanent table and the partitions its
+/// catalog registered, which a read of it lists ([`FileReads::listing_known`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KnownPartitions {
+    /// The partition columns, in partition order (the table's last columns).
+    pub columns: Vec<String>,
+    /// Each registered partition's values in partition order, as the
+    /// directory names hold them unescaped (`None` for the default
+    /// partition, NULL).
+    pub registered: Vec<Vec<Option<String>>>,
+}
+
+/// The partition columns of a known table: its `declared` columns, the
+/// last of `schema`, typed as declared, when the directories above its
+/// files (`found`, per file) name exactly those (in order, names compared
+/// case-insensitively) and every one holds a registered partition; none
+/// when there are no partition directories (an empty or unpartitioned
+/// table). Spark reads a catalog table's registered partitions
+/// (`CatalogFileIndex`), not the directories under its root: a directory
+/// the catalog does not know (before `MSCK REPAIR`) is refused here, never
+/// read, and so is a partition column of a type whose directory value the
+/// scan does not read yet (only strings, integers and dates are: a
+/// timestamp is local time in the session zone, which the scan does not
+/// have).
 ///
 /// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` when the directories name other columns
-/// than the declared ones (or the table declares none), or a partition
-/// column is a timestamp with a time zone: its directory value is local
-/// time in the session zone, which the scan does not have.
+/// `KRISHIV_UNSUPPORTED_FEATURE` in those cases.
 fn declared_partitions(
     schema: &SchemaRef,
-    declared: &[String],
+    declared: &KnownPartitions,
     discovered: &[FieldRef],
+    found: &[(String, Vec<Segment>)],
 ) -> Result<Vec<FieldRef>> {
+    use arrow_schema::DataType as T;
     if discovered.is_empty() {
         return Ok(Vec::new());
     }
     let mismatch =
         || unsupported("reading the subdirectory of a table (partition discovery)".to_owned());
+    let names = &declared.columns;
     let fields = schema.fields();
-    if declared.len() != discovered.len() || declared.len() > fields.len() {
+    if names.len() != discovered.len() || names.len() > fields.len() {
         return Err(mismatch());
     }
-    let tail = &fields[fields.len() - declared.len()..];
+    let tail = &fields[fields.len() - names.len()..];
     let mut out = Vec::with_capacity(tail.len());
-    for ((field, name), found) in tail.iter().zip(declared).zip(discovered) {
+    for ((field, name), found) in tail.iter().zip(names).zip(discovered) {
         if !field.name().eq_ignore_ascii_case(name) || !name.eq_ignore_ascii_case(found.name()) {
             return Err(mismatch());
         }
-        if matches!(
+        if !matches!(
             field.data_type(),
-            arrow_schema::DataType::Timestamp(_, Some(_))
+            T::Utf8 | T::Utf8View | T::Int8 | T::Int16 | T::Int32 | T::Int64 | T::Date32
         ) {
             return Err(unsupported(format!(
-                "reading the timestamp partition column {} of a table",
-                field.name()
+                "reading the partition column {} of type {} of a table",
+                field.name(),
+                field.data_type()
             )));
         }
         out.push(Arc::clone(field));
+    }
+    for (path, segs) in found {
+        let values: Vec<Option<String>> = segs.iter().map(|(_, v)| v.clone()).collect();
+        if !declared.registered.contains(&values) {
+            return Err(unsupported(format!(
+                "reading {path}: a partition directory the catalog does not know (MSCK REPAIR TABLE registers it)"
+            )));
+        }
     }
     Ok(out)
 }

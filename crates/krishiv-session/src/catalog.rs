@@ -79,10 +79,11 @@ pub(crate) enum TempTable {
         /// it lists its files without inferring a schema, and a table with
         /// no files is empty.
         known: bool,
-        /// The partition columns of a permanent table (its last columns, in
-        /// `PARTITIONED BY` order): their values are the `name=value`
-        /// directories above its files. Empty otherwise.
-        partition_columns: Vec<String>,
+        /// A permanent table's partition columns and registered partitions
+        /// (`None` when they are not all at their default directories, so a
+        /// listing under the root cannot read them as Spark does). Empty
+        /// otherwise.
+        partitions: Option<krishiv_exec::files::KnownPartitions>,
     },
     /// A view over a query: the unresolved plan and the output columns it
     /// had when it was created (renamed when the view declares aliases).
@@ -896,7 +897,7 @@ impl QueryCatalog {
             source: table_source(&table),
             columns: columns.clone(),
             known: true,
-            partition_columns: table.layout.partition_columns.clone(),
+            partitions: known_partitions(&table),
         });
         let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
         // Keys are lower case whatever the session's case sensitivity: `entry_key` spells scans that way.
@@ -932,6 +933,38 @@ fn file_metadata(provider: &str) -> FileMetadata {
 }
 
 /// The read of a table's files.
+/// The partitions a read of `table` lists: its partition columns and the
+/// values of the partitions its catalog registered. `None` when a registered
+/// partition is not at its default directory under the table (`ADD PARTITION
+/// ... LOCATION`, `SET LOCATION`): Spark reads it there, a listing of the table
+/// does not.
+fn known_partitions(
+    table: &crate::store::CatalogTable,
+) -> Option<krishiv_exec::files::KnownPartitions> {
+    let columns = table.layout.partition_columns.clone();
+    let mut registered = Vec::with_capacity(table.layout.partitions.len());
+    for p in &table.layout.partitions {
+        let mut dir = table.location.clone();
+        let mut values = Vec::with_capacity(p.spec.len());
+        for (k, v) in &p.spec {
+            dir.push(format!(
+                "{}={}",
+                crate::partitions::escape_path_name(k),
+                crate::partitions::escape_path_name(v)
+            ));
+            values.push((v != krishiv_io::DEFAULT_PARTITION).then(|| v.clone()));
+        }
+        if dir != p.location {
+            return None;
+        }
+        registered.push(values);
+    }
+    Some(krishiv_exec::files::KnownPartitions {
+        columns,
+        registered,
+    })
+}
+
 pub(crate) fn table_source(table: &crate::store::CatalogTable) -> ReadSource {
     ReadSource::Files {
         format: table.provider.clone(),
@@ -2055,7 +2088,7 @@ mod tests {
     fn files(col: &str) -> TempTable {
         TempTable::Files {
             known: false,
-            partition_columns: Vec::new(),
+            partitions: Some(Default::default()),
             source: ReadSource::Files {
                 format: "parquet".to_owned(),
                 paths: vec![],

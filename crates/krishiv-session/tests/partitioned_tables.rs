@@ -1295,3 +1295,50 @@ fn reading_a_partitioned_table_returns_its_partition_values() {
     );
     assert_eq!(class(&s, "SELECT a FROM z"), "KRISHIV_UNSUPPORTED_FEATURE");
 }
+
+/// Spark reads a catalog table's registered partitions (`CatalogFileIndex`), not every directory under its root:
+/// what a listing of the root cannot read the same way is refused, never read differently. A directory the catalog
+/// does not know is not read (the commit log lists the table's own files; a directory outside it is refused by the
+/// listing); a partition registered at another location is refused (the listing would not find its files).
+#[test]
+fn reads_follow_the_registered_partitions() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "CREATE TABLE g (a INT, b STRING) USING parquet PARTITIONED BY (b)",
+    );
+    run(&s, "INSERT INTO g VALUES (1, 'x')");
+    // A partition directory written behind the catalog's back.
+    let root = dir.path().join("g");
+    std::fs::create_dir_all(root.join("b=y")).unwrap();
+    let x = std::fs::read_dir(root.join("b=x"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().starts_with("part-"))
+        .unwrap()
+        .path();
+    std::fs::copy(&x, root.join("b=y").join(x.file_name().unwrap())).unwrap();
+    // The table's commit log lists its own files only, so the unregistered directory is not read: Spark's answer.
+    assert_eq!(
+        rows(&s, "SELECT CAST(a AS STRING), b FROM g ORDER BY b"),
+        ["1\tx"]
+    );
+    // A partition registered outside the table's directory.
+    let elsewhere = tempfile::tempdir().unwrap();
+    run(
+        &s,
+        &format!(
+            "ALTER TABLE g ADD PARTITION (b = 'z') LOCATION '{}'",
+            elsewhere.path().display()
+        ),
+    );
+    assert_eq!(class(&s, "SELECT a FROM g"), "KRISHIV_UNSUPPORTED_FEATURE");
+    // A declared type whose directory value is not read yet.
+    run(
+        &s,
+        "CREATE TABLE f (a INT, x DOUBLE) USING parquet PARTITIONED BY (x)",
+    );
+    run(&s, "INSERT INTO f VALUES (1, 1.5)");
+    assert_eq!(class(&s, "SELECT a FROM f"), "KRISHIV_UNSUPPORTED_FEATURE");
+}
