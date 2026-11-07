@@ -125,7 +125,6 @@ fn fan_ins_and_spills_give_the_same_bytes_on_every_run() {
 /// the runner starts the branches together; the rows still come out in the
 /// same order on every run.
 #[test]
-#[ignore = "T094 G3 (design/P2-T094-deterministic-order.md): a fan-in with a flush barrier still starts its branches together"]
 fn a_join_probing_a_union_gives_the_same_order_on_every_run() {
     let s = Session::new().unwrap();
     s.conf().set("krishiv.deterministicOrder", "true").unwrap();
