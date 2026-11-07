@@ -88,6 +88,9 @@ struct Counters {
     /// Chunks cut short to leave the pool room (`probe.rs` `leaves_room`):
     /// each costs another pass over the probe files.
     capped_chunks: AtomicU64,
+    /// Chunk first batches that waited for another nested loop's chunk
+    /// (`probe.rs` `first_batch`).
+    chunk_waits: AtomicU64,
 }
 
 #[derive(Debug)]

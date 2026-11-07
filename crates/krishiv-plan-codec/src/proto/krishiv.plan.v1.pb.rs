@@ -900,6 +900,10 @@ pub struct ExchangeNode {
     /// feature: exchange_filters
     #[prost(message, repeated, tag = "4")]
     pub filters: ::prost::alloc::vec::Vec<ExchangeFilter>,
+    /// ignorable: the planner's columns of its input (Arrow IPC `Schema`
+    /// flatbuffer); a reader without it learns them by instantiating.
+    #[prost(bytes = "vec", optional, tag = "5")]
+    pub schema: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 /// feature: exchange_filters
 #[derive(Clone, PartialEq, ::prost::Message)]
