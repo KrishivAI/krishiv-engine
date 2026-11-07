@@ -37,6 +37,7 @@ mod number;
 mod predicate;
 mod r#struct;
 mod text;
+mod time;
 mod url;
 mod variant;
 mod vector;
@@ -288,9 +289,13 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "timestampdiff" => "timestampdiff",
         // `base[index]`: the lowering of a subscript (Spark's `ExtractValue`).
         "__subscript" => "__subscript",
+        // `time + interval` and `time - time`: Spark's `TimeAddInterval` and `SubtractTimes`, which the analyzer
+        // builds for the operators (the third argument of `__time_add_interval` is the interval's end field).
+        "__time_add_interval" => "__time_add_interval",
+        "__subtract_times" => "__subtract_times",
         _ => return None,
     };
-    let arity = if name == "__subscript" {
+    let arity = if matches!(name, "__subscript" | "__subtract_times") {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {
         Arity::new([false, false, false, true, false, false, false], "3")
