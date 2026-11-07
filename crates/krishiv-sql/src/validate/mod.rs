@@ -839,14 +839,16 @@ impl Checker<'_> {
                     return column.iter().try_for_each(|c| self.column_name(c));
                 }
                 self.partition_values(partition.as_ref())?;
-                if let Some(part) = partition
-                    .iter()
-                    .flat_map(|s| &s.parts)
-                    .find(|p| p.value.is_none())
+                // The spec's map (`toMap`) is walked for a key without a value.
+                let parts: Vec<_> = partition.iter().flat_map(|s| &s.parts).collect();
+                let keys: Vec<&str> = parts.iter().map(|p| p.key.value.as_str()).collect();
+                if let Some(key) = keys::to_map_order(&keys)
+                    .into_iter()
+                    .find(|k| parts.iter().any(|p| p.key.value == *k && p.value.is_none()))
                 {
                     return Err(at(
                         InvalidSqlSyntaxEmptyPartitionValue {
-                            part_key: quote(&part.key.value),
+                            part_key: quote(key),
                         },
                         d.span,
                     ));

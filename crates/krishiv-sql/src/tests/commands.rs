@@ -1643,4 +1643,26 @@ fn describe_checks_follow_sparks_order() {
     for (sql, class) in cases {
         assert_eq!(err(sql).error.error_class(), class, "{sql}");
     }
+    // The key without a value Spark names walks the spec's `toMap`: written order up to four keys,
+    // hash order from five.
+    for (sql, key) in [
+        ("DESC t PARTITION (a=1, yoo, sgf)", "`yoo`"),
+        ("DESC t PARTITION (a=1, b=1, yoo, sgf)", "`yoo`"),
+        ("DESC t PARTITION (a=1, b=1, c=1, yoo, sgf)", "`sgf`"),
+        ("DESC t PARTITION (a=1, b=1, c=1, d=1, yoo, sgf)", "`sgf`"),
+        ("DESC t PARTITION (an, c0, a=1, b=1, c=1)", "`an`"),
+        ("DESC t PARTITION (c0, an, a=1, b=1, c=1)", "`c0`"),
+    ] {
+        let e = err(sql);
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidSqlSyntaxEmptyPartitionValue,
+            "{sql}"
+        );
+        assert_eq!(
+            e.error.message_parameters(),
+            [("partKey", key.to_owned())],
+            "{sql}"
+        );
+    }
 }

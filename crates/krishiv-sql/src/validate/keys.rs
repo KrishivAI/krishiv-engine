@@ -21,54 +21,65 @@ fn improve(h: u32) -> u32 {
     h ^ (h >> 10)
 }
 
-/// The first of `keys` (distinct) in a CHAMP trie's iteration order, from the level at `shift`.
-/// Keys whose 32-bit hashes are equal sit in a collision node in insertion order; the first listed
-/// stands in for that order.
-fn champ_first(keys: Vec<(&str, u32)>, shift: u32) -> Option<&str> {
+/// `keys` (distinct) in a CHAMP trie's iteration order, from the level at `shift`, appended to
+/// `out`. Keys whose 32-bit hashes are equal sit in a collision node in insertion order, which is
+/// the order they come in.
+fn champ_order<'a>(keys: Vec<(&'a str, u32)>, shift: u32, out: &mut Vec<&'a str>) {
     if keys.len() <= 1 || shift >= 32 {
-        return keys.first().map(|(k, _)| *k);
+        out.extend(keys.into_iter().map(|(k, _)| k));
+        return;
     }
-    let fragment = |h: u32| (h >> shift) & 31;
-    let mut counts = [0usize; 32];
-    for (_, h) in &keys {
-        counts[fragment(*h) as usize] += 1;
+    let fragment = |h: u32| ((h >> shift) & 31) as usize;
+    let mut groups: [Vec<(&str, u32)>; 32] = Default::default();
+    for (k, h) in keys {
+        groups[fragment(h)].push((k, h));
     }
-    if let Some((k, _)) = keys
-        .iter()
-        .filter(|(_, h)| counts[fragment(*h) as usize] == 1)
-        .min_by_key(|(_, h)| fragment(*h))
-    {
-        return Some(k);
+    // A node's own entries first, by fragment, then its sub-nodes, by fragment.
+    out.extend(groups.iter().filter(|g| g.len() == 1).map(|g| g[0].0));
+    for g in groups {
+        if g.len() > 1 {
+            champ_order(g, shift + 5, out);
+        }
     }
-    let lowest = keys.iter().map(|(_, h)| fragment(*h)).min()?;
-    let below = keys
-        .into_iter()
-        .filter(|(_, h)| fragment(*h) == lowest)
-        .collect();
-    champ_first(below, shift + 5)
+}
+
+/// `keys` (distinct) in the iteration order of an `immutable.HashMap` built from them in this order.
+fn hash_map_order<'a>(keys: &[&'a str]) -> Vec<&'a str> {
+    let mut out = Vec::with_capacity(keys.len());
+    champ_order(
+        keys.iter().map(|k| (*k, improve(java_hash(k)))).collect(),
+        0,
+        &mut out,
+    );
+    out
 }
 
 /// The repeated key Spark's `checkDuplicateKeys` reports for `keys` (already lower-cased when
-/// Spark lower-cases them), or `None` when no key repeats.
+/// Spark lower-cases them), or `None` when no key repeats. The repeated keys enter the map in the
+/// order they are first written (Spark 4.2.0: `c0, an, an, c0`, whose hash codes are equal, gives `c0`).
 pub(super) fn first_duplicate_key<'a>(keys: &[&'a str]) -> Option<&'a str> {
     let mut repeated: Vec<&str> = Vec::new();
     for (i, k) in keys.iter().enumerate() {
-        if keys[..i].contains(k) && !repeated.contains(k) {
+        if !keys[..i].contains(k) && keys[i + 1..].contains(k) {
             repeated.push(k);
         }
     }
-    champ_first(
-        repeated
-            .into_iter()
-            .map(|k| (k, improve(java_hash(k))))
-            .collect(),
-        0,
-    )
+    hash_map_order(&repeated).first().copied()
+}
+
+/// The iteration order of Scala's `Seq.toMap` over `keys` (distinct): the written order up to four
+/// keys (`Map1`..`Map4`), the [`hash_map_order`] from five.
+pub(super) fn to_map_order<'a>(keys: &[&'a str]) -> Vec<&'a str> {
+    if keys.len() <= 4 {
+        keys.to_vec()
+    } else {
+        hash_map_order(keys)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::first_duplicate_key;
+    use super::{first_duplicate_key, to_map_order};
 
     /// Cases from the Spark 4.2.0 run (`ALTER TABLE nosuch ADD PARTITION (...)`, keys as written).
     #[test]
@@ -121,5 +132,15 @@ mod tests {
         for (keys, want) in cases {
             assert_eq!(first_duplicate_key(keys), *want, "{keys:?}");
         }
+    }
+
+    /// Spark 4.2.0: `DESC t PARTITION (a=1, b=1, c=1, d=1, yoo, sgf)` names `sgf`.
+    #[test]
+    fn to_map_keeps_four_keys_in_order_and_hashes_five() {
+        assert_eq!(to_map_order(&["yoo", "sgf", "a"]), ["yoo", "sgf", "a"]);
+        let five = to_map_order(&["a", "b", "c", "d", "yoo", "sgf"]);
+        let yoo = five.iter().position(|k| *k == "yoo");
+        let sgf = five.iter().position(|k| *k == "sgf");
+        assert!(sgf < yoo, "{five:?}");
     }
 }
