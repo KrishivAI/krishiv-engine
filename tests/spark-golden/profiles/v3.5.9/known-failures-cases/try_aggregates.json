@@ -1,0 +1,16 @@
+{
+  "cases": {
+    "other-version": [
+      10,
+      11,
+      12,
+      13,
+      26,
+      27,
+      28,
+      29
+    ]
+  },
+  "file": "try_aggregates",
+  "format_version": 1
+}

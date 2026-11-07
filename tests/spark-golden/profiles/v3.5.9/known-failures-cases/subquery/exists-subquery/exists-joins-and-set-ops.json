@@ -1,0 +1,18 @@
+{
+  "cases": {
+    "depends-on-command": [
+      17,
+      18
+    ],
+    "subqueries": [
+      19,
+      20,
+      21,
+      22,
+      23,
+      24
+    ]
+  },
+  "file": "subquery/exists-subquery/exists-joins-and-set-ops",
+  "format_version": 1
+}

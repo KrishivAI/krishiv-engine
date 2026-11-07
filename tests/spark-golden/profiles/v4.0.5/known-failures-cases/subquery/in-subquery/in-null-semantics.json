@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "depends-on-command": [
+      27,
+      28
+    ]
+  },
+  "file": "subquery/in-subquery/in-null-semantics",
+  "format_version": 1
+}
