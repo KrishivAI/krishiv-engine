@@ -122,6 +122,7 @@ registry! {
     (any_value_by_aggregates, AnyValueByAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The `any_value`, `max_by` and `min_by` aggregates."),
     (collated_strings, CollatedStrings, POST_MIGRATION_READER_VERSION, Semantic, "STRING types with a collation other than UTF8_BINARY, by canonical name."),
     (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
+    (exchange_filters, ExchangeFilters, POST_MIGRATION_READER_VERSION, Optimization, "Runtime filters an exchange collects from the rows it writes, for scans of other stages (`ExchangePlan.filters`, distributed stages); without them the fragmenter drops the filters, which never changes rows."),
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
@@ -351,7 +352,8 @@ fn arrow_nested(t: &arrow_schema::DataType) -> bool {
 /// Whether the encoder must list the nested-types feature for an Arrow type
 /// it writes (kept in step with [`feature_of`] for [`Construct::ArrowType`]).
 pub(crate) fn arrow_type_is_nested(t: &arrow_schema::DataType) -> bool {
-    arrow_nested(t)
+    // A variant's carrier is one value, not a struct: it needs `variant_type`, not `nested_types`.
+    !krishiv_types::arrow::is_variant_struct(t) && arrow_nested(t)
 }
 
 /// The feature `construct` needs, or `None` for the epoch-1 baseline.
@@ -394,8 +396,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::TopN { .. }
             | PhysNode::Aggregate { .. }
             | PhysNode::NestedLoopJoin(_)
-            | PhysNode::Union { .. }
-            | PhysNode::Exchange(_) => None,
+            | PhysNode::Union { .. } => None,
+            PhysNode::Exchange(e) if !e.filters.is_empty() => Some(Feature::ExchangeFilters),
+            PhysNode::Exchange(_) => None,
         },
         Construct::Item(item) => match item {
             ProjectItemPlan::Column { .. } | ProjectItemPlan::Expr { .. } => None,
@@ -692,6 +695,7 @@ fn arrow_types_of(node: &PhysNode) -> Vec<&arrow_schema::DataType> {
             out.extend(aggregate.aggregates.iter().map(|a| &a.arg_type));
         }
         PhysNode::Scan(scan) => out.extend(scan.runtime_filters.iter().map(|f| &f.key_type)),
+        PhysNode::Exchange(e) => out.extend(e.filters.iter().map(|f| &f.key_type)),
         _ => {}
     }
     out.extend(subqueries.into_iter().flatten().map(|s| &s.data_type));
@@ -915,5 +919,40 @@ impl ReaderFeatures {
             .filter(|id| Feature::from_id(id).is_none_or(|f| !self.contains(f)))
             .map(str::to_owned)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType as A, Field};
+    use krishiv_types::DataType;
+
+    use super::*;
+
+    #[test]
+    fn the_encoders_nested_flag_agrees_with_the_feature_walk_for_a_variant_carrier() {
+        let carrier = DataType::Variant.to_arrow();
+        // The walk names `variant_type` only; the encoder must not also demand `nested_types`.
+        assert_eq!(
+            feature_of(Construct::ArrowType(&carrier)),
+            Some(Feature::VariantType)
+        );
+        assert!(!arrow_type_is_nested(&carrier));
+        // A list of variants is nested (and the element is a construct of its own).
+        let list = A::List(Arc::new(Field::new("item", carrier, true)));
+        assert_eq!(
+            feature_of(Construct::ArrowType(&list)),
+            Some(Feature::NestedTypes)
+        );
+        assert!(arrow_type_is_nested(&list));
+        // A plain struct stays nested.
+        let plain = A::Struct(vec![Field::new("a", A::Int32, true)].into());
+        assert!(arrow_type_is_nested(&plain));
+        assert_eq!(
+            feature_of(Construct::ArrowType(&plain)),
+            Some(Feature::NestedTypes)
+        );
     }
 }

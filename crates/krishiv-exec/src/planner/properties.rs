@@ -362,6 +362,7 @@ impl Planner<'_> {
                 id,
                 input: Box::new(input.node),
                 partitioning,
+                filters: Vec::new(),
             }),
             schema: Arc::clone(&input.schema),
             layout: input.layout,

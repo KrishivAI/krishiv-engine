@@ -19,8 +19,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use arrow_schema::SchemaRef;
 use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::physical::{
-    ExchangeId, ExchangePlan, HashScheme, JoinDistribution, Partitioning, PhysNode, PhysicalPlan,
-    SharedId, SharedPlan,
+    ExchangeFilterPlan, ExchangeId, ExchangePlan, HashScheme, JoinDistribution, Partitioning,
+    PhysNode, PhysicalPlan, ScanId, ScanNode, SharedId, SharedPlan,
 };
 use krishiv_io::FilterId;
 
@@ -55,6 +55,38 @@ pub struct Stage {
     pub single: bool,
     /// It scans tables: several tasks need the scans' splits.
     pub scans: bool,
+    /// The scans its tasks may split among them: those of its streaming
+    /// pipeline ([`streaming_scans`]). Every other scan is read whole by
+    /// every task.
+    pub dealable: BTreeSet<ScanId>,
+}
+
+/// The scans of the streaming pipeline of the tree at `n`, in plan order:
+/// the probe side of each join, never a build side, a subquery's plan, a
+/// shared plan's body, a recursive CTE or a late fetch. Only these may be
+/// split among a stage's tasks: a dealt build side would join each task's
+/// probe rows with part of the build and lose rows.
+#[must_use]
+pub fn streaming_scans(n: &PhysNode) -> Vec<&ScanNode> {
+    fn walk<'a>(n: &'a PhysNode, out: &mut Vec<&'a ScanNode>) {
+        match n {
+            PhysNode::Scan(s) => out.push(s),
+            PhysNode::HashJoin(j) => walk(&j.probe, out),
+            PhysNode::SortMergeJoin(j) => walk(&j.probe, out),
+            PhysNode::NestedLoopJoin(j) => walk(&j.probe, out),
+            PhysNode::UnionLoop { .. } | PhysNode::LateFetch { .. } => {}
+            // The children after the input are subqueries' plans.
+            PhysNode::Filter { input, .. }
+            | PhysNode::Project { input, .. }
+            | PhysNode::ReplicateRows { input, .. }
+            | PhysNode::Generate { input, .. }
+            | PhysNode::Expand { input, .. } => walk(input, out),
+            other => other.children().into_iter().for_each(|c| walk(c, out)),
+        }
+    }
+    let mut out = Vec::new();
+    walk(n, &mut out);
+    out
 }
 
 type Result<T> = std::result::Result<T, KrishivError>;
@@ -74,13 +106,16 @@ pub fn fragment(
     schemas: &BTreeMap<ExchangeId, SchemaRef>,
 ) -> Result<Vec<Stage>> {
     let run = || {
+        let mut root = plan.root().clone();
+        let crossing = cross_stage_filters(&mut root);
         let mut cx = Cutter {
             plan,
             schemas,
             stages: Vec::new(),
             readers: BTreeMap::new(),
+            crossing,
         };
-        cx.stage(plan.root(), None)?;
+        cx.stage(&root, None)?;
         for (id, readers) in &cx.readers {
             let deterministic = plan
                 .shared()
@@ -108,6 +143,9 @@ struct Cutter<'a> {
     stages: Vec<Stage>,
     /// The stages reading each shared plan.
     readers: BTreeMap<SharedId, BTreeSet<usize>>,
+    /// The filters an exchange collects for scans of other stages
+    /// ([`cross_stage_filters`]): their scans keep them.
+    crossing: BTreeSet<FilterId>,
 }
 
 /// What a fragment holds, gathered while it is cut.
@@ -133,6 +171,7 @@ impl Cutter<'_> {
                         id: e.id,
                         input: Box::new(input),
                         partitioning: e.partitioning.clone(),
+                        filters: e.filters.clone(),
                     }),
                     self.schema(e.id)?,
                 )
@@ -170,7 +209,7 @@ impl Cutter<'_> {
         {
             let mut roots: Vec<&mut PhysNode> = vec![&mut cut];
             roots.extend(shared.iter_mut().map(|sp| &mut sp.plan));
-            local_filters(&mut roots);
+            local_filters(&mut roots, &self.crossing);
         }
         let fragment = PhysicalPlan::new(
             cut,
@@ -185,11 +224,15 @@ impl Cutter<'_> {
         }
         self.stages.push(Stage {
             id,
-            plan: fragment,
             output: output.map(|e| (e.id, e.partitioning.clone())),
             inputs: holds.inputs,
+            dealable: streaming_scans(fragment.root())
+                .iter()
+                .map(|s| s.id)
+                .collect(),
             single: holds.single || !wanted.is_empty(),
             scans: holds.scans,
+            plan: fragment,
         });
         Ok(id)
     }
@@ -282,18 +325,94 @@ impl Cutter<'_> {
             _ => usize::MAX,
         };
         let mut cut = n.clone();
-        for (i, (child, slot)) in n.children().into_iter().zip(cut.children_mut()).enumerate() {
+        let mut pairs: Vec<_> = n
+            .children()
+            .into_iter()
+            .zip(cut.children_mut())
+            .enumerate()
+            .collect();
+        // A join's build side is cut first, so its stages run before the
+        // probe side's: a filter the build exchange collects is ready when
+        // the probe side's scans run (see `cross_stage_filters`).
+        if matches!(n, PhysNode::HashJoin(_)) {
+            pairs.reverse();
+        }
+        for (i, (child, slot)) in pairs {
             *slot = self.cut(child, holds, subquery || i >= first_subquery)?;
         }
         Ok(cut)
     }
 }
 
+/// Moves each runtime filter of a hash join whose scan is in another stage
+/// (below an exchange on the probe side) onto the exchange that feeds the
+/// join's build, when the build input is that exchange: the exchange
+/// collects the filter from the rows it writes, in the stage that writes
+/// them, which runs before the scan's (design P2-T177, cross-stage
+/// filters). Returns the moved filters; the others stay where they are.
+fn cross_stage_filters(root: &mut PhysNode) -> BTreeSet<FilterId> {
+    /// The filters of scans reachable from `n` without crossing an
+    /// exchange, and the key type of every scan filter below `n`.
+    fn scans(n: &PhysNode, local: bool, out: &mut BTreeSet<FilterId>) {
+        if let PhysNode::Scan(s) = n
+            && local
+        {
+            out.extend(s.runtime_filters.iter().map(|f| f.id));
+        }
+        let local = local && !matches!(n, PhysNode::Exchange(_));
+        for c in n.children() {
+            scans(c, local, out);
+        }
+    }
+    let mut types = BTreeMap::new();
+    let mut stack: Vec<&PhysNode> = vec![root];
+    while let Some(n) = stack.pop() {
+        if let PhysNode::Scan(s) = n {
+            types.extend(s.runtime_filters.iter().map(|f| (f.id, f.key_type.clone())));
+        }
+        stack.extend(n.children());
+    }
+    let mut moved = BTreeSet::new();
+    let mut stack: Vec<&mut PhysNode> = vec![root];
+    while let Some(n) = stack.pop() {
+        if let PhysNode::HashJoin(j) = n
+            && !j.runtime_filters.is_empty()
+            && let PhysNode::Exchange(build) = &mut *j.build
+        {
+            let mut local = BTreeSet::new();
+            scans(&j.probe, true, &mut local);
+            let build_keys = j.build_keys.clone();
+            let null_safe = j.null_safe.clone();
+            j.runtime_filters.retain(|f| {
+                let (Some(key_type), Some(&column)) = (types.get(&f.id), build_keys.get(f.key))
+                else {
+                    return true;
+                };
+                if local.contains(&f.id) {
+                    return true;
+                }
+                build.filters.push(ExchangeFilterPlan {
+                    id: f.id,
+                    column,
+                    key_type: key_type.clone(),
+                    options: f.options,
+                    null_safe: null_safe.get(f.key).copied().unwrap_or(false),
+                });
+                moved.insert(f.id);
+                false
+            });
+        }
+        stack.extend(n.children_mut());
+    }
+    moved
+}
+
 /// Keeps the runtime filters whose producer (a join's build, a top-N's
-/// bound) and scan are both in the fragment of `roots`: a filter crossing
-/// stages is dropped on both sides until its value crosses with it
-/// (design P2-T177 unit 2). Dropping one never changes rows.
-fn local_filters(roots: &mut [&mut PhysNode]) {
+/// bound) and scan are both in the fragment of `roots`, and the scans'
+/// filters in `crossing` (collected by an exchange of an earlier stage,
+/// whose value the task brings): any other filter crossing stages is
+/// dropped on both sides. Dropping one never changes rows.
+fn local_filters(roots: &mut [&mut PhysNode], crossing: &BTreeSet<FilterId>) {
     let mut scanned = BTreeSet::new();
     let mut produced = BTreeSet::new();
     for root in roots.iter() {
@@ -308,7 +427,8 @@ fn local_filters(roots: &mut [&mut PhysNode]) {
             stack.extend(n.children());
         }
     }
-    let keep: BTreeSet<FilterId> = scanned.intersection(&produced).copied().collect();
+    let mut keep: BTreeSet<FilterId> = scanned.intersection(&produced).copied().collect();
+    keep.extend(scanned.intersection(crossing).copied());
     for root in roots.iter_mut() {
         let mut stack: Vec<&mut PhysNode> = vec![&mut **root];
         while let Some(n) = stack.pop() {
