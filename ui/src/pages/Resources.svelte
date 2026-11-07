@@ -58,11 +58,11 @@
   <p class="text-error">Could not load resources: {q.error.message}</p>
 {:else}
   <h2 class="mb-3">Memory</h2>
-  <ResponsiveTable columns={memoryColumns} rows={q.data.memory} rowKey={(r) => r.path}>
+  <ResponsiveTable columns={memoryColumns} rows={q.data.memory} rowKey={(r) => `${r.worker_id ?? ""}/${r.path}`}>
     {#snippet cell(r, col)}<span class={col.key === "path" ? "mono" : ""}>{memoryCell(r, col.key)}</span>{/snippet}
   </ResponsiveTable>
   <h2 class="mt-6 mb-3">Caches</h2>
-  <ResponsiveTable columns={cacheColumns} rows={q.data.caches} rowKey={(c) => c.cache}>
+  <ResponsiveTable columns={cacheColumns} rows={q.data.caches} rowKey={(c) => `${c.worker_id ?? ""}/${c.cache}`}>
     {#snippet cell(c, col)}{cacheCell(c, col.key)}{/snippet}
   </ResponsiveTable>
 {/if}

@@ -44,7 +44,7 @@
     <Card><CardLabel>Spilled (all queries)</CardLabel><CardValue>{bytes(h.spill_bytes_total)}</CardValue></Card>
   </div>
   <h2 class="mt-6 mb-3">Caches</h2>
-  <ResponsiveTable {columns} rows={h.caches} rowKey={(c) => c.cache} empty="No caches yet.">
+  <ResponsiveTable {columns} rows={h.caches} rowKey={(c) => `${c.worker_id ?? ""}/${c.cache}`} empty="No caches yet.">
     {#snippet cell(c, col)}{cacheCell(c, col.key)}{/snippet}
   </ResponsiveTable>
 {/if}
