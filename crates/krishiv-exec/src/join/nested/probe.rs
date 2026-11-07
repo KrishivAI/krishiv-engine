@@ -285,6 +285,10 @@ impl Operator for ProbeOp {
             ("build_spills", c.build_spills.load(Ordering::Relaxed)),
             ("probe_spills", c.probe_spills.load(Ordering::Relaxed)),
             ("build_chunks", c.chunks.load(Ordering::Relaxed)),
+            (
+                "build_chunks_capped",
+                c.capped_chunks.load(Ordering::Relaxed),
+            ),
         ])
     }
 
@@ -504,6 +508,13 @@ impl ProbeOp {
                 .grow(bytes)
                 .await
                 .map_err(KrishivError::from)?;
+        } else if !leaves_room(ctx, bytes) {
+            self.0
+                .counters
+                .capped_chunks
+                .fetch_add(1, Ordering::Relaxed);
+            d.pending = Some((b, base));
+            return self.start_probe(d);
         } else if d.chunk_memory.try_grow(bytes).is_err() {
             d.pending = Some((b, base));
             return self.start_probe(d);
@@ -579,6 +590,26 @@ impl ProbeOp {
         let base = d.next_base;
         d.next_base += b.num_rows() as u64;
         Ok(emit(self.0.build_rows(&b, base, marks)?))
+    }
+}
+
+/// Whether a chunk may take `bytes` more past its first batch: a quarter of
+/// the pool's limit stays free for ordinary reservations after it, so nested
+/// loops (and everything else) sharing the limit keep room for their own
+/// first batches and buffers. Each chunk's budget counts only its own
+/// drivers, so without this the chunks of several instantiations together
+/// fill the pool. [`MemoryPool::available`] already leaves out the
+/// spill-scratch floor (and the resident-set guard's cut), so what stays
+/// unreserved is a quarter of the limit plus the floor: under a 4 MiB limit
+/// (floor 1/8) chunks stop growing once the pool is about 5/8 full. A chunk
+/// cut short costs another pass over the probe files (`build_chunks_capped`).
+///
+/// [`MemoryPool::available`]: krishiv_memory::MemoryPool::available
+fn leaves_room(ctx: &TaskContext, bytes: usize) -> bool {
+    let pool = ctx.consumer().consumer().pool();
+    match (pool.available(), pool.effective_limit()) {
+        (Some(free), Some(limit)) => free.saturating_sub(bytes) >= limit / 4,
+        _ => true,
     }
 }
 

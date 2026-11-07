@@ -14,8 +14,7 @@ use arrow_array::RecordBatch;
 use futures::StreamExt;
 use krishiv_common::config::REGISTRY;
 use krishiv_common::error::{
-    AssignmentArityMismatch, ColumnAlreadyExists,
-    CreateViewColumnArityMismatchNotEnoughDataColumns,
+    AssignmentArityMismatch, CreateViewColumnArityMismatchNotEnoughDataColumns,
     CreateViewColumnArityMismatchTooManyDataColumns, CreateViewWithIfNotExistsAndReplace,
     DefaultPlacementInvalid, DuplicateAssignments, DuplicateRoutineParameterNames,
     DuplicateRoutineReturnsColumns, DuplicateVariableNameInsideDeclare, ErrorClass,
@@ -29,6 +28,7 @@ use krishiv_common::error::{
     UserDefinedFunctionsNotNullOnFunctionParameters,
     UserDefinedFunctionsSqlTableUdfBodyMustBeAQuery, VariableAlreadyExists, VariableNotFound,
 };
+use krishiv_common::names::check_column_name_duplication;
 use krishiv_common::redact::RedactedSql;
 use krishiv_plan::analyzer::{
     FunctionLookup, SqlFunction, SqlParam, TableColumn, VariableValue, variable_name,
@@ -1640,26 +1640,10 @@ fn list(names: &[String]) -> String {
         .join(", ")
 }
 
-/// A repeated view column, as Spark 4.2 reports it with
-/// `COLUMN_ALREADY_EXISTS`: ignoring case unless `case_sensitive`, then
-/// the repeated name in lower case, mirroring
-/// [`unique_columns`](crate::session) for writes.
+/// A repeated view column, as Spark 4.2 reports it with `COLUMN_ALREADY_EXISTS`
+/// (`check_column_name_duplication`).
 fn unique_view_columns(columns: &[TableColumn], case_sensitive: bool) -> Result<(), KrishivError> {
-    let mut seen = std::collections::HashSet::new();
-    for c in columns {
-        let name = if case_sensitive {
-            c.name.clone()
-        } else {
-            c.name.to_lowercase()
-        };
-        if !seen.insert(name.clone()) {
-            return Err(ColumnAlreadyExists {
-                column_name: format!("`{}`", name.replace('`', "``")),
-            }
-            .into());
-        }
-    }
-    Ok(())
+    check_column_name_duplication(columns.iter().map(|c| c.name.as_str()), case_sensitive)
 }
 
 /// Spark's search path, as analysis reports it for a missing table.

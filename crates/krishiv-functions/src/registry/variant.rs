@@ -1,8 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The variant function signatures: `parse_json`, `try_parse_json`,
-//! `is_variant_null`, `variant_get` and `try_variant_get` (Spark 4.2's
-//! `ParseJson`, `IsVariantNull` and `VariantGet`, `variantExpressions.scala`
-//! at v4.2.0).
+//! `is_variant_null`, `variant_get`, `try_variant_get`, `schema_of_variant`
+//! and `to_variant_object` (Spark 4.2's `ParseJson`, `IsVariantNull`,
+//! `VariantGet`, `SchemaOfVariant` and `ToVariantObject`,
+//! `variantExpressions.scala` at v4.2.0).
+//!
+//! `to_variant_object` takes an array, map or struct whose leaves a variant
+//! holds (string map keys); anything else is
+//! `DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION` to `VARIANT`.
 //!
 //! `parse_json` and the path take a string, the variant arguments a
 //! `VARIANT`, with nothing cast implicitly. The type of `variant_get(v, path,
@@ -100,6 +105,32 @@ pub(super) fn target_type(name: &str, c: &CallTypes<'_>) -> Result<DataType, Kri
     Ok(t)
 }
 
+fn nullable(c: &CallTypes<'_>) -> bool {
+    c.args().first().is_none_or(|a| a.nullable)
+}
+
+fn schema_of_variant(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::String, nullable(c)))
+}
+
+fn to_variant_object(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let ok = match c.data_type(0) {
+        Some(t @ (DataType::Struct(_) | DataType::Array(_) | DataType::Map(_))) => {
+            variant_castable(t, true)
+        }
+        _ => false,
+    };
+    if !ok {
+        return Err(DatatypeMismatchCastWithoutSuggestion {
+            sql_expr: call_sql("to_variant_object", c),
+            src_type: super::hof::quoted(c.data_type(0)),
+            target_type: "\"VARIANT\"".to_owned(),
+        }
+        .into());
+    }
+    Ok(ArgType::new(DataType::Variant, nullable(c)))
+}
+
 /// `VariantGet.dataType`: the target `asNullable`.
 fn variant_get(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(
@@ -129,5 +160,11 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(scalar(&["is_variant_null"], &variant, is_variant_null));
     out.extend(scalar(&["variant_get"], &get, variant_get));
     out.extend(scalar(&["try_variant_get"], &get, try_variant_get));
+    out.extend(scalar(&["schema_of_variant"], &variant, schema_of_variant));
+    out.extend(scalar(
+        &["to_variant_object"],
+        &Inputs::Any,
+        to_variant_object,
+    ));
     out
 }
