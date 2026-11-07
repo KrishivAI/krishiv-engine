@@ -184,7 +184,7 @@ pub(super) fn evaluate_with(
             WindowFunction::Aggregate(a) if super::udaf::is_udf(a) => {
                 // A UDF's state is charged as it grows, and released with
                 // the function's evaluation.
-                let mut charge = super::udaf::Charge::new(pool.as_deref_mut());
+                let mut charge = super::udaf::Charge::with_slack(pool.as_deref_mut());
                 super::udaf::aggregate(a, f, &unit, ansi, udafs, &mut charge)?
             }
             _ => function(f, &unit, ansi, legacy)?,

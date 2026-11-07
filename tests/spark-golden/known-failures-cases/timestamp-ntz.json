@@ -1,16 +1,7 @@
 {
   "cases": {
-    "datetime": [
-      5,
-      12,
-      14,
-      18
-    ],
     "depends-on-command": [
       32
-    ],
-    "time-geo-types": [
-      13
     ]
   },
   "file": "timestamp-ntz",

@@ -281,6 +281,7 @@ impl DirectoryWrite {
             partition_by: Vec::new(),
             partition_names: Vec::new(),
             zone: Some(0),
+            zone_name: None,
         }
     }
 

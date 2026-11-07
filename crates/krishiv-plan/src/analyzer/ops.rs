@@ -709,6 +709,14 @@ impl Resolver<'_> {
                     }
                     items.push(bound);
                 }
+                // A generator written with one alias is a lateral alias of the items after it
+                // (its columns keep their generator qualifier: see `Resolver::column`).
+                if s.qualifier.iter().any(|q| {
+                    q.starts_with(crate::GENERATE_QUALIFIER_PREFIX)
+                        && q.ends_with(crate::GENERATE_ALIAS_SUFFIX)
+                }) {
+                    lateral.extend(expanded.iter().cloned());
+                }
                 continue;
             }
             let b = {
@@ -768,10 +776,16 @@ impl Resolver<'_> {
     /// With `bare` false (an item written `IDENTIFIER(..)`), a variable or a field of a dotted
     /// path is named by its full shown form (`variablereference(..)`, `c1.c2`).
     fn named(&mut self, b: Bound, bare: bool) -> Result<Bound, AnalysisError> {
-        if let ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::Alias { .. }) =
-            &b.expr.node
-        {
-            return Ok(b);
+        // A column names itself, unless it stands for a call written in its
+        // place (a SQL function whose body is its parameter, `f(c1)`).
+        let written_call = b
+            .shown
+            .as_ref()
+            .is_some_and(|s| matches!(s.node, ExprNode::Function(_)));
+        match &b.expr.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { .. }) => return Ok(b),
+            ExprNode::Resolved(ResolvedExpr::Column(_)) if !written_call => return Ok(b),
+            _ => {}
         }
         let shown = b.shown();
         let bare = super::exprs::bare_name(&shown).filter(|_| bare);
@@ -1349,27 +1363,6 @@ impl Resolver<'_> {
             self.widened(c, &missing)?
         };
         Ok((bounds, wide))
-    }
-
-    /// Whether a `Generate` node sits between `plan` and the aggregate it
-    /// sorts: the search stops at the first aggregate, so a generator in
-    /// that aggregate's input does not count.
-    fn holds_generator(plan: &Arc<LogicalPlan>) -> bool {
-        let mut seen = HashSet::new();
-        let mut stack = vec![Arc::clone(plan)];
-        while let Some(p) = stack.pop() {
-            if !seen.insert(Arc::as_ptr(&p) as usize) {
-                continue;
-            }
-            if matches!(p.node, PlanNode::Generate { .. }) {
-                return true;
-            }
-            if matches!(p.node, PlanNode::Aggregate { .. }) {
-                continue;
-            }
-            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
-        }
-        false
     }
 
     /// The aggregate under `c`'s filters, sorts and limits (`HAVING`), and
@@ -4575,27 +4568,41 @@ fn in_aggregate_call(b: &Bound) -> Result<(), AnalysisError> {
     Ok(())
 }
 
-/// Whether `e` reads a column or calls a non-deterministic function, so it
-/// cannot be folded to a constant.
-fn not_constant(e: &Expr) -> bool {
-    if matches!(
-        &e.node,
-        // A subquery is not foldable, whatever it selects.
-        ExprNode::Subquery { .. }
-            | ExprNode::Resolved(
-                ResolvedExpr::Column(_)
-                    | ResolvedExpr::OuterColumn(_)
-                    | ResolvedExpr::Function(ResolvedFunction {
-                        deterministic: false,
-                        ..
-                    })
-            )
-    ) {
-        return true;
-    }
-    let mut found = false;
-    e.for_each_child(&mut |c| found = found || not_constant(c));
-    found
+/// Whether `e` is not foldable in Spark's sense: it reads a column or a
+/// subquery, calls a non-deterministic function, or calls an aggregate,
+/// window or generator function (Spark's `foldable` is false for those
+/// whatever their arguments). Walks each distinct node once, so a shared
+/// subtree costs one visit however many paths reach it.
+pub(super) fn not_constant(e: &Expr) -> bool {
+    crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+        let crate::walk::Node::Expr(x) = n else {
+            // A plan is reached only through a subquery, stopped below.
+            return std::ops::ControlFlow::Continue(());
+        };
+        let stop = matches!(
+            &x.node,
+            ExprNode::Subquery { .. }
+                | ExprNode::Window(_)
+                | ExprNode::Resolved(
+                    ResolvedExpr::Column(_)
+                        | ResolvedExpr::OuterColumn(_)
+                        | ResolvedExpr::Function(ResolvedFunction {
+                            deterministic: false,
+                            ..
+                        })
+                )
+        ) || matches!(
+            &x.node,
+            ExprNode::Resolved(ResolvedExpr::Function(f))
+                if f.kind != FunctionKind::Scalar
+        );
+        if stop {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
+    })
+    .is_break()
 }
 
 /// Whether `p` returns at most one row, as Spark's `maxRows` has it.

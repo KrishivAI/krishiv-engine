@@ -25,7 +25,7 @@ use krishiv_common::error::{
     UnsupportedFeatureSqlScriptingDropTemporaryVariable, VariableAlreadyExists, VariableNotFound,
 };
 use krishiv_common::redact::RedactedSql;
-use krishiv_plan::analyzer::{LocalFrame, SessionVariable};
+use krishiv_plan::analyzer::{LocalFrame, SessionVariable, VariableValue};
 use krishiv_plan::{Expr as PlanExpr, ExprNode, Literal, LogicalPlan, PlanNode};
 use krishiv_sql::ast::{
     Compound, DataTypeSpec, DeclareVariable, Expr, ForStatement, Handler, HandlerBody,
@@ -363,7 +363,8 @@ impl Run<'_> {
                 tokio::task::yield_now().await;
                 let mut vars = BTreeMap::new();
                 for (i, name) in names.iter().enumerate() {
-                    let (data_type, value) = arrow_value(batch.column(i), row)?;
+                    let (data_type, value) =
+                        crate::nested_value::arrow_variable_value(batch.column(i), row)?;
                     vars.insert(
                         self.fold(name),
                         Local {
@@ -436,8 +437,9 @@ impl Run<'_> {
             let schema = frame.schema().await?;
             // A script's result is returned as literal rows: refuse a type they cannot hold now, not
             // after the rest of the script has run.
+            // Nested columns (ARRAY, STRUCT, MAP) are returned through their constructors.
             for field in schema.fields() {
-                crate::command::arrow_krishiv_type(field.data_type())?;
+                check_result_type(field.data_type())?;
             }
             if !schema.fields().is_empty() {
                 // One row more than the cap shows that it was exceeded; no more is read.
@@ -592,8 +594,8 @@ impl Run<'_> {
             .transpose()?;
         let (data_type, value, default_sql) = match (&declared, &d.default) {
             (_, None) => match declared {
-                Some(t) => (t.clone(), Literal::Null(Some(t)), None),
-                None => (DataType::Null, Literal::Null(None), None),
+                Some(t) => (t.clone(), Literal::Null(Some(t)).into(), None),
+                None => (DataType::Null, Literal::Null(None).into(), None),
             },
             (declared, Some(default)) => {
                 if contains_subquery(default) {
@@ -619,7 +621,7 @@ impl Run<'_> {
                 };
                 let (inferred, value) = self
                     .handle()
-                    .eval_variable_value(&sql, self.redacted, d.span, default.span)
+                    .eval_variable(&sql, self.redacted, d.span, default.span)
                     .await?;
                 (declared.clone().unwrap_or(inferred), value, Some(sql))
             }
@@ -703,7 +705,8 @@ impl Run<'_> {
         }
     }
 
-    fn store(&mut self, target: &Target, value: Literal) {
+    fn store(&mut self, target: &Target, value: impl Into<VariableValue>) {
+        let value = value.into();
         match target {
             Target::Local { scope, key } => {
                 if let Some(local) = self
@@ -756,16 +759,11 @@ impl Run<'_> {
                         match default_sql {
                             Some(sql) => {
                                 handle
-                                    .eval_variable_value(
-                                        &sql,
-                                        self.redacted,
-                                        set.span,
-                                        a.value.span,
-                                    )
+                                    .eval_variable(&sql, self.redacted, set.span, a.value.span)
                                     .await?
                                     .1
                             }
-                            None => Literal::Null(Some(data_type)),
+                            None => Literal::Null(Some(data_type)).into(),
                         }
                     } else {
                         if contains_default(&a.value) {
@@ -778,7 +776,7 @@ impl Run<'_> {
                             &format!(" AS {})", data_type.simple_string()),
                         );
                         handle
-                            .eval_variable_value(&sql, self.redacted, set.span, a.value.span)
+                            .eval_variable(&sql, self.redacted, set.span, a.value.span)
                             .await?
                             .1
                     };
@@ -842,13 +840,18 @@ impl Run<'_> {
                 if rows > 1 {
                     return Err(RowSubqueryTooManyRows {}.into());
                 }
-                let values: Vec<Literal> = match batches.iter().find(|b| b.num_rows() > 0) {
+                // Nested values (an ARRAY, STRUCT or MAP variable) are held as
+                // their constructors, as the session-level row assignment does.
+                let values: Vec<VariableValue> = match batches.iter().find(|b| b.num_rows() > 0) {
                     Some(batch) => (0..types.len())
-                        .map(|i| arrow_value(batch.column(i), 0).map(|(_, v)| v))
+                        .map(|i| {
+                            crate::nested_value::arrow_variable_value(batch.column(i), 0)
+                                .map(|(_, v)| v)
+                        })
                         .collect::<Result<_, _>>()?,
                     None => types
                         .iter()
-                        .map(|t| Literal::Null(Some(t.clone())))
+                        .map(|t| Literal::Null(Some(t.clone())).into())
                         .collect(),
                 };
                 for (target, value) in resolved.iter().zip(values) {
@@ -883,10 +886,15 @@ impl Run<'_> {
             for row in 0..batch.num_rows() {
                 let mut columns = Vec::with_capacity(batch.num_columns());
                 for (i, field) in schema.fields().iter().enumerate() {
-                    let (_, literal) = arrow_value(batch.column(i), row)?;
-                    columns.push(
-                        Column::new(PlanExpr::new(ExprNode::Literal(literal))).alias(field.name()),
-                    );
+                    // A nested value is returned through its constructor.
+                    let expr =
+                        match crate::nested_value::arrow_variable_value(batch.column(i), row)?.1 {
+                            VariableValue::Scalar(literal) => {
+                                PlanExpr::new(ExprNode::Literal(literal))
+                            }
+                            VariableValue::Nested(e) => Arc::unwrap_or_clone(e),
+                        };
+                    columns.push(Column::new(expr).alias(field.name()));
                 }
                 frames.push(one().select(columns));
             }
@@ -939,6 +947,24 @@ fn distinct(targets: &[Target], names: &[String]) -> Result<(), KrishivError> {
             }
             .into());
         }
+    }
+    Ok(())
+}
+
+/// Whether a script's result can hold a column of type `t`: a scalar type a literal row can
+/// hold, or a nested type (returned through its constructor) whose every element, field, key and
+/// value can.
+fn check_result_type(t: &arrow_schema::DataType) -> Result<(), KrishivError> {
+    use arrow_schema::DataType as A;
+    match t {
+        A::List(f) | A::LargeList(f) | A::Map(f, _) => check_result_type(f.data_type()),
+        A::Struct(fields) => fields
+            .iter()
+            .try_for_each(|f| check_result_type(f.data_type())),
+        _ => crate::command::arrow_krishiv_type(t).map(|_| ()),
+    }?;
+    if crate::nested_value::is_nested(t) {
+        DataType::from_arrow(t)?;
     }
     Ok(())
 }
