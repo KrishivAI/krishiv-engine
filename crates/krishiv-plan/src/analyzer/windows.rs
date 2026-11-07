@@ -1585,6 +1585,22 @@ impl Resolver<'_> {
                         return AnalysisError::new(e, origin);
                     }
                 }
+                // A numeric literal bound (negated for `PRECEDING`) the key's type cannot hold: under ANSI the cast
+                // raises (`CAST_OVERFLOW`, or `NUMERIC_VALUE_OUT_OF_RANGE` for a DECIMAL key). With ANSI off Spark
+                // gets a NULL bound, which stays unsupported.
+                let bare = crate::expr::negated(x).unwrap_or(x);
+                if matches!(&bare.node, ExprNode::Literal(l) if !matches!(l, Literal::String(_)))
+                    && self.ctx.conf.ansi
+                {
+                    let to_key = Arc::new(Expr::new(ExprNode::Cast {
+                        expr: Arc::clone(x),
+                        to: key.clone(),
+                        mode: crate::expr::CastMode::Default,
+                    }));
+                    if let Some(Constant::Error(e)) = self.fold(&to_key, true) {
+                        return AnalysisError::new(e, origin);
+                    }
+                }
                 unsupported("RANGE window frame bounds other than literals", origin)
             })?);
         }

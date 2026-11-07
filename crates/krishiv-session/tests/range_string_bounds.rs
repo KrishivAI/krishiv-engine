@@ -325,3 +325,31 @@ fn a_decimal_key_rounds_a_finer_bound_half_up_as_the_cast_does() {
         frames_of("1 preceding and 1 following")
     );
 }
+
+#[test]
+fn an_integral_or_decimal_bound_the_key_cannot_hold_raises_under_ansi() {
+    // Spark 4.2.0 (local run, ANSI on): CAST_OVERFLOW for an integral key, NUMERIC_VALUE_OUT_OF_RANGE for DECIMAL.
+    let d = tempfile::tempdir().unwrap();
+    let s = session(d.path());
+    s.conf().set("spark.sql.ansi.enabled", "true").unwrap();
+    for sql in [
+        "create table ek (id int, t tinyint, k decimal(3,0)) using parquet",
+        "insert into ek values (1,1,1),(2,2,2)",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    for (key, bounds, class) in [
+        ("t", "129 preceding and current row", "CAST_OVERFLOW"),
+        (
+            "k",
+            "1000 preceding and current row",
+            "NUMERIC_VALUE_OUT_OF_RANGE",
+        ),
+    ] {
+        let sql = format!("select count(*) over (order by {key} range between {bounds}) from ek");
+        let err = block_on(async { s.sql(&sql).await?.collect().await })
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(class), "{key} {bounds}: {err}");
+    }
+}
