@@ -2037,10 +2037,10 @@ fn script(c: &crate::ast::Compound, sql: &str, opts: ParserOptions) -> R {
     list(&c.body, sql, opts)
 }
 
-/// `STORED BY 'handler' [WITH SERDEPROPERTIES (...)]` with no `ROW FORMAT` and no `USING` beside it (both are checked
-/// elsewhere) (that pair is
-/// `validateRowFormatFileFormat`'s, checked before): Spark's `visitCreateFileFormat` refuses the clause,
-/// `INVALID_STATEMENT_OR_CLAUSE` `STORED BY` at it (probe13 b1, b2), before the row format is visited.
+/// `STORED BY 'handler' [WITH SERDEPROPERTIES (...)]`: Spark's `visitCreateFileFormat` refuses the clause,
+/// `INVALID_STATEMENT_OR_CLAUSE` `STORED BY` at it (probe13 b1, b2), before the row format is visited. Beside a
+/// `ROW FORMAT` the pair is `validateRowFormatFileFormat`'s error, checked first; beside `USING` the caller skips
+/// this, as Spark reports that at the statement (`using_with_serde`).
 fn stored_by(file_format: Option<&FileFormat>) -> R {
     match file_format {
         Some(FileFormat {
