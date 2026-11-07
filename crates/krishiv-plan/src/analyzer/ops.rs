@@ -709,6 +709,14 @@ impl Resolver<'_> {
                     }
                     items.push(bound);
                 }
+                // A generator written with one alias is a lateral alias of the items after it
+                // (its columns keep their generator qualifier: see `Resolver::column`).
+                if s.qualifier.iter().any(|q| {
+                    q.starts_with(crate::GENERATE_QUALIFIER_PREFIX)
+                        && q.ends_with(crate::GENERATE_ALIAS_SUFFIX)
+                }) {
+                    lateral.extend(expanded.iter().cloned());
+                }
                 continue;
             }
             let b = {

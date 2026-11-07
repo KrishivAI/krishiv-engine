@@ -52,3 +52,47 @@ fn a_name_list_of_the_generator_is_no_lateral_alias() {
         2
     );
 }
+
+/// The `INT` column `idx` of every row.
+fn ints(sql: &str, idx: usize) -> Vec<i32> {
+    run(sql)
+        .unwrap()
+        .iter()
+        .flat_map(|b| {
+            b.column(idx)
+                .as_primitive::<Int32Type>()
+                .iter()
+                .map(|v| v.unwrap_or(i32::MIN))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn only_aliases_before_the_reference_count() {
+    // Spark 4.2.0 (local run, 2026-11-07): a generator alias after the reading item is no match.
+    assert_eq!(
+        ints("SELECT 1 AS a, a * 10, explode(array(1, 2, 3)) AS a", 1),
+        [10, 10, 10]
+    );
+    // And one before it, with no lateral alias of the name, is the generated column: 10, 20.
+    assert_eq!(
+        ints("SELECT explode(array(1, 2)) AS a, a * 10, 1 AS a", 1),
+        [10, 20]
+    );
+    // A generator without an alias is no lateral alias: `col` is the alias `1 AS col`.
+    assert_eq!(
+        ints("SELECT 1 AS col, explode(array(1, 2)), col * 10", 2),
+        [10, 10]
+    );
+    // An input column of the name wins over both.
+    assert_eq!(
+        ints(
+            "SELECT 1 AS a, explode(array(1, 2, 3)) AS a, t.a FROM VALUES (5) AS t(a)",
+            2
+        ),
+        [5, 5, 5]
+    );
+    let e = run("SELECT 1 AS a, explode(array(1)) AS a, explode(array(2)) AS a, a * 10");
+    assert!(e.is_err(), "several generators are not supported here");
+}

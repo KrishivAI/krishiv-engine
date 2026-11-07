@@ -301,41 +301,27 @@ impl Resolver<'_> {
             _ => None,
         };
         // Spark resolves lateral column aliases before it extracts a select-list generator, so a
-        // generated column is no input column yet: a lateral alias of its name takes the name,
-        // and with the generator's own single alias it is ambiguous (a name list or none is not
-        // an alias).
+        // generated column is no input column yet: an earlier plain lateral alias of its name
+        // takes the name, and is ambiguous with an earlier generator's own single alias (those
+        // keep their generator qualifier in `cx.lateral`; a name list or none is no alias).
         let mut lateral_first = false;
         if let ([name], Some(lateral)) = (&c.name[..], cx.lateral) {
             let cs = self.ctx.conf.case_sensitive;
             let named = |a: &&Attr| same(&a.col.name, name, cs);
-            let hits = lateral.iter().filter(named).count();
             let generated = |a: &Attr| {
                 a.qual
                     .iter()
                     .any(|q| q.starts_with(crate::GENERATE_QUALIFIER_PREFIX))
             };
-            if hits > 0
+            let plain = lateral
+                .iter()
+                .filter(named)
+                .filter(|a| !generated(a))
+                .count();
+            if plain > 0
                 && scope.iter().filter(named).all(&generated)
                 && scope.iter().filter(named).any(&generated)
             {
-                let aliased = scope
-                    .iter()
-                    .filter(named)
-                    .filter(|a| {
-                        a.qual
-                            .iter()
-                            .any(|q| q.ends_with(crate::GENERATE_ALIAS_SUFFIX))
-                    })
-                    .count();
-                if hits + aliased > 1 {
-                    return Err(AnalysisError::new(
-                        AmbiguousLateralColumnAlias {
-                            name: quoted(std::slice::from_ref(name)),
-                            n: (hits + aliased).to_string(),
-                        },
-                        Origin::UNKNOWN,
-                    ));
-                }
                 lateral_first = true;
             }
         }
