@@ -473,7 +473,19 @@ fn range_value_signed(
                 let max = 10_i128.checked_pow(u32::from(d.precision()))? - 1;
                 (-max..=max).contains(&v).then_some(RangeValue::Int(v))
             }
-            _ => None,
+            // More scale than the key: Spark casts the bound to the key's DECIMAL(p, s), rounding HALF_UP.
+            Lit::Exact(v, s) => {
+                let div = 10_i128.checked_pow(u32::from(s - d.scale()))?;
+                let (q, r) = (v / div, v % div);
+                let v = if r.abs().checked_mul(2)? >= div {
+                    q + v.signum()
+                } else {
+                    q
+                };
+                let max = 10_i128.checked_pow(u32::from(d.precision()))? - 1;
+                (-max..=max).contains(&v).then_some(RangeValue::Int(v))
+            }
+            Lit::Double(_) => None,
         },
         _ => None,
     }

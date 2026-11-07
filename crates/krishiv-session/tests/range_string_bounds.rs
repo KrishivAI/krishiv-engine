@@ -288,3 +288,40 @@ fn a_boolean_key_reports_the_numeric_bound_beside_an_interval() {
     );
     assert!(err.contains("lower bound"), "{err}");
 }
+
+#[test]
+fn a_decimal_key_rounds_a_finer_bound_half_up_as_the_cast_does() {
+    // Spark casts the bound to the key's DECIMAL(3, 0): 1.5 is 2, 1.4 is 1, and 2.5 PRECEDING is -2.5 cast to -3.
+    let d = tempfile::tempdir().unwrap();
+    let s = session(d.path());
+    for sql in [
+        "create table dk (id int, k decimal(3,0)) using parquet",
+        "insert into dk values (1,1),(2,2),(3,3),(4,4),(5,5)",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let frames_of = |bounds: &str| {
+        let sql = format!(
+            "select id, first(id) over w, last(id) over w from dk \
+             window w as (order by k range between {bounds}) order by id"
+        );
+        let b = block_on(async { s.sql(&sql).await?.collect().await }).unwrap();
+        let mut out = Vec::new();
+        for b in &b {
+            let (f, l) = (
+                b.column(1).as_primitive::<Int32Type>(),
+                b.column(2).as_primitive::<Int32Type>(),
+            );
+            out.extend((0..b.num_rows()).map(|i| (f.value(i), l.value(i))));
+        }
+        out
+    };
+    assert_eq!(
+        frames_of("1.5 preceding and 1.5 following"),
+        frames_of("2 preceding and 2 following")
+    );
+    assert_eq!(
+        frames_of("1.4 preceding and 1.4 following"),
+        frames_of("1 preceding and 1 following")
+    );
+}
