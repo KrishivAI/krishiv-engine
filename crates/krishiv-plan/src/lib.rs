@@ -155,6 +155,14 @@ pub const GENERATE_QUALIFIER_PREFIX: &str = "__krishiv_generate_";
 /// that alias among the select list's lateral column aliases, a name list or none it does not.
 pub const GENERATE_ALIAS_SUFFIX: &str = "_alias";
 
+/// The qualifier of the columns the select-list generator at `index` adds; `aliased` when it was
+/// written with one alias.
+#[must_use]
+pub fn generate_qualifier(index: usize, aliased: bool) -> String {
+    let suffix = if aliased { GENERATE_ALIAS_SUFFIX } else { "" };
+    format!("{GENERATE_QUALIFIER_PREFIX}{index}{suffix}")
+}
+
 pub use plan::{
     ALIAS_PART_SEP, Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind,
     JoinStrategy, LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs,

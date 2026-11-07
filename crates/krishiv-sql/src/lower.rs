@@ -1289,17 +1289,9 @@ impl Lowerer {
             Some(Alias::Name(n)) => vec![n.value.clone()],
             Some(Alias::List(l)) => l.iter().map(|n| n.value.clone()).collect(),
         };
-        // A reserved qualifier the generated columns are read through; no
-        // user table can have it.
-        let aliased = if matches!(item.alias, Some(Alias::Name(_))) {
-            krishiv_plan::GENERATE_ALIAS_SUFFIX
-        } else {
-            ""
-        };
-        let qualifier = format!(
-            "{}{index}{aliased}",
-            krishiv_plan::GENERATE_QUALIFIER_PREFIX
-        );
+        // A reserved qualifier (no user table has it) the generated columns are read through.
+        let aliased = matches!(item.alias, Some(Alias::Name(_)));
+        let qualifier = krishiv_plan::generate_qualifier(index, aliased);
         let plan = self.node(
             PlanNode::Generate {
                 input: arc(plan),
