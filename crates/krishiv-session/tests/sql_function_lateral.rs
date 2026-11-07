@@ -91,26 +91,29 @@ fn calls_are_named_as_spark_names_them() {
     assert_eq!(schema.field(2).name(), "grouping(id(c1))");
 }
 
-/// `x IN (one row of values)` over a column stays refused: Spark answers it
-/// two-valued (a NULL `x` or value gives false, and `NOT` over it is
-/// null-aware), which an equality would not (review of #505, checked on Spark
-/// 4.2.0). A constant NULL is folded first, to NULL, as Spark's
-/// `NullPropagation` does.
+/// `x IN (one row of values)` over a column is an existence join, as over any
+/// other relation (main's `check_in`): Spark 4.2.0 answers it two-valued, so
+/// it is never rewritten to an equality (review of #505). A constant NULL is
+/// folded first, to NULL, as Spark's `NullPropagation` does.
 #[test]
-fn in_over_one_row_of_values_is_refused() {
+fn in_over_one_row_of_values() {
     let s = session();
-    for sql in [
-        "SELECT c1 IN (SELECT 1) FROM t1",
-        "SELECT coalesce(c1 IN (SELECT 1), true) FROM t1",
-        "SELECT c1 FROM t1 WHERE (c1 IN (SELECT 1)) IS NULL",
-        "SELECT NOT (c1 IN (SELECT 1)) FROM t1",
+    for (sql, want) in [
+        (
+            "SELECT c1, CAST(c1 IN (SELECT 1) AS INT) FROM t1",
+            vec![vec![0, 0], vec![0, 0], vec![1, 1]],
+        ),
+        (
+            "SELECT c1, CAST(coalesce(c1 IN (SELECT 1), true) AS INT) FROM t1",
+            vec![vec![0, 0], vec![0, 0], vec![1, 1]],
+        ),
+        ("SELECT c1 FROM t1 WHERE (c1 IN (SELECT 1)) IS NULL", vec![]),
+        (
+            "SELECT c1, CAST(NOT (c1 IN (SELECT 1)) AS INT) FROM t1",
+            vec![vec![0, 1], vec![0, 1], vec![1, 0]],
+        ),
     ] {
-        let e = block_on(async { s.sql(sql).await?.collect().await }).unwrap_err();
-        assert_eq!(
-            e.error_class().name(),
-            "KRISHIV_UNSUPPORTED_FEATURE",
-            "{sql}: {e}"
-        );
+        assert_eq!(ints(&run(&s, sql)), want, "{sql}");
     }
     let out = run(&s, "SELECT CAST(NULL AS INT) IN (SELECT 1)");
     assert!(out[0].column(0).is_null(0));
