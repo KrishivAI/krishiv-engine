@@ -18,10 +18,10 @@ python_worker_logs()
 |---|---|
 | Krishiv | Not implemented yet |
 | Group | `table_funcs` |
-| Kind | scalar (table function) |
+| Kind | table function |
 | Added in Spark | 4.1.0 |
 | In Spark profiles | 4.1 and later |
-| Arguments |  |
+| Arguments | - |
 | Deterministic | yes |
 
 ## Examples

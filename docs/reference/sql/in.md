@@ -21,7 +21,7 @@ expr1 in(expr2, expr3, ...)
 | Kind | scalar (function) |
 | Added in Spark | 1.0.0 |
 | In Spark profiles | 3.5 and later |
-| Arguments |  |
+| Arguments | - |
 | Deterministic | yes |
 
 ## Examples

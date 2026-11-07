@@ -21,7 +21,7 @@ variant_explode(expr)
 | Kind | generator (table function) |
 | Added in Spark | 4.0.0 |
 | In Spark profiles | 4.0 and later |
-| Arguments |  |
+| Arguments | - |
 | Deterministic | yes |
 
 ## Examples

@@ -145,10 +145,10 @@ def createDataFrame(self, data: Any, schema: Any=None, samplingRatio: float | No
 
 A DataFrame of `data`: an object with `__arrow_c_stream__` or
 `__arrow_c_array__` (a pyarrow Table, a Polars or DuckDB result, ...),
-a pandas DataFrame, or rows (tuples, lists, dicts, :class:`Row`) with
+a pandas DataFrame, or rows (tuples, lists, dicts, `Row`) with
 an explicit `schema`.
 
-`schema` is a :class:`StructType`, a DDL string (`"a int, b string"`),
+`schema` is a `StructType`, a DDL string (`"a int, b string"`),
 a list of column names (types are inferred from the rows as PySpark does:
 each value by its Python type, the rows merged, so an `int` and a `float` in
 one column raise `CANNOT_MERGE_TYPE`), or a single atomic type (values become
@@ -193,7 +193,7 @@ which the embedded session does not take).
 def emptyDataFrame(self, schema: StructType | str) -> DataFrame
 ```
 
-An empty :class:`DataFrame` with `schema` (a :class:`StructType`
+An empty `DataFrame` with `schema` (a `StructType`
 or a DDL string), as `pyspark.sql.SparkSession.emptyDataFrame`.
 
 **Examples**
@@ -224,7 +224,7 @@ this session was built with, not from later `conf.set` changes.
 def range(self, start: int, end: int | None=None, step: int=1, numPartitions: int | None=None) -> DataFrame
 ```
 
-A :class:`DataFrame` with a single `bigint` column `id`, holding
+A `DataFrame` with a single `bigint` column `id`, holding
 `start` (inclusive) to `end` (exclusive) by `step`.
 
 With one argument it is the end (from 0); `numPartitions` is

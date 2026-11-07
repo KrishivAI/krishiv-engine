@@ -21,7 +21,7 @@ CASE WHEN expr1 THEN expr2 [WHEN expr3 THEN expr4]* [ELSE expr5] END
 | Kind | scalar (function) |
 | Added in Spark | 1.0.1 |
 | In Spark profiles | 3.5 and later |
-| Arguments |  |
+| Arguments | - |
 | Deterministic | yes |
 
 ## Examples

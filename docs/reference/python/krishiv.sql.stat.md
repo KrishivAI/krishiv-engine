@@ -17,7 +17,7 @@ statistic in Python.
 class DataFrameStatFunctions
 ```
 
-Statistics functions of a :class:`DataFrame` (`pyspark.sql.DataFrameStatFunctions`).
+Statistics functions of a `DataFrame` (`pyspark.sql.DataFrameStatFunctions`).
 
 ### `approxQuantile`
 
@@ -25,7 +25,7 @@ Statistics functions of a :class:`DataFrame` (`pyspark.sql.DataFrameStatFunction
 def approxQuantile(self, col: Any, probabilities: Any, relativeError: Any) -> list[Any]
 ```
 
-The approximate quantiles of numeric columns; see :meth:`DataFrame.approxQuantile`.
+The approximate quantiles of numeric columns; see `DataFrame.approxQuantile`.
 
 .. note:: The engine has no approximate-percentile aggregate yet: after checking its
     arguments this fails with `KRISHIV_UNSUPPORTED_FEATURE`.
@@ -36,7 +36,7 @@ The approximate quantiles of numeric columns; see :meth:`DataFrame.approxQuantil
 def corr(self, col1: str, col2: str, method: str | None=None) -> float
 ```
 
-The Pearson correlation of two columns; see :meth:`DataFrame.corr`.
+The Pearson correlation of two columns; see `DataFrame.corr`.
 
 .. note:: The engine has no correlation aggregate yet: after checking its arguments this
     fails with `KRISHIV_UNSUPPORTED_FEATURE`.
@@ -47,7 +47,7 @@ The Pearson correlation of two columns; see :meth:`DataFrame.corr`.
 def cov(self, col1: str, col2: str) -> float
 ```
 
-The sample covariance of two columns; see :meth:`DataFrame.cov`.
+The sample covariance of two columns; see `DataFrame.cov`.
 
 .. note:: The engine has no covariance aggregate yet: after checking its arguments this
     fails with `KRISHIV_UNSUPPORTED_FEATURE`.
@@ -58,7 +58,7 @@ The sample covariance of two columns; see :meth:`DataFrame.cov`.
 def crosstab(self, col1: str, col2: str) -> DataFrame
 ```
 
-A pair-wise frequency table of two columns; see :meth:`DataFrame.crosstab`.
+A pair-wise frequency table of two columns; see `DataFrame.crosstab`.
 
 ### `freqItems`
 
@@ -66,7 +66,7 @@ A pair-wise frequency table of two columns; see :meth:`DataFrame.crosstab`.
 def freqItems(self, cols: Any, support: float | None=None) -> DataFrame
 ```
 
-The frequent items of columns; see :meth:`DataFrame.freqItems`.
+The frequent items of columns; see `DataFrame.freqItems`.
 
 .. note:: The engine has no frequent-items sketch yet: after checking its arguments this
     fails with `KRISHIV_UNSUPPORTED_FEATURE`.
@@ -77,8 +77,8 @@ The frequent items of columns; see :meth:`DataFrame.freqItems`.
 def sampleBy(self, col: Column | str, fractions: dict[Any, float], seed: int | None=None) -> DataFrame
 ```
 
-A stratified sample without replacement; see :meth:`DataFrame.sampleBy`.
+A stratified sample without replacement; see `DataFrame.sampleBy`.
 
 .. note:: The engine cannot sample yet: unless `fractions` is empty, the returned
-    :class:`DataFrame` fails its first action with `KRISHIV_UNSUPPORTED_FEATURE` (from
-    :meth:`DataFrame.sample`).
+    `DataFrame` fails its first action with `KRISHIV_UNSUPPORTED_FEATURE` (from
+    `DataFrame.sample`).

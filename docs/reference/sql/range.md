@@ -18,10 +18,10 @@ range(start[, end[, step[, numSlices]]]) / range(end)
 |---|---|
 | Krishiv | Implemented |
 | Group | `table_funcs` |
-| Kind | scalar (table function) |
+| Kind | table function |
 | Added in Spark | 2.0.0 |
 | In Spark profiles | 3.5 and later |
-| Arguments |  |
+| Arguments | - |
 | Deterministic | yes |
 
 ## Examples

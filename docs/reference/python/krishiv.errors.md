@@ -5,10 +5,10 @@
 Exceptions, shaped like `pyspark.errors` (Spark 4.2); no dependency on `pyspark`.
 
 Engine errors carry a Spark error class and SQLSTATE. The JVM exception type Spark
-would have thrown is not carried, so :func:`_from_native` picks the class from the
-error class and SQLSTATE (see :func:`_class_for`). Query contexts (where an error
+would have thrown is not carried, so `_from_native` picks the class from the
+error class and SQLSTATE (see `_class_for`). Query contexts (where an error
 arose: a SQL span or a DataFrame operation) cross the bridge as plain tuples and
-are wrapped here as :class:`QueryContext` objects.
+are wrapped here as `QueryContext` objects.
 
 ## Functions
 
@@ -175,7 +175,7 @@ The error class (condition), e.g. `TABLE_OR_VIEW_NOT_FOUND`.
 def getErrorClass(self) -> str | None
 ```
 
-Deprecated name of :meth:`getCondition`.
+Deprecated name of `getCondition`.
 
 ### `getMessage`
 
@@ -321,7 +321,7 @@ A short description of the error's cause.
 class QueryContextType(Enum)
 ```
 
-Where a :class:`QueryContext` came from (`pyspark.errors.QueryContextType`).
+Where a `QueryContext` came from (`pyspark.errors.QueryContextType`).
 
 ## `QueryExecutionException`
 

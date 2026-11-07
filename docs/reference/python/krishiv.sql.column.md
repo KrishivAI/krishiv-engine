@@ -313,7 +313,7 @@ def otherwise(self, value: Any) -> Column
 
 Sets the `ELSE` value of a `when` chain, as
 `pyspark.sql.Column.otherwise`. Only a column built by
-:func:`krishiv.sql.functions.when` (or chained :meth:`when`) has an
+`krishiv.sql.functions.when` (or chained `when`) has an
 `ELSE` to set, and only once.
 
 **Examples**

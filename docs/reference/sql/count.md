@@ -25,7 +25,7 @@ count(*)
 | Kind | aggregate (function) |
 | Added in Spark | 1.0.0 |
 | In Spark profiles | 3.5 and later |
-| Arguments |  >= 1 |
+| Arguments | >= 1 |
 | Deterministic | yes |
 
 ## Examples

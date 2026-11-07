@@ -28,17 +28,17 @@ a growing window frame (rangeFrame, unboundedPreceding, currentRow) is used by d
 def orderBy(*cols: ColumnOrName | Sequence[ColumnOrName]) -> WindowSpec
 ```
 
-Creates a :class:`WindowSpec` with the ordering defined.
+Creates a `WindowSpec` with the ordering defined.
 
 **Parameters**
 
-cols : str, :class:`Column` or list
+cols : str, `Column` or list
     names of columns or expressions
 
 **Returns**
 
-:class: `WindowSpec`
-    A :class:`WindowSpec` with the ordering defined.
+`WindowSpec`
+    A `WindowSpec` with the ordering defined.
 
 **Examples**
 
@@ -67,17 +67,17 @@ cols : str, :class:`Column` or list
 def partitionBy(*cols: ColumnOrName | Sequence[ColumnOrName]) -> WindowSpec
 ```
 
-Creates a :class:`WindowSpec` with the partitioning defined.
+Creates a `WindowSpec` with the partitioning defined.
 
 **Parameters**
 
-cols : str, :class:`Column` or list
+cols : str, `Column` or list
     names of columns or expressions
 
 **Returns**
 
-:class: `WindowSpec`
-    A :class:`WindowSpec` with the partitioning defined.
+`WindowSpec`
+    A `WindowSpec` with the partitioning defined.
 
 **Examples**
 
@@ -106,7 +106,7 @@ cols : str, :class:`Column` or list
 def rangeBetween(start: int, end: int) -> WindowSpec
 ```
 
-Creates a :class:`WindowSpec` with the frame boundaries defined,
+Creates a `WindowSpec` with the frame boundaries defined,
 from `start` (inclusive) to `end` (inclusive).
 
 Both `start` and `end` are relative from the current row. For example,
@@ -133,8 +133,8 @@ end : int
 
 **Returns**
 
-:class: `WindowSpec`
-    A :class:`WindowSpec` with the frame boundaries defined,
+`WindowSpec`
+    A `WindowSpec` with the frame boundaries defined,
     from `start` (inclusive) to `end` (inclusive).
 
 **Examples**
@@ -164,7 +164,7 @@ end : int
 def rowsBetween(start: int, end: int) -> WindowSpec
 ```
 
-Creates a :class:`WindowSpec` with the frame boundaries defined,
+Creates a `WindowSpec` with the frame boundaries defined,
 from `start` (inclusive) to `end` (inclusive).
 
 Both `start` and `end` are relative positions from the current row.
@@ -188,8 +188,8 @@ end : int
 
 **Returns**
 
-:class: `WindowSpec`
-    A :class:`WindowSpec` with the frame boundaries defined,
+`WindowSpec`
+    A `WindowSpec` with the frame boundaries defined,
     from `start` (inclusive) to `end` (inclusive).
 
 **Examples**
@@ -221,7 +221,7 @@ class WindowSpec
 A window specification that defines the partitioning, ordering,
 and frame boundaries, as `pyspark.sql.WindowSpec`.
 
-Use the static methods in :class:`Window` to create a :class:`WindowSpec`.
+Use the static methods in `Window` to create a `WindowSpec`.
 Each method returns a new specification; a repeated `partitionBy` or
 `orderBy` replaces what the earlier call set, as in PySpark.
 
@@ -231,11 +231,11 @@ Each method returns a new specification; a repeated `partitionBy` or
 def orderBy(self, *cols: ColumnOrName | Sequence[ColumnOrName]) -> WindowSpec
 ```
 
-Defines the ordering columns in a :class:`WindowSpec`, replacing any ordering.
+Defines the ordering columns in a `WindowSpec`, replacing any ordering.
 
 **Parameters**
 
-cols : str, :class:`Column` or list
+cols : str, `Column` or list
     names of columns or expressions
 
 ### `partitionBy`
@@ -244,11 +244,11 @@ cols : str, :class:`Column` or list
 def partitionBy(self, *cols: ColumnOrName | Sequence[ColumnOrName]) -> WindowSpec
 ```
 
-Defines the partitioning columns in a :class:`WindowSpec`, replacing any partitioning.
+Defines the partitioning columns in a `WindowSpec`, replacing any partitioning.
 
 **Parameters**
 
-cols : str, :class:`Column` or list
+cols : str, `Column` or list
     names of columns or expressions
 
 ### `rangeBetween`

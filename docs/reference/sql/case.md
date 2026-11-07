@@ -19,7 +19,7 @@ CASE expr1 WHEN expr2 THEN expr3 [WHEN expr4 THEN expr5]* [ELSE expr6] END
 | Krishiv | Implemented (SQL syntax) |
 | Kind | scalar (operator) |
 | In Spark profiles | 3.5 and later |
-| Arguments |  |
+| Arguments | - |
 | Deterministic | yes |
 
 ## Version history

@@ -4,7 +4,7 @@
 
 An offline viewer for `krishiv.query-profile` documents.
 
-:class:`ProfileView` turns the profile JSON of `df.explain(analyze=True, json=True)`
+`ProfileView` turns the profile JSON of `df.explain(analyze=True, json=True)`
 into one self-contained HTML page: the physical plan as a tree, each node with its
 operators' time, rows, blocking and spills as bars scaled to the whole query, and the
 pipelines on a timeline. There is no script, no font and no network request: the page
@@ -23,7 +23,7 @@ def ui(source: Any, *, path: str | Path | None=None) -> ProfileView
 ```
 
 The viewer for `source`: a profile document (`dict` or JSON text), a
-:class:`ProfileView`, or a DataFrame (which runs `EXPLAIN ANALYZE` and views its profile).
+`ProfileView`, or a DataFrame (which runs `EXPLAIN ANALYZE` and views its profile).
 
 With `path` the page is also written there. In a notebook the returned view renders itself.
 
@@ -36,7 +36,7 @@ class ProfileView
 A query profile, shown as HTML.
 
 `ProfileView(document)` takes the parsed document (a `dict`) or its JSON text. Use
-:meth:`to_html` for a full page, :meth:`save` to write it, or leave the object as the last
+`to_html` for a full page, `save` to write it, or leave the object as the last
 expression of a notebook cell.
 
 ### `save`
@@ -45,7 +45,7 @@ expression of a notebook cell.
 def save(self, path: str | Path, title: str='Krishiv query profile') -> Path
 ```
 
-Writes :meth:`to_html` to `path` and returns it.
+Writes `to_html` to `path` and returns it.
 
 ### `to_html`
 

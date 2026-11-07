@@ -6,5 +6,5 @@ Test helpers, as `pyspark.testing`: `assertDataFrameEqual` and `assertSchemaEqua
 
 Behaviour (parameters, error classes, message formats) follows PySpark 4.2's
 `pyspark.testing.utils`; the code below is written for this package (it works
-on :class:`krishiv.sql.DataFrame`, lists of :class:`krishiv.sql.Row`, and pandas
+on `krishiv.sql.DataFrame`, lists of `krishiv.sql.Row`, and pandas
 frames when pandas is installed).

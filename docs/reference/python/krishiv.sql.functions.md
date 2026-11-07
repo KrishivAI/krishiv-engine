@@ -12,7 +12,7 @@ PySpark's signatures) and re-exported here; the ones that are not plain calls ar
 A name in `__all__` is a function with PySpark's signature that builds the registry call; it does not mean the
 engine runs every one end to end. The ranking and window functions (`row_number`, `rank`,
 `dense_rank`, `cume_dist`, `percent_rank`, `ntile`, `first_value`, `last_value`, `lag`, `lead`,
-`nth_value`) run over a window with :meth:`krishiv.sql.Column.over`. `coalesce` / `nvl` with a string
+`nth_value`) run over a window with `krishiv.sql.Column.over`. `coalesce` / `nvl` with a string
 literal and `sha2` over a string fail in the engine's analyzer.
 
 ## Functions
@@ -2966,8 +2966,8 @@ def when(condition: Column, value: Any) -> Column
 ```
 
 Starts a `CASE WHEN condition THEN value` chain, as
-`pyspark.sql.functions.when`. Chain :meth:`Column.when` for more
-branches and :meth:`Column.otherwise` for the `ELSE` value; without
+`pyspark.sql.functions.when`. Chain `Column.when` for more
+branches and `Column.otherwise` for the `ELSE` value; without
 `otherwise` unmatched rows are NULL.
 
 **Examples**

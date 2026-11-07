@@ -18,10 +18,10 @@ collations()
 |---|---|
 | Krishiv | Not implemented yet |
 | Group | `generator_funcs` |
-| Kind | generator (table function) |
+| Kind | table function |
 | Added in Spark | 4.0.0 |
 | In Spark profiles | 4.0 and later |
-| Arguments |  |
+| Arguments | - |
 | Deterministic | yes |
 
 ## Examples

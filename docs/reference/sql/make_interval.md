@@ -21,7 +21,7 @@ make_interval([years[, months[, weeks[, days[, hours[, mins[, secs]]]]]]])
 | Kind | scalar (function) |
 | Added in Spark | 3.0.0 |
 | In Spark profiles | 3.5 and later |
-| Arguments |  |
+| Arguments | - |
 | Deterministic | yes |
 
 ## Examples

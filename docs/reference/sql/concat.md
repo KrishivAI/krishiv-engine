@@ -21,7 +21,7 @@ concat(col1, col2, ..., colN)
 | Kind | scalar (function) |
 | Added in Spark | 1.5.0 |
 | In Spark profiles | 3.5 and later |
-| Arguments |  |
+| Arguments | - |
 | Deterministic | yes |
 
 ## Examples

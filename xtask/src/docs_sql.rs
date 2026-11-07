@@ -290,16 +290,25 @@ fn page(
         .map(|d| d.kind)
         .or_else(|| spark.and_then(|s| s.kind))
         .map_or("unknown", kind_name);
-    let _ = writeln!(m, "| Kind | {kind} ({}) |", doc.registry.replace('_', " "));
+    if doc.registry == "table_function" && def.is_none() {
+        m.push_str("| Kind | table function |\n");
+    } else {
+        let _ = writeln!(m, "| Kind | {kind} ({}) |", doc.registry.replace('_', " "));
+    }
     if !doc.since.is_empty() {
         let _ = writeln!(m, "| Added in Spark | {} |", doc.since);
     }
     if let Some(s) = spark {
         let _ = writeln!(m, "| In Spark profiles | {} and later |", s.since.line());
+        let args = s.arity.expected().trim();
         let _ = writeln!(
             m,
             "| Arguments | {} |",
-            s.arity.expected().replace('|', "\\|")
+            if args.is_empty() {
+                "-".to_owned()
+            } else {
+                args.replace('|', "\\|")
+            }
         );
         if let Some(d) = s.deterministic {
             let _ = writeln!(m, "| Deterministic | {} |", if d { "yes" } else { "no" });

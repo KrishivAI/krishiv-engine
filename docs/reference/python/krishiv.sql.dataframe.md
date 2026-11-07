@@ -50,7 +50,7 @@ the snapshot instead of recomputing it.
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     This DataFrame, marked as cached (as in PySpark, the call acts on the frame itself).
 
 **Examples**
@@ -69,7 +69,7 @@ DataFrame[age: bigint, name: string]
 def coalesce(self, numPartitions: int) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` with exactly `numPartitions` partitions.
+Returns a new `DataFrame` with exactly `numPartitions` partitions.
 
 .. note:: Embedded Krishiv runs on one node: the partition count is accepted and
     ignored, and the rows never change.
@@ -81,7 +81,7 @@ numPartitions : int
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
 
 ### `collect`
 
@@ -154,7 +154,7 @@ table.
 The first column of each row will be the distinct values of `col1` and the column names
 will be the distinct values of `col2`. The name of the first column will be `$col1_$col2`.
 Pairs that have no occurrences will have zero as their counts.
-:func:`DataFrame.crosstab` and :func:`DataFrameStatFunctions.crosstab` are aliases.
+`DataFrame.crosstab` and `DataFrameStatFunctions.crosstab` are aliases.
 
 **Parameters**
 
@@ -163,11 +163,11 @@ col1 : str
     each row.
 col2 : str
     The name of the second column. Distinct items will make the column names
-    of the :class:`DataFrame`.
+    of the `DataFrame`.
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     Frequency matrix of two columns.
 
 **Notes**
@@ -211,11 +211,11 @@ cols : str, list, optional
 def distinct(self) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` containing the distinct rows in this :class:`DataFrame`.
+Returns a new `DataFrame` containing the distinct rows in this `DataFrame`.
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     DataFrame with distinct records.
 
 **See Also**
@@ -247,18 +247,18 @@ DataFrame.dropDuplicates : Remove duplicate rows from this DataFrame.
 def drop(self, *cols: ColumnOrName) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` without specified columns.
+Returns a new `DataFrame` without specified columns.
 This is a no-op if the schema doesn't contain the given column name(s).
 
 **Parameters**
 
-cols: str or :class:`Column`
-    A name of the column, or the :class:`Column` to be dropped.
+cols: str or `Column`
+    A name of the column, or the `Column` to be dropped.
 
 **Returns**
 
-:class:`DataFrame`
-    A new :class:`DataFrame` without the specified columns.
+`DataFrame`
+    A new `DataFrame` without the specified columns.
 
 **Notes**
 
@@ -299,10 +299,10 @@ cols: str or :class:`Column`
 def dropDuplicates(self, subset: list[str] | tuple[str, ...] | None=None) -> DataFrame
 ```
 
-Return a new :class:`DataFrame` with duplicate rows removed,
+Return a new `DataFrame` with duplicate rows removed,
 optionally only considering certain columns.
 
-:func:`drop_duplicates` is an alias for :func:`dropDuplicates`.
+`drop_duplicates` is an alias for `dropDuplicates`.
 
 **Parameters**
 
@@ -311,7 +311,7 @@ subset : list of column names, optional
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     DataFrame without duplicates.
 
 **Examples**
@@ -354,8 +354,8 @@ Deduplicate values on 'name' and 'height' columns.
 def dropna(self, how: str | None='any', thresh: int | None=None, subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` omitting rows with null or NaN values.
-:func:`DataFrame.dropna` and :func:`DataFrameNaFunctions.drop` are
+Returns a new `DataFrame` omitting rows with null or NaN values.
+`DataFrame.dropna` and `DataFrameNaFunctions.drop` are
 aliases of each other.
 
 **Parameters**
@@ -371,7 +371,7 @@ subset : str, tuple or list, optional
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     DataFrame with null only rows excluded.
 
 **Examples**
@@ -447,20 +447,20 @@ def dtypes(self) -> list[tuple[str, str]]
 def exceptAll(self, other: DataFrame) -> DataFrame
 ```
 
-Return a new :class:`DataFrame` containing rows in this :class:`DataFrame` but
-not in another :class:`DataFrame` while preserving duplicates.
+Return a new `DataFrame` containing rows in this `DataFrame` but
+not in another `DataFrame` while preserving duplicates.
 
 This is equivalent to `EXCEPT ALL` in SQL.
 As standard in SQL, this function resolves columns by position (not by name).
 
 **Parameters**
 
-other : :class:`DataFrame`
-    The other :class:`DataFrame` to compare to.
+other : `DataFrame`
+    The other `DataFrame` to compare to.
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
 
 **See Also**
 
@@ -495,7 +495,7 @@ Prints the query's plans, as PySpark's `explain` (`extended` or `mode`: `simple`
 Krishiv extensions (keyword only): `analyze=True` runs the query and prints the physical
 plan with each operator's metrics (`EXPLAIN ANALYZE`); `verbose=True` prints the logical
 plan after each optimizer rule that changed it (`EXPLAIN VERBOSE`). Use
-:meth:`explainString` for the text or the JSON document instead of printing.
+`explainString` for the text or the JSON document instead of printing.
 
 ### `explainString`
 
@@ -503,7 +503,7 @@ plan after each optimizer rule that changed it (`EXPLAIN VERBOSE`). Use
 def explainString(self, extended: bool | str | None=None, mode: str | None=None, *, analyze: bool=False, verbose: bool=False, json: bool=False) -> str
 ```
 
-What :meth:`explain` prints; with `json=True` (`analyze` or `verbose` only) the
+What `explain` prints; with `json=True` (`analyze` or `verbose` only) the
 versioned JSON document (`krishiv.query-profile` or `krishiv.explain-verbose`;
 experimental: may change before 1.0).
 
@@ -513,8 +513,8 @@ experimental: may change before 1.0).
 def fillna(self, value: float | str | bool | dict[str, Any], subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` which null values are filled with new value.
-:func:`DataFrame.fillna` and :func:`DataFrameNaFunctions.fill` are
+Returns a new `DataFrame` which null values are filled with new value.
+`DataFrame.fillna` and `DataFrameNaFunctions.fill` are
 aliases of each other.
 
 **Parameters**
@@ -531,7 +531,7 @@ subset : str, tuple or list, optional
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     DataFrame with replaced null values.
 
 .. note:: The string examples need string columns the engine can compare with
@@ -650,7 +650,7 @@ def head(self, n: int | None=None) -> Row | list[Row] | None
 def hint(self, name: str, *parameters: Any) -> DataFrame
 ```
 
-Specifies some hint on the current :class:`DataFrame`.
+Specifies some hint on the current `DataFrame`.
 
 **Parameters**
 
@@ -661,7 +661,7 @@ parameters : str, list, float or int
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     Hinted DataFrame
 
 **Notes**
@@ -676,19 +676,19 @@ logs it; the rows never change. Use `explain` to see the recorded hint.
 def intersect(self, other: DataFrame) -> DataFrame
 ```
 
-Return a new :class:`DataFrame` containing rows only in
-both this :class:`DataFrame` and another :class:`DataFrame`.
+Return a new `DataFrame` containing rows only in
+both this `DataFrame` and another `DataFrame`.
 Note that any duplicates are removed. To preserve duplicates
-use :func:`intersectAll`.
+use `intersectAll`.
 
 **Parameters**
 
-other : :class:`DataFrame`
-    Another :class:`DataFrame` that needs to be combined.
+other : `DataFrame`
+    Another `DataFrame` that needs to be combined.
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     Combined DataFrame.
 
 **Notes**
@@ -715,15 +715,15 @@ This is equivalent to `INTERSECT` in SQL.
 def intersectAll(self, other: DataFrame) -> DataFrame
 ```
 
-Return a new :class:`DataFrame` containing rows in both this :class:`DataFrame`
-and another :class:`DataFrame` while preserving duplicates.
+Return a new `DataFrame` containing rows in both this `DataFrame`
+and another `DataFrame` while preserving duplicates.
 
 This is equivalent to `INTERSECT ALL` in SQL. As standard in SQL, this function
 resolves columns by position (not by name).
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     Combined DataFrame.
 
 **Examples**
@@ -768,7 +768,7 @@ def limit(self, num: int) -> DataFrame
 def melt(self, ids: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...], values: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...] | None, variableColumnName: str, valueColumnName: str) -> DataFrame
 ```
 
-:func:`melt` is an alias for :func:`unpivot`.
+`melt` is an alias for `unpivot`.
 
 **See Also**
 
@@ -781,7 +781,7 @@ DataFrame.unpivot
 def na(self) -> DataFrameNaFunctions
 ```
 
-Functionality for working with missing data (:class:`DataFrameNaFunctions`).
+Functionality for working with missing data (`DataFrameNaFunctions`).
 
 ### `offset`
 
@@ -789,7 +789,7 @@ Functionality for working with missing data (:class:`DataFrameNaFunctions`).
 def offset(self, num: int) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` by skipping the first `n` rows.
+Returns a new `DataFrame` by skipping the first `n` rows.
 
 **Parameters**
 
@@ -798,7 +798,7 @@ num : int
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     Subset of the records
 
 **Examples**
@@ -837,12 +837,12 @@ levels spill there later).
 
 **Parameters**
 
-storageLevel : :class:`krishiv.storagelevel.StorageLevel`
+storageLevel : `krishiv.storagelevel.StorageLevel`
     The storage level (default `MEMORY_AND_DISK`).
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     This DataFrame, marked as persisted.
 
 **Examples**
@@ -876,7 +876,7 @@ the last expression of a notebook cell, or call `.save("profile.html")`. Krishiv
 def repartition(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` partitioned by the given partitioning expressions.
+Returns a new `DataFrame` partitioned by the given partitioning expressions.
 
 .. note:: Embedded Krishiv runs on one node: the partitioning is accepted and ignored,
     and the rows never change. `spark_partition_id` is not available.
@@ -887,12 +887,12 @@ numPartitions : int
     can be an int to specify the target number of partitions or a Column.
     If it is a Column, it will be used as the first partitioning column. If not specified,
     the default number of partitions is used.
-cols : str or :class:`Column`
+cols : str or `Column`
     partitioning columns.
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     Repartitioned DataFrame.
 
 ### `replace`
@@ -901,8 +901,8 @@ cols : str or :class:`Column`
 def replace(self, to_replace: Any, value: Any=_NO_VALUE, subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` replacing a value with another value.
-:func:`DataFrame.replace` and :func:`DataFrameNaFunctions.replace` are
+Returns a new `DataFrame` replacing a value with another value.
+`DataFrame.replace` and `DataFrameNaFunctions.replace` are
 aliases of each other.
 Values to_replace and value must have the same type and can only be numerics, booleans,
 or strings. Value can have None. When replacing, the new value will be cast
@@ -929,7 +929,7 @@ subset : list, optional
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     DataFrame with replaced values.
 
 .. note:: The string examples need string columns the engine can compare with
@@ -1009,9 +1009,9 @@ Example 4: Replace 10 to 18 in the 'age' column.
 def sample(self, withReplacement: bool | float | None=None, fraction: float | None=None, seed: int | None=None) -> DataFrame
 ```
 
-Returns a sampled subset of this :class:`DataFrame`.
+Returns a sampled subset of this `DataFrame`.
 
-.. note:: The engine cannot sample yet: the returned :class:`DataFrame` fails its
+.. note:: The engine cannot sample yet: the returned `DataFrame` fails its
     first action with `KRISHIV_UNSUPPORTED_FEATURE`.
 
 **Parameters**
@@ -1025,13 +1025,13 @@ seed : int, optional
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     Sampled rows from given DataFrame.
 
 **Notes**
 
 This is not guaranteed to provide exactly the fraction specified of the total
-count of the given :class:`DataFrame`.
+count of the given `DataFrame`.
 
 `fraction` is required and, `withReplacement` and `seed` are optional.
 
@@ -1045,12 +1045,12 @@ Returns a stratified sample without replacement based on the
 fraction given on each stratum.
 
 .. note:: The engine cannot sample yet: unless `fractions` is empty, the returned
-    :class:`DataFrame` fails its first action with `KRISHIV_UNSUPPORTED_FEATURE` (from
-    :meth:`DataFrame.sample`).
+    `DataFrame` fails its first action with `KRISHIV_UNSUPPORTED_FEATURE` (from
+    `DataFrame.sample`).
 
 **Parameters**
 
-col : :class:`Column` or str
+col : `Column` or str
     column that defines strata
 fractions : dict
     sampling fraction for each stratum. If a stratum is not
@@ -1060,7 +1060,7 @@ seed : int, optional
 
 **Returns**
 
-a new :class:`DataFrame` that represents the stratified sample
+a new `DataFrame` that represents the stratified sample
 
 **Notes**
 
@@ -1113,7 +1113,7 @@ def sparkSession(self) -> SparkSession
 def stat(self) -> DataFrameStatFunctions
 ```
 
-Functionality for statistic functions (:class:`DataFrameStatFunctions`).
+Functionality for statistic functions (`DataFrameStatFunctions`).
 
 ### `storageLevel`
 
@@ -1130,17 +1130,17 @@ This frame's storage level (all false when uncached).
 def subtract(self, other: DataFrame) -> DataFrame
 ```
 
-Return a new :class:`DataFrame` containing rows in this :class:`DataFrame`
-but not in another :class:`DataFrame`.
+Return a new `DataFrame` containing rows in this `DataFrame`
+but not in another `DataFrame`.
 
 **Parameters**
 
-other : :class:`DataFrame`
-    Another :class:`DataFrame` that needs to be subtracted.
+other : `DataFrame`
+    Another `DataFrame` that needs to be subtracted.
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     Subtracted DataFrame.
 
 **Notes**
@@ -1187,7 +1187,7 @@ statistics : str, optional
 def tail(self, num: int) -> list[Row]
 ```
 
-Returns the last `num` rows as a :class:`list` of :class:`Row`.
+Returns the last `num` rows as a `list` of `Row`.
 
 **Parameters**
 
@@ -1233,18 +1233,18 @@ calendar interval at any depth, by its Spark type.
 def toDF(self, *cols: str) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` with new specified column names
+Returns a new `DataFrame` with new specified column names
 
 **Parameters**
 
 *cols : tuple
     a tuple of string new column name. The length of the
     list needs to be the same as the number of columns in the initial
-    :class:`DataFrame`
+    `DataFrame`
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     DataFrame with new column names.
 
 **Examples**
@@ -1268,7 +1268,7 @@ Returns a new :class:`DataFrame` with new specified column names
 def toJSON(self, use_unicode: bool=True) -> DataFrame
 ```
 
-Converts a :class:`DataFrame` into one of JSON strings, one row per document, in a
+Converts a `DataFrame` into one of JSON strings, one row per document, in a
 single `string` column `value` (Spark Connect's form; classic PySpark returns an
 `RDD`).
 
@@ -1281,7 +1281,7 @@ The engine has no `to_json` function yet, so this raises the engine's
 def toLocalIterator(self, prefetchPartitions: bool=False) -> Iterator[Row]
 ```
 
-Returns an iterator that contains all of the rows in this :class:`DataFrame`.
+Returns an iterator that contains all of the rows in this `DataFrame`.
 
 .. note:: Embedded Krishiv runs on one node: `prefetchPartitions` is accepted and
     ignored.
@@ -1320,12 +1320,12 @@ wall-clock times in the session time zone without a zone, as Spark's `toPandas`.
 def transform(self, func: Any, *args: Any, **kwargs: Any) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame`. Concise syntax for chaining custom transformations.
+Returns a new `DataFrame`. Concise syntax for chaining custom transformations.
 
 **Parameters**
 
 func : function
-    a function that takes and returns a :class:`DataFrame`.
+    a function that takes and returns a `DataFrame`.
 *args
     Positional arguments to pass to func.
 **kwargs
@@ -1333,7 +1333,7 @@ func : function
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     Transformed DataFrame.
 
 **Examples**
@@ -1359,18 +1359,18 @@ func : function
 def union(self, other: DataFrame) -> DataFrame
 ```
 
-Return a new :class:`DataFrame` containing the union of rows in this and another
-:class:`DataFrame`.
+Return a new `DataFrame` containing the union of rows in this and another
+`DataFrame`.
 
 **Parameters**
 
-other : :class:`DataFrame`
-    Another :class:`DataFrame` that needs to be unioned.
+other : `DataFrame`
+    Another `DataFrame` that needs to be unioned.
 
 **Returns**
 
-:class:`DataFrame`
-    A new :class:`DataFrame` containing the combined rows with corresponding columns.
+`DataFrame`
+    A new `DataFrame` containing the combined rows with corresponding columns.
 
 **See Also**
 
@@ -1409,7 +1409,7 @@ in SQL.
 def unionAll(self, other: DataFrame) -> DataFrame
 ```
 
-:func:`unionAll` is an alias for :func:`union`.
+`unionAll` is an alias for `union`.
 
 ### `unionByName`
 
@@ -1417,8 +1417,8 @@ def unionAll(self, other: DataFrame) -> DataFrame
 def unionByName(self, other: DataFrame, allowMissingColumns: bool=False) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` containing union of rows in this and another
-:class:`DataFrame`.
+Returns a new `DataFrame` containing union of rows in this and another
+`DataFrame`.
 
 This method performs a union operation on both input DataFrames, resolving columns by
 name (rather than position). When `allowMissingColumns` is True, missing columns will
@@ -1426,15 +1426,15 @@ be filled with null.
 
 **Parameters**
 
-other : :class:`DataFrame`
-    Another :class:`DataFrame` that needs to be combined.
+other : `DataFrame`
+    Another `DataFrame` that needs to be combined.
 allowMissingColumns : bool, optional, default False
    Specify whether to allow missing columns.
 
 **Returns**
 
-:class:`DataFrame`
-    A new :class:`DataFrame` containing the combined rows with corresponding
+`DataFrame`
+    A new `DataFrame` containing the combined rows with corresponding
     columns of the two given DataFrames.
 
 **Examples**
@@ -1478,7 +1478,7 @@ blocking : bool, optional
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     This DataFrame, uncached.
 
 **Examples**
@@ -1516,7 +1516,7 @@ valueColumnName : str
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     Unpivoted DataFrame.
 
 **See Also**
@@ -1553,7 +1553,7 @@ def withColumn(self, colName: str, col: Column) -> DataFrame
 def withColumnRenamed(self, existing: str, new: str) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` by renaming an existing column.
+Returns a new `DataFrame` by renaming an existing column.
 This is a no-op if the schema doesn't contain the given column name.
 
 **Parameters**
@@ -1565,7 +1565,7 @@ new : str
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     A new DataFrame with renamed column.
 
 **See Also**
@@ -1608,7 +1608,7 @@ Rename a column that does not exist (no-op)
 def withColumnsRenamed(self, colsMap: dict[str, str]) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` by renaming multiple columns.
+Returns a new `DataFrame` by renaming multiple columns.
 This is a no-op if the schema doesn't contain the given column names.
 
 **Parameters**
@@ -1619,7 +1619,7 @@ colsMap : dict
 
 **Returns**
 
-:class:`DataFrame`
+`DataFrame`
     DataFrame with renamed columns.
 
 **See Also**
@@ -1687,7 +1687,7 @@ Rename with an empty dictionary (no-op)
 def write(self) -> DataFrameWriter
 ```
 
-Writes this :class:`DataFrame`'s rows to files, as `pyspark.sql.DataFrame.write`.
+Writes this `DataFrame`'s rows to files, as `pyspark.sql.DataFrame.write`.
 
 ### `writeTo`
 
@@ -1695,5 +1695,5 @@ Writes this :class:`DataFrame`'s rows to files, as `pyspark.sql.DataFrame.write`
 def writeTo(self, table: str) -> DataFrameWriterV2
 ```
 
-Writes this :class:`DataFrame`'s rows to the table `table`, as
+Writes this `DataFrame`'s rows to the table `table`, as
 `pyspark.sql.DataFrame.writeTo`.

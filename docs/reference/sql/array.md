@@ -21,7 +21,7 @@ array(expr, ...)
 | Kind | scalar (function) |
 | Added in Spark | 1.1.0 |
 | In Spark profiles | 3.5 and later |
-| Arguments |  |
+| Arguments | - |
 | Deterministic | yes |
 
 ## Examples

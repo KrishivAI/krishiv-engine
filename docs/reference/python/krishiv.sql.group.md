@@ -21,10 +21,10 @@ class GroupedData
 def agg(self, *exprs: Column | dict[str, str]) -> DataFrame
 ```
 
-Computes aggregates and returns the result as a :class:`DataFrame`.
+Computes aggregates and returns the result as a `DataFrame`.
 
 Either a single dict from column name to aggregate function name
-(`{"age": "max", "*": "count"}`), or aggregate :class:`Column`
+(`{"age": "max", "*": "count"}`), or aggregate `Column`
 expressions.
 
 **Examples**

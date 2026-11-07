@@ -6,8 +6,8 @@ Equality assertions for tests, as `pyspark.testing.utils`.
 
 Behaviour (parameters, tolerances, error classes, diff formats) follows PySpark
 4.2's `pyspark.testing.utils`; the implementation is written for this package:
-it compares :class:`~krishiv.sql.DataFrame` results (via `collect`), lists of
-:class:`~krishiv.sql.Row`, and pandas frames when pandas is installed. There is
+it compares `krishiv.sql.DataFrame` results (via `collect`), lists of
+`krishiv.sql.Row`, and pandas frames when pandas is installed. There is
 no pandas-on-Spark or streaming DataFrame here, so those PySpark paths are absent.
 
 ## Functions

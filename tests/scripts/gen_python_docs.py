@@ -42,6 +42,8 @@ def md_doc(doc: str | None) -> str:
     if not doc:
         return ""
     text = re.sub(r"``([^`]+)``", r"`\1`", inspect.cleandoc(doc))
+    # Sphinx roles (:class:`X`, :meth:`~a.b`) render as plain code spans.
+    text = re.sub(r":(?:class|meth|func|mod|attr|exc|data|ref):\s*`~?([^`]+)`", r"`\1`", text)
     lines = text.splitlines()
     out: list[str] = []
     i = 0
@@ -169,7 +171,7 @@ def render() -> dict[Path, str]:
     index = ["# Python API reference", "", HEADER, "", "| Module | Summary |", "|---|---|"]
     for name, path in modules():
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        summary = (ast.get_docstring(tree) or "").strip().splitlines()[:1]
+        summary = md_doc(ast.get_docstring(tree)).strip().splitlines()[:1]
         pages[OUT / f"{name}.md"] = render_module(name, path)
         index.append(f"| [`{name}`]({name}.md) | {summary[0].replace('|', chr(92) + '|') if summary else ''} |")
     pages[OUT / "index.md"] = "\n".join(index) + "\n"

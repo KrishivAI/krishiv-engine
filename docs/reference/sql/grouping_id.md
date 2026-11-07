@@ -22,7 +22,7 @@ grouping_id([col1[, col2 ..]])
 | Kind | aggregate (function) |
 | Added in Spark | 2.0.0 |
 | In Spark profiles | 3.5 and later |
-| Arguments |  |
+| Arguments | - |
 | Deterministic | yes |
 
 ## Examples

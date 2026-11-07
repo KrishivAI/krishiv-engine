@@ -22,7 +22,7 @@ coalesce a `Utf8` column built from Python rows with a string literal (`Utf8` ag
 class DataFrameNaFunctions
 ```
 
-Functionality for working with missing data in a :class:`DataFrame`
+Functionality for working with missing data in a `DataFrame`
 (`pyspark.sql.DataFrameNaFunctions`).
 
 ### `drop`
@@ -31,8 +31,8 @@ Functionality for working with missing data in a :class:`DataFrame`
 def drop(self, how: str | None='any', thresh: int | None=None, subset: Any=None) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` omitting rows with null or NaN values; see
-:meth:`DataFrame.dropna` (`df.na.drop` and `df.dropna` are the same).
+Returns a new `DataFrame` omitting rows with null or NaN values; see
+`DataFrame.dropna` (`df.na.drop` and `df.dropna` are the same).
 
 ### `fill`
 
@@ -40,8 +40,8 @@ Returns a new :class:`DataFrame` omitting rows with null or NaN values; see
 def fill(self, value: Any, subset: Any=None) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` with null (and, for floating-point columns, NaN) values
-replaced; see :meth:`DataFrame.fillna` (`df.na.fill` and `df.fillna` are the same).
+Returns a new `DataFrame` with null (and, for floating-point columns, NaN) values
+replaced; see `DataFrame.fillna` (`df.na.fill` and `df.fillna` are the same).
 
 ### `replace`
 
@@ -49,5 +49,5 @@ replaced; see :meth:`DataFrame.fillna` (`df.na.fill` and `df.fillna` are the sam
 def replace(self, to_replace: Any, value: Any=_NO_VALUE, subset: Any=None) -> DataFrame
 ```
 
-Returns a new :class:`DataFrame` replacing a value with another value; see
-:meth:`DataFrame.replace` (`df.na.replace` and `df.replace` are the same).
+Returns a new `DataFrame` replacing a value with another value; see
+`DataFrame.replace` (`df.na.replace` and `df.replace` are the same).

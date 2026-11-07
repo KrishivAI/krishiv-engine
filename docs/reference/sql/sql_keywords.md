@@ -18,10 +18,10 @@ sql_keywords()
 |---|---|
 | Krishiv | Implemented |
 | Group | `generator_funcs` |
-| Kind | generator (table function) |
+| Kind | table function |
 | Added in Spark | 3.5.0 |
 | In Spark profiles | 3.5 and later |
-| Arguments |  |
+| Arguments | - |
 | Deterministic | yes |
 
 ## Examples

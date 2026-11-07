@@ -63,7 +63,7 @@ def parquet(self, *paths: str) -> DataFrame
 class DataFrameWriter
 ```
 
-Writes a :class:`DataFrame`'s rows to files (a subset of
+Writes a `DataFrame`'s rows to files (a subset of
 `pyspark.sql.DataFrameWriter`: `format`/`mode`/`option`/
 `options`/`partitionBy`/`bucketBy`/`sortBy`/`save`/
 `saveAsTable`/`insertInto` and the `parquet`/`csv`/`json`/`text`
@@ -185,7 +185,7 @@ Writes the rows as text files: one string column, as in Spark.
 class DataFrameWriterV2
 ```
 
-Writes a :class:`DataFrame`'s rows to a table (a subset of
+Writes a `DataFrame`'s rows to a table (a subset of
 `pyspark.sql.DataFrameWriterV2`: `using`/`option`/`options`/
 `tableProperty`/`partitionedBy`/`clusterBy` and the `create`/
 `replace`/`createOrReplace`/`append`/`overwrite`/
@@ -253,7 +253,7 @@ def overwrite(self, condition: Column | str) -> None
 
 Overwrites the rows `condition` selects. This always fails with
 `KRISHIV_UNSUPPORTED_FEATURE` naming `INSERT OVERWRITE`; the condition (a
-:class:`Column` or SQL text) never runs.
+`Column` or SQL text) never runs.
 
 ### `overwritePartitions`
 

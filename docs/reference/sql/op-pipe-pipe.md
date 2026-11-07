@@ -19,7 +19,7 @@ expr1 || expr2
 | Krishiv | Implemented (SQL syntax) |
 | Kind | scalar (operator) |
 | In Spark profiles | 3.5 and later |
-| Arguments |  |
+| Arguments | - |
 | Deterministic | yes |
 
 ## Version history
