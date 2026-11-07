@@ -39,6 +39,7 @@ mod error;
 mod id;
 mod policy;
 mod refreshing;
+mod scope;
 mod settings;
 mod stores;
 
@@ -49,6 +50,7 @@ pub use error::Result;
 pub use id::StoreId;
 pub use policy::StorePolicy;
 pub use refreshing::RefreshingStore;
+pub use scope::CacheScope;
 pub use settings::{SettingValue, StoreSettings};
 pub use stores::{
     AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,

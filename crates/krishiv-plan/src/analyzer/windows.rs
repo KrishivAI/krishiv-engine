@@ -51,7 +51,7 @@ use krishiv_common::error::{
 };
 
 use super::bind::unsupported;
-use super::exprs::{Bound, Cx, WindowUse, pretty, semantic_key};
+use super::exprs::{Bound, Cx, WindowUse, builtin_name, pretty, semantic_key};
 use super::ops::col_expr;
 use super::resolve::{Attr, Rel, Resolver};
 use super::{AnalysisError, ArgType, Constant};
@@ -498,6 +498,7 @@ impl Resolver<'_> {
                     col: output.clone(),
                     qual: super::ops::no_qual(),
                     source: None,
+                    duplicate: false,
                 }),
                 _ => return Err(unsupported("a window relation without aliases", p.origin)),
             }
@@ -809,8 +810,10 @@ impl Resolver<'_> {
         // aggregate with its ordering as further arguments, as Spark's
         // `ListAgg.sql` does (the percentiles show the ordered value
         // first, then the percentage).
+        // A session UDF named like one of these is not restricted
+        // (`builtin_name` is empty for it).
         let name = call.id.name();
-        let whole_only = match name {
+        let whole_only = match builtin_name(&call) {
             "listagg" => !call.within_group.is_empty(),
             "median" | "percentile_cont" | "percentile_disc" => true,
             _ => false,
@@ -1517,6 +1520,7 @@ impl Resolver<'_> {
                     col: output,
                     qual: super::ops::no_qual(),
                     source: None,
+                    duplicate: false,
                 };
                 out.push(a.clone());
                 columns.push((*k, a));
@@ -1528,8 +1532,15 @@ impl Resolver<'_> {
                 order_by,
             };
             // No widening through a window: the select list above it sees
-            // every column of its input already.
-            cur = self.make(Origin::UNKNOWN, node, out, &[&cur]);
+            // every column of its input already. Only the columns a `USING`
+            // join merged away come back through it (Spark's `Window` keeps
+            // its child's hidden output).
+            let below = cur;
+            cur = self.make(Origin::UNKNOWN, node, out, &[&below]);
+            if !below.hidden.is_empty() && below.widen.is_some() {
+                cur.hidden = Arc::clone(&below.hidden);
+                cur.widen = Some(Arc::new(super::resolve::Widen::Hidden { child: below }));
+            }
         }
         // The select list over the windows' columns.
         let mut out = Vec::with_capacity(exprs.len());
@@ -1579,6 +1590,7 @@ impl Resolver<'_> {
             col: output,
             qual: super::ops::no_qual(),
             source: None,
+            duplicate: false,
         };
         extracted.push((k, Arc::clone(e), a.clone()));
         col_expr(&a.col, e.origin)

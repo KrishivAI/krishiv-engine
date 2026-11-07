@@ -13,7 +13,10 @@ use krishiv_kernels::datetime::{resolve_zone, zone_id};
 /// Prefixes of entries read once, when the session is built (memory pool,
 /// spill directory, I/O scheduler): setting them later would not apply,
 /// so it fails like a static config.
-const BUILD_TIME: &[&str] = &["krishiv.memory.", "krishiv.spill.", "krishiv.io."];
+pub(crate) const BUILD_TIME: &[&str] = &["krishiv.memory.", "krishiv.spill.", "krishiv.io."];
+
+/// Session keys fixed when the session is built (its memory pool).
+const SESSION_BUILD_TIME: &[&str] = &["krishiv.session.memoryLimit"];
 
 /// The configuration of a session, shared by its clones. Queries read an
 /// immutable snapshot ([`Self::snapshot`]).
@@ -31,6 +34,37 @@ pub(crate) struct ConfStore {
     /// session is built (see [`local_zone`]).
     local_zone: Arc<str>,
 }
+
+/// Fails when `key` is one of the collation switches the engine refuses and `value` turns it on.
+fn refuse_unsupported_switch(key: &str, value: &str) -> Result<(), KrishivError> {
+    if UNSUPPORTED_COLLATION_SWITCHES
+        .iter()
+        .any(|k| k.eq_ignore_ascii_case(key))
+        && value.trim().eq_ignore_ascii_case("true")
+    {
+        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: format!("{key} = true"),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// The builder's initial settings, checked as `SET` checks a runtime one.
+pub(crate) fn check_pairs(pairs: &[(String, String)]) -> Result<(), KrishivError> {
+    pairs
+        .iter()
+        .try_for_each(|(k, v)| refuse_unsupported_switch(k, v))
+}
+
+/// Spark switches for collation features the engine refuses (ADR 0043 Decision 7 and 9): the
+/// collation-aware hash functions, collated map keys and schema-level default collations.
+const UNSUPPORTED_COLLATION_SWITCHES: &[&str] = &[
+    "spark.sql.legacy.collationAwareHashFunctions",
+    "spark.sql.collation.allowInMapKeys",
+    "spark.sql.collation.schemaLevel.enabled",
+    "spark.sql.schemaLevelCollations.enabled",
+];
 
 impl ConfStore {
     pub(crate) fn new(config: Config) -> Self {
@@ -222,7 +256,9 @@ pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
 pub(crate) fn is_modifiable(key: &str) -> bool {
     match lookup(key) {
         Some(entry) => {
-            entry.scope == Scope::Session && !BUILD_TIME.iter().any(|p| entry.key.starts_with(p))
+            entry.scope == Scope::Session
+                && !BUILD_TIME.iter().any(|p| entry.key.starts_with(p))
+                && !SESSION_BUILD_TIME.contains(&entry.key)
         }
         None => true,
     }
@@ -285,6 +321,9 @@ impl RuntimeConf {
             }
             .into());
         }
+        // Collation switches the engine does not honour yet (ADR 0043): turning one on would
+        // change results silently, so it is refused.
+        refuse_unsupported_switch(key, value)?;
         // A time zone setting (under its canonical key or the Spark alias)
         // is resolved against the time zone database, which `krishiv-common`
         // has not: the text as given, as Spark's `ZoneId.of` takes it.

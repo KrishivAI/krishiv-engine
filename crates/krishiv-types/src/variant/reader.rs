@@ -17,7 +17,7 @@
 //!           count:u8/u32 offs:(n+1)*u{off} data
 //! ```
 //!
-//! Object field ids are ordered by key bytes (not numerically); the offset
+//! Object field ids are ordered by key (Java `String` order) (not numerically); the offset
 //! table is parallel to the id table, so `offsets[i]` is the start of field
 //! `i` and `offsets[n]` the total data length. Array offsets are monotonic
 //! and delimit each element. Every accessor re-validates the bounds it
@@ -488,11 +488,12 @@ fn validate_exact(
             if id >= meta.dict_size {
                 return Err(malformed());
             }
-            // Field ids must be ordered by key bytes with unique keys; value
-            // offsets stay unconstrained (Spark emits values in input order).
+            // Field ids must be ordered by key (Java `String` order, as Spark
+            // sorts them) with unique keys; value offsets stay unconstrained
+            // (Spark emits values in input order).
             let key = meta.key(id)?;
             if let Some(prev) = previous
-                && prev >= key
+                && super::key_order(prev, key) != core::cmp::Ordering::Less
             {
                 return Err(malformed());
             }
@@ -502,12 +503,56 @@ fn validate_exact(
     Ok(kind)
 }
 
+/// Checks that no container in `value` nests deeper than
+/// [`super::builder::MAX_NESTING_DEPTH`] levels, the cap `parse_json` has
+/// (Spark 4.2.0). The walkers over a value (schema inference, JSON, the
+/// writer) recurse per level, so a deeper value would overflow the stack;
+/// it is `MALFORMED_VARIANT` instead. Iterative: each position is walked
+/// again only at a greater depth than before, so offsets shared between
+/// containers cannot make the walk exponential.
+fn check_depth(value: &[u8]) -> Result<(), KrishivError> {
+    use std::collections::HashMap;
+    let mut deepest: HashMap<usize, usize> = HashMap::new();
+    let mut stack: Vec<(usize, usize, usize)> = vec![(0, value.len(), 1)];
+    while let Some((pos, end, depth)) = stack.pop() {
+        let header = *value.get(pos).ok_or_else(malformed)?;
+        let basic = header & 0x03;
+        if basic < 2 {
+            continue;
+        }
+        if depth > super::builder::MAX_NESTING_DEPTH {
+            return Err(malformed());
+        }
+        if deepest.get(&pos).is_some_and(|d| *d >= depth) {
+            continue;
+        }
+        deepest.insert(pos, depth);
+        let view = parse_container(value, pos, end, basic == 2)?;
+        let count = usize::try_from(view.count).map_err(|_| malformed())?;
+        let data_end = view.data.checked_add(view.total).ok_or_else(malformed)?;
+        for i in 0..count {
+            let child = view
+                .data
+                .checked_add(read_off_at(value, &view, i)?)
+                .ok_or_else(malformed)?;
+            if child >= data_end {
+                return Err(malformed());
+            }
+            // Only containers can nest: skip the others without a push.
+            if value.get(child).is_some_and(|h| h & 0x03 >= 2) {
+                stack.push((child, data_end, depth + 1));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A validated borrow of one Variant value plus its shared dictionary.
 ///
 /// `new` checks the metadata (version 1, offset widths 1-4, monotonic
 /// dictionary offsets ending exactly at the key bytes, sorted-flagged
 /// dictionaries strictly increasing) and the root value's framing (every id
-/// in dictionary range and ordered by key bytes with unique keys, every
+/// in dictionary range and ordered by key (Java `String` order) with unique keys, every
 /// offset inside the declared total, decimals within their width bounds,
 /// exact consumption). Nested values are only validated when
 /// accessed. All bounds use checked arithmetic and fallible slicing, so
@@ -539,6 +584,14 @@ impl<'a> VariantRef<'a> {
     pub fn new(metadata: &'a [u8], value: &'a [u8]) -> Result<Self, KrishivError> {
         let meta = parse_metadata(metadata)?;
         let kind = validate_exact(value, 0, value.len(), &meta)?;
+        // Every level of nesting takes at least 4 bytes before its child
+        // (header, count, two offsets), so a shorter value cannot pass the
+        // cap and is not walked: the walk is for large values only.
+        if matches!(kind, VariantKind::Object | VariantKind::Array)
+            && value.len() > 4 * super::builder::MAX_NESTING_DEPTH
+        {
+            check_depth(value)?;
+        }
         let container = match kind {
             VariantKind::Object => Some(parse_container(value, 0, value.len(), true)?),
             VariantKind::Array => Some(parse_container(value, 0, value.len(), false)?),
@@ -717,7 +770,7 @@ impl<'a> VariantRef<'a> {
     }
 
     /// The field stored under `key`, via binary search over the field ids
-    /// (which are ordered by key bytes).
+    /// (ordered by key, Java `String` order).
     ///
     /// # Errors
     ///
@@ -739,7 +792,7 @@ impl<'a> VariantRef<'a> {
                 return Err(malformed());
             }
             let stored = self.meta.key(id)?;
-            match stored.cmp(key.as_bytes()) {
+            match super::key_order(stored, key.as_bytes()) {
                 core::cmp::Ordering::Less => lo = mid + 1,
                 core::cmp::Ordering::Greater => hi = mid,
                 core::cmp::Ordering::Equal => {

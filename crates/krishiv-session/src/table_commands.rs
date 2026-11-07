@@ -34,6 +34,7 @@ use krishiv_common::error::{
     UnsupportedFeatureDropDatabase, UnsupportedFeatureTableOperation, UnsupportedOverwriteTable,
     WrongCommandForObjectType,
 };
+use krishiv_common::names::check_column_name_duplication;
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{Privilege, Securable, TableColumn, authorize};
 use krishiv_sql::StatementClass;
@@ -48,6 +49,7 @@ use krishiv_types::DataType;
 
 use crate::dataframe::DataFrame;
 use crate::functions::{col, expr, lit_null};
+use crate::query_fold::Admitted;
 use crate::session::{QueryEnv, Session};
 use crate::store::{
     CatalogStore, CatalogTable, CreateMode, DEFAULT_NAMESPACE, DropNamespaceError, NamespaceMeta,
@@ -56,6 +58,22 @@ use crate::store::{
 
 /// The file formats a table can have.
 const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
+
+/// Spark's `CatalogUtils.makeQualifiedDBObjectPath` on the local file system: a location with a URI scheme
+/// stays as written; any other is resolved against the warehouse directory (an absolute path stays itself)
+/// and qualified as a `file:` URI.
+fn qualified_namespace_location(location: &str, warehouse: &std::path::Path) -> String {
+    let scheme = location.split_once(':').is_some_and(|(s, _)| {
+        s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    if scheme {
+        location.to_owned()
+    } else {
+        format!("file:{}", warehouse.join(location).display())
+    }
+}
 
 /// The short name of a data source written fully qualified, as Spark maps its built-in classes
 /// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
@@ -317,7 +335,7 @@ impl Session {
                 Box::new(move |m| m.properties.extend(properties.clone()))
             }
             AlterNamespaceAction::SetLocation(l) => {
-                let l = l.clone();
+                let l = qualified_namespace_location(l, &self.warehouse_dir()?);
                 Box::new(move |m| m.location = Some(l.clone()))
             }
             AlterNamespaceAction::SetComment(c) => {
@@ -561,27 +579,14 @@ impl Session {
                 column.comment.clone_from(&alias.comment);
             }
         }
-        // Spark checks the names after the aliases: a repeated one is `COLUMN_ALREADY_EXISTS`, ignoring case
-        // unless `caseSensitive` (then as written, else in lower case).
-        let mut seen = std::collections::BTreeSet::new();
-        for c in &columns {
-            let key = if case_sensitive {
-                c.name.clone()
-            } else {
-                c.name.to_lowercase()
-            };
-            if !seen.insert(key.clone()) {
-                return Err(krishiv_common::error::ColumnAlreadyExists {
-                    column_name: format!("`{key}`"),
-                }
-                .into());
-            }
-        }
+        // Spark checks the names after the aliases: a repeated one is `COLUMN_ALREADY_EXISTS`.
+        check_column_name_duplication(columns.iter().map(|c| c.name.as_str()), case_sensitive)?;
         let view = CatalogTable {
             namespace: name.namespace.clone(),
             name: name.name.clone(),
             managed: false,
             provider: String::new(),
+            provider_written: String::new(),
             location: PathBuf::new(),
             columns,
             options: BTreeMap::new(),
@@ -992,20 +997,23 @@ impl Session {
         let mut changed = (*table).clone();
         match &a.action {
             AlterTableAction::AddColumns(defs) => {
+                let mut added = Vec::with_capacity(defs.len());
                 for def in defs {
                     let ColumnName::Ident(ident) = &def.name else {
                         return Err(unsupported("IDENTIFIER() column names"));
                     };
-                    if changed
+                    added.push(ident);
+                }
+                // Spark checks the new and the existing names together (`AlterTableAddColumnsCommand`).
+                check_column_name_duplication(
+                    changed
                         .columns
                         .iter()
-                        .any(|c| c.name.eq_ignore_ascii_case(&ident.value))
-                    {
-                        return Err(krishiv_common::error::ColumnAlreadyExists {
-                            column_name: format!("`{}`", ident.value.to_lowercase()),
-                        }
-                        .into());
-                    }
+                        .map(|c| c.name.as_str())
+                        .chain(added.iter().map(|i| i.value.as_str())),
+                    env.analysis.conf.case_sensitive,
+                )?;
+                for (def, ident) in defs.iter().zip(added) {
                     // Spark alters the data schema: new columns go before the partition columns.
                     let at = changed.data_columns().count();
                     changed.columns.insert(
@@ -1271,13 +1279,15 @@ impl Session {
                 "partition column types in CREATE TABLE ... AS SELECT",
             ));
         }
-        let provider = self.provider_of(t.using.as_ref().map(|u| {
+        let using = t.using.as_ref().map(|u| {
             u.parts
                 .iter()
                 .map(|p| p.value.as_str())
                 .collect::<Vec<_>>()
                 .join(".")
-        }))?;
+        });
+        let provider_written = self.written_provider(using.clone());
+        let provider = self.provider_of(using)?;
         let name = self.table_name(&t.name, &env)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
@@ -1346,6 +1356,7 @@ impl Session {
             name: name.name.clone(),
             managed: !external,
             provider,
+            provider_written,
             location,
             columns: Vec::new(),
             options,
@@ -1364,20 +1375,23 @@ impl Session {
             Some(query) => self.create_table_as(table, query, mode, &layout).await?,
             None => {
                 table.columns = self.columns_of(t, original)?;
+                let mut typed = Vec::with_capacity(typed_partitions.len());
                 for c in &typed_partitions {
                     let ColumnName::Ident(ident) = &c.name else {
                         return Err(unsupported("IDENTIFIER() column names"));
                     };
-                    if table
+                    typed.push(ident);
+                }
+                // A typed partition column is a column of the table's schema: checked with the others.
+                check_column_name_duplication(
+                    table
                         .columns
                         .iter()
-                        .any(|t| t.name.eq_ignore_ascii_case(&ident.value))
-                    {
-                        return Err(krishiv_common::error::ColumnAlreadyExists {
-                            column_name: format!("`{}`", ident.value.to_lowercase()),
-                        }
-                        .into());
-                    }
+                        .map(|c| c.name.as_str())
+                        .chain(typed.iter().map(|i| i.value.as_str())),
+                    self.query_env().analysis.conf.case_sensitive,
+                )?;
+                for (c, ident) in typed_partitions.iter().zip(typed) {
                     table.columns.push(StoreColumn {
                         name: ident.value.clone(),
                         data_type: c.data_type.to_data_type()?,
@@ -1410,6 +1424,15 @@ impl Session {
             }
         }
         self.empty_frame().await
+    }
+
+    /// The provider as written in `using`, or `spark.sql.sources.default`'s
+    /// value: what a table's metadata prints (Spark keeps the case).
+    fn written_provider(&self, using: Option<String>) -> String {
+        using.unwrap_or_else(|| {
+            crate::conf::get(&self.state.conf.snapshot(), "spark.sql.sources.default")
+                .unwrap_or_else(|| "parquet".to_owned())
+        })
     }
 
     /// The provider named by `using`, or `spark.sql.sources.default`.
@@ -1451,15 +1474,6 @@ impl Session {
             let ColumnName::Ident(ident) = &def.name else {
                 return Err(unsupported("IDENTIFIER() column names"));
             };
-            if columns
-                .iter()
-                .any(|c| c.name.eq_ignore_ascii_case(&ident.value))
-            {
-                return Err(krishiv_common::error::ColumnAlreadyExists {
-                    column_name: format!("`{}`", ident.value.to_lowercase()),
-                }
-                .into());
-            }
             if def.generated.is_some() {
                 return Err(unsupported("generated columns"));
             }
@@ -1478,6 +1492,10 @@ impl Session {
                 comment: def.comment.clone(),
             });
         }
+        check_column_name_duplication(
+            columns.iter().map(|c| c.name.as_str()),
+            self.query_env().analysis.conf.case_sensitive,
+        )?;
         Ok(columns)
     }
 
@@ -1623,7 +1641,8 @@ impl Session {
         )
         .map_err(|e| e.error)?;
         let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-        self.create_table_from(table, &df, mode, layout).await
+        self.create_table_from(table, &df, mode, layout, &mut None)
+            .await
     }
 
     /// Writes `df` to the location of the new `table` (whose columns are
@@ -1635,6 +1654,7 @@ impl Session {
         df: &DataFrame,
         mode: CreateMode,
         layout: &LayoutRequest<'_>,
+        pre: &mut Option<Admitted>,
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
         let analysis = df.analyzed_in(self.query_env()).await?;
@@ -1715,7 +1735,7 @@ impl Session {
         } else {
             "errorifexists"
         };
-        let dirs = self.write_table_rows(&table, &df, write_mode).await?;
+        let dirs = self.write_table_rows(&table, &df, write_mode, pre).await?;
         if let Some(owned) = owned {
             owned.keep();
         }
@@ -1759,7 +1779,13 @@ impl Session {
                 .clone_from(&s.layout.partition_columns);
             layout.bucket.clone_from(&s.layout.bucket);
             options.clone_from(&s.options);
-            (s.columns.clone(), s.provider.clone())
+            // A view has no provider of its own: Spark gives the new table
+            // `spark.sql.sources.default` (`CreateTableLikeCommand`, `isViewLike`).
+            let provider = s
+                .view
+                .is_none()
+                .then(|| (s.provider.clone(), s.provider_written.clone()));
+            (s.columns.clone(), provider)
         } else if self.temp_entry_of(&source, &env)
             && let Some(entry) = self
                 .state
@@ -1782,20 +1808,28 @@ impl Session {
                         comment: None,
                     })
                     .collect(),
-                "parquet".to_owned(),
+                None,
             )
         } else {
             return Err(source.not_found());
         };
-        let provider = match &t.using {
-            Some(u) => self.provider_of(Some(
-                u.parts
+        let (provider, provider_written) = match &t.using {
+            Some(u) => {
+                let using = u
+                    .parts
                     .iter()
                     .map(|p| p.value.as_str())
                     .collect::<Vec<_>>()
-                    .join("."),
-            ))?,
-            None => source_provider,
+                    .join(".");
+                (self.provider_of(Some(using.clone()))?, using)
+            }
+            // `None`: a view, which has no provider of its own. The default
+            // is looked up only here, so an explicit `USING` never depends on it.
+            None => match source_provider {
+                Some(p) => p,
+                // Validated, and written as the setting has it (`CSV`).
+                None => (self.provider_of(None)?, self.written_provider(None)),
+            },
         };
         let external = t.location.is_some();
         let location = match &t.location {
@@ -1807,6 +1841,7 @@ impl Session {
             name: name.name.clone(),
             managed: !external,
             provider,
+            provider_written,
             location,
             columns,
             options,
@@ -2269,7 +2304,7 @@ impl Session {
         }
         let df = base.select(select);
         let mode = if overwrite { "overwrite" } else { "append" };
-        let written = self.write_table_rows(table, &df, mode).await;
+        let written = self.write_table_rows(table, &df, mode, &mut None).await;
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
         self.forget_cached(name);
@@ -2424,13 +2459,13 @@ impl Session {
                 // Built directly: a name with dots or a star is one plain column.
                 let by_name = df.select(order.iter().map(|h| {
                     crate::column::Column::new(krishiv_plan::Expr::new(
-                        krishiv_plan::ExprNode::Column(krishiv_plan::ColumnRef {
-                            name: vec![h.clone()],
-                            plan_id: None,
-                        }),
+                        krishiv_plan::ExprNode::Column(krishiv_plan::ColumnRef::new(vec![
+                            h.clone(),
+                        ])),
                     ))
                 }));
-                self.exec_write_v2(&by_name, spec, V2Mode::Append).await
+                self.exec_write_v2(&by_name, spec, V2Mode::Append, &mut None)
+                    .await
             }
             (SaveMode::Overwrite, true) => {
                 // Spark drops the table and creates it again. Everything that can
@@ -2471,7 +2506,7 @@ impl Session {
                     managed_location(&self.warehouse_dir()?, &name.namespace, &name.name);
                 let at =
                     self.locate_write_path(&location.display().to_string(), &spec.options, &env)?;
-                self.authorize_write_path(&at).await?;
+                self.authorize_write_path(&at, &spec.options).await?;
                 // A managed table's own directory goes with it; any other one in the way stays.
                 let own = self
                     .state
@@ -2488,11 +2523,30 @@ impl Session {
                 }
                 // What is left after this point is the write itself (query errors, I/O): as in
                 // Spark's V1 overwrite, a failure there leaves no table.
-                self.drop_named_table(&name, &env, true).await?;
-                self.exec_write_v2(df, spec, V2Mode::Create).await
+                // Admitted before the drop: a controller that refuses the write, or a caller that
+                // gives up while it queues, must not have lost the old table. The write takes
+                // this admission instead of asking again.
+                let mut pre = Some(self.admit_query(&analysis.env).await?);
+                let done = async {
+                    self.drop_named_table(&name, &env, true).await?;
+                    self.exec_write_v2(df, spec, V2Mode::Create, &mut pre).await
+                }
+                .await;
+                // Not taken by a write (the drop or the create failed first): settle its row. A
+                // statement dropped meanwhile drops `pre`, which closes its row `cancelled`.
+                if let Some(unrun) = pre.take() {
+                    match &done {
+                        Ok(()) => unrun.finish_ok(),
+                        Err(error) => unrun.fail(error),
+                    }
+                }
+                done
             }
             // `ErrorIfExists` on an existing table fails in the create.
-            _ => self.exec_write_v2(df, spec, V2Mode::Create).await,
+            _ => {
+                self.exec_write_v2(df, spec, V2Mode::Create, &mut None)
+                    .await
+            }
         }
     }
 
@@ -2548,6 +2602,7 @@ impl Session {
         df: &DataFrame,
         spec: V2WriteSpec,
         mode: V2Mode,
+        pre: &mut Option<Admitted>,
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
         let parsed = krishiv_sql::parse_multipart_identifier(&spec.table, &self.parser_options())
@@ -2582,6 +2637,7 @@ impl Session {
             return Err(unsupported("partitioned tables"));
         }
         let warehouse = self.warehouse_dir()?;
+        let provider_written = self.written_provider(spec.provider.clone());
         let provider = self.provider_of(spec.provider)?;
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
@@ -2611,6 +2667,7 @@ impl Session {
             name: name.name.clone(),
             managed: true,
             provider,
+            provider_written,
             location: managed_location(&warehouse, &name.namespace, &name.name),
             columns: Vec::new(),
             options,
@@ -2625,7 +2682,7 @@ impl Session {
             partition_by: &[],
             bucket: None,
         };
-        self.create_table_from(table, df, CreateMode::ErrorIfExists, &layout)
+        self.create_table_from(table, df, CreateMode::ErrorIfExists, &layout, pre)
             .await
     }
 
@@ -2637,6 +2694,7 @@ impl Session {
         table: &CatalogTable,
         df: &DataFrame,
         mode: &str,
+        pre: &mut Option<Admitted>,
     ) -> Result<Vec<String>, KrishivError> {
         if table.layout.bucket.is_some() {
             return Err(unsupported("writes to bucketed tables"));
@@ -2649,7 +2707,7 @@ impl Session {
             writer = writer.option(k, v);
         }
         writer
-            .save_reporting(&table.location.display().to_string())
+            .save_reporting(&table.location.display().to_string(), pre.take())
             .await
     }
 }
@@ -2949,14 +3007,14 @@ fn can_store(from: &DataType, to: &DataType) -> bool {
         )
     };
     // Anything atomic may be stored as a string.
-    let to_string = matches!(to, T::String)
+    let to_string = matches!(to, T::String | T::CollatedString(_))
         && (numeric(from)
             || matches!(
                 from,
                 T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary
             ));
     match (from, to) {
-        (T::Null, _) => true,
+        (T::Null, _) | (T::String | T::CollatedString(_), T::String | T::CollatedString(_)) => true,
         (a, b) if (numeric(a) && numeric(b)) || to_string => true,
         // Dates and timestamps among themselves.
         (T::Date, T::Timestamp | T::TimestampNtz)
@@ -3095,67 +3153,7 @@ fn clear_dir(dir: &Path) -> Result<(), KrishivError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use krishiv_types::{ArrayType, DecimalType};
-
-    #[test]
-    fn an_owned_directory_is_exclusive_and_reports_why_it_cannot_be_made() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("a").join("t");
-        let owned = OwnedDirectory::create(path.clone()).unwrap();
-        assert!(matches!(
-            OwnedDirectory::create(path.clone()),
-            Err(OwnedDirectoryError::Exists)
-        ));
-        drop(owned);
-        assert!(!path.exists(), "a directory not kept is removed again");
-        // A file where the parent should be.
-        let file = tmp.path().join("f");
-        std::fs::write(&file, b"x").unwrap();
-        assert!(matches!(
-            OwnedDirectory::create(file.join("t")),
-            Err(OwnedDirectoryError::Io(m)) if m.contains("cannot create")
-        ));
-        // A parent that exists but takes no new entries.
-        #[cfg(target_os = "linux")]
-        assert!(matches!(
-            OwnedDirectory::create(PathBuf::from("/proc/krishiv-owned-directory")),
-            Err(OwnedDirectoryError::Io(_))
-        ));
-    }
-
-    #[test]
-    fn ansi_store_assignment() {
-        use DataType as T;
-        assert!(can_store(&T::Integer, &T::Integer));
-        assert!(can_store(&T::Null, &T::Date));
-        assert!(can_store(&T::Integer, &T::Byte));
-        assert!(can_store(
-            &T::Long,
-            &T::Decimal(DecimalType::try_new(5, 2).unwrap())
-        ));
-        assert!(can_store(&T::Integer, &T::String));
-        assert!(can_store(&T::Date, &T::String));
-        assert!(can_store(&T::Date, &T::Timestamp));
-        assert!(!can_store(&T::String, &T::Binary));
-        assert!(!can_store(&T::String, &T::Integer));
-        assert!(!can_store(&T::String, &T::Date));
-        assert!(!can_store(&T::Boolean, &T::Integer));
-        assert!(can_store(&T::Timestamp, &T::Date));
-        let a = |t: T| T::Array(Arc::new(ArrayType::new(t, true)));
-        assert!(can_store(&a(T::Integer), &a(T::Long)));
-        assert!(!can_store(&a(T::String), &a(T::Long)));
-    }
-
-    #[test]
-    fn literal_text_strips_one_pair_of_quotes() {
-        assert_eq!(literal_text("'a b'"), "a b");
-        assert_eq!(literal_text("\"x\""), "x");
-        assert_eq!(literal_text(" true "), "true");
-        assert_eq!(literal_text("'"), "'");
-    }
-}
+mod tests;
 
 /// Why an [`OwnedDirectory`] could not be made.
 #[derive(Debug)]

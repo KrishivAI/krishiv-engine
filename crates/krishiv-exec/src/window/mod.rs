@@ -67,7 +67,7 @@ mod eval;
 mod frames;
 mod group_limit;
 /// UTC, the zone the tests run in unless they name another.
-#[cfg(all(test, not(loom)))]
+#[cfg(test)]
 fn utc_zone() -> krishiv_kernels::datetime::ZoneRef {
     krishiv_kernels::datetime::ZoneRef::Fixed(krishiv_kernels::datetime::FixedOffset(0))
 }
@@ -77,6 +77,7 @@ mod spill;
 mod stream;
 #[cfg(all(test, not(loom)))]
 mod tests;
+mod udaf;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -457,8 +458,13 @@ struct Env {
     /// `spark.sql.ansi.enabled`: overflow raises instead of wrapping or
     /// becoming NULL.
     ansi: bool,
+    /// `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates give NaN instead of NULL where Spark
+    /// divides by zero.
+    legacy: bool,
     /// The session time zone, for a year-month `RANGE` bound over a `TIMESTAMP` key.
     zone: krishiv_kernels::datetime::ZoneRef,
+    /// The session's aggregate UDFs, for window frames of one (ADR 0045).
+    udafs: Option<crate::aggregate::UdafEnv>,
 }
 
 impl std::fmt::Debug for Window {
@@ -636,7 +642,9 @@ impl Window {
                 input,
                 plan,
                 ansi,
+                legacy: false,
                 zone,
+                udafs: None,
             }),
             spill,
             partitions: AtomicU64::new(0),
@@ -655,7 +663,24 @@ impl Window {
         env: &crate::planner::eval::EvalEnv,
         spill: Option<SpillScope>,
     ) -> Result<Self> {
-        Self::with_zone(input, plan, env.ansi, env.zone_rules()?, spill)
+        let mut me = Self::with_zone(input, plan, env.ansi, env.zone_rules()?, spill)?;
+        let udafs = crate::aggregate::UdafEnv::of(env.udfs.as_ref(), env.zone);
+        // A worker without an aggregate UDF of the plan, or with another
+        // state under its version, refuses the plan before any row.
+        for f in &me.env.plan.functions {
+            if let WindowFunction::Aggregate(a) = &f.function {
+                crate::aggregate::check_udaf(a, udafs.as_ref())?;
+            }
+        }
+        // The environment was just built, so nothing shares it; an error here would be a bug, not a dropped flag.
+        let Some(e) = Arc::get_mut(&mut me.env) else {
+            return Err(internal(
+                "a window environment shared before its settings were set".to_owned(),
+            ));
+        };
+        e.udafs = udafs;
+        e.legacy = env.legacy_statistical_aggregate;
+        Ok(me)
     }
 
     /// [`Self::with_zone`] in UTC: the tests' constructor (production code names the session zone).
@@ -799,7 +824,15 @@ impl Window {
                     peer_start: &l.pending[i].peer_start[offset..offset + len],
                 })
                 .collect();
-            eval::evaluate(&self.env.plan, &unit, self.env.ansi, &self.env.zone)?
+            eval::evaluate_with(
+                &self.env.plan,
+                &unit,
+                self.env.ansi,
+                self.env.legacy,
+                &self.env.zone,
+                self.env.udafs.as_ref(),
+                Some(&mut l.reservation),
+            )?
         };
         // One output batch per slice: its input columns, then the slice of
         // each window column.

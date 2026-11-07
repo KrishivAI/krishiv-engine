@@ -21,7 +21,7 @@ use crate::error::Result;
 
 /// Maximum nesting depth of arrays and objects, matching Spark 4.2.0's
 /// `parse_json` (depth 1000 succeeds, depth 1001 fails).
-const MAX_NESTING_DEPTH: usize = 1000;
+pub(super) const MAX_NESTING_DEPTH: usize = 1000;
 
 /// Maximum decoded string value length in UTF-16 code units, matching Spark
 /// 4.2.0's `parse_json` (20,000,000 parses, 20,000,001 is malformed). A char
@@ -153,7 +153,7 @@ fn is_non_ascii_literal_continue(c: char) -> bool {
 ///
 /// Byte-identical to Spark 4.2.0 `parse_json`: keys in first-seen order in
 /// the dictionary (duplicates in one object are malformed), object fields
-/// ordered by key bytes with values in input order, the smallest widths that
+/// ordered by key (Java `String` order) with values in input order, the smallest widths that
 /// fit, short strings below 64 bytes, and Spark's integer/decimal/double
 /// number rules (see the module docs).
 #[derive(Debug, Clone, Copy, Default)]
@@ -1073,10 +1073,10 @@ impl<'t> Parser<'t> {
         self.splice_prefix(hdr, &prefix)
     }
 
-    /// Assembles an object prefix (fields sorted by key bytes, values already
+    /// Assembles an object prefix (fields sorted by key, Java order, values already
     /// in input order) and splices it over the placeholder.
     fn finish_object(&mut self, hdr: usize, mut fields: Vec<Field>) -> Result<(), KrishivError> {
-        fields.sort_by(|a, b| a.key.cmp(&b.key));
+        fields.sort_by(|a, b| super::key_order(&a.key, &b.key));
         let large = fields.len() > 255;
         let data = Self::data_start(hdr, self.text)?;
         let total = self

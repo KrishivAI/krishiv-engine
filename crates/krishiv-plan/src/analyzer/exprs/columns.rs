@@ -262,6 +262,7 @@ impl Resolver<'_> {
                 col: var,
                 qual: super::super::ops::no_qual(),
                 source: None,
+                duplicate: false,
             };
             return self.resolve_attr(&a, 1, &c.name, origin, None, cx, true);
         }
@@ -522,14 +523,20 @@ impl Resolver<'_> {
         let pick = |carried: Vec<Attr>, scope: &[Attr]| {
             let mut hits: Vec<Attr> = Vec::new();
             for a in carried {
-                let visible = scope.iter().any(|s| s.col.id == a.col.id);
-                if visible
+                let seen = scope.iter().find(|s| s.col.id == a.col.id);
+                if let Some(seen) = seen
                     && name.len() == 1
                     && same(&a.col.name, &name[0], cs)
                     && !hits.iter().any(|h| h.col.id == a.col.id)
                 {
-                    hits.push(a);
+                    let duplicate = a.duplicate || seen.duplicate;
+                    hits.push(Attr { duplicate, ..a });
                 }
+            }
+            // As `find`: a union input's repeat of a column does not count
+            // among several matches.
+            if hits.len() > 1 {
+                hits.retain(|a| !a.duplicate);
             }
             hits
         };
@@ -584,6 +591,11 @@ impl Resolver<'_> {
                 {
                     hits.push(a);
                 }
+            }
+            // Spark's `getCandidatesForResolution`: among several matches,
+            // a union input's re-aliased repeat of a column does not count.
+            if hits.len() > 1 {
+                hits.retain(|a| !a.duplicate);
             }
             match hits[..] {
                 [] => continue,
@@ -957,10 +969,7 @@ impl Resolver<'_> {
         let shown = Some(named_as(
             &parent,
             pretty(&base, None),
-            &crate::ColumnRef {
-                name: Vec::new(),
-                plan_id: None,
-            },
+            &crate::ColumnRef::new(Vec::new()),
             origin,
         ));
         Ok(Bound {
@@ -999,11 +1008,19 @@ impl Resolver<'_> {
             .iter()
             .flat_map(|r| r.hidden.iter().cloned())
             .collect();
+        // Only `HAVING` lends its aggregate to the subquery: in a select
+        // list or `ORDER BY`, Spark raises what the call raises in the
+        // subquery (`INVALID_WHERE_CONDITION`).
+        let having = cx
+            .agg_scope
+            .filter(|_| cx.op == "Filter")
+            .map(Arc::<[Attr]>::from);
         outer.push(super::super::resolve::Level {
             scope: scope.into(),
             lateral: false,
             hidden: hidden.into(),
             fallback,
+            having,
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }

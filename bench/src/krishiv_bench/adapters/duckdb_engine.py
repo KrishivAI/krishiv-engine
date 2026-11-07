@@ -67,7 +67,9 @@ class DuckDBEngine(Engine):
             if self.null_order:
                 con.execute(f"SET default_null_order='{self.null_order}'")
             for t in dataset.tables:
-                con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{table_source(dataset.root, t)}')")
+                con.execute(
+                    f"CREATE VIEW {t} AS SELECT * FROM read_parquet({sql_string(table_source(dataset.root, t))})"
+                )
         except BaseException:
             self.teardown()  # the caller's cleanup scope starts only after setup() returns
             raise
@@ -122,6 +124,11 @@ class DuckDBEngine(Engine):
         if self.con:
             self.con.close()
         shutil.rmtree(data_root() / "tmp" / f"duckdb-{os.getpid()}", ignore_errors=True)
+
+
+def sql_string(text: str) -> str:
+    """``text`` as a DuckDB single-quoted string literal (standard SQL: a quote is doubled, a backslash is literal)."""
+    return "'" + text.replace("'", "''") + "'"
 
 
 def table_source(root, table: str) -> str:

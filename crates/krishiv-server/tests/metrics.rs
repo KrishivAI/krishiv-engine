@@ -16,7 +16,7 @@ use krishiv_exec::{
     BUCKETS, CATALOGUE, MetricKind, MetricSource, MetricsRegistry, QueryOutcome, Status,
     WorkloadClass,
 };
-use krishiv_server::metrics::{SnapshotProvider, router_with_metrics};
+use krishiv_server::metrics::{SnapshotProvider, router_with_metrics, router_with_metrics_auth};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -33,6 +33,7 @@ fn full_registry() -> Arc<MetricsRegistry> {
         arbitration_aborts: 1,
         cache_hits: 3,
         cache_misses: 1,
+        cancel_latency_secs: None,
     });
     registry.fold(&QueryOutcome {
         class: WorkloadClass::Batch,
@@ -44,6 +45,20 @@ fn full_registry() -> Arc<MetricsRegistry> {
         arbitration_aborts: 0,
         cache_hits: 0,
         cache_misses: 0,
+        cancel_latency_secs: None,
+    });
+    // A cancelled query with a reason: the cancel-latency histogram's sample.
+    registry.fold(&QueryOutcome {
+        class: WorkloadClass::Interactive,
+        status: Status::Cancelled,
+        error_class: Some("OPERATION_CANCELED"),
+        duration_secs: 0.1,
+        metrics: &krishiv_exec::QueryMetrics::default(),
+        arbitration_spills: 0,
+        arbitration_aborts: 0,
+        cache_hits: 0,
+        cache_misses: 0,
+        cancel_latency_secs: Some(0.01),
     });
     for class in ["interactive", "batch", "background", "agent"] {
         registry
@@ -401,7 +416,7 @@ async fn scraping_does_not_change_counters() {
     assert!(first.starts_with("HTTP/1.1 200"), "{first}");
     assert_eq!(body(&first), body(&second));
     assert_eq!(registry.snapshot(), before);
-    assert_eq!(registry.fold_count(), 2);
+    assert_eq!(registry.fold_count(), 3);
 }
 
 #[tokio::test]
@@ -420,6 +435,7 @@ async fn label_values_escape() {
         arbitration_aborts: 0,
         cache_hits: 0,
         cache_misses: 0,
+        cancel_latency_secs: None,
     });
     let addr = serve(router_with_metrics(true, provider(&registry))).await;
     let response = get(addr, "/metrics").await;
@@ -440,4 +456,93 @@ async fn label_values_escape() {
             .as_deref(),
         Some(MetricKind::Histogram.as_str())
     );
+}
+
+/// `GET path` carrying `Authorization: <authorization>` when given.
+async fn get_authorized(
+    addr: std::net::SocketAddr,
+    path: &str,
+    authorization: Option<&str>,
+) -> String {
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    let header = authorization.map_or_else(String::new, |a| format!("Authorization: {a}\r\n"));
+    let req =
+        format!("GET {path} HTTP/1.1\r\nHost: localhost\r\n{header}Connection: close\r\n\r\n");
+    s.write_all(req.as_bytes()).await.unwrap();
+    let mut out = Vec::new();
+    tokio::time::timeout(std::time::Duration::from_secs(10), s.read_to_end(&mut out))
+        .await
+        .expect("read timed out")
+        .unwrap();
+    String::from_utf8(out).unwrap()
+}
+
+#[tokio::test]
+async fn metrics_with_a_token_needs_the_bearer_header() {
+    let registry = full_registry();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted: SnapshotProvider = {
+        let (registry, calls) = (Arc::clone(&registry), Arc::clone(&calls));
+        Arc::new(move || {
+            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            registry.snapshot()
+        })
+    };
+    let addr = serve(router_with_metrics_auth(
+        true,
+        counted,
+        Some("s3cret-token"),
+    ))
+    .await;
+    for bad in [
+        None,
+        Some("Bearer wrong"),
+        Some("Bearer s3cret-toke"),
+        Some("Basic s3cret-token"),
+    ] {
+        let r = get_authorized(addr, "/metrics", bad).await;
+        assert!(r.starts_with("HTTP/1.1 401"), "{bad:?}: {r}");
+        assert!(r.to_lowercase().contains("www-authenticate: bearer"), "{r}");
+        assert_eq!(body(&r), "{\"error\":\"unauthorized\"}");
+    }
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a refused scrape takes no snapshot"
+    );
+    let ok = get_authorized(addr, "/metrics", Some("Bearer s3cret-token")).await;
+    assert!(ok.starts_with("HTTP/1.1 200"), "{ok}");
+    assert!(
+        body(&ok).contains("krishiv_query_duration_seconds"),
+        "{}",
+        body(&ok)
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn metrics_without_a_token_is_unchanged_and_disabled_is_404_for_everyone() {
+    let registry = full_registry();
+    let open = serve(router_with_metrics_auth(true, provider(&registry), None)).await;
+    let r = get_authorized(open, "/metrics", None).await;
+    assert!(r.starts_with("HTTP/1.1 200"), "{r}");
+    // Disabled: a 404 with or without a token configured, with or without credentials.
+    for token in [None, Some("s3cret-token")] {
+        let off = serve(router_with_metrics_auth(false, provider(&registry), token)).await;
+        for auth in [None, Some("Bearer s3cret-token")] {
+            let r = get_authorized(off, "/metrics", auth).await;
+            assert!(r.starts_with("HTTP/1.1 404"), "{token:?} {auth:?}: {r}");
+        }
+    }
+    // An empty token refuses everyone rather than admitting an empty credential.
+    let bad = serve(router_with_metrics_auth(
+        true,
+        provider(&registry),
+        Some(""),
+    ))
+    .await;
+    for auth in [None, Some("Bearer "), Some("Bearer x")] {
+        let r = get_authorized(bad, "/metrics", auth).await;
+        assert!(r.starts_with("HTTP/1.1 401"), "{auth:?}: {r}");
+    }
 }

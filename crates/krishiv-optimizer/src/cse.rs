@@ -158,9 +158,10 @@ fn rewrite_node(node: Arc<LogicalPlan>, next: &mut Fresh<'_>) -> Arc<LogicalPlan
         PlanNode::Project { input, exprs } => rewrite_project(&node, input, exprs, next),
         PlanNode::Filter { input, predicate } => rewrite_filter(&node, input, predicate, next),
         PlanNode::Aggregate { .. } => rewrite_aggregate(&node, next),
-        PlanNode::Union { .. } | PlanNode::SetOp { .. } | PlanNode::WithCte { .. } => {
-            narrow_positional(node)
-        }
+        PlanNode::Union { .. }
+        | PlanNode::SetOp { .. }
+        | PlanNode::WithCte { .. }
+        | PlanNode::UnionLoop { .. } => narrow_positional(node),
         _ => node,
     }
 }
@@ -208,9 +209,10 @@ fn narrowed(p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     })
 }
 
-/// A union, set operation or `WITH` reads its inputs by position (or, for
-/// a CTE reference, by the definition's attributes): their outputs must be
-/// the ones the query wrote, without extracted columns.
+/// A union, set operation, recursive CTE (its anchor and recursive term)
+/// or `WITH` reads its inputs by position (or, for a CTE reference, by the
+/// definition's attributes): their outputs must be the ones the query
+/// wrote, without extracted columns.
 fn narrow_positional(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     let mut out = LogicalPlan::clone(&node);
     match &mut out.node {
@@ -228,6 +230,12 @@ fn narrow_positional(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
                 c.plan = narrowed(&c.plan);
             }
         }
+        PlanNode::UnionLoop {
+            anchor, recursive, ..
+        } => {
+            *anchor = narrowed(anchor);
+            *recursive = narrowed(recursive);
+        }
         _ => return node,
     }
     let changed = match (&node.node, &out.node) {
@@ -240,6 +248,18 @@ fn narrow_positional(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
             },
             PlanNode::SetOp {
                 left: c, right: d, ..
+            },
+        )
+        | (
+            PlanNode::UnionLoop {
+                anchor: a,
+                recursive: b,
+                ..
+            },
+            PlanNode::UnionLoop {
+                anchor: c,
+                recursive: d,
+                ..
             },
         ) => !Arc::ptr_eq(a, c) || !Arc::ptr_eq(b, d),
         (PlanNode::WithCte { ctes: a, .. }, PlanNode::WithCte { ctes: b, .. }) => {

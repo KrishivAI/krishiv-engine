@@ -233,9 +233,17 @@ fn a_correlated_limit_keeps_its_order_and_partitions_by_clean_keys() {
     assert_eq!(rows(&s, desc), ["4"]);
     let asc = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y ASC LIMIT 1)";
     assert_eq!(rows(&s, asc), ["1", "4"]);
-    // An outer side reading inner columns is refused, never partitioned on it.
+    // An outer side reading inner columns is never partitioned on: the
+    // rows rank within each outer value, through the domain.
     let mixed = "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g + lc.y = lt.id + lc.y ORDER BY lc.k DESC LIMIT 1)";
-    assert!(failure(&s, mixed).contains("LIMIT of this form"));
+    assert_eq!(rows(&s, mixed), ["4"]);
+    // So does a correlation that is not an equality.
+    let below =
+        "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g > lt.id ORDER BY y LIMIT 1)";
+    assert!(rows(&s, below).is_empty());
+    let four =
+        "SELECT id FROM lt WHERE 4 IN (SELECT lc.k FROM lc WHERE lc.g > lt.id ORDER BY y LIMIT 1)";
+    assert_eq!(rows(&s, four), ["1", "2", "3"]);
     // A sort below a derived table still decides the ranks.
     let derived = "SELECT id FROM lt WHERE k IN (SELECT k FROM (SELECT lc.k FROM lc WHERE lc.g = lt.id ORDER BY y DESC) q LIMIT 1)";
     assert_eq!(rows(&s, derived), ["4"]);
@@ -337,16 +345,13 @@ fn correlated_shapes_without_a_rewrite_are_refused() {
             "not equalities",
         ),
         (
-            "SELECT id FROM lt WHERE k IN (SELECT lc.k FROM lc WHERE lc.g > lt.id ORDER BY y LIMIT 1)",
-            "LIMIT of this form",
-        ),
-        (
+            // A single join (Spark 4.x's default): two groups for id 1.
             "SELECT id, (SELECT count(*) FROM lc WHERE lc.g = lt.id GROUP BY lc.y + 1) FROM lt",
-            "with GROUP BY",
+            "SCALAR_SUBQUERY_TOO_MANY_ROWS",
         ),
         (
             "SELECT id, (SELECT sum(v) FROM (SELECT lc.k v FROM lc WHERE lc.g = lt.id UNION ALL SELECT k FROM lc) GROUP BY v) FROM lt",
-            "with GROUP BY",
+            "SCALAR_SUBQUERY_TOO_MANY_ROWS",
         ),
         (
             "SELECT id, (SELECT c FROM (SELECT count(*) c FROM lc WHERE lc.g = lt.id GROUP BY lc.g) q) FROM lt",

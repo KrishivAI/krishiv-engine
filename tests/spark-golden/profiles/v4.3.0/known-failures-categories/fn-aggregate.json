@@ -1,0 +1,28 @@
+{
+  "category": "fn-aggregate",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "The feature WITHIN GROUP",
+      "order": 370
+    },
+    {
+      "family": [
+        "agg",
+        "sketch"
+      ],
+      "order": 420
+    },
+    {
+      "detail": "max_by and min_by|Max of Struct|Min of Struct",
+      "order": 550
+    },
+    {
+      "file": "^postgreSQL/aggregates_part1$",
+      "order": 670
+    }
+  ],
+  "summary": "aggregate and sketch functions beyond P2a, WITHIN GROUP",
+  "task": "P2-T032"
+}

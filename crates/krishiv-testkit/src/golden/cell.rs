@@ -283,6 +283,7 @@ impl CellFormat {
                 entries.sort_unstable_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
                 format!("{{{}}}", entries.join(","))
             }
+            Cell::Variant(m, v) => variant_json(m, v, &self.zone),
             Cell::Struct(f) => format!(
                 "{{{}}}",
                 f.iter()
@@ -291,6 +292,18 @@ impl CellFormat {
                     .join(",")
             ),
         }
+    }
+}
+
+/// A variant's JSON in `zone`; bytes that are not a variant show the error.
+fn variant_json(metadata: &[u8], value: &[u8], zone: &TimeZone) -> String {
+    let rules = krishiv_kernels::datetime::ZoneRef::Named(zone.clone());
+    let mut out = String::new();
+    match krishiv_types::variant::VariantRef::new(metadata, value)
+        .and_then(|v| krishiv_kernels::variant::write_json(&v, &rules, &mut out))
+    {
+        Ok(()) => out,
+        Err(e) => format!("<{e}>"),
     }
 }
 
@@ -340,6 +353,9 @@ pub enum Cell {
     Map(Vec<(Cell, Cell)>),
     /// STRUCT: field names and values.
     Struct(Vec<(String, Cell)>),
+    /// VARIANT: its metadata and value bytes, printed as Spark's
+    /// `VariantVal.toJson` in the session zone, at the top and nested alike.
+    Variant(Vec<u8>, Vec<u8>),
 }
 
 /// Render a top-level row as Spark does (`NULL` for nulls).

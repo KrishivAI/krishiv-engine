@@ -1,0 +1,19 @@
+{
+  "cases": {
+    "subqueries": [
+      6,
+      8,
+      21,
+      23,
+      25,
+      27,
+      30,
+      32,
+      33,
+      34,
+      36
+    ]
+  },
+  "file": "subquery/in-subquery/in-limit",
+  "format_version": 1
+}

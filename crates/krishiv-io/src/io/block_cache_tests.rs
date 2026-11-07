@@ -697,6 +697,172 @@ async fn fetch_buffers_are_reserved_from_the_pool() {
     assert_eq!(root.reserved() as u64, cache.memory_used());
 }
 
+/// Blocks read back from the disk tier are held until the output is assembled, so they are reserved
+/// from the pool too (#432 follow-up): a range of more blocks than the pool holds is refused and
+/// answered by the plain read, and every reservation is returned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocks_read_from_disk_are_reserved_from_the_pool() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let tmp = tempfile::tempdir().unwrap();
+    // A disk-only cache: nothing is held in the memory tier.
+    let (inner, cache, store) = direct(tmp.path(), 1 << 22, 0);
+    let a = Path::from("o");
+    let data = pattern(1 << 20, 7);
+    inner.put(&a, data.clone().into()).await.unwrap();
+    let read = |range: std::ops::Range<u64>| {
+        let mut options = sized(1 << 20);
+        options.range = Some(object_store::GetRange::Bounded(range));
+        let (store, a) = (&store, a.clone());
+        async move {
+            store
+                .get_opts(&a, options)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap()
+        }
+    };
+    // Warm four blocks onto the disk before a pool is attached.
+    let warm = read(0..4 * BLOCK).await;
+    assert_eq!(&warm[..], &data[..usize::try_from(4 * BLOCK).unwrap()]);
+    let root = TreePool::new(&MemoryConfig {
+        limit: Some(2 * usize::try_from(BLOCK).unwrap()),
+        quantum: 1,
+        spill_scratch_reserve: 0,
+        resident_guard: true,
+        ..MemoryConfig::default()
+    });
+    let pool: Arc<dyn MemoryPool> = Arc::clone(&root) as Arc<dyn MemoryPool>;
+    cache.attach_pool(&pool);
+    let errors = cache.stats().errors;
+    let big = read(0..4 * BLOCK).await;
+    assert_eq!(&big[..], &data[..usize::try_from(4 * BLOCK).unwrap()]);
+    assert!(
+        cache.stats().errors > errors,
+        "four disk blocks do not fit a two-block pool: refused, answered by the plain read"
+    );
+    assert_eq!(root.reserved(), 0, "no reservation is left behind");
+    // Two blocks fit: served from the disk tier, and the reservation is returned.
+    let hits = cache.stats().disk_hits;
+    let two = read(0..2 * BLOCK).await;
+    assert_eq!(&two[..], &data[..usize::try_from(2 * BLOCK).unwrap()]);
+    assert!(cache.stats().disk_hits >= hits + 2);
+    assert_eq!(root.reserved(), 0);
+}
+
+/// A block read back from disk that the memory tier keeps is charged once, in the tier (review of
+/// #533): two blocks fit a two-block pool, they are not charged again as the read's held blocks.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_disk_block_kept_in_memory_is_charged_once() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, cache, store) = direct(tmp.path(), 1 << 22, 4 << 20);
+    let a = Path::from("o");
+    let data = pattern(1 << 20, 9);
+    inner.put(&a, data.clone().into()).await.unwrap();
+    let read = |range: std::ops::Range<u64>| {
+        let mut options = sized(1 << 20);
+        options.range = Some(object_store::GetRange::Bounded(range));
+        let (store, a) = (&store, a.clone());
+        async move {
+            store
+                .get_opts(&a, options)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap()
+        }
+    };
+    read(0..2 * BLOCK).await;
+    let root = TreePool::new(&MemoryConfig {
+        limit: Some(2 * usize::try_from(BLOCK).unwrap()),
+        quantum: 1,
+        spill_scratch_reserve: 0,
+        resident_guard: true,
+        ..MemoryConfig::default()
+    });
+    let pool: Arc<dyn MemoryPool> = Arc::clone(&root) as Arc<dyn MemoryPool>;
+    // Attaching empties the memory tier: the two blocks are on disk only.
+    cache.attach_pool(&pool);
+    let (errors, hits, evictions) = (
+        cache.stats().errors,
+        cache.stats().disk_hits,
+        cache.stats().evictions,
+    );
+    let got = read(0..2 * BLOCK).await;
+    assert_eq!(&got[..], &data[..usize::try_from(2 * BLOCK).unwrap()]);
+    assert_eq!(cache.stats().errors, errors, "no refusal: charged once");
+    assert_eq!(
+        cache.stats().evictions,
+        evictions,
+        "nothing evicted to make room"
+    );
+    assert!(cache.stats().disk_hits >= hits + 2);
+    assert_eq!(root.reserved() as u64, cache.memory_used());
+}
+
+/// `reserve_held` makes room by evicting the memory tier's oldest blocks while that can cover the
+/// request, and gives up (keeping the tier) when the tier holds less than the request.
+#[test]
+fn reserve_held_evicts_only_when_the_tier_can_cover_it() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let tmp = tempfile::tempdir().unwrap();
+    let (_inner, cache, _store) = direct(tmp.path(), 1 << 22, 4 << 20);
+    let block = usize::try_from(BLOCK).unwrap();
+    let root = TreePool::new(&MemoryConfig {
+        limit: Some(2 * block),
+        quantum: 1,
+        spill_scratch_reserve: 0,
+        resident_guard: true,
+        ..MemoryConfig::default()
+    });
+    let pool: Arc<dyn MemoryPool> = Arc::clone(&root) as Arc<dyn MemoryPool>;
+    cache.attach_pool(&pool);
+    let kept = Bytes::from(vec![7u8; block]);
+    assert!(cache.remember(1, &kept));
+    assert_eq!(cache.memory_used(), BLOCK);
+    // One block of the pool is a fetch in flight: the tier plus the fetch fill it.
+    assert!(cache.reserve_fetch(block));
+    let evictions = cache.stats().evictions;
+    // A held block needs room: the tier's one block goes, and the request is granted.
+    assert!(cache.reserve_held(block));
+    assert_eq!(cache.stats().evictions, evictions + 1);
+    assert_eq!(cache.memory_used(), 0);
+    // The tier is empty and the pool full: nothing left to evict, the request is refused.
+    assert!(!cache.reserve_held(block));
+    assert_eq!(cache.stats().evictions, evictions + 1);
+    cache.release_fetch(2 * block);
+    assert_eq!(root.reserved(), 0);
+}
+
+/// A block the pool cannot hold even after the tier's others are evicted is not kept in memory.
+#[test]
+fn remember_reports_a_block_the_pool_would_not_grant() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    let tmp = tempfile::tempdir().unwrap();
+    let (_inner, cache, _store) = direct(tmp.path(), 1 << 22, 4 << 20);
+    let block = usize::try_from(BLOCK).unwrap();
+    let root = TreePool::new(&MemoryConfig {
+        limit: Some(block),
+        quantum: 1,
+        spill_scratch_reserve: 0,
+        resident_guard: true,
+        ..MemoryConfig::default()
+    });
+    let pool: Arc<dyn MemoryPool> = Arc::clone(&root) as Arc<dyn MemoryPool>;
+    cache.attach_pool(&pool);
+    // The whole pool is a fetch in flight, so the block has no room and nothing else to evict.
+    assert!(cache.reserve_fetch(block));
+    assert!(!cache.remember(2, &Bytes::from(vec![1u8; block])));
+    assert_eq!(cache.memory_used(), 0);
+    cache.release_fetch(block);
+    // With the pool free again the same block is kept.
+    assert!(cache.remember(2, &Bytes::from(vec![1u8; block])));
+    assert_eq!(cache.memory_used(), BLOCK);
+}
+
 /// A read with many separate runs of missing blocks fetches them all, a few at a time.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn many_runs_are_fetched_within_the_concurrency_bound() {
@@ -747,6 +913,40 @@ fn caches_never_share_or_empty_a_directory() {
     drop((first, second));
 }
 
+/// One cache per engine runtime (design P2-E1 R3): a second runtime in the
+/// process makes a directory of its own, and the sweep at start removes a
+/// dead cache's directory (lock free, older than a minute) while both live
+/// ones stay.
+#[test]
+fn a_dead_directory_goes_and_live_ones_stay() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = || BlockCacheConfig {
+        dir: tmp.path().to_path_buf(),
+        disk_bytes: 1 << 20,
+        memory_bytes: 0,
+        block_bytes: BLOCK,
+    };
+    // A crashed cache: its lock file is free and ten minutes old.
+    let dead = tmp.path().join("p1-7-00000000000000ab");
+    std::fs::create_dir_all(&dead).unwrap();
+    std::fs::write(dead.join("x.blk"), b"old").unwrap();
+    let lock = std::fs::File::create(dead.join(".lock")).unwrap();
+    lock.set_modified(std::time::SystemTime::now() - Duration::from_secs(600))
+        .unwrap();
+    drop(lock);
+    let first = BlockCache::new(config()).unwrap();
+    assert!(!dead.exists(), "the dead directory was swept");
+    let second = BlockCache::new(config()).unwrap();
+    let live: Vec<_> = std::fs::read_dir(tmp.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .collect();
+    assert_eq!(live.len(), 2, "{live:?}");
+    assert!(live.iter().all(|d| d.join(".lock").exists()));
+    drop((first, second));
+}
+
 /// A failure of the store is the store's answer, once: it is not asked again by the plain read.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_store_failure_is_returned_not_retried() {
@@ -765,4 +965,76 @@ async fn a_store_failure_is_returned_not_retried() {
         0,
         "a store failure is not a cache error"
     );
+}
+
+/// E15: a block fetched with one credential scope is never served to another, so a cache hit
+/// cannot hand principal B bytes that only principal A's credentials could read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn blocks_are_shared_only_within_a_credential_scope() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, cache, _) = direct(tmp.path(), 1 << 20, 1 << 20);
+    let a = Path::from("d/a");
+    inner
+        .put(&a, Bytes::from_static(b"0123456789").into())
+        .await
+        .unwrap();
+    let store = |scope: Option<&CacheScope>| {
+        let inner = Arc::clone(&inner) as Arc<dyn ObjectStore>;
+        match scope {
+            Some(s) => CachingStore::with_scope(inner, "s3://direct", Arc::clone(&cache), s),
+            None => CachingStore::new(inner, "s3://direct", Arc::clone(&cache)),
+        }
+    };
+    let read = async |s: &CachingStore| {
+        let before = cache.stats().misses;
+        let got = s
+            .get_opts(
+                &a,
+                GetOptions {
+                    range: Some(object_store::GetRange::Bounded(1..3)),
+                    ..sized(10)
+                },
+            )
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(&got[..], b"12");
+        cache.stats().misses - before
+    };
+    let p = |n: &str| CacheScope::Principal(n.to_owned());
+    // The same principal's second store hits the first one's block.
+    assert_eq!(read(&store(Some(&p("alice")))).await, 1);
+    assert_eq!(read(&store(Some(&p("alice")))).await, 0);
+    // Another principal misses and goes to the store.
+    assert_eq!(read(&store(Some(&p("bob")))).await, 1);
+    // An explicit shared scope is its own scope, not a wildcard over the others.
+    assert_eq!(read(&store(Some(&CacheScope::Shared))).await, 1);
+    assert_eq!(read(&store(Some(&CacheScope::Shared))).await, 0);
+    // No scope given: every store is isolated, even over the same identity.
+    assert_eq!(read(&store(None)).await, 1);
+    assert_eq!(read(&store(None)).await, 1);
+}
+
+/// Key fields are length-prefixed: text with separators cannot shift into the next field.
+#[test]
+fn key_fields_cannot_shift_into_each_other() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (inner, cache, _) = direct(tmp.path(), 1 << 20, 1 << 20);
+    let store = |identity: &str, scope: &str| {
+        CachingStore::with_scope(
+            Arc::clone(&inner) as Arc<dyn ObjectStore>,
+            identity,
+            Arc::clone(&cache),
+            &CacheScope::Principal(scope.to_owned()),
+        )
+    };
+    let p = Path::from("d/a");
+    let k1 = store("s3://b", "x\0y").block_key(&p, "i", 0);
+    let k2 = store("s3://b\0x", "y").block_key(&p, "i", 0);
+    assert_ne!(k1, k2);
+    let k3 = store("s3://b", "x").block_key(&Path::from("d/a"), "i\0", 0);
+    let k4 = store("s3://b", "x").block_key(&Path::from("d/a"), "i", 0);
+    assert_ne!(k3, k4);
 }

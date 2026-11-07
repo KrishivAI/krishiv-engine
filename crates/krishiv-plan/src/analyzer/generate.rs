@@ -60,6 +60,12 @@ fn generated(kind: GeneratorKind, ty: &DataType) -> Option<Vec<(String, DataType
             ));
             Some(cols)
         }
+        // Spark's `VariantExplode.elementSchema`.
+        (GeneratorKind::VariantExplode, DataType::Variant) => Some(vec![
+            ("pos".to_owned(), DataType::Integer, false),
+            ("key".to_owned(), DataType::String, true),
+            ("value".to_owned(), DataType::Variant, false),
+        ]),
         (GeneratorKind::Inline, DataType::Array(a)) => match a.element_type() {
             DataType::Struct(s) => Some(
                 s.fields()
@@ -105,7 +111,24 @@ impl Resolver<'_> {
         let rels = [&c];
         let cx = Self::cx(&c.out, &rels, env, "Generate");
         let arg = &self.stack_rows(arg, &cx)?;
-        let b = self.bind(arg, &cx)?;
+        let mut b = self.bind(arg, &cx)?;
+        // `variant_explode` expects a VARIANT: an untyped NULL is cast to one
+        // (and gives no rows), as `ExpectsInputTypes` casts it.
+        if kind == GeneratorKind::VariantExplode
+            && matches!(b.ty.data_type, None | Some(DataType::Null))
+        {
+            let cast = Expr::new(ExprNode::Cast {
+                expr: Arc::clone(&b.expr),
+                to: DataType::Variant,
+                mode: crate::CastMode::Legacy,
+            })
+            .with_origin(b.expr.origin);
+            b = Bound {
+                ty: super::exprs::arg_type(DataType::Variant, true),
+                expr: Arc::new(cast),
+                ..b
+            };
+        }
         if super::ops::has_generator(&b.expr) {
             return Err(AnalysisError::new(
                 UnsupportedGeneratorNestedInExpressions {
@@ -143,6 +166,7 @@ impl Resolver<'_> {
                     col: col.clone(),
                     qual: super::ops::no_qual(),
                     source: None,
+                    duplicate: false,
                 });
                 let below = self.projection(origin, &c, items, out);
                 (below, col_expr(&col, Origin::UNKNOWN))
@@ -160,6 +184,7 @@ impl Resolver<'_> {
             col: col.clone(),
             qual: Arc::clone(&qual),
             source: None,
+            duplicate: false,
         }));
         let node = PlanNode::Generate {
             input: Arc::clone(&below.plan),
@@ -352,6 +377,7 @@ impl Resolver<'_> {
         let Some(cols) = b.ty.data_type.as_ref().and_then(|ty| generated(kind, ty)) else {
             let required = match kind {
                 GeneratorKind::Inline => "\"ARRAY<STRUCT>\"".to_owned(),
+                GeneratorKind::VariantExplode => "\"VARIANT\"".to_owned(),
                 _ => "(\"ARRAY\" or \"MAP\")".to_owned(),
             };
             let shown = pretty(&b.expr, None);
@@ -432,17 +458,7 @@ impl ExtractedGenerator {
 }
 
 fn generator_kind(name: &str) -> Option<(GeneratorKind, bool)> {
-    let (base, outer) = match name.strip_suffix("_outer") {
-        Some(base) => (base, true),
-        None => (name, false),
-    };
-    let kind = match base {
-        "explode" => GeneratorKind::Explode,
-        "posexplode" => GeneratorKind::PosExplode,
-        "inline" => GeneratorKind::Inline,
-        _ => return None,
-    };
-    Some((kind, outer))
+    GeneratorKind::of_name(name)
 }
 
 impl Resolver<'_> {
@@ -603,6 +619,7 @@ impl Resolver<'_> {
                 col: col.clone(),
                 qual: Arc::clone(&qual),
                 source: None,
+                duplicate: false,
             })
             .collect();
         let mut out = carried;

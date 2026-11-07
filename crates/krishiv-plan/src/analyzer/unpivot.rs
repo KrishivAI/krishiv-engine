@@ -219,6 +219,7 @@ impl Resolver<'_> {
                     col: col.clone(),
                     qual: no_qual(),
                     source: None,
+                    duplicate: false,
                 }),
         );
         let node = PlanNode::Expand {
@@ -241,11 +242,8 @@ impl Resolver<'_> {
                 .iter()
                 .map(|name| {
                     Arc::new(
-                        Expr::new(ExprNode::Column(ColumnRef {
-                            name: vec![name.clone()],
-                            plan_id: None,
-                        }))
-                        .with_origin(p.origin),
+                        Expr::new(ExprNode::Column(ColumnRef::new(vec![name.clone()])))
+                            .with_origin(p.origin),
                     )
                 })
                 .collect(),

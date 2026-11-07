@@ -11,11 +11,10 @@ use krishiv_plan::{
     SortDirection, SortOrder, WindowSpecRef,
 };
 
-use super::aggregate::{aggregate_expr, lower};
+use super::aggregate::{aggregate_expr, lower, udaf_state};
 use super::build::{OrderKey, Planned, Planner, internal, list, orders, unsupported};
 use super::properties::Distribution;
 use crate::aggregate::AggregateFunction;
-use crate::aggregate::is_moment;
 use crate::error::Result;
 use crate::operator::Source;
 use crate::operators::SortKey;
@@ -301,13 +300,6 @@ impl Planner<'_> {
         }
         let lowered =
             lower(c.f).ok_or_else(|| unsupported(&format!("the window aggregate {name}")))?;
-        // The moment aggregates have no window form yet: refused, never
-        // computed as another function. The percentile family and
-        // `approx_count_distinct` have none either: the frame evaluator
-        // only runs the aggregates it knows.
-        if is_moment(&lowered.function) {
-            return Err(unsupported(&format!("the window aggregate {name}")));
-        }
         if matches!(
             lowered.function,
             AggregateFunction::PercentileApprox { .. }
@@ -334,19 +326,24 @@ impl Planner<'_> {
         if c.f.distinct {
             return Err(unsupported("DISTINCT window aggregates"));
         }
-        Ok(WindowFunction::Aggregate(
-            aggregate_expr(
-                function,
-                args.to_vec(),
-                // A window applies the call's filter itself (as the
-                // `WindowFunctionPlan`'s own filter column); the accumulator's
-                // mask stays empty.
-                None,
-                &input.schema,
-                c.output.name.clone(),
-            )?
-            .with_array_result(&c.output.data_type.to_arrow()),
-        ))
+        let udf = matches!(function, AggregateFunction::Udf(_));
+        let expr = aggregate_expr(
+            function,
+            args.to_vec(),
+            // A window applies the call's filter itself (as the
+            // `WindowFunctionPlan`'s own filter column); the accumulator's
+            // mask stays empty.
+            None,
+            &input.schema,
+            c.output.name.clone(),
+        )?;
+        Ok(WindowFunction::Aggregate(if udf {
+            // An aggregate UDF (ADR 0045) carries its own result type and the
+            // state its library declares.
+            udaf_state(expr, self.env.udfs.as_ref())?
+        } else {
+            expr.with_array_result(&c.output.data_type.to_arrow())
+        }))
     }
 }
 

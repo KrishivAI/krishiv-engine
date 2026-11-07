@@ -582,9 +582,10 @@ impl Held {
         Ok(true)
     }
 
-    fn slices(&self, lo: usize, hi: usize) -> Vec<Slice<'_>> {
-        self.held
-            .iter()
+    /// The held rows `[lo, hi)`, as slices (the field alone, so the charge
+    /// stays free to borrow).
+    fn slices(held: &VecDeque<(usize, RecordBatch)>, lo: usize, hi: usize) -> Vec<Slice<'_>> {
+        held.iter()
             .filter_map(|(s, b)| {
                 let from = lo.max(*s);
                 let to = hi.min(s + b.num_rows());
@@ -621,14 +622,24 @@ fn fold_from_file(
     let (file, consumer, query) = (c.file, c.consumer, c.query);
     let a = aggregate_of(&env.plan.functions[j])?;
     let mut charge = direct(consumer).unguarded();
-    let state = crate::aggregate::Accumulator::new(a, env.ansi)?
-        .group_bytes()
-        .max(64)
-        .saturating_add(size_of::<Fold>());
+    // An aggregate UDF's state is its own: counted after it folds.
+    let state = if super::udaf::is_udf(a) {
+        64
+    } else {
+        crate::aggregate::Accumulator::new(a, env.ansi)?.group_bytes()
+    }
+    .max(64)
+    .saturating_add(size_of::<Fold>());
     shed.grow(&mut charge, state.saturating_mul(frames.len()))?;
     let mut folds = Vec::with_capacity(frames.len());
     for _ in frames {
-        folds.push(Fold::new(a, env.ansi)?);
+        let fold = Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?;
+        // An aggregate UDF's state is opaque: each frame's fold charges it.
+        folds.push(if super::udaf::is_udf(a) {
+            fold.charged(a, consumer)
+        } else {
+            fold
+        });
     }
     let live = || frames.iter().filter(|(s, e)| s < e);
     if let (Some(lo), Some(hi)) = (live().map(|f| f.0).min(), live().map(|f| f.1).max()) {
@@ -818,7 +829,11 @@ impl Framed {
                 Self::Prefix(Box::new(Prefix {
                     edges: Edges::open(env, f, file, consumer)?,
                     stream: Stream::open(file, consumer)?,
-                    fold: Fold::new(a, env.ansi)?,
+                    fold: if super::udaf::is_udf(a) {
+                        Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?.charged(a, consumer)
+                    } else {
+                        Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?
+                    },
                     folded: 0,
                 }))
             }
@@ -1009,9 +1024,24 @@ impl Held {
                     }
                 })
                 .collect::<Result<_>>()?;
-            let out = frames::aggregate(a, f, &self.slices(lo, hi), &rebased, env.ansi)?;
+            let slices = Self::slices(&self.held, lo, hi);
+            let out = super::udaf::frames_aggregate(
+                env,
+                a,
+                f,
+                &slices,
+                &rebased,
+                &mut super::udaf::Charge::new(Some(&mut self.charge)),
+            );
             self.charge.shrink(eval);
-            return Ok(out);
+            match out {
+                // A UDF's state the pool refuses: give the held batches up
+                // and fold from the file, where growth may shed others'.
+                Err(e)
+                    if e.error_class()
+                        == krishiv_common::error::ErrorClass::UnableToAcquireMemory => {}
+                out => return out,
+            }
         }
         self.release();
         c.counters.file_folds.fetch_add(1, Ordering::Relaxed);
@@ -1045,7 +1075,14 @@ impl Held {
             part_start: &[],
             peer_start: &[],
         };
-        let out = frames::aggregate(a, f, &[row], &vec![(0, 0); frames.len()], env.ansi);
+        let out = super::udaf::frames_aggregate(
+            env,
+            a,
+            f,
+            &[row],
+            &vec![(0, 0); frames.len()],
+            &mut super::udaf::Charge::new(Some(&mut self.charge)),
+        );
         self.charge.shrink(eval);
         out
     }

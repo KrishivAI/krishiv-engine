@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The process-wide result cache (P2-T094, `design/P2-T094-result-cache.md`).
+//! The result cache of an engine runtime (P2-T094, `design/P2-T094-result-cache.md`; per runtime
+//! since design P2-E1: sessions built alone share one process-wide store, a supplied runtime owns
+//! its own, ADR 0037 §6 update).
 //!
 //! With `krishiv.resultCache.enabled` a query's rows are kept for later runs of the same query by
-//! any session of the process: the key is [`CacheKey`] (normalized plan hash, pinned versions,
+//! any session of the runtime: the key is [`CacheKey`] (normalized plan hash, pinned versions,
 //! principal, policy version, resolution configuration) plus the identity of every permanent
 //! table the plan reads. Only a plan that reads permanent catalog tables alone and calls no
 //! non-deterministic function is cached; a temporary view, an in-memory registration or a read by
@@ -10,7 +12,8 @@
 //!
 //! Entries expire after `krishiv.resultCache.ttl` and are dropped at once by the calls that drop
 //! relation-cache entries (`REFRESH TABLE`, `CLEAR CACHE`, every engine write to a table they
-//! read). The byte cap is `krishiv.resultCache.maxBytes`, held outside the query memory pool: the
+//! read). The byte cap is `krishiv.resultCache.maxBytes` (cluster scope: one cap for one shared store),
+//! held outside the query memory pool: the
 //! store is shared by sessions and outlives their pools. A fill guarded by the store's generation
 //! (taken before the query is analyzed) is dropped if an invalidation ran meanwhile.
 
@@ -145,10 +148,12 @@ pub(crate) struct ResultCache {
     generation: AtomicU64,
 }
 
-/// The process-wide store.
-pub(crate) fn global() -> &'static ResultCache {
-    static GLOBAL: OnceLock<ResultCache> = OnceLock::new();
-    GLOBAL.get_or_init(ResultCache::default)
+/// The process-wide store, shared by every session built without a runtime
+/// (design P2-E1: a supplied runtime owns a store of its own,
+/// [`crate::EngineRuntime`]).
+pub(crate) fn global() -> &'static Arc<ResultCache> {
+    static GLOBAL: OnceLock<Arc<ResultCache>> = OnceLock::new();
+    GLOBAL.get_or_init(Arc::default)
 }
 
 impl ResultCache {
@@ -481,26 +486,29 @@ impl Session {
         let settings = settings(&a.env)?;
         let verdict = match self.result_verdict(a) {
             Err(why) => format!("not cached: {why}"),
-            Ok(key) => match global().age(&key, settings.ttl) {
+            Ok(key) => match self.state.runtime.results.age(&key, settings.ttl) {
                 Some(age) => format!("hit (metadata_age_ms={})", age.as_millis()),
                 None => "miss (the result is stored when the query has run)".to_owned(),
             },
         };
-        let (entries, bytes, hits, misses, stores, invalidated) = global().stats();
+        let (entries, bytes, hits, misses, stores, invalidated) =
+            self.state.runtime.results.stats();
         Some(format!(
             "{verdict}\nstore: {entries} entries, {bytes} bytes; since start: {hits} hits, {misses} misses, {stores} stored, {invalidated} invalidated"
         ))
     }
 }
 
-/// `stream`, storing its batches under `key` when it ends cleanly.
+/// `stream`, storing its batches under `key` in `cache` when it ends cleanly.
 pub(crate) fn fill(
+    cache: Arc<ResultCache>,
     stream: RecordBatchStream,
     key: ResultKey,
     generation: u64,
     settings: Settings,
 ) -> RecordBatchStream {
     Box::pin(FillStream {
+        cache,
         inner: stream,
         key: Some(key),
         batches: Vec::new(),
@@ -513,6 +521,7 @@ pub(crate) fn fill(
 }
 
 struct FillStream {
+    cache: Arc<ResultCache>,
     inner: RecordBatchStream,
     key: Option<ResultKey>,
     batches: Vec<RecordBatch>,
@@ -552,7 +561,7 @@ impl Stream for FillStream {
                     && let Some(key) = self.key.take()
                 {
                     let batches = std::mem::take(&mut self.batches);
-                    global().insert(
+                    self.cache.insert(
                         key,
                         batches,
                         self.bytes,
@@ -731,8 +740,13 @@ mod tests {
 
     #[test]
     fn a_result_over_the_cap_is_not_stored() {
-        let s = session_as("ana");
-        s.conf().set("krishiv.resultCache.maxBytes", "1").unwrap();
+        // The cap is a runtime key: set when the session (its private runtime) is built.
+        let s = Session::builder()
+            .principal(Principal::new("ana", PrincipalKind::User))
+            .config("krishiv.resultCache.maxBytes", "1")
+            .build()
+            .unwrap();
+        s.conf().set("krishiv.resultCache.enabled", "true").unwrap();
         table(&s, "rc_cap", "(1), (2)");
         let key = key_of(&s, "SELECT a FROM rc_cap").unwrap();
         assert_eq!(rows(&run(&s, "SELECT a FROM rc_cap")), 2);
@@ -1086,5 +1100,141 @@ mod tests {
             block_on(df.is_cached()).unwrap(),
             "cache() populated the session's snapshot"
         );
+    }
+
+    /// A runtime of its own with the result cache on, and a session of it.
+    fn runtime_session(user: &str) -> (Arc<crate::EngineRuntime>, Session) {
+        let rt = crate::EngineRuntime::builder()
+            .config("krishiv.resultCache.enabled", "true")
+            .build()
+            .unwrap();
+        let s = Session::builder()
+            .runtime(Arc::clone(&rt))
+            .principal(Principal::new(user, PrincipalKind::User))
+            .build()
+            .unwrap();
+        (rt, s)
+    }
+
+    fn cached_in(rt: &crate::EngineRuntime, key: &ResultKey) -> bool {
+        rt.results.lookup(key, Duration::ZERO).is_some()
+    }
+
+    /// Design P2-E1 R6: the sessions of one runtime share its store (and its
+    /// permanent catalog, as Spark's `newSession()` does); the process store
+    /// is not used; a write in one session drops the entry for all of them.
+    #[test]
+    fn the_sessions_of_a_runtime_share_its_result_cache() {
+        let (rt, a) = runtime_session("ana");
+        table(&a, "rc_rt", "(1), (2), (3)");
+        let b = a.new_session();
+        let sql = "SELECT a FROM rc_rt WHERE a > 1";
+        let key = key_of(&b, sql).unwrap();
+        assert_eq!(key_of(&a, sql), Some(key.clone()));
+        assert_eq!(rows(&run(&a, sql)), 2);
+        assert!(cached_in(&rt, &key), "stored in the runtime's store");
+        assert!(!cached(&key), "never in the process store");
+        let hits = rt.results.stats().2;
+        assert_eq!(rows(&run(&b, sql)), 2);
+        assert!(
+            rt.results.stats().2 > hits,
+            "the other session was served from it"
+        );
+        // A write in one session invalidates the entry for every session.
+        run(&b, "INSERT INTO rc_rt VALUES (9)");
+        assert!(!cached_in(&rt, &key));
+        assert_eq!(rows(&run(&a, sql)), 3);
+    }
+
+    #[test]
+    fn separately_built_runtimes_do_not_share_results() {
+        let (rt1, a) = runtime_session("ana");
+        let (rt2, b) = runtime_session("ana");
+        table(&a, "rc_two", "(1), (2)");
+        table(&b, "rc_two", "(1), (2)");
+        let sql = "SELECT a FROM rc_two";
+        run(&a, sql);
+        let ka = key_of(&a, sql).unwrap();
+        assert!(cached_in(&rt1, &ka));
+        let kb = key_of(&b, sql).unwrap();
+        assert!(
+            !cached_in(&rt2, &kb),
+            "the other runtime's store is untouched"
+        );
+        assert!(!cached_in(&rt2, &ka));
+    }
+
+    /// The cap is one setting for one shared store: the runtime's, never a
+    /// session's.
+    #[test]
+    fn the_cap_is_a_runtime_setting() {
+        let rt = crate::EngineRuntime::builder()
+            .config("krishiv.resultCache.enabled", "true")
+            .config("krishiv.resultCache.maxBytes", "1")
+            .build()
+            .unwrap();
+        let s = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+        let e = s
+            .conf()
+            .set("krishiv.resultCache.maxBytes", "1g")
+            .unwrap_err();
+        assert_eq!(e.error_class().name(), "CANNOT_MODIFY_STATIC_CONFIG");
+        let e = Session::builder()
+            .runtime(Arc::clone(&rt))
+            .config("krishiv.resultCache.maxBytes", "1g")
+            .build()
+            .unwrap_err();
+        assert_eq!(e.error_class().name(), "CANNOT_MODIFY_STATIC_CONFIG");
+        table(&s, "rc_rtcap", "(1), (2)");
+        let sql = "SELECT a FROM rc_rtcap";
+        run(&s, sql);
+        assert!(
+            !cached_in(&rt, &key_of(&s, sql).unwrap()),
+            "over the runtime's cap"
+        );
+    }
+
+    /// Permanent tables belong to the runtime (Spark 4.2.0: a `newSession()`
+    /// child reads its parent's tables and the parent the child's; temporary
+    /// views stay with their session).
+    #[test]
+    fn permanent_tables_are_shared_by_the_sessions_of_a_runtime() {
+        let a = Session::new().unwrap();
+        table(&a, "pt_parent", "(1)");
+        run(&a, "CREATE TEMPORARY VIEW pt_view AS SELECT 2 AS b");
+        let b = a.new_session();
+        assert_eq!(rows(&run(&b, "SELECT * FROM pt_parent")), 1);
+        table(&b, "pt_child", "(3), (4)");
+        assert_eq!(rows(&run(&a, "SELECT * FROM pt_child")), 2);
+        let e = block_on(b.sql("SELECT * FROM pt_view")).unwrap_err();
+        assert_eq!(e.error_class().name(), "TABLE_OR_VIEW_NOT_FOUND");
+        // Sessions built alone keep catalogs of their own.
+        let alone = Session::new().unwrap();
+        let e = block_on(alone.sql("SELECT * FROM pt_parent")).unwrap_err();
+        assert_eq!(e.error_class().name(), "TABLE_OR_VIEW_NOT_FOUND");
+    }
+
+    /// A session's cached snapshot of a permanent table is dropped when
+    /// another session of the runtime writes the table (Spark's shared
+    /// `CacheManager`), and `CLEAR CACHE` in one session clears every
+    /// session's.
+    #[test]
+    fn a_write_in_one_session_drops_another_sessions_cached_table() {
+        let a = Session::new().unwrap();
+        table(&a, "rc_shared", "(1), (2)");
+        let b = a.new_session();
+        run(&a, "CACHE TABLE rc_shared");
+        assert_eq!(rows(&run(&a, "SELECT * FROM rc_shared")), 2);
+        assert!(a.cache_reserved() > 0);
+        run(&b, "INSERT INTO rc_shared VALUES (3)");
+        assert_eq!(
+            rows(&run(&a, "SELECT * FROM rc_shared")),
+            3,
+            "not a stale snapshot"
+        );
+        run(&a, "CACHE TABLE rc_shared");
+        assert!(a.cache_reserved() > 0);
+        run(&b, "CLEAR CACHE");
+        assert_eq!(a.cache_reserved(), 0);
     }
 }

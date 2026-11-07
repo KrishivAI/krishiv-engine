@@ -2,7 +2,8 @@
 //! The messages hosts exchange over simulated TCP (design P2-T176 §2.6):
 //! bytes only, so nothing live crosses a host. Each message is a 4-byte
 //! little-endian length, a 1-byte kind and its payload. One request per
-//! connection: `Run` and `Release` are answered by `Done` or `Failed`;
+//! connection: `Run` and `Release` are answered by `Done` (with a map
+//! task's filter partials) or `Failed`;
 //! `Fetch` by the partition's batches as `Frame`s (Arrow IPC bodies, design
 //! §2.4) and then `End`, or by `Failed`. Every request names its job (one
 //! submitted query): exchange ids are numbered per plan, so each job has a
@@ -51,8 +52,10 @@ pub enum Request {
 /// A worker's answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
-    /// The task ran to its end and committed its output.
-    Done,
+    /// The task ran to its end and committed its output; for a `Run`, the
+    /// filter partials its exchange collected ([`crate::task`]'s
+    /// `encode_partials`), empty for a `Release`.
+    Done(Vec<u8>),
     /// The request failed: the error's class and message.
     Failed(String),
     /// One batch of a fetched partition, as an Arrow IPC body.
@@ -201,7 +204,7 @@ impl Reply {
     /// A failed write or an oversized message.
     pub async fn write(&self, out: &mut (impl AsyncWrite + Unpin)) -> Result<(), KrishivError> {
         match self {
-            Self::Done => send(out, 1, &[]).await,
+            Self::Done(partials) => send(out, 1, &[partials]).await,
             Self::Failed(message) => send(out, 2, &[message.as_bytes()]).await,
             Self::Frame(body) => send(out, 3, &[body]).await,
             Self::End => send(out, 4, &[]).await,
@@ -215,7 +218,7 @@ impl Reply {
     pub async fn read(input: &mut (impl AsyncRead + Unpin)) -> Result<Self, KrishivError> {
         let (kind, body) = receive(input).await?;
         match kind {
-            1 if body.is_empty() => Ok(Self::Done),
+            1 => Ok(Self::Done(body)),
             2 => Ok(Self::Failed(String::from_utf8_lossy(&body).into_owned())),
             3 => Ok(Self::Frame(body)),
             4 if body.is_empty() => Ok(Self::End),
@@ -251,7 +254,8 @@ mod tests {
             },
         ];
         let replies = [
-            Reply::Done,
+            Reply::Done(Vec::new()),
+            Reply::Done(vec![3, 1]),
             Reply::Failed("INTERNAL_ERROR: x".to_owned()),
             Reply::Frame(vec![7; 10]),
             Reply::End,
@@ -279,5 +283,24 @@ mod tests {
         assert!(Request::read(&mut input).await.is_err());
         let mut input: &[u8] = &[2, 0, 0, 0, 9, 0];
         assert!(Reply::read(&mut input).await.is_err());
+        let mut input: &[u8] = &[2, 0, 0, 0, 9, 0];
+        let e = Request::read(&mut input).await.unwrap_err();
+        assert!(
+            e.message().contains("a request of kind 9"),
+            "{}",
+            e.message()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_closed_stream_is_a_simulated_network_error() {
+        let mut input: &[u8] = &[];
+        let e = Reply::read(&mut input).await.unwrap_err();
+        assert!(e.message().contains("simulated network"), "{}", e.message());
+        // A writer whose peer is gone: the length prefix cannot be written.
+        let (mut out, peer) = tokio::io::duplex(8);
+        drop(peer);
+        let e = Reply::End.write(&mut out).await.unwrap_err();
+        assert!(e.message().contains("simulated network"), "{}", e.message());
     }
 }

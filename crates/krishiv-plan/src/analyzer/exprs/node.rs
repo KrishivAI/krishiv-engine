@@ -4,7 +4,7 @@
 use super::*;
 
 impl Resolver<'_> {
-    pub(super) fn expr_node(
+    pub(super) fn expr_node_inner(
         &mut self,
         e: &Arc<Expr>,
         kids: &[Bound],
@@ -112,6 +112,13 @@ impl Resolver<'_> {
                     special_clock(&special, special_kind(*kind, self.ctx.conf.timestamp_ntz))
                         .with_origin(e.origin);
                 return self.expr(&Arc::new(call), cx);
+            }
+            // `TIMESTAMP '11:00'`: that time today, in the session zone (Spark reads a time of day alone
+            // against the current date), bound as the clock calls it stands for.
+            ExprNode::TypedLiteral { kind, value }
+                if let Some(clock) = time_only_today(*kind, value, self.ctx.conf.timestamp_ntz) =>
+            {
+                return self.expr(&Arc::new(clock.with_origin(e.origin)), cx);
             }
             ExprNode::TypedLiteral { kind, value } => {
                 let literal = typed_literal(*kind, value, &self.ctx.conf, e.origin)?;
@@ -231,6 +238,7 @@ impl Resolver<'_> {
                         return self.sql_call(&def, e, f, kids, cx.op);
                     }
                 }
+                super::super::bind::check_function_namespace(self.ctx, f, e.origin)?;
                 let (parts, builtin) = qualified_parts(f, &self.b.search_path, e.origin)?;
                 let session_qualified = super::super::bind::is_session_qualifier(&f.qualifier);
                 let lookup_name = builtin.as_deref().unwrap_or(&f.name);
@@ -492,10 +500,25 @@ impl Resolver<'_> {
                         }
                     }
                 };
+                // A session aggregate UDF (ADR 0045): `DISTINCT` only when it
+                // allows it (a window refuses `DISTINCT` for every aggregate).
+                if !is_builtin_entry(&entry)
+                    && entry.kind == FunctionKind::Aggregate
+                    && f.distinct
+                    && self.ctx.functions.rejects_distinct(entry.id.name())
+                {
+                    return Err(AnalysisError::new(
+                        InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                            pretty_name: format!("`{lookup_name}`"),
+                            syntax: "DISTINCT".to_owned(),
+                        },
+                        e.origin,
+                    ));
+                }
                 // `array_agg` is Spark's spelling of `collect_list` (its
                 // result column is named `collect_list(...)`): resolve it
                 // as `collect_list` throughout.
-                if entry.id.name() == "array_agg" {
+                if is_builtin_entry(&entry) && entry.id.name() == "array_agg" {
                     entry = match self
                         .ctx
                         .functions
@@ -510,7 +533,7 @@ impl Resolver<'_> {
                 // `string_agg` is Spark's alias of `listagg` (its result
                 // column is named `listagg(...)`): resolve it as `listagg`
                 // throughout.
-                if entry.id.name() == "string_agg" {
+                if is_builtin_entry(&entry) && entry.id.name() == "string_agg" {
                     entry = match self
                         .ctx
                         .functions
@@ -527,10 +550,11 @@ impl Resolver<'_> {
                 // `listagg_call`); any other function keeps Spark's
                 // `FUNCTION_WITH_UNSUPPORTED_SYNTAX` error.
                 if !f.within_group.is_empty()
-                    && !matches!(
-                        entry.id.name(),
-                        "mode" | "listagg" | "percentile_cont" | "percentile_disc"
-                    )
+                    && !(is_builtin_entry(&entry)
+                        && matches!(
+                            entry.id.name(),
+                            "mode" | "listagg" | "percentile_cont" | "percentile_disc"
+                        ))
                 {
                     return Err(AnalysisError::new(
                         InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
@@ -543,22 +567,24 @@ impl Resolver<'_> {
                 if !window_fn && entry.kind == FunctionKind::Aggregate {
                     self.nondeterministic_arguments(e, &kids[..n]);
                 }
-                if entry.id.name() == "mode" {
+                if is_builtin_entry(&entry) && entry.id.name() == "mode" {
                     return self.mode_call(&entry, e, f, &kids, window_fn);
                 }
-                if entry.id.name() == "listagg" {
+                if is_builtin_entry(&entry) && entry.id.name() == "listagg" {
                     return self.listagg_call(&entry, e, f, &kids, window_fn);
                 }
-                if matches!(
-                    entry.id.name(),
-                    "percentile"
-                        | "percentile_approx"
-                        | "approx_percentile"
-                        | "median"
-                        | "percentile_cont"
-                        | "percentile_disc"
-                        | "approx_count_distinct"
-                ) {
+                if is_builtin_entry(&entry)
+                    && matches!(
+                        entry.id.name(),
+                        "percentile"
+                            | "percentile_approx"
+                            | "approx_percentile"
+                            | "median"
+                            | "percentile_cont"
+                            | "percentile_disc"
+                            | "approx_count_distinct"
+                    )
+                {
                     return self.quantile_call(&entry, e, f, &kids, n, window_fn);
                 }
                 if !window_fn {
@@ -584,9 +610,17 @@ impl Resolver<'_> {
                     let mut shown_kids = Vec::with_capacity(n);
                     for (arg, k) in f.args.iter().zip(&kids[..n]) {
                         if let ExprNode::Alias { name, .. } = &arg.node {
+                            // The bound child is the alias itself: show what it names.
+                            let shown = k.shown();
+                            let inner = match &shown.node {
+                                ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {
+                                    Arc::clone(expr)
+                                }
+                                _ => shown,
+                            };
                             shown_kids.push(Arc::new(
                                 Expr::new(ExprNode::Alias {
-                                    expr: k.shown(),
+                                    expr: inner,
                                     name: name.clone(),
                                 })
                                 .with_origin(arg.origin),
@@ -751,10 +785,9 @@ impl Resolver<'_> {
                     let sorted = if kids[0].ty.data_type.as_ref().is_some_and(holds_map) {
                         let var = |name: &str| {
                             Arc::new(
-                                Expr::new(ExprNode::Column(crate::ColumnRef {
-                                    name: vec![name.to_owned()],
-                                    plan_id: None,
-                                }))
+                                Expr::new(ExprNode::Column(crate::ColumnRef::new(vec![
+                                    name.to_owned(),
+                                ])))
                                 .with_origin(origin),
                             )
                         };
@@ -813,7 +846,7 @@ impl Resolver<'_> {
                     ));
                     return Ok(b);
                 }
-                if entry.id.name() == "count" && n == 0 {
+                if is_builtin_entry(&entry) && entry.id.name() == "count" && n == 0 {
                     return self.parameterless_count(e, &entry, &kids, agg, window_fn);
                 }
                 // `assert_true(c)` is `assert_true(c, '<c>' is not true!)`:
@@ -1162,10 +1195,9 @@ impl Resolver<'_> {
                             e.origin,
                         ));
                     };
-                    let element = Expr::new(ExprNode::Column(ColumnRef {
-                        name: vec!["__subscript_element".to_owned()],
-                        plan_id: None,
-                    }))
+                    let element = Expr::new(ExprNode::Column(ColumnRef::new(vec![
+                        "__subscript_element".to_owned(),
+                    ])))
                     .with_origin(e.origin);
                     let body = Expr::new(ExprNode::Field {
                         base: Arc::new(element),
@@ -1298,6 +1330,7 @@ impl Resolver<'_> {
                 // built-in: a qualified session UDF named `typeof` runs
                 // the UDF.
                 let is_typeof = is_builtin_entry(&entry) && entry.id.name() == "typeof";
+                let is_collation = is_builtin_entry(&entry) && entry.id.name() == "collation";
                 let session_value_early = if is_builtin_entry(&entry) {
                     match entry.id.name() {
                         "current_schema" | "current_database" => {
@@ -1351,6 +1384,35 @@ impl Resolver<'_> {
                     (
                         rebuilt(ExprNode::Literal(Literal::String(value))),
                         Some(expr),
+                    )
+                } else if is_collation {
+                    // `collation(x)` is the qualified name of the collation of `x`
+                    // (Spark's `RuntimeReplaceable` `Collation`); a plain string is `UTF8_BINARY`.
+                    let child = call_kids.first();
+                    let name = match child.and_then(|k| k.ty.data_type.as_ref()) {
+                        Some(DataType::String) | None => {
+                            krishiv_types::Collation::UTF8_BINARY.qualified_name()
+                        }
+                        Some(DataType::CollatedString(c)) => c.qualified_name(),
+                        other => {
+                            let shown = child
+                                .map(|k| pretty(&k.shown(), self.ctx.conf.session_zone))
+                                .unwrap_or_default();
+                            return Err(AnalysisError::new(
+                                krishiv_common::error::DatatypeMismatchUnexpectedInputType {
+                                    sql_expr: format!("\"collation({shown})\""),
+                                    param_index: "first".to_owned(),
+                                    required_type: "\"STRING\"".to_owned(),
+                                    input_sql: format!("\"{shown}\""),
+                                    input_type: coerce::quoted_type(other),
+                                },
+                                e.origin,
+                            ));
+                        }
+                    };
+                    (
+                        rebuilt(ExprNode::Literal(Literal::String(name))),
+                        shown.or(Some(expr)),
                     )
                 } else if is_typeof {
                     let name = call_kids
@@ -1438,6 +1500,49 @@ impl Resolver<'_> {
                     }),
                     ..keep(arg_type(to.clone(), nullable))
                 }
+            }
+            ExprNode::Collate {
+                collation, name, ..
+            } => {
+                // Collations are the 4.2 profile's (ADR 0043 Decision 9).
+                if self.ctx.profile < crate::analyzer::SparkProfile::V4_2 {
+                    return Err(unsupported("COLLATE under this Spark profile", e.origin));
+                }
+                let child = &kids[0].ty;
+                if !matches!(
+                    child.data_type.as_ref(),
+                    Some(DataType::String | DataType::CollatedString(_)) | None
+                ) {
+                    return Err(AnalysisError::new(
+                        krishiv_common::error::DatatypeMismatchUnexpectedInputType {
+                            sql_expr: format!(
+                                "\"collate({}, {name})\"",
+                                pretty(&kids[0].shown(), self.ctx.conf.session_zone)
+                            ),
+                            param_index: "first".to_owned(),
+                            required_type: "\"STRING\"".to_owned(),
+                            input_sql: format!(
+                                "\"{}\"",
+                                pretty(&kids[0].shown(), self.ctx.conf.session_zone)
+                            ),
+                            input_type: coerce::quoted_type(child.data_type.as_ref()),
+                        },
+                        e.origin,
+                    ));
+                }
+                // A cast to the collated type: the carrier is unchanged, so it costs nothing at
+                // run time. The unresolved node stays the display form.
+                let to = DataType::collated_string(*collation);
+                let mut bound = Bound {
+                    expr: rebuilt(ExprNode::Cast {
+                        expr: Arc::clone(&args[0]),
+                        to: to.clone(),
+                        mode: CastMode::Ansi,
+                    }),
+                    ..keep(arg_type(to, child.nullable))
+                };
+                bound.shown = Some(Arc::clone(e));
+                bound
             }
             // Generators take their several names before this point
             // (`extract_generator`, lowering): any other expression with
@@ -1558,7 +1663,9 @@ impl Resolver<'_> {
             return e;
         };
         let [value] = &values[..] else { return e };
-        if !matches!(plan.node, crate::PlanNode::Aggregate { .. })
+        // Spark's legacy rule (`subquery_legacy.rs`) answers it otherwise.
+        if self.ctx.conf.legacy_exists_in_count
+            || !matches!(plan.node, crate::PlanNode::Aggregate { .. })
             || !crate::analyzer::subquery::one_row_aggregate(plan)
         {
             return e;

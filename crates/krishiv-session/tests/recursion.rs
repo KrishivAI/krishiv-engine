@@ -709,3 +709,38 @@ fn a_seeded_random_draws_every_small_round_in_row_order() {
         ]
     );
 }
+
+/// Spark 4.2.0 `cte-recursion.sql` cases 75 and 79: the recursive term's
+/// output columns read the previous round's columns, not each other.
+#[test]
+fn recursive_term_columns_read_the_previous_round() {
+    let s = Session::new().unwrap();
+    let got = rows(
+        &s,
+        "WITH RECURSIVE tmp(x) AS (values (1), (2), (3), (4), (5)), \
+         rcte(x, y) AS (SELECT x, x FROM tmp WHERE x = 1 \
+         UNION ALL SELECT x + 1, x FROM rcte WHERE x < 5) SELECT * FROM rcte",
+    );
+    let want: Vec<Vec<String>> = [(1, 1), (2, 1), (3, 2), (4, 3), (5, 4)]
+        .iter()
+        .map(|(a, b)| vec![a.to_string(), b.to_string()])
+        .collect();
+    assert_eq!(got, want);
+    let got = rows(
+        &s,
+        "WITH RECURSIVE tmp(x) AS (values (1), (2), (3), (4), (5)), \
+         rcte(x, y, z, t) AS (SELECT x, x, x, x FROM tmp WHERE x = 1 \
+         UNION ALL SELECT x + 1, x, y + 1, y FROM rcte WHERE x < 5) SELECT * FROM rcte",
+    );
+    let want: Vec<Vec<String>> = [
+        [1, 1, 1, 1],
+        [2, 1, 2, 1],
+        [3, 2, 2, 1],
+        [4, 3, 3, 2],
+        [5, 4, 4, 3],
+    ]
+    .iter()
+    .map(|r| r.iter().map(ToString::to_string).collect())
+    .collect();
+    assert_eq!(got, want);
+}

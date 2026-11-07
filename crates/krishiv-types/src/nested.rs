@@ -278,6 +278,27 @@ impl DataType {
             }
     }
 
+    /// This type with every array element, map value and struct field
+    /// nullable (Spark's `DataType.asNullable`).
+    #[must_use]
+    pub fn as_nullable(&self) -> Self {
+        match self {
+            Self::Array(a) => ArrayType::new(a.element_type().as_nullable(), true).into(),
+            Self::Map(m) => MapType::new(
+                m.key_type().as_nullable(),
+                m.value_type().as_nullable(),
+                true,
+            )
+            .into(),
+            Self::Struct(s) => StructType::new(s.fields().iter().map(|f| {
+                StructField::new(f.name(), f.data_type().as_nullable(), true)
+                    .with_metadata(f.metadata().clone())
+            }))
+            .into(),
+            other => other.clone(),
+        }
+    }
+
     /// Whether this is an array, map or struct type.
     pub fn is_nested(&self) -> bool {
         matches!(self, Self::Array(_) | Self::Map(_) | Self::Struct(_))

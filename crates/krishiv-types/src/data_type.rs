@@ -15,8 +15,8 @@ use crate::nested::{ArrayType, MapType, StructType};
 /// A Spark SQL data type.
 ///
 /// Covers void (the type of a bare `NULL`), boolean, integral, floating-point, string, binary, decimal, date,
-/// timestamp, time, interval, geometry and geography types and the nested array, map and struct types. Char/varchar
-/// and variant types are not represented yet; parsing them yields `KRISHIV_UNSUPPORTED_FEATURE`.
+/// timestamp, time, interval, geometry, geography and variant types and the nested array, map and struct types.
+/// Char/varchar types are not represented yet; parsing them yields `KRISHIV_UNSUPPORTED_FEATURE`.
 ///
 /// Build `Time`, `Geometry` and `Geography` with [`Self::time`],
 /// [`Self::geometry`] and [`Self::geography`], which check Spark's bounds.
@@ -98,6 +98,10 @@ pub enum DataType {
     Map(Arc<MapType>),
     /// `STRUCT<name: type, ...>`.
     Struct(StructType),
+    /// `VARIANT`: a self-describing semi-structured value in the Parquet
+    /// Variant v1 encoding (`crate::variant`), held unshredded in memory as
+    /// a `(metadata, value)` byte pair. Not orderable and not hashable.
+    Variant,
 }
 
 /// A field of a year-month interval type (Spark's `YearMonthIntervalType`).
@@ -492,6 +496,7 @@ impl DataType {
             Self::Array(_) => "array",
             Self::Map(_) => "map",
             Self::Struct(_) => "struct",
+            Self::Variant => "variant",
         }
     }
 }

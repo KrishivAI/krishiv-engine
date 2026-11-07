@@ -410,8 +410,23 @@ impl ParquetEncoder {
         // The footer keeps arrow-rs's Arrow schema next to the Parquet
         // types: other engines read the Parquet types, Krishiv's reader
         // also gets back what Parquet cannot say (extension tags).
-        let options =
-            ArrowWriterOptions::new().with_properties(tweak(settings.properties()).build());
+        let properties = tweak(settings.properties()).build();
+        let mut options = ArrowWriterOptions::new();
+        // A variant group (at any depth) gets its `VARIANT(1)` annotation,
+        // which arrow-rs does not write on its own.
+        if schema
+            .fields()
+            .iter()
+            .any(|f| super::variant::holds_variant(f.data_type()))
+        {
+            let descr = parquet::arrow::ArrowSchemaConverter::new()
+                .with_coerce_types(properties.coerce_types())
+                .convert(&schema)
+                .map_err(|e| FormatError::WriteFailed(e.to_string()))?;
+            options =
+                options.with_parquet_schema(super::variant::annotate(descr, schema.fields())?);
+        }
+        let options = options.with_properties(properties);
         let writer = ArrowWriter::try_new_with_options(Vec::new(), Arc::clone(&schema), options)
             .map_err(|e| FormatError::WriteFailed(e.to_string()))?;
         Ok(Self {
