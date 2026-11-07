@@ -1981,7 +1981,7 @@ fn create_table_like_statements() {
     assert!(matches!(t.name, DdlName::Parts(_)));
     assert!(matches!(t.source, DdlName::Parts(_)));
     assert!(t.using.is_none() && t.location.is_none() && t.tblproperties.is_empty());
-    let sql = "CREATE TABLE t LIKE s ROW FORMAT SERDE 'x' STORED AS parquet \
+    let sql = "CREATE TABLE t LIKE s ROW FORMAT SERDE 'x' STORED AS textfile \
         LOCATION '/tmp/t' TBLPROPERTIES ('a' = '1')";
     let t = like(sql);
     assert!(t.using.is_none() && t.row_format.is_some() && t.file_format.is_some());
@@ -2422,7 +2422,7 @@ fn namespace_and_use_statements() {
     };
     let n = create(
         "CREATE DATABASE IF NOT EXISTS db COMMENT 'c' LOCATION '/tmp/db' \
-        DEFAULT COLLATION UTF8_LCASE WITH DBPROPERTIES ('k' = 'v', flag)",
+        DEFAULT COLLATION UTF8_LCASE WITH DBPROPERTIES ('k' = 'v', flag true)",
     );
     assert_eq!(n.kind, NamespaceKind::Database);
     assert!(n.if_not_exists);
@@ -2430,7 +2430,7 @@ fn namespace_and_use_statements() {
     assert_eq!(n.location.as_deref(), Some("/tmp/db"));
     assert!(n.collation.is_some());
     assert_eq!(n.properties.len(), 2);
-    assert!(n.properties[1].value.is_none());
+    assert!(n.properties[1].value.is_some());
     let n = create("CREATE SCHEMA s WITH PROPERTIES ('a' = 1)");
     assert_eq!(n.kind, NamespaceKind::Schema);
     assert_eq!(n.properties.len(), 1);
