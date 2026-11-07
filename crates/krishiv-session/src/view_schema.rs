@@ -248,7 +248,7 @@ pub(crate) fn check_read(
 /// Spark's `buildViewDDL`: the statement that would recreate the view over its current query, the column list
 /// written only when the stored names are not the query's.
 fn view_ddl(entry: &CatalogTable, query_names: &[String]) -> String {
-    let sql = entry.view.as_ref().map_or("", |v| v.sql.as_str());
+    let sql = entry.view.as_ref().map_or("", |v| v.written.as_str());
     let names: Vec<&str> = entry.columns.iter().map(|c| c.name.as_str()).collect();
     let columns = if names
         .iter()

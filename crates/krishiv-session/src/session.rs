@@ -609,7 +609,10 @@ impl Session {
             Statement::ExecuteImmediate(e) => {
                 Box::pin(self.exec_execute_immediate(&e, query, redacted, 0)).await
             }
-            Statement::CreateFunction(f) => self.exec_create_function(&f, redacted).await,
+            Statement::CreateFunction(f) => {
+                self.exec_create_function(&f, redacted, &env.identifier_spans)
+                    .await
+            }
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             Statement::CreateTable(t) => {
                 Box::pin(self.exec_create_table(&t, query, &env.identifier_spans)).await
@@ -625,11 +628,14 @@ impl Session {
                 Box::pin(self.exec_describe(&d, query, &env.identifier_spans)).await
             }
             Statement::CreatePermanentView(v) => {
-                self.exec_create_permanent_view(&v, query, &env.identifier_spans)
-                    .await
+                let ids = (&*env.identifier_spans, &*env.identifier_written);
+                self.exec_create_permanent_view(&v, query, ids).await
             }
             Statement::DropPermanentView(d) => self.exec_drop_permanent_view(&d).await,
-            Statement::AlterView(a) => self.exec_alter_view(&a, query, &env.identifier_spans).await,
+            Statement::AlterView(a) => {
+                let ids = (&*env.identifier_spans, &*env.identifier_written);
+                self.exec_alter_view(&a, query, ids).await
+            }
             Statement::AlterTable(a) => Box::pin(self.exec_alter_table(&a, query)).await,
             Statement::Insert(i) => {
                 Box::pin(self.exec_insert(&i, query, &env.identifier_spans)).await
@@ -1241,6 +1247,7 @@ impl Session {
             statement_class: None,
             row: Arc::default(),
             identifier_spans: Arc::default(),
+            identifier_written: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -2612,6 +2619,9 @@ pub(crate) struct QueryEnv {
     pub(crate) row: Arc<std::sync::Mutex<Option<String>>>,
     /// The spans of the names substituted for `IDENTIFIER(..)` clauses (`lower_identified`).
     pub(crate) identifier_spans: Arc<[krishiv_sql::ast::Span]>,
+    /// The `IDENTIFIER(..)` clause each of `identifier_spans` replaced, as written; empty when
+    /// the spans came with text the session built (`CACHE TABLE`).
+    pub(crate) identifier_written: Arc<[String]>,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a
