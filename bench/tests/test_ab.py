@@ -227,7 +227,7 @@ def test_run_ab_writes_both_sides_into_the_result(tmp_path: Path, monkeypatch: p
     main_runner = make_runner(tmp_path, "main-runner", {"profile": "dist", "target-cpu": "x86-64-v3"})
     pr_runner = make_runner(tmp_path, "pr-runner")
     monkeypatch.setenv("KRISHIV_DATA", str(data))
-    monkeypatch.setattr(ab, "load_queries", lambda *_: [q()])
+    monkeypatch.setattr(ab, "load_queries", lambda *_, **__: [q()])
     settles: list[bool] = []
     # The settle wait must come before either runner starts (a started fake runner leaves its argv file behind).
     markers = [Path(str(r) + ".argv") for r in (main_runner, pr_runner)]
