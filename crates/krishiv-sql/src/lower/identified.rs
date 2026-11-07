@@ -9,14 +9,14 @@ use krishiv_plan::{Plan, SourceId};
 use super::{Lowerer, R, err};
 use crate::ast::{Query, Span};
 
-/// [`lower_with`] for a statement whose `IDENTIFIER(..)` clauses the caller substituted before
-/// parsing: a column whose span is one of `identifier_spans` (the substituted names, in the
-/// parsed text) is marked
+/// [`lower_with`](crate::lower_with) for a statement whose `IDENTIFIER(..)` clauses the caller
+/// substituted before parsing: a column whose span is one of `identifier_spans` (the substituted
+/// names, in the parsed text) is marked
 /// [`ColumnRef::by_identifier`](krishiv_plan::ColumnRef::by_identifier), so the analyzer names
 /// it as Spark names the clause.
 ///
 /// # Errors
-/// As for [`lower`].
+/// As for [`lower`](crate::lower).
 pub fn lower_identified(
     query: &Query,
     source: SourceId,
