@@ -311,6 +311,16 @@ fn lcase_search_refuses_a_pattern_that_could_split_the_dotted_capital_i() {
         one("SELECT CAST(contains('Ab' COLLATE utf8_lcase, 'a') AS STRING)"),
         "true"
     );
+    // Values of a real Spark 4.2.0 run (`ops/scripts/spark-local.sh`): a pattern that cannot split
+    // the pair is answered on the key; a split of it is false in Spark too (refused here).
+    assert_eq!(
+        one("SELECT CAST(contains('a\u{130}b' COLLATE utf8_lcase, 'b') AS STRING)"),
+        "true"
+    );
+    assert_eq!(
+        one("SELECT CAST(contains('\u{130}' COLLATE utf8_lcase, 'i\u{307}') AS STRING)"),
+        "true"
+    );
 }
 
 /// A collated string inside an array, map or struct would lose its collation (or be compared
