@@ -1626,6 +1626,76 @@ async fn exact_and_string_frames_from_disk() {
     }
 }
 
+/// The flush phase reads each spilled batch with the memory its headroom lends as credit. Here the pool is taken whole
+/// after the input, and spilled batches alternate between small and large: the flush phase must read them all and
+/// give the in-memory result.
+#[tokio::test]
+async fn spilled_batches_of_alternating_sizes_read_back_from_a_full_pool() {
+    for large in [300, 1_500] {
+        alternating_sizes_from_a_full_pool(large, functions(), true).await;
+    }
+    // Not here yet: offsets and `nth_value` charge the batches they keep past their read to the pool directly,
+    // which a pool taken whole refuses (queue: window fold charges with no fallback).
+}
+
+/// [`spilled_batches_of_alternating_sizes_read_back_from_a_full_pool`] with batches of 20 and `large` rows: the
+/// external partition's whole-batch evaluation does not fit, so it is evaluated in fewer rows per step.
+async fn alternating_sizes_from_a_full_pool(
+    large: usize,
+    functions: Vec<(WindowFunction, WindowFrame)>,
+    narrows: bool,
+) {
+    let rows: Vec<Row> = (0..3_000)
+        .map(|i| (Some(0), Some(i), i, Some(i % 1_000)))
+        .collect();
+    let window = plan(functions, false);
+    // Batches of 20 and 300 rows, alternating (the rows are already in order).
+    let mut sorted = Vec::new();
+    let (mut at, mut k) = (0, 0);
+    while at < rows.len() {
+        let n = if k % 2 == 0 { 20 } else { large }.min(rows.len() - at);
+        sorted.push(batch(&rows[at..at + n]));
+        at += n;
+        k += 1;
+    }
+    let plain = Window::new(schema(), window.clone(), true, None).unwrap();
+    let (_r, ctx) = task(1 << 30);
+    let want = outputs(
+        &drive(&plain, &ctx, &sorted).unwrap(),
+        window.functions.len(),
+    );
+    let (_manager, scope) = spill_scope();
+    let op = Window::new(schema(), window.clone(), true, Some(scope)).unwrap();
+    let limit = 1 << 30;
+    let (root, ctx) = task(limit);
+    let spills = Spills {
+        every: 1,
+        slack: Some(0),
+    };
+    let got = drive_spilling(&op, &ctx, limit, &root, &sorted, spills)
+        .await
+        .unwrap();
+    assert!(
+        op.counters
+            .spills
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0,
+        "the window spilled"
+    );
+    if narrows {
+        assert!(
+            op.counters
+                .narrowed
+                .load(std::sync::atomic::Ordering::Relaxed)
+                > 0,
+            "the external partition was evaluated in narrower steps ({large} rows)"
+        );
+    }
+    assert_eq!(outputs(&got, window.functions.len()), want, "{large} rows");
+    drop((got, ctx));
+    assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
+}
+
 /// A spill whose write fails loses the rows it took: every later call
 /// fails with that error instead of returning a short result. The write
 /// fails with an I/O error (the scope's directory is gone), not a
