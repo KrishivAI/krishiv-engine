@@ -31,6 +31,8 @@ fn content_type(path: &str) -> &'static str {
         Some("png") => "image/png",
         Some("ico") => "image/x-icon",
         Some("woff2") => "font/woff2",
+        Some("ttf") => "font/ttf",
+        Some("txt") => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
 }
@@ -56,6 +58,43 @@ mod tests {
         let a = get("").map(|a| a.content_type);
         assert_eq!(a, Some("text/html; charset=utf-8"));
         assert!(get("/index.html").is_some());
+    }
+
+    #[test]
+    fn fonts_are_served_with_their_type_and_the_licence_ships() {
+        let font = all().into_iter().find(|(p, _)| p.ends_with(".ttf"));
+        assert!(font.is_some(), "no self-hosted font in the bundle");
+        let name = font.map(|(p, _)| p).unwrap_or_default();
+        assert_eq!(get(&name).map(|a| a.content_type), Some("font/ttf"));
+        assert!(
+            get("fonts-LICENSE.txt").is_some(),
+            "the OFL text must ship with the fonts"
+        );
+        assert!(get("favicon.svg").is_some());
+    }
+
+    /// Nothing may load from another origin: fonts, scripts, styles and images are all in the bundle.
+    #[test]
+    fn nothing_is_loaded_from_another_origin() {
+        for (path, data) in all() {
+            if ["html", "css", "js"].iter().any(|e| path.ends_with(e)) {
+                let text = String::from_utf8_lossy(&data);
+                // Matches a URL that is loaded (src/href/url()/import), not the xmlns of an inline svg.
+                for needle in [
+                    "src=\"http",
+                    "href=\"http",
+                    "url(http",
+                    "url(\"http",
+                    "@import \"http",
+                    "from\"http",
+                ] {
+                    assert!(
+                        !text.contains(needle),
+                        "{path} loads from another origin: {needle}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
