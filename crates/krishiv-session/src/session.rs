@@ -142,6 +142,12 @@ pub(crate) struct SessionState {
     /// The session's registered UDFs, shared with the registry above and
     /// the workers running its plans.
     udfs: Arc<UdfLibrary>,
+    /// The session's Python UDFs (P2-T059), shared with the registry above:
+    /// plans name them by name and version only.
+    pub(crate) python_udfs: Arc<crate::python_udfs::PythonUdfLibrary>,
+    /// The runtime that evaluates them in this process (set by the Python
+    /// facade); without one a plan calling a Python UDF fails to run.
+    pub(crate) python_runtime: Mutex<Option<Arc<dyn krishiv_exec::python_eval::UdfRuntime>>>,
     /// The SQL-bodied functions the session defines.
     pub(crate) sql_functions: SqlFunctions,
     /// The process-wide part of the engine this session runs on.
@@ -908,6 +914,29 @@ impl Session {
         let named = || guard_call("unknown", "name", || udf.name().to_owned());
         let done = self.state.udfs.register(Arc::clone(&udf));
         done.map_err(|e| crate::udfs::registration_error(named(), &e))
+    }
+
+    /// Registers a Python UDF (P2-T059) under `def.name`, replacing any
+    /// Python UDF of that name; the entry carries the new registration
+    /// version, which plans name the UDF by. The callable itself stays with
+    /// the runtime set by [`set_python_udf_runtime`](Self::set_python_udf_runtime),
+    /// keyed by name and version.
+    pub fn register_python_udf(
+        &self,
+        def: crate::python_udfs::PythonUdfDef,
+    ) -> crate::python_udfs::PythonUdfEntry {
+        self.state.python_udfs.register(def)
+    }
+
+    /// Sets the runtime that evaluates this session's Python UDFs (the
+    /// Python facade's embedded interpreter); queries started after this
+    /// call use it.
+    pub fn set_python_udf_runtime(&self, runtime: Arc<dyn krishiv_exec::python_eval::UdfRuntime>) {
+        *self
+            .state
+            .python_runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(runtime);
     }
 
     /// Registers a native Rust aggregate UDF (ADR 0045), replacing any UDF
@@ -2348,7 +2377,7 @@ impl Session {
     /// from the plan with the query's I/O context, formats and configuration;
     /// batch splits resolve through the session's relation store.
     fn worker(&self, env: &QueryEnv) -> WorkerContext {
-        WorkerContext::new(
+        let worker = WorkerContext::new(
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
         )
         .with_udfs(Arc::clone(&self.state.udfs))
@@ -2358,7 +2387,17 @@ impl Session {
         }))
         .with_io(env.io.clone())
         .with_formats(Arc::clone(&self.state.runtime.formats))
-        .with_config(Arc::clone(&env.config))
+        .with_config(Arc::clone(&env.config));
+        let python = self
+            .state
+            .python_runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        match python {
+            Some(runtime) => worker.with_python_udfs(runtime),
+            None => worker,
+        }
     }
 }
 
