@@ -1291,7 +1291,15 @@ impl Lowerer {
         };
         // A reserved qualifier the generated columns are read through; no
         // user table can have it.
-        let qualifier = format!("{}{index}", krishiv_plan::GENERATE_QUALIFIER_PREFIX);
+        let aliased = if matches!(item.alias, Some(Alias::Name(_))) {
+            krishiv_plan::GENERATE_ALIAS_SUFFIX
+        } else {
+            ""
+        };
+        let qualifier = format!(
+            "{}{index}{aliased}",
+            krishiv_plan::GENERATE_QUALIFIER_PREFIX
+        );
         let plan = self.node(
             PlanNode::Generate {
                 input: arc(plan),
