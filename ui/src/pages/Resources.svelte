@@ -26,7 +26,7 @@
       <tr><th>Pool</th><th>Kind</th><th class="num">In use</th><th></th><th class="num">Peak</th><th class="num">Limit</th><th>Spillable</th></tr>
     </thead>
     <tbody>
-      {#each q.data.memory as r (r.path)}
+      {#each q.data.memory as r (`${r.worker_id ?? ""}/${r.path}`)}
         <tr>
           <td class="mono">{r.path}</td>
           <td>{r.kind}</td>
@@ -49,7 +49,7 @@
       <tr><th>Cache</th><th class="num">Entries</th><th class="num">Size</th><th class="num">Capacity</th><th class="num">Hits</th><th class="num">Misses</th><th class="num">Hit rate</th></tr>
     </thead>
     <tbody>
-      {#each q.data.caches as c (c.cache)}
+      {#each q.data.caches as c (`${c.worker_id ?? ""}/${c.cache}`)}
         <tr>
           <td>{c.cache}</td>
           <td class="num">{count(c.entries)}</td>

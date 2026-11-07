@@ -260,12 +260,22 @@ async fn require_token(
 /// secrets and personal data, and the page is a screen: the literals stay in the engine's own record.
 #[must_use]
 pub fn mask_literals(text: &str) -> String {
+    // `SET key = value` carries a value that is a secret as often as not: keep the key, drop the value.
+    let trimmed = text.trim_start();
+    if trimmed.len() > 4
+        && trimmed.is_char_boundary(4)
+        && trimmed[..4].eq_ignore_ascii_case("set ")
+        && let Some(eq) = trimmed.find('=')
+    {
+        return format!("{}=?", &trimmed[..eq]);
+    }
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
     let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
     while i < chars.len() {
         let c = chars[i];
+        let prev_ident = i > 0 && ident(chars[i - 1]);
         match c {
             '\'' | '"' => {
                 let quote = c;
@@ -287,17 +297,39 @@ pub fn mask_literals(text: &str) -> String {
                 out.push('?');
             }
             '`' => {
-                out.push(c);
-                i += 1;
-                while i < chars.len() {
-                    out.push(chars[i]);
-                    i += 1;
-                    if chars[i - 1] == '`' {
-                        break;
+                // A quoted name stays. One that never closes (a cut text) is masked to its end.
+                match chars[i + 1..].iter().position(|&x| x == '`') {
+                    Some(len) => {
+                        out.extend(&chars[i..=i + 1 + len]);
+                        i += len + 2;
+                    }
+                    None => {
+                        out.push('?');
+                        i = chars.len();
                     }
                 }
             }
-            d if d.is_ascii_digit() && (i == 0 || !ident(chars[i - 1]) && chars[i - 1] != '.') => {
+            // Comments can hold anything: drop them.
+            '-' if chars.get(i + 1) == Some(&'-') => {
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+                out.push(' ');
+            }
+            '/' if chars.get(i + 1) == Some(&'*') => {
+                i += 2;
+                while i < chars.len() && !(chars[i] == '*' && chars.get(i + 1) == Some(&'/')) {
+                    i += 1;
+                }
+                i = (i + 2).min(chars.len());
+                out.push(' ');
+            }
+            // A number: `42`, `1.5e3`, `10L`, `0xFF`, and `.5`.
+            d if (d.is_ascii_digit() && !prev_ident && (i == 0 || chars[i - 1] != '.'))
+                || (d == '.'
+                    && !prev_ident
+                    && chars.get(i + 1).is_some_and(char::is_ascii_digit)) =>
+            {
                 i += 1;
                 while i < chars.len() && (ident(chars[i]) || chars[i] == '.') {
                     i += 1;
@@ -702,10 +734,11 @@ impl Drop for StreamSlot {
     }
 }
 
-/// The live-query list as an event body, read at most once per period however many streams ask.
+/// The live-query list as an event body, read at most once per period however many streams ask. The lock is
+/// held only to look at and to store the snapshot, never across the read: a slow read delays the stream that
+/// asked for it and no other.
 async fn shared_snapshot(s: &UiState) -> Value {
-    let mut held = s.snapshot.lock().await;
-    if let Some((at, body)) = held.as_ref()
+    if let Some((at, body)) = s.snapshot.lock().await.as_ref()
         && at.elapsed() < EVENT_PERIOD / 2
     {
         return body.clone();
@@ -714,7 +747,7 @@ async fn shared_snapshot(s: &UiState) -> Value {
         Ok(rows) => json!({"queries": live_queries(&rows)}),
         Err(e) => json!({"error": e.message, "error_class": e.error_class}),
     };
-    *held = Some((Instant::now(), body.clone()));
+    *s.snapshot.lock().await = Some((Instant::now(), body.clone()));
     body
 }
 
