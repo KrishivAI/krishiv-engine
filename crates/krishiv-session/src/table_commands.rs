@@ -71,8 +71,16 @@ fn qualified_namespace_location(location: &str, warehouse: &std::path::Path) -> 
     if scheme {
         location.to_owned()
     } else {
-        // Hadoop's `Path` drops empty segments and a trailing `/`, as `components` does.
-        let path: std::path::PathBuf = warehouse.join(location).components().collect();
+        // Hadoop's `Path` drops empty segments, `.` and a trailing `/`, and `..` removes its
+        // parent (`a/../b` is `b`; checked on Spark 4.2.0).
+        let mut path = std::path::PathBuf::new();
+        for part in warehouse.join(location).components() {
+            if part == std::path::Component::ParentDir {
+                path.pop();
+            } else {
+                path.push(part);
+            }
+        }
         format!("file:{}", path.display())
     }
 }

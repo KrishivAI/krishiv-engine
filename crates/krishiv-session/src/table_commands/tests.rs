@@ -19,6 +19,14 @@ fn a_namespace_location_is_qualified_against_the_warehouse() {
     );
     assert_eq!(qualified_namespace_location("/abs//y/", wh), "file:/abs/y");
     assert_eq!(
+        qualified_namespace_location("a/../b", wh),
+        "file:/w/warehouse/b"
+    );
+    assert_eq!(
+        qualified_namespace_location("a/./b", wh),
+        "file:/w/warehouse/a/b"
+    );
+    assert_eq!(
         qualified_namespace_location("file:/abs/x", wh),
         "file:/abs/x"
     );
