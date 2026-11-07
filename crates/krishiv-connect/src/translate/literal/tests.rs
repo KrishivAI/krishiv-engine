@@ -450,8 +450,26 @@ fn string_collation_in_the_declared_type() {
         Literal::String("x".into())
     );
     assert_eq!(collated("").unwrap(), Literal::String("x".into()));
+    // A collated literal is refused until Connect types are gated by profile and backed by a
+    // golden; an unknown name is Spark's COLLATION_INVALID_NAME.
     assert_eq!(
         collated("UTF8_LCASE").unwrap_err().error_class(),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    assert_eq!(
+        collated("NO_SUCH_COLLATION").unwrap_err().error_class(),
+        ErrorClass::CollationInvalidName
+    );
+    // A typed NULL of a collated type is refused the same way.
+    let null = typed(
+        LiteralType::Null(ProtoType::default()),
+        Kind::String(dt::String {
+            collation: "UTF8_LCASE".into(),
+            ..dt::String::default()
+        }),
+    );
+    assert_eq!(
+        literal(&null).unwrap_err().error_class(),
         ErrorClass::KrishivUnsupportedFeature
     );
 }

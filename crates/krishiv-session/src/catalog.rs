@@ -1650,10 +1650,7 @@ impl Expander<'_> {
                 .map(|(q, c)| {
                     // The name is one part: `col(q)` would split a dot or read a trailing `*`.
                     let stored = crate::column::Column::new(Expr::new(ExprNode::Column(
-                        krishiv_plan::ColumnRef {
-                            name: vec![q.clone()],
-                            plan_id: None,
-                        },
+                        krishiv_plan::ColumnRef::new(vec![q.clone()]),
                     )));
                     let typed = if projection == crate::view_schema::ReadProjection::Cast {
                         stored.cast_ansi(c.data_type.clone())

@@ -530,9 +530,8 @@ impl Session {
         env.row = row;
         let query = self.substituted(query);
         let query: &str = &query;
-        // `IDENTIFIER(expr)` names are evaluated first, so the statement is parsed, authorized and
-        // run with the names they stand for.
-        let resolved = self.resolve_identifier_clauses(query, &env.parser).await?;
+        // `IDENTIFIER(expr)` names are evaluated first: parsing, access checks and the run see them.
+        let resolved = self.identifier_clauses_into(query, &mut env).await?;
         let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
         let query: &str = &resolved;
         let redacted = krishiv_sql::redact_sql(query);
@@ -570,9 +569,7 @@ impl Session {
         crate::collation_defaults::refuse_unhonoured(&statement)?;
         match statement {
             Statement::Query(q) => {
-                let plan =
-                    krishiv_sql::lower_with(&q, SourceId(0), self.parser_options().case_sensitive)
-                        .map_err(|e| sql_context(e.error, redacted, e.span.start, e.span.end))?;
+                let plan = self.lower_identified(&q, &env, redacted)?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
                 df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)
@@ -1213,6 +1210,7 @@ impl Session {
             text: None,
             statement_class: None,
             row: Arc::default(),
+            identifier_spans: Arc::default(),
             cache_generation,
             cache_cap,
             sql_functions,
@@ -2582,6 +2580,8 @@ pub(crate) struct QueryEnv {
     /// when a step after its run fails. Statement-local, so another statement of the same
     /// session cannot set or clear it.
     pub(crate) row: Arc<std::sync::Mutex<Option<String>>>,
+    /// The spans of the names substituted for `IDENTIFIER(..)` clauses (`lower_identified`).
+    pub(crate) identifier_spans: Arc<[krishiv_sql::ast::Span]>,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a

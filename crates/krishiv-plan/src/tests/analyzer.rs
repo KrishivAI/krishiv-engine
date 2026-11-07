@@ -172,8 +172,8 @@ fn df(table: &str, id: i64) -> LogicalPlan {
 
 fn col(name: &str, id: i64) -> Expr {
     Expr::new(ExprNode::Column(ColumnRef {
-        name: vec![name.to_owned()],
         plan_id: Some(PlanId(id)),
+        ..ColumnRef::new(vec![name.to_owned()])
     }))
 }
 
@@ -3456,8 +3456,8 @@ fn inline_table_of_ragged_rows_fails() {
 fn inline_table_of_dataframe_reference_fails() {
     let ctx = ctx();
     let cell = Expr::new(ExprNode::Column(ColumnRef {
-        name: vec!["a".to_owned()],
         plan_id: Some(PlanId(1)),
+        ..ColumnRef::new(vec!["a".to_owned()])
     }));
     let r = run(inline_table(vec![vec![cell]], &["a"]), &ctx);
     assert_eq!(
