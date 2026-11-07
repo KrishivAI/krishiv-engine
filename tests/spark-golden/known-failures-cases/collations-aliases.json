@@ -1,16 +1,8 @@
 {
   "cases": {
     "depends-on-command": [
-      16,
-      17,
-      18,
-      19,
-      20,
-      24,
       25,
-      26,
-      28,
-      29
+      26
     ]
   },
   "file": "collations-aliases",
