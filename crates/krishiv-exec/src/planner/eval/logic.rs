@@ -48,10 +48,24 @@ struct AndOr {
     and: bool,
     l: Arc<dyn PhysExpr>,
     r: Arc<dyn PhysExpr>,
+    /// `r` raises on no row and is deterministic, so it may run on rows
+    /// the left side decides (see `runs_anywhere` in the parent module).
+    r_never_raises: bool,
 }
 
-pub(super) fn and_or(and: bool, l: Arc<dyn PhysExpr>, r: Arc<dyn PhysExpr>) -> Arc<dyn PhysExpr> {
-    Arc::new(AndOr { and, l, r })
+/// `l AND r` (`and`) or `l OR r`; `r_never_raises` as on [`AndOr`].
+pub(super) fn and_or(
+    and: bool,
+    l: Arc<dyn PhysExpr>,
+    r: Arc<dyn PhysExpr>,
+    r_never_raises: bool,
+) -> Arc<dyn PhysExpr> {
+    Arc::new(AndOr {
+        and,
+        l,
+        r,
+        r_never_raises,
+    })
 }
 
 impl PhysExpr for AndOr {
@@ -78,7 +92,10 @@ impl PhysExpr for AndOr {
         }
         // The right side is evaluated only where the left one does not
         // decide (Spark's short circuit): `a <> 0 AND 10 / a > 1` never
-        // divides by zero.
+        // divides by zero. A right side that never raises runs over the
+        // whole batch instead: the combination below ignores its value
+        // where the left side decides, and copying the open rows out and
+        // back costs far more than comparing every row.
         let rows = batch.num_rows();
         let l_all = lv.clone().into_array(rows)?;
         let l = l_all
@@ -87,7 +104,8 @@ impl PhysExpr for AndOr {
         let (lb, l_ok) = parts(l);
         let decided = if self.and { &l_ok & &!&lb } else { &l_ok & &lb };
         let open = !&decided;
-        let rv = if open.count_set_bits() == rows {
+        let open_rows = open.count_set_bits();
+        let rv = if open_rows == rows || (open_rows > 0 && self.r_never_raises) {
             self.r.eval(batch, partition)?
         } else {
             Value::Array(super::eval_where(self.r.as_ref(), batch, &open, partition)?)
@@ -478,6 +496,26 @@ impl PhysExpr for Compare {
     }
 }
 
+/// The (valid and true, valid) bits of `a` over `n` rows; a one-row `a` (a
+/// comparison of scalars) stands for every row.
+pub(super) fn kleene_bits(a: &BooleanArray, n: usize) -> (BooleanBuffer, BooleanBuffer) {
+    let ok = a
+        .nulls()
+        .map_or_else(|| BooleanBuffer::new_set(a.len()), |x| x.inner().clone());
+    let yes = a.values() & &ok;
+    if a.len() == n || a.is_empty() {
+        return (yes, ok);
+    }
+    let all = |b: bool| {
+        if b {
+            BooleanBuffer::new_set(n)
+        } else {
+            BooleanBuffer::new_unset(n)
+        }
+    };
+    (all(yes.value(0)), all(ok.value(0)))
+}
+
 /// The validity of a `<=>` operand.
 fn validity(v: &Value) -> Validity<'_> {
     match v {
@@ -644,7 +682,10 @@ fn struct_compatible(l: &ArrowType, r: &ArrowType) -> bool {
                     .zip(r.iter())
                     .all(|(a, b)| struct_compatible(a.data_type(), b.data_type()))
         }
-        (a, b) => a == b,
+        // An array field compares element by element whatever its element's nullability or
+        // string carrier; anything else must be the same Arrow type.
+        (ArrowType::List(a), ArrowType::List(b)) => struct_compatible(a.data_type(), b.data_type()),
+        (a, b) => a == b || krishiv_kernels::order::same_modulo_carrier(a, b),
     }
 }
 

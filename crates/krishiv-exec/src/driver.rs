@@ -613,7 +613,7 @@ impl Driver {
             && let Ok(slot) = self.slots.get_mut().slot(k)
             && let Some(m) = slot.ctx.registered()
         {
-            m.consumer().release_credit();
+            m.consumer().settle_grant();
         }
     }
 
@@ -850,7 +850,24 @@ impl Driver {
     /// `NeedMemory` from slot `k`: reserve the bytes the cooperative way
     /// (self-spill, then arbitration while servicing this driver's own spill
     /// requests) and park them as the slot's grant credit.
+    /// `bytes` is the operator's whole shortfall; credit the consumer
+    /// still holds (an earlier grant its own spill service, run during the
+    /// wait, made it unable to use) counts toward it, so a retry never asks
+    /// twice for the same bytes.
     async fn reserve(&mut self, k: usize, bytes: usize) -> Result<()> {
+        let credit = self
+            .slots
+            .get_mut()
+            .slot(k)?
+            .ctx
+            .consumer()
+            .consumer()
+            .credit();
+        let bytes = if credit < bytes {
+            bytes - credit
+        } else {
+            bytes
+        };
         let granted = self.reserve_with(k, bytes, true).await?;
         if granted.is_ok() {
             self.credit = Some(k);
@@ -901,6 +918,9 @@ impl Driver {
         };
         let reserved = pause(run_ref, None, reserved).await;
         self.end_wait();
+        // On an error from here, or from the retry, the grant stays
+        // unsettled until the consumer unregisters with the failed task;
+        // rounds of the query's other drivers see the abort first.
         let granted = reserved?.0;
         run.query.check_cancelled()?;
         Ok(granted)

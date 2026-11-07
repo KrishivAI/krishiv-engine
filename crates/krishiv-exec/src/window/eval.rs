@@ -151,7 +151,7 @@ pub(super) fn evaluate(
     ansi: bool,
     zone: &krishiv_kernels::datetime::ZoneRef,
 ) -> Result<Vec<ArrayRef>> {
-    evaluate_with(plan, slices, ansi, zone, None, None)
+    evaluate_with(plan, slices, ansi, false, zone, None, None)
 }
 
 /// [`evaluate`] with the session's aggregate UDFs (ADR 0045), whose state is charged to
@@ -160,6 +160,7 @@ pub(super) fn evaluate_with(
     plan: &WindowPlan,
     slices: &[Slice<'_>],
     ansi: bool,
+    legacy: bool,
     zone: &krishiv_kernels::datetime::ZoneRef,
     udafs: Option<&crate::aggregate::UdafEnv>,
     mut pool: Option<&mut krishiv_memory::Reservation>,
@@ -186,7 +187,7 @@ pub(super) fn evaluate_with(
                 let mut charge = super::udaf::Charge::new(pool.as_deref_mut());
                 super::udaf::aggregate(a, f, &unit, ansi, udafs, &mut charge)?
             }
-            _ => function(f, &unit, ansi)?,
+            _ => function(f, &unit, ansi, legacy)?,
         });
     }
     Ok(columns)
@@ -201,7 +202,7 @@ pub(super) fn has_range_offsets(plan: &WindowPlan) -> bool {
     })
 }
 
-fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool) -> Result<ArrayRef> {
+fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool, legacy: bool) -> Result<ArrayRef> {
     let n = u.rows;
     let int = |v: i64| i32::try_from(v).map_err(|_| too_large());
     Ok(match &f.function {
@@ -261,7 +262,7 @@ fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool) -> Result<ArrayRef
                 .0?;
             Arc::new(Int32Array::from(v))
         }
-        WindowFunction::Aggregate(a) => aggregate(a, f, u, ansi)?,
+        WindowFunction::Aggregate(a) => aggregate(a, f, u, ansi, legacy)?,
         WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
             let part = |i: usize| u.parts[u.part_of[i] as usize];
             let peers = |i: usize| u.peers[u.peer_of[i] as usize];
@@ -356,6 +357,7 @@ fn aggregate(
     f: &WindowFunctionPlan,
     u: &Unit<'_>,
     ansi: bool,
+    legacy: bool,
 ) -> Result<ArrayRef> {
     let shape = f.shape()?;
     if shape == Shape::Frame {
@@ -368,7 +370,7 @@ fn aggregate(
             order: u.order.as_ref(),
         };
         let frames = super::frames::frames(f.frame, &rows)?;
-        return super::frames::aggregate(a, f, u.slices, &frames, ansi);
+        return super::frames::aggregate(a, f, u.slices, &frames, ansi, legacy);
     }
     if exact_decimal(a) {
         return decimal_aggregate(a, f, shape, u, ansi);
@@ -385,7 +387,7 @@ fn aggregate(
         mask: None,
         ..a.clone()
     };
-    let mut acc = Accumulator::new(&local, ansi)?;
+    let mut acc = Accumulator::new(&local, ansi)?.legacy_statistical(legacy);
     let parts = u.parts.len();
     // Group `parts` takes rows the filter drops; it is never evaluated.
     let trash = id(parts)?;

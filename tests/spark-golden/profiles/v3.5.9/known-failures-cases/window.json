@@ -1,0 +1,17 @@
+{
+  "cases": {
+    "depends-on-command": [
+      32
+    ],
+    "other-version": [
+      28,
+      53,
+      54
+    ],
+    "window": [
+      26
+    ]
+  },
+  "file": "window",
+  "format_version": 1
+}
