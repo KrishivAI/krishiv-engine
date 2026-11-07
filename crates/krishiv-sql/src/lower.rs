@@ -2466,6 +2466,25 @@ impl Lowerer {
                     }
                     _ => name.value.clone(),
                 };
+                // Only the bare keyword form is Spark's grammar: a qualified or
+                // backquoted name (`system.builtin.timestampadd(..)`) is a call
+                // Spark's catalog lacks. Its string unit is wrapped in a cast so
+                // the analyzer, which accepts a bare string-literal unit, refuses
+                // it as UNRESOLVED_ROUTINE.
+                if (!qualifier.is_empty() || name.quoted)
+                    && matches!(lname.as_str(), "timestampadd" | "timestampdiff")
+                    && let Some(first) = args.first_mut()
+                    && matches!(first.node, ExprNode::Literal(IrLiteral::String(_)))
+                {
+                    *first = arc(self.ex(
+                        ExprNode::Cast {
+                            expr: Arc::clone(first),
+                            to: krishiv_types::DataType::String,
+                            mode: CastMode::Default,
+                        },
+                        sp,
+                    ));
+                }
                 let within_group = f
                     .within_group
                     .iter()

@@ -630,3 +630,29 @@ fn a_parameter_in_a_doubly_nested_subquery_is_unresolved() {
     let e = format!("{:?}", r.expect_err("deep"));
     assert!(e.contains("UnresolvedColumn"), "{e}");
 }
+
+/// Only the keyword form is Spark's grammar: a qualified name and a quoted name
+/// are calls Spark's catalog lacks (`UNRESOLVED_ROUTINE`), while the keyword form still runs.
+#[test]
+fn only_the_keyword_form_of_timestampadd_and_timestampdiff_resolves() {
+    let s = session();
+    for expr in [
+        "system.builtin.timestampadd('YEAR', 1, DATE'2024-01-15')",
+        "`timestampadd`('YEAR', 1, DATE'2024-01-15')",
+        "`timestampdiff`(DAY, DATE'2024-01-15', DATE'2024-01-20')",
+        "system.builtin.timestampdiff(DAY, DATE'2024-01-15', DATE'2024-01-20')",
+    ] {
+        let sql = format!("SELECT {expr}");
+        let err = block_on(async { s.sql(&sql).await?.collect().await })
+            .err()
+            .unwrap_or_else(|| panic!("{sql} ran"));
+        assert!(
+            err.to_string().contains("UNRESOLVED_ROUTINE"),
+            "{sql}: {err}"
+        );
+    }
+    assert_eq!(
+        one(&s, "timestampdiff(DAY, DATE'2024-01-15', DATE'2024-01-20')").as_deref(),
+        Some("5")
+    );
+}
