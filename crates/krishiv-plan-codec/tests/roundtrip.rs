@@ -168,6 +168,40 @@ fn a_top_n_bound_round_trips_and_is_ignorable() {
     assert_ne!(encode(&bound).unwrap(), encode(&plain).unwrap());
 }
 
+/// An exchange's planned input columns survive the wire and need no feature
+/// of their own (an older reader skips them and instantiates instead), but
+/// a type in them is classified like any other. The field is ignorable, so
+/// the goldens only ever hold it unset.
+#[test]
+fn an_exchanges_planned_schema_round_trips_and_is_ignorable() {
+    use arrow_schema::{Field, Schema};
+
+    let (_, plain) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "exchange_round_robin")
+        .unwrap();
+    let PhysNode::Exchange(e) = plain.root().clone() else {
+        panic!("not an exchange");
+    };
+    assert_eq!(e.schema, None);
+    let with = |schema| {
+        let mut e = e.clone();
+        e.schema = Some(schema);
+        plan_of(PhysNode::Exchange(e))
+    };
+    let planned = with(inventory::schema());
+    assert_eq!(round_trip(&planned), planned);
+    assert_eq!(plan_features(&planned), plan_features(&plain));
+    assert_ne!(encode(&planned).unwrap(), encode(&plain).unwrap());
+    let variant = with(Arc::new(Schema::new(vec![Field::new(
+        "v",
+        krishiv_types::DataType::Variant.to_arrow(),
+        true,
+    )])));
+    assert_eq!(round_trip(&variant), variant);
+    assert!(plan_features(&variant).contains(&krishiv_plan_codec::Feature::VariantType));
+}
+
 #[test]
 fn a_shared_subexpression_is_stored_once() {
     // `a > 10 AND a IS NOT NULL`: the column, the literal and three calls.
