@@ -12,6 +12,12 @@ fn a_namespace_location_is_qualified_against_the_warehouse() {
         "file:/w/warehouse/someloc"
     );
     assert_eq!(qualified_namespace_location("/abs/x", wh), "file:/abs/x");
+    // Spark 4.2.0 (`DESCRIBE NAMESPACE EXTENDED`): `rel/dir//x/` is `<warehouse>/rel/dir/x`.
+    assert_eq!(
+        qualified_namespace_location("rel/dir//x/", wh),
+        "file:/w/warehouse/rel/dir/x"
+    );
+    assert_eq!(qualified_namespace_location("/abs//y/", wh), "file:/abs/y");
     assert_eq!(
         qualified_namespace_location("file:/abs/x", wh),
         "file:/abs/x"

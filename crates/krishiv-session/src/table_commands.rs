@@ -61,7 +61,7 @@ const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
 
 /// Spark's `CatalogUtils.makeQualifiedDBObjectPath` on the local file system: a location with a URI scheme
 /// stays as written; any other is resolved against the warehouse directory (an absolute path stays itself)
-/// and qualified as a `file:` URI.
+/// and qualified as a `file:` URI with empty segments and a trailing `/` removed.
 fn qualified_namespace_location(location: &str, warehouse: &std::path::Path) -> String {
     let scheme = location.split_once(':').is_some_and(|(s, _)| {
         s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
@@ -71,7 +71,9 @@ fn qualified_namespace_location(location: &str, warehouse: &std::path::Path) -> 
     if scheme {
         location.to_owned()
     } else {
-        format!("file:{}", warehouse.join(location).display())
+        // Hadoop's `Path` drops empty segments and a trailing `/`, as `components` does.
+        let path: std::path::PathBuf = warehouse.join(location).components().collect();
+        format!("file:{}", path.display())
     }
 }
 
