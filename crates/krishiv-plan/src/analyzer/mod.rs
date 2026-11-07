@@ -74,6 +74,7 @@ mod analytics;
 mod bind;
 mod builtins;
 mod catalog;
+mod char_varchar;
 mod coerce;
 mod exprs;
 
@@ -416,6 +417,9 @@ pub struct ResolutionConf {
     /// on. Only the nested count-bug shape is kept refused here for it
     /// ([`Self::nested_count_fix`]); every other shape is still answered.
     pub decorrelate_inner_query: bool,
+    /// `spark.sql.legacy.charVarcharAsString`: `CHAR`/`VARCHAR` behave as `STRING` at analysis (no read-side
+    /// padding, no padding rule on comparisons, no write-side length check). The declared type is still kept.
+    pub char_varchar_as_string: bool,
 }
 
 impl Default for ResolutionConf {
@@ -455,13 +459,14 @@ impl Default for ResolutionConf {
             in_join_condition_as_join: true,
             legacy_count_bug: false,
             decorrelate_inner_query: true,
+            char_varchar_as_string: false,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 33] = [
+    pub const KEYS: [&'static str; 34] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -495,6 +500,7 @@ impl ResolutionConf {
         "spark.sql.optimizer.optimizeUncorrelatedInSubqueriesInJoinCondition.enabled",
         "spark.sql.legacy.scalarSubqueryCountBugBehavior",
         "spark.sql.optimizer.decorrelateInnerQuery.enabled",
+        "spark.sql.legacy.charVarcharAsString",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -567,6 +573,7 @@ impl ResolutionConf {
             legacy_count_bug: on(Self::KEYS[31]),
             decorrelate_inner_query: conf(Self::KEYS[32])
                 .is_none_or(|s| s.trim().eq_ignore_ascii_case("true")),
+            char_varchar_as_string: on(Self::KEYS[33]),
         }
     }
 
@@ -685,6 +692,7 @@ impl ContextFingerprint {
             c.in_join_condition_as_join,
             c.legacy_count_bug,
             c.decorrelate_inner_query,
+            c.char_varchar_as_string,
         ];
         num(
             &mut b,
@@ -756,13 +764,16 @@ pub struct AnalysisTimings {
 }
 
 /// A resolved plan and what a cache, the policy layer and EXPLAIN need.
-/// Equality ignores [`Self::timings`].
+/// Equality ignores [`Self::timings`] and [`Self::output_declared`] (which follows from the plan, the catalog and
+/// `spark.sql.legacy.charVarcharAsString`, all in the fingerprint).
 #[derive(Debug, Clone)]
 pub struct AnalyzedPlan {
     /// The resolved plan.
     pub plan: Plan,
     /// Its output columns.
     pub output: Vec<BoundColumn>,
+    /// Per output column, the `CHAR(n)` / `VARCHAR(n)` string it was declared with (see `char_varchar`).
+    pub output_declared: Vec<Option<String>>,
     /// The version pinned per table.
     pub pins: BTreeMap<TableIdent, TableVersion>,
     /// The securables read, in first-use order.
@@ -951,7 +962,8 @@ impl Analyzer for DefaultAnalyzer {
             let bindings = bind::bind(plan, ctx).await?;
             let metadata = started.elapsed();
             let resolving = std::time::Instant::now();
-            let (root, output, securables, warnings) = resolve::resolve(plan, ctx, &bindings)?;
+            let (root, output, securables, warnings, output_declared) =
+                resolve::resolve(plan, ctx, &bindings)?;
             unexecutable::check(&root, ctx.conf.time_type)?;
             let resolved =
                 Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
@@ -965,6 +977,7 @@ impl Analyzer for DefaultAnalyzer {
             Ok(AnalyzedPlan {
                 plan: resolved,
                 output,
+                output_declared,
                 pins,
                 securables,
                 input_key: input.structural_hash(),

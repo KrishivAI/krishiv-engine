@@ -304,6 +304,28 @@ impl Rewriter {
 }
 
 impl Rewriter {
+    /// A correlated scalar subquery that is `Project(value) <- Filter(HAVING)
+    /// <- Aggregate(GROUP BY keys)` whose keys the correlation fixes (a
+    /// constant or a correlated inner key): at most one group per outer row,
+    /// so `pull` lifts the whole plan and a group the `HAVING` rejects, or no
+    /// group, reads NULL after the join, `count` values included (Spark's
+    /// `planWithoutCountBug`). Under the legacy count flag a value that is not
+    /// NULL over no rows is refused. `Ok(false)` for any other shape.
+    pub(super) fn grouped_having_fixed(&mut self, plan: &Arc<LogicalPlan>) -> R<bool> {
+        let Some((below, keys, expr)) = grouped_having_parts(plan) else {
+            return Ok(false);
+        };
+        if self.legacy_scalar_count {
+            let empty = on_no_rows(&expr).ok_or_else(|| legacy_unknown(plan.origin))?;
+            super::legacy_grouped(empty.as_ref(), plan.origin)?;
+        }
+        // The same errors `scalar_single` would meet next: a specific refusal
+        // from `pull` or "not an equality" is reported as it is.
+        let (_, corr) = self.pull(&below, true)?;
+        let (inner_keys, _) = super::equality_keys(&corr, plan.origin)?;
+        Ok(keys.iter().all(|k| fixed_key(k, &inner_keys)))
+    }
+
     /// Whether `input` holds, anywhere below, a global aggregate over a
     /// correlated input: one row for every outer row, matches or not
     /// (Spark's count bug; the legacy flags, and a Spark without inner-query
@@ -869,6 +891,82 @@ fn reads_inner(p: &LogicalPlan) -> bool {
         | PlanNode::SubqueryAlias { input, .. } => reads_inner(input),
         _ => true,
     }
+}
+
+/// The error for a legacy-count subquery whose value over no rows is unknown.
+fn legacy_unknown(origin: Origin) -> AnalysisError {
+    super::unsupported(
+        "a correlated scalar subquery whose value over no rows is not NULL or a count",
+        origin,
+    )
+}
+
+/// Whether the grouping key `k` is fixed by the correlation: a constant, or a
+/// column the correlation equates to an outer expression.
+fn fixed_key(k: &Arc<Expr>, inner_keys: &[Arc<Expr>]) -> bool {
+    match &k.node {
+        ExprNode::Literal(_) => true,
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => inner_keys.iter().any(
+            |i| matches!(&i.node, ExprNode::Resolved(ResolvedExpr::Column(o)) if o.id == c.id),
+        ),
+        _ => false,
+    }
+}
+
+/// A grouped `HAVING` subquery's parts: the aggregate's input, its grouping
+/// keys and the value expression.
+type GroupedHaving = (Arc<LogicalPlan>, Vec<Arc<Expr>>, Arc<Expr>);
+
+/// The aggregate's input, its grouping keys and the value expression of a
+/// `[Project(value) <-] Filter(HAVING) <- Aggregate(GROUP BY keys)` plan whose
+/// keys, items and `HAVING` read nothing of the enclosing query (the input
+/// does), with a `HAVING` holding no subquery; `None` for any other shape.
+fn grouped_having_parts(plan: &Arc<LogicalPlan>) -> Option<GroupedHaving> {
+    let (filter, value) = match &plan.node {
+        PlanNode::Project { input, exprs } => match &exprs[..] {
+            [e] => match &e.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) => (input, Some(c.id)),
+                _ => return None,
+            },
+            _ => return None,
+        },
+        PlanNode::Filter { .. } => (plan, None),
+        _ => return None,
+    };
+    let PlanNode::Filter {
+        input: agg,
+        predicate,
+    } = &filter.node
+    else {
+        return None;
+    };
+    let PlanNode::Aggregate {
+        input: below,
+        grouping: Grouping::GroupBy(keys),
+        aggregates,
+    } = &agg.node
+    else {
+        return None;
+    };
+    let reads = |x: &Arc<Expr>| has_outer(Node::Expr(x));
+    let clean = !keys.is_empty()
+        && !keys.iter().any(reads)
+        && !aggregates.iter().any(reads)
+        && !reads(predicate)
+        && !has_subquery(Node::Expr(predicate))
+        && has_outer(Node::Plan(below));
+    // The value is the projected column, or the aggregate's only item.
+    let expr = aggregates.iter().find_map(|a| match &a.node {
+        ExprNode::Resolved(ResolvedExpr::Alias { expr, output })
+            if value.is_none_or(|v| output.id == v)
+                && (value.is_some() || aggregates.len() == 1) =>
+        {
+            Some(Arc::clone(expr))
+        }
+        _ => None,
+    });
+    clean.then_some(())?;
+    Some((Arc::clone(below), keys.clone(), expr?))
 }
 
 #[cfg(test)]

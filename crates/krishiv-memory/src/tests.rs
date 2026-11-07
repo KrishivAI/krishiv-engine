@@ -1547,3 +1547,232 @@ fn snapshots_show_the_tenant_level() {
     assert_eq!(t.limit, Some(32 * Q));
     assert_eq!(t.parent.as_deref(), Some("process"));
 }
+
+/// Every pool of a query shares its cohorts; pools of other queries and
+/// the root have their own or none.
+#[test]
+fn a_query_shares_its_cohorts_across_its_pools() {
+    let root = root(Some(64 * Q), Q);
+    let q1 = root.child_pool("q1", Some(32 * Q));
+    let task = q1.child_pool("task", None);
+    let q2 = root.child_pool("q2", Some(32 * Q));
+    let (a, b) = (q1.cohort("c").unwrap(), task.cohort("c").unwrap());
+    assert!(Arc::ptr_eq(&a, &b));
+    assert!(!Arc::ptr_eq(&a, &q2.cohort("c").unwrap()));
+    assert!(!Arc::ptr_eq(&a, &task.cohort("other").unwrap()));
+    assert!(root.cohort("c").is_none());
+}
+
+/// Seats count members and active ones (reserving or holding); going idle
+/// or leaving wakes a waiter that listened first, and reserving -> holding
+/// does not.
+#[tokio::test]
+async fn a_cohort_wakes_waiters_when_a_member_goes_idle() {
+    use crate::SeatState::{Holding, Idle, Reserving};
+    let root = root(Some(64 * Q), Q);
+    let cohort = root.child_pool("q", Some(32 * Q)).cohort("c").unwrap();
+    let (mut a, mut b) = (cohort.join(), cohort.join());
+    assert_eq!(cohort.members(), 2);
+    assert!(!cohort.others_active(&b));
+    a.set(Reserving);
+    assert!(cohort.others_active(&b));
+    assert!(!cohort.others_active(&a));
+    b.set(Reserving);
+    assert!(cohort.others_active(&a));
+    b.set(Idle);
+    let mut changed = Box::pin(cohort.changed());
+    a.set(Holding);
+    let early = tokio::time::timeout(std::time::Duration::from_millis(20), changed.as_mut()).await;
+    assert!(early.is_err(), "reserving -> holding woke a waiter");
+    assert!(cohort.others_active(&b));
+    a.set(Idle);
+    tokio::time::timeout(std::time::Duration::from_secs(5), changed)
+        .await
+        .unwrap();
+    assert!(!cohort.others_active(&b));
+    a.set(Holding);
+    let changed = cohort.changed();
+    drop(a);
+    tokio::time::timeout(std::time::Duration::from_secs(5), changed)
+        .await
+        .unwrap();
+    assert_eq!(cohort.members(), 1);
+    assert!(!cohort.others_active(&b));
+}
+
+/// Another driver of the query was granted bytes for a retry it has not run
+/// yet (sync operator code returned `NeedMemory`): a request that needs those
+/// bytes waits for the retry, which uses part and returns the rest, instead
+/// of failing at once (ADR 0007 update 2026-11-06).
+#[tokio::test(start_paused = true)]
+async fn a_round_waits_for_another_drivers_unsettled_grant() {
+    let root = root(Some(4 * Q), Q);
+    let q = root.child_pool("q", None);
+    let (a, b) = (SpillOwner::new(), SpillOwner::new());
+    let ha = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "a",
+        Some(a.signal() as Arc<dyn Spillable>),
+    );
+    let hb = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "b",
+        Some(b.signal() as Arc<dyn Spillable>),
+    );
+    b.reserve_for(&hb, 3 * Q, || async {}).await.unwrap();
+    assert_eq!((hb.credit(), root.reserved()), (3 * Q, 3 * Q));
+    let started = tokio::time::Instant::now();
+    let want = tokio::spawn({
+        let ha = Arc::clone(&ha);
+        async move { a.reserve_for(&ha, 2 * Q, || async {}).await }
+    });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(
+        !want.is_finished(),
+        "the request failed while b's retry was pending"
+    );
+    // b's retry takes its credit, applies, and keeps one quantum.
+    let mut r = hb.reservation();
+    r.try_grow(3 * Q).unwrap();
+    r.shrink(2 * Q);
+    hb.settle_grant();
+    want.await.unwrap().unwrap();
+    assert_eq!(ha.credit(), 2 * Q);
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(root.stats().aborts, 0);
+}
+
+/// A retry that keeps everything it was granted settles its grant: a round
+/// waiting for it fails then, not at `abortReleaseTimeout`.
+#[tokio::test(start_paused = true)]
+async fn a_settled_grant_that_frees_nothing_fails_the_wait_at_once() {
+    let root = root(Some(4 * Q), Q);
+    let q = root.child_pool("q", Some(4 * Q));
+    let (a, b) = (SpillOwner::new(), SpillOwner::new());
+    let ha = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "a",
+        Some(a.signal() as Arc<dyn Spillable>),
+    );
+    let hb = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "b",
+        Some(b.signal() as Arc<dyn Spillable>),
+    );
+    b.reserve_for(&hb, 3 * Q, || async {}).await.unwrap();
+    let started = tokio::time::Instant::now();
+    let want = tokio::spawn({
+        let ha = Arc::clone(&ha);
+        async move { a.reserve_for(&ha, 2 * Q, || async {}).await }
+    });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(!want.is_finished());
+    let mut r = hb.reservation();
+    r.try_grow(3 * Q).unwrap();
+    hb.settle_grant();
+    let e = want.await.unwrap().unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "waited {:?} after the grant settled",
+        started.elapsed()
+    );
+    assert_eq!(ha.credit(), 0);
+    drop(r);
+}
+
+/// A driver waiting in a round of its own will not use its grant until that
+/// round ends: it does not count as in flight, so two drivers whose retries
+/// both need more never wait on each other.
+#[tokio::test(start_paused = true)]
+async fn grants_of_drivers_waiting_for_memory_are_not_waited_for() {
+    let root = root(Some(4 * Q), Q);
+    let q = root.child_pool("q", Some(4 * Q));
+    let (a, b) = (SpillOwner::new(), SpillOwner::new());
+    let ha = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "a",
+        Some(a.signal() as Arc<dyn Spillable>),
+    );
+    let hb = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "b",
+        Some(b.signal() as Arc<dyn Spillable>),
+    );
+    a.reserve_for(&ha, 2 * Q, || async {}).await.unwrap();
+    b.reserve_for(&hb, 2 * Q, || async {}).await.unwrap();
+    let started = tokio::time::Instant::now();
+    // a's retry needs more and asks again, keeping its credit: it waits for
+    // b's grant.
+    let more_a = tokio::spawn({
+        let ha = Arc::clone(&ha);
+        async move { a.reserve_for(&ha, Q, || async {}).await }
+    });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(!more_a.is_finished());
+    // So does b's. Each waits in a round, so neither counts the other's
+    // grant: both end at once (the query is aborted, nothing hangs).
+    let e = b.reserve_for(&hb, Q, || async {}).await.unwrap_err();
+    let ea = more_a.await.unwrap().unwrap_err();
+    for e in [e, ea] {
+        assert!(matches!(
+            e.error_class(),
+            ErrorClass::UnableToAcquireMemory | ErrorClass::KrishivQueryAbortedOutOfMemory
+        ));
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// A retry that uses its grant but for a sub-quantum remainder returns
+/// nothing to the pools, so that release wakes no one: settling the grant
+/// itself wakes a round waiting for it, which then fails at once.
+#[tokio::test(start_paused = true)]
+async fn settling_a_grant_with_a_sub_quantum_remainder_wakes_waiting_rounds() {
+    let root = root(Some(4 * Q), Q);
+    let q = root.child_pool("q", Some(4 * Q));
+    let (a, b) = (SpillOwner::new(), SpillOwner::new());
+    let ha = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "a",
+        Some(a.signal() as Arc<dyn Spillable>),
+    );
+    let hb = ConsumerHandle::register(
+        Arc::clone(&q) as Arc<dyn MemoryPool>,
+        "b",
+        Some(b.signal() as Arc<dyn Spillable>),
+    );
+    b.reserve_for(&hb, 3 * Q, || async {}).await.unwrap();
+    let started = tokio::time::Instant::now();
+    let want = tokio::spawn({
+        let ha = Arc::clone(&ha);
+        async move { a.reserve_for(&ha, 2 * Q, || async {}).await }
+    });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(!want.is_finished());
+    let mut r = hb.reservation();
+    // The consumer quantum is the limit / 64 (64 KiB): 16 KiB stays in it.
+    r.try_grow(3 * Q - (16 << 10)).unwrap();
+    hb.settle_grant();
+    assert_eq!(root.reserved(), 3 * Q, "the remainder stays in the quantum");
+    let e = want.await.unwrap().unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory);
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    drop(r);
+}
+
+#[test]
+fn a_grant_credit_debug_shows_its_bytes_and_unsettled_grants() {
+    let credit = GrantCredit::default();
+    let shown = format!("{credit:?}");
+    assert!(shown.starts_with("GrantCredit {"), "{shown}");
+    assert!(shown.contains("bytes: 0"), "{shown}");
+    assert!(shown.contains("unsettled: 0"), "{shown}");
+}

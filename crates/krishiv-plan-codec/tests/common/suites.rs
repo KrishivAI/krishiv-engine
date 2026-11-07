@@ -201,6 +201,7 @@ fn columns_of(
             name,
             data_type,
             nullable,
+            char_varchar: None,
         });
     }
     (columns, fields)

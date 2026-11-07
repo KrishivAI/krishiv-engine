@@ -23,6 +23,7 @@ fn catalog() -> MemoryCatalog {
         name: name.to_owned(),
         data_type,
         nullable,
+        char_varchar: None,
     };
     MemoryCatalog::new("spark_catalog")
         .with_table(

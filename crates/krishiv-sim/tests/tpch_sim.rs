@@ -144,6 +144,7 @@ async fn open(store: Arc<dyn ObjectStore>) -> Result<Tpch, KrishivError> {
                 name: f.name().clone(),
                 data_type,
                 nullable: f.is_nullable(),
+                char_varchar: None,
             });
         }
         catalog = catalog.with_table(&["default"], t, columns, None);

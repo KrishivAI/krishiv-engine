@@ -15,6 +15,7 @@ fn catalog() -> MemoryCatalog {
         name: name.to_owned(),
         data_type: krishiv_types::parse_data_type(t).unwrap(),
         nullable: true,
+        char_varchar: None,
     };
     MemoryCatalog::new("spark_catalog").with_table(
         &["default"],

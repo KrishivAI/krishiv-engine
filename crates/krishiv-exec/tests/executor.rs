@@ -766,6 +766,22 @@ fn config_merge_join_buffer_bytes() {
     );
 }
 
+/// The shared broadcast cap is unset by default and when set to 0.
+#[test]
+fn config_shared_broadcast_bytes() {
+    assert_eq!(
+        ExecConfig::from_config(&Config::new()).shared_broadcast_bytes,
+        None
+    );
+    let read = |v: &str| {
+        let (config, _) =
+            Config::from_pairs([("krishiv.exec.join.sharedBroadcastBytes", v)]).unwrap();
+        ExecConfig::from_config(&config).shared_broadcast_bytes
+    };
+    assert_eq!(read("64m"), Some(64 << 20));
+    assert_eq!(read("0"), None);
+}
+
 /// Sort hash buckets are on by default; `krishiv.exec.sort.hashBuckets`
 /// turns them off.
 #[test]
