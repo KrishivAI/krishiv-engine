@@ -606,3 +606,36 @@ fn a_cohort_member_going_idle_wakes_a_waiter() {
         t.join().unwrap();
     });
 }
+
+/// Two askers that fail at once back off without waking each other: at
+/// least one of them sees no other member active and goes on (here it
+/// leaves), and its last move to idle wakes the other, which then goes on
+/// too. Neither waits forever.
+#[test]
+fn two_cohort_askers_never_wait_for_each_other() {
+    fn ask(cohort: &crate::Cohort, mut seat: crate::Seat) {
+        loop {
+            seat.set(crate::SeatState::Reserving);
+            // The request is refused: stand by, then wait while another
+            // member is active, else go on with the full request.
+            seat.stand_by();
+            let listener = cohort.changed();
+            if !cohort.others_active(&seat) {
+                seat.set(crate::SeatState::Reserving);
+                seat.set(crate::SeatState::Idle);
+                return;
+            }
+            block_on(listener);
+        }
+    }
+    model(|| {
+        let cohort = Arc::new(crate::Cohort::default());
+        let (a, b) = (cohort.join(), cohort.join());
+        let other = {
+            let cohort = Arc::clone(&cohort);
+            thread::spawn(move || ask(&cohort, b))
+        };
+        ask(&cohort, a);
+        other.join().unwrap();
+    });
+}

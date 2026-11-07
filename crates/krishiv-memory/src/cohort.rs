@@ -118,6 +118,24 @@ impl Seat {
     }
 }
 
+impl Seat {
+    /// [`SeatState::Reserving`] to idle *without* waking the cohort: an
+    /// asker backing off to check [`Cohort::others_active`] before it waits.
+    /// Waking there would make waiters wake each other in turn while a
+    /// holder keeps its memory. Any member waiting on this one is woken by
+    /// this one's next move to idle (its last), as it then is active again or
+    /// waits only while some other member is active. Other states: as
+    /// [`set`](Self::set) to idle.
+    pub fn stand_by(&mut self) {
+        if self.state == SeatState::Reserving {
+            self.state = SeatState::Idle;
+            self.cohort.active.fetch_sub(1, Ordering::AcqRel);
+        } else {
+            self.set(SeatState::Idle);
+        }
+    }
+}
+
 impl Drop for Seat {
     fn drop(&mut self) {
         self.set(SeatState::Idle);

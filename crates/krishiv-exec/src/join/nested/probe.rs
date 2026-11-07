@@ -153,39 +153,55 @@ impl Disk {
 /// [`SeatState::Reserving`] while it asks: arbitration spills without
 /// aborting; if that is not enough and another member of the cohort is
 /// active (holds a chunk, freed at the end of its pass, or is asking), the
-/// seat goes idle (so two askers never wait for each other), waits for a
-/// member to go idle and asks again, counting the wait in `waits`. With no
-/// other member active, the full arbitration runs, which may fail the
-/// request or abort a query. The seat ends in `then` once granted, idle
-/// on an error.
+/// seat stands by ([`Seat::stand_by`]: idle without waking anyone, so two
+/// askers never wait for each other and waiters do not wake each other),
+/// waits for a member to go idle and asks again, counting the wait in
+/// `waits`. With no other member active, the full arbitration runs, which
+/// may fail the request or abort a query. The seat ends in `then` once
+/// granted, idle on an error or if the future is dropped (which wakes the
+/// cohort).
 async fn reserve_in_cohort(
     r: &mut Reservation,
     bytes: usize,
     seat: Option<(&mut Seat, &AtomicU64)>,
     then: SeatState,
 ) -> Result<()> {
+    /// Leaves the seat idle (waking the cohort) unless it ended otherwise.
+    struct Asking<'a>(&'a mut Seat);
+    impl Drop for Asking<'_> {
+        fn drop(&mut self) {
+            if self.0.state() == SeatState::Reserving {
+                self.0.set(SeatState::Idle);
+            }
+        }
+    }
     let Some((seat, waits)) = seat else {
         return r.grow(bytes).await.map_err(KrishivError::from);
     };
     let cohort = Arc::clone(seat.cohort());
+    let asking = Asking(seat);
     let out = loop {
-        seat.set(SeatState::Reserving);
+        asking.0.set(SeatState::Reserving);
         match r.grow_without_abort(bytes).await {
             Ok(()) => break Ok(()),
             Err(MemoryError::Exhausted { .. }) => {}
             Err(e) => break Err(e),
         }
-        seat.set(SeatState::Idle);
+        asking.0.stand_by();
         // Listen before checking: a member going idle meanwhile wakes us.
         let changed = cohort.changed();
-        if !cohort.others_active(seat) {
-            seat.set(SeatState::Reserving);
+        if !cohort.others_active(asking.0) {
+            asking.0.set(SeatState::Reserving);
             break r.grow(bytes).await;
         }
         waits.fetch_add(1, Ordering::Relaxed);
         changed.await;
     };
-    seat.set(if out.is_ok() { then } else { SeatState::Idle });
+    // Granted: `then`; failed: idle (the guard, waking the cohort).
+    if out.is_ok() {
+        asking.0.set(then);
+    }
+    drop(asking);
     out.map_err(KrishivError::from)
 }
 
@@ -779,6 +795,66 @@ mod tests {
         assert!(waits.load(Ordering::Relaxed) >= 1);
         assert!(q.check_aborted().is_ok());
         r.shrink(32 * KIB);
+        q.unregister(held);
+    }
+
+    /// Two batches waiting on one holder do not wake each other: each
+    /// waits a bounded number of times (backing off does not notify), and
+    /// both are granted once the holder lets go.
+    #[tokio::test]
+    async fn two_waiters_do_not_wake_each_other() {
+        let (q, held, mut peer, mut a, mut ra) = setup();
+        let mut b = a.cohort().join();
+        let mut rb = Reservation::new(Arc::clone(&q), q.register("chunk2", None));
+        let (wa, wb) = (AtomicU64::new(0), AtomicU64::new(0));
+        {
+            let ask_a =
+                reserve_in_cohort(&mut ra, 20 * KIB, Some((&mut a, &wa)), SeatState::Holding);
+            let ask_b =
+                reserve_in_cohort(&mut rb, 20 * KIB, Some((&mut b, &wb)), SeatState::Holding);
+            let both = async { tokio::join!(ask_a, ask_b) };
+            let mut both = Box::pin(both);
+            let early = tokio::time::timeout(Duration::from_millis(300), both.as_mut()).await;
+            assert!(early.is_err(), "granted while the peer held its chunk");
+            assert!(
+                wa.load(Ordering::Relaxed) <= 2 && wb.load(Ordering::Relaxed) <= 2,
+                "waiters woke each other: {wa:?} {wb:?}"
+            );
+            q.release(held, 240 * KIB);
+            peer.set(SeatState::Idle);
+            let (x, y) = tokio::time::timeout(Duration::from_secs(10), both)
+                .await
+                .unwrap();
+            x.unwrap();
+            y.unwrap();
+        }
+        assert!(wa.load(Ordering::Relaxed) <= 3 && wb.load(Ordering::Relaxed) <= 3);
+        assert_eq!(
+            (a.state(), b.state()),
+            (SeatState::Holding, SeatState::Holding)
+        );
+        ra.shrink(20 * KIB);
+        rb.shrink(20 * KIB);
+        q.unregister(held);
+    }
+
+    /// A request dropped while it waits leaves its seat idle.
+    #[tokio::test]
+    async fn a_dropped_request_leaves_its_seat_idle() {
+        let (q, held, _peer, mut seat, mut r) = setup();
+        let waits = AtomicU64::new(0);
+        {
+            let ask = reserve_in_cohort(
+                &mut r,
+                32 * KIB,
+                Some((&mut seat, &waits)),
+                SeatState::Holding,
+            );
+            let early = tokio::time::timeout(Duration::from_millis(200), ask).await;
+            assert!(early.is_err());
+        }
+        assert_eq!(seat.state(), SeatState::Idle);
+        q.release(held, 240 * KIB);
         q.unregister(held);
     }
 
