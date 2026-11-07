@@ -76,11 +76,22 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
+        // `equal_null(a, b)` is `a <=> b` (Spark's `EqualNull` replacement), so a bare `char(n)` operand pads as
+        // it does for the operator (`ApplyCharTypePadding`).
+        let padded = (matches!(entry.id, crate::FunctionId::Registry { .. })
+            && entry.id.name() == "equal_null")
+            .then(|| self.pad_char_comparison(kids))
+            .flatten();
+        let kids = padded.as_deref().unwrap_or(kids);
         let constants: Vec<Option<Constant>> = kids
             .iter()
             .map(|k| self.fold(&k.expr, self.ctx.conf.ansi))
             .collect();
         let literals: Vec<bool> = kids.iter().map(|k| fold::is_literal(&k.expr)).collect();
+        let foldable: Vec<bool> = kids
+            .iter()
+            .map(|k| !crate::analyzer::ops::not_constant(&k.expr))
+            .collect();
         // Rendered only if a rule's error quotes an argument.
         let zone = self.ctx.conf.session_zone;
         let sql = |i: usize| kids.get(i).map(|k| pretty(&k.shown(), zone));
@@ -108,6 +119,7 @@ impl Resolver<'_> {
         let bound_sql = |i: usize| call_kids.get(i).map(|k| pretty(&k.expr, zone));
         let call = CallTypes::new(&types, &constants)
             .with_literals(&literals)
+            .with_foldable(&foldable)
             .with_sql(&sql)
             .with_bound_sql(&bound_sql)
             .with_ansi(ansi)

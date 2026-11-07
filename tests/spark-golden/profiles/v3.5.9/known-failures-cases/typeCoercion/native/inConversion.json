@@ -1,0 +1,28 @@
+{
+  "cases": {
+    "depends-on-command": [
+      56,
+      68,
+      89,
+      90,
+      93,
+      94,
+      104,
+      116,
+      237,
+      238,
+      248,
+      260
+    ],
+    "v35-ansi-default": [
+      95,
+      96,
+      128,
+      140,
+      239,
+      240
+    ]
+  },
+  "file": "typeCoercion/native/inConversion",
+  "format_version": 1
+}

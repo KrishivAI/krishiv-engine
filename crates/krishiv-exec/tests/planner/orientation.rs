@@ -26,6 +26,7 @@ fn env() -> Env {
             name: f.name().clone(),
             data_type: krishiv_types::DataType::from_arrow(f.data_type()).unwrap(),
             nullable: f.is_nullable(),
+            char_varchar: None,
         })
         .collect();
     let mut catalog = MemoryCatalog::new("spark_catalog");

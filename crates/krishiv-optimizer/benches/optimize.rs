@@ -83,6 +83,7 @@ fn tpch_catalog() -> MemoryCatalog {
                     name: n.to_owned(),
                     data_type: parse_data_type(t).expect("type"),
                     nullable: true,
+                    char_varchar: None,
                 }
             })
             .collect();
@@ -133,6 +134,7 @@ fn tpcds_plans() -> Vec<Plan> {
                     name: c["name"].as_str().expect("name").to_owned(),
                     data_type: parse_data_type(ty).expect("type"),
                     nullable: true,
+                    char_varchar: None,
                 }
             })
             .collect();

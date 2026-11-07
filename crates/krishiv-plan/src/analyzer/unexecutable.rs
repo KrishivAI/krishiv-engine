@@ -45,7 +45,7 @@ fn is_spatial(t: Option<&DataType>) -> bool {
 }
 
 fn is_collated(t: Option<&DataType>) -> bool {
-    t.is_some_and(|t| t.any_type(&|x| matches!(x, DataType::CollatedString(_))))
+    t.is_some_and(krishiv_types::DataType::contains_collation)
 }
 
 /// The use of a spatial value as a key at `node`, with its origin.

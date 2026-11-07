@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "other-version": [
+      66,
+      72,
+      73
+    ]
+  },
+  "file": "nonansi/date",
+  "format_version": 1
+}

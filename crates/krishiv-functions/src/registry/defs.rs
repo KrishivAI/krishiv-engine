@@ -1077,7 +1077,7 @@ fn datetime() -> Vec<Spec> {
     ));
     out.extend(scalar(
         &["time_trunc"],
-        &Inputs::Expects(vec![exact(DataType::String), any_time()]),
+        &Inputs::Expects(vec![exact(DataType::String), InputType::AnyTimeOrString]),
         time_trunc_result,
     ));
     out.extend(scalar(
@@ -1346,7 +1346,7 @@ pub(super) fn spark_orderable(t: &DataType) -> bool {
 /// map field) is `DATATYPE_MISMATCH.INVALID_ORDERING_TYPE`; one Spark orders
 /// but the struct comparator does not take
 /// ([`krishiv_kernels::r#struct::comparable`], the same predicate the
-/// executor compares with: an array or interval field) is
+/// executor compares with: an interval field) is
 /// `KRISHIV_UNSUPPORTED_FEATURE`.
 fn ordered_min_max(c: &CallTypes<'_>, function: &str) -> Result<ArgType, KrishivError> {
     if let Some(t) = c.data_type(0) {
@@ -1984,6 +1984,19 @@ fn nth_value(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         Constant::Integral(v) | Constant::Fractional(v) => *v,
         Constant::String(t) => t.trim().parse::<i64>().unwrap_or(0),
         Constant::Error(e) => return Err(e.clone()),
+        // An interval or timestamp offset has no implicit cast to `INT` (Spark's `ImplicitCastInputTypes`).
+        Constant::Interval(_) | Constant::Timestamp(_) => {
+            return Err(DatatypeMismatchUnexpectedInputType {
+                sql_expr: call,
+                param_index: "second".to_owned(),
+                required_type: "\"INT\"".to_owned(),
+                input_sql: format!("\"{}\"", sql(1)),
+                input_type: c
+                    .data_type(1)
+                    .map_or_else(|| "\"VOID\"".to_owned(), |t| format!("\"{}\"", t.sql())),
+            }
+            .into());
+        }
         _ => 0,
     };
     if value <= 0 {
@@ -2043,6 +2056,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::array_set::specs());
     out.extend(super::array_shape::specs());
     out.extend(super::text::specs());
+    out.extend(super::time::specs());
     out.extend(super::hof::specs());
     out.extend(super::collection::specs());
     out.extend(super::r#struct::specs());

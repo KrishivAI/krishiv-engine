@@ -103,6 +103,7 @@ fn view(sql: &str) -> Option<(String, Vec<TableColumn>)> {
             name: alias.unwrap_or(shown).to_owned(),
             data_type,
             nullable: false,
+            char_varchar: None,
         });
     }
     Some((name.trim().to_owned(), columns))
@@ -208,8 +209,8 @@ fn failures(root: &Path) -> (BTreeMap<(String, String), String>, usize) {
 fn type_coercion_goldens_analyze_as_spark_does() {
     let root = krishiv_testkit::tests_dir();
     let (failures, queries) = failures(&root);
-    // Of 2,858 query statements, 2,826 resolve as Spark resolves them.
-    assert_eq!((queries, queries - failures.len()), (2858, 2826));
+    // Of 2,858 query statements, 2,827 resolve as Spark resolves them.
+    assert_eq!((queries, queries - failures.len()), (2858, 2827));
     let dir = root.join(MANIFEST_DIR);
     if std::env::var_os("KRISHIV_UPDATE_MANIFEST").is_some() {
         let mut by_file: BTreeMap<&str, Vec<(&String, &String)>> = BTreeMap::new();

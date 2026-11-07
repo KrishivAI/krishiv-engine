@@ -991,7 +991,7 @@ async fn spill_global_during_finalize() {
         assert_eq!(agg.spill_global(&g, 1, &sink_ctx).await.unwrap(), 0);
         let src = ctx(1, "src").with_dependency(Arc::clone(&g));
         let sg = Source::global_state(&*agg, &src).unwrap();
-        assert_eq!(agg.max_parallelism(&sg), 1);
+        assert!(agg.max_parallelism(&sg) > 1, "a file per disk task");
         let mut sl = Source::local_state(&*agg, &src, &sg).unwrap();
         let mut out = Vec::new();
         while let Some(b) = agg.get_data(&mut sl, &sg).await.unwrap() {
@@ -1613,8 +1613,8 @@ async fn first_and_last_pick_rows_in_input_order() {
         ["NULL|NULL|NULL|NULL|NULL|NULL|NULL|NULL"]
     );
 }
-
 mod collect;
+mod disk;
 mod misc;
 mod simple;
 mod structs;
@@ -2016,7 +2016,7 @@ async fn row_final_phase_parallel_and_spill_fallback() {
         assert_eq!(rows(&out), expected, "hog {hog}");
         if hog {
             assert!(agg.metrics().spill_runs > 0);
-            assert_eq!(parallel, 1);
+            assert!(parallel > 1, "{parallel}");
         } else {
             assert_eq!(agg.metrics().spill_runs, 0);
             assert!(parallel > 1, "{parallel}");
@@ -3237,4 +3237,41 @@ async fn moments_over_distinct_arguments() {
     let want_corr = corr_at(&want, 6).unwrap();
     assert!((got[""][0].unwrap() - want_corr).abs() < 1e-12, "{got:?}");
     assert_eq!(got[""][1], Some(6.0));
+}
+
+/// Batches of 4,096 rows take the batch-local key map (`RowTable::probe_local`, E2 step 2): every
+/// index mode, one and three drivers, one and two phases, a tiny fixed index that clears between rows
+/// of one key; fixed-width and inline string keys, NULL keys, and 1,000 keys (past `LOCAL_MAX`: the
+/// map gives up and backs off). The rows equal the columnar tables'.
+#[test]
+fn few_keys_per_batch_take_the_local_map_and_equal_default() {
+    // (keys, every `nulls`th key NULL, strings inline (else 4 in 7 long)).
+    for (keys, nulls, inline) in [(10, 0, false), (10, 11, true), (1000, 0, true)] {
+        let data: Vec<RowCase> = (0..8192_i32)
+            .map(|i| {
+                let x = i64::from(i.wrapping_mul(7919) % 1000);
+                let null = nulls > 0 && i % nulls == 0;
+                let s = if inline { 3 * (i % 7) } else { i % 7 };
+                (
+                    (!null).then(|| i.wrapping_mul(2_654_435_761_u32 as i32)),
+                    u8::try_from(i % 5).ok(),
+                    Some(i % 2 == 0),
+                    Some(x),
+                    Some(x * 3),
+                    (!null).then(|| u16::try_from(s).unwrap_or(0)),
+                )
+            })
+            .collect();
+        for nkeys in 1..=6 {
+            for mode in 0..3 {
+                for slots in [1, 3] {
+                    for two in [false, true] {
+                        row_case(&data, keys, nkeys, 4096, slots, mode, 3, two, None).unwrap_or_else(|e| {
+                            panic!("keys {keys} nulls {nulls} nkeys {nkeys} mode {mode} slots {slots} two {two}: {e}")
+                        });
+                    }
+                }
+            }
+        }
+    }
 }

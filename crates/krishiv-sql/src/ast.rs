@@ -1097,8 +1097,14 @@ pub struct CreateNamespace {
     pub location: Option<String>,
     /// `DEFAULT COLLATION ...`.
     pub collation: Option<ObjectName>,
-    /// `WITH DBPROPERTIES|PROPERTIES (...)`.
+    /// `WITH DBPROPERTIES|PROPERTIES (...)`; every list written, appended.
     pub properties: Vec<TableOption>,
+    /// The first clause written twice, in Spark's check order (`COMMENT`,
+    /// `DEFAULT COLLATION`, `LOCATION`, `WITH PROPERTIES`,
+    /// `WITH DBPROPERTIES`), if any: `DUPLICATE_CLAUSES`.
+    pub duplicate_clause: Option<&'static str>,
+    /// Both `WITH PROPERTIES` and `WITH DBPROPERTIES` written.
+    pub properties_and_dbproperties: bool,
     /// Source text, from `CREATE` to the end of the statement.
     pub span: Span,
 }
@@ -1453,8 +1459,8 @@ pub struct AlterNamespace {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AlterNamespaceAction {
-    /// `SET PROPERTIES (...)` (namespaces say `PROPERTIES`, not
-    /// `TBLPROPERTIES`).
+    /// `SET PROPERTIES (...)` or `SET DBPROPERTIES (...)` (namespaces say
+    /// `PROPERTIES`, not `TBLPROPERTIES`).
     SetProperties(Vec<TableOption>),
     /// `SET LOCATION '...'`.
     SetLocation(String),

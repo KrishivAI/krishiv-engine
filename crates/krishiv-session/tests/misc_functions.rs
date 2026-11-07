@@ -228,7 +228,8 @@ fn current_database_and_catalog() {
             vec![
                 "current_schema()".to_owned(),
                 "current_schema()".to_owned(),
-                "current_catalog".to_owned(),
+                // Spark 4.2.0 (local run 2026-11-06 and the golden): with parentheses.
+                "current_catalog()".to_owned(),
             ],
             vec![vec![
                 "default".to_owned(),

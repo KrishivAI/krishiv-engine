@@ -39,7 +39,7 @@ use krishiv_types::DataType;
 use crate::estimate::Estimator;
 use crate::expr::{
     Attrs, and_all, builtin, call, column, common_equalities, conjuncts, has_subquery, implied,
-    is_deterministic, references,
+    is_deterministic, references, substitute,
 };
 use crate::narrow::{conjunct_selectivities, equi_columns, selectivity};
 use crate::stats::{RelStats, Statistics, cse_definitions, reads_cse, resolve_cse};
@@ -255,6 +255,38 @@ fn selection(p: &LogicalPlan) -> Option<&Arc<LogicalPlan>> {
         }
         _ => None,
     }
+}
+
+/// The outputs of `p`'s projection that compute an expression rather than
+/// pass a column through, by attribute. Empty when `p` is no projection, or
+/// one the filter pushdown does not cross (a nondeterministic expression, a
+/// common-subexpression output): a conjunct over it stays above, so it is
+/// estimated as written.
+fn computed_outputs(p: &LogicalPlan) -> HashMap<AttrId, Arc<Expr>> {
+    let PlanNode::Project { exprs, .. } = &p.node else {
+        return HashMap::new();
+    };
+    let crossed = exprs.iter().all(|e| is_deterministic(e))
+        && !exprs.iter().any(|e| match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
+                crate::cse::is_cse_column(output)
+            }
+            _ => false,
+        });
+    if !crossed {
+        return HashMap::new();
+    }
+    exprs
+        .iter()
+        .filter_map(|e| match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output })
+                if !matches!(expr.node, ExprNode::Resolved(ResolvedExpr::Column(_))) =>
+            {
+                Some((output.id, Arc::clone(expr)))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Whether the column selection `p` over `input` drops only columns common-
@@ -764,6 +796,10 @@ impl Graph {
             })
             .collect();
         let mut joins = Vec::new();
+        // Each input's projection outputs that compute an expression (not a
+        // plain column), by attribute.
+        let projected: Vec<HashMap<AttrId, Arc<Expr>>> =
+            sorted.iter().map(|l| computed_outputs(l)).collect();
         // Definitions per sorted input, so estimates read through
         // common-subexpression projections (built only when a conjunct
         // needs them).
@@ -788,6 +824,17 @@ impl Graph {
                 let resolved = leaf_defs
                     .get(i)
                     .map_or_else(|| Arc::clone(&p), |defs| resolve_cse(&p, defs));
+                // Read through the input's projection to what it computes, as
+                // the estimate sees the conjunct once pushed below it: a class
+                // equality join ordering derives over `x + 1 AS c0, x AS c2` is
+                // `x + 1 = x` there, so both places estimate it alike.
+                let resolved = match projected.get(i) {
+                    // A conjunct with a subquery stays above the projection.
+                    Some(defs) if !defs.is_empty() && !has_subquery(&resolved) => {
+                        substitute(&resolved, defs)
+                    }
+                    _ => resolved,
+                };
                 local[i].push(resolved);
                 sorted[i] = Arc::new(LogicalPlan::new(PlanNode::Filter {
                     input: Arc::clone(&sorted[i]),

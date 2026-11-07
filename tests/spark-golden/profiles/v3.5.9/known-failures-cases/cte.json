@@ -1,0 +1,17 @@
+{
+  "cases": {
+    "depends-on-command": [
+      16
+    ],
+    "query-features": [
+      12,
+      32
+    ],
+    "subqueries": [
+      28,
+      29
+    ]
+  },
+  "file": "cte",
+  "format_version": 1
+}
