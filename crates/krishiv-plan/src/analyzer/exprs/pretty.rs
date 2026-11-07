@@ -312,7 +312,15 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             } else {
                 &k[..n.min(k.len())]
             };
-            let text = call(f.id.name(), op, f.distinct, kids, None, Some(&f.data_type));
+            // A Python UDF keeps its name's case (Spark's `PythonUDF` prints
+            // `name(args)` with the name it was made with: `pyspark/sql/udf.py`
+            // 4.2.0 lines 621-631 show `stringLengthString(test)`); built-ins
+            // print lower case.
+            let text = if let FunctionId::PythonUdf { name, .. } = &f.id {
+                format!("{name}({})", kids.join(", "))
+            } else {
+                call(f.id.name(), op, f.distinct, kids, None, Some(&f.data_type))
+            };
             // The filter child follows the arguments, when the call has
             // one; any `WITHIN GROUP` ordering keys follow it.
             let mut rest = k.get(n.min(k.len())..).unwrap_or_default().iter();

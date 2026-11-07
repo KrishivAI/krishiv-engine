@@ -320,3 +320,67 @@ async fn a_call_reading_both_sides_of_an_outer_join_is_refused_with_its_join_typ
         assert!(err.to_string().contains(name), "{join}: {err}");
     }
 }
+
+/// An unregistered UDF (a DataFrame-side `udf(...)` call, design unit 2c (a)):
+/// its version has the top bit set.
+const ANON: u32 = 0x8000_0001;
+
+#[tokio::test]
+async fn an_unregistered_call_resolves_by_its_encoded_name_and_shows_its_own() {
+    let (s, seen) = session(None);
+    let call = krishiv_session::functions::python_udf_call(
+        &plus_one_def("<lambda>"),
+        ANON,
+        [krishiv_session::functions::col("id")],
+    )
+    .unwrap();
+    let df = s.range(0, 3, 1, None).select([call]);
+    let schema = df.schema().await.unwrap();
+    assert_eq!(schema.field(0).name(), "<lambda>(id)");
+    let batches = df.collect().await.unwrap();
+    let got: Vec<Option<i64>> = batches
+        .iter()
+        .flat_map(|b| {
+            let c = b.column(0).as_any().downcast_ref::<Int64Array>().unwrap();
+            c.iter().collect::<Vec<_>>()
+        })
+        .collect();
+    let mut got = got;
+    got.sort_unstable();
+    assert_eq!(got, vec![Some(1), Some(2), Some(3)]);
+    let seen = seen.lock().unwrap();
+    assert!(
+        seen.prepared
+            .iter()
+            .all(|p| p == &("<lambda>".to_owned(), ANON)),
+        "{:?}",
+        seen.prepared
+    );
+}
+
+#[tokio::test]
+async fn an_unregistered_call_is_not_reachable_by_its_display_name_from_sql() {
+    let (s, _) = session(None);
+    let err = s
+        .sql("SELECT `<lambda>`(id) FROM range(1)")
+        .await
+        .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::UnresolvedRoutine, "{err}");
+}
+
+#[tokio::test]
+async fn a_registered_udf_is_called_and_shown_by_its_registered_name() {
+    // Spark's `PythonUDF` carries the registered name and prints it as made
+    // (PySpark 4.2.0 `sql/udf.py:621-631`: `stringLengthString(test)`).
+    let (s, seen) = session(None);
+    s.register_python_udf(plus_one_def("PyPlus"));
+    let df = s.sql("SELECT pyplus(id) FROM range(2)").await.unwrap();
+    assert_eq!(df.schema().await.unwrap().field(0).name(), "PyPlus(id)");
+    df.collect().await.unwrap();
+    let seen = seen.lock().unwrap();
+    assert!(
+        seen.prepared.iter().all(|p| p == &("PyPlus".to_owned(), 1)),
+        "{:?}",
+        seen.prepared
+    );
+}

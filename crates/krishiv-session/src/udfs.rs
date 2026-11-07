@@ -300,6 +300,14 @@ fn same(a: &str, b: &str) -> bool {
 
 impl FunctionRegistry for SessionFunctions {
     fn lookup(&self, name: &[String], profile: SparkProfile) -> FunctionLookup {
+        // An unregistered Python UDF's call (`session.<encoded>`), decoded
+        // as written: its definition is case-sensitive.
+        if let [q, f] = name
+            && same(q, "session")
+            && let Some((def, version)) = crate::python_udfs::decode_anonymous(f)
+        {
+            return FunctionLookup::Found(crate::python_udfs::entry_of(&def, version));
+        }
         let lower: Vec<String> = name.iter().map(|p| p.to_lowercase()).collect();
         match lower.as_slice() {
             [f] => match self.inner.lookup(std::slice::from_ref(f), profile) {

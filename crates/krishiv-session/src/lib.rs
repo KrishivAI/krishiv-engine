@@ -118,7 +118,7 @@ pub use krishiv_udf_sdk::{
     UdfProperties,
 };
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
-pub use python_udfs::{PythonUdfDef, PythonUdfEntry, PythonUdfLibrary};
+pub use python_udfs::{ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};
 pub use session::{RecordBatchStream, Session, SessionBuilder};
 /// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,

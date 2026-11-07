@@ -10,10 +10,18 @@
 //! epoch, which the analysis fingerprint covers: a cached plan never runs a
 //! callable it was not analyzed with, and a worker without that version
 //! refuses the plan (`KRISHIV_UDF_NOT_AVAILABLE`).
+//!
+//! An unregistered UDF (a DataFrame-side `udf(...)` call, design unit 2c
+//! (a)) is never in a library: its call carries its whole definition in an
+//! encoded name ([`anonymous_call_name`]) under the `session` qualifier, which
+//! [`SessionFunctions`](crate::SessionFunctions) decodes before resolving a
+//! name, so SQL cannot reach it by its display name. Its version has the top
+//! bit set ([`ANONYMOUS_VERSION_BIT`]), so it never equals a registration's.
 
 use std::collections::HashMap;
 use std::sync::{Arc, PoisonError, RwLock};
 
+use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::analyzer::{ArgType, Arity, CallTypes, FunctionEntry, Inputs};
 use krishiv_plan::{FunctionId, FunctionKind, PythonEvalType};
 use krishiv_types::DataType;
@@ -104,38 +112,146 @@ impl PythonUdfLibrary {
             .epoch
     }
 
-    /// The analyzer's entry for `name` (already lower-case), if registered.
-    /// A Python UDF takes any number of arguments of any type, as in Spark
-    /// (the converters check them when it runs), and its result is nullable.
+    /// The analyzer's entry for `name` (any case), if registered. Its
+    /// identity names the UDF as it was registered, as Spark names the
+    /// expression by the registered name.
     #[must_use]
     pub fn entry(&self, name: &str) -> Option<FunctionEntry> {
         let PythonUdfEntry { def, version } = self.get(name)?;
-        let data_type = def.return_type.clone();
-        let result = Arc::new(move |_: &CallTypes<'_>| {
-            Ok(ArgType {
-                data_type: Some(data_type.clone()),
-                nullable: true,
-            })
-        });
-        Some(FunctionEntry {
-            id: FunctionId::PythonUdf {
-                name: name.to_owned(),
-                version,
-                eval_type: def.eval_type,
-                thread_safe: def.thread_safe,
-            },
-            kind: FunctionKind::Scalar,
-            arity: Arity::any(),
-            inputs: Inputs::Any,
-            result,
-            deterministic: def.deterministic,
-        })
+        Some(entry_of(&def, version))
     }
+}
+
+/// The analyzer's entry of `def` at `version`: a Python UDF takes any number
+/// of arguments of any type, as in Spark (the converters check them when it
+/// runs), and its result is nullable.
+pub(crate) fn entry_of(def: &PythonUdfDef, version: u32) -> FunctionEntry {
+    let data_type = def.return_type.clone();
+    let result = Arc::new(move |_: &CallTypes<'_>| {
+        Ok(ArgType {
+            data_type: Some(data_type.clone()),
+            nullable: true,
+        })
+    });
+    FunctionEntry {
+        id: FunctionId::PythonUdf {
+            name: def.name.clone(),
+            version,
+            eval_type: def.eval_type,
+            thread_safe: def.thread_safe,
+        },
+        kind: FunctionKind::Scalar,
+        arity: Arity::any(),
+        inputs: Inputs::Any,
+        result,
+        deterministic: def.deterministic,
+    }
+}
+
+/// The bit every unregistered UDF's version has, and no registration's
+/// (registrations count up from 1 per name).
+pub const ANONYMOUS_VERSION_BIT: u32 = 0x8000_0000;
+
+/// What starts an encoded name; the fields are separated by it too. A NUL
+/// cannot be typed in SQL text short of a backquoted identifier holding one.
+const ANONYMOUS_MARK: char = '\u{0}';
+
+/// The tag after the first mark.
+const ANONYMOUS_TAG: &str = "krishiv.python_udf";
+
+/// The encoded name of an unregistered UDF's call: the definition and
+/// `version` (whose [`ANONYMOUS_VERSION_BIT`] must be set). Called under the
+/// `session` qualifier it resolves to `def` at `version`, shown as
+/// `def.name`.
+///
+/// # Errors
+/// `KRISHIV_INTERNAL_ERROR` when `version` lacks the bit or the name holds
+/// a NUL.
+pub(crate) fn anonymous_call_name(
+    def: &PythonUdfDef,
+    version: u32,
+) -> Result<String, KrishivError> {
+    if version & ANONYMOUS_VERSION_BIT == 0 || def.name.contains(ANONYMOUS_MARK) {
+        return Err(InternalError {
+            message: format!(
+                "an unregistered Python UDF call needs a version with the top bit and a name without NUL (got {version:#x}, {:?})",
+                def.name
+            ),
+        }
+        .into());
+    }
+    let m = ANONYMOUS_MARK;
+    Ok(format!(
+        "{m}{ANONYMOUS_TAG}{m}{version}{m}{}{m}{}{m}{}{m}{}{m}{}",
+        def.eval_type.code(),
+        u8::from(def.deterministic),
+        u8::from(def.thread_safe),
+        def.return_type.sql(),
+        def.name
+    ))
+}
+
+/// The definition and version an encoded name ([`anonymous_call_name`])
+/// carries; `None` for any other name.
+#[must_use]
+pub(crate) fn decode_anonymous(name: &str) -> Option<(PythonUdfDef, u32)> {
+    let rest = name.strip_prefix(ANONYMOUS_MARK)?;
+    let mut parts = rest.splitn(7, ANONYMOUS_MARK);
+    if parts.next()? != ANONYMOUS_TAG {
+        return None;
+    }
+    let version: u32 = parts.next()?.parse().ok()?;
+    if version & ANONYMOUS_VERSION_BIT == 0 {
+        return None;
+    }
+    let eval_type = PythonEvalType::from_code(parts.next()?.parse().ok()?)?;
+    let flag = |p: &str| match p {
+        "0" => Some(false),
+        "1" => Some(true),
+        _ => None,
+    };
+    let deterministic = flag(parts.next()?)?;
+    let thread_safe = flag(parts.next()?)?;
+    let return_type = krishiv_types::parse_data_type(parts.next()?).ok()?;
+    let display = parts.next()?;
+    Some((
+        PythonUdfDef {
+            name: display.to_owned(),
+            eval_type,
+            return_type,
+            deterministic,
+            thread_safe,
+        },
+        version,
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_encoded_name_round_trips_its_definition() {
+        let d = PythonUdfDef {
+            name: "<lambda>".to_owned(),
+            eval_type: PythonEvalType::ScalarPandas,
+            return_type: krishiv_types::parse_data_type("struct<a:int,`b c`:array<string>>")
+                .unwrap_or(DataType::Null),
+            deterministic: false,
+            thread_safe: true,
+        };
+        let name = anonymous_call_name(&d, ANONYMOUS_VERSION_BIT | 7).unwrap_or_default();
+        assert_eq!(
+            decode_anonymous(&name),
+            Some((d.clone(), ANONYMOUS_VERSION_BIT | 7))
+        );
+        assert!(anonymous_call_name(&d, 7).is_err());
+        assert_eq!(decode_anonymous("<lambda>"), None);
+        assert_eq!(decode_anonymous(&name.replace("krishiv", "other")), None);
+        let entry = entry_of(&d, ANONYMOUS_VERSION_BIT | 7);
+        assert_eq!(entry.id.name(), "<lambda>");
+        assert!(!entry.deterministic);
+    }
 
     fn def(name: &str) -> PythonUdfDef {
         PythonUdfDef {

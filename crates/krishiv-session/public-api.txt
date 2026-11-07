@@ -162,6 +162,7 @@ pub fn krishiv_session::functions::lit_null() -> krishiv_session::Column
 pub fn krishiv_session::functions::map_literal(alloc::vec::Vec<(alloc::string::String, alloc::string::String)>) -> krishiv_session::Column
 pub fn krishiv_session::functions::max(krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::min(krishiv_session::Column) -> krishiv_session::Column
+pub fn krishiv_session::functions::python_udf_call(&krishiv_session::PythonUdfDef, u32, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> core::result::Result<krishiv_session::Column, krishiv_common::error::KrishivError>
 pub fn krishiv_session::functions::sum(krishiv_session::Column) -> krishiv_session::Column
 #[non_exhaustive] pub enum krishiv_session::CancelReason
 pub krishiv_session::CancelReason::Admin
@@ -742,6 +743,7 @@ pub fn krishiv_session::WindowSpec::default() -> Self
 impl core::fmt::Debug for krishiv_session::WindowSpec
 pub fn krishiv_session::WindowSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::WindowSpec
+pub const krishiv_session::ANONYMOUS_VERSION_BIT: u32
 pub const krishiv_session::VERBOSE_FORMAT: &str
 pub const krishiv_session::VERBOSE_VERSION: u64
 pub trait krishiv_session::AdmissionController: core::marker::Send + core::marker::Sync + core::fmt::Debug
