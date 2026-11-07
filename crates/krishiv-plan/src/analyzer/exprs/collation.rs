@@ -58,6 +58,11 @@ const COMPARING: &[&str] = &[
     "approx_count_distinct",
 ];
 
+/// Comparisons that run on collation keys when their collation has a key built from existing
+/// functions (`UTF8_LCASE`, `_RTRIM`). `greatest`, `least`, `nullif` and `equal_null` return or
+/// reuse the operands and wait for unit 3b.
+const KEYED: &[&str] = &["==", "<=>", "<", "<=", ">", ">=", "in", "between"];
+
 /// Calls that fail on operands without one collation (Spark's `canContainIndeterminateCollation`);
 /// any other call over such operands runs on the plain strings.
 const FAILS_INDETERMINATE: &[&str] = &[
@@ -180,6 +185,33 @@ const BINARY_RESULT: &[&str] = &[
 
 /// Calls that read the type of their argument: it stays collated.
 const INSPECTS: &[&str] = &["collation", "typeof"];
+
+/// The comparison key of `x` under `c`, as an expression over plain strings.
+fn key_of(x: &Arc<Expr>, c: Collation, origin: crate::Origin) -> Expr {
+    let lit =
+        |t: &str| Expr::new(ExprNode::Literal(Literal::String(t.to_owned()))).with_origin(origin);
+    let mut key = Expr::new(ExprNode::Cast {
+        expr: Arc::clone(x),
+        to: DataType::String,
+        mode: CastMode::Ansi,
+    })
+    .with_origin(origin);
+    if c.rtrim() {
+        key = Expr::function("rtrim", vec![key]).with_origin(origin);
+    }
+    if matches!(c.family(), CollationFamily::Utf8Lcase) {
+        key = Expr::function(
+            "replace",
+            vec![
+                Expr::function("lower", vec![key]).with_origin(origin),
+                lit("\u{3c2}"),
+                lit("\u{3c3}"),
+            ],
+        )
+        .with_origin(origin);
+    }
+    key
+}
 
 /// How many leading arguments of `name` only select (a null test) and so take no part in the
 /// collation of the result: `nvl2(selector, if_not_null, if_null)`.
@@ -332,6 +364,16 @@ impl Resolver<'_> {
         };
         let n = f.args.len().min(kids.len());
         let name = f.name.to_ascii_lowercase();
+        // Comparisons of `UTF8_LCASE` / `_RTRIM` strings compare their keys (design 3.3, unit 3a).
+        if KEYED.contains(&name.as_str())
+            && !f.distinct
+            && kids[..n]
+                .iter()
+                .any(|k| matches!(k.ty.data_type, Some(DataType::CollatedString(_))))
+            && let Some(bound) = self.keyed_comparison(e, kids, n, &name, in_agg, window_fn, cx)?
+        {
+            return Ok(bound);
+        }
         if f.distinct
             || COMPARING.contains(&name.as_str())
             || INSPECTS.contains(&name.as_str())
@@ -376,47 +418,7 @@ impl Resolver<'_> {
             ));
         }
         let mut memo = Memo::new();
-        let items: Vec<(Collation, Strength)> = kids[selector_args(&name).min(n)..n]
-            .iter()
-            .filter(|k| is_string(k.ty.data_type.as_ref()))
-            .filter_map(|k| {
-                // A subquery, variable, field or element: not a shape the pass reads through,
-                // but Spark counts it as implicit, so it is never skipped.
-                strength_of(&k.shown(), &mut memo).or(match &k.ty.data_type {
-                    Some(DataType::CollatedString(c)) => Some((*c, Strength::Implicit)),
-                    _ => Some((Collation::UTF8_BINARY, Strength::Implicit)),
-                })
-            })
-            .collect();
-        let mut indeterminate = false;
-        let chosen = match merge(&items) {
-            Ok(c) => c.map(|(c, _)| c),
-            Err(Conflict::Explicit(list)) => {
-                let types: Vec<String> = list
-                    .iter()
-                    .map(|c| format!("\"STRING COLLATE {}\"", c.name()))
-                    .collect();
-                return Err(AnalysisError::new(
-                    CollationMismatchExplicit {
-                        explicit_types: types.join(", "),
-                    },
-                    e.origin,
-                ));
-            }
-            Err(Conflict::Indeterminate) if !FAILS_INDETERMINATE.contains(&name.as_str()) => {
-                indeterminate = true;
-                None
-            }
-            Err(Conflict::Indeterminate) => {
-                let shown = with_children(e, kids[..n].iter().map(Bound::shown).collect());
-                return Err(AnalysisError::new(
-                    IndeterminateCollationInExpression {
-                        expr: format!("\"{}\"", pretty(&shown, self.ctx.conf.session_zone)),
-                    },
-                    e.origin,
-                ));
-            }
-        };
+        let (chosen, indeterminate) = self.choose_collation(e, kids, n, &name)?;
         if SEARCHES.contains(&name.as_str())
             && matches!(
                 chosen.map(Collation::family),
@@ -534,6 +536,134 @@ impl Resolver<'_> {
             bound.ty.data_type = Some(to);
         }
         Ok(bound)
+    }
+}
+
+impl Resolver<'_> {
+    /// A comparison of strings whose collation has a key: each string operand is replaced by its
+    /// key and the ordinary comparison runs on the keys. `None` when the collation has no such
+    /// key here (ICU), which leaves the operands collated for the execution guard to refuse.
+    ///
+    /// The key of `UTF8_LCASE` is Spark's `lowerCaseCodePoints`: the simple lower case of each
+    /// code point, with the final sigma `ς` read as `σ` (and `İ` lowering to `i` + U+0307, as the
+    /// function does); `_RTRIM` first drops the trailing spaces.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments of `expr_node`, plus the call's"
+    )]
+    fn keyed_comparison(
+        &mut self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        n: usize,
+        name: &str,
+        in_agg: bool,
+        window_fn: bool,
+        cx: &Cx<'_>,
+    ) -> Result<Option<Bound>, AnalysisError> {
+        // The keys are for string-to-string comparisons. Against a timestamp, a number or a binary
+        // the other operand is cast to the string's type, and a lowered or trimmed key would be
+        // cast instead of the text (`ts = '2020-01-01T10:00:00' COLLATE UTF8_LCASE`): those stay
+        // with the execution guard. An untyped NULL is no obstacle.
+        if !kids[..n]
+            .iter()
+            .all(|k| k.ty.data_type.is_none() || is_string(k.ty.data_type.as_ref()))
+        {
+            return Ok(None);
+        }
+        // `x BETWEEN lo AND hi` is `x >= lo AND x <= hi` to Spark, each half coerced on its own: with
+        // different collations on the two halves (`x BETWEEN 'A' COLLATE UTF8_BINARY AND 'c'`) one
+        // collation for all three would compare a half in the wrong one. Those stay with the guard.
+        if name == "between" && n >= 3 {
+            let lower = [kids[0].clone(), kids[1].clone()];
+            let upper = [kids[0].clone(), kids[2].clone()];
+            if self.choose_collation(e, &lower, 2, name)?.0
+                != self.choose_collation(e, &upper, 2, name)?.0
+            {
+                return Ok(None);
+            }
+        }
+        let (chosen, _) = self.choose_collation(e, kids, n, name)?;
+        let Some(c) = chosen else {
+            return Ok(None);
+        };
+        if !matches!(
+            c.family(),
+            CollationFamily::Utf8Binary | CollationFamily::Utf8Lcase
+        ) {
+            return Ok(None);
+        }
+        let mut keyed = Vec::with_capacity(kids.len());
+        for (i, k) in kids.iter().enumerate() {
+            if i >= n || !is_string(k.ty.data_type.as_ref()) {
+                keyed.push(k.clone());
+                continue;
+            }
+            let mut b = self.expr(&Arc::new(key_of(&k.expr, c, e.origin)), cx)?;
+            b.shown = Some(k.shown());
+            b.carry_markers(std::slice::from_ref(k));
+            keyed.push(b);
+        }
+        self.expr_node_inner(e, &keyed, in_agg, window_fn, cx)
+            .map(Some)
+    }
+
+    /// The one collation of the string operands of the call `e` (its first `n` arguments),
+    /// and whether they were indeterminate for a call that tolerates that.
+    ///
+    /// # Errors
+    /// `COLLATION_MISMATCH.EXPLICIT`, or `INDETERMINATE_COLLATION_IN_EXPRESSION` for the calls
+    /// Spark fails on.
+    fn choose_collation(
+        &self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        n: usize,
+        name: &str,
+    ) -> Result<(Option<Collation>, bool), AnalysisError> {
+        let mut memo = Memo::new();
+        let items: Vec<(Collation, Strength)> = kids[selector_args(name).min(n)..n]
+            .iter()
+            .filter(|k| is_string(k.ty.data_type.as_ref()))
+            .filter_map(|k| {
+                // A subquery, variable, field or element: not a shape the pass reads through,
+                // but Spark counts it as implicit, so it is never skipped.
+                strength_of(&k.shown(), &mut memo).or(match &k.ty.data_type {
+                    Some(DataType::CollatedString(c)) => Some((*c, Strength::Implicit)),
+                    _ => Some((Collation::UTF8_BINARY, Strength::Implicit)),
+                })
+            })
+            .collect();
+        let mut indeterminate = false;
+        let chosen = match merge(&items) {
+            Ok(c) => c.map(|(c, _)| c),
+            Err(Conflict::Explicit(list)) => {
+                let types: Vec<String> = list
+                    .iter()
+                    .map(|c| format!("\"STRING COLLATE {}\"", c.name()))
+                    .collect();
+                return Err(AnalysisError::new(
+                    CollationMismatchExplicit {
+                        explicit_types: types.join(", "),
+                    },
+                    e.origin,
+                ));
+            }
+            Err(Conflict::Indeterminate) if !FAILS_INDETERMINATE.contains(&name) => {
+                indeterminate = true;
+                None
+            }
+            Err(Conflict::Indeterminate) => {
+                let shown = with_children(e, kids[..n].iter().map(Bound::shown).collect());
+                return Err(AnalysisError::new(
+                    IndeterminateCollationInExpression {
+                        expr: format!("\"{}\"", pretty(&shown, self.ctx.conf.session_zone)),
+                    },
+                    e.origin,
+                ));
+            }
+        };
+        Ok((chosen, indeterminate))
     }
 }
 
