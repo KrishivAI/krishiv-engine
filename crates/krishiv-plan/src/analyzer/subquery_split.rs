@@ -319,12 +319,11 @@ impl Rewriter {
             let empty = on_no_rows(&expr).ok_or_else(|| legacy_unknown(plan.origin))?;
             super::legacy_grouped(empty.as_ref(), plan.origin)?;
         }
-        let fixed = self
-            .pull(&below, true)
-            .ok()
-            .and_then(|(_, corr)| super::equality_keys(&corr, plan.origin).ok())
-            .map(|(inner_keys, _)| keys.iter().all(|k| fixed_key(k, &inner_keys)));
-        Ok(fixed.unwrap_or(false))
+        // The same errors `scalar_single` would meet next: a specific refusal
+        // from `pull` or "not an equality" is reported as it is.
+        let (_, corr) = self.pull(&below, true)?;
+        let (inner_keys, _) = super::equality_keys(&corr, plan.origin)?;
+        Ok(keys.iter().all(|k| fixed_key(k, &inner_keys)))
     }
 
     /// Whether `input` holds, anywhere below, a global aggregate over a

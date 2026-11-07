@@ -46,6 +46,12 @@ fn run(s: &Session, sql: &str) -> R<Vec<String>> {
     })
 }
 
+fn rows(v: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = v.iter().map(|r| (*r).to_owned()).collect();
+    out.sort();
+    out
+}
+
 fn session() -> R<Session> {
     let s = Session::new()?;
     for q in [
@@ -61,11 +67,30 @@ fn session() -> R<Session> {
 #[test]
 fn a_grouped_having_reads_null_for_no_group_and_for_a_rejected_group() -> R {
     let s = session()?;
-    for (having, value) in [
-        ("count(*) >= 0", "max(y)"),
-        ("count(*) >= 2", "max(y)"),
-        ("max(y) > 8", "max(y) + 1"),
-        ("count(*) >= 1", "count(*)"),
+    // t(k) is 1, 2, 3, NULL; u holds k = 1 twice (y 5, 7), k = 2 once (y 9) and a
+    // NULL group (y 11) that no outer row matches. The expected rows are worked
+    // out from that data by hand (the left join is a second formulation).
+    for (having, value, want) in [
+        (
+            "count(*) >= 0",
+            "max(y)",
+            ["1|7", "2|9", "3|NULL", "NULL|NULL"],
+        ),
+        (
+            "count(*) >= 2",
+            "max(y)",
+            ["1|7", "2|NULL", "3|NULL", "NULL|NULL"],
+        ),
+        (
+            "max(y) > 8",
+            "max(y) + 1",
+            ["1|NULL", "2|10", "3|NULL", "NULL|NULL"],
+        ),
+        (
+            "count(*) >= 1",
+            "count(*)",
+            ["1|2", "2|1", "3|NULL", "NULL|NULL"],
+        ),
     ] {
         let sub = format!(
             "select k, (select {value} from u where u.k = t.k group by u.k having {having}) from t"
@@ -76,6 +101,7 @@ fn a_grouped_having_reads_null_for_no_group_and_for_a_rejected_group() -> R {
         );
         let (a, b) = (run(&s, &sub)?, run(&s, &join)?);
         assert_eq!(a, b, "{sub}");
+        assert_eq!(a, rows(&want), "{sub}");
         // The unmatched outer rows (k = 3 and NULL) read NULL.
         assert!(a.contains(&"3|NULL".to_owned()), "{sub}: {a:?}");
         assert!(a.contains(&"NULL|NULL".to_owned()), "{sub}: {a:?}");
@@ -155,18 +181,25 @@ fn the_legacy_count_flag_leaves_a_null_over_no_rows_value_alone() -> R {
 #[test]
 fn the_other_having_shapes_stay_refused() -> R {
     let s = session()?;
-    for q in [
-        "select k, (select max(y) from u where u.k = t.k group by u.k having count(*) > t.a) from t",
-        "select k, (select max(y) from u where u.k = t.k group by u.k \
-         having count(*) >= (select 1)) from t",
-        "select k, (select max(y) from u where u.k < t.k group by u.k having count(*) >= 1) from t",
+    for (q, why) in [
+        (
+            "select k, (select max(y) from u where u.k = t.k group by u.k having count(*) > t.a) from t",
+            "a correlated scalar subquery of this shape",
+        ),
+        (
+            "select k, (select max(y) from u where u.k = t.k group by u.k \
+             having count(*) >= (select 1)) from t",
+            "a correlated scalar subquery of this shape",
+        ),
+        // `pull` and the key check report their own refusal, not the generic one.
+        (
+            "select k, (select max(y) from u where u.k < t.k group by u.k having count(*) >= 1) from t",
+            "correlated scalar subqueries whose correlation is not an equality",
+        ),
     ] {
         let e = run(&s, q).expect_err(q).to_string();
         assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{q}: {e}");
-        assert!(
-            e.contains("a correlated scalar subquery of this shape"),
-            "{q}: {e}"
-        );
+        assert!(e.contains(why), "{q}: {e}");
     }
     Ok(())
 }
@@ -245,7 +278,22 @@ fn an_expression_key_and_an_unknown_legacy_value_are_refused() -> R {
     );
     let q = "select k, (select collect_list(y) from u where u.k = t.k \
              group by u.k having count(*) >= 1) from t";
-    assert_eq!(run(&s, q)?.len(), 4, "{q}");
+    // Lists print as their type: k = 1 and 2 have a group, 3 and NULL do not.
+    let shown: Vec<String> = run(&s, q)?
+        .into_iter()
+        .map(|r| {
+            if r.contains("<List") {
+                r.split('|').next().unwrap_or("").to_owned() + "|LIST"
+            } else {
+                r
+            }
+        })
+        .collect();
+    assert_eq!(
+        shown,
+        rows(&["1|LIST", "2|LIST", "3|NULL", "NULL|NULL"]),
+        "{q}"
+    );
     run(
         &s,
         "set spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled=true",
