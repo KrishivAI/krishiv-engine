@@ -199,3 +199,43 @@ fn the_session_setting_switches_the_dictionary_stage() {
     );
     assert_eq!(pruned(&[], &[("dictionaryFilter", "false")]), 0);
 }
+
+/// Dates (and timestamps) take no dictionary check: their stored bytes are in
+/// the writer's calendar, which a Spark < 3.0 file may rebase, so a literal
+/// compared to them could prune rows the guarded read would refuse to return.
+#[test]
+fn dates_take_no_dictionary_check() {
+    let env = Env::new();
+    let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Date32, false)]));
+    let days: Vec<i32> = (0..10_000)
+        .map(|i| 2 * (i % 100))
+        .chain((0..10_000).map(|i| 2 * (i % 100) + 1))
+        .collect();
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(arrow_array::Date32Array::from(days)) as ArrayRef],
+    )
+    .unwrap();
+    let f = env.put("dates.parquet", write(&[batch], props().build()));
+    let o = env.options(&[]);
+    let schema = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &f, MetadataNeeds::default(), &o),
+        )
+        .unwrap()
+        .schema();
+    let mut req = ScanRequest::new(schema, vec![ColumnPath::new("d")]);
+    req.predicate = Some(PushdownExpr::cmp(
+        ColumnPath::new("d"),
+        CmpOp::Eq,
+        ScalarValue::Date32(101),
+    ));
+    let (_, m) = env.scan_metered(&f, &req, &o).unwrap();
+    assert_eq!(
+        (m.units_pruned_dictionary, m.dictionary_rejected),
+        (0, 0),
+        "{m:?}"
+    );
+}

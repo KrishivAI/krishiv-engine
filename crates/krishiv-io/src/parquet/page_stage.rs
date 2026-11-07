@@ -243,6 +243,8 @@ impl PageStage {
         let footer = meta.reader.metadata();
         let mut planned = Vec::new();
         let mut ranges = Vec::new();
+        // Dictionary bytes the stage fetches so far (stage 2b's budget).
+        let mut dict_bytes = 0_u64;
         for &index in units {
             let rg = footer.row_group(index);
             let row_group = meta.row_groups.get(index)?;
@@ -349,7 +351,7 @@ impl PageStage {
             // conjuncts, on chunks whose data pages are all dictionary
             // encoded, with a dictionary page under the byte cap.
             let mut dicts: Vec<DictCheck> = Vec::new();
-            if dict {
+            if dict && dict_bytes < dict_probe::MAX_STAGE_DICTIONARY_BYTES {
                 for c in &conjuncts {
                     if prune(c, &row_group.statistics) != TriState::Unknown {
                         continue;
@@ -371,6 +373,15 @@ impl PageStage {
                     let Some(dt) = leaf_type(&meta.schema, &path.0) else {
                         continue;
                     };
+                    // Dates and timestamps are stored in the writer's calendar,
+                    // which a Spark < 3.0 file may rebase (`calendar.rs`): their
+                    // literals are not compared to stored bytes here.
+                    if matches!(
+                        dt,
+                        arrow_schema::DataType::Date32 | arrow_schema::DataType::Timestamp(..)
+                    ) {
+                        continue;
+                    }
                     let Some(literals) = bloom_probe::plain_values(
                         &values,
                         d.physical_type(),
@@ -384,12 +395,17 @@ impl PageStage {
                     };
                     match dicts.iter_mut().find(|x| x.leaf == leaf) {
                         Some(x) => x.probes.push(literals),
-                        None => dicts.push(DictCheck {
-                            leaf,
-                            range,
-                            physical: d.physical_type(),
-                            probes: vec![literals],
-                        }),
+                        None if dict_bytes.saturating_add(range.end - range.start)
+                            > dict_probe::MAX_STAGE_DICTIONARY_BYTES => {}
+                        None => {
+                            dict_bytes += range.end - range.start;
+                            dicts.push(DictCheck {
+                                leaf,
+                                range,
+                                physical: d.physical_type(),
+                                probes: vec![literals],
+                            });
+                        }
                     }
                 }
             }
@@ -657,7 +673,7 @@ impl PageStage {
     ) -> Result<bool, Rejected> {
         let rg = meta.reader.metadata().row_group(unit.index);
         for d in &unit.dicts {
-            let bytes = Self::slice(held, &d.range)?;
+            let bytes = Self::slice_bytes(held, &d.range)?;
             let (values, count) = dict_probe::read_dictionary(rg.column(d.leaf), &d.range, bytes)?;
             for literals in &d.probes {
                 if !dict_probe::any_entry_in(&values, count, d.physical, literals)? {
@@ -666,6 +682,19 @@ impl PageStage {
             }
         }
         Ok(true)
+    }
+
+    /// [`Self::slice`] as shared bytes (no copy).
+    fn slice_bytes(held: &BTreeMap<(u64, u64), Bytes>, r: &Range<u64>) -> Result<Bytes, Rejected> {
+        let bytes = held
+            .get(&(r.start, r.end))
+            .ok_or_else(|| Rejected::from("an index range did not arrive"))?;
+        let len =
+            usize::try_from(r.end - r.start).map_err(|_| Rejected::from("a range overflows"))?;
+        if bytes.len() < len {
+            return Err(Rejected::from("an index range arrived short"));
+        }
+        Ok(bytes.slice(..len))
     }
 
     fn slice<'a>(

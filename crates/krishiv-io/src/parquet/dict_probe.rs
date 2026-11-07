@@ -60,6 +60,17 @@ pub(super) fn all_dictionary(col: &ColumnChunkMetaData) -> bool {
 /// reservation, so the cap bounds that memory per column chunk.
 pub(super) const MAX_DICTIONARY_BYTES: u64 = 16 << 20;
 
+/// The most dictionary bytes one stage fetches over all its units (the
+/// first read holds them all until it decides, before any row decodes):
+/// units past it are read without their dictionary check.
+pub(super) const MAX_STAGE_DICTIONARY_BYTES: u64 = 64 << 20;
+
+/// The largest decompressed dictionary page decoded: arrow-rs allocates
+/// what the page header declares, which the footer does not bound, so a
+/// larger claim is refused before it is decompressed. One page is decoded
+/// at a time, so this bounds the stage's transient decode memory.
+pub(super) const MAX_DECODED_DICTIONARY_BYTES: usize = 64 << 20;
+
 /// The file range of the chunk's dictionary page, header included: from
 /// the chunk's start to its first data page. `None` when the chunk does not
 /// start with a dictionary page, the range leaves the chunk or the file, or
@@ -121,12 +132,17 @@ impl ChunkReader for Window {
 pub(super) fn read_dictionary(
     col: &ColumnChunkMetaData,
     range: &Range<u64>,
-    bytes: &[u8],
+    bytes: Bytes,
 ) -> Result<(Bytes, usize), Rejected> {
-    thrift_guard::check_pages(bytes).map_err(Rejected::from)?;
+    thrift_guard::check_pages(&bytes).map_err(Rejected::from)?;
+    match thrift_guard::first_page_uncompressed_size(&bytes).map_err(Rejected::from)? {
+        Some(n) if n <= MAX_DECODED_DICTIONARY_BYTES => {}
+        _ => return Err(Rejected::from("the dictionary page is too large to decode")),
+    }
+    // The held bytes are shared, not copied.
     let window = Arc::new(Window {
         base: range.start,
-        bytes: Bytes::copy_from_slice(bytes),
+        bytes,
     });
     // The first data page's location makes arrow-rs read everything before
     // it as the dictionary page, and nothing past it.
