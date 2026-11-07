@@ -1281,8 +1281,6 @@ fn option(key: &str, value: &OptionValue) -> Result<pb::OptionValue> {
     Ok(pb::OptionValue { kind: Some(kind) })
 }
 
-/// The IPC bytes of the Arrow type `t`; `nested` is set when it is or holds an
-/// array, map or struct.
 /// `schema`'s bytes; `nested` is set when a field is an array, map or
 /// struct (the feature header classifies a schema field by field).
 fn noted_schema_bytes(schema: &arrow_schema::Schema, nested: &Cell<bool>) -> Vec<u8> {
@@ -1296,6 +1294,8 @@ fn noted_schema_bytes(schema: &arrow_schema::Schema, nested: &Cell<bool>) -> Vec
     schema_bytes(schema)
 }
 
+/// The IPC bytes of the Arrow type `t`; `nested` is set when it is or holds an
+/// array, map or struct.
 fn arrow_bytes(t: &arrow_schema::DataType, nested: &Cell<bool>) -> Vec<u8> {
     if arrow_type_is_nested(t) {
         nested.set(true);
