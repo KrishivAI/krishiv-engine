@@ -468,7 +468,8 @@ async fn read_all(agg: &Arc<HashAggregate>, src: &TaskContext) -> Vec<Batch> {
 
 /// Grows `r` by all the pool grants it, trying from `free` bytes down.
 fn take_all(r: &mut Reservation, free: usize) {
-    // At most one grant per bit of `free` before `step` halves, so bounded.
+    // Bounded: every grant consumes `step` bytes of a finite pool and
+    // every refusal halves `step`.
     let mut step = free;
     while step > 0 {
         if r.try_grow(step).is_err() {
@@ -560,7 +561,8 @@ async fn a_requested_merged_task_writes_instead_of_splitting() {
     })
     .await;
     finalized.unwrap();
-    asked.unwrap();
+    // The merged task's branch writes its table; it frees nothing itself.
+    assert_eq!(asked.unwrap(), 0);
     assert_eq!(agg.disk_merged_runs(), 1, "the merged task did not run");
     assert_eq!(agg.metrics().repartitions, 0, "a partition was split");
     assert_eq!(sink_metric(&agg, "disk_stalls"), 0, "stalled beside others");
@@ -589,8 +591,11 @@ fn spillable_hog(q: &Arc<QueryContext>) -> (Arc<krishiv_memory::SpillSignal>, Re
 /// The disk phase of a global aggregate (review T5): its one task holds a
 /// single group, so it can never split; refused memory alone, it waits
 /// through arbitration. When another consumer frees memory on request, the
-/// task goes on and the one row comes out; when none can, the query fails
-/// with `UNABLE_TO_ACQUIRE_MEMORY`. Either way nothing leaks and no spill
+/// task goes on and the one row comes out. When none can, the arbitrator
+/// (`Escalation::Abort`, no victim to spill) aborts the requester's own
+/// query and the task's `grow` fails with `UNABLE_TO_ACQUIRE_MEMORY`: the
+/// failure is the arbitrator's policy; the phase's part is that it neither
+/// splits nor writes a merged run. Either way nothing leaks and no spill
 /// request is left pending.
 #[tokio::test]
 async fn a_lone_unsplittable_task_waits_for_the_arbitrator() {
@@ -667,6 +672,7 @@ async fn a_lone_unsplittable_task_waits_for_the_arbitrator() {
         } else {
             let e = finalized.unwrap_err();
             assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory, "{e}");
+            assert_eq!(agg.disk_merged_runs(), 0, "a merged run was written");
             // The request the phase took is not left behind: a later one
             // returns at once, freeing nothing.
             let later = bounded("a later request", agg.spill_global(&g, 1, &sink_ctx)).await;
@@ -740,7 +746,9 @@ async fn a_task_error_fails_the_query_and_frees_everything() {
 }
 
 /// Overwrites the first bytes (the magic) of every file under `dir`;
-/// returns how many.
+/// returns how many. That includes the `.spill.tmp` of a writer still open
+/// on the other blocking thread: it is never finished or read, so the
+/// asserted error is still the next *input* file's open.
 fn corrupt_files(dir: &std::path::Path) -> usize {
     use std::io::Write;
     let mut n = 0;

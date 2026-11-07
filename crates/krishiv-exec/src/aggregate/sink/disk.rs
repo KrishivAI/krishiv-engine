@@ -356,9 +356,9 @@ fn next_of(
     }
 }
 
-/// Lends up to `bytes` of `r` to spill I/O of the same consumer (as
-/// `lend_headroom` does through the pool, for callers that do not release
-/// the consumer's credit afterwards). The bytes go to the consumer's credit, not back to
+/// Lends up to `bytes` of `r` to spill I/O of the same consumer as credit
+/// (not through the pool, as `lend_headroom` does for callers that never
+/// `release_credit`). The bytes go to the consumer's credit, not back to
 /// the pool, so the I/O's own reservation takes them without racing other
 /// consumers for them (review m3); a sibling task of the same consumer may
 /// still take them first, and [`regrow`] draws back what is left.
@@ -532,8 +532,8 @@ impl HashAggregate {
                         running.push(self.launch_split(ctx, s, t, fresh));
                     } else {
                         // Nothing to split (a global aggregate's single
-                        // group, or the hash bits used up): wait for the memory through
-                        // arbitration. Nothing of this consumer can be
+                        // group, or the hash bits used up): wait for the
+                        // memory through arbitration. Nothing of this consumer can be
                         // freed meanwhile (every waiting task is
                         // unsplittable, or it would have been taken), so it
                         // publishes nothing as spillable (review m1).
