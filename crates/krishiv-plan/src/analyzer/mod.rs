@@ -411,8 +411,9 @@ pub struct ResolutionConf {
     /// the shape, as it did before it answered it.
     pub legacy_count_bug: bool,
     /// `spark.sql.optimizer.decorrelateInnerQuery.enabled` (default on): off,
-    /// Spark does not decorrelate the inner query, and the nested shapes
-    /// stay refused here.
+    /// Spark refuses more correlated shapes than it does with the framework
+    /// on. Only the nested count-bug shape is kept refused here for it
+    /// ([`Self::nested_count_fix`]); every other shape is still answered.
     pub decorrelate_inner_query: bool,
 }
 

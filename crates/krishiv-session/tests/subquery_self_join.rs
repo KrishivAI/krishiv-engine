@@ -222,6 +222,21 @@ fn a_closed_definition_with_an_in_subquery_read_again_matches_its_expansion() ->
             &["1|1", "2|1", "3|1"][..],
         ),
     ];
+    // A definition whose only subquery sits in its select list.
+    let d2 = "select (select max(y1) from y) m, y2 from y";
+    let extra = [(
+        format!(
+            "select x1, (with t as ({d2}) select count(*) from t a join t b \
+             on a.m = b.m and a.y2 = b.y2 where a.y2 = x1) from x"
+        ),
+        format!(
+            "select x1, (select count(*) from ({d2}) a join ({d2}) b \
+             on a.m = b.m and a.y2 = b.y2 where a.y2 = x1) from x"
+        ),
+    )];
+    for (cte, expanded) in &extra {
+        assert_eq!(run(&s, cte)?, run(&s, expanded)?, "{cte}");
+    }
     for (cte, expanded, want) in &cases {
         assert_eq!(run(&s, expanded)?, rows(want), "{expanded}");
         assert_eq!(run(&s, cte)?, rows(want), "{cte}");

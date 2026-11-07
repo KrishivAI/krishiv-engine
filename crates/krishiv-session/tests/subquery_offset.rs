@@ -281,3 +281,22 @@ fn a_window_below_a_correlation_is_partitioned_per_outer_value() -> R {
         ],
     )
 }
+
+/// Spark 3.5's `CheckAnalysis.checkPlan` has no case for `Window`: outer
+/// references below one are refused there, as below a `LIMIT` (v3.5.3 source);
+/// 4.x decorrelates it, and so does the default profile here.
+#[test]
+fn spark_3_5_refuses_a_correlation_below_a_window() -> R {
+    let q = "select x1, (select max(s) from (select sum(y2) over (order by y2) s \
+             from y where y1 = x1) t) from x";
+    let new = session()?;
+    assert_eq!(run(&new, q)?, rows(&["1|6", "2|9", "3|6"]), "{q}");
+    let old = Session::builder().profile(SparkProfile::V3_5).build()?;
+    views(&old)?;
+    assert!(
+        failure(&old, q).contains(OUTER),
+        "{q}: {}",
+        failure(&old, q)
+    );
+    Ok(())
+}

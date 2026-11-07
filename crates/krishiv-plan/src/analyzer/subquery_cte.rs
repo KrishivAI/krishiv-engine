@@ -63,11 +63,11 @@ pub(super) fn inline(plan: &Arc<LogicalPlan>, next_id: &mut u64) -> R<Arc<Logica
     })
 }
 
-/// The highest attribute id `p` defines, subquery plans inside its
+/// The span of attribute ids `p` defines, subquery plans inside its
 /// expressions included ([`hull`] leaves those out, but a copy of `p` shifts
-/// them too, so its reservation must cover them).
-fn top_id(p: &Arc<LogicalPlan>) -> Option<u64> {
-    let mut top = hull(p).map(|(_, hi)| hi);
+/// them too, so its offset and reservation must cover them).
+fn full_hull(p: &Arc<LogicalPlan>) -> Option<(u64, u64)> {
+    let mut span = hull(p);
     let mut subs: Vec<Arc<LogicalPlan>> = Vec::new();
     let _ = crate::walk::visit_distinct(Node::Plan(p), |n| {
         if let Node::Expr(e) = n
@@ -78,9 +78,12 @@ fn top_id(p: &Arc<LogicalPlan>) -> Option<u64> {
         std::ops::ControlFlow::<()>::Continue(())
     });
     for sub in &subs {
-        top = top.max(hull(sub).map(|(_, hi)| hi));
+        span = match (span, hull(sub)) {
+            (Some((a, b)), Some((c, d))) => Some((a.min(c), b.max(d))),
+            (x, y) => x.or(y),
+        };
     }
-    top
+    span
 }
 
 /// Moves `next_id` past `top` (the highest id of a copy just made), or fails
@@ -145,7 +148,7 @@ fn references(p: &Arc<LogicalPlan>, defs: &mut Vec<Def>, next_id: &mut u64) -> R
                     offset: *offset,
                 };
                 let copy = renumbered(input, span, &mut HashMap::new())?;
-                reserve_past(next_id, top_id(&copy), n.origin)?;
+                reserve_past(next_id, full_hull(&copy).map(|(_, hi)| hi), n.origin)?;
                 Ok(copy)
             }
             _ => Ok(n),
@@ -163,18 +166,12 @@ fn read(d: &mut Def, r: &CteRef, origin: Origin, next_id: &mut u64) -> R<Arc<Log
         if !plan_is_deterministic(&d.plan) {
             return Err(refused());
         }
-        let (lo, hi) = hull(&d.plan).ok_or_else(refused)?;
+        let (lo, hi) = full_hull(&d.plan).ok_or_else(refused)?;
         let offset = next_id.saturating_sub(lo);
         if hi.checked_add(offset).is_none_or(|top| top > MAX_ID) {
             return Err(AnalysisError::new(FailedToParseTooComplex {}, origin));
         }
         *next_id += hi - lo + 1;
-        // The copy shifts the plans of subqueries in expressions too.
-        reserve_past(
-            next_id,
-            top_id(&d.plan).and_then(|t| t.checked_add(offset)),
-            origin,
-        )?;
         let span = Span { lo, hi, offset };
         let body = if has_outer(Node::Plan(&d.plan)) {
             renumbered(&d.plan, span, &mut HashMap::new())?
