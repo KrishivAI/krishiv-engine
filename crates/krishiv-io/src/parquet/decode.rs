@@ -225,6 +225,30 @@ impl ParquetDecoder {
         req: &ScanRequest,
         o: &FormatOptions,
     ) -> FormatResult<Self> {
+        // Dates and timestamps Spark would rebase do not prune or filter
+        // rows before the guard sees them (`calendar.rs`).
+        let rebased = super::calendar::rebased_datetime_roots(
+            meta.calendars,
+            meta.reader.parquet_schema(),
+            o.str("datetimeRebaseMode"),
+        );
+        let stripped;
+        let req = if rebased.is_empty() {
+            req
+        } else {
+            let mut r = req.clone();
+            r.predicate = super::calendar::without_columns(req.predicate.as_ref(), &rebased);
+            if let crate::request::RowLevel::Prefix(p) = &req.row_level {
+                r.row_level = crate::request::RowLevel::Prefix(super::calendar::without_columns(
+                    p.as_ref(),
+                    &rebased,
+                ));
+            }
+            r.dynamic
+                .retain(|d| !super::calendar::reads_root(d, &rebased));
+            stripped = r;
+            &stripped
+        };
         let output = req.output_schema().map_err(FormatError::Other)?;
         let roots: Vec<&str> = output.fields().iter().map(|f| f.name().as_str()).collect();
         let guard = Guard::new(meta.calendars, meta.reader.parquet_schema(), &roots, o);

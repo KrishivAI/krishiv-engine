@@ -52,6 +52,9 @@ pub(crate) struct SchemaOptions {
     pub(crate) binary_as_string: bool,
     /// `int96AsTimestamp`: `INT96` columns are timestamps.
     pub(crate) int96_as_timestamp: bool,
+    /// `datetimeRebaseMode` is `LEGACY`: a file not written by Spark is read
+    /// as if in the legacy calendar (`calendar::rebased_datetime_roots`).
+    pub(crate) legacy_rebase: bool,
 }
 
 /// One row group as planned and pruned.
@@ -69,6 +72,8 @@ pub(crate) struct RowGroup {
 pub struct ParquetMetadata {
     /// The calendars its dates and timestamps are in.
     pub(crate) calendars: super::calendar::Calendars,
+    /// It was read with `datetimeRebaseMode` `LEGACY` (part of the cache key).
+    pub(crate) legacy_rebase: bool,
     /// The footer with the arrow-rs schema the decoders read with.
     pub(crate) reader: ArrowReaderMetadata,
     /// Options the reader schema was built with (a decoder needing virtual
@@ -320,6 +325,7 @@ fn describe_checked(
     let calendars = super::calendar::calendars(meta.file_metadata().key_value_metadata());
     Ok(ParquetMetadata {
         calendars,
+        legacy_rebase: options.legacy_rebase,
         reader,
         reader_options,
         schema,
