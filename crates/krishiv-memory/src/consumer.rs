@@ -11,9 +11,11 @@
 //! returns credit the retry did not use ([`ConsumerHandle::release_credit`]).
 //!
 //! Credit is touched only by the owning driver's task (grant, retry,
-//! release), so it needs no loom model; the atomics only make the handle
-//! `Sync`. A [`Reservation::new`] on a handle's id neither draws credit nor
-//! keeps the consumer registered: use [`ConsumerHandle::reservation`].
+//! release), so it needs no loom model of its own; the atomics only make the
+//! handle `Sync`. Settling a grant wakes rounds through the pool's
+//! `ReleaseSignal`, which is loom-modelled. A [`Reservation::new`] on a
+//! handle's id neither draws credit nor keeps the consumer registered: use
+//! [`ConsumerHandle::reservation`].
 //!
 //! The pool sees the grant too ([`GrantCredit`],
 //! [`MemoryPool::register_with_credit`]): from the grant until the driver
@@ -193,11 +195,14 @@ impl ConsumerHandle {
     /// The retry a grant was for has ended: returns unused credit to the
     /// pool, and rounds waiting for the grant re-plan.
     pub fn settle_grant(&self) {
-        let unsettled = self.credit.unsettled.swap(0, Ordering::AcqRel);
+        // Unused bytes go back before the grant stops counting as unsettled,
+        // so a round planning in between counts them once or twice (it then
+        // waits and re-plans on the wakeup below), never zero times.
         let unused = self.credit.bytes.swap(0, Ordering::AcqRel);
         if unused > 0 {
             self.pool.release(self.id, unused);
         }
+        let unsettled = self.credit.unsettled.swap(0, Ordering::AcqRel);
         // Always, not only through the release: a sub-quantum remainder
         // returns nothing to the pools, and that release notifies no one.
         if unsettled > 0

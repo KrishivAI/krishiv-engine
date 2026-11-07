@@ -27,8 +27,8 @@
 //!    ([`crate::GrantCredit::unsettled`]: granted for a retry that has not
 //!    ended, so about to be used or returned) cover it, re-planning whenever
 //!    memory is released or a grant settles: a consumer whose driver waits in
-//!    a round of its own, and the requester's own driver, do not count. Otherwise abort the query furthest above its fair
-//!    share. The requester's own query fails the request with
+//!    a round of its own, and the requester's own driver, do not count.
+//!    Otherwise abort the query furthest above its fair share. The requester's own query fails the request with
 //!    `UNABLE_TO_ACQUIRE_MEMORY` and its other tasks see
 //!    `KRISHIV_QUERY_ABORTED_OUT_OF_MEMORY`; another victim is aborted and
 //!    the round waits for its release. The phase is bounded by
@@ -493,8 +493,7 @@ impl Round {
 
     /// Retries on every release, ticket completion or abort until granted,
     /// `deadline`, or as `until` says (all tickets completed, or any
-    /// change). The
-    /// deadline only stops waiting for victims that have not begun their
+    /// change). The deadline only stops waiting for victims that have not begun their
     /// spill ([`SpillTicket::started`]): at the deadline those tickets are
     /// dropped, and the round keeps waiting, with no deadline, for the
     /// spills already in progress.
