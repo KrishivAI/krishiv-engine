@@ -1577,16 +1577,19 @@ impl Rewriter {
                 plan.origin,
             ));
         };
-        let ExprNode::Resolved(ResolvedExpr::Alias {
-            expr,
-            output: value,
-        }) = &item.node
-        else {
-            return Err(unsupported(
-                "a correlated scalar subquery of this shape",
-                plan.origin,
-            ));
+        // A `SELECT DISTINCT c` is a grouping by `c` whose item is the bare
+        // column; its value is that column.
+        let (expr, value): (&Arc<Expr>, BoundColumn) = match &item.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => (expr, output.clone()),
+            ExprNode::Resolved(ResolvedExpr::Column(c)) if !keys.is_empty() => (item, c.clone()),
+            _ => {
+                return Err(unsupported(
+                    "a correlated scalar subquery of this shape",
+                    plan.origin,
+                ));
+            }
         };
+        let value = &value;
         // Spark rejects outer references in the value
         // (`AGGREGATE_FUNCTION_MIXED_OUTER_LOCAL_REFERENCES`, or an outer
         // aggregate's `CORRELATED_REFERENCE`); the join could not bind them.

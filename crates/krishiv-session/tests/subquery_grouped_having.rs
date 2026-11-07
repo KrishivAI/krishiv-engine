@@ -205,3 +205,26 @@ fn a_mixed_aggregate_in_a_subquerys_own_having_is_the_mixed_reference_error() ->
     }
     Ok(())
 }
+
+/// `SELECT DISTINCT y` is a grouping by `y` with a bare column as its value
+/// (scalar-subquery-predicate.sql #58 holds Spark 4.2.0's empty answer): one
+/// distinct value per outer row is that value, none is NULL, and two raise
+/// `SCALAR_SUBQUERY_TOO_MANY_ROWS` when the query runs.
+#[test]
+fn a_distinct_value_reads_the_one_value_or_fails_on_two() -> R {
+    let s = session()?;
+    let one = "select k, (select distinct y from u where u.k = t.k and y > 6) from t";
+    let join = "select t.k, m.y from t left join \
+                (select distinct k, y from u where y > 6) m on t.k = m.k";
+    assert_eq!(run(&s, one)?, run(&s, join)?, "{one}");
+    assert_eq!(
+        run(&s, one)?,
+        ["1|7", "2|9", "3|NULL", "NULL|NULL"]
+            .map(String::from)
+            .to_vec()
+    );
+    let two = "select k, (select distinct y from u where u.k = t.k) from t";
+    let e = run(&s, two).expect_err(two).to_string();
+    assert!(e.contains("SCALAR_SUBQUERY_TOO_MANY_ROWS"), "{two}: {e}");
+    Ok(())
+}
