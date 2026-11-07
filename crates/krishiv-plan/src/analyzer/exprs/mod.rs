@@ -470,6 +470,12 @@ impl Resolver<'_> {
                         stack.push(Step::Enter(rewritten, ctx));
                         continue;
                     }
+                    if let Some(rewritten) = Self::top_k_by_window(&x) {
+                        rewritten_calls.push(Arc::clone(&rewritten));
+                        stack.push(Step::Link(addr(&*x), Arc::clone(&rewritten), ctx));
+                        stack.push(Step::Enter(rewritten, ctx));
+                        continue;
+                    }
                     // A lambda binds where it is used: a higher-order
                     // call binds its array and lambda children itself
                     // (see `hof`), while a lambda anywhere else is no
@@ -583,6 +589,83 @@ impl Resolver<'_> {
             first.window_fn = true;
         }
         kids
+    }
+
+    /// `max_by(x, y, k) OVER w` / `min_by(x, y, k) OVER w` with a literal `k` in 1..=100000, as the same
+    /// `slice(sort_array(collect_list(named_struct('k', y, 'v', x)) FILTER (WHERE y IS NOT NULL) OVER w, asc), 1, k).v`
+    /// the aggregate form lowers to (`node.rs`). Other `k` stay on the generic path.
+    fn top_k_by_window(x: &Arc<Expr>) -> Option<Arc<Expr>> {
+        let ExprNode::Window(w) = &x.node else {
+            return None;
+        };
+        let ExprNode::Function(f) = &w.function.node else {
+            return None;
+        };
+        let ascending = f.name.eq_ignore_ascii_case("min_by");
+        if !(ascending || f.name.eq_ignore_ascii_case("max_by"))
+            || f.args.len() != 3
+            || f.distinct
+            || f.filter.is_some()
+            || !f.qualifier.is_empty()
+        {
+            return None;
+        }
+        let ExprNode::Literal(Literal::Integer(k)) = &f.args[2].node else {
+            return None;
+        };
+        if !(1..=100_000).contains(k) {
+            return None;
+        }
+        let origin = x.origin;
+        let lit = |l: Literal| Arc::new(Expr::new(ExprNode::Literal(l)).with_origin(origin));
+        let mk = |name: &str, args: Vec<Arc<Expr>>, filter: Option<Arc<Expr>>| {
+            Arc::new(
+                Expr::new(ExprNode::Function(FunctionCall {
+                    name: name.to_owned(),
+                    qualifier: Vec::new(),
+                    args,
+                    arg_names: Vec::new(),
+                    distinct: false,
+                    filter,
+                    within_group: Vec::new(),
+                }))
+                .with_origin(origin),
+            )
+        };
+        let pair = mk(
+            "named_struct",
+            vec![
+                lit(Literal::String("k".to_owned())),
+                Arc::clone(&f.args[1]),
+                lit(Literal::String("v".to_owned())),
+                Arc::clone(&f.args[0]),
+            ],
+            None,
+        );
+        let present = mk("isnotnull", vec![Arc::clone(&f.args[1])], None);
+        let collected = mk("collect_list", vec![pair], Some(present));
+        let windowed = Arc::new(
+            Expr::new(ExprNode::Window(crate::expr::WindowExpr {
+                function: collected,
+                window: w.window.clone(),
+            }))
+            .with_origin(origin),
+        );
+        let sorted = mk(
+            "sort_array",
+            vec![windowed, lit(Literal::Boolean(ascending))],
+            None,
+        );
+        let top = mk(
+            "slice",
+            vec![sorted, lit(Literal::Integer(1)), Arc::clone(&f.args[2])],
+            None,
+        );
+        Some(mk(
+            "__subscript",
+            vec![top, lit(Literal::String("v".to_owned()))],
+            None,
+        ))
     }
 
     pub(super) fn is_aggregate(&self, e: &Expr) -> bool {
