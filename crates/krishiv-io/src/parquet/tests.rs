@@ -1017,6 +1017,64 @@ fn calendar_rules_follow_spark() {
     assert!(env.scan(&spark2_old, &count, &o).is_ok());
 }
 
+/// A date conjunct does not prune a file whose dates Spark rebases (a Spark
+/// 2 file): Spark rebases the pushed literal to the stored calendar before
+/// comparing (`ParquetFilters`, LEGACY spec); Krishiv does not, so the read
+/// goes on to the calendar guard instead of trusting stored bounds. A Spark 3+
+/// file prunes as usual. The row filter and page stages see the same predicate
+/// (the decoder strips it too, with the read mode).
+#[test]
+fn rebased_dates_do_not_prune() {
+    use parquet::file::metadata::KeyValue;
+    let env = Env::new();
+    let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Date32, true)]));
+    let file = |name: &str, version: &str| {
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(arrow_array::Date32Array::from(vec![
+                -200_000, 10_957,
+            ]))],
+        )
+        .unwrap();
+        let props = WriterProperties::builder()
+            .set_key_value_metadata(Some(vec![KeyValue::new(
+                "org.apache.spark.version".into(),
+                version.to_owned(),
+            )]))
+            .build();
+        env.put(name, write(&[batch], props))
+    };
+    let o = env.options(&[]);
+    // Outside the stored [min, max]: statistics alone would rule the row group out.
+    let mut req = ScanRequest::all(Arc::clone(&schema));
+    req.predicate = Some(PushdownExpr::cmp(
+        ColumnPath::new("d"),
+        CmpOp::Eq,
+        ScalarValue::Date32(-300_000),
+    ));
+    let pruned = |f: &FileRef| {
+        let meta = env
+            .rt
+            .block_on(
+                env.io
+                    .read_metadata(&ParquetFormat, f, MetadataNeeds::default(), &o),
+            )
+            .unwrap();
+        ParquetFormat
+            .plan_units(meta.as_ref(), &ByteRange::whole(f.size), &req)
+            .unwrap()
+            .pruned_by_statistics
+    };
+    assert_eq!(pruned(&file("s4.parquet", "4.2.0")), 1);
+    let spark2 = file("s2.parquet", "2.4.8");
+    assert_eq!(pruned(&spark2), 0);
+    // So the read reaches the guard, which refuses the value a rebase would change.
+    assert_eq!(
+        env.scan(&spark2, &req, &o).err().map(|e| e.error_class()),
+        Some(ErrorClass::KrishivUnsupportedFeature)
+    );
+}
+
 /// The decoder's prefetch hint stops at the budget, whole row groups only.
 #[test]
 fn upcoming_ranges_respect_the_budget() {

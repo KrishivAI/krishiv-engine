@@ -340,13 +340,16 @@ impl FileFormat for ParquetFormat {
             .filter_map(|d| Some((d.predicate()?, d.filter())))
             .collect();
         let mut plan = UnitPlan::default();
+        // Dates and timestamps Spark would rebase do not prune (`calendar.rs`).
+        let rebased =
+            calendar::rebased_datetime_roots(meta.calendars, meta.reader.parquet_schema(), None);
+        let predicate = calendar::without_columns(req.predicate.as_ref(), &rebased);
         for (index, rg) in meta.row_groups.iter().enumerate() {
             if !split.owns(&rg.bytes) {
                 continue;
             }
             plan.owned += 1;
-            if req
-                .predicate
+            if predicate
                 .as_ref()
                 .is_some_and(|p| prune(p, &rg.statistics) == TriState::False)
             {

@@ -110,6 +110,84 @@ fn action(calendar: Calendar, mode: &str, int96: bool) -> Action {
     }
 }
 
+/// The top-level columns of a file whose dates or `INT64` timestamps Spark
+/// rebases on read (the file is in the legacy calendar, or is not Spark's
+/// and is read in `LEGACY` mode). For them Spark rebases a pushed literal
+/// to the stored calendar before it is compared with statistics
+/// (`ParquetFilters` with a `LEGACY` rebase spec, Spark 4.2.0); Krishiv does
+/// not rebase, so no pushed conjunct on them may prune: the read then reaches
+/// the [`Guard`], which refuses the values that would change. In `EXCEPTION`
+/// and `CORRECTED` mode Spark pushes the literal as written and prunes before
+/// it decodes, as Krishiv does. `INT96` has no pushed filter in Spark (nor
+/// statistics here). `mode` is the `datetimeRebaseMode` read option; without
+/// it (statistics pruning, which has no options) only the file decides.
+pub(crate) fn rebased_datetime_roots(
+    calendars: Calendars,
+    descr: &SchemaDescriptor,
+    mode: Option<&str>,
+) -> Vec<String> {
+    let rebased = match calendars.datetime {
+        Calendar::Legacy => true,
+        Calendar::Unknown => mode.is_some_and(|m| m.eq_ignore_ascii_case("LEGACY")),
+        Calendar::Proleptic => false,
+    };
+    if !rebased {
+        return Vec::new();
+    }
+    let mut roots: Vec<String> = descr
+        .columns()
+        .iter()
+        .filter(|c| {
+            c.physical_type() != PhysicalType::INT96
+                && (matches!(
+                    c.logical_type_ref(),
+                    Some(
+                        parquet::basic::LogicalType::Date
+                            | parquet::basic::LogicalType::Timestamp { .. }
+                    )
+                ) || matches!(
+                    c.converted_type(),
+                    parquet::basic::ConvertedType::DATE
+                        | parquet::basic::ConvertedType::TIMESTAMP_MILLIS
+                        | parquet::basic::ConvertedType::TIMESTAMP_MICROS
+                ))
+        })
+        .filter_map(|c| c.path().parts().first().cloned())
+        .collect();
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+/// `predicate` without the top-level conjuncts that read any of `roots`
+/// (`None` when nothing is left): a superset of the rows, so still a sound
+/// pushed filter.
+pub(crate) fn without_columns(
+    predicate: Option<&crate::request::PushdownExpr>,
+    roots: &[String],
+) -> Option<crate::request::PushdownExpr> {
+    use crate::request::PushdownExpr;
+    let p = predicate?;
+    if roots.is_empty() {
+        return Some(p.clone());
+    }
+    let reads = |e: &PushdownExpr| {
+        e.columns()
+            .iter()
+            .any(|c| c.0.first().is_some_and(|r| roots.contains(r)))
+    };
+    let kept: Vec<PushdownExpr> = match p.to_nnf() {
+        PushdownExpr::And(xs) => xs.into_iter().filter(|x| !reads(x)).collect(),
+        other if reads(&other) => Vec::new(),
+        other => vec![other],
+    };
+    match kept.len() {
+        0 => None,
+        1 => kept.into_iter().next(),
+        _ => Some(PushdownExpr::And(kept)),
+    }
+}
+
 /// The checks of one scan: per output column, what ancient values mean.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Guard {
