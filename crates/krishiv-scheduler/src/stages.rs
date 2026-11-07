@@ -34,11 +34,13 @@ use krishiv_common::error::{InternalError, KrishivError, OperationCanceled};
 use krishiv_exec::exchange::reduce_partitions;
 use krishiv_exec::physical::{
     ExchangeInput, PhysicalPlan, ScanId, ScanSplits, TaskSpec, WorkerContext, exchange_schemas,
-    instantiate_task,
+    instantiate_task, planned_exchange_schemas,
 };
 use krishiv_exec::physical::{Partitioning, PhysNode};
 use krishiv_exec::values::{LocalValues, ValueService};
-use krishiv_exec::{BroadcastTables, Executor, QueryContext, QueryId, QueryRunner, Scheduler};
+use krishiv_exec::{
+    BroadcastTables, Executor, Metric, QueryContext, QueryId, QueryMetrics, QueryRunner, Scheduler,
+};
 use krishiv_io::{FilterId, FilterSnapshot, KeyFilter};
 use krishiv_shuffle::LocalShuffle;
 use krishiv_types::batch::Batch;
@@ -93,6 +95,11 @@ pub struct StageRunner {
     broadcast_fallbacks: Arc<AtomicU64>,
     /// Filter values carried from one stage to a later one, summed.
     cross_stage: Arc<AtomicU64>,
+    /// Bytes the map tasks wrote to spill files, summed.
+    task_spill_bytes: Arc<AtomicU64>,
+    /// The map tasks' operator counters (`ExtraMetrics` counts), summed by
+    /// name.
+    task_counters: Arc<Mutex<BTreeMap<String, u64>>>,
     /// The map tasks running for each query, cancelled with it.
     running: Arc<Running>,
 }
@@ -137,6 +144,8 @@ impl StageRunner {
             shared_builds: Arc::default(),
             broadcast_fallbacks: Arc::default(),
             cross_stage: Arc::default(),
+            task_spill_bytes: Arc::default(),
+            task_counters: Arc::default(),
             running: Arc::default(),
         })
     }
@@ -151,6 +160,8 @@ impl StageRunner {
     /// The same runner capping what the shared broadcast tables of one
     /// query may hold at `bytes`: a build past it falls back to one build
     /// per task, each spilling as needed (owner decision 2026-11-06).
+    /// Without it, the query's `krishiv.exec.join.sharedBroadcastBytes`
+    /// caps them.
     #[must_use]
     pub fn with_broadcast_limit(mut self, bytes: usize) -> Self {
         self.broadcast_limit = Some(bytes);
@@ -371,6 +382,7 @@ impl StageRunner {
         drop(stream);
         // Its drivers have ended and its memory is back before it returns.
         task.finished().await;
+        self.record(&task.metrics());
         outcome?;
         task.error().map_or(Ok(()), Err)?;
         Ok(produced(&stage.plan, values.as_ref()))
@@ -390,7 +402,11 @@ impl StageRunner {
             ),
             None => (worker, LocalShuffle::in_memory()),
         };
-        let schemas = {
+        // The plan's own schemas; a plan written without them is
+        // instantiated, unrun, to learn them.
+        let schemas = if let Some(s) = planned_exchange_schemas(&plan) {
+            s
+        } else {
             let (plan, worker) = (plan.clone(), worker.clone());
             let out = Arc::new(Mutex::new(None));
             let slot = Arc::clone(&out);
@@ -410,10 +426,15 @@ impl StageRunner {
         let stages = fragment(&plan, &schemas)?;
         let tasks = stage_tasks(&stages, self.partitions, self.splits.as_deref())?;
         // One worker: the query's broadcast builds are shared by all its
-        // tasks, reserving from its pool (design P2-T177 unit 3).
+        // tasks, reserving from its pool (design P2-T177 unit 3), up to the
+        // runner's cap or else the query's
+        // (`krishiv.exec.join.sharedBroadcastBytes`).
+        let limit = self
+            .broadcast_limit
+            .or(query.config().shared_broadcast_bytes);
         let broadcasts = Arc::new(BroadcastTables::new(
             Arc::clone(&self.executor),
-            query.pool().child("broadcasts", self.broadcast_limit),
+            query.pool().child("broadcasts", limit),
         ));
         let worker = worker
             .with_exchange(Arc::new(shuffle))
@@ -514,6 +535,47 @@ impl StageRunner {
     pub fn cross_stage_filters(&self) -> u64 {
         self.cross_stage.load(Ordering::Relaxed)
     }
+
+    /// The bytes this runner's map tasks wrote to spill files, summed over
+    /// the queries (a task's operators report them in its own metrics,
+    /// which end with the task).
+    #[must_use]
+    pub fn task_spill_bytes(&self) -> u64 {
+        self.task_spill_bytes.load(Ordering::Relaxed)
+    }
+
+    /// The operator counter `name` of this runner's map tasks (e.g. a
+    /// shared broadcast join's `broadcast_shared` or `broadcast_fallback`),
+    /// summed over their operators and the queries. Map tasks only: a join
+    /// in the root stage reports in the query's own metrics instead.
+    #[must_use]
+    pub fn task_counter(&self, name: &str) -> u64 {
+        self.task_counters
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(name)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Adds a finished map task's spill bytes and counters.
+    fn record(&self, metrics: &QueryMetrics) {
+        let mut spilled = 0;
+        let mut counters = self
+            .task_counters
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        for op in metrics.operators.values() {
+            spilled += op.metrics.spill_write_bytes;
+            for (name, value) in &op.extra {
+                if let Metric::Count(n) = value {
+                    *counters.entry(name.to_string()).or_default() += n;
+                }
+            }
+        }
+        drop(counters);
+        self.task_spill_bytes.fetch_add(spilled, Ordering::Relaxed);
+    }
 }
 
 /// A query's entry in [`StageRunner::running`], removed when dropped: when
@@ -563,6 +625,8 @@ impl Scheduler for StageRunner {
             next_task: Arc::clone(&self.next_task),
             shared_builds: Arc::clone(&self.shared_builds),
             broadcast_fallbacks: Arc::clone(&self.broadcast_fallbacks),
+            task_spill_bytes: Arc::clone(&self.task_spill_bytes),
+            task_counters: Arc::clone(&self.task_counters),
             cross_stage: Arc::clone(&self.cross_stage),
             running: Arc::clone(&self.running),
         };
