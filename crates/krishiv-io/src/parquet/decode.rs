@@ -238,6 +238,14 @@ impl ParquetDecoder {
         } else {
             let mut r = req.clone();
             r.predicate = super::calendar::without_columns(req.predicate.as_ref(), &rebased);
+            if let crate::request::RowLevel::Prefix(p) = &req.row_level {
+                r.row_level = crate::request::RowLevel::Prefix(super::calendar::without_columns(
+                    p.as_ref(),
+                    &rebased,
+                ));
+            }
+            r.dynamic
+                .retain(|d| !super::calendar::reads_root(d, &rebased));
             stripped = r;
             &stripped
         };

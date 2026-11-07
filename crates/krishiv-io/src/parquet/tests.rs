@@ -1073,6 +1073,45 @@ fn rebased_dates_do_not_prune() {
         env.scan(&spark2, &req, &o).err().map(|e| e.error_class()),
         Some(ErrorClass::KrishivUnsupportedFeature)
     );
+    // A literal after the switch point compares the same in both calendars:
+    // it still prunes a Spark 2 file (2024-10-03, above the stored maximum).
+    let mut modern = ScanRequest::all(Arc::clone(&schema));
+    modern.predicate = Some(PushdownExpr::cmp(
+        ColumnPath::new("d"),
+        CmpOp::GtEq,
+        ScalarValue::Date32(20_000),
+    ));
+    let pruned_with = |f: &FileRef, req: &ScanRequest, o: &crate::FormatOptions| {
+        let meta = env
+            .rt
+            .block_on(
+                env.io
+                    .read_metadata(&ParquetFormat, f, MetadataNeeds::default(), o),
+            )
+            .unwrap();
+        ParquetFormat
+            .plan_units(meta.as_ref(), &ByteRange::whole(f.size), req)
+            .unwrap()
+            .pruned_by_statistics
+    };
+    assert_eq!(pruned_with(&spark2, &modern, &o), 1);
+    // A file not written by Spark is rebased only in LEGACY mode, which statistics pruning
+    // sees through the metadata (the mode is part of its cache key).
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(arrow_array::Date32Array::from(vec![
+            -200_000, 10_957,
+        ]))],
+    )
+    .unwrap();
+    let other = env.put(
+        "other.parquet",
+        write(&[batch], WriterProperties::default()),
+    );
+    assert_eq!(pruned_with(&other, &req, &o), 1);
+    let legacy = env.options(&[("datetimeRebaseMode", "LEGACY")]);
+    assert_eq!(pruned_with(&other, &req, &legacy), 0);
+    assert_eq!(pruned_with(&other, &modern, &legacy), 1);
 }
 
 /// The decoder's prefetch hint stops at the budget, whole row groups only.
