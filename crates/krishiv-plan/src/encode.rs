@@ -968,6 +968,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     crate::GeneratorKind::Explode => 0,
                     crate::GeneratorKind::PosExplode => 1,
                     crate::GeneratorKind::Inline => 2,
+                    crate::GeneratorKind::VariantExplode => 3,
                 });
                 self.u8(u8::from(*outer));
                 self.expr(arg);
@@ -1197,6 +1198,16 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
                 self.call(args, *distinct, filter.as_ref());
                 self.call_within_group(e);
+            }
+            ExprNode::Collate {
+                expr,
+                collation,
+                name,
+            } => {
+                self.u8(40);
+                self.str(&collation.name());
+                self.str(name);
+                self.expr(expr);
             }
             ExprNode::Cast { expr, to, mode } => {
                 self.u8(5);

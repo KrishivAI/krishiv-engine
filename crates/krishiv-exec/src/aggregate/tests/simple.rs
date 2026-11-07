@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `any_value`, `max_by` and `min_by`: semantics (Spark 4.2: the first row
+//! `any_value`, `max_by` and `min_by`: semantics (Spark 4.2: the last row
 //! on a tie, NULL keys ignored, a NULL value a legal result, NaN largest,
 //! `-0.0 = 0.0`), merges of partial states, the row-layout tables, spills,
 //! memory accounting and the types they take. Every test that runs a plan
@@ -79,7 +79,7 @@ fn by_input(tie: bool) -> (SchemaRef, Vec<Vec<ArrayRef>>) {
     (s, vec![vec![k1, x1, y1], vec![k2, x2, y2]])
 }
 
-const BY_MAX: [&str; 5] = ["1|c", "2|NULL", "3|NULL", "4|NULL", "5|m"];
+const BY_MAX: [&str; 5] = ["1|d", "2|NULL", "3|NULL", "4|NULL", "5|m"];
 const BY_MIN: [&str; 5] = ["1|a", "2|NULL", "3|z", "4|NULL", "5|m"];
 
 fn by_aggs(s: &SchemaRef) -> Vec<AggregateExpr> {
@@ -95,7 +95,7 @@ fn both(max: &[&str], min: &[&str]) -> Vec<String> {
 }
 
 /// Spark 4.2: `SELECT k, max_by(x, y), min_by(x, y) FROM t GROUP BY k`.
-/// The first row wins a tie (also across batches); NULL keys are ignored; a
+/// The last row wins a tie (also across batches); NULL keys are ignored; a
 /// NULL value is a result; no non-NULL key gives NULL.
 #[tokio::test]
 async fn max_by_and_min_by_pick_the_extreme_key() {
@@ -183,7 +183,7 @@ async fn max_by_and_min_by_merge_partial_states() {
 }
 
 /// Spark's ordering of `double` keys: NaN is the largest (and equals
-/// itself), `-0.0 = 0.0`, infinities order as usual; the first row wins ties.
+/// itself), `-0.0 = 0.0`, infinities order as usual; the last row wins ties.
 #[tokio::test]
 async fn float_keys_follow_spark_ordering() {
     let s = schema(vec![
@@ -209,9 +209,9 @@ async fn float_keys_follow_spark_ordering() {
         scan(&s, vec![vec![k, x, y]]),
         spec(&s, vec![0], by_aggs(&s)),
     );
-    // k | max_by | min_by: a `0.0`/`-0.0` tie keeps the first row; NaN beats
+    // k | max_by | min_by: a `0.0`/`-0.0` tie takes the last row; NaN beats
     // infinity; all-NaN keys tie.
-    assert_eq!(run_one(plan).await, ["1|1|1", "2|1|2", "3|1|1", "4|1|1"]);
+    assert_eq!(run_one(plan).await, ["1|2|2", "2|1|2", "3|2|2", "4|3|3"]);
 }
 
 /// `any_value` is the first row's value, or with `ignoreNulls` the first
@@ -330,7 +330,7 @@ fn by_types() -> Vec<DataType> {
 }
 
 /// What `max_by`/`min_by` of rows `(g, x, y)` give per group, by a plain
-/// loop: the first row with a non-NULL key and the extreme key.
+/// loop: the last row with a non-NULL key and the extreme key.
 fn by_oracle(
     rows: &[(i64, Option<i64>, Option<i64>)],
     max: bool,
@@ -342,7 +342,7 @@ fn by_oracle(
         let Some(y) = y else { continue };
         let better = match slot {
             None => true,
-            Some((cur, _)) => (key(y) > key(*cur)) == max && key(y) != key(*cur),
+            Some((cur, _)) => key(y) == key(*cur) || (key(y) > key(*cur)) == max,
         };
         if better {
             *slot = Some((y, x));
@@ -451,7 +451,7 @@ async fn by_aggregates_spill_and_merge() {
     let (s, b) = spill_input(60_000, 40_000);
     let aggs = vec![by(&MaxBy, &s), by(&MinBy, &s)];
     let expected = run_rows(node(scan(&s, b.clone()), spec(&s, vec![0], aggs.clone()))).await;
-    // The same answer by a plain loop (ties keep the first row).
+    // The same answer by a plain loop (a tie takes the last row).
     let mut best: BTreeMap<i64, [Option<(String, String)>; 2]> = BTreeMap::new();
     for i in 0..60_000_i64 {
         if i % 11 == 0 {
@@ -462,10 +462,10 @@ async fn by_aggregates_spill_and_merge() {
             format!("key-{:08}", (i * 7919) % 100_003),
         );
         let slot = best.entry(i % 40_000).or_default();
-        if slot[0].as_ref().is_none_or(|(_, cur)| y > *cur) {
+        if slot[0].as_ref().is_none_or(|(_, cur)| y >= *cur) {
             slot[0] = Some((x.clone(), y.clone()));
         }
-        if slot[1].as_ref().is_none_or(|(_, cur)| y < *cur) {
+        if slot[1].as_ref().is_none_or(|(_, cur)| y <= *cur) {
             slot[1] = Some((x, y));
         }
     }
@@ -637,15 +637,15 @@ fn running_frames_snapshot_fixed_width_states_only() {
     let x = i64s(&[Some(10), None, Some(30)]);
     let y = i64s(&[Some(1), Some(5), Some(5)]);
     a.update_running(&[0, 0, 0], &[x, y], &run).unwrap();
-    // After each row: 10; then NULL (key 5 beats 1); then NULL again (a tie
-    // keeps the first).
+    // After each row: 10; then NULL (key 5 beats 1); then 30 (a tie
+    // takes the new row).
     let out = a.evaluate(&[1, 2, 3]).unwrap();
     let out = out.as_primitive::<Int64Type>();
     assert_eq!(
         (0..3)
             .map(|i| out.is_valid(i).then(|| out.value(i)))
             .collect::<Vec<_>>(),
-        [Some(10), None, None]
+        [Some(10), None, Some(30)]
     );
     for (tx, ty) in [
         (DataType::Utf8View, DataType::Int64),

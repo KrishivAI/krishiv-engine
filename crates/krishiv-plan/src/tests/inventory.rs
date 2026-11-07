@@ -69,6 +69,7 @@ fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
         ExprNode::Field { .. } => "ExprNode::Field",
         ExprNode::UpdateFields { .. } => "ExprNode::UpdateFields",
         ExprNode::Cast { .. } => "ExprNode::Cast",
+        ExprNode::Collate { .. } => "ExprNode::Collate",
         ExprNode::Alias { .. } => "ExprNode::Alias",
         ExprNode::MultiAlias { .. } => "ExprNode::MultiAlias",
         ExprNode::Subquery { .. } => "ExprNode::Subquery",

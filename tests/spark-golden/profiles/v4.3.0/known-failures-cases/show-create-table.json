@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "sql-commands": [
+      44,
+      45,
+      46,
+      47,
+      48,
+      49
+    ]
+  },
+  "file": "show-create-table",
+  "format_version": 1
+}

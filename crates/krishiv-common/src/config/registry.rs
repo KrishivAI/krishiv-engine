@@ -39,6 +39,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_RESIDENT_GUARD,
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
+    &UI_ENABLED,
     &QUERY_MAX_EXECUTION_TIME,
     &QUERY_MAX_QUEUED_TIME,
     &CACHE_MAX_BYTES,
@@ -118,6 +119,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
 pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.seed", &EXEC_SEED),
     ("krishiv.spill.dir", &SPILL_DIR),
+    ("krishiv.ui.enabled", &UI_ENABLED),
     ("krishiv.memory.limit", &MEMORY_LIMIT),
     ("krishiv.io.cache.path", &IO_CACHE_PATH),
     ("krishiv.io.maxRetries", &IO_MAX_RETRIES),
@@ -807,6 +809,20 @@ pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
           principal holding 1000 rows loses its oldest finished row first; at this capacity the \
           oldest finished row of the principal holding the most finished rows goes. Running \
           queries are never dropped.",
+    scope: Scope::Cluster,
+    version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::Startup,
+};
+
+/// Whether `krishiv server` serves the web UI backend (design T133).
+pub static UI_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.ui.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "When false, `krishiv server` refuses to start: there is no listener and no UI \
+          backend, and nothing is recorded beyond the `system` tables. The UI reads those \
+          tables and keeps no state of its own.",
     scope: Scope::Cluster,
     version_added: "0.2.0",
     spark_alias: None,

@@ -132,6 +132,20 @@ fn run_on(
     limit: Option<usize>,
     executor: ExecutorConfig,
 ) -> Result<(Vec<String>, Counters), krishiv_common::error::KrishivError> {
+    run_beside(join_type, filter, probe, build, limit, executor, 0)
+}
+
+/// As [`run_on`], while a consumer of another query under the same root
+/// holds `hold` bytes for the whole run.
+fn run_beside(
+    join_type: JoinType,
+    filter: Option<Arc<dyn Predicate>>,
+    probe: Vec<Batch>,
+    build: Vec<Batch>,
+    limit: Option<usize>,
+    executor: ExecutorConfig,
+    hold: usize,
+) -> Result<(Vec<String>, Counters), krishiv_common::error::KrishivError> {
     let (_dir, scope) = spill_scope();
     let source = |name: &str, b: Vec<Batch>| {
         MemoryScan::try_new(schema(name), b)
@@ -159,6 +173,9 @@ fn run_on(
         spill_scratch_reserve: 32 << 10,
         ..MemoryConfig::default()
     });
+    let other = root.child("other", None);
+    let held = other.register("held", None);
+    other.try_reserve(held, hold).unwrap();
     let query = QueryContext::new(
         QueryId(1),
         WorkloadClass::Interactive,
@@ -193,6 +210,8 @@ fn run_on(
         query.finished().await;
         Ok::<_, krishiv_common::error::KrishivError>(rows)
     });
+    other.release(held, hold);
+    other.unregister(held);
     assert_eq!(root.reserved(), 0, "memory is released");
     let mut out = out?;
     out.sort();
@@ -509,4 +528,48 @@ fn many_drivers_spill_wide_build_batches() {
         counter(&counters, "build_spills") > 0,
         "{join_type:?}: {counters:?}"
     );
+}
+
+/// A spilled build's chunks leave a quarter of the limit free for the rest
+/// of the pool: beside another query holding most of the limit, the loop
+/// reads its build in more, smaller chunks than alone (each chunk's own
+/// budget counts only its drivers, so without this the chunks of several
+/// loops sharing a pool fill it), and still returns the same rows.
+#[test]
+fn a_spilled_build_leaves_room_for_the_rest_of_the_pool() {
+    let probe: Vec<Option<i64>> = (0..64).map(|i| Some((i * 499) % 100_000)).collect();
+    let build: Vec<Option<i64>> = (0..300_000).map(|i| Some((i * 7) % 100_000)).collect();
+    // One driver, so a chunk's own budget is a quarter of the limit.
+    let limit = 2 * LIMIT;
+    let one = ExecutorConfig {
+        compute_threads: 1,
+        blocking_threads: 1,
+        ..ExecutorConfig::default()
+    };
+    let chunks = |hold: usize| {
+        let (got, counters) = run_beside(
+            JoinType::FullOuter,
+            Some(near()),
+            batches("p", &probe, 16),
+            batches("b", &build, 4_096),
+            Some(limit),
+            one,
+            hold,
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            expected_by(JoinType::FullOuter, &is_near, &probe, &build),
+            "hold {hold}"
+        );
+        assert!(counter(&counters, "build_spills") > 0, "{counters:?}");
+        (
+            counter(&counters, "build_chunks"),
+            counter(&counters, "build_chunks_capped"),
+        )
+    };
+    let ((alone, alone_capped), (beside, capped)) = (chunks(0), chunks(limit * 6 / 10));
+    assert!(beside > alone, "alone {alone} chunks, beside {beside}");
+    assert_eq!(alone_capped, 0);
+    assert!(capped > 0, "beside: {capped} chunks cut short");
 }

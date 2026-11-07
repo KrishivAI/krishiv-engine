@@ -10,17 +10,27 @@ publish = false
 
 [dependencies]
 axum = { workspace = true, features = ["http1", "tokio"] }
+arrow-array = { workspace = true, optional = true }
+arrow-schema = { workspace = true, optional = true }
+krishiv-common = { path = "../krishiv-common", optional = true }
 krishiv-exec = { path = "../krishiv-exec", optional = true }
+krishiv-session = { path = "../krishiv-session", optional = true }
 krishiv-ui-assets = { path = "../krishiv-ui-assets" }
-tokio = { workspace = true, features = ["rt-multi-thread", "net"] }
+futures = { workspace = true, features = ["alloc"] }
+getrandom.workspace = true
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync"] }
 
 [features]
 # Prometheus exposition of the engine metrics snapshot (`GET /metrics`).
 # Additive and off by default: nothing in the default embedded build
 # enables it, and the route additionally needs `krishiv.metrics.enabled`.
 metrics-prometheus = ["dep:krishiv-exec"]
+# `SessionSource`: the UI backend over an engine runtime (embedded mode), reading the system tables.
+session = ["dep:krishiv-session", "dep:krishiv-common", "dep:arrow-array", "dep:arrow-schema"]
 
 [dev-dependencies]
+krishiv-session = { path = "../krishiv-session" }
 krishiv-exec = { path = "../krishiv-exec" }
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "macros", "time"] }
 

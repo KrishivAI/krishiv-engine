@@ -124,6 +124,9 @@ pub fn parse_and_lower_named_expression(
         .map_err(|e| e.redacted_in(sql))
 }
 
+mod identifier;
+use identifier::multipart_identifier;
+
 fn err(e: impl Into<KrishivError>, span: Span) -> ParseError {
     ParseError {
         error: e.into(),
@@ -303,6 +306,25 @@ impl Lowerer {
             }),
             span,
         )
+    }
+
+    /// `expr COLLATE name`: an unknown name is `COLLATION_INVALID_NAME` (with Spark's proposals).
+    fn collate(
+        &self,
+        expr: Arc<IrExpr>,
+        name: &str,
+        name_span: Span,
+        span: Span,
+    ) -> Result<IrExpr, ParseError> {
+        let collation = krishiv_types::Collation::parse(name).map_err(|e| err(e, name_span))?;
+        Ok(self.ex(
+            ExprNode::Collate {
+                expr,
+                collation,
+                name: name.to_owned(),
+            },
+            span,
+        ))
     }
 
     fn op(&self, b: Builtin, args: Vec<IrExpr>, span: Span) -> IrExpr {
@@ -1129,20 +1151,11 @@ impl Lowerer {
                 return Err(unsupported("a qualified generator name", v.span));
             };
             let lower = name.value.to_ascii_lowercase();
-            let (base, outer_name) = match lower.strip_suffix("_outer") {
-                Some(base) => (base, true),
-                None => (lower.as_str(), false),
-            };
-            let kind = match base {
-                "explode" => krishiv_plan::GeneratorKind::Explode,
-                "posexplode" => krishiv_plan::GeneratorKind::PosExplode,
-                "inline" => krishiv_plan::GeneratorKind::Inline,
-                _ => {
-                    return Err(unsupported(
-                        &format!("the generator function {}", name.value),
-                        v.span,
-                    ));
-                }
+            let Some((kind, outer_name)) = krishiv_plan::GeneratorKind::of_name(&lower) else {
+                return Err(unsupported(
+                    &format!("the generator function {}", name.value),
+                    v.span,
+                ));
             };
             let [arg] = &v.args[..] else {
                 return Err(err(
@@ -1190,17 +1203,10 @@ impl Lowerer {
             return None;
         };
         let lower = name.value.to_ascii_lowercase();
-        let (base, outer) = match lower.strip_suffix("_outer") {
-            Some(base) => (base, true),
-            None => (lower.as_str(), false),
-        };
-        let kind = match base {
-            "explode" => krishiv_plan::GeneratorKind::Explode,
-            "posexplode" => krishiv_plan::GeneratorKind::PosExplode,
-            "inline" => krishiv_plan::GeneratorKind::Inline,
-            // `stack` is `inline` over an array of structs ([`Self::generator_arg`]).
-            "stack" if !outer => krishiv_plan::GeneratorKind::Inline,
-            _ => return None,
+        // `stack` is `inline` over an array of structs ([`Self::generator_arg`]).
+        let (kind, outer) = match lower.as_str() {
+            "stack" => (krishiv_plan::GeneratorKind::Inline, false),
+            other => krishiv_plan::GeneratorKind::of_name(other)?,
         };
         // A window, a filter or DISTINCT makes it no generator call.
         (f.over.is_none() && f.filter.is_none() && f.quantifier.is_none()).then_some((
@@ -1911,22 +1917,26 @@ impl Lowerer {
                 // A generator as a table: `FROM explode(array(1, 2))`
                 // generates from one empty row.
                 let lname = name.parts[0].value.to_ascii_lowercase();
-                let (base, outer) = match lname.strip_suffix("_outer") {
-                    Some(base) => (base, true),
-                    None => (lname.as_str(), false),
-                };
-                let kind = match base {
-                    "explode" => Some(krishiv_plan::GeneratorKind::Explode),
-                    "posexplode" => Some(krishiv_plan::GeneratorKind::PosExplode),
-                    "inline" => Some(krishiv_plan::GeneratorKind::Inline),
-                    "stack" if !outer => Some(krishiv_plan::GeneratorKind::Inline),
-                    _ => None,
+                let (kind, outer) = match lname.as_str() {
+                    "stack" => (Some(krishiv_plan::GeneratorKind::Inline), false),
+                    other => krishiv_plan::GeneratorKind::of_name(other)
+                        .map_or((None, false), |(k, o)| (Some(k), o)),
                 };
                 // `FROM json_tuple(..)` stays a table function: the analyzer
                 // runs it as the select list `SELECT json_tuple(..)` over one
                 // row, and its alias-count error differs from a subquery's.
                 if let (Some(kind), 1) = (kind, name.parts.len()) {
-                    if let Some(a) = args.iter().find(|a| a.name.is_some()) {
+                    // `variant_explode` names its one parameter `input`
+                    // (Spark's `FunctionSignature(InputParameter("input"))`).
+                    let named = |a: &&crate::ast::FunctionArg| match &a.name {
+                        Some(n) => {
+                            kind != krishiv_plan::GeneratorKind::VariantExplode
+                                || args.len() != 1
+                                || !n.value.eq_ignore_ascii_case("input")
+                        }
+                        None => false,
+                    };
+                    if let Some(a) = args.iter().find(named) {
                         return Err(unsupported("table-valued functions", a.span));
                     }
                     let arg = &self.generator_arg(&name.parts[0], args, tf.span)?;
@@ -2328,6 +2338,21 @@ impl Lowerer {
                     }
                     [] => return Err(unsupported("a function name", f.name.span)),
                 };
+                // `collate(expr, 'name')` is the function form of `expr COLLATE name`.
+                if qualifier.is_empty()
+                    && !name.quoted
+                    && name.value.eq_ignore_ascii_case("collate")
+                    && f.args.len() == 2
+                    && f.quantifier.is_none()
+                    && f.within_group.is_empty()
+                    && f.filter.is_none()
+                    && f.null_treatment.is_none()
+                    && f.over.is_none()
+                    && let ExprKind::Literal(Literal::String(text)) = &f.args[1].expr.kind
+                {
+                    let expr = self.arg(&f.args[0].expr)?;
+                    return self.collate(expr, text, f.args[1].expr.span, sp);
+                }
                 // With `spark.sql.legacy.identifierClause` on, `IDENTIFIER('a.b')`
                 // is an ordinary call (the parser builds `dynamic_name` only
                 // otherwise): Spark resolves a constant string argument to the
@@ -2506,7 +2531,16 @@ impl Lowerer {
                 let args = vec![self.arg(base)?, self.arg(index)?];
                 self.call("__subscript", args, sp)
             }
-            ExprKind::Collate(..) => return Err(unsupported("COLLATE", sp)),
+            ExprKind::Collate(inner, name) => {
+                let text = name
+                    .parts
+                    .iter()
+                    .map(|p| p.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                let expr = self.arg(inner)?;
+                self.collate(expr, &text, name.span, sp)?
+            }
             ExprKind::VariantGet(base, path) => self.variant_get(base, path, sp)?,
             ExprKind::TableArgument(_) => return Err(unsupported("TABLE arguments", sp)),
             ExprKind::Lambda { params, body } => {
@@ -2694,65 +2728,4 @@ fn number(text: &str, kind: NumKind, sp: Span) -> R<IrLiteral> {
             data_type: DecimalType::try_new(precision, scale).map_err(|e| err(e, sp))?,
         },
     })
-}
-
-/// Spark's `parseMultipartIdentifier`: dot-separated parts, each bare or in
-/// backticks (a doubled backtick is one). `None` for an empty or malformed
-/// string, which stays an unresolved call.
-fn multipart_identifier(text: &str) -> Option<Vec<String>> {
-    let mut parts = Vec::new();
-    let mut chars = text.chars().peekable();
-    loop {
-        let mut part = String::new();
-        if chars.peek() == Some(&'`') {
-            chars.next();
-            loop {
-                match chars.next()? {
-                    '`' if chars.peek() == Some(&'`') => {
-                        chars.next();
-                        part.push('`');
-                    }
-                    '`' => break,
-                    c => part.push(c),
-                }
-            }
-        } else {
-            while let Some(&c) = chars.peek() {
-                if !(c.is_ascii_alphanumeric() || c == '_') {
-                    break;
-                }
-                part.push(c);
-                chars.next();
-            }
-            if part.is_empty() {
-                return None;
-            }
-        }
-        parts.push(part);
-        match chars.next() {
-            None => return Some(parts),
-            Some('.') => {}
-            Some(_) => return None,
-        }
-    }
-}
-
-#[cfg(test)]
-mod identifier_tests {
-    use super::multipart_identifier;
-
-    #[test]
-    fn multipart_identifiers_split_like_spark() {
-        let parts = |t| multipart_identifier(t);
-        assert_eq!(parts("a"), Some(vec!["a".to_owned()]));
-        assert_eq!(parts("t.c1"), Some(vec!["t".to_owned(), "c1".to_owned()]));
-        assert_eq!(
-            parts("`a.b`.c"),
-            Some(vec!["a.b".to_owned(), "c".to_owned()])
-        );
-        assert_eq!(parts("`a``b`"), Some(vec!["a`b".to_owned()]));
-        for bad in ["", ".a", "a.", "a..b", "`a", "`a`b", "c 1", "a-b"] {
-            assert_eq!(parts(bad), None, "{bad}");
-        }
-    }
 }
