@@ -3020,14 +3020,14 @@ fn can_store(from: &DataType, to: &DataType) -> bool {
         )
     };
     // Anything atomic may be stored as a string.
-    let to_string = matches!(to, T::String)
+    let to_string = matches!(to, T::String | T::CollatedString(_))
         && (numeric(from)
             || matches!(
                 from,
                 T::Boolean | T::Date | T::Timestamp | T::TimestampNtz | T::Binary
             ));
     match (from, to) {
-        (T::Null, _) => true,
+        (T::Null, _) | (T::String | T::CollatedString(_), T::String | T::CollatedString(_)) => true,
         (a, b) if (numeric(a) && numeric(b)) || to_string => true,
         // Dates and timestamps among themselves.
         (T::Date, T::Timestamp | T::TimestampNtz)

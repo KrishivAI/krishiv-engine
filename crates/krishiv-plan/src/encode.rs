@@ -1193,6 +1193,16 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.call(args, *distinct, filter.as_ref());
                 self.call_within_group(e);
             }
+            ExprNode::Collate {
+                expr,
+                collation,
+                name,
+            } => {
+                self.u8(40);
+                self.str(&collation.name());
+                self.str(name);
+                self.expr(expr);
+            }
             ExprNode::Cast { expr, to, mode } => {
                 self.u8(5);
                 self.data_type(to);
