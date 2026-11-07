@@ -260,15 +260,22 @@ async fn require_token(
 /// secrets and personal data, and the page is a screen: the literals stay in the engine's own record.
 #[must_use]
 pub fn mask_literals(text: &str) -> String {
-    // `SET key = value` carries a value that is a secret as often as not: keep the key, drop the value.
-    let trimmed = text.trim_start();
-    if trimmed.len() > 4
-        && trimmed.is_char_boundary(4)
-        && trimmed[..4].eq_ignore_ascii_case("set ")
-        && let Some(eq) = trimmed.find('=')
-    {
-        return format!("{}=?", &trimmed[..eq]);
+    let masked = mask_pass(text);
+    // `SET key = value`: the value is a secret as often as not. Looked for in the masked text (comments gone,
+    // any whitespace allowed after SET) so a leading comment or a tab cannot hide it: keep the key, drop the value.
+    let head = masked.trim_start();
+    let is_set = head.len() > 3
+        && head.is_char_boundary(3)
+        && head[..3].eq_ignore_ascii_case("set")
+        && head[3..].starts_with(char::is_whitespace);
+    if is_set && let Some(eq) = masked.find('=') {
+        return format!("{}=?", &masked[..eq]);
     }
+    masked
+}
+
+/// One pass over `text` masking strings, numbers and comments (see [`mask_literals`]).
+fn mask_pass(text: &str) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
@@ -734,7 +741,8 @@ impl Drop for StreamSlot {
     }
 }
 
-/// The live-query list as an event body, read at most once per period however many streams ask. The lock is
+/// The live-query list as an event body, normally read once per period however many streams ask (streams that
+/// arrive while a read is in flight may each read once more). The lock is
 /// held only to look at and to store the snapshot, never across the read: a slow read delays the stream that
 /// asked for it and no other.
 async fn shared_snapshot(s: &UiState) -> Value {
@@ -775,4 +783,94 @@ async fn events(State(s): State<UiState>) -> Response {
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mask_literals;
+
+    #[test]
+    fn literals_are_masked_and_names_are_not() {
+        let cases = [
+            ("SELECT 1", "SELECT ?"),
+            (
+                "SELECT * FROM t WHERE name = 'ann' AND age > 42",
+                "SELECT * FROM t WHERE name = ? AND age > ?",
+            ),
+            ("select 'it''s a secret', \"also secret\"", "select ?, ?"),
+            ("select 'back\\'slash', 2", "select ?, ?"),
+            (
+                "select l_orderkey1, t2.c3, `a 1` from t2 where x = 1.5e3",
+                "select l_orderkey1, t2.c3, `a 1` from t2 where x = ?",
+            ),
+            ("select 10L, 1BD, 0xFF, 3.14", "select ?, ?, ?, ?"),
+            (
+                "select sum(l_quantity) from lineitem group by 1, 2",
+                "select sum(l_quantity) from lineitem group by ?, ?",
+            ),
+            ("select 'unterminated", "select ?"),
+            ("select .5, x.y from t", "select ?, x.y from t"),
+            (
+                "select 1 -- the password is hunter2\nfrom t",
+                "select ?  \nfrom t",
+            ),
+            ("select /* secret */ 1", "select   ?"),
+            ("select a from `unclosed", "select a from ?"),
+            ("select 'é', 'ü'", "select ?, ?"),
+            ("select 'ends in a backslash\\", "select ?"),
+            ("select a from `x`", "select a from `x`"),
+            ("setup the thing 42", "setup the thing ?"),
+            ("", ""),
+            ("`", "?"),
+            ("\\", "\\"),
+            ("/*", " "),
+            ("a--b", "a "),
+        ];
+        for (input, want) in cases {
+            assert_eq!(mask_literals(input), want, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn a_set_statement_keeps_its_key_and_loses_its_value_however_it_is_written() {
+        for (input, want) in [
+            (
+                "SET spark.hadoop.fs.s3a.secret.key = abc123",
+                "SET spark.hadoop.fs.s3a.secret.key =?",
+            ),
+            ("  set x=1", "  set x=?"),
+            ("SET\tk=hunter2", "SET\tk=?"),
+            ("SET\nk=hunter2", "SET\nk=?"),
+            ("/*c*/ SET k=hunter2", "  SET k=?"),
+            ("SET -- tok abc\nk = v", "SET  \nk =?"),
+            ("SET k = 'quoted secret'", "SET k =?"),
+            ("SET TIME ZONE 'UTC'", "SET TIME ZONE ?"),
+        ] {
+            let got = mask_literals(input);
+            assert_eq!(got, want, "{input:?}");
+            assert!(
+                !got.contains("hunter2")
+                    && !got.contains("abc123")
+                    && !got.contains("quoted secret"),
+                "{got}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_canary_literal_never_survives() {
+        for input in [
+            "INSERT INTO users VALUES ('s3cr3t-canary', 123456789)",
+            "SELECT * FROM t WHERE token = \"s3cr3t-canary\"",
+            "SELECT 1 /* s3cr3t-canary */",
+            "SELECT 1 -- s3cr3t-canary",
+            "SET x = s3cr3t-canary",
+        ] {
+            let got = mask_literals(input);
+            assert!(
+                !got.contains("s3cr3t") && !got.contains("123456789"),
+                "{input:?} -> {got:?}"
+            );
+        }
+    }
 }
