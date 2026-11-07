@@ -49,14 +49,6 @@
       "reason": "SELECT time_trunc('HOUR', true) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
-      "id": "time_trunc#6ebd19244997/ansi_on",
-      "reason": "SELECT time_trunc('HOUR', '1') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "time_trunc#6ebd19244997/ansi_off",
-      "reason": "SELECT time_trunc('HOUR', '1') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
       "id": "time_trunc#86431233aa59/ansi_on",
       "reason": "SELECT time_trunc('HOUR', CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
@@ -135,14 +127,6 @@
     {
       "id": "time_trunc#bc2b28d3f90e/ansi_off",
       "reason": "SELECT time_trunc('HOUR', CAST(1 AS SMALLINT)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "time_trunc#bc62be307ce3/ansi_on",
-      "reason": "SELECT time_trunc('HOUR', 'abc') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "time_trunc#bc62be307ce3/ansi_off",
-      "reason": "SELECT time_trunc('HOUR', 'abc') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time_trunc#e2f57e66513c/ansi_on",

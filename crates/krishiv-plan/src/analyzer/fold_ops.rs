@@ -81,6 +81,31 @@ pub(super) fn arithmetic(
     if l.data_type() != out || r.data_type() != out {
         return None;
     }
+    // ANSI intervals of one family: `+`/`-` always raise on overflow, as Spark's exact interval arithmetic does.
+    let interval_op = match op {
+        Builtin::Add => Some(krishiv_kernels::interval::AddOp::Add),
+        Builtin::Subtract => Some(krishiv_kernels::interval::AddOp::Subtract),
+        _ => None,
+    };
+    match (out, interval_op) {
+        (ArrowType::Duration(arrow_schema::TimeUnit::Microsecond), Some(iop)) => {
+            return done(krishiv_kernels::interval::add_day_time(
+                operand::<arrow_array::types::DurationMicrosecondType>(l),
+                operand::<arrow_array::types::DurationMicrosecondType>(r),
+                iop,
+                false,
+            ));
+        }
+        (ArrowType::Interval(arrow_schema::IntervalUnit::YearMonth), Some(iop)) => {
+            return done(krishiv_kernels::interval::add_year_month(
+                operand::<arrow_array::types::IntervalYearMonthType>(l),
+                operand::<arrow_array::types::IntervalYearMonthType>(r),
+                iop,
+                false,
+            ));
+        }
+        _ => {}
+    }
     match out {
         ArrowType::Int8 => integral::<Int8Type>(op, l, r, ansi, ctx),
         ArrowType::Int16 => integral::<Int16Type>(op, l, r, ansi, ctx),
