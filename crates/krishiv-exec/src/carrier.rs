@@ -42,7 +42,9 @@ fn structure(a: &StructArray, fields: &arrow_schema::Fields) -> Result<StructArr
 }
 
 /// A calendar interval whose microseconds overflow `i64` nanoseconds at the edge: Spark's `ArrowWriter` fails there
-/// with `Math.multiplyExact`'s `ArithmeticException` ("long overflow").
+/// with `Math.multiplyExact`'s `ArithmeticException` ("long overflow"), which carries no error class. The nearest class
+/// is `ARITHMETIC_OVERFLOW`, whose template always names `spark.sql.ansi.enabled`, although turning ANSI off does not
+/// avoid this error (the edge conversion is exact in every mode).
 fn calendar_overflow() -> KrishivError {
     krishiv_common::error::ArithmeticOverflow {
         message: "long overflow".to_owned(),

@@ -364,7 +364,15 @@ impl Engine for SessionEngine {
                         .zip(&columns)
                         .map(|(f, c)| f.as_ref().clone().with_data_type(c.data_type().clone()))
                         .collect();
-                    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).map_err(|e| {
+                    // A batch of no columns keeps its row count.
+                    let options =
+                        arrow_array::RecordBatchOptions::new().with_row_count(Some(b.num_rows()));
+                    RecordBatch::try_new_with_options(
+                        Arc::new(Schema::new(fields)),
+                        columns,
+                        &options,
+                    )
+                    .map_err(|e| {
                         krishiv_common::error::KrishivError::from(
                             krishiv_common::error::InternalError {
                                 message: e.to_string(),

@@ -1234,17 +1234,22 @@ mod tests {
     }
 
     #[test]
-    fn a_calendar_literal_past_the_nanosecond_field_is_refused_by_name() {
+    fn a_calendar_literal_holds_every_long_of_microseconds() {
         let literal = |micros| Literal::CalendarInterval {
             months: 0,
             days: 0,
             micros,
         };
-        assert!(super::literal_array(&literal(i64::MAX / 1000)).is_ok());
-        let e = super::literal_array(&literal(i64::MAX / 1000 + 1)).err();
-        assert_eq!(
-            e.map(|e| e.error_class().name().to_owned()).as_deref(),
-            Some("KRISHIV_UNSUPPORTED_FEATURE")
-        );
+        for micros in [i64::MAX / 1000 + 1, i64::MAX, i64::MIN] {
+            let a = super::literal_array(&literal(micros)).ok();
+            let got = a
+                .as_deref()
+                .and_then(krishiv_types::calendar::Calendars::of)
+                .and_then(|c| c.get(0));
+            assert_eq!(
+                got,
+                Some(krishiv_types::calendar::CalendarValue::new(0, 0, micros))
+            );
+        }
     }
 }

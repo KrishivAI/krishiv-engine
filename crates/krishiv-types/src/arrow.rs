@@ -163,7 +163,11 @@ pub fn calendar_struct() -> ArrowType {
 /// Whether `arrow` is the struct of a calendar interval.
 #[must_use]
 pub fn is_calendar_struct(arrow: &ArrowType) -> bool {
-    *arrow == calendar_struct()
+    // Only a three-field struct whose first child carries the mark can be one,
+    // so other types never build the carrier to compare against.
+    matches!(arrow, ArrowType::Struct(f) if f.len() == 3
+        && f[0].metadata().contains_key(CALENDAR_CHILD_METADATA_KEY))
+        && *arrow == calendar_struct()
 }
 
 /// Whether `arrow` is the struct of a variant value.
