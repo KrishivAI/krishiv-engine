@@ -34,10 +34,12 @@
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
 3369 crates/krishiv-session/src/table_commands.rs
-3869 crates/krishiv-sql/src/ast.rs
+# +6 lines over main: CREATE NAMESPACE records a clause written twice and PROPERTIES with DBPROPERTIES (DUPLICATE_CLAUSES, PR #572)
+3875 crates/krishiv-sql/src/ast.rs
 2774 crates/krishiv-sql/src/lower.rs
 # +21 lines over main: WITH ctes FROM source INSERT ... parses as a multi-table insert (P2b row 11)
-5246 crates/krishiv-sql/src/parser.rs
+# +28 more (PR #572): CREATE NAMESPACE counts each clause in Spark's duplicate-check order (DUPLICATE_CLAUSES)
+5274 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs
 2153 crates/krishiv-testkit/src/file_format/mod.rs
