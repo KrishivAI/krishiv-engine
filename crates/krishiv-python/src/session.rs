@@ -43,10 +43,16 @@ impl PySession {
             builder = builder.config(key, value);
         }
         let inner = builder.build().map_err(|e| to_py(py, &e))?;
-        Ok(Self {
+        let session = Self {
             inner,
             udfs: std::sync::OnceLock::new(),
-        })
+        };
+        // Every session runs unregistered UDFs (a DataFrame-side `udf(...)`
+        // registers in no session), so it holds its runtime from the start;
+        // the pool itself starts with the first call. After the exit hook
+        // there is none (registration then raises, as before).
+        let _ = session.udf_runtime(py);
+        Ok(session)
     }
 
     /// Runs the SQL query `query` through analysis; its DataFrame.
@@ -91,12 +97,7 @@ impl PySession {
                 deterministic,
                 thread_safe,
             });
-        runtime.insert(
-            name.to_ascii_lowercase(),
-            entry.version,
-            wrapper,
-            thread_safe,
-        );
+        runtime.insert(entry.def.name.clone(), entry.version, wrapper, thread_safe);
         Ok(entry.version)
     }
 
@@ -265,7 +266,10 @@ impl PySession {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(0);
         let size = crate::udf::pool_size(py, threads)?;
-        let made = std::sync::Arc::new(crate::udf::runtime::PyUdfRuntime::new(size));
+        let made = std::sync::Arc::new(crate::udf::runtime::PyUdfRuntime::new(
+            size,
+            self.inner.conf(),
+        ));
         let runtime = std::sync::Arc::clone(self.udfs.get_or_init(|| made));
         self.inner
             .set_python_udf_runtime(std::sync::Arc::clone(&runtime)

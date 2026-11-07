@@ -116,3 +116,81 @@ pub(crate) fn _udf_pool_shutdown(py: Python<'_>) -> usize {
         None => 0,
     }
 }
+
+/// `_native.AnonymousPythonUdf`: an unregistered Python UDF (a DataFrame-side
+/// `udf(...)`, design P2-T059 unit 2c (a)), its wrapper in the process's
+/// table. Its calls ([`Self::call`]) resolve in any session and are never
+/// reachable by name from SQL; they show `name(args)`.
+#[pyclass(name = "AnonymousPythonUdf", module = "krishiv._native", frozen)]
+#[derive(Debug)]
+pub(crate) struct PyAnonymousUdf {
+    def: krishiv_session::PythonUdfDef,
+    version: u32,
+}
+
+#[pymethods]
+impl PyAnonymousUdf {
+    /// Adds `wrapper` (one `pyarrow.Array` per argument in, one of
+    /// `return_type`, a Spark DDL type, out) under a new version.
+    #[new]
+    #[pyo3(signature = (name, eval_type, return_type, deterministic, thread_safe, wrapper))]
+    fn new(
+        py: Python<'_>,
+        name: &str,
+        eval_type: i32,
+        return_type: &str,
+        deterministic: bool,
+        thread_safe: bool,
+        wrapper: Py<PyAny>,
+    ) -> PyResult<Self> {
+        if SHUT.load(Ordering::SeqCst) {
+            return Err(PyRuntimeError::new_err(
+                "Python UDFs cannot be created while the interpreter exits",
+            ));
+        }
+        let eval_type = krishiv_plan::PythonEvalType::from_code(eval_type).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "unsupported Python UDF eval type {eval_type}"
+            ))
+        })?;
+        let return_type = krishiv_types::parse_data_type(return_type)
+            .map_err(|e| crate::errors::to_py(py, &e))?;
+        if name.contains('\0') {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "a Python UDF name cannot hold a NUL character",
+            ));
+        }
+        let version = runtime::insert_anonymous(wrapper, thread_safe)?;
+        Ok(Self {
+            def: krishiv_session::PythonUdfDef {
+                name: name.to_owned(),
+                eval_type,
+                return_type,
+                deterministic,
+                thread_safe,
+            },
+            version,
+        })
+    }
+
+    /// The version plans name this UDF by (top bit set).
+    #[getter]
+    fn version(&self) -> u32 {
+        self.version
+    }
+
+    /// A call of this UDF on `args`.
+    fn call(
+        &self,
+        py: Python<'_>,
+        args: Vec<crate::column::PyColumn>,
+    ) -> PyResult<crate::column::PyColumn> {
+        krishiv_session::functions::python_udf_call(
+            &self.def,
+            self.version,
+            args.into_iter().map(|c| c.inner),
+        )
+        .map(crate::column::PyColumn::wrap)
+        .map_err(|e| crate::errors::to_py(py, &e))
+    }
+}

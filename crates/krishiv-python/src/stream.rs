@@ -63,6 +63,64 @@ fn capsule_name(capsule: &Bound<'_, PyCapsule>) -> String {
     }
 }
 
+/// A reader whose `next` runs with the calling thread detached from Python
+/// when it is attached (design P2-T059 §2.5 "Stream export", T091b §5): a
+/// consumer reading a query's stream while it holds the GIL (or, on a
+/// free-threaded build, an attached thread state) would otherwise block the
+/// Python UDF pool threads the query waits on. A thread without a Python
+/// thread state is left alone (it is never attached, which could block on
+/// the GIL).
+pub(crate) struct Detaching<R>(pub(crate) R);
+
+/// Re-attaches the thread state it holds when dropped, so an unwinding
+/// `next` leaves the thread as it found it.
+struct Reattach(*mut pyo3::ffi::PyThreadState);
+
+impl Drop for Reattach {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` is the thread state `PyEval_SaveThread` returned
+        // on this same thread (the guard is `!Send`: it holds a raw
+        // pointer), not yet restored.
+        unsafe { pyo3::ffi::PyEval_RestoreThread(self.0) };
+    }
+}
+
+/// Runs `f` with this thread detached from Python if it is attached.
+fn detached<T>(f: impl FnOnce() -> T) -> T {
+    // Probe: swapping in NULL returns the current thread state (NULL when
+    // the thread has none, and then it does nothing); it is swapped back at
+    // once and released properly below.
+    // SAFETY: with a NULL argument the swap only reads (and on 3.12+
+    // detaches) the calling thread's own state; restoring the returned one
+    // on the same thread undoes it. No Python object is touched.
+    let current = unsafe { pyo3::ffi::PyThreadState_Swap(std::ptr::null_mut()) };
+    if current.is_null() {
+        return f();
+    }
+    // SAFETY: as above: `current` is this thread's own state, just taken.
+    unsafe { pyo3::ffi::PyThreadState_Swap(current) };
+    // SAFETY: the thread is attached (it holds `current`), so it may
+    // release it; the guard restores it on this thread after `f`, which
+    // touches no Python object.
+    let _reattach = Reattach(unsafe { pyo3::ffi::PyEval_SaveThread() });
+    f()
+}
+
+impl<R: Iterator> Iterator for Detaching<R> {
+    type Item = R::Item;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let inner = &mut self.0;
+        detached(|| inner.next())
+    }
+}
+
+impl<R: RecordBatchReader> RecordBatchReader for Detaching<R> {
+    fn schema(&self) -> SchemaRef {
+        self.0.schema()
+    }
+}
+
 /// A one-shot stream of Arrow record batches (Arrow PyCapsule interface).
 #[pyclass(module = "krishiv._native", frozen)]
 pub struct ArrowStream {

@@ -33,6 +33,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__allocator__", ALLOCATOR)?;
     m.add_class::<stream::ArrowStream>()?;
     m.add_function(wrap_pyfunction!(udf::_udf_pool_shutdown, m)?)?;
+    m.add_function(wrap_pyfunction!(udf::runtime::_udf_runner_conf, m)?)?;
+    m.add_class::<udf::PyAnonymousUdf>()?;
     m.add_class::<session::PySession>()?;
     m.add_class::<dataframe::PyDataFrame>()?;
     m.add_class::<dataframe::PyGroupedData>()?;
