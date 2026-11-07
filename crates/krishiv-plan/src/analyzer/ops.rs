@@ -1359,27 +1359,6 @@ impl Resolver<'_> {
         Ok((bounds, wide))
     }
 
-    /// Whether a `Generate` node sits between `plan` and the aggregate it
-    /// sorts: the search stops at the first aggregate, so a generator in
-    /// that aggregate's input does not count.
-    fn holds_generator(plan: &Arc<LogicalPlan>) -> bool {
-        let mut seen = HashSet::new();
-        let mut stack = vec![Arc::clone(plan)];
-        while let Some(p) = stack.pop() {
-            if !seen.insert(Arc::as_ptr(&p) as usize) {
-                continue;
-            }
-            if matches!(p.node, PlanNode::Generate { .. }) {
-                return true;
-            }
-            if matches!(p.node, PlanNode::Aggregate { .. }) {
-                continue;
-            }
-            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
-        }
-        false
-    }
-
     /// The aggregate under `c`'s filters, sorts and limits (`HAVING`), and
     /// those layers, top first; `None` when `c` is not such a stack. A
     /// `HAVING` that had to grow the aggregate left a projection over its

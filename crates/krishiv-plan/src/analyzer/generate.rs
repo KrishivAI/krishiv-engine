@@ -8,6 +8,7 @@
 //! input, its type picks the generated columns, and the node outputs the
 //! input's attributes followed by them.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{
@@ -681,6 +682,27 @@ impl Resolver<'_> {
 }
 
 impl Resolver<'_> {
+    /// Whether a `Generate` node sits between `plan` and the aggregate it
+    /// sorts: the search stops at the first aggregate, so a generator in
+    /// that aggregate's input does not count.
+    pub(super) fn holds_generator(plan: &Arc<LogicalPlan>) -> bool {
+        let mut seen = HashSet::new();
+        let mut stack = vec![Arc::clone(plan)];
+        while let Some(p) = stack.pop() {
+            if !seen.insert(Arc::as_ptr(&p) as usize) {
+                continue;
+            }
+            if matches!(p.node, PlanNode::Generate { .. }) {
+                return true;
+            }
+            if matches!(p.node, PlanNode::Aggregate { .. }) {
+                continue;
+            }
+            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
+        false
+    }
+
     /// A `HAVING` over an aggregate with a generator in the select list and
     /// windows: the generator runs above the windows, and the `HAVING`
     /// still filters below them (Spark 4.3; 4.2 filtered the generated rows
