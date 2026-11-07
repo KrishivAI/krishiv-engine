@@ -90,6 +90,7 @@ export interface QueryDetail {
 }
 
 export interface CacheRow {
+  worker_id?: string;
   cache: string;
   entries: number;
   bytes: number;
@@ -111,6 +112,7 @@ export interface Health {
 }
 
 export interface MemoryRow {
+  worker_id?: string;
   path: string;
   parent: string | null;
   kind: string;

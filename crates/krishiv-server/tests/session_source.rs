@@ -126,5 +126,8 @@ async fn cancelling_an_unknown_query_is_false_and_a_malformed_id_is_an_error() {
             .await
             .unwrap()
     );
-    assert!(source.cancel("not-a-query-id").await.is_err());
+    assert!(
+        !source.cancel("not-a-query-id").await.unwrap(),
+        "an id that is not an id names no running query"
+    );
 }

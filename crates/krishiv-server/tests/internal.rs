@@ -32,12 +32,17 @@ fn rows(v: Value) -> Vec<Row> {
 struct Fake {
     cancelled: Mutex<Vec<String>>,
     fail: bool,
+    /// How many times the live-query table was read.
+    reads: std::sync::atomic::AtomicUsize,
 }
 
 impl UiSource for Fake {
     fn rows(&self, table: SystemTable) -> UiFuture<'_, Vec<Row>> {
         let fail = self.fail;
         Box::pin(async move {
+            if table == SystemTable::Queries {
+                self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
             if fail {
                 return Err(UiError::with_class(
                     "system.queries is unavailable",
@@ -48,7 +53,7 @@ impl UiSource for Fake {
             Ok(match table {
                 SystemTable::Queries => rows(json!([
                     {"query_id": "q-run", "state": "running", "principal": "ann", "submitted_at": 2_000,
-                     "query_text": "SELECT 1", "secret_option": "hunter2", "workers": 1},
+                     "query_text": "SELECT 1 FROM t WHERE pw = 's3cr3t-canary'", "secret_option": "hunter2", "workers": 1},
                     {"query_id": "q-wait", "state": "queued", "principal": "bob", "submitted_at": 1_000},
                     {"query_id": "q-a", "state": "finished", "principal": "ann", "submitted_at": 100,
                      "wall_ns": 1_000, "peak_memory_bytes": 10, "rows_produced": 5, "spill_bytes": 0},
@@ -71,6 +76,8 @@ impl UiSource for Fake {
                 SystemTable::Memory => rows(json!([
                     {"worker_id": "local", "path": "root", "parent": null, "kind": "root",
                      "reserved_bytes": 100, "peak_bytes": 200, "limit_bytes": 1000, "spillable": false},
+                    {"worker_id": "w2", "path": "root/q", "parent": "root", "kind": "query",
+                     "reserved_bytes": 5, "peak_bytes": 6, "limit_bytes": null, "spillable": true},
                     {"worker_id": "w2", "path": "root", "parent": null, "kind": "root",
                      "reserved_bytes": 20, "peak_bytes": 30, "limit_bytes": 500, "spillable": false},
                     {"worker_id": "local", "path": "root/q", "parent": "root", "kind": "query",
@@ -97,6 +104,7 @@ async fn start(fail: bool) -> (std::net::SocketAddr, Arc<Fake>) {
     let fake = Arc::new(Fake {
         cancelled: Mutex::new(Vec::new()),
         fail,
+        reads: std::sync::atomic::AtomicUsize::new(0),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -215,7 +223,11 @@ async fn the_live_list_has_running_and_queued_queries_oldest_first_and_only_allo
         .collect();
     assert_eq!(ids, ["q-wait", "q-run"]);
     let run = &body["queries"][1];
-    assert_eq!(run["query_text"], "SELECT 1");
+    assert_eq!(
+        run["query_text"], "SELECT ? FROM t WHERE pw = ?",
+        "literals never reach the page"
+    );
+    assert!(!body.to_string().contains("s3cr3t-canary"), "{body}");
     assert!(
         run.get("secret_option").is_none(),
         "a column outside the allowlist is dropped: {run}"
@@ -310,7 +322,24 @@ async fn health_and_resources_report_memory_and_cache_hit_rates() {
         "no lookups yet is not a 0% hit rate"
     );
     let r = get(addr, "/api/internal/resources").await;
-    assert_eq!(r["memory"].as_array().unwrap().len(), 3);
+    assert_eq!(r["memory"].as_array().unwrap().len(), 4);
+    let keys: std::collections::BTreeSet<String> = r["memory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            format!(
+                "{}/{}",
+                m["worker_id"].as_str().unwrap(),
+                m["path"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(
+        keys.len(),
+        4,
+        "worker id and path together identify a pool (the page keys its rows by them): {keys:?}"
+    );
     assert_eq!(r["caches"][0]["cache"], "metadata");
 }
 
@@ -372,5 +401,130 @@ async fn the_event_stream_sends_the_live_list_about_once_a_second() {
     assert!(
         gap >= std::time::Duration::from_millis(900),
         "events {gap:?} apart, faster than once a second"
+    );
+}
+
+#[tokio::test]
+async fn nothing_that_changes_state_accepts_a_token_in_the_address_or_a_cookie() {
+    let (addr, fake) = start(false).await;
+    for (name, extra, path) in [
+        ("no token", "", "/api/internal/queries/q-run/cancel"),
+        (
+            "token in the address",
+            "",
+            &format!("/api/internal/queries/q-run/cancel?token={TOKEN}"),
+        ),
+        (
+            "token in a cookie",
+            &format!("Cookie: krishiv_ui_token={TOKEN}\r\n"),
+            "/api/internal/queries/q-run/cancel",
+        ),
+    ] {
+        let mut s = TcpStream::connect(addr).await.unwrap();
+        s.write_all(format!("POST {path} HTTP/1.1\r\nHost: l\r\n{extra}Content-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+        let mut out = String::new();
+        s.read_to_string(&mut out).await.unwrap();
+        assert!(out.starts_with("HTTP/1.1 401"), "{name}: {out}");
+    }
+    assert!(
+        fake.cancelled.lock().unwrap().is_empty(),
+        "nothing was cancelled"
+    );
+}
+
+#[tokio::test]
+async fn the_address_token_works_only_for_a_get() {
+    let (addr, _) = start(false).await;
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    s.write_all(format!("DELETE /api/internal/queries?token={TOKEN} HTTP/1.1\r\nHost: l\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).await.unwrap();
+    assert!(
+        out.starts_with("HTTP/1.1 401") || out.starts_with("HTTP/1.1 405"),
+        "{out}"
+    );
+}
+
+async fn open_stream(addr: std::net::SocketAddr) -> TcpStream {
+    let mut s = TcpStream::connect(addr).await.unwrap();
+    s.write_all(
+        format!(
+            "GET /api/internal/events HTTP/1.1\r\nHost: l\r\nAuthorization: Bearer {TOKEN}\r\n\r\n"
+        )
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+    s
+}
+
+async fn first_line(s: &mut TcpStream) -> String {
+    let mut buf = [0_u8; 256];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(20), s.read(&mut buf))
+        .await
+        .expect("no response")
+        .unwrap();
+    String::from_utf8_lossy(&buf[..n])
+        .lines()
+        .next()
+        .unwrap_or("")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn the_event_streams_are_capped_and_a_slot_comes_back_when_a_client_leaves() {
+    let (addr, _) = start(false).await;
+    let mut open = Vec::new();
+    for _ in 0..krishiv_server::internal::MAX_EVENT_CLIENTS {
+        let mut s = open_stream(addr).await;
+        assert_eq!(first_line(&mut s).await, "HTTP/1.1 200 OK");
+        open.push(s);
+    }
+    let mut extra = open_stream(addr).await;
+    assert_eq!(
+        first_line(&mut extra).await,
+        "HTTP/1.1 503 Service Unavailable",
+        "the stream over the cap is refused"
+    );
+    drop(open.pop());
+    // The server notices the closed connection when it next writes to it (within a period or two).
+    let mut accepted = false;
+    for _ in 0..10 {
+        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+        let mut again = open_stream(addr).await;
+        if first_line(&mut again).await == "HTTP/1.1 200 OK" {
+            accepted = true;
+            break;
+        }
+    }
+    assert!(accepted, "a client that left did not free its place");
+}
+
+#[tokio::test]
+async fn several_open_tabs_share_one_read_of_the_live_queries_a_period() {
+    let (addr, fake) = start(false).await;
+    let mut tabs = Vec::new();
+    for _ in 0..6 {
+        tabs.push(open_stream(addr).await);
+    }
+    for t in &mut tabs {
+        assert_eq!(first_line(t).await, "HTTP/1.1 200 OK");
+    }
+    // Wait for the first event of every tab (one period), then count the reads.
+    let mut buf = [0_u8; 4096];
+    for t in &mut tabs {
+        let mut seen = String::new();
+        while !seen.contains("event: queries") {
+            let n = tokio::time::timeout(std::time::Duration::from_secs(20), t.read(&mut buf))
+                .await
+                .expect("no event")
+                .unwrap();
+            seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+    }
+    let reads = fake.reads.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        reads <= 3,
+        "6 tabs caused {reads} reads of the live queries; they should share one a period"
     );
 }

@@ -13,16 +13,16 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use futures::stream::Stream;
 use serde_json::{Map, Value, json};
 
 /// One system-table row as JSON (column name to value).
@@ -103,6 +103,11 @@ struct UiState {
     source: Arc<dyn UiSource>,
     token: Arc<str>,
     started: Instant,
+    /// Event streams open now (capped at [`MAX_EVENT_CLIENTS`]).
+    streams: Arc<AtomicUsize>,
+    /// The last live-query snapshot the event streams share, so the number of open tabs does not change how many
+    /// planned queries the engine runs.
+    snapshot: Arc<tokio::sync::Mutex<Option<(Instant, Value)>>>,
 }
 
 /// A fresh random token: 32 bytes from the operating system, hex encoded.
@@ -147,6 +152,8 @@ pub fn router_with_ui(source: Arc<dyn UiSource>, token: &str) -> Router {
         source,
         token: token.into(),
         started: Instant::now(),
+        streams: Arc::new(AtomicUsize::new(0)),
+        snapshot: Arc::new(tokio::sync::Mutex::new(None)),
     };
     let internal = Router::new()
         .route("/api/internal/health", get(health))
@@ -208,15 +215,19 @@ fn param<'a>(uri: &'a Uri, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v)
 }
 
-/// The presented token: `Authorization: Bearer`, the `krishiv_ui_token` cookie, or `?token=` (an
-/// `EventSource` cannot set headers).
-fn presented(headers: &HeaderMap, uri: &Uri) -> Option<String> {
+/// The presented token. `Authorization: Bearer` is accepted for every method. The cookie and `?token=` (an
+/// `EventSource` cannot set headers) are accepted for `GET` only, so a request that changes something (cancel)
+/// cannot be made by a link or a cross-site form that carries the token in its address or a cookie.
+fn presented(method: &Method, headers: &HeaderMap, uri: &Uri) -> Option<String> {
     if let Some(v) = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         && let Some(t) = v.strip_prefix("Bearer ")
     {
         return Some(t.trim().to_owned());
+    }
+    if method != Method::GET {
+        return None;
     }
     if let Some(c) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok())
         && let Some(t) = c
@@ -234,7 +245,7 @@ async fn require_token(
     req: axum::extract::Request,
     next: Next,
 ) -> Response {
-    match presented(req.headers(), req.uri()) {
+    match presented(req.method(), req.headers(), req.uri()) {
         Some(t) if same(&t, &s.token) => next.run(req).await,
         _ => error(
             StatusCode::UNAUTHORIZED,
@@ -242,6 +253,74 @@ async fn require_token(
             "a valid UI token is required",
         ),
     }
+}
+
+/// `text` with every literal replaced by `?`: quoted strings (`'it''s'`, `"x"`, with backslash escapes) and
+/// numbers (`42`, `1.5e3`, `10L`, `0xFF`), outside of identifiers and backquoted names. A query's text can hold
+/// secrets and personal data, and the page is a screen: the literals stay in the engine's own record.
+#[must_use]
+pub fn mask_literals(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            '\'' | '"' => {
+                let quote = c;
+                i += 1;
+                while i < chars.len() {
+                    if chars[i] == '\\' {
+                        i += 2;
+                    } else if chars[i] == quote {
+                        if chars.get(i + 1) == Some(&quote) {
+                            i += 2;
+                        } else {
+                            i += 1;
+                            break;
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                out.push('?');
+            }
+            '`' => {
+                out.push(c);
+                i += 1;
+                while i < chars.len() {
+                    out.push(chars[i]);
+                    i += 1;
+                    if chars[i - 1] == '`' {
+                        break;
+                    }
+                }
+            }
+            d if d.is_ascii_digit() && (i == 0 || !ident(chars[i - 1]) && chars[i - 1] != '.') => {
+                i += 1;
+                while i < chars.len() && (ident(chars[i]) || chars[i] == '.') {
+                    i += 1;
+                }
+                out.push('?');
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// [`pick`] for a `system.queries` row, with the literals of its text masked.
+fn pick_query(row: &Row) -> Row {
+    let mut picked = pick(row, QUERY_COLUMNS);
+    if let Some(Value::String(text)) = picked.get("query_text") {
+        let masked = mask_literals(text);
+        picked.insert("query_text".to_owned(), Value::String(masked));
+    }
+    picked
 }
 
 /// Keeps only the allowlisted columns of a row.
@@ -339,7 +418,7 @@ fn live_queries(rows: &[Row]) -> Vec<Value> {
     let mut live: Vec<&Row> = rows.iter().filter(|r| is_live(r)).collect();
     live.sort_by_key(|r| int(r, "submitted_at"));
     live.into_iter()
-        .map(|r| Value::Object(pick(r, QUERY_COLUMNS)))
+        .map(|r| Value::Object(pick_query(r)))
         .collect()
 }
 
@@ -415,7 +494,7 @@ async fn health(State(s): State<UiState>) -> Response {
             "memory": memory_total(&memory),
             "spill_bytes_total": spill_bytes,
             "caches": caches.iter().map(|r| {
-                let mut c = pick(r, &["cache", "entries", "bytes", "capacity_bytes", "hits", "misses"]);
+                let mut c = pick(r, &["worker_id", "cache", "entries", "bytes", "capacity_bytes", "hits", "misses"]);
                 c.insert("hit_rate".to_owned(), hit_rate(r));
                 Value::Object(c)
             }).collect::<Vec<_>>(),
@@ -498,7 +577,7 @@ async fn query_detail(State(s): State<UiState>, Path(id): Path<String>) -> Respo
     json_response(
         StatusCode::OK,
         &json!({
-            "query": pick(query, QUERY_COLUMNS),
+            "query": pick_query(query),
             "operators": ops.iter().map(|r| Value::Object(pick(r, OPERATOR_COLUMNS))).collect::<Vec<_>>(),
             "hot_operator": hot_operator(&ops),
             "warnings": warnings(&ops),
@@ -539,7 +618,7 @@ async fn history(State(s): State<UiState>, uri: Uri) -> Response {
     done.truncate(limit);
     json_response(
         StatusCode::OK,
-        &json!({"queries": done.into_iter().map(|r| Value::Object(pick(r, QUERY_COLUMNS))).collect::<Vec<_>>()}),
+        &json!({"queries": done.into_iter().map(|r| Value::Object(pick_query(r))).collect::<Vec<_>>()}),
     )
 }
 
@@ -583,7 +662,7 @@ async fn compare(State(s): State<UiState>, uri: Uri) -> Response {
     }
     json_response(
         StatusCode::OK,
-        &json!({"a": pick(ra, QUERY_COLUMNS), "b": pick(rb, QUERY_COLUMNS), "delta": delta}),
+        &json!({"a": pick_query(ra), "b": pick_query(rb), "delta": delta}),
     )
 }
 
@@ -611,21 +690,56 @@ async fn resources(State(s): State<UiState>) -> Response {
 /// The refresh period of the event stream: one event a second per client at most (design T133 item 7).
 const EVENT_PERIOD: Duration = Duration::from_secs(1);
 
-/// `GET /api/internal/events`: the live query list as an `queries` event, once a second.
-async fn events(
-    State(s): State<UiState>,
-) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+/// Event streams open at once: each is a connection the server holds and a periodic read of the system tables.
+pub const MAX_EVENT_CLIENTS: usize = 16;
+
+/// Releases an event stream's place when the stream ends (the client left or the connection dropped).
+struct StreamSlot(Arc<AtomicUsize>);
+
+impl Drop for StreamSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// The live-query list as an event body, read at most once per period however many streams ask.
+async fn shared_snapshot(s: &UiState) -> Value {
+    let mut held = s.snapshot.lock().await;
+    if let Some((at, body)) = held.as_ref()
+        && at.elapsed() < EVENT_PERIOD / 2
+    {
+        return body.clone();
+    }
+    let body = match s.source.rows(SystemTable::Queries).await {
+        Ok(rows) => json!({"queries": live_queries(&rows)}),
+        Err(e) => json!({"error": e.message, "error_class": e.error_class}),
+    };
+    *held = Some((Instant::now(), body.clone()));
+    body
+}
+
+/// `GET /api/internal/events`: the live query list as a `queries` event, once a second. At most
+/// [`MAX_EVENT_CLIENTS`] streams at a time (a further one is a `503`); the streams share one snapshot a period.
+async fn events(State(s): State<UiState>) -> Response {
+    if s.streams.fetch_add(1, Ordering::SeqCst) >= MAX_EVENT_CLIENTS {
+        s.streams.fetch_sub(1, Ordering::SeqCst);
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "too_many_streams",
+            "too many live views are open; close one and retry",
+        );
+    }
+    let slot = StreamSlot(Arc::clone(&s.streams));
     let ticker = tokio::time::interval(EVENT_PERIOD);
-    let stream = futures::stream::unfold((ticker, s), |(mut ticker, s)| async move {
+    let stream = futures::stream::unfold((ticker, s, slot), |(mut ticker, s, slot)| async move {
         ticker.tick().await;
-        let body = match s.source.rows(SystemTable::Queries).await {
-            Ok(rows) => json!({"queries": live_queries(&rows)}),
-            Err(e) => json!({"error": e.message, "error_class": e.error_class}),
-        };
+        let body = shared_snapshot(&s).await;
         let event = Event::default().event("queries").data(body.to_string());
-        // A slow snapshot must not make the next ticks fire back to back: the period restarts here.
+        // A slow client must not make the next ticks fire back to back: the period restarts here.
         ticker.reset();
-        Some((Ok(event), (ticker, s)))
+        Some((Ok::<_, std::convert::Infallible>(event), (ticker, s, slot)))
     });
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response()
 }
