@@ -1054,10 +1054,9 @@ mod tests {
     #[test]
     fn other_expressions_are_not_constants() {
         let ansi = true;
-        let col = Expr::new(ExprNode::Column(crate::ColumnRef {
-            name: vec!["a".to_owned()],
-            plan_id: None,
-        }));
+        let col = Expr::new(ExprNode::Column(crate::ColumnRef::new(vec![
+            "a".to_owned(),
+        ])));
         assert_eq!(constant(&col, ansi), None);
         assert_eq!(constant(&cast_of(col, DataType::Float), ansi), None);
     }
@@ -1259,10 +1258,9 @@ mod tests {
             Some(ErrorClass::FailedExecuteUdf)
         );
         // A non-literal argument never folds.
-        let col = Expr::new(ExprNode::Column(crate::ColumnRef {
-            name: vec!["a".to_owned()],
-            plan_id: None,
-        }));
+        let col = Expr::new(ExprNode::Column(crate::ColumnRef::new(vec![
+            "a".to_owned(),
+        ])));
         assert_eq!(
             super::constant(
                 &Arc::new(udf("test_udf", 2, vec![col], true)),
@@ -1618,10 +1616,9 @@ mod tests {
             n(2)
         );
         // One argument that is not foldable keeps the call from folding.
-        let col = Expr::new(ExprNode::Column(crate::ColumnRef {
-            name: vec!["a".to_owned()],
-            plan_id: None,
-        }));
+        let col = Expr::new(ExprNode::Column(crate::ColumnRef::new(vec![
+            "a".to_owned(),
+        ])));
         assert_eq!(constant(&iff(truth(true), int(1), col), true), None);
     }
 

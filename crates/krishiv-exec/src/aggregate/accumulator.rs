@@ -139,22 +139,18 @@ impl Values {
         }
     }
 
-    /// Whether row `i` of `src` orders after (`max`) or before group `g`'s
-    /// value, strictly: a tie keeps the value held.
+    /// Whether row `i` of `src` replaces group `g`'s value: Spark's
+    /// `MaxBy`/`MinBy` keep the held row only while it orders strictly after
+    /// (`max`) or before the new one, so a tie takes the new row (the last
+    /// of equal keys; `-0.0` equals `0.0`, NaN equals NaN).
     fn beats(&self, g: usize, src: &Col<'_>, i: usize, max: bool) -> Result<bool> {
+        let takes = |o: std::cmp::Ordering| if max { o.is_ge() } else { o.is_le() };
         Ok(match (self, src) {
-            (Self::Int(v), Col::Int(c)) => c[i] != v[g] && (c[i] > v[g]) == max,
+            (Self::Int(v), Col::Int(c)) => takes(c[i].cmp(&v[g])),
             (Self::Float(v), Col::Float(c)) => {
-                if max {
-                    float_lt(v[g], c[i])
-                } else {
-                    float_lt(c[i], v[g])
-                }
+                !float_lt(if max { c[i] } else { v[g] }, if max { v[g] } else { c[i] })
             }
-            (Self::Bytes(v), Col::Bytes(c)) => {
-                let cur: &[u8] = &v[g];
-                if max { c[i] > cur } else { c[i] < cur }
-            }
+            (Self::Bytes(v), Col::Bytes(c)) => takes(c[i].cmp(&v[g][..])),
             _ => {
                 return Err(internal(
                     "an ordering key of another kind than its state".to_owned(),
@@ -483,6 +479,14 @@ impl DecFold<'_> {
             && self.mask.is_none_or(|m| m.is_valid(i) && m.value(i))
     }
 
+    /// Raw rows (not partial states) with unit weights, no NULL value and
+    /// no `FILTER` mask: every row adds its value once.
+    fn dense_unit(&self) -> bool {
+        matches!(self.w, Some(Weights::Const(1)))
+            && self.mask.is_none()
+            && self.nulls.is_none_or(|n| n.null_count() == 0)
+    }
+
     fn fits(&self, s: i128) -> bool {
         self.bound.is_none_or(|b| s.unsigned_abs() < b)
     }
@@ -502,6 +506,19 @@ impl DecFold<'_> {
         nonempty: Option<&BooleanArray>,
     ) {
         let fast = self.proven(v);
+        if fast && self.dense_unit() {
+            debug_assert_eq!(v.len(), self.groups.len(), "one value per group id");
+            // Raw rows, all valid, unit weights, no overflow possible in this
+            // batch: a plain add per row (an overflowed group stays NULL).
+            for (&g, x) in self.groups.iter().zip(v) {
+                let g = g as usize;
+                if st[g] != 2 {
+                    sum[g] = sum[g].wrapping_add(x.wide());
+                    st[g] = 1;
+                }
+            }
+            return;
+        }
         for (i, &g) in self.groups.iter().enumerate() {
             let g = g as usize;
             let x = v[i].wide();
@@ -553,6 +570,16 @@ impl DecFold<'_> {
         counts: Option<&[i64]>,
     ) {
         let fast = self.proven(v);
+        if fast && counts.is_none() && self.dense_unit() {
+            debug_assert_eq!(v.len(), self.groups.len(), "one value per group id");
+            // As in `sum`: raw rows, all valid, unit weights, proven.
+            for (&g, x) in self.groups.iter().zip(v) {
+                let g = g as usize;
+                sum[g] = sum[g].wrapping_add(x.wide());
+                count[g] = count[g].wrapping_add(1);
+            }
+            return;
+        }
         for (i, &g) in self.groups.iter().enumerate() {
             let g = g as usize;
             let x = v[i].wide();
@@ -1787,7 +1814,6 @@ impl Accumulator {
                 self.kind,
                 Kind::SumDec { .. }
                     | Kind::AvgDec { .. }
-                    | Kind::Moments(_)
                     | Kind::Exact(_)
                     | Kind::Approx(_)
                     | Kind::Hll(_)
@@ -2300,7 +2326,7 @@ impl Accumulator {
                             .iter()
                             .all(|n| n.as_ref().is_none_or(|n| n.is_valid(i)))
                 };
-                m.update(groups, &cols, all_valid)?;
+                m.update(groups, &cols, all_valid, run)?;
             }
             (Kind::Moments(m), true) => {
                 let cols = args

@@ -71,7 +71,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 10;
+pub const ENCODING_VERSION: u16 = 11;
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
@@ -968,6 +968,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     crate::GeneratorKind::Explode => 0,
                     crate::GeneratorKind::PosExplode => 1,
                     crate::GeneratorKind::Inline => 2,
+                    crate::GeneratorKind::VariantExplode => 3,
                 });
                 self.u8(u8::from(*outer));
                 self.expr(arg);
@@ -1133,10 +1134,15 @@ impl<'k, 'a> Encoder<'k, 'a> {
 
     fn expr_fields(&mut self, e: &'a Expr) {
         match &e.node {
-            ExprNode::Column(ColumnRef { name, plan_id }) => {
+            ExprNode::Column(ColumnRef {
+                name,
+                plan_id,
+                by_identifier,
+            }) => {
                 self.u8(1);
                 self.strs(name);
                 self.plan_ref(*plan_id);
+                self.u8(u8::from(*by_identifier));
             }
             ExprNode::Literal(v) => {
                 self.u8(2);

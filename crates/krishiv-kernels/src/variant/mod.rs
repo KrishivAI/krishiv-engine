@@ -15,6 +15,7 @@
 
 mod build;
 mod cast;
+mod schema;
 
 use std::sync::Arc;
 
@@ -33,6 +34,7 @@ use crate::cast::datetime::{format_date, format_timestamp, utc_to_local};
 
 pub use build::cast_to_variant;
 pub use cast::{cast_from_variant, cast_values};
+pub use schema::Schema;
 
 fn internal(message: &str) -> KrishivError {
     krishiv_common::error::InternalError {

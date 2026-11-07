@@ -340,6 +340,8 @@ enum GeneratorKind {
   GENERATOR_KIND_EXPLODE = 1;
   GENERATOR_KIND_POS_EXPLODE = 2;
   GENERATOR_KIND_INLINE = 3;
+  // feature: variant_explode
+  GENERATOR_KIND_VARIANT_EXPLODE = 4;
 }
 
 // feature: expand
