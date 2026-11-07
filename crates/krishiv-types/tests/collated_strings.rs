@@ -15,11 +15,18 @@ fn t(ddl: &str) -> DataType {
 
 #[test]
 fn utf8_binary_is_the_plain_string() {
-    assert_eq!(t("string collate utf8_binary"), DataType::String);
-    assert_eq!(
-        t("STRING COLLATE SYSTEM.BUILTIN.UTF8_BINARY"),
-        DataType::String
-    );
+    // Written explicitly, it is the display-only marker (ADR 0043, update 2026-11-07): it prints
+    // as Spark prints it and is no collation.
+    for ddl in [
+        "string collate utf8_binary",
+        "STRING COLLATE SYSTEM.BUILTIN.UTF8_BINARY",
+    ] {
+        let ty = t(ddl);
+        assert_eq!(ty.simple_string(), "string collate UTF8_BINARY");
+        assert!(ty.is_string_type() && !ty.contains_collation() && !ty.is_collated_string());
+        assert_ne!(ty, DataType::String);
+    }
+    assert_eq!(t("string"), DataType::String);
     assert_ne!(t("string collate utf8_binary_rtrim"), DataType::String);
 }
 

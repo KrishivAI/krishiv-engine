@@ -235,9 +235,17 @@ fn map_lookup_compares_collation(kids: &[Bound]) -> bool {
     ) || (kids
         .iter()
         .any(|k| matches!(k.ty.data_type, Some(DataType::Map(_))))
-        && kids
-            .iter()
-            .any(|k| matches!(k.ty.data_type, Some(DataType::CollatedString(_)))))
+        && kids.iter().any(|k| is_collated(k.ty.data_type.as_ref())))
+}
+
+/// A collated string that is more than the display-only `UTF8_BINARY` marker.
+fn is_collated(t: Option<&DataType>) -> bool {
+    t.is_some_and(DataType::is_collated_string)
+}
+
+/// The display-only `UTF8_BINARY` marker (ADR 0043, update 2026-11-07).
+fn is_marker(t: Option<&DataType>) -> bool {
+    matches!(t, Some(DataType::CollatedString(c)) if c.is_utf8_binary())
 }
 
 fn is_string(t: Option<&DataType>) -> bool {
@@ -382,7 +390,7 @@ impl Resolver<'_> {
             && !f.distinct
             && kids[..n]
                 .iter()
-                .any(|k| matches!(k.ty.data_type, Some(DataType::CollatedString(_))))
+                .any(|k| is_collated(k.ty.data_type.as_ref()))
             && let Some(bound) = self.keyed_comparison(e, kids, n, &name, in_agg, window_fn, cx)?
         {
             return Ok(bound);
@@ -391,9 +399,11 @@ impl Resolver<'_> {
             || COMPARING.contains(&name.as_str())
             || INSPECTS.contains(&name.as_str())
             || !kids[..n].iter().any(|k| {
-                k.ty.data_type
-                    .as_ref()
-                    .is_some_and(DataType::contains_collation)
+                is_marker(k.ty.data_type.as_ref())
+                    || k.ty
+                        .data_type
+                        .as_ref()
+                        .is_some_and(DataType::contains_collation)
             })
         {
             return self.expr_node_inner(e, kids, in_agg, window_fn, cx);
@@ -417,11 +427,10 @@ impl Resolver<'_> {
         if (!NESTED_OK.contains(&name.as_str()) || map_lookup_compares_collation(&kids[..n]))
             && kids[..n]
                 .iter()
-                .any(|k| matches!(k.ty.data_type, Some(DataType::CollatedString(_))))
+                .any(|k| is_collated(k.ty.data_type.as_ref()))
             && kids[..n].iter().any(|k| {
                 k.ty.data_type.as_ref().is_some_and(|t| {
-                    !matches!(t, DataType::String | DataType::CollatedString(_))
-                        && t.any_type(&|x| matches!(x, DataType::String))
+                    !t.is_string_type() && t.any_type(&|x| matches!(x, DataType::String))
                 })
             })
         {
@@ -439,7 +448,7 @@ impl Resolver<'_> {
             )
             && let Some(i) = kids[..n]
                 .iter()
-                .position(|k| matches!(k.ty.data_type, Some(DataType::CollatedString(_))))
+                .position(|k| is_collated(k.ty.data_type.as_ref()))
         {
             let shown = with_children(e, kids[..n].iter().map(Bound::shown).collect());
             let zone = self.ctx.conf.session_zone;
@@ -492,18 +501,37 @@ impl Resolver<'_> {
                 {
                     let shown = Expr::new(ExprNode::Cast {
                         expr: k.shown(),
-                        to: DataType::collated_string(want),
+                        to: if want.is_utf8_binary() {
+                            DataType::String
+                        } else {
+                            DataType::collated_string(want)
+                        },
                         mode: CastMode::Default,
                     })
                     .with_origin(e.origin);
                     k.shown = Some(Arc::new(shown));
                 }
-                if matches!(k.ty.data_type, Some(DataType::CollatedString(_))) {
+                if is_marker(k.ty.data_type.as_ref()) || is_collated(k.ty.data_type.as_ref()) {
                     k.ty.data_type = Some(DataType::String);
                 }
                 k
             })
             .collect();
+        // The marker follows the first operand of the winning strength (Spark takes the type
+        // of the head of the strongest group): `elt(2, s, c)` with a plain `s` is plain.
+        let marked = {
+            let skip = selector_args(&name);
+            let strengths: Vec<Option<(Collation, Strength)>> = kids[skip.min(n)..n]
+                .iter()
+                .map(|k| strength_of(&k.shown(), &mut memo))
+                .collect();
+            let winner = merge(&strengths.iter().flatten().copied().collect::<Vec<_>>())
+                .ok()
+                .flatten();
+            winner
+                .and_then(|w| strengths.iter().position(|s| *s == Some(w)))
+                .is_some_and(|i| is_marker(kids[skip.min(n) + i].ty.data_type.as_ref()))
+        };
         let mut bound = self.expr_node_inner(e, &plain, in_agg, window_fn, cx)?;
         if let Some(t) = bound.ty.data_type.as_ref() {
             // A nested result would drop the collation of its strings; an indeterminate string
@@ -534,6 +562,29 @@ impl Resolver<'_> {
             && !c.is_utf8_binary()
             && bound.ty.data_type == Some(DataType::String)
             && !binary_result(&name, f.args.len())
+        {
+            let to = DataType::collated_string(c);
+            let shown = bound.shown();
+            bound.expr = Arc::new(
+                Expr::new(ExprNode::Cast {
+                    expr: Arc::clone(&bound.expr),
+                    to: to.clone(),
+                    mode: CastMode::Ansi,
+                })
+                .with_origin(e.origin),
+            );
+            bound.shown = Some(shown);
+            bound.ty.data_type = Some(to);
+        }
+        // A string call over an explicit `UTF8_BINARY` operand keeps the display-only marker
+        // (Spark prints `upper(c)` of a `STRING COLLATE UTF8_BINARY` column that way).
+        if let Some(c) = chosen
+            && c.is_utf8_binary()
+            && marked
+            && !window_fn
+            && bound.ty.data_type == Some(DataType::String)
+            && !binary_result(&name, f.args.len())
+            && !INSPECTS.contains(&name.as_str())
         {
             let to = DataType::collated_string(c);
             let shown = bound.shown();

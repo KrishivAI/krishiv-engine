@@ -41,9 +41,12 @@ pub enum DataType {
     Double,
     /// `STRING`: binary-safe, may hold bytes that are not valid UTF-8.
     String,
-    /// `STRING COLLATE x`: a string compared under a collation other than
-    /// `UTF8_BINARY` (which is plain [`Self::String`]). The values are the
-    /// same UTF-8 text; the collation is part of the type (ADR 0043).
+    /// `STRING COLLATE x`: a string compared under collation `x` (ADR 0043).
+    /// The values are the same UTF-8 text; the collation is part of the type.
+    /// With `UTF8_BINARY` it is a display-only marker (ADR 0043, update
+    /// 2026-11-07): Spark keeps a written `COLLATE UTF8_BINARY` in the schema
+    /// line, and the type behaves as plain [`Self::String`] everywhere else
+    /// (see [`Self::contains_collation`]).
     CollatedString(Collation),
     /// `BINARY`.
     Binary,
@@ -269,11 +272,13 @@ impl DataType {
         Ok(Self::DayTimeInterval { start, end })
     }
 
-    /// Whether a collated string occurs in this type, at any depth.
+    /// Whether a string with a collation other than `UTF8_BINARY` occurs in
+    /// this type, at any depth. The display-only `UTF8_BINARY` marker does not
+    /// count: it behaves as plain `STRING`.
     #[must_use]
     pub fn contains_collation(&self) -> bool {
         match self {
-            Self::CollatedString(_) => true,
+            Self::CollatedString(c) => !c.is_utf8_binary(),
             Self::Array(a) => a.element_type().contains_collation(),
             Self::Map(m) => {
                 m.key_type().contains_collation() || m.value_type().contains_collation()
@@ -303,15 +308,32 @@ impl DataType {
         Ok(self)
     }
 
-    /// `STRING COLLATE collation`: [`Self::String`] for `UTF8_BINARY`, else
-    /// [`Self::CollatedString`].
+    /// `STRING COLLATE collation`. A written `UTF8_BINARY` stays a
+    /// [`Self::CollatedString`] (the display-only marker, ADR 0043 update
+    /// 2026-11-07); plain `STRING` is [`Self::String`].
     #[must_use]
     pub fn collated_string(collation: Collation) -> Self {
-        if collation.is_utf8_binary() {
-            Self::String
-        } else {
-            Self::CollatedString(collation)
-        }
+        Self::CollatedString(collation)
+    }
+
+    /// Whether this is a string type of either form, including the
+    /// display-only `UTF8_BINARY` marker.
+    #[must_use]
+    pub fn is_string_type(&self) -> bool {
+        matches!(self, Self::String | Self::CollatedString(_))
+    }
+
+    /// Whether this is the display-only `UTF8_BINARY` marker itself.
+    #[must_use]
+    pub fn is_binary_marker(&self) -> bool {
+        matches!(self, Self::CollatedString(c) if c.is_utf8_binary())
+    }
+
+    /// Whether this is a collated string that is more than the display-only
+    /// `UTF8_BINARY` marker.
+    #[must_use]
+    pub fn is_collated_string(&self) -> bool {
+        matches!(self, Self::CollatedString(c) if !c.is_utf8_binary())
     }
 
     /// `TIME(precision)`.

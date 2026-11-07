@@ -49,8 +49,11 @@ fn collate_gives_the_collated_type() {
         one("SELECT typeof(collate('a', 'UNICODE_CI'))"),
         "string collate UNICODE_CI"
     );
-    // UTF8_BINARY is the plain string type.
-    assert_eq!(one("SELECT typeof('a' COLLATE UTF8_BINARY)"), "string");
+    // A written UTF8_BINARY is the display-only marker: Spark prints it, nothing else sees it.
+    assert_eq!(
+        one("SELECT typeof('a' COLLATE UTF8_BINARY)"),
+        "string collate UTF8_BINARY"
+    );
     // Names are case-insensitive and may be qualified.
     assert_eq!(
         one("SELECT typeof('a' COLLATE SYSTEM.BUILTIN.utf8_lcase)"),
@@ -160,7 +163,10 @@ fn collated_columns_in_tables_keep_their_type() {
             |v| v.value(0).to_owned(),
         )
     };
-    assert_eq!(first("select typeof(a) from t1"), "string");
+    assert_eq!(
+        first("select typeof(a) from t1"),
+        "string collate UTF8_BINARY"
+    );
     assert_eq!(
         first("select typeof(b) from t1"),
         "string collate UTF8_LCASE"
@@ -664,4 +670,55 @@ fn value_of(s: &Session, sql: &str) -> String {
         || c.as_string_view().value(0).to_owned(),
         |v| v.value(0).to_owned(),
     )
+}
+
+/// A written `UTF8_BINARY` keeps its name in the schema (ADR 0043, update 2026-11-07) and is a
+/// plain string everywhere else: functions, comparisons, grouping and joins work as on `STRING`.
+#[test]
+fn an_explicit_utf8_binary_is_a_display_only_marker() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create table m(c string collate utf8_binary, p string) using parquet",
+        "insert into m values ('aB', 'aB'), ('ab', 'x'), ('aB', 'y')",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    let col = |sql: &str| -> Vec<String> {
+        let b = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+        let mut out = Vec::new();
+        for batch in &b {
+            let c = &batch.columns()[0];
+            for i in 0..c.len() {
+                out.push(if let Some(v) = c.as_string_view_opt() {
+                    v.value(i).to_owned()
+                } else if let Some(v) = c.as_string_opt::<i32>() {
+                    v.value(i).to_owned()
+                } else if let Some(v) = c.as_primitive_opt::<arrow_array::types::Int64Type>() {
+                    v.value(i).to_string()
+                } else {
+                    format!("{c:?}")
+                });
+            }
+        }
+        out
+    };
+    // The schema line: the marker follows the first operand of the winning strength.
+    let ty = |sql: &str| col(sql).remove(0);
+    assert_eq!(
+        ty("select typeof(upper(c)) from m limit 1"),
+        "string collate UTF8_BINARY"
+    );
+    assert_eq!(ty("select typeof(upper(p)) from m limit 1"), "string");
+    assert_eq!(ty("select typeof(concat(p, c)) from m limit 1"), "string");
+    assert_eq!(
+        ty("select typeof(concat(c, p)) from m limit 1"),
+        "string collate UTF8_BINARY"
+    );
+    // Behaviour is a plain string's.
+    assert_eq!(col("select upper(c) from m order by 1")[0], "AB");
+    assert_eq!(col("select count(*) from m where c = 'aB'"), ["2"]);
+    assert_eq!(col("select count(*) from m where c = p"), ["1"]);
+    assert_eq!(col("select count(distinct c) from m"), ["2"]);
+    assert_eq!(col("select c from m group by c order by c"), ["aB", "ab"]);
+    assert_eq!(col("select count(*) from m a join m b on a.c = b.c"), ["5"]);
 }
