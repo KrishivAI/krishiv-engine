@@ -8,7 +8,7 @@ Project [a#9]
    :  +- Shift +17
    :     +- Union
    :        :- Aggregate [a#0, b#1], [a#0, b#1, 's' AS ch#3, count(1) AS n#4]
-   :        :  +- Filter (b#1 == 'x')
+   :        :  +- Filter (isnotnull(a#0) and (b#1 == 'x'))
    :        :     +- Scan spark_catalog.default.t [a#0, b#1] (shared #1)
    :        +- Aggregate [a#5, d#6], [a#5, d#6, 'u' AS ch#7, count(1) AS n#8]
    :           +- Filter false
@@ -21,5 +21,5 @@ Project [a#9]
                :  +- Filter false
                :     +- Shared #1, printed above
                +- Aggregate [a#5, d#6], [a#5, d#6, 'u' AS ch#7, count(1) AS n#8]
-                  +- Filter (d#6 == 'y')
+                  +- Filter (isnotnull(a#5) and (d#6 == 'y'))
                      +- Shared #2, printed above

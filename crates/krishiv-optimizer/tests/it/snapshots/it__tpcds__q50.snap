@@ -7,18 +7,22 @@ Limit 100
    +- Aggregate [s_store_name#48, s_company_id#59, s_street_number#61, s_street_name#62, s_street_type#63, s_suite_number#64, s_city#65, s_county#66, s_state#67, s_zip#68], [s_store_name#48, s_company_id#59, s_street_number#61, s_street_name#62, s_street_type#63, s_suite_number#64, s_city#65, s_county#66, s_state#67, s_zip#68, sum(CASE WHEN (krishiv_cse_0#4294967296 <= 30) THEN 1 ELSE 0 END) AS 30 days#128, sum(CASE WHEN ((krishiv_cse_0#4294967296 > 30) and (krishiv_cse_0#4294967296 <= 60)) THEN 1 ELSE 0 END) AS 31-60 days#129, sum(CASE WHEN ((krishiv_cse_0#4294967296 > 60) and (krishiv_cse_0#4294967296 <= 90)) THEN 1 ELSE 0 END) AS 61-90 days#130, sum(CASE WHEN ((krishiv_cse_0#4294967296 > 90) and (krishiv_cse_0#4294967296 <= 120)) THEN 1 ELSE 0 END) AS 91-120 days#131, sum(CASE WHEN (krishiv_cse_0#4294967296 > 120) THEN 1 ELSE 0 END) AS >120 days#132]
       +- Project [s_store_name#48, s_company_id#59, s_street_number#61, s_street_name#62, s_street_type#63, s_suite_number#64, s_city#65, s_county#66, s_state#67, s_zip#68, (sr_returned_date_sk#23 - ss_sold_date_sk#0) AS krishiv_cse_0#4294967296]
          +- Join Inner, (ss_store_sk#7 == s_store_sk#43)
-            :- Scan spark_catalog.default.store [s_store_sk#43, s_store_name#48, s_company_id#59, s_street_number#61, s_street_name#62, s_street_type#63, s_suite_number#64, s_city#65, s_county#66, s_state#67, s_zip#68]
+            :- Filter isnotnull(s_store_sk#43)
+            :  +- Scan spark_catalog.default.store [s_store_sk#43, s_store_name#48, s_company_id#59, s_street_number#61, s_street_name#62, s_street_type#63, s_suite_number#64, s_city#65, s_county#66, s_state#67, s_zip#68]
             +- Project [ss_sold_date_sk#0, ss_store_sk#7, sr_returned_date_sk#23]
                +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#72)
                   :- Project [d_date_sk#72]
-                  :  +- Scan spark_catalog.default.date_dim [d_date_sk#72, d_year#78, d_moy#80] (shared #1)
+                  :  +- Filter isnotnull(d_date_sk#72)
+                  :     +- Scan spark_catalog.default.date_dim [d_date_sk#72, d_year#78, d_moy#80] (shared #1)
                   +- Project [ss_sold_date_sk#0, ss_store_sk#7, sr_returned_date_sk#23]
                      +- Join Inner, (((ss_ticket_number#9 == sr_ticket_number#32) and (ss_item_sk#2 == sr_item_sk#25)) and (ss_customer_sk#3 == sr_customer_sk#26))
-                        :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_ticket_number#9]
+                        :- Filter ((((isnotnull(ss_item_sk#2) and isnotnull(ss_customer_sk#3)) and isnotnull(ss_ticket_number#9)) and isnotnull(ss_sold_date_sk#0)) and isnotnull(ss_store_sk#7))
+                        :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_customer_sk#3, ss_store_sk#7, ss_ticket_number#9]
                         +- Project [sr_returned_date_sk#23, sr_item_sk#25, sr_customer_sk#26, sr_ticket_number#32]
                            +- Join Inner, (sr_returned_date_sk#23 == d_date_sk#100)
-                              :- Scan spark_catalog.default.store_returns [sr_returned_date_sk#23, sr_item_sk#25, sr_customer_sk#26, sr_ticket_number#32]
+                              :- Filter (((isnotnull(sr_returned_date_sk#23) and isnotnull(sr_item_sk#25)) and isnotnull(sr_customer_sk#26)) and isnotnull(sr_ticket_number#32))
+                              :  +- Scan spark_catalog.default.store_returns [sr_returned_date_sk#23, sr_item_sk#25, sr_customer_sk#26, sr_ticket_number#32]
                               +- Project [d_date_sk#100]
                                  +- Shift +28
-                                    +- Filter ((d_year#78 == 2001) and (d_moy#80 == 8))
+                                    +- Filter (((d_year#78 == 2001) and (d_moy#80 == 8)) and isnotnull(d_date_sk#72))
                                        +- Shared #1, printed above

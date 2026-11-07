@@ -46,6 +46,7 @@
 
 #![forbid(unsafe_code)]
 
+mod constraints;
 mod cse;
 mod dag;
 mod eager;
@@ -348,6 +349,7 @@ fn run(
                 Ok(pushdown::imply_join_condition(p))
             })
         })?;
+        let root = t.once("InferJoinFilters", &root, infer_join_filters)?;
         // UDF calls of literals fold with the rewrite batch to a fixed
         // point: folding exposes the constants rewriting folds, and
         // rewriting exposes the literals folding folds (casts, arithmetic
@@ -407,6 +409,14 @@ fn run(
                 }
             }
             _ => root,
+        };
+        // Without join ordering, once more after restriction (its semi
+        // joins); with it, `order_and_restrict` already ran the rule on the
+        // final joins. Tidying pushes what it adds.
+        let root = if stats.is_none() {
+            t.once("InferJoinFilters", &root, infer_join_filters)?
+        } else {
+            root
         };
         let pruned = t.once("Prune", &root, |r| Ok(prune::prune(r)))?;
         let mut root = batch(Arc::clone(&pruned), "Tidy", &mut t)?;
@@ -482,7 +492,14 @@ fn run(
     }
 }
 
-/// Join ordering alternating with restriction, until neither changes the plan.
+/// [`constraints::infer_join_filters`] at every join, bottom up.
+fn infer_join_filters(root: &Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
+    dag::rewrite_up(Arc::clone(root), &mut |p| {
+        Ok(constraints::infer_join_filters(p))
+    })
+}
+
+/// Join ordering alternating with restriction and inferred join filters, until neither changes the plan.
 fn order_and_restrict(
     mut root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
@@ -494,8 +511,25 @@ fn order_and_restrict(
         t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
         let restricted = restrict::restrict(Arc::clone(&ordered), stats, propagate)?;
         t.step("JoinOrder", round, "Restrict", &ordered, &restricted);
-        let done = Arc::ptr_eq(&restricted, &ordered);
-        root = restricted;
+        // The filters of the joins ordering and restriction formed: ordering
+        // keys its canonical input order on them, so they are part of the
+        // loop.
+        let inferred = infer_join_filters(&restricted)?;
+        t.step(
+            "JoinOrder",
+            round,
+            "InferJoinFilters",
+            &restricted,
+            &inferred,
+        );
+        let done = Arc::ptr_eq(&inferred, &ordered);
+        // Pushed down and merged before ordering reads them again, so the
+        // next round sees the inputs a second `optimize` would see.
+        root = if Arc::ptr_eq(&inferred, &restricted) {
+            inferred
+        } else {
+            batch(inferred, "Tidy", t)?
+        };
         if done {
             break;
         }

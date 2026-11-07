@@ -50,3 +50,25 @@ repeated values raise `INVALID_ARRAY_INDEX` with ANSI on and leave NULL cells wi
   not by the collation;
 - a NULL pivot value for a binary or collated pivot column: Spark 4.2 compares it with the other values in a sorted
   map (and fails), earlier versions look it up in a hash map.
+
+## Inferred join filters differ from Spark's
+Spark's `InferFiltersFromConstraints` adds filters to the inputs of a join from the join condition and the filters
+below it. Krishiv adds the same `isnotnull` on nullable join keys, and moves comparisons with a literal, literal `IN`
+lists and `isnotnull` across `=` keys of one type, on the sides Spark filters. It never substitutes a column into
+another expression, so:
+- `EXPLAIN` lacks the filters Spark derives that way: `a + 1 > 5` from `b + 1 > 5` and `a = b`, `(a = 1 OR a = 2)`,
+  `isnull(a)`, `StartsWith`/`LIKE`, cast forms such as `cast(a AS STRING) = '5'`, and equalities of two columns
+  of one side;
+- Spark also adds `isnotnull(c)` beside any filter whose own predicate rejects a null `c` (`c = 'x'` becomes
+  `isnotnull(c) AND c = 'x'`), at joins or not; Krishiv adds `isnotnull` only for join keys (TPC-H: 51 of Spark's
+  162 inferred `isnotnull` are of this kind);
+- Spark adds `isnotnull` for every column a null-rejecting join condition reads (`l_quantity < 0.2 * avg(..)`) and
+  for a key equality common to every branch of an `OR`; Krishiv only for top-level `=` keys;
+- such a filter can raise in Spark (a cast or arithmetic under ANSI) on rows the query's own predicates never
+  evaluate; Krishiv does not raise there.
+
+Krishiv also infers at the semi and anti joins that `IN`/`EXISTS`/`NOT EXISTS` subqueries become (TPC-H q04, q20,
+q22: `isnotnull` on their keys); Spark rewrites those subqueries after its inference and adds none there. A null key
+never matches, so these filters drop only rows the join drops.
+
+The rows returned are the same. ADR 0023 (update 2026-11-06).

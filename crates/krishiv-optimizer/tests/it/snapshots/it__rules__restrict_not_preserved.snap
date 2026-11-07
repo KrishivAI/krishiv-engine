@@ -7,5 +7,5 @@ Project [a#0]
    :- Aggregate [a#0], [a#0]
    :  +- Scan spark_catalog.default.u [a#0]
    +- Project [a#3]
-      +- Filter (b#4 == 'x')
+      +- Filter (isnotnull(a#3) and (b#4 == 'x'))
          +- Scan spark_catalog.default.t [a#3, b#4]

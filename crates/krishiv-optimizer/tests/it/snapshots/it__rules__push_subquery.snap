@@ -4,10 +4,12 @@ expression: "SELECT a FROM t WHERE a IN (SELECT a FROM u WHERE d = 'y') AND EXIS
 ---
 Join LeftSemi, (a#6 == a#0)
 :- Join LeftSemi, (a#0 == a#3)
-:  :- Scan spark_catalog.default.t [a#0]
+:  :- Filter isnotnull(a#0)
+:  :  +- Scan spark_catalog.default.t [a#0]
 :  +- Project [a#3]
-:     +- Filter (d#4 == 'y')
+:     +- Filter ((d#4 == 'y') and isnotnull(a#3))
 :        +- Scan spark_catalog.default.u [a#3, d#4] (shared #1)
 +- Project [a#6]
    +- Shift +3
-      +- Shared #1, printed above
+      +- Filter isnotnull(a#3)
+         +- Shared #1, printed above

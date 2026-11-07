@@ -9,14 +9,15 @@ WithCte [r]
    +- Join Inner, (a#6 == a#8)
       :- Project [a#8]
       :  +- Shift +2
-      :     +- CteRef r [a#6, x#7] (shared #1)
+      :     +- Filter isnotnull(a#6)
+      :        +- CteRef r [a#6, x#7] (shared #1)
       +- Project [a#6]
          +- Join Inner, (a#10 == a#6)
             :- Project [a#6]
-            :  +- Filter (x#7 > 0.5D)
+            :  +- Filter (isnotnull(a#6) and (x#7 > 0.5D))
             :     +- Shared #1, printed above
             +- Project [a#15 AS a#10]
                +- Shift +11
                   +- Project [a#4]
-                     +- Filter (d#5 == 'z')
+                     +- Filter ((d#5 == 'z') and isnotnull(a#4))
                         +- Scan spark_catalog.default.u [a#4, d#5]

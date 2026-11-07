@@ -141,6 +141,23 @@ pub(crate) fn imply_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     join(&node, new_left, new_right, *kind, conjuncts(cond))
 }
 
+/// `side` with `preds` pushed into it as far as legal, or `side` itself when
+/// that changes nothing structurally (for rules outside this module).
+pub(crate) fn into_side(side: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> Arc<LogicalPlan> {
+    unless_equal(side, into(side, preds))
+}
+
+/// `node`, a join, over new inputs with the condition `cond`.
+pub(crate) fn rebuild_join(
+    node: &Arc<LogicalPlan>,
+    left: Arc<LogicalPlan>,
+    right: Arc<LogicalPlan>,
+    kind: JoinKind,
+    cond: Vec<Arc<Expr>>,
+) -> Arc<LogicalPlan> {
+    join(node, left, right, kind, cond)
+}
+
 /// `after`, or `before` when the two are structurally equal.
 fn unless_equal(before: &Arc<LogicalPlan>, after: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     if Arc::ptr_eq(before, &after) {
@@ -191,31 +208,36 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
                 // columns there, over the `cse_*` columns here) adds nothing
                 // above: a second `optimize` pass derives such a predicate
                 // from the join condition again, and would stack it.
-                // Only this projection's own definitions: a `cse_*` column
-                // from further down (the nullable side of a join) is NULL
-                // where the join extends, not its definition.
-                let defs: HashMap<AttrId, Arc<Expr>> = exprs
-                    .iter()
-                    .filter_map(|e| match &e.node {
-                        ExprNode::Resolved(ResolvedExpr::Alias { expr, output })
-                            if crate::cse::is_cse_column(output) =>
-                        {
-                            Some((output.id, Arc::clone(expr)))
-                        }
-                        _ => None,
-                    })
-                    .collect();
+                // Its definitions, and those of the common-subexpression
+                // projections in the run of filters under it (a filter that
+                // reads a shared expression twice gets its own): never a
+                // `cse_*` column from across a join (the nullable side of a
+                // join), which is NULL where the join extends, not its
+                // definition.
+                let mut defs = cse_defs(exprs);
                 let mut held: Vec<Arc<Expr>> = Vec::new();
                 let mut below = input;
-                while let PlanNode::Filter { input, predicate } = &below.node {
-                    held.extend(
-                        conjuncts(predicate)
-                            .iter()
-                            .filter(|c| is_deterministic(c))
-                            .map(|c| resolve_cse(c, &defs)),
-                    );
-                    below = input;
+                loop {
+                    match &below.node {
+                        PlanNode::Filter { input, predicate } => {
+                            held.extend(
+                                conjuncts(predicate)
+                                    .into_iter()
+                                    .filter(|c| is_deterministic(c)),
+                            );
+                            below = input;
+                        }
+                        PlanNode::Project { input, exprs }
+                            if !cse_outputs(exprs).is_empty()
+                                && exprs.iter().all(|e| is_deterministic(e)) =>
+                        {
+                            defs.extend(cse_defs(exprs));
+                            below = input;
+                        }
+                        _ => break,
+                    }
                 }
+                let held: Vec<Arc<Expr>> = held.iter().map(|c| resolve_cse(c, &defs)).collect();
                 movable.retain(|p| {
                     !(is_deterministic(p) && held.iter().any(|q| same(q, &resolve_cse(p, &defs))))
                 });
@@ -572,12 +594,28 @@ fn local(p: &Expr, lo: &Attrs, ro: &Attrs) -> Attrs {
 }
 
 /// Output id → the expression an alias computes.
-fn alias_map(exprs: &[Arc<Expr>]) -> HashMap<AttrId, Arc<Expr>> {
+pub(crate) fn alias_map(exprs: &[Arc<Expr>]) -> HashMap<AttrId, Arc<Expr>> {
     exprs
         .iter()
         .filter_map(|e| match &e.node {
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
                 Some((output.id, Arc::clone(strip_alias(e))))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A common-subexpression projection's definitions: each `cse_*` output id
+/// and the expression it names.
+fn cse_defs(exprs: &[Arc<Expr>]) -> HashMap<AttrId, Arc<Expr>> {
+    exprs
+        .iter()
+        .filter_map(|e| match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output })
+                if crate::cse::is_cse_column(output) =>
+            {
+                Some((output.id, Arc::clone(expr)))
             }
             _ => None,
         })

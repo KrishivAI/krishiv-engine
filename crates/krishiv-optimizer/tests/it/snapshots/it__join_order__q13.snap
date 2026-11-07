@@ -8,6 +8,7 @@ Sort [custdist#20 DESC NULLS LAST, c_count#19 DESC NULLS LAST], true
       +- Project [c_custkey#0, count#count#21]
          +- Join LeftOuter, (c_custkey#0 == o_custkey#9)
             :- Scan spark_catalog.default.customer [c_custkey#0]
-            +- PartialAggregate [o_custkey#9], [count(o_orderkey#8)]
-               +- Filter (NOT (o_comment#16 like '%special%requests%'))
-                  +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_comment#16]
+            +- Filter isnotnull(o_custkey#9)
+               +- PartialAggregate [o_custkey#9], [count(o_orderkey#8)]
+                  +- Filter (isnotnull(o_custkey#9) and (NOT (o_comment#16 like '%special%requests%')))
+                     +- Scan spark_catalog.default.orders [o_orderkey#8, o_custkey#9, o_comment#16]

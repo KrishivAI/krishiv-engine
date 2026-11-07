@@ -1,0 +1,10 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT t.a FROM t JOIN u ON t.a = u.a WHERE u.a + 1 > 5 AND (u.a = 1 OR u.a = 2)
+---
+Project [a#0]
++- Join Inner, (a#0 == a#3)
+   :- Filter isnotnull(a#0)
+   :  +- Scan spark_catalog.default.t [a#0]
+   +- Filter ((isnotnull(a#3) and ((a#3 + 1) > 5)) and ((a#3 == 1) or (a#3 == 2)))
+      +- Scan spark_catalog.default.u [a#3]

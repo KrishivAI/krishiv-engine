@@ -12,12 +12,14 @@ Project [total_sum#165, s_state#168, s_county#169, lochierarchy#166, rank_within
                   +- Join LeftSemi, (s_state#75 == s_state#160)
                      :- Project [s_county#74, s_state#75, ss_net_profit#22]
                      :  +- Join Inner, (s_store_sk#51 == ss_store_sk#7)
-                     :     :- Scan spark_catalog.default.store [s_store_sk#51, s_county#74, s_state#75] (shared #1)
+                     :     :- Filter (isnotnull(s_state#75) and isnotnull(s_store_sk#51))
+                     :     :  +- Scan spark_catalog.default.store [s_store_sk#51, s_county#74, s_state#75] (shared #1)
                      :     +- Project [ss_store_sk#7, ss_net_profit#22]
                      :        +- Join Inner, (d_date_sk#23 == ss_sold_date_sk#0)
-                     :           :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_store_sk#7, ss_net_profit#22] (shared #2)
+                     :           :- Filter (isnotnull(ss_sold_date_sk#0) and isnotnull(ss_store_sk#7))
+                     :           :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_store_sk#7, ss_net_profit#22] (shared #2)
                      :           +- Project [d_date_sk#23]
-                     :              +- Filter ((d_month_seq#26 >= 1200) and (d_month_seq#26 <= 1211))
+                     :              +- Filter (((d_month_seq#26 >= 1200) and (d_month_seq#26 <= 1211)) and isnotnull(d_date_sk#23))
                      :                 +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_month_seq#26] (shared #3)
                      +- Project [s_state#160]
                         +- Filter (_we0#163 <= 5)
@@ -27,12 +29,14 @@ Project [total_sum#165, s_state#168, s_county#169, lochierarchy#166, rank_within
                                     +- Join Inner, (s_store_sk#103 == ss_store_sk#87)
                                        :- Project [s_store_sk#103, s_state#127]
                                        :  +- Shift +52
-                                       :     +- Shared #1, printed above
+                                       :     +- Filter (isnotnull(s_state#75) and isnotnull(s_store_sk#51))
+                                       :        +- Shared #1, printed above
                                        +- Project [ss_store_sk#87, ss_net_profit#102]
                                           +- Join Inner, (d_date_sk#132 == ss_sold_date_sk#80)
                                              :- Shift +80
-                                             :  +- Shared #2, printed above
+                                             :  +- Filter (isnotnull(ss_sold_date_sk#0) and isnotnull(ss_store_sk#7))
+                                             :     +- Shared #2, printed above
                                              +- Project [d_date_sk#132]
                                                 +- Shift +109
-                                                   +- Filter ((d_month_seq#26 >= 1200) and (d_month_seq#26 <= 1211))
+                                                   +- Filter (((d_month_seq#26 >= 1200) and (d_month_seq#26 <= 1211)) and isnotnull(d_date_sk#23))
                                                       +- Shared #3, printed above

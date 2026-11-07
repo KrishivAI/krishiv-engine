@@ -7,11 +7,11 @@ Project [a#4, n#6, n#9]
    :- Project [a#10 AS a#4, n#13 AS n#6]
    :  +- Shift +10
    :     +- Aggregate [a#0, b#1], [a#0, count(1) AS n#3]
-   :        +- Filter (b#1 == 'p')
+   :        +- Filter (isnotnull(a#0) and (b#1 == 'p'))
    :           +- Scan spark_catalog.default.t [a#0, b#1] (shared #1)
    +- Shift +3
       +- Project [a#10 AS a#4, n#13 AS n#6]
          +- Shift +10
             +- Aggregate [a#0, b#1], [a#0, count(1) AS n#3]
-               +- Filter (b#1 == 'q')
+               +- Filter (isnotnull(a#0) and (b#1 == 'q'))
                   +- Shared #1, printed above

@@ -1,0 +1,47 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [c_customer_id#85 ASC NULLS FIRST, c_salutation#91 ASC NULLS FIRST, c_first_name#92 ASC NULLS FIRST, c_last_name#93 ASC NULLS FIRST, c_preferred_cust_flag#94 ASC NULLS FIRST, c_birth_day#95 ASC NULLS FIRST, c_birth_month#96 ASC NULLS FIRST, c_birth_year#97 ASC NULLS FIRST, c_birth_country#98 ASC NULLS FIRST, c_login#99 ASC NULLS FIRST, c_email_address#100 ASC NULLS FIRST, c_last_review_date#101 ASC NULLS FIRST, ctr_total_return#70 ASC NULLS FIRST], true
+   +- Project [c_customer_id#85, c_salutation#91, c_first_name#92, c_last_name#93, c_preferred_cust_flag#94, c_birth_day#95, c_birth_month#96, c_birth_year#97, c_birth_country#98, c_login#99, c_email_address#100, c_last_review_date#101, ctr_total_return#70]
+      +- Join Inner, (ca_address_sk#71 == c_current_addr_sk#88)
+         :- Project [ca_address_sk#71]
+         :  +- Filter ((ca_state#79 == 'GA') and isnotnull(ca_address_sk#71))
+         :     +- Scan spark_catalog.default.customer_address [ca_address_sk#71, ca_state#79]
+         +- Project [c_customer_id#85, c_current_addr_sk#88, c_salutation#91, c_first_name#92, c_last_name#93, c_preferred_cust_flag#94, c_birth_day#95, c_birth_month#96, c_birth_year#97, c_birth_country#98, c_login#99, c_email_address#100, c_last_review_date#101, ctr_total_return#70]
+            +- Join Inner, (ctr_customer_sk#68 == c_customer_sk#84)
+               :- Filter (isnotnull(c_customer_sk#84) and isnotnull(c_current_addr_sk#88))
+               :  +- Scan spark_catalog.default.customer [c_customer_sk#84, c_customer_id#85, c_current_addr_sk#88, c_salutation#91, c_first_name#92, c_last_name#93, c_preferred_cust_flag#94, c_birth_day#95, c_birth_month#96, c_birth_year#97, c_birth_country#98, c_login#99, c_email_address#100, c_last_review_date#101]
+               +- Project [ctr_customer_sk#68, ctr_total_return#70]
+                  +- Join Inner, ((ctr_state#69 == ctr_state#103) and (CAST(ctr_total_return#70 AS DECIMAL(24,7)) > (avg(ctr_total_return) * 1.2)#105))
+                     :- Project [ctr_customer_sk#171 AS ctr_customer_sk#68, ctr_state#172 AS ctr_state#69, ctr_total_return#173 AS ctr_total_return#70]
+                     :  +- Shift +106
+                     :     +- Aggregate [wr_returning_customer_sk#7, ca_state#60], [wr_returning_customer_sk#7 AS ctr_customer_sk#65, ca_state#60 AS ctr_state#66, sum(wr_return_amt#15) AS ctr_total_return#67]
+                     :        +- Project [ca_state#60, wr_returning_customer_sk#7, wr_return_amt#15]
+                     :           +- Join Inner, (wr_returning_addr_sk#10 == ca_address_sk#52)
+                     :              :- Filter (isnotnull(ca_address_sk#52) and isnotnull(ca_state#60))
+                     :              :  +- Scan spark_catalog.default.customer_address [ca_address_sk#52, ca_state#60] (shared #1)
+                     :              +- Project [wr_returning_customer_sk#7, wr_returning_addr_sk#10, wr_return_amt#15]
+                     :                 +- Join Inner, (wr_returned_date_sk#0 == d_date_sk#24)
+                     :                    :- Filter ((isnotnull(wr_returned_date_sk#0) and isnotnull(wr_returning_addr_sk#10)) and isnotnull(wr_returning_customer_sk#7))
+                     :                    :  +- Scan spark_catalog.default.web_returns [wr_returned_date_sk#0, wr_returning_customer_sk#7, wr_returning_addr_sk#10, wr_return_amt#15] (shared #2)
+                     :                    +- Project [d_date_sk#24]
+                     :                       +- Filter ((d_year#30 == 2002) and isnotnull(d_date_sk#24))
+                     :                          +- Scan spark_catalog.default.date_dim [d_date_sk#24, d_year#30] (shared #3)
+                     +- Aggregate [ctr_state#103], [(avg(ctr_total_return#104) * 1.2) AS (avg(ctr_total_return) * 1.2)#105, ctr_state#103]
+                        +- Shift +34
+                           +- Project [ctr_state#172 AS ctr_state#69, ctr_total_return#173 AS ctr_total_return#70]
+                              +- Shift +106
+                                 +- Aggregate [wr_returning_customer_sk#7, ca_state#60], [ca_state#60 AS ctr_state#66, sum(wr_return_amt#15) AS ctr_total_return#67]
+                                    +- Project [ca_state#60, wr_returning_customer_sk#7, wr_return_amt#15]
+                                       +- Join Inner, (wr_returning_addr_sk#10 == ca_address_sk#52)
+                                          :- Filter (isnotnull(ca_state#60) and isnotnull(ca_address_sk#52))
+                                          :  +- Shared #1, printed above
+                                          +- Project [wr_returning_customer_sk#7, wr_returning_addr_sk#10, wr_return_amt#15]
+                                             +- Join Inner, (wr_returned_date_sk#0 == d_date_sk#24)
+                                                :- Filter (isnotnull(wr_returned_date_sk#0) and isnotnull(wr_returning_addr_sk#10))
+                                                :  +- Shared #2, printed above
+                                                +- Project [d_date_sk#24]
+                                                   +- Filter ((d_year#30 == 2002) and isnotnull(d_date_sk#24))
+                                                      +- Shared #3, printed above

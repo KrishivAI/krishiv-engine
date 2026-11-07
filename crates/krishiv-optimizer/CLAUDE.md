@@ -10,6 +10,7 @@ Query optimizer: rule- and cost-based rewrites, including the IVM rewrite pass.
 Paths are relative to this crate.
 - `src/lib.rs` rule batches and the `optimize` entry point
 - `src/dag.rs` `dag::Rewriter`, the rewrite-once rule for shared subtrees
+- `src/constraints.rs` `InferJoinFilters` (P2-T072b unit 3): `isnotnull` on nullable `=` keys and literal comparisons moved across `=` keys of one type, on the sides Spark's `InferFiltersFromConstraints` filters (no substitution; differences in `docs/known-differences.md`); runs before the rewrite batch and inside `order_and_restrict`
 - `src/fold.rs` constant folding; `src/pushdown.rs` predicate pushdown (below a window only on partition keys); `src/prune.rs` column pruning (removes unused window columns)
 - `src/project.rs` projection rules; `src/limit.rs` limit rules; `src/group_limit.rs` Spark's
   `InferWindowGroupLimit` decision (applied by the physical planner)
@@ -28,6 +29,7 @@ Paths are relative to this crate.
 - Input and output are resolved plans with the same output attributes; the optimised plan is a fixed point.
 - A rule returns its input `Arc` when it changes nothing (that is how a batch detects its fixed point) and
   rewrites a shared subtree once (`dag::Rewriter`), subquery plans included; never copy a shared subtree.
+- Inferred join filters keep `optimize` a fixed point: a side that already implies a candidate (`constraints::held`: through aliases, `cse_*` projections, `Shift`, positional unions, grouped aggregates, joins, row-preserving nodes; a literal `false`) gets nothing, and a side with nothing to add is returned as it is.
 - Only deterministic predicates move; folding never changes what a query returns or raises (no overflow,
   no division, no time-zone-dependent cast; a raising call stays in the plan).
 - `SUM(x + c)` of a narrow integral column becomes `SUM(x) + c * COUNT(x)` (`sum_rewrite.rs`, one pass after the

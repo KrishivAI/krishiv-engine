@@ -10,29 +10,33 @@ Limit 100
          :  :- Project [ws_order_number#87, ws_ext_ship_cost#98, ws_net_profit#103]
          :  :  +- Join Inner, (ws_ship_addr_sk#81 == ca_address_sk#132)
          :  :     :- Project [ca_address_sk#132]
-         :  :     :  +- Filter (ca_state#140 == 'IL')
+         :  :     :  +- Filter ((ca_state#140 == 'IL') and isnotnull(ca_address_sk#132))
          :  :     :     +- Scan spark_catalog.default.customer_address [ca_address_sk#132, ca_state#140]
          :  :     +- Project [ws_ship_addr_sk#81, ws_order_number#87, ws_ext_ship_cost#98, ws_net_profit#103]
          :  :        +- Join Inner, (ws_web_site_sk#83 == web_site_sk#145)
          :  :           :- Project [web_site_sk#145]
-         :  :           :  +- Filter (web_company_name#159 == 'pri')
+         :  :           :  +- Filter ((web_company_name#159 == 'pri') and isnotnull(web_site_sk#145))
          :  :           :     +- Scan spark_catalog.default.web_site [web_site_sk#145, web_company_name#159]
          :  :           +- Project [ws_ship_addr_sk#81, ws_web_site_sk#83, ws_order_number#87, ws_ext_ship_cost#98, ws_net_profit#103]
          :  :              +- Join Inner, (ws_ship_date_sk#72 == d_date_sk#104)
-         :  :                 :- Scan spark_catalog.default.web_sales [ws_ship_date_sk#72, ws_ship_addr_sk#81, ws_web_site_sk#83, ws_order_number#87, ws_ext_ship_cost#98, ws_net_profit#103]
+         :  :                 :- Filter (((isnotnull(ws_order_number#87) and isnotnull(ws_ship_date_sk#72)) and isnotnull(ws_web_site_sk#83)) and isnotnull(ws_ship_addr_sk#81))
+         :  :                 :  +- Scan spark_catalog.default.web_sales [ws_ship_date_sk#72, ws_ship_addr_sk#81, ws_web_site_sk#83, ws_order_number#87, ws_ext_ship_cost#98, ws_net_profit#103]
          :  :                 +- Project [d_date_sk#104]
-         :  :                    +- Filter ((d_date#106 >= DATE '1999-02-01') and (d_date#106 <= DATE '1999-04-02'))
+         :  :                    +- Filter (((d_date#106 >= DATE '1999-02-01') and (d_date#106 <= DATE '1999-04-02')) and isnotnull(d_date_sk#104))
          :  :                       +- Scan spark_catalog.default.date_dim [d_date_sk#104, d_date#106]
          :  +- Project [ws_order_number#245 AS ws_order_number#171]
          :     +- Shift +228 (shared #1)
          :        +- Project [ws_order_number#17]
          :           +- Join Inner, ((ws_order_number#17 == ws_order_number#51) and (NOT (ws_warehouse_sk#15 == ws_warehouse_sk#49)))
-         :              :- Scan spark_catalog.default.web_sales [ws_warehouse_sk#15, ws_order_number#17] (shared #2)
+         :              :- Filter isnotnull(ws_order_number#17)
+         :              :  +- Scan spark_catalog.default.web_sales [ws_warehouse_sk#15, ws_order_number#17] (shared #2)
          :              +- Shift +34
-         :                 +- Shared #2, printed above
+         :                 +- Filter isnotnull(ws_order_number#17)
+         :                    +- Shared #2, printed above
          +- Shift +30
             +- Project [wr_order_number#187]
                +- Join Inner, (wr_order_number#187 == ws_order_number#171)
-                  :- Scan spark_catalog.default.web_returns [wr_order_number#187]
+                  :- Filter isnotnull(wr_order_number#187)
+                  :  +- Scan spark_catalog.default.web_returns [wr_order_number#187]
                   +- Project [ws_order_number#245 AS ws_order_number#171]
                      +- Shared #1, printed above

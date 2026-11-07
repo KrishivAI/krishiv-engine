@@ -10,11 +10,12 @@ Project [a#5]
       +- Join Inner, (a#0 == a#5)
          :- Aggregate [a#0], [a#0]
          :  +- Join LeftSemi, (a#0 == a#13)
-         :     :- Shared #1, printed above
+         :     :- Filter isnotnull(a#0)
+         :     :  +- Shared #1, printed above
          :     +- Shift +8
          :        +- Project [a#5]
-         :           +- Filter (b#6 == 'x')
+         :           +- Filter (isnotnull(a#5) and (b#6 == 'x'))
          :              +- Scan spark_catalog.default.t [a#5, b#6] (shared #2)
          +- Project [a#5]
-            +- Filter (b#6 == 'x')
+            +- Filter (isnotnull(a#5) and (b#6 == 'x'))
                +- Shared #2, printed above

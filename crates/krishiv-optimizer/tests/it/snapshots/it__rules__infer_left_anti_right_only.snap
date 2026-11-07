@@ -1,0 +1,9 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: SELECT a FROM t LEFT ANTI JOIN (SELECT a FROM u WHERE a = 5) v ON t.a = v.a WHERE t.a > 1
+---
+Join LeftAnti, (a#0 == a#3)
+:- Filter (a#0 > 1)
+:  +- Scan spark_catalog.default.t [a#0]
++- Filter ((a#3 == 5) and (a#3 > 1))
+   +- Scan spark_catalog.default.u [a#3]
