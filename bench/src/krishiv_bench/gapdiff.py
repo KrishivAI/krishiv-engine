@@ -432,8 +432,13 @@ class Basis:
         return None if self.process_cpu is None else self.process_cpu - self.operator_secs
 
     @property
+    def load_known(self) -> bool:
+        """Whether any load reading was taken (``/proc/loadavg`` can be unreadable)."""
+        return any(x is not None for x in (self.load_start, self.load_end))
+
+    @property
     def indicative(self) -> bool:
-        loads = [x for x in (self.load_start, self.load_end) if x is not None and x == x]
+        loads = [x for x in (self.load_start, self.load_end) if x is not None]
         return self.load_bound is not None and bool(loads) and max(loads) > self.load_bound
 
 
@@ -472,12 +477,17 @@ def markdown(
         "- " + _basis_line("DuckDB", d),
     ]
     for name, b in (("Krishiv", k), ("DuckDB", d)):
-        if b.load_start is not None and b.load_bound is not None:
-            end = "n/a" if b.load_end is None else f"{b.load_end:.1f}"
-            lines.append(
-                f"- {name} load average (1 min) {b.load_start:.1f} at start, {end} at end, bound {b.load_bound:g}: "
-                + ("**INDICATIVE ONLY**" if b.indicative else "within bound")
-            )
+        if b.load_bound is None:
+            continue
+        if not b.load_known:
+            lines.append(f"- {name} load average: **unknown** (/proc/loadavg was not readable), bound {b.load_bound:g}")
+            continue
+        start = "n/a" if b.load_start is None else f"{b.load_start:.1f}"
+        end = "n/a" if b.load_end is None else f"{b.load_end:.1f}"
+        lines.append(
+            f"- {name} load average (1 min) {start} at start, {end} at end, bound {b.load_bound:g}: "
+            + ("**INDICATIVE ONLY**" if b.indicative else "within bound")
+        )
     cpu_note = (
         "CPU s = the kind's share of the engine's operator seconds times its process CPU"
         if use_cpu
@@ -566,6 +576,7 @@ class QueryResult:
     top_gap_kind: str | None = None
     flagged_pipelines: int | None = None
     indicative: bool = False
+    load_known: bool = True
     error: str | None = None
     krishiv: Basis | None = None
     duckdb: Basis | None = None
@@ -602,6 +613,7 @@ def analyse(
         top_gap_kind=top.key if top is not None and top.gap is not None and top.gap > 0 else None,
         flagged_pipelines=len({p.pipeline for p in prows if p.flags} | {o.pipeline for o in orows}),
         indicative=kb.indicative or db.indicative,
+        load_known=kb.load_known and db.load_known,
         krishiv=kb,
         duckdb=db,
         kinds=kinds,
@@ -620,7 +632,7 @@ def summary_table(results: list[QueryResult], suite: str, sf: float, threads: in
         "Process CPU seconds of the profiled run for each engine (`basis` says when a query has operator seconds "
         "instead, which are wall time per thread summed over threads and inflate under load). `top gap` is the "
         "kind where Krishiv spends the most beyond DuckDB; `flags` counts pipelines with a parallelism flag; "
-        "`load` marks a run that passed the harness's load bound.",
+        "`load` marks a run that passed the harness's load bound (or whose load could not be read).",
         "",
         "| query | Krishiv s | DuckDB s | ratio | gap s | basis | top gap | flags | load |",
         "|---|---:|---:|---:|---:|---|---|---:|---|",
@@ -634,7 +646,7 @@ def summary_table(results: list[QueryResult], suite: str, sf: float, threads: in
         lines.append(
             f"| {r.query} | {r.krishiv_cpu:.3f} | {r.duckdb_cpu:.3f} | {_ratio(ratio)} "
             f"| {r.krishiv_cpu - r.duckdb_cpu:+.3f} | {r.basis} | {r.top_gap_kind or '-'} | {r.flagged_pipelines} "
-            f"| {'INDICATIVE' if r.indicative else 'ok'} |"
+            f"| {'INDICATIVE' if r.indicative else 'ok' if r.load_known else 'load unknown'} |"
         )
     for basis, what in (("cpu", "process CPU"), ("operator seconds", "operator seconds")):
         mine = [r for r in ok if r.basis == basis]
@@ -649,6 +661,11 @@ def summary_table(results: list[QueryResult], suite: str, sf: float, threads: in
             + (" Not comparable with the process CPU ratios." if basis != "cpu" else ""),
         ]
     return "\n".join(lines) + "\n"
+
+
+def _load(v: float) -> float | None:
+    """A load reading, ``None`` when it could not be taken (``loadavg`` returns NaN; NaN is not valid JSON)."""
+    return None if v != v else v
 
 
 def run_gapdiff(
@@ -709,17 +726,17 @@ def run_gapdiff(
                     for _ in range(warmup):  # both engines read warm files, whichever runs first
                         krishiv.plan_profile(kq[qid])
                         duck.con.execute(sql).fetchone()
-                    load0 = loadavg()
+                    load0 = _load(loadavg())
                     krishiv.begin_measure()
                     kp = krishiv.plan_profile(kq[qid])
                     k_meas = krishiv.end_measure()
-                    k_load = loadavg()
+                    k_load = _load(loadavg())
                     duck.begin_measure()
                     row = duck.con.execute(sql).fetchone()
                     d_meas = duck.end_measure()
                     if row is None:
                         raise ValueError("DuckDB returned no profile")
-                    d_load = loadavg()
+                    d_load = _load(loadavg())
                     result, report = analyse(
                         qid,
                         kp["profile"],

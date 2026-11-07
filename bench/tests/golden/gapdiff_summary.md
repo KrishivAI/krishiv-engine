@@ -1,6 +1,6 @@
 # gapdiff tpch SF100, 12 threads
 
-Process CPU seconds of the profiled run for each engine (`basis` says when a query has operator seconds instead, which are wall time per thread summed over threads and inflate under load). `top gap` is the kind where Krishiv spends the most beyond DuckDB; `flags` counts pipelines with a parallelism flag; `load` marks a run that passed the harness's load bound.
+Process CPU seconds of the profiled run for each engine (`basis` says when a query has operator seconds instead, which are wall time per thread summed over threads and inflate under load). `top gap` is the kind where Krishiv spends the most beyond DuckDB; `flags` counts pipelines with a parallelism flag; `load` marks a run that passed the harness's load bound (or whose load could not be read).
 
 | query | Krishiv s | DuckDB s | ratio | gap s | basis | top gap | flags | load |
 |---|---:|---:|---:|---:|---|---|---:|---|

@@ -507,3 +507,34 @@ def test_the_geomean_is_kept_per_basis():
     text = gd.summary_table(rs, "tpch", 1, 4)
     assert "over 1 queries on process CPU: 3.00x." in text
     assert "over 1 queries on operator seconds: 4.00x. Not comparable with the process CPU ratios." in text
+
+
+def test_an_unreadable_load_is_unknown_not_within_bound():
+    k = gd.Basis(24.0, 0.0, None, None, 16.0)
+    d = gd.Basis(8.0, 0.0, 2.5, 3.0, 16.0)
+    assert not k.load_known
+    assert not k.indicative
+    assert d.load_known
+    result, md = gd.analyse("q03", _doc(K_OPS, K_PIPES, K_PLAN), D_DOC, k, d)
+    assert not result.load_known
+    assert "Krishiv load average: **unknown** (/proc/loadavg was not readable), bound 16" in md
+    assert "DuckDB load average (1 min) 2.5 at start, 3.0 at end, bound 16: within bound" in md
+    text = gd.summary_table([result], "tpch", 1, 4)
+    assert "| load unknown |" in text
+    assert "| ok |" not in text
+    # A reading over the bound still wins over a missing one.
+    late = gd.Basis(24.0, 0.0, None, 30.0, 16.0)
+    assert late.load_known
+    assert late.indicative
+
+
+def test_the_json_never_holds_nan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    out, _ = _setup_fakes(tmp_path, monkeypatch, ["q01"])
+    monkeypatch.setattr("krishiv_bench.abba.loadavg", lambda: float("nan"))
+    gd.run_gapdiff("tpch", 1, ["q01"], dataset="tpch-duckdb", threads=1, out_dir=out)
+    text = (out / "gapdiff.json").read_text()
+    assert "NaN" not in text
+    q = json.loads(text, parse_constant=lambda c: pytest.fail(f"non-JSON constant {c}"))["queries"]["q01"]
+    assert q["load_known"] is False
+    assert q["krishiv"]["load_start"] is None
+    assert "unknown" in (out / "q01.md").read_text()
