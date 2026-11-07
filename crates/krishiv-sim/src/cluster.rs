@@ -27,6 +27,7 @@ use futures::stream::{BoxStream, FuturesUnordered};
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_exec::physical::{
     PhysicalPlan, TaskSpec, WorkerContext, exchange_schemas, instantiate_task,
+    planned_exchange_schemas,
 };
 use krishiv_exec::{ExecConfig, Executor, QueryContext, QueryId, QueryRunner, Scheduler};
 use krishiv_scheduler::{Partials, StageSplits, fragment, merge_partials, stage_tasks};
@@ -211,7 +212,12 @@ impl Inner {
             job,
             workers: self.workers.clone(),
         };
-        let schemas = exchange_schemas(&plan, &worker)?;
+        // The plan's own schemas; a plan written without them is
+        // instantiated, unrun, to learn them.
+        let schemas = match planned_exchange_schemas(&plan) {
+            Some(s) => s,
+            None => exchange_schemas(&plan, &worker)?,
+        };
         let stages = fragment(&plan, &schemas)?;
         let splits = self
             .splits

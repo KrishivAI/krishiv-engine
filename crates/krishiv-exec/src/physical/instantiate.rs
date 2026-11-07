@@ -397,6 +397,23 @@ pub fn exchange_schemas(
     Ok(instantiate_with_schemas(plan, &written, &TaskSpec::whole())?.1)
 }
 
+/// [`exchange_schemas`] from the plan alone: the planner's schema of every
+/// exchange ([`ExchangePlan::schema`], T176 unit 1 review m4), with no
+/// operator built. `None` when some exchange has none (a plan written
+/// without them): instantiate it instead.
+#[must_use]
+pub fn planned_exchange_schemas(plan: &PhysicalPlan) -> Option<BTreeMap<ExchangeId, SchemaRef>> {
+    let mut out = BTreeMap::new();
+    let mut stack: Vec<&PhysNode> = plan.roots().collect();
+    while let Some(n) = stack.pop() {
+        if let PhysNode::Exchange(e) = n {
+            out.insert(e.id, SchemaRef::clone(e.schema.as_ref()?));
+        }
+        stack.extend(n.children());
+    }
+    Some(out)
+}
+
 /// [`instantiate_task`], with the schema of each exchange's input.
 fn instantiate_with_schemas(
     plan: &PhysicalPlan,
@@ -2069,6 +2086,7 @@ mod tests {
             input: Box::new(first),
             partitioning: Partitioning::Single,
             filters: Vec::new(),
+            schema: None,
         });
         let merge = PhysNode::Aggregate {
             input: Box::new(moved),
