@@ -1,0 +1,8 @@
+# Hand-written Rust files over 2000 lines: `<lines> <path>`. They may shrink, never grow
+# (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
+3869 crates/krishiv-sql/src/ast.rs
+2774 crates/krishiv-sql/src/lower.rs
+# +21 lines over main: WITH ctes FROM source INSERT ... parses as a multi-table insert (P2b row 11)
+5246 crates/krishiv-sql/src/parser.rs
+2150 crates/krishiv-sql/src/parser/ddl.rs
+3657 crates/krishiv-sql/src/tests.rs

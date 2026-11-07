@@ -1,0 +1,4 @@
+# Hand-written Rust files over 2000 lines: `<lines> <path>`. They may shrink, never grow
+# (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
+2153 crates/krishiv-testkit/src/file_format/mod.rs
+2535 crates/krishiv-testkit/src/kernel_eval.rs
