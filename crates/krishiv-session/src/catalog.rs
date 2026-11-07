@@ -75,6 +75,9 @@ pub(crate) enum TempTable {
         /// it lists its files without inferring a schema, and a table with
         /// no files is empty.
         known: bool,
+        /// An entry of the permanent catalog: only a reference to one takes read options of its
+        /// own (`FROM t WITH (..)`); Spark drops them for a temporary view.
+        permanent: bool,
     },
     /// A view over a query: the unresolved plan and the output columns it
     /// had when it was created (renamed when the view declares aliases).
@@ -374,13 +377,14 @@ enum FilesKey {
 fn reference_key(
     key: String,
     known: bool,
+    permanent: bool,
     source: &ReadSource,
     options: &BTreeMap<String, krishiv_common::secret::OptionValue>,
 ) -> (FilesKey, ReadSource) {
     // Spark applies a reference's options to a catalog table's scan only (`resolveTempView`
     // drops them for a temporary view), and a key the table already stores keeps the table's
     // spelling and value: a different value is an error (`check_reference_options`).
-    if let (false, true, ReadSource::Files { .. }) = (options.is_empty(), known, source) {
+    if let (false, true, ReadSource::Files { .. }) = (options.is_empty(), permanent, source) {
         let mut merged = source.clone();
         if let ReadSource::Files { options: base, .. } = &mut merged {
             for (k, v) in options {
@@ -586,7 +590,7 @@ impl QueryCatalog {
                     ReadSource::Files {
                         options: stored, ..
                     },
-                known: true,
+                permanent: true,
                 ..
             } = &*table
             else {
@@ -628,10 +632,16 @@ impl QueryCatalog {
                 let (key, source) = match &scan.source {
                     ReadSource::Table { name, options } => {
                         let (key, table) = self.entry_of(name)?;
-                        let TempTable::Files { source, known, .. } = &*table else {
+                        let TempTable::Files {
+                            source,
+                            known,
+                            permanent,
+                            ..
+                        } = &*table
+                        else {
                             return None;
                         };
-                        reference_key(key, *known, source, options)
+                        reference_key(key, *known, *permanent, source, options)
                     }
                     source @ ReadSource::Files { .. } => {
                         (FilesKey::Read(source.clone()), source.clone())
@@ -764,11 +774,23 @@ impl QueryCatalog {
                                 ));
                             }
                         }
-                        TempTable::Files { source, known, .. } => {
+                        TempTable::Files {
+                            source,
+                            known,
+                            permanent,
+                            ..
+                        } => {
                             let key = if options.is_empty() {
                                 FilesKey::View(last.to_lowercase())
                             } else {
-                                reference_key(last.to_lowercase(), *known, source, options).0
+                                reference_key(
+                                    last.to_lowercase(),
+                                    *known,
+                                    *permanent,
+                                    source,
+                                    options,
+                                )
+                                .0
                             };
                             let table = self.opened(&key).ok_or_else(|| InternalError {
                                 message: "a scan of files that was not opened before planning"
@@ -1096,6 +1118,7 @@ impl QueryCatalog {
             source: table_source(&table),
             columns: columns.clone(),
             known: true,
+            permanent: true,
         });
         let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
         // Keys are lower case whatever the session's case sensitivity: `entry_key` spells scans that way.
@@ -1291,11 +1314,18 @@ impl TableProviderResolver for QueryCatalog {
                     TempTable::Memory { table, .. } => {
                         Ok(Arc::clone(table) as Arc<dyn TableProvider>)
                     }
-                    TempTable::Files { known, source, .. } => {
+                    TempTable::Files {
+                        known,
+                        permanent,
+                        source,
+                        ..
+                    } => {
                         let key = self
                             .entry_of(name)
                             .map_or_else(|| last.to_lowercase(), |(k, _)| k);
-                        self.files_provider(&reference_key(key, *known, source, options).0)
+                        self.files_provider(
+                            &reference_key(key, *known, *permanent, source, options).0,
+                        )
                     }
                     // Views are inlined as subqueries before analysis, so
                     // no scan ever reads one.
@@ -2252,6 +2282,7 @@ mod tests {
     fn files(col: &str) -> TempTable {
         TempTable::Files {
             known: false,
+            permanent: false,
             source: ReadSource::Files {
                 format: "parquet".to_owned(),
                 paths: vec![],

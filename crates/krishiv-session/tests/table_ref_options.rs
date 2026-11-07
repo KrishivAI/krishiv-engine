@@ -134,6 +134,31 @@ fn a_file_views_reference_options_are_ignored() {
 }
 
 #[test]
+fn a_sql_temporary_views_reference_options_are_ignored() {
+    // Checked on a Spark 4.2.0 local run (2026-11-07): all three read `[1, a]`.
+    // Same as a DataFrame view: Spark drops the options of a reference to any temporary view,
+    // so neither a new option applies nor a contradicting one is an error.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("f.csv"), "a,b\n1,2\n").unwrap();
+    let s = Session::new().unwrap();
+    block_on(s.sql(&format!(
+        "CREATE TEMPORARY VIEW w (a STRING, b STRING) USING csv \
+         OPTIONS (path '{}', header 'false')",
+        dir.path().display()
+    )))
+    .unwrap();
+    let plain = column(&s, "SELECT a FROM w ORDER BY 1");
+    assert_eq!(plain, ["1", "a"]);
+    for opt in ["'header' = 'true'", "'HEADER' = 'false'", "'sep' = ';'"] {
+        assert_eq!(
+            column(&s, &format!("SELECT a FROM w WITH ({opt}) ORDER BY 1")),
+            plain,
+            "{opt}"
+        );
+    }
+}
+
+#[test]
 fn tables_over_the_same_files_keep_their_own_columns() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("f.csv"), "1,2\n").unwrap();

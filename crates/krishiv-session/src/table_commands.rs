@@ -781,6 +781,7 @@ impl Session {
                 source,
                 columns,
                 known: true,
+                permanent: false,
             },
         );
         // A replaced view must not keep serving the rows of the old one.
