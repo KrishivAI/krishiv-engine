@@ -75,6 +75,9 @@ pub struct BroadcastTables {
     pool: Arc<dyn MemoryPool>,
     builds: Mutex<HashMap<BroadcastKey, Arc<Slot>>>,
     next: AtomicU64,
+    /// Tasks that built their own table without attempting the shared one,
+    /// because it could never fit ([`Decision`]).
+    skipped: AtomicU64,
 }
 
 impl fmt::Debug for BroadcastTables {
@@ -135,6 +138,7 @@ impl BroadcastTables {
             pool,
             builds: Mutex::default(),
             next: AtomicU64::new(0),
+            skipped: AtomicU64::new(0),
         }
     }
 
@@ -151,6 +155,13 @@ impl BroadcastTables {
             .values()
             .filter(|s| matches!(&*lock(&s.outcome), Some(Err(e)) if does_not_fit(e)))
             .count()
+    }
+
+    /// The tasks that skipped the shared build because it could never fit
+    /// (each built its own table; not among [`Self::fallbacks`]).
+    #[must_use]
+    pub fn skipped(&self) -> u64 {
+        self.skipped.load(Ordering::Relaxed)
     }
 
     /// The build `key`, started from `job` with `query`'s settings and
@@ -254,6 +265,14 @@ fn does_not_fit(e: &KrishivError) -> bool {
     e.error_class() == ErrorClass::UnableToAcquireMemory
 }
 
+/// What a broadcast's built table holds at least, per byte of its exchange
+/// frames: its rows. A lower bound, so no build that could fit is skipped.
+/// Measured on TPC-H SF0.01 over a `LocalShuffle` (2026-11-07, design
+/// `P2-row30c-m5-shared-skip`): every table's pool peak was 2x to over 1000x
+/// its frames (the row pages' floor dominates small builds), so no upper
+/// factor holds.
+const EXPANSION: usize = 1;
+
 /// How a task's join gets its table.
 #[derive(Clone)]
 enum Choice {
@@ -269,18 +288,43 @@ enum Choice {
 pub(crate) struct Decision {
     tables: Arc<BroadcastTables>,
     key: BroadcastKey,
+    /// The frame bytes the broadcast's committed map outputs hold for this
+    /// task, when its exchange knows them ([`Exchange::committed_bytes`](crate::exchange::Exchange::committed_bytes)).
+    committed: Option<u64>,
     /// Handed over if this task starts the build.
     job: std::sync::Mutex<Option<BuildJob>>,
     chosen: OnceLock<Result<Choice>>,
 }
 
 impl Decision {
-    pub(crate) fn new(tables: Arc<BroadcastTables>, key: BroadcastKey, job: BuildJob) -> Self {
+    pub(crate) fn new(
+        tables: Arc<BroadcastTables>,
+        key: BroadcastKey,
+        committed: Option<u64>,
+        job: BuildJob,
+    ) -> Self {
         Self {
             tables,
             key,
+            committed,
             job: std::sync::Mutex::new(Some(job)),
             chosen: OnceLock::new(),
+        }
+    }
+
+    /// Whether the shared table could never fit: the broadcast's bytes times
+    /// [`EXPANSION`] (a lower bound) past the most the job's broadcast pool can hold (its
+    /// `krishiv.exec.join.sharedBroadcastBytes` cap or a limit above it).
+    /// What other consumers hold now does not count: they can spill.
+    fn cannot_fit(&self) -> bool {
+        match (self.committed, self.tables.pool.effective_limit()) {
+            (Some(bytes), Some(limit)) => {
+                let table = usize::try_from(bytes)
+                    .unwrap_or(usize::MAX)
+                    .saturating_mul(EXPANSION);
+                table > limit
+            }
+            _ => false,
         }
     }
 
@@ -294,6 +338,12 @@ impl Decision {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
         };
+        if self.cannot_fit() {
+            // Never attempted: the attempt would spill the query's other
+            // operators before failing (design `P2-row30c-m5-shared-skip`).
+            self.tables.skipped.fetch_add(1, Ordering::Relaxed);
+            return self.chosen.get_or_init(|| Ok(Choice::Own)).clone();
+        }
         let choice = match self.tables.get(self.key, job, query).await {
             Ok(built) => Ok(Choice::Shared(built)),
             Err(e) if does_not_fit(&e) => Ok(Choice::Own),
@@ -911,6 +961,7 @@ mod tests {
         Arc::new(Decision {
             tables: Arc::clone(tables),
             key,
+            committed: None,
             job: std::sync::Mutex::new(None),
             chosen: OnceLock::new(),
         })
@@ -972,6 +1023,7 @@ mod tests {
         let gone = Decision {
             tables: Arc::clone(&tables),
             key: key(3),
+            committed: None,
             job: std::sync::Mutex::new(None),
             chosen: OnceLock::new(),
         };
