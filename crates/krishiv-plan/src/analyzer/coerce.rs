@@ -444,42 +444,8 @@ fn legacy_string_type(args: &[Arg<'_>]) -> Option<Option<Option<DataType>>> {
     Some(typed.iter().all(promotes).then_some(Some(T::String)))
 }
 
-/// The type a value and a subquery column of `(values) IN (subquery)`
-/// meet at.
-pub(super) fn common_type(
-    a: &Arg<'_>,
-    b: &Arg<'_>,
-    case_sensitive: bool,
-) -> Option<Option<DataType>> {
-    common(a, b, false, case_sensitive)
-}
-
-/// The type two set-operation columns meet at (`findWiderTypeForTwo`, the
-/// legacy rules with ANSI off).
-pub(super) fn wider_type(a: &Arg<'_>, b: &Arg<'_>, rules: Rules) -> Option<Option<DataType>> {
-    common_all(&[*a, *b], rules)
-}
-
-/// The type two inline-table values meet at without ANSI
-/// (`findWiderTypeWithoutStringPromotion`): the set-operation rules, except
-/// that a string never meets another type.
-pub(super) fn wider_type_without_string_promotion(
-    a: &Arg<'_>,
-    b: &Arg<'_>,
-    case_sensitive: bool,
-) -> Option<Option<DataType>> {
-    match (a.ty, b.ty) {
-        (Some(x), Some(y)) if (x == &DataType::String) != (y == &DataType::String) => None,
-        _ => {
-            let rules = Rules {
-                ansi: false,
-                case_sensitive,
-                concat_binary_as_string: false,
-            };
-            common_in(a, b, false, rules, Nested::Wider)
-        }
-    }
-}
+mod entry;
+pub(super) use entry::{common_type, wider_type, wider_type_without_string_promotion};
 
 /// Whether `a` and `b` are ANSI intervals of one family with other fields:
 /// `map_contains_key` and the array functions take them as different types,

@@ -20,7 +20,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use crate::store::{CatalogStore, CatalogTable, InMemoryCatalogStore, ViewDef, Warehouse};
-use arrow_schema::{Schema, SchemaRef};
 use krishiv_common::config::Config;
 use krishiv_common::error::{
     InternalError, KrishivError, KrishivReservedTempViewName, KrishivUnsupportedFeature,
@@ -44,6 +43,11 @@ use krishiv_plan::{
 };
 
 use crate::cache::{RelationCache, is_cache_name};
+
+mod file_tables;
+mod ndv_sampling;
+
+use self::file_tables::FileScanOf;
 
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
@@ -477,92 +481,6 @@ impl QueryCatalog {
             .cloned()
     }
 
-    /// Lists the files of every read by path and file view that the
-    /// analyzed `plan` scans (subqueries included), and opens them as file
-    /// tables for the planner. A read the analyzer listed keeps that
-    /// listing; a view lists its files now.
-    ///
-    /// # Errors
-    /// Listing errors (`PATH_NOT_FOUND` once a view's files are gone, ...)
-    /// and errors reading the files' footers.
-    pub(crate) async fn open_files(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
-        for (key, source, table) in self.file_scans(plan) {
-            if self.opened(&key).is_some() {
-                continue;
-            }
-            let ReadSource::Files {
-                format,
-                paths,
-                options,
-            } = &source
-            else {
-                continue;
-            };
-            let listing = match &key {
-                FilesKey::Table(_) => {
-                    self.files
-                        .listing_known(format, paths, options, Arc::clone(&table))
-                        .await?
-                }
-                _ => self.files.listing(format, paths, options).await?,
-            };
-            let opened = open_table(
-                Arc::clone(&listing.format),
-                self.scans.clone(),
-                table,
-                listing.files.to_vec(),
-                listing.options.clone(),
-            )
-            .await?
-            .with_partition_columns(listing.partition_columns.to_vec());
-            self.opened
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push((key, Arc::new(opened)));
-        }
-        Ok(())
-    }
-
-    /// The scans of files in `plan`: what each reads, and the columns the
-    /// analyzer bound (the view's, for a view), which the files map to by
-    /// name.
-    fn file_scans(&self, plan: &LogicalPlan) -> Vec<(FilesKey, ReadSource, SchemaRef)> {
-        let mut scans = Vec::new();
-        collect_scans(plan, &mut scans);
-        scans
-            .into_iter()
-            .filter_map(|scan| {
-                let (key, source) = match &scan.source {
-                    ReadSource::Table { name, .. } => {
-                        let (key, table) = self.entry_of(name)?;
-                        let TempTable::Files { source, known, .. } = &*table else {
-                            return None;
-                        };
-                        let key = if *known {
-                            FilesKey::Table(key)
-                        } else {
-                            FilesKey::View(key)
-                        };
-                        (key, source.clone())
-                    }
-                    source @ ReadSource::Files { .. } => {
-                        (FilesKey::Read(source.clone()), source.clone())
-                    }
-                    _ => return None,
-                };
-                // The hidden `_metadata` column is the scan's, not the table's.
-                let columns = scan.output.len() - usize::from(scan.metadata_column().is_some());
-                let table = Arc::new(Schema::new(
-                    scan.output[..columns]
-                        .iter()
-                        .map(|c| c.data_type.to_arrow_field(c.name.clone(), c.nullable))
-                        .collect::<Vec<_>>(),
-                ));
-                Some((key, source, table))
-            })
-            .collect()
-    }
-
     /// Whether this query loaded a file view: its files are listed again
     /// by the next query, so an analysis that did must not be reused.
     pub(crate) fn loaded_file_views(&self) -> bool {
@@ -792,32 +710,6 @@ enum ScanSplitsKind {
     },
 }
 
-/// [`FileTable::open`] on the executor's I/O runtime: footer reads are
-/// object-store requests, which belong there and not on the compute
-/// runtime. Dropping the returned future aborts the open.
-async fn open_table(
-    format: Arc<dyn krishiv_io::FileFormat>,
-    scans: FileScans,
-    table: SchemaRef,
-    files: Vec<krishiv_io::FileRef>,
-    options: krishiv_io::FormatOptions,
-) -> Result<FileTable, KrishivError> {
-    let runtime = scans.runtime.clone();
-    run_on(&runtime, async move {
-        FileTable::open(
-            format,
-            scans.io,
-            table,
-            files,
-            options,
-            &scans.config,
-            scans.slots,
-        )
-        .await
-    })
-    .await
-}
-
 /// Aborts its task when dropped.
 struct AbortGuard<T>(tokio::task::JoinHandle<T>);
 
@@ -993,6 +885,7 @@ impl QueryCatalog {
                 name: c.name.clone(),
                 data_type: c.data_type.clone(),
                 nullable: c.nullable,
+                char_varchar: c.char_varchar.clone(),
             })
             .collect();
         let entry = Arc::new(TempTable::Files {
@@ -2116,6 +2009,7 @@ mod tests {
     use arrow_array::Array as _;
     use arrow_array::{Int32Array, RecordBatch};
     use arrow_schema::Field;
+    use arrow_schema::Schema;
     use futures::executor::block_on;
     use krishiv_common::error::ErrorClass;
     use krishiv_types::DataType;
@@ -2161,11 +2055,7 @@ mod tests {
                 paths: vec![],
                 options: Default::default(),
             },
-            columns: vec![TableColumn {
-                name: col.to_owned(),
-                data_type: DataType::Integer,
-                nullable: false,
-            }],
+            columns: vec![TableColumn::new(col.to_owned(), DataType::Integer, false)],
         }
     }
 

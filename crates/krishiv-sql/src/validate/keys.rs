@@ -1,0 +1,381 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Spark's `ParserUtils.checkDuplicateKeys`: which repeated key of a key-value list Spark reports.
+//!
+//! Spark groups the keys with Scala 2.13's `groupBy` (an `immutable.HashMap`), keeps the groups of
+//! more than one and throws for the first in the map's iteration order. That order is the CHAMP
+//! trie's: at each level the entries alone in their 5-bit hash fragment come first, by fragment,
+//! then the sub-tries, by fragment. The hash is `Hashing.improve(key.hashCode)`. Checked against
+//! Spark 4.2.0 on 403 random key lists (`research/spark/partition-spec-duplicate-key.md`).
+
+use std::collections::HashSet;
+
+use krishiv_common::error::{DuplicateKey, KrishivError, UnsupportedFeatureSetNamespaceProperty};
+use krishiv_common::names::to_sql_id;
+
+use super::{R, at};
+use crate::ast::{OptionKey, Span, TableOption};
+
+/// Java's `String.hashCode` (UTF-16 code units), as an unsigned word.
+fn java_hash(s: &str) -> u32 {
+    s.encode_utf16()
+        .fold(0u32, |h, c| h.wrapping_mul(31).wrapping_add(u32::from(c)))
+}
+
+/// Scala 2.13's `scala.collection.Hashing.improve`, which `immutable.HashMap` applies to `key.##`.
+fn improve(h: u32) -> u32 {
+    let mut h = h.wrapping_add(!(h << 9));
+    h ^= h >> 14;
+    h = h.wrapping_add(h << 4);
+    h ^ (h >> 10)
+}
+
+/// `keys` (distinct) in a CHAMP trie's iteration order, from the level at `shift`, appended to
+/// `out`. Keys whose 32-bit hashes are equal sit in a collision node in insertion order, which is
+/// the order they come in.
+fn champ_order<'a>(keys: Vec<(&'a str, u32)>, shift: u32, out: &mut Vec<&'a str>) {
+    if keys.len() <= 1 || shift >= 32 {
+        out.extend(keys.into_iter().map(|(k, _)| k));
+        return;
+    }
+    let fragment = |h: u32| ((h >> shift) & 31) as usize;
+    let mut groups: [Vec<(&str, u32)>; 32] = Default::default();
+    for (k, h) in keys {
+        groups[fragment(h)].push((k, h));
+    }
+    // A node's own entries first, by fragment, then its sub-nodes, by fragment.
+    out.extend(groups.iter().filter(|g| g.len() == 1).map(|g| g[0].0));
+    for g in groups {
+        if g.len() > 1 {
+            champ_order(g, shift + 5, out);
+        }
+    }
+}
+
+/// `keys` (distinct) in the order a CHAMP trie's `filterImpl` visits them from the level at
+/// `shift`, appended to `out`: by 5-bit hash fragment, each sub-trie walked in its fragment's
+/// place (unlike [`champ_order`], which lists a node's own entries before its sub-tries).
+fn champ_filter_order<'a>(keys: Vec<(&'a str, u32)>, shift: u32, out: &mut Vec<&'a str>) {
+    if keys.len() <= 1 || shift >= 32 {
+        out.extend(keys.into_iter().map(|(k, _)| k));
+        return;
+    }
+    let mut groups: [Vec<(&str, u32)>; 32] = Default::default();
+    for (k, h) in keys {
+        groups[((h >> shift) & 31) as usize].push((k, h));
+    }
+    for g in groups {
+        champ_filter_order(g, shift + 5, out);
+    }
+}
+
+/// The order in which Scala's `Map.filter` over `Seq.toMap` of `keys` (distinct) tests them, so a
+/// predicate that throws does so at the first of these it rejects: the written order up to four
+/// keys, [`champ_filter_order`] from five (Spark 4.2.0: `cleanNamespaceProperties` over
+/// `k5, k1, k2, k3, k4, owner, location, collation` names `location`, the map's iteration order
+/// puts `owner` first).
+pub(super) fn filter_visit_order<'a>(keys: &[&'a str]) -> Vec<&'a str> {
+    if keys.len() <= 4 {
+        return keys.to_vec();
+    }
+    let mut out = Vec::with_capacity(keys.len());
+    champ_filter_order(
+        keys.iter().map(|k| (*k, improve(java_hash(k)))).collect(),
+        0,
+        &mut out,
+    );
+    out
+}
+
+/// `keys` (distinct) in the iteration order of an `immutable.HashMap` built from them in this order.
+fn hash_map_order<'a>(keys: &[&'a str]) -> Vec<&'a str> {
+    let mut out = Vec::with_capacity(keys.len());
+    champ_order(
+        keys.iter().map(|k| (*k, improve(java_hash(k)))).collect(),
+        0,
+        &mut out,
+    );
+    out
+}
+
+/// The repeated key Spark's `checkDuplicateKeys` reports for `keys` (already lower-cased when
+/// Spark lower-cases them), or `None` when no key repeats. The repeated keys enter the map in the
+/// order they are first written (Spark 4.2.0: `c0, an, an, c0`, whose hash codes are equal, gives `c0`).
+pub(super) fn first_duplicate_key<'a>(keys: &[&'a str]) -> Option<&'a str> {
+    let mut repeated: Vec<&str> = Vec::new();
+    for (i, k) in keys.iter().enumerate() {
+        if !keys[..i].contains(k) && keys[i + 1..].contains(k) {
+            repeated.push(k);
+        }
+    }
+    hash_map_order(&repeated).first().copied()
+}
+
+/// The iteration order of Scala's `Seq.toMap` over `keys` (distinct): the written order up to four
+/// keys (`Map1`..`Map4`), the [`hash_map_order`] from five.
+pub(super) fn to_map_order<'a>(keys: &[&'a str]) -> Vec<&'a str> {
+    if keys.len() <= 4 {
+        keys.to_vec()
+    } else {
+        hash_map_order(keys)
+    }
+}
+
+/// The keys of `keys` (distinct, as written) for which `pick` holds, in the order Spark's
+/// `visitPropertyKeyValues` lists them: `collect` over the property map, so the picked keys keep
+/// their place in [`to_map_order`] of all the keys.
+pub(super) fn collected_order<'a>(keys: &[&'a str], pick: impl Fn(&str) -> bool) -> Vec<&'a str> {
+    to_map_order(keys).into_iter().filter(|k| pick(k)).collect()
+}
+
+/// The keys of `keys` (distinct, as written) for which `pick` holds, in the order Spark's
+/// `visitPropertyKeys` lists them: `filter` over the property map, then its keys. A map of up to
+/// four keys filters in written order; a larger `HashMap` filters into a new trie of the picked
+/// keys alone, whose order is that trie's own, not their order in the whole map (Spark 4.2.0:
+/// `UNSET TBLPROPERTIES (jee=1, hb=1, b=1, jbd, bg, cfi)` lists `[hb,b,jee]`, `SET` with the
+/// same keys missing values `[b,jee,hb]`).
+pub(super) fn filtered_order<'a>(keys: &[&'a str], pick: impl Fn(&str) -> bool) -> Vec<&'a str> {
+    let picked: Vec<&str> = keys.iter().copied().filter(|k| pick(k)).collect();
+    if keys.len() <= 4 {
+        picked
+    } else {
+        hash_map_order(&picked)
+    }
+}
+
+/// Spark's `cleanNamespaceProperties` (with `spark.sql.legacy.notReserveProperties` off, its
+/// default): the keys `location`, `collation` and `owner` (exact case) are refused with
+/// `UNSUPPORTED_FEATURE.SET_NAMESPACE_PROPERTY` at `statement`, the first `filter` reaches over
+/// the property map ([`filter_visit_order`]). The keys must be distinct.
+pub(super) fn reserved_namespace_properties(properties: &[TableOption], statement: Span) -> R {
+    let keys: Vec<String> = properties.iter().map(|o| key_text(&o.key)).collect();
+    let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+    let reserved = |k: &str| matches!(k, "location" | "collation" | "owner");
+    let Some(property) = filter_visit_order(&refs).into_iter().find(|k| reserved(k)) else {
+        return Ok(());
+    };
+    let msg = match property {
+        "location" => "please use the LOCATION clause to specify it",
+        "collation" => "please use the DEFAULT COLLATION clause to specify it",
+        _ => "it will be set to the current user",
+    };
+    Err(at(
+        UnsupportedFeatureSetNamespaceProperty {
+            property: property.to_owned(),
+            msg: msg.to_owned(),
+        },
+        statement,
+    ))
+}
+
+/// A property key as Spark's `visitPropertyKey` reads it: the dotted parts, unquoted (Spark 4.2.0:
+/// `` `a`.b ``, `` `a.b` `` and `'a.b'` are the same key), or a string key's text.
+pub(super) fn key_text(key: &OptionKey) -> String {
+    key.parts
+        .iter()
+        .map(|p| p.value.as_str())
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// The keys of `properties` (non-empty only when a key is set or missing a value) whose value is
+/// missing (`set`) or given (`!set`), in the order Spark lists them (see [`collected_order`],
+/// [`filtered_order`]). The keys must be distinct, as they are once [`super::Checker::property_keys`]
+/// passes.
+pub(super) fn misvalued_keys(properties: &[TableOption], set: bool) -> Vec<String> {
+    let keys: Vec<String> = properties.iter().map(|o| key_text(&o.key)).collect();
+    let bad: HashSet<&str> = properties
+        .iter()
+        .zip(&keys)
+        .filter(|(o, _)| o.value.is_some() != set)
+        .map(|(_, k)| k.as_str())
+        .collect();
+    if bad.is_empty() {
+        return Vec::new();
+    }
+    let keys: Vec<&str> = keys.iter().map(String::as_str).collect();
+    let pick = |k: &str| bad.contains(k);
+    let ordered = if set {
+        collected_order(&keys, pick)
+    } else {
+        filtered_order(&keys, pick)
+    };
+    ordered.into_iter().map(str::to_owned).collect()
+}
+
+/// Spark's `DUPLICATE_KEY` for `key`, quoted by `toSQLId` (`INVALID_ATTRIBUTE_NAME_SYNTAX` when
+/// the key is not an attribute name, as `` a`b `` or `.a`, because Spark quotes it that way while
+/// building the message).
+pub(super) fn duplicate_key(key: &str) -> KrishivError {
+    match to_sql_id(key) {
+        Ok(key_column) => DuplicateKey { key_column }.into(),
+        Err(e) => e,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        collected_order, filter_visit_order, filtered_order, first_duplicate_key, hash_map_order,
+        to_map_order,
+    };
+
+    /// Spark 4.2.0 `ALTER TABLE ... SET` / `UNSET TBLPROPERTIES` with these keys missing (or
+    /// holding) a value (`research/spark/partition-spec-duplicate-key/probe9.py`).
+    #[test]
+    fn bad_property_keys_are_listed_in_map_order() {
+        type Case<'a> = (&'a [&'a str], &'a [&'a str], &'a [&'a str], &'a [&'a str]);
+        let cases: &[Case<'_>] = &[
+            (
+                &["jee", "hb", "b", "jbd", "bg", "cfi"],
+                &["hb", "jee", "b"],
+                &["b", "jee", "hb"],
+                &["hb", "b", "jee"],
+            ),
+            (
+                &["ehf", "cge", "geg", "d", "gag", "bjf"],
+                &["ehf", "d", "gag"],
+                &["ehf", "d", "gag"],
+                &["ehf", "gag", "d"],
+            ),
+            (
+                &["i", "fj", "d", "jg", "jc"],
+                &["jg", "d", "jc"],
+                &["jg", "d", "jc"],
+                &["jc", "jg", "d"],
+            ),
+            (
+                &["dd", "c", "h", "d", "abd", "a"],
+                &["abd", "a", "d"],
+                &["a", "abd", "d"],
+                &["d", "a", "abd"],
+            ),
+            (
+                &["yoo", "sgf", "a", "b", "c"],
+                &["yoo", "sgf"],
+                &["sgf", "yoo"],
+                &["sgf", "yoo"],
+            ),
+            (
+                &["yoo", "sgf", "a"],
+                &["yoo", "sgf"],
+                &["yoo", "sgf"],
+                &["yoo", "sgf"],
+            ),
+        ];
+        for (keys, bad, set, unset) in cases {
+            let pick = |k: &str| bad.contains(&k);
+            assert_eq!(collected_order(keys, pick), *set, "SET {keys:?}");
+            assert_eq!(filtered_order(keys, pick), *unset, "UNSET {keys:?}");
+        }
+    }
+
+    /// Cases from the Spark 4.2.0 run (`ALTER TABLE nosuch ADD PARTITION (...)`, keys as written).
+    #[test]
+    fn spark_reports_the_first_repeated_key_in_hash_map_order() {
+        let cases: &[(&[&str], Option<&str>)] = &[
+            (&["p", "q"], None),
+            (&["p", "p"], Some("p")),
+            (&["a", "a", "b", "b"], Some("a")),
+            (&["b", "b", "a", "a"], Some("a")),
+            (&["z", "z", "p.q", "p.q"], Some("p.q")),
+            (
+                &[
+                    "yoo", "je", "sgf", "d", "je", "put", "d", "yoo", "sgf", "r", "r",
+                ],
+                Some("sgf"),
+            ),
+            (&["ayo", "u", "q", "u", "os", "os", "ayo"], Some("u")),
+            (
+                &[
+                    "ydm", "q", "j", "ca", "ydm", "q", "ky", "p", "agg", "ky", "ac", "ac", "ca",
+                    "agg",
+                ],
+                Some("agg"),
+            ),
+            (&["o", "fv", "fv", "goq"], Some("fv")),
+            (&["i", "i", "jag", "ng", "jag"], Some("i")),
+            (
+                &["pjq", "hx", "q", "cnb", "min", "pjq", "d", "d"],
+                Some("pjq"),
+            ),
+            (
+                &["hb", "f", "ecl", "lq", "vx", "f", "o", "lq", "o", "hb"],
+                Some("hb"),
+            ),
+            (
+                &["x", "ezk", "ke", "rl", "c", "rl", "c", "ezk", "bxx", "x"],
+                Some("x"),
+            ),
+            (
+                &[
+                    "ooo", "cqy", "xk", "i", "xk", "c", "u", "ooo", "xw", "c", "i",
+                ],
+                Some("xk"),
+            ),
+            (
+                &["hk", "hk", "vi", "y", "vo", "g", "zz", "y", "vi", "u"],
+                Some("y"),
+            ),
+        ];
+        for (keys, want) in cases {
+            assert_eq!(first_duplicate_key(keys), *want, "{keys:?}");
+        }
+    }
+
+    /// Spark 4.2.0: `DESC t PARTITION (a=1, b=1, c=1, d=1, yoo, sgf)` names `sgf`.
+    #[test]
+    fn to_map_keeps_four_keys_in_order_and_hashes_five() {
+        assert_eq!(to_map_order(&["yoo", "sgf", "a"]), ["yoo", "sgf", "a"]);
+        let five = to_map_order(&["a", "b", "c", "d", "yoo", "sgf"]);
+        let yoo = five.iter().position(|k| *k == "yoo");
+        let sgf = five.iter().position(|k| *k == "sgf");
+        assert!(sgf < yoo, "{five:?}");
+    }
+
+    /// Spark 4.2.0: `cleanNamespaceProperties` over these keys names `location`: `filter` walks
+    /// fragment 3's sub-trie (`k5`, `location`) in its place, while iteration lists the level's
+    /// own entries (`owner` among them) first.
+    #[test]
+    fn filter_visits_sub_tries_in_their_place() {
+        let keys = [
+            "k5",
+            "k1",
+            "k2",
+            "k3",
+            "k4",
+            "owner",
+            "location",
+            "collation",
+        ];
+        assert_eq!(
+            filter_visit_order(&keys),
+            [
+                "k2",
+                "k5",
+                "location",
+                "k1",
+                "owner",
+                "k4",
+                "k3",
+                "collation"
+            ]
+        );
+        assert_eq!(
+            hash_map_order(&keys),
+            [
+                "k2",
+                "k1",
+                "owner",
+                "collation",
+                "k5",
+                "location",
+                "k4",
+                "k3"
+            ]
+        );
+        assert_eq!(
+            filter_visit_order(&["owner", "location"]),
+            ["owner", "location"]
+        );
+    }
+}

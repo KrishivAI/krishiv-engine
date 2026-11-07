@@ -306,14 +306,14 @@ fn describe_modes_secrets_and_quoting() {
     let dir = tempfile::tempdir().unwrap();
     let s = session(dir.path());
     run(&s, "CREATE TABLE t (`a b` INT, c STRING) USING parquet");
-    assert_eq!(
-        class(&s, "DESCRIBE EXTENDED t c"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
-    assert_eq!(
-        class(&s, "DESCRIBE FORMATTED t c"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
+    // The catalog keeps no column statistics: the rows Spark adds for `EXTENDED | FORMATTED` are NULL.
+    for mode in ["EXTENDED", "FORMATTED"] {
+        let rows = table(&s, &format!("DESCRIBE {mode} t c")).1;
+        assert_eq!(rows.len(), 10, "{mode}");
+        assert_eq!(rows[3], ["min", "NULL"], "{mode}");
+        assert_eq!(rows[9], ["histogram", "NULL"], "{mode}");
+    }
+    assert_eq!(table(&s, "DESCRIBE t c").1.len(), 3);
     let text = table(&s, "SHOW CREATE TABLE t").1[0][0].clone();
     assert!(text.contains("  `a b` INT"), "{text}");
     assert!(text.contains("\n  c STRING"), "{text}");

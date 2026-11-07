@@ -58,7 +58,6 @@ pub(crate) enum Fail {
     Fatal(Box<ParseError>),
 }
 
-/// Parse state to rewind to when a speculative parse fails.
 /// The `CREATE TABLE` clauses Spark rejects when written twice, in the
 /// order it checks them (`DUPLICATE_CLAUSES` names the first).
 const CREATE_TABLE_CLAUSES: [&str; 10] = [
@@ -84,6 +83,17 @@ const CREATE_TABLE_LIKE_CLAUSES: [&str; 5] = [
     "TBLPROPERTIES",
 ];
 
+/// The `CREATE NAMESPACE` clauses Spark rejects when written twice, in
+/// the order it checks them (`visitCreateNamespace`).
+const CREATE_NAMESPACE_CLAUSES: [&str; 5] = [
+    "COMMENT",
+    "DEFAULT COLLATION",
+    "LOCATION",
+    "WITH PROPERTIES",
+    "WITH DBPROPERTIES",
+];
+
+/// Parse state to rewind to when a speculative parse fails.
 struct Checkpoint {
     pos: usize,
     far: usize,
@@ -1667,16 +1677,37 @@ impl<'s> Parser<'s> {
         let save = self.checkpoint();
         let start = self.start();
         let with = match self.with_clause() {
-            Ok(with) if self.kw_at(0, "INSERT") => with,
+            Ok(with) if self.kw_at(0, "INSERT") || self.kw_at(0, "FROM") => with,
             Ok(_) | Err(Fail::Syntax) => {
                 self.restore(save);
                 return Ok(None);
             }
             Err(e) => return Err(e),
         };
-        self.commit(save);
-        let Statement::Insert(mut insert) = self.insert_command()? else {
-            return self.fail();
+        // `WITH ctes FROM source INSERT ...`: a multi-table insert whose clauses all see the
+        // common table expressions; `WITH ctes FROM source SELECT ...` stays a query (a syntax
+        // failure here gives the statement back to the query parser).
+        let mut insert = if self.kw_at(0, "FROM") {
+            let from = self.checkpoint();
+            match self.multi_insert_command() {
+                Ok(Statement::Insert(insert)) => {
+                    self.commit(from);
+                    self.commit(save);
+                    insert
+                }
+                Ok(_) | Err(Fail::Syntax) => {
+                    self.restore(from);
+                    self.restore(save);
+                    return Ok(None);
+                }
+                Err(e) => return Err(e),
+            }
+        } else {
+            self.commit(save);
+            let Statement::Insert(insert) = self.insert_command()? else {
+                return self.fail();
+            };
+            insert
         };
         for clause in &mut insert.clauses {
             // Spark refuses a `WITH` in both places.
@@ -3477,24 +3508,40 @@ impl<'s> Parser<'s> {
             let mut location = None;
             let mut collation = None;
             let mut properties = Vec::new();
+            // Occurrences per clause, in Spark's duplicate-check order.
+            let mut seen = [0_usize; CREATE_NAMESPACE_CLAUSES.len()];
             loop {
-                if p.eat_kw("COMMENT") {
+                let clause = if p.eat_kw("COMMENT") {
                     comment = Some(p.string_after()?);
-                } else if p.eat_kw("LOCATION") {
-                    location = Some(p.string_after()?);
+                    0
                 } else if p.kw_at(0, "DEFAULT") && p.kw_at(1, "COLLATION") {
                     p.pos += 2;
                     collation = Some(p.table_name()?);
+                    1
+                } else if p.eat_kw("LOCATION") {
+                    location = Some(p.string_after()?);
+                    2
                 } else if p.eat_kw("WITH") {
-                    if p.eat_kw("DBPROPERTIES") || p.eat_kw("PROPERTIES") {
-                        properties.extend(p.property_list(false)?);
+                    let clause = if p.eat_kw("PROPERTIES") {
+                        3
+                    } else if p.eat_kw("DBPROPERTIES") {
+                        4
                     } else {
                         return p.fail();
-                    }
+                    };
+                    properties.extend(p.property_list(false)?);
+                    clause
                 } else {
                     break;
-                }
+                };
+                seen[clause] += 1;
             }
+            let duplicate_clause = CREATE_NAMESPACE_CLAUSES
+                .iter()
+                .zip(seen)
+                .find(|(_, n)| *n > 1)
+                .map(|(c, _)| *c);
+            let properties_and_dbproperties = seen[3] > 0 && seen[4] > 0;
             let span = p.span_from(start);
             p.command_end()?;
             Ok(Statement::CreateNamespace(CreateNamespace {
@@ -3505,6 +3552,8 @@ impl<'s> Parser<'s> {
                 location,
                 collation,
                 properties,
+                duplicate_clause,
+                properties_and_dbproperties,
                 span,
             }))
         })

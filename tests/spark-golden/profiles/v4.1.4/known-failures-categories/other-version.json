@@ -1,0 +1,8 @@
+{
+  "category": "other-version",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [],
+  "summary": "failures on this older Spark version nobody has sorted yet; cases are listed by hand (no rule, so a routine update cannot file a new failure here; the engine runs its 4.2 behaviour on every set)",
+  "task": "P3-T090"
+}
