@@ -577,7 +577,7 @@ impl Rewriter {
                 right,
                 kind,
                 condition: JoinCondition::On(on),
-            } if self.existential(on) => self.join(&p, left, right, kind, on),
+            } if self.existential(on) || self.liftable(on) => self.join(&p, left, right, kind, on),
             PlanNode::Join {
                 left,
                 right,
