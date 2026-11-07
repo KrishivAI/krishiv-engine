@@ -563,8 +563,13 @@ fn a_spilled_build_leaves_room_for_the_rest_of_the_pool() {
             "hold {hold}"
         );
         assert!(counter(&counters, "build_spills") > 0, "{counters:?}");
-        counter(&counters, "build_chunks")
+        (
+            counter(&counters, "build_chunks"),
+            counter(&counters, "build_chunks_capped"),
+        )
     };
-    let (alone, beside) = (chunks(0), chunks(limit * 6 / 10));
+    let ((alone, alone_capped), (beside, capped)) = (chunks(0), chunks(limit * 6 / 10));
     assert!(beside > alone, "alone {alone} chunks, beside {beside}");
+    assert_eq!(alone_capped, 0);
+    assert!(capped > 0, "beside: {capped} chunks cut short");
 }

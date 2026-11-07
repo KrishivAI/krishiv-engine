@@ -243,9 +243,9 @@ async fn memory_pool_defaults_for_scratch_and_spill_only() {
     assert_eq!(pool.peak_reserved(), 4096);
     // Nor its own path of limits: its own limit.
     assert_eq!(pool.effective_limit(), pool.limit());
-    // Its headroom is its own limit minus what it holds.
+    // What it has available is its own limit minus what it holds.
     assert_eq!(
-        pool.headroom(),
+        pool.available(),
         pool.limit().map(|l| l.saturating_sub(pool.reserved()))
     );
 }
@@ -1298,26 +1298,26 @@ fn the_effective_limit_is_the_smallest_on_the_path_to_the_root() {
 }
 
 #[test]
-fn headroom_is_the_least_free_space_under_a_limit_on_the_path() {
+fn available_is_the_least_free_space_under_a_limit_on_the_path() {
     let r = root(Some(4 << 20), 1);
     let (q, other) = (r.child("q", None), r.child("other", None));
-    let start = q.headroom().unwrap();
+    let start = q.available().unwrap();
     assert!(start <= 4 << 20);
     // A sibling's reservation under the shared root takes from it.
     let id = other.register("op", None);
     other.try_reserve(id, 1 << 20).unwrap();
-    assert_eq!(q.headroom(), Some(start - (1 << 20)));
+    assert_eq!(q.available(), Some(start - (1 << 20)));
     // A tighter limit below the root decides when it is fuller.
     let tight = r.child("tight", Some(1 << 20));
     let t = tight.register("op", None);
     tight.try_reserve(t, 512 << 10).unwrap();
     let inner = tight.child("inner", None);
-    assert!(inner.headroom().unwrap() <= 512 << 10);
+    assert!(inner.available().unwrap() <= 512 << 10);
     tight.release(t, 512 << 10);
     other.release(id, 1 << 20);
     tight.unregister(t);
     other.unregister(id);
-    assert_eq!(root(None, 1).child("q", None).headroom(), None);
+    assert_eq!(root(None, 1).child("q", None).available(), None);
 }
 
 /// Sets the resident-set guard's cut of `root` (the sampler's output).

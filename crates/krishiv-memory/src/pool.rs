@@ -1125,7 +1125,7 @@ impl MemoryPool for TreePool {
         limit
     }
 
-    fn headroom(&self) -> Option<usize> {
+    fn available(&self) -> Option<usize> {
         let mut free: Option<usize> = None;
         let mut cur = Some(&self.node);
         while let Some(node) = cur {
