@@ -341,7 +341,7 @@ def test_arrow_udf_returning_no_pyarrow_array_is_refused(spark: SparkSession) ->
 
 
 def test_a_udf_inferred_from_arrow_type_hints_is_an_arrow_udf(spark: SparkSession) -> None:
-    # `udf` with `pa.Array -> pa.Array` hints is `ArrowUDFType.SCALAR` (`sql/functions/builtin.py:30573-30580`,
+    # `udf` with `pa.Array -> pa.Array` hints is `ArrowUDFType.SCALAR` (`sql/functions/builtin.py:30558-30565`,
     # `sql/pandas/typehints.py:380-403`). Inferring tries pandas first, so it needs pandas.
     @F.udf(returnType=IntegerType())
     def pa_calc(a: pa.Array, b: pa.Array) -> pa.Array:
