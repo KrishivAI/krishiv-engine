@@ -300,7 +300,35 @@ impl Resolver<'_> {
             }
             _ => None,
         };
-        for (i, level) in [Some(scope), extra, hidden].into_iter().enumerate() {
+        // Spark resolves lateral column aliases before it extracts a select-list generator, so a
+        // generated column is no input column yet: an earlier plain lateral alias of its name
+        // takes the name, and is ambiguous with an earlier generator's own single alias (those
+        // keep their generator qualifier in `cx.lateral`; a name list or none is no alias).
+        let mut lateral_first = false;
+        if let ([name], Some(lateral)) = (&c.name[..], cx.lateral) {
+            let cs = self.ctx.conf.case_sensitive;
+            let named = |a: &&Attr| same(&a.col.name, name, cs);
+            let generated = |a: &Attr| {
+                a.qual
+                    .iter()
+                    .any(|q| q.starts_with(crate::GENERATE_QUALIFIER_PREFIX))
+            };
+            let plain = lateral
+                .iter()
+                .filter(named)
+                .filter(|a| !generated(a))
+                .count();
+            if plain > 0
+                && scope.iter().filter(named).all(&generated)
+                && scope.iter().filter(named).any(&generated)
+            {
+                lateral_first = true;
+            }
+        }
+        for (i, level) in [(!lateral_first).then_some(scope), extra, hidden]
+            .into_iter()
+            .enumerate()
+        {
             let Some(level) = level else { continue };
             let lenient = cx.lenient && i == 0;
             match self.find(level, &c.name, origin, lenient) {
