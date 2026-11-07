@@ -1315,7 +1315,10 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         DataType::Long => (Kind::Long, 0, 0, 0),
         DataType::Float => (Kind::Float, 0, 0, 0),
         DataType::Double => (Kind::Double, 0, 0, 0),
+        // The display-only `UTF8_BINARY` marker travels as plain STRING (ADR 0043, update
+        // 2026-11-07): it changes the printed type name only.
         DataType::String => (Kind::String, 0, 0, 0),
+        DataType::CollatedString(c) if c.is_utf8_binary() => (Kind::String, 0, 0, 0),
         DataType::Binary => (Kind::Binary, 0, 0, 0),
         DataType::Decimal(d) => (
             Kind::Decimal,
