@@ -1210,7 +1210,39 @@ fn a_dictionary_of_the_declared_type_is_rejected_not_reinterpreted() {
     let dict: arrow_array::DictionaryArray<arrow_array::types::Int32Type> =
         vec!["a", "b", "a"].into_iter().collect();
     let column: ArrayRef = Arc::new(dict);
-    assert!(column_round_trip(&column, &DataType::Utf8, 3).is_err());
+    let err = column_round_trip(&column, &DataType::Utf8, 3).unwrap_err();
+    assert!(err.to_string().contains("where Utf8 was declared"), "{err}");
+}
+
+#[test]
+fn a_nested_result_with_other_field_names_is_read_as_the_declared_type() {
+    // pyarrow names a list's element `item`; the declared type may name it
+    // otherwise: same layout, so the result is accepted and keeps the
+    // declared name.
+    let values = Int64Array::from(vec![1, 2, 3]);
+    let produced = arrow_array::ListArray::new(
+        Arc::new(Field::new("item", DataType::Int64, true)),
+        arrow_buffer::OffsetBuffer::new(vec![0, 2, 3].into()),
+        Arc::new(values),
+        None,
+    );
+    let declared = DataType::List(Arc::new(Field::new("element", DataType::Int64, true)));
+    let back = column_round_trip(&(Arc::new(produced) as ArrayRef), &declared, 2).unwrap();
+    assert_eq!(back.data_type(), &declared);
+    assert_eq!(back.len(), 2);
+}
+
+#[test]
+fn a_sliced_string_column_round_trips() {
+    let full: ArrayRef = Arc::new(StringArray::from(vec![
+        Some("a"),
+        None,
+        Some("ccc"),
+        Some("dd"),
+    ]));
+    let sliced = full.slice(1, 2);
+    let back = column_round_trip(&sliced, &DataType::Utf8, 2).unwrap();
+    assert_eq!(back.as_ref(), sliced.as_ref());
 }
 
 #[test]

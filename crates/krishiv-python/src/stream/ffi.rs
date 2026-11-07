@@ -728,12 +728,15 @@ pub(crate) fn export_column(
 }
 
 /// Imports one `ArrowArray` + `ArrowSchema` pair (a Python UDF's result) as
-/// one column of exactly `declared` with `rows` values. Imports are
-/// untrusted: the header is checked, the data validated in full and arrow-rs
-/// panics contained before anything reads a value. A different type (a
-/// dictionary or run-end encoding of `declared` included) is rejected, never
-/// reinterpreted: the converters cast a result to the declared type before
-/// they export it (design P2-T059 §7 item 9).
+/// one column of `declared` with `rows` values. Imports are untrusted: the
+/// header is checked, the data validated in full and arrow-rs panics
+/// contained before anything reads a value. The result's type must have
+/// `declared`'s layout ([`DataType::equals_datatype`]: nested field names
+/// and metadata may differ, so a nested result pyarrow built is accepted);
+/// it is then read as `declared`, whose names and metadata the engine keeps.
+/// Another layout (a dictionary or run-end encoding of `declared` included)
+/// is rejected, never reinterpreted: the converters cast a result to the
+/// declared type before they export it (design P2-T059 §7 item 9).
 ///
 /// # Safety
 ///
@@ -767,14 +770,15 @@ pub(crate) unsafe fn import_column(
             arrow_message(&e)
         ))
     })?;
-    if field.data_type() != declared {
+    if !field.data_type().equals_datatype(declared) {
         return Err(invalid(format!(
             "a Python UDF returned {} where {declared} was declared",
             field.data_type()
         )));
     }
-    // SAFETY: `array` is the producer's C array of `declared`, read from its
-    // own schema (equal, checked above).
+    // SAFETY: `array` is the producer's C array of a type with `declared`'s
+    // layout (checked above), so reading it as `declared` reads the same
+    // buffers the producer described.
     unsafe { check_array(&raw const array, declared) }?;
     let data = catch_panic(|| {
         // SAFETY: `array` is the producer's C array of `declared`, its
@@ -789,13 +793,14 @@ pub(crate) unsafe fn import_column(
             arrow_message(&e)
         ))
     })?;
-    catch_panic(|| data.validate_full())?.map_err(|e| invalid(arrow_message(&e)))?;
+    // The cheap check first: a wrong length needs no validation pass.
     if data.len() != rows {
         return Err(invalid(format!(
             "a Python UDF returned {} rows for {rows}",
             data.len()
         )));
     }
+    catch_panic(|| data.validate_full())?.map_err(|e| invalid(arrow_message(&e)))?;
     catch_panic(|| arrow_array::make_array(data))
 }
 
