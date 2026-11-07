@@ -1846,9 +1846,10 @@ pub static JOIN_COST: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::String(Cow::Borrowed("rows"))),
     doc: "What the join optimizer minimises when it orders a tree of inner joins, and which input \
           of each join it builds. `rows`: the rows of the intermediate results; the input with \
-          fewer rows is built. `bytes`: their rows times the estimated width of the columns read \
-          above the tree (Spark's default size per type); the input with fewer bytes is built. \
-          Results are the same either way.",
+          fewer rows is built. `bytes`: each join's result rows times 48 bytes plus the bytes of \
+          its build input (rows times the estimated width of the columns still read, Spark's \
+          default size per type); the input with fewer rows is built unless it holds more than \
+          twice the other's bytes. Results are the same either way.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

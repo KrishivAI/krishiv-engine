@@ -65,7 +65,7 @@ pub(crate) fn fixture() -> Fixture {
 }
 
 /// Panics on a join without a condition anywhere in `root`.
-fn no_cross_product(root: &LogicalPlan, what: &str) {
+pub(crate) fn no_cross_product(root: &LogicalPlan, what: &str) {
     let mut stack = vec![root];
     while let Some(p) = stack.pop() {
         p.for_each_child(&mut |c| stack.push(c));

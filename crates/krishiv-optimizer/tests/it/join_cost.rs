@@ -1,20 +1,89 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `krishiv.optimizer.joinCost` (E5b, design `P2b-E5b-join-bytes.md`):
-//! costed by `bytes`, a join tree minimises its intermediate results' rows
-//! times the width of the columns read above the tree, and builds the input
-//! with fewer bytes. Plans return the same rows either way.
+//! `krishiv.optimizer.joinCost` (E5b, design `P2b-E5b-join-bytes.md` §6):
+//! costed by `bytes`, each join costs its result rows times `ROW_BYTES`
+//! plus its build input's bytes (rows times the width of the columns still
+//! read), and the input with fewer rows stays the build unless it holds more
+//! than 2x the other's bytes. Plans return the same rows either way, keep
+//! the crate's invariants (a fixed point, no new cross product, the same
+//! output) and are planned canonically.
 
 use std::sync::Arc;
 
 use krishiv_common::config::Config;
-use krishiv_optimizer::{RuleStep, Statistics, optimize_traced_with_udfs};
+use krishiv_optimizer::{NoStatistics, RuleStep, Statistics, optimize_traced_with_udfs};
 use krishiv_plan::{LogicalPlan, Plan, PlanNode};
 use krishiv_udf_sdk::UdfLibrary;
 
-use crate::join_order::fixture;
+use crate::join_order::{fixture, no_cross_product};
 use crate::support::{self, data, eval};
+use crate::tpcds;
 
 const BYTES: &[(&str, &str)] = &[("krishiv.optimizer.joinCost", "bytes")];
+
+const GREEDY_BYTES: &[(&str, &str)] = &[
+    ("krishiv.optimizer.joinCost", "bytes"),
+    ("krishiv.optimizer.joinEnumerator", "greedy"),
+];
+
+/// Whether `p` (or a subquery plan in it) holds a join without a condition.
+fn has_cross_product(p: &Arc<LogicalPlan>) -> bool {
+    let mut stack = vec![Arc::clone(p)];
+    let mut found = false;
+    while let Some(n) = stack.pop() {
+        n.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        n.for_each_expr(&mut |e| {
+            if let krishiv_plan::ExprNode::Subquery { plan, .. } = &e.node {
+                stack.push(Arc::clone(plan));
+            }
+        });
+        found |= matches!(
+            n.node,
+            PlanNode::Join {
+                condition: krishiv_plan::JoinCondition::None,
+                ..
+            }
+        );
+    }
+    found
+}
+
+/// The crate's invariants for `optimized` (from `plan` under `conf`): the
+/// same output, a fixed point under the same settings, and no cross
+/// product the plan as written does not have.
+fn invariants(
+    plan: &Plan,
+    optimized: &Plan,
+    stats: &dyn Statistics,
+    conf: &[(&str, &str)],
+    what: &str,
+) {
+    assert_eq!(
+        optimized.root().resolved_output(),
+        plan.root().resolved_output(),
+        "{what}"
+    );
+    // A fixed point wherever the same settings costed by rows give one
+    // (with a session configuration, `ShareCte` runs too, and its plans are
+    // not all fixed points: TPC-H q15's shared view, on main as here).
+    let (again, _) = plan_with(optimized, stats, conf);
+    if !again.structurally_eq(optimized) {
+        let by_rows: Vec<(&str, &str)> = conf
+            .iter()
+            .copied()
+            .filter(|(k, _)| *k != "krishiv.optimizer.joinCost")
+            .collect();
+        let (rows, _) = plan_with(plan, stats, &by_rows);
+        let (rows_again, _) = plan_with(&rows, stats, &by_rows);
+        assert!(
+            !rows_again.structurally_eq(&rows),
+            "{what} is a fixed point by rows but not by bytes:\n{}",
+            again.root()
+        );
+    }
+    if !has_cross_product(plan.root()) {
+        no_cross_product(optimized.root(), what);
+    }
+}
 
 fn plan_with(plan: &Plan, stats: &dyn Statistics, conf: &[(&str, &str)]) -> (Plan, Vec<RuleStep>) {
     let mut config = Config::new();
@@ -76,12 +145,22 @@ fn tpch_bytes_plans_return_the_same_rows() {
         let plan = support::resolve(&support::tpch_sql(q), &ctx);
         let (rows, rows_steps) = plan_with(&plan, &stats, &[]);
         let (bytes, bytes_steps) = plan_with(&plan, &stats, BYTES);
+        let (greedy, _) = plan_with(&plan, &stats, GREEDY_BYTES);
+        invariants(&plan, &bytes, &stats, BYTES, &format!("q{q:02} bytes"));
+        invariants(
+            &plan,
+            &greedy,
+            &stats,
+            GREEDY_BYTES,
+            &format!("q{q:02} greedy bytes"),
+        );
         assert!(measures(&rows_steps).iter().all(|m| m == "rows"), "q{q:02}");
         let m = measures(&bytes_steps);
         assert_eq!(m.len(), measures(&rows_steps).len(), "q{q:02}");
         assert!(m.iter().all(|m| m == "bytes"), "q{q:02}");
         let want = eval::rows(&db, plan.root());
         assert_eq!(eval::rows(&db, bytes.root()), want, "q{q:02}");
+        assert_eq!(eval::rows(&db, greedy.root()), want, "q{q:02}");
         assert_eq!(eval::rows(&db, rows.root()), want, "q{q:02}");
     }
 }
@@ -120,4 +199,29 @@ fn tpch_plans_that_bytes_changes() {
         })
         .collect();
     assert_eq!(changed, [2, 10]);
+}
+
+/// TPC-DS under bytes (default row counts: no statistics here) keeps the
+/// crate's invariants, for both enumerators.
+#[test]
+fn tpcds_bytes_plans_keep_the_invariants() {
+    let ctx = support::ctx_over(tpcds::catalog());
+    let mut planned = 0;
+    for q in 1..=99 {
+        let Some(plan) = support::try_resolve(&tpcds::sql(q), &ctx) else {
+            continue;
+        };
+        for conf in [BYTES, GREEDY_BYTES] {
+            let (bytes, _) = plan_with(&plan, &NoStatistics, conf);
+            invariants(
+                &plan,
+                &bytes,
+                &NoStatistics,
+                conf,
+                &format!("q{q:02} {conf:?}"),
+            );
+        }
+        planned += 1;
+    }
+    assert!(planned > 90, "{planned} queries");
 }

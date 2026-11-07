@@ -104,8 +104,10 @@ impl Enumerator {
 pub(crate) enum JoinCost {
     /// The rows of the intermediate results (`C_out`); fewer rows build.
     Rows,
-    /// Their rows times the width of the columns read above the tree
-    /// ([`reads`]); fewer bytes build.
+    /// Each join's result rows times [`ROW_BYTES`] plus its build input's
+    /// bytes (rows times the width of the columns still read, [`reads`]);
+    /// the input with fewer rows builds unless it holds more than
+    /// [`BUILD_BYTES_FACTOR`] times the other's bytes.
     Bytes,
 }
 
@@ -438,10 +440,7 @@ impl Reorder<'_> {
         let ests: Vec<Arc<RelStats>> = leaves.iter().map(|l| self.est.plan(l)).collect();
         // Costed by bytes, an input is as wide as the columns read above the
         // tree (or by a join of it).
-        let above = self
-            .reads
-            .as_ref()
-            .map(|r| r.outside(&reads::Reads::of_tree(root)));
+        let above = self.reads.as_ref().map(|r| r.above(root));
         let mut graph = Graph::new(
             &leaves,
             &ests,
@@ -945,7 +944,7 @@ impl Graph {
     /// input outside `set`; a join key used up inside `set` is not carried.
     fn width_of(&self, set: &dyn Fn(usize) -> bool) -> f64 {
         self.widths.as_ref().map_or(0.0, |w| {
-            (0..self.n())
+            (0..w.len())
                 .filter(|&i| set(i))
                 .flat_map(|i| &w[i])
                 .filter(|c| {
@@ -1118,9 +1117,16 @@ impl Graph {
         let (table, mut fallback, work) = match enumerator {
             Enumerator::Greedy => (None, Some("forced"), dp::Work::default()),
             Enumerator::DpSub if n <= settings.dp_limit.min(MAX_DP_LIMIT) => {
+                // Each set's rows and width once: a split asks for both halves.
+                let sizes = std::cell::RefCell::new(HashMap::<Set, (f64, f64)>::new());
                 let size = |s: Set| {
+                    if let Some(&v) = sizes.borrow().get(&s) {
+                        return v;
+                    }
                     let set = |i: usize| s & (1 << i) != 0;
-                    (self.rows_of(&set), self.width_of(&set))
+                    let v = (self.rows_of(&set), self.width_of(&set));
+                    sizes.borrow_mut().insert(s, v);
+                    v
                 };
                 let result_of = |s: Set| self.result_cost(size(s).0);
                 let split_of = |a: Set, b: Set| {
@@ -1472,4 +1478,71 @@ fn canonical_equalities(preds: Vec<Arc<Expr>>, owner: &HashMap<AttrId, usize>) -
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use krishiv_plan::{Expr, ExprNode, Literal};
+
+    use super::{ColumnUse, Graph, Pred, ROW_BYTES};
+
+    /// Two inputs joined by one conjunct: input 0 holds a 20 B key read only
+    /// by the conjunct and a 4 B column read above; input 1 an 8 B key
+    /// (the conjunct) and a 100 B column read above.
+    fn graph() -> Graph {
+        let col = |width, above, preds: &[usize]| ColumnUse {
+            width,
+            above,
+            preds: preds.to_vec(),
+        };
+        Graph {
+            trace: false,
+            leaves: Vec::new(),
+            rows: vec![10.0, 10.0],
+            widths: Some(vec![
+                vec![col(20.0, false, &[0]), col(4.0, true, &[])],
+                vec![col(8.0, false, &[0]), col(100.0, true, &[])],
+            ]),
+            preds: vec![Pred {
+                expr: Arc::new(Expr::new(ExprNode::Literal(Literal::Boolean(true)))),
+                on: vec![0, 1],
+                sel: 1.0,
+                edge: true,
+                class: None,
+                carrier: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn a_join_key_used_up_inside_a_set_is_not_carried() {
+        let g = graph();
+        // Alone, each input carries its key for the join still to come.
+        assert!((g.width_of(&|i| i == 0) - 24.0).abs() < 1e-9);
+        assert!((g.width_of(&|i| i == 1) - 108.0).abs() < 1e-9);
+        // Joined, only what is read above remains.
+        assert!((g.width_of(&|_| true) - 104.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fewer_rows_build_unless_more_than_twice_the_bytes() {
+        let g = graph();
+        let w = |bytes_per_row: f64| bytes_per_row - ROW_BYTES;
+        // `b` has fewer rows and at most 2x `a`'s bytes: `b` builds.
+        assert!(g.builds_second((100.0, w(10.0)), (50.0, w(40.0))));
+        // `b` has fewer rows but more than 2x `a`'s bytes: `a` builds.
+        assert!(!g.builds_second((100.0, w(10.0)), (50.0, w(41.0))));
+        // `a` has fewer rows: it builds unless it holds more than 2x `b`'s.
+        assert!(!g.builds_second((50.0, w(40.0)), (100.0, w(10.0))));
+        assert!(g.builds_second((50.0, w(41.0)), (100.0, w(10.0))));
+        // Costed by rows, fewer rows build (`b` on a tie).
+        let rows = Graph {
+            widths: None,
+            ..graph()
+        };
+        assert!(rows.builds_second((10.0, 0.0), (10.0, 0.0)));
+        assert!(!rows.builds_second((5.0, 0.0), (10.0, 0.0)));
+    }
 }
