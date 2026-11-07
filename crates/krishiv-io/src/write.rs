@@ -81,7 +81,7 @@ pub struct WriteOptions {
     /// timestamp partition values; `None` when it is not a fixed offset.
     pub zone: Option<i32>,
     /// The session time zone's id when [`Self::zone`] is `None` (a region such as `America/Los_Angeles`): timestamp
-    /// partition values render in its rules, as Spark renders them in the session zone.
+    /// partition values render in its rules, as Spark renders them in the session zone. A set `zone` wins.
     pub zone_name: Option<Arc<str>>,
 }
 

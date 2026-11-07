@@ -235,3 +235,30 @@ fn binary_values_render_as_their_utf8_text() {
         );
     }
 }
+
+/// Malformed UTF-8 decodes as Java's `new String(bytes, UTF_8)` (Spark 4.2.0 `probe4.out`): one U+FFFD per
+/// maximal subpart, and one for a whole encoded surrogate.
+#[test]
+fn malformed_binary_partition_values_decode_as_java_does() {
+    let cases: [(&[u8], usize); 8] = [
+        (&[0xED, 0xA0, 0x80], 1),
+        (&[0xED, 0xBF, 0xBF], 1),
+        (&[0xF0, 0x80, 0x80], 3),
+        (&[0x80], 1),
+        (&[0xC3], 1),
+        (&[0xE2, 0x82], 1),
+        (&[0xFF], 1),
+        (&[0xF4, 0x90, 0x80, 0x80], 4),
+    ];
+    for (bytes, replacements) in cases {
+        let column: ArrayRef = Arc::new(BinaryArray::from(vec![Some(bytes)]));
+        let text = partition_texts(&column, None).unwrap()[0].clone().unwrap();
+        assert_eq!(text, "\u{FFFD}".repeat(replacements), "{bytes:02X?}");
+    }
+    // Valid text around a malformed byte stays.
+    let column: ArrayRef = Arc::new(BinaryArray::from(vec![Some(&b"a\xEDb"[..])]));
+    assert_eq!(
+        partition_texts(&column, None).unwrap()[0].as_deref(),
+        Some("a\u{FFFD}b")
+    );
+}

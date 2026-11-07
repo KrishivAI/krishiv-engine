@@ -184,9 +184,38 @@ pub fn partition_texts_in(
 
 /// Each value's bytes as UTF-8 text, a malformed sequence as U+FFFD.
 fn lossy<'a>(values: impl Iterator<Item = Option<&'a [u8]>>) -> Vec<Option<String>> {
-    values
-        .map(|v| v.map(|b| String::from_utf8_lossy(b).into_owned()))
-        .collect()
+    values.map(|v| v.map(java_utf8_lossy)).collect()
+}
+
+/// `bytes` decoded as Java's `new String(bytes, UTF_8)` does (Spark 4.2.0, krishiv-internal
+/// `research/spark/binary-partition/probe4.out`): Rust's maximal-subpart replacement, except that an encoded
+/// surrogate (`ED A0..BF 80..BF`) is one U+FFFD, not three.
+fn java_utf8_lossy(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    let mut rest = bytes;
+    loop {
+        match std::str::from_utf8(rest) {
+            Ok(valid) => {
+                out.push_str(valid);
+                return out;
+            }
+            Err(e) => {
+                let (valid, after) = rest.split_at(e.valid_up_to());
+                // `valid_up_to` is a char boundary: this part is UTF-8.
+                out.push_str(&String::from_utf8_lossy(valid));
+                out.push('\u{FFFD}');
+                let skip = match after {
+                    [0xED, 0xA0..=0xBF, 0x80..=0xBF, ..] => 3,
+                    [0xED, 0xA0..=0xBF, ..] => 2,
+                    _ => e.error_len().unwrap_or(after.len()),
+                };
+                rest = &after[skip.min(after.len())..];
+                if rest.is_empty() {
+                    return out;
+                }
+            }
+        }
+    }
 }
 
 /// One partition path segment per row of `columns` (in column order):
