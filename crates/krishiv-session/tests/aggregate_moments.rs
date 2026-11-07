@@ -444,14 +444,43 @@ fn corr_of_a_constant_column_follows_ansi() -> R {
     Ok(())
 }
 
-/// The window form is not implemented: it is refused, never computed
-/// as another function.
+/// Variance and standard deviation as window aggregates over the whole
+/// partition: Spark 4.2 values (`testData` rows with neither column NULL).
 #[test]
-fn moment_window_aggregates_are_refused() -> R {
+fn variance_window_aggregates_match_spark() -> R {
     let s = session()?;
-    let e = run(&s, "SELECT stddev(a) OVER (PARTITION BY b) FROM testData")
-        .expect_err("not implemented");
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    let (_, batches) = run(
+        &s,
+        "SELECT stddev(a) OVER (PARTITION BY b), var_pop(a) OVER (PARTITION BY b), \
+         var_samp(a) OVER (PARTITION BY b), stddev_pop(a) OVER (PARTITION BY b) \
+         FROM testData WHERE a IS NOT NULL AND b IS NOT NULL",
+    )?;
+    let (schema, rows) = render(&batches[0].schema(), &batches);
+    assert!(schema.starts_with("struct<stddev(a) OVER"), "{schema}");
+    assert_eq!(rows.len(), 6);
+    for row in &rows {
+        assert_eq!(row, "1.0\t0.6666666666666666\t1.0\t0.816496580927726");
+    }
+    Ok(())
+}
+
+/// The moment aggregates run over every frame (`moment_window_goldens.rs`
+/// checks the values against Spark); the approximate aggregates still have no
+/// window form: refused, never computed as another function.
+#[test]
+fn approximate_window_aggregates_are_refused() -> R {
+    let s = session()?;
+    for q in [
+        "SELECT approx_count_distinct(a) OVER (PARTITION BY b) FROM testData",
+        "SELECT percentile_approx(a, 0.5) OVER (PARTITION BY b ORDER BY a) FROM testData",
+    ] {
+        let e = run(&s, q).expect_err("not implemented");
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{q}"
+        );
+    }
     Ok(())
 }
 
