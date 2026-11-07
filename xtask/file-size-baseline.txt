@@ -28,9 +28,11 @@
 3020 crates/krishiv-session/src/catalog.rs
 2286 crates/krishiv-session/src/command.rs
 2630 crates/krishiv-session/src/dataframe.rs
-2789 crates/krishiv-session/src/session.rs
+# +17 lines over main: statements over a query take the IDENTIFIER(..) spans to their lowering (queue-opus-b1 row 31, follow-up to #554)
+2806 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
-3279 crates/krishiv-session/src/table_commands.rs
+# +6 lines over main (on top of #479's +25): CTAS, views and INSERT lower with the IDENTIFIER(..) spans (queue-opus-b1 row 31)
+3285 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
 2774 crates/krishiv-sql/src/lower.rs
 5225 crates/krishiv-sql/src/parser.rs

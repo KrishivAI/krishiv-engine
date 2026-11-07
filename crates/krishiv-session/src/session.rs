@@ -516,8 +516,8 @@ impl Session {
     }
 
     /// Runs `query` on the calling task as `sql` would, for text the session built from a
-    /// statement it already substituted (`CACHE TABLE t AS query`): `spans` are the substituted names in `query`, kept while
-    /// substituting again leaves the text as it is.
+    /// statement it already substituted (`CACHE TABLE t AS query`): `spans` are the substituted
+    /// names in `query`, kept while substituting again leaves the text as it is.
     pub(crate) async fn sql_here_spanned(
         &self,
         query: &str,
@@ -526,8 +526,8 @@ impl Session {
         self.sql_here_inner(query, Arc::default(), spans).await
     }
 
-    /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for the id of the `system.queries`
-    /// row a query of it began.
+    /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
+    /// the id of the `system.queries` row a query of it began.
     pub(crate) async fn sql_here_marked(
         &self,
         query: &str,
