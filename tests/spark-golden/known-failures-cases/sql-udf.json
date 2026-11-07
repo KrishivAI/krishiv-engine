@@ -1,7 +1,6 @@
 {
   "cases": {
     "depends-on-command": [
-      178,
       230,
       232,
       238,
@@ -17,9 +16,6 @@
       336,
       337,
       338
-    ],
-    "sql-commands": [
-      177
     ]
   },
   "file": "sql-udf",
