@@ -577,7 +577,7 @@ impl Rewriter {
                 right,
                 kind,
                 condition: JoinCondition::On(on),
-            } if self.existential(on) || self.liftable(on) => self.join(&p, left, right, kind, on),
+            } if self.joins_here(on, left, right) => self.join(&p, left, right, kind, on),
             PlanNode::Join {
                 left,
                 right,
@@ -891,7 +891,7 @@ impl Rewriter {
             r = joined;
             plain.extend(conds);
         }
-        let (plain, l) = self.lift_exists(plain, l)?;
+        let (plain, l, r) = self.lift_sides(plain, l, r, &right_ids)?;
         if plain.iter().any(|c| self.reads_correlated(c)) {
             return Err(unsupported(
                 "correlated subqueries outside a filter or a projection",
@@ -1095,7 +1095,7 @@ impl Rewriter {
     /// Whether `e` holds an `EXISTS` or `IN` subquery that an existence
     /// join computes: a correlated `EXISTS`, or any `IN`. (An uncorrelated
     /// `EXISTS` stays an expression computed once.)
-    fn existential(&mut self, e: &Arc<Expr>) -> bool {
+    pub(super) fn existential(&mut self, e: &Arc<Expr>) -> bool {
         subqueries(e).iter().any(|s| match &s.node {
             ExprNode::Subquery {
                 kind: SubqueryKind::Exists,
@@ -2803,7 +2803,7 @@ fn peel_limit(plan: &Arc<LogicalPlan>, input: &Arc<LogicalPlan>) -> R<PeeledLimi
 }
 
 /// Whether `right` reads a column of `left`: a lateral join's right side.
-fn reads_left(left: &Arc<LogicalPlan>, right: &Arc<LogicalPlan>) -> bool {
+pub(super) fn reads_left(left: &Arc<LogicalPlan>, right: &Arc<LogicalPlan>) -> bool {
     let Ok(out) = output(left) else {
         return false;
     };

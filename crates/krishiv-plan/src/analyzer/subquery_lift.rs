@@ -2,18 +2,34 @@
 //! The uncorrelated `EXISTS` or scalar subquery a join condition keeps (after the three-valued
 //! `IN` rewrite, or written there): one constant for every row pair, so the left side carries
 //! its value as a column (the executor evaluates subquery values in a projection, not in a join
-//! condition). A scalar subquery over an empty left side is never evaluated, so its
-//! `SCALAR_SUBQUERY_TOO_MANY_ROWS` is not raised there, where Spark raises it.
+//! condition).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::bind::addr;
 use super::ops::col_expr;
-use super::subquery::{R, Rewriter, alias, node, output, subqueries};
-use crate::{BoundColumn, Expr, ExprNode, JoinKind, LogicalPlan, Origin, PlanNode, SubqueryKind};
+use super::subquery::{R, Rewriter, alias, inner_columns, node, output, reads_left, subqueries};
+use crate::{
+    AttrId, BoundColumn, Expr, ExprNode, JoinKind, LogicalPlan, Origin, PlanNode, SubqueryKind,
+};
+
+/// The conjuncts of a join condition after the lift, and the join's left and right inputs.
+type Lifted = (Vec<Arc<Expr>>, Arc<LogicalPlan>, Arc<LogicalPlan>);
 
 impl Rewriter {
+    /// Whether a join with condition `on` is rewritten by `join()`: it holds a subquery that
+    /// becomes a join or a lifted column, and its right side is not a LATERAL one (which reads
+    /// the left and keeps the lateral rewrite).
+    pub(super) fn joins_here(
+        &mut self,
+        on: &Arc<Expr>,
+        left: &Arc<LogicalPlan>,
+        right: &Arc<LogicalPlan>,
+    ) -> bool {
+        self.existential(on) || (self.liftable(on) && !reads_left(left, right))
+    }
+
     /// Whether `e` holds an uncorrelated `EXISTS` or scalar subquery: what a join condition
     /// cannot evaluate where it stands, and [`Self::lift_exists`] moves to the left side.
     pub(super) fn liftable(&mut self, e: &Arc<Expr>) -> bool {
@@ -54,6 +70,25 @@ impl Rewriter {
             data_type: value.data_type,
             nullable: true,
         })
+    }
+
+    /// [`Self::lift_exists`] for both inputs of a join: a conjunct that reads only `right`'s
+    /// columns lifts onto the right input (so it can still be pushed into it as a filter), every
+    /// other onto the left. Returns the conjuncts and the two inputs.
+    pub(super) fn lift_sides(
+        &mut self,
+        conds: Vec<Arc<Expr>>,
+        left: Arc<LogicalPlan>,
+        right: Arc<LogicalPlan>,
+        right_ids: &HashSet<AttrId>,
+    ) -> R<Lifted> {
+        let (to_right, to_left): (Vec<_>, Vec<_>) = conds.into_iter().partition(|c| {
+            let cols = inner_columns(c);
+            !cols.is_empty() && cols.iter().all(|x| right_ids.contains(&x.id))
+        });
+        let (to_left, left) = self.lift_exists(to_left, left)?;
+        let (to_right, right) = self.lift_exists(to_right, right)?;
+        Ok((to_left.into_iter().chain(to_right).collect(), left, right))
     }
 
     /// `conds` with each uncorrelated `EXISTS` or scalar subquery replaced by a column that

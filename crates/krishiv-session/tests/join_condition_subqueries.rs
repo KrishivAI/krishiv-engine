@@ -191,3 +191,116 @@ fn the_lifted_column_is_not_in_the_output() -> R {
     assert!(batches.iter().all(|b| b.num_columns() == 2), "{q}");
     Ok(())
 }
+
+/// A LATERAL join whose right side reads the left keeps the lateral rewrite when its condition
+/// holds an uncorrelated subquery (`join()` lifts a constant only for a right side that reads
+/// nothing of the left). A scalar subquery there is the constant it evaluates to; an `EXISTS` there
+/// stays the lateral rewrite's own refusal, as before. `f1` is 1, 2, so `s.y` is 1 or 2.
+#[test]
+fn a_lateral_join_with_a_constant_in_its_condition_keeps_the_lateral_rewrite() -> R {
+    let s = session()?;
+    for kind in ["join", "left join"] {
+        let q = |c: &str| {
+            format!("select f1.id, s.y from f1 {kind} lateral (select f1.id as y) s on {c}")
+        };
+        let (cond, literal) = ("s.y = (select min(id) from tt)", "s.y = 2");
+        assert_eq!(
+            run(&s, &q(cond))?,
+            run(&s, &q(literal))?,
+            "{kind} on {cond}"
+        );
+        for cond in [
+            "exists (select 1 from tt)",
+            "s.y = 1 and exists (select 1 from te)",
+        ] {
+            let e = run(&s, &q(cond)).expect_err(cond).to_string();
+            assert!(
+                e.contains("UNSUPPORTED_IN_EXISTS_SUBQUERY"),
+                "{kind} on {cond}: {e}"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A left semi or anti join keeps only the left columns, whichever side carries the constant.
+/// `f1` is 1, 2; `f2` is 2, 3. With a key: the semi join keeps 2, the anti join keeps 1.
+#[test]
+fn semi_and_anti_joins_with_a_constant_condition() -> R {
+    let s = session()?;
+    let semi = |c: &str| format!("select f1.id from f1 left semi join f2 on {c}");
+    let anti = |c: &str| format!("select f1.id from f1 left anti join f2 on {c}");
+    assert_eq!(
+        run(&s, &semi("f1.id = f2.id and exists (select 1 from tt)"))?,
+        rows(&["2"])
+    );
+    assert_eq!(
+        run(&s, &anti("f1.id = f2.id and exists (select 1 from tt)"))?,
+        rows(&["1"])
+    );
+    // A false constant: the semi join keeps nothing, the anti join everything.
+    assert_eq!(run(&s, &semi("exists (select 1 from te)"))?, rows(&[]));
+    assert_eq!(
+        run(&s, &anti("exists (select 1 from te)"))?,
+        rows(&["1", "2"])
+    );
+    Ok(())
+}
+
+/// A condition on right columns only lifts onto the right input, so it still filters it:
+/// `f2.id = max(tt.id)` is `f2.id = 9`, true for no right row, in every kind, and the rows are
+/// those of the literal form.
+#[test]
+fn a_right_only_constant_condition_matches_its_literal_in_every_kind() -> R {
+    let s = session()?;
+    for kind in KINDS {
+        for (cond, literal) in [
+            ("f2.id = (select max(id) from tt)", "f2.id = 9"),
+            ("f2.id < (select max(id) from tt)", "f2.id < 9"),
+            (
+                "f1.id = f2.id and f2.id < (select max(id) from tt)",
+                "f1.id = f2.id and f2.id < 9",
+            ),
+        ] {
+            let (got, want) = (run(&s, &join(kind, cond))?, run(&s, &join(kind, literal))?);
+            assert_eq!(got, want, "{kind} on {cond}");
+        }
+    }
+    Ok(())
+}
+
+/// A neither-side `NOT IN` (a null-aware existence join) beside a liftable subquery in one condition.
+#[test]
+fn a_not_in_beside_a_lifted_constant() -> R {
+    let s = session()?;
+    for kind in KINDS {
+        let (got, want) = (
+            run(
+                &s,
+                &join(
+                    kind,
+                    "5 not in (select id from tt) and exists (select 1 from tt)",
+                ),
+            )?,
+            run(&s, &join(kind, "true"))?,
+        );
+        assert_eq!(got, want, "{kind}");
+    }
+    Ok(())
+}
+
+/// A scalar subquery with two rows raises `SCALAR_SUBQUERY_TOO_MANY_ROWS` whenever the query runs,
+/// as in Spark, even over an empty left input: the lifted subquery is evaluated eagerly. `tt` has
+/// two rows.
+#[test]
+fn a_scalar_with_two_rows_fails_over_any_left_input() -> R {
+    let s = session()?;
+    for left in ["f1", "(select id from f1 where false) f1"] {
+        let q = format!(
+            "select f1.id, f2.id from {left} full outer join f2 on f1.id = (select id from tt)"
+        );
+        let e = run(&s, &q).expect_err(&q).to_string();
+        assert!(e.contains("SCALAR_SUBQUERY_TOO_MANY_ROWS"), "{q}: {e}");
+    }
+    Ok(())
+}
