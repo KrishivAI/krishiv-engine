@@ -112,3 +112,84 @@ fn default_datetime_grammars() {
     assert_eq!(spark_string_to_timestamp_ntz("10:00:00"), None);
     assert_eq!(today_in(86_400_000_000 - 1, &FixedOffset(3600)), 1);
 }
+
+#[test]
+fn a_decimal_must_stay_below_ten_to_the_precision() {
+    assert_eq!(java_parse_decimal("999", 3, 0), Some(999));
+    assert_eq!(java_parse_decimal("-999", 3, 0), Some(-999));
+    // 10^precision itself does not fit.
+    assert_eq!(java_parse_decimal("1000", 3, 0), None);
+    assert_eq!(java_parse_decimal("-1000", 3, 0), None);
+    // Rounding to the scale can reach the limit too.
+    assert_eq!(java_parse_decimal("9.995", 3, 2), None);
+    assert_eq!(java_parse_decimal("9.994", 3, 2), Some(999));
+}
+
+#[test]
+fn infinities_print_with_their_sign_in_both_widths() {
+    assert_eq!(java_double_string(f64::INFINITY), "Infinity");
+    assert_eq!(java_double_string(f64::NEG_INFINITY), "-Infinity");
+    assert_eq!(java_float_string32(f32::INFINITY), "Infinity");
+    assert_eq!(java_float_string32(f32::NEG_INFINITY), "-Infinity");
+    assert_eq!(java_float_string32(f32::NAN), "NaN");
+    assert_eq!(java_float_string32(-1.5), "-1.5");
+    assert_eq!(java_float_string32(0.0), "0.0");
+}
+
+#[test]
+fn a_time_of_day_is_trimmed_of_whitespace_and_control_characters() {
+    let utc = FixedOffset(0);
+    let want = Some(10 * 86_400_000_000 + 36_000_000_000);
+    let ts = |s: &str| spark_string_to_timestamp(s, &utc, 10).unwrap();
+    assert_eq!(ts("10:00:00"), want);
+    assert_eq!(ts(" 10:00:00 "), want);
+    assert_eq!(ts("\t10:00:00\n"), want);
+    assert_eq!(ts("\u{7f}10:00:00\u{7f}"), want);
+}
+
+#[test]
+fn today_is_the_local_date_in_the_zone_named() {
+    use crate::cast::timestamp::Zone;
+    let day = 20_000_i64;
+    let midnight = day * 86_400_000_000;
+    // UTC midnight is still the day before at UTC-12, and the same day at UTC+1.
+    assert_eq!(
+        today_in_zone(&Zone::Session, &FixedOffset(0), midnight),
+        Some(20_000)
+    );
+    assert_eq!(
+        today_in_zone(&Zone::Session, &FixedOffset(-43_200), midnight),
+        Some(19_999)
+    );
+    assert_eq!(
+        today_in_zone(&Zone::Offset(-43_200), &FixedOffset(0), midnight),
+        Some(19_999)
+    );
+    assert_eq!(
+        today_in_zone(&Zone::Offset(3_600), &FixedOffset(0), midnight),
+        Some(20_000)
+    );
+    assert_eq!(
+        today_in_zone(
+            &Zone::Offset(3_600),
+            &FixedOffset(0),
+            midnight - 3_601_000_000
+        ),
+        Some(19_999)
+    );
+    assert_eq!(
+        today_in_zone(
+            &Zone::Region("America/Los_Angeles".into()),
+            &FixedOffset(0),
+            midnight
+        ),
+        Some(19_999)
+    );
+    assert_eq!(
+        today_in_zone(&Zone::Region("Not/AZone".into()), &FixedOffset(0), midnight),
+        None
+    );
+    // The same on the instant that starts the day.
+    assert_eq!(today_in(midnight, &FixedOffset(0)), 20_000);
+    assert_eq!(today_in(midnight, &FixedOffset(-1)), 19_999);
+}

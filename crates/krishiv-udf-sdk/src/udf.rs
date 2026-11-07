@@ -395,6 +395,21 @@ mod tests {
     }
 
     #[test]
+    fn arity_checks_follow_the_signature_kind() {
+        let one = vec![UdfInputType::Exact(DataType::Integer)];
+        assert!(Signature::Exact(one.clone()).accepts(1));
+        assert!(!Signature::Exact(one.clone()).accepts(2));
+        assert!(Signature::Coercible(one).accepts(1));
+        let many = Signature::Variadic {
+            element: UdfInputType::Any,
+            min_arity: 2,
+        };
+        assert!(!many.accepts(1) && many.accepts(2) && many.accepts(9));
+        assert_eq!(many.inputs_sql(), r#""ANY", ..."#);
+        assert_eq!(many.arity_text(), "> 1");
+    }
+
+    #[test]
     fn signatures_print_arity_and_inputs() {
         assert_eq!(Signature::Exact(vec![]).arity_text(), "0");
         assert_eq!(
