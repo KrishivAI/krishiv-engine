@@ -125,6 +125,7 @@ impl Session {
         options: &ParserOptions,
     ) -> Result<(Cow<'a, str>, Vec<Span>), KrishivError> {
         let mut spans = Vec::new();
+        let mut dotted_names: Vec<(std::ops::Range<usize>, String)> = Vec::new();
         let legacy = options.legacy_identifier_clause;
         // The legacy mode reads `IDENTIFIER(expr)` as a function, which the grammar accepts only
         // where a table or an expression may stand: a statement that does not parse as written
@@ -267,6 +268,9 @@ impl Session {
             }
             out.push_str(sql.get(copied..t.span.start).unwrap_or_default());
             spans.push(Span::new(out.len(), out.len() + name.len()));
+            if parts > 1 {
+                dotted_names.push((out.len()..out.len() + name.len(), name.clone()));
+            }
             out.push_str(&name);
             copied = last.span.end;
             i = close + 1;
@@ -275,6 +279,23 @@ impl Session {
             return Ok((Cow::Borrowed(sql), spans));
         }
         out.push_str(sql.get(copied..).unwrap_or_default());
+        // A several-part name where the grammar takes one identifier (a column list without `AS`:
+        // `t(IDENTIFIER('a.b'))`) reads as a syntax error at its dot: Spark's parser, which sees
+        // the clause, says `IDENTIFIER_TOO_MANY_NAME_PARTS`. Only text that already fails to
+        // parse changes its error.
+        if !dotted_names.is_empty()
+            && let Err(e) = krishiv_sql::parse_statement(&out, options)
+            && e.error.to_string().contains("PARSE_SYNTAX_ERROR")
+            && let Some((_, name)) = dotted_names
+                .iter()
+                .find(|(r, _)| r.start <= e.span.start && e.span.start < r.end)
+        {
+            return Err(IdentifierTooManyNameParts {
+                identifier: name.clone(),
+                limit: "1".to_owned(),
+            }
+            .into());
+        }
         Ok((Cow::Owned(out), spans))
     }
 
