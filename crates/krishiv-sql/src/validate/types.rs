@@ -103,6 +103,22 @@ fn primitive(name: &str, args: &[String], span: Span) -> Result<(), ParseError> 
         )),
         // The spatial reference of a geometry type is checked when the type
         // is resolved.
+        // Spark reads the length as a Java `int`: a longer one is an unclassified `NumberFormatException`
+        // ("For input string"), refused here as unsupported.
+        "char" | "character" | "varchar"
+            if args.len() == 1 && args[0].trim().parse::<i32>().is_err() =>
+        {
+            Err(at(
+                krishiv_common::error::KrishivUnsupportedFeature {
+                    feature: format!(
+                        "{} length {} (the largest is 2147483647)",
+                        head.to_uppercase(),
+                        args[0].trim()
+                    ),
+                },
+                span,
+            ))
+        }
         "char" | "character" | "varchar" | "geometry" | "geography" if args.len() == 1 => Ok(()),
         "time" if args.is_empty() => Ok(()),
         "time" if args.len() == 1 => {

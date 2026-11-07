@@ -213,6 +213,19 @@ fn type_sql(t: &DataType) -> Result<String, KrishivError> {
     Ok(text.to_uppercase())
 }
 
+/// The type `DESCRIBE` shows for column `name`: its declared `CHAR(n)` / `VARCHAR(n)` string when it has one
+/// (`declared` maps a lower-cased column name to it), else the catalog string of its type.
+fn shown_type(
+    declared: &std::collections::HashMap<String, String>,
+    name: &str,
+    t: &DataType,
+) -> String {
+    declared
+        .get(&name.to_lowercase())
+        .cloned()
+        .unwrap_or_else(|| t.catalog_string())
+}
+
 /// A name as Spark's `quoteIfNeeded` writes it: bare when it is word characters
 /// and not all digits, else in backquotes.
 pub(crate) fn quote_if_needed(name: &str) -> String {
@@ -236,6 +249,55 @@ fn is_global_namespace(ns: &str) -> bool {
 }
 
 impl Session {
+    /// The declared `CHAR(n)` / `VARCHAR(n)` strings of the stored table `name`'s columns, by lower-cased column
+    /// name; none for a temporary view or a name that is not a stored relation.
+    async fn declared_char_varchars(
+        &self,
+        name: &TableName,
+        temp: bool,
+    ) -> Result<std::collections::HashMap<String, String>, KrishivError> {
+        if temp {
+            // Spark 4.2 keeps a temporary view's `CHAR(n)` / `VARCHAR(n)` output types (3.5 to 4.1
+            // print `string`): read them off the analyzed view (review of #496 M1).
+            if self.state.profile != krishiv_plan::analyzer::SparkProfile::V4_2 {
+                return Ok(std::collections::HashMap::new());
+            }
+            let env = self.query_env();
+            let global = !name.bare
+                && name
+                    .namespace
+                    .eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE);
+            let df = if global {
+                DataFrame::new(
+                    self.clone(),
+                    Arc::new(krishiv_plan::LogicalPlan::table([
+                        crate::catalog::GLOBAL_NAMESPACE,
+                        name.name.as_str(),
+                    ])),
+                )
+            } else {
+                self.table(&name.name)
+            };
+            let analysis = df.analyzed_in(env).await?;
+            return Ok(analysis
+                .analyzed
+                .output
+                .iter()
+                .zip(&analysis.analyzed.output_declared)
+                .filter_map(|(c, d)| Some((c.name.to_lowercase(), d.clone()?)))
+                .collect());
+        }
+        Ok(self
+            .stored_relation(name)
+            .map(|t| {
+                t.columns
+                    .iter()
+                    .filter_map(|c| Some((c.name.to_lowercase(), c.char_varchar.clone()?)))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
     /// `SHOW TABLES | VIEWS IN global_temp`: the global temporary views.
     async fn global_views_frame(
         &self,
@@ -763,18 +825,37 @@ impl Session {
                         .await;
                 }
                 if !column.is_empty() {
-                    if mode.is_some() {
-                        // Spark adds statistics rows; the engine keeps none.
-                        return Err(unsupported("DESCRIBE EXTENDED | FORMATTED ... column"));
+                    // The statistics rows are NULL because the catalog keeps no column statistics; after
+                    // `ANALYZE .. FOR COLUMNS` Spark shows values, so say so rather than print NULLs.
+                    let analyzed = !temp
+                        && self
+                            .state
+                            .catalog
+                            .store
+                            .table(&name.namespace, &name.name)
+                            .is_some_and(|t| t.column_stats_requested);
+                    if mode.is_some() && analyzed {
+                        return Err(unsupported(
+                            "DESCRIBE EXTENDED of a column after ANALYZE TABLE ... FOR COLUMNS (column statistics)",
+                        ));
                     }
-                    return self.describe_column(&columns, column, false).await;
+                    return self
+                        .describe_column(
+                            &columns,
+                            column,
+                            &self.declared_char_varchars(&name, temp).await?,
+                            mode.is_some(),
+                        )
+                        .await;
                 }
+                // `CHAR(n)` / `VARCHAR(n)` columns show their declared type, not `string`.
+                let declared = self.declared_char_varchars(&name, temp).await?;
                 let mut rows: Vec<Vec<Cell>> = columns
                     .iter()
                     .map(|(n, t, c)| {
                         vec![
                             s(n),
-                            s(t.catalog_string()),
+                            s(shown_type(&declared, n, t)),
                             s(c.clone().unwrap_or_default()),
                         ]
                     })
@@ -791,7 +872,9 @@ impl Session {
                     rows.extend(t.partition_schema().into_iter().map(|c| {
                         vec![
                             s(&c.name),
-                            s(c.data_type.catalog_string()),
+                            s(c.char_varchar
+                                .clone()
+                                .unwrap_or_else(|| c.data_type.catalog_string())),
                             s(c.comment.clone().unwrap_or_default()),
                         ]
                     }));
@@ -911,7 +994,8 @@ impl Session {
         &self,
         columns: &[(String, DataType, Option<String>)],
         column: &[krishiv_sql::ast::ColumnName],
-        _extended: bool,
+        declared: &std::collections::HashMap<String, String>,
+        statistics: bool,
     ) -> Result<DataFrame, KrishivError> {
         let wanted = match column {
             [krishiv_sql::ast::ColumnName::Ident(i)] => i.value.clone(),
@@ -929,14 +1013,30 @@ impl Session {
             }
             .into());
         };
-        let rows = vec![
+        let mut rows = vec![
             vec![s("col_name"), s(name)],
-            vec![s("data_type"), s(data_type.catalog_string())],
+            vec![s("data_type"), s(shown_type(declared, name, data_type))],
             vec![
                 s("comment"),
                 s(comment.clone().unwrap_or_else(|| "NULL".to_owned())),
             ],
         ];
+        // `EXTENDED | FORMATTED` add the statistics rows; the catalog keeps none, so they are NULL.
+        for stat in statistics
+            .then_some([
+                "min",
+                "max",
+                "num_nulls",
+                "distinct_count",
+                "avg_col_len",
+                "max_col_len",
+                "histogram",
+            ])
+            .into_iter()
+            .flatten()
+        {
+            rows.push(vec![s(stat), s("NULL")]);
+        }
         self.ordered_frame(&["info_name", "info_value"], &[], rows)
             .await
     }
@@ -1313,7 +1413,13 @@ fn partition_details(t: &CatalogTable, p: &CatalogPartition) -> Vec<(String, Str
 /// `spark.sql.legacy.viewSchemaBindingMode` (a view's `WITH SCHEMA` line).
 fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, KrishivError> {
     let column = |c: &crate::store::StoreColumn| -> Result<String, KrishivError> {
-        let mut out = format!("  {} {}", quote_if_needed(&c.name), type_sql(&c.data_type)?);
+        // A `CHAR(n)` / `VARCHAR(n)` column prints its declared type (`CHAR(5)`); nested ones are refused like the
+        // other nested types.
+        let shown = match &c.char_varchar {
+            Some(cv) if !cv.contains('<') => cv.to_uppercase(),
+            _ => type_sql(&c.data_type)?,
+        };
+        let mut out = format!("  {} {}", quote_if_needed(&c.name), shown);
         if !c.nullable {
             out.push_str(" NOT NULL");
         }

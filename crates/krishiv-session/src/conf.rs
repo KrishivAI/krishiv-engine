@@ -35,20 +35,32 @@ pub(crate) struct ConfStore {
     local_zone: Arc<str>,
 }
 
-/// Fails when `key` is one of the collation switches the engine refuses and `value` turns it on.
+/// Fails when `key` is one of the switches the engine refuses and `value` sets it to the refused value.
 fn refuse_unsupported_switch(key: &str, value: &str) -> Result<(), KrishivError> {
-    if UNSUPPORTED_COLLATION_SWITCHES
+    let refused = UNSUPPORTED_COLLATION_SWITCHES
         .iter()
-        .any(|k| k.eq_ignore_ascii_case(key))
-        && value.trim().eq_ignore_ascii_case("true")
-    {
+        .map(|k| (*k, "true"))
+        .chain(UNSUPPORTED_CHAR_VARCHAR_SWITCHES.iter().copied())
+        .find(|(k, v)| k.eq_ignore_ascii_case(key) && value.trim().eq_ignore_ascii_case(v));
+    if let Some((_, v)) = refused {
         return Err(krishiv_common::error::KrishivUnsupportedFeature {
-            feature: format!("{key} = true"),
+            feature: format!("{key} = {v}"),
         }
         .into());
     }
     Ok(())
 }
+
+/// CHAR/VARCHAR switches the engine does not implement, with the value that leaves Spark's default
+/// (design `P2-T001b-char-varchar.md`, point (b); ADR 0008: refused, not ignored). `readSideCharPadding`
+/// off moves the padding to the write side, which Krishiv does not do, and `noCharPaddingInPredicate`
+/// only matters with it off.
+const UNSUPPORTED_CHAR_VARCHAR_SWITCHES: &[(&str, &str)] = &[
+    ("spark.sql.charAsVarchar", "true"),
+    ("spark.sql.preserveCharVarcharTypeInfo", "true"),
+    ("spark.sql.readSideCharPadding", "false"),
+    ("spark.sql.legacy.noCharPaddingInPredicate", "true"),
+];
 
 /// The builder's initial settings, checked as `SET` checks a runtime one.
 pub(crate) fn check_pairs(pairs: &[(String, String)]) -> Result<(), KrishivError> {
