@@ -20,7 +20,12 @@ use crate::nested::{ArrayType, MapType, StructType};
 ///
 /// Build `Time`, `Geometry` and `Geography` with [`Self::time`],
 /// [`Self::geometry`] and [`Self::geography`], which check Spark's bounds.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+///
+/// Equality follows Spark's `StringType.equals`, which ignores whether the
+/// `UTF8_BINARY` collation was written: [`Self::String`] equals the
+/// display-only marker `CollatedString(UTF8_BINARY)` (ADR 0043, update
+/// 2026-11-07), also inside nested types, and `Hash` agrees.
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum DataType {
     /// `VOID`: the type of an untyped `NULL`; every value is null.
@@ -105,6 +110,89 @@ pub enum DataType {
     /// Variant v1 encoding (`crate::variant`), held unshredded in memory as
     /// a `(metadata, value)` byte pair. Not orderable and not hashable.
     Variant,
+}
+
+impl PartialEq for DataType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::CollatedString(a), Self::CollatedString(b)) => a == b,
+            (Self::CollatedString(c), Self::String) | (Self::String, Self::CollatedString(c)) => {
+                c.is_utf8_binary()
+            }
+            (Self::Decimal(a), Self::Decimal(b)) => a == b,
+            (Self::Time { precision: a }, Self::Time { precision: b }) => a == b,
+            (Self::Geometry { srid: a }, Self::Geometry { srid: b })
+            | (Self::Geography { srid: a }, Self::Geography { srid: b }) => a == b,
+            (
+                Self::YearMonthInterval { start: a, end: b },
+                Self::YearMonthInterval { start: c, end: d },
+            ) => a == c && b == d,
+            (
+                Self::DayTimeInterval { start: a, end: b },
+                Self::DayTimeInterval { start: c, end: d },
+            ) => a == c && b == d,
+            (Self::Array(a), Self::Array(b)) => a == b,
+            (Self::Map(a), Self::Map(b)) => a == b,
+            (Self::Struct(a), Self::Struct(b)) => a == b,
+            (a, b) => a.is_payload_free() && std::mem::discriminant(a) == std::mem::discriminant(b),
+        }
+    }
+}
+
+impl Eq for DataType {}
+
+impl std::hash::Hash for DataType {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // The marker hashes as `String`, which it equals.
+        let this = match self {
+            Self::CollatedString(c) if c.is_utf8_binary() => &Self::String,
+            other => other,
+        };
+        std::mem::discriminant(this).hash(state);
+        match this {
+            Self::CollatedString(c) => c.hash(state),
+            Self::Decimal(d) => d.hash(state),
+            Self::Time { precision } => precision.hash(state),
+            Self::Geometry { srid } | Self::Geography { srid } => srid.hash(state),
+            Self::YearMonthInterval { start, end } => {
+                start.hash(state);
+                end.hash(state);
+            }
+            Self::DayTimeInterval { start, end } => {
+                start.hash(state);
+                end.hash(state);
+            }
+            Self::Array(a) => a.hash(state),
+            Self::Map(m) => m.hash(state),
+            Self::Struct(st) => st.hash(state),
+            _ => {}
+        }
+    }
+}
+
+impl DataType {
+    /// The types that carry no value besides their kind. A listed type is equal to itself by
+    /// kind alone; a new variant is unequal to itself until it is listed here (the tests catch it).
+    const fn is_payload_free(&self) -> bool {
+        matches!(
+            self,
+            Self::Null
+                | Self::Boolean
+                | Self::Byte
+                | Self::Short
+                | Self::Integer
+                | Self::Long
+                | Self::Float
+                | Self::Double
+                | Self::String
+                | Self::Binary
+                | Self::Date
+                | Self::Timestamp
+                | Self::TimestampNtz
+                | Self::CalendarInterval
+                | Self::Variant
+        )
+    }
 }
 
 /// A field of a year-month interval type (Spark's `YearMonthIntervalType`).

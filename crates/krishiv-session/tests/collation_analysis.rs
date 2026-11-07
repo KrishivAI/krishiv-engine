@@ -709,10 +709,17 @@ fn an_explicit_utf8_binary_is_a_display_only_marker() {
         "string collate UTF8_BINARY"
     );
     assert_eq!(ty("select typeof(upper(p)) from m limit 1"), "string");
+    // With one collation among the operands nothing is cast and the head operand decides.
     assert_eq!(ty("select typeof(concat(p, c)) from m limit 1"), "string");
     assert_eq!(
         ty("select typeof(concat(c, p)) from m limit 1"),
         "string collate UTF8_BINARY"
+    );
+    assert_eq!(ty("select typeof(concat('a', c)) from m limit 1"), "string");
+    // Mixed collations cast to the winner, which is the written type.
+    assert_eq!(
+        ty("select typeof(concat(c, 'x' collate utf8_lcase)) from m limit 1"),
+        "string collate UTF8_LCASE"
     );
     // Behaviour is a plain string's.
     assert_eq!(col("select upper(c) from m order by 1")[0], "AB");
@@ -721,4 +728,36 @@ fn an_explicit_utf8_binary_is_a_display_only_marker() {
     assert_eq!(col("select count(distinct c) from m"), ["2"]);
     assert_eq!(col("select c from m group by c order by c"), ["aB", "ab"]);
     assert_eq!(col("select count(*) from m a join m b on a.c = b.c"), ["5"]);
+}
+
+/// Type unification treats the marker as the plain string it equals (`UNION`, `IN (subquery)`,
+/// array functions, casts to the marker type, a `from_json` map key).
+#[test]
+fn the_marker_unifies_with_string() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "create table u(c string collate utf8_binary, p string, a array<string collate utf8_binary>) using parquet",
+        "insert into u values ('x', 'x', array('x', 'y'))",
+    ] {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    }
+    let n = |sql: &str| -> usize {
+        block_on(block_on(s.sql(sql)).unwrap().collect())
+            .unwrap()
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum()
+    };
+    assert_eq!(n("select c from u union select p from u"), 1);
+    assert_eq!(n("select p from u where p in (select c from u)"), 1);
+    assert_eq!(n("select c from u where c in (select p from u)"), 1);
+    assert_eq!(n("select array_contains(a, 'x') from u"), 1);
+    assert_eq!(
+        n("select cast(date'2024-01-01' as string collate utf8_binary)"),
+        1
+    );
+    assert_eq!(
+        n("select from_json('{\"a\":1}', 'map<string collate utf8_binary,int>')"),
+        1
+    );
 }

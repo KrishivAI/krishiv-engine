@@ -517,20 +517,26 @@ impl Resolver<'_> {
                 k
             })
             .collect();
-        // The marker follows the first operand of the winning strength (Spark takes the type
-        // of the head of the strongest group): `elt(2, s, c)` with a plain `s` is plain.
+        // Spark casts string operands to one collation only when their collations differ;
+        // then the result is the cast target, which for `UTF8_BINARY` is the written type (the
+        // marker). With one collation among the string operands nothing is cast and the result
+        // follows the head string operand (`elt(2, s, c)` with a plain `s` is plain).
         let marked = {
-            let skip = selector_args(&name);
-            let strengths: Vec<Option<(Collation, Strength)>> = kids[skip.min(n)..n]
-                .iter()
-                .map(|k| strength_of(&k.shown(), &mut memo))
-                .collect();
-            let winner = merge(&strengths.iter().flatten().copied().collect::<Vec<_>>())
-                .ok()
-                .flatten();
-            winner
-                .and_then(|w| strengths.iter().position(|s| *s == Some(w)))
-                .is_some_and(|i| is_marker(kids[skip.min(n) + i].ty.data_type.as_ref()))
+            let skip = selector_args(&name).min(n);
+            let own = |k: &Bound| match k.ty.data_type.as_ref() {
+                Some(DataType::CollatedString(c)) => Some(*c),
+                Some(DataType::String) => Some(Collation::UTF8_BINARY),
+                _ => None,
+            };
+            let strings: Vec<&Bound> = kids[skip..n].iter().filter(|k| own(k).is_some()).collect();
+            let mixed = strings.iter().any(|k| own(k) != own(strings[0]));
+            if mixed {
+                true
+            } else {
+                strings
+                    .first()
+                    .is_some_and(|k| is_marker(k.ty.data_type.as_ref()))
+            }
         };
         let mut bound = self.expr_node_inner(e, &plain, in_agg, window_fn, cx)?;
         if let Some(t) = bound.ty.data_type.as_ref() {
