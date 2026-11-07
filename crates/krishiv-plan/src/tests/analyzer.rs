@@ -1564,7 +1564,7 @@ fn unsupported_inputs_fail_explicitly() {
         paths: vec![krishiv_common::secret::OptionValue::from_user("path", "/d")],
         options: std::collections::BTreeMap::new(),
     }));
-    let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("collation", vec![c("b")])]);
+    let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("sentences", vec![c("b")])]);
     for plan in [files, sha] {
         assert_eq!(class(&run(plan, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
     }
@@ -2468,17 +2468,15 @@ fn typed_literals_resolve_with_the_session_zone() {
         let a = project(kind, value, utc).unwrap();
         assert_eq!(a.output[0].data_type.simple_string(), ty, "{value}");
     }
-    // A bare time of day needs the clock too, which is not supported yet.
+    // A bare time of day is that time on the query clock's date, in the session zone.
     for (kind, value) in [
         (TypedLiteralKind::TimestampLtz, "10:00"),
-        (TypedLiteralKind::Timestamp, "10:00"),
+        (TypedLiteralKind::Timestamp, "T10:00:30.5"),
     ] {
-        let e = project(kind, value, utc).unwrap_err();
-        assert_eq!(
-            e.error.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{value}"
-        );
+        let ty = project(kind, value, utc).unwrap().output[0]
+            .data_type
+            .simple_string();
+        assert_eq!(ty, "timestamp", "{value}");
     }
     // An unresolvable session zone serves explicit zones but not wall-clock time.
     project(
@@ -3519,7 +3517,7 @@ fn legacy_flag_confs_follow_session_confs() {
     // booleans are not registry entries, so `SET` does not validate them).
     let odd_bool = conf(&[("spark.sql.legacy.allowParameterlessCount", "sometimes")]);
     assert!(!odd_bool.allow_parameterless_count);
-    assert_eq!(ResolutionConf::KEYS.len(), 28);
+    assert_eq!(ResolutionConf::KEYS.len(), 33);
     let charsets = conf(&[
         ("spark.sql.legacy.javaCharsets", "true"),
         ("spark.sql.legacy.codingErrorAction", "TRUE"),

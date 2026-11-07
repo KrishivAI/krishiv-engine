@@ -437,6 +437,29 @@ impl QueryMetrics {
             .filter(|&t| t > 0 && busy > 0)
             .map(|t| t as f64 / busy as f64)
     }
+
+    /// The scans' reads outstanding on average over the query: the sum of
+    /// the scans' `scan_read_inflight_ns` (each read's time from issue to
+    /// completion) over [`QueryMetrics::wall_time`]. `None` for a query
+    /// without a file scan read, or without a wall time. Derived, so a
+    /// reader recomputes it.
+    #[must_use]
+    pub fn scan_reads_in_flight_mean(&self) -> Option<f64> {
+        let mut inflight = None;
+        for e in self.operators.values() {
+            if let Some(&Metric::Count(n)) = e.extra("scan_read_inflight_ns") {
+                inflight = Some(inflight.unwrap_or(0_u64).saturating_add(n));
+            }
+        }
+        let wall = self.wall_time.as_nanos();
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a ratio for a report: nanoseconds past 2^53 lose only digits it does not show"
+        )]
+        inflight
+            .filter(|&t| t > 0 && wall > 0)
+            .map(|t| t as f64 / wall as f64)
+    }
 }
 
 /// A small dense id of the current thread, for counting the threads that

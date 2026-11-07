@@ -43,8 +43,8 @@ use super::writer::SpillWriter;
 use super::{SpillCodec, SpillError};
 use crate::Reservation;
 
-const PREFIX: &str = "krishiv-spill-";
-const LOCK_SUFFIX: &str = ".lock";
+pub(crate) const PREFIX: &str = "krishiv-spill-";
+pub(crate) const LOCK_SUFFIX: &str = ".lock";
 /// Prefix of a lock file not yet published under its final name; startup
 /// scans ignore it (it does not start with [`PREFIX`]).
 const PENDING_PREFIX: &str = ".krishiv-spill-new-";
@@ -486,7 +486,7 @@ fn remove_stale_sessions(root: &Path) -> usize {
 }
 
 /// Removes the session `id` if nobody holds its lock.
-fn reclaim(root: &Path, id: &str, lock_path: &Path) -> bool {
+pub(crate) fn reclaim(root: &Path, id: &str, lock_path: &Path) -> bool {
     let Ok(lock) = OpenOptions::new().write(true).open(lock_path) else {
         return false;
     };
@@ -538,12 +538,24 @@ fn default_candidates() -> Vec<PathBuf> {
     let user = user
         .or_else(|| std::env::var("USER").ok())
         .unwrap_or_else(|| "user".to_owned());
-    let cache = std::env::var_os("XDG_CACHE_HOME")
+    candidates_for(
+        &user,
+        std::env::var_os("XDG_CACHE_HOME"),
+        std::env::var_os("HOME"),
+    )
+}
+
+/// The candidates for `user` given the `XDG_CACHE_HOME` and `HOME` values (an empty value counts as unset).
+pub(crate) fn candidates_for(
+    user: &str,
+    xdg_cache_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Vec<PathBuf> {
+    let cache = xdg_cache_home
         .filter(|p| !p.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
-            std::env::var_os("HOME")
-                .filter(|p| !p.is_empty())
+            home.filter(|p| !p.is_empty())
                 .map(|h| PathBuf::from(h).join(".cache"))
         });
     let mut out = Vec::new();
@@ -570,7 +582,7 @@ pub(crate) fn choose_default(candidates: &[PathBuf], on_ram: impl Fn(&Path) -> b
 /// when it is unsuitable for spilling by default: a RAM file system (`tmpfs`,
 /// `ramfs`), or a network or FUSE file system, which `SpillManager::open`
 /// refuses. Linux only; elsewhere `None`.
-fn unsuitable_fs(path: &Path) -> Option<String> {
+pub(crate) fn unsuitable_fs(path: &Path) -> Option<String> {
     #[cfg(target_os = "linux")]
     {
         let existing = path.ancestors().find(|p| p.exists())?;

@@ -208,6 +208,7 @@ fn is_plan_data_source(rel_path: &str) -> bool {
     rel_path.starts_with("crates/krishiv-exec/src/physical/")
         && rel_path.ends_with(".rs")
         && !rel_path.ends_with("/instantiate.rs")
+        && !rel_path.contains("/physical/instantiate/")
 }
 
 /// Live-handle markers in code lines (not `//` comments) of a physical-plan
