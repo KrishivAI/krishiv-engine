@@ -127,6 +127,7 @@ impl Seat {
     /// waits only while some other member is active. Other states: as
     /// [`set`](Self::set) to idle.
     pub fn stand_by(&mut self) {
+        debug_assert_eq!(self.state, SeatState::Reserving, "only an asker stands by");
         if self.state == SeatState::Reserving {
             self.state = SeatState::Idle;
             self.cohort.active.fetch_sub(1, Ordering::AcqRel);

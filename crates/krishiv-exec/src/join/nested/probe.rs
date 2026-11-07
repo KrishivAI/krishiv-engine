@@ -178,6 +178,7 @@ async fn reserve_in_cohort(
     let Some((seat, waits)) = seat else {
         return r.grow(bytes).await.map_err(KrishivError::from);
     };
+    debug_assert_eq!(seat.state(), SeatState::Idle, "a seat asks from idle");
     let cohort = Arc::clone(seat.cohort());
     let asking = Asking(seat);
     let out = loop {
@@ -739,7 +740,9 @@ mod tests {
     use std::time::Duration;
 
     use krishiv_common::error::ErrorClass;
-    use krishiv_memory::{ConsumerId, MemoryConfig, MemoryPool, TreePool};
+    use krishiv_memory::{
+        ConsumerId, MemoryConfig, MemoryPool, SpillSignal, Spillable as _, TreePool,
+    };
 
     use super::*;
 
@@ -856,6 +859,44 @@ mod tests {
         assert_eq!(seat.state(), SeatState::Idle);
         q.release(held, 240 * KIB);
         q.unregister(held);
+    }
+
+    /// A request dropped while it is still asking (its arbitration waits on
+    /// a spill nobody services) leaves its seat idle and wakes the cohort:
+    /// the seat would otherwise count as active for good.
+    #[tokio::test]
+    async fn a_request_dropped_while_asking_leaves_its_seat_idle() {
+        let (q, held, mut peer, mut seat, mut r) = setup();
+        // The peer's chunk is gone; a spillable consumer holds the memory
+        // instead, and its spill is requested but never serviced.
+        q.release(held, 240 * KIB);
+        q.unregister(held);
+        peer.set(SeatState::Idle);
+        let signal = Arc::new(SpillSignal::new());
+        signal.set_spillable_bytes(240 * KIB);
+        let victim = q.register("victim", Some(Arc::clone(&signal) as _));
+        q.try_reserve(victim, 240 * KIB).unwrap();
+        let waits = AtomicU64::new(0);
+        let woken = peer.cohort().changed();
+        {
+            let ask = reserve_in_cohort(
+                &mut r,
+                32 * KIB,
+                Some((&mut seat, &waits)),
+                SeatState::Holding,
+            );
+            let early = tokio::time::timeout(Duration::from_millis(200), ask).await;
+            assert!(early.is_err(), "the request did not wait on the spill");
+        }
+        assert!(signal.spill_requested().is_some(), "no spill was asked for");
+        assert_eq!(waits.load(Ordering::Relaxed), 0, "it stood by instead");
+        assert_eq!(seat.state(), SeatState::Idle);
+        assert!(!peer.cohort().others_active(&peer), "the seat still counts");
+        tokio::time::timeout(Duration::from_secs(1), woken)
+            .await
+            .expect("the drop did not wake the cohort");
+        q.release(victim, 240 * KIB);
+        q.unregister(victim);
     }
 
     /// With no other member active, nothing will free memory: the request

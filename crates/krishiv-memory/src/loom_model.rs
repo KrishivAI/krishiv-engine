@@ -613,7 +613,10 @@ fn a_cohort_member_going_idle_wakes_a_waiter() {
 /// too. Neither waits forever.
 #[test]
 fn two_cohort_askers_never_wait_for_each_other() {
-    fn ask(cohort: &crate::Cohort, mut seat: crate::Seat) {
+    // The seats come back and drop only after both threads joined, so a
+    // seat's drop (which also wakes the cohort) cannot stand in for the
+    // last move to idle.
+    fn ask(cohort: &crate::Cohort, mut seat: crate::Seat) -> crate::Seat {
         loop {
             seat.set(crate::SeatState::Reserving);
             // The request is refused: stand by, then wait while another
@@ -623,7 +626,7 @@ fn two_cohort_askers_never_wait_for_each_other() {
             if !cohort.others_active(&seat) {
                 seat.set(crate::SeatState::Reserving);
                 seat.set(crate::SeatState::Idle);
-                return;
+                return seat;
             }
             block_on(listener);
         }
@@ -635,7 +638,8 @@ fn two_cohort_askers_never_wait_for_each_other() {
             let cohort = Arc::clone(&cohort);
             thread::spawn(move || ask(&cohort, b))
         };
-        ask(&cohort, a);
-        other.join().unwrap();
+        let a = ask(&cohort, a);
+        let b = other.join().unwrap();
+        drop((a, b));
     });
 }
