@@ -593,6 +593,22 @@ fn lcase_and_rtrim_comparisons_compare_keys() {
         ("'a' COLLATE utf8_lcase IN ('B', 'C')", "false"),
         ("'b' COLLATE utf8_lcase BETWEEN 'A' AND 'C'", "true"),
         ("'d' COLLATE utf8_lcase BETWEEN 'A' AND 'C'", "false"),
+        ("'b' COLLATE utf8_lcase NOT BETWEEN 'A' AND 'C'", "false"),
+        ("'d' COLLATE utf8_lcase NOT BETWEEN 'A' AND 'C'", "true"),
+        ("'a' COLLATE utf8_lcase NOT IN ('B', 'A')", "false"),
+        ("'a' COLLATE utf8_lcase NOT IN ('B', 'C')", "true"),
+        (
+            "CAST(NULL AS STRING) COLLATE utf8_lcase <=> CAST(NULL AS STRING)",
+            "true",
+        ),
+        ("CAST(NULL AS STRING) COLLATE utf8_lcase = 'A'", "NULL"),
+        (
+            "CASE WHEN 'a' COLLATE utf8_lcase = 'A' THEN 'y' ELSE 'n' END",
+            "y",
+        ),
+        // Only trailing spaces are dropped, tabs and the no-break space are not.
+        ("'a\t' COLLATE utf8_binary_rtrim = 'a'", "false"),
+        ("'a\u{a0}' COLLATE utf8_binary_rtrim = 'a'", "false"),
     ] {
         assert_eq!(t(sql), want, "{sql}");
     }
