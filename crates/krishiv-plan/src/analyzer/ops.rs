@@ -4605,27 +4605,41 @@ fn in_aggregate_call(b: &Bound) -> Result<(), AnalysisError> {
     Ok(())
 }
 
-/// Whether `e` reads a column or calls a non-deterministic function, so it
-/// cannot be folded to a constant.
-fn not_constant(e: &Expr) -> bool {
-    if matches!(
-        &e.node,
-        // A subquery is not foldable, whatever it selects.
-        ExprNode::Subquery { .. }
-            | ExprNode::Resolved(
-                ResolvedExpr::Column(_)
-                    | ResolvedExpr::OuterColumn(_)
-                    | ResolvedExpr::Function(ResolvedFunction {
-                        deterministic: false,
-                        ..
-                    })
-            )
-    ) {
-        return true;
-    }
-    let mut found = false;
-    e.for_each_child(&mut |c| found = found || not_constant(c));
-    found
+/// Whether `e` is not foldable in Spark's sense: it reads a column or a
+/// subquery, calls a non-deterministic function, or calls an aggregate,
+/// window or generator function (Spark's `foldable` is false for those
+/// whatever their arguments). Walks each distinct node once, so a shared
+/// subtree costs one visit however many paths reach it.
+pub(super) fn not_constant(e: &Expr) -> bool {
+    crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+        let crate::walk::Node::Expr(x) = n else {
+            // A plan is reached only through a subquery, stopped below.
+            return std::ops::ControlFlow::Continue(());
+        };
+        let stop = matches!(
+            &x.node,
+            ExprNode::Subquery { .. }
+                | ExprNode::Window(_)
+                | ExprNode::Resolved(
+                    ResolvedExpr::Column(_)
+                        | ResolvedExpr::OuterColumn(_)
+                        | ResolvedExpr::Function(ResolvedFunction {
+                            deterministic: false,
+                            ..
+                        })
+                )
+        ) || matches!(
+            &x.node,
+            ExprNode::Resolved(ResolvedExpr::Function(f))
+                if f.kind != FunctionKind::Scalar
+        );
+        if stop {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
+    })
+    .is_break()
 }
 
 /// Whether `p` returns at most one row, as Spark's `maxRows` has it.

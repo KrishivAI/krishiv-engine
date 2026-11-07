@@ -445,11 +445,17 @@ impl Resolver<'_> {
                         b = make_nullable(b);
                     }
                     // Shown as Spark names it, over the operands as written
-                    // (a session variable keeps its name).
+                    // (a session variable keeps its name): `date_add` / `date_sub`, or the `try_` call
+                    // itself with its operands in the order written.
+                    let (shown_name, a, c) = if lookup_name.starts_with("try_") {
+                        (lookup_name, 0, 1)
+                    } else {
+                        (name, first, second)
+                    };
                     b.shown = Some(Arc::new(
                         Expr::function(
-                            name,
-                            vec![kids[first].shown(), kids[second].shown()]
+                            shown_name,
+                            vec![kids[a].shown(), kids[c].shown()]
                                 .into_iter()
                                 .map(|k| bare_variable(&k))
                                 .collect(),
@@ -976,6 +982,32 @@ impl Resolver<'_> {
                         false,
                         e.origin,
                     ));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], 3)
+                } else if is_builtin_entry(&entry) && entry.id.name() == "time_bucket" && n == 2 {
+                    // Spark's builder writes the origin: 1970-01-01 00:00:00 in the session zone for a
+                    // `TIMESTAMP` (or anything that is not a `TIMESTAMP_NTZ`), the epoch for a `TIMESTAMP_NTZ`.
+                    owned = kids[..n].to_vec();
+                    owned.push(if kids[1].ty.data_type == Some(DataType::TimestampNtz) {
+                        default_argument(
+                            Literal::TimestampNtz(0),
+                            DataType::TimestampNtz,
+                            false,
+                            e.origin,
+                        )
+                    } else {
+                        let offset = self.ctx.conf.session_zone.map_or(0, |z| {
+                            krishiv_kernels::cast::TimeZoneRules::offset_for_local(&z, 0)
+                        });
+                        default_argument(
+                            Literal::Timestamp(i64::from(offset).saturating_mul(-1_000_000)),
+                            DataType::Timestamp,
+                            false,
+                            e.origin,
+                        )
+                    });
                     if let Some(filter) = kids.get(n) {
                         owned.push(filter.clone());
                     }
@@ -1689,6 +1721,19 @@ impl Resolver<'_> {
                 }
             }),
         };
+        if let ExprNode::Function(f) = &e.node
+            && matches!(
+                &b.expr.node,
+                ExprNode::Resolved(ResolvedExpr::Function(r)) if !matches!(r.id, FunctionId::Udf { .. })
+            )
+            && let Some(shown) = super::display::spark_display(
+                &f.name,
+                &kids.iter().map(Bound::shown).collect::<Vec<_>>(),
+                e.origin,
+            )
+        {
+            b.shown = Some(shown);
+        }
         if b.shown.is_none() && kids.iter().any(|k| k.shown.is_some()) {
             b.shown = Some(with_children(
                 &b.expr,
