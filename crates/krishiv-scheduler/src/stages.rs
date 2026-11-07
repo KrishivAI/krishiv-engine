@@ -542,7 +542,8 @@ impl StageRunner {
 
     /// The operator counter `name` of this runner's map tasks (e.g. a
     /// shared broadcast join's `broadcast_shared` or `broadcast_fallback`),
-    /// summed over their operators and the queries.
+    /// summed over their operators and the queries. Map tasks only: a join
+    /// in the root stage reports in the query's own metrics instead.
     #[must_use]
     pub fn task_counter(&self, name: &str) -> u64 {
         self.task_counters
