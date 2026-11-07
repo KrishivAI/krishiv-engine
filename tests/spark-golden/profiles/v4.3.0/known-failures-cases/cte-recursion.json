@@ -1,8 +1,7 @@
 {
   "cases": {
     "depends-on-command": [
-      12,
-      53
+      12
     ],
     "fn-array": [
       85
@@ -11,9 +10,6 @@
       27,
       28,
       84
-    ],
-    "sql-commands": [
-      52
     ]
   },
   "file": "cte-recursion",
