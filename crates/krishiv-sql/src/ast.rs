@@ -1453,8 +1453,8 @@ pub struct AlterNamespace {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AlterNamespaceAction {
-    /// `SET PROPERTIES (...)` (namespaces say `PROPERTIES`, not
-    /// `TBLPROPERTIES`).
+    /// `SET PROPERTIES (...)` or `SET DBPROPERTIES (...)` (namespaces say
+    /// `PROPERTIES`, not `TBLPROPERTIES`).
     SetProperties(Vec<TableOption>),
     /// `SET LOCATION '...'`.
     SetLocation(String),

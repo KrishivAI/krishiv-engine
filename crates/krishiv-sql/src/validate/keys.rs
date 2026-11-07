@@ -77,9 +77,81 @@ pub(super) fn to_map_order<'a>(keys: &[&'a str]) -> Vec<&'a str> {
     }
 }
 
+/// The keys of `keys` (distinct, as written) for which `pick` holds, in the order Spark's
+/// `visitPropertyKeyValues` lists them: `collect` over the property map, so the picked keys keep
+/// their place in [`to_map_order`] of all the keys.
+pub(super) fn collected_order<'a>(keys: &[&'a str], pick: impl Fn(&str) -> bool) -> Vec<&'a str> {
+    to_map_order(keys).into_iter().filter(|k| pick(k)).collect()
+}
+
+/// The keys of `keys` (distinct, as written) for which `pick` holds, in the order Spark's
+/// `visitPropertyKeys` lists them: `filter` over the property map, then its keys. A map of up to
+/// four keys filters in written order; a larger `HashMap` filters into a new trie of the picked
+/// keys alone, whose order is that trie's own, not their order in the whole map (Spark 4.2.0:
+/// `UNSET TBLPROPERTIES (jee=1, hb=1, b=1, jbd, bg, cfi)` lists `[hb,b,jee]`, `SET` with the
+/// same keys missing values `[b,jee,hb]`).
+pub(super) fn filtered_order<'a>(keys: &[&'a str], pick: impl Fn(&str) -> bool) -> Vec<&'a str> {
+    let picked: Vec<&str> = keys.iter().copied().filter(|k| pick(k)).collect();
+    if keys.len() <= 4 {
+        picked
+    } else {
+        hash_map_order(&picked)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{first_duplicate_key, to_map_order};
+    use super::{collected_order, filtered_order, first_duplicate_key, to_map_order};
+
+    /// Spark 4.2.0 `ALTER TABLE ... SET` / `UNSET TBLPROPERTIES` with these keys missing (or
+    /// holding) a value (`research/spark/partition-spec-duplicate-key/probe9.py`).
+    #[test]
+    fn bad_property_keys_are_listed_in_map_order() {
+        type Case<'a> = (&'a [&'a str], &'a [&'a str], &'a [&'a str], &'a [&'a str]);
+        let cases: &[Case<'_>] = &[
+            (
+                &["jee", "hb", "b", "jbd", "bg", "cfi"],
+                &["hb", "jee", "b"],
+                &["b", "jee", "hb"],
+                &["hb", "b", "jee"],
+            ),
+            (
+                &["ehf", "cge", "geg", "d", "gag", "bjf"],
+                &["ehf", "d", "gag"],
+                &["ehf", "d", "gag"],
+                &["ehf", "gag", "d"],
+            ),
+            (
+                &["i", "fj", "d", "jg", "jc"],
+                &["jg", "d", "jc"],
+                &["jg", "d", "jc"],
+                &["jc", "jg", "d"],
+            ),
+            (
+                &["dd", "c", "h", "d", "abd", "a"],
+                &["abd", "a", "d"],
+                &["a", "abd", "d"],
+                &["d", "a", "abd"],
+            ),
+            (
+                &["yoo", "sgf", "a", "b", "c"],
+                &["yoo", "sgf"],
+                &["sgf", "yoo"],
+                &["sgf", "yoo"],
+            ),
+            (
+                &["yoo", "sgf", "a"],
+                &["yoo", "sgf"],
+                &["yoo", "sgf"],
+                &["yoo", "sgf"],
+            ),
+        ];
+        for (keys, bad, set, unset) in cases {
+            let pick = |k: &str| bad.contains(&k);
+            assert_eq!(collected_order(keys, pick), *set, "SET {keys:?}");
+            assert_eq!(filtered_order(keys, pick), *unset, "UNSET {keys:?}");
+        }
+    }
 
     /// Cases from the Spark 4.2.0 run (`ALTER TABLE nosuch ADD PARTITION (...)`, keys as written).
     #[test]
