@@ -1814,3 +1814,25 @@ fn a_decoded_collation_is_checked() {
         "a collation on a type that is not a collated string",
     );
 }
+
+/// A plan calling a Python UDF lists `python_udf` (a semantic feature: no
+/// plan without the node computes the same rows), and a reader without it
+/// refuses the plan naming the feature.
+#[test]
+fn a_python_udf_needs_its_feature() {
+    assert_eq!(message("python_udf").features, ["python_udf"]);
+    assert_eq!(Feature::PythonUdf.kind(), FeatureKind::Semantic);
+    let bytes = message("python_udf").encode_to_vec();
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::PythonUdf),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["python_udf".to_owned()]
+        }
+    );
+}
