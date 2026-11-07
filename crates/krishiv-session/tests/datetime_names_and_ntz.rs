@@ -120,9 +120,32 @@ fn parses_to_timestamp_ntz_report_patterns_without_the_legacy_fallback() {
         );
     }
     // A number is read as a string, and an untyped NULL stays NULL, both as TIMESTAMP_NTZ.
-    for sql in ["select to_timestamp(1)", "select to_timestamp(null)"] {
+    for sql in [
+        "select to_timestamp(1)",
+        "select to_timestamp(null)",
+        "select to_timestamp(1.5D)",
+        "select to_timestamp(cast(1.5 as float))",
+        "select to_timestamp(cast(1.5 as decimal(3, 1)))",
+    ] {
         let types = schema(&s, sql).unwrap();
         assert_eq!(types[0].1, "Timestamp(µs)", "{sql}");
+    }
+    // Spark 4.2.0 (local run 2026-11-07): under ANSI each numeric form fails reading its string as TIMESTAMP_NTZ.
+    let ansi = session(&[
+        "spark.sql.timestampType=TIMESTAMP_NTZ",
+        "spark.sql.ansi.enabled=true",
+    ]);
+    for arg in [
+        "1",
+        "1.5D",
+        "cast(1.5 as float)",
+        "cast(1.5 as decimal(3, 1))",
+    ] {
+        assert_eq!(
+            class(&ansi, &format!("select to_timestamp({arg})")),
+            "CAST_INVALID_INPUT",
+            "{arg}"
+        );
     }
     // Without the NTZ setting the same pattern still falls back to the legacy check.
     let plain = session(&[]);

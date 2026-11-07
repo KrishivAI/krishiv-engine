@@ -239,7 +239,8 @@ fn with_children(e: &Expr, kids: Vec<Arc<Expr>>) -> Arc<Expr> {
 fn ntz_variant(name: &str, kids: &[Bound]) -> Option<(&'static str, usize)> {
     let is = |n: &str| name.eq_ignore_ascii_case(n);
     if is("to_timestamp") && (1..=2).contains(&kids.len()) {
-        // A numeric argument is cast to a string first, as Spark's implicit casts do; an untyped NULL is a NULL.
+        // A numeric argument (integral, floating or decimal) is cast to a string first, as Spark's implicit casts
+        // do (Spark 4.2.0: `to_timestamp(1.5D)` is `CAST_INVALID_INPUT` of '1.5' under ANSI); an untyped NULL is a NULL.
         let ok = matches!(
             kids[0].ty.data_type,
             None | Some(
@@ -252,6 +253,9 @@ fn ntz_variant(name: &str, kids: &[Bound]) -> Option<(&'static str, usize)> {
                     | DataType::Short
                     | DataType::Integer
                     | DataType::Long
+                    | DataType::Float
+                    | DataType::Double
+                    | DataType::Decimal(_)
             )
         );
         return ok.then_some(("to_timestamp_ntz", kids.len()));
