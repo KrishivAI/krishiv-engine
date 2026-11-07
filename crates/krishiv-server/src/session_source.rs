@@ -134,7 +134,10 @@ impl UiSource for SessionSource {
 
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool> {
         Box::pin(async move {
-            let id = QueryId::parse(query_id).map_err(ui_error)?;
+            // An id that is not an id names no running query.
+            let Ok(id) = QueryId::parse(query_id) else {
+                return Ok(false);
+            };
             Ok(self.runtime.cancel(&id, CancelReason::Admin))
         })
     }
