@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `ROW FORMAT` against `STORED AS|BY`, in Spark's `AstBuilder` order. Every case is from a Spark
-//! 4.2.0 run (`research/spark/row-format-file-format/probe11.py`, `probe12.py` in
-//! krishiv-internal).
+//! `CREATE NAMESPACE`'s clause checks (`DUPLICATE_CLAUSES`, both `PROPERTIES` and `DBPROPERTIES`,
+//! reserved property keys) and `ROW FORMAT` against `STORED AS`, in Spark's
+//! `AstBuilder` order. Every case is from a Spark 4.2.0 run (`research/spark/row-format-file-format/`
+//! `probe11.py`, `probe12.py` in krishiv-internal).
 
 use super::*;
 use krishiv_common::error::ErrorClass;
@@ -28,6 +29,145 @@ fn assert_error(sql: &str, class: ErrorClass, params: &[(&str, &str)], whole: bo
     if whole {
         assert_eq!(e.span.range(), 0..sql.len(), "{sql}");
     }
+}
+
+#[test]
+fn create_namespace_checks_follow_sparks_order() {
+    let dup = |c| [("clauseName", c)];
+    for (sql, clause) in [
+        ("CREATE NAMESPACE n COMMENT 'a' COMMENT 'b'", "COMMENT"),
+        (
+            "CREATE NAMESPACE n LOCATION '/a' COMMENT 'a' LOCATION '/b' COMMENT 'b'",
+            "COMMENT",
+        ),
+        (
+            "CREATE NAMESPACE n WITH PROPERTIES (a=1) WITH PROPERTIES (b=1)",
+            "WITH PROPERTIES",
+        ),
+        (
+            "CREATE SCHEMA n WITH DBPROPERTIES (a=1) WITH DBPROPERTIES (b=1)",
+            "WITH DBPROPERTIES",
+        ),
+        (
+            "CREATE DATABASE n WITH DBPROPERTIES (a=1, a=2) LOCATION '/x' LOCATION '/y'",
+            "LOCATION",
+        ),
+        (
+            "CREATE NAMESPACE n DEFAULT COLLATION UTF8_LCASE DEFAULT COLLATION UTF8_LCASE \
+             LOCATION '/a' LOCATION '/b'",
+            "DEFAULT COLLATION",
+        ),
+        (
+            "CREATE NAMESPACE n WITH PROPERTIES (a=1) WITH DBPROPERTIES (b=1) WITH PROPERTIES (c=1)",
+            "WITH PROPERTIES",
+        ),
+    ] {
+        assert_error(sql, ErrorClass::DuplicateClauses, &dup(clause), true);
+    }
+    for sql in [
+        "CREATE NAMESPACE n WITH PROPERTIES (a=1) WITH DBPROPERTIES (b=1)",
+        "CREATE NAMESPACE n WITH DBPROPERTIES (a=1) WITH PROPERTIES (a=1, a=2)",
+    ] {
+        assert_error(
+            sql,
+            ErrorClass::UnsupportedFeatureSetPropertiesAndDbproperties,
+            &[],
+            true,
+        );
+    }
+    let location = "please use the LOCATION clause to specify it";
+    let owner = "it will be set to the current user";
+    let collation = "please use the DEFAULT COLLATION clause to specify it";
+    for (sql, property, msg) in [
+        (
+            "CREATE NAMESPACE n WITH PROPERTIES (location='/x')",
+            "location",
+            location,
+        ),
+        (
+            "CREATE NAMESPACE n WITH PROPERTIES ('location'='/x')",
+            "location",
+            location,
+        ),
+        (
+            "CREATE NAMESPACE n WITH PROPERTIES (owner='me')",
+            "owner",
+            owner,
+        ),
+        (
+            "CREATE NAMESPACE n WITH PROPERTIES (collation='UTF8_LCASE')",
+            "collation",
+            collation,
+        ),
+        (
+            "CREATE NAMESPACE n WITH PROPERTIES (owner='me', location='/x')",
+            "owner",
+            owner,
+        ),
+        // Five keys: the property map's hash order.
+        (
+            "CREATE NAMESPACE n WITH PROPERTIES (k1=1,k2=2,k3=3,location='/x',owner='me')",
+            "location",
+            location,
+        ),
+        (
+            "CREATE NAMESPACE n WITH PROPERTIES \
+             (k5=1,k1=1,k2=2,k3=3,k4=4,owner='me',location='/x',collation='c')",
+            "location",
+            location,
+        ),
+        // Reserved keys before the collation clause.
+        (
+            "CREATE NAMESPACE n DEFAULT COLLATION UTF8_LCASE WITH PROPERTIES (owner='me')",
+            "owner",
+            owner,
+        ),
+        (
+            "ALTER NAMESPACE default SET PROPERTIES (location='/x')",
+            "location",
+            location,
+        ),
+        (
+            "ALTER NAMESPACE default SET DBPROPERTIES (owner='me')",
+            "owner",
+            owner,
+        ),
+    ] {
+        assert_error(
+            sql,
+            ErrorClass::UnsupportedFeatureSetNamespaceProperty,
+            &[("property", property), ("msg", msg)],
+            true,
+        );
+    }
+    // The key list's own checks come first.
+    for sql in [
+        "CREATE NAMESPACE n WITH PROPERTIES (location='/x', location='/y')",
+        "ALTER NAMESPACE default SET PROPERTIES (a=1, a=2, location='/x')",
+    ] {
+        assert_eq!(
+            err(sql).error.error_class(),
+            ErrorClass::DuplicateKey,
+            "{sql}"
+        );
+    }
+    for sql in [
+        "CREATE NAMESPACE n WITH PROPERTIES (location)",
+        "ALTER NAMESPACE default SET PROPERTIES (location)",
+    ] {
+        assert_error(
+            sql,
+            ErrorClass::LegacyErrorTemp0035,
+            &[("message", "Values must be specified for key(s): [location]")],
+            false,
+        );
+    }
+    // Reserved keys compare exactly; `comment` is not reserved.
+    ok("CREATE NAMESPACE n WITH PROPERTIES (Location='/x')");
+    ok("CREATE NAMESPACE n COMMENT 'x' WITH PROPERTIES (comment='y')");
+    ok("CREATE NAMESPACE n COMMENT 'x' LOCATION '/a' WITH DBPROPERTIES (a=1)");
+    // Spark refuses `DEFAULT COLLATION` with schema-level collations off; Krishiv accepts it.
+    ok("CREATE NAMESPACE n DEFAULT COLLATION UTF8_LCASE");
 }
 
 #[test]

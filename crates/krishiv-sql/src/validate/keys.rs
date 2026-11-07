@@ -43,6 +43,41 @@ fn champ_order<'a>(keys: Vec<(&'a str, u32)>, shift: u32, out: &mut Vec<&'a str>
     }
 }
 
+/// `keys` (distinct) in the order a CHAMP trie's `filterImpl` visits them from the level at
+/// `shift`, appended to `out`: by 5-bit hash fragment, each sub-trie walked in its fragment's
+/// place (unlike [`champ_order`], which lists a node's own entries before its sub-tries).
+fn champ_filter_order<'a>(keys: Vec<(&'a str, u32)>, shift: u32, out: &mut Vec<&'a str>) {
+    if keys.len() <= 1 || shift >= 32 {
+        out.extend(keys.into_iter().map(|(k, _)| k));
+        return;
+    }
+    let mut groups: [Vec<(&str, u32)>; 32] = Default::default();
+    for (k, h) in keys {
+        groups[((h >> shift) & 31) as usize].push((k, h));
+    }
+    for g in groups {
+        champ_filter_order(g, shift + 5, out);
+    }
+}
+
+/// The order in which Scala's `Map.filter` over `Seq.toMap` of `keys` (distinct) tests them, so a
+/// predicate that throws does so at the first of these it rejects: the written order up to four
+/// keys, [`champ_filter_order`] from five (Spark 4.2.0: `cleanNamespaceProperties` over
+/// `k5, k1, k2, k3, k4, owner, location, collation` names `location`, the map's iteration order
+/// puts `owner` first).
+pub(super) fn filter_visit_order<'a>(keys: &[&'a str]) -> Vec<&'a str> {
+    if keys.len() <= 4 {
+        return keys.to_vec();
+    }
+    let mut out = Vec::with_capacity(keys.len());
+    champ_filter_order(
+        keys.iter().map(|k| (*k, improve(java_hash(k)))).collect(),
+        0,
+        &mut out,
+    );
+    out
+}
+
 /// `keys` (distinct) in the iteration order of an `immutable.HashMap` built from them in this order.
 fn hash_map_order<'a>(keys: &[&'a str]) -> Vec<&'a str> {
     let mut out = Vec::with_capacity(keys.len());
@@ -101,7 +136,10 @@ pub(super) fn filtered_order<'a>(keys: &[&'a str], pick: impl Fn(&str) -> bool) 
 
 #[cfg(test)]
 mod tests {
-    use super::{collected_order, filtered_order, first_duplicate_key, to_map_order};
+    use super::{
+        collected_order, filter_visit_order, filtered_order, first_duplicate_key, hash_map_order,
+        to_map_order,
+    };
 
     /// Spark 4.2.0 `ALTER TABLE ... SET` / `UNSET TBLPROPERTIES` with these keys missing (or
     /// holding) a value (`research/spark/partition-spec-duplicate-key/probe9.py`).
@@ -214,5 +252,52 @@ mod tests {
         let yoo = five.iter().position(|k| *k == "yoo");
         let sgf = five.iter().position(|k| *k == "sgf");
         assert!(sgf < yoo, "{five:?}");
+    }
+
+    /// Spark 4.2.0: `cleanNamespaceProperties` over these keys names `location`: `filter` walks
+    /// fragment 3's sub-trie (`k5`, `location`) in its place, while iteration lists the level's
+    /// own entries (`owner` among them) first.
+    #[test]
+    fn filter_visits_sub_tries_in_their_place() {
+        let keys = [
+            "k5",
+            "k1",
+            "k2",
+            "k3",
+            "k4",
+            "owner",
+            "location",
+            "collation",
+        ];
+        assert_eq!(
+            filter_visit_order(&keys),
+            [
+                "k2",
+                "k5",
+                "location",
+                "k1",
+                "owner",
+                "k4",
+                "k3",
+                "collation"
+            ]
+        );
+        assert_eq!(
+            hash_map_order(&keys),
+            [
+                "k2",
+                "k1",
+                "owner",
+                "collation",
+                "k5",
+                "location",
+                "k4",
+                "k3"
+            ]
+        );
+        assert_eq!(
+            filter_visit_order(&["owner", "location"]),
+            ["owner", "location"]
+        );
     }
 }

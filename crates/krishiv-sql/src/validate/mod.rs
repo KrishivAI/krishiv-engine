@@ -65,6 +65,7 @@ use krishiv_common::error::{
     LegacyErrorTemp0064, LegacyErrorTemp1292, UnsupportedFeatureContinueExceptionHandler,
     UnsupportedFeatureDescTableColumnJson, UnsupportedFeatureDescTableColumnPartition,
     UnsupportedFeatureLateralJoinUsing, UnsupportedFeatureSchemaLevelCollations,
+    UnsupportedFeatureSetNamespaceProperty, UnsupportedFeatureSetPropertiesAndDbproperties,
     UnsupportedFeatureSqlCursor, UnsupportedFeatureTemporaryViewWithSchemaBindingMode,
 };
 use krishiv_common::names::to_sql_id;
@@ -74,11 +75,11 @@ use crate::ParserOptions;
 use crate::ast::{
     AlterColumnAction, AlterNamespaceAction, AlterTable, AlterTableAction, AlterView,
     AlterViewAction, CacheKind, ChangeColumnAction, ColumnConstraintKind, ColumnDef, ColumnName,
-    CreateFunction, CreatePermanentView, CreateTable, CreateTableLike, DdlName, Delete, Describe,
-    DescribeKind, Expr, ExprKind, FileFormat, FileFormatKind, FrameBoundKind, FromClause, Function,
-    FunctionBodyKind, FunctionReturnsKind, GeneratedKind, GroupBy, GroupItem, GroupItemKind,
-    GroupWith, GroupingSet, Insert, InsertClause, Join, JoinConstraint, Literal, Merge,
-    MergeAction, MergeInsert, MergeSource, NamedWindow, NumKind, ObjectName, OptionKey,
+    CreateFunction, CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, DdlName,
+    Delete, Describe, DescribeKind, Expr, ExprKind, FileFormat, FileFormatKind, FrameBoundKind,
+    FromClause, Function, FunctionBodyKind, FunctionReturnsKind, GeneratedKind, GroupBy, GroupItem,
+    GroupItemKind, GroupWith, GroupingSet, Insert, InsertClause, Join, JoinConstraint, Literal,
+    Merge, MergeAction, MergeInsert, MergeSource, NamedWindow, NumKind, ObjectName, OptionKey,
     PartitionFieldKind, PartitionSpec, Query, RefreshKind, Relation, RelationExt, RowFormat,
     RowFormatKind, SchemaBindingClause, Select, SelectItem, SetExpr, SetExprKind, SetVariableKind,
     Show, ShowKind, SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind,
@@ -123,11 +124,7 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             | Statement::DropVariable(_)
             | Statement::AddResource(_)
             | Statement::ListResource(_) => return Ok(()),
-            // `visitCreateNamespace` reads the properties first (its duplicate-clause checks are not
-            // made: the parser keeps every `WITH (DB)PROPERTIES` list).
-            Statement::CreateNamespace(n) => {
-                return Checker { sql, opts }.property_list(&n.properties, true, n.span);
-            }
+            Statement::CreateNamespace(n) => return Checker { sql, opts }.create_namespace(n),
             Statement::DropPermanentView(v) => return Checker { sql, opts }.ddl_name(&v.name),
             Statement::AlterNamespace(a) => {
                 let checker = Checker { sql, opts };
@@ -136,6 +133,7 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                     AlterNamespaceAction::SetProperties(properties) => {
                         checker.property_list(properties, true, a.span)?;
                         checker.option_values(properties)?;
+                        reserved_namespace_properties(properties, a.span)?;
                     }
                     // Schema-level collations are off in Spark 4.2
                     // (`spark.sql.schemaLevelCollations.enabled`).
@@ -441,6 +439,29 @@ impl Checker<'_> {
             t.span,
         )?;
         self.property_list(&t.tblproperties, true, t.span)
+    }
+
+    /// `CREATE DATABASE|SCHEMA|NAMESPACE`, in `visitCreateNamespace`'s order: a clause written
+    /// twice, both `PROPERTIES` and `DBPROPERTIES`, the property list, then its reserved keys.
+    fn create_namespace(&self, n: &CreateNamespace) -> R {
+        if let Some(clause) = n.duplicate_clause {
+            return Err(at(
+                DuplicateClauses {
+                    clause_name: clause.to_owned(),
+                },
+                n.span,
+            ));
+        }
+        if n.properties_and_dbproperties {
+            return Err(at(
+                UnsupportedFeatureSetPropertiesAndDbproperties {},
+                n.span,
+            ));
+        }
+        self.property_list(&n.properties, true, n.span)?;
+        // Spark 4.2 then refuses `DEFAULT COLLATION` unless `spark.sql.schemaLevelCollations.enabled`;
+        // its golden suite runs with it on, and Krishiv accepts the clause (not checked here).
+        reserved_namespace_properties(&n.properties, n.span)
     }
 
     /// Spark's `validateRowFormatFileFormat`, when both a `ROW FORMAT` and a `STORED AS|BY` are
@@ -1765,6 +1786,34 @@ fn foldable(e: &Expr) -> bool {
         }
         _ => false,
     }
+}
+
+/// Spark's `cleanNamespaceProperties` (with `spark.sql.legacy.notReserveProperties` off, its
+/// default): the keys `location`, `collation` and `owner` (exact case) are refused with
+/// `UNSUPPORTED_FEATURE.SET_NAMESPACE_PROPERTY` at `statement`, the first `filter` reaches over
+/// the property map ([`keys::filter_visit_order`]). The keys must be distinct.
+fn reserved_namespace_properties(properties: &[TableOption], statement: Span) -> R {
+    let keys: Vec<String> = properties.iter().map(|o| key_text(&o.key)).collect();
+    let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
+    let reserved = |k: &str| matches!(k, "location" | "collation" | "owner");
+    let Some(property) = keys::filter_visit_order(&refs)
+        .into_iter()
+        .find(|k| reserved(k))
+    else {
+        return Ok(());
+    };
+    let msg = match property {
+        "location" => "please use the LOCATION clause to specify it",
+        "collation" => "please use the DEFAULT COLLATION clause to specify it",
+        _ => "it will be set to the current user",
+    };
+    Err(at(
+        UnsupportedFeatureSetNamespaceProperty {
+            property: property.to_owned(),
+            msg: msg.to_owned(),
+        },
+        statement,
+    ))
 }
 
 /// The clause at `span` as Spark's `validateRowFormatFileFormat` prints a context: its children's
