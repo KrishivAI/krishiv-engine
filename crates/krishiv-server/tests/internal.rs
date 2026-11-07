@@ -248,6 +248,17 @@ async fn a_query_detail_names_the_hot_operator_and_explains_spill_skew_and_memor
         .map(|w| (w["operator"].as_str().unwrap(), w["kind"].as_str().unwrap()))
         .collect();
     assert!(kinds.contains(&("HashJoin", "spill")), "{kinds:?}");
+    let spill_hint = body["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["kind"] == "spill")
+        .map(|w| w["hint"].as_str().unwrap().to_owned())
+        .unwrap();
+    assert!(
+        spill_hint.contains("spilled 4.0 KiB to disk"),
+        "bytes are written like the pages write them: {spill_hint}"
+    );
     assert!(kinds.contains(&("HashJoin", "skew")), "{kinds:?}");
     assert!(kinds.contains(&("Sort", "memory")), "{kinds:?}");
     assert!(!kinds.iter().any(|(op, _)| *op == "Scan"));

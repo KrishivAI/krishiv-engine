@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "other-version": [
+      11,
+      12
+    ]
+  },
+  "file": "nonansi/try_arithmetic",
+  "format_version": 1
+}

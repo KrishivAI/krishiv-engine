@@ -1,64 +1,80 @@
+@import "tailwindcss";
+@import "./brand/tokens.css";
+
+/* Red Hat Display / Text / Mono, self-hosted (SIL OFL 1.1, see fonts-LICENSE.txt). */
+@font-face { font-family: "Red Hat Display"; src: url("./brand/fonts/RedHatDisplay-VF.ttf") format("truetype"); font-weight: 300 900; font-display: swap; }
+@font-face { font-family: "Red Hat Text"; src: url("./brand/fonts/RedHatText-VF.ttf") format("truetype"); font-weight: 300 700; font-display: swap; }
+@font-face { font-family: "Red Hat Mono"; src: url("./brand/fonts/RedHatMono-VF.ttf") format("truetype"); font-weight: 300 700; font-display: swap; }
+
+/* shadcn-svelte's CSS variables, mapped to the brand kit's --k-* tokens (tokens.css switches them for dark and
+   light, by prefers-color-scheme or data-theme). The same variables are the hook for embed theming. */
 :root {
-  --bg: #0f1419;
-  --panel: #1a2029;
-  --line: #2b3441;
-  --text: #e6e9ee;
-  --muted: #98a2b3;
-  --accent: #6aa6ff;
-  --warn: #f5b942;
-  --bad: #ef6b6b;
-  --ok: #5ccf8f;
+  --background: var(--k-bg);
+  --foreground: var(--k-text);
+  --card: var(--k-surface);
+  --card-foreground: var(--k-text);
+  --popover: var(--k-surface);
+  --popover-foreground: var(--k-text);
+  --primary: var(--k-primary);
+  --primary-foreground: var(--k-on-primary);
+  --secondary: var(--k-surface-2);
+  --secondary-foreground: var(--k-text);
+  --muted: var(--k-bg-subtle);
+  --muted-foreground: var(--k-muted);
+  --accent: var(--k-surface-2);
+  --accent-foreground: var(--k-text);
+  --destructive: var(--k-error);
+  --border: var(--k-border);
+  --input: var(--k-border-strong);
+  --ring: var(--k-focus);
+  --radius: var(--k-radius-md);
 }
-@media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f6f7f9;
-    --panel: #fff;
-    --line: #d9dde3;
-    --text: #1b2330;
-    --muted: #5b6678;
-    --accent: #1f6feb;
-    --warn: #b7791f;
-    --bad: #c53030;
-    --ok: #2f855a;
-  }
+
+/* Tailwind's theme: shadcn names first, then the brand's status colours and series. */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-text-2: var(--k-text-2);
+  --color-success: var(--k-success);
+  --color-warning: var(--k-warning);
+  --color-error: var(--k-error);
+  --color-info: var(--k-info);
+  --color-success-bg: var(--k-success-bg);
+  --color-warning-bg: var(--k-warning-bg);
+  --color-error-bg: var(--k-error-bg);
+  --color-info-bg: var(--k-info-bg);
+  --color-series-1: var(--k-series-1);
+  --color-code: var(--k-code-bg);
+  --font-sans: var(--k-font-text);
+  --font-display: var(--k-font-display);
+  --font-mono: var(--k-font-mono);
+  --radius-sm: var(--k-radius-sm);
+  --radius-md: var(--k-radius-md);
+  --radius-lg: var(--k-radius-lg);
+  --shadow-sm: var(--k-shadow-sm);
 }
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, sans-serif; }
-nav { display: flex; gap: 1rem; align-items: center; padding: 0.6rem 1rem; background: var(--panel); border-bottom: 1px solid var(--line); }
-nav .brand { font-weight: 600; margin-right: 1rem; }
-nav a { color: var(--muted); text-decoration: none; padding: 0.2rem 0.1rem; }
-nav a.active { color: var(--text); border-bottom: 2px solid var(--accent); }
-main { max-width: 74rem; margin: 0 auto; padding: 1rem; }
-h1 { font-size: 1.15rem; margin: 0 0 0.8rem; }
-h2 { font-size: 1rem; margin: 1.2rem 0 0.5rem; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 0.7rem; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 0.7rem 0.9rem; }
-.card .label { color: var(--muted); font-size: 0.8rem; }
-.card .value { font-size: 1.3rem; font-weight: 600; }
-table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
-th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 500; font-size: 0.8rem; }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-tr.hot td { background: color-mix(in srgb, var(--warn) 14%, transparent); }
-code, .mono { font-family: ui-monospace, monospace; font-size: 0.85rem; }
-a { color: var(--accent); }
-.pill { display: inline-block; padding: 0 0.5rem; border-radius: 999px; font-size: 0.75rem; border: 1px solid var(--line); }
-.pill.running { color: var(--accent); border-color: var(--accent); }
-.pill.queued { color: var(--warn); border-color: var(--warn); }
-.pill.finished { color: var(--ok); border-color: var(--ok); }
-.pill.failed { color: var(--bad); border-color: var(--bad); }
-.pill.cancelled { color: var(--muted); }
-.bar { height: 0.55rem; background: var(--line); border-radius: 3px; overflow: hidden; min-width: 6rem; }
-.bar > span { display: block; height: 100%; background: var(--accent); }
-.bar.hot > span { background: var(--warn); }
-.warning { border-left: 3px solid var(--warn); background: var(--panel); padding: 0.5rem 0.8rem; margin: 0.4rem 0; }
-.warning.spill, .warning.memory { border-left-color: var(--bad); }
-.muted { color: var(--muted); }
-.error { color: var(--bad); }
-button { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 0.2rem 0.7rem; cursor: pointer; }
-button:hover { border-color: var(--accent); }
-button.danger:hover { border-color: var(--bad); color: var(--bad); }
-.toolbar { display: flex; gap: 0.6rem; align-items: center; margin-bottom: 0.7rem; flex-wrap: wrap; }
-select, input { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 0.2rem 0.4rem; }
-.delta.up { color: var(--bad); }
-.delta.down { color: var(--ok); }
+
+@layer base {
+  html { -webkit-text-size-adjust: 100%; }
+  body { @apply bg-background font-sans text-sm text-foreground antialiased; overflow-x: hidden; }
+  h1 { @apply font-display text-xl font-bold tracking-tight wrap-anywhere md:text-2xl; }
+  h2 { @apply font-display text-base font-bold; }
+  :focus-visible { @apply outline-2 outline-offset-2 outline-ring; }
+  code, .mono { @apply font-mono text-[13px]; }
+}

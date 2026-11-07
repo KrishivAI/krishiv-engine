@@ -2135,27 +2135,50 @@ impl Session {
         Err(name.not_found())
     }
 
-    /// `INSERT INTO|OVERWRITE [TABLE] name [(columns)] [BY NAME] query`.
+    /// `INSERT INTO|OVERWRITE [TABLE] name [(columns)] [BY NAME] query`, or the multi-table
+    /// `FROM source INSERT ... SELECT ... [INSERT ... SELECT ...]`.
+    ///
+    /// A multi-table insert writes each clause's rows of the shared source (the clause reads as
+    /// `FROM source SELECT ...`). Every clause is resolved and checked before the first write, so
+    /// a missing table, an unknown column or a column count mismatch in any clause writes nothing,
+    /// as in Spark 4.2.0; the clauses are then written in order. Spark plans them as one statement,
+    /// so a failure while one runs also leaves the others unwritten; here the clauses before it
+    /// stay written (`docs/known-differences.md`).
     pub(crate) async fn exec_insert(
         &self,
         i: &Insert,
         original: &str,
         ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
-        if i.source.is_some() || i.clauses.len() != 1 {
-            return Err(unsupported("multi-table INSERT"));
+        let clauses: Vec<InsertClause> = match &i.source {
+            None => i.clauses.clone(),
+            Some(source) => i.clauses.iter().map(|c| from_source(source, c)).collect(),
+        };
+        if clauses.len() > 1 {
+            // Spark resolves every target before any clause's columns: a missing table is the
+            // error even when an earlier clause names an unknown column.
+            let env = self.query_env();
+            for clause in &clauses {
+                let name = self.table_name(&clause.name, &env)?;
+                self.table_for_write(&name, "INSERT", &env)?;
+            }
+            for clause in &clauses {
+                self.insert_clause(clause, original, ids, true).await?;
+            }
         }
-        for clause in &i.clauses {
-            self.insert_clause(clause, original, ids).await?;
+        for clause in &clauses {
+            self.insert_clause(clause, original, ids, false).await?;
         }
         self.empty_frame().await
     }
 
+    /// `c` checked through to the rows it would write (`dry`), or written.
     async fn insert_clause(
         &self,
         c: &InsertClause,
         original: &str,
         ids: &[krishiv_sql::ast::Span],
+        dry: bool,
     ) -> Result<(), KrishivError> {
         let env = self.query_env();
         if c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some() {
@@ -2225,6 +2248,7 @@ impl Session {
                 by_name: c.by_name,
                 overwrite: c.overwrite,
                 statics: &statics,
+                dry,
             },
         )
         .await
@@ -2245,6 +2269,7 @@ impl Session {
             by_name,
             overwrite,
             statics,
+            dry,
         } = *target;
         let env = self.query_env();
         let analysis = source.analyzed_in(self.query_env()).await?;
@@ -2324,6 +2349,10 @@ impl Session {
             select.push(value.alias(&column.name));
         }
         let df = base.select(select);
+        if dry {
+            // Every check of the write, without writing.
+            return self.check_table_write(table, &df, overwrite).await;
+        }
         let mode = if overwrite { "overwrite" } else { "append" };
         let written = self.write_table_rows(table, &df, mode, &mut None).await;
         // Data may have changed even when the write failed late.
@@ -2608,6 +2637,7 @@ impl Session {
             by_name: false,
             overwrite,
             statics: &[],
+            dry: false,
         };
         self.insert_rows(&name, &found, df, &target).await
     }
@@ -2642,6 +2672,7 @@ impl Session {
                     by_name: false,
                     overwrite: false,
                     statics: &[],
+                    dry: false,
                 };
                 return self.insert_rows(&name, &table, df, &target).await;
             }
@@ -2717,18 +2748,21 @@ impl Session {
         mode: &str,
         pre: &mut Option<Admitted>,
     ) -> Result<Vec<String>, KrishivError> {
-        if table.layout.bucket.is_some() {
-            return Err(unsupported("writes to bucketed tables"));
-        }
-        let mut writer = df.write().format(&table.provider).mode(mode);
-        if table.is_partitioned() {
-            writer = writer.partition_by(&table.layout.partition_columns);
-        }
-        for (k, v) in &table.options {
-            writer = writer.option(k, v);
-        }
-        writer
+        table_writer(table, df, mode)?
             .save_reporting(&table.location.display().to_string(), pre.take())
+            .await
+    }
+
+    /// The checks [`Self::write_table_rows`] makes before it writes, without writing.
+    async fn check_table_write(
+        &self,
+        table: &CatalogTable,
+        df: &DataFrame,
+        overwrite: bool,
+    ) -> Result<(), KrishivError> {
+        let mode = if overwrite { "overwrite" } else { "append" };
+        table_writer(table, df, mode)?
+            .check_save(&table.location.display().to_string())
             .await
     }
 }
@@ -2740,6 +2774,25 @@ enum ColumnChange {
     Position,
     Nullability,
     DropDefault,
+}
+
+/// The writer of `df` into `table` with `mode` (bucketed tables refused).
+fn table_writer(
+    table: &CatalogTable,
+    df: &DataFrame,
+    mode: &str,
+) -> Result<crate::dataframe::DataFrameWriter, KrishivError> {
+    if table.layout.bucket.is_some() {
+        return Err(unsupported("writes to bucketed tables"));
+    }
+    let mut writer = df.write().format(&table.provider).mode(mode);
+    if table.is_partitioned() {
+        writer = writer.partition_by(&table.layout.partition_columns);
+    }
+    for (k, v) in &table.options {
+        writer = writer.option(k, v);
+    }
+    Ok(writer)
 }
 
 /// `UNSUPPORTED_FEATURE.TABLE_OPERATION` for `operation` on the table `name`.
@@ -2794,6 +2847,41 @@ struct InsertTarget<'a> {
     by_name: bool,
     overwrite: bool,
     statics: &'a [(String, String)],
+    /// Checked through to the rows it would write, not written.
+    dry: bool,
+}
+
+/// A clause of a multi-table insert as a single-table one: its query reads `FROM source`, as
+/// Spark's `visitMultiInsertQuery` gives each body the shared relation.
+fn from_source(source: &krishiv_sql::ast::FromClause, c: &InsertClause) -> InsertClause {
+    use krishiv_sql::ast::{FromStatement, Query, SetExpr, SetExprKind};
+    let mut body = (*c.query).clone();
+    let with = body.with.take();
+    let span = c.query.span;
+    let query = Query {
+        with,
+        body: SetExpr {
+            kind: SetExprKind::FromStatement(Box::new(FromStatement {
+                from: source.clone(),
+                bodies: vec![body],
+                span,
+            })),
+            span,
+        },
+        order_by: Vec::new(),
+        order_span: None,
+        cluster_by: Vec::new(),
+        distribute_by: Vec::new(),
+        sort_by: Vec::new(),
+        windows: Vec::new(),
+        limit: None,
+        offset: None,
+        span,
+    };
+    InsertClause {
+        query: Box::new(query),
+        ..c.clone()
+    }
 }
 
 /// The `PARTITIONED BY` column names and `CLUSTERED BY` of a new table.

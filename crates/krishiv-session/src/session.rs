@@ -1837,6 +1837,7 @@ impl Session {
         target: WriteTarget,
         types: &[DataType],
         pre: &mut Option<Admitted>,
+        dry: bool,
     ) -> Result<Vec<String>, KrishivError> {
         let WriteTarget {
             format,
@@ -1884,6 +1885,10 @@ impl Session {
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.
         crate::access::still_physical(self, &at)?;
+        // Checked only (`dry`): nothing is admitted or replaced.
+        if dry {
+            return Ok(Vec::new());
+        }
         // The admission permit before anything is replaced: `DirectoryWrite::begin` deletes what
         // an overwrite replaces, which a refused or cancelled query must not have done.
         // Admitted by the caller already (it changed something before this write), else here.

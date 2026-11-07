@@ -222,8 +222,8 @@ fn a_closed_definition_with_an_in_subquery_read_again_matches_its_expansion() ->
             &["1|1", "2|1", "3|1"][..],
         ),
     ];
-    // A definition whose only subquery sits in its select list, over a leaf
-    // with no ids of its own below the subquery's.
+    // A definition with a subquery in its select list, read twice: the copy
+    // must move the subquery's ids as well as the `FROM` leaf's.
     let d2 = "select (select max(y1) from y) m, y2 from y";
     let extra = [(
         format!(

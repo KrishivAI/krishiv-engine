@@ -86,6 +86,13 @@ fn value(a: &ArrayRef, i: usize) -> Value {
     match a.data_type() {
         DataType::Int32 => Value::from(a.as_primitive::<Int32Type>().value(i)),
         DataType::Int64 => Value::from(a.as_primitive::<Int64Type>().value(i)),
+        // Spark's JSON writes a decimal as a number.
+        DataType::Decimal128(_, scale) => {
+            let unscaled = a
+                .as_primitive::<arrow_array::types::Decimal128Type>()
+                .value(i);
+            Value::from(unscaled as f64 / 10_f64.powi(i32::from(*scale)))
+        }
         DataType::Date32 => {
             let (y, m, d) = civil_from_days(i64::from(a.as_primitive::<Date32Type>().value(i)));
             Value::from(format!("{y:04}-{m:02}-{d:02}"))
@@ -264,36 +271,6 @@ const EXPECTED_SKIPPED: usize = 7;
 
 /// Cases Krishiv does not match yet, with the reason. Each must still mismatch: a fix removes its line.
 const KNOWN_GAPS: &[(&str, &str)] = &[
-    (
-        "inv_int_key_month_bound",
-        "the bound is cast to a numeric key's type (an INT key takes INTERVAL '1' MONTH as 1)",
-    ),
-    ("inv_bigint_key_month_bound", "as inv_int_key_month_bound"),
-    ("inv_dec_key_month_bound", "as inv_int_key_month_bound"),
-    (
-        "ansi_true_int_key_month_bound_cast",
-        "as inv_int_key_month_bound",
-    ),
-    (
-        "ansi_true_int_key_year_bound_cast",
-        "as inv_int_key_month_bound",
-    ),
-    (
-        "ansi_false_int_key_month_bound_cast",
-        "as inv_int_key_month_bound",
-    ),
-    (
-        "ansi_false_int_key_year_bound_cast",
-        "as inv_int_key_month_bound",
-    ),
-    (
-        "inv_double_key_month_bound",
-        "RANGE_FRAME_INVALID_TYPE for a DOUBLE key with an interval bound (ours: unsupported)",
-    ),
-    (
-        "inv_bool_key_month_bound",
-        "RANGE_FRAME_INVALID_TYPE for a BOOLEAN key (ours: SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE)",
-    ),
     (
         "d_calendar_interval_bound_legacy_off",
         "RANGE_FRAME_INVALID_TYPE for a calendar-interval bound (ours: unsupported)",

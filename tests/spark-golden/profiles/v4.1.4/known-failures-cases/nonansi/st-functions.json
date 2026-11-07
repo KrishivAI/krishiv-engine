@@ -1,0 +1,21 @@
+{
+  "cases": {
+    "depends-on-command": [
+      12,
+      14,
+      16,
+      18,
+      20,
+      22,
+      24,
+      26,
+      28
+    ],
+    "other-version": [
+      33,
+      37
+    ]
+  },
+  "file": "nonansi/st-functions",
+  "format_version": 1
+}
