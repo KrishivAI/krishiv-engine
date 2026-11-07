@@ -238,13 +238,19 @@ fn a_neither_side_in_conjunct_stays_a_join_in_every_width_and_mode() -> R {
         let q = "select count(*) from t join t2 on 3 in (select e from t3)";
         assert_eq!(run(&s, q)?, rows(&["0"]), "legacy {legacy}: {q}");
     }
+    // A `NOT (multi-value IN)` conjunct is a null-aware anti join: (5, 5) matches a `t3` row, so
+    // NOT IN is false; (5, 6) matches none but meets the all-NULL row, so IN is NULL and NOT IN
+    // is not TRUE either (a plain anti join would keep the pairs and count 2).
     for q in [
         "select count(*) from t join t2 on not ((5, 5) in (select e, e from t3))",
-        "select count(*) from t join t2 on (5 in (select e from t3)) is null",
+        "select count(*) from t join t2 on not ((5, 6) in (select e, e from t3))",
     ] {
-        let e = error_class(&s, q);
-        assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{q}: {e}");
+        assert_eq!(run(&s, q)?, rows(&["0"]), "{q}");
     }
+    // Nested under `IS NULL` NULL and false differ, and the rewrite is still refused.
+    let q = "select count(*) from t join t2 on (5 in (select e from t3)) is null";
+    let e = error_class(&s, q);
+    assert!(e.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{q}: {e}");
     Ok(())
 }
 
@@ -264,5 +270,33 @@ fn a_nested_correlation_inside_the_limit_input_is_not_refused() -> R {
         e.contains("ACCESSING_OUTER_QUERY_COLUMN_IS_NOT_ALLOWED"),
         "{q}: {e}"
     );
+    Ok(())
+}
+
+/// A conjunct `NOT (v IN (subquery))` that reads neither side keeps a pair only
+/// when it is TRUE: a null-aware anti join, which every join type plans (a FULL
+/// OUTER join cannot hold an `exists` expression, which the three-valued rewrite
+/// of a nested `IN` would make). `t` holds 1 and NULL, `t2` holds 2, `t3` holds 5
+/// and NULL, and `t_empty` nothing. Rows are worked out from those: 5 is in `t3`
+/// (NOT IN false), 7 is not but `t3` has a NULL (NULL), and nothing is in
+/// `t_empty` (TRUE). Spark 4.3's `in-joins` statement 32 is the first shape.
+#[test]
+fn a_not_in_conjunct_that_reads_neither_side_plans_in_a_full_outer_join() -> R {
+    let s = session()?;
+    let full = |cond: &str| format!("select t.c, t2.d from t full outer join t2 on ({cond})");
+    // FALSE and NULL: no pair matches, so each side's rows come back alone.
+    for cond in ["5 not in (select e from t3)", "7 not in (select e from t3)"] {
+        assert_eq!(
+            run(&s, &full(cond))?,
+            rows(&["1|NULL", "NULL|NULL", "NULL|2"]),
+            "{cond}"
+        );
+    }
+    // TRUE: every pair matches.
+    let cond = "7 not in (select e from t_empty)";
+    assert_eq!(run(&s, &full(cond))?, rows(&["1|2", "NULL|2"]), "{cond}");
+    // The same conjunct beside an equality, and as a left join.
+    let q = "select t.c, t2.d from t left join t2 on (7 not in (select e from t_empty))";
+    assert_eq!(run(&s, q)?, rows(&["1|2", "NULL|2"]), "{q}");
     Ok(())
 }

@@ -221,20 +221,39 @@ fn in_reads(s: &Arc<Expr>, values: &[Arc<Expr>]) -> HashSet<AttrId> {
 /// conjunct of its own it is a plain join. A NULL literal value is left to
 /// [`check_in`].
 pub(super) fn three_valued_ins(on: &Arc<Expr>, legacy: bool) -> R<Arc<Expr>> {
-    // A conjunct that is itself such an `IN` keeps a row only when it is
-    // true, so NULL and false agree: it stays an ordinary join. Only an `IN`
-    // under `NOT`, `OR`, `IS NULL` and the like tells them apart.
+    // A conjunct that is itself such an `IN`, or `NOT` of one, keeps a row only
+    // when it is true, so NULL and false agree: it stays an existence join
+    // (`NOT IN` the null-aware anti join, which is true only when no value
+    // matches and none is NULL), as any join type can plan. Only an `IN` under
+    // `OR`, `IS NULL` and the like tells NULL and false apart.
     let kept: Vec<Arc<Expr>> = super::subquery::conjuncts(on)
         .into_iter()
-        .map(|c| match &c.node {
-            ExprNode::Subquery {
-                kind: SubqueryKind::In(_),
-                ..
-            } => Ok(c),
-            _ => three_valued_nested(&c, legacy),
+        .map(|c| {
+            if is_in(&c) || is_not_of_in(&c) {
+                Ok(c)
+            } else {
+                three_valued_nested(&c, legacy)
+            }
         })
         .collect::<R<_>>()?;
     Ok(super::subquery::and_all(kept).unwrap_or_else(|| Arc::clone(on)))
+}
+
+/// Whether `e` is an `IN` subquery.
+fn is_in(e: &Arc<Expr>) -> bool {
+    matches!(
+        &e.node,
+        ExprNode::Subquery {
+            kind: SubqueryKind::In(_),
+            ..
+        }
+    )
+}
+
+/// Whether `e` is `NOT` of an `IN` subquery.
+fn is_not_of_in(e: &Arc<Expr>) -> bool {
+    matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Function(f))
+        if f.id == crate::FunctionId::Builtin(Builtin::Not) && f.args.len() == 1 && is_in(&f.args[0]))
 }
 
 /// [`three_valued_ins`] for every `IN` in `on`, whatever its position.
