@@ -94,7 +94,7 @@ pub use runtime_filter::{
     DisabledReason, FilterCounts, FilterForm, FilterId, FilterSnapshot, KeyFilter,
     KeyFilterBuilder, KeyFilterOptions, Published, RowHash, RuntimeFilter, ScanFilter,
 };
-pub use scan::{ScanOptions, ScanStream};
+pub use scan::{ReadStats, ScanOptions, ScanStream};
 pub use scan_gate::ScanGate;
 pub use schema_map::{FIELD_ID_KEY, SchemaMapper};
 pub use stats::{ColumnStatistics, FileStatistics, Precision, TriState, prune};

@@ -47,6 +47,7 @@ fn exchange(id: u64, input: PhysNode, partitioning: Partitioning) -> PhysNode {
         id: ExchangeId(id),
         input: Box::new(input),
         partitioning,
+        filters: Vec::new(),
     })
 }
 
@@ -255,4 +256,139 @@ fn fragments_round_trip_through_the_plan_codec() {
         let back = krishiv_plan_codec::decode(&bytes).unwrap();
         assert_eq!(back.root(), s.plan.root());
     }
+}
+
+fn scan(id: u64) -> PhysNode {
+    PhysNode::Scan(krishiv_exec::physical::ScanNode {
+        id: krishiv_exec::physical::ScanId(id),
+        scan: krishiv_plan::Scan {
+            source: krishiv_plan::ReadSource::Table {
+                name: vec!["t".to_owned()],
+                options: BTreeMap::new(),
+            },
+            output: vec![krishiv_plan::BoundColumn {
+                id: AttrId(id),
+                name: "id".to_owned(),
+                data_type: krishiv_types::DataType::Long,
+                nullable: false,
+            }],
+            version: None,
+        },
+        projection: vec![krishiv_io::ColumnPath::new("id")],
+        filter: None,
+        runtime_filters: Vec::new(),
+        row_stage: krishiv_exec::RowStageSettings::default(),
+        row_id: false,
+    })
+}
+
+/// Review m3 of T176 unit 1: a stage lists the scans its tasks may split
+/// (the streaming side), and dealt splits for any other scan are refused,
+/// since a dealt build side would lose rows.
+#[test]
+fn only_streaming_scans_are_dealt() {
+    use krishiv_exec::physical::{
+        HashJoinPlan, JoinDistribution, PhysicalPlan as Fragment, ScanId, ScanSplits,
+    };
+
+    let join = PhysNode::HashJoin(HashJoinPlan {
+        probe: Box::new(scan(1)),
+        build: Box::new(scan(2)),
+        join_type: krishiv_exec::JoinType::Inner,
+        probe_keys: vec![0],
+        build_keys: vec![0],
+        null_safe: vec![false],
+        residual: None,
+        single_match: false,
+        distinct_build: false,
+        runtime_filters: Vec::new(),
+        distribution: JoinDistribution::Broadcast,
+    });
+    let stages = fragment(&plan(exchange(1, join, hash())), &schemas(&[1])).unwrap();
+    let map = &stages[0];
+    assert_eq!(
+        map.dealable.iter().copied().collect::<Vec<_>>(),
+        vec![ScanId(1)]
+    );
+
+    #[derive(Debug)]
+    struct Deal(u64);
+    impl crate::StageSplits for Deal {
+        fn splits(
+            &self,
+            _fragment: &Fragment,
+            _tasks: u32,
+        ) -> Result<Option<Vec<BTreeMap<ScanId, ScanSplits>>>, krishiv_common::error::KrishivError>
+        {
+            let none = ScanSplits::Files {
+                files: Arc::from(Vec::new()),
+                partitions: Vec::new(),
+            };
+            Ok(Some(vec![BTreeMap::from([(ScanId(self.0), none)]); 2]))
+        }
+    }
+    let tasks = crate::stage_tasks(&stages, 4, Some(&Deal(1))).unwrap();
+    assert_eq!(tasks[0].len(), 2);
+    let e = crate::stage_tasks(&stages, 4, Some(&Deal(2))).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.message().contains("scan 2"), "{e}");
+}
+
+/// The streaming side of a sort-merge or nested-loop join is its probe:
+/// only those scans may be dealt.
+#[test]
+fn streaming_scans_follow_every_join_kind_to_its_probe() {
+    use krishiv_exec::physical::{NestedLoopPlan, ScanId, SortMergeJoinPlan};
+
+    let nested = PhysNode::NestedLoopJoin(NestedLoopPlan {
+        probe: Box::new(scan(1)),
+        build: Box::new(scan(2)),
+        join_type: krishiv_exec::JoinType::Inner,
+        residual: None,
+    });
+    let merge = PhysNode::SortMergeJoin(SortMergeJoinPlan {
+        probe: Box::new(nested),
+        build: Box::new(scan(3)),
+        join_type: krishiv_exec::JoinType::Inner,
+        probe_keys: vec![0],
+        build_keys: vec![0],
+        null_safe: vec![false],
+        residual: None,
+        single_match: false,
+    });
+    let ids: Vec<ScanId> = crate::streaming_scans(&merge)
+        .iter()
+        .map(|s| s.id)
+        .collect();
+    assert_eq!(ids, vec![ScanId(1)]);
+}
+
+/// A nested loop that returns build rows (right or full outer) runs as one
+/// task even where it reads a hash exchange: each task would emit the
+/// unmatched build rows of the whole broadcast (design P2-T052b §2.2; the
+/// local/final split moves to P5, owner decision 2026-11-06). An inner
+/// nested loop over the same inputs may run as many tasks.
+#[test]
+fn a_build_preserving_nested_loop_runs_as_one_task() {
+    use krishiv_exec::JoinType;
+    use krishiv_exec::physical::NestedLoopPlan;
+
+    let stage = |join_type: JoinType| {
+        let nested = PhysNode::NestedLoopJoin(NestedLoopPlan {
+            probe: Box::new(exchange(1, range(), hash())),
+            build: Box::new(exchange(2, range(), Partitioning::Broadcast)),
+            join_type,
+            residual: None,
+        });
+        let root = exchange(3, nested, Partitioning::Single);
+        let stages = fragment(&plan(root), &schemas(&[1, 2, 3])).unwrap();
+        assert_eq!(stages.len(), 4);
+        // Stage 2 holds the join: it reads exchanges 1 and 2, writes 3.
+        assert_eq!(output(&stages[2]), Some(3));
+        stages[2].single
+    };
+    assert!(stage(JoinType::RightOuter));
+    assert!(stage(JoinType::FullOuter));
+    assert!(!stage(JoinType::Inner));
+    assert!(!stage(JoinType::LeftOuter));
 }

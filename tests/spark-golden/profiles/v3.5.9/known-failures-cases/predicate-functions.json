@@ -1,0 +1,17 @@
+{
+  "cases": {
+    "v35-ansi-default": [
+      5,
+      6,
+      7,
+      12,
+      13,
+      19,
+      20,
+      26,
+      27
+    ]
+  },
+  "file": "predicate-functions",
+  "format_version": 1
+}

@@ -1,0 +1,15 @@
+{
+  "cases": {
+    "other-version": [
+      68,
+      69,
+      117,
+      118,
+      119,
+      121,
+      122
+    ]
+  },
+  "file": "timestampNTZ/timestamp-ansi",
+  "format_version": 1
+}

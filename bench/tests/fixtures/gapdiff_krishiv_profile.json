@@ -1,0 +1,941 @@
+{
+ "detailed": true,
+ "environment": {
+  "arch": "x86_64",
+  "krishiv_version": "0.1.0-alpha",
+  "os": "linux"
+ },
+ "format": "krishiv.query-profile",
+ "minor": 1,
+ "operators": [
+  {
+   "extra": [],
+   "id": 0,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 0,
+    "min_rows_out": 0
+   },
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 0,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 2095,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 2095,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 10,
+    "rows_out": 0,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Result",
+   "node": null,
+   "pipelines": [
+    0
+   ],
+   "role": "sink"
+  },
+  {
+   "extra": [],
+   "id": 1,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 0,
+    "min_rows_out": 0
+   },
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 0,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 60610,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 60610,
+    "morsels": 0,
+    "peak_reserved_bytes": 1008,
+    "rows_in": 10,
+    "rows_out": 0,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "TopN",
+   "node": 0,
+   "pipelines": [
+    1
+   ],
+   "role": "sink"
+  },
+  {
+   "extra": [],
+   "id": 2,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 0,
+    "min_rows_out": 0
+   },
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 0,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 115962,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 115962,
+    "morsels": 0,
+    "peak_reserved_bytes": 1008,
+    "rows_in": 35,
+    "rows_out": 0,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "TopN",
+   "node": 2,
+   "pipelines": [
+    2
+   ],
+   "role": "sink"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "groups",
+     "value": 35
+    },
+    {
+     "kind": "count",
+     "name": "spill_runs",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_files",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "repartitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "hash_entries",
+     "value": 35
+    },
+    {
+     "kind": "count",
+     "name": "hash_buckets",
+     "value": 2048
+    },
+    {
+     "kind": "count",
+     "name": "hash_resizes",
+     "value": 1
+    },
+    {
+     "kind": "text",
+     "name": "hash_index",
+     "value": "swiss"
+    },
+    {
+     "kind": "count",
+     "name": "row_abandons",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "row_final_tasks",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "row_final_spills",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "row_final_flushes",
+     "value": 0
+    },
+    {
+     "kind": "text",
+     "name": "table_layout",
+     "value": "rows"
+    },
+    {
+     "kind": "count",
+     "name": "probe_lookups",
+     "value": 66667
+    },
+    {
+     "kind": "count",
+     "name": "probe_key_compares",
+     "value": 66632
+    },
+    {
+     "kind": "max",
+     "name": "max_probe_length",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "exchange_rows",
+     "value": 35
+    },
+    {
+     "kind": "count",
+     "name": "exchange_bytes",
+     "value": 102340
+    },
+    {
+     "kind": "count",
+     "name": "exchange_keys",
+     "value": 35
+    },
+    {
+     "kind": "count",
+     "name": "exchange_map_tasks",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "exchange_partitions",
+     "value": 13
+    },
+    {
+     "kind": "count",
+     "name": "exchange_max_partition_rows",
+     "value": 6
+    }
+   ],
+   "id": 3,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 0,
+    "min_rows_out": 0
+   },
+   "metrics": {
+    "batches_in": 52,
+    "batches_out": 0,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 6629583,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 6629583,
+    "morsels": 0,
+    "peak_reserved_bytes": 256649,
+    "rows_in": 66667,
+    "rows_out": 0,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashAggregate",
+   "node": 6,
+   "pipelines": [
+    3
+   ],
+   "role": "sink"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "build_rows",
+     "value": 1000
+    },
+    {
+     "kind": "count",
+     "name": "hash_entries",
+     "value": 1000
+    },
+    {
+     "kind": "count",
+     "name": "hash_buckets",
+     "value": 2048
+    },
+    {
+     "kind": "count",
+     "name": "spilled_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_file_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "finalize_ns",
+     "value": 532212
+    },
+    {
+     "kind": "count",
+     "name": "finalize_concat_ns",
+     "value": 75284
+    },
+    {
+     "kind": "count",
+     "name": "finalize_index_ns",
+     "value": 80352
+    },
+    {
+     "kind": "max",
+     "name": "finalize_max_partition_ns",
+     "value": 41616
+    },
+    {
+     "kind": "text",
+     "name": "hash_index",
+     "value": "row-flat+chain"
+    }
+   ],
+   "id": 4,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 0,
+    "min_rows_out": 0
+   },
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 0,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 731015,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 731015,
+    "morsels": 0,
+    "peak_reserved_bytes": 78304,
+    "rows_in": 1000,
+    "rows_out": 0,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashJoinBuild",
+   "node": 8,
+   "pipelines": [
+    4
+   ],
+   "role": "sink"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "scan_splits",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "scan_rows_decoded",
+     "value": 1000
+    },
+    {
+     "kind": "count",
+     "name": "scan_bytes",
+     "value": 5521
+    }
+   ],
+   "id": 5,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 1000,
+    "min_rows_out": 1000
+   },
+   "metrics": {
+    "batches_in": 0,
+    "batches_out": 1,
+    "blocked_on_io_ns": 405917,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 276820,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 405917,
+    "max_driver_compute_time_ns": 276820,
+    "morsels": 1,
+    "peak_reserved_bytes": 0,
+    "rows_in": 0,
+    "rows_out": 1000,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "FileScan",
+   "node": 12,
+   "pipelines": [
+    4
+   ],
+   "role": "source"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "scan_splits",
+     "value": 1
+    },
+    {
+     "kind": "count",
+     "name": "scan_units",
+     "value": 4
+    },
+    {
+     "kind": "count",
+     "name": "scan_units_pruned",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "scan_rows_decoded",
+     "value": 200000
+    },
+    {
+     "kind": "count",
+     "name": "scan_bytes",
+     "value": 1244711
+    }
+   ],
+   "id": 6,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 200000,
+    "min_rows_out": 200000
+   },
+   "metrics": {
+    "batches_in": 0,
+    "batches_out": 52,
+    "blocked_on_io_ns": 3778886,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 10020755,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 3778886,
+    "max_driver_compute_time_ns": 10020755,
+    "morsels": 1,
+    "peak_reserved_bytes": 933532,
+    "rows_in": 0,
+    "rows_out": 200000,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "FileScan",
+   "node": 10,
+   "pipelines": [
+    3
+   ],
+   "role": "source"
+  },
+  {
+   "extra": [],
+   "id": 7,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 66667,
+    "min_rows_out": 66667
+   },
+   "metrics": {
+    "batches_in": 52,
+    "batches_out": 52,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 4667731,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 4667731,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 200000,
+    "rows_out": 66667,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Filter",
+   "node": 9,
+   "pipelines": [
+    3
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [
+    {
+     "kind": "count",
+     "name": "probe_rows",
+     "value": 66667
+    },
+    {
+     "kind": "count",
+     "name": "probe_spilled_rows",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "spill_file_bytes",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "repartitions",
+     "value": 0
+    },
+    {
+     "kind": "max",
+     "name": "recursion_depth",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_hash_entries",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "grace_hash_buckets",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "reversed_partitions",
+     "value": 0
+    },
+    {
+     "kind": "count",
+     "name": "probe_table_ns",
+     "value": 4475255
+    },
+    {
+     "kind": "count",
+     "name": "probe_lookups",
+     "value": 66667
+    },
+    {
+     "kind": "count",
+     "name": "probe_key_compares",
+     "value": 67000
+    },
+    {
+     "kind": "max",
+     "name": "max_probe_length",
+     "value": 2
+    }
+   ],
+   "id": 8,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 66667,
+    "min_rows_out": 66667
+   },
+   "metrics": {
+    "batches_in": 52,
+    "batches_out": 52,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 9926905,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 9926905,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 66667,
+    "rows_out": 66667,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashJoinProbe",
+   "node": 8,
+   "pipelines": [
+    3
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [],
+   "id": 9,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 66667,
+    "min_rows_out": 66667
+   },
+   "metrics": {
+    "batches_in": 52,
+    "batches_out": 52,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 48498,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 48498,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 66667,
+    "rows_out": 66667,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Project",
+   "node": 7,
+   "pipelines": [
+    3
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [],
+   "id": 10,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 35,
+    "min_rows_out": 35
+   },
+   "metrics": {
+    "batches_in": 0,
+    "batches_out": 1,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 48379,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 48379,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 0,
+    "rows_out": 35,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "HashAggregate",
+   "node": 4,
+   "pipelines": [
+    2
+   ],
+   "role": "source"
+  },
+  {
+   "extra": [],
+   "id": 11,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 35,
+    "min_rows_out": 35
+   },
+   "metrics": {
+    "batches_in": 1,
+    "batches_out": 1,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 1798,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 1798,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 35,
+    "rows_out": 35,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "Project",
+   "node": 3,
+   "pipelines": [
+    2
+   ],
+   "role": "operator"
+  },
+  {
+   "extra": [],
+   "id": 12,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 10,
+    "min_rows_out": 10
+   },
+   "metrics": {
+    "batches_in": 0,
+    "batches_out": 1,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 5982,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 5982,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 0,
+    "rows_out": 10,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "TopN",
+   "node": 2,
+   "pipelines": [
+    1
+   ],
+   "role": "source"
+  },
+  {
+   "extra": [],
+   "id": 13,
+   "instances": {
+    "count": 1,
+    "max_rows_out": 10,
+    "min_rows_out": 10
+   },
+   "metrics": {
+    "batches_in": 0,
+    "batches_out": 1,
+    "blocked_on_io_ns": 0,
+    "blocked_on_memory_ns": 0,
+    "blocked_on_sink_ns": 0,
+    "compute_time_ns": 2214,
+    "drivers": 1,
+    "max_driver_blocked_on_io_ns": 0,
+    "max_driver_compute_time_ns": 2214,
+    "morsels": 0,
+    "peak_reserved_bytes": 0,
+    "rows_in": 0,
+    "rows_out": 10,
+    "spill_files": 0,
+    "spill_write_bytes": 0,
+    "spilled_bytes": 0,
+    "spills": 0
+   },
+   "name": "TopN",
+   "node": 0,
+   "pipelines": [
+    0
+   ],
+   "role": "source"
+  }
+ ],
+ "pipelines": [
+  {
+   "drivers": 1,
+   "ended_ns": 40111764,
+   "id": 0,
+   "started_ns": 40077299,
+   "threads": 1
+  },
+  {
+   "drivers": 1,
+   "ended_ns": 40067196,
+   "id": 1,
+   "started_ns": 39988310,
+   "threads": 1
+  },
+  {
+   "drivers": 1,
+   "ended_ns": 39801968,
+   "id": 2,
+   "started_ns": 39611286,
+   "threads": 1
+  },
+  {
+   "drivers": 1,
+   "ended_ns": 39513444,
+   "id": 3,
+   "started_ns": 1811897,
+   "threads": 2
+  },
+  {
+   "drivers": 1,
+   "ended_ns": 1748477,
+   "id": 4,
+   "started_ns": 173779,
+   "threads": 2
+  }
+ ],
+ "plan": [
+  {
+   "children": [
+    1
+   ],
+   "detail": "10, [s#7 DESC NULLS LAST]",
+   "id": 0,
+   "name": "TopN"
+  },
+  {
+   "children": [
+    2
+   ],
+   "detail": "SinglePartition",
+   "id": 1,
+   "name": "Exchange"
+  },
+  {
+   "children": [
+    3
+   ],
+   "detail": "10, [s#7 DESC NULLS LAST]",
+   "id": 2,
+   "name": "LocalTopN"
+  },
+  {
+   "children": [
+    4
+   ],
+   "detail": "[x#5, g#2, sum(v#1)#4611686018427387904 AS s#7, count(1)#4611686018427387905 AS c#8]",
+   "id": 3,
+   "name": "Project"
+  },
+  {
+   "children": [
+    5
+   ],
+   "detail": "keys=[x#5, g#2], functions=[sum(v#1), count(1)]",
+   "id": 4,
+   "name": "HashAggregate"
+  },
+  {
+   "children": [
+    6
+   ],
+   "detail": "hashpartitioning(x#5, g#2)",
+   "id": 5,
+   "name": "Exchange"
+  },
+  {
+   "children": [
+    7
+   ],
+   "detail": "keys=[x#5, g#2], functions=[sum(v#1), count(1)]",
+   "id": 6,
+   "name": "PartialHashAggregate"
+  },
+  {
+   "children": [
+    8
+   ],
+   "detail": "[v#1, g#2, x#5]",
+   "id": 7,
+   "name": "Project"
+  },
+  {
+   "children": [
+    9,
+    11
+   ],
+   "detail": "Inner, [k#0] = [k#4]",
+   "id": 8,
+   "name": "HashJoin"
+  },
+  {
+   "children": [
+    10
+   ],
+   "detail": "((v#1 % 3L) == 0L)",
+   "id": 9,
+   "name": "Filter"
+  },
+  {
+   "children": [],
+   "detail": "spark_catalog.default.fact [k#0, v#1, g#2], PushedFilters: [((v#1 % 3L) == 0L)]",
+   "id": 10,
+   "name": "Scan"
+  },
+  {
+   "children": [
+    12
+   ],
+   "detail": "",
+   "id": 11,
+   "name": "BroadcastExchange"
+  },
+  {
+   "children": [],
+   "detail": "spark_catalog.default.dim [k#4, x#5]",
+   "id": 12,
+   "name": "Scan"
+  }
+ ],
+ "query": {
+  "batches": 56,
+  "busy_ns": 36815931,
+  "drivers": 5,
+  "hash_probe_share": 0.12155756702173307,
+  "max_slice_ns": 5646427,
+  "memory": {
+   "limit_bytes": 2147483648,
+   "peak_reserved_bytes": 4194304
+  },
+  "stalls": 0,
+  "wall_time_ns": 40147149,
+  "workers": 1,
+  "yields": 56
+ },
+ "usage": {
+  "cpu_ns": 32538347,
+  "fidelity": "measured",
+  "peak_memory_bytes": 4194304,
+  "rows_out": 67722,
+  "scan": {
+   "bytes": 1250232,
+   "rows": 201000
+  },
+  "spill_bytes": 0,
+  "wall_ns": 40147149
+ },
+ "version": 1
+}

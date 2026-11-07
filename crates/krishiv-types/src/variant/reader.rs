@@ -503,6 +503,50 @@ fn validate_exact(
     Ok(kind)
 }
 
+/// Checks that no container in `value` nests deeper than
+/// [`super::builder::MAX_NESTING_DEPTH`] levels, the cap `parse_json` has
+/// (Spark 4.2.0). The walkers over a value (schema inference, JSON, the
+/// writer) recurse per level, so a deeper value would overflow the stack;
+/// it is `MALFORMED_VARIANT` instead. Iterative: each position is walked
+/// again only at a greater depth than before, so offsets shared between
+/// containers cannot make the walk exponential.
+fn check_depth(value: &[u8]) -> Result<(), KrishivError> {
+    use std::collections::HashMap;
+    let mut deepest: HashMap<usize, usize> = HashMap::new();
+    let mut stack: Vec<(usize, usize, usize)> = vec![(0, value.len(), 1)];
+    while let Some((pos, end, depth)) = stack.pop() {
+        let header = *value.get(pos).ok_or_else(malformed)?;
+        let basic = header & 0x03;
+        if basic < 2 {
+            continue;
+        }
+        if depth > super::builder::MAX_NESTING_DEPTH {
+            return Err(malformed());
+        }
+        if deepest.get(&pos).is_some_and(|d| *d >= depth) {
+            continue;
+        }
+        deepest.insert(pos, depth);
+        let view = parse_container(value, pos, end, basic == 2)?;
+        let count = usize::try_from(view.count).map_err(|_| malformed())?;
+        let data_end = view.data.checked_add(view.total).ok_or_else(malformed)?;
+        for i in 0..count {
+            let child = view
+                .data
+                .checked_add(read_off_at(value, &view, i)?)
+                .ok_or_else(malformed)?;
+            if child >= data_end {
+                return Err(malformed());
+            }
+            // Only containers can nest: skip the others without a push.
+            if value.get(child).is_some_and(|h| h & 0x03 >= 2) {
+                stack.push((child, data_end, depth + 1));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A validated borrow of one Variant value plus its shared dictionary.
 ///
 /// `new` checks the metadata (version 1, offset widths 1-4, monotonic
@@ -540,6 +584,14 @@ impl<'a> VariantRef<'a> {
     pub fn new(metadata: &'a [u8], value: &'a [u8]) -> Result<Self, KrishivError> {
         let meta = parse_metadata(metadata)?;
         let kind = validate_exact(value, 0, value.len(), &meta)?;
+        // Every level of nesting takes at least 4 bytes before its child
+        // (header, count, two offsets), so a shorter value cannot pass the
+        // cap and is not walked: the walk is for large values only.
+        if matches!(kind, VariantKind::Object | VariantKind::Array)
+            && value.len() > 4 * super::builder::MAX_NESTING_DEPTH
+        {
+            check_depth(value)?;
+        }
         let container = match kind {
             VariantKind::Object => Some(parse_container(value, 0, value.len(), true)?),
             VariantKind::Array => Some(parse_container(value, 0, value.len(), false)?),

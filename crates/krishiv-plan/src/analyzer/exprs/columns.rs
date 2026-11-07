@@ -969,10 +969,7 @@ impl Resolver<'_> {
         let shown = Some(named_as(
             &parent,
             pretty(&base, None),
-            &crate::ColumnRef {
-                name: Vec::new(),
-                plan_id: None,
-            },
+            &crate::ColumnRef::new(Vec::new()),
             origin,
         ));
         Ok(Bound {
@@ -1011,11 +1008,19 @@ impl Resolver<'_> {
             .iter()
             .flat_map(|r| r.hidden.iter().cloned())
             .collect();
+        // Only `HAVING` lends its aggregate to the subquery: in a select
+        // list or `ORDER BY`, Spark raises what the call raises in the
+        // subquery (`INVALID_WHERE_CONDITION`).
+        let having = cx
+            .agg_scope
+            .filter(|_| cx.op == "Filter")
+            .map(Arc::<[Attr]>::from);
         outer.push(super::super::resolve::Level {
             scope: scope.into(),
             lateral: false,
             hidden: hidden.into(),
             fallback,
+            having,
         });
         self.env(cx.env.ctes.clone(), cx.env.ctes_id, outer)
     }

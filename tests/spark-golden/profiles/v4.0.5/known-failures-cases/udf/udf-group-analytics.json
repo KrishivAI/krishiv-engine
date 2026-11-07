@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "test-udfs": [
+      18
+    ]
+  },
+  "file": "udf/udf-group-analytics",
+  "format_version": 1
+}

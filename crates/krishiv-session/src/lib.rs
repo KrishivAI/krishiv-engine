@@ -43,10 +43,12 @@
 
 mod access;
 mod admission;
+mod arrow_values;
 mod cache;
 mod cancel;
 mod carrier;
 mod catalog;
+mod collation_defaults;
 mod column;
 mod command;
 mod conf;

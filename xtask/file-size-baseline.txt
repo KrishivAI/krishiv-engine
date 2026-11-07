@@ -1,6 +1,7 @@
 # Hand-written Rust files over 2000 lines: `<lines> <path>`. They may shrink, never grow
 # (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
-4100 crates/krishiv-exec/src/aggregate/accumulator.rs
+# +31 lines over main: the decimal sum/avg unit-weight fast loops (E2 step 1)
+4131 crates/krishiv-exec/src/aggregate/accumulator.rs
 2067 crates/krishiv-exec/src/aggregate/hll.rs
 3156 crates/krishiv-exec/src/aggregate/rowtable.rs
 # +1 line (and in physical/instantiate.rs, window/tests.rs): the `udafs` spec field and the `Udf` aggregate variant (ADR 0045, T060a)
@@ -12,28 +13,31 @@
 2491 crates/krishiv-exec/src/planner/eval/cond.rs
 2626 crates/krishiv-exec/src/planner/eval/hof.rs
 3064 crates/krishiv-exec/src/window/tests.rs
-# +14: nth_value refuses an interval or timestamp offset as UNEXPECTED_INPUT_TYPE before its value check (T025 rest)
-2098 crates/krishiv-functions/src/registry/defs.rs
+2084 crates/krishiv-functions/src/registry/defs.rs
 3337 crates/krishiv-functions/src/registry/tests.rs
 4186 crates/krishiv-io/src/avro/tests.rs
 2215 crates/krishiv-kernels/src/csv.rs
 2429 crates/krishiv-kernels/src/map.rs
-# +2 over main: the implicit cast of a string to TIME(6) for the AnyTimeOrString parameter of time_trunc (T025 rest)
-2470 crates/krishiv-plan/src/analyzer/coerce.rs
+2468 crates/krishiv-plan/src/analyzer/coerce.rs
 # +9 lines over main: a cast of an alias (`v:a::int`) keeps the alias's name (T001c, PR #491)
-4588 crates/krishiv-plan/src/analyzer/ops.rs
+# +67 lines over main: USING-join keys through projections, windows and pipe boundaries (Widen::Hidden, P2b row 11)
+4655 crates/krishiv-plan/src/analyzer/ops.rs
 3098 crates/krishiv-plan/src/analyzer/subquery.rs
 5392 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 3020 crates/krishiv-session/src/catalog.rs
-2527 crates/krishiv-session/src/command.rs
-2630 crates/krishiv-session/src/dataframe.rs
-2789 crates/krishiv-session/src/session.rs
+2286 crates/krishiv-session/src/command.rs
+# +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
+2644 crates/krishiv-session/src/dataframe.rs
+# +5 lines over main: write_files' dry flag (multi-table INSERT)
+2794 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
-3291 crates/krishiv-session/src/table_commands.rs
+# +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
+3369 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
 2774 crates/krishiv-sql/src/lower.rs
-5263 crates/krishiv-sql/src/parser.rs
+# +21 lines over main: WITH ctes FROM source INSERT ... parses as a multi-table insert (P2b row 11)
+5246 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs
 2153 crates/krishiv-testkit/src/file_format/mod.rs

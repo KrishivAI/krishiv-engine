@@ -699,4 +699,46 @@ mod tests {
         );
         assert_eq!(ge.unwrap(), BooleanArray::from(vec![true]));
     }
+
+    #[test]
+    fn time_parse_reads_fields_of_at_most_two_digits() {
+        let ns = |h: i64, m: i64, sec: i64| ((h * 60 + m) * 60 + sec) * 1_000_000_000;
+        assert_eq!(time_parse("10:00:00"), Some(ns(10, 0, 0)));
+        assert_eq!(time_parse("T9:5:7"), Some(ns(9, 5, 7)));
+        // A third digit is not part of the field: it is trailing text.
+        assert_eq!(time_parse("10:00:030"), None);
+        assert_eq!(time_parse("10:030"), None);
+        assert_eq!(time_parse("100:00"), None);
+    }
+
+    #[test]
+    fn time_parse_keeps_the_fraction_to_microseconds() {
+        let base = (10 * 60 * 60) * 1_000_000_000_i64;
+        assert_eq!(time_parse("10:00:00.5"), Some(base + 500_000_000));
+        assert_eq!(time_parse("10:00:00.123456"), Some(base + 123_456_000));
+        // Digits past the sixth are dropped, not rounded.
+        assert_eq!(time_parse("10:00:00.1234569"), Some(base + 123_456_000));
+    }
+
+    #[test]
+    fn time_parse_twelve_hour_clock() {
+        let h = |hour: i64, minute: i64| (hour * 60 + minute) * 60 * 1_000_000_000;
+        assert_eq!(time_parse("1:00 AM"), Some(h(1, 0)));
+        assert_eq!(time_parse("1:00 PM"), Some(h(13, 0)));
+        assert_eq!(time_parse("11:30 am"), Some(h(11, 30)));
+        assert_eq!(time_parse("12:00 AM"), Some(h(0, 0)));
+        assert_eq!(time_parse("12:00 PM"), Some(h(12, 0)));
+        assert_eq!(time_parse("12:15 pm"), Some(h(12, 15)));
+        // The 12-hour clock has hours 1 to 12 only.
+        assert_eq!(time_parse("0:30 AM"), None);
+        assert_eq!(time_parse("13:00 PM"), None);
+        assert_eq!(time_parse("13:00 AM"), None);
+        // The marker must be set off by whitespace and must be AM or PM.
+        assert_eq!(time_parse("10:00:00AM"), None);
+        assert_eq!(time_parse("10:00:00 XM"), None);
+        assert_eq!(time_parse("10:00:00 AM x"), None);
+        // 24-hour hours stop at 23.
+        assert_eq!(time_parse("24:00"), None);
+        assert_eq!(time_parse("23:59:59"), Some(h(23, 59) + 59_000_000_000));
+    }
 }

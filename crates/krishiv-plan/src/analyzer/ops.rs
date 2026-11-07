@@ -16,6 +16,7 @@ use krishiv_common::error::{
     UnresolvedUsingColumnForJoin, UnsupportedExprForOperator,
     UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy, UnsupportedGeneratorNestedInExpressions,
+    UnsupportedSubqueryExpressionCategoryAggregateFunctionMixedOuterLocalReferences,
     UnsupportedSubqueryExpressionCategoryLateralJoinConditionNonDeterministic,
     UnsupportedSubqueryExpressionCategoryNonDeterministicLateralSubqueries,
     UnsupportedSubqueryExpressionCategoryUnsupportedInExistsSubquery,
@@ -26,8 +27,7 @@ use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::quoted_type;
 use super::exprs::{
-    Bound, Cx, WindowUse, builtin_name, names, pretty, semantic_key, synth_call, synth_call_of,
-    unresolved,
+    Bound, Cx, WindowUse, names, pretty, semantic_key, synth_call, synth_call_of, unresolved,
 };
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, FileMetadata, TableKind};
@@ -41,15 +41,15 @@ use krishiv_types::DataType;
 /// What [`Resolver::group_substitute`] reads and grows: the aggregate, the
 /// attributes it shows, and the output it adds for grouping expressions the
 /// select list does not name.
-struct Grouped<'a> {
-    info: &'a AggInfo,
-    env: &'a Arc<Env>,
-    op: &'static str,
-    visible: &'a HashSet<AttrId>,
-    memo: &'a mut HashMap<usize, u128>,
-    known: &'a mut Vec<(u128, Attr)>,
-    grown: &'a mut AggInfo,
-    pass: &'a mut Vec<Attr>,
+pub(super) struct Grouped<'a> {
+    pub(super) info: &'a AggInfo,
+    pub(super) env: &'a Arc<Env>,
+    pub(super) op: &'static str,
+    pub(super) visible: &'a HashSet<AttrId>,
+    pub(super) memo: &'a mut HashMap<usize, u128>,
+    pub(super) known: &'a mut Vec<(u128, Attr)>,
+    pub(super) grown: &'a mut AggInfo,
+    pub(super) pass: &'a mut Vec<Attr>,
 }
 
 /// The two attributes of a `USING` column.
@@ -275,8 +275,13 @@ impl Resolver<'_> {
                 offset,
             }))
         });
-        // A file table's `_metadata` is widened in on demand, in the other instance's ids.
-        let widen = c.hidden.iter().any(is_generated_metadata).then(|| {
+        // Hidden columns are widened in on demand, in the other instance's
+        // ids: a file table's `_metadata`, and the keys a `USING` join
+        // merged (`t1 JOIN (t2 JOIN t3 USING (a)) USING (a)` reading `t3.a`,
+        // where the right side is a second instance of `t1`'s plan).
+        let widen = (c.hidden.iter().any(is_generated_metadata)
+            || (!c.hidden.is_empty() && c.widen.is_some()))
+        .then(|| {
             Arc::new(Widen::Shift {
                 inner: c.clone(),
                 offset,
@@ -623,11 +628,8 @@ impl Resolver<'_> {
                         let item = Arc::new(
                             Expr::new(ExprNode::Alias {
                                 expr: Arc::new(
-                                    Expr::new(ExprNode::Column(crate::ColumnRef {
-                                        name,
-                                        plan_id: None,
-                                    }))
-                                    .with_origin(e.origin),
+                                    Expr::new(ExprNode::Column(crate::ColumnRef::new(name)))
+                                        .with_origin(e.origin),
                                 ),
                                 name: field,
                             })
@@ -655,7 +657,7 @@ impl Resolver<'_> {
                 // the local forms above (a local struct column of that name wins).
                 if let Some(outer) = self.outer_star(s, &cx, e.origin)? {
                     for b in outer {
-                        items.push(self.named(b)?);
+                        items.push(self.named(b, true)?);
                     }
                     continue;
                 }
@@ -700,7 +702,8 @@ impl Resolver<'_> {
                 cx.windows = WindowUse::Allowed;
                 self.bind(e, &cx)?
             };
-            let b = self.named(b)?;
+            let written_identifier = matches!(&e.node, ExprNode::Column(c) if c.by_identifier);
+            let b = self.named(b, !written_identifier)?;
             if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &b.expr.node {
                 lateral.push(Attr {
                     col: output.clone(),
@@ -743,19 +746,20 @@ impl Resolver<'_> {
     /// `b` as a named expression: an attribute, or aliased by Spark's
     /// generated name (a cast of a column keeps the column's name, a
     /// lateral alias otherwise reads `lateralAliasReference(name)`).
-    fn named(&mut self, b: Bound) -> Result<Bound, AnalysisError> {
+    /// With `bare` false (an item written `IDENTIFIER(..)`), a variable or a field of a dotted
+    /// path is named by its full shown form (`variablereference(..)`, `c1.c2`).
+    fn named(&mut self, b: Bound, bare: bool) -> Result<Bound, AnalysisError> {
         if let ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::Alias { .. }) =
             &b.expr.node
         {
             return Ok(b);
         }
         let shown = b.shown();
+        let bare = super::exprs::bare_name(&shown).filter(|_| bare);
         let zone = self.ctx.conf.session_zone;
         let name = match &shown.node {
             // A bare variable or a field of a dotted column path keeps its own name.
-            _ if super::exprs::bare_name(&shown).is_some() => super::exprs::bare_name(&shown)
-                .unwrap_or_default()
-                .to_owned(),
+            _ if bare.is_some() => bare.unwrap_or_default().to_owned(),
             ExprNode::Cast { expr, .. }
                 if matches!(expr.node, ExprNode::Resolved(ResolvedExpr::Column(_))) =>
             {
@@ -879,11 +883,36 @@ impl Resolver<'_> {
             exprs: exprs.clone(),
         };
         let mut r = self.make(origin, node, out, &[input]);
+        // Spark's `Project` keeps its child's hidden output: the columns a
+        // `USING` join merged away stay reachable by a qualified name
+        // through any projection (`|> extend`, `|> select`), up to an
+        // alias, an aggregate or a set operation. A file table's
+        // `_metadata` is not carried (it is widened from the scan).
+        let hidden: Vec<Attr> = input
+            .hidden
+            .iter()
+            .filter(|a| !is_generated_metadata(a) && !r.out.iter().any(|o| o.col.id == a.col.id))
+            .cloned()
+            .collect();
+        if !hidden.is_empty() {
+            r.hidden = hidden.into();
+        }
         r.widen = Some(Arc::new(Widen::Project {
             input: input.clone(),
             exprs,
         }));
         r
+    }
+
+    /// Whether `r` is the projection over a `USING` join that merges its
+    /// keys: one of its hidden columns is an output of its input.
+    fn merges_using_keys(r: &Rel) -> bool {
+        match r.widen.as_deref() {
+            Some(Widen::Project { input, .. }) => r.hidden.iter().any(|h| {
+                !is_generated_metadata(h) && input.out.iter().any(|o| o.col.id == h.col.id)
+            }),
+            _ => false,
+        }
     }
 
     pub(super) fn filter(
@@ -942,11 +971,19 @@ impl Resolver<'_> {
         let (mut bounds, wide) =
             self.bind_missing(&c, std::slice::from_ref(predicate), env, "Filter", false)?;
         let b = bounds.remove(0);
-        if b.agg.is_some() {
+        if let Some(x) = super::having_subquery::mixed_aggregate(&b.expr) {
+            return Err(AnalysisError::new(
+                UnsupportedSubqueryExpressionCategoryAggregateFunctionMixedOuterLocalReferences {
+                    function: super::having_subquery::mixed_sql(&x, &wide.out, env),
+                },
+                p.origin,
+            ));
+        }
+        if b.agg.is_some() && !super::having_subquery::outer_aggregates_only(&b.expr, env) {
             return Err(AnalysisError::new(
                 InvalidWhereCondition {
                     condition: format!("\"{}\"", pretty(&b.shown(), self.ctx.conf.session_zone)),
-                    expression_list: aggregate_sql(&b.expr, &wide.out),
+                    expression_list: super::aggregate_text::aggregate_sql(&b.expr, &wide.out),
                 },
                 p.origin,
             ));
@@ -1384,8 +1421,9 @@ impl Resolver<'_> {
         let mut cur = r.clone();
         while let Some(w) = cur.widen.clone() {
             // A `USING` join's own projection: what it merged away is
-            // reached only with `with_hidden`.
-            if !with_hidden && !cur.hidden.is_empty() && !Arc::ptr_eq(&cur.plan, &r.plan) {
+            // reached only with `with_hidden`. (Projections above it carry
+            // the merged columns too, but only this one drops them.)
+            if !with_hidden && Self::merges_using_keys(&cur) && !Arc::ptr_eq(&cur.plan, &r.plan) {
                 break;
             }
             cur = match &*w {
@@ -1394,6 +1432,13 @@ impl Resolver<'_> {
                     break;
                 }
                 Widen::Scan | Widen::Join { .. } | Widen::Shift { .. } => break,
+                // Past a pipe boundary only the hidden columns come back.
+                Widen::Hidden { child } => {
+                    if with_hidden {
+                        child.hidden.iter().for_each(|a| add(a, &mut out));
+                    }
+                    break;
+                }
                 Widen::Through { child } => child.clone(),
                 Widen::Project { input, .. } => {
                     input.out.iter().for_each(|a| add(a, &mut out));
@@ -1420,7 +1465,7 @@ impl Resolver<'_> {
                 Widen::Aggregate(_) | Widen::Scan | Widen::Join { .. } | Widen::Shift { .. } => {
                     None
                 }
-                Widen::Through { child } => Some(child.clone()),
+                Widen::Through { child } | Widen::Hidden { child } => Some(child.clone()),
                 Widen::Project { input, .. } => {
                     need.retain(|a| !input.out.iter().any(|o| o.col.id == a.col.id));
                     (!need.is_empty()).then(|| input.clone())
@@ -1453,6 +1498,35 @@ impl Resolver<'_> {
                     let mut exprs = exprs.clone();
                     exprs.extend(need.iter().map(|a| col_expr(&a.col, Origin::UNKNOWN)));
                     self.projection(rel.plan.origin, &input, exprs, out)
+                }
+                // The same plan as its child: the widened child, still
+                // letting only hidden columns cross.
+                Widen::Hidden { child } => {
+                    let below = built.take().unwrap_or_else(|| child.clone());
+                    if Arc::ptr_eq(&rel.plan, &child.plan) {
+                        let mut wide = below.clone();
+                        wide.widen = Some(Arc::new(Widen::Hidden { child: below }));
+                        wide.agg = None;
+                        wide.generated_from = None;
+                        wide
+                    } else {
+                        // A window over `child`: its input's columns, now
+                        // wider, then the columns it adds.
+                        let plan = Arc::clone(&rel.plan)
+                            .map_children(|_| Ok::<_, Infallible>(Arc::clone(&below.plan)))
+                            .unwrap_or_else(|never| match never {});
+                        let mut out = below.out.to_vec();
+                        out.extend(
+                            rel.out
+                                .iter()
+                                .filter(|a| !child.out.iter().any(|c| c.col.id == a.col.id))
+                                .cloned(),
+                        );
+                        let mut wide = self.wrap(plan, rel.plan.origin.plan_id, out, &[&below]);
+                        wide.hidden = Arc::clone(&rel.hidden);
+                        wide.widen = Some(Arc::new(Widen::Hidden { child: below }));
+                        wide
+                    }
                 }
                 Widen::Through { child } => {
                     let child = built.take().unwrap_or_else(|| child.clone());
@@ -1652,98 +1726,50 @@ impl Resolver<'_> {
                 b.expr = self.resolve_grouping(&b.expr, an, env)?;
             }
         }
+        let mut st = Grouped {
+            info: &info,
+            env,
+            op,
+            visible: &visible,
+            memo: &mut memo,
+            known: &mut known,
+            grown: &mut grown,
+            pass: &mut pass,
+        };
         for b in &mut bounds {
             b.expr = Arc::clone(&b.expr).transform_down(&mut |x: Arc<Expr>| match &x.node {
                 ExprNode::Resolved(ResolvedExpr::Function(f))
                     if f.kind == FunctionKind::Aggregate =>
                 {
-                    let k = semantic_key(&x, &mut memo);
-                    let a = match known.iter().find(|(kk, _)| *kk == k) {
-                        Some((_, a)) => a.clone(),
-                        None if info.distinct_rewritten
-                            && !f.distinct
-                            && !matches!(builtin_name(f), "min" | "max") =>
-                        {
-                            // Spark rewrites this call with the select list's. Planned over the
-                            // rewrite's own rows (one per distinct set) it would count each group
-                            // once per set (`HAVING count(*) > 1` kept every group), so it is
-                            // refused until the rewrite takes calls from `HAVING` and `ORDER BY`.
-                            // A `DISTINCT` call, `min` and `max` do not read a row twice.
-                            return Err(unsupported(
-                                "an aggregate in HAVING or ORDER BY that the select list does not hold, over DISTINCT aggregates of different arguments",
-                                x.origin,
-                            ));
-                        }
-                        None => {
-                            let ty = ArgType {
-                                data_type: Some(f.data_type.clone()),
-                                nullable: f.nullable,
-                            };
-                            let output = self.attr(&pretty(&x, self.ctx.conf.session_zone), &ty);
-                            grown.aggregates.push(Arc::new(Expr::new(ExprNode::Resolved(
-                                ResolvedExpr::Alias {
-                                    expr: Arc::clone(&x),
-                                    output: output.clone(),
-                                },
-                            ))));
-                            let a = Attr {
-                                col: output,
-                                qual: no_qual(),
-                                source: None,
-                                duplicate: false,
-                            };
-                            grown.out.push(a.clone());
-                            known.push((k, a.clone()));
-                            a
-                        }
-                    };
-                    if !visible.contains(&a.col.id) && !pass.iter().any(|p| p.col.id == a.col.id) {
-                        pass.push(a.clone());
-                    }
+                    let k = semantic_key(&x, st.memo);
+                    let a = self.aggregate_output(&x, k, &mut st)?;
                     Ok(col_expr(&a.col, x.origin))
                 }
                 ExprNode::Resolved(ResolvedExpr::Column(c))
-                    if !visible.contains(&c.id) && !pass.iter().any(|a| a.col.id == c.id) =>
+                    if !st.visible.contains(&c.id) && !st.pass.iter().any(|a| a.col.id == c.id) =>
                 {
-                    if let Some(k) = info.keys.iter().find(|k| k.col.id == c.id) {
+                    if let Some(k) = st.info.keys.iter().find(|k| k.col.id == c.id) {
                         // An output that already computes the key (`x AS
                         // m`) stands for it, as in Spark: nothing grows.
-                        let key = semantic_key(&x, &mut memo);
-                        if let Some((_, a)) = known.iter().find(|(kk, _)| *kk == key) {
+                        let key = semantic_key(&x, st.memo);
+                        if let Some((_, a)) = st.known.iter().find(|(kk, _)| *kk == key) {
                             return Ok(col_expr(&a.col, x.origin));
                         }
-                        if !grown.out.iter().any(|o| o.col.id == c.id) {
-                            grown.aggregates.push(col_expr(&k.col, Origin::UNKNOWN));
-                            grown.out.push(k.clone());
+                        if !st.grown.out.iter().any(|o| o.col.id == c.id) {
+                            st.grown.aggregates.push(col_expr(&k.col, Origin::UNKNOWN));
+                            st.grown.out.push(k.clone());
                         }
-                        pass.push(k.clone());
+                        st.pass.push(k.clone());
                     }
                     Ok(x)
                 }
                 _ => Ok(x),
             })?;
         }
+        self.having_subqueries(&mut bounds, &mut st, agg.plan.origin)?;
         // An aggregate call over a merged-away `USING` column
         // (`ORDER BY max(t2.k)`) reads it from the input.
         grown.input = self.reveal_exprs(&grown.input, grown.aggregates.iter())?;
-        // Grouping attributes a subquery reads from here.
-        for b in &bounds {
-            let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(&b.expr), |n| {
-                if let crate::walk::Node::Expr(e) = n
-                    && let ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) = &e.node
-                    && !visible.contains(&c.id)
-                    && !pass.iter().any(|a| a.col.id == c.id)
-                    && let Some(k) = info.keys.iter().find(|k| k.col.id == c.id)
-                {
-                    if !grown.out.iter().any(|o| o.col.id == c.id) {
-                        grown.aggregates.push(col_expr(&k.col, Origin::UNKNOWN));
-                        grown.out.push(k.clone());
-                    }
-                    pass.push(k.clone());
-                }
-                std::ops::ControlFlow::Continue(())
-            });
-        }
         if pass.is_empty() {
             return Ok((bounds, agg.clone(), false));
         }
@@ -2690,7 +2716,7 @@ impl Resolver<'_> {
                 &synth_call("max", vec![col_expr(&a.col, origin)], None, origin),
                 &expand_cx,
             )?;
-            let b = self.named(b)?;
+            let b = self.named(b, true)?;
             max_of.insert(*i, out_attr(&b, &expand.out));
             items1.push(b);
         }
@@ -2732,7 +2758,7 @@ impl Resolver<'_> {
                 c.args = mapped;
             }
             let b = self.bind(&call, &expand_cx)?;
-            let b = self.named(b)?;
+            let b = self.named(b, true)?;
             partial_of.push(out_attr(&b, &expand.out));
             items1.push(b);
         }
@@ -3062,6 +3088,7 @@ impl Resolver<'_> {
                 lateral: true,
                 hidden: Arc::clone(&l.hidden),
                 fallback: Arc::from(Vec::new()),
+                having: None,
             });
             let inner = self.env(env.ctes.clone(), env.ctes_id, outer);
             let mut r = self.rel(right, &inner)?;
@@ -3100,10 +3127,11 @@ impl Resolver<'_> {
             && a.0 <= b.1
             && b.0 <= a.1
         {
-            if r.outer.is_some_and(|k| k < env.outer.len()) {
-                return Err(unsupported("a self-join of a correlated subtree", p.origin));
-            }
-            r = self.instance(&r)?;
+            r = if r.outer.is_some_and(|k| k < env.outer.len()) {
+                self.correlated_instance(&r)?
+            } else {
+                self.instance(&r)?
+            };
         }
         let nullable = |a: &Attr, yes: bool| Attr {
             col: BoundColumn {
@@ -3810,29 +3838,6 @@ impl Resolver<'_> {
                 Err(e) => return Err(reported(e)),
             }
         };
-        // A generator between the sort and the aggregate: the aggregate
-        // cannot grow through it, so Spark leaves the call in the sort and
-        // refuses it there.
-        if bounds.iter().any(|b| b.agg.is_some()) && Self::holds_generator(&c.plan) {
-            let calls: Vec<String> = bounds
-                .iter()
-                .flat_map(|b| {
-                    aggregate_sql(&b.shown(), &below.out)
-                        .split(", ")
-                        .filter(|c| !c.is_empty())
-                        .map(|c| format!("\"{c}\""))
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-            if !calls.is_empty() {
-                return Err(AnalysisError::new(
-                    UnsupportedExprForOperator {
-                        invalid_expr_sqls: calls.join(", "),
-                    },
-                    p.origin,
-                ));
-            }
-        }
         // A map does not order (`INVALID_ORDERING_TYPE`, as `SortOrder`).
         for (o, b) in order.iter().zip(&bounds) {
             if let Some(t) =
@@ -3856,6 +3861,32 @@ impl Resolver<'_> {
                         data_type: quoted_type(Some(t)),
                     },
                     o.expr.origin,
+                ));
+            }
+        }
+        // A generator between the sort and the aggregate: the aggregate
+        // cannot grow through it, so Spark leaves the call in the sort and
+        // refuses it there. The same for windows over the aggregate: an
+        // aggregate call in the `ORDER BY` stays in the sort, which no
+        // aggregate may be in (Spark 4.2.0, `window-with-aggregates`).
+        let over_windows = c.agg.as_ref().is_some_and(|i| i.has_windows());
+        if bounds.iter().any(|b| b.agg.is_some())
+            && (Self::holds_generator(&c.plan) || over_windows)
+        {
+            // Each call as Spark prints it: unqualified (`sum(col1)`), in the order the sort keys read them, a call
+            // of several arguments whole (`max_by(b, c)`, `count(DISTINCT b)`), a repeated call listed twice
+            // (Spark 4.2.0, `window-with-aggregates` and a local run over a generator).
+            let calls: Vec<String> = bounds
+                .iter()
+                .flat_map(|b| super::aggregate_text::aggregate_calls(&b.shown()))
+                .map(|c| format!("\"{c}\""))
+                .collect();
+            if !calls.is_empty() {
+                return Err(AnalysisError::new(
+                    UnsupportedExprForOperator {
+                        invalid_expr_sqls: calls.join(", "),
+                    },
+                    p.origin,
                 ));
             }
         }
@@ -4518,27 +4549,6 @@ fn in_aggregate_call(b: &Bound) -> Result<(), AnalysisError> {
         x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
     }
     Ok(())
-}
-
-/// The aggregate calls in `e` as Spark's `sql` prints them, columns fully
-/// qualified (for `INVALID_WHERE_CONDITION`).
-fn aggregate_sql(e: &Arc<Expr>, scope: &[Attr]) -> String {
-    let mut found = Vec::new();
-    let mut seen = HashSet::new();
-    let mut stack = vec![Arc::clone(e)];
-    while let Some(x) = stack.pop() {
-        if !seen.insert(super::bind::addr(&*x)) {
-            continue;
-        }
-        if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node
-            && f.kind == FunctionKind::Aggregate
-        {
-            found.push(pretty(&qualified(&x, scope), None));
-            continue;
-        }
-        x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
-    }
-    found.join(", ")
 }
 
 /// Whether `e` is not foldable in Spark's sense: it reads a column or a
