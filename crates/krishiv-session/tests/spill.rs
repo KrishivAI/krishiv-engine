@@ -209,3 +209,39 @@ fn explain_analyze_shows_spill_files_and_memory() {
     assert_eq!(back, profile);
     wait_until_clean(&root(&dir));
 }
+
+/// A join feeding a sort of every joined row spills under 8 MiB instead of
+/// aborting the query: the only query holds about half of its limit, so
+/// arbitration has room to spill (the sort merge falls back to a smaller
+/// fan-in through `Reservation::grow_without_abort` instead of aborting).
+#[test]
+fn a_join_feeding_a_full_sort_spills_under_eight_mib() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(&root(&dir), Some("8m"));
+    let df =
+        block_on(s.sql("SELECT f.k, f.v, d.k AS dk FROM f JOIN d ON f.k = d.k ORDER BY f.v, f.k"))
+            .unwrap();
+    let mut stream = block_on(df.execute_stream()).unwrap();
+    let mut got = Vec::new();
+    while let Some(batch) = block_on(stream.next()) {
+        let batch = batch.unwrap();
+        let (k, v, dk) = (
+            batch.column(0).as_primitive::<Int64Type>(),
+            batch.column(1).as_primitive::<Int64Type>(),
+            batch.column(2).as_primitive::<Int64Type>(),
+        );
+        got.extend((0..batch.num_rows()).map(|i| (v.value(i), k.value(i), dk.value(i))));
+    }
+    // Every fact row joins its one key; `(v, k)` orders the whole row, so
+    // the complete output, duplicates included, is determined.
+    let mut want: Vec<(i64, i64, i64)> = (0..FACT_ROWS)
+        .map(|i| (i % 1000, i % KEYS, i % KEYS))
+        .collect();
+    want.sort_unstable();
+    assert_eq!(got.len(), want.len());
+    if let Some(at) = got.iter().zip(&want).position(|(g, w)| g != w) {
+        panic!("row {at}: got {:?}, want {:?}", got[at], want[at]);
+    }
+    drop(stream);
+    wait_until_clean(&root(&dir));
+}

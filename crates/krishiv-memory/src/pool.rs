@@ -40,7 +40,7 @@ use crate::event::Event;
 use crate::rounds::Rounds;
 use crate::spill::{OwnerId, Spillable};
 use crate::sync::{AtomicBool, AtomicU64, AtomicUsize, Mutex, Ordering, fence, lock};
-use crate::{BoxFuture, ConsumerId, MemoryError, MemoryPool};
+use crate::{BoxFuture, ConsumerId, GrantCredit, MemoryError, MemoryPool};
 
 /// The abort bit of a query pool's counter word.
 const ABORTED: usize = 1 << (usize::BITS - 1);
@@ -289,6 +289,11 @@ pub(crate) struct Consumer {
     pub(crate) quantum: usize,
     pub(crate) usage: Mutex<Usage>,
     pub(crate) node: Weak<Node>,
+    /// The handle's grant credit, when registered through one.
+    credit: Option<Arc<GrantCredit>>,
+    /// Inside an arbitration round of its own (or queued for one): its
+    /// credit then waits on that round and is not counted as in flight.
+    pub(crate) waiting: AtomicBool,
 }
 
 impl fmt::Debug for Consumer {
@@ -310,6 +315,14 @@ impl Consumer {
 
     pub(crate) fn used(&self) -> usize {
         lock(&self.usage).used
+    }
+
+    /// Bytes granted to the consumer's driver for a retry still running:
+    /// about to be used or returned ([`GrantCredit::unsettled`]).
+    pub(crate) fn unsettled(&self) -> usize {
+        self.credit
+            .as_ref()
+            .map_or(0, |c| c.unsettled().min(self.used()))
     }
 
     /// Returns the quantisation slack (`granted - used`) to the pools.
@@ -789,6 +802,30 @@ pub struct TreePool {
 }
 
 impl TreePool {
+    fn register_consumer(
+        &self,
+        name: &str,
+        spill: Option<&Arc<dyn Spillable>>,
+        credit: Option<Arc<GrantCredit>>,
+    ) -> ConsumerId {
+        let shared = &self.node.shared;
+        let id = ConsumerId(NEXT_CONSUMER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let consumer = Arc::new(Consumer {
+            id,
+            name: name.to_owned(),
+            owner: spill.and_then(|s| s.owner()),
+            spill: spill.map(Arc::downgrade),
+            quantum: self.node.consumer_quantum(),
+            usage: Mutex::new(Usage::default()),
+            node: Arc::downgrade(&self.node),
+            credit,
+            waiting: AtomicBool::new(false),
+        });
+        lock(&shared.registry).insert(id, Arc::downgrade(&consumer));
+        lock(&self.node.consumers).insert(id, consumer);
+        id
+    }
+
     /// A new process root, timing arbitration with [`SystemClock`].
     pub fn new(config: &MemoryConfig) -> Arc<Self> {
         Self::with_clock(config, Arc::new(SystemClock::new()))
@@ -952,20 +989,17 @@ impl MemoryPool for TreePool {
     }
 
     fn register(&self, name: &str, spill: Option<Arc<dyn Spillable>>) -> ConsumerId {
-        let shared = &self.node.shared;
-        let id = ConsumerId(NEXT_CONSUMER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
-        let consumer = Arc::new(Consumer {
-            id,
-            name: name.to_owned(),
-            owner: spill.as_ref().and_then(|s| s.owner()),
-            spill: spill.as_ref().map(Arc::downgrade),
-            quantum: self.node.consumer_quantum(),
-            usage: Mutex::new(Usage::default()),
-            node: Arc::downgrade(&self.node),
-        });
-        lock(&shared.registry).insert(id, Arc::downgrade(&consumer));
-        lock(&self.node.consumers).insert(id, consumer);
-        id
+        self.register_consumer(name, spill.as_ref(), None)
+    }
+
+    fn register_with_credit(
+        &self,
+        name: &str,
+        spill: Option<Arc<dyn Spillable>>,
+        credit: &Arc<GrantCredit>,
+    ) -> ConsumerId {
+        credit.notify(Arc::downgrade(&self.node.shared));
+        self.register_consumer(name, spill.as_ref(), Some(Arc::clone(credit)))
     }
 
     fn unregister(&self, id: ConsumerId) {

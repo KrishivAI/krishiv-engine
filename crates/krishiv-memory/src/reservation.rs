@@ -144,30 +144,29 @@ impl Reservation {
         self.grow_with(bytes, true).await
     }
 
-    /// [`grow`](Self::grow) without the abort phase: arbitration reclaims
-    /// and spills, and fails the request (instead of aborting a query) when
-    /// that is not enough. For a caller with something cheaper to do than
-    /// aborting, such as waiting for memory it knows will be freed.
+    /// [`grow`](Self::grow) without the abort phase: when spills cannot
+    /// make room it fails with [`MemoryError::Exhausted`] instead of
+    /// aborting a query. For callers with a cheaper fallback than an abort
+    /// (a sort merge that can read fewer runs at once).
     ///
     /// # Errors
-    /// [`MemoryError`] if reclaiming and spilling did not make room.
+    /// [`MemoryError`] if spilling could not make room or the query was
+    /// aborted.
     pub async fn grow_without_abort(&mut self, bytes: usize) -> Result<(), MemoryError> {
         self.grow_with(bytes, false).await
     }
 
-    async fn grow_with(&mut self, bytes: usize, abort: bool) -> Result<(), MemoryError> {
+    async fn grow_with(&mut self, bytes: usize, may_abort: bool) -> Result<(), MemoryError> {
         let (rest, credit) = self.draw_credit(bytes);
         // Cancel-safe: dropping this future mid-wait puts the credit back.
         let mut drawn = Drawn {
             handle: self.handle.as_ref(),
             credit,
         };
-        if rest > 0 {
-            if abort {
-                self.pool.reserve(self.id, rest).await?;
-            } else {
-                self.pool.reserve_without_abort(self.id, rest).await?;
-            }
+        if rest > 0 && may_abort {
+            self.pool.reserve(self.id, rest).await?;
+        } else if rest > 0 {
+            self.pool.reserve_without_abort(self.id, rest).await?;
         }
         drawn.credit = 0;
         drop(drawn);

@@ -57,6 +57,7 @@
 //! - Batches a merge moved past stay referenced until its output batch is
 //!   built: in-flight bytes, like every operator's output.
 
+mod budget;
 mod keys;
 mod merge;
 #[expect(

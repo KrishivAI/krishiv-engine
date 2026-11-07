@@ -628,11 +628,8 @@ impl Resolver<'_> {
                         let item = Arc::new(
                             Expr::new(ExprNode::Alias {
                                 expr: Arc::new(
-                                    Expr::new(ExprNode::Column(crate::ColumnRef {
-                                        name,
-                                        plan_id: None,
-                                    }))
-                                    .with_origin(e.origin),
+                                    Expr::new(ExprNode::Column(crate::ColumnRef::new(name)))
+                                        .with_origin(e.origin),
                                 ),
                                 name: field,
                             })
@@ -660,7 +657,7 @@ impl Resolver<'_> {
                 // the local forms above (a local struct column of that name wins).
                 if let Some(outer) = self.outer_star(s, &cx, e.origin)? {
                     for b in outer {
-                        items.push(self.named(b)?);
+                        items.push(self.named(b, true)?);
                     }
                     continue;
                 }
@@ -705,7 +702,8 @@ impl Resolver<'_> {
                 cx.windows = WindowUse::Allowed;
                 self.bind(e, &cx)?
             };
-            let b = self.named(b)?;
+            let written_identifier = matches!(&e.node, ExprNode::Column(c) if c.by_identifier);
+            let b = self.named(b, !written_identifier)?;
             if let ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) = &b.expr.node {
                 lateral.push(Attr {
                     col: output.clone(),
@@ -748,19 +746,20 @@ impl Resolver<'_> {
     /// `b` as a named expression: an attribute, or aliased by Spark's
     /// generated name (a cast of a column keeps the column's name, a
     /// lateral alias otherwise reads `lateralAliasReference(name)`).
-    fn named(&mut self, b: Bound) -> Result<Bound, AnalysisError> {
+    /// With `bare` false (an item written `IDENTIFIER(..)`), a variable or a field of a dotted
+    /// path is named by its full shown form (`variablereference(..)`, `c1.c2`).
+    fn named(&mut self, b: Bound, bare: bool) -> Result<Bound, AnalysisError> {
         if let ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::Alias { .. }) =
             &b.expr.node
         {
             return Ok(b);
         }
         let shown = b.shown();
+        let bare = super::exprs::bare_name(&shown).filter(|_| bare);
         let zone = self.ctx.conf.session_zone;
         let name = match &shown.node {
             // A bare variable or a field of a dotted column path keeps its own name.
-            _ if super::exprs::bare_name(&shown).is_some() => super::exprs::bare_name(&shown)
-                .unwrap_or_default()
-                .to_owned(),
+            _ if bare.is_some() => bare.unwrap_or_default().to_owned(),
             ExprNode::Cast { expr, .. }
                 if matches!(expr.node, ExprNode::Resolved(ResolvedExpr::Column(_))) =>
             {
@@ -2717,7 +2716,7 @@ impl Resolver<'_> {
                 &synth_call("max", vec![col_expr(&a.col, origin)], None, origin),
                 &expand_cx,
             )?;
-            let b = self.named(b)?;
+            let b = self.named(b, true)?;
             max_of.insert(*i, out_attr(&b, &expand.out));
             items1.push(b);
         }
@@ -2759,7 +2758,7 @@ impl Resolver<'_> {
                 c.args = mapped;
             }
             let b = self.bind(&call, &expand_cx)?;
-            let b = self.named(b)?;
+            let b = self.named(b, true)?;
             partial_of.push(out_attr(&b, &expand.out));
             items1.push(b);
         }
@@ -3874,26 +3873,14 @@ impl Resolver<'_> {
         if bounds.iter().any(|b| b.agg.is_some())
             && (Self::holds_generator(&c.plan) || over_windows)
         {
-            let calls: Vec<String> = if Self::holds_generator(&c.plan) {
-                bounds
-                    .iter()
-                    .flat_map(|b| {
-                        super::aggregate_text::aggregate_sql(&b.shown(), &below.out)
-                            .split(", ")
-                            .filter(|c| !c.is_empty())
-                            .map(|c| format!("\"{c}\""))
-                            .collect::<Vec<_>>()
-                    })
-                    .collect()
-            } else {
-                // Over windows, each call as written (columns unqualified, a call with several arguments whole),
-                // in the order the sort keys read them (Spark 4.2.0, `window-with-aggregates`).
-                bounds
-                    .iter()
-                    .flat_map(|b| super::aggregate_text::aggregate_calls(&b.shown()))
-                    .map(|c| format!("\"{c}\""))
-                    .collect()
-            };
+            // Each call as Spark prints it: unqualified (`sum(col1)`), in the order the sort keys read them, a call
+            // of several arguments whole (`max_by(b, c)`, `count(DISTINCT b)`), a repeated call listed twice
+            // (Spark 4.2.0, `window-with-aggregates` and a local run over a generator).
+            let calls: Vec<String> = bounds
+                .iter()
+                .flat_map(|b| super::aggregate_text::aggregate_calls(&b.shown()))
+                .map(|c| format!("\"{c}\""))
+                .collect();
             if !calls.is_empty() {
                 return Err(AnalysisError::new(
                     UnsupportedExprForOperator {

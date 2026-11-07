@@ -60,7 +60,7 @@ use krishiv_common::stack::{STEP, on_big_stack};
 
 #[path = "subquery_rank.rs"]
 mod rank;
-use rank::{repartitioned, window_reads_outer};
+use rank::{outer_only, repartitioned, window_reads_outer};
 
 type R<T> = Result<T, AnalysisError>;
 
@@ -1394,7 +1394,7 @@ impl Rewriter {
                 aggregates,
             } if keep && !keys.is_empty() && !keys.iter().any(|k| has_outer(Node::Expr(k))) => {
                 let (inner, corr) = self.pull(input, true)?;
-                if !corr.iter().all(is_outer_equality) {
+                if !corr.iter().all(|c| is_outer_equality(c) || outer_only(c)) {
                     return Err(unsupported(
                         "outer references below a grouped aggregate that are not equalities",
                         plan.origin,
@@ -1585,16 +1585,19 @@ impl Rewriter {
                 plan.origin,
             ));
         };
-        let ExprNode::Resolved(ResolvedExpr::Alias {
-            expr,
-            output: value,
-        }) = &item.node
-        else {
-            return Err(unsupported(
-                "a correlated scalar subquery of this shape",
-                plan.origin,
-            ));
+        // A `SELECT DISTINCT c` is a grouping by `c` whose item is the bare
+        // column; its value is that column.
+        let (expr, value): (&Arc<Expr>, BoundColumn) = match &item.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => (expr, output.clone()),
+            ExprNode::Resolved(ResolvedExpr::Column(c)) if !keys.is_empty() => (item, c.clone()),
+            _ => {
+                return Err(unsupported(
+                    "a correlated scalar subquery of this shape",
+                    plan.origin,
+                ));
+            }
         };
+        let value = &value;
         // Spark rejects outer references in the value
         // (`AGGREGATE_FUNCTION_MIXED_OUTER_LOCAL_REFERENCES`, or an outer
         // aggregate's `CORRELATED_REFERENCE`); the join could not bind them.
@@ -1846,7 +1849,7 @@ impl Rewriter {
             return Ok((base, read));
         }
         let through_domain = forced.is_some() || on_path(plan, split::limit_hit);
-        if !through_domain && aggregates_below(plan) {
+        if !through_domain && aggregates_below(plan) && !self.grouped_having_fixed(plan)? {
             return Err(unsupported(
                 "a correlated scalar subquery of this shape",
                 plan.origin,

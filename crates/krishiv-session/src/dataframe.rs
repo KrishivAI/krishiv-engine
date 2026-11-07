@@ -2129,6 +2129,22 @@ impl DataFrameWriter {
         path: &str,
         admitted: Option<crate::query_fold::Admitted>,
     ) -> Result<Vec<String>, KrishivError> {
+        self.save_or_check(path, admitted, false).await
+    }
+
+    /// Every check [`Self::save_reporting`] makes before it changes anything (the rows resolve,
+    /// the format and options, the path and its access check), without writing: a multi-table
+    /// `INSERT` checks all its clauses before the first one writes.
+    pub(crate) async fn check_save(self, path: &str) -> Result<(), KrishivError> {
+        self.save_or_check(path, None, true).await.map(|_| ())
+    }
+
+    async fn save_or_check(
+        self,
+        path: &str,
+        admitted: Option<crate::query_fold::Admitted>,
+        dry: bool,
+    ) -> Result<Vec<String>, KrishivError> {
         self.assert_not_bucketed("save")?;
         let target = WriteTarget {
             format: self.format,
@@ -2167,7 +2183,7 @@ impl DataFrameWriter {
                         .map(|c| c.data_type.clone())
                         .collect();
                     df.session
-                        .write_files(physical, &a.env, target, &types, &mut admitted)
+                        .write_files(physical, &a.env, target, &types, &mut admitted, dry)
                         .await
                 }
                 .await;

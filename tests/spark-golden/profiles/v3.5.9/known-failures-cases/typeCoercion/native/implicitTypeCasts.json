@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "depends-on-command": [
+      1,
+      2,
+      3
+    ]
+  },
+  "file": "typeCoercion/native/implicitTypeCasts",
+  "format_version": 1
+}
