@@ -460,9 +460,10 @@ jobs:
           path: crates/krishiv-kernels/fuzz/artifacts
           retention-days: 30
 
-  # P2-T090: the public API of the Rust facade (default features; the
-  # `unstable-ir` feature is outside semver, ADR 0027) must match the
-  # checked-in snapshots; a change updates them in the same PR.
+  # P2-T090: the public API of the Rust facade, the session crate and the
+  # UDF SDK (P2-T060a; default features; the `unstable-ir` feature is
+  # outside semver, ADR 0027) must match the checked-in snapshots; a change
+  # updates them in the same PR.
   public-api:
     if: github.repository == 'KrishivAI/krishiv-engine'
     runs-on: ubuntu-latest
@@ -484,7 +485,7 @@ jobs:
           tool: sccache@0.18.0,cargo-public-api@0.52.0
       - name: Diff against the snapshots
         run: |
-          for crate in krishiv krishiv-session; do
+          for crate in krishiv krishiv-session krishiv-udf-sdk; do
             cargo +nightly-2026-08-12 public-api -ss -p "$crate" \
               > "$RUNNER_TEMP/$crate.txt"
             diff -u "crates/$crate/public-api.txt" "$RUNNER_TEMP/$crate.txt"

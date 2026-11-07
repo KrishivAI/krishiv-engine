@@ -13,14 +13,15 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, PoisonError, RwLock};
 
-use super::{ScalarUdf, guard_call};
+use super::{AggregateUdf, ScalarUdf, UdfError, guard_call};
 
 /// The UDFs registered on one session, by lower-case name.
 ///
-/// Re-registering a name replaces its implementation. Every registration
-/// bumps the library [`version`](Self::version): the analyzer's context
-/// fingerprint covers it, so a cached plan never outlives the registration
-/// it was analyzed with.
+/// Scalar and aggregate UDFs share one namespace, as Spark's functions do:
+/// registering a name replaces whatever UDF held it, of either kind. Every
+/// registration bumps the library [`version`](Self::version): the
+/// analyzer's context fingerprint covers it, so a cached plan never
+/// outlives the registration it was analyzed with.
 pub struct UdfLibrary {
     inner: RwLock<Inner>,
 }
@@ -28,8 +29,35 @@ pub struct UdfLibrary {
 #[derive(Debug, Default)]
 struct Inner {
     udfs: HashMap<String, Arc<dyn ScalarUdf>>,
+    udafs: HashMap<String, Arc<dyn AggregateUdf>>,
     /// Bumped on every registration; part of the analysis fingerprint.
     epoch: u64,
+}
+
+/// The lower-case name a UDF registers under, from its (guarded) `name`.
+fn checked_name(name: Result<String, UdfError>) -> Result<String, UdfError> {
+    let name = name?;
+    if name.is_empty() {
+        return Err(UdfError::new(
+            "UDF name is empty: a UDF name must be non-empty and contain no '.' or '`', so the UDF could never be called by name",
+        ));
+    }
+    if name.contains('.') || name.contains('`') {
+        return Err(UdfError::new(format!(
+            "UDF {name}.name is invalid: a UDF name must contain no '.' or '`', so the UDF could never be called by name"
+        )));
+    }
+    Ok(name.to_lowercase())
+}
+
+/// Whether a UDF's (guarded) version is `version`. A panicking `version`
+/// matches, so that binding surfaces `FAILED_EXECUTE_UDF` rather than
+/// `KRISHIV_UDF_NOT_AVAILABLE`.
+fn version_matches(name: &str, version: u32, read: impl FnOnce() -> u32) -> bool {
+    match guard_call(name, "version", read) {
+        Ok(v) => v == version,
+        Err(_) => true,
+    }
 }
 
 impl UdfLibrary {
@@ -42,56 +70,79 @@ impl UdfLibrary {
     }
 
     /// Registers `udf` under its lower-case [`name`](ScalarUdf::name),
-    /// replacing any UDF of that name, and bumps the library version.
+    /// replacing any UDF of that name (scalar or aggregate), and bumps the
+    /// library version.
     ///
     /// The `name` call goes through [`guard_call`] like every other trait
-    /// call: a panicking `name` is returned as a [`UdfError`](crate::UdfError) instead of
+    /// call: a panicking `name` is returned as a [`UdfError`] instead of
     /// unwinding (there is no name to register the UDF under). An empty
     /// name, or one containing a `.` or a backtick, is also an error,
     /// since such a UDF can never be called by name.
     ///
     /// # Errors
-    /// A [`UdfError`](crate::UdfError) when `name` panics, is empty, or contains a `.` or
+    /// A [`UdfError`] when `name` panics, is empty, or contains a `.` or
     /// a backtick.
-    pub fn register(&self, udf: Arc<dyn ScalarUdf>) -> Result<(), super::UdfError> {
-        let name = guard_call("unknown", "name", || udf.name().to_owned())?;
-        if name.is_empty() {
-            return Err(super::UdfError::new(
-                "UDF name is empty: a UDF name must be non-empty and contain no '.' or '`', so the UDF could never be called by name",
-            ));
-        }
-        if name.contains('.') || name.contains('`') {
-            return Err(super::UdfError::new(format!(
-                "UDF {name}.name is invalid: a UDF name must contain no '.' or '`', so the UDF could never be called by name"
-            )));
-        }
-        let name = name.to_lowercase();
+    pub fn register(&self, udf: Arc<dyn ScalarUdf>) -> Result<(), UdfError> {
+        let name = checked_name(guard_call("unknown", "name", || udf.name().to_owned()))?;
         let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
+        inner.udafs.remove(&name);
         inner.udfs.insert(name, udf);
         inner.epoch = inner.epoch.wrapping_add(1);
         Ok(())
     }
 
-    /// The UDF named `name` (case-insensitive), if registered.
+    /// Registers the aggregate `udaf` under its lower-case
+    /// [`name`](AggregateUdf::name), replacing any UDF of that name
+    /// (scalar or aggregate), and bumps the library version. Names are
+    /// checked as for [`register`](Self::register).
+    ///
+    /// # Errors
+    /// A [`UdfError`] when `name` panics, is empty, or contains a `.` or
+    /// a backtick.
+    pub fn register_aggregate(&self, udaf: Arc<dyn AggregateUdf>) -> Result<(), UdfError> {
+        let name = checked_name(guard_call("unknown", "name", || udaf.name().to_owned()))?;
+        let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
+        inner.udfs.remove(&name);
+        inner.udafs.insert(name, udaf);
+        inner.epoch = inner.epoch.wrapping_add(1);
+        Ok(())
+    }
+
+    /// The scalar UDF named `name` (case-insensitive), if registered.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<Arc<dyn ScalarUdf>> {
         let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
         inner.udfs.get(&name.to_lowercase()).cloned()
     }
 
-    /// The UDF named `name` at `version` (both case- and
+    /// The aggregate UDF named `name` (case-insensitive), if registered.
+    #[must_use]
+    pub fn get_aggregate(&self, name: &str) -> Option<Arc<dyn AggregateUdf>> {
+        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        inner.udafs.get(&name.to_lowercase()).cloned()
+    }
+
+    /// The scalar UDF named `name` at `version` (both case- and
     /// version-sensitive), as a plan references it; `None` when the name is
-    /// unregistered or holds another version. A panicking `version` matches
-    /// (through [`guard_call`]) so that binding surfaces `FAILED_EXECUTE_UDF`
-    /// rather than `KRISHIV_UDF_NOT_AVAILABLE`.
+    /// unregistered, is an aggregate, or holds another version. A panicking
+    /// `version` matches (through [`guard_call`]) so that binding surfaces
+    /// `FAILED_EXECUTE_UDF` rather than `KRISHIV_UDF_NOT_AVAILABLE`.
     #[must_use]
     pub fn get_versioned(&self, name: &str, version: u32) -> Option<Arc<dyn ScalarUdf>> {
         let udf = self.get(name)?;
-        let matches = match guard_call(name, "version", || udf.version()) {
-            Ok(v) => v == version,
-            Err(_) => true,
-        };
-        matches.then_some(udf)
+        version_matches(name, version, || udf.version()).then_some(udf)
+    }
+
+    /// The aggregate UDF named `name` at `version`, as a plan references
+    /// it; as [`get_versioned`](Self::get_versioned) for aggregates.
+    #[must_use]
+    pub fn get_aggregate_versioned(
+        &self,
+        name: &str,
+        version: u32,
+    ) -> Option<Arc<dyn AggregateUdf>> {
+        let udaf = self.get_aggregate(name)?;
+        version_matches(name, version, || udaf.version()).then_some(udaf)
     }
 
     /// Bumped on every registration; part of the analysis fingerprint.
@@ -103,14 +154,11 @@ impl UdfLibrary {
             .epoch
     }
 
-    /// Whether no UDF is registered.
+    /// Whether no UDF (scalar or aggregate) is registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.inner
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .udfs
-            .is_empty()
+        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        inner.udfs.is_empty() && inner.udafs.is_empty()
     }
 }
 
@@ -123,21 +171,38 @@ impl Default for UdfLibrary {
 impl fmt::Debug for UdfLibrary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        let label = |name: Result<String, UdfError>, version: &dyn Fn() -> u32| {
+            let name = name.unwrap_or_else(|_| "<panicking>".to_owned());
+            let version = guard_call(&name, "version", version)
+                .map(|v| v.to_string())
+                .unwrap_or_else(|_| "<panicking>".to_owned());
+            format!("{name}@{version}")
+        };
         let mut names: Vec<String> = inner
             .udfs
             .values()
             .map(|u| {
-                let name = guard_call("unknown", "name", || u.name().to_owned())
-                    .unwrap_or_else(|_| "<panicking>".to_owned());
-                let version = guard_call(&name, "version", || u.version())
-                    .map(|v| v.to_string())
-                    .unwrap_or_else(|_| "<panicking>".to_owned());
-                format!("{name}@{version}")
+                label(
+                    guard_call("unknown", "name", || u.name().to_owned()),
+                    &|| u.version(),
+                )
             })
             .collect();
+        let mut aggregates: Vec<String> = inner
+            .udafs
+            .values()
+            .map(|u| {
+                label(
+                    guard_call("unknown", "name", || u.name().to_owned()),
+                    &|| u.version(),
+                )
+            })
+            .collect();
+        aggregates.sort();
         names.sort();
         f.debug_struct("UdfLibrary")
             .field("udfs", &names)
+            .field("aggregates", &aggregates)
             .field("epoch", &inner.epoch)
             .finish()
     }
@@ -208,7 +273,7 @@ mod tests {
         assert!(lib.get_versioned("nosuch", 2).is_none());
         assert_eq!(
             format!("{lib:?}"),
-            "UdfLibrary { udfs: [\"my_identity@2\"], epoch: 2 }"
+            "UdfLibrary { udfs: [\"my_identity@2\"], aggregates: [], epoch: 2 }"
         );
         assert_eq!(format!("{}", UdfLibrary::default().version()), "0");
     }
@@ -420,5 +485,110 @@ mod tests {
         assert!(lib.get_versioned("panic_version", 1).is_some());
         assert!(lib.get_versioned("panic_version", 999).is_some());
         assert!(lib.get_versioned("nosuch", 1).is_none());
+    }
+
+    const CTX: InvokeContext = InvokeContext {
+        partition: 0,
+        ansi: false,
+        time_zone: None,
+    };
+
+    /// An aggregate UDF whose accumulator is never built here.
+    #[derive(Debug)]
+    struct Total {
+        name: &'static str,
+        version: u32,
+    }
+
+    impl super::super::AggregateUdf for Total {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn version(&self) -> u32 {
+            self.version
+        }
+
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(Vec::new()))
+        }
+
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Long,
+                nullable: true,
+            })
+        }
+
+        fn state_fields(&self, _: &[ArgField]) -> Result<Vec<super::super::StateField>, UdfError> {
+            Ok(Vec::new())
+        }
+
+        fn accumulator(
+            &self,
+            _: &[ArgField],
+            _: &InvokeContext,
+        ) -> Result<Box<dyn super::super::GroupsAccumulator>, UdfError> {
+            Err(UdfError::new("test only"))
+        }
+    }
+
+    #[test]
+    fn aggregates_register_by_lower_case_name_and_version() {
+        let lib = UdfLibrary::new();
+        let before = lib.version();
+        lib.register_aggregate(Arc::new(Total {
+            name: "My_Total",
+            version: 2,
+        }))
+        .unwrap();
+        assert_ne!(lib.version(), before, "registering bumps the epoch");
+        // Names are case-insensitive.
+        let udaf = lib.get_aggregate("my_total").unwrap();
+        assert!(lib.get_aggregate("MY_TOTAL").is_some());
+        assert!(lib.get_aggregate("nosuch").is_none());
+        assert!(lib.get_aggregate_versioned("my_total", 2).is_some());
+        assert!(lib.get_aggregate_versioned("my_total", 3).is_none());
+        assert!(lib.get_aggregate_versioned("nosuch", 2).is_none());
+        // The debug form lists it with its own name.
+        let shown = format!("{lib:?}");
+        assert!(
+            shown.contains("aggregates") && shown.contains("My_Total"),
+            "{shown}"
+        );
+        // The double declares what the contract asks of it.
+        assert_eq!(udaf.signature(), &Signature::Exact(Vec::new()));
+        assert_eq!(udaf.return_field(&[]).unwrap().data_type, DataType::Long);
+        assert!(udaf.state_fields(&[]).unwrap().is_empty());
+        assert_eq!(
+            udaf.properties(),
+            super::super::AggregateProperties::DEFAULT
+        );
+        assert!(udaf.accumulator(&[], &CTX).is_err());
+    }
+
+    #[test]
+    fn registering_an_aggregate_replaces_a_scalar_of_the_same_name() {
+        let lib = UdfLibrary::new();
+        lib.register(Arc::new(Identity { version: 1 })).unwrap();
+        assert!(lib.get("my_identity").is_some());
+        lib.register_aggregate(Arc::new(Total {
+            name: "my_identity",
+            version: 1,
+        }))
+        .unwrap();
+        assert!(lib.get("my_identity").is_none(), "one name, one kind");
+        assert!(lib.get_aggregate("my_identity").is_some());
+    }
+
+    #[test]
+    fn the_panicking_version_double_is_otherwise_a_working_udf() {
+        let u = PanicVersion;
+        assert_eq!(u.signature(), &Signature::Exact(Vec::new()));
+        assert_eq!(u.return_field(&[]).unwrap().data_type, DataType::Integer);
+        assert!(u.invoke(&[], 0, &CTX).is_err());
+        assert_eq!(u.properties(), super::super::UdfProperties::default());
     }
 }

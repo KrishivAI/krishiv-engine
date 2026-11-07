@@ -1,0 +1,225 @@
+{
+ "outcomes": {
+  "rows-array-float-tolerance": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-array-length": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 100.00000 % )\n*** actual ***\n! Row(a=[1, 2])\n\n\n*** expected ***\n! Row(a=[1, 2, 3])",
+   "ok": false
+  },
+  "rows-bool-vs-int": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-both-empty": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-column-names-differ": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-date-differs": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 100.00000 % )\n*** actual ***\n! Row(a=datetime.date(2020, 1, 1))\n\n\n*** expected ***\n! Row(a=datetime.date(2020, 1, 2))",
+   "ok": false
+  },
+  "rows-decimal-differs": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 100.00000 % )\n*** actual ***\n! Row(a=Decimal('1.10'))\n\n\n*** expected ***\n! Row(a=Decimal('1.11'))",
+   "ok": false
+  },
+  "rows-decimal-equal": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-equal": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-extra-row": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 50.00000 % )\n*** actual ***\n  Row(a=1)\n- Row(a=2)\n\n\n*** expected ***",
+   "ok": false
+  },
+  "rows-float-custom-atol": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-float-custom-rtol": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-float-inf-equal": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-float-inf-vs-neginf": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-float-nan-equal": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-float-nan-vs-value": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-float-outside-rtol": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 100.00000 % )\n*** actual ***\n! Row(a=1.0)\n\n\n*** expected ***\n! Row(a=1.001)",
+   "ok": false
+  },
+  "rows-float-within-rtol": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-include-diff-rows": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 50.00000 % )\n*** actual ***\n  Row(a=1)\n! Row(a=2)\n\n\n*** expected ***\n  Row(a=1)\n! Row(a=3)",
+   "ok": false
+  },
+  "rows-int-vs-float": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-many-differ-max-errors": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 40.00000 % )\n*** actual ***\n! Row(a=0)\n! Row(a=1)\n\n\n*** expected ***\n! Row(a=10)\n! Row(a=11)",
+   "ok": false
+  },
+  "rows-map-differs": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 100.00000 % )\n*** actual ***\n! Row(a={'k': 1})\n\n\n*** expected ***\n! Row(a={'k': 2})",
+   "ok": false
+  },
+  "rows-map-equal": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-missing-row": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 50.00000 % )\n*** actual ***\n\n\n*** expected ***\n  Row(a=1)\n+ Row(a=2)",
+   "ok": false
+  },
+  "rows-nested-row-list": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-null-equal": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-null-vs-value": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 100.00000 % )\n*** actual ***\n! Row(a=None)\n\n\n*** expected ***\n! Row(a=1)",
+   "ok": false
+  },
+  "rows-one-differs": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 100.00000 % )\n*** actual ***\n! Row(a=1)\n\n\n*** expected ***\n! Row(a=2)",
+   "ok": false
+  },
+  "rows-order-checked": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 100.00000 % )\n*** actual ***\n  Row(a=1)\n- Row(a=2)\n\n\n*** expected ***\n+ Row(a=2)\n  Row(a=1)",
+   "ok": false
+  },
+  "rows-order-ignored": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "rows-show-only-diff": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 50.00000 % )\n*** actual ***\n! Row(a=2)\n\n\n*** expected ***\n! Row(a=3)",
+   "ok": false
+  },
+  "rows-string-case": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 100.00000 % )\n*** actual ***\n! Row(a='A')\n\n\n*** expected ***\n! Row(a='a')",
+   "ok": false
+  },
+  "rows-two-columns-one-differs": {
+   "error_class": "DIFFERENT_ROWS",
+   "message": "[DIFFERENT_ROWS] Results do not match: ( 100.00000 % )\n*** actual ***\n! Row(a=1, b='x')\n\n\n*** expected ***\n! Row(a=1, b='y')",
+   "ok": false
+  },
+  "schema-array-contains-null": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "schema-array-contains-null-strict": {
+   "error_class": "DIFFERENT_SCHEMA",
+   "message": "[DIFFERENT_SCHEMA] Schemas do not match.\n--- actual\n+++ expected\n- StructType([StructField('a', ArrayType(IntegerType(), True), True)])\n?                                                       ^^^\n\n+ StructType([StructField('a', ArrayType(IntegerType(), False), True)])\n?                                                       ^^^^\n",
+   "ok": false
+  },
+  "schema-column-name-ignored": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "schema-column-order": {
+   "error_class": "DIFFERENT_SCHEMA",
+   "message": "[DIFFERENT_SCHEMA] Schemas do not match.\n--- actual\n+++ expected\n- StructType([StructField('a', IntegerType(), True), StructField('b', StringType(), True)])\n+ StructType([StructField('b', StringType(), True), StructField('a', IntegerType(), True)])",
+   "ok": false
+  },
+  "schema-column-order-ignored": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "schema-equal": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "schema-extra-field": {
+   "error_class": "DIFFERENT_SCHEMA",
+   "message": "[DIFFERENT_SCHEMA] Schemas do not match.\n--- actual\n+++ expected\n- StructType([StructField('a', IntegerType(), True), StructField('b', StringType(), True)])\n+ StructType([StructField('a', IntegerType(), True)])",
+   "ok": false
+  },
+  "schema-name-differs": {
+   "error_class": "DIFFERENT_SCHEMA",
+   "message": "[DIFFERENT_SCHEMA] Schemas do not match.\n--- actual\n+++ expected\n- StructType([StructField('a', IntegerType(), True)])\n?                          ^\n\n+ StructType([StructField('b', IntegerType(), True)])\n?                          ^\n",
+   "ok": false
+  },
+  "schema-nullable-differs-default": {
+   "error_class": null,
+   "message": null,
+   "ok": true
+  },
+  "schema-nullable-differs-strict": {
+   "error_class": "DIFFERENT_SCHEMA",
+   "message": "[DIFFERENT_SCHEMA] Schemas do not match.\n--- actual\n+++ expected\n- StructType([StructField('a', IntegerType(), True)])\n?                                             ^^^\n\n+ StructType([StructField('a', IntegerType(), False)])\n?                                             ^^^^\n",
+   "ok": false
+  },
+  "schema-type-differs": {
+   "error_class": "DIFFERENT_SCHEMA",
+   "message": "[DIFFERENT_SCHEMA] Schemas do not match.\n--- actual\n+++ expected\n- StructType([StructField('a', IntegerType(), True)])\n?                              ^ -- --\n\n+ StructType([StructField('a', LongType(), True)])\n?                              ^^\n",
+   "ok": false
+  }
+ },
+ "spark_version": "4.2.0"
+}

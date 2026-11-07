@@ -638,6 +638,7 @@ pub(super) fn rows() -> Vec<Row> {
             "length: int | Column, seed: int | Column = None",
         ),
         Row::new("typeof", "col: ColumnOrName"),
+        Row::new("collation", "col: ColumnOrName"),
         Row::new(
             "uniform",
             "min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Column = None",
@@ -673,6 +674,7 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("array_prepend", "col: ColumnOrName, value: Any"),
         Row::new("array_insert", "arr: ColumnOrName, pos: ColumnOrName | int, value: Any"),
         Row::new("array_compact", "col: ColumnOrName"),
+        Row::new("shuffle", "col: ColumnOrName, seed: int | Column = None"),
         Row::new("array_contains", "col: ColumnOrName, value: Any"),
         Row::new("array_distinct", "col: ColumnOrName"),
         Row::new("array_union", "col1: ColumnOrName, col2: ColumnOrName"),

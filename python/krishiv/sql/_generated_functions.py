@@ -83,6 +83,7 @@ __all__ = [
     "char_length",
     "character_length",
     "coalesce",
+    "collation",
     "collect_list",
     "collect_set",
     "concat_ws",
@@ -285,6 +286,7 @@ __all__ = [
     "shiftleft",
     "shiftright",
     "shiftrightunsigned",
+    "shuffle",
     "sign",
     "signum",
     "sin",
@@ -705,6 +707,11 @@ def character_length(str: ColumnOrName) -> Column:
 def coalesce(*cols: ColumnOrName) -> Column:
     """Calls the registry function ``coalesce``."""
     return _call("coalesce", *_cols(cols))
+
+
+def collation(col: ColumnOrName) -> Column:
+    """Calls the registry function ``collation``."""
+    return _call("collation", _named(col, "col"))
 
 
 def collect_list(col: ColumnOrName) -> Column:
@@ -1785,6 +1792,11 @@ def shiftright(col: ColumnOrName, numBits: int) -> Column:
 def shiftrightunsigned(col: ColumnOrName, numBits: int) -> Column:
     """Calls the registry function ``shiftrightunsigned``."""
     return _call("shiftrightunsigned", _named(col, "col"), _lit(numBits, "numBits"))
+
+
+def shuffle(col: ColumnOrName, seed: int | Column | None = None) -> Column:
+    """Calls the registry function ``shuffle``."""
+    return _call("shuffle", _named(col, "col"), *_opt(_lit, seed, "seed"))
 
 
 def sign(col: ColumnOrName) -> Column:

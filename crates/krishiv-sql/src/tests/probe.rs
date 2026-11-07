@@ -170,20 +170,19 @@ fn agrees_with_spark_on_the_type_string_fixture() {
     for case in doc["ddl"].as_array().unwrap() {
         let ddl = case["ddl"].as_str().unwrap();
         if ddl.to_ascii_lowercase().contains(" collate ") {
-            // Collated string types parse (their `COLLATE` is DDL syntax)
-            // but do not resolve yet: the lowering refuses them as
-            // unsupported. An explicit `UTF8_BINARY` is the plain string.
+            // Collated string types parse and resolve to `DataType::CollatedString`. An
+            // explicit `UTF8_BINARY` is the plain string.
             let t = parse_data_type(ddl, &d).unwrap_or_else(|e| panic!("{ddl}: {}", e.error));
             if ddl.to_ascii_lowercase().ends_with("utf8_binary") {
                 assert_eq!(t.to_data_type().unwrap(), krishiv_types::DataType::String);
                 continue;
             }
-            let e = t.to_data_type().unwrap_err();
-            assert_eq!(
-                e.error_class().name(),
-                "KRISHIV_UNSUPPORTED_FEATURE",
-                "{ddl}"
-            );
+            // A known collation resolves to the collated type; an unknown name is
+            // `COLLATION_INVALID_NAME`.
+            match t.to_data_type() {
+                Ok(t) => assert!(t.contains_collation(), "{ddl}"),
+                Err(e) => assert_eq!(e.error_class().name(), "COLLATION_INVALID_NAME", "{ddl}"),
+            }
             continue;
         }
         let ours = parse_data_type(ddl, &d);

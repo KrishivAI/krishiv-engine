@@ -537,9 +537,8 @@ impl Session {
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
-        // Spark refuses a database on a temporary function named by an
-        // `IDENTIFIER(...)` clause when it drops it; the parser sees only the
-        // evaluated name.
+        // Spark refuses a database on a temporary function named by an `IDENTIFIER(...)`
+        // clause when it drops it; the parser sees only the evaluated name.
         if named_by_clause
             && let Statement::DropFunction(f) = &statement
             && f.temporary
@@ -567,6 +566,7 @@ impl Session {
         query: &str,
         redacted: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
+        crate::collation_defaults::refuse_unhonoured(&statement)?;
         match statement {
             Statement::Query(q) => {
                 let plan =
@@ -826,7 +826,7 @@ impl Session {
             .map(|f| {
                 Ok(TableColumn {
                     name: f.name().clone(),
-                    data_type: DataType::from_arrow_field(f)?.refuse_collations()?,
+                    data_type: DataType::from_arrow_field(f)?,
                     nullable: f.is_nullable(),
                 })
             })
@@ -900,31 +900,31 @@ impl Session {
     /// ```
     ///
     /// # Errors
-    /// `FAILED_EXECUTE_UDF` when the UDF's `name` panics, is empty, or
-    /// contains a `.` or a backtick, since such a UDF can never be called
-    /// by name (the function name is `unknown` when there is none).
+    /// `FAILED_EXECUTE_UDF` (naming `unknown` if there is no name) when the
+    /// UDF's `name` panics, is empty, or holds a `.` or a backtick.
     pub fn register_udf(
         &self,
         udf: impl krishiv_udf_sdk::ScalarUdf,
     ) -> Result<(), krishiv_common::error::KrishivError> {
         let udf: Arc<dyn krishiv_udf_sdk::ScalarUdf> = Arc::new(udf);
-        if let Err(e) = self.state.udfs.register(Arc::clone(&udf)) {
-            let name = guard_call("unknown", "name", || udf.name().to_owned())
-                .map(|name| name.to_lowercase())
-                .unwrap_or_else(|_| "unknown".to_owned());
-            let name = if name.is_empty() {
-                "unknown".to_owned()
-            } else {
-                name
-            };
-            return Err(krishiv_functions::scalar::failed_execute(
-                &name,
-                "unknown",
-                "unknown",
-                e.message(),
-            ));
-        }
-        Ok(())
+        let named = || guard_call("unknown", "name", || udf.name().to_owned());
+        let done = self.state.udfs.register(Arc::clone(&udf));
+        done.map_err(|e| crate::udfs::registration_error(named(), &e))
+    }
+
+    /// Registers a native Rust aggregate UDF (ADR 0045), replacing any UDF
+    /// of its name, scalar or aggregate; otherwise as [`register_udf`](Self::register_udf).
+    ///
+    /// # Errors
+    /// As [`register_udf`](Self::register_udf).
+    pub fn register_udaf(
+        &self,
+        udaf: impl krishiv_udf_sdk::AggregateUdf,
+    ) -> Result<(), krishiv_common::error::KrishivError> {
+        let udaf: Arc<dyn krishiv_udf_sdk::AggregateUdf> = Arc::new(udaf);
+        let named = || guard_call("unknown", "name", || udaf.name().to_owned());
+        let done = self.state.udfs.register_aggregate(Arc::clone(&udaf));
+        done.map_err(|e| crate::udfs::registration_error(named(), &e))
     }
 
     /// The temporary tables and views, by name as registered.
