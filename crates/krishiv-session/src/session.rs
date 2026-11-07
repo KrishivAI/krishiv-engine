@@ -2477,7 +2477,7 @@ const PARSER_KEYS: [&str; 15] = [
     "spark.sql.caseSensitive",
     "spark.sql.parser.quotedRegexColumnNames",
     "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
-    "spark.sql.schemaLevelCollations.enabled",
+    "spark.sql.collation.schemaLevel.enabled",
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.

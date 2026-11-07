@@ -43,9 +43,9 @@ use super::setup::SessionSetup;
 use super::sorted::is_semantically_sorted;
 
 /// Settings of Spark's `SQLQueryTestSuite` that its goldens depend on, applied to every file's session (and its
-/// parser) before the file's own: `spark.sql.schemaLevelCollations.enabled` (off by default in Spark 4.2 and in
+/// parser) before the file's own: `spark.sql.collation.schemaLevel.enabled` (off by default in Spark 4.2 and in
 /// Krishiv; `describe.sql` creates a schema with a default collation; owner decision 2026-11-07).
-const SUITE_CONF: &[(&str, &str)] = &[("spark.sql.schemaLevelCollations.enabled", "true")];
+const SUITE_CONF: &[(&str, &str)] = &[("spark.sql.collation.schemaLevel.enabled", "true")];
 
 pub use super::run::TIMEOUT_CLASS;
 

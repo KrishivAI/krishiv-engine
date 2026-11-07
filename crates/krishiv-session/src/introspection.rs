@@ -1013,13 +1013,14 @@ impl Session {
             vec![s("Catalog Name"), s(crate::catalog::CATALOG)],
             vec![s("Namespace Name"), s(ns)],
             vec![s("Comment"), s(meta.comment.clone().unwrap_or_default())],
-            vec![s("Location"), s(location)],
-            vec![s("Owner"), s("spark")],
         ];
-        // `spark.sql.schemaLevelCollations.enabled`: the schema's default collation.
+        // The schema's default collation, after the comment (Spark 4.2.0,
+        // `research/spark/schema-collation/probe2.out`).
         if let Some(c) = &meta.collation {
             rows.push(vec![s("Collation"), s(c.clone())]);
         }
+        rows.push(vec![s("Location"), s(location)]);
+        rows.push(vec![s("Owner"), s("spark")]);
         Ok(rows)
     }
 

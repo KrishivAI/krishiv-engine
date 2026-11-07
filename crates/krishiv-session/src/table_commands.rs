@@ -240,9 +240,9 @@ impl Session {
         )
     }
 
-    /// Refuses a table or view in a schema with a default collation (`spark.sql.schemaLevelCollations.enabled`):
+    /// Refuses a table or view in a schema with a default collation (`spark.sql.collation.schemaLevel.enabled`):
     /// Krishiv does not apply the default to the new columns yet, and would type them `UTF8_BINARY`.
-    fn refuse_collated_namespace(&self, name: &TableName) -> Result<(), KrishivError> {
+    pub(crate) fn refuse_collated_namespace(&self, name: &TableName) -> Result<(), KrishivError> {
         let collated = self
             .state
             .catalog
@@ -368,7 +368,7 @@ impl Session {
                 let c = c.clone();
                 Box::new(move |m| m.comment.clone_from(&c))
             }
-            // Reaches here only with `spark.sql.schemaLevelCollations.enabled` (the parser refuses it
+            // Reaches here only with `spark.sql.collation.schemaLevel.enabled` (the parser refuses it
             // otherwise).
             AlterNamespaceAction::DefaultCollation(c) => {
                 let parts: Vec<&str> = c.parts.iter().map(|p| p.value.as_str()).collect();
@@ -1693,6 +1693,7 @@ impl Session {
             written: String::new(),
             bare: false,
         };
+        self.refuse_collated_namespace(&name)?;
         table.layout = crate::partitions::table_layout(
             &name,
             &mut table.columns,

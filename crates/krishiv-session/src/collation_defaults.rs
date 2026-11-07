@@ -35,7 +35,7 @@ fn collated_map_key(dt: &DataType) -> bool {
 /// `.COLLATIONS_IN_MAP_KEYS` as Spark 4.2 raises them with its switches off;
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a view default; `COLLATION_INVALID_NAME` for an unknown name.
 ///
-/// With `schema_level` (`spark.sql.schemaLevelCollations.enabled`) a schema's default is stored and
+/// With `schema_level` (`spark.sql.collation.schemaLevel.enabled`) a schema's default is stored and
 /// shown (`DESCRIBE SCHEMA`); a table or view in such a schema is refused where it is created.
 pub(crate) fn refuse_unhonoured(
     statement: &Statement,

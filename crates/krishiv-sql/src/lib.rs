@@ -136,7 +136,7 @@ pub struct ParserOptions {
     /// `spark.sql.legacy.parser.havingWithoutGroupByAsWhere`: a `HAVING` with no `GROUP BY` over
     /// a select list with no aggregate call filters rows like `WHERE`.
     pub having_without_group_by_as_where: bool,
-    /// `spark.sql.schemaLevelCollations.enabled` (off in Spark 4.2): a schema may take
+    /// `spark.sql.collation.schemaLevel.enabled` (off in Spark 4.2): a schema may take
     /// `DEFAULT COLLATION`; off, `ALTER SCHEMA .. DEFAULT COLLATION` is
     /// `UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS`.
     pub schema_level_collations: bool,
@@ -186,7 +186,7 @@ impl ParserOptions {
                 "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
                 false,
             ),
-            schema_level_collations: on("spark.sql.schemaLevelCollations.enabled", false),
+            schema_level_collations: on("spark.sql.collation.schemaLevel.enabled", false),
         }
     }
 }

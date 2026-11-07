@@ -30,7 +30,8 @@
 5384 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 2902 crates/krishiv-session/src/catalog.rs
-2251 crates/krishiv-session/src/command.rs
+# +7 lines over main: a persistent SQL function in a schema with a DEFAULT COLLATION is refused (row 14)
+2258 crates/krishiv-session/src/command.rs
 # +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
 2640 crates/krishiv-session/src/dataframe.rs
 # +5 lines over main: write_files' dry flag (multi-table INSERT)
@@ -38,8 +39,8 @@
 2785 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
 # +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
-# +36 lines over main: a schema's DEFAULT COLLATION stored and altered, tables and views refused in it (row 14)
-3409 crates/krishiv-session/src/table_commands.rs
+# +37 lines over main: a schema's DEFAULT COLLATION stored and altered, tables, views and writeTo creates refused in it (row 14)
+3410 crates/krishiv-session/src/table_commands.rs
 # +6 lines over main: CREATE NAMESPACE records a clause written twice and PROPERTIES with DBPROPERTIES (DUPLICATE_CLAUSES, PR #572)
 3875 crates/krishiv-sql/src/ast.rs
 2732 crates/krishiv-sql/src/lower.rs

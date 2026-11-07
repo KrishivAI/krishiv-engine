@@ -488,7 +488,7 @@ fn spark_aliases_map_to_krishiv_keys() {
         Some(ANSI_ENABLED.key)
     );
     assert_eq!(
-        lookup("spark.sql.schemaLevelCollations.enabled").map(|e| e.key),
+        lookup("spark.sql.collation.schemaLevel.enabled").map(|e| e.key),
         Some(SCHEMA_LEVEL_COLLATIONS_ENABLED.key)
     );
 }
@@ -501,14 +501,14 @@ fn schema_level_collations_default_off_and_parse() {
         c.get(&SCHEMA_LEVEL_COLLATIONS_ENABLED),
         Some(&ConfigValue::Bool(false))
     );
-    c.set("spark.sql.schemaLevelCollations.enabled", "true")
+    c.set("spark.sql.collation.schemaLevel.enabled", "true")
         .unwrap();
     assert_eq!(
         c.get(&SCHEMA_LEVEL_COLLATIONS_ENABLED),
         Some(&ConfigValue::Bool(true))
     );
     assert!(
-        c.set("krishiv.sql.schemaLevelCollations.enabled", "maybe")
+        c.set("krishiv.sql.collation.schemaLevel.enabled", "maybe")
             .is_err()
     );
 }

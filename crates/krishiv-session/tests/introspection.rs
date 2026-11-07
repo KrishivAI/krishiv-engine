@@ -345,40 +345,36 @@ fn describe_modes_secrets_and_quoting() {
     assert!(text.contains("it\\'s'"), "{text}");
 }
 
-/// `spark.sql.schemaLevelCollations.enabled` (owner decision 2026-11-07): off (Spark 4.2's default) a schema's
-/// `DEFAULT COLLATION` is refused; on (a session default), the schema stores and shows it, `ALTER` changes it, and
-/// a table in it is refused, since Krishiv does not apply the default to its columns yet.
+/// `spark.sql.collation.schemaLevel.enabled` (owner decision 2026-11-07; Spark 4.2.0
+/// `research/spark/schema-collation/probe2.out`): off (the default) a schema's `DEFAULT COLLATION` is refused; on (a
+/// session `SET` too), the schema stores and shows it after its comment, `ALTER` changes it, and a table, view or
+/// function in it is refused, since Krishiv does not apply the default to their strings yet.
 #[test]
 fn schema_level_collations_are_stored_only_when_enabled() {
     let dir = tempfile::tempdir().unwrap();
-    let off = session(dir.path());
+    let s = session(dir.path());
     assert_eq!(
-        class(&off, "CREATE SCHEMA c DEFAULT COLLATION UNICODE"),
+        class(&s, "CREATE SCHEMA c DEFAULT COLLATION UNICODE"),
         "UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS"
     );
-    let on = Session::builder()
-        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .config("spark.sql.schemaLevelCollations.enabled", "true")
-        .build()
-        .unwrap();
-    run(&on, "CREATE SCHEMA c DEFAULT COLLATION unicode");
-    let shown = rows(&on, "DESCRIBE SCHEMA EXTENDED c");
-    assert!(
-        shown.contains(&vec!["Collation".to_owned(), "UNICODE".to_owned()]),
-        "{shown:?}"
-    );
-    run(&on, "ALTER SCHEMA c DEFAULT COLLATION UTF8_LCASE");
-    let shown = rows(&on, "DESCRIBE SCHEMA EXTENDED c");
-    assert!(
-        shown.contains(&vec!["Collation".to_owned(), "UTF8_LCASE".to_owned()]),
-        "{shown:?}"
-    );
+    run(&s, "SET spark.sql.collation.schemaLevel.enabled = true");
+    run(&s, "CREATE SCHEMA c DEFAULT COLLATION unicode");
+    let shown = rows(&s, "DESCRIBE SCHEMA c");
+    assert_eq!(shown[2][0], "Comment", "{shown:?}");
+    assert_eq!(shown[3], ["Collation", "UNICODE"], "{shown:?}");
+    run(&s, "ALTER SCHEMA c DEFAULT COLLATION UTF8_LCASE");
+    let shown = rows(&s, "DESCRIBE SCHEMA EXTENDED c");
+    assert_eq!(shown[3], ["Collation", "UTF8_LCASE"], "{shown:?}");
+    for sql in [
+        "CREATE TABLE c.t (a STRING) USING parquet",
+        "CREATE TABLE c.t2 USING parquet AS SELECT 'x' AS a",
+        "CREATE VIEW c.v AS SELECT 'x' AS a",
+        "CREATE FUNCTION c.f(x STRING) RETURNS STRING RETURN x",
+    ] {
+        assert_eq!(class(&s, sql), "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
+    }
     assert_eq!(
-        class(&on, "CREATE TABLE c.t (a STRING) USING parquet"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
-    assert_eq!(
-        class(&on, "CREATE SCHEMA d DEFAULT COLLATION nope"),
+        class(&s, "CREATE SCHEMA d DEFAULT COLLATION nope"),
         "COLLATION_INVALID_NAME"
     );
 }

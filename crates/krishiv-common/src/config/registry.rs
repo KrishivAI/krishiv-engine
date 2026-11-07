@@ -372,12 +372,12 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &AVRO_DATETIME_REBASE_MODE_IN_READ,
     ),
     (
-        "spark.sql.legacy.viewSchemaCompensation",
-        &LEGACY_VIEW_SCHEMA_COMPENSATION,
+        "spark.sql.collation.schemaLevel.enabled",
+        &SCHEMA_LEVEL_COLLATIONS_ENABLED,
     ),
     (
-        "spark.sql.schemaLevelCollations.enabled",
-        &SCHEMA_LEVEL_COLLATIONS_ENABLED,
+        "spark.sql.legacy.viewSchemaCompensation",
+        &LEGACY_VIEW_SCHEMA_COMPENSATION,
     ),
     (
         "krishiv.runtimeFilter.exactSet.maxValues",
@@ -404,12 +404,12 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &AVRO_DATETIME_REBASE_MODE_IN_READ,
     ),
     (
-        "krishiv.sql.legacy.viewSchemaCompensation",
-        &LEGACY_VIEW_SCHEMA_COMPENSATION,
+        "krishiv.sql.collation.schemaLevel.enabled",
+        &SCHEMA_LEVEL_COLLATIONS_ENABLED,
     ),
     (
-        "krishiv.sql.schemaLevelCollations.enabled",
-        &SCHEMA_LEVEL_COLLATIONS_ENABLED,
+        "krishiv.sql.legacy.viewSchemaCompensation",
+        &LEGACY_VIEW_SCHEMA_COMPENSATION,
     ),
     (
         "krishiv.sql.sources.partitionOverwriteMode",
@@ -481,19 +481,18 @@ pub static SQL_PATH_ENABLED: ConfigEntry = ConfigEntry {
 
 /// Whether schema-level default collations (`CREATE|ALTER SCHEMA .. DEFAULT COLLATION`) are allowed.
 pub static SCHEMA_LEVEL_COLLATIONS_ENABLED: ConfigEntry = ConfigEntry {
-    key: "krishiv.sql.schemaLevelCollations.enabled",
+    key: "krishiv.sql.collation.schemaLevel.enabled",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(false)),
     doc: "Whether a schema may have a default collation (`CREATE SCHEMA .. DEFAULT COLLATION`, \
           `ALTER SCHEMA .. DEFAULT COLLATION`). Off, as in Spark 4.2, the clause is \
           `UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS`. On, the schema stores it and `DESCRIBE \
-          SCHEMA` shows it; tables and views are not created in such a schema yet (Krishiv does not \
-          apply the default to their columns). Meant as a session default (the session builder or \
-          an administrator); Spark reads it only at startup.",
+          SCHEMA` shows it; tables, views and functions are not created in such a schema yet \
+          (Spark gives their strings the schema's collation; Krishiv does not apply it).",
     scope: Scope::Session,
-    settable_by: SettableBy::Admin,
+    settable_by: SettableBy::User,
     version_added: "0.2.0",
-    spark_alias: Some("spark.sql.schemaLevelCollations.enabled"),
+    spark_alias: Some("spark.sql.collation.schemaLevel.enabled"),
 };
 
 /// What `DEFAULT_PATH` expands to.
