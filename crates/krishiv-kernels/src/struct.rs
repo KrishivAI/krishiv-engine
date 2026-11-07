@@ -292,6 +292,15 @@ mod tests {
         ArrowType::List(Arc::new(Field::new("item", ArrowType::Int32, true)))
     }
 
+    /// A type Spark cannot order either.
+    fn map_of_int() -> ArrowType {
+        let entries = struct_of(vec![
+            Field::new("key", ArrowType::Int32, false),
+            Field::new("value", ArrowType::Int32, true),
+        ]);
+        ArrowType::Map(Arc::new(Field::new("entries", entries, false)), false)
+    }
+
     #[test]
     fn only_structs_of_orderable_fields_are_comparable() {
         // Flat struct of orderable leaves.
@@ -299,11 +308,15 @@ mod tests {
             Field::new("a", ArrowType::Int32, true),
             Field::new("b", ArrowType::Utf8, true),
         ])));
-        // A field these kernels cannot order (arrays, for now: Spark can order them) makes the
-        // struct incomparable here, at any depth.
-        assert!(!comparable(&struct_of(vec![
+        // Arrays order element-wise, as in Spark.
+        assert!(comparable(&struct_of(vec![
             Field::new("a", ArrowType::Int32, true),
             Field::new("l", list_of_int(), true),
+        ])));
+        // A field nothing can order (a map) makes the struct incomparable, at any depth.
+        assert!(!comparable(&struct_of(vec![
+            Field::new("a", ArrowType::Int32, true),
+            Field::new("m", map_of_int(), true),
         ])));
         let nested_ok = struct_of(vec![Field::new(
             "s",
@@ -313,13 +326,14 @@ mod tests {
         assert!(comparable(&nested_ok));
         let nested_bad = struct_of(vec![Field::new(
             "s",
-            struct_of(vec![Field::new("l", list_of_int(), true)]),
+            struct_of(vec![Field::new("m", map_of_int(), true)]),
             true,
         )]);
         assert!(!comparable(&nested_bad));
-        // Only structs qualify.
+        // Only structs and arrays qualify.
         assert!(!comparable(&ArrowType::Int32));
-        assert!(!comparable(&list_of_int()));
+        assert!(comparable(&list_of_int()));
+        assert!(!comparable(&map_of_int()));
     }
 
     #[test]
@@ -337,7 +351,9 @@ mod tests {
             assert!(drilled_orderable(&t), "{t:?}");
         }
         assert!(!leaf_orderable(&list_of_int()));
-        assert!(!drilled_orderable(&list_of_int()));
+        assert!(drilled_orderable(&list_of_int()));
+        assert!(!leaf_orderable(&map_of_int()));
+        assert!(!drilled_orderable(&map_of_int()));
         // A struct is not a leaf; it is orderable only through its fields.
         let st = struct_of(vec![Field::new("a", ArrowType::Int32, true)]);
         assert!(!leaf_orderable(&st));
