@@ -354,6 +354,19 @@ mod wkt;
 #[cfg(test)]
 mod tests;
 
+/// A value of `GEOMETRY(ANY)` or `GEOGRAPHY(ANY)` cast to a geography must carry a geographic
+/// SRID of Spark's registry (`STUtils.geometryToGeography`).
+///
+/// # Errors
+/// `ST_INVALID_SRID_VALUE` for an SRID that is unknown or not geographic.
+pub fn check_geographic_srid(srid: i32) -> Result<()> {
+    if crate::srs::is_geographic(srid) {
+        Ok(())
+    } else {
+        Err(error::invalid_srid(&srid.to_string()))
+    }
+}
+
 /// The text Spark prints a spatial value as (extended well-known text):
 /// `POINT(1 2)`, with `SRID=<n>;` in front unless the SRID is 0. Every
 /// geometry type prints, with `Z`/`M`/`ZM` ordinates, empty geometries and

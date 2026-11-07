@@ -6,12 +6,9 @@
 //! coordinates in range), and `try_cast` turning only the runtime errors
 //! into NULL. Spark's results are the same with ANSI on and off.
 //!
-//! Not matched yet (`is_known_gap`): a cast from `GEOMETRY(ANY)` to
-//! `GEOGRAPHY(ANY)`. Spark accepts it at analysis and checks the value's SRID
-//! at run time against its registry of geographic systems
-//! (`sql/api/.../srs_registry.csv`, 1,406 geographic SRIDs, generated from
-//! PROJ); the engine refuses it at analysis, and its geographic check knows
-//! only 4326. The gap cases must still differ, so the list can only shrink.
+//! Every case of the fixture matches: a cast from `GEOMETRY(ANY)` to `GEOGRAPHY(ANY)` is
+//! accepted at analysis (equal `ANY` SRIDs) and checks each value's SRID against Spark's
+//! registry of geographic systems at run time (`ST_INVALID_SRID_VALUE`), then its coordinates.
 #![cfg(test)]
 
 use arrow_array::Array;
@@ -21,29 +18,32 @@ use futures::executor::block_on;
 use krishiv_session::Session;
 use serde_json::Value;
 
-/// Whether `sql` is one of the cases the engine does not match yet.
-fn is_known_gap(sql: &str) -> bool {
-    sql.contains("GEOMETRY(ANY)") && sql.contains("GEOGRAPHY(ANY)")
-}
-
-/// What the first cell of `sql` prints as: EWKT for a spatial value,
+/// What the first column of `sql` prints as, rows joined by `, `: EWKT for a spatial value,
 /// `true`/`false` for a boolean, `NULL` for a NULL.
 fn first_cell(s: &Session, sql: &str) -> Result<String, String> {
     let df = block_on(s.sql(sql)).map_err(|e| e.to_string())?;
     let batches = block_on(df.collect()).map_err(|e| e.to_string())?;
-    let column = &batches[0].columns()[0];
-    if column.is_null(0) {
-        return Ok("NULL".to_owned());
+    let mut cells = Vec::new();
+    for batch in &batches {
+        let column = &batch.columns()[0];
+        for row in 0..batch.num_rows() {
+            if column.is_null(row) {
+                cells.push("NULL".to_owned());
+                continue;
+            }
+            if let Some(b) = column.as_boolean_opt() {
+                cells.push(b.value(row).to_string());
+                continue;
+            }
+            let st = column
+                .as_struct_opt()
+                .ok_or_else(|| format!("a {} column", column.data_type()))?;
+            let srid = st.column(0).as_primitive::<Int32Type>().value(row);
+            let wkb = st.column(1).as_binary_view().value(row);
+            cells.push(krishiv_types::geo::to_ewkt(srid, wkb).map_err(|e| e.to_string())?);
+        }
     }
-    if let Some(b) = column.as_boolean_opt() {
-        return Ok(b.value(0).to_string());
-    }
-    let st = column
-        .as_struct_opt()
-        .ok_or_else(|| format!("a {} column", column.data_type()))?;
-    let srid = st.column(0).as_primitive::<Int32Type>().value(0);
-    let wkb = st.column(1).as_binary_view().value(0);
-    krishiv_types::geo::to_ewkt(srid, wkb).map_err(|e| e.to_string())
+    Ok(cells.join(", "))
 }
 
 #[test]
@@ -68,14 +68,10 @@ fn every_spark_geography_cast_case_agrees() {
                 (None, Some(want)) => got.as_deref() == Ok(want),
                 _ => false,
             };
-            match (ok, is_known_gap(sql)) {
-                (false, false) => wrong.push(format!(
+            if !ok {
+                wrong.push(format!(
                     "ansi={ansi}: {sql}\n    want {c}\n    got  {got:?}"
-                )),
-                (true, true) => wrong.push(format!(
-                    "ansi={ansi}: now matches Spark, remove it from is_known_gap: {sql}"
-                )),
-                _ => {}
+                ));
             }
         }
     }
