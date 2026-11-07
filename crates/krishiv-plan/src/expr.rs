@@ -113,6 +113,18 @@ pub enum ExprNode {
         /// Error behaviour on invalid input.
         mode: CastMode,
     },
+    /// `expr COLLATE name` / `collate(expr, name)`: the value with an *explicit* collation
+    /// (the strongest of the coercion pass, ADR 0043). It resolves to a cast to the collated
+    /// type, free at run time; a non-string child is `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE`.
+    Collate {
+        /// The string value.
+        expr: Arc<Expr>,
+        /// The collation.
+        collation: krishiv_types::Collation,
+        /// The name as written (`utf8_lcase`), which names the output column
+        /// (`collate(col1, utf8_lcase)`).
+        name: String,
+    },
     /// An unresolved `expr AS name`.
     Alias {
         /// The aliased expression.
@@ -706,6 +718,7 @@ impl Expr {
                 columns.iter().for_each(&mut *f);
             }
             ExprNode::Cast { expr, .. }
+            | ExprNode::Collate { expr, .. }
             | ExprNode::Alias { expr, .. }
             | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
@@ -768,6 +781,7 @@ impl Expr {
                 columns.iter_mut().for_each(&mut *f);
             }
             ExprNode::Cast { expr, .. }
+            | ExprNode::Collate { expr, .. }
             | ExprNode::Alias { expr, .. }
             | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }

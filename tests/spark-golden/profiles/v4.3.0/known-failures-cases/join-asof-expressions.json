@@ -1,0 +1,21 @@
+{
+  "cases": {
+    "parser-tail": [
+      12,
+      13
+    ],
+    "s43-asof-join": [
+      2,
+      3,
+      4,
+      5,
+      7,
+      8,
+      10,
+      11,
+      14
+    ]
+  },
+  "file": "join-asof-expressions",
+  "format_version": 1
+}
