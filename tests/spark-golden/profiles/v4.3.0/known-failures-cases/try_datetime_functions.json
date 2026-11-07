@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "s43-other": [
+      6,
+      8,
+      9,
+      10
+    ]
+  },
+  "file": "try_datetime_functions",
+  "format_version": 1
+}
