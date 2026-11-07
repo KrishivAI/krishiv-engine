@@ -610,15 +610,46 @@ fn restriction_after_join_ordering_reaches_a_fixed_point() {
 /// key `c0`; common-subexpression elimination then read the key's cast as a
 /// `cse_*` column, and the prune after it dropped `c0` from the aggregate, so
 /// the projection was left dropping only that column. The next run's join
-/// ordering dissolved it and pruning (which never narrows for a `cse_*` column
-/// alone) did not rebuild it, so the plan was not a fixed point. Pruning now
-/// removes such a selection.
+/// ordering looked through it and pruning (which never narrows for a `cse_*`
+/// column alone) did not rebuild it, so the plan was not a fixed point. Join
+/// ordering now takes such a selection as an input.
 #[test]
-fn a_selection_left_dropping_only_a_cse_column_goes() {
-    let seed = 18_345_891_200_138_869_054_u64;
-    let sql = Gen::new(seed).top();
-    let plan = support::resolve(&sql, &support::ctx());
+fn a_selection_dropping_only_cse_columns_is_a_join_input() {
+    fixed_point_with_rows(
+        18_345_891_200_138_869_054,
+        &Gen::new(18_345_891_200_138_869_054).top(),
+    );
+}
+
+/// The same shape written directly, under joins whose output is the query's
+/// (inner, left outer, left semi, and a union that reads by position): the
+/// output stays the query's and the plan a fixed point.
+#[test]
+fn a_selection_dropping_only_cse_columns_keeps_the_output() {
+    let inner = "(SELECT y.c1 FROM (SELECT a AS c0, count(*) AS c1 FROM t GROUP BY a) AS y \
+                 WHERE y.c1 >= y.c0 AND y.c0 >= y.c1) AS x1";
+    for sql in [
+        format!("SELECT * FROM u JOIN {inner} ON x1.c1 = u.a"),
+        format!("SELECT * FROM {inner} LEFT JOIN u ON x1.c1 = u.a"),
+        format!("SELECT * FROM {inner} LEFT SEMI JOIN u ON x1.c1 = u.a"),
+        format!("SELECT * FROM {inner} LEFT SEMI JOIN u ON x1.c1 = u.a UNION ALL SELECT 5L"),
+    ] {
+        for seed in [1, 2, 3] {
+            fixed_point_with_rows(seed, &sql);
+        }
+    }
+}
+
+/// `sql` optimizes to a plan with the query's output that a second optimization
+/// leaves alone and that returns the unoptimized plan's rows over `data::small(seed)`.
+fn fixed_point_with_rows(seed: u64, sql: &str) {
+    let plan = support::resolve(sql, &support::ctx());
     let optimized = optimize(&plan).unwrap();
+    assert_eq!(
+        optimized.root().resolved_output(),
+        plan.root().resolved_output(),
+        "{sql}"
+    );
     let again = optimize(&optimized).unwrap();
     assert!(
         again.structurally_eq(&optimized),
@@ -642,21 +673,8 @@ fn a_selection_left_dropping_only_a_cse_column_goes() {
 /// held one with its sides swapped is now dropped as a repeat.
 #[test]
 fn a_swapped_equality_pushed_into_a_join_is_a_repeat() {
-    let seed = 2_091_781_642_927_400_886_u64;
-    let sql = Gen::new(seed).top();
-    let plan = support::resolve(&sql, &support::ctx());
-    let optimized = optimize(&plan).unwrap();
-    let again = optimize(&optimized).unwrap();
-    assert!(
-        again.structurally_eq(&optimized),
-        "{sql}: not a fixed point:\n{}\n{}",
-        optimized.root(),
-        again.root()
-    );
-    let db = data::small(seed);
-    assert_eq!(
-        eval::rows(&db, optimized.root()),
-        eval::rows(&db, plan.root()),
-        "{sql}"
+    fixed_point_with_rows(
+        2_091_781_642_927_400_886,
+        &Gen::new(2_091_781_642_927_400_886).top(),
     );
 }
