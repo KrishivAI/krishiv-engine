@@ -1,0 +1,15 @@
+{
+  "cases": {
+    "depends-on-command": [
+      84
+    ],
+    "sql-commands": [
+      83,
+      188,
+      189,
+      233
+    ]
+  },
+  "file": "sql-session-variables",
+  "format_version": 1
+}

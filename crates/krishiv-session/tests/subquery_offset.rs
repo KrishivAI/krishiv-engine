@@ -322,3 +322,26 @@ fn spark_3_5_checks_a_bound_behind_a_correlated_with_reference() -> R {
     );
     Ok(())
 }
+
+/// The `LIMIT` twin of the test above, with `decorrelateLimit` off: a bound
+/// behind a reference to a correlated `WITH` definition is refused on the
+/// default profile too, where the same query answers with the switch on.
+#[test]
+fn a_limit_behind_a_correlated_with_reference_follows_the_switch() -> R {
+    let cte = "select x1, (with t as (select y2 from y where y1 = x1) \
+               select max(y2) from (select y2 from t order by y2 limit 1) q) from x";
+    let written = "select x1, (select max(y2) from (select y2 from y where y1 = x1 \
+                   order by y2 limit 1) q) from x";
+    let s = session()?;
+    assert_eq!(run(&s, cte)?, run(&s, written)?, "{cte}");
+    run(
+        &s,
+        "set spark.sql.optimizer.decorrelateLimit.enabled = false",
+    )?;
+    assert!(
+        failure(&s, cte).contains(OUTER),
+        "{cte}: {}",
+        failure(&s, cte)
+    );
+    Ok(())
+}

@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "depends-on-command": [
+      47,
+      58
+    ]
+  },
+  "file": "postgreSQL/boolean",
+  "format_version": 1
+}

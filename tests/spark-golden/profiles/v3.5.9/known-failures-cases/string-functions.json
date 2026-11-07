@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "v35-ansi-default": [
+      9,
+      12,
+      55,
+      56
+    ]
+  },
+  "file": "string-functions",
+  "format_version": 1
+}

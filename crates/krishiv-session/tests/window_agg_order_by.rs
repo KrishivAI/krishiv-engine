@@ -110,3 +110,24 @@ fn a_map_valued_sort_key_is_an_ordering_error_before_the_aggregate_refusal() {
         "DATATYPE_MISMATCH.INVALID_ORDERING_TYPE"
     );
 }
+
+#[test]
+fn over_a_generator_the_calls_are_listed_whole_and_unqualified_too() {
+    let s = Session::new().unwrap();
+    // Spark 4.2.0 (local run): an aggregate in the ORDER BY beside a generator is refused with the calls as
+    // written, a call of several arguments whole.
+    let from = "FROM VALUES (1, 10), (2, 20), (2, 30) t(k, v) GROUP BY k";
+    for (order, want) in [
+        ("count(*)", "\"count(1)\""),
+        ("max_by(k, k)", "\"max_by(k, k)\""),
+        ("sum(k), max_by(k, k)", "\"sum(k)\", \"max_by(k, k)\""),
+        ("count(DISTINCT k)", "\"count(DISTINCT k)\""),
+    ] {
+        let sql = format!("SELECT k, explode(array(k)) e {from} ORDER BY {order}");
+        assert_eq!(
+            outcome(&s, &sql),
+            ("UNSUPPORTED_EXPR_FOR_OPERATOR".to_owned(), want.to_owned()),
+            "ORDER BY {order}"
+        );
+    }
+}
