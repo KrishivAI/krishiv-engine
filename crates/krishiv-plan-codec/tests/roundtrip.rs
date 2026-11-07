@@ -200,6 +200,19 @@ fn an_exchanges_planned_schema_round_trips_and_is_ignorable() {
     )])));
     assert_eq!(round_trip(&variant), variant);
     assert!(plan_features(&variant).contains(&krishiv_plan_codec::Feature::VariantType));
+    // A partial aggregate's list-typed state columns name the nested type;
+    // the encoder must agree with the header (percentile_cont, nightly).
+    let list = with(Arc::new(Schema::new(vec![Field::new(
+        "values",
+        arrow_schema::DataType::List(Arc::new(Field::new(
+            "item",
+            arrow_schema::DataType::Float64,
+            true,
+        ))),
+        true,
+    )])));
+    assert_eq!(round_trip(&list), list);
+    assert!(plan_features(&list).contains(&krishiv_plan_codec::Feature::NestedTypes));
 }
 
 #[test]
