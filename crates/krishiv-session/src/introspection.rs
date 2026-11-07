@@ -251,22 +251,51 @@ fn is_global_namespace(ns: &str) -> bool {
 impl Session {
     /// The declared `CHAR(n)` / `VARCHAR(n)` strings of the stored table `name`'s columns, by lower-cased column
     /// name; none for a temporary view or a name that is not a stored relation.
-    fn declared_char_varchars(
+    async fn declared_char_varchars(
         &self,
         name: &TableName,
         temp: bool,
-    ) -> std::collections::HashMap<String, String> {
+    ) -> Result<std::collections::HashMap<String, String>, KrishivError> {
         if temp {
-            return std::collections::HashMap::new();
+            // Spark 4.2 keeps a temporary view's `CHAR(n)` / `VARCHAR(n)` output types (3.5 to 4.1
+            // print `string`): read them off the analyzed view (review of #496 M1).
+            if self.state.profile != krishiv_plan::analyzer::SparkProfile::V4_2 {
+                return Ok(std::collections::HashMap::new());
+            }
+            let env = self.query_env();
+            let global = !name.bare
+                && name
+                    .namespace
+                    .eq_ignore_ascii_case(crate::catalog::GLOBAL_NAMESPACE);
+            let df = if global {
+                DataFrame::new(
+                    self.clone(),
+                    Arc::new(krishiv_plan::LogicalPlan::table([
+                        crate::catalog::GLOBAL_NAMESPACE,
+                        name.name.as_str(),
+                    ])),
+                )
+            } else {
+                self.table(&name.name)
+            };
+            let analysis = df.analyzed_in(env).await?;
+            return Ok(analysis
+                .analyzed
+                .output
+                .iter()
+                .zip(&analysis.analyzed.output_declared)
+                .filter_map(|(c, d)| Some((c.name.to_lowercase(), d.clone()?)))
+                .collect());
         }
-        self.stored_relation(name)
+        Ok(self
+            .stored_relation(name)
             .map(|t| {
                 t.columns
                     .iter()
                     .filter_map(|c| Some((c.name.to_lowercase(), c.char_varchar.clone()?)))
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
     /// `SHOW TABLES | VIEWS IN global_temp`: the global temporary views.
@@ -814,13 +843,13 @@ impl Session {
                         .describe_column(
                             &columns,
                             column,
-                            &self.declared_char_varchars(&name, temp),
+                            &self.declared_char_varchars(&name, temp).await?,
                             mode.is_some(),
                         )
                         .await;
                 }
                 // `CHAR(n)` / `VARCHAR(n)` columns show their declared type, not `string`.
-                let declared = self.declared_char_varchars(&name, temp);
+                let declared = self.declared_char_varchars(&name, temp).await?;
                 let mut rows: Vec<Vec<Cell>> = columns
                     .iter()
                     .map(|(n, t, c)| {

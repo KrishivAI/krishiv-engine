@@ -678,3 +678,34 @@ fn column_statistics_after_analyze_are_refused_not_null() {
     }
     run(&s, "DESC t c").unwrap();
 }
+
+/// Fixture `ddl_temp_view_desc` (Spark 4.2.0): `DESCRIBE` of a temporary view over a table with
+/// `CHAR`/`VARCHAR` columns prints their declared types (3.5.7 to 4.1.0 print `string`; review of #496 M1).
+#[test]
+fn a_temporary_view_describes_its_char_varchar_columns() {
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        "CREATE TABLE t_cmp(c3 char(3), c5 char(5), v3 varchar(3), v5 varchar(5), s string) USING parquet",
+    )
+    .unwrap();
+    run(&s, "CREATE TEMPORARY VIEW tv_cv AS SELECT * FROM t_cmp").unwrap();
+    let df = block_on(s.sql("DESCRIBE TABLE tv_cv")).unwrap();
+    let mut got = Vec::new();
+    for b in block_on(df.collect()).unwrap() {
+        let (n, t) = (b.column(0).as_string_view(), b.column(1).as_string_view());
+        for i in 0..b.num_rows() {
+            got.push(format!("{} {}", n.value(i), t.value(i)));
+        }
+    }
+    assert_eq!(
+        got,
+        [
+            "c3 char(3)",
+            "c5 char(5)",
+            "v3 varchar(3)",
+            "v5 varchar(5)",
+            "s string"
+        ]
+    );
+}
