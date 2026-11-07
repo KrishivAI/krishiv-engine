@@ -783,8 +783,10 @@ impl QueryCatalog {
                             let key = if options.is_empty() {
                                 FilesKey::View(last.to_lowercase())
                             } else {
+                                // The key `open_files` and the provider build: the entry's own.
                                 reference_key(
-                                    last.to_lowercase(),
+                                    self.entry_of(name)
+                                        .map_or_else(|| last.to_lowercase(), |(k, _)| k),
                                     *known,
                                     *permanent,
                                     source,
@@ -2691,6 +2693,45 @@ mod tests {
             union.sort_unstable();
             assert_eq!(union, whole, "{tasks} tasks");
         }
+    }
+
+    #[test]
+    fn task_specs_deal_a_reference_with_options_to_a_table_over_files() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        write_parquet(&dir.path().join("a.parquet"), 500, 100);
+        write_parquet(&dir.path().join("b.parquet"), 300, 100);
+        let session = Session::builder()
+            .config("spark.sql.files.maxPartitionBytes", "1024")
+            .build()
+            .unwrap();
+        block_on(session.sql(&format!(
+            "CREATE TABLE pt (id INT) USING parquet LOCATION '{}'",
+            dir.path().display()
+        )))
+        .unwrap();
+        // The reference's options name another listing than the bare table's: its splits come
+        // from the listing opened for the reference.
+        let df = block_on(session.sql("SELECT id FROM pt WITH ('mergeSchema' = 'false')")).unwrap();
+        let analysis = rt.block_on(df.analysis()).unwrap();
+        let (_, physical) = rt
+            .block_on(session.physical(&analysis.analyzed, &analysis.env))
+            .unwrap();
+        let specs = analysis.env.catalog.task_specs(&physical, 2, 2).unwrap();
+        assert_eq!(specs.len(), 2);
+        let mut union = Vec::new();
+        for task in &specs {
+            union.extend(ids_of(
+                &rt.block_on(session.run_task(&physical, &analysis.env, task))
+                    .unwrap(),
+            ));
+        }
+        union.sort_unstable();
+        assert_eq!(union, ids_of(&rt.block_on(df.collect()).unwrap()));
+        assert_eq!(union.len(), 800);
     }
 
     /// A streaming `Range` has no split assignment: one task is fine,

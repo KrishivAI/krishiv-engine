@@ -24,7 +24,7 @@
 3098 crates/krishiv-plan/src/analyzer/subquery.rs
 5390 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
-3139 crates/krishiv-session/src/catalog.rs
+3180 crates/krishiv-session/src/catalog.rs
 2286 crates/krishiv-session/src/command.rs
 2629 crates/krishiv-session/src/dataframe.rs
 2789 crates/krishiv-session/src/session.rs
