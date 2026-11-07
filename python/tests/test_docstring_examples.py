@@ -22,16 +22,8 @@ from krishiv.sql import functions as F
 from krishiv.sql.session import SparkSession
 
 KNOWN_FAILING = {
-    "krishiv.sql.column.Column.bitwiseAND",
-    "krishiv.sql.column.Column.bitwiseOR",
-    "krishiv.sql.column.Column.bitwiseXOR",
+    # createDataFrame does not accept a list column yet
     "krishiv.sql.column.Column.getItem",
-    "krishiv.sql.column.Column.isNaN",
-    "krishiv.sql.column.Column.otherwise",
-    "krishiv.sql.column.Column.try_cast",
-    "krishiv.sql.column.Column.when",
-    "krishiv.sql.dataframe.DataFrame.toDF",
-    "krishiv.sql.functions.when",
 }
 
 # These print rows without an ORDER BY, so they pass or fail with the row order of the run; fix the
@@ -73,3 +65,10 @@ def test_docstring_examples_match_the_documented_output(spark: SparkSession) -> 
         "now failing": sorted(failing - KNOWN_FAILING),
         "now passing (remove from KNOWN_FAILING)": sorted(KNOWN_FAILING - failing),
     }
+
+
+def test_show_truncates_cells_but_never_the_header(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> None:
+    spark.createDataFrame([("x" * 30,)], ["a_very_long_column_name_over_twenty"]).show()
+    out = capsys.readouterr().out
+    assert "a_very_long_column_name_over_twenty" in out
+    assert "x" * 17 + "..." in out

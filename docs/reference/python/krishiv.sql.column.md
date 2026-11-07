@@ -65,7 +65,7 @@ The bitwise AND with `other`, as `pyspark.sql.Column.bitwiseAND`.
 ```python
 >>> df = spark.createDataFrame([(170, 75)], ["a", "b"])
 >>> df.select(df.a.bitwiseAND(df.b)).collect()
-[Row(value=10)]
+[Row((a & b)=10)]
 ```
 
 ### `bitwiseOR`
@@ -85,7 +85,7 @@ The bitwise OR with `other`, as `pyspark.sql.Column.bitwiseOR`.
 ```python
 >>> df = spark.createDataFrame([(170, 75)], ["a", "b"])
 >>> df.select(df.a.bitwiseOR(df.b)).collect()
-[Row(value=235)]
+[Row((a | b)=235)]
 ```
 
 ### `bitwiseXOR`
@@ -105,7 +105,7 @@ The bitwise XOR with `other`, as `pyspark.sql.Column.bitwiseXOR`.
 ```python
 >>> df = spark.createDataFrame([(170, 75)], ["a", "b"])
 >>> df.select(df.a.bitwiseXOR(df.b)).collect()
-[Row(value=225)]
+[Row((a ^ b)=225)]
 ```
 
 ### `cast`
@@ -278,7 +278,7 @@ Whether the value is NaN, as `pyspark.sql.Column.isNaN`.
 ```python
 >>> df = spark.createDataFrame([(1.0,), (float("nan"),)], ["x"])
 >>> df.select(df.x.isNaN()).collect()
-[Row(value=False), Row(value=True)]
+[Row(isnan(x)=False), Row(isnan(x)=True)]
 ```
 
 ### `isNotNull`
@@ -426,7 +426,7 @@ error, as `pyspark.sql.Column.try_cast`.
 ```python
 >>> df = spark.createDataFrame([("123",), ("Bob",), (None,)], ["name"])
 >>> df.select(df.name.try_cast("int")).collect()
-[Row(value=123), Row(value=None), Row(value=None)]
+[Row(name=123), Row(name=None), Row(name=None)]
 ```
 
 ### `when`

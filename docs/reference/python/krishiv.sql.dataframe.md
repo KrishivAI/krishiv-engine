@@ -1257,8 +1257,8 @@ Returns a new `DataFrame` with new specified column names
 | f1|   f2|
 +---+-----+
 | 14|  Tom|
-| 23|Alice|
 | 16|  Bob|
+| 23|Alice|
 +---+-----+
 ```
 
