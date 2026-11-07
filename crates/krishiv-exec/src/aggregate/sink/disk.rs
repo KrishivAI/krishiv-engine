@@ -30,10 +30,11 @@
 //! split would rewrite it three times), else the largest waiting task is
 //! split. Finished tasks hold no memory (their files are final).
 //!
-//! A lone task that cannot split (too few groups to be worth it, or the
-//! hash bits used up) waits through arbitration with nothing of its own published as
-//! spillable: only other consumers can free its memory, and when none can
-//! the query fails with `UNABLE_TO_ACQUIRE_MEMORY`, as the serial phase did.
+//! A lone task that cannot split (a global aggregate's single group, or
+//! the hash bits used up) waits through arbitration with nothing of its
+//! own published as spillable: only other consumers can free its memory,
+//! and when none can the query fails with `UNABLE_TO_ACQUIRE_MEMORY`, as
+//! the serial phase did.
 //!
 //! The groups' order across partitions is the tasks' key order, not the
 //! order the serial phase produced; inside a partition it is unchanged.
@@ -57,8 +58,8 @@ use krishiv_types::batch::Batch;
 
 use super::super::table::Table;
 use super::{
-    Final, Global, HEADROOM, HashAggregate, Output, Run, Spiller, bump, chunks, lend_headroom,
-    out_chunk, regrow, reserve_to, tasks_of,
+    Final, Global, HEADROOM, HashAggregate, Output, Run, Spiller, bump, chunks, out_chunk, regrow,
+    reserve_to, tasks_of,
 };
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
@@ -91,6 +92,10 @@ struct DiskTask {
     io: usize,
     /// Bytes the task was refused (0 when it runs).
     need: usize,
+    /// Tests: a gate passed once the input is merged, before the output
+    /// file is opened.
+    #[cfg(test)]
+    merged_gate: Option<Arc<crate::testing::BlockingGate>>,
 }
 
 /// How a task's job ended.
@@ -129,6 +134,8 @@ impl DiskTask {
             emit: None,
             io: HEADROOM,
             need: 0,
+            #[cfg(test)]
+            merged_gate: None,
         }
     }
 
@@ -142,6 +149,18 @@ impl DiskTask {
     /// which frees its table.
     fn merged(&self) -> bool {
         self.files.is_empty() && self.reader.is_none() && self.pending.is_none()
+    }
+
+    /// Grants a waiting task the bytes it was refused, if the pool has
+    /// them now (and, with `merged_only`, only a task with all its input
+    /// merged); `need` is then 0, so the bytes are never asked twice.
+    fn grant(&mut self, merged_only: bool) -> bool {
+        let granted =
+            (!merged_only || self.merged()) && self.reservation.try_grow(self.need).is_ok();
+        if granted {
+            self.need = 0;
+        }
+        granted
     }
 
     /// Merges and then writes its groups until done, or until memory is
@@ -169,6 +188,12 @@ impl DiskTask {
             }
             if self.table.len() == 0 {
                 return Ok(Outcome::Done(None));
+            }
+            // Tests: the task is merged and holds its table, not yet
+            // writing.
+            #[cfg(test)]
+            if let Some(g) = &self.merged_gate {
+                g.pass();
             }
             let schema = Arc::clone(&s.core.output_schema);
             let w = s.scope.writer(schema, s.consumer.reservation())?;
@@ -269,7 +294,10 @@ impl DiskTask {
             pending,
             ..
         } = self;
-        lend_headroom(&mut reservation);
+        // As credit (review m-a): other operators of the query share the
+        // pool, and the run's writer must not lose the headroom to them.
+        // What it leaves goes back with the phase's `release_credit`.
+        lend(&mut reservation, HEADROOM);
         let first = s.write_run(&table, 0, level, u32::MAX)?;
         drop((table, reservation));
         let mut writers: Vec<Option<SpillWriter>> = (0..PARTITIONS).map(|_| None).collect();
@@ -328,8 +356,9 @@ fn next_of(
     }
 }
 
-/// Lends up to `bytes` of `r` to spill I/O of the same consumer (see
-/// `lend_headroom`). The bytes go to the consumer's credit, not back to
+/// Lends up to `bytes` of `r` to spill I/O of the same consumer (as
+/// `lend_headroom` does through the pool, for callers that do not release
+/// the consumer's credit afterwards). The bytes go to the consumer's credit, not back to
 /// the pool, so the I/O's own reservation takes them without racing other
 /// consumers for them (review m3); a sibling task of the same consumer may
 /// still take them first, and [`regrow`] draws back what is left.
@@ -443,15 +472,12 @@ impl HashAggregate {
                 // Waiting tasks first, whenever their memory is there.
                 let mut i = 0;
                 while running.len() < limit && i < waiting.len() {
-                    let fits = waiting
-                        .get_mut(i)
-                        .is_some_and(|t| t.reservation.try_grow(t.need).is_ok());
+                    let fits = waiting.get_mut(i).is_some_and(|t| t.grant(false));
                     if !fits {
                         i += 1;
                         continue;
                     }
-                    if let Some(mut t) = waiting.remove(i) {
-                        t.need = 0;
+                    if let Some(t) = waiting.remove(i) {
                         running.push(self.launch(ctx, s, t));
                     }
                 }
@@ -483,13 +509,14 @@ impl HashAggregate {
                     // A merged task frees its table by writing it: run it
                     // when its write fits, rather than split (rewrite) it
                     // (review M2). Without a request the retry pass above
-                    // already tried every waiting task.
-                    if let Some(i) = waiting
-                        .iter_mut()
-                        .position(|t| t.merged() && t.reservation.try_grow(t.need).is_ok())
-                        && let Some(mut t) = waiting.remove(i)
+                    // already tried every waiting task; with one it was
+                    // skipped, and the tasks not run here are retried next
+                    // round, beside this write.
+                    if let Some(i) = waiting.iter_mut().position(|t| t.grant(true))
+                        && let Some(t) = waiting.remove(i)
                     {
-                        t.need = 0;
+                        #[cfg(test)]
+                        bump(&self.counters.disk_merged_runs, 1);
                         running.push(self.launch(ctx, s, t));
                     }
                 }
@@ -504,8 +531,8 @@ impl HashAggregate {
                         let fresh = self.new_table(g, false)?;
                         running.push(self.launch_split(ctx, s, t, fresh));
                     } else {
-                        // Nothing to split (too few groups, or the hash
-                        // bits used up): wait for the memory through
+                        // Nothing to split (a global aggregate's single
+                        // group, or the hash bits used up): wait for the memory through
                         // arbitration. Nothing of this consumer can be
                         // freed meanwhile (every waiting task is
                         // unsplittable, or it would have been taken), so it
@@ -541,7 +568,7 @@ impl HashAggregate {
                     let mut t = *t;
                     t.need = need;
                     if !running.is_empty() {
-                        bump(&self.counters.disk_waits, 1);
+                        bump(&self.counters.disk_stalls, 1);
                     }
                     waiting.push_back(t);
                 }
@@ -571,6 +598,10 @@ impl HashAggregate {
         let s = s.clone();
         #[cfg(test)]
         let (gate, counters) = (self.disk_gate.clone(), Arc::clone(&self.counters));
+        #[cfg(test)]
+        {
+            t.merged_gate.clone_from(&self.disk_merged_gate);
+        }
         Box::pin(async move {
             let (t, outcome) = ctx
                 .run_blocking(move || {

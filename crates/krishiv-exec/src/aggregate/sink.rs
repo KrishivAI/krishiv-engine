@@ -106,8 +106,12 @@ struct Counters {
     disk_peak: AtomicU64,
     /// Times a disk task was refused memory while others ran (it waited);
     /// a task refused several times counts each time, so this counts
-    /// stalls, not tasks (review m5).
-    disk_waits: AtomicU64,
+    /// stalls, not tasks (review m5). Reported as `disk_stalls`.
+    disk_stalls: AtomicU64,
+    /// Tests: merged disk tasks run to write their groups on a spill
+    /// request instead of being split (review M2).
+    #[cfg(test)]
+    disk_merged_runs: AtomicU64,
     /// Tests: disk jobs on the blocking pool now (`+1` a task, `+SPLIT` a
     /// split), and the splits that started beside another job.
     #[cfg(test)]
@@ -147,6 +151,11 @@ pub struct HashAggregate {
     /// its table (tests cancel a query during the disk phase).
     #[cfg(test)]
     disk_gate: Option<Arc<crate::testing::BlockingGate>>,
+    /// A gate every disk task waits at once all its input is merged,
+    /// before it opens its output file (tests: a spill request or a full
+    /// pool at that point).
+    #[cfg(test)]
+    disk_merged_gate: Option<Arc<crate::testing::BlockingGate>>,
 }
 
 impl HashAggregate {
@@ -167,6 +176,8 @@ impl HashAggregate {
             output_gate: None,
             #[cfg(test)]
             disk_gate: None,
+            #[cfg(test)]
+            disk_merged_gate: None,
         }))
     }
 
@@ -189,6 +200,8 @@ impl HashAggregate {
             output_gate: None,
             #[cfg(test)]
             disk_gate: None,
+            #[cfg(test)]
+            disk_merged_gate: None,
         }))
     }
 
@@ -213,6 +226,7 @@ impl HashAggregate {
             stall_after: None,
             output_gate: None,
             disk_gate: None,
+            disk_merged_gate: None,
         }))
     }
 
@@ -234,6 +248,7 @@ impl HashAggregate {
             stall_after: Some(finished),
             output_gate: None,
             disk_gate: None,
+            disk_merged_gate: None,
         }))
     }
 
@@ -253,6 +268,7 @@ impl HashAggregate {
             stall_after: None,
             output_gate: Some(gate),
             disk_gate: None,
+            disk_merged_gate: None,
         }))
     }
 
@@ -272,7 +288,37 @@ impl HashAggregate {
             stall_after: None,
             output_gate: None,
             disk_gate: Some(gate),
+            disk_merged_gate: None,
         }))
+    }
+
+    /// [`new`](Self::new) whose disk tasks wait at `merged` once their
+    /// input is merged (before they write), and their jobs at `done`
+    /// before they return.
+    #[cfg(test)]
+    pub(crate) fn with_disk_gates(
+        spec: AggregateSpec,
+        merged: Arc<crate::testing::BlockingGate>,
+        done: Arc<crate::testing::BlockingGate>,
+    ) -> Result<Arc<Self>> {
+        Ok(Arc::new(Self {
+            core: Arc::new(AggCore::new(spec)?),
+            counters: Arc::default(),
+            row_mode: None,
+            widen_at: WIDEN_GROUPS,
+            exchange: None,
+            stall_after: None,
+            output_gate: None,
+            disk_gate: Some(done),
+            disk_merged_gate: Some(merged),
+        }))
+    }
+
+    /// Merged disk tasks run to write their groups on a spill request
+    /// instead of being split.
+    #[cfg(test)]
+    pub(crate) fn disk_merged_runs(&self) -> u64 {
+        self.counters.disk_merged_runs.load(AtomicOrdering::Relaxed)
     }
 
     /// Splits of the disk phase that started while another disk job ran
@@ -1445,7 +1491,9 @@ impl Sink for HashAggregate {
         if disk_tasks > 0 {
             out.extend(crate::metrics::counts([
                 ("disk_tasks", disk_tasks),
-                ("disk_waits", c.disk_waits.load(AtomicOrdering::Relaxed)),
+                // Stalls, not tasks: a task refused memory beside running
+                // ones counts once per refusal.
+                ("disk_stalls", c.disk_stalls.load(AtomicOrdering::Relaxed)),
             ]));
             out.push((
                 std::borrow::Cow::Borrowed("disk_peak_tasks"),
