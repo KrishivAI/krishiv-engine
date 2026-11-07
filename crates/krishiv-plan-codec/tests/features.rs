@@ -1136,11 +1136,14 @@ fn a_variant_result_column_is_not_a_nested_type() {
         DataType::Variant.to_arrow(),
         true,
     )));
+    let features = to_message(&with_result(list)).unwrap().features;
     assert!(
-        to_message(&with_result(list))
-            .unwrap()
-            .features
-            .contains(&"nested_types".to_owned())
+        features.contains(&"nested_types".to_owned()),
+        "{features:?}"
+    );
+    assert!(
+        features.contains(&"variant_type".to_owned()),
+        "{features:?}"
     );
 }
 
