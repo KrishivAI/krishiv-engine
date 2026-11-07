@@ -108,7 +108,7 @@ PYSPARK_SIGNATURES = {
     "datepart": "field, source",
     "date_sub": "start, days",
     "date_trunc": "format, timestamp",
-    "time_bucket": "bucket_size, ts, origin",
+    "time_bucket": "bucket_size, ts, origin=None",
     "dateadd": "start, days",
     "datediff": "end, start",
     "day": "col",
