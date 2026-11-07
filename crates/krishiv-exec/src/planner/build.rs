@@ -34,10 +34,9 @@ use krishiv_plan::{
 use super::eval::{self, EvalEnv, PhysExpr};
 use super::explain::ExplainNode;
 use super::properties::{Distribution, Placement, range_keys};
-use super::python_udf::has_python_udf;
 use super::runtime_filter::{Settings, Site, column_type, kept, key_source, renamed};
-use super::subquery::SubqueryValue;
 use super::{PhysicalPlanner, PlanningContext};
+use super::{python_udf::has_python_udf, subquery::SubqueryValue};
 use crate::error::Result;
 use crate::operator::{Operator, Source};
 use crate::operators::{FilterPushdown, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN};
@@ -392,12 +391,7 @@ impl<'a> Planner<'a> {
         match &p.node {
             PlanNode::Scan(scan) => self.scan(p, scan, None),
             PlanNode::Filter { input, predicate } if has_python_udf(predicate) => {
-                let input = self.plan(input)?;
-                let (input, exprs) = self.extract_python(input, std::slice::from_ref(predicate))?;
-                let predicate = exprs
-                    .first()
-                    .ok_or_else(|| internal("a filter without a predicate"))?;
-                self.filter(input, predicate)
+                self.python_filter(input, predicate)
             }
             PlanNode::Filter { input, predicate } => {
                 if let PlanNode::Scan(scan) = &input.node
@@ -430,11 +424,7 @@ impl<'a> Planner<'a> {
                 }
                 self.filter(input, predicate)
             }
-            PlanNode::Project { input, exprs } => {
-                let input = self.plan(input)?;
-                let (input, exprs) = self.extract_python(input, exprs)?;
-                self.project(input, &exprs)
-            }
+            PlanNode::Project { input, exprs } => self.project_extracting(input, exprs),
             PlanNode::Aggregate {
                 input,
                 grouping,

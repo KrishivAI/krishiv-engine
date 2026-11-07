@@ -226,6 +226,50 @@ pub(crate) fn decode_anonymous(name: &str) -> Option<(PythonUdfDef, u32)> {
     ))
 }
 
+impl crate::Session {
+    /// Registers a Python UDF (P2-T059) under `def.name`, replacing any
+    /// Python UDF of that name; the entry carries the new registration
+    /// version, which plans name the UDF by. The callable itself stays with
+    /// the runtime set by [`set_python_udf_runtime`](Self::set_python_udf_runtime),
+    /// keyed by name and version.
+    pub fn register_python_udf(&self, def: PythonUdfDef) -> PythonUdfEntry {
+        self.state.python_udfs.register(def)
+    }
+
+    /// Sets the runtime that evaluates this session's Python UDFs (the
+    /// Python facade's embedded interpreter); queries started after this
+    /// call use it.
+    pub fn set_python_udf_runtime(
+        &self,
+        runtime: std::sync::Arc<dyn krishiv_exec::python_eval::UdfRuntime>,
+    ) {
+        *self
+            .state
+            .python_runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(runtime);
+    }
+
+    /// `worker` calling this session's Python UDFs through its runtime, if
+    /// it has one (a plan calling one without fails with
+    /// `KRISHIV_UDF_NOT_AVAILABLE`).
+    pub(crate) fn with_python_runtime(
+        &self,
+        worker: krishiv_exec::physical::WorkerContext,
+    ) -> krishiv_exec::physical::WorkerContext {
+        let python = self
+            .state
+            .python_runtime
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        match python {
+            Some(runtime) => worker.with_python_udfs(runtime),
+            None => worker,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

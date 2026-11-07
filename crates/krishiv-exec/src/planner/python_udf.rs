@@ -230,6 +230,32 @@ impl Planner<'_> {
 
 impl Planner<'_> {
     /// The non-inner case of [`Self::join_with_python_udfs`].
+    /// A filter whose predicate calls Python UDFs: the calls evaluated below
+    /// it (`PythonEval`), the predicate reading their columns.
+    pub(super) fn python_filter(
+        &mut self,
+        input: &Arc<LogicalPlan>,
+        predicate: &Arc<Expr>,
+    ) -> Result<Planned> {
+        let input = self.plan(input)?;
+        let (input, exprs) = self.extract_python(input, std::slice::from_ref(predicate))?;
+        let predicate = exprs
+            .first()
+            .ok_or_else(|| internal("a filter without a predicate"))?;
+        self.filter(input, predicate)
+    }
+
+    /// A projection, its Python UDF calls (if any) evaluated below it.
+    pub(super) fn project_extracting(
+        &mut self,
+        input: &Arc<LogicalPlan>,
+        exprs: &[Arc<Expr>],
+    ) -> Result<Planned> {
+        let input = self.plan(input)?;
+        let (input, exprs) = self.extract_python(input, exprs)?;
+        self.project(input, &exprs)
+    }
+
     fn outer_join_with_python_udfs(
         &mut self,
         left: &Arc<LogicalPlan>,

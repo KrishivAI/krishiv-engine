@@ -916,29 +916,6 @@ impl Session {
         done.map_err(|e| crate::udfs::registration_error(named(), &e))
     }
 
-    /// Registers a Python UDF (P2-T059) under `def.name`, replacing any
-    /// Python UDF of that name; the entry carries the new registration
-    /// version, which plans name the UDF by. The callable itself stays with
-    /// the runtime set by [`set_python_udf_runtime`](Self::set_python_udf_runtime),
-    /// keyed by name and version.
-    pub fn register_python_udf(
-        &self,
-        def: crate::python_udfs::PythonUdfDef,
-    ) -> crate::python_udfs::PythonUdfEntry {
-        self.state.python_udfs.register(def)
-    }
-
-    /// Sets the runtime that evaluates this session's Python UDFs (the
-    /// Python facade's embedded interpreter); queries started after this
-    /// call use it.
-    pub fn set_python_udf_runtime(&self, runtime: Arc<dyn krishiv_exec::python_eval::UdfRuntime>) {
-        *self
-            .state
-            .python_runtime
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(runtime);
-    }
-
     /// Registers a native Rust aggregate UDF (ADR 0045), replacing any UDF
     /// of its name, scalar or aggregate; otherwise as [`register_udf`](Self::register_udf).
     ///
@@ -2388,16 +2365,7 @@ impl Session {
         .with_io(env.io.clone())
         .with_formats(Arc::clone(&self.state.runtime.formats))
         .with_config(Arc::clone(&env.config));
-        let python = self
-            .state
-            .python_runtime
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        match python {
-            Some(runtime) => worker.with_python_udfs(runtime),
-            None => worker,
-        }
+        self.with_python_runtime(worker)
     }
 }
 
