@@ -80,7 +80,9 @@ fn collate_expressions() {
     assert!(data_type.collation.is_some());
     assert_eq!(class("SELECT a COLLATE"), "PARSE_SYNTAX_ERROR");
     assert_eq!(class("SELECT a COLLATE 1"), "PARSE_SYNTAX_ERROR");
-    assert!(unsupported("SELECT a COLLATE x FROM t").contains("COLLATE"));
+    // An unknown collation name is a Spark error at lowering.
+    let e = lower(&ok("SELECT a COLLATE x FROM t"), krishiv_plan::SourceId(0)).unwrap_err();
+    assert_eq!(e.error.error_class().name(), "COLLATION_INVALID_NAME");
 }
 
 #[test]

@@ -514,6 +514,7 @@ pub(crate) fn feature_states() -> Vec<(&'static str, bool)> {
         ("python", cfg!(feature = "python")),
         ("wasm-udf", cfg!(feature = "wasm-udf")),
         ("celeborn", cfg!(feature = "celeborn")),
+        ("tokio-console", cfg!(feature = "tokio-console")),
         ("full", cfg!(feature = "full")),
     ]
 }
@@ -555,6 +556,9 @@ fn enabled_features() -> Vec<&'static str> {
     }
     if cfg!(feature = "celeborn") {
         out.push("celeborn");
+    }
+    if cfg!(feature = "tokio-console") {
+        out.push("tokio-console");
     }
     if cfg!(feature = "full") {
         out.push("full");
@@ -717,6 +721,61 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `system.capabilities` lists the features this build was made with, so the list must be the manifest's.
+    /// `default` is a set of features, not one; `cloud` is reported by the session library itself (it is the
+    /// feature the object-store code is compiled under), so it is not in `feature_states`.
+    #[test]
+    fn the_listed_features_are_the_binarys_cargo_features() {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+        let out = std::process::Command::new(cargo)
+            .args([
+                "metadata",
+                "--no-deps",
+                "--format-version",
+                "1",
+                "--offline",
+            ])
+            .arg("--manifest-path")
+            .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+            .output()
+            .expect("run cargo metadata");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let meta: serde_json::Value = serde_json::from_slice(&out.stdout).expect("metadata json");
+        let package = meta["packages"]
+            .as_array()
+            .and_then(|p| p.iter().find(|p| p["name"] == "krishiv-cli"))
+            .expect("the krishiv-cli package");
+        let manifest: std::collections::BTreeSet<String> = package["features"]
+            .as_object()
+            .expect("features")
+            .keys()
+            .filter(|f| !matches!(f.as_str(), "default" | "cloud"))
+            .cloned()
+            .collect();
+        let listed: std::collections::BTreeSet<String> = feature_states()
+            .iter()
+            .map(|(name, _)| (*name).to_owned())
+            .collect();
+        assert_eq!(
+            listed, manifest,
+            "feature_states and [features] in Cargo.toml disagree"
+        );
+        let enabled: std::collections::BTreeSet<&str> = enabled_features().into_iter().collect();
+        let on: std::collections::BTreeSet<&str> = feature_states()
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(
+            enabled, on,
+            "the bundle's feature list and feature_states disagree"
+        );
+    }
 
     #[test]
     fn error_json_redacts_paths_and_keeps_class() {

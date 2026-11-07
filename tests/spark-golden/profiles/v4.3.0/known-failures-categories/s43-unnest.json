@@ -1,0 +1,13 @@
+{
+  "category": "s43-unnest",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "file": "^unnest$",
+      "order": 9060
+    }
+  ],
+  "summary": "UNNEST in FROM (Spark 4.3)",
+  "task": "P3-T090"
+}

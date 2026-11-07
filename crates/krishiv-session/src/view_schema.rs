@@ -22,9 +22,8 @@ use std::sync::Arc;
 use krishiv_common::config::{
     Config, ConfigValue, LEGACY_VIEW_SCHEMA_BINDING_MODE, LEGACY_VIEW_SCHEMA_COMPENSATION,
 };
-use krishiv_common::error::{
-    CannotUpCastDatatype, ColumnAlreadyExists, IncompatibleViewSchemaChange, KrishivError,
-};
+use krishiv_common::error::{CannotUpCastDatatype, IncompatibleViewSchemaChange, KrishivError};
+use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::analyzer::AnalyzedPlan;
 use krishiv_plan::{AttrId, BoundColumn, LogicalPlan, PlanNode, ReadSource};
 use krishiv_sql::ast::SchemaBinding;
@@ -152,16 +151,7 @@ pub(crate) fn check_read(
         if !redo {
             return Ok(None);
         }
-        let mut seen = std::collections::BTreeSet::new();
-        for o in output {
-            let key = fold(&o.name);
-            if !seen.insert(key.clone()) {
-                return Err(ColumnAlreadyExists {
-                    column_name: format!("`{key}`"),
-                }
-                .into());
-            }
-        }
+        check_column_name_duplication(output.iter().map(|o| o.name.as_str()), case_sensitive)?;
         let mut changed = (**entry).clone();
         changed.columns = output
             .iter()

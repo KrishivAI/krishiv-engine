@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "sql-commands": [
+      8,
+      13,
+      83,
+      87,
+      95,
+      98
+    ]
+  },
+  "file": "view-schema-binding-config",
+  "format_version": 1
+}
