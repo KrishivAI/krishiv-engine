@@ -1,0 +1,15 @@
+{
+  "cases": {
+    "s43-vector-functions": [
+      0,
+      42,
+      43,
+      44,
+      45,
+      46,
+      47
+    ]
+  },
+  "file": "vector-distance",
+  "format_version": 1
+}

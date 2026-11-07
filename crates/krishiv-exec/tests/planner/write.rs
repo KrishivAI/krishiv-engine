@@ -923,12 +923,20 @@ fn a_partitioned_write_sorts_by_the_partition_columns_below_the_writer() {
     assert_eq!(e.error_class(), ErrorClass::InternalError);
     assert!(e.to_string().contains("partition column 2"), "{e}");
     let write = plan.into_write(write_plan(vec![1])).unwrap();
-    // The spillable local sort on the partition columns sits directly
+    // The writer's rows go through a final gather (design P2-T178 §2.5);
+    // the spillable local sort on the partition columns sits directly
     // below the writer.
+    let PhysNode::Exchange(gather) = write.root() else {
+        panic!("no gather above the writer");
+    };
+    assert_eq!(
+        gather.partitioning,
+        krishiv_exec::physical::Partitioning::Single
+    );
     let PhysNode::WriteFiles {
         input,
         write: Some(w),
-    } = write.root()
+    } = gather.input.as_ref()
     else {
         panic!("not a write");
     };

@@ -69,6 +69,7 @@ fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
         ExprNode::Field { .. } => "ExprNode::Field",
         ExprNode::UpdateFields { .. } => "ExprNode::UpdateFields",
         ExprNode::Cast { .. } => "ExprNode::Cast",
+        ExprNode::Collate { .. } => "ExprNode::Collate",
         ExprNode::Alias { .. } => "ExprNode::Alias",
         ExprNode::MultiAlias { .. } => "ExprNode::MultiAlias",
         ExprNode::Subquery { .. } => "ExprNode::Subquery",
@@ -162,6 +163,7 @@ fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
     let df_col = Expr::new(ExprNode::Column(ColumnRef {
         name: vec!["a".to_owned()],
         plan_id: Some(PlanId(1)),
+        by_identifier: false,
     }));
     let parquet = LogicalPlan::new(PlanNode::Read(ReadSource::Files {
         format: "parquet".to_owned(),

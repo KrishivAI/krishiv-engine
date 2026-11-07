@@ -34,9 +34,9 @@ use krishiv_types::DataType;
 use crate::estimate::Estimator;
 use crate::expr::{
     Attrs, Classes, and_all, call, column, common_equalities, conjuncts, equality, has_subquery,
-    implied, is_deterministic, references,
+    implied, is_deterministic, references, substitute,
 };
-use crate::narrow::{equi_columns, selectivity};
+use crate::narrow::{conjunct_selectivities, equi_columns, selectivity};
 use crate::stats::{RelStats, Statistics, cse_definitions, reads_cse, resolve_cse};
 
 /// An original relation (kept alive) and its rewrite.
@@ -91,6 +91,55 @@ fn selection(p: &LogicalPlan) -> Option<&Arc<LogicalPlan>> {
         }
         _ => None,
     }
+}
+
+/// The outputs of `p`'s projection that compute an expression rather than
+/// pass a column through, by attribute. Empty when `p` is no projection, or
+/// one the filter pushdown does not cross (a nondeterministic expression, a
+/// common-subexpression output): a conjunct over it stays above, so it is
+/// estimated as written.
+fn computed_outputs(p: &LogicalPlan) -> HashMap<AttrId, Arc<Expr>> {
+    let PlanNode::Project { exprs, .. } = &p.node else {
+        return HashMap::new();
+    };
+    let crossed = exprs.iter().all(|e| is_deterministic(e))
+        && !exprs.iter().any(|e| match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
+                crate::cse::is_cse_column(output)
+            }
+            _ => false,
+        });
+    if !crossed {
+        return HashMap::new();
+    }
+    exprs
+        .iter()
+        .filter_map(|e| match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output })
+                if !matches!(expr.node, ExprNode::Resolved(ResolvedExpr::Column(_))) =>
+            {
+                Some((output.id, Arc::clone(expr)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether the column selection `p` over `input` drops only columns common-
+/// subexpression elimination extracted. CSE runs after join ordering, so only a
+/// second optimization meets one: pruning left it when the columns it was made
+/// to drop went after CSE, and it would not rebuild it (it never narrows for a
+/// `cse_*` column alone). Looking through it would lose it and change the plan,
+/// so the tree takes it as an input.
+fn drops_only_cse(p: &LogicalPlan, input: &LogicalPlan) -> bool {
+    let (Some(out), Some(below)) = (p.resolved_output(), input.resolved_output()) else {
+        return false;
+    };
+    let kept = |c: &BoundColumn| out.iter().any(|o| o.id == c.id);
+    below
+        .iter()
+        .all(|c| crate::cse::is_cse_column(c) || kept(c))
+        && below.iter().any(|c| !kept(c))
 }
 
 /// Whether `p` tops an inner-join tree: the join itself, or a deterministic
@@ -248,8 +297,8 @@ impl Reorder<'_> {
                 }
                 _ if Arc::ptr_eq(n, root) => return self.children(root),
                 _ => match selection(n) {
-                    Some(input) => stack.push(input),
-                    None => leaves.push(self.node(n)),
+                    Some(input) if !drops_only_cse(n, input) => stack.push(input),
+                    _ => leaves.push(self.node(n)),
                 },
             }
         }
@@ -492,6 +541,10 @@ impl Graph {
             })
             .collect();
         let mut joins = Vec::new();
+        // Each input's projection outputs that compute an expression (not a
+        // plain column), by attribute.
+        let projected: Vec<HashMap<AttrId, Arc<Expr>>> =
+            sorted.iter().map(|l| computed_outputs(l)).collect();
         // Definitions per sorted input, so estimates read through
         // common-subexpression projections (built only when a conjunct
         // needs them).
@@ -500,6 +553,9 @@ impl Graph {
         } else {
             Vec::new()
         };
+        // The conjuncts over each input alone, estimated together after the
+        // loop: each narrows the columns the next reads.
+        let mut local: Vec<Vec<Arc<Expr>>> = vec![Vec::new(); sorted.len()];
         for (p, r) in preds.into_iter().zip(&refs) {
             let mut on: Vec<usize> = r
                 .iter()
@@ -513,7 +569,18 @@ impl Graph {
                 let resolved = leaf_defs
                     .get(i)
                     .map_or_else(|| Arc::clone(&p), |defs| resolve_cse(&p, defs));
-                rows[i] = (rows[i] * selectivity(&resolved, &ests[order[i]], narrow)).max(1.0);
+                // Read through the input's projection to what it computes, as
+                // the estimate sees the conjunct once pushed below it: a class
+                // equality join ordering derives over `x + 1 AS c0, x AS c2` is
+                // `x + 1 = x` there, so both places estimate it alike.
+                let resolved = match projected.get(i) {
+                    // A conjunct with a subquery stays above the projection.
+                    Some(defs) if !defs.is_empty() && !has_subquery(&resolved) => {
+                        substitute(&resolved, defs)
+                    }
+                    _ => resolved,
+                };
+                local[i].push(resolved);
                 sorted[i] = Arc::new(LogicalPlan::new(PlanNode::Filter {
                     input: Arc::clone(&sorted[i]),
                     predicate: p,
@@ -521,6 +588,21 @@ impl Graph {
                 continue;
             }
             joins.push((p, on));
+        }
+        // In a canonical order (each conjunct narrows the view the next reads,
+        // and a null-rejecting or `IN` conjunct changes what a range after it
+        // keeps), so the estimate does not depend on how the query wrote them.
+        // Multiplied in one at a time, as each conjunct's rows always were,
+        // so inputs whose conjuncts do not narrow each other estimate as before.
+        for preds in &mut local {
+            preds.sort_by_cached_key(ToString::to_string);
+        }
+        for (i, preds) in local.iter().enumerate() {
+            for sel in
+                conjunct_selectivities(preds.iter().map(AsRef::as_ref), &ests[order[i]], narrow)
+            {
+                rows[i] = (rows[i] * sel).max(1.0);
+            }
         }
         // A filtered input keeps at most as many distinct values of a column
         // as it keeps rows, as the estimate of a filter does: a join with a

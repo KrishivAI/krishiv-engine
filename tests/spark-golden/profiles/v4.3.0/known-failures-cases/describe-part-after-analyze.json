@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "sql-commands": [
+      6,
+      8,
+      9,
+      11,
+      12,
+      13
+    ]
+  },
+  "file": "describe-part-after-analyze",
+  "format_version": 1
+}
