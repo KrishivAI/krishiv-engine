@@ -504,6 +504,10 @@ pub enum GeneratorKind {
     /// `inline`: a row per struct of an array of structs, one column per
     /// field.
     Inline,
+    /// `variant_explode`: a row per field of a variant object or element of
+    /// a variant array (`pos`, `key`, `value`); any other value, a variant
+    /// null and SQL `NULL` give no rows.
+    VariantExplode,
 }
 
 impl GeneratorKind {
@@ -515,7 +519,26 @@ impl GeneratorKind {
             Self::Explode => "explode",
             Self::PosExplode => "posexplode",
             Self::Inline => "inline",
+            Self::VariantExplode => "variant_explode",
         }
+    }
+
+    /// The generator a function name calls (ASCII lower case), and whether
+    /// it is the `_outer` form; `stack` is not one (it lowers to `inline`).
+    #[must_use]
+    pub fn of_name(name: &str) -> Option<(Self, bool)> {
+        let (base, outer) = match name.strip_suffix("_outer") {
+            Some(base) => (base, true),
+            None => (name, false),
+        };
+        let kind = match base {
+            "explode" => Self::Explode,
+            "posexplode" => Self::PosExplode,
+            "inline" => Self::Inline,
+            "variant_explode" => Self::VariantExplode,
+            _ => return None,
+        };
+        Some((kind, outer))
     }
 }
 

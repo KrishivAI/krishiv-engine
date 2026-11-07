@@ -1,6 +1,7 @@
 # Hand-written Rust files over 2000 lines: `<lines> <path>`. They may shrink, never grow
 # (`cargo xtask file-size`; rewrite with `--write-baseline`). Raising a line needs a reason in review.
-4100 crates/krishiv-exec/src/aggregate/accumulator.rs
+# +31 lines over main: the decimal sum/avg unit-weight fast loops (E2 step 1)
+4131 crates/krishiv-exec/src/aggregate/accumulator.rs
 2067 crates/krishiv-exec/src/aggregate/hll.rs
 3156 crates/krishiv-exec/src/aggregate/rowtable.rs
 # +1 line (and in physical/instantiate.rs, window/tests.rs): the `udafs` spec field and the `Udf` aggregate variant (ADR 0045, T060a)
@@ -22,7 +23,7 @@
 # +67 lines over main: USING-join keys through projections, windows and pipe boundaries (Widen::Hidden, P2b row 11)
 # +27 lines over main: a sort over no aggregate refuses an aggregate call (UNSUPPORTED_EXPR_FOR_OPERATOR); pipe AGGREGATE generators keep their alias or are refused with several (P2b row 11)
 4682 crates/krishiv-plan/src/analyzer/ops.rs
-3082 crates/krishiv-plan/src/analyzer/subquery.rs
+3098 crates/krishiv-plan/src/analyzer/subquery.rs
 5390 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 3020 crates/krishiv-session/src/catalog.rs

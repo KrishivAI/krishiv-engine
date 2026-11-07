@@ -1014,6 +1014,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     crate::GeneratorKind::Explode => 0,
                     crate::GeneratorKind::PosExplode => 1,
                     crate::GeneratorKind::Inline => 2,
+                    crate::GeneratorKind::VariantExplode => 3,
                 });
                 self.u8(u8::from(*outer));
                 self.expr(arg);
@@ -1178,9 +1179,14 @@ impl<'k, 'a> Encoder<'k, 'a> {
     fn expr_fields(&mut self, e: &'a Expr) {
         self.u8(expr_tag(&e.node));
         match &e.node {
-            ExprNode::Column(ColumnRef { name, plan_id }) => {
+            ExprNode::Column(ColumnRef {
+                name,
+                plan_id,
+                by_identifier,
+            }) => {
                 self.strs(name);
                 self.plan_ref(*plan_id);
+                self.u8(u8::from(*by_identifier));
             }
             ExprNode::Literal(v) => {
                 self.literal(v);

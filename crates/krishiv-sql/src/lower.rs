@@ -46,8 +46,11 @@ use crate::ast::{
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
 
+mod identified;
 mod pipe;
 mod variant;
+
+pub use identified::lower_identified;
 type R<T> = Result<T, ParseError>;
 
 /// The most grouping sets one `GROUP BY` expands to.
@@ -83,16 +86,7 @@ pub fn lower(query: &Query, source: SourceId) -> R<Plan> {
 /// # Errors
 /// As for [`lower`].
 pub fn lower_with(query: &Query, source: SourceId, case_sensitive: bool) -> R<Plan> {
-    let mut l = Lowerer {
-        source,
-        depth: 0,
-        root: query.span,
-        windows: Vec::new(),
-        recursive: 0,
-        case_sensitive,
-    };
-    let plan = l.query(query)?;
-    Plan::try_new(plan).map_err(|e| err(e, query.span))
+    lower_identified(query, source, case_sensitive, &[])
 }
 
 /// Lowers one parsed expression into the IR `Session::sql` builds for
@@ -104,14 +98,7 @@ pub fn lower_with(query: &Query, source: SourceId, case_sensitive: bool) -> R<Pl
 /// `KRISHIV_UNSUPPORTED_FEATURE` for constructs the IR lacks and Spark's
 /// literal errors, as for [`lower`].
 pub fn lower_expression(expr: &Expr, source: SourceId) -> R<IrExpr> {
-    let mut l = Lowerer {
-        source,
-        depth: 0,
-        root: expr.span,
-        windows: Vec::new(),
-        recursive: 0,
-        case_sensitive: false,
-    };
+    let mut l = Lowerer::new(source, expr.span, false, Vec::new());
     l.expr(expr)
 }
 
@@ -121,14 +108,7 @@ pub fn lower_expression(expr: &Expr, source: SourceId) -> R<IrExpr> {
 /// # Errors
 /// As for [`lower_expression`].
 pub fn lower_select_item(item: &SelectItem, source: SourceId) -> R<Arc<IrExpr>> {
-    let mut l = Lowerer {
-        source,
-        depth: 0,
-        root: item.span,
-        windows: Vec::new(),
-        recursive: 0,
-        case_sensitive: false,
-    };
+    let mut l = Lowerer::new(source, item.span, false, Vec::new());
     l.select_item(item)
 }
 
@@ -254,6 +234,9 @@ struct Lowerer {
     recursive: usize,
     /// `spark.sql.caseSensitive`: a CTE name matches its references exactly.
     case_sensitive: bool,
+    /// The names the session substituted for `IDENTIFIER(..)` clauses: a column at one of these
+    /// spans is [`ColumnRef::by_identifier`].
+    identifier_spans: Vec<Span>,
 }
 
 /// A `WINDOW` clause: each name's specification, references to other
@@ -968,20 +951,11 @@ impl Lowerer {
                 return Err(unsupported("a qualified generator name", v.span));
             };
             let lower = name.value.to_ascii_lowercase();
-            let (base, outer_name) = match lower.strip_suffix("_outer") {
-                Some(base) => (base, true),
-                None => (lower.as_str(), false),
-            };
-            let kind = match base {
-                "explode" => krishiv_plan::GeneratorKind::Explode,
-                "posexplode" => krishiv_plan::GeneratorKind::PosExplode,
-                "inline" => krishiv_plan::GeneratorKind::Inline,
-                _ => {
-                    return Err(unsupported(
-                        &format!("the generator function {}", name.value),
-                        v.span,
-                    ));
-                }
+            let Some((kind, outer_name)) = krishiv_plan::GeneratorKind::of_name(&lower) else {
+                return Err(unsupported(
+                    &format!("the generator function {}", name.value),
+                    v.span,
+                ));
             };
             let [arg] = &v.args[..] else {
                 return Err(err(
@@ -1029,17 +1003,10 @@ impl Lowerer {
             return None;
         };
         let lower = name.value.to_ascii_lowercase();
-        let (base, outer) = match lower.strip_suffix("_outer") {
-            Some(base) => (base, true),
-            None => (lower.as_str(), false),
-        };
-        let kind = match base {
-            "explode" => krishiv_plan::GeneratorKind::Explode,
-            "posexplode" => krishiv_plan::GeneratorKind::PosExplode,
-            "inline" => krishiv_plan::GeneratorKind::Inline,
-            // `stack` is `inline` over an array of structs ([`Self::generator_arg`]).
-            "stack" if !outer => krishiv_plan::GeneratorKind::Inline,
-            _ => return None,
+        // `stack` is `inline` over an array of structs ([`Self::generator_arg`]).
+        let (kind, outer) = match lower.as_str() {
+            "stack" => (krishiv_plan::GeneratorKind::Inline, false),
+            other => krishiv_plan::GeneratorKind::of_name(other)?,
         };
         // A window, a filter or DISTINCT makes it no generator call.
         (f.over.is_none() && f.filter.is_none() && f.quantifier.is_none()).then_some((
@@ -1820,22 +1787,26 @@ impl Lowerer {
                 // A generator as a table: `FROM explode(array(1, 2))`
                 // generates from one empty row.
                 let lname = name.parts[0].value.to_ascii_lowercase();
-                let (base, outer) = match lname.strip_suffix("_outer") {
-                    Some(base) => (base, true),
-                    None => (lname.as_str(), false),
-                };
-                let kind = match base {
-                    "explode" => Some(krishiv_plan::GeneratorKind::Explode),
-                    "posexplode" => Some(krishiv_plan::GeneratorKind::PosExplode),
-                    "inline" => Some(krishiv_plan::GeneratorKind::Inline),
-                    "stack" if !outer => Some(krishiv_plan::GeneratorKind::Inline),
-                    _ => None,
+                let (kind, outer) = match lname.as_str() {
+                    "stack" => (Some(krishiv_plan::GeneratorKind::Inline), false),
+                    other => krishiv_plan::GeneratorKind::of_name(other)
+                        .map_or((None, false), |(k, o)| (Some(k), o)),
                 };
                 // `FROM json_tuple(..)` stays a table function: the analyzer
                 // runs it as the select list `SELECT json_tuple(..)` over one
                 // row, and its alias-count error differs from a subquery's.
                 if let (Some(kind), 1) = (kind, name.parts.len()) {
-                    if let Some(a) = args.iter().find(|a| a.name.is_some()) {
+                    // `variant_explode` names its one parameter `input`
+                    // (Spark's `FunctionSignature(InputParameter("input"))`).
+                    let named = |a: &&crate::ast::FunctionArg| match &a.name {
+                        Some(n) => {
+                            kind != krishiv_plan::GeneratorKind::VariantExplode
+                                || args.len() != 1
+                                || !n.value.eq_ignore_ascii_case("input")
+                        }
+                        None => false,
+                    };
+                    if let Some(a) = args.iter().find(named) {
                         return Err(unsupported("table-valued functions", a.span));
                     }
                     let arg = &self.generator_arg(&name.parts[0], args, tf.span)?;
@@ -2463,6 +2434,7 @@ impl Lowerer {
             ExprNode::Column(ColumnRef {
                 name,
                 plan_id: None,
+                by_identifier: self.by_identifier(sp),
             }),
             sp,
         )

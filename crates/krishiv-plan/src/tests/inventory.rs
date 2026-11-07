@@ -175,6 +175,7 @@ fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
     let df_col = Expr::new(ExprNode::Column(ColumnRef {
         name: vec!["a".to_owned()],
         plan_id: Some(PlanId(1)),
+        by_identifier: false,
     }));
     let parquet = LogicalPlan::new(PlanNode::Read(ReadSource::Files {
         format: "parquet".to_owned(),

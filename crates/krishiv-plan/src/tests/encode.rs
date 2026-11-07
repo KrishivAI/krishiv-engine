@@ -27,6 +27,7 @@ fn df_col(id: i64) -> Expr {
     Expr::new(ExprNode::Column(ColumnRef {
         name: vec!["a".to_owned()],
         plan_id: Some(PlanId(id)),
+        by_identifier: false,
     }))
 }
 
@@ -44,6 +45,22 @@ fn self_join(ids: (i64, i64), refs: (i64, i64)) -> LogicalPlan {
         JoinKind::Inner,
         JoinCondition::On(Arc::new(cond)),
     )
+}
+
+/// A column written `IDENTIFIER(..)` is named differently, so it must not share a cache key with
+/// the same name written plainly.
+#[test]
+fn a_column_marked_by_identifier_has_its_own_key() {
+    let project = |by_identifier: bool| {
+        let col = Expr::new(ExprNode::Column(ColumnRef {
+            name: vec!["c1".to_owned(), "c2".to_owned()],
+            plan_id: None,
+            by_identifier,
+        }));
+        LogicalPlan::table(["t"]).project(vec![col])
+    };
+    assert_ne!(key(project(true)), key(project(false)));
+    assert_eq!(key(project(true)), key(project(true)));
 }
 
 #[test]
@@ -415,8 +432,8 @@ fn keys_are_stable() {
         ))
         .project(vec![Expr::column(["a"]).alias("b")]);
     let (hash, encoding) = key(plan);
-    assert_eq!(encoding.len(), 509, "{encoding:?}");
-    assert_eq!(hash.to_string(), "494c61e739163994dc420bed6de23aaf");
+    assert_eq!(encoding.len(), 512, "{encoding:?}");
+    assert_eq!(hash.to_string(), "bccb1469c0da007b914098d7f620880d");
     // Options other than inline secrets, whose keys are per process.
     let options = [
         ("header", OptionValue::Plain("true".to_owned())),

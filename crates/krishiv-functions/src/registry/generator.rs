@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The generator functions `explode`, `posexplode`, `inline` and their
-//! `_outer` forms.
+//! The generator functions `explode`, `posexplode`, `inline`,
+//! `variant_explode` and their `_outer` forms.
 //!
 //! Lowering turns a generator in a `SELECT` item, a `LATERAL VIEW` or a
 //! `FROM` clause into a `Generate` node and types it there, so these
@@ -25,6 +25,8 @@ pub(super) fn specs() -> Vec<Spec> {
         "posexplode_outer",
         "inline",
         "inline_outer",
+        "variant_explode",
+        "variant_explode_outer",
         // Rewritten to `inline` over an array of structs where a generator
         // is allowed (select list, FROM); registered so that anywhere else
         // it is a generator call, with Spark's errors.
