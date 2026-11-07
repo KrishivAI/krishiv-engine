@@ -95,11 +95,62 @@ pub(crate) fn push_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
             stay.push(c);
         }
     }
-    if l.is_empty() && r.is_empty() && Arc::ptr_eq(&simplified, cond) {
+    // An inner join keeps only rows its condition holds for, so an outer
+    // join just below it whose padded rows the condition rejects is no
+    // longer outer on that side (Spark reaches the same through the
+    // `IsNotNull` filters it infers): simplified here, before join ordering
+    // sees the tree, rather than only once a filter reaches it later.
+    let (left_in, right_in) = if matches!(kind, JoinKind::Inner | JoinKind::Cross) {
+        let all = conjuncts(&simplified);
+        (inner_child(left, &all), inner_child(right, &all))
+    } else {
+        (Arc::clone(left), Arc::clone(right))
+    };
+    if l.is_empty()
+        && r.is_empty()
+        && Arc::ptr_eq(&simplified, cond)
+        && Arc::ptr_eq(&left_in, left)
+        && Arc::ptr_eq(&right_in, right)
+    {
         return node;
     }
-    let (left, right) = (into(left, l), into(right, r));
+    let (left, right) = (into(&left_in, l), into(&right_in, r));
     join(&node, left, right, *kind, stay)
+}
+
+/// `child` of an inner join on `preds`: an outer join whose padded side
+/// `preds` rejects ([`eliminate_outer`]) loses that side's padding; any
+/// other relation is returned as it is.
+fn inner_child(child: &Arc<LogicalPlan>, preds: &[Arc<Expr>]) -> Arc<LogicalPlan> {
+    let PlanNode::Join {
+        left,
+        right,
+        kind,
+        condition,
+    } = &child.node
+    else {
+        return Arc::clone(child);
+    };
+    if !matches!(
+        kind,
+        JoinKind::LeftOuter | JoinKind::RightOuter | JoinKind::FullOuter
+    ) {
+        return Arc::clone(child);
+    }
+    let (lo, ro) = (ids(left), ids(right));
+    let new = eliminate_outer(*kind, preds, left, right, &lo, &ro);
+    if new == *kind {
+        return Arc::clone(child);
+    }
+    Arc::new(LogicalPlan {
+        node: PlanNode::Join {
+            left: Arc::clone(left),
+            right: Arc::clone(right),
+            kind: new,
+            condition: condition.clone(),
+        },
+        origin: child.origin,
+    })
 }
 
 /// The rule at an inner or cross `Join`, run once before the rewrite batch:
