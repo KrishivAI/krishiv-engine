@@ -3882,19 +3882,30 @@ impl Resolver<'_> {
         // refuses it there. The same for windows over the aggregate: an
         // aggregate call in the `ORDER BY` stays in the sort, which no
         // aggregate may be in (Spark 4.2.0, `window-with-aggregates`).
+        let over_windows = c.agg.as_ref().is_some_and(|i| i.has_windows());
         if bounds.iter().any(|b| b.agg.is_some())
-            && (Self::holds_generator(&c.plan) || c.agg.as_ref().is_some_and(|i| i.has_windows()))
+            && (Self::holds_generator(&c.plan) || over_windows)
         {
-            let calls: Vec<String> = bounds
-                .iter()
-                .flat_map(|b| {
-                    aggregate_sql(&b.shown(), &below.out)
-                        .split(", ")
-                        .filter(|c| !c.is_empty())
-                        .map(|c| format!("\"{c}\""))
-                        .collect::<Vec<_>>()
-                })
-                .collect();
+            let calls: Vec<String> = if Self::holds_generator(&c.plan) {
+                bounds
+                    .iter()
+                    .flat_map(|b| {
+                        aggregate_sql(&b.shown(), &below.out)
+                            .split(", ")
+                            .filter(|c| !c.is_empty())
+                            .map(|c| format!("\"{c}\""))
+                            .collect::<Vec<_>>()
+                    })
+                    .collect()
+            } else {
+                // Over windows, each call as written (columns unqualified, a call with several arguments whole),
+                // in the order the sort keys read them (Spark 4.2.0, `window-with-aggregates`).
+                bounds
+                    .iter()
+                    .flat_map(|b| aggregate_calls(&b.shown()))
+                    .map(|c| format!("\"{c}\""))
+                    .collect()
+            };
             if !calls.is_empty() {
                 return Err(AnalysisError::new(
                     UnsupportedExprForOperator {
@@ -4610,6 +4621,28 @@ fn aggregate_sql(e: &Arc<Expr>, scope: &[Attr]) -> String {
         x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
     }
     found.join(", ")
+}
+
+/// The aggregate calls in `e` as Spark's `sql` prints them (columns unqualified), in the order `e` reads them.
+fn aggregate_calls(e: &Arc<Expr>) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut seen = HashSet::new();
+    let mut stack = vec![Arc::clone(e)];
+    while let Some(x) = stack.pop() {
+        if !seen.insert(super::bind::addr(&*x)) {
+            continue;
+        }
+        if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node
+            && f.kind == FunctionKind::Aggregate
+        {
+            found.push(pretty(&x, None));
+            continue;
+        }
+        let mut children = Vec::new();
+        x.for_each_child(&mut |k| children.push(Arc::clone(k)));
+        stack.extend(children.into_iter().rev());
+    }
+    found
 }
 
 /// Whether `e` reads a column or calls a non-deterministic function, so it
