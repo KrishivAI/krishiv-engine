@@ -396,6 +396,19 @@ fn row_layout_joins_report_their_index() {
         Some(&Metric::Text("row-flat+chain".to_owned()))
     );
     assert_eq!(build.extra("hash_entries"), Some(&Metric::Count(4)));
+    // Its memory once finalized: one 8-byte hash per row, key and payload
+    // columns, an index, and the reservation the probe lives with.
+    let count = |name| build.extra(name).and_then(Metric::value).unwrap_or(0);
+    let rows_built = count("build_rows");
+    assert!(rows_built > 0, "{build:?}");
+    assert!(count("arena_hash_bytes") >= 8 * rows_built, "{build:?}");
+    assert!(count("arena_key_bytes") > 0, "{build:?}");
+    assert!(
+        count("arena_bytes") >= count("arena_hash_bytes") + count("arena_key_bytes"),
+        "{build:?}"
+    );
+    assert!(count("index_bytes") > 0, "{build:?}");
+    assert!(count("steady_reserved_bytes") > 0, "{build:?}");
     // The row-layout index counts probe lengths too: every probe row with
     // a key looks up once (2,000 orders, filtered to those over 10).
     let probe = profile

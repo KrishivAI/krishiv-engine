@@ -625,7 +625,8 @@ impl Sink for BuildSink {
         }
         for (p, c) in chunks {
             l.parts[p].chunks.push(c);
-            l.parts[p].coalesce(s.arena_schema(&g.hashing))?;
+            let merged = l.parts[p].coalesce(s.arena_schema(&g.hashing))?;
+            s.counters.max(Counter::MaxCoalesceCopyBytes, merged as u64);
         }
         if let Some((sketches, _)) = &mut l.sketches {
             for (sketch, rows) in sketches.iter_mut().zip(&by_part) {
@@ -762,6 +763,8 @@ impl Sink for BuildSink {
             // are asked for through arbitration when nothing else runs.
             let spill = s.spill.is_some();
             let mut spare = held_copy;
+            // The concatenation copies reserved at once (for the counter).
+            let mut copying = 0usize;
             let mut jobs = std::collections::VecDeque::from(jobs);
             let mut running = futures::stream::FuturesUnordered::new();
             let mut tables = Vec::with_capacity(jobs.len());
@@ -796,6 +799,10 @@ impl Sink for BuildSink {
                         ..
                     }) = jobs.pop_front_if(|_| funded)
                     {
+                        copying = copying.saturating_add(copy);
+                        self.0
+                            .counters
+                            .max(Counter::MaxFinalizeCopyBytes, copying as u64);
                         let shared = Arc::clone(&self.0);
                         let hashing = g.hashing.clone();
                         running.push(async move {
@@ -836,6 +843,7 @@ impl Sink for BuildSink {
                     break;
                 };
                 let (p, table, copy, index_bytes) = done?;
+                copying = copying.saturating_sub(copy);
                 // The index was reserved for one key per row: keep what it
                 // holds.
                 index.shrink(

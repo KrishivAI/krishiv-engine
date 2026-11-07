@@ -87,13 +87,17 @@ impl Part {
     /// count reached the fan-out copied the whole partition again every 15
     /// pushes (quadratic in its size); tiered, a row is copied about once
     /// per tier it climbs.
-    pub(crate) fn coalesce(&mut self, schema: &SchemaRef) -> Result<()> {
+    ///
+    /// Returns the bytes of the largest run merged (each merge reserves the
+    /// run again while it copies: the transient peak), 0 when none was.
+    pub(crate) fn coalesce(&mut self, schema: &SchemaRef) -> Result<usize> {
         const FANOUT: usize = 16;
         let size = |c: &Batch| c.data().get_array_memory_size();
         let tier = |c: &Batch| size(c).max(1).ilog(FANOUT);
+        let mut largest = 0;
         while self.chunks.len() >= FANOUT {
             let Some(top) = self.chunks.last().map(tier) else {
-                return Ok(());
+                return Ok(largest);
             };
             let run = self
                 .chunks
@@ -102,15 +106,15 @@ impl Part {
                 .take_while(|c| tier(c) <= top)
                 .count();
             if run < FANOUT {
-                return Ok(());
+                return Ok(largest);
             }
             let from = self.chunks.len() - run;
             let old: usize = self.chunks[from..].iter().map(size).sum();
             let Some(m) = self.memory.first_mut().filter(|m| m.size() >= old) else {
-                return Ok(());
+                return Ok(largest);
             };
             if m.try_grow(old).is_err() {
-                return Ok(());
+                return Ok(largest);
             }
             let merged =
                 Batch::concat(schema, &self.chunks[from..]).map_err(|e| internal(e.to_string()));
@@ -118,14 +122,15 @@ impl Part {
                 Ok(b) if size(&b) <= old => b,
                 other => {
                     m.shrink(old);
-                    return other.map(drop);
+                    return other.map(|_| largest);
                 }
             };
+            largest = largest.max(old);
             m.shrink(old + old - size(&merged));
             self.chunks.truncate(from);
             self.chunks.push(merged);
         }
-        Ok(())
+        Ok(largest)
     }
 
     pub(crate) fn absorb(&mut self, other: Self) {
