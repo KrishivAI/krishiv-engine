@@ -588,6 +588,14 @@ impl<'s> Parser<'s> {
             }
             return self.fail();
         }
+        if self.eat_kw("UNSET") {
+            if self.eat_kw("PROPERTIES") || self.eat_kw("DBPROPERTIES") {
+                return Ok(AlterNamespaceAction::UnsetProperties(
+                    self.property_list(false)?,
+                ));
+            }
+            return self.fail();
+        }
         if self.kw_at(0, "DEFAULT") && self.kw_at(1, "COLLATION") {
             self.pos += 2;
             let collation = self.table_name()?;

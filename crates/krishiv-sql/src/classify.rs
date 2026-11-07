@@ -501,6 +501,7 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
             match &a.action {
                 AlterNamespaceAction::SetLocation(l) => out.push(t(O::Path(l), Modify)),
                 AlterNamespaceAction::SetProperties(_)
+                | AlterNamespaceAction::UnsetProperties(_)
                 | AlterNamespaceAction::SetComment(_)
                 | AlterNamespaceAction::DefaultCollation(_) => {}
             }

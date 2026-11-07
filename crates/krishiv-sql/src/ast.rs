@@ -1462,6 +1462,8 @@ pub enum AlterNamespaceAction {
     /// `SET PROPERTIES (...)` or `SET DBPROPERTIES (...)` (namespaces say
     /// `PROPERTIES`, not `TBLPROPERTIES`).
     SetProperties(Vec<TableOption>),
+    /// `UNSET PROPERTIES (key, ...)` or `UNSET DBPROPERTIES (key, ...)`.
+    UnsetProperties(Vec<TableOption>),
     /// `SET LOCATION '...'`.
     SetLocation(String),
     /// `COMMENT ON SCHEMA name IS 'comment'` (`None` for `IS NULL`).

@@ -47,3 +47,35 @@ fn a_namespace_takes_a_comment_properties_and_a_location() {
         .unwrap_err();
     assert!(err.to_string().contains("SCHEMA_NOT_FOUND"), "{err}");
 }
+
+/// Spark 4.2.0 (`research/spark/row-format-file-format/probe13.py` a1, a2, a6, a7):
+/// `UNSET PROPERTIES|DBPROPERTIES` removes the keys, an absent key is fine, and the
+/// reserved `comment` is `CANNOT_REMOVE_RESERVED_PROPERTY` when the command runs.
+#[test]
+fn unset_properties_removes_the_keys() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("CREATE SCHEMA ns2 WITH DBPROPERTIES ('a' = '1', 'b' = '2', 'c' = '3')"))
+        .unwrap();
+    block_on(s.sql("ALTER SCHEMA ns2 UNSET PROPERTIES ('a', 'absent')")).unwrap();
+    block_on(s.sql("ALTER DATABASE ns2 UNSET DBPROPERTIES ('c')")).unwrap();
+    let rows = describe(&s, "ns2");
+    let props = rows
+        .iter()
+        .find(|r| r.starts_with("Properties="))
+        .cloned()
+        .unwrap_or_default();
+    assert!(props.contains("b=2"), "{rows:?}");
+    assert!(!props.contains("a=1") && !props.contains("c=3"), "{rows:?}");
+    let err = block_on(s.sql("ALTER NAMESPACE ns2 UNSET PROPERTIES ('comment')"))
+        .map(|_| ())
+        .unwrap_err();
+    assert_eq!(
+        err.error_class().name(),
+        "CANNOT_REMOVE_RESERVED_PROPERTY",
+        "{err}"
+    );
+    let err = block_on(s.sql("ALTER NAMESPACE missing UNSET PROPERTIES ('a')"))
+        .map(|_| ())
+        .unwrap_err();
+    assert!(err.to_string().contains("SCHEMA_NOT_FOUND"), "{err}");
+}

@@ -135,6 +135,12 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                         checker.option_values(properties)?;
                         reserved_namespace_properties(properties, a.span)?;
                     }
+                    // Spark's `visitUnsetNamespaceProperties`: keys without values, then
+                    // `cleanNamespaceProperties` over them (probe13 a1-a8).
+                    AlterNamespaceAction::UnsetProperties(keys) => {
+                        checker.property_list(keys, false, a.span)?;
+                        reserved_namespace_properties(keys, a.span)?;
+                    }
                     // Schema-level collations are off in Spark 4.2
                     // (`spark.sql.schemaLevelCollations.enabled`).
                     AlterNamespaceAction::DefaultCollation(_) => {

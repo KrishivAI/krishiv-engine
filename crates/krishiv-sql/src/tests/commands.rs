@@ -10,6 +10,7 @@ use super::*;
 use krishiv_common::error::ErrorClass;
 
 mod namespace_and_row_format;
+mod parse_leftovers;
 mod property_keys;
 
 /// The tree of `sql`, without Spark's post-parse checks (tree shapes).

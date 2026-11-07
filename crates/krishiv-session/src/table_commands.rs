@@ -334,6 +334,22 @@ impl Session {
                 let properties = options_of(properties, original);
                 Box::new(move |m| m.properties.extend(properties.clone()))
             }
+            // Spark's `AlterNamespaceUnsetPropertiesCommand`: the reserved `comment` is refused
+            // (the parser refused `location`, `owner` and `collation`); an absent key is fine.
+            AlterNamespaceAction::UnsetProperties(keys) => {
+                let keys: Vec<String> = options_of(keys, original).into_keys().collect();
+                if let Some(k) = keys.iter().find(|k| k.as_str() == "comment") {
+                    return Err(krishiv_common::error::CannotRemoveReservedProperty {
+                        property: k.clone(),
+                    }
+                    .into());
+                }
+                Box::new(move |m| {
+                    for k in &keys {
+                        m.properties.remove(k);
+                    }
+                })
+            }
             AlterNamespaceAction::SetLocation(l) => {
                 let l = qualified_namespace_location(l, &self.warehouse_dir()?);
                 Box::new(move |m| m.location = Some(l.clone()))
