@@ -25,7 +25,13 @@
 //! The flush phase keeps a headroom reservation for its readers' frames
 //! and writers' scratch; every blocking step lends it as the consumer's
 //! grant credit and takes back what is left, so no other consumer takes it
-//! in between.
+//! in between. An external partition (one that does not fit, evaluated from
+//! its own file) needs its readers' frames plus one step's evaluation, which
+//! grows with the rows evaluated at once. When the pool refuses the growth
+//! for a whole batch, the partition is evaluated in fewer rows per step, as
+//! many as the headroom already held covers (`external_narrowed` in the
+//! metrics): the query slows down instead of failing, and fails only when
+//! one row's evaluation does not fit.
 //!
 //! # Failure and cancellation
 //! Rows handed to a blocking step are owned by that step. Until it returns
@@ -57,6 +63,9 @@ pub(super) struct Counters {
     pub(super) external: AtomicU64,
     /// Batches whose frames did not fit and folded from the file.
     pub(super) file_folds: AtomicU64,
+    /// External partitions evaluated in fewer rows per step than a batch, because the headroom for a whole
+    /// batch's evaluation was refused.
+    pub(super) narrowed: AtomicU64,
 }
 
 /// The spilled rows being read back, in order.
@@ -474,21 +483,43 @@ impl Window {
         r.carry = copied.rest;
         // Frames of the readers' batches (the trailing and lead readers', the
         // lead's batch before, and each frame's or offset function's), and
-        // one batch's evaluation.
-        let rows = copied.disk.batch_rows;
-        let need = copied
+        // one step's evaluation.
+        let rows = copied.disk.batch_rows.max(1);
+        let frames = copied
             .disk
             .file
             .max_read_reservation()
-            .saturating_mul(readers)
-            .saturating_add(super::disk::headroom(&self.env.plan, rows)?);
-        let spare = r.headroom.size().saturating_sub(need.max(r.base));
+            .saturating_mul(readers);
+        let need = |n: usize| -> Result<usize> {
+            Ok(frames.saturating_add(super::disk::headroom(&self.env.plan, n)?))
+        };
+        let full = need(rows)?;
+        let spare = r.headroom.size().saturating_sub(full.max(r.base));
         r.headroom.shrink(spare);
-        if r.headroom.size() < need {
-            r.headroom
-                .grow(need - r.headroom.size())
-                .await
-                .map_err(krishiv_common::error::KrishivError::from)?;
+        let mut eval_rows = rows;
+        if r.headroom.size() < full && r.headroom.grow(full - r.headroom.size()).await.is_err() {
+            // Refused: evaluate fewer rows per step, as many as the headroom held covers (the evaluation's need
+            // grows with its rows), so the query slows down instead of failing. Only when one row's evaluation
+            // does not fit is the refusal the query's error.
+            let held = r.headroom.size();
+            let (mut lo, mut hi) = (1_usize, rows);
+            if need(lo)? > held {
+                r.headroom
+                    .grow(need(lo)? - held)
+                    .await
+                    .map_err(krishiv_common::error::KrishivError::from)?;
+            } else {
+                while lo < hi {
+                    let mid = lo + (hi - lo).div_ceil(2);
+                    if need(mid)? <= held {
+                        lo = mid;
+                    } else {
+                        hi = mid - 1;
+                    }
+                }
+            }
+            eval_rows = lo;
+            self.counters.narrowed.fetch_add(1, Ordering::Relaxed);
         }
         let env = Arc::clone(&self.env);
         let consumer = Arc::clone(ctx.consumer().consumer());
@@ -497,7 +528,7 @@ impl Window {
         let counters = Arc::clone(&self.counters);
         let emit = with_credit(ctx, &mut r.headroom, move || {
             Ok(Box::new(Emit::open(
-                &env, disk, &consumer, counters, query,
+                &env, disk, &consumer, counters, query, eval_rows,
             )?))
         })
         .await?;
