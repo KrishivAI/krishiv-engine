@@ -8,7 +8,7 @@ import sys
 import threading
 import warnings
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from krishiv import _native
 from krishiv.errors import (
@@ -23,6 +23,9 @@ from krishiv.sql.dataframe import DataFrame
 from krishiv.sql.readwriter import DataFrameReader
 from krishiv.sql.types import DataType, StructType
 from krishiv.storagelevel import StorageLevel
+
+if TYPE_CHECKING:
+    from krishiv.sql.udf import UDFRegistration
 
 #: The Spark version this engine is compatible with.
 SPARK_VERSION = "4.2.0"
@@ -113,6 +116,13 @@ class SparkSession:
     @property
     def read(self) -> DataFrameReader:
         return DataFrameReader(self)
+
+    @property
+    def udf(self) -> UDFRegistration:
+        """The :class:`UDFRegistration` of this session (``spark.udf.register(name, f, returnType)``)."""
+        from krishiv.sql.udf import UDFRegistration
+
+        return UDFRegistration(self)
 
     @property
     def catalog(self) -> Catalog:

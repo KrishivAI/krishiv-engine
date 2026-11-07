@@ -63,8 +63,38 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PT"]
 
+# PySpark 4.2.0 code vendored unchanged but for its imports (NOTICE): kept in Spark's shape (and black's
+# 100-column format) so that it stays diffable against the tag, so only pyflakes' error checks apply.
+[tool.ruff.lint.per-file-ignores]
+"krishiv/_udf/{conversion,pandas_types,pandas_utils,typehints,loose_version}.py" = [
+    "E",
+    "W",
+    "I",
+    "B",
+    "UP",
+    "SIM",
+    "RUF",
+    "PT",
+    "F401",
+    "F811",
+    "F841",
+]
+
+[tool.ruff.format]
+exclude = ["krishiv/_udf/{conversion,pandas_types,pandas_utils,typehints,loose_version}.py"]
+
 [tool.ty.environment]
 python-version = "3.11"
+
+[tool.ty.src]
+# The vendored PySpark modules (see the ruff note above) are untyped in Spark's way; ty skips them.
+exclude = [
+    "krishiv/_udf/conversion.py",
+    "krishiv/_udf/pandas_types.py",
+    "krishiv/_udf/pandas_utils.py",
+    "krishiv/_udf/typehints.py",
+    "krishiv/_udf/loose_version.py",
+]
 
 [tool.ty.analysis]
 # The compiled extension only exists after `maturin develop`; when it is missing

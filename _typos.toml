@@ -12,6 +12,12 @@ extend-exclude = [
     "crates/krishiv-kernels/src/datetime_pattern/zone_names.rs",
     "crates/krishiv-kernels/vendored/legacy_zones.rs",
     "proto/spark-connect/**",
+    # PySpark 4.2.0 modules vendored unchanged but for their imports (NOTICE)
+    "python/krishiv/_udf/conversion.py",
+    "python/krishiv/_udf/pandas_types.py",
+    "python/krishiv/_udf/pandas_utils.py",
+    "python/krishiv/_udf/typehints.py",
+    "python/krishiv/_udf/loose_version.py",
     "crates/krishiv-connect/src/proto/**",
     "tests/sqllogictest/**",
     "crates/krishiv-ui-assets/assets/**",

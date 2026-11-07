@@ -70,6 +70,39 @@ _TEMPLATES = {
         "DataFrames are not almost equal:\nLeft:\n<left>\n<left_dtype>\nRight:\n<right>\n<right_dtype>"
     ),
     "INVALID_TYPE_DF_EQUALITY_ARG": ("Expected type <expected_type> for `<arg_name>` but got type <actual_type>."),
+    # Python UDFs (P2-T059 unit 2c).
+    "PACKAGE_NOT_INSTALLED": "<package_name> >= <minimum_version> must be installed; however, it was not found.",
+    "UNSUPPORTED_PACKAGE_VERSION": (
+        "<package_name> >= <minimum_version> must be installed; however, your version is <current_version>."
+    ),
+    "ARROW_LEGACY_IPC_FORMAT": (
+        "Arrow legacy IPC format is not supported in PySpark, please unset ARROW_PRE_0_15_IPC_FORMAT."
+    ),
+    "DUPLICATED_FIELD_NAME_IN_ARROW_STRUCT": (
+        "Duplicated field names in Arrow Struct are not allowed, got <field_names>"
+    ),
+    "MALFORMED_VARIANT": "Variant binary is malformed. Please check the data source is valid.",
+    "UNKNOWN_VALUE_FOR": "Unknown value for `<var>`.",
+    "TYPE_HINT_SHOULD_BE_SPECIFIED": "Type hints for <target> should be specified; however, got <sig>.",
+    "UNSUPPORTED_SIGNATURE": "Unsupported signature: <signature>.",
+    "RESULT_ROWS_MISMATCH": (
+        "The number of output rows (<output_length>) must match the number of input rows (<input_length>)."
+    ),
+    "UDF_RETURN_TYPE": "Return type of the user-defined function should be <expected>, but is <actual>.",
+    "SCHEMA_MISMATCH_FOR_PANDAS_UDF": (
+        "Result vector from <udf_type> was not the required length: expected <expected>, got <actual>."
+    ),
+    "STOP_ITERATION_OCCURRED": "Caught StopIteration thrown from user's code; failing the task: <exc>",
+    "CANNOT_SPECIFY_RETURN_TYPE_FOR_UDF": (
+        "returnType can not be specified when `<arg_name>` is a user-defined function, but got <return_type>."
+    ),
+    "INVALID_UDF_EVAL_TYPE": "Eval type for UDF must be <eval_type>.",
+    "INVALID_PANDAS_UDF_TYPE": "`<arg_name>` should be one of the values from PandasUDFType, got <arg_type>",
+    "INVALID_PANDAS_UDF": "Invalid function: <detail>",
+    "INVALID_RETURN_TYPE_FOR_PANDAS_UDF": "Pandas UDF should return StructType for <eval_type>, got <return_type>.",
+    "INVALID_RETURN_TYPE_FOR_ARROW_UDF": (
+        "Grouped and Cogrouped map Arrow UDF should return StructType for <eval_type>, got <return_type>."
+    ),
 }
 
 

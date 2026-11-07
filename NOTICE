@@ -29,6 +29,13 @@ Apache Spark
   file keeps its license header). The Rust types in crates/krishiv-connect/src/proto/
   and the descriptor set under crates/krishiv-connect/tests/fixtures/ are generated
   from them by tools/connect-protogen.
+  python/krishiv/_udf/{conversion,pandas_types,pandas_utils,typehints,loose_version}.py:
+  copies of PySpark v4.2.0's python/pyspark/sql/conversion.py, sql/pandas/types.py,
+  sql/pandas/utils.py, sql/pandas/typehints.py and loose_version.py (Apache-2.0), changed
+  only in their imports; each keeps its license header. Ported (same code shape, edited):
+  python/krishiv/_udf/worker.py (from pyspark/worker.py, pyspark/util.py and
+  sql/pandas/serializers.py), python/krishiv/sql/udf.py (from sql/udf.py) and
+  python/krishiv/sql/pandas/functions.py (from sql/pandas/functions.py).
 
 --------------------------------------------------------------------------------
 (Further entries: DataFusion, Feldera and others, if code is copied. Currently
