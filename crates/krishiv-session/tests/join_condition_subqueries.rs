@@ -362,3 +362,27 @@ fn a_left_anti_join_lifts_a_left_only_subquery_condition() -> R {
     }
     Ok(())
 }
+
+/// The optimizer snapshot `restrict_not_subquery_key` plans this query but never runs it. Its
+/// tables are `t(a, b, c)` and `u(a, d)`. Here `u.a` is 1, 3, 3, 5, so `max(u.a)` is 5 and the join
+/// pairs `t.a + 5 = g.a`: `t.a` 0 (b x) gives 5, which is in `g`; 1 (b x) gives 6, which is not;
+/// 2 is filtered out by `b = 'y'`. The result is therefore the single row 0, and not empty.
+#[test]
+fn the_optimizer_snapshot_query_runs_and_matches_its_literal() -> R {
+    let s = Session::new()?;
+    for q in [
+        "create temporary view t(a, b, c) as values (0, 'x', 10), (1, 'x', 20), (2, 'y', 30)",
+        "create temporary view u(a, d) as values (1, 'p'), (3, 'q'), (3, 'r'), (5, 's')",
+    ] {
+        run(&s, q)?;
+    }
+    let q = |on: &str| {
+        format!(
+            "SELECT t.a FROM t JOIN (SELECT a, count(*) AS n FROM u GROUP BY a) g ON {on} WHERE t.b = 'x'"
+        )
+    };
+    let got = run(&s, &q("t.a + (SELECT max(a) FROM u) = g.a"))?;
+    assert_eq!(got, rows(&["0"]));
+    assert_eq!(got, run(&s, &q("t.a + 5 = g.a"))?);
+    Ok(())
+}
