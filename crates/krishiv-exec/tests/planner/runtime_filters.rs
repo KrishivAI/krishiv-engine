@@ -629,6 +629,65 @@ fn bloom_settings_are_honoured() {
     assert!(dropped[4] >= dropped[0], "{dropped:?}");
 }
 
+/// TPC-H q18's shape: an `IN` subquery whose build is an aggregate cut by
+/// `HAVING`. The build is estimated far above `bloom.maxItems` but holds
+/// few keys, more than an exact set takes. The filter's form comes from
+/// the keys the build actually holds, not from the estimate, so the probe
+/// scan still drops the rows a min/max range would keep (design
+/// `P2-q18-runtime-filter-actual-keys`). Limits are scaled down: ~100 keys,
+/// an exact set of 16, a Bloom filter of at most 150 keys.
+#[test]
+fn a_selective_build_estimated_large_still_filters_by_its_keys() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 23;
+    write(dir.path(), "big.parquet", &table(&mut rng, 4000, 40_000, 0));
+    // `v` is the row number: `sum(v) < 100` keeps (about) the keys of the
+    // first 100 rows, spread over the whole domain, out of ~15,000 groups.
+    // Like q18's `sum(l_quantity) > 300`, no statistic bounds a sum, so its
+    // estimate is a guess (a `max(v)` is estimated from the footer's range).
+    write(
+        dir.path(),
+        "small.parquet",
+        &table(&mut rng, 20_000, 40_000, 0),
+    );
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    let q = "SELECT b.v FROM big b WHERE b.k64 IN \
+             (SELECT k64 FROM small GROUP BY k64 HAVING sum(v) < 100)";
+    configured(&mut t, MODES[0].1);
+    let want = sorted(&run(&t.plan_sql(q).unwrap()).0);
+    let scaled: &[(&str, &str)] = &[
+        ("krishiv.runtimeFilter.bloom.minApplicationRows", "0"),
+        ("krishiv.runtimeFilter.inList.maxValues", "0"),
+        ("krishiv.runtimeFilter.exactSet.maxValues", "16"),
+        ("krishiv.runtimeFilter.bloom.maxItems", "150"),
+        ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
+    ];
+    configured(&mut t, scaled);
+    let plan = t.plan_sql(q).unwrap();
+    // The estimate (thousands of groups) is over the 150-key cap, but it
+    // is a guess: the Bloom form is planned.
+    assert!(plan.to_string().contains("(bloom)"), "{plan}");
+    let (got, c) = run(&plan);
+    assert_eq!(sorted(&got), want);
+    // ~100 of 40,000 key values: a range over them keeps nearly every row
+    // of `big`, the keys themselves keep ~1%.
+    assert!(c.rows_dropped >= 3_000, "{c:?}\n{plan}");
+    // A build estimated from its table, not guessed, keeps the estimate's
+    // decision: 20,000 rows are over the cap, so no Bloom is planned.
+    let q = "SELECT b.v FROM big b JOIN small s ON b.k64 = s.k64";
+    let plan = t.plan_sql(q).unwrap();
+    assert!(plan.to_string().contains("RuntimeFilter #"), "{plan}");
+    assert!(!plan.to_string().contains("(bloom)"), "{plan}");
+}
+
 /// The `scan_waits` of every runtime filter a join in `node` publishes.
 fn scan_waits(node: &krishiv_exec::physical::PhysNode, out: &mut Vec<bool>) {
     if let krishiv_exec::physical::PhysNode::HashJoin(j) = node {

@@ -72,7 +72,7 @@ pub(crate) use instantiate::{
 };
 pub use instantiate::{
     ExchangeInput, SpillScopes, TaskSpec, WorkerContext, exchange_schemas, instantiate,
-    instantiate_task,
+    instantiate_task, planned_exchange_schemas,
 };
 pub use krishiv_memory::{RelationLease, RelationRef, RelationStore};
 pub use splits::{
@@ -260,6 +260,12 @@ pub struct ExchangePlan {
     /// fragmenter on the exchange that feeds a join's build, empty on one
     /// worker.
     pub filters: Vec<ExchangeFilterPlan>,
+    /// The columns of its input, as the planner typed them: what a
+    /// fragmenter gives the [`PhysNode::ExchangeSource`] in its place,
+    /// without instantiating the plan (T176 unit 1 review m4). `None` in a
+    /// plan written without it; the fragmenter's caller then instantiates
+    /// the plan to learn them ([`exchange_schemas`]).
+    pub schema: Option<SchemaRef>,
 }
 
 /// A runtime filter an exchange collects from the rows it writes, in place
@@ -897,7 +903,7 @@ plan_data!(enum Partitioning {
     RoundRobin,
     Range { keys },
 });
-plan_data!(struct ExchangePlan { id, input, partitioning, filters });
+plan_data!(struct ExchangePlan { id, input, partitioning, filters, schema });
 plan_data!(struct ExchangeFilterPlan { id, column, key_type, options, null_safe });
 plan_data!(
     enum JoinDistribution {
@@ -1273,6 +1279,7 @@ impl PhysicalPlan {
                 }),
                 partitioning: Partitioning::Single,
                 filters: Vec::new(),
+                schema: Some(WritePlan::result_schema()),
             })),
             shared: self.shared,
             explain,

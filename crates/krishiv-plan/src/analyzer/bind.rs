@@ -60,6 +60,9 @@ pub(super) struct Bindings {
     pub(super) reads_files: bool,
     /// Securables of already-resolved scans, by name parts.
     pub(super) scans: HashMap<Vec<String>, usize>,
+    /// The declared `CHAR`/`VARCHAR` types of the columns of already-resolved scans (a DataFrame's stored
+    /// plan), by name parts, then column name: the resolved plan holds the types, not the declarations.
+    pub(super) scan_declared: HashMap<Vec<String>, HashMap<String, Arc<str>>>,
     /// The lowered plan of each `PlanNode::Sql`, by node address.
     pub(super) sql: HashMap<usize, Arc<LogicalPlan>>,
     pub(super) pins: BTreeMap<TableIdent, TableVersion>,
@@ -883,6 +886,14 @@ async fn load(
                 return Err(unsupported("a scan that does not match its table", origin));
             }
             b.scans.insert(name.to_vec(), securable);
+            let declared: HashMap<String, Arc<str>> = meta
+                .columns
+                .iter()
+                .filter_map(|m| Some((m.name.clone(), Arc::from(m.char_varchar.as_deref()?))))
+                .collect();
+            if !declared.is_empty() {
+                b.scan_declared.insert(name.to_vec(), declared);
+            }
             validated.entry(name).or_default().push((version, columns));
         } else {
             b.tables.insert(

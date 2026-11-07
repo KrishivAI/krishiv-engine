@@ -739,6 +739,7 @@ impl Decoder {
                     })
                 })
                 .collect::<Result<_>>()?,
+            schema: e.schema.as_deref().map(schema_from).transpose()?,
         })
     }
 

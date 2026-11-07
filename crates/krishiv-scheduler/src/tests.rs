@@ -45,6 +45,7 @@ fn range() -> PhysNode {
 
 fn exchange(id: u64, input: PhysNode, partitioning: Partitioning) -> PhysNode {
     PhysNode::Exchange(ExchangePlan {
+        schema: None,
         id: ExchangeId(id),
         input: Box::new(input),
         partitioning,
