@@ -2,9 +2,6 @@
   "cases": {
     "query-features": [
       34
-    ],
-    "s43-other": [
-      27
     ]
   },
   "file": "postgreSQL/groupingsets",

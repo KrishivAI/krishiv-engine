@@ -243,7 +243,7 @@ fn type_feature(t: &DataType) -> Option<Feature> {
         DataType::YearMonthInterval { .. }
         | DataType::DayTimeInterval { .. }
         | DataType::CalendarInterval => Some(Feature::IntervalTypes),
-        DataType::CollatedString(_) => Some(Feature::CollatedStrings),
+        DataType::CollatedString(c) if !c.is_utf8_binary() => Some(Feature::CollatedStrings),
         DataType::Variant => Some(Feature::VariantType),
         _ => t.is_nested().then_some(Feature::NestedTypes),
     }
@@ -252,7 +252,7 @@ fn type_feature(t: &DataType) -> Option<Feature> {
 /// Whether `t` is or holds a collated string.
 fn collated(t: &DataType) -> bool {
     match t {
-        DataType::CollatedString(_) => true,
+        DataType::CollatedString(c) => !c.is_utf8_binary(),
         DataType::Array(a) => collated(a.element_type()),
         DataType::Map(m) => collated(m.key_type()) || collated(m.value_type()),
         DataType::Struct(s) => s.fields().iter().any(|x| collated(x.data_type())),
