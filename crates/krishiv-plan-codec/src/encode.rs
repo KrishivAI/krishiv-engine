@@ -528,7 +528,17 @@ impl Encoder {
                 .iter()
                 .map(|f| exchange_filter(f, &self.nested))
                 .collect(),
-            schema: exchange.schema.as_deref().map(schema_bytes),
+            schema: exchange.schema.as_deref().map(|schema| {
+                // The feature walk classifies this schema field by field: the flag follows.
+                if schema
+                    .fields()
+                    .iter()
+                    .any(|f| arrow_type_is_nested(f.data_type()))
+                {
+                    self.nested.set(true);
+                }
+                schema_bytes(schema)
+            }),
         })
     }
 
