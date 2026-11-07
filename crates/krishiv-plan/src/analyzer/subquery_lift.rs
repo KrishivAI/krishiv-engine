@@ -13,8 +13,7 @@ use super::subquery::{
     R, Rewriter, alias, conjuncts, inner_columns, node, output, reads_left, subqueries,
 };
 use crate::{
-    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, JoinKind, LogicalPlan, Origin,
-    PlanNode, ResolvedExpr, SubqueryKind,
+    AttrId, BoundColumn, Expr, ExprNode, JoinKind, LogicalPlan, Origin, PlanNode, SubqueryKind,
 };
 
 /// The conjuncts of a join condition after the lift, and the join's left and right inputs.
@@ -50,11 +49,11 @@ impl Rewriter {
     }
 
     /// Whether the conjunct `c` of a join of `kind` holds an uncorrelated `EXISTS` or scalar
-    /// subquery that the join cannot evaluate where it stands, so it must be lifted. A subquery
-    /// the planner already pushes into one input as a filter is left alone, so those plans do not
-    /// change: a FULL OUTER join takes none in its condition; any join takes none under an `OR`;
-    /// a LEFT join takes none in a condition on the left (preserved) input alone, a RIGHT join
-    /// none on the right alone.
+    /// subquery that the join cannot evaluate where it stands, so it must be lifted: whatever the
+    /// planner cannot push into one input as a filter. A conjunct that reads both inputs is never
+    /// pushable; a FULL OUTER join pushes none; a LEFT OUTER or LEFT ANTI join cannot push one on
+    /// the left (preserved) input alone, nor a RIGHT OUTER join one on the right alone. The rest
+    /// (one-sided, or constant, on a kind that pushes it) keep their plans.
     fn needs_lift(
         &mut self,
         c: &Arc<Expr>,
@@ -68,11 +67,13 @@ impl Rewriter {
         let cols = inner_columns(c);
         let on_side =
             |ids: &HashSet<AttrId>| !cols.is_empty() && cols.iter().all(|x| ids.contains(&x.id));
+        let (left_only, right_only) = (on_side(left_ids), on_side(right_ids));
+        let both = !cols.is_empty() && !left_only && !right_only;
         match kind {
             JoinKind::FullOuter => true,
-            _ if has_or(c) => true,
-            JoinKind::LeftOuter => on_side(left_ids),
-            JoinKind::RightOuter => on_side(right_ids),
+            _ if both => true,
+            JoinKind::LeftOuter | JoinKind::LeftAnti => left_only,
+            JoinKind::RightOuter => right_only,
             _ => false,
         }
     }
@@ -198,22 +199,4 @@ impl Rewriter {
             node(PlanNode::Project { input: side, exprs }, origin),
         ))
     }
-}
-
-/// Whether `e` has an `OR` anywhere in it.
-fn has_or(e: &Arc<Expr>) -> bool {
-    let mut seen = HashSet::new();
-    let mut stack = vec![Arc::clone(e)];
-    while let Some(x) = stack.pop() {
-        if !seen.insert(addr(&*x)) {
-            continue;
-        }
-        if matches!(&x.node, ExprNode::Resolved(ResolvedExpr::Function(f))
-            if f.id == FunctionId::Builtin(Builtin::Or))
-        {
-            return true;
-        }
-        x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
-    }
-    false
 }

@@ -304,3 +304,61 @@ fn a_scalar_with_two_rows_fails_over_any_left_input() -> R {
     }
     Ok(())
 }
+
+/// A conjunct that reads both inputs and holds a subquery is never a one-sided filter, so every
+/// join kind lifts it: `f1.id = f2.id + (select min(id) from tt)` is `f1.id = f2.id + 2`
+/// (`tt` is 2, 9). The same shape is the optimizer test `restrict_not_subquery_key`.
+#[test]
+fn a_condition_reading_both_sides_with_a_subquery_matches_its_literal() -> R {
+    let s = session()?;
+    for kind in KINDS {
+        for (cond, literal) in [
+            (
+                "f1.id = f2.id + (select min(id) from tt)",
+                "f1.id = f2.id + 2",
+            ),
+            (
+                "f1.id + (select max(id) from tt) = f2.id + 9",
+                "f1.id + 9 = f2.id + 9",
+            ),
+            (
+                "f1.id < f2.id + (select count(*) from tt)",
+                "f1.id < f2.id + 2",
+            ),
+        ] {
+            let (got, want) = (run(&s, &join(kind, cond))?, run(&s, &join(kind, literal))?);
+            assert_eq!(got, want, "{kind} on {cond}");
+        }
+    }
+    // f1 is 1, 2 and f2 is 2, 3: the first condition pairs f1 = 2 + ... never (4, 5), so an inner
+    // join is empty and a FULL OUTER join leaves each side alone.
+    assert_eq!(
+        run(
+            &s,
+            &join(
+                "full outer join",
+                "f1.id = f2.id + (select min(id) from tt)"
+            )
+        )?,
+        rows(&["1|NULL", "2|NULL", "NULL|2", "NULL|3"])
+    );
+    Ok(())
+}
+
+/// A LEFT ANTI join treats a left-only conjunct like a LEFT OUTER join does: it cannot be pushed
+/// into the preserved input, so it is lifted. `f1` is 1, 2; `f2` is 2, 3; `min(tt.id)` is 2.
+#[test]
+fn a_left_anti_join_lifts_a_left_only_subquery_condition() -> R {
+    let s = session()?;
+    let anti = |c: &str| format!("select f1.id from f1 left anti join f2 on {c}");
+    for (cond, literal) in [
+        ("f1.id = (select min(id) from tt)", "f1.id = 2"),
+        (
+            "f1.id = f2.id and f1.id = (select min(id) from tt)",
+            "f1.id = f2.id and f1.id = 2",
+        ),
+    ] {
+        assert_eq!(run(&s, &anti(cond))?, run(&s, &anti(literal))?, "{cond}");
+    }
+    Ok(())
+}
