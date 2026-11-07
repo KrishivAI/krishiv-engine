@@ -36,7 +36,7 @@ use crate::expr::{
     Attrs, and_all, builtin, call, column, common_equalities, conjuncts, has_subquery, implied,
     is_deterministic, references, substitute,
 };
-use crate::narrow::{equi_columns, selectivity};
+use crate::narrow::{conjunct_selectivities, equi_columns, selectivity};
 use crate::stats::{RelStats, Statistics, cse_definitions, reads_cse, resolve_cse};
 
 /// An original relation (kept alive) and its rewrite.
@@ -604,6 +604,9 @@ impl Graph {
         } else {
             Vec::new()
         };
+        // The conjuncts over each input alone, estimated together after the
+        // loop: each narrows the columns the next reads.
+        let mut local: Vec<Vec<Arc<Expr>>> = vec![Vec::new(); sorted.len()];
         for (p, r) in preds.into_iter().zip(&refs) {
             let mut on: Vec<usize> = r
                 .iter()
@@ -628,7 +631,7 @@ impl Graph {
                     }
                     _ => resolved,
                 };
-                rows[i] = (rows[i] * selectivity(&resolved, &ests[order[i]], narrow)).max(1.0);
+                local[i].push(resolved);
                 sorted[i] = Arc::new(LogicalPlan::new(PlanNode::Filter {
                     input: Arc::clone(&sorted[i]),
                     predicate: p,
@@ -636,6 +639,21 @@ impl Graph {
                 continue;
             }
             joins.push((p, on));
+        }
+        // In a canonical order (each conjunct narrows the view the next reads,
+        // and a null-rejecting or `IN` conjunct changes what a range after it
+        // keeps), so the estimate does not depend on how the query wrote them.
+        // Multiplied in one at a time, as each conjunct's rows always were,
+        // so inputs whose conjuncts do not narrow each other estimate as before.
+        for preds in &mut local {
+            preds.sort_by_cached_key(ToString::to_string);
+        }
+        for (i, preds) in local.iter().enumerate() {
+            for sel in
+                conjunct_selectivities(preds.iter().map(AsRef::as_ref), &ests[order[i]], narrow)
+            {
+                rows[i] = (rows[i] * sel).max(1.0);
+            }
         }
         // A filtered input keeps at most as many distinct values of a column
         // as it keeps rows, as the estimate of a filter does: a join with a
