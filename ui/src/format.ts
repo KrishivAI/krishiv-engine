@@ -1,0 +1,51 @@
+export function bytes(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "–";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let v = n;
+  let i = 0;
+  while (Math.abs(v) >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${i === 0 ? v : v.toFixed(1)} ${units[i]}`;
+}
+
+export function nanos(n: number | null | undefined): string {
+  if (n === null || n === undefined) return "–";
+  if (n < 1_000) return `${n} ns`;
+  if (n < 1_000_000) return `${(n / 1_000).toFixed(1)} µs`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)} ms`;
+  return `${(n / 1_000_000_000).toFixed(2)} s`;
+}
+
+export function count(n: number | null | undefined): string {
+  return n === null || n === undefined ? "–" : n.toLocaleString("en-US");
+}
+
+export function percent(r: number | null | undefined): string {
+  return r === null || r === undefined ? "–" : `${(r * 100).toFixed(1)}%`;
+}
+
+export function seconds(s: number): string {
+  if (s < 60) return `${s} s`;
+  if (s < 3600) return `${Math.floor(s / 60)} min ${s % 60} s`;
+  return `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+}
+
+/** Microseconds since the epoch, as the system tables hold them. */
+export function when(micros: number | null | undefined): string {
+  if (micros === null || micros === undefined) return "–";
+  return new Date(micros / 1000).toLocaleString();
+}
+
+/** How long a running query has run, from its submission time. */
+export function elapsed(micros: number | undefined, nowMs: number): string {
+  if (micros === undefined) return "–";
+  return nanos(Math.max(0, nowMs * 1000 - micros) * 1000);
+}
+
+export function oneLine(text: string | null | undefined, max = 120): string {
+  if (!text) return "–";
+  const t = text.replace(/\s+/g, " ").trim();
+  return t.length > max ? `${t.slice(0, max)}…` : t;
+}
