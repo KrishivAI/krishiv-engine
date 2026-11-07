@@ -62,7 +62,7 @@ use krishiv_common::stack::{STEP, on_big_stack};
 mod rank;
 use rank::{outer_only, repartitioned, window_reads_outer};
 
-type R<T> = Result<T, AnalysisError>;
+pub(super) type R<T> = Result<T, AnalysisError>;
 
 #[path = "subquery_split.rs"]
 mod split;
@@ -111,7 +111,7 @@ pub(super) fn rewrite(
     Ok(out)
 }
 
-struct Rewriter {
+pub(super) struct Rewriter {
     next_id: u64,
     /// Each relation rewritten, by address (the original kept alive), so a
     /// relation shared by several parents or subqueries is rewritten once.
@@ -547,7 +547,7 @@ impl Rewriter {
     }
 
     /// Whether the subquery `e` refers to its enclosing query.
-    fn correlated(&mut self, e: &Expr) -> bool {
+    pub(super) fn correlated(&mut self, e: &Expr) -> bool {
         let ExprNode::Subquery { plan, .. } = &e.node else {
             return false;
         };
@@ -819,10 +819,8 @@ impl Rewriter {
         Ok(if widened { columns(base, &out) } else { base })
     }
 
-    /// A join whose `ON` holds `EXISTS` / `IN` subqueries: each is an
-    /// existence join under the side whose columns it reads, and the `ON`
-    /// reads the `exists` column (Spark plans the same `ExistenceJoin`
-    /// below the join). A subquery that reads both sides stays unsupported.
+    /// A join whose `ON` holds `EXISTS` / `IN` subqueries: each is an existence join under
+    /// the side it reads (Spark's `ExistenceJoin`); one reading both sides stays unsupported.
     fn join(
         &mut self,
         p: &Arc<LogicalPlan>,
@@ -893,10 +891,6 @@ impl Rewriter {
             r = joined;
             plain.extend(conds);
         }
-        // An uncorrelated EXISTS left in a conjunct (the three-valued form of an `IN` in a
-        // condition that reads neither side) is one constant for every row pair: the left side
-        // carries its value as a column, because the executor evaluates subquery values in a
-        // projection and not in a join condition.
         let (plain, l) = self.lift_exists(plain, l)?;
         if plain.iter().any(|c| self.reads_correlated(c)) {
             return Err(unsupported(
@@ -915,59 +909,6 @@ impl Rewriter {
             p.origin,
         );
         Ok(columns(joined, &out))
-    }
-
-    /// `conds` with each uncorrelated `EXISTS` replaced by a boolean column that `side` gains
-    /// (a projection of its columns and the subquery values), and `side` with those columns.
-    fn lift_exists(
-        &mut self,
-        conds: Vec<Arc<Expr>>,
-        side: Arc<LogicalPlan>,
-    ) -> R<(Vec<Arc<Expr>>, Arc<LogicalPlan>)> {
-        let mut lifted: Vec<Arc<Expr>> = Vec::new();
-        let mut columns_of: HashMap<usize, Arc<Expr>> = HashMap::new();
-        for c in &conds {
-            for sub in subqueries(c) {
-                if !matches!(
-                    sub.node,
-                    ExprNode::Subquery {
-                        kind: SubqueryKind::Exists,
-                        ..
-                    }
-                ) || self.correlated(&sub)
-                    || columns_of.contains_key(&addr(&*sub))
-                {
-                    continue;
-                }
-                let column = JoinKind::existence_column(self.fresh());
-                lifted.push(alias(Arc::clone(&sub), &column));
-                columns_of.insert(addr(&*sub), col_expr(&column, sub.origin));
-            }
-        }
-        if lifted.is_empty() {
-            return Ok((conds, side));
-        }
-        let conds = conds
-            .into_iter()
-            .map(|c| {
-                c.transform_down(&mut |x: Arc<Expr>| {
-                    Ok::<_, std::convert::Infallible>(
-                        columns_of.get(&addr(&*x)).cloned().unwrap_or(x),
-                    )
-                })
-                .unwrap_or_else(|never| match never {})
-            })
-            .collect();
-        let mut exprs: Vec<Arc<Expr>> = output(&side)?
-            .iter()
-            .map(|c| col_expr(c, Origin::UNKNOWN))
-            .collect();
-        exprs.extend(lifted);
-        let origin = side.origin;
-        Ok((
-            conds,
-            node(PlanNode::Project { input: side, exprs }, origin),
-        ))
     }
 
     /// `left JOIN LATERAL right`, `right` reading `left`'s columns: an
@@ -2513,7 +2454,7 @@ impl Rewriter {
         Ok((node(shift, Origin::UNKNOWN), Renumber { lo, hi, offset }))
     }
 
-    fn fresh(&mut self) -> AttrId {
+    pub(super) fn fresh(&mut self) -> AttrId {
         self.next_id += 1;
         AttrId(self.next_id - 1)
     }
@@ -2759,7 +2700,7 @@ fn with_domain(
 }
 
 /// `value` as the attribute `output`.
-fn alias(value: Arc<Expr>, output: &BoundColumn) -> Arc<Expr> {
+pub(super) fn alias(value: Arc<Expr>, output: &BoundColumn) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
         expr: value,
         output: output.clone(),
