@@ -3,10 +3,10 @@
 //! re-planned as a whole.
 //!
 //! Its inputs and the conjuncts of its conditions form a query (hyper)graph.
-//! With up to [`DP_LIMIT`] inputs, dynamic programming over connected
-//! subsets finds the order with the fewest intermediate rows (`C_out`);
-//! above it, a greedy pass repeatedly joins the connected pair with the
-//! smallest result ([`dp::dpsub`]; P2-T113 kept it over DPhyp). Session
+//! With up to [`DP_LIMIT`] inputs (the default limit), dynamic programming
+//! over connected subsets finds the order with the fewest intermediate rows
+//! (`C_out`; [`dp::dpsub`], which P2-T113 kept over DPhyp); above it, a
+//! greedy pass repeatedly joins the connected pair with the smallest result. Session
 //! configuration `krishiv.optimizer.joinEnumerator` can choose `greedy` for
 //! every tree, and `krishiv.optimizer.joinDpLimit` moves the limit. Both
 //! plan the same tree with the same costs, so they differ only in which
@@ -49,7 +49,8 @@ mod dp;
 /// An original relation (kept alive) and its rewrite.
 type Rewritten = (Arc<LogicalPlan>, Arc<LogicalPlan>);
 
-/// The most join inputs planned exactly; larger trees are planned greedily.
+/// The default of the most join inputs planned exactly (`krishiv.optimizer.joinDpLimit`); larger trees
+/// are planned greedily.
 pub const DP_LIMIT: usize = 10;
 
 /// The highest `krishiv.optimizer.joinDpLimit` honoured: `dpsub` considers
