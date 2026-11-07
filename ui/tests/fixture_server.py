@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import mimetypes
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,6 +20,25 @@ HERE = Path(__file__).parent
 ASSETS = HERE.parent.parent / "crates" / "krishiv-ui-assets" / "assets"
 DATA = json.loads((HERE / "fixtures.json").read_text())
 TOKEN = "fixture"
+# The content type comes from the file's suffix in this table, never from the request.
+CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".ttf": "font/ttf",
+    ".txt": "text/plain; charset=utf-8",
+    ".json": "application/json",
+}
+# Relative name -> (file, content type), for every file in the asset folder now.
+FILES = {
+    f.relative_to(ASSETS).as_posix(): (
+        f,
+        CONTENT_TYPES.get(f.suffix, "application/octet-stream"),
+    )
+    for f in ASSETS.rglob("*")
+    if f.is_file()
+}
 # The same policy `krishiv_server::internal` sends: a page that needs more than this fails the snapshot check.
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
@@ -94,16 +112,15 @@ class Handler(BaseHTTPRequestHandler):
                 if body is not None
                 else self.send_json(404, {"error": "not_found"})
             )
-        rel = url.path.lstrip("/") or "index.html"
-        f = ASSETS / rel
-        if not f.is_file():
+        # Only files that were in the asset folder at start-up are served, looked up by their relative name:
+        # no path is built from the request, so nothing outside the folder can be named.
+        served = FILES.get(url.path.lstrip("/") or "index.html")
+        if served is None:
             return self.send_json(404, {"error": "not_found"})
-        raw = f.read_bytes()
+        file, content_type = served
+        raw = file.read_bytes()
         self.send_response(200)
-        self.send_header(
-            "Content-Type",
-            mimetypes.guess_type(f.name)[0] or "application/octet-stream",
-        )
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
