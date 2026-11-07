@@ -509,6 +509,7 @@ impl DecFold<'_> {
     ) {
         let fast = self.proven(v);
         if fast && self.dense_unit() {
+            debug_assert_eq!(v.len(), self.groups.len(), "one value per group id");
             // Raw rows, all valid, unit weights, no overflow possible in this
             // batch: a plain add per row (an overflowed group stays NULL).
             for (&g, x) in self.groups.iter().zip(v) {
@@ -572,6 +573,7 @@ impl DecFold<'_> {
     ) {
         let fast = self.proven(v);
         if fast && counts.is_none() && self.dense_unit() {
+            debug_assert_eq!(v.len(), self.groups.len(), "one value per group id");
             // As in `sum`: raw rows, all valid, unit weights, proven.
             for (&g, x) in self.groups.iter().zip(v) {
                 let g = g as usize;
