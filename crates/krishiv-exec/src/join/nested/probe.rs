@@ -504,7 +504,7 @@ impl ProbeOp {
                 .grow(bytes)
                 .await
                 .map_err(KrishivError::from)?;
-        } else if d.chunk_memory.try_grow(bytes).is_err() {
+        } else if !leaves_room(ctx, bytes) || d.chunk_memory.try_grow(bytes).is_err() {
             d.pending = Some((b, base));
             return self.start_probe(d);
         }
@@ -579,6 +579,19 @@ impl ProbeOp {
         let base = d.next_base;
         d.next_base += b.num_rows() as u64;
         Ok(emit(self.0.build_rows(&b, base, marks)?))
+    }
+}
+
+/// Whether a chunk may take `bytes` more past its first batch: a quarter of
+/// the pool's limit stays free after it, so nested loops (and everything
+/// else) sharing the limit keep room for their own first batches and
+/// buffers. Each chunk's budget counts only its own drivers, so without
+/// this the chunks of several instantiations together fill the pool.
+fn leaves_room(ctx: &TaskContext, bytes: usize) -> bool {
+    let pool = ctx.consumer().consumer().pool();
+    match (pool.headroom(), pool.effective_limit()) {
+        (Some(free), Some(limit)) => free.saturating_sub(bytes) >= limit / 4,
+        _ => true,
     }
 }
 
