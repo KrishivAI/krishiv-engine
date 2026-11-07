@@ -2,6 +2,9 @@
 //! `cargo xtask file-size [--write-baseline [--base REF] [--only PATH]...]`: no hand-written Rust file under a crate's `src/` grows
 //! past [`MAX_LINES`] lines (owner rule, 2026-11-01).
 //!
+//! `xtask/file-size-baseline.txt` is unused (the check no longer reads it) and goes away in a follow-up; it stays
+//! untouched until then so PRs that still edit it merge cleanly.
+//!
 //! Files already over the limit are listed with their size in `xtask/file-size-baseline/<crate>.txt` (one
 //! `<lines> <path>` per line, sorted by path; one file per crate so PRs in different crates never
 //! conflict on the list): they may shrink, never grow. A new file over the limit

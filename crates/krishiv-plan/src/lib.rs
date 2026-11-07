@@ -151,6 +151,17 @@ pub use partial::partial_state_columns;
 /// The qualifier prefix of the columns a select-list generator adds: an
 /// unqualified `*` skips them (the generator's own star reads them).
 pub const GENERATE_QUALIFIER_PREFIX: &str = "__krishiv_generate_";
+/// Ends the qualifier of a generator written with one alias (`explode(..) AS a`): Spark counts
+/// that alias among the select list's lateral column aliases, a name list or none it does not.
+pub const GENERATE_ALIAS_SUFFIX: &str = "_alias";
+
+/// The qualifier of the columns the select-list generator at `index` adds; `aliased` when it was
+/// written with one alias.
+#[must_use]
+pub fn generate_qualifier(index: usize, aliased: bool) -> String {
+    let suffix = if aliased { GENERATE_ALIAS_SUFFIX } else { "" };
+    format!("{GENERATE_QUALIFIER_PREFIX}{index}{suffix}")
+}
 
 pub use plan::{
     ALIAS_PART_SEP, Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind,
