@@ -399,6 +399,19 @@ pub(crate) struct QueryCatalog {
     path: Vec<Vec<String>>,
     /// What the `system` tables read.
     system: crate::system::Sources,
+    /// Which kinds of table the planned scans read: a `system.*` table, anything else. A query
+    /// that read only `system.*` tables skips admission (`reads_only_system`).
+    scanned: Scanned,
+    /// The estimate of the query's optimized plan, kept for the admission request when the
+    /// controller asked for one (`AdmissionController::uses_estimate`).
+    estimate: Mutex<Option<crate::explain::Estimate>>,
+}
+
+/// The kinds of table a query's scans read (set when each scan's provider is resolved).
+#[derive(Debug, Default)]
+struct Scanned {
+    system: std::sync::atomic::AtomicBool,
+    other: std::sync::atomic::AtomicBool,
 }
 
 impl QueryCatalog {
@@ -445,7 +458,29 @@ impl QueryCatalog {
             namespace,
             path,
             system,
+            scanned: Scanned::default(),
+            estimate: Mutex::new(None),
         }
+    }
+
+    /// Whether the planned scans read `system.*` tables and nothing else: such a query is how an
+    /// operator sees why the engine is saturated, so it is never queued behind the load.
+    pub(crate) fn reads_only_system(&self) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.scanned.system.load(SeqCst) && !self.scanned.other.load(SeqCst)
+    }
+
+    /// Keeps `estimate` for the query's admission request.
+    pub(crate) fn set_estimate(&self, estimate: crate::explain::Estimate) {
+        *self.estimate.lock().unwrap_or_else(PoisonError::into_inner) = Some(estimate);
+    }
+
+    /// The kept estimate, `None` when none was computed (unknown).
+    pub(crate) fn estimate(&self) -> Option<crate::explain::Estimate> {
+        self.estimate
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// Keeps the snapshot `table` for this query's scans of the hidden `name`.
@@ -1051,6 +1086,13 @@ impl CatalogResolver for QueryCatalogs {
 
 impl TableProviderResolver for QueryCatalog {
     fn provider(&self, scan: &Scan) -> Result<Arc<dyn TableProvider>, KrishivError> {
+        let kind = match &scan.source {
+            ReadSource::Table { name, .. } if crate::system::is_system_table(name) => {
+                &self.scanned.system
+            }
+            _ => &self.scanned.other,
+        };
+        kind.store(true, std::sync::atomic::Ordering::SeqCst);
         match &scan.source {
             ReadSource::Table { name, .. } if crate::system::is_system_table(name) => {
                 let table = name.last().map_or("", String::as_str);

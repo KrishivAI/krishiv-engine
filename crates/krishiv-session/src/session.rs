@@ -8,6 +8,7 @@ use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
+use tracing::Instrument as _;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
@@ -1073,6 +1074,10 @@ impl Session {
     /// The block-cache scope of this session's stores: its principal. The session's storage
     /// credentials come from its own configuration, so one principal's queries may share blocks
     /// and no other principal's may (E15).
+    /// The scope is the principal and nothing else. The session's own `fs.*` credentials are not
+    /// part of it: changing them with `SET` keeps the same scope (and the same store ids), so
+    /// blocks cached under the old credentials stay readable under the new ones. A session that
+    /// swaps its storage credentials should be replaced by a new session.
     pub(crate) fn credential_scope(&self) -> krishiv_io::CacheScope {
         krishiv_io::CacheScope::Principal(self.state.principal.id())
     }
@@ -1441,6 +1446,14 @@ impl Session {
             .with_user(self.state.principal.name.as_str())
             .with_udfs(Arc::clone(&self.state.udfs));
         let physical = self.state.planner.plan(&optimized, &cx)?;
+        // The admission request's estimate, only for a controller that reads it.
+        if self.state.admission.uses_estimate() {
+            env.catalog.set_estimate(crate::explain::estimate_of(
+                &optimized,
+                &physical,
+                &env.catalog,
+            ));
+        }
         // Spark logs what analysis and planning ignore (hints) as
         // warnings; `DataFrame::warnings` returns them too.
         for w in analyzed.warnings.iter().chain(physical.warnings()) {
@@ -1506,12 +1519,21 @@ impl Session {
     /// leaves the row `running`; one that waits shows it `queued`. A refusal
     /// closes the row as failed with the controller's error class, and a
     /// caller that drops the query while it is queued closes it `cancelled`.
-    async fn admit(&self, log_id: &str) -> Result<crate::admission::Permit, KrishivError> {
+    async fn admit(
+        &self,
+        log_id: &str,
+        env: &QueryEnv,
+        exempt: bool,
+    ) -> Result<crate::admission::Permit, KrishivError> {
+        // A query that reads only `system.*` is never queued behind the load it inspects.
+        if exempt {
+            return Ok(crate::admission::Permit::unlimited());
+        }
         let request = QueryRequest {
             principal: Arc::clone(&self.state.principal),
             tags: self.state.queries.tags_now(),
             class: WorkloadClass::Interactive,
-            estimate: None,
+            estimate: env.catalog.estimate(),
         };
         let controller = Arc::clone(&self.state.admission);
         let mut admit = std::pin::pin!(controller.admit(&request));
@@ -1544,14 +1566,18 @@ impl Session {
     /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
     /// that is about to change something (a write replacing files) takes the permit first and
     /// passes it on, so a refused or cancelled query has changed nothing.
-    pub(crate) async fn admit_query(&self, env: &QueryEnv) -> Result<Admitted, KrishivError> {
+    pub(crate) async fn admit_query(
+        &self,
+        env: &QueryEnv,
+        exempt: bool,
+    ) -> Result<Admitted, KrishivError> {
         let log_id = self.state.queries.begin_as(
             env.text.as_deref(),
             env.statement_class,
             self.operation_id(),
         )?;
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
-        let permit = self.admit(&log_id).await?;
+        let permit = self.admit(&log_id, env, exempt).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 
@@ -1572,7 +1598,10 @@ impl Session {
         // `system.memory.query_id` joins `system.queries.query_id`.
         let (log_id, permit) = match admitted {
             Some(admitted) => admitted.into_parts(),
-            None => self.admit_query(env).await?.into_parts(),
+            None => self
+                .admit_query(env, env.catalog.reads_only_system())
+                .await?
+                .into_parts(),
         };
         let id = QueryId(self.state.runtime.reserve(
             self.state.number,
@@ -1633,18 +1662,23 @@ impl Session {
                 let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
                 pending.1 = Some(done_rx);
                 let abandoned = Arc::clone(&query);
-                drop(self.state.runtime.executor.spawn(
-                    WorkloadClass::Interactive,
-                    Box::pin(async move {
-                        let result = submit.await;
-                        let started = result.is_ok();
-                        if let Err(Ok(stream)) = stream_tx.send(result) {
-                            abandoned.cancel();
-                            drop(stream);
-                        }
-                        let _ = done_tx.send(started);
-                    }),
-                ));
+                drop(
+                    self.state.runtime.executor.spawn(
+                        WorkloadClass::Interactive,
+                        Box::pin(
+                            async move {
+                                let result = submit.await;
+                                let started = result.is_ok();
+                                if let Err(Ok(stream)) = stream_tx.send(result) {
+                                    abandoned.cancel();
+                                    drop(stream);
+                                }
+                                let _ = done_tx.send(started);
+                            }
+                            .instrument(tracing::Span::current()),
+                        ),
+                    ),
+                );
                 stream_rx
                     .await
                     .unwrap_or_else(|_| Err(internal("a query ended during its setup".to_owned())))
@@ -1864,7 +1898,7 @@ impl Session {
         // Admitted by the caller already (it changed something before this write), else here.
         let mut admitted = Some(match pre.take() {
             Some(admitted) => admitted,
-            None => self.admit_query(env).await?,
+            None => self.admit_query(env, false).await?,
         });
         let written = async {
             let job = job_uuid();

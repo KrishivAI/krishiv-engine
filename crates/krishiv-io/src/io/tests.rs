@@ -764,7 +764,8 @@ fn secrets_are_resolved_once_per_context() {
     let counting = Arc::new(Counting::default());
     let s = setup(IoConfig::default());
     let io =
-        s.io.with_secrets(Arc::clone(&counting) as Arc<dyn SecretResolver>);
+        s.io.with_secrets(Arc::clone(&counting) as Arc<dyn SecretResolver>)
+            .with_principal(Arc::new(krishiv_common::Principal::local_user()));
     rt().block_on(async {
         for _ in 0..3 {
             assert_eq!(
