@@ -6,6 +6,7 @@
 //! temporary views, variables) is the session's own, through the same APIs
 //! every other surface uses.
 
+use krishiv_common::names::column_already_exists;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -14,8 +15,7 @@ use arrow_array::RecordBatch;
 use futures::StreamExt;
 use krishiv_common::config::REGISTRY;
 use krishiv_common::error::{
-    AssignmentArityMismatch, ColumnAlreadyExists,
-    CreateViewColumnArityMismatchNotEnoughDataColumns,
+    AssignmentArityMismatch, CreateViewColumnArityMismatchNotEnoughDataColumns,
     CreateViewColumnArityMismatchTooManyDataColumns, CreateViewWithIfNotExistsAndReplace,
     DefaultPlacementInvalid, DuplicateAssignments, DuplicateRoutineParameterNames,
     DuplicateRoutineReturnsColumns, DuplicateVariableNameInsideDeclare, ErrorClass,
@@ -1647,10 +1647,7 @@ fn unique_view_columns(columns: &[TableColumn], case_sensitive: bool) -> Result<
             c.name.to_lowercase()
         };
         if !seen.insert(name.clone()) {
-            return Err(ColumnAlreadyExists {
-                column_name: format!("`{}`", name.replace('`', "``")),
-            }
-            .into());
+            return Err(column_already_exists(&name));
         }
     }
     Ok(())

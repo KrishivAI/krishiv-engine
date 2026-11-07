@@ -20,6 +20,7 @@
 //! commands delete lies inside the warehouse, is never a link, and is
 //! authorised against the session's policy first.
 
+use krishiv_common::names::column_already_exists;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -588,10 +589,7 @@ impl Session {
                 c.name.to_lowercase()
             };
             if !seen.insert(key.clone()) {
-                return Err(krishiv_common::error::ColumnAlreadyExists {
-                    column_name: format!("`{key}`"),
-                }
-                .into());
+                return Err(column_already_exists(&key));
             }
         }
         let view = CatalogTable {
@@ -1019,10 +1017,7 @@ impl Session {
                         .iter()
                         .any(|c| c.name.eq_ignore_ascii_case(&ident.value))
                     {
-                        return Err(krishiv_common::error::ColumnAlreadyExists {
-                            column_name: format!("`{}`", ident.value.to_lowercase()),
-                        }
-                        .into());
+                        return Err(column_already_exists(&ident.value.to_lowercase()));
                     }
                     // Spark alters the data schema: new columns go before the partition columns.
                     let at = changed.data_columns().count();
@@ -1394,10 +1389,7 @@ impl Session {
                         .iter()
                         .any(|t| t.name.eq_ignore_ascii_case(&ident.value))
                     {
-                        return Err(krishiv_common::error::ColumnAlreadyExists {
-                            column_name: format!("`{}`", ident.value.to_lowercase()),
-                        }
-                        .into());
+                        return Err(column_already_exists(&ident.value.to_lowercase()));
                     }
                     table.columns.push(StoreColumn {
                         name: ident.value.clone(),
@@ -1485,10 +1477,7 @@ impl Session {
                 .iter()
                 .any(|c| c.name.eq_ignore_ascii_case(&ident.value))
             {
-                return Err(krishiv_common::error::ColumnAlreadyExists {
-                    column_name: format!("`{}`", ident.value.to_lowercase()),
-                }
-                .into());
+                return Err(column_already_exists(&ident.value.to_lowercase()));
             }
             if def.generated.is_some() {
                 return Err(unsupported("generated columns"));

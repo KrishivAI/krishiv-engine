@@ -22,13 +22,13 @@
 //!   whole plan is resolved (a hint names relations of its subtree).
 
 use super::SessionZone;
+use krishiv_common::names::column_already_exists;
 
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    ColumnAlreadyExists, IncompatibleColumnType,
-    InvalidInlineTableCannotEvaluateExpressionInInlineTable,
+    IncompatibleColumnType, InvalidInlineTableCannotEvaluateExpressionInInlineTable,
     InvalidInlineTableFailedSqlExpressionEvaluation,
     InvalidInlineTableIncompatibleTypesInInlineTable, KrishivInvalidPartitionNumber,
     LegacyErrorTemp1047, LegacyErrorTemp1048, NumColumnsMismatch, UnresolvedColumnAmongFieldNames,
@@ -1112,9 +1112,7 @@ fn no_duplicates(k: &Rel, cs: bool) -> Result<(), AnalysisError> {
                 a.col.name.to_lowercase()
             };
             return Err(AnalysisError::new(
-                ColumnAlreadyExists {
-                    column_name: quoted(&[name]),
-                },
+                column_already_exists(&name),
                 Origin::UNKNOWN,
             ));
         }

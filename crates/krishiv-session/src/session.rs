@@ -2,6 +2,7 @@
 //! [`Session`] and [`SessionBuilder`], and the query pipeline every
 //! action runs: analyze → optimize → physical plan → run.
 
+use krishiv_common::names::column_already_exists;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::future::Future;
@@ -15,8 +16,8 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use krishiv_common::config::{Config, ConfigValue, METRICS_ENABLED, PARTITION_OVERWRITE_MODE};
 use krishiv_common::error::{
-    AllPartitionColumnsNotAllowed, ColumnAlreadyExists, ErrorQueryContext, InternalError,
-    KrishivError, KrishivUnsupportedFeature, PartitionColumnNotFoundInSchema,
+    AllPartitionColumnsNotAllowed, ErrorQueryContext, InternalError, KrishivError,
+    KrishivUnsupportedFeature, PartitionColumnNotFoundInSchema,
 };
 use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
@@ -2302,10 +2303,11 @@ fn resolve_partitions(
         // Spark rejects a repeated partition column
         // (`checkColumnNameDuplication`).
         if out.iter().any(|(i, _)| *i == index) {
-            return Err(ColumnAlreadyExists {
-                column_name: format!("`{}`", field.name().replace('`', "``")),
-            }
-            .into());
+            return Err(column_already_exists(&if case_sensitive {
+                field.name().clone()
+            } else {
+                field.name().to_lowercase()
+            }));
         }
         // Checked here so that nothing is started for a column type that
         // has no partition path text.
@@ -2417,10 +2419,7 @@ fn unique_columns(schema: &SchemaRef, case_sensitive: bool) -> Result<(), Krishi
             f.name().to_lowercase()
         };
         if !seen.insert(name.clone()) {
-            return Err(ColumnAlreadyExists {
-                column_name: format!("`{}`", name.replace('`', "``")),
-            }
-            .into());
+            return Err(column_already_exists(&name));
         }
     }
     Ok(())

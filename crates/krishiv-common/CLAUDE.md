@@ -15,6 +15,7 @@ Paths are relative to this crate.
 - `build.rs` generates the error registry from `vendored/spark-error-conditions.json` and `krishiv-error-classes.json`
 - `src/secret/mod.rs` typed secrets; `OptionValue::from_user` is the single classifier (ADR 0038)
 - `src/redact.rs` redaction of untyped free text
+- `src/names.rs` Spark's attribute-name syntax (`parse_attribute_name`), `toSQLId` quoting (`to_sql_id`, `quote_parts`) and `column_already_exists`, the error of every repeated-column check
 - `src/cpu.rs` start-up check of the CPU features the build targets; `src/stack.rs` big-stack thread helper
 - `benches/config_lookup.rs` config lookup benchmark
 

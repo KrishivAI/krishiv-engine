@@ -15,16 +15,17 @@
 //!   write to one fails with `KRISHIV_UNSUPPORTED_FEATURE` before anything is written. Reading a partitioned
 //!   table's rows needs partition discovery, which file reads refuse (`KRISHIV_UNSUPPORTED_FEATURE`).
 
+use krishiv_common::names::column_already_exists;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    AllPartitionColumnsNotAllowed, ColumnAlreadyExists, ColumnNotDefinedInTable,
-    ForbiddenOperation, InternalError, InvalidPartitionColumnDataType,
-    InvalidPartitionOperationPartitionSchemaIsEmpty, KrishivError, KrishivUnsupportedFeature,
-    LegacyErrorTemp1166, LegacyErrorTemp1167, LegacyErrorTemp1169, LegacyErrorTemp1232,
-    LegacyErrorTemp1237, LegacyErrorTemp1251, PartitionsAlreadyExist, PartitionsNotFound,
+    AllPartitionColumnsNotAllowed, ColumnNotDefinedInTable, ForbiddenOperation, InternalError,
+    InvalidPartitionColumnDataType, InvalidPartitionOperationPartitionSchemaIsEmpty, KrishivError,
+    KrishivUnsupportedFeature, LegacyErrorTemp1166, LegacyErrorTemp1167, LegacyErrorTemp1169,
+    LegacyErrorTemp1232, LegacyErrorTemp1237, LegacyErrorTemp1251, PartitionsAlreadyExist,
+    PartitionsNotFound,
 };
 use krishiv_plan::Literal;
 use krishiv_plan::analyzer::{Privilege, Securable, authorize};
@@ -161,10 +162,7 @@ fn check_duplicates(names: &[String], case_sensitive: bool) -> Result<(), Krishi
             } else {
                 a.to_lowercase()
             };
-            return Err(ColumnAlreadyExists {
-                column_name: quote_identifier(&shown),
-            }
-            .into());
+            return Err(column_already_exists(&shown));
         }
     }
     Ok(())
