@@ -40,6 +40,7 @@ fn catalog(root: &Path) -> MemoryCatalog {
                 data_type: krishiv_types::parse_data_type(f["type"].as_str().expect("type"))
                     .expect("type"),
                 nullable: f["nullable"].as_bool().expect("nullable"),
+                char_varchar: None,
             })
             .collect();
         c = c.with_table(&["default"], name, columns, None);
