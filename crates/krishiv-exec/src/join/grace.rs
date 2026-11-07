@@ -1645,15 +1645,21 @@ mod tests {
             let c = chunk(i);
             reserve_chunks(parts, &[(0, c.clone())]).unwrap();
             parts[0].chunks.push(c);
-            parts[0].coalesce(&schema).unwrap();
+            parts[0].coalesce(&schema).unwrap()
         };
+        let sizes: usize = (0..16)
+            .map(|i| chunk(i).data().get_array_memory_size())
+            .sum();
+        let mut merged_run = 0;
         for i in 0..16 {
-            push(&mut parts, i);
+            merged_run = push(&mut parts, i);
         }
         assert_eq!(parts[0].chunks.len(), 1, "16 small chunks merge");
+        // It reports the run it merged: the 16 chunks' bytes.
+        assert_eq!(merged_run, sizes);
         let merged = Arc::clone(parts[0].chunks[0].data().column(0));
         for i in 16..31 {
-            push(&mut parts, i);
+            assert_eq!(push(&mut parts, i), 0, "no merge below the fan-out");
         }
         assert_eq!(parts[0].chunks.len(), 16);
         let first = parts[0].chunks[0].data().column(0);
