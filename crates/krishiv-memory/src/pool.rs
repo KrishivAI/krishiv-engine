@@ -35,6 +35,7 @@ use krishiv_common::config::{
 
 use crate::arbitrate::Escalation;
 use crate::clock::{Clock, SystemClock};
+use crate::cohort::Cohort;
 use crate::event::Event;
 use crate::rounds::Rounds;
 use crate::spill::{OwnerId, Spillable};
@@ -228,6 +229,8 @@ pub(crate) struct Group {
     aborted: AtomicBool,
     error: Mutex<Option<MemoryError>>,
     pub(crate) abort_event: Event,
+    /// The group's cohorts by name (a handful at most).
+    cohorts: Mutex<Vec<(&'static str, Arc<Cohort>)>>,
 }
 
 impl Group {
@@ -237,7 +240,19 @@ impl Group {
             aborted: AtomicBool::new(false),
             error: Mutex::new(None),
             abort_event: Event::default(),
+            cohorts: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The cohort named `name`, created on first use.
+    fn cohort(&self, name: &'static str) -> Arc<Cohort> {
+        let mut cohorts = lock(&self.cohorts);
+        if let Some((_, c)) = cohorts.iter().find(|(n, _)| *n == name) {
+            return Arc::clone(c);
+        }
+        let c = Arc::new(Cohort::default());
+        cohorts.push((name, Arc::clone(&c)));
+        c
     }
 
     /// One atomic load while not aborted.
@@ -1140,6 +1155,14 @@ impl MemoryPool for TreePool {
 
     fn check_aborted(&self) -> Result<(), MemoryError> {
         self.node.group.as_ref().map_or(Ok(()), |g| g.check())
+    }
+
+    fn cohort(&self, name: &'static str) -> Option<Arc<Cohort>> {
+        self.node
+            .group
+            .as_ref()
+            .filter(|g| g.kind == GroupKind::Query)
+            .map(|g| g.cohort(name))
     }
 
     fn aborted(&self) -> BoxFuture<'_, MemoryError> {

@@ -10,13 +10,14 @@
 )]
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
 use arrow_array::{Array, BooleanArray, Int64Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::StreamExt;
+use futures::future::BoxFuture;
 use krishiv_common::error::ErrorClass;
 use krishiv_exec::testing::Scan;
 use krishiv_exec::{
@@ -24,6 +25,7 @@ use krishiv_exec::{
     NestedLoopJoinNode, NestedLoopSpec, Predicate, QueryContext, QueryId, QueryRunner,
     ScanPushdown as _, ScanPushdowns, TokioExecutor, WorkloadClass,
 };
+use krishiv_exec::{GlobalState, LocalState, Source, TaskContext};
 use krishiv_memory::{
     MemoryConfig, MemoryPool as _, SpillConfig, SpillManager, SpillScope, TreePool,
 };
@@ -132,11 +134,59 @@ fn run_on(
     limit: Option<usize>,
     executor: ExecutorConfig,
 ) -> Result<(Vec<String>, Counters), krishiv_common::error::KrishivError> {
-    run_beside(join_type, filter, probe, build, limit, executor, 0)
+    run_beside(join_type, filter, probe, build, limit, executor, 0, None)
+}
+
+/// Another member of the query's nested-loop chunk cohort: it holds a seat
+/// (marked as holding a chunk) for `release_after`: from the start, or with
+/// `fill` from the probe side's first batch (the build is done then), when
+/// it also takes all but 16 KiB of what the query could still reserve, less
+/// than one build batch, and gives it back with the seat.
+#[derive(Clone, Copy)]
+struct Peer {
+    fill: bool,
+    release_after: std::time::Duration,
+}
+
+/// A source that raises `started` when it hands out its first batch.
+struct Flagged {
+    inner: Arc<dyn Source>,
+    started: Arc<AtomicBool>,
+}
+
+impl Source for Flagged {
+    fn schema(&self) -> SchemaRef {
+        self.inner.schema()
+    }
+    fn global_state(&self, ctx: &TaskContext) -> krishiv_exec::Result<GlobalState> {
+        self.inner.global_state(ctx)
+    }
+    fn max_parallelism(&self, global: &GlobalState) -> usize {
+        self.inner.max_parallelism(global)
+    }
+    fn local_state(
+        &self,
+        ctx: &TaskContext,
+        global: &GlobalState,
+    ) -> krishiv_exec::Result<LocalState> {
+        self.inner.local_state(ctx, global)
+    }
+    fn get_data<'a>(
+        &'a self,
+        local: &'a mut LocalState,
+        global: &'a GlobalState,
+    ) -> BoxFuture<'a, krishiv_exec::Result<Option<Batch>>> {
+        self.started.store(true, Ordering::Release);
+        self.inner.get_data(local, global)
+    }
 }
 
 /// As [`run_on`], while a consumer of another query under the same root
 /// holds `hold` bytes for the whole run.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a test helper: the inputs, limit, executor and both neighbours"
+)]
 fn run_beside(
     join_type: JoinType,
     filter: Option<Arc<dyn Predicate>>,
@@ -145,6 +195,7 @@ fn run_beside(
     limit: Option<usize>,
     executor: ExecutorConfig,
     hold: usize,
+    peer: Option<Peer>,
 ) -> Result<(Vec<String>, Counters), krishiv_common::error::KrishivError> {
     let (_dir, scope) = spill_scope();
     let source = |name: &str, b: Vec<Batch>| {
@@ -160,10 +211,14 @@ fn run_beside(
         filter,
         spill: limit.map(|_| scope.clone()),
     })?;
+    let started = Arc::new(AtomicBool::new(false));
     let plan = Arc::new(NestedLoopJoinNode {
         join,
         build: Arc::new(Scan(source("b", build))),
-        probe: Arc::new(Scan(source("p", probe))),
+        probe: Arc::new(Scan(Arc::new(Flagged {
+            inner: source("p", probe),
+            started: Arc::clone(&started),
+        }))),
     });
     let executor = TokioExecutor::new(&executor)?;
     let runner = QueryRunner::new(executor);
@@ -176,15 +231,46 @@ fn run_beside(
     let other = root.child("other", None);
     let held = other.register("held", None);
     other.try_reserve(held, hold).unwrap();
+    // The query runs in a task pool below its query pool, as a stage's
+    // tasks do, so a peer can share the query's cohort and limit.
+    let q = root.child("q", None);
     let query = QueryContext::new(
         QueryId(1),
         WorkloadClass::Interactive,
         ExecConfig::default(),
-        root.child("q", None),
+        q.child("task", None),
     );
     let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
         .build()
         .unwrap();
+    let peer_pool = q.child("peer", None);
+    let peer_id = peer_pool.register("chunk", None);
+    // Runs on `rt` beside the query (while `block_on` drives it).
+    let _peer = peer.map(|p| {
+        // Same name as the operator's cohort (`join/nested/probe.rs`).
+        let mut seat = q.cohort("nested-loop chunks").unwrap().join();
+        seat.set_holding(true);
+        let (pool, started) = (Arc::clone(&peer_pool), Arc::clone(&started));
+        rt.spawn(async move {
+            while p.fill && !started.load(Ordering::Acquire) {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            let deadline = tokio::time::Instant::now() + p.release_after;
+            let mut held = 0;
+            while tokio::time::Instant::now() < deadline {
+                if p.fill {
+                    let free = pool.available().unwrap_or(0);
+                    if free > 16 << 10 && pool.try_reserve(peer_id, free - (16 << 10)).is_ok() {
+                        held += free - (16 << 10);
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+            pool.release(peer_id, held);
+            drop(seat);
+        })
+    });
     let out = rt.block_on(async {
         let mut stream = runner.execute(plan, Arc::clone(&query)).await?;
         let mut rows = Vec::new();
@@ -210,6 +296,7 @@ fn run_beside(
         query.finished().await;
         Ok::<_, krishiv_common::error::KrishivError>(rows)
     });
+    peer_pool.unregister(peer_id);
     other.release(held, hold);
     other.unregister(held);
     assert_eq!(root.reserved(), 0, "memory is released");
@@ -555,6 +642,7 @@ fn a_spilled_build_leaves_room_for_the_rest_of_the_pool() {
             Some(limit),
             one,
             hold,
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -572,4 +660,84 @@ fn a_spilled_build_leaves_room_for_the_rest_of_the_pool() {
     assert!(beside > alone, "alone {alone} chunks, beside {beside}");
     assert_eq!(alone_capped, 0);
     assert!(capped > 0, "beside: {capped} chunks cut short");
+}
+
+/// The chunks of nested loops in one query split one quarter of its limit:
+/// with another member in the cohort, a loop's chunks are half as large, so
+/// it reads more of them than alone, and none is cut short.
+#[test]
+fn nested_loops_of_one_query_share_the_chunk_budget() {
+    let probe: Vec<Option<i64>> = (0..64).map(|i| Some((i * 499) % 100_000)).collect();
+    let build: Vec<Option<i64>> = (0..300_000).map(|i| Some((i * 7) % 100_000)).collect();
+    let one = ExecutorConfig {
+        compute_threads: 1,
+        blocking_threads: 1,
+        ..ExecutorConfig::default()
+    };
+    let chunks = |peer: Option<Peer>| {
+        let (got, counters) = run_beside(
+            JoinType::FullOuter,
+            Some(near()),
+            batches("p", &probe, 16),
+            batches("b", &build, 4_096),
+            Some(2 * LIMIT),
+            one,
+            0,
+            peer,
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            expected_by(JoinType::FullOuter, &is_near, &probe, &build)
+        );
+        assert!(counter(&counters, "build_spills") > 0, "{counters:?}");
+        assert_eq!(counter(&counters, "build_chunks_capped"), 0, "{counters:?}");
+        assert_eq!(counter(&counters, "build_chunk_waits"), 0, "{counters:?}");
+        counter(&counters, "build_chunks")
+    };
+    // A peer seat holding no memory, for the whole run.
+    let seat = Peer {
+        fill: false,
+        release_after: std::time::Duration::from_secs(3_600),
+    };
+    let (alone, shared) = (chunks(None), chunks(Some(seat)));
+    assert!(
+        shared >= alone * 3 / 2,
+        "alone {alone} chunks, sharing {shared}"
+    );
+}
+
+/// A chunk's first batch that does not fit while another nested loop of
+/// the query holds its chunk waits for that chunk to go instead of failing
+/// the query (chunk memory cannot be spilled).
+#[test]
+fn a_first_batch_waits_for_another_loops_chunk() {
+    let probe: Vec<Option<i64>> = (0..64).map(|i| Some((i * 499) % 100_000)).collect();
+    let build: Vec<Option<i64>> = (0..300_000).map(|i| Some((i * 7) % 100_000)).collect();
+    let one = ExecutorConfig {
+        compute_threads: 1,
+        blocking_threads: 1,
+        ..ExecutorConfig::default()
+    };
+    let limit = 2 * LIMIT;
+    let peer = Peer {
+        fill: true,
+        release_after: std::time::Duration::from_millis(1_500),
+    };
+    let (got, counters) = run_beside(
+        JoinType::FullOuter,
+        Some(near()),
+        batches("p", &probe, 16),
+        batches("b", &build, 4_096),
+        Some(limit),
+        one,
+        0,
+        Some(peer),
+    )
+    .unwrap();
+    assert_eq!(
+        got,
+        expected_by(JoinType::FullOuter, &is_near, &probe, &build)
+    );
+    assert!(counter(&counters, "build_chunk_waits") > 0, "{counters:?}");
 }

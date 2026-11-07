@@ -10,7 +10,9 @@ use std::sync::atomic::Ordering;
 use arrow_array::RecordBatch;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
-use krishiv_memory::{Reservation, SpillError, SpillFile, SpillReader, SpillSignal};
+use krishiv_memory::{
+    MemoryError, Reservation, Seat, SpillError, SpillFile, SpillReader, SpillSignal,
+};
 use krishiv_types::batch::Batch;
 
 use super::build::{Ready, ready, write};
@@ -81,6 +83,9 @@ struct Disk {
     chunk: Vec<RecordBatch>,
     chunk_bases: Vec<u64>,
     chunk_memory: Reservation,
+    /// This driver's seat among the query's chunked nested loops while it
+    /// reads chunks ([`CHUNK_COHORT`]): held while its chunk is reserved.
+    seat: Option<Seat>,
     /// The probe rows being re-read: file, reader, the number of the next
     /// row, and the batch being joined with its first row's number.
     probe_file: usize,
@@ -113,6 +118,7 @@ impl Disk {
             chunk: Vec::new(),
             chunk_bases: Vec::new(),
             chunk_memory: memory.reservation(),
+            seat: None,
             probe_file: 0,
             probe_reader: None,
             probe_base: 0,
@@ -132,8 +138,16 @@ impl Disk {
         self.chunk_bases.clear();
         let held = self.chunk_memory.size();
         self.chunk_memory.shrink(held);
+        if let Some(seat) = &mut self.seat {
+            seat.set_holding(false);
+        }
     }
 }
+
+/// The cohort of a query's chunked nested loops: their chunk budgets split
+/// one quarter of the limit, and a first batch that does not fit waits for
+/// another member's chunk.
+const CHUNK_COHORT: &str = "nested-loop chunks";
 
 /// The next batch of the reader in `slot` (opened on `file` when empty),
 /// opened and read on the blocking pool. A frame the pool refuses is waited
@@ -289,6 +303,7 @@ impl Operator for ProbeOp {
                 "build_chunks_capped",
                 c.capped_chunks.load(Ordering::Relaxed),
             ),
+            ("build_chunk_waits", c.chunk_waits.load(Ordering::Relaxed)),
         ])
     }
 
@@ -371,12 +386,18 @@ impl ProbeOp {
             .ok_or_else(|| internal("nested-loop flush without its disk state".to_owned()))?;
         match d.phase {
             Phase::Start => {
-                d.budget = chunk_budget(ctx, ready.drivers.load(Ordering::Acquire));
                 d.phase = if d.rows == 0 {
                     Phase::Build
                 } else {
+                    d.seat = ctx
+                        .consumer()
+                        .consumer()
+                        .pool()
+                        .cohort(CHUNK_COHORT)
+                        .map(|c| c.join());
                     Phase::Load
                 };
+                d.budget = chunk_budget(ctx, &ready, d.seat.as_ref());
                 Ok(FlushOutput::Continue)
             }
             Phase::Load => {
@@ -388,6 +409,7 @@ impl ProbeOp {
                     let Some(file) = d.files.get(d.probe_file).cloned() else {
                         // The chunk met every probe row.
                         d.drop_chunk();
+                        d.budget = chunk_budget(ctx, &ready, d.seat.as_ref());
                         (d.probe_file, d.probe_base) = (0, 0);
                         d.phase = if d.build_read(&ready) {
                             Phase::Unmatched
@@ -433,6 +455,8 @@ impl ProbeOp {
                 Ok(out.map_or(FlushOutput::Continue, |b| FlushOutput::Batch(Batch::new(b))))
             }
             Phase::Unmatched => {
+                // Done with chunks: no longer a member.
+                d.seat = None;
                 let file = match d.files.get(d.probe_file).cloned() {
                     Some(f) if self.0.tracks_probe() => f,
                     _ => {
@@ -478,10 +502,7 @@ impl ProbeOp {
             }
         }
         if let Some((b, base)) = d.pending.take() {
-            d.chunk_memory
-                .grow(b.get_array_memory_size())
-                .await
-                .map_err(KrishivError::from)?;
+            self.first_batch(d, b.get_array_memory_size()).await?;
             d.chunk.push(b);
             d.chunk_bases.push(base);
         }
@@ -504,10 +525,7 @@ impl ProbeOp {
         let (bytes, base) = (b.get_array_memory_size(), d.next_base);
         d.next_base += b.num_rows() as u64;
         if d.chunk.is_empty() {
-            d.chunk_memory
-                .grow(bytes)
-                .await
-                .map_err(KrishivError::from)?;
+            self.first_batch(d, bytes).await?;
         } else if !leaves_room(ctx, bytes) {
             self.0
                 .counters
@@ -521,6 +539,39 @@ impl ProbeOp {
         }
         d.chunk.push(b);
         d.chunk_bases.push(base);
+        Ok(())
+    }
+
+    /// Reserves a chunk's first batch, which it needs to make progress.
+    /// Spilling may make room; if it does not while another member of the
+    /// cohort holds a chunk (freed at the end of its pass), the driver waits
+    /// for that and asks again. Only with no other chunk held does it run
+    /// the full arbitration, which may fail the request or abort a query.
+    async fn first_batch(&self, d: &mut Disk, bytes: usize) -> Result<()> {
+        let Some(cohort) = d.seat.as_ref().map(|s| Arc::clone(s.cohort())) else {
+            return d.chunk_memory.grow(bytes).await.map_err(KrishivError::from);
+        };
+        loop {
+            // Listen before asking: a chunk freed meanwhile still wakes us.
+            let changed = cohort.changed();
+            match d.chunk_memory.grow_without_abort(bytes).await {
+                Ok(()) => break,
+                Err(MemoryError::Exhausted { .. }) => {}
+                Err(e) => return Err(e.into()),
+            }
+            if !d.seat.as_ref().is_some_and(|s| cohort.others_holding(s)) {
+                d.chunk_memory
+                    .grow(bytes)
+                    .await
+                    .map_err(KrishivError::from)?;
+                break;
+            }
+            self.0.counters.chunk_waits.fetch_add(1, Ordering::Relaxed);
+            changed.await;
+        }
+        if let Some(seat) = &mut d.seat {
+            seat.set_holding(true);
+        }
         Ok(())
     }
 
@@ -614,11 +665,15 @@ fn leaves_room(ctx: &TaskContext, bytes: usize) -> bool {
 }
 
 /// The bytes of build rows one driver's chunk reserves: a quarter of the
-/// pool's limit shared by the drivers (at least one batch is always read).
-fn chunk_budget(ctx: &TaskContext, drivers: usize) -> usize {
+/// pool's limit shared by the drivers reading chunks, those of every
+/// nested loop of the query in its cohort, else this one's (at least one
+/// batch is always read). Taken again for every chunk, as loops come and go.
+fn chunk_budget(ctx: &TaskContext, ready: &Ready, seat: Option<&Seat>) -> usize {
+    let drivers = ready.drivers.load(Ordering::Acquire);
+    let sharing = seat.map_or(drivers, |s| s.cohort().members().max(drivers));
     ctx.consumer()
         .consumer()
         .pool()
         .effective_limit()
-        .map_or(usize::MAX, |l| (l / 4 / drivers.max(1)).max(1))
+        .map_or(usize::MAX, |l| (l / 4 / sharing.max(1)).max(1))
 }

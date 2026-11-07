@@ -156,6 +156,28 @@ impl Reservation {
         Ok(())
     }
 
+    /// [`grow`](Self::grow) without the abort phase: arbitration reclaims
+    /// and spills, and fails the request (instead of aborting a query) when
+    /// that is not enough. For a caller with something cheaper to do than
+    /// aborting, such as waiting for memory it knows will be freed.
+    ///
+    /// # Errors
+    /// [`MemoryError`] if reclaiming and spilling did not make room.
+    pub async fn grow_without_abort(&mut self, bytes: usize) -> Result<(), MemoryError> {
+        let (rest, credit) = self.draw_credit(bytes);
+        let mut drawn = Drawn {
+            handle: self.handle.as_ref(),
+            credit,
+        };
+        if rest > 0 {
+            self.pool.reserve_without_abort(self.id, rest).await?;
+        }
+        drawn.credit = 0;
+        drop(drawn);
+        self.added(bytes);
+        Ok(())
+    }
+
     fn added(&mut self, bytes: usize) {
         self.bytes = self.bytes.saturating_add(bytes);
         if let Some(h) = &self.handle {
