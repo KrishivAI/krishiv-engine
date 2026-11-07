@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::UInt64Type;
-use arrow_array::{Array, LargeBinaryArray, UInt64Array};
+use arrow_array::{Array, LargeBinaryArray, RecordBatch, UInt64Array};
 use arrow_buffer::Buffer;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use krishiv_types::batch::{Batch, Weights};
@@ -261,75 +261,99 @@ impl ArenaPart {
 /// One partition's build rows: its chunks read in place (X3' step 3, design
 /// `P2-X3-copy-free-join-finalize`; no concatenation copy at finalize). Rows
 /// are numbered across the chunks in order; `starts[i]` is chunk `i`'s first
-/// row id.
+/// row id and `starts[parts.len()]` is the row count.
 #[derive(Debug)]
 pub(crate) struct RowArena {
     parts: Vec<ArenaPart>,
     starts: Vec<u32>,
-    /// Each row's chunk, when there are 2 to 256 chunks: one load instead of a
-    /// search over `starts` on the probe's path (1 byte per row).
-    chunk_of: Vec<u8>,
+    /// For each block of [`ARENA_BLOCK`] rows, the chunk holding the block's
+    /// first row, when there are two or more chunks: a row's chunk is that
+    /// one or a few after it (4 bytes per block, small enough to stay in
+    /// cache, unlike a byte per row).
+    block_chunk: Vec<u32>,
     len: usize,
 }
 
+/// Rows per entry of [`RowArena::block_chunk`] (`1 << ARENA_BLOCK_SHIFT`).
+const ARENA_BLOCK_SHIFT: u32 = 6;
+const ARENA_BLOCK: usize = 1 << ARENA_BLOCK_SHIFT;
+
 impl RowArena {
     /// The arena over `chunks` (same schema, in order), without copying their
-    /// rows.
-    pub(crate) fn concat(_schema: &SchemaRef, chunks: &[Batch]) -> Result<Self> {
+    /// rows. Empty chunks are skipped; an arena of no rows keeps one empty
+    /// chunk of `schema`, so its key format is still known.
+    pub(crate) fn over_chunks(schema: &SchemaRef, chunks: &[Batch]) -> Result<Self> {
         let mut parts = Vec::with_capacity(chunks.len().max(1));
-        let mut starts = Vec::with_capacity(chunks.len().max(1));
+        let mut starts = Vec::with_capacity(chunks.len() + 1);
         let mut len = 0usize;
         for chunk in chunks.iter().filter(|c| c.num_rows() > 0) {
-            let start = u32::try_from(len)
-                .map_err(|_| internal("a join partition has over 2^32 rows".to_owned()))?;
-            starts.push(start);
+            starts.push(Self::row_id(len)?);
             len = len.saturating_add(chunk.num_rows());
             parts.push(ArenaPart::of(chunk.clone())?);
         }
-        if u32::try_from(len).is_err() {
-            return Err(internal("a join partition has over 2^32 rows".to_owned()));
+        if parts.is_empty() {
+            let empty = match chunks.first() {
+                Some(c) => c.clone(),
+                None => Batch::new(RecordBatch::new_empty(Arc::clone(schema))),
+            };
+            starts.push(0);
+            parts.push(ArenaPart::of(empty)?);
         }
-        let mut chunk_of = Vec::new();
-        if (2..=256).contains(&parts.len()) {
-            chunk_of
-                .try_reserve_exact(len)
+        starts.push(Self::row_id(len)?);
+        let mut block_chunk = Vec::new();
+        if parts.len() > 1 {
+            block_chunk
+                .try_reserve_exact(len.div_ceil(ARENA_BLOCK))
                 .map_err(|e| internal(e.to_string()))?;
-            for (i, part) in parts.iter().enumerate() {
-                let id = u8::try_from(i).unwrap_or(u8::MAX);
-                chunk_of.extend(std::iter::repeat_n(id, part.batch.num_rows()));
+            let mut chunk = 0usize;
+            for first in (0..len).step_by(ARENA_BLOCK) {
+                while starts.get(chunk + 1).is_some_and(|&s| s as usize <= first) {
+                    chunk += 1;
+                }
+                block_chunk.push(Self::row_id(chunk)?);
             }
         }
         Ok(Self {
             parts,
             starts,
-            chunk_of,
+            block_chunk,
             len,
         })
     }
 
-    /// The bytes of the per-row chunk table (part of the index's cost).
+    fn row_id(n: usize) -> Result<u32> {
+        u32::try_from(n).map_err(|_| internal("a join partition has over 2^32 rows".to_owned()))
+    }
+
+    /// The bytes of the block-to-chunk table (part of the index's cost).
     pub(crate) fn chunk_table_bytes(&self) -> usize {
-        self.chunk_of.capacity()
+        self.block_chunk.capacity() * size_of::<u32>()
+    }
+
+    /// The bytes [`chunk_table_bytes`](Self::chunk_table_bytes) is at most
+    /// for `rows` rows.
+    pub(crate) fn chunk_table_bound(rows: usize) -> usize {
+        rows.div_ceil(ARENA_BLOCK) * size_of::<u32>()
     }
 
     /// The chunk holding row `row` and the row's index in it (`None` past
     /// the end).
     #[inline]
     fn at(&self, row: u32) -> Option<(&ArenaPart, u32)> {
-        if let [one] = self.parts.as_slice() {
-            return ((row as usize) < self.len).then_some((one, row));
+        if (row as usize) >= self.len {
+            return None;
         }
-        let i = match self.chunk_of.get(row as usize) {
-            Some(&i) => usize::from(i),
-            // Past 256 chunks: the last chunk starting at or before `row`.
-            None if self.chunk_of.is_empty() => {
-                self.starts.partition_point(|&s| s <= row).checked_sub(1)?
-            }
-            None => return None,
-        };
+        if let [one] = self.parts.as_slice() {
+            return Some((one, row));
+        }
+        let mut i = *self.block_chunk.get((row >> ARENA_BLOCK_SHIFT) as usize)? as usize;
+        // The block's chunk starts at or before `row`; a later one may too
+        // (chunks shorter than a block).
+        while self.starts.get(i + 1).is_some_and(|&s| s <= row) {
+            i += 1;
+        }
         let part = self.parts.get(i)?;
-        let local = row.checked_sub(*self.starts.get(i)?)?;
-        ((local as usize) < part.batch.num_rows()).then_some((part, local))
+        Some((part, row.checked_sub(*self.starts.get(i)?)?))
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -553,8 +577,9 @@ impl JoinTable {
     /// per row. Row layout: the [`JoinIndex`] sized for one key per row and
     /// a link per row (it copies no keys and holds the heads itself).
     pub(crate) fn index_bytes(rows: usize, key_bytes: usize, row_layout: bool) -> usize {
-        // Plus the arena's chunk table (`RowArena::chunk_table_bytes`, at most a byte per row).
-        Self::index_only_bytes(rows, key_bytes, row_layout).saturating_add(rows)
+        // Plus the arena's chunk table (`RowArena::chunk_table_bytes`).
+        Self::index_only_bytes(rows, key_bytes, row_layout)
+            .saturating_add(RowArena::chunk_table_bound(rows))
     }
 
     fn index_only_bytes(rows: usize, key_bytes: usize, row_layout: bool) -> usize {
@@ -861,7 +886,7 @@ mod tests {
             ],
         )
         .unwrap_or_else(|e| panic!("{e}"));
-        RowArena::concat(&schema, &[Batch::new(data)]).unwrap_or_else(|e| panic!("{e}"))
+        RowArena::over_chunks(&schema, &[Batch::new(data)]).unwrap_or_else(|e| panic!("{e}"))
     }
 
     #[test]
@@ -930,8 +955,8 @@ mod tests {
                 )
             };
             let (a, b) = valid.split_at(valid.len() / 3);
-            let arena =
-                RowArena::concat(&schema, &[chunk(a), chunk(b)]).unwrap_or_else(|e| panic!("{e}"));
+            let arena = RowArena::over_chunks(&schema, &[chunk(a), chunk(b)])
+                .unwrap_or_else(|e| panic!("{e}"));
             let l = layout.as_ref().filter(|_| rows);
             let t = JoinTable::build_with(arena, l, hashing.g_seed(), choice, None)
                 .unwrap_or_else(|e| panic!("{e}"));
@@ -961,8 +986,8 @@ mod tests {
     }
 
     /// An arena over several chunks (no copy, X3' step 3) reads every row as the one batch of the same rows does:
-    /// with the per-row chunk table (2-256 chunks), past it (the search over chunk starts), with empty chunks
-    /// skipped, and the index built over it chains the same rows.
+    /// through the block-to-chunk table, with chunks longer and shorter than a block, past 256 chunks, with empty
+    /// chunks skipped, and the index built over it chains the same rows.
     #[test]
     fn a_chunked_arena_reads_and_indexes_as_one_batch() {
         let schema =
@@ -983,15 +1008,25 @@ mod tests {
                 .unwrap_or_else(|e| panic!("{e}")),
             )
         };
-        let one = RowArena::concat(&schema, &[batch(0..n)]).unwrap_or_else(|e| panic!("{e}"));
-        // Uneven chunks with empty ones between; then 300 chunks of 2 rows (past the 256-chunk table).
-        let uneven: Vec<Batch> = [0..1, 1..1, 1..250, 250..251, 251..251, 251..n]
-            .into_iter()
-            .map(batch)
-            .collect();
+        let one = RowArena::over_chunks(&schema, &[batch(0..n)]).unwrap_or_else(|e| panic!("{e}"));
+        // Uneven chunks with empty ones between, a block-aligned edge (64, 128); then 300 chunks of 2 rows
+        // (many chunks per block, more than 256 chunks).
+        let uneven: Vec<Batch> = [
+            0..1,
+            1..1,
+            1..64,
+            64..128,
+            128..250,
+            250..251,
+            251..251,
+            251..n,
+        ]
+        .into_iter()
+        .map(batch)
+        .collect();
         let many: Vec<Batch> = (0..n / 2).map(|c| batch(2 * c..2 * c + 2)).collect();
         for chunks in [uneven, many] {
-            let arena = RowArena::concat(&schema, &chunks).unwrap_or_else(|e| panic!("{e}"));
+            let arena = RowArena::over_chunks(&schema, &chunks).unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(arena.len(), n);
             for row in 0..u32::try_from(n).unwrap_or(0) {
                 assert_eq!(arena.hash(row), one.hash(row), "row {row}");
@@ -1005,13 +1040,33 @@ mod tests {
             assert!(arena.memory_split().hash > 0);
             let chained = JoinTable::build(arena, None, 0).unwrap_or_else(|e| panic!("{e}"));
             let single = JoinTable::build(
-                RowArena::concat(&schema, &[batch(0..n)]).unwrap_or_else(|e| panic!("{e}")),
+                RowArena::over_chunks(&schema, &[batch(0..n)]).unwrap_or_else(|e| panic!("{e}")),
                 None,
                 0,
             )
             .unwrap_or_else(|e| panic!("{e}"));
             assert_eq!(chained.next(), single.next());
             assert_eq!(chained.index_size().0, single.index_size().0);
+        }
+    }
+
+    /// An arena of no rows (a grace partition whose build side is empty, its
+    /// chunks all empty or none at all) keeps its key format, builds a table and
+    /// finds nothing (Fable review of X3' step 3, blocker 1).
+    #[test]
+    fn an_empty_arena_builds_and_matches_nothing() {
+        let schema =
+            arena_schema(ArenaFormat::Arrow { payload: false }).unwrap_or_else(|e| panic!("{e}"));
+        let empty = Batch::new(RecordBatch::new_empty(Arc::clone(&schema)));
+        for chunks in [vec![], vec![empty.clone()], vec![empty.clone(), empty]] {
+            let arena = RowArena::over_chunks(&schema, &chunks).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(arena.len(), 0);
+            assert!(arena.has_arrow_keys());
+            assert_eq!(arena.hash(0), 0);
+            assert_eq!(arena.key_bytes(0), None);
+            assert_eq!(arena.chunk_table_bytes(), 0);
+            let table = JoinTable::build(arena, None, 0).unwrap_or_else(|e| panic!("{e}"));
+            assert!(table.next().is_empty());
         }
     }
 
@@ -1029,7 +1084,7 @@ mod tests {
             ],
         )
         .unwrap_or_else(|e| panic!("{e}"));
-        assert!(RowArena::concat(&schema, &[Batch::new(data)]).is_err());
+        assert!(RowArena::over_chunks(&schema, &[Batch::new(data)]).is_err());
         let rows = arena(vec![1], vec![b"a"]);
         assert_eq!(RowSource::row(&rows, 0), (&[][..], &[][..]));
         assert_eq!(RowSource::hash(&rows, 9), 0);

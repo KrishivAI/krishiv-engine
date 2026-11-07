@@ -447,6 +447,8 @@ struct Active {
     table: JoinTable,
     _memory: Reservation,
     chunks: Vec<Batch>,
+    /// The build part's own reservations (its in-memory chunks, if any).
+    _build_memory: Vec<Reservation>,
     _chunk_memory: Vec<Reservation>,
     files: VecDeque<SpillFile>,
     reader: Option<SpillReader>,
@@ -664,7 +666,7 @@ fn reverse_blocking(
         // The stream runs in one blocking call: a cancelled query stops it
         // at the next chunk.
         query.check_cancelled()?;
-        let arena = RowArena::concat(schema, std::slice::from_ref(&chunk))?;
+        let arena = RowArena::over_chunks(schema, std::slice::from_ref(&chunk))?;
         let rows =
             u32::try_from(arena.len()).map_err(|_| internal("build chunk too large".to_owned()))?;
         // (probe row, build row of this chunk), evaluated before it is dropped.
@@ -1172,10 +1174,12 @@ impl Loading {
         ctx.consumer().consumer().release_credit();
         self.memory.shrink_to_credit(headroom);
         let Task { build, probe, .. } = self.task;
-        drop(build);
         Active {
             table,
             _memory: self.memory,
+            // The arena reads its chunks in place: any build chunks the task
+            // still held stay reserved while the table may read them.
+            _build_memory: build.memory,
             chunks: probe.chunks,
             _chunk_memory: probe.memory,
             files: probe.files.into(),
@@ -1251,7 +1255,7 @@ impl Loading {
         if self.memory.try_grow(need).is_err() {
             return Ok(Loaded::Need(need));
         }
-        let arena = RowArena::concat(shared.arena_schema(hashing), &chunks)?;
+        let arena = RowArena::over_chunks(shared.arena_schema(hashing), &chunks)?;
         drop(chunks);
         self.chunks.clear();
         let layout = shared.keys.layout().filter(|_| hashing.rows());

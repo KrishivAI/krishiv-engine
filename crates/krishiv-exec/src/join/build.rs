@@ -812,7 +812,7 @@ impl Sink for BuildSink {
                                 .run_blocking(move || {
                                     let t0 = std::time::Instant::now();
                                     let schema = shared.arena_schema(&hashing);
-                                    let arena = RowArena::concat(schema, &chunks)?;
+                                    let arena = RowArena::over_chunks(schema, &chunks)?;
                                     drop(chunks);
                                     let t1 = std::time::Instant::now();
                                     let layout = shared.keys.layout().filter(|_| hashing.rows());
