@@ -203,6 +203,7 @@ class TreeProc:
         self._io: dict[int, IoCounters] = {}
         self.cpu_seconds: float | None = None
         self.io: IoCounters | None = None
+        self._cpu_fresh = False
 
     def _sample(self) -> int:
         total = 0
@@ -213,6 +214,7 @@ class TreeProc:
                 rss, _, cpu = p.read()
                 total += rss
                 self._cpu[pid] = cpu
+                self._cpu_fresh = True
             with contextlib.suppress(OSError, RuntimeError, ValueError):
                 self._io[pid] = p.read_io()
         return total
@@ -239,6 +241,7 @@ class TreeProc:
         self._cpu, self._io, self._ppid = {}, {}, {}
         self._peak = self._sample()
         self._cpu0, self._io0 = dict(self._cpu), dict(self._io)
+        self._cpu_fresh = False  # set again by the first successful CPU read after the baseline
         self.cpu_seconds, self.io = None, None
         self._stop.clear()
         if self.sample:
@@ -253,7 +256,9 @@ class TreeProc:
             self._thread = None
         peak = max(self._peak, self._sample(), self._hwm_sum())
         alive = set(self._tree_pids())
-        if self._cpu:
+        # Only readings taken after the baseline make a delta: when every later read failed (the process is gone,
+        # /proc unreadable) `_cpu` still holds the baseline and the delta would be a made-up 0.
+        if self._cpu and self._cpu_fresh:
             self.cpu_seconds = max(0.0, sum(c - self._cpu0.get(pid, 0.0) for pid, c in self._cpu.items()))
         if self._io:
             zero = IoCounters()

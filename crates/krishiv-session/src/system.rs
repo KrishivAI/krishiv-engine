@@ -254,6 +254,7 @@ fn columns(table: &str) -> Option<Vec<TableColumn>> {
                     Kind::Buckets => buckets_type(),
                 },
                 nullable,
+                char_varchar: None,
             })
             .collect(),
     )

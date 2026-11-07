@@ -67,6 +67,7 @@ fn plans() -> Vec<Plan> {
                     name: n.to_owned(),
                     data_type: parse_data_type(t).expect("type"),
                     nullable: true,
+                    char_varchar: None,
                 }
             })
             .collect();

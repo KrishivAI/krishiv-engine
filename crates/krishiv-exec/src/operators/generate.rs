@@ -73,10 +73,19 @@ impl Generate {
 /// The generated columns for an argument of Arrow type `ty`.
 fn generated_fields(kind: GeneratorKind, outer: bool, ty: &DataType) -> Result<Vec<Arc<Field>>> {
     let mut out = Vec::new();
-    if kind == GeneratorKind::PosExplode {
+    if matches!(
+        kind,
+        GeneratorKind::PosExplode | GeneratorKind::VariantExplode
+    ) {
         out.push(Arc::new(Field::new("pos", DataType::Int32, outer)));
     }
     match (kind, ty) {
+        (GeneratorKind::VariantExplode, t) if krishiv_types::arrow::is_variant_struct(t) => {
+            out.push(Arc::new(Field::new("key", DataType::Utf8View, true)));
+            out.push(Arc::new(
+                krishiv_types::DataType::Variant.to_arrow_field("value", outer),
+            ));
+        }
         (GeneratorKind::Explode | GeneratorKind::PosExplode, DataType::List(f)) => {
             out.push(Arc::new(Field::new(
                 "col",
@@ -151,7 +160,54 @@ struct Elements {
 }
 
 impl Elements {
+    /// `variant_explode`'s elements: an object's fields (key and value) or
+    /// an array's elements (no key), each value with its parent's metadata
+    /// (Spark's `VariantVal(field.value.getValue, field.value.getMetadata)`).
+    fn of_variant(arg: &ArrayRef) -> Result<Self> {
+        use krishiv_kernels::variant::{VariantColumn, VariantColumnBuilder};
+        use krishiv_types::variant::VariantKind;
+        let col = VariantColumn::new(arg.as_ref())?;
+        let mut keys = arrow_array::builder::StringViewBuilder::new();
+        let mut values = VariantColumnBuilder::with_capacity(col.len());
+        let mut ranges = Vec::with_capacity(col.len());
+        let mut n = 0_usize;
+        for i in 0..col.len() {
+            let Some(v) = col.get(i)? else {
+                ranges.push(None);
+                continue;
+            };
+            let start = n;
+            match v.kind() {
+                VariantKind::Object => {
+                    for f in 0..v.len()? {
+                        keys.append_value(v.field_key_at(f)?);
+                        values.append(v.metadata(), v.field_at(f)?.value_bytes());
+                        n += 1;
+                    }
+                }
+                VariantKind::Array => {
+                    for e in 0..v.len()? {
+                        keys.append_null();
+                        values.append(v.metadata(), v.get_index(e)?.value_bytes());
+                        n += 1;
+                    }
+                }
+                // Any other value, a variant null included, gives no rows.
+                _ => {}
+            }
+            ranges.push(Some((start, n)));
+        }
+        Ok(Self {
+            ranges,
+            struct_nulls: None,
+            sources: vec![Arc::new(keys.finish()), values.finish()?],
+        })
+    }
+
     fn of(kind: GeneratorKind, arg: &ArrayRef) -> Result<Self> {
+        if kind == GeneratorKind::VariantExplode {
+            return Self::of_variant(arg);
+        }
         let offsets_ranges =
             |offsets: &OffsetBuffer<i32>, nulls: Option<&arrow_buffer::NullBuffer>| {
                 (0..offsets.len().saturating_sub(1))
@@ -300,7 +356,10 @@ impl Operator for Generate {
                 .columns()
                 .to_vec()
         };
-        if matches!(self.kind, GeneratorKind::PosExplode) {
+        if matches!(
+            self.kind,
+            GeneratorKind::PosExplode | GeneratorKind::VariantExplode
+        ) {
             columns.push(Arc::new(Int32Array::from(positions)));
         }
         let element_indices = UInt32Array::from(taken);

@@ -245,9 +245,9 @@ fn tpch_q1_q3_q9_q18_snapshots() {
 #[test]
 fn cost_of_a_query_that_fails_after_analysis_repeats_the_error() {
     let s = tpch();
-    // Analyzes, but the planner has no window form of the moment
-    // aggregates yet.
-    let q = "SELECT stddev(n_nationkey) OVER (PARTITION BY n_regionkey) FROM nation";
+    // Analyzes, but the planner has no window form of
+    // `approx_count_distinct` yet.
+    let q = "SELECT approx_count_distinct(n_nationkey) OVER (PARTITION BY n_regionkey) FROM nation";
     // The query analyzes; only planning fails.
     block_on(block_on(s.sql(q)).unwrap().schema()).unwrap();
     let t = explain_sql(&s, &format!("EXPLAIN COST {q}"));

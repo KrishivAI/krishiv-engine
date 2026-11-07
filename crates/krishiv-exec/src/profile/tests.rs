@@ -510,6 +510,49 @@ fn the_hash_probe_share_is_reported() {
     assert_eq!(back.ok(), Some(Duration::ZERO));
 }
 
+/// Mean reads in flight is the scans' outstanding read time over the query's
+/// wall time, in the JSON and the text; a query without a scan read has none.
+#[test]
+fn the_mean_reads_in_flight_is_reported() {
+    let mut m = metrics();
+    assert_eq!(m.scan_reads_in_flight_mean(), None);
+    m.wall_time = Duration::from_millis(100);
+    assert_eq!(m.scan_reads_in_flight_mean(), None);
+    // Two scans: 150 ms and 100 ms of reads outstanding over 100 ms of wall time.
+    for (id, ns) in [(7, 150_000_000_u64), (8, 100_000_000)] {
+        let mut scan = entry("FileScan", None, OperatorRole::Source, 1);
+        scan.extra = vec![(Cow::Borrowed("scan_read_inflight_ns"), Metric::Count(ns))];
+        m.operators.insert(OperatorId(id), scan);
+    }
+    assert_eq!(m.scan_reads_in_flight_mean(), Some(2.5));
+    // A zero wall time has no mean.
+    let mut no_wall = m.clone();
+    no_wall.wall_time = Duration::ZERO;
+    assert_eq!(no_wall.scan_reads_in_flight_mean(), None);
+
+    let p = QueryProfile::new(&plan(matching()), m, true);
+    let doc = p.to_json_value();
+    assert_eq!(doc["query"]["scan_reads_in_flight_mean"], 2.5);
+    let text = p.to_text(TextOptions::default());
+    assert!(
+        text.contains("scan reads: 2.5 in flight on average"),
+        "{text}"
+    );
+    // Masked text hides the run-dependent mean.
+    let masked = p.to_text(TextOptions::masked());
+    assert!(
+        masked.contains("scan reads: <n> in flight on average"),
+        "{masked}"
+    );
+    // Absent in a document written before the field existed: it still reads.
+    let mut old = doc;
+    old["query"]
+        .as_object_mut()
+        .unwrap()
+        .remove("scan_reads_in_flight_mean");
+    assert!(QueryProfile::from_json(&old.to_string()).is_ok());
+}
+
 /// A document of a later minor loads: unknown members are ignored and an
 /// unknown metric kind is kept as text. A different major is refused.
 #[test]

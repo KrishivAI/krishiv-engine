@@ -66,10 +66,13 @@ pub(crate) fn literal(lit: &expression::Literal) -> Result<Literal, KrishivError
         LiteralType::Decimal(d) => decimal(d, declared_kind)?,
         LiteralType::String(v) => {
             if let Some(Kind::String(s)) = declared_kind {
-                // Only the default collation is a plain `STRING`.
+                // A string literal declared with a collation is refused until Connect types are gated
+                // by profile and backed by a golden (Opus review of #531): `data_type` only knows
+                // the collation, and the analyzer would see the wrapped value as explicit.
                 data_type(&ProtoType {
                     kind: Some(Kind::String(s.clone())),
-                })?;
+                })?
+                .refuse_collations()?;
             }
             Literal::String(v.clone())
         }
@@ -134,7 +137,7 @@ pub(crate) fn literal(lit: &expression::Literal) -> Result<Literal, KrishivError
 fn null(of: &ProtoType) -> Result<Literal, KrishivError> {
     match &of.kind {
         Some(Kind::Null(_)) => Ok(Literal::Null(None)),
-        _ => Ok(Literal::Null(Some(data_type(of)?))),
+        _ => Ok(Literal::Null(Some(data_type(of)?.refuse_collations()?))),
     }
 }
 

@@ -1,0 +1,13 @@
+{
+  "cases": {
+    "s43-other": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ]
+  },
+  "file": "variant/named-function-arguments",
+  "format_version": 1
+}

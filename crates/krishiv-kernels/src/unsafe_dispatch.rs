@@ -115,7 +115,14 @@ fn unsafe_run_v4<K: Kernel>(kernel: K) -> K::Output {
 
 #[cfg(test)]
 mod tests {
-    use super::prefetch_read;
+    use super::{prefetch_read, scalar_loops};
+    use crate::dispatch::KernelCtx;
+
+    #[test]
+    fn only_the_baseline_skips_the_scalar_operand_loops() {
+        assert!(!scalar_loops(&KernelCtx::new().baseline()));
+        assert!(scalar_loops(&KernelCtx::new()));
+    }
 
     #[test]
     fn a_prefetch_changes_nothing_and_ignores_a_bad_index() {

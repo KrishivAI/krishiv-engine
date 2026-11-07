@@ -737,3 +737,18 @@ fn a_result_of_a_type_literals_cannot_hold_fails_where_it_is_produced() {
     );
     assert_eq!(rows(&s, "SELECT ran"), ok(&[&["0"]]));
 }
+
+/// A script's result and its loop variables cannot hold an ANSI interval
+/// yet: Arrow carries no interval fields there, and Spark's defaults would
+/// change `INTERVAL '3' DAY` into `interval day to second`. Refused, not
+/// rewritten (the session variable paths keep the analyzed fields).
+#[test]
+fn scripts_refuse_ansi_interval_results() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "BEGIN SELECT INTERVAL '3' DAY AS i; END",
+        "BEGIN FOR r AS SELECT INTERVAL '1' YEAR AS i DO SELECT typeof(r.i); END FOR; END",
+    ] {
+        assert_eq!(class(&s, sql), "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
+    }
+}

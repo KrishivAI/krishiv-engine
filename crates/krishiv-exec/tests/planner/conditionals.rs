@@ -87,11 +87,13 @@ fn conditional_cx(ansi: bool) -> Cx {
             name: "c1".to_owned(),
             data_type: krishiv_types::DataType::Double,
             nullable: true,
+            char_varchar: None,
         },
         TableColumn {
             name: "c2".to_owned(),
             data_type: krishiv_types::DataType::Integer,
             nullable: true,
+            char_varchar: None,
         },
     ];
     let catalog = MemoryCatalog::new("spark_catalog").with_table(
@@ -470,11 +472,13 @@ fn sql_compatibility_conditionals_over_aggregates() {
                 name: "s".to_owned(),
                 data_type: krishiv_types::DataType::String,
                 nullable: true,
+                char_varchar: None,
             },
             TableColumn {
                 name: "a".to_owned(),
                 data_type: krishiv_types::DataType::Integer,
                 nullable: true,
+                char_varchar: None,
             },
         ],
         None,

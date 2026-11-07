@@ -1,0 +1,21 @@
+{
+  "cases": {
+    "depends-on-command": [
+      12,
+      54
+    ],
+    "fn-array": [
+      86
+    ],
+    "query-features": [
+      27,
+      28,
+      85
+    ],
+    "sql-commands": [
+      53
+    ]
+  },
+  "file": "cte-recursion",
+  "format_version": 1
+}

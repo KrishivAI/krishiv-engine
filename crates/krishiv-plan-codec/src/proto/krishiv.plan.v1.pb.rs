@@ -897,6 +897,24 @@ pub struct ExchangeNode {
     pub input: u32,
     #[prost(message, optional, tag = "3")]
     pub partitioning: ::core::option::Option<Partitioning>,
+    /// feature: exchange_filters
+    #[prost(message, repeated, tag = "4")]
+    pub filters: ::prost::alloc::vec::Vec<ExchangeFilter>,
+}
+/// feature: exchange_filters
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExchangeFilter {
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    #[prost(uint64, tag = "2")]
+    pub column: u64,
+    /// Arrow IPC `Schema` flatbuffer of one field.
+    #[prost(bytes = "vec", tag = "3")]
+    pub key_type: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "4")]
+    pub options: ::core::option::Option<KeyFilterOptions>,
+    #[prost(bool, tag = "5")]
+    pub null_safe: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Partitioning {
@@ -1509,6 +1527,8 @@ pub enum GeneratorKind {
     Explode = 1,
     PosExplode = 2,
     Inline = 3,
+    /// feature: variant_explode
+    VariantExplode = 4,
 }
 impl GeneratorKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1521,6 +1541,7 @@ impl GeneratorKind {
             Self::Explode => "GENERATOR_KIND_EXPLODE",
             Self::PosExplode => "GENERATOR_KIND_POS_EXPLODE",
             Self::Inline => "GENERATOR_KIND_INLINE",
+            Self::VariantExplode => "GENERATOR_KIND_VARIANT_EXPLODE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1530,6 +1551,7 @@ impl GeneratorKind {
             "GENERATOR_KIND_EXPLODE" => Some(Self::Explode),
             "GENERATOR_KIND_POS_EXPLODE" => Some(Self::PosExplode),
             "GENERATOR_KIND_INLINE" => Some(Self::Inline),
+            "GENERATOR_KIND_VARIANT_EXPLODE" => Some(Self::VariantExplode),
             _ => None,
         }
     }

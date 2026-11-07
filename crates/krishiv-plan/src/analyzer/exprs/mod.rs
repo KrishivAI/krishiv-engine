@@ -60,6 +60,7 @@ use crate::{
 
 mod aggregates;
 mod calls;
+mod collation;
 mod columns;
 mod conditionals;
 mod display;

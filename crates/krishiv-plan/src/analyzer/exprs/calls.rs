@@ -76,6 +76,13 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
+        // `equal_null(a, b)` is `a <=> b` (Spark's `EqualNull` replacement), so a bare `char(n)` operand pads as
+        // it does for the operator (`ApplyCharTypePadding`).
+        let padded = (matches!(entry.id, crate::FunctionId::Registry { .. })
+            && entry.id.name() == "equal_null")
+            .then(|| self.pad_char_comparison(kids))
+            .flatten();
+        let kids = padded.as_deref().unwrap_or(kids);
         let constants: Vec<Option<Constant>> = kids
             .iter()
             .map(|k| self.fold(&k.expr, self.ctx.conf.ansi))

@@ -23,6 +23,7 @@
 //!   at the boundary.
 
 mod arith;
+mod between;
 mod cast;
 mod cond;
 mod field;
@@ -31,6 +32,8 @@ mod hof;
 mod interval;
 pub(crate) mod logic;
 mod nested_cast;
+#[cfg(test)]
+mod short_circuit_tests;
 mod strings;
 mod variant_cast;
 
@@ -550,7 +553,7 @@ fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: 
                 | Builtin::Multiply
         ),
         FunctionId::Registry { name, .. } => {
-            // `nullif`, `date_add`/`date_sub`, Spark's `BinaryMathExpression`s (`power`, `atan2`, `hypot`), the bitwise
+            // `nullif`, `date_add`/`date_sub`, Spark's `BinaryMathExpression`s (`power`, `atan2`, `hypot`, `log(base, x)`), the bitwise
             // and shift operators, and the string and date `BinaryExpression`s: all return NULL on a NULL left value
             // before looking at the right one.
             matches!(
@@ -562,6 +565,7 @@ fn guards_right_operand(f: &ResolvedFunction, args: &[Arc<dyn PhysExpr>], ansi: 
                     | "pow"
                     | "atan2"
                     | "hypot"
+                    | "log"
                     | "&"
                     | "|"
                     | "^"
@@ -650,7 +654,8 @@ fn builtin(
         (Builtin::And | Builtin::Or, 2) => {
             let r = args.pop().ok_or_else(arity)?;
             let l = args.pop().ok_or_else(arity)?;
-            logic::and_or(b == Builtin::And, l, r)
+            let r_never_raises = runs_anywhere(f, 1, env.ansi);
+            logic::and_or(b == Builtin::And, l, r, r_never_raises)
         }
         (Builtin::Not, 1) => logic::not(args.pop().ok_or_else(arity)?),
         (Builtin::IsNull | Builtin::IsNotNull, 1) => {
@@ -736,7 +741,8 @@ fn builtin(
             let hi = args.pop().ok_or_else(arity)?;
             let lo = args.pop().ok_or_else(arity)?;
             let v = args.pop().ok_or_else(arity)?;
-            cond::between(v, lo, hi, env)?
+            let never_raises = [runs_anywhere(f, 1, env.ansi), runs_anywhere(f, 2, env.ansi)];
+            between::between(v, lo, hi, never_raises, env)?
         }
         (Builtin::Like, 2 | 3) => strings::like(args)?,
         // `rlike(a, b)` is Spark's `RLike(a, b)`: the `regexp_like` kernel
@@ -754,9 +760,18 @@ fn builtin(
     })
 }
 
+/// Whether argument `i` of `f` may run on rows Spark would not evaluate it
+/// on: it raises on no row ([`krishiv_plan::may_raise`]) and is
+/// deterministic, so evaluating it there cannot be observed.
+fn runs_anywhere(f: &ResolvedFunction, i: usize, ansi: bool) -> bool {
+    f.args
+        .get(i)
+        .is_some_and(|a| !krishiv_plan::may_raise(a, ansi) && krishiv_plan::is_deterministic(a))
+}
+
 /// Kleene `l AND r`.
 pub(crate) fn and(l: Arc<dyn PhysExpr>, r: Arc<dyn PhysExpr>) -> Arc<dyn PhysExpr> {
-    logic::and_or(true, l, r)
+    logic::and_or(true, l, r, false)
 }
 
 fn arity() -> krishiv_common::error::KrishivError {

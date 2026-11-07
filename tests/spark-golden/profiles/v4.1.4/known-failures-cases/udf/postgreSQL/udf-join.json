@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "depends-on-command": [
+      93,
+      148
+    ]
+  },
+  "file": "udf/postgreSQL/udf-join",
+  "format_version": 1
+}

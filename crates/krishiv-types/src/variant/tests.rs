@@ -1646,3 +1646,37 @@ fn the_writer_builds_every_type_as_spark_does() {
     assert_eq!(strip_trailing_zeros(0, 4), (0, 0));
     assert_eq!(strip_trailing_zeros(100, 0), (100, 0));
 }
+
+/// An array holding `depth` nested arrays around a null: each level is a
+/// one-element array with 4-byte offsets.
+fn nested_arrays(depth: usize) -> Vec<u8> {
+    let mut v = vec![0x00];
+    for _ in 0..depth {
+        let len = u32::try_from(v.len()).unwrap();
+        let mut level = vec![0x0F, 0x01];
+        level.extend_from_slice(&0u32.to_le_bytes());
+        level.extend_from_slice(&len.to_le_bytes());
+        level.extend_from_slice(&v);
+        v = level;
+    }
+    v
+}
+
+/// The walkers over a value recurse per level, so validation caps nesting
+/// at `parse_json`'s 1,000 levels: a deeper value from a file or a client
+/// is `MALFORMED_VARIANT`, never a stack overflow.
+#[test]
+fn values_nested_past_the_depth_cap_are_malformed() {
+    let meta = [0x01, 0x00, 0x00];
+    assert!(VariantRef::new(&meta, &nested_arrays(1000)).is_ok());
+    for depth in [1001, 20_000, 200_000] {
+        let bytes = nested_arrays(depth);
+        assert_eq!(
+            VariantRef::new(&meta, &bytes)
+                .map(|_| ())
+                .map_err(|e| e.error_class()),
+            Err(ErrorClass::MalformedVariant),
+            "{depth}"
+        );
+    }
+}

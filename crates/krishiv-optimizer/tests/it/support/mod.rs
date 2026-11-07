@@ -37,6 +37,7 @@ pub(crate) fn catalog() -> MemoryCatalog {
                 name: f["name"].as_str().unwrap().to_owned(),
                 data_type: krishiv_types::parse_data_type(f["type"].as_str().unwrap()).unwrap(),
                 nullable: f["nullable"].as_bool().unwrap(),
+                char_varchar: None,
             })
             .collect();
         cat = cat.with_table(&["default"], name, columns, None);
