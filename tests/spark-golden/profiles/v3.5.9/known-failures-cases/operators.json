@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "other-version": [
+      16,
+      20,
+      24,
+      56,
+      63,
+      64
+    ]
+  },
+  "file": "operators",
+  "format_version": 1
+}

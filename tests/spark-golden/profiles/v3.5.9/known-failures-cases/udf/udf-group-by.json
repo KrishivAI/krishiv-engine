@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "depends-on-command": [
+      13
+    ],
+    "test-udfs": [
+      42
+    ]
+  },
+  "file": "udf/udf-group-by",
+  "format_version": 1
+}

@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "fn-json": [
+      38,
+      39
+    ]
+  },
+  "file": "json-functions",
+  "format_version": 1
+}
