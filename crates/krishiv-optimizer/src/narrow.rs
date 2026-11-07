@@ -387,7 +387,9 @@ pub(crate) fn selectivity(pred: &Expr, est: &RelStats, narrow: bool) -> f64 {
 /// the columns the ones before it narrowed, as within one `AND`: for
 /// `a >= lo AND a < hi` their product is the fraction of the range between
 /// the bounds, not the product of each bound's own fraction. A conjunct over
-/// columns nothing before it narrowed has the selectivity it has alone.
+/// columns nothing before it narrowed has the selectivity it has alone. The
+/// result can depend on the order (`x IS NOT NULL AND x > 3`: the comparison
+/// ignores nulls), so callers pass a canonical order.
 pub(crate) fn conjunct_selectivities<'e>(
     preds: impl IntoIterator<Item = &'e Expr>,
     est: &RelStats,

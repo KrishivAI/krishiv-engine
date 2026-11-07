@@ -576,8 +576,14 @@ impl Graph {
             }
             joins.push((p, on));
         }
+        // In a canonical order (each conjunct narrows the view the next reads,
+        // and a null-rejecting or `IN` conjunct changes what a range after it
+        // keeps), so the estimate does not depend on how the query wrote them.
         // Multiplied in one at a time, as each conjunct's rows always were,
         // so inputs whose conjuncts do not narrow each other estimate as before.
+        for preds in &mut local {
+            preds.sort_by_cached_key(ToString::to_string);
+        }
         for (i, preds) in local.iter().enumerate() {
             for sel in
                 conjunct_selectivities(preds.iter().map(AsRef::as_ref), &ests[order[i]], narrow)
