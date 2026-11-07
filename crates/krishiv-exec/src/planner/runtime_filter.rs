@@ -282,6 +282,8 @@ fn planned_bloom_bytes(build_rows: f64, fpp: f64, max_bytes: usize) -> u32 {
 /// `HAVING`, or a filter on a grouped subquery), looking down through
 /// projections and exchanges: the estimate of such a build is a selectivity
 /// guess, so it must not keep a runtime filter's Bloom form out of the plan.
+/// The walk is shallow on purpose: any other node in between (a join, a
+/// sort, a limit) answers `false`, and the estimate is used as it is.
 fn filtered_aggregate(node: &PhysNode) -> bool {
     let mut filtered = false;
     let mut n = node;

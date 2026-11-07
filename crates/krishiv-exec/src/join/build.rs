@@ -196,11 +196,18 @@ impl Partials {
                 *b = None;
             }
         }
+        self.fit();
+    }
+
+    /// Reserves what the partials hold beyond their reservations; when that
+    /// fails the Bloom hashes go first, the exact keys only if it still
+    /// fails without them (an optional filter never waits or fails).
+    fn fit(&mut self) {
+        let held: usize = self.memory.iter().map(Reservation::size).sum();
         let want = self.heap_bytes();
         let Some(memory) = self.memory.first_mut() else {
             return;
         };
-        let held = memory.size();
         if want > held && memory.try_grow(want - held).is_err() {
             // The Bloom hashes go first; the exact keys only if the
             // reservation still fails without them.
@@ -213,7 +220,10 @@ impl Partials {
             };
             if want <= held || memory.try_grow(want - held).is_ok() {
                 if want < held {
-                    memory.shrink(held - want);
+                    // Only the first reservation shrinks (the others are
+                    // merged drivers', released when the partials drop).
+                    let extra = (held - want).min(memory.size());
+                    memory.shrink(extra);
                 }
                 return;
             }
@@ -225,7 +235,8 @@ impl Partials {
                 return;
             };
             if want < held {
-                memory.shrink(held - want);
+                let extra = (held - want).min(memory.size());
+                memory.shrink(extra);
             } else {
                 // The few value-set bytes left are not worth failing over.
                 let _ = memory.try_grow(want - held);
@@ -244,6 +255,8 @@ impl Partials {
             };
         }
         self.memory.extend(other.memory);
+        // `merge` grew this driver's hashes by the other's (review minor 2).
+        self.fit();
     }
 }
 
@@ -974,6 +987,9 @@ mod tests {
         let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
             limit: Some(limit),
             quantum: 1,
+            // The whole limit for the partials: the spill-scratch floor
+            // would hide part of it from these exact-size cases.
+            spill_scratch_reserve: 0,
             ..MemoryConfig::default()
         });
         let id = pool.register("partials", None);
@@ -1003,6 +1019,54 @@ mod tests {
                 ..KeyFilterOptions::default()
             },
         }
+    }
+
+    /// Memory for the distinct keys but not for their Bloom hashes too: the
+    /// hashes go and the exact set stays (`drop_hashes`, review M1), with
+    /// the reservation equal to what the partial holds. Were the hashes and
+    /// the keys dropped together (`drop_bloom`), only the range would be
+    /// published.
+    #[test]
+    fn without_room_for_the_hashes_the_exact_set_stays() {
+        let mut f = filter();
+        f.options.max_values = 100;
+        let shared = vec![f.clone()];
+        // Sparse (not a dense range, which would publish as the range
+        // whatever is kept), and more than the `IN` list holds (100), so
+        // `drop_bloom` would drop them where `drop_hashes` keeps them.
+        let keys: ArrayRef = Arc::new(Int64Array::from_iter_values(
+            (0..2000).map(|i: i64| i * 1_000_003),
+        ));
+        let sizes = |hashes: bool| {
+            let mut b = krishiv_io::KeyFilterBuilder::new(DataType::Int64, f.options).unwrap();
+            b.add(keys.as_ref(), None).unwrap();
+            if !hashes {
+                b.drop_hashes();
+            }
+            b.heap_bytes()
+        };
+        let (keys_only, with_hashes) = (sizes(false), sizes(true));
+        assert!(with_hashes > keys_only, "no hashes to drop");
+        let mut p = Partials {
+            builders: vec![krishiv_io::KeyFilterBuilder::new(
+                DataType::Int64,
+                f.options,
+            )],
+            // Room for the keys and half the hashes: never both.
+            memory: vec![reservation(keys_only + (with_hashes - keys_only) / 2)],
+        };
+        p.add_keys(&shared, &[Arc::clone(&keys)], None);
+        assert_eq!(p.memory[0].size(), p.heap_bytes(), "reservation != heap");
+        assert_eq!(p.heap_bytes(), keys_only, "the keys were dropped too");
+        publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+        let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
+            unreachable!("not published")
+        };
+        assert_eq!(
+            k.form(),
+            krishiv_io::FilterForm::HashSet(2000),
+            "no exact set published"
+        );
     }
 
     /// Without memory for the hashes the Bloom is dropped; without memory
