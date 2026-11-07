@@ -228,3 +228,32 @@ fn a_distinct_value_reads_the_one_value_or_fails_on_two() -> R {
     assert!(e.contains("SCALAR_SUBQUERY_TOO_MANY_ROWS"), "{two}: {e}");
     Ok(())
 }
+
+/// A grouping key that is an expression of an inner column the correlation
+/// does not equate to an outer one is not fixed: refused. Under the legacy
+/// count flag a value whose result over no rows is unknown (`collect_list`) is
+/// refused with its own message.
+#[test]
+fn an_expression_key_and_an_unknown_legacy_value_are_refused() -> R {
+    let s = session()?;
+    let q = "select k, (select max(y) from u where u.k = t.k \
+             group by u.k, y + 1 having count(*) >= 1) from t";
+    let e = run(&s, q).expect_err(q).to_string();
+    assert!(
+        e.contains("a correlated scalar subquery of this shape"),
+        "{q}: {e}"
+    );
+    let q = "select k, (select collect_list(y) from u where u.k = t.k \
+             group by u.k having count(*) >= 1) from t";
+    assert_eq!(run(&s, q)?.len(), 4, "{q}");
+    run(
+        &s,
+        "set spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled=true",
+    )?;
+    let e = run(&s, q).expect_err(q).to_string();
+    assert!(
+        e.contains("whose value over no rows is not NULL or a count"),
+        "{q}: {e}"
+    );
+    Ok(())
+}

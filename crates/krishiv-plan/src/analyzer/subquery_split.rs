@@ -312,76 +312,19 @@ impl Rewriter {
     /// `planWithoutCountBug`). Under the legacy count flag a value that is not
     /// NULL over no rows is refused. `Ok(false)` for any other shape.
     pub(super) fn grouped_having_fixed(&mut self, plan: &Arc<LogicalPlan>) -> R<bool> {
-        // The value is the projected column, or the aggregate's only item.
-        let (filter, value) = match &plan.node {
-            PlanNode::Project { input, exprs } => {
-                let [e] = &exprs[..] else { return Ok(false) };
-                let ExprNode::Resolved(ResolvedExpr::Column(c)) = &e.node else {
-                    return Ok(false);
-                };
-                (input, Some(c.id))
-            }
-            PlanNode::Filter { .. } => (plan, None),
-            _ => return Ok(false),
-        };
-        let PlanNode::Filter {
-            input: agg,
-            predicate,
-        } = &filter.node
-        else {
+        let Some((below, keys, expr)) = grouped_having_parts(plan) else {
             return Ok(false);
         };
-        let PlanNode::Aggregate {
-            input: below,
-            grouping: Grouping::GroupBy(keys),
-            aggregates,
-        } = &agg.node
-        else {
-            return Ok(false);
-        };
-        let reads = |x: &Arc<Expr>| has_outer(Node::Expr(x));
-        if keys.is_empty()
-            || keys.iter().any(reads)
-            || aggregates.iter().any(reads)
-            || reads(predicate)
-            || has_subquery(Node::Expr(predicate))
-            || !has_outer(Node::Plan(below))
-        {
-            return Ok(false);
-        }
-        let item = aggregates.iter().find_map(|a| match &a.node {
-            ExprNode::Resolved(ResolvedExpr::Alias { expr, output })
-                if value.is_none_or(|v| output.id == v)
-                    && (value.is_some() || aggregates.len() == 1) =>
-            {
-                Some(expr)
-            }
-            _ => None,
-        });
-        let Some(expr) = item else { return Ok(false) };
         if self.legacy_scalar_count {
-            let empty = on_no_rows(expr).ok_or_else(|| {
-                super::unsupported(
-                    "a correlated scalar subquery whose value over no rows is not NULL or a count",
-                    plan.origin,
-                )
-            })?;
+            let empty = on_no_rows(&expr).ok_or_else(|| legacy_unknown(plan.origin))?;
             super::legacy_grouped(empty.as_ref(), plan.origin)?;
         }
-        let Ok((_, corr)) = self.pull(below, true) else {
-            return Ok(false);
-        };
-        let Ok((inner_keys, _)) = super::equality_keys(&corr, plan.origin) else {
-            return Ok(false);
-        };
-        let fixed = |k: &Arc<Expr>| match &k.node {
-            ExprNode::Literal(_) => true,
-            ExprNode::Resolved(ResolvedExpr::Column(c)) => inner_keys.iter().any(
-                |i| matches!(&i.node, ExprNode::Resolved(ResolvedExpr::Column(o)) if o.id == c.id),
-            ),
-            _ => false,
-        };
-        Ok(keys.iter().all(fixed))
+        let fixed = self
+            .pull(&below, true)
+            .ok()
+            .and_then(|(_, corr)| super::equality_keys(&corr, plan.origin).ok())
+            .map(|(inner_keys, _)| keys.iter().all(|k| fixed_key(k, &inner_keys)));
+        Ok(fixed.unwrap_or(false))
     }
 
     /// Whether `input` holds, anywhere below, a global aggregate over a
@@ -949,6 +892,82 @@ fn reads_inner(p: &LogicalPlan) -> bool {
         | PlanNode::SubqueryAlias { input, .. } => reads_inner(input),
         _ => true,
     }
+}
+
+/// The error for a legacy-count subquery whose value over no rows is unknown.
+fn legacy_unknown(origin: Origin) -> AnalysisError {
+    super::unsupported(
+        "a correlated scalar subquery whose value over no rows is not NULL or a count",
+        origin,
+    )
+}
+
+/// Whether the grouping key `k` is fixed by the correlation: a constant, or a
+/// column the correlation equates to an outer expression.
+fn fixed_key(k: &Arc<Expr>, inner_keys: &[Arc<Expr>]) -> bool {
+    match &k.node {
+        ExprNode::Literal(_) => true,
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => inner_keys.iter().any(
+            |i| matches!(&i.node, ExprNode::Resolved(ResolvedExpr::Column(o)) if o.id == c.id),
+        ),
+        _ => false,
+    }
+}
+
+/// A grouped `HAVING` subquery's parts: the aggregate's input, its grouping
+/// keys and the value expression.
+type GroupedHaving = (Arc<LogicalPlan>, Vec<Arc<Expr>>, Arc<Expr>);
+
+/// The aggregate's input, its grouping keys and the value expression of a
+/// `[Project(value) <-] Filter(HAVING) <- Aggregate(GROUP BY keys)` plan whose
+/// keys, items and `HAVING` read nothing of the enclosing query (the input
+/// does), with a `HAVING` holding no subquery; `None` for any other shape.
+fn grouped_having_parts(plan: &Arc<LogicalPlan>) -> Option<GroupedHaving> {
+    let (filter, value) = match &plan.node {
+        PlanNode::Project { input, exprs } => match &exprs[..] {
+            [e] => match &e.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) => (input, Some(c.id)),
+                _ => return None,
+            },
+            _ => return None,
+        },
+        PlanNode::Filter { .. } => (plan, None),
+        _ => return None,
+    };
+    let PlanNode::Filter {
+        input: agg,
+        predicate,
+    } = &filter.node
+    else {
+        return None;
+    };
+    let PlanNode::Aggregate {
+        input: below,
+        grouping: Grouping::GroupBy(keys),
+        aggregates,
+    } = &agg.node
+    else {
+        return None;
+    };
+    let reads = |x: &Arc<Expr>| has_outer(Node::Expr(x));
+    let clean = !keys.is_empty()
+        && !keys.iter().any(reads)
+        && !aggregates.iter().any(reads)
+        && !reads(predicate)
+        && !has_subquery(Node::Expr(predicate))
+        && has_outer(Node::Plan(below));
+    // The value is the projected column, or the aggregate's only item.
+    let expr = aggregates.iter().find_map(|a| match &a.node {
+        ExprNode::Resolved(ResolvedExpr::Alias { expr, output })
+            if value.is_none_or(|v| output.id == v)
+                && (value.is_some() || aggregates.len() == 1) =>
+        {
+            Some(Arc::clone(expr))
+        }
+        _ => None,
+    });
+    clean.then_some(())?;
+    Some((Arc::clone(below), keys.clone(), expr?))
 }
 
 #[cfg(test)]
