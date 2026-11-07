@@ -218,6 +218,10 @@ class VariantType(AtomicType):
     """Semi-structured values (``parse_json``); ``pyspark.sql.types.VariantType``."""
 
 
+# PySpark exports it from ``types``.
+from krishiv.sql.variant import VariantVal as VariantVal  # noqa: E402
+
+
 class DayTimeIntervalType(AtomicType):
     """An ANSI day-time interval, ``interval day to second`` by default."""
 

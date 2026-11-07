@@ -1,0 +1,15 @@
+{
+  "cases": {
+    "fn-string": [
+      3
+    ],
+    "s43-other": [
+      4,
+      5,
+      6,
+      7
+    ]
+  },
+  "file": "binary",
+  "format_version": 1
+}

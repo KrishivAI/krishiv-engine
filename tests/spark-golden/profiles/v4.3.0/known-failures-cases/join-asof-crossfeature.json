@@ -1,0 +1,23 @@
+{
+  "cases": {
+    "parser-tail": [
+      13
+    ],
+    "s43-asof-join": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      10,
+      12
+    ],
+    "sql-commands": [
+      9,
+      11
+    ]
+  },
+  "file": "join-asof-crossfeature",
+  "format_version": 1
+}

@@ -18,7 +18,7 @@ use krishiv_exec::physical::{
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryId,
     SubqueryPlan, SubqueryValueKind, WritePlan,
 };
-use krishiv_exec::physical::{SharedId, SharedPlan};
+use krishiv_exec::physical::{ExchangeFilterPlan, SharedId, SharedPlan};
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
@@ -535,6 +535,7 @@ impl Decoder {
                     Explode => krishiv_plan::GeneratorKind::Explode,
                     PosExplode => krishiv_plan::GeneratorKind::PosExplode,
                     Inline => krishiv_plan::GeneratorKind::Inline,
+                    VariantExplode => krishiv_plan::GeneratorKind::VariantExplode,
                 })?,
                 outer: g.outer,
                 arg: self.expr_ref(g.arg)?,
@@ -718,6 +719,26 @@ impl Decoder {
             id: ExchangeId(e.id),
             input: self.boxed(e.input)?,
             partitioning: partitioning(required(&e.partitioning, "the partitioning")?)?,
+            filters: e
+                .filters
+                .iter()
+                .map(|f| {
+                    let options = join_filter(&pb::JoinFilter {
+                        id: f.id,
+                        key: 0,
+                        options: f.options,
+                    })?
+                    .options;
+                    Ok(ExchangeFilterPlan {
+                        id: FilterId(f.id),
+                        column: usize::try_from(f.column)
+                            .map_err(|_| corrupt("an exchange filter column out of range"))?,
+                        key_type: type_from(&f.key_type)?,
+                        options,
+                        null_safe: f.null_safe,
+                    })
+                })
+                .collect::<Result<_>>()?,
         })
     }
 

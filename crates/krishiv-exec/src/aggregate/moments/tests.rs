@@ -735,6 +735,36 @@ fn row_weights_other_than_one_are_refused() {
     }
 }
 
+/// A running fold keeps the partition's state after each row: the snapshot
+/// groups equal independent folds of the first row and of the first two.
+#[test]
+fn a_running_fold_snapshots_the_state_after_each_row() {
+    for f in &ALL {
+        let cols = columns(f, &some(&[1.0, 2.0, 4.0]), &some(&[2.0, 3.0, 7.0]));
+        let mut run = acc(f, false, 3);
+        let snaps = [1_u32, 2, crate::aggregate::Running::NONE];
+        let r = crate::aggregate::Running {
+            parts: &[0, 0, 0],
+            snapshots: &snaps,
+        };
+        run.update_running(&[0, 0, 0], &cols, &r).unwrap();
+        let got = run.evaluate(&[1, 2, 0]).unwrap();
+        for (k, rows) in [(0_usize, 1_usize), (1, 2), (2, 3)] {
+            let mut fresh = acc(f, false, 1);
+            let part: Vec<ArrayRef> = cols.iter().map(|c| c.slice(0, rows)).collect();
+            fresh
+                .update(&vec![0; rows], &part, &Weights::Const(1))
+                .unwrap();
+            let want = fresh.evaluate(&[0]).unwrap();
+            assert_eq!(
+                got.slice(k, 1).to_data(),
+                want.to_data(),
+                "{f:?} after {rows}"
+            );
+        }
+    }
+}
+
 #[test]
 fn malformed_inputs_are_errors_not_panics() {
     for f in &ALL {
@@ -747,12 +777,6 @@ fn malformed_inputs_are_errors_not_panics() {
         assert!(a.state(&[3]).is_err());
         // Columns of another length than the rows.
         assert!(a.update(&[0], &cols, &Weights::Const(1)).is_err());
-        // A running fold has no moment form.
-        let run = crate::aggregate::Running {
-            parts: &[0, 0],
-            snapshots: &[crate::aggregate::Running::NONE; 2],
-        };
-        assert!(a.update_running(&[0, 0], &cols, &run).is_err());
         // States: too few columns, NULLs, another type, another length.
         let good = acc(f, false, 1).state(&[0]).unwrap();
         assert!(a.merge(&[0], &good[..good.len() - 1]).is_err());

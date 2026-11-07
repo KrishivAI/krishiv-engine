@@ -1,0 +1,18 @@
+{
+  "category": "s43-time-type",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "file": "^time$",
+      "order": 9050
+    },
+    {
+      "detail": "TIME",
+      "file": "^(nonansi/)?cast$",
+      "order": 9050
+    }
+  ],
+  "summary": "the TIME type: casts to and from TIME, TIME functions and arithmetic of Spark 4.3",
+  "task": "P3-T090"
+}

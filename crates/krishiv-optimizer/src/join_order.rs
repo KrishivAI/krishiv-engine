@@ -36,7 +36,7 @@ use crate::expr::{
     Attrs, and_all, builtin, call, column, common_equalities, conjuncts, has_subquery, implied,
     is_deterministic, references,
 };
-use crate::narrow::{equi_columns, selectivity};
+use crate::narrow::{conjunct_selectivities, equi_columns, selectivity};
 use crate::stats::{RelStats, Statistics, cse_definitions, reads_cse, resolve_cse};
 
 /// An original relation (kept alive) and its rewrite.
@@ -91,6 +91,23 @@ fn selection(p: &LogicalPlan) -> Option<&Arc<LogicalPlan>> {
         }
         _ => None,
     }
+}
+
+/// Whether the column selection `p` over `input` drops only columns common-
+/// subexpression elimination extracted. CSE runs after join ordering, so only a
+/// second optimization meets one: pruning left it when the columns it was made
+/// to drop went after CSE, and it would not rebuild it (it never narrows for a
+/// `cse_*` column alone). Looking through it would lose it and change the plan,
+/// so the tree takes it as an input.
+fn drops_only_cse(p: &LogicalPlan, input: &LogicalPlan) -> bool {
+    let (Some(out), Some(below)) = (p.resolved_output(), input.resolved_output()) else {
+        return false;
+    };
+    let kept = |c: &BoundColumn| out.iter().any(|o| o.id == c.id);
+    below
+        .iter()
+        .all(|c| crate::cse::is_cse_column(c) || kept(c))
+        && below.iter().any(|c| !kept(c))
 }
 
 /// Whether `p` tops an inner-join tree: the join itself, or a deterministic
@@ -248,8 +265,8 @@ impl Reorder<'_> {
                 }
                 _ if Arc::ptr_eq(n, root) => return self.children(root),
                 _ => match selection(n) {
-                    Some(input) => stack.push(input),
-                    None => leaves.push(self.node(n)),
+                    Some(input) if !drops_only_cse(n, input) => stack.push(input),
+                    _ => leaves.push(self.node(n)),
                 },
             }
         }
@@ -551,6 +568,9 @@ impl Graph {
         } else {
             Vec::new()
         };
+        // The conjuncts over each input alone, estimated together after the
+        // loop: each narrows the columns the next reads.
+        let mut local: Vec<Vec<Arc<Expr>>> = vec![Vec::new(); sorted.len()];
         for (p, r) in preds.into_iter().zip(&refs) {
             let mut on: Vec<usize> = r
                 .iter()
@@ -564,7 +584,7 @@ impl Graph {
                 let resolved = leaf_defs
                     .get(i)
                     .map_or_else(|| Arc::clone(&p), |defs| resolve_cse(&p, defs));
-                rows[i] = (rows[i] * selectivity(&resolved, &ests[order[i]], narrow)).max(1.0);
+                local[i].push(resolved);
                 sorted[i] = Arc::new(LogicalPlan::new(PlanNode::Filter {
                     input: Arc::clone(&sorted[i]),
                     predicate: p,
@@ -572,6 +592,21 @@ impl Graph {
                 continue;
             }
             joins.push((p, on));
+        }
+        // In a canonical order (each conjunct narrows the view the next reads,
+        // and a null-rejecting or `IN` conjunct changes what a range after it
+        // keeps), so the estimate does not depend on how the query wrote them.
+        // Multiplied in one at a time, as each conjunct's rows always were,
+        // so inputs whose conjuncts do not narrow each other estimate as before.
+        for preds in &mut local {
+            preds.sort_by_cached_key(ToString::to_string);
+        }
+        for (i, preds) in local.iter().enumerate() {
+            for sel in
+                conjunct_selectivities(preds.iter().map(AsRef::as_ref), &ests[order[i]], narrow)
+            {
+                rows[i] = (rows[i] * sel).max(1.0);
+            }
         }
         // A filtered input keeps at most as many distinct values of a column
         // as it keeps rows, as the estimate of a filter does: a join with a

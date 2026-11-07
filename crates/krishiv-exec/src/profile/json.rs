@@ -52,6 +52,7 @@ impl QueryProfile {
                 "stalls": d.stalls,
                 "busy_ns": ns(d.busy),
                 "hash_probe_share": m.hash_probe_share(),
+                "scan_reads_in_flight_mean": m.scan_reads_in_flight_mean(),
                 "memory": {
                     "limit_bytes": m.memory.limit,
                     "peak_reserved_bytes": m.memory.peak_reserved,

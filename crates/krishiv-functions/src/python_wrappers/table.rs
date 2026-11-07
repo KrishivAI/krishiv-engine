@@ -98,6 +98,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "generator: a `Generate` node, not a DataFrame function yet",
     ),
     (
+        "variant_explode",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
+        "variant_explode_outer",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
         "timestampadd",
         "parsed from `TIMESTAMPADD(unit, n, ts)`; PySpark names it `timestamp_add`",
     ),
@@ -616,6 +624,8 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("parse_json", "col: ColumnOrName"),
         Row::new("try_parse_json", "col: ColumnOrName"),
         Row::new("is_variant_null", "v: ColumnOrName"),
+        Row::new("schema_of_variant", "v: ColumnOrName"),
+        Row::new("to_variant_object", "col: ColumnOrName"),
         Row::new(
             "variant_get",
             "v: ColumnOrName, path: Column | str, targetType: str",
@@ -638,6 +648,7 @@ pub(super) fn rows() -> Vec<Row> {
             "length: int | Column, seed: int | Column = None",
         ),
         Row::new("typeof", "col: ColumnOrName"),
+        Row::new("collation", "col: ColumnOrName"),
         Row::new(
             "uniform",
             "min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Column = None",

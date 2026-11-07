@@ -988,6 +988,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reserve_reports_an_allocation_that_cannot_be_made() {
+        let mut buf = Vec::new();
+        assert!(reserve(&mut buf, 16).is_ok());
+        assert!(buf.capacity() >= 16);
+        assert!(reserve(&mut buf, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn a_code_point_equal_to_the_last_of_a_run_is_in_it() {
+        let runs = [(10_u32, 20, 1), (30, 40, 2)];
+        for inside in [10, 15, 20, 30, 32, 40] {
+            assert!(in_runs(&runs, inside), "{inside}");
+        }
+        for outside in [0, 9, 21, 29, 31, 39, 41, 1000] {
+            assert!(!in_runs(&runs, outside), "{outside}");
+        }
+        assert!(!in_runs(&[], 5));
+    }
+
+    #[test]
     fn offsets_that_do_not_fit_are_errors() {
         assert_eq!(check_offset::<i32>(5).unwrap(), 5);
         assert_eq!(check_offset::<i64>(1 << 40).unwrap(), 1 << 40);

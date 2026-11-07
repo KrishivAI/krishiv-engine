@@ -255,6 +255,30 @@ pub struct ExchangePlan {
     pub input: Box<PhysNode>,
     /// Where each row goes.
     pub partitioning: Partitioning,
+    /// The runtime filters collected from the rows it writes, for scans of
+    /// other stages (design P2-T177, cross-stage filters): set only by the
+    /// fragmenter on the exchange that feeds a join's build, empty on one
+    /// worker.
+    pub filters: Vec<ExchangeFilterPlan>,
+}
+
+/// A runtime filter an exchange collects from the rows it writes, in place
+/// of the join whose build those rows feed (see [`ExchangePlan::filters`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExchangeFilterPlan {
+    /// The filter.
+    pub id: FilterId,
+    /// The column of the exchange's rows it is collected from (the join's
+    /// build key).
+    pub column: usize,
+    /// The type the filter compares in (the scans' key type).
+    pub key_type: DataType,
+    /// What to collect: the join's options.
+    pub options: KeyFilterOptions,
+    /// The join compares the key null-safely (`<=>`): a NULL key is a
+    /// value. Otherwise rows with a NULL key are left out, as the join's
+    /// build leaves them out.
+    pub null_safe: bool,
 }
 
 /// How a hash join gets matching rows of its two inputs into one task.
@@ -873,7 +897,8 @@ plan_data!(enum Partitioning {
     RoundRobin,
     Range { keys },
 });
-plan_data!(struct ExchangePlan { id, input, partitioning });
+plan_data!(struct ExchangePlan { id, input, partitioning, filters });
+plan_data!(struct ExchangeFilterPlan { id, column, key_type, options, null_safe });
 plan_data!(
     enum JoinDistribution {
         Broadcast,
@@ -1172,6 +1197,10 @@ impl PhysicalPlan {
     /// ordering, in the existing spillable local sort), so each task keeps
     /// exactly one open file however many partitions it sees.
     ///
+    /// The plan's root is a gather (`Exchange(Single)`) of the writer's
+    /// rows: cut into stages, the writer runs in every task of its stage,
+    /// each task writing the files its partition names.
+    ///
     /// # Errors
     /// `INTERNAL_ERROR` if a partition column is out of range.
     pub fn into_write(self, write: WritePlan) -> Result<Self> {
@@ -1218,12 +1247,33 @@ impl PhysicalPlan {
                 explain,
             )
         };
+        // The commit messages (one row per file) flow through a final
+        // gather to whoever commits (design P2-T178 §2.5): on several
+        // workers each task writes its own files; on one worker the gather
+        // lowers into nothing.
+        let mut next = 0_u64;
+        let mut stack: Vec<&PhysNode> = std::iter::once(&root)
+            .chain(self.shared.iter().map(|s| &s.plan))
+            .collect();
+        while let Some(n) = stack.pop() {
+            match n {
+                PhysNode::Exchange(e) => next = next.max(e.id.0.saturating_add(1)),
+                PhysNode::ExchangeSource { id, .. } => next = next.max(id.0.saturating_add(1)),
+                _ => {}
+            }
+            stack.extend(n.children());
+        }
         Ok(Self {
             schema: WritePlan::result_schema(),
-            root: Arc::new(PhysNode::WriteFiles {
-                input: Box::new(root),
-                write: Some(write),
-            }),
+            root: Arc::new(PhysNode::Exchange(ExchangePlan {
+                id: ExchangeId(next),
+                input: Box::new(PhysNode::WriteFiles {
+                    input: Box::new(root),
+                    write: Some(write),
+                }),
+                partitioning: Partitioning::Single,
+                filters: Vec::new(),
+            })),
             shared: self.shared,
             explain,
             warnings: self.warnings,

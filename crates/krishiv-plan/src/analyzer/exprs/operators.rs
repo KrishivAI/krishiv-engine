@@ -139,6 +139,25 @@ impl Resolver<'_> {
         origin: Origin,
         kids: &[Bound],
     ) -> Result<Bound, AnalysisError> {
+        // The execution guard of collations unit 2a: a comparison compares bytes, so it refuses
+        // a collated operand until unit 3a (collation keys) lifts this.
+        if matches!(
+            op,
+            Builtin::Eq
+                | Builtin::EqNullSafe
+                | Builtin::Lt
+                | Builtin::LtEq
+                | Builtin::Gt
+                | Builtin::GtEq
+                | Builtin::In
+                | Builtin::Between
+        ) && kids.iter().any(|k| {
+            k.ty.data_type
+                .as_ref()
+                .is_some_and(|t| t.any_type(&|t| matches!(t, DataType::CollatedString(_))))
+        }) {
+            return Err(unsupported("collated comparison", origin));
+        }
         if let (Builtin::Between, [v, lo, hi]) = (op, kids) {
             // The value is shared, as Spark's errors show it.
             let shared = Expr::function("commonexpressionref", Vec::new());

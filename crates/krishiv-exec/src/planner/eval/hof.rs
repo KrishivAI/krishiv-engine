@@ -2291,10 +2291,9 @@ mod tests {
     }
 
     fn col() -> Arc<Expr> {
-        Arc::new(Expr::new(ExprNode::Column(ColumnRef {
-            name: vec!["a".to_owned()],
-            plan_id: None,
-        })))
+        Arc::new(Expr::new(ExprNode::Column(ColumnRef::new(vec![
+            "a".to_owned(),
+        ]))))
     }
 
     fn lambda() -> Arc<Expr> {

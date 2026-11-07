@@ -478,6 +478,52 @@ mod tests {
         assert!(of(&[first, second], &schema).is_err());
     }
 
+    #[test]
+    fn floats_print_as_the_harness_prints_them() {
+        assert_eq!(json_float(f64::NAN), "NaN");
+        assert_eq!(json_float(f64::INFINITY), "Infinity");
+        assert_eq!(json_float(f64::NEG_INFINITY), "-Infinity");
+        assert_eq!(json_float(1.5), "1.5");
+        assert_eq!(json_float(1.0), "1.0");
+        assert_eq!(json_float(-0.0), "-0.0");
+    }
+
+    #[test]
+    fn an_arrow_error_is_a_config_error_naming_the_checksum() {
+        let e = encode_error(&arrow_schema::ArrowError::ComputeError("boom".to_owned()));
+        assert!(
+            matches!(&e, RunnerError::Config(m) if m.starts_with("result checksum:") && m.contains("boom")),
+            "{e:?}"
+        );
+    }
+
+    #[test]
+    fn a_later_batch_with_another_column_count_is_an_error() {
+        let one = Arc::new(Schema::new(vec![Field::new("m", DataType::Float64, true)]));
+        let first = RecordBatch::try_new(
+            Arc::clone(&one),
+            vec![Arc::new(Float64Array::from(vec![1.0]))],
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        let two = Arc::new(Schema::new(vec![
+            Field::new("m", DataType::Float64, true),
+            Field::new("n", DataType::Float64, true),
+        ]));
+        let second = RecordBatch::try_new(
+            two,
+            vec![
+                Arc::new(Float64Array::from(vec![1.0])),
+                Arc::new(Float64Array::from(vec![2.0])),
+            ],
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        let r = of(&[first, second], &one);
+        assert!(
+            matches!(&r, Err(RunnerError::Config(m)) if m.contains("2 columns, the schema 1")),
+            "{r:?}"
+        );
+    }
+
     proptest::proptest! {
         #[test]
         fn shuffling_rows_and_resplitting_batches_keeps_the_checksum(

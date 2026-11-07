@@ -13,10 +13,10 @@ use krishiv_exec::aggregate::{
     AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
 };
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
-    JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan, SubqueryPlan,
-    SubqueryValueKind, WritePlan,
+    AggregatePlan, ExchangeFilterPlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme,
+    JoinDistribution, JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
+    ProjectItemPlan, Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan,
+    SubqueryPlan, SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
@@ -331,6 +331,9 @@ impl Encoder {
                     krishiv_plan::GeneratorKind::Explode => pb::GeneratorKind::Explode,
                     krishiv_plan::GeneratorKind::PosExplode => pb::GeneratorKind::PosExplode,
                     krishiv_plan::GeneratorKind::Inline => pb::GeneratorKind::Inline,
+                    krishiv_plan::GeneratorKind::VariantExplode => {
+                        pb::GeneratorKind::VariantExplode
+                    }
                 }
                 .into(),
                 outer: *outer,
@@ -521,6 +524,11 @@ impl Encoder {
             id: exchange.id.0,
             input: self.node_index(&exchange.input)?,
             partitioning: Some(partitioning(&exchange.partitioning)),
+            filters: exchange
+                .filters
+                .iter()
+                .map(|f| exchange_filter(f, &self.nested))
+                .collect(),
         })
     }
 
@@ -800,6 +808,21 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
             bloom_max_fpp,
             bloom_bytes,
         }),
+    }
+}
+
+fn exchange_filter(f: &ExchangeFilterPlan, nested: &Cell<bool>) -> pb::ExchangeFilter {
+    pb::ExchangeFilter {
+        id: f.id.0,
+        column: u64::try_from(f.column).unwrap_or(u64::MAX),
+        key_type: arrow_bytes(&f.key_type, nested),
+        options: join_filter(&JoinFilterPlan {
+            id: f.id,
+            key: 0,
+            options: f.options,
+        })
+        .options,
+        null_safe: f.null_safe,
     }
 }
 

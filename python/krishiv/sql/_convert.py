@@ -101,6 +101,10 @@ def _value(value: Any, arrow_type: Any) -> Any:
     if pa.types.is_timestamp(arrow_type) and arrow_type.tz is not None:
         # An instant: PySpark returns it as a naive datetime in the client's local time zone.
         return value.astimezone().replace(tzinfo=None)
+    from krishiv.sql.variant import VariantVal, is_variant_struct
+
+    if is_variant_struct(arrow_type):
+        return VariantVal(bytes(value["value"]), bytes(value["metadata"]))
     if pa.types.is_struct(arrow_type):
         fields = [arrow_type.field(i) for i in range(arrow_type.num_fields)]
         return _create_row([f.name for f in fields], [_value(value[f.name], f.type) for f in fields])
@@ -139,6 +143,12 @@ def cell(value: Any, arrow_type: Any, zone: tzinfo = UTC) -> str:
         return "NULL"
     import pyarrow as pa
 
+    from krishiv.sql.variant import _json, _Metadata, is_variant_struct
+
+    if is_variant_struct(arrow_type):
+        out: list[str] = []
+        _json(bytes(value["value"]), _Metadata(bytes(value["metadata"])), 0, zone, out)
+        return "".join(out)
     if pa.types.is_struct(arrow_type):
         fields = [arrow_type.field(i) for i in range(arrow_type.num_fields)]
         return "{" + ", ".join(cell(value[f.name], f.type, zone) for f in fields) + "}"
