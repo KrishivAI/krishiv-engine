@@ -19,7 +19,7 @@
 
 use std::future::Future;
 use std::mem;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
 use arrow_schema::SchemaRef;
@@ -492,6 +492,9 @@ struct SortLocal {
     batch_rows: usize,
     bucketing: Option<Arc<Bucketing>>,
     prune: PruneStats,
+    /// The [`SortGlobal`]: a running driver spills the combined drivers'
+    /// buffers too.
+    global: GlobalState,
 }
 
 /// A combined driver's state, in combine order.
@@ -884,6 +887,11 @@ struct SortGlobal {
     /// The query's bucketing (none: one bucket).
     bucketing: Option<Arc<Bucketing>>,
     buckets: usize,
+    /// Bytes buffered in `shared.parts`. A driver that combined has ended
+    /// and its spill hook with it, so the drivers still running offer these
+    /// bytes as theirs to spill (else a small pool filled with them refused
+    /// memory, `tests/spill.rs` under load).
+    combined: AtomicUsize,
 }
 
 /// The readers of a spilled result: the buckets left to merge, and the
@@ -1020,6 +1028,31 @@ impl Drop for ReaderSlot {
 }
 
 impl Sort {
+    /// Spills the buffers of the combined drivers (`shared.parts`), out of
+    /// the lock: a driver combining meanwhile appends to the list left
+    /// behind. Concurrent spills may change the order between drivers (no
+    /// order holds there; drivers combine as they end), never within one:
+    /// a driver's parts go in together. An error fails the query (the
+    /// parts go). Returns the bytes freed.
+    async fn spill_parts(&self, g: &SortGlobal, ctx: &TaskContext) -> Result<usize> {
+        let mut parts = mem::take(&mut lock(&g.shared).parts);
+        let batch_rows = ctx.query().config().batch_size.max(1);
+        let mut freed = 0;
+        for part in &mut parts {
+            let Part::Buffer(b) = part else { continue };
+            let before = b.reservation.size();
+            if let Ok(runs) = self.spill_buffer(b, g.buckets, batch_rows, ctx).await? {
+                freed += before;
+                *part = Part::Run(runs);
+            }
+        }
+        let mut shared = lock(&g.shared);
+        parts.append(&mut shared.parts);
+        shared.parts = parts;
+        g.combined.store(buffered(&shared.parts), Ordering::Relaxed);
+        Ok(freed)
+    }
+
     /// Spills `buffer` (not empty) as one sorted run per bucket on the
     /// blocking pool. Returns the runs and empties the buffer, or
     /// `Ok(Err(_))` and keeps it when the pool refused the writer's scratch
@@ -1261,6 +1294,7 @@ impl Sink for Sort {
             readers: Arc::default(),
             bucketing,
             buckets,
+            combined: AtomicUsize::new(0),
         }))
     }
 
@@ -1274,6 +1308,7 @@ impl Sink for Sort {
             batch_rows: ctx.query().config().batch_size.max(1),
             bucketing: g.bucketing.clone(),
             prune: PruneStats::default(),
+            global: Arc::clone(global),
         }))
     }
 
@@ -1281,7 +1316,7 @@ impl Sink for Sort {
         &self,
         input: Batch,
         local: &mut LocalState,
-        _global: &GlobalState,
+        global: &GlobalState,
     ) -> Result<SinkStatus> {
         let l = local_mut::<SortLocal>(local, "Sort")?;
         let rows = input.num_rows();
@@ -1321,7 +1356,10 @@ impl Sink for Sort {
             .pruned
             .fetch_add(dropped as u64, Ordering::Relaxed);
         if self.spill.is_some() {
-            l.signal.set_spillable_bytes(b.reservation.size());
+            let g = global_ref::<SortGlobal>(global, "Sort")?;
+            let combined = g.combined.load(Ordering::Relaxed);
+            l.signal
+                .set_spillable_bytes(b.reservation.size() + combined);
         }
         Ok(SinkStatus::NeedMoreInput)
     }
@@ -1342,6 +1380,7 @@ impl Sink for Sort {
         if !buffer.batches.is_empty() {
             shared.parts.push(Part::Buffer(buffer));
         }
+        g.combined.store(buffered(&shared.parts), Ordering::Relaxed);
         // The last driver to combine finalizes: its signal offers the whole
         // global state to `spill_global` meanwhile.
         if self.spill.is_some() {
@@ -1429,21 +1468,29 @@ impl Sink for Sort {
     ) -> BoxFuture<'a, Result<usize>> {
         Box::pin(async move {
             let l = local_mut::<SortLocal>(local, "Sort")?;
-            let before = l.buffer.reservation.size();
-            if l.buffer.batches.is_empty() || self.spill.is_none() {
+            if self.spill.is_none() {
                 return Ok(0);
             }
-            let buckets = l.bucketing.as_ref().map_or(1, |b| b.buckets());
-            let Ok(runs) = self
-                .spill_buffer(&mut l.buffer, buckets, l.batch_rows, ctx)
-                .await?
-            else {
-                // Refused scratch memory: nothing freed this time.
-                return Ok(0);
-            };
-            l.runs.push(runs);
-            l.signal.set_spillable_bytes(0);
-            Ok(before)
+            let mut freed = 0;
+            if !l.buffer.batches.is_empty() {
+                let before = l.buffer.reservation.size();
+                let buckets = l.bucketing.as_ref().map_or(1, |b| b.buckets());
+                // Refused scratch memory: nothing freed from this buffer.
+                if let Ok(runs) = self
+                    .spill_buffer(&mut l.buffer, buckets, l.batch_rows, ctx)
+                    .await?
+                {
+                    l.runs.push(runs);
+                    freed = before;
+                }
+            }
+            // The combined drivers' buffers. `finalize` cannot run
+            // meanwhile: it waits for this driver's `combine`.
+            let g = global_ref::<SortGlobal>(&l.global, "Sort")?;
+            freed += self.spill_parts(g, ctx).await?;
+            let left = l.buffer.reservation.size() + g.combined.load(Ordering::Relaxed);
+            l.signal.set_spillable_bytes(left);
+            Ok(freed)
         })
     }
 
@@ -1458,25 +1505,10 @@ impl Sink for Sort {
             if self.spill.is_none() {
                 return Ok(0);
             }
-            // Out of the lock while spilling; `finalize` is not polled
-            // meanwhile, and an error fails the query (the parts go).
-            let mut parts = mem::take(&mut lock(&g.shared).parts);
-            let batch_rows = ctx.query().config().batch_size.max(1);
-            let mut freed = 0;
-            for part in &mut parts {
-                let Part::Buffer(b) = part else { continue };
-                let before = b.reservation.size();
-                if let Ok(runs) = self.spill_buffer(b, g.buckets, batch_rows, ctx).await? {
-                    freed += before;
-                    *part = Part::Run(runs);
-                }
-            }
-            let mut shared = lock(&g.shared);
-            parts.append(&mut shared.parts);
-            shared.parts = parts;
+            let freed = self.spill_parts(g, ctx).await?;
             ctx.consumer()
                 .signal()
-                .set_spillable_bytes(buffered(&shared.parts));
+                .set_spillable_bytes(g.combined.load(Ordering::Relaxed));
             Ok(freed)
         })
     }

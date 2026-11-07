@@ -18,7 +18,8 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use krishiv_common::error::ErrorClass;
 use krishiv_memory::{
-    ConsumerHandle, MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillOwner, TreePool,
+    ConsumerHandle, MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillOwner, Spillable,
+    TreePool,
 };
 use krishiv_types::batch::{Batch, Weights};
 
@@ -268,6 +269,79 @@ async fn spill_global_spills_the_combined_buffers() {
     assert_eq!(out.weights(), &Weights::Column(Int64Array::from(w)));
     assert_eq!(sort.metrics().final_fan_in, 2);
     drop((local, source_global, source_ctx, global, sink_ctx));
+    assert_eq!(manager.used_bytes(), 0);
+    assert_eq!(root.reserved(), 0);
+    drop(manager);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A driver that combined has ended with its spill hook: a driver still
+/// running offers its buffer as its own spillable bytes and spills it, so a
+/// small pool is not left full of buffers nobody can spill.
+#[tokio::test(start_paused = true)]
+async fn a_running_driver_spills_the_combined_buffers() {
+    let (schema, batch) = floats();
+    let executor: Arc<dyn Executor> = TokioExecutor::deterministic(1).unwrap();
+    let root = TreePool::new(&MemoryConfig::default());
+    let config = ExecConfig {
+        batch_size: 3,
+        ..ExecConfig::default()
+    };
+    let query = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        config,
+        root.child("q", None),
+    );
+    let ctx = |op| {
+        TaskContext::new(
+            Arc::clone(&query),
+            Arc::clone(&executor),
+            SpillOwner::new(),
+            OperatorId(op),
+            "Sort",
+        )
+    };
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!("sort-unit-running-{}", std::process::id()));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: dir.clone(),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let sort = Sort::new(schema, &[SortKey::asc(2)], Some(manager.scope().unwrap())).unwrap();
+    let (ended_ctx, running_ctx) = (ctx(0), ctx(2));
+    let global = Sink::global_state(&sort, &ended_ctx).unwrap();
+    let mut ended = Sink::local_state(&sort, &ended_ctx, &global).unwrap();
+    sort.sink(batch.clone(), &mut ended, &global).unwrap();
+    let one_buffer = ended_ctx.consumer().signal().spillable_bytes();
+    assert!(one_buffer > 0);
+    sort.combine(ended, &global).unwrap();
+    drop(ended_ctx);
+
+    let mut running = Sink::local_state(&sort, &running_ctx, &global).unwrap();
+    sort.sink(batch.clone(), &mut running, &global).unwrap();
+    let signal = running_ctx.consumer().signal();
+    assert_eq!(signal.spillable_bytes(), 2 * one_buffer, "both buffers");
+    let freed = sort.spill(&mut running, 1, &running_ctx).await.unwrap();
+    assert_eq!(freed, 2 * one_buffer);
+    assert_eq!(signal.spillable_bytes(), 0);
+    // One spill request wrote both drivers' buffers.
+    assert_eq!(sort.metrics().runs_spilled, 2);
+    sort.combine(running, &global).unwrap();
+    sort.finalize(&global, &running_ctx).await.unwrap();
+
+    let source_ctx = ctx(1).with_dependency(Arc::clone(&global));
+    let source_global = Source::global_state(&sort, &source_ctx).unwrap();
+    let mut local = Source::local_state(&sort, &source_ctx, &source_global).unwrap();
+    let mut out = Vec::new();
+    while let Some(b) = sort.get_data(&mut local, &source_global).await.unwrap() {
+        out.push(b);
+    }
+    let out = Batch::concat(&out[0].schema(), &out).unwrap();
+    assert_eq!(ids(&out), [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]);
+    drop((local, source_global, source_ctx, global, running_ctx));
     assert_eq!(manager.used_bytes(), 0);
     assert_eq!(root.reserved(), 0);
     drop(manager);
