@@ -1840,6 +1840,7 @@ impl DataFrame {
                     source: source.clone(),
                     columns,
                     known: false,
+                    permanent: false,
                 },
             );
             self.session.state.cache.invalidate_table(name);
