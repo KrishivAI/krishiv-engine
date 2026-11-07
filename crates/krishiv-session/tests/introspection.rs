@@ -365,10 +365,12 @@ fn schema_level_collations_are_stored_only_when_enabled() {
     run(&s, "ALTER SCHEMA c DEFAULT COLLATION UTF8_LCASE");
     let shown = rows(&s, "DESCRIBE SCHEMA EXTENDED c");
     assert_eq!(shown[3], ["Collation", "UTF8_LCASE"], "{shown:?}");
+    run(&s, "CREATE TABLE default.src (a STRING) USING parquet");
     for sql in [
         "CREATE TABLE c.t (a STRING) USING parquet",
         "CREATE TABLE c.t2 USING parquet AS SELECT 'x' AS a",
         "CREATE VIEW c.v AS SELECT 'x' AS a",
+        "CREATE TABLE c.t3 LIKE default.src",
         "CREATE FUNCTION c.f(x STRING) RETURNS STRING RETURN x",
     ] {
         assert_eq!(class(&s, sql), "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");

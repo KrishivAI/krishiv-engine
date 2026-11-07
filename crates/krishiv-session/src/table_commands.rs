@@ -240,7 +240,7 @@ impl Session {
         )
     }
 
-    /// Refuses a table or view in a schema with a default collation (`spark.sql.collation.schemaLevel.enabled`):
+    /// Refuses a table, view or SQL function in a schema with a default collation (`spark.sql.collation.schemaLevel.enabled`):
     /// Krishiv does not apply the default to the new columns yet, and would type them `UTF8_BINARY`.
     pub(crate) fn refuse_collated_namespace(&self, name: &TableName) -> Result<(), KrishivError> {
         let collated = self
