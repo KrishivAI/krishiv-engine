@@ -351,7 +351,8 @@ fn arrow_nested(t: &arrow_schema::DataType) -> bool {
 /// Whether the encoder must list the nested-types feature for an Arrow type
 /// it writes (kept in step with [`feature_of`] for [`Construct::ArrowType`]).
 pub(crate) fn arrow_type_is_nested(t: &arrow_schema::DataType) -> bool {
-    arrow_nested(t)
+    // A variant's carrier is one value, not a struct: it needs `variant_type`, not `nested_types`.
+    !krishiv_types::arrow::is_variant_struct(t) && arrow_nested(t)
 }
 
 /// The feature `construct` needs, or `None` for the epoch-1 baseline.
@@ -915,5 +916,40 @@ impl ReaderFeatures {
             .filter(|id| Feature::from_id(id).is_none_or(|f| !self.contains(f)))
             .map(str::to_owned)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType as A, Field};
+    use krishiv_types::DataType;
+
+    use super::*;
+
+    #[test]
+    fn the_encoders_nested_flag_agrees_with_the_feature_walk_for_a_variant_carrier() {
+        let carrier = DataType::Variant.to_arrow();
+        // The walk names `variant_type` only; the encoder must not also demand `nested_types`.
+        assert_eq!(
+            feature_of(Construct::ArrowType(&carrier)),
+            Some(Feature::VariantType)
+        );
+        assert!(!arrow_type_is_nested(&carrier));
+        // A list of variants is nested (and the element is a construct of its own).
+        let list = A::List(Arc::new(Field::new("item", carrier, true)));
+        assert_eq!(
+            feature_of(Construct::ArrowType(&list)),
+            Some(Feature::NestedTypes)
+        );
+        assert!(arrow_type_is_nested(&list));
+        // A plain struct stays nested.
+        let plain = A::Struct(vec![Field::new("a", A::Int32, true)].into());
+        assert!(arrow_type_is_nested(&plain));
+        assert_eq!(
+            feature_of(Construct::ArrowType(&plain)),
+            Some(Feature::NestedTypes)
+        );
     }
 }
