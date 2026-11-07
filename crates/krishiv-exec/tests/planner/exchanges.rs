@@ -80,10 +80,10 @@ fn a_large_build_is_partitioned_and_a_small_one_broadcast() {
     +- HashJoin Inner, [a#0] = [a#3], RuntimeFilter #1: a#0 -> spark_catalog.default.big.a
        :- Exchange hashpartitioning(a#0)
        :  +- Project [a#0, s#2]
-       :     +- Scan spark_catalog.default.big [a#0, b#1, s#2]
+       :     +- Scan spark_catalog.default.big [a#0, b#1, s#2], PushedFilters: [isnotnull(a#0)]
        +- Exchange hashpartitioning(a#3)
           +- Project [a#3, b#4]
-             +- Scan spark_catalog.default.big [a#0, b#1, s#2] (ids +3)
+             +- Scan spark_catalog.default.big [a#0, b#1, s#2], PushedFilters: [isnotnull(a#0)] (ids +3)
     ");
     assert_eq!(
         exchanges_of(&env, "SELECT x.s FROM big x JOIN t y ON x.a = y.a"),
@@ -218,13 +218,13 @@ fn a_join_on_an_aggregated_key_exchanges_only_the_other_side() {
     Project [s#2, n#7]
     +- HashJoin Inner, [a#0] = [a#4], RuntimeFilter #1: a#0 -> spark_catalog.default.big.a
        :- Exchange hashpartitioning(a#0)
-       :  +- Scan spark_catalog.default.big [a#0, s#2]
-       +- Project [a#0, count(1)#4611686018427387904 AS n#3] (ids +4)
+       :  +- Scan spark_catalog.default.big [a#0, s#2], PushedFilters: [isnotnull(a#0)]
+       +- Project [a#0, count(1)#4611686018427387906 AS n#3] (ids +4)
           +- HashAggregate keys=[a#0], functions=[count(1)]
              +- Exchange hashpartitioning(a#0)
                 +- PartialHashAggregate keys=[a#0], functions=[count(1)]
                    +- Project [a#0]
-                      +- Scan spark_catalog.default.big [a#0, s#2]
+                      +- Scan spark_catalog.default.big [a#0, s#2], PushedFilters: [isnotnull(a#0)]
     ");
     // Through a CTE reference, which renames the definition's columns.
     let sql = "WITH g AS (SELECT a, count(*) AS n FROM big GROUP BY a) \
