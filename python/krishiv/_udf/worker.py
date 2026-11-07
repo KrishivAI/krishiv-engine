@@ -183,25 +183,28 @@ def wrap_scalar_pandas_udf(f: Callable[..., Any], return_type: DataType) -> Call
 
 
 # --- Krishiv: the engine's Arrow forms around Spark's ---
-def _spark_arrow_type(t: Any) -> Any:
-    """``t`` with the engine's view types replaced by Spark's (``string``, ``binary``)."""
+def _spark_arrow_type(t: Any, timezone: str | None = None) -> Any:
+    """``t`` with the engine's view types replaced by Spark's (``string``, ``binary``) and, given ``timezone``,
+    its zoned timestamps in that zone (Spark sends the session time zone; the engine sends UTC: the same instants)."""
     import pyarrow as pa
 
+    if timezone is not None and pa.types.is_timestamp(t) and t.tz is not None:
+        return pa.timestamp(t.unit, tz=timezone)
     if pa.types.is_string_view(t):
         return pa.string()
     if pa.types.is_binary_view(t):
         return pa.binary()
     if pa.types.is_list(t) or pa.types.is_large_list(t):
         field = t.value_field
-        inner = field.with_type(_spark_arrow_type(field.type))
+        inner = field.with_type(_spark_arrow_type(field.type, timezone))
         return pa.list_(inner) if pa.types.is_list(t) else pa.large_list(inner)
     if pa.types.is_map(t):
         return pa.map_(
-            t.key_field.with_type(_spark_arrow_type(t.key_type)),
-            t.item_field.with_type(_spark_arrow_type(t.item_type)),
+            t.key_field.with_type(_spark_arrow_type(t.key_type, timezone)),
+            t.item_field.with_type(_spark_arrow_type(t.item_type, timezone)),
         )
     if pa.types.is_struct(t):
-        return pa.struct([f.with_type(_spark_arrow_type(f.type)) for f in t])
+        return pa.struct([f.with_type(_spark_arrow_type(f.type, timezone)) for f in t])
     return t
 
 
@@ -226,8 +229,8 @@ def _engine_arrow_type(t: Any) -> Any:
     return t
 
 
-def _to_spark(arr: Any) -> Any:
-    t = _spark_arrow_type(arr.type)
+def _to_spark(arr: Any, timezone: str | None = None) -> Any:
+    t = _spark_arrow_type(arr.type, timezone)
     return arr if t == arr.type else arr.cast(t)
 
 
@@ -332,7 +335,9 @@ def scalar_pandas_wrapper(f: Callable[..., Any], return_type: DataType) -> Calla
         from krishiv.errors import PySparkValueError
 
         conf = _runner_conf()
-        batch = pa.RecordBatch.from_arrays([_to_spark(a) for a in arrays], names=[f"_{i}" for i in range(len(arrays))])
+        batch = pa.RecordBatch.from_arrays(
+            [_to_spark(a, conf.timezone) for a in arrays], names=[f"_{i}" for i in range(len(arrays))]
+        )
         # load_stream (`serializers.py:441-455`), with the worker's options (`worker.py:2467-2490`).
         series = ArrowBatchTransformer.to_pandas(
             batch,
@@ -378,7 +383,7 @@ def scalar_arrow_wrapper(f: Callable[..., Any], return_type: DataType) -> Callab
 
     def func(*arrays: Any) -> Any:
         conf = _runner_conf()
-        result = udf_func(*[_to_spark(a) for a in arrays])
+        result = udf_func(*[_to_spark(a, conf.timezone) for a in arrays])
         # Only pyarrow's own arrays are imported (design "Trusted producer"): anything else, even with
         # `__arrow_c_array__`, is refused here. Spark would fail in `RecordBatch.from_arrays`.
         if not isinstance(result, pa.Array):

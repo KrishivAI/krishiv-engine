@@ -593,6 +593,11 @@ class Catalog:
             raise not_expected_type("viewName", "str", viewName)
         return self._session._native.drop_temp_view(viewName)
 
+    def registerFunction(self, name: str, f: Any, returnType: Any = None) -> Any:
+        """An alias for ``spark.udf.register`` (deprecated since 2.3.0, ``pyspark/sql/catalog.py:1272``)."""
+        warnings.warn("Deprecated in 2.3.0. Use spark.udf.register instead.", FutureWarning, stacklevel=2)
+        return self._session.udf.register(name, f, returnType)
+
     def clearCache(self) -> None:
         """Drops every cached relation: later actions run uncached."""
         self._session._native.clear_cache()

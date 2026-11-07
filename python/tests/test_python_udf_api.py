@@ -15,6 +15,7 @@ import importlib.util
 import subprocess
 import sys
 import textwrap
+import time
 from collections.abc import Iterator
 from decimal import Decimal
 from typing import Any
@@ -506,3 +507,42 @@ def test_a_stream_read_with_the_gil_released_after_a_subinterpreter_was_created_
     # T098b I1: once any subinterpreter exists PyGILState_Check answers 1 on every thread (measured on
     # 3.11-3.14), so the probe must not rely on it where the thread state is per thread (3.12+).
     _read_stream_in_a_child("CFUNCTYPE", on_thread=True, subinterpreter=True)
+
+
+# --- unit 3a: bugs the adapted PySpark tests found ---
+
+
+def test_catalog_register_function_is_the_deprecated_alias_of_udf_register(spark: SparkSession) -> None:
+    # `pyspark/sql/catalog.py:1272-1287`: a FutureWarning, then `spark.udf.register`.
+    with pytest.warns(FutureWarning, match="Deprecated in 2.3.0"):
+        f = spark.catalog.registerFunction("cat_reg_plus", lambda x: x + 1, LongType())
+    assert sorted(_values(spark.sql("SELECT cat_reg_plus(id) FROM range(3)").collect())) == [1, 2, 3]
+    assert sorted(_values(spark.range(3).select(f("id")).collect())) == [1, 2, 3]
+
+
+@needs_pandas
+@pytest.mark.parametrize("kind", ["pandas", "arrow"])
+def test_vectorized_udfs_see_timestamps_in_the_session_time_zone(
+    spark: SparkSession, kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Spark sends `timestamp[us, tz=<session zone>]`; the engine sends UTC, so the same instants arrive in
+    # the session zone (`pyspark/worker.py` `local_timestamp` in `ArrowBatchTransformer.to_pandas`).
+    spark.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
+    monkeypatch.setenv("TZ", "America/Los_Angeles")  # the Python zone of the naive datetime: the session's
+    time.tzset()
+    try:
+        df = spark.createDataFrame([(datetime.datetime(2020, 2, 2, 12, 15, 16),)], ["ts"])
+        if kind == "pandas":
+            f = F.pandas_udf(lambda s: s.astype(str), "string")
+        else:
+            f = F.arrow_udf(lambda a: pa.array([str(a.type)] * len(a)), "string")
+        got = _values(df.select(f("ts")).collect())[0]
+        assert (
+            got.startswith("2020-02-02 12:15:16")
+            if kind == "pandas"
+            else got == "timestamp[us, tz=America/Los_Angeles]"
+        )
+    finally:
+        spark.conf.unset("spark.sql.session.timeZone")
+        monkeypatch.undo()
+        time.tzset()

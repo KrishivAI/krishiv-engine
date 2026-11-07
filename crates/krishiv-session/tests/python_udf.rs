@@ -261,6 +261,19 @@ async fn a_call_in_a_grouping_key_is_evaluated_below_the_aggregate() {
     assert_eq!(got, vec![Some(5), Some(5)]);
 }
 
+#[tokio::test]
+async fn a_call_that_is_a_grouping_key_can_be_selected() {
+    // Python's `groupBy(udf(x)).agg(...)`: the key is the call and so is an output.
+    let (s, _) = session(None);
+    s.register_python_udf(plus_one_def("py_plus"));
+    let got = longs(
+        &s,
+        "SELECT py_plus(id) AS k, count(*) FROM range(3) GROUP BY py_plus(id) ORDER BY 1",
+    )
+    .await;
+    assert_eq!(got, vec![Some(1), Some(2), Some(3)]);
+}
+
 /// Two-argument `x + y` registered as `py_add` (both `bigint`).
 fn add_def() -> PythonUdfDef {
     PythonUdfDef {
