@@ -324,6 +324,11 @@ fn a_decimal_key_rounds_a_finer_bound_half_up_as_the_cast_does() {
         frames_of("1.4 preceding and 1.4 following"),
         frames_of("1 preceding and 1 following")
     );
+    // HALF_UP, not HALF_EVEN: 2.5 rounds to 3 (HALF_EVEN would give 2).
+    assert_eq!(
+        frames_of("2.5 preceding and 2.5 following"),
+        frames_of("3 preceding and 3 following")
+    );
 }
 
 #[test]

@@ -293,7 +293,7 @@ fn a_date_target_past_the_day_range_wraps_without_ansi() {
 
 /// A bound that does not fit the key's decimal type raises the cast overflow under ANSI (the default).
 #[test]
-fn a_decimal_bound_past_the_key_precision_is_not_accepted() {
+fn a_decimal_bound_past_the_key_precision_raises_the_cast_error() {
     let s = session();
     let sql = "SELECT count(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND 100 FOLLOWING) \
                FROM VALUES (CAST(1 AS DECIMAL(2,0))) AS b(x)";
