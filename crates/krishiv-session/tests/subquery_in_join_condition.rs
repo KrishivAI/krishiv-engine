@@ -266,3 +266,33 @@ fn a_nested_correlation_inside_the_limit_input_is_not_refused() -> R {
     );
     Ok(())
 }
+
+/// An `IN` in a condition that reads neither side of a full outer join stays an expression in
+/// Spark (nothing can push it down); it is one constant for every row pair
+/// (`subquery/in-subquery/in-joins.sql` #32 of Spark 4.3.0: a NULL in the subquery makes
+/// `5 NOT IN (...)` NULL, so no pair matches).
+#[test]
+fn a_constant_in_under_a_full_join_is_one_value_for_every_pair() -> R {
+    let s = session()?;
+    for q in [
+        "create temporary view f1 as select * from values (1), (3), (5) as f1(id)",
+        "create temporary view f2 as select * from values (1), (4) as f2(id)",
+        "create temporary view f_null as select * from values (99), (cast(null as int)) as f_null(id)",
+        "create temporary view f_in as select * from values (3), (4) as f_in(id)",
+    ] {
+        run(&s, q)?;
+    }
+    let none = rows(&["1|NULL", "3|NULL", "5|NULL", "NULL|1", "NULL|4"]);
+    let q = "select f1.id, f2.id from f1 full outer join f2 on (5 not in (select id from f_null))";
+    assert_eq!(run(&s, q)?, none, "{q}");
+    // 5 is not among 3, 4: the condition holds for every pair.
+    let all = rows(&["1|1", "1|4", "3|1", "3|4", "5|1", "5|4"]);
+    let q = "select f1.id, f2.id from f1 full outer join f2 on (5 not in (select id from f_in))";
+    assert_eq!(run(&s, q)?, all, "{q}");
+    // With a key beside it.
+    let keyed = rows(&["1|1", "3|NULL", "5|NULL", "NULL|4"]);
+    let q = "select f1.id, f2.id from f1 full outer join f2 \
+             on (f1.id = f2.id and 5 not in (select id from f_in))";
+    assert_eq!(run(&s, q)?, keyed, "{q}");
+    Ok(())
+}

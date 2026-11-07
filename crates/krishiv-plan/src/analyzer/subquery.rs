@@ -893,6 +893,11 @@ impl Rewriter {
             r = joined;
             plain.extend(conds);
         }
+        // An uncorrelated EXISTS left in a conjunct (the three-valued form of an `IN` in a
+        // condition that reads neither side) is one constant for every row pair: the left side
+        // carries its value as a column, because the executor evaluates subquery values in a
+        // projection and not in a join condition.
+        let (plain, l) = self.lift_exists(plain, l)?;
         if plain.iter().any(|c| self.reads_correlated(c)) {
             return Err(unsupported(
                 "correlated subqueries outside a filter or a projection",
@@ -910,6 +915,59 @@ impl Rewriter {
             p.origin,
         );
         Ok(columns(joined, &out))
+    }
+
+    /// `conds` with each uncorrelated `EXISTS` replaced by a boolean column that `side` gains
+    /// (a projection of its columns and the subquery values), and `side` with those columns.
+    fn lift_exists(
+        &mut self,
+        conds: Vec<Arc<Expr>>,
+        side: Arc<LogicalPlan>,
+    ) -> R<(Vec<Arc<Expr>>, Arc<LogicalPlan>)> {
+        let mut lifted: Vec<Arc<Expr>> = Vec::new();
+        let mut columns_of: HashMap<usize, Arc<Expr>> = HashMap::new();
+        for c in &conds {
+            for sub in subqueries(c) {
+                if !matches!(
+                    sub.node,
+                    ExprNode::Subquery {
+                        kind: SubqueryKind::Exists,
+                        ..
+                    }
+                ) || self.correlated(&sub)
+                    || columns_of.contains_key(&addr(&*sub))
+                {
+                    continue;
+                }
+                let column = JoinKind::existence_column(self.fresh());
+                lifted.push(alias(Arc::clone(&sub), &column));
+                columns_of.insert(addr(&*sub), col_expr(&column, Origin::UNKNOWN));
+            }
+        }
+        if lifted.is_empty() {
+            return Ok((conds, side));
+        }
+        let conds = conds
+            .into_iter()
+            .map(|c| {
+                c.transform_down(&mut |x: Arc<Expr>| {
+                    Ok::<_, std::convert::Infallible>(
+                        columns_of.get(&addr(&*x)).cloned().unwrap_or(x),
+                    )
+                })
+                .unwrap_or_else(|never| match never {})
+            })
+            .collect();
+        let mut exprs: Vec<Arc<Expr>> = output(&side)?
+            .iter()
+            .map(|c| col_expr(c, Origin::UNKNOWN))
+            .collect();
+        exprs.extend(lifted);
+        let origin = side.origin;
+        Ok((
+            conds,
+            node(PlanNode::Project { input: side, exprs }, origin),
+        ))
     }
 
     /// `left JOIN LATERAL right`, `right` reading `left`'s columns: an
