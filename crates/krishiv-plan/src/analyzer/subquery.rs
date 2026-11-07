@@ -605,8 +605,10 @@ impl Rewriter {
         }
         e.transform_up(&mut |x: Arc<Expr>| match &x.node {
             ExprNode::Subquery { kind, plan } => {
-                self.check_bounds(plan)?;
+                // After the inlining: Spark checks the plan with its CTEs
+                // inlined, so a bound behind a `WITH` reference counts.
                 let inlined = super::subquery_cte::inline(plan, &mut self.next_id)?;
+                self.check_bounds(&inlined)?;
                 let mut rewritten = self.plan(&inlined)?;
                 if self.legacy_exists_in_count
                     && matches!(kind, SubqueryKind::Exists | SubqueryKind::In(_))

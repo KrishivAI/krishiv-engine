@@ -300,3 +300,25 @@ fn spark_3_5_refuses_a_correlation_below_a_window() -> R {
     );
     Ok(())
 }
+
+/// Spark checks a subquery with its CTEs inlined, so a window (or LIMIT) behind
+/// a reference to a correlated `WITH` definition is refused on 3.5 too; the
+/// default profile answers it as it does the written-out form.
+#[test]
+fn spark_3_5_checks_a_bound_behind_a_correlated_with_reference() -> R {
+    let cte = "select x1, (with t as (select y2 from y where y1 = x1) \
+               select max(s) from (select sum(y2) over (order by y2) s from t) q) from x";
+    let written = "select x1, (select max(s) from (select sum(y2) over (order by y2) s \
+                   from y where y1 = x1) q) from x";
+    let new = session()?;
+    assert_eq!(run(&new, cte)?, run(&new, written)?, "{cte}");
+    assert_eq!(run(&new, cte)?, rows(&["1|6", "2|9", "3|6"]), "{cte}");
+    let old = Session::builder().profile(SparkProfile::V3_5).build()?;
+    views(&old)?;
+    assert!(
+        failure(&old, cte).contains(OUTER),
+        "{cte}: {}",
+        failure(&old, cte)
+    );
+    Ok(())
+}

@@ -222,7 +222,8 @@ fn a_closed_definition_with_an_in_subquery_read_again_matches_its_expansion() ->
             &["1|1", "2|1", "3|1"][..],
         ),
     ];
-    // A definition whose only subquery sits in its select list.
+    // A definition whose only subquery sits in its select list, over a leaf
+    // with no ids of its own below the subquery's.
     let d2 = "select (select max(y1) from y) m, y2 from y";
     let extra = [(
         format!(
@@ -234,7 +235,20 @@ fn a_closed_definition_with_an_in_subquery_read_again_matches_its_expansion() ->
              on a.m = b.m and a.y2 = b.y2 where a.y2 = x1) from x"
         ),
     )];
-    for (cte, expanded) in &extra {
+    // The subquery's plan holds the lowest ids: the definition is only a
+    // select list over it, with no relation of its own.
+    let d3 = "select (select max(y1) from y) m";
+    let low = [(
+        format!(
+            "select x1, (with t as ({d3}) select count(*) from t a join t b \
+             on a.m = b.m where a.m = x1) from x"
+        ),
+        format!(
+            "select x1, (select count(*) from ({d3}) a join ({d3}) b \
+             on a.m = b.m where a.m = x1) from x"
+        ),
+    )];
+    for (cte, expanded) in extra.iter().chain(&low) {
         assert_eq!(run(&s, cte)?, run(&s, expanded)?, "{cte}");
     }
     for (cte, expanded, want) in &cases {
