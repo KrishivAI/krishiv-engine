@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "subqueries": [
+      17,
+      18
+    ]
+  },
+  "file": "subquery/in-subquery/in-joins",
+  "format_version": 1
+}

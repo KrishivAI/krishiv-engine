@@ -11,15 +11,18 @@
 //! the kernels' variant cast (`INVALID_VARIANT_CAST` for `variant_get`,
 //! NULL for `try_variant_get`). Without a type, the result is a `VARIANT`
 //! re-encoded with only the keys it uses, as Spark's `VariantBuilder` does.
+//! `schema_of_variant` prints the kernels' [`Schema`]; `to_variant_object`
+//! is the kernels' `castToVariant` with structs and maps allowed.
 
 use std::sync::Arc;
 
-use arrow_array::builder::BooleanBuilder;
+use arrow_array::builder::{BooleanBuilder, StringViewBuilder};
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType;
 use krishiv_common::error::KrishivError;
 use krishiv_kernels::variant::{
-    PathSegment, VariantColumn, VariantColumnBuilder, cast_values, extract, parse_path_or_raise,
+    PathSegment, Schema, VariantColumn, VariantColumnBuilder, cast_values, extract,
+    parse_path_or_raise,
 };
 use krishiv_types::DataType as SparkType;
 use krishiv_types::variant::VariantBuilder;
@@ -31,6 +34,8 @@ use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 pub(super) const NAMES: &[&str] = &[
     "is_variant_null",
     "parse_json",
+    "schema_of_variant",
+    "to_variant_object",
     "try_parse_json",
     "try_variant_get",
     "variant_get",
@@ -67,6 +72,19 @@ fn parse_json(x: &Inputs<'_>, fail: bool) -> Result<ArrayRef, KrishivError> {
         }
     }
     out.finish()
+}
+
+fn schema_of_variant(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
+    let column = x.column(0)?;
+    let col = VariantColumn::new(column.as_ref())?;
+    let mut out = StringViewBuilder::with_capacity(col.len());
+    for i in 0..col.len() {
+        match col.get(i)? {
+            Some(v) => out.append_value(Schema::of(&v)?.sql()),
+            None => out.append_null(),
+        }
+    }
+    Ok(Arc::new(out.finish()))
 }
 
 fn is_variant_null(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
@@ -148,6 +166,18 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             Some(Binding::new(variant, move |x: &Inputs<'_>| {
                 parse_json(x, fail)
             }))
+        }
+        ("schema_of_variant", [t]) if variant_or_null(t) => {
+            Some(Binding::new(DataType::Utf8View, schema_of_variant))
+        }
+        ("to_variant_object", [t]) => {
+            // The analyzer checked the type; its Spark form names the fields.
+            let from = SparkType::from_arrow(t).ok();
+            from.map(|from| {
+                Binding::new(variant.clone(), move |x: &Inputs<'_>| {
+                    krishiv_kernels::variant::cast_to_variant(x.column(0)?.as_ref(), &from)
+                })
+            })
         }
         ("is_variant_null", [t]) if variant_or_null(t) => {
             Some(Binding::new(DataType::Boolean, is_variant_null))

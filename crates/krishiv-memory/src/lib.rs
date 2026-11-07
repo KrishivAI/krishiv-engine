@@ -87,7 +87,7 @@ mod spillfile;
 mod sync;
 
 pub use clock::{Clock, SystemClock};
-pub use consumer::{ConsumerHandle, SpillStats};
+pub use consumer::{ConsumerHandle, GrantCredit, SpillStats};
 pub use error::MemoryError;
 pub use limit::{DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit};
 pub use pool::{
@@ -129,6 +129,19 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// cannot be asked to spill. A driver's consumers pass a signal from
     /// their [`SpillOwner`].
     fn register(&self, name: &str, spill: Option<Arc<dyn Spillable>>) -> ConsumerId;
+    /// [`register`](Self::register) for a [`ConsumerHandle`], whose grant
+    /// `credit` the pool may read: an arbitration round waits for other
+    /// consumers' unused credit (granted, about to be used or returned)
+    /// before it fails a request or aborts a query. The default ignores it.
+    fn register_with_credit(
+        &self,
+        name: &str,
+        spill: Option<Arc<dyn Spillable>>,
+        credit: &Arc<GrantCredit>,
+    ) -> ConsumerId {
+        let _ = credit;
+        self.register(name, spill)
+    }
     /// Unregisters a consumer and returns everything it holds.
     fn unregister(&self, id: ConsumerId);
     /// Fast path, no arbitration and no waiting. Quantised.

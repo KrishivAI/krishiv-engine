@@ -866,6 +866,17 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "generate_variant_explode",
+            PhysNode::Generate {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                kind: krishiv_plan::GeneratorKind::VariantExplode,
+                outer: true,
+                arg: col(2, "v", DataType::Variant),
+                subqueries: Vec::new(),
+            },
+        ),
+        (
             "generate_posexplode_outer",
             PhysNode::Generate {
                 input: boxed(scan()),

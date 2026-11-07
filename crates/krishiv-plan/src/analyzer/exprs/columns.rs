@@ -969,10 +969,7 @@ impl Resolver<'_> {
         let shown = Some(named_as(
             &parent,
             pretty(&base, None),
-            &crate::ColumnRef {
-                name: Vec::new(),
-                plan_id: None,
-            },
+            &crate::ColumnRef::new(Vec::new()),
             origin,
         ));
         Ok(Bound {

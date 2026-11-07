@@ -759,3 +759,56 @@ fn a_fallback_build_spills_under_a_small_query_pool() {
     assert!(capped.task_spill_bytes() > 0);
     assert_eq!(small.reserved(), 0, "memory still held after a fallback");
 }
+
+/// A broadcast hash join under a partial aggregate, four drivers, query
+/// pools from "the build spills" to "everything fits": each pool size works.
+/// The table stays in memory from about 5 MiB, and the four aggregates each
+/// reserve a batch's worst case (~790 KB) and give most of it back. A
+/// driver refused while the others hold grants for their retries waits for
+/// those retries rather than failing (6 MiB failed 6/8 before; ADR 0007
+/// update 2026-11-06).
+#[test]
+fn a_join_and_aggregate_run_in_pools_between_spilling_and_fitting() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let runner = QueryRunner::new(Arc::clone(&executor) as _);
+    let dir = tempfile::tempdir().unwrap();
+    let spill = SpillManager::open(&SpillConfig {
+        dir: dir.path().join("spill"),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let worker =
+        WorkerContext::new(Arc::clone(&tpch.tables) as _).with_spill(spill.scope().unwrap());
+    let mut config = Config::clone(&tpch.config);
+    config
+        .set("spark.sql.autoBroadcastJoinThreshold", "1g")
+        .unwrap();
+    let sql = "SELECT o_orderpriority, count(*), sum(l_quantity), max(o_comment) \
+               FROM lineitem JOIN orders ON l_orderkey = o_orderkey GROUP BY o_orderpriority";
+    let plan = tpch.plan_sql(sql, Arc::new(config)).unwrap();
+    let sorted = |mut rows: Vec<String>| {
+        rows.sort();
+        rows
+    };
+    let roomy: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let want = sorted(run(&runner, &plan, &worker, &roomy, 0).unwrap());
+    let mut id = 1;
+    for mib in [3, 4, 6, 8] {
+        for _ in 0..4 {
+            let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
+                limit: Some(mib << 20),
+                ..MemoryConfig::default()
+            });
+            let got = run(&runner, &plan, &worker, &pool, id)
+                .unwrap_or_else(|e| panic!("{mib} MiB, run {id}: {e}"));
+            assert_eq!(sorted(got), want, "{mib} MiB");
+            assert_eq!(pool.reserved(), 0, "{mib} MiB: memory still held");
+            id += 1;
+        }
+    }
+}

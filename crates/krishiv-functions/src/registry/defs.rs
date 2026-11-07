@@ -1346,7 +1346,7 @@ pub(super) fn spark_orderable(t: &DataType) -> bool {
 /// map field) is `DATATYPE_MISMATCH.INVALID_ORDERING_TYPE`; one Spark orders
 /// but the struct comparator does not take
 /// ([`krishiv_kernels::r#struct::comparable`], the same predicate the
-/// executor compares with: an array or interval field) is
+/// executor compares with: an interval field) is
 /// `KRISHIV_UNSUPPORTED_FEATURE`.
 fn ordered_min_max(c: &CallTypes<'_>, function: &str) -> Result<ArgType, KrishivError> {
     if let Some(t) = c.data_type(0) {
