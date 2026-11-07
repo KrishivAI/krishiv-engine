@@ -318,9 +318,11 @@ fn versions_are_checked_on_every_read() {
 
 #[test]
 fn fetch_runs_on_the_io_runtime_and_aborts_when_dropped() {
-    // One paused runtime for the read and the caller: the durations are virtual,
-    // so a loaded host cannot stretch them.
-    let io_rt = rt();
+    let io_rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
     let inner = Arc::new(InMemory::new());
     let fault = FaultStore::new(Arc::clone(&inner) as Arc<dyn ObjectStore>);
     let sched = IoScheduler::with_runtime(IoConfig::default(), io_rt.handle().clone());
@@ -348,11 +350,9 @@ fn fetch_runs_on_the_io_runtime_and_aborts_when_dropped() {
 /// not the time it then waited to be awaited.
 #[test]
 fn fetch_timed_measures_the_read_not_the_wait_to_use_it() {
-    let io_rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .enable_all()
-        .build()
-        .unwrap();
+    // One paused runtime for the read and the caller: the durations are
+    // virtual, so a loaded host cannot stretch them.
+    let io_rt = rt();
     let inner = Arc::new(InMemory::new());
     let fault = FaultStore::new(Arc::clone(&inner) as Arc<dyn ObjectStore>);
     let sched = IoScheduler::with_runtime(IoConfig::default(), io_rt.handle().clone());

@@ -524,7 +524,9 @@ struct FileScanLocal {
     row_filter: Option<(usize, bool)>,
     rows: super::RowStage,
     /// The scan's totals, to record a split this driver abandons (a limit above
-    /// stopped it before the split's end): its reads were made and paid for.
+    /// stopped it before the split's end): its reads were made and paid for. The
+    /// split's rows, bytes and unit counts are added with them; the decode
+    /// over-commit of its last unit is added when the stream drops, later.
     totals: Arc<Mutex<FileScanMetrics>>,
 }
 
