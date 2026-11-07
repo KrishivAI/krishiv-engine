@@ -4,6 +4,7 @@
 # Sparse-fetches sql/core/src/test/resources/sql-tests/{inputs,results} from apache/spark at <tag>
 # into tests/spark-golden/<tag>/{inputs,results}, plus MANIFEST and NOTICE.
 # Only v4.2.0 is committed; other fetched upstream tags are gitignored (see tests/spark-golden/.gitignore); Krishiv-authored goldens are committed.
+# The nightly `golden-profiles` job fetches v4.3.0 with this script; its baseline is tests/spark-golden/profiles/v4.3.0/.
 set -euo pipefail
 
 TAG="${1:?usage: $0 <tag> (e.g. v4.2.0)}"

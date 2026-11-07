@@ -104,6 +104,15 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
         {
             k[0].to_owned()
         }
+        ExprNode::Collate { name, .. } => format!("collate({}, {name})", k[0]),
+        // The implicit cast of a string to the collation of its call (`CollationTypeCoercion`),
+        // which Spark shows as `' ' collate UTF8_LCASE`; the analyzer builds it in `Default` mode and a
+        // bound written `CAST` never has that mode.
+        ExprNode::Cast {
+            to: DataType::CollatedString(c),
+            mode: CastMode::Default,
+            ..
+        } => format!("{} collate {}", k[0], c.name()),
         ExprNode::Cast { to, mode, .. } => {
             let cast = if *mode == CastMode::Try {
                 "TRY_CAST"
@@ -185,6 +194,17 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             name, qualifier, ..
         }) if name == "__subscript" && qualifier.is_empty() && k.len() == 2 => {
             format!("{}[{}]", k[0], k[1])
+        }
+        // `TimeAddInterval` and `SubtractTimes` show `left + right` / `left - right`, without the parentheses of
+        // Spark's arithmetic operators (`intervals.rs` `time_arithmetic` names them so).
+        ExprNode::Function(FunctionCall {
+            name, qualifier, ..
+        }) if qualifier.is_empty()
+            && k.len() == 2
+            && matches!(name.as_str(), "__time_plus" | "__time_minus") =>
+        {
+            let op = if name == "__time_plus" { '+' } else { '-' };
+            format!("{} {op} {}", k[0], k[1])
         }
         ExprNode::Function(FunctionCall {
             name,
@@ -521,6 +541,10 @@ pub(super) fn call(
         _ if name.eq_ignore_ascii_case("extract") && (2..=3).contains(&k.len()) => {
             format!("extract({} FROM {})", k[0], k[1])
         }
+        // `datepart` keeps its name and reads like `extract` (`date_part(field, source)` stays a call).
+        _ if name.eq_ignore_ascii_case("datepart") && (2..=3).contains(&k.len()) => {
+            format!("datepart({} FROM {})", k[0], k[1])
+        }
         // `trim` family: one argument is `trim(src)` / `ltrim(src)` /
         // `rtrim(src)` / `btrim(...)`; two are Spark's `TRIM(...)` form.
         // The analyzer keeps `trim(trimStr, src)` (characters first, as
@@ -638,19 +662,17 @@ pub(super) fn call(
         // prefix; `to_varchar` shows as `to_char`.
         _ if k.len() == 2 && matches!(name, "&" | "|" | "^" | "<<" | ">>" | ">>>") => infix(name),
         _ if k.len() == 1 && name == "~" => format!("~{}", k[0]),
+        // The unary `-` of a window frame bound cast to its key's type (`windows.rs`): Spark's `UnaryMinus` text.
+        _ if k.len() == 1 && name == "-" => format!("(- {})", k[0]),
         _ if name.eq_ignore_ascii_case("to_varchar") => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("to_char({d}{})", k.join(", "))
         }
         // `current_database` and `current_schema` are one expression
-        // (Spark's `CurrentDatabase`, shown as `current_schema`);
-        // `current_catalog` shows without parentheses.
+        // (Spark's `CurrentDatabase`, shown as `current_schema`).
         _ if name.eq_ignore_ascii_case("current_database") => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("current_schema({d}{})", k.join(", "))
-        }
-        _ if name.eq_ignore_ascii_case("current_catalog") && k.is_empty() && !distinct => {
-            "current_catalog".to_owned()
         }
         // `RLike` prints its function name upper case, whichever spelling
         // (`rlike`, `regexp`, `regexp_like`) the query used.

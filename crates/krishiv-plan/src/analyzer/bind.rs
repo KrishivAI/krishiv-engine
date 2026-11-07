@@ -60,6 +60,9 @@ pub(super) struct Bindings {
     pub(super) reads_files: bool,
     /// Securables of already-resolved scans, by name parts.
     pub(super) scans: HashMap<Vec<String>, usize>,
+    /// The declared `CHAR`/`VARCHAR` types of the columns of already-resolved scans (a DataFrame's stored
+    /// plan), by name parts, then column name: the resolved plan holds the types, not the declarations.
+    pub(super) scan_declared: HashMap<Vec<String>, HashMap<String, Arc<str>>>,
     /// The lowered plan of each `PlanNode::Sql`, by node address.
     pub(super) sql: HashMap<usize, Arc<LogicalPlan>>,
     pub(super) pins: BTreeMap<TableIdent, TableVersion>,
@@ -328,6 +331,46 @@ fn is_registry_call(name: &str) -> bool {
         && super::analytics::GroupingFn::from_name(name).is_none()
 }
 
+/// Whether `name` is `TIMESTAMPADD` or `TIMESTAMPDIFF` (any case): the
+/// functions only Spark's grammar builds, from a keyword unit.
+fn is_grammar_unit_call(name: &str) -> bool {
+    name.eq_ignore_ascii_case("timestampadd") || name.eq_ignore_ascii_case("timestampdiff")
+}
+
+/// A function name of three or more parts in the session catalog
+/// (`a.b.c.d()`, `spark_catalog.a.b.c()`) has a namespace of several parts,
+/// which the session catalog's functions cannot have (Spark's
+/// `asFunctionIdentifier`): `REQUIRES_SINGLE_PART_NAMESPACE`.
+pub(super) fn check_function_namespace(
+    ctx: &AnalysisContext,
+    f: &crate::FunctionCall,
+    origin: Origin,
+) -> Result<(), AnalysisError> {
+    if f.qualifier.len() < 2
+        || is_session_qualifier(&f.qualifier)
+        || is_builtin_qualifier(&f.qualifier)
+    {
+        return Ok(());
+    }
+    let mut named = f.qualifier.clone();
+    named.push(f.name.clone());
+    if let Some((catalog, ident)) = locate(ctx, &named)
+        && catalog.single_part_namespace()
+        && ident.namespace.len() != 1
+    {
+        let mut parts = ident.namespace;
+        parts.push(ident.name);
+        return Err(AnalysisError::new(
+            RequiresSinglePartNamespace {
+                session_catalog: catalog.name().to_owned(),
+                identifier: quoted(&parts),
+            },
+            origin,
+        ));
+    }
+    Ok(())
+}
+
 fn check_function(
     ctx: &AnalysisContext,
     f: &crate::FunctionCall,
@@ -356,6 +399,7 @@ fn check_function(
             return Ok(());
         }
     }
+    check_function_namespace(ctx, f, origin)?;
     let (parts, builtin) = qualified_parts(f, &search_path(ctx), origin)?;
     // A session-qualified call resolves through the full parts (UDFs only).
     if is_session_qualifier(&f.qualifier) {
@@ -389,6 +433,25 @@ fn check_function(
         };
     }
     let name = builtin.as_deref().unwrap_or(&f.name);
+    // `TIMESTAMPADD` and `TIMESTAMPDIFF` are grammar, not catalog functions:
+    // only the keyword-unit form (lowered to a string literal unit) builds
+    // one. Any other spelling (`TIMESTAMPADD(IDENTIFIER('YEAR'), ...)`,
+    // `timestampdiff(col, a, b)`) is a plain call Spark's catalog lacks,
+    // refused before its arguments resolve.
+    if is_grammar_unit_call(name)
+        && !f
+            .args
+            .first()
+            .is_some_and(|a| matches!(a.node, crate::ExprNode::Literal(crate::Literal::String(_))))
+    {
+        return Err(AnalysisError::new(
+            UnresolvedRoutine {
+                routine_name: quoted(&parts),
+                search_path: search_path(ctx),
+            },
+            origin,
+        ));
+    }
     let named = f.arg_names.iter().any(Option::is_some);
     // The canonical operators exist in every profile; the analyzer types
     // them itself.
@@ -823,6 +886,14 @@ async fn load(
                 return Err(unsupported("a scan that does not match its table", origin));
             }
             b.scans.insert(name.to_vec(), securable);
+            let declared: HashMap<String, Arc<str>> = meta
+                .columns
+                .iter()
+                .filter_map(|m| Some((m.name.clone(), Arc::from(m.char_varchar.as_deref()?))))
+                .collect();
+            if !declared.is_empty() {
+                b.scan_declared.insert(name.to_vec(), declared);
+            }
             validated.entry(name).or_default().push((version, columns));
         } else {
             b.tables.insert(

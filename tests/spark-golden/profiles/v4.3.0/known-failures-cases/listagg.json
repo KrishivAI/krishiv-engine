@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "s43-other": [
+      30,
+      51,
+      53,
+      54,
+      55,
+      56
+    ]
+  },
+  "file": "listagg",
+  "format_version": 1
+}

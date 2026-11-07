@@ -23,7 +23,7 @@ use krishiv_plan::Literal;
 use krishiv_sql::ast::{ExecuteImmediate, Expr, ExprKind, Statement};
 use krishiv_types::DataType;
 
-use crate::command::{arrow_value, padded_select};
+use crate::command::{arrow_field_value, padded_select};
 use crate::dataframe::DataFrame;
 use crate::session::{Session, sql_context};
 use crate::variables::{StoredVariable, quote_normalized, variable_key};
@@ -123,13 +123,18 @@ impl Session {
         }
         duplicate_aliases(&args, case_sensitive)?;
 
-        let bound = bind(&statement_text, &args, case_sensitive)?;
+        let bound = bind(
+            &statement_text,
+            &args,
+            case_sensitive,
+            env0.parser.double_quoted_identifiers,
+        )?;
         // The text of a dynamic statement does not see a running script's locals.
-        let bound = self
+        let (bound, identifier_spans) = self
             .with_locals(Vec::new())
-            .resolve_identifier_clauses(&bound, &env0.parser)
-            .await?
-            .into_owned();
+            .substitute_identifier_clauses(&bound, &env0.parser)
+            .await?;
+        let bound = bound.into_owned();
         let inner_text = krishiv_sql::redact_sql(&bound);
         let env = self.query_env();
         let statement = krishiv_sql::parse_statement(&bound, &env.parser)
@@ -168,7 +173,8 @@ impl Session {
                 // The text of the statement does not see a running script's locals (Spark's
                 // `EXECUTE IMMEDIATE` runs it apart from the script); its arguments did.
                 let plain = self.with_locals(Vec::new());
-                let env = plain.query_env();
+                let mut env = plain.query_env();
+                env.identifier_spans = identifier_spans.into();
                 plain.authorize_statement(&statement, class, &env).await?;
                 Box::pin(plain.run_statement(statement, env, &bound, &inner_text)).await?
             }
@@ -201,7 +207,7 @@ impl Session {
             return Ok(None);
         };
         (0..width)
-            .map(|i| arrow_value(batch.column(i), 0).map(|(_, v)| v))
+            .map(|i| arrow_field_value(batch, i, 0).map(|(_, v)| v))
             .collect::<Result<Vec<_>, _>>()
             .map(Some)
     }
@@ -358,8 +364,13 @@ fn duplicate_aliases(args: &[Argument], case_sensitive: bool) -> Result<(), Kris
 /// named markers take the argument of that name, and then every argument
 /// must be named. Mixing the two is an error, as is a marker without an
 /// argument.
-fn bind(sql: &str, args: &[Argument], case_sensitive: bool) -> Result<String, KrishivError> {
-    let markers = krishiv_sql::parameter_markers(sql);
+fn bind(
+    sql: &str,
+    args: &[Argument],
+    case_sensitive: bool,
+    double_quoted_identifiers: bool,
+) -> Result<String, KrishivError> {
+    let markers = krishiv_sql::parameter_markers(sql, double_quoted_identifiers);
     let named = markers.iter().filter(|m| m.name.is_some()).count();
     if named > 0 && named < markers.len() {
         return Err(InvalidQueryMixedQueryParameters {}.into());
@@ -484,7 +495,10 @@ fn render_literal(value: &Literal, escaped_strings: bool) -> Result<String, Kris
         | Literal::Long(_)
         | Literal::Float(_)
         | Literal::Double(_)
-        | Literal::Date(_) => Ok(value.to_string()),
+        | Literal::Date(_)
+        // `INTERVAL '3' DAY`: the literal's own SQL keeps the interval's fields.
+        | Literal::YearMonthInterval { .. }
+        | Literal::DayTimeInterval { .. } => Ok(value.to_string()),
         _ => Err(unsupported("this type")),
     }
 }
@@ -533,15 +547,15 @@ mod tests {
     fn markers_bind_by_position_or_name() {
         let args = [arg(Some("b"), "2", "\"2\""), arg(Some("a"), "'x'", "\"x\"")];
         assert_eq!(
-            bind("SELECT ?, ? FROM t", &args, false).unwrap(),
+            bind("SELECT ?, ? FROM t", &args, false, false).unwrap(),
             "SELECT 2, 'x' FROM t"
         );
         assert_eq!(
-            bind("SELECT :A, :b, ':a'", &args, false).unwrap(),
+            bind("SELECT :A, :b, ':a'", &args, false, false).unwrap(),
             "SELECT 'x', 2, ':a'"
         );
         assert_eq!(
-            class(bind("SELECT :A", &args, true)),
+            class(bind("SELECT :A", &args, true, false)),
             "UNBOUND_SQL_PARAMETER"
         );
     }
@@ -551,18 +565,18 @@ mod tests {
         let named = [arg(Some("a"), "1", "\"1\"")];
         let unnamed = [arg(None, "1", "\"1\"")];
         assert_eq!(
-            class(bind("SELECT ? + :a", &named, false)),
+            class(bind("SELECT ? + :a", &named, false, false)),
             "INVALID_QUERY_MIXED_QUERY_PARAMETERS"
         );
         assert_eq!(
-            class(bind("SELECT :a", &unnamed, false)),
+            class(bind("SELECT :a", &unnamed, false, false)),
             "ALL_PARAMETERS_MUST_BE_NAMED"
         );
-        let missing = bind("SELECT ?", &[], false).unwrap_err();
+        let missing = bind("SELECT ?", &[], false, false).unwrap_err();
         assert_eq!(missing.error_class().name(), "UNBOUND_SQL_PARAMETER");
         assert!(missing.to_string().contains("_7"), "{missing}");
         // Extra arguments are ignored.
-        assert_eq!(bind("SELECT 1", &named, false).unwrap(), "SELECT 1");
+        assert_eq!(bind("SELECT 1", &named, false, false).unwrap(), "SELECT 1");
     }
 
     #[test]
@@ -595,13 +609,26 @@ mod tests {
             r(Literal::TimestampNtz(-1)),
             "TIMESTAMP_NTZ '1969-12-31 23:59:59.999999'"
         );
-        // Types the text cannot carry exactly are refused, never guessed.
+        // ANSI intervals keep their fields.
         let interval = Literal::YearMonthInterval {
             months: 14,
             start: krishiv_plan::YearMonthField::Year,
             end: krishiv_plan::YearMonthField::Month,
         };
-        assert!(render_literal(&interval, false).is_err());
+        assert_eq!(r(interval), "INTERVAL '1-2' YEAR TO MONTH");
+        let day = Literal::DayTimeInterval {
+            micros: 3 * 86_400_000_000,
+            start: krishiv_plan::DayTimeField::Day,
+            end: krishiv_plan::DayTimeField::Day,
+        };
+        assert_eq!(r(day), "INTERVAL '3' DAY");
+        // Types the text cannot carry exactly are refused, never guessed.
+        let calendar = Literal::CalendarInterval {
+            months: 1,
+            days: 2,
+            micros: 3,
+        };
+        assert!(render_literal(&calendar, false).is_err());
         // With escapedStringLiterals a quote or backslash cannot be written back.
         assert!(render_literal(&Literal::String("a'b".into()), true).is_err());
         assert!(render_literal(&Literal::String("plain".into()), true).is_ok());

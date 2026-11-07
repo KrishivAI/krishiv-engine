@@ -113,6 +113,18 @@ pub enum ExprNode {
         /// Error behaviour on invalid input.
         mode: CastMode,
     },
+    /// `expr COLLATE name` / `collate(expr, name)`: the value with an *explicit* collation
+    /// (the strongest of the coercion pass, ADR 0043). It resolves to a cast to the collated
+    /// type, free at run time; a non-string child is `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE`.
+    Collate {
+        /// The string value.
+        expr: Arc<Expr>,
+        /// The collation.
+        collation: krishiv_types::Collation,
+        /// The name as written (`utf8_lcase`), which names the output column
+        /// (`collate(col1, utf8_lcase)`).
+        name: String,
+    },
     /// An unresolved `expr AS name`.
     Alias {
         /// The aliased expression.
@@ -157,6 +169,24 @@ pub struct ColumnRef {
     /// encoding records all of those carriers, so plans with equal keys
     /// resolve the reference alike, whichever rule picks among them.
     pub plan_id: Option<PlanId>,
+    /// Written as `IDENTIFIER(..)` (the session substituted the name before
+    /// parsing): a bare select item of it is named by the resolved
+    /// expression's SQL, as Spark names an `ExpressionWithUnresolvedIdentifier`
+    /// (`variablereference(system.session.v='x')`, `c1.c2` for a field),
+    /// while an attribute keeps its own name.
+    pub by_identifier: bool,
+}
+
+impl ColumnRef {
+    /// A reference by `name` alone: no DataFrame, not written as `IDENTIFIER(..)`.
+    #[must_use]
+    pub const fn new(name: Vec<String>) -> Self {
+        Self {
+            name,
+            plan_id: None,
+            by_identifier: false,
+        }
+    }
 }
 
 /// One field update of an unresolved [`ExprNode::UpdateFields`] (Spark's
@@ -590,6 +620,7 @@ impl Expr {
         Self::new(ExprNode::Column(ColumnRef {
             name: parts.into_iter().map(Into::into).collect(),
             plan_id: None,
+            by_identifier: false,
         }))
     }
 
@@ -706,6 +737,7 @@ impl Expr {
                 columns.iter().for_each(&mut *f);
             }
             ExprNode::Cast { expr, .. }
+            | ExprNode::Collate { expr, .. }
             | ExprNode::Alias { expr, .. }
             | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
@@ -768,6 +800,7 @@ impl Expr {
                 columns.iter_mut().for_each(&mut *f);
             }
             ExprNode::Cast { expr, .. }
+            | ExprNode::Collate { expr, .. }
             | ExprNode::Alias { expr, .. }
             | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }

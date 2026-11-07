@@ -578,7 +578,7 @@ impl<'s> Parser<'s> {
     /// The action of an `ALTER DATABASE|SCHEMA|NAMESPACE`, after the name.
     fn alter_namespace_action(&mut self) -> PR<AlterNamespaceAction> {
         if self.eat_kw("SET") {
-            if self.eat_kw("PROPERTIES") {
+            if self.eat_kw("PROPERTIES") || self.eat_kw("DBPROPERTIES") {
                 return Ok(AlterNamespaceAction::SetProperties(
                     self.property_list(false)?,
                 ));

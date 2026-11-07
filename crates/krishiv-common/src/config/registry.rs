@@ -27,6 +27,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_RADIX_BITS,
     &EXEC_JOIN_STRATEGY,
     &EXEC_JOIN_SMJ_BUFFER_BYTES,
+    &EXEC_JOIN_SHARED_BROADCAST_BYTES,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
@@ -39,6 +40,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_RESIDENT_GUARD,
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
+    &UI_ENABLED,
     &QUERY_MAX_EXECUTION_TIME,
     &QUERY_MAX_QUEUED_TIME,
     &CACHE_MAX_BYTES,
@@ -72,6 +74,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_LATE_MATERIALIZATION,
     &IO_PARQUET_PAGE_INDEX_ENABLED,
     &IO_PARQUET_BLOOM_FILTER_ENABLED,
+    &IO_PARQUET_DICTIONARY_FILTER_ENABLED,
     &IO_FOOTER_READ_BYTES,
     &IO_METADATA_CACHE_BYTES,
     &IO_CACHE_ENABLED,
@@ -108,6 +111,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &AGENT_GATE_BYTES,
     &SHARE_CTE_INSTANCES,
     &EAGER_AGGREGATION,
+    &NDV_SAMPLING_ENABLED,
+    &NDV_SAMPLING_ROWS,
+    &NDV_SAMPLING_TIMEOUT,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -118,6 +124,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
 pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.seed", &EXEC_SEED),
     ("krishiv.spill.dir", &SPILL_DIR),
+    ("krishiv.ui.enabled", &UI_ENABLED),
     ("krishiv.memory.limit", &MEMORY_LIMIT),
     ("krishiv.io.cache.path", &IO_CACHE_PATH),
     ("krishiv.io.maxRetries", &IO_MAX_RETRIES),
@@ -251,6 +258,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &MEMORY_SPILL_SCRATCH_RESERVE,
     ),
     ("krishiv.optimizer.eagerAggregation", &EAGER_AGGREGATION),
+    ("krishiv.optimizer.ndvSampling.rows", &NDV_SAMPLING_ROWS),
     (
         "krishiv.sql.avro.compression.codec",
         &AVRO_COMPRESSION_CODEC,
@@ -304,8 +312,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CTE_PRECEDENCE_POLICY,
     ),
     (
+        "krishiv.optimizer.ndvSampling.enabled",
+        &NDV_SAMPLING_ENABLED,
+    ),
+    (
+        "krishiv.optimizer.ndvSampling.timeout",
+        &NDV_SAMPLING_TIMEOUT,
+    ),
+    (
         "spark.sql.legacy.statisticalAggregate",
         &LEGACY_STATISTICAL_AGGREGATE,
+    ),
+    (
+        "krishiv.exec.join.sharedBroadcastBytes",
+        &EXEC_JOIN_SHARED_BROADCAST_BYTES,
     ),
     (
         "krishiv.io.parquet.bloomFilter.enabled",
@@ -386,6 +406,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.sources.partitionOverwriteMode",
         &PARTITION_OVERWRITE_MODE,
+    ),
+    (
+        "krishiv.io.parquet.dictionaryFilter.enabled",
+        &IO_PARQUET_DICTIONARY_FILTER_ENABLED,
     ),
     (
         "krishiv.runtimeFilter.adaptive.maxPassPercent",
@@ -664,6 +688,23 @@ pub static EXEC_JOIN_SMJ_BUFFER_BYTES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// The most one query's shared broadcast tables may hold on a worker
+/// (P2-T177 unit 3, row 30c (b)).
+pub static EXEC_JOIN_SHARED_BROADCAST_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.sharedBroadcastBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(0)),
+    doc: "Bytes the broadcast join tables one query shares among its tasks on a worker may \
+          hold; 0 sets no cap beyond the query's memory. A shared build that grows past it \
+          stops, and each task of the query builds its own table from the broadcast rows \
+          instead, spilling as needed. A cap below the query's memory avoids the spill of the query's \
+          other memory that precedes that fallback when the table does not fit.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
 /// The seed of deterministic execution (tests and the golden harness).
 pub static EXEC_SEED: ConfigEntry = ConfigEntry {
     key: "krishiv.exec.seed",
@@ -807,6 +848,20 @@ pub static SYSTEM_QUERIES_CAPACITY: ConfigEntry = ConfigEntry {
           principal holding 1000 rows loses its oldest finished row first; at this capacity the \
           oldest finished row of the principal holding the most finished rows goes. Running \
           queries are never dropped.",
+    scope: Scope::Cluster,
+    version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::Startup,
+};
+
+/// Whether `krishiv server` serves the web UI backend (design T133).
+pub static UI_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.ui.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "When false, `krishiv server` refuses to start: there is no listener and no UI \
+          backend, and nothing is recorded beyond the `system` tables. The UI reads those \
+          tables and keeps no state of its own.",
     scope: Scope::Cluster,
     version_added: "0.2.0",
     spark_alias: None,
@@ -1252,6 +1307,22 @@ pub static IO_PARQUET_BLOOM_FILTER_ENABLED: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.parquet.dictionaryFilter.enabled`.
+pub static IO_PARQUET_DICTIONARY_FILTER_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.parquet.dictionaryFilter.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether a Parquet scan reads the dictionary page of a column chunk whose data pages \
+          are all dictionary encoded, for the row groups its statistics could not decide, and \
+          skips a row group when the dictionary holds no literal of a pushed equality or IN. \
+          Returned rows are the same either way: the dictionary only prunes, and a page that \
+          fails a check is ignored. Dictionary pages above 16 MiB are not read.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
     spark_alias: None,
 };
 
@@ -1768,6 +1839,48 @@ pub static AGENT_GATE_BYTES: ConfigEntry = ConfigEntry {
           tables report no statistics runs. 0 turns the gate off.",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Plan-time distinct-value samples (`krishiv.optimizer.ndvSampling.enabled`, P2-T164 U6).
+pub static NDV_SAMPLING_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.ndvSampling.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Before a query is optimized, count the distinct values of the file columns an equality or IN \
+          compares with values, when the files store no distinct count, from the first rows of the \
+          table's files. The count steers join ordering and build-side choice; results are the same \
+          either way. Samples are kept per file version.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Rows a distinct-value sample reads (`krishiv.optimizer.ndvSampling.rows`).
+pub static NDV_SAMPLING_ROWS: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.ndvSampling.rows",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(131_072)),
+    doc: "The most rows a distinct-value sample of a table reads, from its first files in order. A table \
+          no larger than this is counted exactly.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Time a distinct-value sample may take (`krishiv.optimizer.ndvSampling.timeout`).
+pub static NDV_SAMPLING_TIMEOUT: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.ndvSampling.timeout",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(2))),
+    doc: "The time a distinct-value sample of one table may take; past it the table keeps its \
+          default estimates. The row limit is what bounds a sample; this only guards against slow \
+          storage, so that how fast the machine is does not decide the plan.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
     version_added: "0.1.0",
     spark_alias: None,
 };

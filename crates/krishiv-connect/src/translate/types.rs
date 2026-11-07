@@ -2,25 +2,24 @@
 //! Connect `DataType` to Krishiv's.
 
 use krishiv_common::error::{KrishivError, UnsupportedTimePrecision};
-use krishiv_types::{ArrayType, DataType, DecimalType, MapType, Srid, StructField, StructType};
+use krishiv_types::{
+    ArrayType, Collation, DataType, DecimalType, MapType, Srid, StructField, StructType,
+};
 
-use super::errors::{assertion, not_set, unsupported_field, unsupported_variant};
+use super::errors::{assertion, not_set, unsupported_variant};
 use super::literal;
 use crate::proto::v4_2::{DataType as Proto, data_type::Kind};
-
-/// The collation Spark 4 reports for the default `STRING`.
-const DEFAULT_COLLATION: &str = "UTF8_BINARY";
 
 /// Maps a Connect data type, following Spark's `DataTypeProtoConverter`:
 /// a decimal with no precision is `decimal(10,0)`, one with a precision but
 /// no scale has scale 0, a time with no precision is `time(6)`, an SRID of
-/// -1 is `ANY`, `string` with the default collation is `STRING`,
+/// -1 is `ANY`, `string` with the default collation is `STRING` and with another one a collated string,
 /// and a struct field's metadata is Spark's `Metadata` JSON. An unset
 /// element, key, value or field type is an unset kind.
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a type Krishiv does not have yet
-/// (`NULL`, `CHAR`, `VARCHAR`, intervals, ...) or a non-default collation,
+/// (`NULL`, `CHAR`, `VARCHAR`, intervals, ...), `COLLATION_INVALID_NAME` for an unknown collation,
 /// `CONNECT_INVALID_PLAN.*` for an unset kind or an invalid decimal,
 /// `INVALID_JSON_DATA_TYPE` for field metadata that is not a JSON object,
 /// `FAILED_TO_PARSE_TOO_COMPLEX` for a type nested deeper than
@@ -88,14 +87,19 @@ fn data_type_at(proto: &Proto, depth: usize) -> Result<DataType, KrishivError> {
         Kind::Geometry(g) => DataType::geometry(Srid::from_i32(g.srid))?,
         Kind::Geography(g) => DataType::geography(Srid::from_i32(g.srid))?,
         Kind::String(s) => {
-            if !s.collation.is_empty() && !s.collation.eq_ignore_ascii_case(DEFAULT_COLLATION) {
-                return Err(unsupported_field(
-                    "DataType.String",
-                    "collation",
-                    "string types with a collation",
-                ));
+            // An empty name or `UTF8_BINARY` is the plain `STRING`: PySpark sends the default
+            // string with the name `UTF8_BINARY`, so Connect cannot tell a written
+            // `COLLATE UTF8_BINARY` from it (the SQL path keeps that as the display-only marker).
+            // Any other name is a collated string (`COLLATION_INVALID_NAME` for a name Spark does
+            // not know).
+            if s.collation.is_empty() {
+                DataType::String
+            } else {
+                match Collation::parse(&s.collation)? {
+                    c if c.is_utf8_binary() => DataType::String,
+                    c => DataType::collated_string(c),
+                }
             }
-            DataType::String
         }
         Kind::Array(a) => ArrayType::new(child(a.element_type.as_deref())?, a.contains_null).into(),
         Kind::Map(m) => MapType::new(

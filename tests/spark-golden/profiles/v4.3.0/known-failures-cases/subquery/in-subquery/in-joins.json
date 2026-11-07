@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "query-features": [
+      32
+    ]
+  },
+  "file": "subquery/in-subquery/in-joins",
+  "format_version": 1
+}

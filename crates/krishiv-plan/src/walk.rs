@@ -180,6 +180,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | ExprNode::Field { .. }
                 | ExprNode::UpdateFields { .. }
                 | ExprNode::Alias { .. }
+                | ExprNode::Collate { .. }
                 | ExprNode::MultiAlias { .. } => false,
                 ExprNode::Cast { mode, .. } => match mode {
                     CastMode::Default => false,
@@ -435,6 +436,7 @@ impl Teardown {
                 self.exprs.extend(columns);
             }
             ExprNode::Cast { expr, .. }
+            | ExprNode::Collate { expr, .. }
             | ExprNode::Alias { expr, .. }
             | ExprNode::MultiAlias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }

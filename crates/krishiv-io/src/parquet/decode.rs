@@ -189,8 +189,11 @@ fn projection_mask(meta: &ParquetMetadata, paths: &[ColumnPath]) -> (ProjectionM
     let leaves: Vec<&[String]> = descr.columns().iter().map(|c| c.path().parts()).collect();
     let mut picked = Vec::new();
     for p in paths {
+        // A variant is read whole: its shredded `typed_value` leaves are not
+        // in the engine schema the paths come from.
+        let whole = meta.variants.roots.contains(p.root());
         let mut hits: Vec<usize> = (0..leaves.len())
-            .filter(|&i| leaves[i].starts_with(&p.0))
+            .filter(|&i| leaves[i].starts_with(&p.0) && !whole)
             .collect();
         if hits.is_empty() {
             hits = (0..leaves.len())
@@ -363,6 +366,7 @@ impl ParquetDecoder {
         // selection are not verified yet (design section 5, stage 3).
         let page = o.bool("pageIndex").unwrap_or(true) && !row_index;
         let bloom = o.bool("bloomFilter").unwrap_or(true);
+        let dict = o.bool("dictionaryFilter").unwrap_or(true);
         // The row filter reads the predicate's and the runtime filters'
         // columns under a projection of its own: an offset index attached
         // for some of a row group's fetched columns and not others would
@@ -385,10 +389,10 @@ impl ParquetDecoder {
         attach_leaves.extend(projection_mask(meta, &filter_columns).1);
         attach_leaves.sort_unstable();
         attach_leaves.dedup();
-        let pages = if page || bloom {
+        let pages = if page || bloom || dict {
             req.predicate.as_ref().and_then(|p| {
                 let units: Vec<usize> = planned.iter().map(|u| u.index).collect();
-                PageStage::plan(meta, &units, p, &attach_leaves, page, bloom)
+                PageStage::plan(meta, &units, p, &attach_leaves, page, bloom, dict)
             })
         } else {
             None
@@ -463,6 +467,9 @@ impl ParquetDecoder {
                 &RecordBatchOptions::new().with_row_count(Some(rows)),
             )
             .map_err(|e| FormatError::Corrupt(e.to_string()))?;
+        }
+        if !self.meta.variants.roots.is_empty() {
+            batch = variant_columns(&batch, &self.meta.schema, &self.meta.variants.roots)?;
         }
         let projected = project_batch(&batch, &self.projection).map_err(FormatError::Other)?;
         let mut columns = projected
@@ -686,6 +693,8 @@ impl ParquetDecoder {
         self.metrics.page_index_rejected += stage.rejected;
         self.metrics.units_pruned_bloom += stage.bloom_pruned;
         self.metrics.bloom_rejected += stage.bloom_rejected;
+        self.metrics.units_pruned_dictionary += stage.dict_pruned;
+        self.metrics.dictionary_rejected += stage.dict_rejected;
         self.pages = None;
         if outcome.decisions.is_empty() {
             return Ok(());
@@ -1073,6 +1082,39 @@ fn predicate_mask(
     picked.sort_unstable();
     picked.dedup();
     (mask, worth)
+}
+
+/// `batch` with its variant columns (top level or nested in the `roots`)
+/// in the in-memory form of `engine`, the file's engine schema.
+fn variant_columns(
+    batch: &RecordBatch,
+    engine: &arrow_schema::Schema,
+    roots: &std::collections::HashSet<String>,
+) -> FormatResult<RecordBatch> {
+    let schema = batch.schema();
+    let mut fields = Vec::with_capacity(batch.num_columns());
+    let mut columns = Vec::with_capacity(batch.num_columns());
+    for (f, c) in schema.fields().iter().zip(batch.columns()) {
+        match engine.field_with_name(f.name()) {
+            Ok(target) if roots.contains(f.name()) => {
+                columns.push(super::variant::to_engine(c, target.data_type())?);
+                fields.push(Arc::new(target.clone()));
+            }
+            _ => {
+                columns.push(Arc::clone(c));
+                fields.push(Arc::clone(f));
+            }
+        }
+    }
+    RecordBatch::try_new_with_options(
+        Arc::new(arrow_schema::Schema::new_with_metadata(
+            fields,
+            schema.metadata().clone(),
+        )),
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(batch.num_rows())),
+    )
+    .map_err(|e| FormatError::Corrupt(e.to_string()))
 }
 
 /// [`spark_read_array`] for the row filter: a column it cannot widen is

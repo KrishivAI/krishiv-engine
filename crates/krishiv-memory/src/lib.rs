@@ -72,6 +72,7 @@ use std::sync::Arc;
 
 mod arbitrate;
 mod clock;
+mod cohort;
 mod consumer;
 mod error;
 mod event;
@@ -87,7 +88,8 @@ mod spillfile;
 mod sync;
 
 pub use clock::{Clock, SystemClock};
-pub use consumer::{ConsumerHandle, SpillStats};
+pub use cohort::{Cohort, Seat, SeatState};
+pub use consumer::{ConsumerHandle, GrantCredit, SpillStats};
 pub use error::MemoryError;
 pub use limit::{DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit};
 pub use pool::{
@@ -129,6 +131,19 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// cannot be asked to spill. A driver's consumers pass a signal from
     /// their [`SpillOwner`].
     fn register(&self, name: &str, spill: Option<Arc<dyn Spillable>>) -> ConsumerId;
+    /// [`register`](Self::register) for a [`ConsumerHandle`], whose grant
+    /// `credit` the pool may read: an arbitration round waits for other
+    /// consumers' unused credit (granted, about to be used or returned)
+    /// before it fails a request or aborts a query. The default ignores it.
+    fn register_with_credit(
+        &self,
+        name: &str,
+        spill: Option<Arc<dyn Spillable>>,
+        credit: &Arc<GrantCredit>,
+    ) -> ConsumerId {
+        let _ = credit;
+        self.register(name, spill)
+    }
     /// Unregisters a consumer and returns everything it holds.
     fn unregister(&self, id: ConsumerId);
     /// Fast path, no arbitration and no waiting. Quantised.
@@ -228,6 +243,16 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     fn effective_limit(&self) -> Option<usize> {
         self.limit()
     }
+    /// The bytes an ordinary reservation of this pool could still take
+    /// now: the least free space under a limit on the path to the root
+    /// (`None`: no pool on the path has a limit), not counting the
+    /// spill-scratch floor or the resident-set guard's cut, which ordinary
+    /// reservations cannot use. A snapshot, for sizing optional memory (a
+    /// nested loop's build chunk) so that other consumers sharing the limit
+    /// keep room. Defaults to this pool's own limit minus what it holds.
+    fn available(&self) -> Option<usize> {
+        self.limit().map(|l| l.saturating_sub(self.reserved()))
+    }
     /// `Err` once the arbitrator has aborted this pool's query: drivers call
     /// it at every batch boundary (one atomic load while not aborted). From
     /// the abort on, no reservation of the query succeeds and its held
@@ -242,6 +267,12 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// releases its memory without waiting for its next batch boundary.
     fn aborted(&self) -> BoxFuture<'_, MemoryError> {
         Box::pin(std::future::pending())
+    }
+    /// The cohort `name` of this pool's query, shared by every pool of the
+    /// query (see [`Cohort`]); `None` outside a query.
+    fn cohort(&self, name: &'static str) -> Option<std::sync::Arc<Cohort>> {
+        let _ = name;
+        None
     }
 }
 

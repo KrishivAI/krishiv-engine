@@ -215,7 +215,7 @@ pub(super) fn frames_aggregate(
     charge: &mut Charge<'_>,
 ) -> Result<ArrayRef> {
     if !is_udf(a) {
-        return super::frames::aggregate(a, f, slices, frames, env.ansi);
+        return super::frames::aggregate(a, f, slices, frames, env.ansi, env.legacy);
     }
     let local = AggregateExpr {
         args: (0..a.args.len()).collect(),

@@ -23,6 +23,7 @@ fn catalog() -> MemoryCatalog {
         name: name.to_owned(),
         data_type,
         nullable,
+        char_varchar: None,
     };
     MemoryCatalog::new("spark_catalog")
         .with_table(
@@ -481,10 +482,11 @@ fn pivot_first_ignores_the_nulls_the_if_introduces() {
     let r = run(pivot(
         &["course"],
         vec![(vec![s("dotNET")], None)],
-        vec![f("first", vec![c("earnings")])],
+        vec![f("first", vec![c("course")])],
     ));
-    assert_eq!(names(&r), ["year", "dotNET"]);
-    // The rewritten `first` ignores nulls: its second argument is `true`.
+    assert_eq!(names(&r), ["year", "earnings", "dotNET"]);
+    // A `STRING` aggregate takes Spark's `If` fallback, whose rewritten
+    // `first` ignores nulls: its second argument is `true`.
     let mut found = false;
     let _ = crate::walk::visit_distinct(crate::walk::Node::Plan(r.unwrap().plan.root()), |node| {
         if let crate::walk::Node::Expr(e) = node
@@ -497,6 +499,35 @@ fn pivot_first_ignores_the_nulls_the_if_introduces() {
         std::ops::ControlFlow::Continue(())
     });
     assert!(found, "first(value, true)");
+}
+
+#[test]
+fn pivot_first_aggregates_by_the_pivot_column_then_picks_each_value() {
+    // `count` is a `BIGINT`, so Spark's `PivotFirst` plan: an aggregate
+    // grouped by `year` and `course`, under one grouped by `year`; every
+    // cell is nullable (a value with no row is NULL, not 0).
+    let r = run(pivot(
+        &["course"],
+        vec![(vec![s("dotNET")], None), (vec![s("Java")], None)],
+        vec![f("count", vec![c("earnings")])],
+    ));
+    let analyzed = r.unwrap();
+    let mut groupings = Vec::new();
+    let _ = crate::walk::visit_distinct(crate::walk::Node::Plan(analyzed.plan.root()), |node| {
+        if let crate::walk::Node::Plan(p) = node
+            && let crate::PlanNode::Aggregate {
+                grouping: crate::Grouping::GroupBy(keys),
+                ..
+            } = &p.node
+        {
+            groupings.push(keys.len());
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    groupings.sort_unstable();
+    assert_eq!(groupings, [1, 2]);
+    let cells: Vec<bool> = analyzed.output.iter().skip(1).map(|c| c.nullable).collect();
+    assert_eq!(cells, [true, true]);
 }
 
 /// `UNPIVOT (value FOR name IN (cols))` over `sales`.
@@ -654,13 +685,17 @@ fn pivot_counts_star() {
     let r = run(pivot(
         &["course"],
         vec![(vec![s("dotNET")], None)],
-        vec![count_star()],
+        vec![count_star(), f("max", vec![c("course")])],
     ));
     // `count(*)` references no column, so `earnings` stays a grouping
     // column, as in Spark.
-    assert_eq!(names(&r), ["year", "earnings", "dotNET"]);
-    // The rewrite counts matching rows: `count(if(course <=> 'dotNET',
-    // 1, NULL))`, not `count(1)`.
+    assert_eq!(
+        names(&r),
+        ["year", "earnings", "dotNET_count(1)", "dotNET_max(course)"]
+    );
+    // With a `STRING` aggregate beside it, Spark's `If` fallback counts
+    // matching rows: `count(if(course <=> 'dotNET', 1, NULL))`, not
+    // `count(1)`.
     let analyzed = r.unwrap();
     let mut found = false;
     let _ = crate::walk::visit_distinct(crate::walk::Node::Plan(analyzed.plan.root()), |node| {

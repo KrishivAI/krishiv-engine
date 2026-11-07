@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "depends-on-command": [
+      19
+    ]
+  },
+  "file": "cte",
+  "format_version": 1
+}

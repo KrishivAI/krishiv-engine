@@ -1,0 +1,15 @@
+{
+  "cases": {
+    "sql-commands": [
+      48,
+      70,
+      71,
+      73,
+      75,
+      76,
+      168
+    ]
+  },
+  "file": "identifier-clause-legacy",
+  "format_version": 1
+}

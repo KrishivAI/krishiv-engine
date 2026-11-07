@@ -25,6 +25,7 @@ pub mod beneath;
 pub mod block_cache;
 pub mod cache;
 mod coalesce;
+pub mod distinct_samples;
 pub mod fault;
 #[cfg(unix)]
 pub mod local_listing;
@@ -65,6 +66,7 @@ pub use self::block_cache::{
 };
 pub use self::cache::{CacheKey, CacheStats, MetadataCache};
 pub use self::coalesce::{Coalesced, Waste, coalesce, coalesce_with};
+pub use self::distinct_samples::{DistinctSample, DistinctSamples, SampleKey};
 pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
 use self::pace::{Direction, Pacer};
 pub use self::stores::{
@@ -395,6 +397,8 @@ pub struct IoScheduler {
     config: IoConfig,
     stores: RwLock<HashMap<StoreId, Registered>>,
     cache: MetadataCache,
+    /// The distinct-value samples the planner took of file columns (P2-T164 U6).
+    distinct_samples: DistinctSamples,
     /// The local block cache of remote reads, when `krishiv.io.cache.enabled`.
     block_cache: Option<Arc<BlockCache>>,
     runtime: Option<tokio::runtime::Handle>,
@@ -434,6 +438,7 @@ impl IoScheduler {
         Arc::new(Self {
             block_cache,
             cache: MetadataCache::new(config.metadata_cache_bytes),
+            distinct_samples: DistinctSamples::default(),
             jitter: AtomicU64::new(config.seed),
             config,
             stores: RwLock::new(HashMap::new()),
@@ -568,6 +573,13 @@ impl IoScheduler {
     #[must_use]
     pub fn cache(&self) -> &MetadataCache {
         &self.cache
+    }
+
+    /// The distinct-value samples of file columns, next to the metadata
+    /// cache (P2-T164 U6).
+    #[must_use]
+    pub fn distinct_samples(&self) -> &DistinctSamples {
+        &self.distinct_samples
     }
 
     /// Process-wide counters.
@@ -840,6 +852,13 @@ impl IoContext {
         self
     }
 
+    /// The query's pool this context reserves metadata reads from, when it
+    /// has one ([`Self::with_memory`]).
+    #[must_use]
+    pub fn memory_pool(&self) -> Option<&Arc<dyn MemoryPool>> {
+        self.memory.as_ref().map(|h| h.pool())
+    }
+
     async fn reserve(&self, bytes: u64) -> Result<Option<Reservation>> {
         let Some(h) = &self.memory else {
             return Ok(None);
@@ -994,6 +1013,28 @@ impl IoContext {
     ) -> BoxFuture<'static, Result<Vec<Bytes>>> {
         let ctx = self.clone();
         let fut = async move { ctx.get_ranges(&file, &ranges).await };
+        match &self.sched.runtime {
+            None => Box::pin(fut),
+            Some(rt) => spawned(rt, fut),
+        }
+    }
+
+    /// Like [`Self::fetch`], and also how long the read itself took: the
+    /// time from the moment it started (on the I/O runtime at once, else
+    /// when first polled) to its completion, measured inside the read so a
+    /// finished read that the caller has not yet awaited does not count
+    /// the time it waited. A failed read has no time.
+    pub fn fetch_timed(
+        &self,
+        file: FileRef,
+        ranges: Vec<Range<u64>>,
+    ) -> BoxFuture<'static, Result<(Vec<Bytes>, Duration)>> {
+        let ctx = self.clone();
+        let fut = async move {
+            let started = tokio::time::Instant::now();
+            let bytes = ctx.get_ranges(&file, &ranges).await?;
+            Ok((bytes, started.elapsed()))
+        };
         match &self.sched.runtime {
             None => Box::pin(fut),
             Some(rt) => spawned(rt, fut),

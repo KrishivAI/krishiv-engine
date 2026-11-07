@@ -37,6 +37,7 @@ mod number;
 mod predicate;
 mod r#struct;
 mod text;
+mod time;
 mod url;
 mod variant;
 mod vector;
@@ -270,9 +271,9 @@ pub fn builtins() -> &'static Registry {
 
 /// Whether `name` is one Spark's grammar owns (`TIMESTAMPADD` and `TIMESTAMPDIFF`): it has
 /// a definition but no row in Spark's function catalog, and the lowering
-/// reaches it through the keyword-unit forms. A call spelled as an ordinary
-/// function (`timestampadd(col, 1, ts)`) also resolves here, where Spark says
-/// `UNRESOLVED_ROUTINE`: a known divergence.
+/// reaches it through the keyword-unit forms. The analyzer refuses a call
+/// spelled as an ordinary function (`timestampadd(col, 1, ts)`: a unit that
+/// is not a string literal) with `UNRESOLVED_ROUTINE`, as Spark does.
 #[must_use]
 pub fn is_grammar_only(name: &str) -> bool {
     grammar_row(name).is_some()
@@ -288,9 +289,13 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "timestampdiff" => "timestampdiff",
         // `base[index]`: the lowering of a subscript (Spark's `ExtractValue`).
         "__subscript" => "__subscript",
+        // `time + interval` and `time - time`: Spark's `TimeAddInterval` and `SubtractTimes`, which the analyzer
+        // builds for the operators (the third argument of `__time_add_interval` is the interval's end field).
+        "__time_add_interval" => "__time_add_interval",
+        "__subtract_times" => "__subtract_times",
         _ => return None,
     };
-    let arity = if name == "__subscript" {
+    let arity = if matches!(name, "__subscript" | "__subtract_times") {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {
         Arity::new([false, false, false, true, false, false, false], "3")

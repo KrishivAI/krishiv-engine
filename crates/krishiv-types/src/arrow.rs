@@ -317,6 +317,12 @@ impl DataType {
                 Self::CollatedString(_),
                 ArrowType::Utf8View | ArrowType::Utf8 | ArrowType::LargeUtf8,
             ) => true,
+            // The display-only `UTF8_BINARY` marker is a plain string: bytes that are not UTF-8
+            // may be stored as binary for it too.
+            (
+                Self::CollatedString(c),
+                ArrowType::BinaryView | ArrowType::Binary | ArrowType::LargeBinary,
+            ) => c.is_utf8_binary(),
             (
                 Self::Decimal(d),
                 ArrowType::Decimal32(p, s)

@@ -21,8 +21,8 @@ use arrow_schema::Field;
 use krishiv_functions::registry::{Lookup, builtins};
 use krishiv_functions::signature::SparkProfile;
 use krishiv_plan::{
-    AttrId, BoundColumn, Expr, ExprNode, FunctionId, FunctionKind, Grouping, Literal, NullOrdering,
-    ResolvedExpr, ResolvedFunction, SortDirection,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Grouping, Literal,
+    NullOrdering, ResolvedExpr, ResolvedFunction, SortDirection,
 };
 
 use super::build::{Planned, Planner, column_of, internal, list, unsupported};
@@ -499,8 +499,18 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
         "covar_samp" if f.args.len() == 2 => (AggregateFunction::CovarSamp, f.args.clone()),
         "covar_pop" if f.args.len() == 2 => (AggregateFunction::CovarPop, f.args.clone()),
         "regr_count" if f.args.len() == 2 => (AggregateFunction::RegrCount, f.args.clone()),
-        "regr_avgx" if f.args.len() == 2 => (AggregateFunction::RegrAvgx, f.args.clone()),
-        "regr_avgy" if f.args.len() == 2 => (AggregateFunction::RegrAvgy, f.args.clone()),
+        // Spark's `RegrAvgX(y, x)` is `Average(IF(y IS NOT NULL AND x IS NOT NULL, x,
+        // NULL))`: a plain sum over a count, not the running mean the other
+        // moments keep (they differ in the last bit, and an infinity gives NaN
+        // in the running mean).
+        "regr_avgx" if f.args.len() == 2 => (
+            AggregateFunction::Avg,
+            vec![value_where_other_present(&f.args[0], &f.args[1])],
+        ),
+        "regr_avgy" if f.args.len() == 2 => (
+            AggregateFunction::Avg,
+            vec![value_where_other_present(&f.args[1], &f.args[0])],
+        ),
         "regr_sxx" if f.args.len() == 2 => (AggregateFunction::RegrSxx, f.args.clone()),
         "regr_syy" if f.args.len() == 2 => (AggregateFunction::RegrSyy, f.args.clone()),
         "regr_sxy" if f.args.len() == 2 => (AggregateFunction::RegrSxy, f.args.clone()),
@@ -693,6 +703,39 @@ fn double_arg(e: &Arc<Expr>) -> Option<f64> {
 /// `Literal::Long(v)`, for a synthesized frequency of one.
 fn long_lit(v: i64) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Literal(krishiv_plan::Literal::Long(v))))
+}
+
+/// `CASE WHEN other IS NOT NULL THEN value END` (`value` where `other` is
+/// present, else NULL), over two `double` arguments.
+fn value_where_other_present(other: &Arc<Expr>, value: &Arc<Expr>) -> Arc<Expr> {
+    let call = |id: Builtin, args: Vec<Arc<Expr>>, data_type: krishiv_types::DataType| {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Builtin(id),
+                kind: FunctionKind::Scalar,
+                args,
+                distinct: false,
+                filter: None,
+                within_group: Vec::new(),
+                nullable: !matches!(data_type, krishiv_types::DataType::Boolean),
+                data_type,
+                deterministic: true,
+            },
+        ))))
+    };
+    let present = call(
+        Builtin::IsNotNull,
+        vec![Arc::clone(other)],
+        krishiv_types::DataType::Boolean,
+    );
+    let absent = Arc::new(Expr::literal(krishiv_plan::Literal::Null(Some(
+        krishiv_types::DataType::Double,
+    ))));
+    call(
+        Builtin::When,
+        vec![present, Arc::clone(value), absent],
+        krishiv_types::DataType::Double,
+    )
 }
 
 /// `nullif(c, false)`: `c` where it is true, else NULL, so `count` of it

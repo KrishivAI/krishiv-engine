@@ -57,6 +57,7 @@ fn catalog(g: &Value) -> MemoryCatalog {
                 name: f["name"].as_str().unwrap().to_owned(),
                 data_type: krishiv_types::parse_data_type(f["type"].as_str().unwrap()).unwrap(),
                 nullable: f["nullable"].as_bool().unwrap(),
+                char_varchar: None,
             })
             .collect();
         c = c.with_table(&["default"], name, columns, None);
@@ -360,8 +361,9 @@ fn resolution_corpus_matches_spark() {
     // interval literals and date and timestamp arithmetic, P2-T001b; 12
     // since a correlated `EXISTS` in an aggregate's key or `FILTER`; 11 since
     // a scalar subquery over no relation reads the outer query's columns; 9
-    // since grouped scalar subqueries run as Spark's single join, P2b row 20).
-    assert_eq!(gaps, 9, "statements in documented gaps");
+    // since grouped scalar subqueries run as Spark's single join, P2b row 20;
+    // 8 since a correlated subquery's own `WITH` is inlined, P2-T115).
+    assert_eq!(gaps, 8, "statements in documented gaps");
     assert_eq!(by_design, NULLABLE_BY_DESIGN.len());
     // Classes of lateral aliases, ordinals and type coercion, each matched
     // against Spark above.
@@ -818,6 +820,7 @@ fn window_goldens_resolve_to_a_fixed_point() {
                 name: f["name"].as_str().unwrap().to_owned(),
                 data_type: krishiv_types::parse_data_type(f["type"].as_str().unwrap()).unwrap(),
                 nullable: f["nullable"].as_bool().unwrap(),
+                char_varchar: None,
             })
             .collect();
         c = c.with_table(&["default"], name, columns, None);
@@ -989,16 +992,22 @@ fn typed_timestamp_literals_resolve_like_spark() {
     // `now` reads the query clock.
     let a = analyze_with("SELECT TIMESTAMP 'now'", false, utc).unwrap();
     assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
-    // A time of day alone still needs the query clock's date.
-    for sql in ["SELECT TIMESTAMP_LTZ '10:00'", "SELECT TIMESTAMP '10:00'"] {
-        let e = analyze_with(sql, false, utc).unwrap_err();
-        assert_eq!(
-            e.error.error_class(),
-            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
-            "{sql}"
-        );
-        assert!(e.error.to_string().contains("query clock"), "{sql}: {e}");
+    // A time of day alone is that time on the query clock's date, in the session zone.
+    for sql in [
+        "SELECT TIMESTAMP_LTZ '10:00'",
+        "SELECT TIMESTAMP '10:00'",
+        "SELECT TIMESTAMP 'T10:00:30.5'",
+    ] {
+        let a = analyze_with(sql, false, utc).unwrap();
+        assert_eq!(a.output[0].data_type.simple_string(), "timestamp", "{sql}");
     }
+    // A time of day with a zone is no timestamp literal.
+    let e = analyze_with("SELECT TIMESTAMP '10:00+05:30'", false, utc).unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        krishiv_common::error::ErrorClass::InvalidTypedLiteral,
+        "{e}"
+    );
     // A region session zone serves explicit offsets but not wall-clock time.
     let e = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'", false, None).unwrap();
     assert_eq!(e.output[0].data_type.simple_string(), "timestamp");

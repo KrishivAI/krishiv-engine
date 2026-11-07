@@ -267,8 +267,8 @@ fn count_if_checks_its_argument_type() -> R {
     Ok(())
 }
 
-/// Spark 4.2: the value of the row with the extreme non-NULL key, the first
-/// such row on a tie; NULL keys are skipped; NaN is the largest `double`,
+/// Spark 4.2: the value of the row with the extreme non-NULL key, the last
+/// such row on a tie (`MaxBy` keeps the held row only if `old > new`); NULL keys are skipped; NaN is the largest `double`,
 /// `-0.0 = 0.0`.
 #[test]
 fn max_by_and_min_by() -> R {
@@ -281,20 +281,20 @@ fn max_by_and_min_by() -> R {
         names,
         ["k:Int32", "max_by(x, y):Utf8View", "min_by(x, y):Utf8View"]
     );
-    // Group 1: keys 3, NULL, 7, 7: the largest is the first 7 (`c`).
+    // Group 1: keys 3, NULL, 7, 7: the largest is the last 7 (`d`).
     // Group 2: the NULL key of the first row is skipped.
-    assert_eq!(got, ["1|c|a", "2|p|p", "3|q|q"]);
+    assert_eq!(got, ["1|d|a", "2|p|p", "3|q|q"]);
     assert_eq!(
         rows(&s, "SELECT max_by(x, y), min_by(x, y) FROM t")?,
         ["q|p"]
     );
-    // Doubles: NaN beats infinity; `0.0` and `-0.0` tie, the first wins.
+    // Doubles: NaN beats infinity; `0.0` and `-0.0` tie, the last wins.
     assert_eq!(
         rows(
             &s,
             "SELECT k, max_by(y, d), min_by(y, d) FROM t GROUP BY k ORDER BY k"
         )?,
-        ["1|7|3", "2|2|2", "3|9|9"]
+        ["1|7|NULL", "2|2|2", "3|9|9"]
     );
     // Expressions as arguments; a NULL value is a result.
     assert_eq!(rows(&s, "SELECT max_by(y, id) FROM t WHERE k = 1")?, ["7"]);
@@ -328,17 +328,17 @@ fn max_by_and_min_by_in_windows() -> R {
              min_by(x, y) OVER (PARTITION BY k) FROM t ORDER BY id"
         )?,
         [
-            "1|c|a", "2|c|a", "3|c|a", "4|c|a", "5|p|p", "6|p|p", "7|q|q"
+            "1|d|a", "2|d|a", "3|d|a", "4|d|a", "5|p|p", "6|p|p", "7|q|q"
         ]
     );
-    // A running frame: the first row wins ties (`-0.0` after `0.0`, `inf`
+    // A running frame: the last row wins ties (`-0.0` after `0.0`, `inf`
     // after NaN), a NULL key leaves the state as it was.
     assert_eq!(
         rows(
             &s,
             "SELECT id, max_by(y, d) OVER (PARTITION BY k ORDER BY id) FROM t ORDER BY id"
         )?,
-        ["1|3", "2|3", "3|7", "4|7", "5|NULL", "6|2", "7|9"]
+        ["1|3", "2|NULL", "3|7", "4|7", "5|NULL", "6|2", "7|9"]
     );
     // Strings would be copied for every row of a running frame.
     let (class, _) = error(

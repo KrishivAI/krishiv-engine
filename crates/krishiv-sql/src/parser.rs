@@ -18,6 +18,7 @@
 mod ddl;
 mod expr;
 mod function;
+mod names;
 pub(crate) use function::check_temporary_function_name;
 mod script;
 mod types;
@@ -57,7 +58,6 @@ pub(crate) enum Fail {
     Fatal(Box<ParseError>),
 }
 
-/// Parse state to rewind to when a speculative parse fails.
 /// The `CREATE TABLE` clauses Spark rejects when written twice, in the
 /// order it checks them (`DUPLICATE_CLAUSES` names the first).
 const CREATE_TABLE_CLAUSES: [&str; 10] = [
@@ -83,6 +83,17 @@ const CREATE_TABLE_LIKE_CLAUSES: [&str; 5] = [
     "TBLPROPERTIES",
 ];
 
+/// The `CREATE NAMESPACE` clauses Spark rejects when written twice, in
+/// the order it checks them (`visitCreateNamespace`).
+const CREATE_NAMESPACE_CLAUSES: [&str; 5] = [
+    "COMMENT",
+    "DEFAULT COLLATION",
+    "LOCATION",
+    "WITH PROPERTIES",
+    "WITH DBPROPERTIES",
+];
+
+/// Parse state to rewind to when a speculative parse fails.
 struct Checkpoint {
     pos: usize,
     far: usize,
@@ -1233,13 +1244,7 @@ impl<'s> Parser<'s> {
     /// are enforced.
     fn ident_at(&self, n: usize, strong: bool) -> Option<Ident> {
         if self.identifier_literal_at(n) {
-            let (first, last) = (self.tok(n)?, self.tok(n + 3)?);
-            let literal = self.tok(n + 2)?.span.text(self.src);
-            return Some(Ident {
-                value: unescape_string(literal, !self.opts.escaped_string_literals, false),
-                quoted: true,
-                span: first.span.to(last.span),
-            });
+            return self.identifier_literal(n);
         }
         let t = self.tok(n)?;
         let text = t.span.text(self.src);
@@ -1267,42 +1272,6 @@ impl<'s> Parser<'s> {
         })
     }
 
-    /// Whether `IDENTIFIER('name')` starts at token `n`: an identifier
-    /// literal (not with only the legacy function syntax on).
-    fn identifier_literal_at(&self, n: usize) -> bool {
-        !self.opts.legacy_identifier_clause
-            && self.kw_at(n, "IDENTIFIER")
-            && self.sym_at(n + 1, Sym::LParen)
-            && self.single_string_at(n + 2)
-            && self.sym_at(n + 3, Sym::RParen)
-    }
-
-    /// Spark parses the string of an identifier literal as a name when it
-    /// builds the tree: it must be a name (not empty), of `parts` parts at
-    /// most (`1` for a position taking one identifier). The first problem
-    /// is deferred; the name is returned when there is none.
-    fn check_identifier_literal(
-        &mut self,
-        text: &str,
-        span: Span,
-        parts: usize,
-    ) -> Option<ObjectName> {
-        match parse_multipart_identifier(text, self.opts) {
-            Err(e) => self.defer(ParseError { span, ..e }),
-            Ok(name) if name.parts.len() > parts => {
-                let identifier: Vec<String> =
-                    name.parts.iter().map(|p| quote_ident(&p.value)).collect();
-                self.defer(error::identifier_too_many_name_parts(
-                    identifier.join("."),
-                    parts,
-                    span,
-                ));
-            }
-            Ok(name) => return Some(name),
-        }
-        None
-    }
-
     /// Whether token `n` is an identifier ([`Self::ident_at`] without
     /// building it).
     fn is_ident_at(&self, n: usize, strong: bool) -> bool {
@@ -1322,7 +1291,7 @@ impl<'s> Parser<'s> {
         let Some(id) = self.ident_at(0, strong) else {
             return self.fail();
         };
-        if self.identifier_literal_at(0) {
+        if let Some(len) = self.identifier_literal_len(0) {
             let mut id = id;
             // A name that is not one part is an error already; one part
             // is the identifier.
@@ -1331,7 +1300,7 @@ impl<'s> Parser<'s> {
             {
                 id.value.clone_from(&part.value);
             }
-            self.pos += 4;
+            self.pos += len;
             return Ok(id);
         }
         // Spark's `exitUnquotedIdentifier`: only ASCII letters, digits, `_`.
@@ -1374,10 +1343,10 @@ impl<'s> Parser<'s> {
 
     fn object_name(&mut self) -> PR<ObjectName> {
         let start = self.start();
-        let mut parts = vec![self.name_part(false)?];
+        let mut parts = self.name_parts(false)?;
         while self.sym_at(0, Sym::Dot) && self.is_ident_at(1, true) {
             self.bump();
-            parts.push(self.name_part(true)?);
+            parts.extend(self.name_parts(true)?);
         }
         Ok(ObjectName {
             parts,
@@ -1390,10 +1359,10 @@ impl<'s> Parser<'s> {
     #[inline(never)]
     fn variable_name(&mut self) -> PR<ObjectName> {
         let start = self.start();
-        let mut parts = vec![self.name_part(true)?];
+        let mut parts = self.name_parts(true)?;
         while self.sym_at(0, Sym::Dot) && self.is_ident_at(1, true) {
             self.bump();
-            parts.push(self.name_part(true)?);
+            parts.extend(self.name_parts(true)?);
         }
         Ok(ObjectName {
             parts,
@@ -1405,7 +1374,7 @@ impl<'s> Parser<'s> {
     /// table here (`FROM order`, `FROM from t`), as Spark's grammar allows.
     fn table_name(&mut self) -> PR<ObjectName> {
         let start = self.start();
-        let mut parts = vec![self.name_part(true)?];
+        let mut parts = self.name_parts(true)?;
         // With only the legacy function syntax, `IDENTIFIER(` is never a
         // later part of a name.
         while self.sym_at(0, Sym::Dot)
@@ -1415,7 +1384,7 @@ impl<'s> Parser<'s> {
                 && self.sym_at(2, Sym::LParen))
         {
             self.bump();
-            parts.push(self.name_part(true)?);
+            parts.extend(self.name_parts(true)?);
         }
         Ok(ObjectName {
             parts,
@@ -1708,16 +1677,37 @@ impl<'s> Parser<'s> {
         let save = self.checkpoint();
         let start = self.start();
         let with = match self.with_clause() {
-            Ok(with) if self.kw_at(0, "INSERT") => with,
+            Ok(with) if self.kw_at(0, "INSERT") || self.kw_at(0, "FROM") => with,
             Ok(_) | Err(Fail::Syntax) => {
                 self.restore(save);
                 return Ok(None);
             }
             Err(e) => return Err(e),
         };
-        self.commit(save);
-        let Statement::Insert(mut insert) = self.insert_command()? else {
-            return self.fail();
+        // `WITH ctes FROM source INSERT ...`: a multi-table insert whose clauses all see the
+        // common table expressions; `WITH ctes FROM source SELECT ...` stays a query (a syntax
+        // failure here gives the statement back to the query parser).
+        let mut insert = if self.kw_at(0, "FROM") {
+            let from = self.checkpoint();
+            match self.multi_insert_command() {
+                Ok(Statement::Insert(insert)) => {
+                    self.commit(from);
+                    self.commit(save);
+                    insert
+                }
+                Ok(_) | Err(Fail::Syntax) => {
+                    self.restore(from);
+                    self.restore(save);
+                    return Ok(None);
+                }
+                Err(e) => return Err(e),
+            }
+        } else {
+            self.commit(save);
+            let Statement::Insert(insert) = self.insert_command()? else {
+                return self.fail();
+            };
+            insert
         };
         for clause in &mut insert.clauses {
             // Spark refuses a `WITH` in both places.
@@ -1988,9 +1978,9 @@ impl<'s> Parser<'s> {
                 p.pos += 2;
                 return p.fail();
             }
-            let mut names = vec![p.variable_name()?];
+            let mut names = vec![p.variable_reference()?];
             while p.eat_sym(Sym::Comma) {
-                names.push(p.variable_name()?);
+                names.push(p.variable_reference()?);
             }
             // A type follows unless the names end here: `DEFAULT`, `=`,
             // `;` or the end of input (anything else fails after the
@@ -2458,7 +2448,7 @@ impl<'s> Parser<'s> {
 
     /// `DROP ...`: a view, a table, a function, a namespace, or a temporary variable.
     /// Anything else fails where it stands, as in Spark. A `DROP VIEW`
-    /// the legacy reading rejects reads as a full view statement instead.
+    /// the one-part reading rejects reads as a full view statement instead.
     fn drop_command(&mut self) -> PR<Statement> {
         if !self.kw_at(1, "VIEW") {
             return self.drop_command_inner();
@@ -2466,12 +2456,15 @@ impl<'s> Parser<'s> {
         let start = self.start();
         let save = self.checkpoint();
         match self.drop_command_inner() {
-            Ok(statement) => {
+            // A one-part reading that deferred an error (an identifier
+            // literal of several parts, `DROP VIEW IDENTIFIER('a.b.c')`)
+            // reads as the full view statement, which takes the whole name.
+            Ok(statement) if self.deferred.is_none() => {
                 self.commit(save);
                 Ok(statement)
             }
             Err(Fail::Fatal(e)) => Err(Fail::Fatal(e)),
-            Err(Fail::Syntax) => {
+            Ok(_) | Err(Fail::Syntax) => {
                 self.restore(save);
                 self.expect_kw("DROP")?;
                 self.drop_full_view_command(start)
@@ -2519,7 +2512,7 @@ impl<'s> Parser<'s> {
         } else {
             false
         };
-        let name = self.variable_name()?;
+        let name = self.variable_reference()?;
         let span = self.span_from(start);
         self.command_end()?;
         Ok(Statement::DropVariable(DropVariable {
@@ -3515,24 +3508,40 @@ impl<'s> Parser<'s> {
             let mut location = None;
             let mut collation = None;
             let mut properties = Vec::new();
+            // Occurrences per clause, in Spark's duplicate-check order.
+            let mut seen = [0_usize; CREATE_NAMESPACE_CLAUSES.len()];
             loop {
-                if p.eat_kw("COMMENT") {
+                let clause = if p.eat_kw("COMMENT") {
                     comment = Some(p.string_after()?);
-                } else if p.eat_kw("LOCATION") {
-                    location = Some(p.string_after()?);
+                    0
                 } else if p.kw_at(0, "DEFAULT") && p.kw_at(1, "COLLATION") {
                     p.pos += 2;
                     collation = Some(p.table_name()?);
+                    1
+                } else if p.eat_kw("LOCATION") {
+                    location = Some(p.string_after()?);
+                    2
                 } else if p.eat_kw("WITH") {
-                    if p.eat_kw("DBPROPERTIES") || p.eat_kw("PROPERTIES") {
-                        properties.extend(p.property_list(false)?);
+                    let clause = if p.eat_kw("PROPERTIES") {
+                        3
+                    } else if p.eat_kw("DBPROPERTIES") {
+                        4
                     } else {
                         return p.fail();
-                    }
+                    };
+                    properties.extend(p.property_list(false)?);
+                    clause
                 } else {
                     break;
-                }
+                };
+                seen[clause] += 1;
             }
+            let duplicate_clause = CREATE_NAMESPACE_CLAUSES
+                .iter()
+                .zip(seen)
+                .find(|(_, n)| *n > 1)
+                .map(|(c, _)| *c);
+            let properties_and_dbproperties = seen[3] > 0 && seen[4] > 0;
             let span = p.span_from(start);
             p.command_end()?;
             Ok(Statement::CreateNamespace(CreateNamespace {
@@ -3543,6 +3552,8 @@ impl<'s> Parser<'s> {
                 location,
                 collation,
                 properties,
+                duplicate_clause,
+                properties_and_dbproperties,
                 span,
             }))
         })

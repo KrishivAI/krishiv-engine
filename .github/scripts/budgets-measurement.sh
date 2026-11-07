@@ -10,6 +10,9 @@
 # (an earlier wheel build failed) is an error. Fails when the measurement failed or did not finish
 # within WAIT_SECS. A cancelled run is superseded by a newer one on the same
 # head (re-opened PR, re-run), so it keeps waiting.
+# With NO_WAIT=1 nothing is waited for: a measurement that has not finished (no
+# run yet, still running, or cancelled) prints `pending` and exits 0, so the
+# caller holds no runner while CI works; a finished failure is still an error.
 # Read-only, so it also works for fork pull requests.
 # Every `gh` call is retried with exponential backoff (RETRY_ATTEMPTS tries,
 # RETRY_BASE_SECS doubling: 5, 10, 20, 40) when it fails transiently (HTTP 5xx,
@@ -17,7 +20,7 @@
 # errors (404, auth, bad request) fail at once.
 # Env: GH_TOKEN, REPO, HEAD_SHA, OUT_DIR, WAIT_SECS (default 4500),
 #      POLL_SECS (default 30), RETRY_ATTEMPTS (default 5),
-#      RETRY_BASE_SECS (default 5), JOB, ARTIFACT, SKIP_JOB (see above).
+#      RETRY_BASE_SECS (default 5), NO_WAIT (1: see above), JOB, ARTIFACT, SKIP_JOB.
 set -euo pipefail
 job_name="${JOB:-budgets-measure}"
 artifact="${ARTIFACT:-budgets-current}"
@@ -100,6 +103,10 @@ while :; do
           ;;
       esac
     fi
+  fi
+  if [ "${NO_WAIT:-0}" = 1 ]; then
+    echo pending
+    exit 0
   fi
   if [ "$SECONDS" -ge "$deadline" ]; then
     echo "::error::no finished $job_name job for $HEAD_SHA after ${wait_secs}s" >&2

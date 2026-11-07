@@ -16,16 +16,18 @@ use futures::future::BoxFuture;
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_exec::exchange::{Exchange, ExchangeFrame};
 use krishiv_exec::physical::{ExchangeId, WorkerContext, instantiate_task};
+use krishiv_exec::values::{LocalValues, ValueService};
 use krishiv_exec::{
-    ExecConfig, Executor, QueryContext, QueryId, QueryRunner, TokioClock, TokioExecutor,
-    WorkloadClass,
+    BroadcastTables, ExecConfig, Executor, QueryContext, QueryId, QueryRunner, TokioClock,
+    TokioExecutor, WorkloadClass,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+use krishiv_scheduler::produced;
 use krishiv_shuffle::frame::batch_body;
 use turmoil::net::{TcpListener, TcpStream};
 
 use crate::exchange::{Fault, HostExchange, Workers};
-use crate::task::decode_task;
+use crate::task::{decode_task, encode_partials};
 use crate::wire::{Reply, Request};
 
 type Result<T> = std::result::Result<T, KrishivError>;
@@ -42,6 +44,14 @@ pub trait HostSetup: Send + Sync + 'static {
     /// configuration, over the cluster's shared object store. The
     /// simulation adds the exchange.
     fn worker(&self) -> BoxFuture<'static, Result<WorkerContext>>;
+
+    /// Called when the coordinator releases `job` on host `host`: the
+    /// broadcast builds the job started there and how many of them did not
+    /// fit (`krishiv.exec.join.sharedBroadcastBytes`), so each task built
+    /// its own table. A test's view of what the workers shared.
+    fn released(&self, host: usize, job: u64, builds: usize, fallbacks: usize) {
+        let _ = (host, job, builds, fallbacks);
+    }
 }
 
 /// The execution seed of a task: from the simulation's seed, its job,
@@ -75,10 +85,20 @@ struct Host {
     executor: Arc<dyn Executor>,
     pool: Arc<dyn MemoryPool>,
     runner: QueryRunner,
-    /// Each running job's exchange, until the coordinator releases it.
-    jobs: Mutex<BTreeMap<u64, Arc<HostExchange>>>,
+    setup: Arc<dyn HostSetup>,
+    /// Each running job's exchange and broadcast builds, until the
+    /// coordinator releases it.
+    jobs: Mutex<BTreeMap<u64, Job>>,
     worker: WorkerContext,
     next_query: AtomicU64,
+}
+
+/// What a host keeps of one job: its map outputs and its broadcast tables
+/// (built once on this host and shared by the job's tasks here, design
+/// P2-T177 unit 3), both dropped at `Release`.
+struct Job {
+    exchange: Arc<HostExchange>,
+    broadcasts: Arc<BroadcastTables>,
 }
 
 /// Runs worker `index` of `workers` until the simulation ends: the body of
@@ -104,6 +124,7 @@ pub async fn serve(
         workers: workers.clone(),
         fault,
         runner: QueryRunner::new(Arc::clone(&executor)),
+        setup,
         executor,
         pool,
         jobs: Mutex::default(),
@@ -134,30 +155,46 @@ impl Host {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(&job)
-            .cloned()
+            .map(|j| Arc::clone(&j.exchange))
     }
 
-    /// `job`'s exchange on this host, made on first use.
-    fn exchange(&self, job: u64) -> Arc<HostExchange> {
+    /// `job`'s exchange and broadcast tables on this host, made on first
+    /// use; the tables hold at most `limit` bytes
+    /// (`krishiv.exec.join.sharedBroadcastBytes` of the task that made them).
+    fn job(&self, job: u64, limit: Option<usize>) -> (Arc<HostExchange>, Arc<BroadcastTables>) {
         let mut jobs = self.jobs.lock().unwrap_or_else(PoisonError::into_inner);
-        Arc::clone(jobs.entry(job).or_insert_with(|| {
-            Arc::new(HostExchange::worker(
+        let j = jobs.entry(job).or_insert_with(|| Job {
+            exchange: Arc::new(HostExchange::worker(
                 job,
                 self.index,
                 self.workers.clone(),
                 self.fault,
-            ))
-        }))
+            )),
+            broadcasts: Arc::new(BroadcastTables::new(
+                Arc::clone(&self.executor),
+                self.pool.child(&format!("job-{job}-broadcasts"), limit),
+            )),
+        });
+        (Arc::clone(&j.exchange), Arc::clone(&j.broadcasts))
     }
 
     async fn answer(&self, mut stream: TcpStream) -> Result<()> {
         match Request::read(&mut stream).await? {
             Request::Release { job } => {
-                self.jobs
+                let released = self
+                    .jobs
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .remove(&job);
-                Reply::Done.write(&mut stream).await
+                if let Some(j) = released {
+                    self.setup.released(
+                        self.index,
+                        job,
+                        j.broadcasts.builds(),
+                        j.broadcasts.fallbacks(),
+                    );
+                }
+                Reply::Done(Vec::new()).write(&mut stream).await
             }
             Request::Run {
                 job,
@@ -165,7 +202,7 @@ impl Host {
                 task,
             } => {
                 let reply = match self.run(job, &fragment, &task).await {
-                    Ok(()) => Reply::Done,
+                    Ok(partials) => Reply::Done(partials),
                     Err(e) => Reply::Failed(failure(&e)),
                 };
                 reply.write(&mut stream).await
@@ -198,8 +235,9 @@ impl Host {
         }
     }
 
-    /// Runs one map task to its end; its output is committed by then.
-    async fn run(&self, job: u64, fragment: &[u8], task: &[u8]) -> Result<()> {
+    /// Runs one map task to its end; its output is committed by then. Its
+    /// exchange's filter partials, encoded.
+    async fn run(&self, job: u64, fragment: &[u8], task: &[u8]) -> Result<Vec<u8>> {
         let plan = krishiv_plan_codec::decode(fragment)
             .map_err(|e| internal(format!("a fragment: {e}")))?;
         let (task, settings) = decode_task(task)?;
@@ -207,10 +245,16 @@ impl Host {
             "stage-{}-task-{}-attempt-{}",
             task.stage, task.partition, task.attempt
         );
+        let (exchange, broadcasts) = self.job(job, settings.shared_broadcast_bytes);
         let worker = self
             .worker
             .clone()
-            .with_exchange(self.exchange(job) as Arc<dyn Exchange>);
+            .with_exchange(exchange as Arc<dyn Exchange>)
+            .with_broadcasts(broadcasts);
+        // The task's own values: its exchange's filter partials are read
+        // from here once it ended.
+        let values = Arc::new(LocalValues::new());
+        let worker = worker.with_values(Arc::clone(&values) as Arc<dyn ValueService>);
         let node = instantiate_task(&plan, &worker, &task)?;
         let query = QueryContext::new(
             QueryId(self.next_query.fetch_add(1, Ordering::Relaxed)),
@@ -245,7 +289,8 @@ impl Host {
         // Its drivers have ended and its memory is back before it answers.
         query.finished().await;
         outcome?;
-        query.error().map_or(Ok(()), Err)
+        query.error().map_or(Ok(()), Err)?;
+        Ok(encode_partials(&produced(&plan, values.as_ref())))
     }
 
     async fn fetch(
@@ -338,7 +383,10 @@ mod tests {
                 "{reply:?}"
             );
             // Releasing a job it does not hold is fine.
-            assert_eq!(ask(Request::Release { job: 99 }).await, Reply::Done);
+            assert_eq!(
+                ask(Request::Release { job: 99 }).await,
+                Reply::Done(Vec::new())
+            );
             Ok::<(), Box<dyn std::error::Error>>(())
         });
         sim.run().unwrap();
@@ -353,6 +401,7 @@ mod tests {
             workers: testing::workers(&["worker-0"]),
             fault: None,
             runner: QueryRunner::new(Arc::clone(&executor)),
+            setup: Arc::new(Empty),
             executor,
             pool: TreePool::with_clock(&MemoryConfig::default(), Arc::new(TokioClock)),
             jobs: Mutex::default(),
@@ -361,8 +410,10 @@ mod tests {
         };
         assert!(format!("{host:?}").starts_with("Host"));
         assert!(host.existing(5).is_none());
-        // A job's exchange is made once and reused.
-        assert!(Arc::ptr_eq(&host.exchange(5), &host.exchange(5)));
+        // A job's exchange and broadcast tables are made once and reused.
+        let (first, second) = (host.job(5, None), host.job(5, None));
+        assert!(Arc::ptr_eq(&first.0, &second.0));
+        assert!(Arc::ptr_eq(&first.1, &second.1));
         assert!(host.existing(5).is_some());
     }
 }
