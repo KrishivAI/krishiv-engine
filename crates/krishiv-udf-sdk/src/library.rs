@@ -210,7 +210,10 @@ impl fmt::Debug for UdfLibrary {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{ArgField, InvokeContext, ReturnField, Signature, UdfArg, UdfError};
+    use super::super::{
+        ArgField, GroupsAccumulator, InvokeContext, ReturnField, Signature, StateField, UdfArg,
+        UdfError,
+    };
     use super::*;
 
     use arrow_array::ArrayRef;
@@ -485,5 +488,184 @@ mod tests {
         assert!(lib.get_versioned("panic_version", 1).is_some());
         assert!(lib.get_versioned("panic_version", 999).is_some());
         assert!(lib.get_versioned("nosuch", 1).is_none());
+        // The other methods of the stub answer without a panic.
+        let udf = PanicVersion;
+        assert_eq!(udf.signature(), &Signature::Exact(Vec::new()));
+        assert!(udf.return_field(&[]).is_ok());
+        let ctx = InvokeContext {
+            partition: 0,
+            ansi: true,
+            time_zone: None,
+        };
+        assert!(udf.invoke(&[], 0, &ctx).is_err());
+    }
+
+    /// An aggregate with nothing to compute: enough to register and list.
+    #[derive(Debug)]
+    struct StubAggregate;
+
+    impl AggregateUdf for StubAggregate {
+        fn name(&self) -> &str {
+            "sum_stub"
+        }
+
+        fn version(&self) -> u32 {
+            3
+        }
+
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(Vec::new()))
+        }
+
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: krishiv_types::DataType::Long,
+                nullable: true,
+            })
+        }
+
+        fn state_fields(&self, _: &[ArgField]) -> Result<Vec<StateField>, UdfError> {
+            Ok(Vec::new())
+        }
+
+        fn accumulator(
+            &self,
+            _: &[ArgField],
+            _: &InvokeContext,
+        ) -> Result<Box<dyn GroupsAccumulator>, UdfError> {
+            Err(UdfError::new("test only"))
+        }
+    }
+
+    #[test]
+    fn aggregates_register_resolve_by_version_and_show_in_debug() {
+        let lib = UdfLibrary::new();
+        assert!(lib.is_empty());
+        lib.register_aggregate(Arc::new(StubAggregate)).unwrap();
+        assert!(!lib.is_empty());
+        assert!(lib.get_aggregate("sum_stub").is_some());
+        assert!(lib.get_aggregate_versioned("sum_stub", 3).is_some());
+        assert!(lib.get_aggregate_versioned("sum_stub", 4).is_none());
+        assert!(lib.get_aggregate("nosuch").is_none());
+        let shown = format!("{lib:?}");
+        assert!(shown.contains("aggregates: [\"sum_stub@3\"]"), "{shown}");
+        // The stub's remaining methods answer.
+        let udaf = StubAggregate;
+        assert_eq!(udaf.signature(), &Signature::Exact(Vec::new()));
+        assert!(udaf.return_field(&[]).is_ok());
+        assert!(udaf.state_fields(&[]).is_ok_and(|f| f.is_empty()));
+        let ctx = InvokeContext {
+            partition: 0,
+            ansi: true,
+            time_zone: None,
+        };
+        assert!(udaf.accumulator(&[], &ctx).is_err());
+    }
+
+    const CTX: InvokeContext = InvokeContext {
+        partition: 0,
+        ansi: false,
+        time_zone: None,
+    };
+
+    /// An aggregate UDF whose accumulator is never built here.
+    #[derive(Debug)]
+    struct Total {
+        name: &'static str,
+        version: u32,
+    }
+
+    impl super::super::AggregateUdf for Total {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        fn version(&self) -> u32 {
+            self.version
+        }
+
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(Vec::new()))
+        }
+
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Long,
+                nullable: true,
+            })
+        }
+
+        fn state_fields(&self, _: &[ArgField]) -> Result<Vec<super::super::StateField>, UdfError> {
+            Ok(Vec::new())
+        }
+
+        fn accumulator(
+            &self,
+            _: &[ArgField],
+            _: &InvokeContext,
+        ) -> Result<Box<dyn super::super::GroupsAccumulator>, UdfError> {
+            Err(UdfError::new("test only"))
+        }
+    }
+
+    #[test]
+    fn aggregates_register_by_lower_case_name_and_version() {
+        let lib = UdfLibrary::new();
+        let before = lib.version();
+        lib.register_aggregate(Arc::new(Total {
+            name: "My_Total",
+            version: 2,
+        }))
+        .unwrap();
+        assert_ne!(lib.version(), before, "registering bumps the epoch");
+        // Names are case-insensitive.
+        let udaf = lib.get_aggregate("my_total").unwrap();
+        assert!(lib.get_aggregate("MY_TOTAL").is_some());
+        assert!(lib.get_aggregate("nosuch").is_none());
+        assert!(lib.get_aggregate_versioned("my_total", 2).is_some());
+        assert!(lib.get_aggregate_versioned("my_total", 3).is_none());
+        assert!(lib.get_aggregate_versioned("nosuch", 2).is_none());
+        // The debug form lists it with its own name.
+        let shown = format!("{lib:?}");
+        assert!(
+            shown.contains("aggregates") && shown.contains("My_Total"),
+            "{shown}"
+        );
+        // The double declares what the contract asks of it.
+        assert_eq!(udaf.signature(), &Signature::Exact(Vec::new()));
+        assert_eq!(udaf.return_field(&[]).unwrap().data_type, DataType::Long);
+        assert!(udaf.state_fields(&[]).unwrap().is_empty());
+        assert_eq!(
+            udaf.properties(),
+            super::super::AggregateProperties::DEFAULT
+        );
+        assert!(udaf.accumulator(&[], &CTX).is_err());
+    }
+
+    #[test]
+    fn registering_an_aggregate_replaces_a_scalar_of_the_same_name() {
+        let lib = UdfLibrary::new();
+        lib.register(Arc::new(Identity { version: 1 })).unwrap();
+        assert!(lib.get("my_identity").is_some());
+        lib.register_aggregate(Arc::new(Total {
+            name: "my_identity",
+            version: 1,
+        }))
+        .unwrap();
+        assert!(lib.get("my_identity").is_none(), "one name, one kind");
+        assert!(lib.get_aggregate("my_identity").is_some());
+    }
+
+    #[test]
+    fn the_panicking_version_double_is_otherwise_a_working_udf() {
+        let u = PanicVersion;
+        assert_eq!(u.signature(), &Signature::Exact(Vec::new()));
+        assert_eq!(u.return_field(&[]).unwrap().data_type, DataType::Integer);
+        assert!(u.invoke(&[], 0, &CTX).is_err());
+        assert_eq!(u.properties(), super::super::UdfProperties::default());
     }
 }

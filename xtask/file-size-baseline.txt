@@ -13,25 +13,25 @@
 2626 crates/krishiv-exec/src/planner/eval/hof.rs
 3064 crates/krishiv-exec/src/window/tests.rs
 2084 crates/krishiv-functions/src/registry/defs.rs
-3329 crates/krishiv-functions/src/registry/tests.rs
+3337 crates/krishiv-functions/src/registry/tests.rs
 4186 crates/krishiv-io/src/avro/tests.rs
 2215 crates/krishiv-kernels/src/csv.rs
 2429 crates/krishiv-kernels/src/map.rs
 2468 crates/krishiv-plan/src/analyzer/coerce.rs
 # +9 lines over main: a cast of an alias (`v:a::int`) keeps the alias's name (T001c, PR #491)
 # +67 lines over main: USING-join keys through projections, windows and pipe boundaries (Widen::Hidden, P2b row 11)
-4655 crates/krishiv-plan/src/analyzer/ops.rs
+4649 crates/krishiv-plan/src/analyzer/ops.rs
 3098 crates/krishiv-plan/src/analyzer/subquery.rs
-5392 crates/krishiv-plan/src/tests/analyzer.rs
+5390 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 3139 crates/krishiv-session/src/catalog.rs
 2286 crates/krishiv-session/src/command.rs
 2629 crates/krishiv-session/src/dataframe.rs
 2789 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
-3269 crates/krishiv-session/src/table_commands.rs
+3278 crates/krishiv-session/src/table_commands.rs
 3869 crates/krishiv-sql/src/ast.rs
-2774 crates/krishiv-sql/src/lower.rs
+2759 crates/krishiv-sql/src/lower.rs
 5225 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs
