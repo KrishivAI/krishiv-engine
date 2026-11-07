@@ -21,22 +21,23 @@
 2468 crates/krishiv-plan/src/analyzer/coerce.rs
 # +9 lines over main: a cast of an alias (`v:a::int`) keeps the alias's name (T001c, PR #491)
 # +67 lines over main: USING-join keys through projections, windows and pipe boundaries (Widen::Hidden, P2b row 11)
-# +27 lines over main: a sort over no aggregate refuses an aggregate call (UNSUPPORTED_EXPR_FOR_OPERATOR); pipe AGGREGATE generators keep their alias or are refused with several (P2b row 11)
-4682 crates/krishiv-plan/src/analyzer/ops.rs
-3098 crates/krishiv-plan/src/analyzer/subquery.rs
-5390 crates/krishiv-plan/src/tests/analyzer.rs
+4628 crates/krishiv-plan/src/analyzer/ops.rs
+3096 crates/krishiv-plan/src/analyzer/subquery.rs
+5392 crates/krishiv-plan/src/tests/analyzer.rs
 # +16 lines over main: the runtime-owned permanent catalog and its invalidation hub (E1 R6, SessionCatalog::over)
 3020 crates/krishiv-session/src/catalog.rs
 2286 crates/krishiv-session/src/command.rs
-2630 crates/krishiv-session/src/dataframe.rs
-2789 crates/krishiv-session/src/session.rs
+# +14 lines over main: DataFrameWriter::check_save, a table write checked without writing (multi-table INSERT)
+2644 crates/krishiv-session/src/dataframe.rs
+# +5 lines over main: write_files' dry flag (multi-table INSERT)
+2780 crates/krishiv-session/src/session.rs
 # +25 lines over main: saveAsTable overwrite takes its admission before the old table is dropped and passes it down the write chain (E5, PR #479)
-3277 crates/krishiv-session/src/table_commands.rs
-# +4 lines over main: `Query::organization_span`, the clause span Spark's errors cite for SORT/DISTRIBUTE/CLUSTER BY (P2b row 11)
+# +90 lines over main: the multi-table INSERT (FROM source INSERT ... INSERT ...), every clause checked before the first write (P2b row 11, cte-recursion 52/53)
+3356 crates/krishiv-session/src/table_commands.rs
 3873 crates/krishiv-sql/src/ast.rs
-2626 crates/krishiv-sql/src/lower.rs
-# +9 lines over main: fills `Query::organization_span` when a clause is written (P2b row 11)
-5234 crates/krishiv-sql/src/parser.rs
+2598 crates/krishiv-sql/src/lower.rs
+# +21 lines over main: WITH ctes FROM source INSERT ... parses as a multi-table insert (P2b row 11)
+5255 crates/krishiv-sql/src/parser.rs
 2150 crates/krishiv-sql/src/parser/ddl.rs
 3657 crates/krishiv-sql/src/tests.rs
 2153 crates/krishiv-testkit/src/file_format/mod.rs

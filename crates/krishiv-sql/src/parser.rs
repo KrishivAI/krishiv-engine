@@ -1667,16 +1667,37 @@ impl<'s> Parser<'s> {
         let save = self.checkpoint();
         let start = self.start();
         let with = match self.with_clause() {
-            Ok(with) if self.kw_at(0, "INSERT") => with,
+            Ok(with) if self.kw_at(0, "INSERT") || self.kw_at(0, "FROM") => with,
             Ok(_) | Err(Fail::Syntax) => {
                 self.restore(save);
                 return Ok(None);
             }
             Err(e) => return Err(e),
         };
-        self.commit(save);
-        let Statement::Insert(mut insert) = self.insert_command()? else {
-            return self.fail();
+        // `WITH ctes FROM source INSERT ...`: a multi-table insert whose clauses all see the
+        // common table expressions; `WITH ctes FROM source SELECT ...` stays a query (a syntax
+        // failure here gives the statement back to the query parser).
+        let mut insert = if self.kw_at(0, "FROM") {
+            let from = self.checkpoint();
+            match self.multi_insert_command() {
+                Ok(Statement::Insert(insert)) => {
+                    self.commit(from);
+                    self.commit(save);
+                    insert
+                }
+                Ok(_) | Err(Fail::Syntax) => {
+                    self.restore(from);
+                    self.restore(save);
+                    return Ok(None);
+                }
+                Err(e) => return Err(e),
+            }
+        } else {
+            self.commit(save);
+            let Statement::Insert(insert) = self.insert_command()? else {
+                return self.fail();
+            };
+            insert
         };
         for clause in &mut insert.clauses {
             // Spark refuses a `WITH` in both places.

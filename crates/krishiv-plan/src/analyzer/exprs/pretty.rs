@@ -652,6 +652,8 @@ pub(super) fn call(
         // prefix; `to_varchar` shows as `to_char`.
         _ if k.len() == 2 && matches!(name, "&" | "|" | "^" | "<<" | ">>" | ">>>") => infix(name),
         _ if k.len() == 1 && name == "~" => format!("~{}", k[0]),
+        // The unary `-` of a window frame bound cast to its key's type (`windows.rs`): Spark's `UnaryMinus` text.
+        _ if k.len() == 1 && name == "-" => format!("(- {})", k[0]),
         _ if name.eq_ignore_ascii_case("to_varchar") => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("to_char({d}{})", k.join(", "))

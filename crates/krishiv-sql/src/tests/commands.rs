@@ -722,6 +722,19 @@ fn statement_dispatch_disambiguation() {
         checked("FROM s INSERT INTO a SELECT *"),
         ast::Statement::Query(_)
     ));
+    // The same after a `WITH` clause, which every insert clause then sees.
+    assert!(matches!(
+        checked("WITH r AS (SELECT 1 AS a) FROM r SELECT a"),
+        ast::Statement::Query(_)
+    ));
+    let ast::Statement::Insert(insert) =
+        checked("WITH r AS (SELECT 1 AS a) FROM r INSERT INTO t SELECT * INSERT INTO u SELECT a")
+    else {
+        panic!("a multi-table insert");
+    };
+    assert!(insert.source.is_some());
+    assert_eq!(insert.clauses.len(), 2);
+    assert!(insert.clauses.iter().all(|c| c.query.with.is_some()));
 }
 
 /// `INSERT` statements: single-table and multi-table.
