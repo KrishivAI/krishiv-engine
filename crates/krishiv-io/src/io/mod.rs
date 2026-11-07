@@ -1010,6 +1010,28 @@ impl IoContext {
         }
     }
 
+    /// Like [`Self::fetch`], and also how long the read itself took: the
+    /// time from the moment it started (on the I/O runtime at once, else
+    /// when first polled) to its completion, measured inside the read so a
+    /// finished read that the caller has not yet awaited does not count
+    /// the time it waited. A failed read has no time.
+    pub fn fetch_timed(
+        &self,
+        file: FileRef,
+        ranges: Vec<Range<u64>>,
+    ) -> BoxFuture<'static, Result<(Vec<Bytes>, Duration)>> {
+        let ctx = self.clone();
+        let fut = async move {
+            let started = tokio::time::Instant::now();
+            let bytes = ctx.get_ranges(&file, &ranges).await?;
+            Ok((bytes, started.elapsed()))
+        };
+        match &self.sched.runtime {
+            None => Box::pin(fut),
+            Some(rt) => spawned(rt, fut),
+        }
+    }
+
     /// The last `len` bytes of `file` (at most [`MAX_TAIL_BYTES`], at least
     /// the configured `krishiv.io.footerReadBytes`, at most the file) in one
     /// request: the speculative footer read, reserved like

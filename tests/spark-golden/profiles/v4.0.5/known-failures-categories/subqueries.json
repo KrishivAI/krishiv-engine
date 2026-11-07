@@ -1,0 +1,25 @@
+{
+  "category": "subqueries",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "list-query|UNRESOLVED_COLUMN.*`a`\\.`four`",
+      "order": 140
+    },
+    {
+      "detail": "The feature correlated scalar subqueries",
+      "order": 320
+    },
+    {
+      "detail": "outer references|correlated|self-join of a correlated",
+      "order": 510
+    },
+    {
+      "file": "^subquery/",
+      "order": 700
+    }
+  ],
+  "summary": "general subquery unnesting (correlated shapes beyond TPC-H)",
+  "task": "P2-T115"
+}

@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "other-version": [
+      11,
+      12,
+      25,
+      26
+    ]
+  },
+  "file": "ceil-floor-with-scale-param",
+  "format_version": 1
+}

@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "sql-commands": [
+      13,
+      19
+    ]
+  },
+  "file": "show-tables",
+  "format_version": 1
+}

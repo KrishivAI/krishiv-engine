@@ -306,6 +306,8 @@ fn as_nullable(f: &Field) -> Field {
 
 fn as_nullable_type(dt: &DataType) -> DataType {
     match dt {
+        // A variant's carrier struct is one value: only the field is nullable.
+        DataType::Struct(_) if krishiv_types::arrow::is_variant_struct(dt) => dt.clone(),
         DataType::Struct(fs) => {
             DataType::Struct(fs.iter().map(|f| as_nullable(f)).collect::<Fields>())
         }
