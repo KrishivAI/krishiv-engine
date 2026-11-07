@@ -363,7 +363,8 @@ fn merge(items: &[(Collation, Strength)]) -> Result<Option<(Collation, Strength)
 }
 
 /// Whether `e` is a string literal (under casts and collate) that cannot begin with U+0307 or end
-/// with `i`/`I`/`İ`, so no lower-cased match of it can split the pair `İ` lower-cases to.
+/// with `i`/`I`, so no lower-cased match of it can split the pair `İ` lower-cases to (a pattern
+/// ending in `İ` is refused too: stricter than needed, since its lower-case ends on the dot).
 fn safe_search_pattern(e: &Expr) -> bool {
     match &e.node {
         ExprNode::Literal(Literal::String(s)) => {
