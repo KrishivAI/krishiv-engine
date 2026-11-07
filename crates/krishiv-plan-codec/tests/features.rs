@@ -1115,6 +1115,52 @@ fn the_variant_type_needs_its_feature() {
     );
 }
 
+/// A plan whose result columns include a variant encodes with
+/// `variant_type` alone and decodes to the same schema: the encoder's own
+/// nested-types check reads the variant's struct carrier as one value, as
+/// [`feature_of`] does. This is the end-to-end `encode` case the review of
+/// #555 asked for (its M1): the nightly `serialize-through` failure was a
+/// plan like this one. A variant inside an array is still nested.
+#[test]
+fn a_variant_result_column_is_not_a_nested_type() {
+    use std::sync::Arc;
+
+    use arrow_schema::{Field, Schema};
+    use krishiv_exec::physical::PhysicalPlan;
+    use krishiv_types::DataType;
+    let (_, scan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "variant_scan")
+        .unwrap();
+    let with_result = |t: arrow_schema::DataType| {
+        PhysicalPlan::new(
+            scan.root().clone(),
+            Arc::new(Schema::new(vec![Field::new("v", t, true)])),
+            scan.explain().clone(),
+            scan.env().clone(),
+        )
+    };
+    let plan = with_result(DataType::Variant.to_arrow());
+    let m = to_message(&plan).unwrap();
+    assert_eq!(m.features, ["variant_type"]);
+    let back = decode(&m.encode_to_vec()).unwrap();
+    assert_eq!(back.schema(), plan.schema());
+    let list = arrow_schema::DataType::List(Arc::new(Field::new(
+        "element",
+        DataType::Variant.to_arrow(),
+        true,
+    )));
+    let features = to_message(&with_result(list)).unwrap().features;
+    assert!(
+        features.contains(&"nested_types".to_owned()),
+        "{features:?}"
+    );
+    assert!(
+        features.contains(&"variant_type".to_owned()),
+        "{features:?}"
+    );
+}
+
 #[test]
 fn time_and_spatial_types_need_their_features() {
     use krishiv_types::{DataType, Srid};

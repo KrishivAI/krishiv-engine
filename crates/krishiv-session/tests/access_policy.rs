@@ -257,6 +257,7 @@ fn ddl(s: &Session) -> Vec<(&'static str, String)> {
         ("CREATE DATABASE", sql("CREATE DATABASE d")),
         ("CREATE TABLE", sql("CREATE TABLE c (a INT)")),
         ("ALTER TABLE", sql("ALTER TABLE t ADD COLUMNS (b INT)")),
+        ("MSCK REPAIR TABLE", sql("MSCK REPAIR TABLE t")),
         ("CREATE VIEW", sql("CREATE VIEW default.pv AS SELECT 1")),
         (
             "CREATE GLOBAL TEMPORARY VIEW",
