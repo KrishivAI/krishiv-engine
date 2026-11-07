@@ -726,6 +726,30 @@ pub struct AggregateExpr {
     /// interval's fields; empty otherwise).
     #[prost(bytes = "vec", tag = "17")]
     pub result_element: ::prost::alloc::vec::Vec<u8>,
+    /// feature: rust_udaf (`AGGREGATE_FUNCTION_UDF` only: the call).
+    #[prost(message, optional, boxed, tag = "18")]
+    pub udaf: ::core::option::Option<::prost::alloc::boxed::Box<UdafCall>>,
+}
+/// The call of a session aggregate UDF: its implementation by name and
+/// version, and the columns the planner fixed for it. A worker must hold
+/// the same version, declaring the same state, to run the plan.
+/// feature: rust_udaf
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UdafCall {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub version: u64,
+    /// Arrow IPC `Schema` flatbuffer of the argument fields, in order.
+    #[prost(bytes = "vec", tag = "3")]
+    pub args: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "4")]
+    pub result: ::core::option::Option<DataType>,
+    #[prost(bool, tag = "5")]
+    pub nullable: bool,
+    /// Arrow IPC `Schema` flatbuffer of the declared state fields, in order.
+    #[prost(bytes = "vec", tag = "6")]
+    pub state: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Residual {
@@ -897,6 +921,24 @@ pub struct ExchangeNode {
     pub input: u32,
     #[prost(message, optional, tag = "3")]
     pub partitioning: ::core::option::Option<Partitioning>,
+    /// feature: exchange_filters
+    #[prost(message, repeated, tag = "4")]
+    pub filters: ::prost::alloc::vec::Vec<ExchangeFilter>,
+}
+/// feature: exchange_filters
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExchangeFilter {
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    #[prost(uint64, tag = "2")]
+    pub column: u64,
+    /// Arrow IPC `Schema` flatbuffer of one field.
+    #[prost(bytes = "vec", tag = "3")]
+    pub key_type: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "4")]
+    pub options: ::core::option::Option<KeyFilterOptions>,
+    #[prost(bool, tag = "5")]
+    pub null_safe: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Partitioning {
@@ -1312,6 +1354,8 @@ pub mod data_type {
         CalendarInterval = 21,
         /// feature: collated_strings
         CollatedString = 22,
+        /// feature: variant_type
+        Variant = 23,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -1343,6 +1387,7 @@ pub mod data_type {
                 Self::DayTimeInterval => "KIND_DAY_TIME_INTERVAL",
                 Self::CalendarInterval => "KIND_CALENDAR_INTERVAL",
                 Self::CollatedString => "KIND_COLLATED_STRING",
+                Self::Variant => "KIND_VARIANT",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1371,6 +1416,7 @@ pub mod data_type {
                 "KIND_DAY_TIME_INTERVAL" => Some(Self::DayTimeInterval),
                 "KIND_CALENDAR_INTERVAL" => Some(Self::CalendarInterval),
                 "KIND_COLLATED_STRING" => Some(Self::CollatedString),
+                "KIND_VARIANT" => Some(Self::Variant),
                 _ => None,
             }
         }
@@ -1523,6 +1569,8 @@ pub enum GeneratorKind {
     Explode = 1,
     PosExplode = 2,
     Inline = 3,
+    /// feature: variant_explode
+    VariantExplode = 4,
 }
 impl GeneratorKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1535,6 +1583,7 @@ impl GeneratorKind {
             Self::Explode => "GENERATOR_KIND_EXPLODE",
             Self::PosExplode => "GENERATOR_KIND_POS_EXPLODE",
             Self::Inline => "GENERATOR_KIND_INLINE",
+            Self::VariantExplode => "GENERATOR_KIND_VARIANT_EXPLODE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1544,6 +1593,7 @@ impl GeneratorKind {
             "GENERATOR_KIND_EXPLODE" => Some(Self::Explode),
             "GENERATOR_KIND_POS_EXPLODE" => Some(Self::PosExplode),
             "GENERATOR_KIND_INLINE" => Some(Self::Inline),
+            "GENERATOR_KIND_VARIANT_EXPLODE" => Some(Self::VariantExplode),
             _ => None,
         }
     }
@@ -1778,6 +1828,9 @@ pub enum AggregateFunction {
     MaxBy = 44,
     /// feature: any_value_by_aggregates
     MinBy = 45,
+    /// A session aggregate UDF, by name and version (`AggregateExpr.udaf`).
+    /// feature: rust_udaf
+    Udf = 46,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1832,6 +1885,7 @@ impl AggregateFunction {
             Self::AnyValue => "AGGREGATE_FUNCTION_ANY_VALUE",
             Self::MaxBy => "AGGREGATE_FUNCTION_MAX_BY",
             Self::MinBy => "AGGREGATE_FUNCTION_MIN_BY",
+            Self::Udf => "AGGREGATE_FUNCTION_UDF",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1883,6 +1937,7 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_ANY_VALUE" => Some(Self::AnyValue),
             "AGGREGATE_FUNCTION_MAX_BY" => Some(Self::MaxBy),
             "AGGREGATE_FUNCTION_MIN_BY" => Some(Self::MinBy),
+            "AGGREGATE_FUNCTION_UDF" => Some(Self::Udf),
             _ => None,
         }
     }

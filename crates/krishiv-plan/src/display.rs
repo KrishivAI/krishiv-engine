@@ -815,6 +815,13 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 | FunctionId::Udf { .. }
                 | FunctionId::PythonUdf { .. } => None,
             };
+            // A session UDF may share a built-in's name: its identity
+            // says which (the shown name stays Spark's).
+            if let FunctionId::Udf { version, .. } = id
+                && IDENTITY.with(std::cell::Cell::get)
+            {
+                out.push(Piece::Owned(format!("system.session@{version}.")));
+            }
             call(
                 id.name(),
                 op,
@@ -833,6 +840,10 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             }));
             out.push(Piece::Expr(expr));
             out.push(Piece::Owned(format!(" AS {})", to.sql())));
+        }
+        ExprNode::Collate { expr, name, .. } => {
+            out.push(Piece::Expr(expr));
+            out.push(Piece::Owned(format!(" COLLATE {name}")));
         }
         ExprNode::Alias { expr, name } => {
             out.push(Piece::Expr(expr));

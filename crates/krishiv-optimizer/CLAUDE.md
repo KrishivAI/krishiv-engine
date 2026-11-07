@@ -38,7 +38,17 @@ Paths are relative to this crate.
 - Join ordering re-plans each inner-join tree (through deterministic filters and column selections) from
   `Statistics`; it never adds a cross product, places each conjunct at the lowest join that has its inputs
   (subquery conjuncts as filters), and restores column order only for positional consumers. Inputs are
-  ordered canonically, so `optimize` stays a fixed point.
+  ordered canonically, so `optimize` stays a fixed point. An input's own conjuncts are estimated over one view in a canonical
+  order (`narrow::conjunct_selectivities`), so a two-sided range keeps the fraction between its bounds (E5a).
+- Column equalities `a = b` of one type between join-tree inputs form equivalence classes (`join_order.rs`
+  `canonical_equalities`): inputs with columns of one class can join on it even when the query relates them only
+  through a third input, and a join or an estimate takes only the equalities that connect columns of a class not
+  already equal below it (`Graph::independent`), chosen canonically (a composite key's members first, its
+  selectivity on one canonical member, then column-id order), so the plan does not depend on how the class was
+  written.
+- Restriction (`restrict.rs`): an aggregate joined on its group keys may be reduced by a semi join with the other
+  side's key domain; the domain follows inner-join `o = y` equalities (same type, never through an outer join) to the
+  subtree that scans fewest rows, so where join ordering puts the aggregate does not decide it.
 - Statistics propagation (`PlanStats`): a filter narrows `min`/`max` of the columns it reads and clears their null
   fraction when null-rejecting; `OR` takes the union of its branches' ranges, `NOT` and unknown predicates leave
   ranges alone, so a range only stays or widens (the proptest in `plan_stats.rs` holds it to that). An equality with

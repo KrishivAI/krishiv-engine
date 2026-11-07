@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "s43-other": [
+      43,
+      46,
+      53
+    ]
+  },
+  "file": "metadata_column_resolution",
+  "format_version": 1
+}

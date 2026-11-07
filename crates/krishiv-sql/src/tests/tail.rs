@@ -80,7 +80,9 @@ fn collate_expressions() {
     assert!(data_type.collation.is_some());
     assert_eq!(class("SELECT a COLLATE"), "PARSE_SYNTAX_ERROR");
     assert_eq!(class("SELECT a COLLATE 1"), "PARSE_SYNTAX_ERROR");
-    assert!(unsupported("SELECT a COLLATE x FROM t").contains("COLLATE"));
+    // An unknown collation name is a Spark error at lowering.
+    let e = lower(&ok("SELECT a COLLATE x FROM t"), krishiv_plan::SourceId(0)).unwrap_err();
+    assert_eq!(e.error.error_class().name(), "COLLATION_INVALID_NAME");
 }
 
 #[test]
@@ -845,6 +847,36 @@ fn legacy_identifier_clause_takes_only_the_function_syntax() {
     }
 }
 
+/// A session variable's name in `DECLARE` and `DROP TEMPORARY VARIABLE` is
+/// an identifier reference in both modes (Spark 4.2 `createVariable`,
+/// `dropVariable`).
+#[test]
+fn legacy_identifier_clause_names_declared_variables() {
+    let legacy =
+        ParserOptions::from_conf(|k| (k == "spark.sql.legacy.identifierClause").then_some("true"));
+    for opts in [&legacy, &defaults()] {
+        let Statement::DeclareVariable(d) =
+            parse_statement("DECLARE IDENTIFIER('my_var') = 'value'", opts).unwrap()
+        else {
+            panic!("not a DECLARE")
+        };
+        assert_eq!(d.names[0].parts[0].value, "my_var");
+        let Statement::DropVariable(d) = parse_statement(
+            "DROP TEMPORARY VARIABLE IF EXISTS IDENTIFIER('my_var')",
+            opts,
+        )
+        .unwrap() else {
+            panic!("not a DROP VARIABLE")
+        };
+        assert_eq!(d.name.parts[0].value, "my_var");
+    }
+    // The legacy mode is back after the name: an alias in the default
+    // still refuses the literal.
+    let aliased = "DECLARE IDENTIFIER('v') = (SELECT 1 AS IDENTIFIER('c'))";
+    assert!(parse_statement(aliased, &legacy).is_err());
+    parse_statement(aliased, &defaults()).unwrap();
+}
+
 #[test]
 fn variant_paths() {
     use ast::VariantPathPartKind as K;
@@ -892,7 +924,15 @@ fn variant_paths() {
     }
     // Colons of struct types are still types.
     ok("SELECT CAST(x AS STRUCT<a: INT, b:STRING>)");
-    assert!(unsupported("SELECT v:a FROM t").contains("variant paths"));
+    // `v:a` lowers to `variant_get(v, '$.a') AS a`; a path `JsonPathParser`
+    // refuses (an identifier subscript) is a syntax error.
+    let q = ok("SELECT v:a.b[0] FROM t");
+    let plan = format!("{:?}", lower(&q, krishiv_plan::SourceId(0)).unwrap());
+    assert!(
+        plan.contains("variant_get") && plan.contains("$.a.b[0]"),
+        "{plan}"
+    );
+    assert!(unsupported("SELECT v:a[b] FROM t").contains("PARSE_SYNTAX_ERROR"));
 }
 
 fn transform_of(sql: &str) -> ast::TransformSelect {
@@ -1081,4 +1121,39 @@ fn nested_table_argument_partitions_parse_in_bounded_time() {
         table_arg(&args[0]).partitioning.unwrap().partition_by[0].kind,
         ExprKind::Subquery(..)
     ));
+}
+
+/// The name in `IDENTIFIER_TOO_MANY_NAME_PARTS` is printed as Spark quotes it: each part in backticks, a backtick
+/// inside a part doubled, the parts joined by dots.
+#[test]
+fn too_many_name_parts_quotes_each_part() {
+    for (sql, quoted) in [
+        ("SELECT 1 AS IDENTIFIER('a.b')", "`a`.`b`"),
+        ("SELECT 1 AS IDENTIFIER('`x``y`.z')", "`x``y`.`z`"),
+    ] {
+        let message = parse_query(sql, &defaults()).unwrap_err().to_string();
+        assert!(message.contains(quoted), "{sql}: {message}");
+    }
+}
+
+/// `nesting_bound` counts brackets, `CASE ... END` and the angle brackets of `ARRAY`, `MAP` and `STRUCT` types
+/// (a `<` or `>` elsewhere is a comparison), plus one per lambda arrow.
+#[test]
+fn nesting_bound_counts_brackets_cases_angles_and_arrows() {
+    let bound = |sql: &str| crate::parser::nesting_bound(sql, &crate::lexer::tokenize(sql));
+    assert_eq!(bound("((1))"), 2);
+    assert_eq!(bound("CASE WHEN (a) THEN 1 END"), 2);
+    // a closed type angle ends its level: the later `>` is a comparison and must not close another level
+    for ty in ["ARRAY<INT>", "MAP<INT, INT>", "STRUCT<a: INT>"] {
+        let sql = format!("{ty} (1 > (((2))))");
+        assert_eq!(bound(&sql), 4, "{sql}");
+        let sql = format!("({ty})");
+        assert_eq!(bound(&sql), 2, "{sql}");
+    }
+    assert_eq!(
+        bound("a < (b)"),
+        1,
+        "a `<` after a plain word is a comparison"
+    );
+    assert_eq!(bound("x -> (x)"), 2);
 }

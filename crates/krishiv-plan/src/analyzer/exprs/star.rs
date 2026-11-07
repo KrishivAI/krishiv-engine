@@ -908,14 +908,8 @@ impl Resolver<'_> {
         let Some((last, leading)) = path.split_last() else {
             return Vec::new();
         };
-        if leading.is_empty() {
-            return out
-                .iter()
-                .filter(|a| same(&a.col.name, last, cs))
-                .cloned()
-                .collect();
-        }
-        out.iter()
+        let mut hits: Vec<Attr> = out
+            .iter()
             .filter(|a| {
                 same(&a.col.name, last, cs)
                     && leading.len() <= a.qual.len()
@@ -925,7 +919,13 @@ impl Resolver<'_> {
                         .all(|(x, y)| same(x, y, cs))
             })
             .cloned()
-            .collect()
+            .collect();
+        // Spark resolves the entry through `getCandidatesForResolution`: a
+        // union input's repeat of a column does not count among several.
+        if hits.len() > 1 {
+            hits.retain(|a| !a.duplicate);
+        }
+        hits
     }
 }
 

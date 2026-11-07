@@ -11,9 +11,9 @@ byte for byte.
 |---|---|---|
 | `krishiv.resultCache.enabled` | `false` | Keep the rows of a query for later runs of the same query. |
 | `krishiv.resultCache.ttl` | `1d` | How long an entry is served, from when it was stored. `0s` never expires. |
-| `krishiv.resultCache.maxBytes` | `64MB` | Bytes the cache holds for the whole process. |
+| `krishiv.resultCache.maxBytes` | `64MB` | Bytes the cache holds. A runtime setting: set it when the session (or its engine runtime) is built; `SET` of it fails with `CANNOT_MODIFY_STATIC_CONFIG`. |
 
-The store is one per process, shared by every session in it. It is separate from `DataFrame.cache()`
+The store belongs to an engine runtime and is shared by every session on it: sessions built alone share one store for the process, and a runtime a host builds (`EngineRuntime`) has its own. Sessions built alone each bring their own cap to that shared store. It is separate from `DataFrame.cache()`
 and `persist()`, which are a session's explicit snapshots, never expire (as in Spark) and are not
 changed by this.
 

@@ -314,9 +314,24 @@ fn values_keep_their_type_and_their_own_token() {
         rows(&s, "SELECT CAST(ts AS STRING)"),
         [["2020-02-29 01:02:03"]]
     );
+    // ANSI intervals keep their fields.
+    assert_eq!(
+        rows(
+            &s,
+            "EXECUTE IMMEDIATE 'SELECT typeof(:p), CAST(:p AS STRING)' USING INTERVAL '3' DAY AS p"
+        ),
+        [["interval day", "INTERVAL '3' DAY"]]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "EXECUTE IMMEDIATE 'SELECT typeof(?)' USING INTERVAL '1-2' YEAR TO MONTH"
+        ),
+        [["interval year to month"]]
+    );
     // Types the text cannot carry exactly are refused.
     assert_eq!(
-        class(&s, "EXECUTE IMMEDIATE 'SELECT ?' USING INTERVAL '3' DAY"),
+        class(&s, "EXECUTE IMMEDIATE 'SELECT ?' USING ARRAY(1)"),
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
 }

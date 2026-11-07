@@ -98,6 +98,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "generator: a `Generate` node, not a DataFrame function yet",
     ),
     (
+        "variant_explode",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
+        "variant_explode_outer",
+        "generator: a `Generate` node, not a DataFrame function yet",
+    ),
+    (
         "timestampadd",
         "parsed from `TIMESTAMPADD(unit, n, ts)`; PySpark names it `timestamp_add`",
     ),
@@ -613,6 +621,19 @@ pub(super) fn rows() -> Vec<Row> {
             "col: ColumnOrName, schema: Column | str, options: dict[str, str] = None",
         ),
         Row::new("get_json_object", "col: ColumnOrName, path: str"),
+        Row::new("parse_json", "col: ColumnOrName"),
+        Row::new("try_parse_json", "col: ColumnOrName"),
+        Row::new("is_variant_null", "v: ColumnOrName"),
+        Row::new("schema_of_variant", "v: ColumnOrName"),
+        Row::new("to_variant_object", "col: ColumnOrName"),
+        Row::new(
+            "variant_get",
+            "v: ColumnOrName, path: Column | str, targetType: str",
+        ),
+        Row::new(
+            "try_variant_get",
+            "v: ColumnOrName, path: Column | str, targetType: str",
+        ),
         Row::new("greatest", "*cols: ColumnOrName").at_least(2),
         Row::new("least", "*cols: ColumnOrName").at_least(2),
         Row::new(
@@ -627,6 +648,7 @@ pub(super) fn rows() -> Vec<Row> {
             "length: int | Column, seed: int | Column = None",
         ),
         Row::new("typeof", "col: ColumnOrName"),
+        Row::new("collation", "col: ColumnOrName"),
         Row::new(
             "uniform",
             "min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Column = None",
@@ -662,6 +684,7 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("array_prepend", "col: ColumnOrName, value: Any"),
         Row::new("array_insert", "arr: ColumnOrName, pos: ColumnOrName | int, value: Any"),
         Row::new("array_compact", "col: ColumnOrName"),
+        Row::new("shuffle", "col: ColumnOrName, seed: int | Column = None"),
         Row::new("array_contains", "col: ColumnOrName, value: Any"),
         Row::new("array_distinct", "col: ColumnOrName"),
         Row::new("array_union", "col1: ColumnOrName, col2: ColumnOrName"),

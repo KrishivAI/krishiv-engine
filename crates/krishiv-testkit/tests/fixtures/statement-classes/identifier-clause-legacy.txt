@@ -173,10 +173,10 @@ ADMIN	REFRESH TABLE IDENTIFIER('identifier_clause_test_schema.test_table')
 READ	DESCRIBE IDENTIFIER('identifier_clause_test_schema.test_table')
 READ	SHOW COLUMNS FROM IDENTIFIER('identifier_clause_test_schema.test_table')
 DDL	DROP TABLE IDENTIFIER('identifier_clause_test_schema.test_table')
-PARSE_ERROR	DECLARE IDENTIFIER('my_var') = 'value'
+SESSION	DECLARE IDENTIFIER('my_var') = 'value'
 PARSE_ERROR	SET VAR IDENTIFIER('my_var') = 'new_value'
 READ	SELECT IDENTIFIER('my_var')
-PARSE_ERROR	DROP TEMPORARY VARIABLE IDENTIFIER('my_var')
+SESSION	DROP TEMPORARY VARIABLE IDENTIFIER('my_var')
 PARSE_ERROR	CREATE TEMPORARY FUNCTION test_udf(IDENTIFIER('param1') INT, IDENTIFIER('param2') STRING)
 READ	SELECT test_udf(5, 'hello')
 SESSION	DROP TEMPORARY FUNCTION test_udf

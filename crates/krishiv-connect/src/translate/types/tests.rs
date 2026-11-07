@@ -52,13 +52,59 @@ fn string_collation() {
         data_type(&string("utf8_binary")).expect("default"),
         DataType::String
     );
-    let e = data_type(&string("UTF8_LCASE")).expect_err("collated");
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(
-        e.message().contains("DataType.String.collation"),
-        "{}",
-        e.message()
+    // Any other collation is a collated string; names are case-insensitive, `_RTRIM` is kept.
+    for name in [
+        "UTF8_LCASE",
+        "utf8_lcase",
+        "UNICODE_CI",
+        "UTF8_BINARY_RTRIM",
+    ] {
+        assert_eq!(
+            data_type(&string(name)).expect(name),
+            DataType::collated_string(Collation::parse(name).expect(name)),
+            "{name}"
+        );
+    }
+    // Independent of the parser the translator uses: the type is a collated string and prints
+    // its canonical name; a binary collation with `_RTRIM` is not the plain `STRING`.
+    for (written, canonical) in [
+        ("UTF8_LCASE", "UTF8_LCASE"),
+        ("utf8_lcase", "UTF8_LCASE"),
+        ("UTF8_BINARY_RTRIM", "UTF8_BINARY_RTRIM"),
+        ("SYSTEM.BUILTIN.UTF8_LCASE", "UTF8_LCASE"),
+    ] {
+        let DataType::CollatedString(c) = data_type(&string(written)).expect(written) else {
+            panic!("{written} is not a collated string");
+        };
+        assert_eq!(c.name(), canonical, "{written}");
+    }
+    // A qualified name of the default collation is the plain `STRING` as well.
+    assert_eq!(
+        data_type(&string("SYSTEM.BUILTIN.UTF8_BINARY")).expect("default"),
+        DataType::String
     );
+    // Inside a nested type too.
+    let array = proto_type(Kind::Array(Box::new(dt::Array {
+        element_type: Some(Box::new(Proto {
+            kind: Some(Kind::String(dt::String {
+                collation: "UTF8_LCASE".to_owned(),
+                ..dt::String::default()
+            })),
+        })),
+        contains_null: true,
+        ..dt::Array::default()
+    })));
+    assert_eq!(
+        data_type(&array).expect("array"),
+        ArrayType::new(
+            DataType::collated_string(Collation::parse("UTF8_LCASE").expect("lcase")),
+            true
+        )
+        .into()
+    );
+    // An unknown name is Spark's COLLATION_INVALID_NAME.
+    let e = data_type(&string("NO_SUCH_COLLATION")).expect_err("unknown");
+    assert_eq!(e.error_class(), ErrorClass::CollationInvalidName);
 }
 
 #[test]
@@ -103,7 +149,6 @@ fn unsupported_and_unset_kinds() {
         Kind::Null(dt::Null::default()),
         Kind::Char(dt::Char::default()),
         Kind::VarChar(dt::VarChar::default()),
-        Kind::Variant(dt::Variant::default()),
     ] {
         let e = data_type(&proto_type(kind)).expect_err("unsupported");
         assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
@@ -113,6 +158,14 @@ fn unsupported_and_unset_kinds() {
             e.message()
         );
     }
+}
+
+#[test]
+fn the_variant_type_maps() {
+    assert_eq!(
+        data_type(&proto_type(Kind::Variant(dt::Variant::default()))),
+        Ok(DataType::Variant)
+    );
 }
 
 #[test]

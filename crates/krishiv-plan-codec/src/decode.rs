@@ -9,14 +9,16 @@ use std::sync::Arc;
 
 use krishiv_common::secret::{OptionValue, SecretValue};
 use krishiv_exec::JoinType;
-use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
+use krishiv_exec::aggregate::{
+    AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
+};
 use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
     PythonCallPlan, Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SortMergeJoinPlan,
     SubqueryId, SubqueryPlan, SubqueryValueKind, WritePlan,
 };
-use krishiv_exec::physical::{SharedId, SharedPlan};
+use krishiv_exec::physical::{ExchangeFilterPlan, SharedId, SharedPlan};
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
     FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
@@ -546,6 +548,7 @@ impl Decoder {
                     Explode => krishiv_plan::GeneratorKind::Explode,
                     PosExplode => krishiv_plan::GeneratorKind::PosExplode,
                     Inline => krishiv_plan::GeneratorKind::Inline,
+                    VariantExplode => krishiv_plan::GeneratorKind::VariantExplode,
                 })?,
                 outer: g.outer,
                 arg: self.expr_ref(g.arg)?,
@@ -729,6 +732,26 @@ impl Decoder {
             id: ExchangeId(e.id),
             input: self.boxed(e.input)?,
             partitioning: partitioning(required(&e.partitioning, "the partitioning")?)?,
+            filters: e
+                .filters
+                .iter()
+                .map(|f| {
+                    let options = join_filter(&pb::JoinFilter {
+                        id: f.id,
+                        key: 0,
+                        options: f.options,
+                    })?
+                    .options;
+                    Ok(ExchangeFilterPlan {
+                        id: FilterId(f.id),
+                        column: usize::try_from(f.column)
+                            .map_err(|_| corrupt("an exchange filter column out of range"))?,
+                        key_type: type_from(&f.key_type)?,
+                        options,
+                        null_safe: f.null_safe,
+                    })
+                })
+                .collect::<Result<_>>()?,
         })
     }
 
@@ -1087,7 +1110,11 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         PercentileApprox => percentile_approx_function(a)?,
         PercentileDisc => percentile_disc_function(a)?,
         ApproxCountDistinct => hll_function(a)?,
+        Udf => AggregateFunction::Udf(Box::new(udaf_call(a.udaf.as_deref())?)),
     })?;
+    if a.udaf.is_some() && !matches!(function, AggregateFunction::Udf(_)) {
+        return Err(corrupt("an aggregate UDF call on another function"));
+    }
     if !matches!(function, AggregateFunction::ListAgg { .. })
         && (!a.listagg_delimiter.is_empty()
             || !a.listagg_desc.is_empty()
@@ -1105,6 +1132,14 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         return Err(corrupt("`ignore_nulls` on a function without it"));
     }
     let args = usizes(&a.args)?;
+    if let AggregateFunction::Udf(call) = &function
+        && a.input == pb::AggregateInput::Raw as i32
+        && call.args.len() != args.len()
+    {
+        return Err(corrupt(
+            "an aggregate UDF with another argument count than its call",
+        ));
+    }
     if let AggregateFunction::ListAgg { orders, .. } = &function
         && args.len() != orders.len() + 1
     {
@@ -1130,6 +1165,34 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
                 _ => return Err(corrupt("an aggregate element that is not one field")),
             }
         },
+    })
+}
+
+/// The call of an aggregate UDF from its wire form.
+fn udaf_call(u: Option<&pb::UdafCall>) -> Result<UdafCall> {
+    let u = u.ok_or_else(|| corrupt("an aggregate UDF without its call"))?;
+    let fields = |b: &[u8]| -> Result<Vec<arrow_schema::Field>> {
+        Ok(schema_from(b)?
+            .fields()
+            .iter()
+            .map(|f| f.as_ref().clone())
+            .collect())
+    };
+    let state = fields(&u.state)?;
+    if state.is_empty() {
+        return Err(corrupt("an aggregate UDF without state columns"));
+    }
+    Ok(UdafCall {
+        name: u.name.clone(),
+        version: u32::try_from(u.version).map_err(|_| corrupt("a UDF version out of range"))?,
+        args: fields(&u.args)?,
+        result: spark_type(
+            u.result
+                .as_ref()
+                .ok_or_else(|| corrupt("an aggregate UDF without its result type"))?,
+        )?,
+        nullable: u.nullable,
+        state,
     })
 }
 
@@ -1383,6 +1446,7 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         DayTimeInterval => interval_day_time(t)?,
         CalendarInterval => DataType::CalendarInterval,
         CollatedString => collated_string(t)?,
+        Variant => DataType::Variant,
     })?;
     let (precision, scale, srid) = match data_type {
         DataType::Decimal(_) => (true, true, false),

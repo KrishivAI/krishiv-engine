@@ -3,12 +3,15 @@
 
 #![forbid(unsafe_code)]
 
+pub use principal::{Principal, PrincipalKind};
 pub use sketch::SketchRef;
 
 pub mod config;
 pub mod cpu;
 pub mod error;
 pub mod experimental;
+pub mod names;
+pub mod principal;
 pub mod redact;
 pub mod secret;
 pub mod sketch;

@@ -130,10 +130,12 @@ pub(crate) struct SessionCatalog {
     epoch: AtomicU64,
     /// Hidden names handed out for snapshot pins (see [`SessionCatalog::put_view`]).
     hidden: AtomicU64,
-    /// The permanent tables, apart from the temporary views above.
-    pub(crate) store: InMemoryCatalogStore,
-    /// Where managed tables live.
-    pub(crate) warehouse: Warehouse,
+    /// The permanent tables, apart from the temporary views above: the
+    /// runtime's, shared by all its sessions as Spark's `newSession()`
+    /// shares the external catalog.
+    pub(crate) store: Arc<InMemoryCatalogStore>,
+    /// Where managed tables live (the runtime's).
+    pub(crate) warehouse: Arc<Warehouse>,
     /// The namespace bare table names resolve in (`USE`).
     current_namespace: RwLock<String>,
     /// The entries `SET PATH` stored; `None` is the default path.
@@ -141,6 +143,20 @@ pub(crate) struct SessionCatalog {
 }
 
 impl SessionCatalog {
+    /// A session's catalog over the runtime's permanent `store` and
+    /// `warehouse`.
+    pub(crate) fn over(store: Arc<InMemoryCatalogStore>, warehouse: Arc<Warehouse>) -> Self {
+        Self {
+            tables: RwLock::default(),
+            epoch: AtomicU64::new(0),
+            hidden: AtomicU64::new(0),
+            store,
+            warehouse,
+            current_namespace: RwLock::default(),
+            path: RwLock::default(),
+        }
+    }
+
     /// Adds or replaces `name`, removing the snapshot pins the old entry
     /// owned that no other live view still owns.
     pub(crate) fn put(&self, name: &str, table: TempTable) {
@@ -693,14 +709,9 @@ impl QueryCatalog {
         // cannot fail the conversion the `tasks` range would repeat.
         let mut specs: Vec<TaskSpec> = (0..partitions)
             .map(|partition| TaskSpec {
-                stage: 0,
-                stage_attempt: 0,
                 partition,
                 partitions,
-                attempt: 0,
-                scans: BTreeMap::new(),
-                exchanges: BTreeMap::new(),
-                output: None,
+                ..TaskSpec::whole()
             })
             .collect();
         for (id, kind) in assigned {
@@ -1135,7 +1146,7 @@ impl CatalogResolver for QueryCatalogs {
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
         if crate::system::is_system(name) {
-            return Some(Arc::new(crate::system::SystemCatalog));
+            return Some(Arc::new(crate::system::SystemCatalog::of(&self.0.system)));
         }
         name.eq_ignore_ascii_case(CATALOG)
             .then(|| Arc::clone(&self.0) as Arc<dyn Catalog>)
@@ -1639,10 +1650,7 @@ impl Expander<'_> {
                 .map(|(q, c)| {
                     // The name is one part: `col(q)` would split a dot or read a trailing `*`.
                     let stored = crate::column::Column::new(Expr::new(ExprNode::Column(
-                        krishiv_plan::ColumnRef {
-                            name: vec![q.clone()],
-                            plan_id: None,
-                        },
+                        krishiv_plan::ColumnRef::new(vec![q.clone()]),
                     )));
                     let typed = if projection == crate::view_schema::ReadProjection::Cast {
                         stored.cast_ansi(c.data_type.clone())

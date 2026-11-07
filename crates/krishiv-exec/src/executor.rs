@@ -247,6 +247,9 @@ impl fmt::Debug for TokioExecutor {
     }
 }
 
+/// The stack of a compute thread (see [`TokioExecutor::new`]).
+const COMPUTE_STACK_BYTES: usize = 8 << 20;
+
 impl TokioExecutor {
     /// Starts a compute and an I/O runtime.
     ///
@@ -262,10 +265,16 @@ impl TokioExecutor {
                 .build()
                 .map_err(|e| internal(format!("cannot start the {name} runtime: {e}")))
         };
+        // Statements run on compute threads, and some recurse deeply
+        // through their futures (an SQL script nested to Spark's limit of
+        // 32 blocks needs about 2 MiB in a debug build, tokio's default
+        // stack): give them the 8 MiB of a main thread. Only the pages a
+        // thread touches are committed.
         let compute = build(
             tokio::runtime::Builder::new_multi_thread()
                 .worker_threads(compute_threads)
-                .max_blocking_threads(blocking_threads),
+                .max_blocking_threads(blocking_threads)
+                .thread_stack_size(COMPUTE_STACK_BYTES),
             "krishiv-compute",
         )?;
         // The I/O runtime's blocking pool is bounded too

@@ -20,7 +20,7 @@
 //! fingerprint, as in the canonical encoding. The hash is an in-process
 //! key only (it is never stored in a plan or sent anywhere).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use krishiv_common::secret::{OptionValue, SecretValue, UrlPart};
@@ -79,10 +79,27 @@ pub fn normalized_subtree_hash(plan: &LogicalPlan) -> u128 {
     XxHash3_128::oneshot(&enc.out)
 }
 
+/// The normalized hash of an expression, except that the attribute ids in
+/// `pinned` keep their raw values: two copies of one subquery resolved apart
+/// hash equal only when they read the same enclosing-query columns in the
+/// same places. Literals are hashed whole.
+#[must_use]
+pub(crate) fn pinned_expr_hash(e: &Expr, pinned: HashSet<u64>) -> u128 {
+    let mut enc = Encoder {
+        pinned,
+        ..Encoder::default()
+    };
+    enc.expr(e, 0);
+    XxHash3_128::oneshot(&enc.out)
+}
+
 /// Writes the normalized encoding: bytes plus the attribute-id renumbering.
 #[derive(Debug, Default)]
 struct Encoder {
     out: Vec<u8>,
+    /// Raw ids written as themselves (outside any shift), marked by the top
+    /// bit, which no normalized id or attribute id below `MAX_ID` has.
+    pinned: HashSet<u64>,
     /// The normalized id per `(raw id, shift bias)`: a [`PlanNode::Shift`]
     /// instance reads as its own attributes, so the bias is part of the key.
     ids: HashMap<(u64, u64), u64>,
@@ -109,6 +126,9 @@ enum NodeKind {
 impl Encoder {
     /// The normalized id of `raw` under `bias`, assigned in first-use order.
     fn remap(&mut self, raw: AttrId, bias: u64) -> u64 {
+        if bias == 0 && self.pinned.contains(&raw.0) {
+            return raw.0 | (1 << 63);
+        }
         let key = (raw.0, bias);
         if let Some(n) = self.ids.get(&key) {
             return *n;
@@ -367,6 +387,16 @@ impl Encoder {
                 self.expr(expr, bias);
                 self.debug(to);
                 self.debug(mode);
+            }
+            ExprNode::Collate {
+                expr,
+                collation,
+                name,
+            } => {
+                self.tag("collate");
+                self.expr(expr, bias);
+                self.debug(collation);
+                self.text(name);
             }
             ExprNode::Alias { expr, name } => {
                 self.tag("alias");
@@ -1217,14 +1247,12 @@ mod tests {
                 unresolved(ExprNode::Column(ColumnRef {
                     name: vec!["t".into(), "a".into()],
                     plan_id: Some(PlanId(3)),
+                    by_identifier: false,
                 })),
             ),
             (
                 "column-bare",
-                unresolved(ExprNode::Column(ColumnRef {
-                    name: vec!["a".into()],
-                    plan_id: None,
-                })),
+                unresolved(ExprNode::Column(ColumnRef::new(vec!["a".into()]))),
             ),
             ("literal", lit(7)),
             (

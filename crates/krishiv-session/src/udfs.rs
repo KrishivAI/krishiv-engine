@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Session functions: Spark's built-ins plus the session's registered
-//! native Rust UDFs.
+//! native Rust UDFs, scalar and aggregate.
 //!
 //! A [`SessionFunctions`] wraps the built-in [`BuiltinFunctions`] (or a
 //! custom registry) and the session's [`UdfLibrary`]. Bare names resolve
@@ -21,7 +21,8 @@ use krishiv_plan::{FunctionId, FunctionKind};
 
 use crate::python_udfs::PythonUdfLibrary;
 use krishiv_udf_sdk::{
-    ArgField, NullHandling, ScalarUdf, Signature, UdfInputType, UdfLibrary, guard_call,
+    AggregateUdf, ArgField, NullHandling, ScalarUdf, Signature, UdfInputType, UdfLibrary,
+    guard_call,
 };
 
 /// The function registry of a session: built-ins plus its UDFs.
@@ -96,7 +97,10 @@ impl SessionFunctions {
             return FunctionLookup::Found(entry);
         }
         let Some(udf) = self.udfs.get(name) else {
-            return FunctionLookup::NotFound;
+            return match self.udfs.get_aggregate(name) {
+                Some(udaf) => aggregate_entry(name, &udaf),
+                None => FunctionLookup::NotFound,
+            };
         };
         // `version` is part of the plan identity: a panic fails the call
         // rather than the analyzer.
@@ -175,6 +179,90 @@ impl SessionFunctions {
     }
 }
 
+/// The [`FunctionEntry`] of the aggregate UDF `udaf` registered as `name`
+/// (ADR 0045): an [`FunctionKind::Aggregate`] entry whose result is the
+/// UDF's [`return_field`](AggregateUdf::return_field), as declared (an
+/// aggregate's nullability does not follow its arguments'). Every trait
+/// call is guarded as for scalar UDFs.
+fn aggregate_entry(name: &str, udaf: &Arc<dyn AggregateUdf>) -> FunctionLookup {
+    let version = match guard_call(name, "version", || udaf.version()) {
+        Ok(v) => v,
+        Err(e) => return FunctionLookup::Found(failing_entry(name, 0, "unknown", e.message())),
+    };
+    let signature = match guard_call(name, "signature", || udaf.signature().clone()) {
+        Ok(s) => s,
+        Err(e) => {
+            return FunctionLookup::Found(failing_entry(name, version, "unknown", e.message()));
+        }
+    };
+    let Some((arity, inputs)) = signature_parts(&signature) else {
+        return FunctionLookup::KnownUnsupported;
+    };
+    let properties = match guard_call(name, "properties", || udaf.properties()) {
+        Ok(p) => p,
+        Err(e) => {
+            return FunctionLookup::Found(failing_entry(
+                name,
+                version,
+                &signature.inputs_sql(),
+                e.message(),
+            ));
+        }
+    };
+    let entry_udf = Arc::clone(udaf);
+    let entry_name = name.to_owned();
+    let signature_sql = signature.inputs_sql();
+    let result = Arc::new(move |call: &CallTypes<'_>| {
+        let fields: Vec<ArgField> = call
+            .args()
+            .iter()
+            .map(|a| ArgField {
+                data_type: a.data_type.clone(),
+                nullable: a.nullable,
+            })
+            .collect();
+        let failed = |reason: &str| {
+            KrishivError::from(FailedExecuteUdf {
+                function_name: entry_name.clone(),
+                signature: signature_sql.clone(),
+                result: "unknown".to_owned(),
+                reason: reason.to_owned(),
+            })
+        };
+        // The state must be describable too: a UDF without state for these
+        // arguments fails at analysis, not on a worker.
+        match guard_call(&entry_name, "state_fields", || {
+            entry_udf.state_fields(&fields)
+        }) {
+            Ok(Ok(state)) if state.is_empty() => {
+                return Err(failed("state_fields declared no state column"));
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) | Err(e) => return Err(failed(e.message())),
+        }
+        match guard_call(&entry_name, "return_field", || {
+            entry_udf.return_field(&fields)
+        }) {
+            Ok(Ok(r)) => Ok(ArgType {
+                data_type: Some(r.data_type),
+                nullable: r.nullable,
+            }),
+            Ok(Err(e)) | Err(e) => Err(failed(e.message())),
+        }
+    });
+    FunctionLookup::Found(FunctionEntry {
+        id: FunctionId::Udf {
+            name: name.to_owned(),
+            version,
+        },
+        kind: FunctionKind::Aggregate,
+        arity,
+        inputs,
+        result,
+        deterministic: properties.deterministic,
+    })
+}
+
 /// A UDF entry that always fails with `FAILED_EXECUTE_UDF`: what a UDF
 /// whose `signature`, `properties` or `version` panics resolves to, so
 /// the panic surfaces as an error at analysis rather than unwinding it.
@@ -243,10 +331,21 @@ impl FunctionRegistry for SessionFunctions {
         if let Some(entry) = self.python.get(name) {
             return Some(entry.def.deterministic);
         }
-        let udf = self.udfs.get(name)?;
-        guard_call(name, "properties", || udf.properties())
+        if let Some(udf) = self.udfs.get(name) {
+            return guard_call(name, "properties", || udf.properties())
+                .ok()
+                .map(|p| p.deterministic);
+        }
+        let udaf = self.udfs.get_aggregate(name)?;
+        guard_call(name, "properties", || udaf.properties())
             .ok()
             .map(|p| p.deterministic)
+    }
+
+    fn rejects_distinct(&self, name: &str) -> bool {
+        self.udfs.get_aggregate(name).is_some_and(|udaf| {
+            guard_call(name, "properties", || udaf.properties()).is_ok_and(|p| !p.distinct)
+        })
     }
 
     fn resolve_udf(&self, name: &str, version: u32) -> Option<Arc<dyn ScalarUdf>> {
@@ -335,6 +434,20 @@ fn to_input(t: &UdfInputType) -> Option<InputType> {
         // A future input-type form: not implemented here.
         _ => return None,
     })
+}
+
+/// `FAILED_EXECUTE_UDF` for a refused registration: the UDF's lower-case
+/// name (`unknown` when it has none or panics) and the refusal.
+pub(crate) fn registration_error(
+    name: Result<String, krishiv_udf_sdk::UdfError>,
+    e: &krishiv_udf_sdk::UdfError,
+) -> krishiv_common::error::KrishivError {
+    let name = name
+        .map(|n| n.to_lowercase())
+        .ok()
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| "unknown".to_owned());
+    krishiv_functions::scalar::failed_execute(&name, "unknown", "unknown", e.message())
 }
 
 #[cfg(test)]

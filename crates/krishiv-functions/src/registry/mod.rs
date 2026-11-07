@@ -38,6 +38,7 @@ mod predicate;
 mod r#struct;
 mod text;
 mod url;
+mod variant;
 mod vector;
 mod xml;
 
@@ -49,6 +50,7 @@ pub use catalog::SparkFunction;
 pub use defs::legacy_day_count;
 pub use defs::{approx_percentile_result, exact_percentile_result};
 pub(crate) use json::parse_json_schema;
+pub use variant::variant_castable;
 
 use crate::signature::{Arity, FunctionKind, Inputs, ResultType, SparkProfile};
 
@@ -268,9 +270,9 @@ pub fn builtins() -> &'static Registry {
 
 /// Whether `name` is one Spark's grammar owns (`TIMESTAMPADD` and `TIMESTAMPDIFF`): it has
 /// a definition but no row in Spark's function catalog, and the lowering
-/// reaches it through the keyword-unit forms. A call spelled as an ordinary
-/// function (`timestampadd(col, 1, ts)`) also resolves here, where Spark says
-/// `UNRESOLVED_ROUTINE`: a known divergence.
+/// reaches it through the keyword-unit forms. The analyzer refuses a call
+/// spelled as an ordinary function (`timestampadd(col, 1, ts)`: a unit that
+/// is not a string literal) with `UNRESOLVED_ROUTINE`, as Spark does.
 #[must_use]
 pub fn is_grammar_only(name: &str) -> bool {
     grammar_row(name).is_some()
@@ -310,7 +312,7 @@ impl Registry {
             rows.into_iter().map(|r| (r.name, r)).collect();
         let mut defs = HashMap::new();
         let mut unlisted = Vec::new();
-        for (id, spec) in (0_u32..).zip(defs::specs()) {
+        for (id, spec) in (0_u32..).zip(defs::specs().into_iter().chain(variant::specs())) {
             let grammar = grammar_row(spec.name);
             let Some(row) = spark.get(spec.name).or(grammar.as_ref()) else {
                 unlisted.push(spec.name);

@@ -153,6 +153,8 @@ enum Found<'a> {
     Files(&'a ReadSource, Origin),
     /// An already-resolved scan of files.
     FileScan(&'a ReadSource, &'a [BoundColumn], Origin),
+    /// The scopes of the secret references in a table read's options (E12).
+    Secrets(Vec<String>, Origin),
 }
 
 /// One node of the walk: reports what it reads, checks its functions, and
@@ -168,7 +170,11 @@ fn visit<'a>(
     match node {
         Node::Plan(p) => {
             match &p.node {
-                PlanNode::Read(ReadSource::Table { name, .. }) => {
+                PlanNode::Read(ReadSource::Table { name, options }) => {
+                    let scopes = super::access::secret_scopes(options.values());
+                    if !scopes.is_empty() {
+                        found.push(Found::Secrets(scopes, p.origin));
+                    }
                     let shadowed = name.len() == 1 && env.iter().any(|c| same(c, &name[0], cs));
                     if !shadowed {
                         found.push(Found::Table(name, p.origin));
@@ -179,7 +185,11 @@ fn visit<'a>(
                 }
                 // A plan resolved elsewhere is checked like a fresh one.
                 PlanNode::Scan(s) => match &s.source {
-                    ReadSource::Table { name, .. } => {
+                    ReadSource::Table { name, options } => {
+                        let scopes = super::access::secret_scopes(options.values());
+                        if !scopes.is_empty() {
+                            found.push(Found::Secrets(scopes, p.origin));
+                        }
                         found.push(Found::Scan(name, s.version, &s.output, p.origin));
                     }
                     source @ ReadSource::Files { .. } => {
@@ -318,6 +328,46 @@ fn is_registry_call(name: &str) -> bool {
         && super::analytics::GroupingFn::from_name(name).is_none()
 }
 
+/// Whether `name` is `TIMESTAMPADD` or `TIMESTAMPDIFF` (any case): the
+/// functions only Spark's grammar builds, from a keyword unit.
+fn is_grammar_unit_call(name: &str) -> bool {
+    name.eq_ignore_ascii_case("timestampadd") || name.eq_ignore_ascii_case("timestampdiff")
+}
+
+/// A function name of three or more parts in the session catalog
+/// (`a.b.c.d()`, `spark_catalog.a.b.c()`) has a namespace of several parts,
+/// which the session catalog's functions cannot have (Spark's
+/// `asFunctionIdentifier`): `REQUIRES_SINGLE_PART_NAMESPACE`.
+pub(super) fn check_function_namespace(
+    ctx: &AnalysisContext,
+    f: &crate::FunctionCall,
+    origin: Origin,
+) -> Result<(), AnalysisError> {
+    if f.qualifier.len() < 2
+        || is_session_qualifier(&f.qualifier)
+        || is_builtin_qualifier(&f.qualifier)
+    {
+        return Ok(());
+    }
+    let mut named = f.qualifier.clone();
+    named.push(f.name.clone());
+    if let Some((catalog, ident)) = locate(ctx, &named)
+        && catalog.single_part_namespace()
+        && ident.namespace.len() != 1
+    {
+        let mut parts = ident.namespace;
+        parts.push(ident.name);
+        return Err(AnalysisError::new(
+            RequiresSinglePartNamespace {
+                session_catalog: catalog.name().to_owned(),
+                identifier: quoted(&parts),
+            },
+            origin,
+        ));
+    }
+    Ok(())
+}
+
 fn check_function(
     ctx: &AnalysisContext,
     f: &crate::FunctionCall,
@@ -346,6 +396,7 @@ fn check_function(
             return Ok(());
         }
     }
+    check_function_namespace(ctx, f, origin)?;
     let (parts, builtin) = qualified_parts(f, &search_path(ctx), origin)?;
     // A session-qualified call resolves through the full parts (UDFs only).
     if is_session_qualifier(&f.qualifier) {
@@ -379,6 +430,25 @@ fn check_function(
         };
     }
     let name = builtin.as_deref().unwrap_or(&f.name);
+    // `TIMESTAMPADD` and `TIMESTAMPDIFF` are grammar, not catalog functions:
+    // only the keyword-unit form (lowered to a string literal unit) builds
+    // one. Any other spelling (`TIMESTAMPADD(IDENTIFIER('YEAR'), ...)`,
+    // `timestampdiff(col, a, b)`) is a plain call Spark's catalog lacks,
+    // refused before its arguments resolve.
+    if is_grammar_unit_call(name)
+        && !f
+            .args
+            .first()
+            .is_some_and(|a| matches!(a.node, crate::ExprNode::Literal(crate::Literal::String(_))))
+    {
+        return Err(AnalysisError::new(
+            UnresolvedRoutine {
+                routine_name: quoted(&parts),
+                search_path: search_path(ctx),
+            },
+            origin,
+        ));
+    }
     let named = f.arg_names.iter().any(Option::is_some);
     // The canonical operators exist in every profile; the analyzer types
     // them itself.
@@ -586,10 +656,41 @@ async fn authorize(
     securable: Securable,
     origin: Origin,
 ) -> Result<usize, AnalysisError> {
-    if let Some((_, i)) = checked.iter().find(|(s, _)| *s == securable) {
+    authorize_as(ctx, b, checked, securable, Privilege::Select, origin).await
+}
+
+/// `USAGE` on each secret scope in `scopes` (E12).
+async fn authorize_usage(
+    ctx: &AnalysisContext,
+    b: &mut Bindings,
+    checked: &mut Vec<(Securable, usize)>,
+    scopes: &[String],
+    origin: Origin,
+) -> Result<(), AnalysisError> {
+    for scope in scopes {
+        let securable = Securable::Secret {
+            scope: scope.clone(),
+        };
+        authorize_as(ctx, b, checked, securable, Privilege::Usage, origin).await?;
+    }
+    Ok(())
+}
+
+/// [`authorize`] for `privilege`.
+async fn authorize_as(
+    ctx: &AnalysisContext,
+    b: &mut Bindings,
+    checked: &mut Vec<(Securable, usize)>,
+    securable: Securable,
+    privilege: Privilege,
+    origin: Origin,
+) -> Result<usize, AnalysisError> {
+    if let Some((_, i)) = checked
+        .iter()
+        .find(|(s, i)| *s == securable && b.securables[*i].1 == privilege)
+    {
         return Ok(*i);
     }
-    let privilege = Privilege::Select;
     super::access::authorize(&*ctx.policy, &ctx.principal, &securable, privilege)
         .await
         .map_err(|e| AnalysisError::new(e, origin))?;
@@ -637,6 +738,10 @@ async fn load(
                 if !known {
                     return Err(unsupported("a scan that does not match its files", origin));
                 }
+                continue;
+            }
+            Found::Secrets(scopes, origin) => {
+                authorize_usage(ctx, b, &mut checked, &scopes, origin).await?;
                 continue;
             }
             Found::Table(name, origin) => (name, None, &[][..], origin, false),
@@ -906,6 +1011,11 @@ async fn bind_files(
     for path in &qualified {
         authorize(ctx, b, checked, Securable::Path(path.clone()), origin).await?;
     }
+    // A `secret('scope', 'key')` reference in the options (or a path) is
+    // resolved for the principal only with USAGE on its scope (E12), checked
+    // before anything is listed or inferred.
+    let scopes = super::access::secret_scopes(options.values().chain(&qualified));
+    authorize_usage(ctx, b, checked, &scopes, origin).await?;
     let columns = files
         .infer(format, &qualified, options)
         .await

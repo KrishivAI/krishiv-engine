@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import h2o, micro, micro_data
+from . import h2o, memguard, micro, micro_data
 from .adapters import ENGINES
 from .paths import data_root
 from .report import write_report
@@ -111,6 +111,24 @@ def h2o_target(ap: argparse.ArgumentParser, a: argparse.Namespace) -> tuple[Path
     return root, str(root.relative_to(data_root())), h2o.SIZE_GB[a.size]
 
 
+def add_reference_cache_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--cold",
+        action="store_true",
+        help="drop the dataset from the page cache before every timed run (not comparable with warm results)",
+    )
+    p.add_argument(
+        "--refresh-reference",
+        action="store_true",
+        help="run DuckDB again and replace its cached answers and timings (refcache/ under $KRISHIV_DATA)",
+    )
+    p.add_argument(
+        "--no-reference-cache",
+        action="store_true",
+        help="neither read nor write the DuckDB reference cache",
+    )
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="krishiv-bench")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -145,6 +163,19 @@ def main(argv=None) -> None:
         action="store_true",
         help="evict the dataset from the page cache before every run (results are not comparable with warm runs)",
     )
+    r.add_argument(
+        "--min-mem-avail",
+        type=float,
+        default=memguard.DEFAULT_MIN_FRACTION,
+        help="wait before each timed run until MemAvailable is this fraction of MemTotal, and mark runs that dip "
+        "below it 'invalid: memory reclaimed' (0 = off)",
+    )
+    r.add_argument(
+        "--mem-retries",
+        type=int,
+        default=memguard.DEFAULT_RETRIES,
+        help="times to retry a run marked invalid before the query fails",
+    )
     _add_memcap_args(r)
     nc = sub.add_parser(
         "nested-check",
@@ -166,6 +197,7 @@ def main(argv=None) -> None:
     ab.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
     ab.add_argument("--reps", type=int, default=3, help="ABBA blocks per query (2 samples per engine each)")
     ab.add_argument("--queries", help="comma list, e.g. q01,q05")
+    add_reference_cache_args(ab)
     ab.add_argument("--threads", type=int, default=8, help="threads for both engines")
     ab.add_argument("--memory-limit", default="12g", help="memory limit for both engines")
     ab.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
@@ -183,6 +215,28 @@ def main(argv=None) -> None:
     ed.add_argument("--out", default=None, help="report directory (default $KRISHIV_DATA/results/explain-diff)")
     ed.add_argument("--timeout", type=float, default=600, help="per-query Krishiv timeout seconds (0 = none)")
     ed.add_argument("--runner", help=RUNNER_HELP)
+    gd = sub.add_parser(
+        "gapdiff",
+        help="operator CPU by kind beside DuckDB, pipelines dominated by one driver, optional perf folded stacks",
+    )
+    gd.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
+    gd.add_argument("--sf", type=float, default=10)
+    gd.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
+    which = gd.add_mutually_exclusive_group(required=True)
+    which.add_argument("--query", help="one query, e.g. q18")
+    which.add_argument("--all", action="store_true", help="every query of the suite: summary table + JSON")
+    gd.add_argument("--threads", type=int, default=8, help="threads for both engines")
+    gd.add_argument("--memory-limit", default="12g", help="memory limit for both engines")
+    gd.add_argument("--out", default=None, help="result directory (default $KRISHIV_DATA/results/gapdiff/<ts>_...)")
+    gd.add_argument("--timeout", type=float, default=600, help="per-query Krishiv timeout seconds (0 = none)")
+    gd.add_argument("--busy-share", type=float, default=0.5, help="flag a pipeline whose busiest driver does more")
+    gd.add_argument("--min-cpu-share", type=float, default=0.02, help="...if it has at least this share of the CPU")
+    gd.add_argument(
+        "--perf", action="store_true", help="also sample the Krishiv run under perf record -g (folded stacks)"
+    )
+    gd.add_argument("--perf-runs", type=int, default=1, help="warm runs sampled per query with --perf")
+    gd.add_argument("--warmup", type=int, default=1, help="unprofiled runs of each engine before the profiled one")
+    gd.add_argument("--runner", help=RUNNER_HELP)
     xb = sub.add_parser(
         "ab",
         help="build-vs-build A/B: two runner binaries, or one binary with two --conf sets, interleaved ABBA",
@@ -230,6 +284,7 @@ def main(argv=None) -> None:
     rr.add_argument("--methods", default="ours,theirs", help="comma list of: ours, theirs")
     rr.add_argument("--reps", type=int, default=3, help="interleaved blocks per query (2 samples per engine each)")
     rr.add_argument("--queries", help="comma list, e.g. q01,q05")
+    add_reference_cache_args(rr)
     rr.add_argument("--threads", type=int, default=12)
     rr.add_argument("--memory-gb", type=int, default=32)
     rr.add_argument("--timeout", type=float, default=600, help="per-run timeout for the ours method (seconds)")
@@ -406,6 +461,8 @@ def main(argv=None) -> None:
         methods = tuple(m.strip() for m in a.methods.split(",") if m.strip())
         if not methods or set(methods) - {"ours", "theirs"}:
             ap.error(f"--methods must be a comma list of: ours, theirs (got {a.methods!r})")
+        if a.cgroup_gb is not None and not a.sequential:
+            ap.error("--cgroup-gb needs --sequential (the cgroup scope is one engine worker's)")
         run_reproduce(
             a.suite,
             a.sf,
@@ -422,6 +479,9 @@ def main(argv=None) -> None:
             a.profile,
             sequential=a.sequential,
             cap_gb=a.cgroup_gb,
+            reference_cache=not a.no_reference_cache,
+            refresh_reference=a.refresh_reference,
+            cold=a.cold,
         )
     elif a.cmd == "ledger":
         from .ledger import run_ledger
@@ -450,6 +510,9 @@ def main(argv=None) -> None:
             a.timeout,
             a.suite,
             a.runner,
+            reference_cache=not a.no_reference_cache,
+            refresh_reference=a.refresh_reference,
+            cold=a.cold,
         )
     elif a.cmd == "explain-diff":
         from .explain_diff import run_explain_diff
@@ -464,6 +527,25 @@ def main(argv=None) -> None:
             a.runner,
             Path(a.out) if a.out else None,
             a.timeout,
+        )
+    elif a.cmd == "gapdiff":
+        from .gapdiff import run_gapdiff
+
+        run_gapdiff(
+            a.suite,
+            a.sf,
+            None if a.all else [a.query],
+            a.dataset or ABBA_DATASET[a.suite],
+            a.threads,
+            a.memory_limit,
+            a.runner,
+            Path(a.out) if a.out else None,
+            a.timeout,
+            a.min_cpu_share,
+            a.busy_share,
+            a.perf,
+            a.perf_runs,
+            a.warmup,
         )
     elif a.cmd == "ab":
         from .ab import parse_conf, run_ab
@@ -573,6 +655,8 @@ def main(argv=None) -> None:
             a.timeout or None,
             a.dataset,
             a.cold,
+            min_mem_avail=a.min_mem_avail or None,
+            mem_retries=a.mem_retries,
         )
         print(f"result: {f}")
     elif a.suite == "micro":

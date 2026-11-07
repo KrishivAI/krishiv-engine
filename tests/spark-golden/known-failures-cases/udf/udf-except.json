@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "depends-on-command": [
-      8
-    ]
-  },
-  "file": "udf/udf-except",
-  "format_version": 1
-}

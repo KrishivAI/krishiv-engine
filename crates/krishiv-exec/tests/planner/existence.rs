@@ -143,23 +143,46 @@ fn a_user_column_named_exists_never_collides() {
     );
 }
 
+/// `IN (SELECT 1)` is an `IN` over a one-row literal relation: Spark folds it
+/// into the expression, so it can sit under `OR`. It is two-valued here: a NULL
+/// `a` is not in `(1)`, so such a row is kept only by the other branch of the
+/// `OR` (the table has two NULL `a` and neither has `s0`).
 #[test]
-fn forms_spark_folds_before_any_join_are_refused() {
+fn a_one_row_literal_subquery_under_or_answers_as_its_value() {
     let env = env();
-    for sql in [
-        "SELECT a FROM t WHERE a IN (SELECT 1) OR s = 's0'",
-        "SELECT a FROM t x WHERE NOT (x.a NOT IN (SELECT a FROM t)) OR s = 's0'",
-    ] {
-        let plan =
-            krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
-                .unwrap();
-        let e = block_on(DefaultAnalyzer.analyze(&plan, &env.ctx)).unwrap_err();
-        assert_eq!(
-            e.error.error_class().name(),
-            "KRISHIV_UNSUPPORTED_FEATURE",
-            "{sql}: {e}"
-        );
-    }
+    let sub = rows(
+        &env,
+        "SELECT a FROM t WHERE a IN (SELECT 1) OR s = 's0' ORDER BY a",
+    );
+    assert_eq!(sub, ["0", "1"], "{sub:?}");
+    let lit = rows(
+        &env,
+        "SELECT a FROM t WHERE a IN (1) OR s = 's0' ORDER BY a",
+    );
+    assert_eq!(sub, lit);
+    // A NULL row is kept by the other branch alone.
+    let null_kept = rows(
+        &env,
+        "SELECT s FROM t WHERE a IN (SELECT 1) OR a IS NULL ORDER BY s",
+    );
+    assert_eq!(null_kept, ["s1", "s3", "s7"], "{null_kept:?}");
+}
+
+/// `NOT (x NOT IN s)` is `x IN s` under three-valued logic, as Spark's
+/// boolean simplification has it, so under `OR` it answers like the `IN`.
+#[test]
+fn not_of_not_in_under_or_answers_as_in() {
+    let env = env();
+    let twice = rows(
+        &env,
+        "SELECT a FROM t x WHERE NOT (x.a NOT IN (SELECT a FROM t WHERE b >= 80)) OR s = 's0' ORDER BY a",
+    );
+    let once = rows(
+        &env,
+        "SELECT a FROM t x WHERE x.a IN (SELECT a FROM t WHERE b >= 80) OR s = 's0' ORDER BY a",
+    );
+    assert_eq!(twice, once);
+    assert!(!once.is_empty());
 }
 
 /// `NULL IN (subquery)` is NULL over some rows (false over none), so under

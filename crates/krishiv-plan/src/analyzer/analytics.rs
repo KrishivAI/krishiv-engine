@@ -338,6 +338,7 @@ impl Resolver<'_> {
                 col: col.clone(),
                 qual: Arc::from(Vec::new()),
                 source: None,
+                duplicate: false,
             })
             .collect();
         let node = PlanNode::Expand {
@@ -396,6 +397,7 @@ impl Resolver<'_> {
             },
             qual: Arc::from(Vec::new()),
             source: None,
+            duplicate: false,
         });
         let keys: Vec<Attr> = gid.iter().cloned().collect();
         let items = self.select_items_in(&c, aggregates, env, "Aggregate", Some(&keys))?;
@@ -500,6 +502,7 @@ impl Resolver<'_> {
                         col: v.clone(),
                         qual: Arc::from(Vec::new()),
                         source: None,
+                        duplicate: false,
                     });
                     computed = true;
                     v
@@ -515,6 +518,7 @@ impl Resolver<'_> {
                         .as_ref()
                         .map_or_else(|| Arc::from(Vec::new()), |a| Arc::clone(&a.qual)),
                     source: column.and_then(|a| a.source),
+                    duplicate: false,
                 },
             });
             value.push(v);
@@ -562,11 +566,13 @@ impl Resolver<'_> {
                 col: gid_col.clone(),
                 qual: Arc::from(Vec::new()),
                 source: None,
+                duplicate: false,
             }))
             .chain(pos_col.iter().map(|col| Attr {
                 col: col.clone(),
                 qual: Arc::from(Vec::new()),
                 source: None,
+                duplicate: false,
             }))
             .collect();
         let node = PlanNode::Expand {

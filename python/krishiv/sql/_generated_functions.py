@@ -83,6 +83,7 @@ __all__ = [
     "char_length",
     "character_length",
     "coalesce",
+    "collation",
     "collect_list",
     "collect_set",
     "concat_ws",
@@ -161,6 +162,7 @@ __all__ = [
     "input_file_name",
     "instr",
     "is_valid_utf8",
+    "is_variant_null",
     "isnan",
     "isnotnull",
     "isnull",
@@ -225,6 +227,7 @@ __all__ = [
     "nvl2",
     "octet_length",
     "overlay",
+    "parse_json",
     "parse_url",
     "percent_rank",
     "percentile",
@@ -270,6 +273,7 @@ __all__ = [
     "rpad",
     "rtrim",
     "schema_of_json",
+    "schema_of_variant",
     "sec",
     "second",
     "sequence",
@@ -283,6 +287,7 @@ __all__ = [
     "shiftleft",
     "shiftright",
     "shiftrightunsigned",
+    "shuffle",
     "sign",
     "signum",
     "sin",
@@ -325,6 +330,7 @@ __all__ = [
     "to_unix_timestamp",
     "to_utc_timestamp",
     "to_varchar",
+    "to_variant_object",
     "translate",
     "trim",
     "trunc",
@@ -338,6 +344,7 @@ __all__ = [
     "try_make_timestamp_ntz",
     "try_mod",
     "try_multiply",
+    "try_parse_json",
     "try_parse_url",
     "try_subtract",
     "try_sum",
@@ -347,6 +354,7 @@ __all__ = [
     "try_to_timestamp",
     "try_url_decode",
     "try_validate_utf8",
+    "try_variant_get",
     "typeof",
     "ucase",
     "unbase64",
@@ -365,6 +373,7 @@ __all__ = [
     "var_pop",
     "var_samp",
     "variance",
+    "variant_get",
     "version",
     "weekday",
     "weekofyear",
@@ -700,6 +709,11 @@ def character_length(str: ColumnOrName) -> Column:
 def coalesce(*cols: ColumnOrName) -> Column:
     """Calls the registry function ``coalesce``."""
     return _call("coalesce", *_cols(cols))
+
+
+def collation(col: ColumnOrName) -> Column:
+    """Calls the registry function ``collation``."""
+    return _call("collation", _named(col, "col"))
 
 
 def collect_list(col: ColumnOrName) -> Column:
@@ -1093,6 +1107,11 @@ def is_valid_utf8(str: ColumnOrName) -> Column:
     return _call("is_valid_utf8", _named(str, "str"))
 
 
+def is_variant_null(v: ColumnOrName) -> Column:
+    """Calls the registry function ``is_variant_null``."""
+    return _call("is_variant_null", _named(v, "v"))
+
+
 def isnan(col: ColumnOrName) -> Column:
     """Calls the registry function ``isnan``."""
     return _call("isnan", _named(col, "col"))
@@ -1478,6 +1497,11 @@ def overlay(src: ColumnOrName, replace: ColumnOrName, pos: ColumnOrName | int, l
     )
 
 
+def parse_json(col: ColumnOrName) -> Column:
+    """Calls the registry function ``parse_json``."""
+    return _call("parse_json", _named(col, "col"))
+
+
 def parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None = None) -> Column:
     """Calls the registry function ``parse_url``."""
     return _call("parse_url", _named(url, "url"), _named(partToExtract, "partToExtract"), *_opt(_named, key, "key"))
@@ -1703,6 +1727,11 @@ def schema_of_json(json: Column | str, options: dict[str, str] | None = None) ->
     return _call("schema_of_json", _lit(json, "json"), *_opt(_opts, options, "options"))
 
 
+def schema_of_variant(v: ColumnOrName) -> Column:
+    """Calls the registry function ``schema_of_variant``."""
+    return _call("schema_of_variant", _named(v, "v"))
+
+
 def sec(col: ColumnOrName) -> Column:
     """Calls the registry function ``sec``."""
     return _call("sec", _named(col, "col"))
@@ -1770,6 +1799,11 @@ def shiftright(col: ColumnOrName, numBits: int) -> Column:
 def shiftrightunsigned(col: ColumnOrName, numBits: int) -> Column:
     """Calls the registry function ``shiftrightunsigned``."""
     return _call("shiftrightunsigned", _named(col, "col"), _lit(numBits, "numBits"))
+
+
+def shuffle(col: ColumnOrName, seed: int | Column | None = None) -> Column:
+    """Calls the registry function ``shuffle``."""
+    return _call("shuffle", _named(col, "col"), *_opt(_lit, seed, "seed"))
 
 
 def sign(col: ColumnOrName) -> Column:
@@ -1993,6 +2027,11 @@ def to_varchar(col: ColumnOrName, format: ColumnOrName) -> Column:
     return _call("to_varchar", _named(col, "col"), _named(format, "format"))
 
 
+def to_variant_object(col: ColumnOrName) -> Column:
+    """Calls the registry function ``to_variant_object``."""
+    return _call("to_variant_object", _named(col, "col"))
+
+
 def translate(srcCol: ColumnOrName, matching: str, replace: str) -> Column:
     """Calls the registry function ``translate``."""
     return _call("translate", _named(srcCol, "srcCol"), _lit(matching, "matching"), _lit(replace, "replace"))
@@ -2123,6 +2162,11 @@ def try_multiply(left: ColumnOrName, right: ColumnOrName) -> Column:
     return _call("try_multiply", _named(left, "left"), _named(right, "right"))
 
 
+def try_parse_json(col: ColumnOrName) -> Column:
+    """Calls the registry function ``try_parse_json``."""
+    return _call("try_parse_json", _named(col, "col"))
+
+
 def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None = None) -> Column:
     """Calls the registry function ``try_parse_url``."""
     return _call("try_parse_url", _named(url, "url"), _named(partToExtract, "partToExtract"), *_opt(_named, key, "key"))
@@ -2166,6 +2210,11 @@ def try_url_decode(str: ColumnOrName) -> Column:
 def try_validate_utf8(str: ColumnOrName) -> Column:
     """Calls the registry function ``try_validate_utf8``."""
     return _call("try_validate_utf8", _named(str, "str"))
+
+
+def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column:
+    """Calls the registry function ``try_variant_get``."""
+    return _call("try_variant_get", _named(v, "v"), _lit(path, "path"), _lit(targetType, "targetType"))
 
 
 def typeof(col: ColumnOrName) -> Column:
@@ -2256,6 +2305,11 @@ def var_samp(col: ColumnOrName) -> Column:
 def variance(col: ColumnOrName) -> Column:
     """Calls the registry function ``variance``."""
     return _call("variance", _named(col, "col"))
+
+
+def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column:
+    """Calls the registry function ``variant_get``."""
+    return _call("variant_get", _named(v, "v"), _lit(path, "path"), _lit(targetType, "targetType"))
 
 
 def version() -> Column:

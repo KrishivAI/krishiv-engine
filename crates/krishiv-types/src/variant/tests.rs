@@ -6,7 +6,7 @@
 use krishiv_common::error::{ErrorClass, KrishivError};
 use proptest::prelude::*;
 
-use super::{VARIANT_SIZE_LIMIT, VariantBuilder, VariantKind, VariantRef};
+use super::{VARIANT_SIZE_LIMIT, VariantBuilder, VariantKind, VariantRef, VariantWriter};
 
 /// Decodes lowercase hex (the test fixtures' notation).
 fn hex_bytes(hex: &str) -> Vec<u8> {
@@ -1519,5 +1519,164 @@ proptest! {
         let _ = back.as_timestamp_nanos();
         let _ = back.as_time_micros();
         }
+    }
+}
+
+#[test]
+fn object_keys_sort_in_java_string_order() {
+    // U+10000 is a surrogate pair in UTF-16, below U+E000; in UTF-8 it is
+    // above. Spark sorts and searches by `String.compareTo`.
+    let json = "{\"\u{e000}\":1,\"\u{10000}\":2}";
+    let (m, v) = VariantBuilder::from_json(json).unwrap();
+    let r = VariantRef::new(&m, &v).unwrap();
+    assert_eq!(r.field_key_at(0).unwrap(), "\u{10000}");
+    assert_eq!(r.field_key_at(1).unwrap(), "\u{e000}");
+    assert_eq!(
+        r.get_field("\u{e000}").unwrap().unwrap().as_i64().unwrap(),
+        1
+    );
+    assert_eq!(
+        r.get_field("\u{10000}").unwrap().unwrap().as_i64().unwrap(),
+        2
+    );
+    let mut w = VariantWriter::new();
+    w.append_variant(&r).unwrap();
+    let (m2, v2) = w.finish().unwrap();
+    let again = VariantRef::new(&m2, &v2).unwrap();
+    assert_eq!(
+        again
+            .get_field("\u{e000}")
+            .unwrap()
+            .unwrap()
+            .as_i64()
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn the_writer_builds_every_type_as_spark_does() {
+    use super::{digits, strip_trailing_zeros};
+    let mut w = VariantWriter::new();
+    let start = w.position();
+    let mut fields = vec![];
+    let mut put = |w: &mut VariantWriter, key: &str, f: &dyn Fn(&mut VariantWriter)| {
+        fields.push(w.field(start, key).unwrap());
+        f(w);
+    };
+    put(&mut w, "null", &|w| w.null());
+    put(&mut w, "t", &|w| w.boolean(true));
+    put(&mut w, "f", &|w| w.boolean(false));
+    put(&mut w, "i8", &|w| w.long(-5));
+    put(&mut w, "i16", &|w| w.long(300));
+    put(&mut w, "i32", &|w| w.long(70_000));
+    put(&mut w, "i64", &|w| w.long(1 << 40));
+    put(&mut w, "d", &|w| w.double(1.5));
+    put(&mut w, "fl", &|w| w.float(2.5));
+    put(&mut w, "dec4", &|w| w.decimal(12345, 2));
+    put(&mut w, "dec8", &|w| w.decimal(1_234_567_890_123, 3));
+    put(&mut w, "dec16", &|w| w.decimal(10_i128.pow(30), 0));
+    put(&mut w, "date", &|w| w.date(19_000));
+    put(&mut w, "ts", &|w| w.timestamp(1_000_000));
+    put(&mut w, "ntz", &|w| w.timestamp_ntz(2_000_000));
+    put(&mut w, "bin", &|w| w.binary(&[1, 2, 3]).unwrap());
+    put(&mut w, "s", &|w| w.string("short").unwrap());
+    put(&mut w, "long", &|w| w.string(&"x".repeat(100)).unwrap());
+    put(&mut w, "uuid", &|w| w.uuid([7; 16]));
+    let array_at = w.position();
+    fields.push(w.field(start, "arr").unwrap());
+    let inner = w.position();
+    let offsets: Vec<usize> = (0..300)
+        .map(|i| {
+            let o = w.position() - inner;
+            w.long(i);
+            o
+        })
+        .collect();
+    w.finish_array(inner, &offsets).unwrap();
+    assert!(w.position() > array_at);
+    w.finish_object(start, fields).unwrap();
+    let (m, v) = w.finish().unwrap();
+    let r = VariantRef::new(&m, &v).unwrap();
+    let get = |k: &str| r.get_field(k).unwrap().unwrap();
+    assert_eq!(get("null").kind(), VariantKind::Null);
+    assert!(get("t").as_bool().unwrap() && !get("f").as_bool().unwrap());
+    assert_eq!(get("i8").kind(), VariantKind::Int8);
+    assert_eq!(get("i16").kind(), VariantKind::Int16);
+    assert_eq!(get("i32").kind(), VariantKind::Int32);
+    assert_eq!(get("i64").as_i64().unwrap(), 1 << 40);
+    assert!((get("d").as_f64().unwrap() - 1.5).abs() < f64::EPSILON);
+    assert!((get("fl").as_f32().unwrap() - 2.5).abs() < f32::EPSILON);
+    assert_eq!(get("dec4").as_decimal().unwrap(), (12345, 2));
+    assert_eq!(get("dec8").as_decimal().unwrap(), (1_234_567_890_123, 3));
+    assert_eq!(get("dec16").as_decimal().unwrap(), (10_i128.pow(30), 0));
+    assert_eq!(get("date").as_date().unwrap(), 19_000);
+    assert_eq!(get("ts").kind(), VariantKind::Timestamp);
+    assert_eq!(get("ntz").as_timestamp_micros().unwrap(), 2_000_000);
+    assert_eq!(get("bin").as_bytes().unwrap(), &[1, 2, 3]);
+    assert_eq!(get("s").as_str().unwrap(), "short");
+    assert_eq!(get("long").as_str().unwrap().len(), 100);
+    assert_eq!(get("uuid").as_uuid().unwrap(), [7; 16]);
+    let arr = get("arr");
+    assert_eq!(arr.len().unwrap(), 300);
+    assert_eq!(arr.get_index(299).unwrap().as_i64().unwrap(), 299);
+    // A large object (over 255 fields) and a repeated key.
+    let mut w = VariantWriter::new();
+    let fields: Vec<_> = (0..300)
+        .map(|i| {
+            let f = w.field(0, &format!("k{i}")).unwrap();
+            w.long(i);
+            f
+        })
+        .collect();
+    w.finish_object(0, fields).unwrap();
+    let (m, v) = w.finish().unwrap();
+    let r = VariantRef::new(&m, &v).unwrap();
+    assert_eq!(r.get_field("k299").unwrap().unwrap().as_i64().unwrap(), 299);
+    let mut w = VariantWriter::new();
+    let a = w.field(0, "a").unwrap();
+    w.null();
+    let b = w.field_at("a", 1).unwrap();
+    w.null();
+    let e = w.finish_object(0, vec![a, b]).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::VariantDuplicateKey);
+    assert_eq!(digits(0), 1);
+    assert_eq!(digits(-12_345), 5);
+    assert_eq!(strip_trailing_zeros(1500, 3), (15, 1));
+    assert_eq!(strip_trailing_zeros(0, 4), (0, 0));
+    assert_eq!(strip_trailing_zeros(100, 0), (100, 0));
+}
+
+/// An array holding `depth` nested arrays around a null: each level is a
+/// one-element array with 4-byte offsets.
+fn nested_arrays(depth: usize) -> Vec<u8> {
+    let mut v = vec![0x00];
+    for _ in 0..depth {
+        let len = u32::try_from(v.len()).unwrap();
+        let mut level = vec![0x0F, 0x01];
+        level.extend_from_slice(&0u32.to_le_bytes());
+        level.extend_from_slice(&len.to_le_bytes());
+        level.extend_from_slice(&v);
+        v = level;
+    }
+    v
+}
+
+/// The walkers over a value recurse per level, so validation caps nesting
+/// at `parse_json`'s 1,000 levels: a deeper value from a file or a client
+/// is `MALFORMED_VARIANT`, never a stack overflow.
+#[test]
+fn values_nested_past_the_depth_cap_are_malformed() {
+    let meta = [0x01, 0x00, 0x00];
+    assert!(VariantRef::new(&meta, &nested_arrays(1000)).is_ok());
+    for depth in [1001, 20_000, 200_000] {
+        let bytes = nested_arrays(depth);
+        assert_eq!(
+            VariantRef::new(&meta, &bytes)
+                .map(|_| ())
+                .map_err(|e| e.error_class()),
+            Err(ErrorClass::MalformedVariant),
+            "{depth}"
+        );
     }
 }

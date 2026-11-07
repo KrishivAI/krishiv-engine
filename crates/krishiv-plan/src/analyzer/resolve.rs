@@ -36,6 +36,13 @@ pub(super) struct Attr {
     pub(super) col: BoundColumn,
     pub(super) qual: Arc<[String]>,
     pub(super) source: Option<(usize, Arc<str>)>,
+    /// A union input's re-aliased repeat of an earlier column of that input
+    /// (`Resolver::distinct_output_ids`): Spark's `__is_duplicate`
+    /// metadata. A name that matches it and another column resolves to the
+    /// other. It follows the attribute wherever the attribute is copied
+    /// (instances, CTE references, column aliases, an alias of the bare
+    /// column); a new attribute computed from it does not have it.
+    pub(super) duplicate: bool,
 }
 
 /// What an aggregate needs to resolve `HAVING` / `ORDER BY` over it.
@@ -81,6 +88,10 @@ pub(super) enum Widen {
     Project { input: Rel, exprs: Vec<Arc<Expr>> },
     /// A filter, sort or limit over `child`: its columns pass through.
     Through { child: Rel },
+    /// A pipe boundary over `child` (the same plan): only `child`'s hidden
+    /// columns (a `USING` join's merged keys, a `_metadata`) come back
+    /// through it, never a column a projection below dropped.
+    Hidden { child: Rel },
     /// An aggregate (under the projections of its lateral aliases): it
     /// adds grouping attributes to its output.
     Aggregate(Arc<AggInfo>),
@@ -140,6 +151,10 @@ pub(super) struct Level {
     /// output does not carry, searched first: Spark binds an outer name to the
     /// aggregate input before an output alias of the same name.
     pub(super) fallback: Arc<[Attr]>,
+    /// The input of the aggregate whose `HAVING` the subquery sits in: an
+    /// aggregate call of the subquery's `WHERE` over only these columns is
+    /// that aggregate's (Spark's outer aggregate), not the subquery's.
+    pub(super) having: Option<Arc<[Attr]>>,
 }
 
 /// A scope environment: the CTEs visible and the enclosing queries.
@@ -257,7 +272,13 @@ pub(super) fn resolve(
     // Hints name relations of their resolved subtree.
     let (root, warnings) = super::hints::resolve(&rel.plan, ctx.conf.case_sensitive)?;
     // Subqueries to joins, after everything resolved (P2-T071c).
-    let root = super::subquery::rewrite(&root, &mut r.next_id, &*ctx.functions, ctx.profile)?;
+    let root = super::subquery::rewrite(
+        &root,
+        &mut r.next_id,
+        &*ctx.functions,
+        ctx.profile,
+        &ctx.conf,
+    )?;
     let output = rel.out.iter().map(|a| a.col.clone()).collect();
     let uses = b
         .securables
@@ -861,6 +882,7 @@ impl Resolver<'_> {
                         col: c.clone(),
                         qual: Arc::clone(&qual),
                         source: source.map(|i| (i, Arc::from(c.name.as_str()))),
+                        duplicate: false,
                     })
                     .collect();
                 Ok(self.wrap(Arc::clone(p), o.plan_id, out, &[]))
@@ -874,6 +896,7 @@ impl Resolver<'_> {
                         col: c.clone(),
                         qual: Arc::clone(&qual),
                         source: None,
+                        duplicate: false,
                     })
                     .collect();
                 Ok(self.wrap(Arc::clone(p), o.plan_id, out, &[]))
@@ -945,6 +968,7 @@ impl Resolver<'_> {
                     col,
                     qual,
                     source: None,
+                    duplicate: false,
                 }];
                 let leaf = Arc::new(LogicalPlan::new(node).with_origin(o));
                 Ok(self.wrap(leaf, o.plan_id, out, &[]))

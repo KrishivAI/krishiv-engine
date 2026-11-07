@@ -51,6 +51,9 @@ fn run() -> Result<()> {
     let mut config = prost_build::Config::new();
     // Deterministic iteration order for map fields (read options).
     config.btree_map(["."]);
+    // An aggregate UDF call is rare and large: boxed, so `AggregateExpr`
+    // stays small in the enums that hold it.
+    config.boxed(".krishiv.plan.v1.AggregateExpr.udaf");
     let requests: Vec<_> = fds
         .file
         .iter()

@@ -66,10 +66,10 @@ pub use io::beneath::{AnchorError, BeneathStore};
 #[cfg(unix)]
 pub use io::local_listing::SettledLocalFileSystem;
 pub use io::{
-    BlockCacheStats, ByteRange, CacheStats, FileRef, Held, IoConfig, IoContext, IoCounters,
-    IoScheduler, ObjectScheme, OpenedStore, ParsedUrl, PinnedStore, PutIfAbsent, SecretResolver,
-    StoreId, StorePolicy, StoreRegistry, StoreSettings, Tail, VersionToken, parse_object_url,
-    query_registry, register, register_with_options,
+    BlockCacheStats, ByteRange, CacheScope, CacheStats, FileRef, Held, IoConfig, IoContext,
+    IoCounters, IoScheduler, ObjectScheme, OpenedStore, ParsedUrl, PinnedStore, PutIfAbsent,
+    SecretResolver, StoreId, StorePolicy, StoreRegistry, StoreSettings, Tail, VersionToken,
+    parse_object_url, query_registry, register, register_with_options,
 };
 pub use json::JsonFormat;
 pub use options::{
@@ -94,7 +94,7 @@ pub use runtime_filter::{
     DisabledReason, FilterCounts, FilterForm, FilterId, FilterSnapshot, KeyFilter,
     KeyFilterBuilder, KeyFilterOptions, Published, RowHash, RuntimeFilter, ScanFilter,
 };
-pub use scan::{ScanOptions, ScanStream};
+pub use scan::{ReadStats, ScanOptions, ScanStream};
 pub use scan_gate::ScanGate;
 pub use schema_map::{FIELD_ID_KEY, SchemaMapper};
 pub use stats::{ColumnStatistics, FileStatistics, Precision, TriState, prune};

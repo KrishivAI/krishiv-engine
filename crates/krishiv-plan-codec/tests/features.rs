@@ -939,6 +939,34 @@ fn features_of_refuses_what_it_cannot_interpret() {
 }
 
 #[test]
+fn only_udaf_plans_need_rust_udaf_and_a_reader_without_it_refuses() {
+    for (name, plan) in cases() {
+        assert_eq!(
+            plan_features(&plan).contains(&Feature::RustUdaf),
+            name == "rust_udaf",
+            "{name}"
+        );
+    }
+    let plan = cases()
+        .into_iter()
+        .find(|(n, _)| n == "rust_udaf")
+        .map(|(_, p)| p)
+        .unwrap();
+    let bytes = encode(&plan).unwrap();
+    let others: Vec<Feature> = plan_features(&plan)
+        .into_iter()
+        .filter(|f| *f != Feature::RustUdaf)
+        .collect();
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &ReaderFeatures::only(others)).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["rust_udaf".to_owned()]
+        }
+    );
+    assert_eq!(decode(&bytes).unwrap(), plan);
+}
+
+#[test]
 fn only_udf_plans_need_rust_udf_and_every_expression_position_counts() {
     // Negative: no inventory case but `rust_udf` uses it, and the
     // `expressions` case (a registry call) does not.
@@ -1040,6 +1068,50 @@ fn nested_types_need_their_feature() {
     corrupt(
         &hidden,
         "the feature header does not match the plan's constructs",
+    );
+}
+
+#[test]
+fn the_variant_type_needs_its_feature() {
+    use krishiv_types::DataType;
+    assert_eq!(message("variant_scan").features, ["variant_type"]);
+    assert_eq!(
+        feature_of(Construct::Type(&DataType::Variant)),
+        Some(Feature::VariantType)
+    );
+    assert_eq!(Feature::VariantType.kind(), FeatureKind::Semantic);
+    assert_eq!(
+        message("generate_variant_explode").features,
+        ["generate", "variant_explode", "variant_type"]
+    );
+    assert_eq!(
+        feature_of(Construct::Generator(
+            krishiv_plan::GeneratorKind::VariantExplode
+        )),
+        Some(Feature::VariantExplode)
+    );
+    assert_eq!(
+        feature_of(Construct::Generator(krishiv_plan::GeneratorKind::Explode)),
+        None
+    );
+    // A variant carried only in an Arrow schema (an exchange's columns).
+    let carrier = DataType::Variant.to_arrow();
+    assert_eq!(
+        feature_of(Construct::ArrowType(&carrier)),
+        Some(Feature::VariantType)
+    );
+    let bytes = message("variant_scan").encode_to_vec();
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::VariantType),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["variant_type".to_owned()]
+        }
     );
 }
 
