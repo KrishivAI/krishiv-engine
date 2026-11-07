@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "other-version": [
+      22,
+      45,
+      70
+    ]
+  },
+  "file": "table-valued-functions",
+  "format_version": 1
+}
