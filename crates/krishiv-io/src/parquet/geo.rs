@@ -11,12 +11,14 @@
 //!   CRS, `srid:N` and PROJJSON are `ST_INVALID_CRS_VALUE`). Every value is validated and
 //!   re-encoded little endian (`geo::rewrite`); a malformed one fails the scan with
 //!   `WKB_PARSE_ERROR`. A plain `BINARY` column stays `binary`. Only top-level columns are
-//!   converted; one nested in a struct, array or map reads as its plain binary.
+//!   converted; a file with one nested in a struct, array or map is `KRISHIV_UNSUPPORTED_FEATURE`
+//!   (never silently read as binary).
 //! - **Write.** A top-level column of fixed SRID is written as `BINARY` with the logical type and
 //!   the CRS string Spark writes (`SRID:0`, `OGC:CRS84`, `EPSG:3857`, ... explicitly; arrow-rs's
 //!   own conversion would write `srid:0`, which Spark 4.2 refuses to read). `GEOMETRY(ANY)` and
 //!   `GEOGRAPHY(ANY)` are `UNSUPPORTED_DATA_TYPE_FOR_DATASOURCE`, as in Spark. Not written: the
-//!   bounding-box statistics of Spark's files, which only a reader that prunes by them needs.
+//!   bounding-box statistics of Spark's files (they need the parquet crate's `geospatial`
+//!   feature and its 11 crates; only a reader that prunes by them needs them).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -97,6 +99,20 @@ impl Geos {
         footer: Option<&Vec<KeyValue>>,
         fields: Vec<FieldRef>,
     ) -> FormatResult<(Vec<FieldRef>, Self)> {
+        for t in descr.root_schema().get_fields() {
+            if t.is_group() && nested_spatial(t) {
+                return Err(FormatError::Other(
+                    krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: format!(
+                            "reading Parquet GEOMETRY or GEOGRAPHY nested in the column `{}` \
+                             (only top-level columns)",
+                            t.name()
+                        ),
+                    }
+                    .into(),
+                ));
+            }
+        }
         let mut roots = HashMap::new();
         let mut out = Vec::with_capacity(fields.len());
         for f in fields {
@@ -142,6 +158,17 @@ impl Geos {
         }
         Ok((out, Self { roots }))
     }
+}
+
+/// Whether a leaf below group `t` is annotated `GEOMETRY` or `GEOGRAPHY`.
+fn nested_spatial(t: &Type) -> bool {
+    if t.is_group() {
+        return t.get_fields().iter().any(|c| nested_spatial(c));
+    }
+    matches!(
+        t.get_basic_info().logical_type_ref(),
+        Some(LogicalType::Geometry(_) | LogicalType::Geography(_))
+    )
 }
 
 /// `batch` with each spatial column of `roots` (a `BINARY` of WKB) as the in-memory struct of

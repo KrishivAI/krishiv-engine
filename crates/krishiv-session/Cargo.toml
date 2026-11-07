@@ -54,7 +54,7 @@ bytes.workspace = true
 arrow-select.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
 insta.workspace = true
-parquet = { workspace = true, features = ["arrow", "geospatial"] }
+parquet = { workspace = true, features = ["arrow"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }

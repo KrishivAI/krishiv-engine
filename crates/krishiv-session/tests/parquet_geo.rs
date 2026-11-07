@@ -252,3 +252,80 @@ fn a_plain_binary_column_stays_binary() {
     let got = read_crafted(None, &[Some(p.as_slice())]).unwrap();
     assert_eq!(got, ["<BinaryView>"]);
 }
+
+#[test]
+fn a_geography_value_outside_longitude_and_latitude_fails_the_read() {
+    // Spark 4.2 `STUtils.stGeogFromWKB` checks the bounds; a geometry is not bounded.
+    let mut out = vec![1_u8, 1, 0, 0, 0];
+    out.extend_from_slice(&200.0_f64.to_le_bytes());
+    out.extend_from_slice(&100.0_f64.to_le_bytes());
+    let e = read_crafted(
+        Some(LogicalType::geography(Some("OGC:CRS84".to_owned()), None)),
+        &[Some(out.as_slice())],
+    )
+    .unwrap_err();
+    assert!(e.contains("FAILED_READ_FILE.NO_HINT"), "{e}");
+    let ok = read_crafted(Some(LogicalType::geometry(None)), &[Some(out.as_slice())]);
+    assert_eq!(ok, Ok(vec!["SRID=4326;POINT(200 100)".to_owned()]));
+}
+
+#[test]
+fn nothing_to_write_and_all_null_columns() {
+    let s = Session::new().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    for (name, filter) in [("none", "i < 0"), ("nulls", "i >= 0")] {
+        let out = dir.path().join(name);
+        let df = block_on(s.sql(&format!(
+            "SELECT CASE WHEN i < 0 THEN ST_GeomFromWKB({POINT}, 3857) END g FROM range(3) t(i) WHERE {filter}"
+        )))
+        .unwrap();
+        block_on(df.write().parquet(out.to_str().unwrap())).unwrap();
+        let got = rows(&s, &format!("SELECT g FROM parquet.`{}`", out.display())).unwrap();
+        let want: Vec<&str> = if name == "none" {
+            vec![]
+        } else {
+            vec!["NULL"; 3]
+        };
+        assert_eq!(got, want, "{name}");
+    }
+}
+
+#[test]
+fn a_nested_geometry_in_a_file_is_refused_not_read_as_binary() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("n.parquet");
+    let leaf = Type::primitive_type_builder("x", Physical::BYTE_ARRAY)
+        .with_repetition(Repetition::OPTIONAL)
+        .with_logical_type(Some(LogicalType::geometry(None)))
+        .build()
+        .unwrap();
+    let group = Type::group_type_builder("g")
+        .with_repetition(Repetition::OPTIONAL)
+        .with_fields(vec![Arc::new(leaf)])
+        .build()
+        .unwrap();
+    let schema = Type::group_type_builder("m")
+        .with_fields(vec![Arc::new(group)])
+        .build()
+        .unwrap();
+    let mut w = SerializedFileWriter::new(
+        File::create(&file).unwrap(),
+        Arc::new(schema),
+        Arc::new(WriterProperties::builder().build()),
+    )
+    .unwrap();
+    let mut rg = w.next_row_group().unwrap();
+    let mut col = rg.next_column().unwrap().unwrap();
+    col.typed::<parquet::data_type::ByteArrayType>()
+        .write_batch(&[ByteArray::from(point())], Some(&[2]), None)
+        .unwrap();
+    col.close().unwrap();
+    rg.close().unwrap();
+    w.close().unwrap();
+    let s = Session::new().unwrap();
+    let e = rows(&s, &format!("SELECT * FROM parquet.`{}`", file.display())).unwrap_err();
+    assert!(
+        e.contains("KRISHIV_UNSUPPORTED_FEATURE") || e.contains("not supported"),
+        "{e}"
+    );
+}
