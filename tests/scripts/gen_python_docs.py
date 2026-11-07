@@ -166,13 +166,14 @@ def render() -> dict[Path, str]:
         pages[OUT / f"{name}.md"] = render_module(name, path)
         index.append(f"| [`{name}`]({name}.md) | {summary[0].replace('|', chr(92) + '|') if summary else ''} |")
     pages[OUT / "index.md"] = "\n".join(index) + "\n"
+    pages[OUT / "_meta.json"] = '{\n  "index": "Python API"\n}\n'
     return pages
 
 
 def main(argv: list[str]) -> int:
     pages = render()
     if "--check" in argv:
-        have = {p for p in OUT.glob("*.md")} if OUT.is_dir() else set()
+        have = {p for p in OUT.glob("*.[mj]*")} if OUT.is_dir() else set()
         bad = [str(p.relative_to(ROOT)) for p, t in pages.items() if not p.exists() or p.read_text(encoding="utf-8") != t]
         bad += [f"{p.relative_to(ROOT)} (extra)" for p in sorted(have - set(pages))]
         if bad:
@@ -180,7 +181,7 @@ def main(argv: list[str]) -> int:
             return 1
         return 0
     OUT.mkdir(parents=True, exist_ok=True)
-    for stale in set(OUT.glob("*.md")) - set(pages):
+    for stale in set(OUT.glob("*.[mj]*")) - set(pages):
         stale.unlink()
     for path, text in pages.items():
         path.write_text(text, encoding="utf-8")

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// The nightly that produces rustdoc JSON; its format version must be one `rustdoc-md` reads.
-pub const RUSTDOC_NIGHTLY: &str = "nightly-2026-09-01";
+pub const RUSTDOC_NIGHTLY: &str = "nightly-2026-08-12";
 
 /// The crates whose public API is documented on the site: the facade, the session and the UDF SDK (the connector SDK is an empty skeleton; `krishiv-common` is mostly
 /// registry constants, covered by the configuration reference).
@@ -115,6 +115,10 @@ pub fn run_rust(root: &Path, check: bool) -> Result<(), String> {
         pages.push((out_dir.join(format!("{c}.md")), md));
     }
     pages.push((out_dir.join("index.md"), index));
+    pages.push((
+        out_dir.join("_meta.json"),
+        "{\n  \"index\": \"Rust API\"\n}\n".to_owned(),
+    ));
     if check {
         let bad: Vec<String> = pages
             .iter()

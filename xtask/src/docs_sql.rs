@@ -274,6 +274,10 @@ pub fn render() -> Result<BTreeMap<PathBuf, String>, String> {
         docs.len()
     );
     out.insert(PathBuf::from(OUT_DIR).join("index.md"), index);
+    out.insert(
+        PathBuf::from(OUT_DIR).join("_meta.json"),
+        "{\n  \"index\": \"SQL functions\"\n}\n".to_owned(),
+    );
     Ok(out)
 }
 

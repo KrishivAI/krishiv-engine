@@ -35,3 +35,31 @@ fn emits_to_stdout_or_path() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "# hi\n");
     assert!(buf.is_empty());
 }
+
+#[test]
+fn the_checked_in_configuration_guide_page_matches_the_registry() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let on_disk = std::fs::read_to_string(root.join("docs/configuration.md")).unwrap();
+    assert_eq!(
+        on_disk,
+        Doc::Config.markdown(),
+        "run `cargo xtask docs-config docs/configuration.md`"
+    );
+}
+
+#[test]
+fn the_checked_in_python_reference_matches_the_generator() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return; // no Python on this machine; the python-quality job runs it
+    }
+    xtask::docs_ext::run_python(root, true).unwrap();
+}
