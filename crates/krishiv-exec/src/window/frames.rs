@@ -1089,9 +1089,10 @@ pub(super) fn cost(a: &AggregateExpr, f: &WindowFunctionPlan, rows: usize) -> Re
 }
 
 /// The items one chunk of merges holds for `rows` rows (see [`CHUNK`]): a `ROWS` frame of at most `w` rows has at
-/// most `max(w, 2 * (bits(w) + 1))` items per row (the rows of an in-order fold, or the nodes of a tree query), so a
+/// most `max(w, 2 * (bits(w) + 1))` items per row (the rows of an in-order fold, or the nodes of a tree query, which
+/// are in fact bounded by `min(w, 2 * (bits + 1))`: the `max` is a loose but correct cover, keep it), so a
 /// small batch charges for those, not for a whole chunk. Other frames can hold a whole chunk.
-fn chunk_items(f: &WindowFunctionPlan, rows: usize) -> usize {
+pub(super) fn chunk_items(f: &WindowFunctionPlan, rows: usize) -> usize {
     use super::FrameBound as B;
     let fr = &f.frame;
     let at = |b: B| match b {
@@ -1106,7 +1107,7 @@ fn chunk_items(f: &WindowFunctionPlan, rows: usize) -> usize {
         return CHUNK;
     };
     let w = usize::try_from(hi.saturating_sub(lo).saturating_add(1).max(1)).unwrap_or(usize::MAX);
-    let bits = usize::try_from(usize::BITS - w.leading_zeros()).unwrap_or(64);
+    let bits = (usize::BITS - w.leading_zeros()) as usize;
     let per_row = w.max(2 * (bits + 1));
     CHUNK.min(rows.saturating_mul(per_row).saturating_add(2 * (bits + 1)))
 }

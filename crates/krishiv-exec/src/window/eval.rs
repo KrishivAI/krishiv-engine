@@ -874,7 +874,7 @@ pub(super) fn width(t: &DataType, rows: usize) -> usize {
 /// The bytes the evaluation of `plan` over complete partitions holds for
 /// `rows` rows in `parts` partitions and `peers` peer groups: the row
 /// maps, each function's states and output, and the index vectors that
-/// gather outputs. Linear in its arguments, so the cost of a unit is the
+/// gather outputs. Subadditive in its arguments (linear, capped by a constant), so the cost of a unit is at most the
 /// sum of its batches' costs. `held` is [`snapshot_slots`] of the batch.
 pub(super) fn cost(
     plan: &WindowPlan,

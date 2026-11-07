@@ -3062,3 +3062,41 @@ async fn rows_a_filter_drops_do_not_overflow_on_disk() {
         assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
     }
 }
+
+#[test]
+fn chunk_items_prices_a_bounded_rows_frame_by_the_rows_it_can_hold() {
+    use super::frames::{CHUNK, chunk_items};
+    let f = |frame| WindowFunctionPlan {
+        function: WindowFunction::Aggregate(AggregateExpr {
+            function: AggregateFunction::Sum,
+            args: vec![1],
+            input: AggInput::Raw,
+            mask: None,
+            arg_type: DataType::Int64,
+            name: "x".to_owned(),
+            element: None,
+        }),
+        frame,
+        filter: None,
+        name: "x".to_owned(),
+    };
+    let rows = |lo, hi| WindowFrame {
+        units: FrameUnits::Rows,
+        lower: FrameBound::Offset(lo),
+        upper: FrameBound::Offset(hi),
+    };
+    // Width 3 (bits 2, per row max(3, 6) = 6): 10 rows hold at most 10 * 6 + 6 items.
+    assert_eq!(chunk_items(&f(rows(-1, 1)), 10), 66);
+    // A big batch is capped at a whole chunk.
+    assert_eq!(chunk_items(&f(rows(-1, 1)), 10 * CHUNK), CHUNK);
+    // Unbounded and RANGE frames can hold a whole chunk.
+    assert_eq!(
+        chunk_items(&f(WindowFrame::running(FrameUnits::Rows)), 10),
+        CHUNK
+    );
+    let range = WindowFrame {
+        units: FrameUnits::Range,
+        ..rows(-1, 1)
+    };
+    assert_eq!(chunk_items(&f(range), 10), CHUNK);
+}
