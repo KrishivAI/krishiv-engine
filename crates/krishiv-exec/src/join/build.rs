@@ -843,6 +843,15 @@ impl Sink for BuildSink {
                         .saturating_sub(table.index_memory())
                         .min(index.size()),
                 );
+                let split = table.arena().memory_split();
+                let n = &self.0.counters;
+                n.add(
+                    Counter::ArenaBytes,
+                    (split.hash + split.key + split.other) as u64,
+                );
+                n.add(Counter::ArenaHashBytes, split.hash as u64);
+                n.add(Counter::ArenaKeyBytes, split.key as u64);
+                n.add(Counter::IndexBytes, table.index_memory() as u64);
                 let (keys, buckets, kind) = table.index_size();
                 self.0.counters.or(Counter::IndexKinds, kind as u64);
                 self.0.counters.add(Counter::HashEntries, keys as u64);
@@ -878,6 +887,11 @@ impl Sink for BuildSink {
             let mut grace = Grace::new(g.hashing.fanout0());
             grace.keep_unprobed = s.join_type.keeps_null_build_keys();
             for (p, part) in c.parts.iter_mut().enumerate() {
+                if spilled & (1 << p) == 0 {
+                    self.0
+                        .counters
+                        .add(Counter::SteadyReservedBytes, part.bytes() as u64);
+                }
                 memory.append(&mut part.memory);
                 if spilled & (1 << p) != 0 {
                     grace.build[p].files = std::mem::take(&mut part.files);

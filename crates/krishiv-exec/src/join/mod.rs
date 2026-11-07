@@ -379,11 +379,27 @@ pub(crate) enum Counter {
     ProbeTableNs,
     /// Spilled partitions that would not split, joined by sort-merge.
     MergeFallbacks,
+    /// What the build's in-memory partitions keep reserved for their rows
+    /// once finalized (the chunks' reservations, which the probe lives with).
+    SteadyReservedBytes,
+    /// The exact buffer bytes of the finalized arenas (all columns).
+    ArenaBytes,
+    /// Of those, the `hash` column's.
+    ArenaHashBytes,
+    /// Of those, the key columns'.
+    ArenaKeyBytes,
+    /// The bytes of the finalized indexes (and match bitmaps).
+    IndexBytes,
 }
 
 /// The build sink's counters, by name.
-const BUILD_COUNTERS: [(Counter, &str); 9] = [
+const BUILD_COUNTERS: [(Counter, &str); 14] = [
     (Counter::BuildRows, "build_rows"),
+    (Counter::SteadyReservedBytes, "steady_reserved_bytes"),
+    (Counter::ArenaBytes, "arena_bytes"),
+    (Counter::ArenaHashBytes, "arena_hash_bytes"),
+    (Counter::ArenaKeyBytes, "arena_key_bytes"),
+    (Counter::IndexBytes, "index_bytes"),
     (Counter::HashEntries, "hash_entries"),
     (Counter::HashBuckets, "hash_buckets"),
     (Counter::SpilledPartitions, "spilled_partitions"),
@@ -415,7 +431,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug, Default)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 24]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; 29]);
 
 impl Counters {
     pub(crate) fn add(&self, c: Counter, v: u64) {
