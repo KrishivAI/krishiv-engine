@@ -633,3 +633,27 @@ fn stored_cte_references_wide_chars_and_linked_partitions() {
     run(&s, "msck repair table pl").unwrap();
     assert_eq!(first_text(&s, "show partitions pl"), "k=x");
 }
+
+/// The CHAR/VARCHAR switches Krishiv does not implement are refused, not ignored (design
+/// `P2-T001b-char-varchar.md` point (b), ADR 0008), at `SET` and on the session builder; their
+/// defaults are fine.
+#[test]
+fn unimplemented_char_varchar_switches_are_refused() {
+    let s = fresh();
+    for (key, refused, default) in [
+        ("spark.sql.charAsVarchar", "true", "false"),
+        ("spark.sql.preserveCharVarcharTypeInfo", "true", "false"),
+        ("spark.sql.readSideCharPadding", "false", "true"),
+        ("spark.sql.legacy.noCharPaddingInPredicate", "true", "false"),
+    ] {
+        let e = run(&s, &format!("SET {key} = {refused}")).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_UNSUPPORTED_FEATURE",
+            "{key}"
+        );
+        run(&s, &format!("SET {key} = {default}")).unwrap();
+        let built = Session::builder().config(key, refused).build();
+        assert!(built.is_err(), "{key} on the builder");
+    }
+}
