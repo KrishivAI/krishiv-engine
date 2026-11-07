@@ -59,7 +59,9 @@ def test_values_print_as_spark() -> None:
     assert ts.toPython() == datetime.datetime(1970, 1, 1, 0, 0, 1, 500000, tzinfo=datetime.UTC)
 
 
-# Values built from their bytes (empty dictionary), checked against PySpark 4.2.0's ``VariantVal``.
+# Values built from their bytes (empty dictionary). Expected values follow Spark's JVM ``Variant`` (``VariantUtil``,
+# SQL ``to_json``), which Krishiv's ``VariantVal`` decodes as; where PySpark 4.2.0's own ``VariantVal`` differs is in
+# docs/known-differences.md ("PySpark's ``VariantVal``").
 _META = b"\x01\x00\x00"
 
 
@@ -67,7 +69,7 @@ def _primitive(type_id: int, body: bytes) -> T.VariantVal:
     return T.VariantVal(bytes([type_id << 2]) + body, _META)
 
 
-def test_primitive_variants_match_pyspark() -> None:
+def test_primitive_variants_decode_as_spark() -> None:
     ntz = _primitive(13, struct.pack("<q", 1_700_000_000_123_456))
     assert ntz.toJson() == '"2023-11-14 22:13:20.123456"'
     assert ntz.toPython() == datetime.datetime(2023, 11, 14, 22, 13, 20, 123456)
@@ -83,7 +85,7 @@ def test_primitive_variants_match_pyspark() -> None:
     assert _primitive(14, struct.pack("<f", 2.5)).toJson() == "2.5"
 
 
-def test_string_escapes_match_pyspark() -> None:
+def test_string_escapes_follow_spark() -> None:
     raw = b'a"b\\c\n\x01'
     v = T.VariantVal(bytes([(len(raw) << 2) | 1]) + raw, _META)
     assert v.toJson() == '"a\\"b\\\\c\\n\\u0001"'
