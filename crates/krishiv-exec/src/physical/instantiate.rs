@@ -40,23 +40,21 @@ use std::fmt;
 use std::sync::Arc;
 
 use arrow_schema::{Field, Schema, SchemaRef};
-use krishiv_common::config::{ARROW_MAX_RECORDS_PER_BATCH, Config};
-use krishiv_common::error::{KrishivError, KrishivUdfNotAvailable, KrishivUnsupportedFeature};
+use krishiv_common::config::Config;
+use krishiv_common::error::KrishivUnsupportedFeature;
 use krishiv_io::{
     ColumnPath, FilterId, FilterSnapshot, FormatRegistry, IoContext, KeyFilter, StoreId,
     WriteOptions, effective_job_uuid, is_spark_file_source,
 };
 use krishiv_memory::SpillScope;
-use krishiv_plan::{AttrId, Expr, ExprNode, FunctionId, ResolvedExpr};
-use krishiv_types::arrow::client_arrow_type;
+use krishiv_plan::{AttrId, Expr};
 use krishiv_udf_sdk::UdfLibrary;
 use object_store::path::Path;
 
 use super::{
     AggregatePlan, ExchangeId, ExchangePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode,
-    PhysicalPlan, ProjectItemPlan, PythonCallPlan, Residual, ScanId, ScanNode, ScanSplits,
-    SharedPlan, SortMergeJoinPlan, SubqueryPlan, ValueId, Version, WritePlan, files_of,
-    partitions_of,
+    PhysicalPlan, ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SharedPlan,
+    SortMergeJoinPlan, SubqueryPlan, ValueId, Version, WritePlan, files_of, partitions_of,
 };
 use crate::aggregate::{
     AggInput, AggregateExpr, AggregateNode, AggregateOutput, AggregateSpec, HashAggregate,
@@ -73,15 +71,14 @@ use crate::loops::UnionLoopSource;
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
     Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, Generate, LateFetch, NullOf,
-    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScalarExpr,
-    ScanPushdown, ScanPushdowns, Sort, SortKey, TopN,
+    Predicate, Project, ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdown,
+    ScanPushdowns, Sort, SortKey, TopN,
 };
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
 use crate::planner::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
 use crate::planner::nodes::{BreakerNode, FanInNode, OperatorNode, OrderedNode, SourceNode};
 use crate::planner::subquery::{SubquerySink, SubqueryValue, WithSubqueries};
-use crate::python_eval::{DEFAULT_WINDOW, EvalCall, PythonEvalSink, UdfCallSpec, UdfRuntime};
 use crate::shared::{Output, SharedSink, SharedSource};
 use crate::values::{
     BroadcastBuild, LocalValues, Partial, Producer, Publication, Value, ValueService,
@@ -114,7 +111,7 @@ pub struct WorkerContext {
     tables: Arc<dyn TableProviderResolver>,
     udfs: Option<Arc<UdfLibrary>>,
     /// Resolves the Python UDFs a plan names (design P2-T059).
-    python: Option<Arc<dyn UdfRuntime>>,
+    python: Option<Arc<dyn crate::python_eval::UdfRuntime>>,
     relations: Option<Arc<krishiv_memory::RelationStore>>,
     spill: Option<SpillScope>,
     scopes: Option<Arc<dyn SpillScopes>>,
@@ -229,15 +226,6 @@ impl WorkerContext {
     #[must_use]
     pub fn with_udfs(mut self, udfs: Arc<UdfLibrary>) -> Self {
         self.udfs = Some(udfs);
-        self
-    }
-
-    /// The same context calling Python UDFs through `runtime`. A plan
-    /// calling a Python UDF without one fails with
-    /// `KRISHIV_UDF_NOT_AVAILABLE`.
-    #[must_use]
-    pub fn with_python_udfs(mut self, runtime: Arc<dyn UdfRuntime>) -> Self {
-        self.python = Some(runtime);
         self
     }
 
@@ -983,25 +971,7 @@ impl Instantiation<'_> {
 
     fn untagged(&mut self, n: &PhysNode) -> Result<Built> {
         match n {
-            PhysNode::PythonEval {
-                input,
-                layout,
-                calls,
-            } => {
-                let ordered = ends_in_sort(input) || reads_range_in_order(input);
-                let input = self.node(input)?;
-                let sink = self.python_eval_sink(&input.schema, layout, calls)?;
-                let source = SharedSource::new(sink.schema());
-                Ok(Built {
-                    schema: sink.schema(),
-                    node: Arc::new(BreakerNode {
-                        input: input.node,
-                        sink,
-                        source,
-                        ordered,
-                    }),
-                })
-            }
+            PhysNode::PythonEval { .. } => self.python_eval(n),
             PhysNode::Scan(s) => self.scan(s),
             PhysNode::Range(r) => {
                 let source = Arc::new(crate::operators::Range::new(
@@ -1614,20 +1584,6 @@ impl Instantiation<'_> {
                 probe: probe.node,
             }),
         })
-    }
-}
-
-/// Whether `n` ends in a sort (through row-wise nodes): its rows are in
-/// order, so a breaker over it keeps that order (one driver above it).
-fn ends_in_sort(n: &PhysNode) -> bool {
-    match n {
-        PhysNode::Sort { .. } | PhysNode::TopN { .. } => true,
-        PhysNode::Project { input, .. }
-        | PhysNode::Filter { input, .. }
-        | PhysNode::LateFetch { input, .. }
-        | PhysNode::PythonEval { input, .. }
-        | PhysNode::Limit { input, .. } => ends_in_sort(input),
-        _ => false,
     }
 }
 

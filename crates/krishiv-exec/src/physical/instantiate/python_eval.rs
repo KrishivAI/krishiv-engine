@@ -4,8 +4,53 @@
 //! [`UdfRuntime`].
 
 use super::*;
+use krishiv_common::config::ARROW_MAX_RECORDS_PER_BATCH;
+use krishiv_common::error::{KrishivError, KrishivUdfNotAvailable};
+use krishiv_plan::{ExprNode, FunctionId, ResolvedExpr};
+use krishiv_types::arrow::client_arrow_type;
+
+use crate::operators::ScalarExpr;
+use crate::physical::PythonCallPlan;
+use crate::python_eval::{DEFAULT_WINDOW, EvalCall, PythonEvalSink, UdfCallSpec, UdfRuntime};
+
+impl WorkerContext {
+    /// The same context calling Python UDFs through `runtime`. A plan
+    /// calling a Python UDF without one fails with
+    /// `KRISHIV_UDF_NOT_AVAILABLE`.
+    #[must_use]
+    pub fn with_python_udfs(mut self, runtime: Arc<dyn UdfRuntime>) -> Self {
+        self.python = Some(runtime);
+        self
+    }
+}
 
 impl Instantiation<'_> {
+    /// A `PythonEval` over `input`: a breaker whose sink submits the input's
+    /// batches to the calls and whose source yields them with the results.
+    pub(super) fn python_eval(&mut self, node: &PhysNode) -> Result<Built> {
+        let PhysNode::PythonEval {
+            input,
+            layout,
+            calls,
+        } = node
+        else {
+            return Err(internal("not a PythonEval node".to_owned()));
+        };
+        let ordered = ends_in_sort(input) || reads_range_in_order(input);
+        let input = self.node(input)?;
+        let sink = self.python_eval_sink(&input.schema, layout, calls)?;
+        let source = SharedSource::new(sink.schema());
+        Ok(Built {
+            schema: sink.schema(),
+            node: Arc::new(BreakerNode {
+                input: input.node,
+                sink,
+                source,
+                ordered,
+            }),
+        })
+    }
+
     /// The sink of a `PythonEval` over input of `schema` (attributes
     /// `layout`): each call's arguments compiled over the input and its UDF
     /// prepared by the worker's runtime.
@@ -87,5 +132,19 @@ impl Instantiation<'_> {
             DEFAULT_WINDOW,
             self.spill.clone(),
         ))
+    }
+}
+
+/// Whether `n` ends in a sort (through row-wise nodes): its rows are in
+/// order, so a breaker over it keeps that order (one driver above it).
+fn ends_in_sort(n: &PhysNode) -> bool {
+    match n {
+        PhysNode::Sort { .. } | PhysNode::TopN { .. } => true,
+        PhysNode::Project { input, .. }
+        | PhysNode::Filter { input, .. }
+        | PhysNode::LateFetch { input, .. }
+        | PhysNode::PythonEval { input, .. }
+        | PhysNode::Limit { input, .. } => ends_in_sort(input),
+        _ => false,
     }
 }
