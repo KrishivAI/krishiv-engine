@@ -952,3 +952,22 @@ fn engine_runtime_entries_parse_and_default() {
     assert_eq!(SESSION_MEMORY_LIMIT.scope, Scope::Session);
     assert_eq!(SYSTEM_QUERIES_CAPACITY.scope, Scope::Cluster);
 }
+
+#[test]
+fn the_dictionary_filter_is_on_by_default_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&IO_PARQUET_DICTIONARY_FILTER_ENABLED),
+        Some(&ConfigValue::Bool(true))
+    );
+    c.set("krishiv.io.parquet.dictionaryFilter.enabled", "false")
+        .unwrap();
+    assert_eq!(
+        c.get(&IO_PARQUET_DICTIONARY_FILTER_ENABLED),
+        Some(&ConfigValue::Bool(false))
+    );
+    assert!(
+        c.set("krishiv.io.parquet.dictionaryFilter.enabled", "maybe")
+            .is_err()
+    );
+}

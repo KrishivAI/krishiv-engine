@@ -72,6 +72,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_LATE_MATERIALIZATION,
     &IO_PARQUET_PAGE_INDEX_ENABLED,
     &IO_PARQUET_BLOOM_FILTER_ENABLED,
+    &IO_PARQUET_DICTIONARY_FILTER_ENABLED,
     &IO_FOOTER_READ_BYTES,
     &IO_METADATA_CACHE_BYTES,
     &IO_CACHE_ENABLED,
@@ -386,6 +387,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.sources.partitionOverwriteMode",
         &PARTITION_OVERWRITE_MODE,
+    ),
+    (
+        "krishiv.io.parquet.dictionaryFilter.enabled",
+        &IO_PARQUET_DICTIONARY_FILTER_ENABLED,
     ),
     (
         "krishiv.runtimeFilter.adaptive.maxPassPercent",
@@ -1252,6 +1257,22 @@ pub static IO_PARQUET_BLOOM_FILTER_ENABLED: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.parquet.dictionaryFilter.enabled`.
+pub static IO_PARQUET_DICTIONARY_FILTER_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.parquet.dictionaryFilter.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether a Parquet scan reads the dictionary page of a column chunk whose data pages \
+          are all dictionary encoded, for the row groups its statistics could not decide, and \
+          skips a row group when the dictionary holds no literal of a pushed equality or IN. \
+          Returned rows are the same either way: the dictionary only prunes, and a page that \
+          fails a check is ignored. Dictionary pages above 16 MiB are not read.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.2.0",
     spark_alias: None,
 };
 
