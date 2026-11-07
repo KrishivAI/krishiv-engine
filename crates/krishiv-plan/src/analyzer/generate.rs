@@ -8,6 +8,7 @@
 //! input, its type picks the generated columns, and the node outputs the
 //! input's attributes followed by them.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{
@@ -109,7 +110,26 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
         let rels = [&c];
-        let cx = Self::cx(&c.out, &rels, env, "Generate");
+        // The argument reads an input column before another select-list generator's column of
+        // its name (Spark resolves generators over the lateral aliases only after the input).
+        let generated = |a: &Attr| {
+            a.qual
+                .iter()
+                .any(|q| q.starts_with(crate::GENERATE_QUALIFIER_PREFIX))
+        };
+        let cs = self.ctx.conf.case_sensitive;
+        let scope: Vec<Attr> =
+            c.out
+                .iter()
+                .filter(|a| {
+                    !generated(a)
+                        || !c.out.iter().any(|i| {
+                            !generated(i) && super::bind::same(&i.col.name, &a.col.name, cs)
+                        })
+                })
+                .cloned()
+                .collect();
+        let cx = Self::cx(&scope, &rels, env, "Generate");
         let arg = &self.stack_rows(arg, &cx)?;
         let mut b = self.bind(arg, &cx)?;
         // `variant_explode` expects a VARIANT: an untyped NULL is cast to one
@@ -662,6 +682,27 @@ impl Resolver<'_> {
 }
 
 impl Resolver<'_> {
+    /// Whether a `Generate` node sits between `plan` and the aggregate it
+    /// sorts: the search stops at the first aggregate, so a generator in
+    /// that aggregate's input does not count.
+    pub(super) fn holds_generator(plan: &Arc<LogicalPlan>) -> bool {
+        let mut seen = HashSet::new();
+        let mut stack = vec![Arc::clone(plan)];
+        while let Some(p) = stack.pop() {
+            if !seen.insert(Arc::as_ptr(&p) as usize) {
+                continue;
+            }
+            if matches!(p.node, PlanNode::Generate { .. }) {
+                return true;
+            }
+            if matches!(p.node, PlanNode::Aggregate { .. }) {
+                continue;
+            }
+            p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
+        false
+    }
+
     /// A `HAVING` over an aggregate with a generator in the select list and
     /// windows: the generator runs above the windows, and the `HAVING`
     /// still filters below them (Spark 4.3; 4.2 filtered the generated rows

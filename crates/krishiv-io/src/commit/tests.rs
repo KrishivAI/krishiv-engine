@@ -1430,6 +1430,7 @@ impl WriteOptionsForTest {
             partition_by: vec![1],
             partition_names: vec!["p".to_owned()],
             zone: Some(0),
+            zone_name: None,
         }
     }
 }

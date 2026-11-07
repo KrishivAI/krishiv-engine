@@ -2,8 +2,6 @@
   "cases": {
     "depends-on-command": [
       7,
-      12,
-      16,
       33,
       57,
       88,
@@ -12,8 +10,6 @@
       130
     ],
     "parser-pipe-collate": [
-      9,
-      11,
       19,
       20,
       21,
