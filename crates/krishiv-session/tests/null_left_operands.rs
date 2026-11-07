@@ -138,3 +138,20 @@ fn bitwise_with_a_set_left_still_raises_on_a_failing_right() {
         .unwrap_err();
     assert!(err.contains("DIVIDE_BY_ZERO"), "{err}");
 }
+
+#[test]
+fn binary_math_functions_do_not_evaluate_the_right_side_on_null_left_rows() {
+    // Found by the nightly expression differential (2026-11-06): `power(NULL, x)` is NULL
+    // in Spark's `BinaryMathExpression` (a `BinaryExpression`), whatever `x` raises.
+    for f in ["power", "pow", "atan2", "hypot", "log"] {
+        let got = strings(&format!(
+            "select cast({f}(cast(nullif(id, 0) as double), 1 / id) is null as string) \
+             from range(3) order by id"
+        ));
+        assert_eq!(
+            got.unwrap_or_else(|e| panic!("{f}: {e}")),
+            some(&[Some("true"), Some("false"), Some("false")]),
+            "{f}"
+        );
+    }
+}

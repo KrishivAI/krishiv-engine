@@ -6,6 +6,7 @@
 pub mod budgets;
 pub mod ci;
 pub mod codeql_proxy;
+pub mod compat;
 pub mod console;
 pub mod coverage;
 pub mod dev;
