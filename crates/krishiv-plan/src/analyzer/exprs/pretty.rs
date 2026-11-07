@@ -204,11 +204,7 @@ pub(super) fn pretty_node(x: &Expr, k: &[&str], zone: Option<SessionZone>) -> St
             within_group,
             ..
         }) => {
-            let qualified = if qualifier.is_empty() {
-                name.clone()
-            } else {
-                format!("{}.{name}", qualifier.join("."))
-            };
+            let qualified = crate::function::shown_call_name(&qualifier.join("."), name);
             // Operators are never qualified, so only a bare name matches.
             let op = if qualifier.is_empty() {
                 Builtin::from_name(name)

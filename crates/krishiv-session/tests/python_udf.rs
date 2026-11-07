@@ -359,6 +359,47 @@ async fn an_unregistered_call_resolves_by_its_encoded_name_and_shows_its_own() {
 }
 
 #[tokio::test]
+async fn an_unregistered_call_prints_its_display_name_in_every_plan_and_error() {
+    // Review 2c I2: the encoded name (NUL-separated fields) never shows. Spark
+    // builds the `PythonUDF` at once, so even its parsed plan shows the name.
+    let (s, _) = session(None);
+    let call = |arg: &str| {
+        krishiv_session::functions::python_udf_call(
+            &plus_one_def("<lambda>"),
+            ANON,
+            [krishiv_session::functions::col(arg)],
+        )
+        .unwrap()
+    };
+    let text = s
+        .range(0, 3, 1, None)
+        .select([call("id")])
+        .explain(krishiv_session::ExplainMode::Extended)
+        .await
+        .unwrap();
+    assert!(!text.contains('\0'), "{text:?}");
+    assert!(text.contains("<lambda>(id)"), "{text}");
+    let parsed = text
+        .split("== Analyzed Logical Plan ==")
+        .next()
+        .unwrap_or_default();
+    assert!(parsed.contains("<lambda>"), "{parsed}");
+    // An error over an unresolved argument, raised before the call resolves.
+    let err = s
+        .range(0, 3, 1, None)
+        .select([call("missing")])
+        .collect()
+        .await
+        .unwrap_err();
+    assert!(!err.to_string().contains('\0'), "{err:?}");
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::UnresolvedColumnWithSuggestion,
+        "{err}"
+    );
+}
+
+#[tokio::test]
 async fn an_unregistered_call_is_not_reachable_by_its_display_name_from_sql() {
     let (s, _) = session(None);
     let err = s

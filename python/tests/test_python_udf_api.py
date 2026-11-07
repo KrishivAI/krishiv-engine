@@ -399,12 +399,12 @@ def test_an_arrow_udf_of_the_wrong_length_fails(spark: SparkSession) -> None:
 # --- stream export ---
 
 
-def test_a_stream_read_with_the_gil_held_finishes() -> None:
-    # Design §2.5 "Stream export": the C stream's get_next, called from a thread holding the GIL (a ctypes
-    # PYFUNCTYPE call keeps it), must not block the UDF pool. Run in a child process: without the detach the
-    # holder never lets go of the GIL, so nothing in this process could time it out.
-    code = textwrap.dedent(
-        """
+def _read_stream_in_a_child(get_next_type: str, on_thread: bool) -> None:
+    # Reads a UDF query's C stream through ctypes in a child process (a hang there cannot hang this one), the
+    # get_next call typed `get_next_type`, on a second thread while the main thread runs Python if `on_thread`.
+    code = (
+        textwrap.dedent(
+            """
         import ctypes
         import pyarrow.compute as pc
         from krishiv.sql import SparkSession, functions as F
@@ -424,7 +424,7 @@ def test_a_stream_read_with_the_gil_held_finishes() -> None:
 
         Stream._fields_ = [
             ("get_schema", ctypes.c_void_p),
-            ("get_next", ctypes.PYFUNCTYPE(ctypes.c_int, ctypes.POINTER(Stream), ctypes.POINTER(ArrowArray))),
+            ("get_next", ctypes.GET_NEXT_TYPE(ctypes.c_int, ctypes.POINTER(Stream), ctypes.POINTER(ArrowArray))),
             ("get_last_error", ctypes.c_void_p),
             ("release", ctypes.PYFUNCTYPE(None, ctypes.POINTER(Stream))),
             ("private_data", ctypes.c_void_p),
@@ -433,23 +433,60 @@ def test_a_stream_read_with_the_gil_held_finishes() -> None:
         spark = SparkSession.builder.getOrCreate()
         spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", "50")
         plus = F.arrow_udf(lambda a: pc.call_function("add", [a, 1]), "bigint")
-        capsule = spark.range(0, 1000, 1, 4).select(plus("id")).__arrow_c_stream__()
+        capsule = spark.range(0, 100000, 1, 4).select(plus("id")).__arrow_c_stream__()
         get = ctypes.pythonapi.PyCapsule_GetPointer
         get.restype = ctypes.c_void_p
         get.argtypes = [ctypes.py_object, ctypes.c_char_p]
         stream = ctypes.cast(get(capsule, b"arrow_array_stream"), ctypes.POINTER(Stream))
-        rows = 0
-        while True:
-            out = ArrowArray()
-            assert stream.contents.get_next(stream, ctypes.byref(out)) == 0
-            if not out.release:
-                break
-            rows += out.length
-            out.release(ctypes.byref(out))
-        assert rows == 1000, rows
+        result = {}
+
+        def read():
+            rows = 0
+            while True:
+                out = ArrowArray()
+                assert stream.contents.get_next(stream, ctypes.byref(out)) == 0
+                if not out.release:
+                    break
+                rows += out.length
+                out.release(ctypes.byref(out))
+                _ = [str(i) for i in range(64)]
+            result["rows"] = rows
+
+        if ON_THREAD:
+            import threading
+            import time
+
+            reader = threading.Thread(target=read)
+            reader.start()
+            spins, deadline = 0, time.monotonic() + 60
+            while reader.is_alive() and time.monotonic() < deadline:
+                # This thread holds the GIL between switch intervals and churns objects: two threads running
+                # Python at once (a detach that released a GIL this reader did not hold) corrupts refcounts.
+                spins += len({i: [i] * 4 for i in range(64)})
+            reader.join(60)
+        else:
+            read()
+        assert result.get("rows") == 100000, result
         print("ok")
         """
+        )
+        .replace("GET_NEXT_TYPE", get_next_type)
+        .replace("ON_THREAD", str(on_thread))
     )
     done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=False)
     assert done.returncode == 0, done.stdout + done.stderr
     assert done.stdout.strip() == "ok"
+
+
+def test_a_stream_read_with_the_gil_held_finishes() -> None:
+    # Design §2.5 "Stream export": the C stream's get_next, called from a thread holding the GIL (a ctypes
+    # PYFUNCTYPE call keeps it), must not block the UDF pool. Run in a child process: without the detach the
+    # holder never lets go of the GIL, so nothing in this process could time it out.
+    _read_stream_in_a_child("PYFUNCTYPE", on_thread=False)
+
+
+def test_a_stream_read_with_the_gil_released_while_another_thread_holds_it_finishes() -> None:
+    # Review 2c B1: get_next on a thread that released the GIL (a CFUNCTYPE call releases it) while the main
+    # thread runs Python. The detach must see that this thread is not attached and leave the other thread's
+    # state alone (on 3.11 the current thread state is process-global).
+    _read_stream_in_a_child("CFUNCTYPE", on_thread=True)

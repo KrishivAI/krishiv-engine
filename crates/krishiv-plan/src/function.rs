@@ -407,3 +407,33 @@ impl FunctionId {
 }
 
 pub use krishiv_functions::signature::FunctionKind;
+
+/// The name a call of `name` (written under `qualifier`) prints with. A name
+/// starting with NUL is an encoded name (an unregistered Python UDF's call,
+/// `krishiv-session` `python_udfs.rs`: fields separated by NUL, the shown
+/// name last): it prints as that last field, unqualified, as Spark's
+/// `PythonUDF` prints `name(args)` (review 2c I2). Any other name prints as
+/// written, qualified.
+pub(crate) fn shown_call_name(qualifier: &str, name: &str) -> String {
+    if name.starts_with('\0') {
+        return name.rsplit('\0').next().unwrap_or_default().to_owned();
+    }
+    if qualifier.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{qualifier}.{name}")
+    }
+}
+
+#[cfg(test)]
+mod shown_name_tests {
+    use super::shown_call_name;
+
+    #[test]
+    fn an_encoded_name_shows_its_last_field_unqualified_and_others_as_written() {
+        assert_eq!(shown_call_name("session", "\0tag\0x\0<lambda>"), "<lambda>");
+        assert_eq!(shown_call_name("", "\0tag\0\0f"), "f");
+        assert_eq!(shown_call_name("", "upper"), "upper");
+        assert_eq!(shown_call_name("db", "f"), "db.f");
+    }
+}

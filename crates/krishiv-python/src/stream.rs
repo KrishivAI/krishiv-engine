@@ -72,41 +72,39 @@ fn capsule_name(capsule: &Bound<'_, PyCapsule>) -> String {
 /// the GIL).
 pub(crate) struct Detaching<R>(pub(crate) R);
 
-/// Re-attaches the thread state it holds when dropped, so an unwinding
-/// `next` leaves the thread as it found it.
-struct Reattach(*mut pyo3::ffi::PyThreadState);
-
-impl Drop for Reattach {
-    fn drop(&mut self) {
-        // SAFETY: `self.0` is the thread state `PyEval_SaveThread` returned
-        // on this same thread (the guard is `!Send`: it holds a raw
-        // pointer), not yet restored.
-        unsafe { pyo3::ffi::PyEval_RestoreThread(self.0) };
-    }
+unsafe extern "C" {
+    /// Whether the calling thread holds the GIL (on a free-threaded build:
+    /// has an attached thread state). Not in the limited API, so pyo3-ffi
+    /// leaves it out of abi3 builds; every CPython 3.11+ exports it, and the
+    /// wheels (Linux, macOS) resolve it from the host interpreter at load.
+    fn PyGILState_Check() -> std::ffi::c_int;
 }
 
 /// Runs `f` with this thread detached from Python if it is attached.
-fn detached<T>(f: impl FnOnce() -> T) -> T {
-    // Probe: swapping in NULL returns the current thread state (NULL when
-    // the thread has none, and then it does nothing); it is swapped back at
-    // once and released properly below.
-    // SAFETY: with a NULL argument the swap only reads (and on 3.12+
-    // detaches) the calling thread's own state; restoring the returned one
-    // on the same thread undoes it. No Python object is touched.
-    let current = unsafe { pyo3::ffi::PyThreadState_Swap(std::ptr::null_mut()) };
-    if current.is_null() {
+///
+/// The probe is `PyGILState_Check`, which reads only this thread's own state
+/// on every supported version (review 2c B1: on 3.11 the current thread
+/// state is process-global, so a `PyThreadState_Swap` probe on a thread that
+/// had released the GIL took another thread's state). The detach is pyo3's,
+/// which also keeps pyo3's own attach count right while detached (review 2c
+/// M1), whoever attached the thread.
+fn detached<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    // SAFETY: a plain query of the calling thread's state; callable with or
+    // without the GIL, before or after the interpreter is initialised.
+    if unsafe { PyGILState_Check() } == 0 {
         return f();
     }
-    // SAFETY: as above: `current` is this thread's own state, just taken.
-    unsafe { pyo3::ffi::PyThreadState_Swap(current) };
-    // SAFETY: the thread is attached (it holds `current`), so it may
-    // release it; the guard restores it on this thread after `f`, which
-    // touches no Python object.
-    let _reattach = Reattach(unsafe { pyo3::ffi::PyEval_SaveThread() });
-    f()
+    // SAFETY: `PyGILState_Check` just said this thread is attached, so a
+    // token is valid here; it is used only to detach (and re-attach after
+    // `f`, on this thread), never to touch an object, and does not escape.
+    let py = unsafe { Python::assume_attached() };
+    py.detach(f)
 }
 
-impl<R: Iterator> Iterator for Detaching<R> {
+impl<R: Iterator + Send> Iterator for Detaching<R>
+where
+    R::Item: Send,
+{
     type Item = R::Item;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -115,7 +113,7 @@ impl<R: Iterator> Iterator for Detaching<R> {
     }
 }
 
-impl<R: RecordBatchReader> RecordBatchReader for Detaching<R> {
+impl<R: RecordBatchReader + Send> RecordBatchReader for Detaching<R> {
     fn schema(&self) -> SchemaRef {
         self.0.schema()
     }

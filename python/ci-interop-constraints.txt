@@ -7,3 +7,6 @@
 pyarrow==26.0.0
 polars==2.0.0
 duckdb==1.5.6
+# pandas_udf and toPandas tests (T059 review 2c I3).
+pandas==3.0.6
+numpy==2.5.4

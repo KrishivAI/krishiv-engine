@@ -115,6 +115,30 @@ pub(crate) fn _udf_runner_conf(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {
     Ok(out)
 }
 
+/// The runner conf and row count of the call running on this thread, set
+/// for the scope's life; the previous ones come back on drop.
+struct RunnerScope {
+    previous: Option<Arc<RunnerConf>>,
+    previous_rows: usize,
+}
+
+impl RunnerScope {
+    fn enter(conf: Arc<RunnerConf>, rows: usize) -> Self {
+        Self {
+            previous: RUNNER.with(|r| r.borrow_mut().replace(conf)),
+            previous_rows: ROWS.with(|c| c.replace(rows)),
+        }
+    }
+}
+
+impl Drop for RunnerScope {
+    fn drop(&mut self) {
+        let previous = self.previous.take();
+        RUNNER.with(|r| *r.borrow_mut() = previous);
+        ROWS.with(|c| c.set(self.previous_rows));
+    }
+}
+
 /// One registered UDF.
 struct Registered {
     wrapper: Py<PyAny>,
@@ -238,10 +262,11 @@ impl PreparedUdf for Prepared {
         let declared = self.declared.clone();
         let runner = Arc::clone(&self.runner);
         pool.submit(Box::new(move |py| {
-            RUNNER.with(|r| *r.borrow_mut() = Some(runner));
-            ROWS.with(|c| c.set(args.num_rows()));
+            // Restores the outer call's conf and rows when dropped, also on
+            // unwinding: a nested call on this thread (a UDF running a query)
+            // must not leave the outer call reading another's (review 2c M2).
+            let _scope = RunnerScope::enter(runner, args.num_rows());
             let result = invoke(py, &registered, &args, &declared);
-            RUNNER.with(|r| *r.borrow_mut() = None);
             let _ = done.send(result);
         }));
         Box::pin(async move {

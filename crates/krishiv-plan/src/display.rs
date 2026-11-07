@@ -764,11 +764,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             filter,
             within_group,
         }) => {
-            let qualified = if qualifier.is_empty() {
-                name.clone()
-            } else {
-                format!("{}.{name}", Name(qualifier))
-            };
+            let qualified = crate::function::shown_call_name(&Name(qualifier).to_string(), name);
             call(
                 &qualified,
                 Builtin::from_name(name),
