@@ -552,6 +552,22 @@ impl Session {
         if let Some(spec) = partition {
             let env = self.query_env();
             let name = TableName::resolve(std::slice::from_ref(&pattern.pattern), &ns, &env)?;
+            // Spark resolves the name as an `UnresolvedTable("SHOW TABLE EXTENDED ... PARTITION
+            // ...")`: any view, temporary or not, is `EXPECT_TABLE_NOT_VIEW.NO_ALTERNATIVE`.
+            let view = self.temp_entry_of(&name, &env)
+                || self
+                    .state
+                    .catalog
+                    .store
+                    .table(&name.namespace, &name.name)
+                    .is_some_and(|t| t.view.is_some());
+            if view {
+                return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
+                    operation: "SHOW TABLE EXTENDED ... PARTITION ...".to_owned(),
+                    view_name: name.quoted(),
+                }
+                .into());
+            }
             let p = self
                 .described_partition(&name, false, spec, original, "SHOW TABLE EXTENDED")
                 .await?;
